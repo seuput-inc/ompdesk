@@ -203,6 +203,7 @@ pub fn registry() -> Registry {
     crate::sidecar::register(&mut registry);
     crate::ipc::register(&mut registry);
     crate::agentctl::register(&mut registry);
+    crate::autopilot::register(&mut registry);
     crate::ports::register(&mut registry);
     registry
 }
