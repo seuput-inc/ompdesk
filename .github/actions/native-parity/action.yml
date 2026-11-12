@@ -76,3 +76,4 @@ runs:
         src/main/session-launch-parity.test.ts
         src/main/remote/link-traffic-relaunch.test.ts
         src/main/remote/fanout-cpu-report.test.ts
+        src/main/agent-control/*.test.ts
