@@ -6,7 +6,7 @@
  * in at most one tab (`edit`), and a current connection; a reconnect is a fresh connection id. The page sends its
  * dirty tab on every change and right after its connection opens (`FileEditReporter`). Main keeps the latest report
  * per connection (`FileEditReports`), forgets a connection when it ends, and an agent's close reads that store
- * (`tabCloseStep`): it keeps a tab some report names, releases any other.
+ * (`tab_close_step`): it keeps a tab some report names, releases any other.
  *
  * Frames from page to main are FIFO per connection; frames of a connection that ended are refused.
  *)
@@ -80,7 +80,7 @@ Edits(t) ==
        ELSE IF reported # {} THEN "clean"
        ELSE "unreported"
 
-\* @code src/main/agent-control/tab-close.ts:31-36 tabCloseStep (looked/userTouched are outside this model)
+\* @code native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs:57-67 tab_close_step (looked/userTouched, and the in-use check, are outside this model)
 CloseStep(t) == IF Edits(t) = "dirty" THEN "keep" ELSE "release"
 
 \* A page whose current connection is live, greeted and has nothing in flight: main has its word.
@@ -107,7 +107,7 @@ Edit(p, v) ==
     /\ UNCHANGED <<conn, live, greeted, handoff, store, deciding, released, bad, late, refused>>
 
 \* A fresh socket: the router serves a new connection (a new random id) for the page.
-\* @code src/main/web/ws-router.ts:391-403 attach
+\* @code src/main/web/ws-router.ts:403-414 attach
 Connect(p) ==
     /\ conn[p] < MaxConn
     /\ conn[p] = 0 \/ Current(p) \notin live
@@ -126,7 +126,7 @@ Greet(p) ==
     /\ UNCHANGED <<edit, conn, live, handoff, store, deciding, released, edits, bad, late, refused>>
 
 \* The socket ends (closed, timed out, retired, revoked): detach, onConnectionEnded, forget, in one synchronous run.
-\* @code src/main/web/ws-router.ts:418-434 detach -> onConnectionEnded; src/main/index.ts:1843 forget
+\* @code src/main/web/ws-router.ts:430-446 detach -> onConnectionEnded; src/main/index.ts:2285 forget
 Drop(c) ==
     /\ c \in live
     /\ live' = live \ {c}
@@ -134,7 +134,7 @@ Drop(c) ==
     /\ UNCHANGED <<edit, conn, greeted, q, handoff, deciding, released, edits, bad, late, refused>>
 
 \* A report frame reaches main: an ended connection refuses it; a live one hands it to the handler in the same run.
-\* @code src/main/web/ws-router.ts:507-508 receive (closed -> ignored); ws-router.ts:749 registry.invoke; src/main/ipc.ts:1542-1546 FILE_EDIT_REPORT
+\* @code src/main/web/ws-router.ts:549-550 receive (closed -> ignored); ws-router.ts:810 registry.invoke; src/main/ipc.ts:1696-1700 FILE_EDIT_REPORT
 Deliver(c) ==
     /\ q[c] # <<>>
     /\ q' = [q EXCEPT ![c] = Tail(@)]
@@ -154,7 +154,7 @@ Handle(c) ==
     /\ UNCHANGED <<edit, conn, live, greeted, q, deciding, released, edits, bad, late, refused>>
 
 \* An agent's close reads the tab (its `webEdits` from the store) and decides.
-\* @code src/main/agent-control/service.ts:3327-3336 #closeTab: snapshot, tabCloseStep, keep or start the release
+\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:138-177 close_tab: snapshot, tab_close_step, keep or start the release
 CloseDecide(t) ==
     /\ t \notin released \cup deciding
     /\ IF CloseStep(t) = "release"
@@ -168,7 +168,7 @@ CloseDecide(t) ==
 \* The release lands after awaits (host.release, closeWindowTab's refreshExitPolicy); reports may arrive meanwhile.
 \* Right after the await, with no await before the release, the one rule decides again on what the store says now.
 \* @code src/main/tab-release.ts:38-41 refreshExitPolicy, stillClosable, closeTabTerminals, releaseTab
-\* @code src/main/agent-control/host.ts:960-969 release: stillReleasable = tabCloseStep on the store's word then
+\* @code src/main/agent-control/host.ts:1119-1126 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
 CloseRelease(t) ==
     /\ t \in deciding
     /\ deciding' = deciding \ {t}
