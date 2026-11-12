@@ -159,7 +159,7 @@ Init ==
 
 \* @code src/main/turn-resume.ts:1441-1473 launch(): the marker finds its tab (layout, unwritten, opened) and is kept as a launch marker (#pending)
 \* @code src/main/turn-resume.ts:1475-1486 each marker's continuation holds (offline) or runs (online) with the tab's session file and `touched` (HeldWait.since / #run's `since`)
-\* @code src/main/autopilot.ts:1133-1134 #onReady: a launch marker means the run waits for the continuation's goalSettled (`apWait`)
+\* @code native/ompdesk/crates/core/src/autopilot/cycle.rs:1146 Coordinator::on_ready: a launch marker means the run waits for the continuation's goalSettled (`apWait`)
 Launch(t) ==
     /\ Idle /\ ~launched /\ ~online /\ nStarts = 0 /\ run[t] = "idle" /\ ~awaiting[t]
     /\ launched' = TRUE
