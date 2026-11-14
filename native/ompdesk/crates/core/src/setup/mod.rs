@@ -17,6 +17,7 @@ mod download;
 mod net;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 use serde::Deserialize;
 

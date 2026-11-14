@@ -17,7 +17,7 @@
 //! secret; the secret travels in `target`, `current` and `secret` and goes nowhere but the CLI's own argument.
 
 mod json;
-mod locate;
+pub(crate) mod locate;
 mod serve;
 mod service;
 mod status;
