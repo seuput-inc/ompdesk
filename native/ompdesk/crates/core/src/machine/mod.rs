@@ -13,7 +13,7 @@ mod tools;
 pub use command::{CommandShell, ShellContext};
 
 pub use paths::{
-    Platform, find_git_bash, find_on_path, is_compiled_omp, manifest_bun_minimum,
+    Platform, find_git_bash, find_on_path, is_compiled_omp, manifest_bun_minimum, omp_path,
     update_environment,
 };
 pub use rea::{REA_NODE_REQUIREMENT, ReaState, rea_node_supported};

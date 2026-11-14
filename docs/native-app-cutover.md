@@ -31,6 +31,25 @@ Paths below are relative to `src/main` (TS) and `native/ompdesk/crates/core/src`
 - Runtime log writer, full-disk retained saves, CEF first-page notification, Boot owner revocation, native quit/update ordering, authenticated dialogs/notifications and the CEF UI heartbeat are part of this integration, not optional polish.
 - Windows isolated supervisor handle inheritance is still a common platform effect, not proven by the existing `isolated` flag alone.
 
+### Native source intake, 14 Nov 2026
+
+The source units below are present in `omp/agent/shell-native-common`. A domain's native constructor and tests are not evidence that the production application invokes it.
+
+| Source unit | Integrated implementation | Remaining composition gate |
+|---|---|---|
+| Machine/models | Canonical runtime, shell, detection, REA cache and typed application; closed runners fence child admission after runtime resolution. | Authenticated target resolution must reject a revoked owner before the domain is polled again. `close_owner` signals cancellation; it is not a joined global teardown. |
+| Pool/sidecar | Existing Lane and hub engine through native handles; same-tick activity/snapshot and intrinsic outcome identity. | Real native Host, owner reservations, release receipts, platform effects and strong per-tab/generation/outcome Arc retention. |
+| Schedules/routines | Native source actors reuse OS watches, Git/GitHub reads, pool subscriptions and read-only TLS IMAP/MIME. | The actual authenticated pool activity channel and native account/credential capability; no Node source callback. |
+| Memory | One Rust policy compiled into tracked WASM, embedded terminal extension and native supervised capture Host. | Production service graph and upkeep/care clients; Windows isolated setup remains refused until its real handle-inheritance proof is accepted. |
+| Autopilot | Native typed service, existing coordinator, canonical Machine shell and stock approval guard. | Actual Pool/Machine/worktree/resume/permission ports and application frame delivery. |
+| Caller admission/preferences/logging | Native generation/owner/request registry, retained shared preferences and UTF-16-compatible runtime log writer. | Authenticated transport admission, real IPC registration and replacement of the existing Node writer, never two simultaneous writers. |
+
+`application::Services` constructs the shared Machine, Setup runner, stock lanes, Memory Host and first-tab barrier directly. It is not yet wired into the shell's production startup. The Node entry in the section above remains reachable.
+
+Current local evidence: explicit Rust/compiler/toolchain-subcommand 1.95, combined narrow native source tests `20261114-065044-9665` (125 passed), workspace formatter `20261114-065157-7e64` (passed), and native Host/stock adapter tests `20261114-065516-d33a` (62 passed). These checks do not execute CEF, paired desktops or the final application artifact.
+
+Independent hosted source-unit runs retain their observed failures. The Memory run's missing limit-wait log followed an observed hub timeout and core termination; its underlying transport stall is unconfirmed. No deadline or assertion has been relaxed. Canonical Electron-baseline notices are regenerated from that baseline's frozen dependencies; a CEF candidate or changed Cargo lock requires its own generated notices, not a copied expected string.
+
 ## Intentionally TypeScript
 
 Renderer UI and its shared page contracts; the stock omp bridge/extensions and SDK-facing stock workers; build/test/capture tooling. A stock worker may load installed omp session storage. Application decisions performed around that SDK read are not automatically exempt from native migration. Runtime-loaded probes and embedded worker scripts require explicit inventory before deleting Node.
