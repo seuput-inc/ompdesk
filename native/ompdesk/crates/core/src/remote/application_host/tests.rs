@@ -6,15 +6,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Semaphore;
 
 type Listener = Arc<dyn Fn(String, Value) + Send + Sync>;
-struct Target {
-    state: Mutex<Snapshot>,
+pub(crate) struct Target {
+    pub(crate) state: Mutex<Snapshot>,
     listeners: Mutex<Vec<Listener>>,
     answers: Mutex<HashSet<String>>,
 }
 #[derive(Clone)]
-struct Caller(String);
-struct Effects {
-    targets: Mutex<HashMap<String, Arc<Target>>>,
+pub(crate) struct Caller(pub(crate) String);
+pub(crate) struct Effects {
+    pub(crate) targets: Mutex<HashMap<String, Arc<Target>>>,
     calls: AtomicUsize,
     opens: AtomicUsize,
     closed: AtomicUsize,
@@ -22,6 +22,19 @@ struct Effects {
     block: AtomicBool,
     acquired: Semaphore,
     release: Semaphore,
+    block_close: AtomicBool,
+    close_started: Semaphore,
+    close_release: Semaphore,
+    closed_targets: Mutex<Vec<Arc<Target>>>,
+    block_runtime: AtomicBool,
+    runtime_started: Semaphore,
+    runtime_release: Semaphore,
+    fail_after_close: AtomicBool,
+    session_effects: Mutex<Vec<(Arc<Target>, Value)>>,
+    fail_session_effect: AtomicBool,
+    capture_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    pub(crate) snapshot_failure: Mutex<Option<Fault>>,
+    capture_started: Semaphore,
 }
 impl Effects {
     fn new() -> Arc<Self> {
@@ -34,7 +47,31 @@ impl Effects {
             block: AtomicBool::new(false),
             acquired: Semaphore::new(0),
             release: Semaphore::new(0),
+            block_close: AtomicBool::new(false),
+            close_started: Semaphore::new(0),
+            close_release: Semaphore::new(0),
+            closed_targets: Mutex::default(),
+            block_runtime: AtomicBool::new(false),
+            runtime_started: Semaphore::new(0),
+            runtime_release: Semaphore::new(0),
+            fail_after_close: AtomicBool::new(false),
+            session_effects: Mutex::default(),
+            fail_session_effect: AtomicBool::new(false),
+            capture_gate: Mutex::default(),
+            snapshot_failure: Mutex::default(),
+            capture_started: Semaphore::new(0),
         })
+    }
+
+    fn record_session_effect(&self, target: &Arc<Target>, command: Value) -> Result<(), Fault> {
+        lock(&self.session_effects).push((Arc::clone(target), command));
+        if self.fail_session_effect.load(Ordering::SeqCst) {
+            return Err(Fault::new(
+                "session_effect_failed",
+                "The native session effect failed",
+            ));
+        }
+        Ok(())
     }
 }
 impl Host for Effects {
@@ -86,7 +123,85 @@ impl Host for Effects {
             .clone())
     }
     fn snapshot(&self, target: &Arc<Target>) -> Result<Snapshot, Fault> {
+        if let Some(failure) = lock(&self.snapshot_failure).as_ref() {
+            return Err(failure.clone());
+        }
         Ok(lock(&target.state).clone())
+    }
+    async fn capture_session_target(
+        &self,
+        target: &Arc<Target>,
+        expected_path: &str,
+    ) -> Result<Arc<Target>, Fault> {
+        let gate = lock(&self.capture_gate).take();
+        self.capture_started.add_permits(1);
+        if let Some(gate) = gate {
+            gate.await
+                .map_err(|_| Fault::new("capture_lost", "Capture gate dropped"))?;
+        }
+        if lock(&target.state).session_path.as_deref() != Some(expected_path) {
+            return Err(Fault::new(
+                "session_changed",
+                "The hosted session path changed",
+            ));
+        }
+        Ok(Arc::clone(target))
+    }
+    async fn stop_session(&self, target: &Arc<Target>) -> Result<(), Fault> {
+        self.record_session_effect(target, json!({"type":"stop"}))
+    }
+    async fn command_session(&self, target: &Arc<Target>, command: Value) -> Result<Value, Fault> {
+        self.record_session_effect(target, command)?;
+        Ok(json!({
+            "type":"response",
+            "command":"set_session_name",
+            "success":false,
+            "error":"Stock rejected the name",
+            "data":{"preserved":true}
+        }))
+    }
+    async fn note_session_name(&self, target: &Arc<Target>, name: &str) -> Result<(), Fault> {
+        self.record_session_effect(target, json!({"type":"note_session_name","name":name}))
+    }
+    async fn session_runtime(&self, target: &Arc<Target>) -> Result<SessionRuntime, Fault> {
+        self.runtime_started.add_permits(1);
+        if self.block_runtime.load(Ordering::SeqCst) {
+            self.runtime_release.acquire().await.unwrap().forget();
+        }
+        use crate::session_ops::{Activity, RuntimeState};
+        let snapshot = lock(&target.state);
+        Ok(SessionRuntime {
+            activity: if snapshot.run["compacting"] == true {
+                Activity::Compacting
+            } else if snapshot.run["running"] == true {
+                Activity::Running
+            } else {
+                Activity::Idle
+            },
+            state: match snapshot.status.as_str() {
+                "ready" => RuntimeState::Ready,
+                "asleep" => RuntimeState::Dormant,
+                _ => RuntimeState::Starting,
+            },
+        })
+    }
+    async fn close_session(&self, target: Arc<Target>) -> Result<SessionRelease, Fault> {
+        if self.session_runtime(&target).await?.activity != crate::session_ops::Activity::Idle {
+            return Ok(SessionRelease::Busy);
+        }
+        self.close_started.add_permits(1);
+        if self.block_close.load(Ordering::SeqCst) {
+            self.close_release.acquire().await.unwrap().forget();
+        }
+        lock(&self.closed_targets).push(target);
+        self.closed.fetch_add(1, Ordering::SeqCst);
+        Ok(SessionRelease::Released(
+            if self.fail_after_close.load(Ordering::SeqCst) {
+                Err(Fault::new("after_close", "A post-release observer failed"))
+            } else {
+                Ok(())
+            },
+        ))
     }
     fn listen(&self, target: &Arc<Target>, event: Listener) -> Result<(), Fault> {
         lock(&target.listeners).push(event);
@@ -122,7 +237,15 @@ impl Host for Effects {
         target: &Arc<Target>,
         _: Value,
         _: Option<Duration>,
+        expected_omp: Option<String>,
+        _: &RemoteRequests,
     ) -> ResultValue {
+        if expected_omp
+            .as_deref()
+            .is_some_and(|expected| expected != lock(&target.state).omp)
+        {
+            return Err(Fault::new("remote_run_changed", "The captured remote run changed").into());
+        }
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(
             json!({"success":!self.fail.load(Ordering::SeqCst),"data":lock(&target.state).session_path}),
@@ -133,7 +256,18 @@ impl Host for Effects {
         _: &Caller,
         target: &Arc<Target>,
         frame: Value,
+        expected_omp: Option<String>,
+        _: &RemoteRequests,
     ) -> Result<(), Fault> {
+        if expected_omp
+            .as_deref()
+            .is_some_and(|expected| expected != lock(&target.state).omp)
+        {
+            return Err(Fault::new(
+                "remote_run_changed",
+                "The captured remote run changed",
+            ));
+        }
         if frame["type"] == "extension_ui_response"
             && let Some(id) = frame["id"].as_str()
             && !lock(&target.answers).insert(id.to_owned())
@@ -141,6 +275,36 @@ impl Host for Effects {
             return Err(Fault::new("already_answered", "Already answered"));
         }
         Ok(())
+    }
+    async fn observe_card(
+        &self,
+        _: &Caller,
+        target: &Arc<Target>,
+        expected_omp: String,
+        card_id: String,
+        _: &RemoteRequests,
+    ) -> Result<CardObservation, Fault> {
+        let state = lock(&target.state);
+        if state.omp != expected_omp {
+            return Err(Fault::new(
+                "remote_run_changed",
+                "The captured remote run changed",
+            ));
+        }
+        let request = state
+            .asks
+            .iter()
+            .find(|ask| ask["id"] == card_id)
+            .ok_or_else(|| Fault::new("observed_card_changed", "The original card is gone"))?;
+        Ok(CardObservation {
+            session_path: state
+                .session_path
+                .clone()
+                .ok_or_else(|| Fault::new("session_unwritten", "No saved session"))?,
+            omp_epoch: state.omp.clone(),
+            card_id,
+            request: request.clone(),
+        })
     }
     async fn close(&self, _: Arc<Target>) -> Result<(), Fault> {
         self.closed.fetch_add(1, Ordering::SeqCst);
@@ -181,7 +345,7 @@ impl QuotaStore for Records {
         Ok(true)
     }
 }
-fn service() -> (Arc<HostServices<Effects>>, Arc<Effects>, Arc<PeerQuota>) {
+pub(crate) fn service() -> (Arc<HostServices<Effects>>, Arc<Effects>, Arc<PeerQuota>) {
     let effects = Effects::new();
     let records = Arc::new(Records::default());
     lock(&records.0).insert("peer".into(), QuotaRecord::default());
@@ -560,6 +724,457 @@ async fn sign_in_callback_is_bound_to_live_target_state_and_consumed_before_poll
         "sign_in_unavailable"
     );
     assert_eq!(quota.usage("peer").unwrap().requests, 0.0);
+    service.drop_peer("peer").await.unwrap();
+    device.disconnect_for_test();
+    host.disconnect_for_test();
+}
+
+#[tokio::test]
+async fn captured_session_follows_rekey_but_never_closes_a_replacement() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("old"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    let original = captured.holders[0].runtime.target().clone();
+    service.disconnected(&owner, &host);
+    let (_new_device, new_host, _new_keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("new"), &new_host)
+        .await
+        .unwrap();
+    service
+        .close_session_ticket(&captured.holders[0].runtime)
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(&lock(&effects.closed_targets)[0], &original));
+    assert!(service.target("peer", "new").is_err());
+
+    lock(&effects.targets).remove("/session/one.jsonl");
+    service
+        .call(&owner, "tab.open", open("new"), &new_host)
+        .await
+        .unwrap();
+    let replacement = service.target("peer", "new").unwrap();
+    assert!(!Arc::ptr_eq(&original, &replacement));
+    assert_eq!(
+        service
+            .close_session_ticket(&captured.holders[0].runtime)
+            .await
+            .unwrap_err()
+            .code,
+        "session_changed"
+    );
+    assert!(Arc::ptr_eq(
+        &service.target("peer", "new").unwrap(),
+        &replacement
+    ));
+    assert_eq!(lock(&effects.closed_targets).len(), 1);
+}
+
+#[tokio::test]
+async fn captured_activity_reports_compaction_and_starting_without_closing() {
+    use crate::session_ops::{Activity, RuntimeState};
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("one"), &host)
+        .await
+        .unwrap();
+    let target = service.target("peer", "one").unwrap();
+    {
+        let mut snapshot = lock(&target.state);
+        snapshot.run = json!({"running":false,"compacting":true});
+        snapshot.status = "starting".into();
+    }
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    assert_eq!(captured.holders[0].activity, Activity::Compacting);
+    assert_eq!(captured.holders[0].state, RuntimeState::Starting);
+    assert_eq!(
+        service
+            .close_session_ticket(&captured.holders[0].runtime)
+            .await
+            .unwrap_err()
+            .code,
+        "session_running"
+    );
+    assert_eq!(effects.closed.load(Ordering::SeqCst), 0);
+    assert!(service.target("peer", "one").is_ok());
+}
+
+#[tokio::test]
+async fn failed_status_notification_does_not_skip_joining_the_captured_close() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("one"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    effects.block_close.store(true, Ordering::SeqCst);
+    host.disconnect_for_test();
+    let closing = {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move {
+            service
+                .close_session_ticket(&captured.holders[0].runtime)
+                .await
+        })
+    };
+    effects.close_started.acquire().await.unwrap().forget();
+    assert!(!closing.is_finished());
+    effects.close_release.add_permits(1);
+    assert!(closing.await.unwrap().is_err());
+    assert_eq!(effects.closed.load(Ordering::SeqCst), 1);
+    assert!(service.target("peer", "one").is_err());
+}
+
+#[tokio::test]
+async fn a_committed_close_error_still_forgets_the_exact_hosted_ticket() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("one"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    effects.fail_after_close.store(true, Ordering::SeqCst);
+    let error = service
+        .close_session_ticket(&captured.holders[0].runtime)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "after_close");
+    assert_eq!(effects.closed.load(Ordering::SeqCst), 1);
+    assert!(service.target("peer", "one").is_err());
+}
+
+#[tokio::test]
+async fn failed_captured_notice_still_notifies_current_connections() {
+    let (service, _, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("one"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    service
+        .close_session_ticket(&captured.holders[0].runtime)
+        .await
+        .unwrap();
+    host.disconnect_for_test();
+    let (other_device, other_host, _other_keep) = pair().await;
+    let mut events = other_device.events();
+    lock(&service.state)
+        .connections
+        .insert("other".into(), (other_host, json!({})));
+    assert!(
+        service
+            .notify_session_deleted("/session/one.jsonl", captured.notices)
+            .is_err()
+    );
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.event, "host.sessionsDeleted");
+    assert_eq!(event.data, json!({"paths":["/session/one.jsonl"]}));
+}
+
+#[tokio::test]
+async fn runtime_await_keeps_the_previously_captured_target_across_rekey() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("old"), &host)
+        .await
+        .unwrap();
+    let original = service.target("peer", "old").unwrap();
+    effects.block_runtime.store(true, Ordering::SeqCst);
+    let capture = {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move { service.capture_session("/session/one.jsonl").await })
+    };
+    effects.runtime_started.acquire().await.unwrap().forget();
+    service.disconnected(&owner, &host);
+    let (_device, new_host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("new"), &new_host)
+        .await
+        .unwrap();
+    effects.runtime_release.add_permits(1);
+    let captured = capture.await.unwrap().unwrap();
+    assert!(Arc::ptr_eq(captured.holders[0].runtime.target(), &original));
+    assert!(Arc::ptr_eq(
+        &service.target("peer", "new").unwrap(),
+        &original
+    ));
+}
+
+#[tokio::test]
+async fn captured_session_effects_keep_the_original_target_and_full_reply_after_rekey() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("old"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    let ticket = &captured.holders[0].runtime;
+    let original = ticket.target();
+    service.disconnected(&owner, &host);
+    let (_new_device, new_host, _new_keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("new"), &new_host)
+        .await
+        .unwrap();
+
+    service.stop_session_ticket(ticket).await.unwrap();
+    let command = json!({"type":"set_session_name","name":"sample"});
+    let reply = service
+        .command_session_ticket(ticket, command.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        json!({
+            "type":"response",
+            "command":"set_session_name",
+            "success":false,
+            "error":"Stock rejected the name",
+            "data":{"preserved":true}
+        })
+    );
+    service
+        .note_session_name_ticket(ticket, "sample")
+        .await
+        .unwrap();
+    {
+        let effects = lock(&effects.session_effects);
+        assert_eq!(effects.len(), 3);
+        assert!(
+            effects
+                .iter()
+                .all(|(target, _)| Arc::ptr_eq(target, original))
+        );
+        assert_eq!(effects[0].1, json!({"type":"stop"}));
+        assert_eq!(effects[1].1, command);
+        assert_eq!(
+            effects[2].1,
+            json!({"type":"note_session_name","name":"sample"})
+        );
+    }
+    assert!(Arc::ptr_eq(
+        &service.target("peer", "new").unwrap(),
+        original
+    ));
+    service.drop_peer("peer").await.unwrap();
+}
+
+#[tokio::test]
+async fn replaced_hosted_ticket_refuses_all_session_effects_before_dispatch() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("same"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    let ticket = &captured.holders[0].runtime;
+    service.close_session_ticket(ticket).await.unwrap();
+    lock(&effects.targets).remove("/session/one.jsonl");
+    service
+        .call(&owner, "tab.open", open("same"), &host)
+        .await
+        .unwrap();
+    let replacement = service.target("peer", "same").unwrap();
+    assert!(!Arc::ptr_eq(ticket.target(), &replacement));
+    assert_eq!(
+        service.stop_session_ticket(ticket).await.unwrap_err().code,
+        "session_changed"
+    );
+    assert_eq!(
+        service
+            .command_session_ticket(ticket, json!({"type":"get_state"}))
+            .await
+            .unwrap_err()
+            .code,
+        "session_changed"
+    );
+    assert_eq!(
+        service
+            .note_session_name_ticket(ticket, "obsolete")
+            .await
+            .unwrap_err()
+            .code,
+        "session_changed"
+    );
+    assert!(lock(&effects.session_effects).is_empty());
+    assert!(Arc::ptr_eq(
+        &service.target("peer", "same").unwrap(),
+        &replacement
+    ));
+    service.drop_peer("peer").await.unwrap();
+}
+
+#[tokio::test]
+async fn captured_session_effect_failures_are_not_reported_as_success() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("one"), &host)
+        .await
+        .unwrap();
+    let captured = service.capture_session("/session/one.jsonl").await.unwrap();
+    let ticket = &captured.holders[0].runtime;
+    effects.fail_session_effect.store(true, Ordering::SeqCst);
+    let expected = Fault::new("session_effect_failed", "The native session effect failed");
+    assert_eq!(
+        service.stop_session_ticket(ticket).await,
+        Err(expected.clone())
+    );
+    assert_eq!(
+        service
+            .command_session_ticket(ticket, json!({"type":"get_state"}))
+            .await,
+        Err(expected.clone())
+    );
+    assert_eq!(
+        service.note_session_name_ticket(ticket, "sample").await,
+        Err(expected)
+    );
+    assert_eq!(lock(&effects.session_effects).len(), 3);
+    service.drop_peer("peer").await.unwrap();
+}
+
+#[tokio::test]
+async fn a_path_changed_while_freezing_never_becomes_a_session_holder() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (_device, host, _keep) = pair().await;
+    service
+        .call(&owner, "tab.open", open("freezing"), &host)
+        .await
+        .unwrap();
+    let original = service.target("peer", "freezing").unwrap();
+    let (release, released) = tokio::sync::oneshot::channel();
+    *lock(&effects.capture_gate) = Some(released);
+    let capture = {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move { service.capture_session("/session/one.jsonl").await })
+    };
+    effects.capture_started.acquire().await.unwrap().forget();
+    lock(&original.state).session_path = Some("/session/replacement.jsonl".into());
+    release.send(()).unwrap();
+    let error = capture
+        .await
+        .unwrap()
+        .err()
+        .expect("changed target must be refused");
+    assert_eq!(error.code, "session_changed");
+    assert!(lock(&effects.session_effects).is_empty());
+    assert_eq!(effects.closed.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn bound_commands_and_cards_cannot_cross_a_remote_run() {
+    let (service, effects, _) = service();
+    let owner = Caller("peer".into());
+    let (device, host, _keep) = pair().await;
+    let opened = service
+        .call(&owner, "tab.open", open("one"), &host)
+        .await
+        .unwrap();
+    assert_eq!(opened["boundOmp"], true);
+    let target = service.target("peer", "one").unwrap();
+    let observation = service
+        .call(
+            &owner,
+            "tab.observeCard",
+            json!({"rtab":"one","expectedOmp":"process-one","cardId":"ask"}),
+            &host,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        observation,
+        json!({"sessionPath":"/session/one.jsonl","ompEpoch":"process-one",
+        "cardId":"ask","request":{"id":"ask","method":"input","title":"question"}})
+    );
+    lock(&target.state).omp = "process-two".into();
+    for (method, params) in [
+        (
+            "tab.command",
+            json!({"rtab":"one","expectedOmp":"process-one","command":{"type":"get_state"}}),
+        ),
+        (
+            "tab.sideChannel",
+            json!({"rtab":"one","expectedOmp":"process-one","frame":{"type":"extension_ui_response","id":"ask"}}),
+        ),
+        (
+            "tab.observeCard",
+            json!({"rtab":"one","expectedOmp":"process-one","cardId":"ask"}),
+        ),
+    ] {
+        assert_eq!(
+            service
+                .call(&owner, method, params, &host)
+                .await
+                .unwrap_err()
+                .fault
+                .code,
+            "remote_run_changed"
+        );
+    }
+    assert_eq!(effects.calls.load(Ordering::SeqCst), 0);
+    assert!(lock(&target.answers).is_empty());
+    service
+        .call(
+            &owner,
+            "tab.command",
+            json!({"rtab":"one","expectedOmp":"process-two","command":{"type":"get_state"}}),
+            &host,
+        )
+        .await
+        .unwrap();
+    assert_eq!(effects.calls.load(Ordering::SeqCst), 1);
+    lock(&target.state).asks.clear();
+    assert_eq!(
+        service
+            .call(
+                &owner,
+                "tab.observeCard",
+                json!({"rtab":"one","expectedOmp":"process-two","cardId":"ask"}),
+                &host
+            )
+            .await
+            .unwrap_err()
+            .fault
+            .code,
+        "observed_card_changed"
+    );
+    service.disconnected(&owner, &host);
+    assert_eq!(
+        service
+            .call(
+                &owner,
+                "tab.observeCard",
+                json!({"rtab":"one","expectedOmp":"process-two","cardId":"ask"}),
+                &host
+            )
+            .await
+            .unwrap_err()
+            .fault
+            .code,
+        "remote_offline"
+    );
     service.drop_peer("peer").await.unwrap();
     device.disconnect_for_test();
     host.disconnect_for_test();

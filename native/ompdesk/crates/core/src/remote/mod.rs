@@ -30,6 +30,7 @@ mod handshake;
 mod host;
 pub mod identity;
 mod link;
+pub mod native_sidecar;
 pub mod quota;
 pub mod requests;
 pub mod session_feed;

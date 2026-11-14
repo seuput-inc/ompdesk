@@ -15,6 +15,7 @@ use super::events::delta::{ReadEncoder, encoded_read_key};
 use super::events::encoder::{BATCH_INTERVAL, Options, Sender};
 use super::quota::{PeerQuota, assistant_tokens, command_uses_model};
 use super::requests::{RemoteError, RemoteRequests};
+pub use crate::pool::application::native::{SessionRelease, SessionRuntime};
 use crate::remotebytes::native::LoopbackCallback;
 use crate::server::Fault;
 
@@ -38,6 +39,15 @@ pub struct Open {
     pub fresh: bool,
     pub session_path: Option<String>,
 }
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardObservation {
+    pub session_path: String,
+    pub omp_epoch: String,
+    pub card_id: String,
+    pub request: Value,
+}
+
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub cwd: String,
@@ -73,6 +83,35 @@ pub trait Host: Send + Sync + 'static {
         options: Open,
     ) -> impl Future<Output = Result<Self::Target, Fault>> + Send;
     fn snapshot(&self, target: &Self::Target) -> Result<Snapshot, Fault>;
+    /// Freeze the original execution, path and run before a saved-session ticket can outlive an await.
+    fn capture_session_target(
+        &self,
+        target: &Self::Target,
+        expected_path: &str,
+    ) -> impl Future<Output = Result<Self::Target, Fault>> + Send;
+    /// Reads the pool's authoritative activity and readiness for this exact target.
+    fn session_runtime(
+        &self,
+        target: &Self::Target,
+    ) -> impl Future<Output = Result<SessionRuntime, Fault>> + Send;
+    /// Each effect must admit this exact captured target in the authoritative native pool.
+    fn stop_session(&self, target: &Self::Target)
+    -> impl Future<Output = Result<(), Fault>> + Send;
+    fn command_session(
+        &self,
+        target: &Self::Target,
+        command: Value,
+    ) -> impl Future<Output = Result<Value, Fault>> + Send;
+    fn note_session_name(
+        &self,
+        target: &Self::Target,
+        name: &str,
+    ) -> impl Future<Output = Result<(), Fault>> + Send;
+    /// Atomically recheck the target incarnation and activity, enqueue disposal, and join its exact exit receipt.
+    fn close_session(
+        &self,
+        target: Self::Target,
+    ) -> impl Future<Output = Result<SessionRelease, Fault>> + Send;
     /// Install before starting a target; callbacks run in source order before command completion, outside source locks.
     fn listen(
         &self,
@@ -93,13 +132,26 @@ pub trait Host: Send + Sync + 'static {
         target: &Self::Target,
         command: Value,
         timeout: Option<Duration>,
+        expected_omp: Option<String>,
+        connection: &RemoteRequests,
     ) -> impl Future<Output = ResultValue> + Send;
     fn side_channel(
         &self,
         owner: &Self::Owner,
         target: &Self::Target,
         frame: Value,
+        expected_omp: Option<String>,
+        connection: &RemoteRequests,
     ) -> impl Future<Output = Result<(), Fault>> + Send;
+    /// Admit the actual card, policy and captured execution run in the canonical pool in one effect.
+    fn observe_card(
+        &self,
+        owner: &Self::Owner,
+        target: &Self::Target,
+        expected_omp: String,
+        card_id: String,
+        connection: &RemoteRequests,
+    ) -> impl Future<Output = Result<CardObservation, Fault>> + Send;
     fn close(&self, target: Self::Target) -> impl Future<Output = Result<(), Fault>> + Send;
     fn cancel_wait(&self, target: &Self::Target) -> impl Future<Output = Result<(), Fault>> + Send;
     fn sync_image_generation(&self, target: &Self::Target) -> Result<(), Fault>;
@@ -203,6 +255,24 @@ pub struct HostServices<H: Host> {
     grace: Duration,
     config: Config,
 }
+/// A captured hosted tab incarnation. Its target and notice route never come from a later lookup.
+pub struct SessionTicket<T> {
+    target: T,
+    serial: u64,
+}
+impl<T> SessionTicket<T> {
+    pub fn target(&self) -> &T {
+        &self.target
+    }
+}
+
+pub struct SessionNotices(Vec<(RemoteRequests, String)>);
+
+pub struct SessionCapture<T> {
+    pub holders: Vec<crate::session_ops::Holder<SessionTicket<T>>>,
+    pub notices: SessionNotices,
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
@@ -269,6 +339,194 @@ impl<H: Host> HostServices<H> {
             config,
         })
     }
+    /// Native counterpart of resumeFacts: views hold no execution tag; disconnected runners remain held.
+    pub fn holds_session(&self, path: &str) -> Result<bool, Fault> {
+        let state = lock(&self.state);
+        for tab in state.tabs.values() {
+            let snapshot = self.host.snapshot(&tab.target)?;
+            if !snapshot.viewing && snapshot.session_path.as_deref() == Some(path) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Capture hosted runners and their notice routes before asynchronous work.
+    pub async fn capture_session(&self, path: &str) -> Result<SessionCapture<H::Target>, Fault> {
+        use crate::session_ops::Holder;
+        let (tickets, notices) = {
+            let state = lock(&self.state);
+            let mut tickets = Vec::new();
+            let mut notices = Vec::new();
+            for tab in state.tabs.values() {
+                let snapshot = self.host.snapshot(&tab.target)?;
+                if snapshot.session_path.as_deref() != Some(path) {
+                    continue;
+                }
+                if let Some(connection) = &tab.connection {
+                    notices.push((connection.clone(), tab.rtab.clone()));
+                }
+                if !snapshot.viewing {
+                    tickets.push(SessionTicket {
+                        target: tab.target.clone(),
+                        serial: tab.serial,
+                    });
+                }
+            }
+            (tickets, notices)
+        };
+        let mut holders = Vec::with_capacity(tickets.len());
+        for mut ticket in tickets {
+            ticket.target = self
+                .host
+                .capture_session_target(&ticket.target, path)
+                .await?;
+            let runtime = self.host.session_runtime(&ticket.target).await?;
+            holders.push(Holder {
+                runtime: ticket,
+                hosted: true,
+                activity: runtime.activity,
+                state: runtime.state,
+            });
+        }
+        Ok(SessionCapture {
+            holders,
+            notices: SessionNotices(notices),
+        })
+    }
+
+    fn session_ticket_target<'a>(
+        &self,
+        ticket: &'a SessionTicket<H::Target>,
+    ) -> Result<&'a H::Target, Fault> {
+        if !lock(&self.state)
+            .tabs
+            .values()
+            .any(|tab| tab.serial == ticket.serial)
+        {
+            return Err(Fault::new(
+                "session_changed",
+                "The captured hosted tab is no longer present",
+            ));
+        }
+        Ok(&ticket.target)
+    }
+
+    pub async fn stop_session_ticket(
+        &self,
+        ticket: &SessionTicket<H::Target>,
+    ) -> Result<(), Fault> {
+        self.host
+            .stop_session(self.session_ticket_target(ticket)?)
+            .await
+    }
+
+    pub async fn command_session_ticket(
+        &self,
+        ticket: &SessionTicket<H::Target>,
+        command: Value,
+    ) -> Result<Value, Fault> {
+        self.host
+            .command_session(self.session_ticket_target(ticket)?, command)
+            .await
+    }
+
+    pub async fn note_session_name_ticket(
+        &self,
+        ticket: &SessionTicket<H::Target>,
+        name: &str,
+    ) -> Result<(), Fault> {
+        self.host
+            .note_session_name(self.session_ticket_target(ticket)?, name)
+            .await
+    }
+
+    /// Detach only the captured incarnation, even if it was rekeyed.
+    pub async fn close_session_ticket(
+        &self,
+        ticket: &SessionTicket<H::Target>,
+    ) -> Result<(), Fault> {
+        let snapshot = {
+            let state = lock(&self.state);
+            if !state.tabs.values().any(|tab| tab.serial == ticket.serial) {
+                return Err(Fault::new(
+                    "session_changed",
+                    "The captured hosted tab is no longer present",
+                ));
+            }
+            self.host.snapshot(&ticket.target)?
+        };
+        let closed = match self.host.close_session(ticket.target.clone()).await? {
+            SessionRelease::Busy => {
+                return Err(Fault::new(
+                    "session_running",
+                    "The hosted session is running",
+                ));
+            }
+            SessionRelease::Released(result) => result,
+        };
+        let notification = {
+            let mut state = lock(&self.state);
+            let key = state
+                .tabs
+                .iter()
+                .find(|(_, tab)| tab.serial == ticket.serial)
+                .map(|(key, _)| key.clone());
+            let Some(key) = key else {
+                return closed;
+            };
+            let mut tab = state
+                .tabs
+                .remove(&key)
+                .expect("captured tab exists under lock");
+            *state.revisions.entry(key).or_default() += 1;
+            let notification = tab.connection.as_ref().map(|connection| {
+                send_event(
+                    connection,
+                    &tab.rtab,
+                    "status",
+                    &json!({
+                        "status":"exited",
+                        "statusPayload":{"message":"This session was closed on the host"},
+                        "processAlive":false,
+                        "cwd":snapshot.cwd,
+                        "kind":snapshot.kind
+                    }),
+                )
+                .map_err(|error| error.fault)
+            });
+            tab.sender.dispose();
+            notification
+        };
+        closed.and(notification.unwrap_or(Ok(())))
+    }
+
+    /// Call only after the stored deletion commits.
+    pub fn notify_session_deleted(&self, path: &str, notices: SessionNotices) -> Result<(), Fault> {
+        let mut failure = None;
+        for (connection, rtab) in notices.0 {
+            if let Err(error) = send_event(&connection, &rtab, "sessionDeleted", &json!(path)) {
+                failure.get_or_insert(error.fault);
+            }
+        }
+        let connections: Vec<_> = lock(&self.state)
+            .connections
+            .values()
+            .map(|(connection, _)| connection.clone())
+            .collect();
+        let data = json!({"paths":[path]});
+        for connection in connections {
+            if let Err(error) = connection.emit("host.sessionsDeleted", &data) {
+                failure.get_or_insert(error.fault);
+            }
+        }
+        self.host.publish("host.sessionsDeleted", &data);
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// The caller is authenticated by Base before this function runs; no request contains an Owner.
     pub fn serve(
         self: &Arc<Self>,
@@ -453,8 +711,28 @@ impl<H: Host> HostServices<H> {
                 Ok(Value::Null)
             }
             "tab.command" => {
-                self.command(owner, params, target()?, admission.serial)
-                    .await
+                self.command(
+                    owner,
+                    params,
+                    target()?,
+                    admission.serial,
+                    connection.clone(),
+                )
+                .await
+            }
+            "tab.observeCard" => {
+                let expected =
+                    expected_omp(&params)?.ok_or_else(|| invalid("expectedOmp required"))?;
+                let card = params["cardId"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| invalid("cardId required"))?
+                    .to_owned();
+                let observation = self
+                    .host
+                    .observe_card(owner, &target()?, expected, card, connection)
+                    .await?;
+                serde_json::to_value(observation).map_err(|_| invalid("Invalid card observation"))
             }
             "tab.sideChannel" => {
                 let target = target()?;
@@ -462,7 +740,13 @@ impl<H: Host> HostServices<H> {
                     return Err(invalid("frame must be an object"));
                 }
                 self.host
-                    .side_channel(owner, &target, params["frame"].clone())
+                    .side_channel(
+                        owner,
+                        &target,
+                        params["frame"].clone(),
+                        expected_omp(&params)?,
+                        connection,
+                    )
                     .await?;
                 if matches!(
                     params["frame"]["type"].as_str(),
@@ -841,7 +1125,7 @@ impl<H: Host> HostServices<H> {
             }
         }
         Ok(
-            json!({"cwd":snapshot.cwd,"kind":snapshot.kind,"attached":attached,"viewing":snapshot.viewing}),
+            json!({"cwd":snapshot.cwd,"kind":snapshot.kind,"attached":attached,"viewing":snapshot.viewing,"boundOmp":true}),
         )
     }
 
@@ -851,6 +1135,7 @@ impl<H: Host> HostServices<H> {
         params: Value,
         target: H::Target,
         serial: u64,
+        connection: RemoteRequests,
     ) -> ResultValue {
         let peer = self.host.peer(owner);
         let id = rtab(&params)?.to_owned();
@@ -880,6 +1165,7 @@ impl<H: Host> HostServices<H> {
         let service = Arc::clone(self);
         let owner = owner.clone();
         let fresh = params["fresh"] == true;
+        let expected = expected_omp(&params)?;
         let work = move || async move {
             let command = Value::Object(command);
             let reservation = if command_uses_model(&command) {
@@ -889,7 +1175,14 @@ impl<H: Host> HostServices<H> {
             };
             let mut result = service
                 .host
-                .command(&owner, &target, command.clone(), timeout)
+                .command(
+                    &owner,
+                    &target,
+                    command.clone(),
+                    timeout,
+                    expected,
+                    &connection,
+                )
                 .await;
             if (result.as_ref().is_err()
                 || result
@@ -1234,6 +1527,14 @@ impl<H: Host> HostServices<H> {
         Ok(())
     }
 }
+fn expected_omp(params: &Value) -> Result<Option<String>, RemoteError> {
+    match params.get("expectedOmp") {
+        None => Ok(None),
+        Some(Value::String(value)) if !value.is_empty() => Ok(Some(value.clone())),
+        _ => Err(invalid("expectedOmp must be a nonempty string")),
+    }
+}
+
 fn optional_text(params: &Value, key: &str) -> Result<Option<String>, RemoteError> {
     match params.get(key) {
         None => Ok(None),
@@ -1359,4 +1660,4 @@ fn host_method(method: &str) -> Option<(RequestKind, &'static str)> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
