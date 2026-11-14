@@ -21,6 +21,7 @@ pub mod ipc;
 mod json;
 pub mod keepawake;
 pub mod machine;
+pub mod mcp_hub;
 pub mod memory;
 mod memsync;
 pub mod models;
