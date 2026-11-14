@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
+use tokio::task::JoinSet;
 
 use super::events::decoder::Decoder;
 use super::events::delta::{ReadDecoder, encoded_read_key};
@@ -50,6 +51,10 @@ pub struct TabSnapshot {
     pub status_from_link: bool,
     pub detail: Value,
     pub session_path: Option<String>,
+    /// Changes when the original link epoch or host omp binding changes.
+    pub generation: u64,
+    pub omp: Option<String>,
+    pub bridge: Value,
 }
 
 #[derive(Clone)]
@@ -58,6 +63,7 @@ pub struct RemoteTab {
     snapshot: Arc<Mutex<TabSnapshot>>,
     cache: Arc<ContentCache>,
     execution_host: String,
+    disposed: watch::Receiver<Option<Result<(), Fault>>>,
 }
 
 type Answer = oneshot::Sender<Result<Value, RemoteError>>;
@@ -125,6 +131,8 @@ struct State {
     relay: Option<NativeRelay>,
     relay_generation: u64,
     signing_in: bool,
+    work: JoinSet<()>,
+    watchers: JoinSet<()>,
 }
 
 fn offline() -> RemoteError {
@@ -157,8 +165,11 @@ impl RemoteTab {
             status_from_link: true,
             detail: json!({}),
             session_path: options.session_path.clone(),
+            generation: 1,
+            omp: None,
+            bridge: Value::Null,
         }));
-        let state = State {
+        let mut state = State {
             options,
             link,
             epoch: 1,
@@ -180,15 +191,24 @@ impl RemoteTab {
             relay: None,
             relay_generation: 0,
             signing_in: false,
+            work: JoinSet::new(),
+            watchers: JoinSet::new(),
         };
         state.watch_link();
-        tokio::spawn(state.run(receiver));
+        let (finished, disposed) = watch::channel(None);
+        tokio::spawn(async move {
+            let result = tokio::spawn(state.run(receiver))
+                .await
+                .unwrap_or_else(|error| Err(Fault::new("remote_actor", error.to_string())));
+            finished.send_replace(Some(result));
+        });
         (
             Self {
                 inbox,
                 snapshot,
                 cache,
                 execution_host,
+                disposed,
             },
             events,
         )
@@ -203,6 +223,9 @@ impl RemoteTab {
     pub fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.snapshot, &other.snapshot)
     }
+    pub fn generation(&self) -> u64 {
+        self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).generation
+    }
     pub fn start(&self) {
         let _ = self.inbox.send(Input::Start);
     }
@@ -214,6 +237,19 @@ impl RemoteTab {
     }
     pub fn dispose(&self, keep_on_host: bool) {
         let _ = self.inbox.send(Input::Dispose(keep_on_host));
+    }
+    /// Completion of this local actor and its cleanup, not of the host's omp.
+    pub fn when_disposed(&self) -> crate::sidecar::application::EffectFuture<'static, Result<(), Fault>> {
+        let mut disposed = self.disposed.clone();
+        Box::pin(async move {
+            loop {
+                if let Some(result) = disposed.borrow_and_update().clone() {
+                    return result;
+                }
+                disposed.changed().await
+                    .map_err(|_| Fault::new("remote_actor", "Remote tab actor lost its completion receipt"))?;
+            }
+        })
     }
     pub async fn command(
         &self,
@@ -366,7 +402,8 @@ impl State {
         drop(snapshot);
         self.emit("status", payload, from_link);
     }
-    fn watch_link(&self) {
+    fn watch_link(&mut self) {
+        self.watchers.abort_all();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
         let rtab = self.options.rtab.clone();
@@ -377,7 +414,7 @@ impl State {
         });
         let mut changes = self.link.changes();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
+        self.watchers.spawn(async move {
             if !*changes.borrow() {
                 let _ = inbox.send(Input::Lost(epoch));
                 return;
@@ -404,7 +441,7 @@ impl State {
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
         let closes = Arc::clone(&self.closes);
-        tokio::spawn(async move {
+        self.work.spawn(async move {
             let result = closes.open(&link, params).await;
             let _ = inbox.send(Input::Opened(epoch, result));
         });
@@ -434,7 +471,7 @@ impl State {
         let link = self.link.clone();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
-        tokio::spawn(async move {
+        self.work.spawn(async move {
             let result = link.request(method, params, REQUEST).await;
             let _ = inbox.send(Input::Started(epoch, result));
         });
@@ -445,18 +482,18 @@ impl State {
             self.queued.pop_front();
         }
     }
-    fn deliver(&self, frame: Value, answer: Answer) {
+    fn deliver(&mut self, frame: Value, answer: Answer) {
         let link = self.link.clone();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
         let omp = self.omp.clone();
         let params = json!({"rtab":self.options.rtab,"frame":frame});
-        tokio::spawn(async move {
+        self.work.spawn(async move {
             let result = link.request("tab.sideChannel", params, REQUEST).await;
             let _ = inbox.send(Input::Delivered(epoch, omp, frame, answer, result));
         });
     }
-    fn read(&self, command: Value, timeout: Duration, fresh: bool, answer: Answer) {
+    fn read(&mut self, command: Value, timeout: Duration, fresh: bool, answer: Answer) {
         let link = self.link.clone();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
@@ -464,7 +501,7 @@ impl State {
         if fresh {
             params["fresh"] = true.into();
         }
-        tokio::spawn(async move {
+        self.work.spawn(async move {
             let result = link
                 .request("tab.command", params, timeout.saturating_add(LINK_SLACK))
                 .await;
@@ -579,6 +616,10 @@ impl State {
                 }
                 if omp != self.omp {
                     self.queued.clear();
+                    let mut snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                    snapshot.generation += 1;
+                    snapshot.omp = omp.clone();
+                    snapshot.bridge = Value::Null;
                 }
                 self.omp = omp;
                 {
@@ -614,6 +655,10 @@ impl State {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .session_path = self.options.session_path.clone();
+                self.emit(name, arg, false);
+            }
+            "bridge" => {
+                self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).bridge = arg.clone();
                 self.emit(name, arg, false);
             }
             "signIn" => {
@@ -710,12 +755,18 @@ impl State {
         let listen = relay.listen();
         self.relay = Some(relay);
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
+        self.work.spawn(async move {
             let _ = inbox.send(Input::RelayListening(generation, listen.await));
         });
     }
-    async fn run(mut self, mut receiver: mpsc::UnboundedReceiver<Input>) {
+    async fn run(mut self, mut receiver: mpsc::UnboundedReceiver<Input>) -> Result<(), Fault> {
+        let mut failure = None;
         while let Some(input) = receiver.recv().await {
+            while let Some(result) = self.work.try_join_next() {
+                if let Err(error) = result {
+                    failure.get_or_insert_with(|| Fault::new("remote_task", error.to_string()));
+                }
+            }
             match input {
                 Input::Start => {
                     self.wanted = true;
@@ -750,6 +801,11 @@ impl State {
                 }
                 Input::Link(link) => {
                     self.epoch += 1;
+                    {
+                        let mut snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                        snapshot.generation += 1;
+                        snapshot.bridge = Value::Null;
+                    }
                     self.lost();
                     self.link = link;
                     self.watch_link();
@@ -899,7 +955,7 @@ impl State {
                     } else if matches!(self.phase, BringUp::Open) {
                         let link = self.link.clone();
                         let params = json!({"rtab":self.options.rtab});
-                        tokio::spawn(async move {
+                        self.work.spawn(async move {
                             let _ =
                                 answer.send(link.request("tab.cancelWait", params, REQUEST).await);
                         });
@@ -917,7 +973,7 @@ impl State {
                     } else if matches!(self.phase, BringUp::Open) {
                         let link = self.link.clone();
                         let params = json!({"rtab":self.options.rtab,"path":path,"query":query});
-                        tokio::spawn(async move {
+                        self.work.spawn(async move {
                             let result = link
                                 .request("host.signIn.callback", params, REQUEST)
                                 .await
@@ -953,24 +1009,35 @@ impl State {
                 {
                     params["rtab"] = self.options.rtab.clone().into();
                     let link = self.link.clone();
-                    tokio::spawn(async move {
+                    self.work.spawn(async move {
                         let _ = link.request(method, params, REQUEST).await;
                     });
                 }
                 Input::Dispose(keep) => {
+                    receiver.close();
+                    while let Ok(pending) = receiver.try_recv() {
+                        drop(pending);
+                    }
+                    self.end_relay();
+                    self.watchers.abort_all();
+                    while self.watchers.join_next().await.is_some() {}
+                    while let Some(result) = self.work.join_next().await {
+                        if let Err(error) = result {
+                            failure.get_or_insert_with(|| Fault::new("remote_task", error.to_string()));
+                        }
+                    }
                     if self.opened_once && !keep {
                         self.closes.defer(self.options.rtab.clone());
-                        let closes = Arc::clone(&self.closes);
-                        let link = self.link.clone();
-                        tokio::spawn(async move {
-                            closes.flush(&link).await;
-                        });
+                        if let Err(error) = self.closes.flush_result(&self.link).await {
+                            failure.get_or_insert(error);
+                        }
                     }
                     break;
                 }
                 _ => {}
             }
         }
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -1037,6 +1104,10 @@ impl PendingTabCloses {
             .remove(rtab);
     }
     pub async fn flush(&self, link: &RemoteRequests) {
+        let _ = self.flush_result(link).await;
+    }
+    async fn flush_result(&self, link: &RemoteRequests) -> Result<(), Fault> {
+        let mut failure = None;
         let pending = self
             .0
             .lock()
@@ -1059,6 +1130,9 @@ impl PendingTabCloses {
             let result = link
                 .request("tab.close", json!({"rtab":rtab}), REQUEST)
                 .await;
+            if let Err(error) = &result {
+                failure.get_or_insert_with(|| error.fault.clone());
+            }
             if result
                 .as_ref()
                 .is_err_and(|error| error.fault.code == "remote_offline")
@@ -1070,6 +1144,7 @@ impl PendingTabCloses {
                 current.tabs.remove(&rtab);
             }
         }
+        failure.map_or(Ok(()), Err)
     }
 }
 
