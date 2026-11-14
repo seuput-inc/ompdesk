@@ -203,10 +203,10 @@
 				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:746-772",
 				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:819-847",
 				"native/ompdesk/crates/core/src/agentctl/service/mod.rs:302-325",
-				"native/ompdesk/crates/core/src/agentctl/service/attach.rs:667-708",
-				"native/ompdesk/crates/core/src/agentctl/service/attach.rs:742-801",
+				"native/ompdesk/crates/core/src/agentctl/service/attach.rs:693-734",
+				"native/ompdesk/crates/core/src/agentctl/service/attach.rs:768-827",
 				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:224-259",
-				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:583-643"
+				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:582-638"
 			],
 			"syncCommit": null
 		}

@@ -1,12 +1,12 @@
 # Correspondence: native report coalescer
 
-Sync status: SOURCE, source-read against `9f42f5ccb` and registered with `syncCommit: null`, not model-checked or stamped.
+Sync status: SOURCE, source-read against `9f42f5ccb` plus the upload-cache correction `b89c79d280` selected as `89f567a55`, and registered with `syncCommit: null`, not model-checked or stamped.
 Main d113 owns acceptance of this mapping and the actual hosted result.
 The original `77bc9fe81` remains the pre-fix reference; its memory-Queued behavior is not relabelled as a pass.
 
 ## Exact code evidence
 
-All paths below are relative to `native/ompdesk/crates/core/src/agentctl/` in the immutable `9f42f5ccb` tree.
+All paths below are relative to `native/ompdesk/crates/core/src/agentctl/`. Mailbox regions remain those of immutable `9f42f5ccb`; attachment and receiving regions use the corrected `89f567a55` tree.
 Source order: `77bc9fe81`, test-first `53327f34c`, test-first `6b1d2771c`, then `21a94251e`, `03cecb5de`, `9f42f5ccb`.
 This document imports no production code.
 
@@ -22,15 +22,15 @@ This document imports no production code.
   `930-954` forget fences unstarted claims but retains attempted handles.
 - `service/messages.rs:746-772, 819-847` creates the original Arc plan and queries canonical refs, without native carry.
   `service/mod.rs:302-325` invokes late preparation inside the selected Deliver.
-  `service/attach.rs:742-801` returns Existing before effects, or carries only after authoritative Missing.
-  Its borrowed materialization seam is `667-708`.
+- `service/attach.rs:768-827` returns Existing before effects, or carries only after authoritative Missing.
+  Its borrowed materialization seam is `693-734`.
 - `runtime/inbox_source.rs:224-259` queries before and inside the source lane, persists the original source with Disk responsibility,
   then awaits the exact receiving receipt.
-  `583-643` separates landing awaits from receiving Disk acceptance and checks the exact receiver/key set.
+  `582-638` separates upload-reference resolution from receiving Disk acceptance and checks the exact receiver/key set.
 
 ## Atomic regions and actions
 
-| Model action | Exact code region in `9f42f5ccb` | Granularity / abstraction |
+| Model action | Exact code region in the source trees above | Granularity / abstraction |
 |---|---|---|
 | `Admit` | `rules/mail.rs:763-875` | One Tables region. Carries original plan, settles replaced pending waiters, registers an unstarted claim. |
 | `Join` | `rules/mail.rs:773-790` | Same Tables region; original completion shared by Progress, Done and Question. |
@@ -38,12 +38,12 @@ This document imports no production code.
 | `Claim` | `rules/mail.rs:596-616` | Exact pending-generation removal and in-flight registration under Tables. Claim is not invocation. Timer has no fairness. |
 | `BeginDeliver` | `rules/mail.rs:621-645` | Checks exact generation AND Arc plus unfinished latch; commits attempted before invocation with no intervening await. |
 | `FenceUnstarted` | `rules/mail.rs:628-641, 482-509, 946-953` | Forgotten task cannot invoke Deliver or remove a replacement handle. Cleanup touches only its own handle. |
-| `LookupKnown` | `service/attach.rs:768-781`; `runtime/inbox_source.rs:224-238` | Awaited authoritative Existing answer; no materialization. Intermediate source-lane lookups are folded into this answer. |
-| `LookupMissing` | `service/attach.rs:768-790`; `runtime/inbox_source.rs:233-244` | Missing and materialization are separate transitions; Missing is not eternal exclusivity. |
+| `LookupKnown` | `service/attach.rs:794-807`; `runtime/inbox_source.rs:224-238` | Awaited authoritative Existing answer; no materialization. Intermediate source-lane lookups are folded into this answer. |
+| `LookupMissing` | `service/attach.rs:794-816`; `runtime/inbox_source.rs:233-244` | Missing and materialization are separate transitions; Missing is not eternal exclusivity. |
 | `LookupConflict` | Same canonical lookup boundary | Error leaves receiving row unchanged; terminal selected-callback error is unconfirmed. |
-| `Materialize` | `service/attach.rs:667-708, 790-800`; `runtime/inbox_source.rs:583-618` | Actual attachment effects for an attached report. Per-file awaits are collapsed; not per-file ExactlyOnce. |
+| `Materialize` | `service/attach.rs:693-734, 816-826`; `runtime/inbox_source.rs:582-607` | Actual attachment effects for an attached report. Per-file awaits are collapsed; not per-file ExactlyOnce. |
 | `PersistSource` | `runtime/inbox_source.rs:240-244` | Successful source journal Disk transaction; failure is `FailDeliver`, never ACK. |
-| `Receive` | `runtime/inbox_source.rs:245-257, 620-643` | Abstract exact receiver Disk transaction, separate from reply; not stock/provider consumption. |
+| `Receive` | `runtime/inbox_source.rs:245-257, 615-638` | Abstract exact receiver Disk transaction, separate from reply; not stock/provider consumption. |
 | `Return` | `rules/mail.rs:646-657, 482-509, 447-454` | Settles only its original latch; first result cannot be overwritten; exact cleanup retains replacements. |
 | `FailDeliver` | `rules/mail.rs:659-688` | Error and bounded retry under Tables; may follow Receive. Same handle requeues with attempted history. Terminal failure is Unknown. |
 | `Forget` | `rules/mail.rs:930-954` | One Tables region. Pristine queued/claimed work ends unadmitted; attempted work ends Unknown and keeps its task. |
@@ -99,6 +99,8 @@ This document imports no production code.
    Panics/process teardown and wire authentication are outside this model's claims.
 10. Materialization may first occur before source persistence; later transfer uploads follow it.
     The shared effect event records occurrence, not file-stage ordering, cache eviction or the number of uploads.
+    The corrected transfer reuses the existing fresh device/hash landing through `service/attach.rs:140-165`.
+    Cache expiry, individual upload counts and joined callers' attachment-summary metadata are not modeled or proven here; actual consumer regressions own those obligations.
 
 ## Mutation correspondence
 

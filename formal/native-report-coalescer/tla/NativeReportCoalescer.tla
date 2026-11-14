@@ -167,7 +167,7 @@ FenceUnstarted(g) ==
                    owned, effects, known, received, expectedJoin, unknownEnded>>
 
 \* SOURCE actual Deliver canonical lookup returns known responsibility; no carry/land.
-\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:768-781
+\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:794-807
 LookupKnown(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "lookup"
@@ -178,7 +178,7 @@ LookupKnown(g) ==
                    receiver, owned, effects, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE actual selected Deliver's second canonical lookup still says Missing.
-\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:768-790
+\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:794-816
 LookupMissing(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "lookup"
@@ -198,7 +198,7 @@ LookupConflict(g) ==
                    receiver, owned, effects, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE materialize selected original Arc attachment plan outside the tables lock.
-\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:667-708
+\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:693-734
 Materialize(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "carry"
@@ -217,7 +217,7 @@ PersistSource(g) ==
                    receiver, owned, effects, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE receiving native Disk transaction; wire response can still be lost afterward.
-\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:620-643
+\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:615-638
 Receive(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "offer"

@@ -44,7 +44,7 @@ The watch outcome is first-wins under its own lock.
 
 `g` denotes one stable completion allocation.
 Physical retry generations are abstracted by `(g, attempt)`; the original handle survives retry, with no overlapping old callback.
-Exact source/await/lock correspondence is recorded against `9f42f5ccb`.
+Exact source/await/lock correspondence is recorded against `9f42f5ccb`, with the later upload-cache correction and shifted attachment/receiving ranges listed in `CORRESPONDENCE.md`.
 It is a source-read mapping, not a mechanically checked refinement or runtime verdict.
 
 ## Exclusions
@@ -55,6 +55,7 @@ It is a source-read mapping, not a mechanically checked refinement or runtime ve
 - No preservation proof of the legacy coalescing window, stale dispatch policy, progress merging, board text or serialized report formatting. Those remain production-owner obligations.
 - No complete model of source retry/runtime receiver retry/redeliverSends or stock. The final source's convergence seam must be listed, not inferred from this mailbox model.
 - Preparation (including obtaining an Arc plan and canonical hash) is not a physical effect. Materializing a selected attachment plan and transferring Disk responsibility are the explicit effects; their counters do not count function calls.
+- No proof of cache expiry, individual physical upload counts or attachment summaries shared by joined callers. Actual consumer regressions retain those obligations.
 
 ## Checks and delivery ownership
 
