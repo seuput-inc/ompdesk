@@ -2,8 +2,55 @@
 //! transport, executor or domain policy. In particular, page arguments cannot deserialize application authority.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
+
+/// Opaque application ownership identity. Base's authenticated registry issues and revokes these; domain services
+/// receive handles, not the issuer. It is deliberately neither Serialize nor Deserialize.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Owner {
+    generation: u64,
+    id: u64,
+}
+
+impl Owner {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+/// One issuer per native application generation, held only by Base's authority registry. Admitting a CEF page,
+/// paired web connection or authenticated peer creates a registry record before its handle reaches a domain.
+/// The registry, not this token, retains caller/device/execution-host facts and checks revocation.
+pub struct OwnerIssuer {
+    generation: u64,
+    next: AtomicU64,
+}
+
+impl OwnerIssuer {
+    pub fn new(generation: u64) -> Self {
+        Self {
+            generation,
+            next: AtomicU64::new(1),
+        }
+    }
+
+    pub fn admit_authenticated(&self) -> Option<Owner> {
+        let id = self
+            .next
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .ok()?;
+        Some(Owner {
+            generation: self.generation,
+            id,
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeCaller {
