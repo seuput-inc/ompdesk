@@ -22,6 +22,7 @@ const STOCK_PROVIDER_IDS: readonly string[] = [
 	"alibaba-coding-plan",
 	"alibaba-token-plan",
 	"amazon-bedrock",
+	"antigravity-cli",
 	"anthropic",
 	"apple",
 	"azure",
@@ -185,6 +186,11 @@ describe("provider marks", () => {
 		expect(html).toContain('data-provider-mark="anthropic"');
 		expect(html).toContain('fill="currentColor"');
 		expect(html).not.toMatch(/#[0-9a-f]{3,6}/i);
+		const antigravity = renderToStaticMarkup(
+			<ProviderMark provider={{ id: "antigravity-cli", name: "Antigravity CLI" }} />,
+		);
+		expect(antigravity).toContain('data-provider-mark="antigravity"');
+		expect(providerBrand({ id: "antigravity-cli", name: "Antigravity CLI" }).company).toBe("Google");
 	});
 
 	it("falls back to the first letter in a hairline square for an unknown id or a custom endpoint", () => {
