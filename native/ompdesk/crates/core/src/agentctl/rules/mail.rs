@@ -713,7 +713,7 @@ impl Mailbox {
         format!("d{n}")
     }
 
-    pub fn candidate_dispatch(&self, child: &str, pending_floor: u64) -> u64 {
+    pub fn candidate_dispatch(&self, child: &str, pending_floor: u64) -> Result<u64, String> {
         self.inner
             .tables()
             .dispatch
@@ -721,7 +721,9 @@ impl Mailbox {
             .copied()
             .unwrap_or(0)
             .max(pending_floor)
-            + 1
+            .checked_add(1)
+            .filter(|next| *next <= crate::agentctl::inbox::MAX_DISPATCH as u64)
+            .ok_or_else(|| "The next dispatch exceeds the exact host-number range".into())
     }
 
     /// A retry activates the receiver's FIRST dispatch, never the discarded newly derived number.

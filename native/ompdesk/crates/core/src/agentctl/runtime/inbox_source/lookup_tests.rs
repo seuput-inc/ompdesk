@@ -38,6 +38,7 @@ fn query() -> NativeInboxLookup {
 fn observed(query: &NativeInboxLookup) -> NativeInboxLookupReply {
     NativeInboxLookupReply {
         receiver: query.receiver.clone(),
+        dispatch_floor: 1,
         entries: vec![NativeInboxLookupResult::ExistingContextObserved {
             key: query.entries[0].key.clone(),
             dispatch: Some(1),
@@ -105,4 +106,17 @@ fn historical_consumed_proof_requires_its_own_exact_key_path_and_actual_request(
         assert!(validate_lookup_reply(&query, &wrong).is_err(), "{field}");
     }
     validate_lookup_reply(&query, &observed(&query)).unwrap();
+}
+
+#[test]
+fn valid_consumed_receipts_do_not_hide_negative_or_inexact_dispatch_floor_metadata() {
+    let query = query();
+    for floor in [-1, crate::agentctl::inbox::MAX_DISPATCH + 1, i64::MAX] {
+        let mut reply = observed(&query);
+        reply.dispatch_floor = floor;
+        assert!(validate_lookup_reply(&query, &reply).is_err());
+    }
+    let mut reply = observed(&query);
+    reply.dispatch_floor = 0;
+    validate_lookup_reply(&query, &reply).unwrap();
 }

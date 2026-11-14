@@ -285,14 +285,10 @@ impl Runtime {
             &query.receiver,
             query.entries.iter().map(|entry| &entry.logical),
         )?;
-        let entries = inbox
+        inbox
             .ledger
             .lookup(&query.receiver, &query.entries)
-            .map_err(|error| Fault::new("inbox_lookup_unconfirmed", error))?;
-        Ok(NativeInboxLookupReply {
-            receiver: query.receiver,
-            entries,
-        })
+            .map_err(|error| Fault::new("inbox_lookup_unconfirmed", error))
     }
 
     async fn accept_inbox(

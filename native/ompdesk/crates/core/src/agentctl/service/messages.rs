@@ -384,6 +384,7 @@ impl AgentControl {
         if let Some(receipt) = receipt_of_existing(&reply) {
             return Ok(receipt);
         }
+        let receiver_floor = reply.dispatch_floor;
         kept.outbox.lane(&receiver_key(kept.path, target.device.as_deref()), async {
         let (query, reply) = inbox_source::lookup(
             self.host.port().id(), &target.tab_id, query.entries, &execution,
@@ -392,6 +393,7 @@ impl AgentControl {
         if let Some(receipt) = receipt_of_existing(&reply) {
             return Ok(receipt);
         }
+        let receiver_floor = receiver_floor.max(reply.dispatch_floor);
         self.until_draft_sent(caller, target).await?;
         let carried = super::attach::carry_planned(
             &self.host, &target.tab_id, target.device.as_deref(), &images, &to_land, true,
@@ -429,17 +431,19 @@ impl AgentControl {
         let was_blocked = self.is_blocked(&target.tab_id);
         let arrivals_before = self.arrivals(&target.tab_id);
         let running = current.busy || was_blocked;
-        let dispatch = own_child.then(|| {
-            format!(
-                "d{}",
-                self.mailbox.candidate_dispatch(
-                    &target.tab_id,
-                    kept.outbox
-                        .last_dispatch(kept.path, target.device.as_deref())
-                        .max(0) as u64
-                )
-            )
-        });
+        let dispatch = if own_child {
+            let floor = kept
+                .outbox
+                .last_dispatch(kept.path, target.device.as_deref())
+                .max(0) as u64;
+            let next = self
+                .mailbox
+                .candidate_dispatch(&target.tab_id, floor.max(receiver_floor as u64))
+                .map_err(Fail::other)?;
+            Some(format!("d{next}"))
+        } else {
+            None
+        };
         let message = wrap_agent_message(
             &with_dispatch(
                 &args.message,

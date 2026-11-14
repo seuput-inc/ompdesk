@@ -8,6 +8,9 @@ use serde_json::{Map, Value};
 use super::journal::Persistence;
 use super::journal::attachments::{Attached, AttachedSet, AttachmentRef, read_attached, read_ref};
 
+/// Dispatch metadata crosses the existing JavaScript host route without numeric rounding.
+pub(crate) const MAX_DISPATCH: i64 = (1_i64 << 53) - 1;
+
 /// Supplied only by the app's trusted native-service constructor, never by a delivery/tool payload.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -551,8 +554,10 @@ pub(crate) enum NativeInboxLookupResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct NativeInboxLookupReply {
     pub receiver: InboxReceiver,
+    pub dispatch_floor: i64,
     pub entries: Vec<NativeInboxLookupResult>,
 }
 
