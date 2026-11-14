@@ -4851,6 +4851,22 @@ describe("ompdesk_report: sessions tell their opener", () => {
 				}
 			}
 		}
+		const transfer = stock.session.transferQueuedMessagesToAside;
+		if (typeof transfer !== "function") throw new Error("Missing stock queue transfer");
+		let movedRoot: unknown;
+		stock.session.transferQueuedMessagesToAside = (roots: readonly unknown[]) => {
+			expect(roots).toHaveLength(1);
+			const root = roots[0];
+			expect(stock.followUps).toEqual([root]);
+			expect(stock.followUps[0]).toBe(root);
+			expect(stock.asides).toEqual([]);
+			const result = Reflect.apply(transfer, stock.session, [roots]);
+			expect(stock.followUps).toEqual([]);
+			expect(stock.asides).toEqual([root]);
+			expect(stock.asides[0]).toBe(root);
+			movedRoot = root;
+			return result;
+		};
 		const result = await service.run(a, T.report, { kind: "done", text: "finished" });
 		expect(result.isError, result.text).toBe(false);
 		const done = await stock.waitForRequest(request =>
@@ -4869,15 +4885,34 @@ describe("ompdesk_report: sessions tell their opener", () => {
 			if (entry.kind === "report" && entry.details.text === "finished") identities.push(inboxIdentity(entry));
 		}
 		expect(new Set(identities).size).toBe(4);
-		expect(stock.admissions).toEqual(
-			["step 1", "step 2", "step 3", "finished"].map((text, index) => ({
-				queue: text === "finished" ? "followUp" : "journal",
-				message: expect.objectContaining({
+		expect(
+			stock.branch.filter(
+				root =>
+					root !== null &&
+					typeof root === "object" &&
+					"type" in root &&
+					(root.type === "custom_message" || root.type === "message"),
+			),
+		).toEqual(
+			["step 1", "step 2", "step 3"].map((text, index) =>
+				expect.objectContaining({
+					type: "custom_message",
+					content: expect.stringContaining(text),
 					provenance: { source: INBOX_PROVENANCE_SOURCE, id: identities[index] },
 					details: expect.objectContaining({ text }),
 				}),
-			})),
+			),
 		);
+		expect(stock.followUps).toEqual([]);
+		expect(stock.asides).toEqual([
+			expect.objectContaining({
+				role: "custom",
+				content: expect.stringContaining("finished"),
+				provenance: { source: INBOX_PROVENANCE_SOURCE, id: identities[3] },
+				details: expect.objectContaining({ text: "finished" }),
+			}),
+		]);
+		expect(stock.asides[0]).toBe(movedRoot);
 		expect((await stock.status()).receipts).toEqual([]);
 	});
 
