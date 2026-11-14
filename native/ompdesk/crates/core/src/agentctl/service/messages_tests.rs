@@ -968,3 +968,133 @@ async fn receiver_owned_follow_ups_seed_d2_and_d4_after_the_source_relaunches() 
         control.host.port().close();
     }
 }
+
+#[tokio::test]
+async fn kept_max_dispatch_retries_its_original_source_while_new_requests_refuse_overflow() {
+    use crate::agentctl::inbox::{
+        InboxAddress, InboxIntent, InboxLogicalMessage, InboxLogicalPayload, InboxLogicalSource,
+        InboxSourceExecution, MAX_DISPATCH,
+    };
+    use crate::agentctl::journal::Persistence;
+    use crate::agentctl::journal::send_outbox::{OutboxSend, StreamingBehavior};
+    use crate::agentctl::runtime::inbox_source;
+
+    let (control, asked, mut channel, _fixture) = rig(
+        9_365,
+        state(vec![tab("a"), tab("b")]),
+        Tuning::default(),
+        main_replies,
+    );
+    let logical = InboxLogicalMessage {
+        producer: InboxAddress {
+            device_id: "test-host".into(),
+            session_path: "/s/a_1.jsonl".into(),
+        },
+        target: InboxAddress {
+            device_id: "test-host".into(),
+            session_path: "/s/b_1.jsonl".into(),
+        },
+        request_id: Some("original-max".into()),
+        intent: InboxIntent::FollowUp,
+        trigger_turn: true,
+        payload: InboxLogicalPayload::Prompt {
+            text: "original instructions".into(),
+        },
+    };
+    let id = logical.delivery_id().unwrap();
+    let mut original = OutboxSend::new(
+        id.clone(),
+        Some(MAX_DISPATCH),
+        "/s/b_1.jsonl".into(),
+        None,
+        "/s/a_1.jsonl".into(),
+        "original instructions".into(),
+        "original MAX dispatch presentation".into(),
+        StreamingBehavior::FollowUp,
+        1.0,
+    );
+    original.delivery_id = Some(id.clone());
+    original.logical_message = Some(original.message.clone());
+    original.native_source = InboxLogicalSource::Bound(logical);
+    original.from_device = Some("test-host".into());
+    let execution = InboxSourceExecution {
+        tab_id: "a".into(),
+        runtime_instance: Some("runtime-a".into()),
+    };
+    assert_eq!(
+        inbox_source::keep_prompt(control.host.port().id(), original, &execution).unwrap(),
+        Persistence::Disk
+    );
+    let held = control.send_outbox.as_ref().unwrap().pending();
+    assert_eq!(held.len(), 1);
+    let status = control
+        .host
+        .inbox_status("b", "/s/b_1.jsonl", None)
+        .await
+        .unwrap();
+    assert!(
+        control
+            .receiving_inbox
+            .as_ref()
+            .unwrap()
+            .ledger
+            .pending(&status.receiver)
+            .unwrap()
+            .1
+            .is_empty()
+    );
+    for (request, message) in [
+        ("new-request", "new instructions"),
+        ("original-max", "conflicting instructions"),
+    ] {
+        let refused = control
+            .run(
+                "a",
+                "ompdesk_session_send",
+                json!({
+                    "session": "b", "request_id": request, "message": message,
+                    "delivery": "follow_up"
+                }),
+                None,
+            )
+            .await;
+        assert!(refused.is_error, "{}", refused.text);
+        assert_eq!(control.send_outbox.as_ref().unwrap().pending(), held);
+        assert!(asked_with(&asked, "inbox").is_empty());
+    }
+    let retry = control
+        .run(
+            "a",
+            "ompdesk_session_send",
+            json!({
+                "session": "b", "request_id": "original-max",
+                "message": "original instructions", "delivery": "follow_up"
+            }),
+            None,
+        )
+        .await;
+    assert!(!retry.is_error, "{}", retry.text);
+    let transfer = asked_with(&asked, "inbox");
+    assert_eq!(transfer.len(), 1);
+    let sent = &transfer[0]["transfer"]["entries"][0];
+    assert_eq!(sent["entry"]["deliveryId"], id);
+    assert_eq!(sent["dispatch"], MAX_DISPATCH);
+    assert_eq!(
+        sent["entry"]["content"],
+        "original MAX dispatch presentation"
+    );
+    delivered(&mut channel).await;
+    assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
+    let pending = control
+        .receiving_inbox
+        .as_ref()
+        .unwrap()
+        .ledger
+        .pending(&status.receiver)
+        .unwrap()
+        .1;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entry.delivery_id, id);
+    assert_eq!(pending[0].dispatch, Some(MAX_DISPATCH));
+    control.host.port().close();
+}
