@@ -206,10 +206,14 @@ fn entry_key(session_path: &str, device: Option<&str>, mark: &str) -> String {
     format!("{}\n{mark}", receiver_key(session_path, device))
 }
 
+fn native_key(session_path: &str, device: Option<&str>, id: &str) -> String {
+    serde_json::to_string(&("native", session_path, device, id))
+        .expect("native identity tuple serializes")
+}
+
 fn key_of(entry: &OutboxSend) -> String {
     match &entry.delivery_id {
-        Some(id) => serde_json::to_string(&("native", &entry.session_path, &entry.device, id))
-            .expect("native identity tuple serializes"),
+        Some(id) => native_key(&entry.session_path, entry.device.as_deref(), id),
         None => entry_key(&entry.session_path, entry.device.as_deref(), &entry.mark),
     }
 }
@@ -428,7 +432,7 @@ impl SendOutbox {
     ) -> Result<SourceDispatch, String> {
         let state = self.state();
         state.readable()?;
-        let key = entry_key(session_path, device, &query.key.delivery_id);
+        let key = native_key(session_path, device, &query.key.delivery_id);
         let Some(position) = state.position(&key) else {
             return Ok(SourceDispatch::Missing);
         };
