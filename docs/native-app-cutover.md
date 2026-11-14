@@ -1,6 +1,6 @@
 # Native application cutover inventory
 
-Status: 14 Nov 2026. Integration branch `omp/agent/shell-native-integration` combines S `f2ca2c8ce`, main `cdfe86e8f`, organization transfer `facc97ae3` and the five preserved SX implementations. This is **not a Node-free application**. The original Electron-dependent subset in `rust-remaining-units.md` §4 is not the complete application boundary.
+Status: 14 Nov 2026. Integration branch `omp/agent/shell-native-common` preserves main `a973d93df` (v0.130.0), S and the preserved SX implementations. This is **not a Node-free application**. The original Electron-dependent subset in `rust-remaining-units.md` §4 is not the complete application boundary.
 
 ## Remaining production entry
 
@@ -38,7 +38,7 @@ The source units below are present in `omp/agent/shell-native-common`. A domain'
 | Source unit | Integrated implementation | Remaining composition gate |
 |---|---|---|
 | Machine/models | Canonical runtime, shell, detection, REA cache and typed application; closed runners fence child admission after runtime resolution. | Authenticated target resolution must reject a revoked owner before the domain is polled again. `close_owner` signals cancellation; it is not a joined global teardown. |
-| Pool/sidecar | Existing Lane and hub engine through native handles; same-tick activity/snapshot and intrinsic outcome identity. | Real native Host, owner reservations, release receipts, platform effects and strong per-tab/generation/outcome Arc retention. |
+| Pool/sidecar | Existing Lane and hub engine through native handles; same-tick activity/snapshot and intrinsic outcome identity. | Real native Host, owner reservations, release receipts, required original view tokens, platform effects and strong per-tab/generation/outcome Arc retention. |
 | Schedules/routines | Native source actors reuse OS watches, Git/GitHub reads, pool subscriptions and read-only TLS IMAP/MIME. | The actual authenticated pool activity channel and native account/credential capability; no Node source callback. |
 | Memory | One Rust policy compiled into tracked WASM, embedded terminal extension and native supervised capture Host. | Production upkeep/care clients and the CEF entry remain unbound. The isolated-run refusal was removed only after Main accepted Setup's bounded Windows runner/handle-list proof; integrated Windows strict and artifact gates remain open. |
 | Autopilot | Native typed service, existing coordinator, canonical Machine shell and stock approval guard. | Actual Pool/Machine/worktree/resume/permission ports and application frame delivery. |
@@ -48,9 +48,45 @@ The source units below are present in `omp/agent/shell-native-common`. A domain'
 
 Current local evidence uses explicit Rust/compiler/toolchain-subcommand 1.95. Common source tests `20261114-082526-2df4` passed 174 cases; actual supervised setup adapters `20261114-082635-1cff` passed 20. The direct shell/core transport `20261114-090214-c65e` passed six executable tests (two child fixtures are ignored as standalone tests), including binary/bidirectional calls, owner death, EOF, cancellation and thread-spawn failure cleanup. Session index/feed tests `20261114-090718-e5d0` passed 21 cases, including a 2,112-command corpus captured from the actual TypeScript pace classifiers. These checks do not execute CEF, paired desktops or the final application artifact.
 
-Additional launch-policy gaps are not hidden behind the native Host traits: the authenticated MCP hub and builtin-root composition, session process-tag/scratch ownership, worktree start lifecycle and the main local-RPC dispatcher still have production TypeScript decisions. Pool/sidecar engines, OS process reads and stock bridge methods are reused; their existence does not replace these decisions.
+The additional launch-policy modules are present: `mcp_hub`, `session_ownership`, `worktree_lifecycle`, `session_ops` and `local_dispatch`. Main's exact MCP/ownership source cohort `9a3182f94` passed its Linux/Windows standard run; that is not production application activation. Registration, adapters, authenticated create/command admission and joined cleanup remain separate gates. `application::session_authority::SessionAuthority` is the single native deletion store/count/admission owner; SessionOps owns mutation ordering. The existing TypeScript singleton remains the only production authority until the complete caller cutover. No parallel writer or count is enabled.
 
 Independent hosted source-unit runs retain their observed failures. The Memory run's missing limit-wait log followed an observed hub timeout and core termination; its underlying transport stall is unconfirmed. No deadline or assertion has been relaxed. Canonical Electron-baseline notices are regenerated from that baseline's frozen dependencies; a CEF candidate or changed Cargo lock requires its own generated notices, not a copied expected string.
+
+The bounded native authority source `75307aa0d` passed five cases for counted guards, atomic holder admission, persisted ordering/modes and memory retention after save failure. The adjacent quota defect was reproduced in `20261114-103223-b713`: EDQUOT became UNKNOWN and recovery did not save retained bytes. Source `01e405f03` fixes the canonical errno mapping and kept retry; `20261114-103806-b5e2` passed 15 save/error/authority cases with actual Rust 1.95, including recovery without another mutation. It depends on the earlier `610a60b0c` retry extraction. This is not application or platform-artifact proof.
+
+Checkpoint `5a95ec411` is a historical captured-service prerequisite, not the final graph. Later `59889e6bf` and `07fc0c2e2` preserve immutable source/incarnation/run targets and admit their effects under the same Callers mutex as revocation. The 25-case run `20261114-181908-f319`, the post-observer Stop recheck `20261114-182739-837c` and the concrete HostedTargets consumer `20261114-182955-b62e` passed. `c0a6912cf` additionally refuses ordinary effects after shutdown while retaining already-captured cleanup authority (`20261114-183743-9dff`, seven cases). These do not instantiate RootPoolHost or prove the final source factory's external-tab-id reopening behavior.
+
+Local compiler outputs are session scratch. The 20 GiB disk floor and official heavy slots remain enforced. Main authorized recovery of confirmed retired shell targets; active targets, source and evidence were preserved. Hosted source cohorts are not full native application candidates.
+
+### Launch composition evidence
+
+`native-app-data.ts` generates agent templates, the browser catalog and mounted tool definitions from their existing TypeScript exports. The native loader shares the immutable tool arrays; neither an empty array nor a copied schema substitutes for those inputs. Machine's proxy overlay contains only proxy variables, so merging it cannot restore a parent session's plumbing after launch sanitization.
+
+The original Lane launch ask includes `sessionPath` even when its file is unwritten and `open` is `new`. Application passes that same value to process ownership. `LaunchIngress` is the production Sink adapter: it dispatches original asks through Application, retains pending effects independently of the caller, and joins them on close. Root still must construct that adapter in its production source factory.
+
+| Actual Rust 1.95 run | Observed scope | Result |
+|---|---|---|
+| `20261114-190249-6baf` | Machine/proxy, launch assembly and real Lane unwritten-path/restart consumers | 22 passed |
+| `20261114-191751-dc4b` | Persisted preferences, browser catalog/cache and session-free policy consumers | 9 passed |
+| `20261114-192309-d24d` | Concrete ownership adapter over the existing encrypted Host effect fixture and real runtime log files | 2 passed |
+| `20261114-195439-5fbc` | Existing launch assembly, real native child/exit, memory output and first-tab consumers | 20 passed |
+| `20261114-201556-897a` | Concrete LaunchHost, original unwritten/restart paths, process tags/scratch modes, generated tools, parent-environment stripping and retired-owner refusal | 3 passed |
+| `20261114-203740-ed2c` | The same positive real-child/restart consumer through production LaunchIngress; original two direct-Application negative consumers retained | 3 passed |
+
+Both three-case checks used actual Rust 1.95, fresh results and unchanged inputs. The latter test observes status without answering launch asks itself; the production Sink performs those answers. These observations do not establish production Owner/permission ingress, Root service composition, enabled REA/Memory execution, CEF/platform artifacts, Node removal or a formal stamp.
+
+### Original view identity evidence
+
+The pool's existing epoch, entry sequence and attachment generation produce the stream `viewId`. Required full-stream envelopes, FullChannel receivers and the original Node carrier preserve that value; absent identities fail closed. A replacement core re-announces `wireFull` for the retained owner/viewer attachments rather than deriving their identity from whichever window is current.
+
+| Actual run | Observed scope | Result |
+|---|---|---|
+| `20261114-205329-6ad4` | Native Pool/Frames/FullChannel, rejoin, new-epoch reseed and existing captured-run/exit/claim consumers, Rust 1.95 | 42 passed |
+| `20261114-205411-f9b7` | Shared page API preserves original tokens and refuses missing/empty identities | 6 passed |
+| `20261114-211123-cb2f` | Actual SidecarPool client and rebuilt warm core: original viewer survives core loss, departed viewer stays absent, new-token events reach the same attachments without a second sidecar | 2 passed, 166 filtered out |
+| `20261114-211212-ef6c` | TypeScript compiler after the client reseed projection | Passed |
+
+The filtered Vitest runner incorrectly reported its 166 skipped cases as passed in its summary; only the two executed consumers count above. This unit does not integrate Relay's entire close/retirement policy, phone coalescing or renderer absence guards, and does not prove the production RootHost or final application.
 
 ## Intentionally TypeScript
 

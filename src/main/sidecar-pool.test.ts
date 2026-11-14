@@ -14,7 +14,7 @@ import type {
 	SidecarStatus,
 } from "../shared/rpc-types";
 import { unsavedSessionKey } from "../shared/session-summary";
-import { core } from "./core/process";
+import { core, stopCore } from "./core/process";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
 import { RemoteSidecar } from "./remote/remote-sidecar";
 import type { SidecarSessionIdentity, SidecarStartGate } from "./sidecar";
@@ -4236,6 +4236,52 @@ describe("SidecarPool device views (a paired device viewing a tab of a window he
 });
 
 describe("SidecarPool and a lost core", () => {
+	it("reseeds original viewer attachments with fresh stream identities, without reviving departed viewers", async () => {
+		const { pool, sidecars } = fakePool();
+		const owner = fakeWindow(1);
+		const phone = fakeWindow(-1);
+		const departed = fakeWindow(-2);
+		try {
+			pool.acquire("/a", owner.win, "tab-a", "/s/a.jsonl");
+			expect(pool.attachViewer(phone.win, "tab-a")).toBe(true);
+			expect(pool.attachViewer(departed.win, "tab-a")).toBe(true);
+			expect(pool.detachViewer(departed.win, "tab-a")).toBe(true);
+			const originalOwner = pool.sessionOwner("/s/a.jsonl");
+			const oldOwnerView = pool.tabsForWindow(owner.win)[0]?.viewId;
+			const oldPhoneView = pool.tabsForWindow(phone.win)[0]?.viewId;
+			expect(oldOwnerView).toEqual(expect.any(String));
+			expect(oldPhoneView).toEqual(expect.any(String));
+			expect(oldPhoneView).not.toBe(oldOwnerView);
+			core().abandon("the original viewer stream's core ended");
+			const newPhoneView = pool.tabsForWindow(phone.win)[0]?.viewId;
+			const newOwnerView = pool.tabsForWindow(owner.win)[0]?.viewId;
+			expect(newPhoneView).toEqual(expect.any(String));
+			expect(newPhoneView).not.toBe(oldPhoneView);
+			expect(newOwnerView).not.toBe(oldOwnerView);
+			expect(pool.tabsForWindow(departed.win)).toEqual([]);
+			expect(pool.sessionOwner("/s/a.jsonl")).toEqual(originalOwner);
+			expect(sidecars).toHaveLength(1);
+			owner.sent.length = 0;
+			phone.sent.length = 0;
+			departed.sent.length = 0;
+			sidecars[0]?.emitAgentEvents(["agent_start"]);
+			expect(owner.sentTo(IPC_EVENTS.EVENTS_BATCH).at(-1)?.data).toEqual({
+				tabId: "tab-a",
+				viewId: newOwnerView,
+				payload: [{ type: "agent_start" }],
+			});
+			expect(phone.sentTo(IPC_EVENTS.EVENTS_BATCH).at(-1)?.data).toEqual({
+				tabId: "tab-a",
+				viewId: newPhoneView,
+				payload: [{ type: "agent_start" }],
+			});
+			expect(departed.sentTo(IPC_EVENTS.EVENTS_BATCH)).toEqual([]);
+		} finally {
+			pool.disposeAll();
+			for (const sidecar of sidecars) sidecar.exited.resolve();
+			await stopCore();
+		}
+	});
 	it("seeds the next core with the tabs main holds, and its windows keep their tabs", () => {
 		const { pool } = fakePool();
 		const fw = fakeWindow(1);
