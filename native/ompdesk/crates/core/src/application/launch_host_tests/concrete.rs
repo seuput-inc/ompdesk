@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicUsize;
 
 use super::*;
 use crate::application::launch_ingress::LaunchIngress;
+use crate::application::local_sources::Config as SourceConfig;
 use crate::application::memory_host::MemoryHost;
 use crate::application::readiness::FirstTab;
 use crate::application::runtime_log::{RuntimeLogContext, Writer};
@@ -26,34 +27,33 @@ enum Delivery {
     Ingress,
 }
 
-struct Rig {
-    callers: Arc<Callers>,
-    owner: Owner,
-    source: Arc<NativeSidecar>,
-    held: Held,
-    ingress: Option<Arc<LaunchIngress<LaunchHost>>>,
-    events: mpsc::UnboundedReceiver<LaneEvent>,
-    stock: Arc<Stock>,
-    sessions: Arc<SessionIndex>,
-    memory: Arc<Memory>,
-    hub: Arc<McpHub>,
-    ownership: Arc<SessionOwnership>,
-    process_file: PathBuf,
-    scratch_file: PathBuf,
-    unwritten: PathBuf,
-    child_log: PathBuf,
-    launch_env: PathBuf,
-    omp: PathBuf,
-    env: machine::Environment,
-    base_tools: Arc<[Value]>,
+/// One real service world, before any Source is opened. Both entry fixtures share these exact constructors.
+pub(crate) struct World {
+    pub(crate) config: SourceConfig,
+    pub(crate) spawn: crate::pool::application::Spawn,
+    pub(crate) owner: Owner,
+    pub(crate) stock: Arc<Stock>,
+    pub(crate) process_file: PathBuf,
+    pub(crate) scratch_file: PathBuf,
+    pub(crate) unwritten: PathBuf,
+    pub(crate) child_log: PathBuf,
+    pub(crate) launch_env: PathBuf,
+    pub(crate) omp: PathBuf,
+    pub(crate) env: machine::Environment,
+    pub(crate) base_tools: Arc<[Value]>,
     _transport: mpsc::UnboundedSender<crate::wire::Frame>,
     _frames: mpsc::UnboundedReceiver<crate::wire::Frame>,
     _mcp_fixture: McpFixture,
-    fixture: Fixture,
+    pub(crate) fixture: Fixture,
 }
 
-impl Rig {
-    async fn new(name: &str, delivery: Delivery) -> (Self, Config) {
+impl std::ops::Deref for World {
+    type Target = SourceConfig;
+    fn deref(&self) -> &Self::Target { &self.config }
+}
+
+impl World {
+    pub(crate) async fn new(name: &str) -> Self {
         let fixture = Fixture::new(name);
         let tools = HostTools::bundled().unwrap();
         let home = fixture.dir.join("home");
@@ -139,75 +139,120 @@ impl Rig {
         callers.keep_execution(&owner).unwrap();
         callers.finish_execution_reservation(reservation, true);
         let unwritten = sessions_root.join("not-written.jsonl");
-        let (record, recorded) = mpsc::unbounded_channel();
-        let sink = Arc::new(native::tests::Recorder { events: record, flushes: AtomicUsize::new(0) });
-        let ingress = match delivery {
-            Delivery::Application => None,
-            Delivery::Ingress => Some(LaunchIngress::new(sink.clone())),
-        };
-        let source_sink: Arc<dyn native::Sink> = match &ingress {
-            Some(ingress) => ingress.clone(),
-            None => sink,
-        };
-        let (source, held) = NativeSidecar::new(native::Config {
-            tab, seq: 0, cwd: fixture.dir.to_string_lossy().into_owned(), fresh: false,
-            event_filter: Vec::new(), bridge: false, ledger_file: None, start_slow_ms: None,
-            entry_id_timeout_ms: None, tuning: None,
-            session_path: Some(unwritten.to_string_lossy().into_owned()), is_new: Some(false),
-        }, events, source_sink, Arc::new(DirectSpawn)).unwrap();
         let browsers = BrowserState::new(Arc::clone(&machine), browsers::Places {
             platform: "other".into(), home: home.to_string_lossy().into_owned(),
             app_dirs: Vec::new(), program_dirs: Vec::new(), local_app_data: String::new(),
         }).unwrap();
         let mcp_fixture = McpFixture::new().await;
         let hub = Arc::new(McpHub::start(mcp_fixture.config()).await.unwrap());
-        let config = Config {
-            owner: owner.clone(), tab: callers.execution_facts(&owner).unwrap().tab,
-            callers: Arc::clone(&callers), source: Arc::clone(&source), machine, prefs,
-            sessions: Arc::clone(&sessions), memory: Arc::clone(&memory), hub: Arc::clone(&hub),
-            ownership: Arc::clone(&ownership), browsers,
-            bridge_dir: bridge, builtin_dir: builtin,
+        let base_tools = Arc::clone(&tools.base);
+        let config = SourceConfig {
+            callers, machine, prefs, sessions, memory, hub, ownership, browsers, host_tools: tools,
+            events, spawn: Arc::new(DirectSpawn), bridge_dir: bridge, builtin_dir: builtin,
             memory_state_file: data.join("recall.json"), roles_file: data.join("roles.json"),
-            rotation_ledger: data.join("rotation.json"), control_environment: machine::Environment::new(),
-            user_flags: Vec::new(), host_tools: Arc::clone(&tools.base), control_tools: tools.control,
-            origin: None, kind: policy::LaunchKind::Agent, device: None,
-            session_owned_text: "The session is owned by another omp process.".into(), device_reply_language: Some("English".into()),
+            rotation_ledger: data.join("rotation.json"), user_flags: Vec::new(),
+            session_owned_text: "The session is owned by another omp process.".into(),
+            device_reply_language: Some("English".into()), bridge: false, event_filter: Vec::new(),
+            ledger_file: None, start_slow_ms: None, entry_id_timeout_ms: None, tuning: None,
         };
-        (Self {
-            callers, owner, source, held, ingress, events: recorded, stock, sessions, memory, hub, ownership,
-            process_file, scratch_file, unwritten, child_log, launch_env, omp, env, base_tools: tools.base,
-            _transport: transport, _frames: frames, _mcp_fixture: mcp_fixture, fixture,
-        }, config)
+        let spawn = crate::pool::application::Spawn {
+            owner: owner.clone(), tab, window: 17, cwd: fixture.dir.to_string_lossy().into_owned(),
+            kind: "agent".into(), fresh: false, device: None,
+            session_path: Some(unwritten.to_string_lossy().into_owned()), worktree: None,
+            placeholder: false, defer_start: false,
+        };
+        Self {
+            config, spawn, owner, stock, process_file, scratch_file, unwritten, child_log, launch_env,
+            omp, env, base_tools, _transport: transport, _frames: frames, _mcp_fixture: mcp_fixture, fixture,
+        }
     }
 
-    fn stdin(&self) -> Vec<Value> {
+    pub(crate) fn stdin(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.child_log).unwrap().lines().filter_map(|line| line.strip_prefix("in "))
             .map(|line| serde_json::from_str(line).unwrap()).collect()
     }
 
-    fn tags(&self) -> Value { serde_json::from_slice(&std::fs::read(&self.process_file).unwrap()).unwrap() }
-    fn scratch(&self) -> Value { serde_json::from_slice(&std::fs::read(&self.scratch_file).unwrap()).unwrap() }
+    pub(crate) fn tags(&self) -> Value { serde_json::from_slice(&std::fs::read(&self.process_file).unwrap()).unwrap() }
+    pub(crate) fn scratch(&self) -> Value { serde_json::from_slice(&std::fs::read(&self.scratch_file).unwrap()).unwrap() }
 
-    async fn close(self) {
+    pub(crate) fn begin_close(&self) {
         self.ownership.freeze();
         self.ownership.closing(&self.owner);
         self.callers.retire_execution(&self.owner);
+    }
+
+    pub(crate) async fn finish_close(self) -> Result<(), Fault> {
+        self.sessions.stop();
+        self.memory.close().await;
+        let hub = self.hub.shutdown().await.map_err(|error| Fault::new("fixture_hub_close", error.to_string()));
+        let stock = self.stock.close().await;
+        self.callers.finish_execution_retirement(&self.owner);
+        self.callers.stop();
+        hub.and(stock)
+    }
+
+    fn launch_config(&self, source: Arc<NativeSidecar>) -> Config {
+        Config {
+            owner: self.owner.clone(), tab: self.spawn.tab.clone(), callers: Arc::clone(&self.callers),
+            source, machine: Arc::clone(&self.machine), prefs: Arc::clone(&self.prefs),
+            sessions: Arc::clone(&self.sessions), memory: Arc::clone(&self.memory), hub: Arc::clone(&self.hub),
+            ownership: Arc::clone(&self.ownership), browsers: Arc::clone(&self.browsers),
+            bridge_dir: self.bridge_dir.clone(), builtin_dir: self.builtin_dir.clone(),
+            memory_state_file: self.memory_state_file.clone(), roles_file: self.roles_file.clone(),
+            rotation_ledger: self.rotation_ledger.clone(), control_environment: machine::Environment::new(),
+            user_flags: self.user_flags.clone(), host_tools: Arc::clone(&self.host_tools.base),
+            control_tools: Arc::clone(&self.host_tools.control), origin: None, kind: policy::LaunchKind::Agent,
+            device: None, session_owned_text: self.session_owned_text.clone(),
+            device_reply_language: self.device_reply_language.clone(),
+        }
+    }
+}
+
+struct Rig {
+    world: World,
+    source: Arc<NativeSidecar>,
+    held: Held,
+    ingress: Option<Arc<LaunchIngress<LaunchHost>>>,
+    events: mpsc::UnboundedReceiver<LaneEvent>,
+}
+
+impl std::ops::Deref for Rig {
+    type Target = World;
+    fn deref(&self) -> &Self::Target { &self.world }
+}
+
+impl Rig {
+    async fn new(name: &str, delivery: Delivery) -> (Self, Config) {
+        let world = World::new(name).await;
+        let (record, recorded) = mpsc::unbounded_channel();
+        let sink = Arc::new(native::tests::Recorder { events: record, flushes: AtomicUsize::new(0) });
+        let ingress = match delivery {
+            Delivery::Application => None,
+            Delivery::Ingress => Some(LaunchIngress::new(sink.clone())),
+        };
+        let source_sink: Arc<dyn native::Sink> = match &ingress { Some(ingress) => ingress.clone(), None => sink };
+        let (source, held) = NativeSidecar::new(native::Config {
+            tab: world.spawn.tab.clone(), seq: 0, cwd: world.spawn.cwd.clone(), fresh: world.spawn.fresh,
+            event_filter: world.event_filter.clone(), bridge: world.bridge, ledger_file: world.ledger_file.clone(),
+            start_slow_ms: world.start_slow_ms, entry_id_timeout_ms: world.entry_id_timeout_ms, tuning: world.tuning.clone(),
+            session_path: world.spawn.session_path.clone(), is_new: Some(world.spawn.fresh),
+        }, world.config.events.clone(), source_sink, Arc::clone(&world.config.spawn)).unwrap();
+        let config = world.launch_config(Arc::clone(&source));
+        (Self { world, source, held, ingress, events: recorded }, config)
+    }
+
+    async fn close(self) {
+        self.world.begin_close();
         let ingress = self.ingress.as_ref().map(|ingress| ingress.close());
         let exited = self.source.when_exited();
         self.source.dispose(Duration::ZERO);
         let exit = exited.await;
         let held = self.held.await;
         let ingress = match ingress { Some(joined) => Some(joined.await), None => None };
-        self.sessions.stop();
-        self.memory.close().await;
-        let hub = self.hub.shutdown().await;
-        let stock = self.stock.close().await;
-        self.callers.finish_execution_retirement(&self.owner);
-        self.callers.stop();
+        let world = self.world.finish_close().await;
         exit.unwrap();
         held.unwrap();
-        hub.unwrap();
-        stock.unwrap();
+        world.unwrap();
         if let Some(ingress) = ingress { ingress.unwrap(); }
     }
 }
@@ -278,7 +323,7 @@ async fn actual_launch_host_mounts_canonical_tools_and_keeps_unwritten_paths_on_
 }
 
 // Observe an event without applying policy; Application::dispatch remains the only native ask decoder/router.
-async fn event(events: &mut mpsc::UnboundedReceiver<LaneEvent>, name: &str) -> LaneEvent {
+pub(crate) async fn event(events: &mut mpsc::UnboundedReceiver<LaneEvent>, name: &str) -> LaneEvent {
     loop {
         let event = events.recv().await.expect("the real Lane remains open");
         if event.name == name { return event; }
