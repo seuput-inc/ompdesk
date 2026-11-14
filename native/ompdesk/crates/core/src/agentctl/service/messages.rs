@@ -1214,6 +1214,7 @@ impl AgentControl {
             }
             None => self.host.answer(&target.tab_id, &ask.id, &response).await?,
         }
+        self.mailbox.answered_card(&target.tab_id, &ask.id);
         let by = if caller.title.is_empty() {
             &caller.tab_id
         } else {
