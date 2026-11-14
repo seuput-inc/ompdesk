@@ -431,7 +431,14 @@ impl AgentControl {
         let was_blocked = self.is_blocked(&target.tab_id);
         let arrivals_before = self.arrivals(&target.tab_id);
         let running = current.busy || was_blocked;
-        let dispatch = if own_child {
+        let original_dispatch = kept.outbox.native_dispatch(
+            kept.path, target.device.as_deref(), &query.entries[0],
+        ).map_err(Fail::other)?;
+        let dispatch = if let crate::agentctl::journal::send_outbox::SourceDispatch::Kept(original) =
+            original_dispatch
+        {
+            original.map(|dispatch| format!("d{dispatch}"))
+        } else if own_child {
             let floor = kept
                 .outbox
                 .last_dispatch(kept.path, target.device.as_deref())
