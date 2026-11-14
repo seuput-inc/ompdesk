@@ -1,30 +1,39 @@
 use std::future::Future;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::*;
+use crate::pool::application::Sidecar as _;
 use crate::remote::application_client::{PendingTabCloses, RemoteTab, TabEvent, TabOptions};
 use crate::remote::requests::tests::pair;
-use crate::pool::application::Sidecar as _;
-use crate::remotebytes::native::{ContentCache, Words};
 use crate::remotebytes::native::tests::Dir;
+use crate::remotebytes::native::{ContentCache, Words};
 
 fn options() -> TabOptions {
     TabOptions {
-        rtab: "remote-native".into(), cwd: "/isolated/workspace".into(), kind: "agent".into(),
-        fresh: false, session_path: Some("/isolated/session.jsonl".into()),
-        offline_message: "offline".into(), unanswered_message: "waiting".into(),
+        rtab: "remote-native".into(),
+        cwd: "/isolated/workspace".into(),
+        kind: "agent".into(),
+        fresh: false,
+        session_path: Some("/isolated/session.jsonl".into()),
+        offline_message: "offline".into(),
+        unanswered_message: "waiting".into(),
         execution_host: "original-execution-host".into(),
-        sign_in_failure: Words { title: "Sign-in failed".into(), message: "Paste the callback address".into() },
+        sign_in_failure: Words {
+            title: "Sign-in failed".into(),
+            message: "Paste the callback address".into(),
+        },
     }
 }
 
 async fn next_status(events: &mut mpsc::UnboundedReceiver<TabEvent>) {
     loop {
-        if events.recv().await.unwrap().name == "status" { return; }
+        if events.recv().await.unwrap().name == "status" {
+            return;
+        }
     }
 }
 
@@ -38,8 +47,12 @@ impl RemoteSink for Sink {
             let _ = output.send(event);
         }
     }
-    fn before_response(&self) { self.flushed.fetch_add(1, Ordering::AcqRel); }
-    fn remove_listeners(&self) { self.output.lock().unwrap().take(); }
+    fn before_response(&self) {
+        self.flushed.fetch_add(1, Ordering::AcqRel);
+    }
+    fn remove_listeners(&self) {
+        self.output.lock().unwrap().take();
+    }
 }
 
 #[tokio::test]
@@ -47,10 +60,18 @@ async fn captured_local_disposal_receipt_joins_pending_work_and_close_acknowledg
     let folder = Dir::new();
     let (device, host, _keep) = pair().await;
     let mut incoming = host.take_requests().unwrap();
-    let (tab, events) = RemoteTab::new(options(), device.clone(), Arc::new(PendingTabCloses::default()), Arc::new(ContentCache::new(folder.path().to_owned())));
+    let (tab, events) = RemoteTab::new(
+        options(),
+        device.clone(),
+        Arc::new(PendingTabCloses::default()),
+        Arc::new(ContentCache::new(folder.path().to_owned())),
+    );
     let original = tab.clone();
     let (output, mut delivered) = mpsc::unbounded_channel();
-    let sink = Arc::new(Sink { output: Mutex::new(Some(output)), flushed: AtomicUsize::new(0) });
+    let sink = Arc::new(Sink {
+        output: Mutex::new(Some(output)),
+        flushed: AtomicUsize::new(0),
+    });
     let (service, held) = Service::from_tab(tab, events, sink.clone());
     assert!(service.remote_tab().same_instance(&original));
     let run_service = Arc::clone(&service);
@@ -98,9 +119,17 @@ async fn failed_rpc_frames_and_original_close_fault_are_not_promoted_to_success(
     let folder = Dir::new();
     let (device, host, _keep) = pair().await;
     let mut incoming = host.take_requests().unwrap();
-    let (tab, events) = RemoteTab::new(options(), device.clone(), Arc::new(PendingTabCloses::default()), Arc::new(ContentCache::new(folder.path().to_owned())));
+    let (tab, events) = RemoteTab::new(
+        options(),
+        device.clone(),
+        Arc::new(PendingTabCloses::default()),
+        Arc::new(ContentCache::new(folder.path().to_owned())),
+    );
     let (output, mut delivered) = mpsc::unbounded_channel();
-    let sink = Arc::new(Sink { output: Mutex::new(Some(output)), flushed: AtomicUsize::new(0) });
+    let sink = Arc::new(Sink {
+        output: Mutex::new(Some(output)),
+        flushed: AtomicUsize::new(0),
+    });
     let (service, held) = Service::from_tab(tab, events, sink);
     let run_service = Arc::clone(&service);
     let run_host = host.clone();
@@ -154,9 +183,17 @@ async fn bound_actions_refuse_old_hosts_and_never_retry_or_replay_into_a_replace
     let folder = Dir::new();
     let (device, host, _keep) = pair().await;
     let mut incoming = host.take_requests().unwrap();
-    let (tab, events) = RemoteTab::new(options(), device.clone(), Arc::new(PendingTabCloses::default()), Arc::new(ContentCache::new(folder.path().to_owned())));
+    let (tab, events) = RemoteTab::new(
+        options(),
+        device.clone(),
+        Arc::new(PendingTabCloses::default()),
+        Arc::new(ContentCache::new(folder.path().to_owned())),
+    );
     let (output, mut delivered) = mpsc::unbounded_channel();
-    let sink = Arc::new(Sink { output: Mutex::new(Some(output)), flushed: AtomicUsize::new(0) });
+    let sink = Arc::new(Sink {
+        output: Mutex::new(Some(output)),
+        flushed: AtomicUsize::new(0),
+    });
     let (service, held) = Service::from_tab(tab, events, sink);
     let (replacement_device, replacement_host, _replacement_keep) = pair().await;
     let mut replacement_incoming = replacement_host.take_requests().unwrap();
@@ -211,10 +248,14 @@ async fn bound_actions_refuse_old_hosts_and_never_retry_or_replay_into_a_replace
     service.keep_on_host();
     service.dispose();
     if outcome.is_err() {
-        for link in [&device, &host, &replacement_device, &replacement_host] { link.disconnect_for_test(); }
+        for link in [&device, &host, &replacement_device, &replacement_host] {
+            link.disconnect_for_test();
+        }
     }
     let joined = held.await;
-    for link in [&device, &host, &replacement_device, &replacement_host] { link.disconnect_for_test(); }
+    for link in [&device, &host, &replacement_device, &replacement_host] {
+        link.disconnect_for_test();
+    }
     outcome.unwrap();
     joined.unwrap();
 }

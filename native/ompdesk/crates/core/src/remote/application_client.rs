@@ -2,8 +2,8 @@
 //! run beside it, never holding a streamed status or ask behind a long `tab.command`.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -238,16 +238,25 @@ impl RemoteTab {
         Arc::ptr_eq(&self.snapshot, &other.snapshot)
     }
     pub fn generation(&self) -> u64 {
-        self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).generation
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .generation
     }
-    pub fn emitted_events(&self) -> u64 { self.emitted.load(Ordering::Acquire) }
+    pub fn emitted_events(&self) -> u64 {
+        self.emitted.load(Ordering::Acquire)
+    }
     pub fn facts(&self) -> Value {
         let state = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
         json!({"cwd":state.cwd,"kind":state.kind,"status":state.status,"processAlive":state.process_alive,
             "shared":state.shared,"sleep":false,"rpc":state.status!="asleep","bridge":state.bridge["connected"]==true})
     }
     pub fn bridge_connected(&self) -> bool {
-        self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).bridge["connected"] == true
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .bridge["connected"]
+            == true
     }
     /// Snapshot admission only; authentication and connection ownership remain the Root's.
     /// The synchronous effect must neither await nor re-enter this snapshot mutex.
@@ -264,7 +273,10 @@ impl RemoteTab {
             || snapshot.omp.as_deref() != Some(omp)
             || !snapshot.process_alive
         {
-            return Err(Fault::new("remote_run_changed", "The observed remote session is no longer current"));
+            return Err(Fault::new(
+                "remote_run_changed",
+                "The observed remote session is no longer current",
+            ));
         }
         let result = effect();
         drop(snapshot);
@@ -283,15 +295,21 @@ impl RemoteTab {
         let _ = self.inbox.send(Input::Dispose(keep_on_host));
     }
     /// Completion of this local actor and its cleanup, not of the host's omp.
-    pub fn when_disposed(&self) -> crate::sidecar::application::EffectFuture<'static, Result<(), Fault>> {
+    pub fn when_disposed(
+        &self,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<(), Fault>> {
         let mut disposed = self.disposed.clone();
         Box::pin(async move {
             loop {
                 if let Some(result) = disposed.borrow_and_update().clone() {
                     return result;
                 }
-                disposed.changed().await
-                    .map_err(|_| Fault::new("remote_actor", "Remote tab actor lost its completion receipt"))?;
+                disposed.changed().await.map_err(|_| {
+                    Fault::new(
+                        "remote_actor",
+                        "Remote tab actor lost its completion receipt",
+                    )
+                })?;
             }
         })
     }
@@ -300,23 +318,38 @@ impl RemoteTab {
     }
     /// Enqueues against this actor before the returned receipt is polled.
     pub fn command_for_generation(
-        &self, generation: u64, command: Value, timeout: Duration,
+        &self,
+        generation: u64,
+        command: Value,
+        timeout: Duration,
     ) -> crate::sidecar::application::EffectFuture<'static, Result<Value, RemoteError>> {
         let (answer, result) = oneshot::channel();
-        let sent = self.inbox.send(Input::CachedCommand(self.clone(), generation, command, timeout, answer));
+        let sent = self.inbox.send(Input::CachedCommand(
+            self.clone(),
+            generation,
+            command,
+            timeout,
+            answer,
+        ));
         Box::pin(async move {
             sent.map_err(|_| offline())?;
             result.await.unwrap_or_else(|_| Err(offline()))
         })
     }
     async fn check(&self, expected: Option<u64>) -> Result<(), RemoteError> {
-        let Some(generation) = expected else { return Ok(()); };
+        let Some(generation) = expected else {
+            return Ok(());
+        };
         let (answer, result) = oneshot::channel();
-        self.inbox.send(Input::Check(generation, answer)).map_err(|_| offline())?;
+        self.inbox
+            .send(Input::Check(generation, answer))
+            .map_err(|_| offline())?;
         result.await.unwrap_or_else(|_| Err(offline()))
     }
     pub fn bridge(
-        &self, expected: Option<u64>, method: String,
+        &self,
+        expected: Option<u64>,
+        method: String,
     ) -> crate::sidecar::application::EffectFuture<'static, Result<Value, RemoteError>> {
         let (answer, result) = oneshot::channel();
         let sent = self.inbox.send(Input::Bridge(expected, method, answer));
@@ -326,7 +359,10 @@ impl RemoteTab {
         })
     }
     async fn command_inner(
-        &self, mut command: Value, timeout: Duration, expected: Option<u64>,
+        &self,
+        mut command: Value,
+        timeout: Duration,
+        expected: Option<u64>,
     ) -> Result<Value, RemoteError> {
         self.check(expected).await?;
         let session = self.snapshot().session_path;
@@ -430,7 +466,12 @@ impl RemoteTab {
         self.check(expected).await?;
         Ok(response)
     }
-    async fn request(&self, command: Value, timeout: Duration, expected: Option<u64>) -> Result<Value, RemoteError> {
+    async fn request(
+        &self,
+        command: Value,
+        timeout: Duration,
+        expected: Option<u64>,
+    ) -> Result<Value, RemoteError> {
         let (answer, result) = oneshot::channel();
         self.inbox
             .send(Input::Command(expected, command, timeout, answer))
@@ -445,19 +486,29 @@ impl RemoteTab {
         result.await.unwrap_or_else(|_| Err(offline())).map(|_| ())
     }
     pub fn enqueue_side_channel(
-        &self, frame: Value,
-    ) -> Result<crate::sidecar::application::EffectFuture<'static, Result<(), RemoteError>>, RemoteError> {
+        &self,
+        frame: Value,
+    ) -> Result<
+        crate::sidecar::application::EffectFuture<'static, Result<(), RemoteError>>,
+        RemoteError,
+    > {
         let (answer, result) = oneshot::channel();
-        self.inbox.send(Input::SideChannel(None, frame, answer)).map_err(|_| offline())?;
+        self.inbox
+            .send(Input::SideChannel(None, frame, answer))
+            .map_err(|_| offline())?;
         Ok(Box::pin(async move {
             result.await.unwrap_or_else(|_| Err(offline())).map(|_| ())
         }))
     }
     pub fn side_channel_for_generation(
-        &self, generation: u64, frame: Value,
+        &self,
+        generation: u64,
+        frame: Value,
     ) -> crate::sidecar::application::EffectFuture<'static, Result<(), RemoteError>> {
         let (answer, result) = oneshot::channel();
-        let sent = self.inbox.send(Input::SideChannel(Some(generation), frame, answer));
+        let sent = self
+            .inbox
+            .send(Input::SideChannel(Some(generation), frame, answer));
         Box::pin(async move {
             sent.map_err(|_| offline())?;
             result.await.unwrap_or_else(|_| Err(offline())).map(|_| ())
@@ -465,7 +516,9 @@ impl RemoteTab {
     }
     pub fn adopt_cwd(&self, cwd: &str) -> bool {
         let mut snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
-        if snapshot.cwd == cwd { return false; }
+        if snapshot.cwd == cwd {
+            return false;
+        }
         snapshot.cwd = cwd.to_owned();
         drop(snapshot);
         let _ = self.inbox.send(Input::AdoptCwd(cwd.to_owned()));
@@ -487,11 +540,19 @@ impl RemoteTab {
 
 impl State {
     fn check_generation(&self, expected: Option<u64>) -> Result<(), RemoteError> {
-        let Some(expected) = expected else { return Ok(()); };
-        if !self.link.is_online() { return Err(offline()); }
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        if !self.link.is_online() {
+            return Err(offline());
+        }
         let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
         if snapshot.generation != expected || snapshot.omp.is_none() {
-            return Err(Fault::new("remote_run_changed", "The original remote tab run is no longer current").into());
+            return Err(Fault::new(
+                "remote_run_changed",
+                "The original remote tab run is no longer current",
+            )
+            .into());
         }
         Ok(())
     }
@@ -499,20 +560,36 @@ impl State {
         self.check_generation(expected)?;
         if expected.is_some() {
             if !self.bound_omp {
-                return Err(Fault::new("remote_run_binding_unavailable", "The execution host does not support generation-bound tab effects").into());
+                return Err(Fault::new(
+                    "remote_run_binding_unavailable",
+                    "The execution host does not support generation-bound tab effects",
+                )
+                .into());
             }
-            let omp = self.omp.as_deref().filter(|omp| !omp.is_empty())
-                .ok_or_else(|| Fault::new("remote_run_changed", "The original remote tab run is no longer current"))?;
+            let omp = self
+                .omp
+                .as_deref()
+                .filter(|omp| !omp.is_empty())
+                .ok_or_else(|| {
+                    Fault::new(
+                        "remote_run_changed",
+                        "The original remote tab run is no longer current",
+                    )
+                })?;
             params["expectedOmp"] = omp.into();
         }
         Ok(())
     }
     fn emit(&self, name: &str, arg: Value, from_link: bool) {
-        if self.output.send(TabEvent {
-            name: name.to_owned(),
-            arg,
-            from_link,
-        }).is_ok() {
+        if self
+            .output
+            .send(TabEvent {
+                name: name.to_owned(),
+                arg,
+                from_link,
+            })
+            .is_ok()
+        {
             self.emitted.fetch_add(1, Ordering::Release);
         }
     }
@@ -620,10 +697,19 @@ impl State {
         }
         self.work.spawn(async move {
             let result = link.request("tab.sideChannel", params, REQUEST).await;
-            let _ = inbox.send(Input::Delivered(epoch, omp, expected, frame, answer, result));
+            let _ = inbox.send(Input::Delivered(
+                epoch, omp, expected, frame, answer, result,
+            ));
         });
     }
-    fn read(&mut self, expected: Option<u64>, command: Value, timeout: Duration, fresh: bool, answer: Answer) {
+    fn read(
+        &mut self,
+        expected: Option<u64>,
+        command: Value,
+        timeout: Duration,
+        fresh: bool,
+        answer: Answer,
+    ) {
         let link = self.link.clone();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
@@ -745,7 +831,10 @@ impl State {
                 ) {
                     return;
                 }
-                let omp = arg["omp"].as_str().filter(|omp| !omp.is_empty()).map(str::to_owned);
+                let omp = arg["omp"]
+                    .as_str()
+                    .filter(|omp| !omp.is_empty())
+                    .map(str::to_owned);
                 if self.reattaching && (omp.is_none() || omp != self.omp) {
                     self.status("starting", json!({}), true);
                 }
@@ -793,7 +882,10 @@ impl State {
                 self.emit(name, arg, false);
             }
             "bridge" => {
-                self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).bridge = arg.clone();
+                self.snapshot
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .bridge = arg.clone();
                 self.emit(name, arg, false);
             }
             "signIn" => {
@@ -1001,7 +1093,9 @@ impl State {
                 Input::Started(epoch, Err(error)) if epoch == self.epoch => self.failed(error),
                 Input::AdoptCwd(cwd) => {
                     self.options.cwd = cwd.clone();
-                    let _ = self.inbox.send(Input::Notify("tab.adoptCwd", json!({"cwd":cwd})));
+                    let _ = self
+                        .inbox
+                        .send(Input::Notify("tab.adoptCwd", json!({"cwd":cwd})));
                 }
                 Input::Check(generation, answer) => {
                     let _ = answer.send(self.check_generation(Some(generation)));
@@ -1024,7 +1118,8 @@ impl State {
                         let _ = answer.send(Err(error));
                     } else {
                         self.work.spawn(async move {
-                            let result = tab.command_inner(command, timeout, Some(generation)).await;
+                            let result =
+                                tab.command_inner(command, timeout, Some(generation)).await;
                             let _ = answer.send(result);
                         });
                     }
@@ -1090,7 +1185,8 @@ impl State {
                     } else if matches!(self.phase, BringUp::Open) {
                         self.deliver(expected, frame, answer);
                     } else {
-                        self.waiting.push_back(Input::SideChannel(expected, frame, answer));
+                        self.waiting
+                            .push_back(Input::SideChannel(expected, frame, answer));
                         self.open();
                     }
                 }
@@ -1104,7 +1200,9 @@ impl State {
                     };
                     match result {
                         Err(error)
-                            if expected.is_none() && replayable(&frame) && error.fault.code == "remote_offline" =>
+                            if expected.is_none()
+                                && replayable(&frame)
+                                && error.fault.code == "remote_offline" =>
                         {
                             if omp == self.omp {
                                 self.queued.push_back((omp, frame));
@@ -1199,7 +1297,9 @@ impl State {
                     while self.watchers.join_next().await.is_some() {}
                     while let Some(result) = self.work.join_next().await {
                         if let Err(error) = result {
-                            failure.get_or_insert_with(|| Fault::new("remote_task", error.to_string()));
+                            failure.get_or_insert_with(|| {
+                                Fault::new("remote_task", error.to_string())
+                            });
                         }
                     }
                     if self.opened_once && !keep {
