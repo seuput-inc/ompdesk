@@ -493,6 +493,12 @@ pub enum Answer {
     SessionFreed(SessionFree),
 }
 
+pub enum Dispatch {
+    Ignored,
+    Done,
+    Pending(EffectFuture<'static, ()>),
+}
+
 #[derive(Default)]
 pub struct ProcessIdentity {
     pub tag: Option<String>,
@@ -502,6 +508,7 @@ pub struct ProcessIdentity {
 /// Per-tab native services. Base supplies implementations backed by the actual machine/prefs/pool services.
 /// No method accepts a deserialized caller or synthesizes authority from an event payload.
 pub trait Host: Send + Sync {
+    fn lane_id(&self) -> &str;
     fn current(&self, ask: Ask) -> bool;
     fn runtime(&self) -> EffectFuture<'_, Result<Runtime, String>>;
     fn shell_environment(&self) -> EffectFuture<'_, Result<Environment, String>>;
@@ -519,7 +526,7 @@ pub trait Host: Send + Sync {
     fn user_flags(&self) -> Vec<String>;
     fn launch_profile(&self, cwd: &str) -> Option<Value>;
     fn origin(&self) -> Option<Value>;
-    fn processes(&self, cwd: &str) -> Result<ProcessIdentity, String>;
+    fn processes(&self, cwd: &str, session_path: Option<&str>) -> Result<ProcessIdentity, String>;
     fn host_tools(&self) -> Value;
     fn bridge_connected(&self) -> bool;
     fn arm_gate(&self);
@@ -559,12 +566,123 @@ fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn event_text<'a>(data: &'a Value, field: &str) -> Result<Option<&'a str>, crate::server::Fault> {
+    match data.get(field) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(crate::server::Fault::new(
+            "native_launch_event",
+            format!("The native launch event has no valid {field}"),
+        )),
+    }
+}
+
+fn event_open(value: &Value) -> Result<Open, crate::server::Fault> {
+    match value {
+        Value::String(word) if word == "new" => Ok(Open::New),
+        Value::String(word) if word == "default" => Ok(Open::Default),
+        Value::Object(object) if object.len() == 1 => object
+            .get("session")
+            .and_then(Value::as_str)
+            .map(|path| Open::Session(path.to_owned()))
+            .ok_or_else(|| {
+                crate::server::Fault::new("native_launch_event", "Invalid native session open")
+            }),
+        _ => Err(crate::server::Fault::new(
+            "native_launch_event",
+            "Invalid native session open",
+        )),
+    }
+}
+
 impl<H: Host> Application<H> {
     pub fn new(host: std::sync::Arc<H>) -> Self {
         Self {
             host,
             snapshot: Default::default(),
             gate: Default::default(),
+        }
+    }
+    pub(crate) fn handles(event: &super::LaneEvent) -> bool {
+        matches!(
+            event.name.as_str(),
+            "sidecar.resolve" | "sidecar.launch" | "sidecar.gateAsk" | "sidecar.sessionWait"
+        )
+    }
+
+
+    /// Consumes only the original bound Lane's internal asks. Root retains and joins every Pending effect.
+    pub fn dispatch(
+        self: &std::sync::Arc<Self>,
+        event: &super::LaneEvent,
+    ) -> Result<Dispatch, crate::server::Fault>
+    where
+        H: 'static,
+    {
+        if !Self::handles(event) {
+            return Ok(Dispatch::Ignored);
+        }
+        if event.data["tab"].as_str() != Some(self.host.lane_id()) {
+            return Err(crate::server::Fault::new(
+                "native_launch_source",
+                "The launch ask belongs to another native source",
+            ));
+        }
+        let number = |field| {
+            event.data[field].as_u64().ok_or_else(|| {
+                crate::server::Fault::new(
+                    "native_launch_event",
+                    "Invalid native launch ask identity",
+                )
+            })
+        };
+        let ask = Ask {
+            ask: number("ask")?,
+            cmd: number("cmd")?,
+        };
+        if !self.host.current(ask) {
+            return Ok(Dispatch::Done);
+        }
+        match event.name.as_str() {
+            "sidecar.launch" => {
+                let open = event_open(&event.data["open"])?;
+                self.launch(
+                    ask,
+                    &open,
+                    event_text(&event.data, "bridgeAddress")?,
+                    event_text(&event.data, "model")?,
+                    event_text(&event.data, "sessionPath")?,
+                );
+                Ok(Dispatch::Done)
+            }
+            "sidecar.resolve" => {
+                let path = event_text(&event.data, "sessionPath")?.map(str::to_owned);
+                let app = std::sync::Arc::clone(self);
+                Ok(Dispatch::Pending(Box::pin(async move {
+                    app.resolve(ask, path.as_deref()).await;
+                })))
+            }
+            "sidecar.sessionWait" => {
+                let path = event_text(&event.data, "sessionPath")?
+                    .ok_or_else(|| {
+                        crate::server::Fault::new(
+                            "native_launch_event",
+                            "A session wait has no path",
+                        )
+                    })?
+                    .to_owned();
+                let app = std::sync::Arc::clone(self);
+                Ok(Dispatch::Pending(Box::pin(async move {
+                    app.session_wait(ask, &path).await;
+                })))
+            }
+            "sidecar.gateAsk" => {
+                let app = std::sync::Arc::clone(self);
+                Ok(Dispatch::Pending(Box::pin(async move {
+                    app.gate(ask).await;
+                })))
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -631,7 +749,14 @@ impl<H: Host> Application<H> {
         );
     }
 
-    pub fn launch(&self, ask: Ask, open: &Open, address: Option<&str>, model: Option<&str>) {
+    pub fn launch(
+        &self,
+        ask: Ask,
+        open: &Open,
+        address: Option<&str>,
+        model: Option<&str>,
+        session_path: Option<&str>,
+    ) {
         if !self.host.current(ask) {
             return;
         }
@@ -641,7 +766,7 @@ impl<H: Host> Application<H> {
             return;
         };
         let cwd = self.host.cwd();
-        let process = match self.host.processes(&cwd) {
+        let process = match self.host.processes(&cwd, session_path) {
             Ok(process) => process,
             Err(error) => {
                 self.host.answer(ask, Answer::LaunchFailed(error));
