@@ -1,52 +1,52 @@
 # Correspondence: native report coalescer
 
-Sync status: SOURCE, source-read against `9f42f5ccb` plus the upload-cache correction `b89c79d280` selected as `89f567a55`, and registered with `syncCommit: null`, not model-checked or stamped.
+Sync status: SOURCE, source-read against selected `25e51563f` including Question admission, shared completion summaries and receiver dispatch-floor changes. Registered with `syncCommit: null`, not model-checked or stamped.
 Main d113 owns acceptance of this mapping and the actual hosted result.
 The original `77bc9fe81` remains the pre-fix reference; its memory-Queued behavior is not relabelled as a pass.
 
 ## Exact code evidence
 
-All paths below are relative to `native/ompdesk/crates/core/src/agentctl/`. Mailbox regions remain those of immutable `9f42f5ccb`; attachment and receiving regions use the corrected `89f567a55` tree.
+All paths below are relative to `native/ompdesk/crates/core/src/agentctl/` in selected `25e51563f`. Only correspondence comments/ranges change here; predicates, actions, bounds and mutation identities remain unchanged.
 Source order: `77bc9fe81`, test-first `53327f34c`, test-first `6b1d2771c`, then `21a94251e`, `03cecb5de`, `9f42f5ccb`.
 This document imports no production code.
 
-- `rules/mail.rs:400-418`: existing Waiting, monotone attempted, pending map and exact-generation/Arc completion index.
-  `439-472`: lazy first-outcome construction under the watch lock, waiting outside Tables.
-  `476-509`: generation AND Arc equality on removal; Drop never overwrites an existing latch.
-- `rules/mail.rs:593-688`: timer claim is separate from actual invocation.
-  `621-645` checks generation/Arc and unfinished latch, marks attempted under Tables, then invokes Deliver without an intervening await.
+- `rules/mail.rs:416-434`: existing Waiting, monotone attempted, pending map and exact-generation/Arc completion index.
+  `455-489`: lazy first-outcome construction under the watch lock, waiting outside Tables; the result carries a shared summary.
+  `498-528`: generation AND Arc equality on removal; Drop never overwrites an existing latch.
+- `rules/mail.rs:608-715`: timer claim is separate from actual invocation.
+  `637-661` checks generation/Arc and unfinished latch, marks attempted under Tables, then invokes Deliver without an intervening await.
   Error requeue retains the completion and attempted history, disarms the old guard, and allocates a fresh physical generation.
-- `rules/mail.rs:763-875`: synchronous Tables region joins all native kinds before replacement, rejects canonical conflicts,
+- `rules/mail.rs:801-915`: synchronous Tables region joins all native kinds before replacement, rejects canonical conflicts,
   removes the ephemeral plan before board cloning, replaces only the existing pair slot, and registers immediate native claims.
-  `880-915` awaits the original completion after launching delivery.
-  `930-954` forget fences unstarted claims but retains attempted handles.
-- `service/messages.rs:746-772, 819-847` creates the original Arc plan and queries canonical refs, without native carry.
+  `918-969` awaits the original completion after launching delivery.
+  `972-998` forget fences unstarted claims but retains attempted handles.
+- `service/messages.rs:757-784, 835-862` creates the original Arc plan and queries canonical refs, without native carry.
   `service/mod.rs:302-325` invokes late preparation inside the selected Deliver.
 - `service/attach.rs:768-827` returns Existing before effects, or carries only after authoritative Missing.
   Its borrowed materialization seam is `693-734`.
-- `runtime/inbox_source.rs:224-259` queries before and inside the source lane, persists the original source with Disk responsibility,
+- `runtime/inbox_source.rs:228-264` queries before and inside the source lane, persists the original source with Disk responsibility,
   then awaits the exact receiving receipt.
-  `582-638` separates upload-reference resolution from receiving Disk acceptance and checks the exact receiver/key set.
+  `580-643` separates upload-reference resolution from receiving Disk acceptance and checks the exact receiver/key set.
 
 ## Atomic regions and actions
 
 | Model action | Exact code region in the source trees above | Granularity / abstraction |
 |---|---|---|
-| `Admit` | `rules/mail.rs:763-875` | One Tables region. Carries original plan, settles replaced pending waiters, registers an unstarted claim. |
-| `Join` | `rules/mail.rs:773-790` | Same Tables region; original completion shared by Progress, Done and Question. |
-| `Conflict` | `rules/mail.rs:785-787, 514-540` | Canonical mismatch returns error, original retained. Reuses the existing ledger fingerprint. |
-| `Claim` | `rules/mail.rs:596-616` | Exact pending-generation removal and in-flight registration under Tables. Claim is not invocation. Timer has no fairness. |
-| `BeginDeliver` | `rules/mail.rs:621-645` | Checks exact generation AND Arc plus unfinished latch; commits attempted before invocation with no intervening await. |
-| `FenceUnstarted` | `rules/mail.rs:628-641, 482-509, 946-953` | Forgotten task cannot invoke Deliver or remove a replacement handle. Cleanup touches only its own handle. |
-| `LookupKnown` | `service/attach.rs:794-807`; `runtime/inbox_source.rs:224-238` | Awaited authoritative Existing answer; no materialization. Intermediate source-lane lookups are folded into this answer. |
-| `LookupMissing` | `service/attach.rs:794-816`; `runtime/inbox_source.rs:233-244` | Missing and materialization are separate transitions; Missing is not eternal exclusivity. |
+| `Admit` | `rules/mail.rs:801-915` | One Tables region. Carries original plan, settles replaced pending waiters, registers an unstarted claim. |
+| `Join` | `rules/mail.rs:811-828` | Same Tables region; original completion shared by Progress, Done and Question. |
+| `Conflict` | `rules/mail.rs:823-825, 530-558` | Canonical mismatch returns error, original retained. Reuses the existing ledger fingerprint. |
+| `Claim` | `rules/mail.rs:612-634` | Exact pending-generation removal and in-flight registration under Tables. Claim is not invocation. Timer has no fairness. |
+| `BeginDeliver` | `rules/mail.rs:637-661` | Checks exact generation AND Arc plus unfinished latch; commits attempted before invocation with no intervening await. |
+| `FenceUnstarted` | `rules/mail.rs:644-659, 498-528, 988-995` | Forgotten task cannot invoke Deliver or remove a replacement handle. Cleanup touches only its own handle. |
+| `LookupKnown` | `service/attach.rs:794-807`; `runtime/inbox_source.rs:228-243` | Awaited authoritative Existing answer; no materialization. Intermediate source-lane lookups are folded into this answer. |
+| `LookupMissing` | `service/attach.rs:794-816`; `runtime/inbox_source.rs:237-244` | Missing and materialization are separate transitions; Missing is not eternal exclusivity. |
 | `LookupConflict` | Same canonical lookup boundary | Error leaves receiving row unchanged; terminal selected-callback error is unconfirmed. |
-| `Materialize` | `service/attach.rs:693-734, 816-826`; `runtime/inbox_source.rs:582-607` | Actual attachment effects for an attached report. Per-file awaits are collapsed; not per-file ExactlyOnce. |
-| `PersistSource` | `runtime/inbox_source.rs:240-244` | Successful source journal Disk transaction; failure is `FailDeliver`, never ACK. |
-| `Receive` | `runtime/inbox_source.rs:245-257, 615-638` | Abstract exact receiver Disk transaction, separate from reply; not stock/provider consumption. |
-| `Return` | `rules/mail.rs:646-657, 482-509, 447-454` | Settles only its original latch; first result cannot be overwritten; exact cleanup retains replacements. |
-| `FailDeliver` | `rules/mail.rs:659-688` | Error and bounded retry under Tables; may follow Receive. Same handle requeues with attempted history. Terminal failure is Unknown. |
-| `Forget` | `rules/mail.rs:930-954` | One Tables region. Pristine queued/claimed work ends unadmitted; attempted work ends Unknown and keeps its task. |
+| `Materialize` | `service/attach.rs:693-734, 816-826`; `runtime/inbox_source.rs:580-612` | Actual attachment effects for an attached report. Per-file awaits are collapsed; not per-file ExactlyOnce. |
+| `PersistSource` | `runtime/inbox_source.rs:244-248` | Successful source journal Disk transaction; failure is `FailDeliver`, never ACK. |
+| `Receive` | `runtime/inbox_source.rs:249-261, 613-643` | Abstract exact receiver Disk transaction, separate from reply; not stock/provider consumption. |
+| `Return` | `rules/mail.rs:664-682, 498-528, 463-470` | Settles only its original latch; first result cannot be overwritten; exact cleanup retains replacements. |
+| `FailDeliver` | `rules/mail.rs:683-713` | Error and bounded retry under Tables; may follow Receive. Same handle requeues with attempted history. Terminal failure is Unknown. |
+| `Forget` | `rules/mail.rs:972-998` | One Tables region. Pristine queued/claimed work ends unadmitted; attempted work ends Unknown and keeps its task. |
 | `AckQueued` | Pre-fix memory-Queued mode | Deliberately broken baseline under `EarlyAck = TRUE`, never an allowed implementation. |
 
 `Spec` has no fairness. Environment scheduling may indefinitely delay any task. The model's stuttering closure is deliberate; `CHECK_DEADLOCK FALSE` means the matrix checks safety only, not scheduler progress or deadlock freedom. No state constraint, symmetry or depth cutoff is used.
@@ -86,7 +86,7 @@ This document imports no production code.
 4. Canonical hash equality stands for the actual immutable logical message plus original attachment refs, including absent versus present-empty sets. Presentation text, landing paths/times and a newly derived dispatch cannot redefine identity.
 5. Materialization may fail or partially take effect. `FailDeliver` may happen after any active boundary, including after receiver ownership. The model records at least one representative effect, not per-file counts or rollback.
 6. Same-handle latch writes are first-wins.
-   Actual watch lock and generation/Arc removals were read at `rules/mail.rs:447-509, 628-645, 930-954`.
+   Actual watch lock and generation/Arc removals were read at `rules/mail.rs:463-528, 644-661, 972-998`.
    `FenceUnstarted` merges Drop's separate remove-active and latch steps.
    No intervening action can revive or redirect the old latch. This is an abstraction obligation, not a checked refinement proof.
 7. Explicit retry source is confirmed: `service/mod.rs:1201-1203` obtains this port's Runtime and calls `redeliver_inbox`,

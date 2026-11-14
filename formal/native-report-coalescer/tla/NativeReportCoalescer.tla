@@ -69,7 +69,7 @@ Init ==
     /\ scheduled = {}
 
 \* SOURCE mailbox post: one tables mutex section, no physical attachment effects.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:763-875
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:801-915
 Admit(c, k, h, kind) ==
     /\ CanCall(c)
     /\ lastGen < MaxGenerations
@@ -98,7 +98,7 @@ Admit(c, k, h, kind) ==
     /\ UNCHANGED <<receiver, owned, effects, known, received, unknownActive>>
 
 \* SOURCE mailbox pending/in-flight canonical equality under the same tables mutex.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:773-790
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:811-828
 Join(c, g) ==
     /\ CanCall(c)
     /\ g \in Indexed
@@ -114,7 +114,7 @@ Join(c, g) ==
                    owned, effects, known, received, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE mailbox immutable canonical hash conflict: original Waiting is retained.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:785-787
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:823-825
 Conflict(c, g, h) ==
     /\ CanCall(c)
     /\ g \in Indexed
@@ -129,7 +129,7 @@ Conflict(c, g, h) ==
                    effects, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE timer claims a Waiting under Tables; the actual callback has not started.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:596-616
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:612-634
 Claim(g) ==
     /\ pending = g
     /\ flights[g].phase = "queued"
@@ -142,7 +142,7 @@ Claim(g) ==
                    effects, known, received, expectedJoin, unknownActive, unknownEnded>>
 
 \* SOURCE exact generation + Arc check, then attempted=true before calling Deliver.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:621-645
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:637-661
 BeginDeliver(g) ==
     /\ g \in scheduled
     /\ g \in inFlight
@@ -155,7 +155,7 @@ BeginDeliver(g) ==
                    receiver, owned, effects, known, received, expectedJoin, unknownActive, unknownEnded>>
 
 \* SOURCE an unstarted forgotten task fails its exact-handle check; Drop is fenced.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:482-509
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:498-528
 FenceUnstarted(g) ==
     /\ g \in scheduled
     /\ flights[g].outcome # "none"
@@ -188,7 +188,7 @@ LookupMissing(g) ==
                    receiver, owned, effects, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE lookup conflict is an error and cannot overwrite receiver ownership.
-\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:224-239
+\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:228-243
 LookupConflict(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "lookup"
@@ -208,7 +208,7 @@ Materialize(g) ==
                    receiver, owned, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE persist original native source responsibility before offering to receiver.
-\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:240-244
+\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:244-248
 PersistSource(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "persist"
@@ -217,7 +217,7 @@ PersistSource(g) ==
                    receiver, owned, effects, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE receiving native Disk transaction; wire response can still be lost afterward.
-\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:615-638
+\* @code native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:613-643
 Receive(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "offer"
@@ -232,7 +232,7 @@ Receive(g) ==
                    effects, known, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE response resumes the original Deliver; exact handle owns its latch/cleanup.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:646-657
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:664-682
 Return(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "return"
@@ -246,7 +246,7 @@ Return(g) ==
                    known, received, expectedJoin, unknownEnded, scheduled>>
 
 \* SOURCE failed actual Deliver may have acquired receiving Disk before response loss.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:659-688
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:683-713
 FailDeliver(g) ==
     /\ g \in inFlight
     /\ flights[g].phase \in ActivePhases
@@ -263,7 +263,7 @@ FailDeliver(g) ==
                    known, received, expectedJoin, unknownEnded, scheduled>>
 
 \* SOURCE forget fences unstarted claims, but retains actually attempted deliveries.
-\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:930-954
+\* @code native/ompdesk/crates/core/src/agentctl/rules/mail.rs:972-998
 Forget ==
     /\ pending # None \/ inFlight # {}
     /\ LET affected == inFlight \cup (IF pending = None THEN {} ELSE {pending})

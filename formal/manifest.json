@@ -196,17 +196,17 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:400-540",
-				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:593-688",
-				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:763-915",
-				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:930-954",
-				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:746-772",
-				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:819-847",
+				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:400-558",
+				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:608-715",
+				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:801-915",
+				"native/ompdesk/crates/core/src/agentctl/rules/mail.rs:918-998",
+				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:757-784",
+				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:835-862",
 				"native/ompdesk/crates/core/src/agentctl/service/mod.rs:302-325",
 				"native/ompdesk/crates/core/src/agentctl/service/attach.rs:693-734",
 				"native/ompdesk/crates/core/src/agentctl/service/attach.rs:768-827",
-				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:224-259",
-				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:582-638"
+				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:228-264",
+				"native/ompdesk/crates/core/src/agentctl/runtime/inbox_source.rs:580-643"
 			],
 			"syncCommit": null
 		}

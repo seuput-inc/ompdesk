@@ -26,7 +26,7 @@ An ever-attempted handle stays indexed until its own end; its waiters receive Un
 
 ## Attempted is not unadmitted
 
-The final source `9f42f5ccb` distinguishes claim from actual invocation.
+The selected `25e51563f` source retains the claim/invocation distinction introduced by `9f42f5ccb`.
 `BeginDeliver` commits `attempted=true` under the exact generation/Arc check, before calling Deliver.
 A failed attempt may already have transferred receiver responsibility before its response was lost.
 Requeue therefore retains ever-attempted permanently.
@@ -44,7 +44,7 @@ The watch outcome is first-wins under its own lock.
 
 `g` denotes one stable completion allocation.
 Physical retry generations are abstracted by `(g, attempt)`; the original handle survives retry, with no overlapping old callback.
-Exact source/await/lock correspondence is recorded against `9f42f5ccb`, with the later upload-cache correction and shifted attachment/receiving ranges listed in `CORRESPONDENCE.md`.
+Exact source/await/lock correspondence uses the selected `25e51563f` tree, including Question admission, shared completion summaries and receiver-floor changes. Current ranges are listed in `CORRESPONDENCE.md`.
 It is a source-read mapping, not a mechanically checked refinement or runtime verdict.
 
 ## Exclusions
