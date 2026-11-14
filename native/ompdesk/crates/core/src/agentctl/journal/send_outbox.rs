@@ -266,6 +266,12 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
     })
 }
 
+/// Read-only metadata from the canonical source row; absence never grants receiving responsibility.
+pub(crate) enum SourceDispatch {
+    Missing,
+    Kept(Option<i64>),
+}
+
 struct State {
     file: Option<PathBuf>,
     save_failed: bool,
@@ -412,6 +418,47 @@ impl SendOutbox {
 
     pub(crate) fn persist_pending(&self) -> Result<Persistence, String> {
         self.state().save()
+    }
+
+    pub(crate) fn native_dispatch(
+        &self,
+        session_path: &str,
+        device: Option<&str>,
+        query: &crate::agentctl::inbox::NativeInboxLookupEntry,
+    ) -> Result<SourceDispatch, String> {
+        let state = self.state();
+        state.readable()?;
+        let key = entry_key(session_path, device, &query.key.delivery_id);
+        let Some(position) = state.position(&key) else {
+            return Ok(SourceDispatch::Missing);
+        };
+        let entry = &state.entries[position].1;
+        if query.key.kind != crate::agentctl::inbox::InboxKind::Prompt
+            || entry.delivery_id.as_deref() != Some(query.key.delivery_id.as_str())
+            || entry.attachments_corrupt
+        {
+            return Err("Native source identity conflicts with an unreadable original".into());
+        }
+        let logical = entry.native_source.bound()?.ok_or(
+            "Native source identity conflicts with an ambiguous legacy record; original retained",
+        )?;
+        let previous = crate::agentctl::inbox::logical_payload(
+            logical,
+            entry.attachments.as_ref().map(|set| {
+                (
+                    set.images.iter(),
+                    set.files.iter().map(|landed| &landed.file),
+                )
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        if previous != query.logical_payload().map_err(|error| error.to_string())? {
+            return Err(
+                "Native source identity conflicts with an existing payload; original retained"
+                    .into(),
+            );
+        }
+        Ok(SourceDispatch::Kept(entry.dispatch))
     }
 
     /// The message is in the hands of the omp `instance` (it queues or runs it).
