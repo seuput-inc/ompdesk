@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { INBOX_PROVENANCE_SOURCE, inboxIdentity } from "../../../resources/gui-bridge/agent-inbox-contracts";
 import type { AutopilotStartOptions, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import { type ClosedChild, AGENT_CONTROL_TOOLS as T, wrapAgentMessage } from "../../shared/agent-control";
 import type {
@@ -4827,6 +4828,7 @@ describe("ompdesk_report: sessions tell their opener", () => {
 	it("delivers each sequentially awaited report after its native Disk ACK without merging completed progress", async () => {
 		const { host, service, a } = await family(true);
 		const stock = host.stocks.get("boss0001")!;
+		const identities: string[] = [];
 		for (const text of ["step 1", "step 2", "step 3"]) {
 			const result = await service.run(a, T.report, { kind: "progress", text });
 			expect(result.isError, result.text).toBe(false);
@@ -4843,8 +4845,10 @@ describe("ompdesk_report: sessions tell their opener", () => {
 				]),
 			);
 			for (const entry of delivered.entries) {
-				if (entry.kind === "report" && entry.details.text === text)
+				if (entry.kind === "report" && entry.details.text === text) {
 					expect(entry.details).not.toHaveProperty("merged");
+					identities.push(inboxIdentity(entry));
+				}
 			}
 		}
 		const result = await service.run(a, T.report, { kind: "done", text: "finished" });
@@ -4861,12 +4865,19 @@ describe("ompdesk_report: sessions tell their opener", () => {
 				}),
 			]),
 		);
-		expect(stock.admissions.filter(event => event.queue === "followUp").map(event => event.message.details)).toEqual([
-			expect.objectContaining({ text: "step 1" }),
-			expect.objectContaining({ text: "step 2" }),
-			expect.objectContaining({ text: "step 3" }),
-			expect.objectContaining({ text: "finished" }),
-		]);
+		for (const entry of done.entries) {
+			if (entry.kind === "report" && entry.details.text === "finished") identities.push(inboxIdentity(entry));
+		}
+		expect(new Set(identities).size).toBe(4);
+		expect(stock.admissions).toEqual(
+			["step 1", "step 2", "step 3", "finished"].map((text, index) => ({
+				queue: text === "finished" ? "followUp" : "journal",
+				message: expect.objectContaining({
+					provenance: { source: INBOX_PROVENANCE_SOURCE, id: identities[index] },
+					details: expect.objectContaining({ text }),
+				}),
+			})),
+		);
 		expect((await stock.status()).receipts).toEqual([]);
 	});
 
