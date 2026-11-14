@@ -171,7 +171,7 @@ async fn the_mailbox_replays_the_typescripts_scenarios() {
             match op["op"].as_str().unwrap() {
                 "post" => {
                     res = match mailbox.post(mail_of(&op["mail"])).await {
-                        Ok(posted) => json!({"ok": posted.as_str()}),
+                        Ok(result) => json!({"ok": result.posted.as_str()}),
                         Err(error) => json!({"thrown": error}),
                     };
                 }
@@ -268,17 +268,26 @@ async fn progress_is_coalesced_and_a_done_supersedes_it() {
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
     let mailbox = mailbox_with(log.clone());
     let progress = |id: &str| Mail::new(id, "kid", "K", "boss", MailKind::Progress, id, 0.0);
-    assert_eq!(mailbox.post(progress("p1")).await, Ok(Posted::Queued));
-    assert_eq!(mailbox.post(progress("p2")).await, Ok(Posted::Queued));
+    assert_eq!(
+        mailbox.post(progress("p1")).await.unwrap().posted,
+        Posted::Queued
+    );
+    assert_eq!(
+        mailbox.post(progress("p2")).await.unwrap().posted,
+        Posted::Queued
+    );
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_millis(2_000)).await;
     tokio::task::yield_now().await;
     tokio::task::yield_now().await;
     assert_eq!(*log.lock().unwrap(), ["p2:1"]);
-    assert_eq!(mailbox.post(progress("p3")).await, Ok(Posted::Queued));
+    assert_eq!(
+        mailbox.post(progress("p3")).await.unwrap().posted,
+        Posted::Queued
+    );
     let done = Mail::new("d1", "kid", "K", "boss", MailKind::Done, "done", 0.0);
-    assert_eq!(mailbox.post(done.clone()).await, Ok(Posted::Delivered));
-    assert_eq!(mailbox.post(done).await, Ok(Posted::Duplicate));
+    assert_eq!(mailbox.post(done.clone()).await.unwrap().posted, Posted::Delivered);
+    assert_eq!(mailbox.post(done).await.unwrap().posted, Posted::Duplicate);
     tokio::time::advance(Duration::from_millis(5_000)).await;
     tokio::task::yield_now().await;
     assert_eq!(*log.lock().unwrap(), ["p2:1", "d1:0"]);
@@ -921,7 +930,7 @@ async fn native_reports_obey_stale_dispatch_and_coalesce_without_overwriting_a_p
     mailbox.seed("child", 2);
     let mut stale = native_report("stale", "old result", MailKind::Done);
     stale.dispatch = Some("d1".into());
-    assert_eq!(mailbox.post(stale).await.unwrap(), Posted::Stale);
+    assert_eq!(mailbox.post(stale).await.unwrap().posted, Posted::Stale);
     assert!(log.lock().unwrap().is_empty());
     let mut first = Box::pin(mailbox.post(native_report(
         "stable",
@@ -944,8 +953,8 @@ async fn native_reports_obey_stale_dispatch_and_coalesce_without_overwriting_a_p
     assert!(log.lock().unwrap().is_empty());
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_millis(super::mail::MAIL_COALESCE_MS)).await;
-    assert_eq!(first.await.unwrap(), Posted::Delivered);
-    assert_eq!(duplicate.await.unwrap(), Posted::Delivered);
+    assert_eq!(first.await.unwrap().posted, Posted::Delivered);
+    assert_eq!(duplicate.await.unwrap().posted, Posted::Delivered);
     assert_eq!(*log.lock().unwrap(), ["stable:0"]);
 }
 
@@ -958,7 +967,8 @@ async fn a_native_delivery_uses_the_receiver_existing_result_after_mailbox_resta
         mailbox
             .post(native_report("stable", "already owned", MailKind::Done))
             .await
-            .unwrap(),
+            .unwrap()
+            .posted,
         Posted::Duplicate,
     );
 }
@@ -1011,8 +1021,8 @@ async fn native_progress_joins_the_claimed_delivery_and_cannot_ack_while_accepta
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release_tx.send(Ok(DeliveryReceipt::New)).unwrap();
-    assert_eq!(first.await.unwrap(), Posted::Delivered);
-    assert_eq!(joined.await.unwrap(), Posted::Delivered);
+    assert_eq!(first.await.unwrap().posted, Posted::Delivered);
+    assert_eq!(joined.await.unwrap().posted, Posted::Delivered);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
@@ -1033,7 +1043,7 @@ async fn unclaimed_native_progress_replacement_and_forget_report_no_receiver_acc
                 assert!(log.lock().unwrap().is_empty());
                 tokio::task::yield_now().await;
                 tokio::time::advance(Duration::from_millis(super::mail::MAIL_COALESCE_MS)).await;
-                assert_eq!(newer.await.unwrap(), Posted::Delivered);
+                assert_eq!(newer.await.unwrap().posted, Posted::Delivered);
                 assert_eq!(*log.lock().unwrap(), ["new:1"]);
             }
             "done" => {
@@ -1041,7 +1051,8 @@ async fn unclaimed_native_progress_replacement_and_forget_report_no_receiver_acc
                     mailbox
                         .post(native_report("done", "finished", MailKind::Done))
                         .await
-                        .unwrap(),
+                        .unwrap()
+                        .posted,
                     Posted::Delivered
                 );
                 assert!(original.await.is_err());
@@ -1129,7 +1140,7 @@ async fn active_forget_keeps_the_actual_delivery_and_late_completion_cannot_eras
     release_tx.send(Ok(DeliveryReceipt::New)).unwrap();
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_millis(super::mail::MAIL_COALESCE_MS)).await;
-    assert_eq!(newer.await.unwrap(), Posted::Delivered);
+    assert_eq!(newer.await.unwrap().posted, Posted::Delivered);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
@@ -1169,8 +1180,8 @@ async fn identical_native_done_and_question_calls_join_before_the_first_preparat
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         release_tx.send(Ok(DeliveryReceipt::New)).unwrap();
-        assert_eq!(first.await.unwrap(), Posted::Delivered);
-        assert_eq!(joined.await.unwrap(), Posted::Delivered);
+        assert_eq!(first.await.unwrap().posted, Posted::Delivered);
+        assert_eq!(joined.await.unwrap().posted, Posted::Delivered);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
@@ -1273,7 +1284,7 @@ async fn forget_before_native_delivery_starts_fences_the_old_claim_and_its_late_
     entered_rx.await.unwrap();
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     release_tx.send(Ok(DeliveryReceipt::New)).unwrap();
-    assert_eq!(replacement.await.unwrap(), Posted::Delivered);
+    assert_eq!(replacement.await.unwrap().posted, Posted::Delivered);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 

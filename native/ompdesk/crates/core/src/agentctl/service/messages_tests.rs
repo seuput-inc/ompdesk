@@ -689,3 +689,268 @@ async fn answering_an_old_card_does_not_clear_a_new_question_admitted_while_it_w
     );
     control.host.port().close();
 }
+
+#[tokio::test(start_paused = true)]
+async fn distinct_pending_native_progress_coalesces_and_done_supersedes_without_orphaning_callers() {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use std::time::Duration;
+
+    use crate::agentctl::rules::mail::{MAIL_COALESCE_MS, Mail, MailKind, Posted};
+
+    async fn pending<F: Future>(mut future: std::pin::Pin<&mut F>) {
+        poll_fn(|cx| {
+            assert!(future.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+    }
+
+    let (control, asked, mut channel, _fixture) = rig(
+        9_353,
+        state(vec![tab("a"), tab("b")]),
+        Tuning::default(),
+        main_replies,
+    );
+    let native = |id: &str, text: &str, kind: MailKind| {
+        let mut mail = Mail::new(id, "b", "b", "a", kind, text, 1.0);
+        let state = control.host.state();
+        let child = state.tabs.iter().find(|tab| tab.tab_id == "b").unwrap();
+        let parent = state.tabs.iter().find(|tab| tab.tab_id == "a").unwrap();
+        mail.native_source = Some(
+            crate::agentctl::runtime::inbox_source::report_source(
+                &state, child, parent, &mail, text,
+            )
+            .unwrap(),
+        );
+        mail
+    };
+    let first = control
+        .mailbox
+        .post(native("pending-one", "first progress", MailKind::Progress));
+    tokio::pin!(first);
+    pending(first.as_mut()).await;
+    let newest = control
+        .mailbox
+        .post(native("pending-two", "newest progress", MailKind::Progress));
+    tokio::pin!(newest);
+    pending(newest.as_mut()).await;
+    let superseded = first.await.unwrap_err();
+    assert!(superseded.contains("before delivery"), "{superseded}");
+    assert!(control.host.outbox().unwrap().pending().is_empty());
+    assert!(asked_with(&asked, "inbox").is_empty());
+    assert_eq!(
+        control.mailbox.state("b", "a").unwrap().last.text,
+        "newest progress"
+    );
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(MAIL_COALESCE_MS)).await;
+    assert_eq!(newest.await.unwrap().posted, Posted::Delivered);
+    let progress = delivered(&mut channel).await;
+    let progress = &progress["request"]["entries"][0];
+    assert_eq!(progress["details"]["id"], "pending-two");
+    assert_eq!(progress["details"]["merged"], 1);
+    assert_eq!(progress["triggerTurn"], false);
+
+    let replaced = control.mailbox.post(native(
+        "pending-three",
+        "not yet delivered",
+        MailKind::Progress,
+    ));
+    tokio::pin!(replaced);
+    pending(replaced.as_mut()).await;
+    let done = control
+        .mailbox
+        .post(native("pending-done", "finished", MailKind::Done));
+    tokio::pin!(done);
+    pending(done.as_mut()).await;
+    let superseded = replaced.await.unwrap_err();
+    assert!(superseded.contains("before delivery"), "{superseded}");
+    assert_eq!(done.await.unwrap().posted, Posted::Delivered);
+    let completion = delivered(&mut channel).await;
+    let completion = &completion["request"]["entries"][0];
+    assert_eq!(completion["details"]["id"], "pending-done");
+    assert!(completion["details"].get("merged").is_none());
+    assert_eq!(completion["triggerTurn"], true);
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(MAIL_COALESCE_MS * 2)).await;
+    tokio::task::yield_now().await;
+    let accepted = asked_with(&asked, "inbox");
+    let ids: Vec<_> = accepted
+        .iter()
+        .flat_map(|args| args["transfer"]["entries"].as_array().unwrap())
+        .map(|entry| entry["logical"]["requestId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["pending-two", "pending-done"]);
+    let status = control
+        .host
+        .inbox_status("a", "/s/a_1.jsonl", None)
+        .await
+        .unwrap();
+    assert!(status.receipts.is_empty());
+    let pending = control
+        .receiving_inbox
+        .as_ref()
+        .unwrap()
+        .ledger
+        .pending(&status.receiver)
+        .unwrap()
+        .1;
+    let ids: Vec<_> = pending
+        .iter()
+        .map(|entry| entry.logical.request_id.as_deref().unwrap())
+        .collect();
+    assert_eq!(ids, ["pending-two", "pending-done"]);
+    assert!(control.host.outbox().unwrap().pending().is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn receiver_owned_follow_ups_seed_d2_and_d4_after_the_source_relaunches() {
+    use super::super::JournalFile;
+    use crate::agentctl::inbox::InboxFiles;
+
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    for (case, count) in [1_u64, 3].into_iter().enumerate() {
+        let dir = Directory(crate::fs::disk::make_temp_dir("ompdesk-relaunch-dispatch-").unwrap());
+        let files = Files {
+            send_outbox: Some(JournalFile {
+                file: Some(dir.0.join("sends.json")),
+            }),
+            mail_outbox: Some(JournalFile {
+                file: Some(dir.0.join("mail.json")),
+            }),
+            inbox: Some(InboxFiles {
+                ledger: dir.0.join("receiver.json"),
+                upload_user_data: dir.0.join("uploads"),
+            }),
+            ..Files::default()
+        };
+        let port = 9_360 + case as u64 * 2;
+        {
+            let (control, asked, mut channel, _fixture) =
+                crate::agentctl::runtime::tests::native_rig(
+                    port,
+                    state(vec![tab("a"), tab("b")]),
+                    Caps::default(),
+                    &files,
+                    Tuning::default(),
+                    main_replies,
+                );
+            for n in 0..count {
+                let result = control
+                    .run(
+                        "a",
+                        "ompdesk_session_send",
+                        json!({
+                            "session": "b", "message": format!("before relaunch {n}"),
+                            "request_id": format!("before-{n}"), "delivery": "follow_up"
+                        }),
+                        None,
+                    )
+                    .await;
+                assert!(!result.is_error, "{}", result.text);
+                delivered(&mut channel).await;
+            }
+            let transfers = asked_with(&asked, "inbox");
+            let dispatches: Vec<_> = transfers
+                .iter()
+                .map(|args| args["transfer"]["entries"][0]["dispatch"].as_u64().unwrap())
+                .collect();
+            assert_eq!(dispatches, (1..=count).collect::<Vec<_>>());
+            assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
+            let status = control
+                .host
+                .inbox_status("b", "/s/b_1.jsonl", None)
+                .await
+                .unwrap();
+            assert!(status.receipts.is_empty());
+            assert_eq!(
+                control
+                    .receiving_inbox
+                    .as_ref()
+                    .unwrap()
+                    .ledger
+                    .pending(&status.receiver)
+                    .unwrap()
+                    .1
+                    .len(),
+                count as usize
+            );
+        }
+        let (control, asked, mut channel, _fixture) =
+            crate::agentctl::runtime::tests::native_rig(
+                port + 1,
+                state(vec![tab("a"), tab("b")]),
+                Caps::default(),
+                &files,
+                Tuning::default(),
+                main_replies,
+            );
+        assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
+        assert!(!control.mailbox.knows("b"));
+        let retry = control
+            .run(
+                "a",
+                "ompdesk_session_send",
+                json!({
+                    "session": "b", "message": "before relaunch 0",
+                    "request_id": "before-0", "delivery": "follow_up"
+                }),
+                None,
+            )
+            .await;
+        assert!(!retry.is_error, "{}", retry.text);
+        assert!(asked_with(&asked, "inbox").is_empty());
+        let fresh = control
+            .run(
+                "a",
+                "ompdesk_session_send",
+                json!({
+                    "session": "b", "message": "after relaunch",
+                    "request_id": "after-relaunch", "delivery": "follow_up"
+                }),
+                None,
+            )
+            .await;
+        assert!(!fresh.is_error, "{}", fresh.text);
+        let transfers = asked_with(&asked, "inbox");
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0]["transfer"]["entries"][0]["dispatch"], count + 1);
+        let fresh_id = &transfers[0]["transfer"]["entries"][0]["entry"]["deliveryId"];
+        loop {
+            let delivery = delivered(&mut channel).await;
+            if delivery["request"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| &entry["deliveryId"] == fresh_id)
+            {
+                break;
+            }
+        }
+        let status = control
+            .host
+            .inbox_status("b", "/s/b_1.jsonl", None)
+            .await
+            .unwrap();
+        let pending = control
+            .receiving_inbox
+            .as_ref()
+            .unwrap()
+            .ledger
+            .pending(&status.receiver)
+            .unwrap()
+            .1;
+        let dispatches: Vec<_> = pending.iter().map(|entry| entry.dispatch.unwrap()).collect();
+        assert_eq!(dispatches, (1..=(count + 1) as i64).collect::<Vec<_>>());
+        assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
+        control.host.port().close();
+    }
+}
