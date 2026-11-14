@@ -186,8 +186,15 @@ async fn bound_actions_refuse_old_hosts_and_never_retry_or_replay_into_a_replace
         let request = replacement_incoming.recv().await.unwrap();
         assert_eq!(request.method, "tab.command");
         assert_eq!(request.params["expectedOmp"], "original-omp");
+        run_replacement_host.emit("tab.event", &json!({"rtab":"remote-native","name":"extensionUi","arg":{"id":"original-card","method":"input","title":"Original question"}})).unwrap();
         run_replacement_host.emit("tab.event", &json!({"rtab":"remote-native","name":"status","arg":{"status":"ready","processAlive":true,"omp":"replacement-omp"}})).unwrap();
+        let original_card = loop {
+            let event = delivered.recv().await.unwrap();
+            if event.name == "extensionUi" && event.arg["id"] == "original-card" { break event; }
+        };
         while run_service.generation() == captured { next_status(&mut delivered).await; }
+        assert_eq!(original_card.generation, captured, "queued cards retain their emitting run, not the later snapshot");
+        assert_ne!(original_card.generation, run_service.generation());
         run_replacement_host.answer(request.id, Ok(json!({"success":true,"data":{"~read":"old.2","base":"old.1","delta":{"~delta":"x","set":{},"unset":[]}}}))).unwrap();
         assert_eq!(pending.await.unwrap().unwrap_err().code, "remote_run_changed");
         assert_eq!(run_service.stock_for_generation(captured, json!({"type":"set_session_name","name":"Must not rename replacement"})).await.unwrap_err().code, "remote_run_changed");

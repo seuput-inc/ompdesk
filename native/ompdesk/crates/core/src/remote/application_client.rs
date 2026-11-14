@@ -40,6 +40,8 @@ pub struct TabEvent {
     pub arg: Value,
     /// Only link-derived status preserves the pool's open question routes.
     pub from_link: bool,
+    /// Captured by the original actor before event delivery can wait behind another consumer.
+    pub generation: u64,
 }
 
 #[derive(Clone)]
@@ -541,10 +543,12 @@ impl State {
         Ok(())
     }
     fn emit(&self, name: &str, arg: Value, from_link: bool) {
+        let generation = self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).generation;
         if self.output.send(TabEvent {
             name: name.to_owned(),
             arg,
             from_link,
+            generation,
         }).is_ok() {
             self.emitted.fetch_add(1, Ordering::Release);
         }
