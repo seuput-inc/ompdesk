@@ -550,10 +550,20 @@ async function verifyRolledBack(reason: "swap" | "start", final: boolean): Promi
 		`the setup logged ${reason === "swap" ? "the incomplete unpack" : "`start-failed`"} (in %TEMP%\\ompdesk-setup.log), no dialog`,
 		setupText.trim(),
 	);
-	expect(
-		!existsSync(join(profile, "app-started.json")) || reason === "swap",
-		"the failed new app left no app-started.json for the new version",
-	);
+	const markerFile = join(profile, "app-started.json");
+	let marker: unknown = null;
+	let markerValid = true;
+	if (existsSync(markerFile)) {
+		try {
+			marker = JSON.parse(readFileSync(markerFile, "utf8")) as unknown;
+			markerValid =
+				typeof marker === "object" && marker !== null && "version" in marker && marker.version === RELEASED_VERSION;
+		} catch {
+			markerValid = false;
+		}
+	}
+	evidence.rollbackStartMarker = marker;
+	expect(markerValid, "the rollback start marker is absent or names the restored Electron version", marker);
 	expect(await noWindows(), "no window appeared during the failed move");
 	const running = await processesUnder(TEST_DIR);
 	evidence.running = running;
