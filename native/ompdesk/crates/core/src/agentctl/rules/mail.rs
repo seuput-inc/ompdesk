@@ -397,6 +397,22 @@ impl Posted {
     }
 }
 
+/// The first actual delivery outcome. Shared summaries contain paths/counts only, never prepared attachment bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostedOutcome {
+    pub posted: Posted,
+    pub attachment_summary: Option<Arc<String>>,
+}
+
+impl From<Posted> for PostedOutcome {
+    fn from(posted: Posted) -> Self {
+        Self {
+            posted,
+            attachment_summary: None,
+        }
+    }
+}
+
 struct Waiting {
     mail: Mail,
     generation: u64,
@@ -440,11 +456,11 @@ struct NativeCompletion {
     identity: Arc<String>,
     fingerprint: String,
     pair: String,
-    result: tokio::sync::watch::Sender<Option<Result<Posted, String>>>,
+    result: tokio::sync::watch::Sender<Option<Result<PostedOutcome, String>>>,
 }
 
 impl NativeCompletion {
-    fn finish(&self, result: impl FnOnce() -> Result<Posted, String>) {
+    fn finish(&self, result: impl FnOnce() -> Result<PostedOutcome, String>) {
         self.result.send_if_modified(|current| {
             if current.is_some() {
                 return false;
@@ -458,7 +474,7 @@ impl NativeCompletion {
         self.result.borrow().is_some()
     }
 
-    async fn wait(&self) -> Result<Posted, String> {
+    async fn wait(&self) -> Result<PostedOutcome, String> {
         let mut result = self.result.subscribe();
         loop {
             let observed = result.borrow_and_update().clone();
@@ -649,9 +665,17 @@ async fn deliver_claimed(inner: Arc<Inner>, key: String, mut next: Waiting, atte
             tables.seen.insert(next.mail.id);
             if let Some(progress) = &next.native {
                 progress.finish(|| {
-                    Ok(match receipt {
-                        DeliveryReceipt::New => Posted::Delivered,
-                        DeliveryReceipt::Existing => Posted::Duplicate,
+                    Ok(PostedOutcome {
+                        posted: match receipt {
+                            DeliveryReceipt::New => Posted::Delivered,
+                            DeliveryReceipt::Existing => Posted::Duplicate,
+                        },
+                        attachment_summary: next
+                            .mail
+                            .native_attachment_plan
+                            .take()
+                            .and_then(|plan| plan.summary())
+                            .map(Arc::new),
                     })
                 });
             }
@@ -891,12 +915,15 @@ impl Mailbox {
     }
 
     /// Coalesces legacy progress immediately; native posts finish only at actual receiver acceptance or explicit failure.
-    pub async fn post(&self, mail: Mail) -> Result<Posted, String> {
+    pub async fn post(&self, mail: Mail) -> Result<PostedOutcome, String> {
         let key = format!("{}>{}", mail.from, mail.to);
         let mut mail = Some(mail);
         match self.prepare_post(&mut mail)? {
-            PostAdmission::Ready(result) => Ok(result),
-            PostAdmission::Joined(completion) => completion.wait().await,
+            PostAdmission::Ready(result) => Ok(result.into()),
+            PostAdmission::Joined(completion) => {
+                drop(mail);
+                completion.wait().await
+            }
             PostAdmission::Queued {
                 generation,
                 completion,
@@ -904,7 +931,7 @@ impl Mailbox {
                 arm(self.inner.clone(), key, generation, 0);
                 match completion {
                     Some(completion) => completion.wait().await,
-                    None => Ok(Posted::Queued),
+                    None => Ok(Posted::Queued.into()),
                 }
             }
             PostAdmission::Deliver {
@@ -931,10 +958,11 @@ impl Mailbox {
                     let id = mail.id.clone();
                     let delivered = (self.inner.deliver)(mail).await?;
                     self.inner.tables().seen.insert(id);
-                    Ok(match delivered {
+                    let posted = match delivered {
                         DeliveryReceipt::New => Posted::Delivered,
                         DeliveryReceipt::Existing => Posted::Duplicate,
-                    })
+                    };
+                    Ok(posted.into())
                 }
             }
         }

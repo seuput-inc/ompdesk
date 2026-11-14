@@ -864,19 +864,27 @@ impl AgentControl {
             .mem()
             .mailed_in
             .insert(turn_key.clone(), caller.busy_since);
+        let report_id = mail.id.clone();
+        let report_kind = mail.kind;
+        drop(native_plan);
         let outcome = if existing {
-            Ok(Posted::Duplicate)
+            drop(mail);
+            Ok(Posted::Duplicate.into())
         } else {
-            self.mailbox.post(mail.clone()).await
+            self.mailbox.post(mail).await
         };
-        if matches!(outcome, Ok(Posted::Duplicate | Posted::Stale)) {
+        if outcome
+            .as_ref()
+            .is_ok_and(|result| matches!(result.posted, Posted::Duplicate | Posted::Stale))
+        {
             let mut mem = self.mem();
             match before {
                 Some(turn) => mem.mailed_in.insert(turn_key, turn),
                 None => mem.mailed_in.remove(&turn_key),
             };
         }
-        let outcome = outcome.map_err(Fail::other)?;
+        let result = outcome.map_err(Fail::other)?;
+        let outcome = result.posted;
         if let Some(parent) = &parent {
             self.host.review_changed(parent);
         }
@@ -888,10 +896,12 @@ impl AgentControl {
                 .reported_in
                 .insert(format!("{}\n{to}", caller.tab_id), caller.busy_since);
         }
-        let summary = attached
+        let attached_summary = attached.as_ref().map(|set| set.summary());
+        let summary = result
+            .attachment_summary
             .as_ref()
-            .map(|set| set.summary())
-            .or_else(|| native_plan.as_ref().and_then(|plan| plan.summary()));
+            .map(|summary| summary.as_str())
+            .or(attached_summary.as_deref());
         let mut waiting = match summary {
             Some(summary) if outcome != Posted::Duplicate && outcome != Posted::Stale => {
                 format!(" {summary}.")
@@ -913,7 +923,7 @@ impl AgentControl {
         Ok(match outcome {
             Posted::Duplicate => format!(
                 "Report {} was already delivered; nothing sent again.{waiting}",
-                mail.id
+                report_id
             ),
             Posted::Stale => format!(
                 "Ignored: dispatch {} is no longer current (the session that opened you has since sent dispatch {}). Work on its latest message.{waiting}",
@@ -926,7 +936,7 @@ impl AgentControl {
                 "Progress noted; it reaches the session shortly (several progress reports arrive as the latest one).{waiting}"
             ),
             Posted::Delivered => {
-                if mail.kind == MailKind::Question || mail.kind == MailKind::Blocked {
+                if report_kind == MailKind::Question || report_kind == MailKind::Blocked {
                     format!(
                         "Delivered. Wait for the answer: it comes as a message (between your steps while this turn runs); do not guess the decision meanwhile.{waiting}"
                     )
