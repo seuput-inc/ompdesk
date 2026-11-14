@@ -146,6 +146,7 @@ export const PROVIDER_BRANDS: Readonly<Record<string, Brand>> = {
 	"alibaba-coding-plan": brand("alibabacloud", "Alibaba"),
 	"alibaba-token-plan": brand("alibabacloud", "Alibaba"),
 	"amazon-bedrock": brand("bedrock", "Amazon"),
+	"antigravity-cli": brand("antigravity", "Google"),
 	"bedrock-mantle": brand("bedrock", "Amazon"),
 	"cline-pass": brand("cline", "Cline"),
 	"cloudflare-ai-gateway": brand("cloudflare", "Cloudflare"),
