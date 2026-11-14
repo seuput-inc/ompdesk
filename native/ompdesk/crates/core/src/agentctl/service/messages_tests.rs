@@ -550,3 +550,142 @@ async fn steer_send_queues_behind_open_card() {
 async fn follow_up_send_queues_behind_open_card() {
     open_card_queues_message(9_314, Some("follow_up")).await;
 }
+
+async fn answered_card_board_state(port: u64, succeeds: bool) {
+    let mut child = tab("b");
+    child["asks"] = json!([{
+        "id": "card-one",
+        "request": { "id": "card-one", "method": "confirm", "title": "Continue the original work?" }
+    }]);
+    let (control, _, mut channel, _fixture) = rig(
+        port,
+        state(vec![tab("a"), child]),
+        Tuning::default(),
+        move |method, args| {
+            if method == "answer" && !succeeds {
+                Err("The live question rejected the answer".into())
+            } else {
+                main_replies(method, args)
+            }
+        },
+    );
+    control.child_asked("a", "b", "card-one").await.unwrap();
+    delivered(&mut channel).await;
+    let before = control.host.state();
+    let before = control.report_fields(&before, &before.tabs[1]);
+    assert_eq!(before.get("waiting"), Some(&json!(true)));
+    let result = control
+        .run(
+            "a",
+            "ompdesk_session_answer",
+            json!({ "session": "b", "request": "card-one", "approve": true }),
+            None,
+        )
+        .await;
+    assert_eq!(result.is_error, !succeeds, "{}", result.text);
+    if succeeds {
+        crate::ports::apply_state(
+            control.host.port(),
+            1,
+            &state(vec![tab("a"), tab("b")]).to_string(),
+        )
+        .unwrap();
+    }
+    let current = control.host.state();
+    assert_eq!(current.tabs[1].asks.is_empty(), succeeds);
+    let after = control.report_fields(&current, &current.tabs[1]);
+    assert_eq!(after.get("report"), before.get("report"));
+    assert_eq!(after.get("waiting") == Some(&json!(true)), !succeeds);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_successful_live_card_answer_does_not_restore_question_waiting_on_the_board() {
+    answered_card_board_state(9_350, true).await;
+}
+
+#[tokio::test]
+async fn a_failed_live_card_answer_keeps_the_original_question_waiting() {
+    answered_card_board_state(9_351, false).await;
+}
+
+#[tokio::test]
+async fn answering_an_old_card_does_not_clear_a_new_question_admitted_while_it_waits() {
+    use crate::agentctl::runtime::tests::native_rig_async;
+
+    let mut child = tab("b");
+    child["asks"] = json!([{
+        "id": "card-one",
+        "request": { "id": "card-one", "method": "confirm", "title": "The first question" }
+    }]);
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let entered = Arc::new(Mutex::new(Some(entered_tx)));
+    let held = Arc::new(Mutex::new(Some(release_rx)));
+    let (control, _, mut channel, _fixture) = native_rig_async(
+        9_352,
+        state(vec![tab("a"), child]),
+        Caps::default(),
+        &Files::default(),
+        Tuning::default(),
+        move |method, args| {
+            let reply = if method == "answer" {
+                entered.lock().unwrap().take().unwrap().send(()).unwrap();
+                held.lock().unwrap().take()
+            } else {
+                None
+            };
+            async move {
+                if let Some(reply) = reply {
+                    reply.await.expect("held live answer was not released")
+                } else {
+                    main_replies(&method, &args)
+                }
+            }
+        },
+    );
+    control.child_asked("a", "b", "card-one").await.unwrap();
+    let first = delivered(&mut channel).await;
+    let answering = control.run(
+        "a",
+        "ompdesk_session_answer",
+        json!({ "session": "b", "request": "card-one", "approve": true }),
+        None,
+    );
+    tokio::pin!(answering);
+    tokio::select! {
+        result = &mut answering => panic!("answer completed before its actual host reply: {}", result.text),
+        entered = entered_rx => entered.expect("the live card answer was not entered"),
+    }
+    let mut replacement = tab("b");
+    replacement["asks"] = json!([{
+        "id": "card-two",
+        "request": { "id": "card-two", "method": "confirm", "title": "The new question" }
+    }]);
+    crate::ports::apply_state(
+        control.host.port(),
+        1,
+        &state(vec![tab("a"), replacement]).to_string(),
+    )
+    .unwrap();
+    control.child_asked("a", "b", "card-two").await.unwrap();
+    let second = delivered(&mut channel).await;
+    assert_ne!(
+        first["request"]["entries"][0]["deliveryId"],
+        second["request"]["entries"][0]["deliveryId"]
+    );
+    release_tx.send(Ok(Value::Null)).unwrap();
+    let result = answering.await;
+    assert!(!result.is_error, "{}", result.text);
+    let current = control.host.state();
+    assert_eq!(current.tabs[1].asks[0].id, "card-two");
+    let fields = control.report_fields(&current, &current.tabs[1]);
+    assert_eq!(fields.get("waiting"), Some(&json!(true)));
+    assert!(
+        fields["report"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("The new question")
+    );
+    control.host.port().close();
+}
