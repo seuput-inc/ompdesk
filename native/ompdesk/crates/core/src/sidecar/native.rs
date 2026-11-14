@@ -51,6 +51,8 @@ struct State {
     pid: Option<u32>,
     alive: bool,
     bridge: bool,
+    generation: u64,
+    accepted_cmd: u64,
     session: Option<Value>,
 }
 
@@ -101,6 +103,8 @@ impl Service {
                 pid: None,
                 alive: false,
                 bridge: false,
+                generation: 0,
+                accepted_cmd: next - 1,
                 session: None,
             }),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -112,7 +116,7 @@ impl Service {
             Arc::clone(&service.sink),
             receiver,
         ));
-        let held = Box::pin(async move { answer.await.unwrap_or(Ok(())) });
+        let held = Box::pin(async move { answer.await.map_err(|_| disconnected())? });
         Ok((service, held))
     }
 
@@ -121,6 +125,11 @@ impl Service {
     }
 
     fn send(&self, command: Command, lifecycle: bool) -> u64 {
+        let _state = lifecycle.then(|| locked(&self.state));
+        self.enqueue(command, lifecycle)
+    }
+
+    fn enqueue(&self, command: Command, lifecycle: bool) -> u64 {
         let seq = self.next.fetch_add(1, Ordering::Relaxed);
         if lifecycle {
             self.fence.fetch_max(seq, Ordering::SeqCst);
@@ -145,6 +154,15 @@ impl Service {
             true,
         );
     }
+    /// Cleanup capability for an already captured local run; never restarts a replacement generation.
+    pub fn restart_for_generation(
+        &self,
+        generation: u64,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let (reply, answer) = oneshot::channel();
+        self.send(Command::NativeRestart { generation, reply }, false);
+        Box::pin(async move { answer.await.map_err(|_| disconnected())? })
+    }
     pub fn sleep(&self) {
         self.send(Command::Sleep, true);
     }
@@ -156,8 +174,9 @@ impl Service {
     }
 
     pub fn dispose(&self, stdin_grace: Duration) {
+        let _state = locked(&self.state);
         if !self.disposed.swap(true, Ordering::SeqCst) {
-            self.send(Command::Dispose { stdin_grace }, true);
+            self.enqueue(Command::Dispose { stdin_grace }, true);
         }
     }
 
@@ -182,6 +201,27 @@ impl Service {
             facts["pid"] = Value::from(pid);
         }
         facts
+    }
+
+    /// A synchronous native keep may use the observed run, never a queued replacement lifecycle.
+    /// The effect must not await or reenter this source.
+    pub(crate) fn admit_observation<T>(
+        &self,
+        generation: u64,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = locked(&self.state);
+        if self.disposed.load(Ordering::SeqCst)
+            || !state.alive
+            || state.generation != generation
+            || state.accepted_cmd < self.fence.load(Ordering::SeqCst)
+        {
+            return Err(Fault::new(
+                "observed_card_changed",
+                "The original question's run has changed",
+            ));
+        }
+        effect()
     }
 
     pub fn session(&self) -> Option<Value> {
@@ -240,8 +280,51 @@ impl Service {
         Ok(())
     }
 
+    pub fn send_for_generation(
+        &self,
+        generation: u64,
+        frame: Value,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let frame = match serde_json::value::to_raw_value(&frame) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return Box::pin(
+                    async move { Err(Fault::new("invalid_params", error.to_string())) },
+                );
+            }
+        };
+        let (reply, answer) = oneshot::channel();
+        self.send(
+            Command::GuardedSend {
+                generation,
+                frame,
+                reply,
+            },
+            false,
+        );
+        Box::pin(async move { answer.await.map_err(|_| disconnected())? })
+    }
+
     pub fn stock(
         &self,
+        command: Value,
+        timeout: Option<Duration>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        self.stock_with_generation(None, command, timeout)
+    }
+
+    pub fn stock_for_generation(
+        &self,
+        generation: u64,
+        command: Value,
+        timeout: Option<Duration>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        self.stock_with_generation(Some(generation), command, timeout)
+    }
+
+    fn stock_with_generation(
+        &self,
+        generation: Option<u64>,
         command: Value,
         timeout: Option<Duration>,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
@@ -261,6 +344,7 @@ impl Service {
             &self.tab,
             seq,
             Command::Stock {
+                generation,
                 seq,
                 command,
                 timeout,
@@ -290,6 +374,26 @@ impl Service {
         params: Option<Value>,
         timeout: Option<Duration>,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
+        self.bridge_with_generation(None, method, params, timeout)
+    }
+
+    pub fn bridge_for_generation(
+        &self,
+        generation: u64,
+        method: String,
+        params: Option<Value>,
+        timeout: Option<Duration>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        self.bridge_with_generation(Some(generation), method, params, timeout)
+    }
+
+    fn bridge_with_generation(
+        &self,
+        generation: Option<u64>,
+        method: String,
+        params: Option<Value>,
+        timeout: Option<Duration>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
         let params = match params
             .map(|params| serde_json::value::to_raw_value(&params))
             .transpose()
@@ -304,6 +408,7 @@ impl Service {
         let (reply, answer) = oneshot::channel();
         self.send(
             Command::Bridge {
+                generation,
                 method,
                 params,
                 timeout,
@@ -324,12 +429,10 @@ impl Service {
     }
 
     /// Captured synchronously before a following dispose, as SidecarPool's exact-close receipt requires.
-    pub fn when_exited(&self) -> EffectFuture<'static, ()> {
+    pub fn when_exited(&self) -> EffectFuture<'static, Result<(), Fault>> {
         let (reply, answer) = oneshot::channel();
-        self.send(Command::WhenExited(reply), false);
-        Box::pin(async move {
-            let _ = answer.await;
-        })
+        self.send(Command::NativeWhenExited(reply), false);
+        Box::pin(async move { answer.await.map_err(|_| disconnected())? })
     }
 
     pub fn barrier(&self) -> EffectFuture<'static, Result<(), Fault>> {
@@ -344,7 +447,7 @@ impl Service {
         };
         Box::pin(async move {
             let _waiting = waiting;
-            let _ = answered.await;
+            answered.await.map_err(|_| disconnected())?;
             let _ = framed.await.map_err(|_| disconnected())?;
             Ok(())
         })
@@ -389,9 +492,19 @@ async fn pump(
         let cmd = event.data["cmd"].as_u64().unwrap_or(0);
         let stale =
             service.disposed.load(Ordering::SeqCst) || cmd < service.fence.load(Ordering::SeqCst);
-        if !stale {
+        if !stale
+            || event.name == "sidecar.disposed"
+            || (event.name == "sidecar.nativeGeneration"
+                && cmd >= service.fence.load(Ordering::SeqCst))
+        {
             let mut state = locked(&service.state);
+            state.generation = event.generation;
+            state.accepted_cmd = cmd;
             match event.name.as_str() {
+                "sidecar.nativeGeneration" => {
+                    service.fence.fetch_max(cmd, Ordering::SeqCst);
+                    state.bridge = false;
+                }
                 "sidecar.status" => {
                     if let Some(status) = event.data["payload"]["status"].as_str() {
                         state.status = status.into();
@@ -408,7 +521,7 @@ async fn pump(
                         .and_then(|pid| u32::try_from(pid).ok());
                     state.alive = true;
                 }
-                "sidecar.exited" => {
+                "sidecar.exited" | "sidecar.disposed" => {
                     state.pid = None;
                     state.alive = false;
                     state.bridge = false;
@@ -428,6 +541,9 @@ async fn pump(
                 }
                 _ => {}
             }
+        }
+        if event.name == "sidecar.nativeGeneration" {
+            continue;
         }
         if event.name == "sidecar.answer" {
             service.sink.before_response();
@@ -450,14 +566,27 @@ impl crate::pool::application::Sidecar for Service {
     fn facts(&self) -> Value {
         Service::facts(self)
     }
+    fn generation(&self) -> u64 {
+        locked(&self.state).generation
+    }
+    fn bridge_connected(&self) -> bool {
+        Service::bridge_connected(self)
+    }
+    fn before_response(&self) {
+        self.sink.before_response();
+    }
     fn start(&self) {
         Service::start(self);
     }
     fn restart(&self, session: Option<&str>) {
         Service::restart(self, None, session.map(str::to_owned));
     }
-    fn sleep(&self) {
+    fn sleep(&self) -> Result<(), Fault> {
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(disconnected());
+        }
         Service::sleep(self);
+        Ok(())
     }
     fn adopt_cwd(&self, cwd: &str) -> bool {
         Service::adopt_cwd(self, cwd)
@@ -472,6 +601,35 @@ impl crate::pool::application::Sidecar for Service {
     fn stock(&self, command: Value) -> EffectFuture<'static, Result<Value, Fault>> {
         Service::stock(self, command, Some(Duration::from_secs(8)))
     }
+    fn send_for_generation(
+        &self,
+        generation: u64,
+        frame: Value,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        Service::send_for_generation(self, generation, frame)
+    }
+    fn stock_for_generation(
+        &self,
+        generation: u64,
+        command: Value,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        Service::stock_for_generation(self, generation, command, Some(Duration::from_secs(8)))
+    }
+    fn bridge_for_generation(
+        &self,
+        generation: u64,
+        method: String,
+        params: Option<Value>,
+        timeout_ms: Option<u64>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        Service::bridge_for_generation(
+            self,
+            generation,
+            method,
+            params,
+            timeout_ms.map(Duration::from_millis),
+        )
+    }
     fn bridge(
         &self,
         method: String,
@@ -480,7 +638,7 @@ impl crate::pool::application::Sidecar for Service {
     ) -> EffectFuture<'static, Result<Value, Fault>> {
         Service::bridge(self, method, params, timeout_ms.map(Duration::from_millis))
     }
-    fn exit_waiter(&self) -> EffectFuture<'static, ()> {
+    fn exit_waiter(&self) -> EffectFuture<'static, Result<(), Fault>> {
         self.when_exited()
     }
     fn remove_listeners(&self) {
@@ -496,4 +654,4 @@ impl crate::pool::application::Sidecar for Service {
 
 #[cfg(test)]
 #[path = "native_tests.rs"]
-mod tests;
+pub(crate) mod tests;

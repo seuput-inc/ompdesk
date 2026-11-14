@@ -30,7 +30,7 @@ impl Effects for DeviceEffects {
     fn adopt_login(&self, _: &str) {}
     fn migrated(&self, _: f64, _: Vec<String>, _: Vec<String>) {}
 }
-struct AppHost {
+pub(crate) struct AppHost {
     prefs: Mutex<Preferences>,
     output: mpsc::UnboundedSender<Output>,
 }
@@ -168,10 +168,19 @@ async fn quota_notifications_are_coalesced_and_read_the_single_native_peer_recor
     assert!(output.try_recv().is_err());
     service.dispose().await.unwrap();
 }
-#[tokio::test]
-async fn a_known_offline_host_keeps_a_tab_waiting_without_accepting_a_user_answer() {
-    let dir = Dir::new();
-    let (service, _output) = rig(&dir);
+pub(crate) fn linked(dir: &Dir, requests: RemoteRequests) -> Arc<Service<AppHost>> {
+    with_link(dir, Some(requests))
+}
+
+pub(crate) fn tab_present(service: &Service<AppHost>, device: &str, rtab: &str) -> bool {
+    lock(&service.state)
+        .links
+        .get(device)
+        .is_some_and(|link| link.tabs.contains_key(rtab))
+}
+
+fn with_link(dir: &Dir, requests: Option<RemoteRequests>) -> Arc<Service<AppHost>> {
+    let (service, _output) = rig(dir);
     let (events, _frames) = mpsc::unbounded_channel();
     let record = json!({"deviceId":"host","name":"Host","staticPub":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","nodeId":"node-host","addresses":[],"pairedAt":0});
     lock(&crate::remote::store::open(dir.path(), Kind::Hosts))
@@ -195,7 +204,7 @@ async fn a_known_offline_host_keeps_a_tab_waiting_without_accepting_a_user_answe
             serial: 1,
             client,
             change: None,
-            requests: None,
+            requests,
             tabs: HashMap::new(),
             closes: Arc::default(),
             sessions,
@@ -205,6 +214,13 @@ async fn a_known_offline_host_keeps_a_tab_waiting_without_accepting_a_user_answe
             reading_summaries: false,
         },
     );
+    service
+}
+
+#[tokio::test]
+async fn a_known_offline_host_keeps_a_tab_waiting_without_accepting_a_user_answer() {
+    let dir = Dir::new();
+    let service = with_link(&dir, None);
     let options = TabOptions {
         rtab: "tab".into(),
         cwd: "/workspace".into(),
@@ -230,6 +246,61 @@ async fn a_known_offline_host_keeps_a_tab_waiting_without_accepting_a_user_answe
             .code,
         "remote_offline"
     );
+    let (first, first_remote, _keep_first) = crate::remote::requests::tests::pair().await;
+    let (next, next_remote, _keep_next) = crate::remote::requests::tests::pair().await;
+    lock(&service.state).links.get_mut("host").unwrap().requests = Some(first.clone());
+    let captured = service
+        .capture_host_connection("host", first.link_id().unwrap())
+        .unwrap();
+    assert!(captured.same_connection(&first));
+    assert!(
+        service
+            .capture_host_connection("another host", first.link_id().unwrap())
+            .is_err()
+    );
+    let (sent, mut received) = mpsc::unbounded_channel();
+    service
+        .admit_host_connection("host", &captured, || {
+            sent.send("first").unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(received.recv().await, Some("first"));
+    lock(&service.state).links.get_mut("host").unwrap().requests = Some(next.clone());
+    assert!(
+        service
+            .admit_host_connection("host", &captured, || {
+                sent.send("stale").unwrap();
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(received.try_recv().is_err());
+    let current = service
+        .capture_host_connection("host", next.link_id().unwrap())
+        .unwrap();
+    service
+        .admit_host_connection("host", &current, || {
+            sent.send("next").unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(received.recv().await, Some("next"));
+    let mut changes = current.changes();
+    current.disconnect_for_test();
+    changes.wait_for(|online| !*online).await.unwrap();
+    assert!(
+        service
+            .admit_host_connection("host", &current, || {
+                sent.send("disconnected").unwrap();
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(received.try_recv().is_err());
+    first.disconnect_for_test();
+    first_remote.disconnect_for_test();
+    next_remote.disconnect_for_test();
     service.release_tab("host", "tab", &tab, true);
     assert!(lock(&service.state).links["host"].tabs.is_empty());
     service.dispose().await.unwrap();

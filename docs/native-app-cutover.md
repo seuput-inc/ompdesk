@@ -88,6 +88,16 @@ The pool's existing epoch, entry sequence and attachment generation produce the 
 
 The filtered Vitest runner incorrectly reported its 166 skipped cases as passed in its summary; only the two executed consumers count above. This unit does not integrate Relay's entire close/retirement policy, phone coalescing or renderer absence guards, and does not prove the production RootHost or final application.
 
+### Local and remote source lifetime
+
+`LocalSources` constructs the actual LaunchHost/Application/LaunchIngress over the original execution Owner without starting its child. Runs `20261114-213912-3aad` exercised the original three launch consumers and three factory consumers (six passed). The production Root entry still must call this factory.
+
+The remote Source wraps the existing device-owned RemoteTab rather than creating a second actor. Its bound command and side-channel protocol carries the original omp token and encrypted connection into required Host effects. Run `20261114-220023-1df5` passed 28 remote actor, adapter and hosted-service consumers with Rust 1.95. This is not an authenticated production RootHost observation.
+
+The public Source is the single cleanup owner. Its opaque device release capability removes only the same original actor from the canonical device map; an old release cannot remove or close a replacement. A remote retirement receipt joins this computer's actor, event pump and close acknowledgement, never the execution host's omp exit. A local retirement joins the captured run exit, Lane lifetime and retained Ingress work while keeping its Application alive.
+
+Run `20261114-221812-4920` retained a real failure after eight passing consumers: after the original child exit, Lane lifetime and terminal `sidecar.disposed` event, the local mirror still reported `processAlive: true`. The shared mirror correction consumes that terminal event, which the Lane emits only after all original exits have joined. Its follow-up proof remains distinct from the earlier eight observations.
+
 ## Intentionally TypeScript
 
 Renderer UI and its shared page contracts; the stock omp bridge/extensions and SDK-facing stock workers; build/test/capture tooling. A stock worker may load installed omp session storage. Application decisions performed around that SDK read are not automatically exempt from native migration. Runtime-loaded probes and embedded worker scripts require explicit inventory before deleting Node.

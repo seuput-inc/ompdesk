@@ -8,12 +8,11 @@ use super::devices::{
 };
 use super::quota::{Limits, PeerQuota, Reservation};
 use super::requests::{RemoteError, RemoteEvent, RemoteRequests};
-use super::session_feed::{
-    HostSessionList, Row, SessionList, apply_summary_change, valid_summary_delta,
-};
+use super::session_feed::{HostSessionList, apply_summary_change, valid_summary_delta};
 use super::store::Kind;
 use crate::remotebytes::native::ContentCache;
 use crate::server::Fault;
+use crate::sessions::list::{Row, SessionList};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -151,6 +150,28 @@ enum Input {
     QuotaChanged,
     QuotaBroadcast,
 }
+
+/// Issued only for a tab already registered in the canonical device service. The Source owns this one release.
+pub(crate) struct TabRelease {
+    release: Option<Box<dyn FnOnce(bool) + Send + Sync>>,
+}
+
+impl TabRelease {
+    pub(crate) fn release(mut self, keep: bool) {
+        if let Some(release) = self.release.take() {
+            release(keep);
+        }
+    }
+}
+
+impl Drop for TabRelease {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release(false);
+        }
+    }
+}
+
 pub struct Service<H: Host> {
     devices: Arc<Devices>,
     host: Arc<H>,
@@ -371,6 +392,109 @@ impl<H: Host> Service<H> {
             })
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// Root has checked its core generation before resolving this transport metadata.
+    pub fn capture_host_connection(
+        &self,
+        device: &str,
+        link_id: u64,
+    ) -> Result<RemoteRequests, Fault> {
+        let state = lock(&self.state);
+        let connection = state
+            .links
+            .get(device)
+            .and_then(|link| link.requests.as_ref())
+            .filter(|connection| {
+                !state.disposed && connection.link_id() == Some(link_id) && connection.is_online()
+            })
+            .ok_or_else(|| Fault::new("remote_offline", "The host connection has changed"))?;
+        Ok(connection.clone())
+    }
+
+    /// A synchronous native effect admission; do not await or reenter this service/connection.
+    pub fn admit_host_connection<T>(
+        &self,
+        device: &str,
+        captured: &RemoteRequests,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = lock(&self.state);
+        if state.disposed
+            || !state
+                .links
+                .get(device)
+                .and_then(|link| link.requests.as_ref())
+                .is_some_and(|current| current.same_connection(captured))
+        {
+            return Err(Fault::new(
+                "remote_offline",
+                "The host connection has changed",
+            ));
+        }
+        captured.admit_online(effect)
+    }
+
+    pub(crate) fn observed_tab_id(
+        &self,
+        device: &str,
+        tab: &RemoteTab,
+        connection: &RemoteRequests,
+    ) -> Result<String, Fault> {
+        let state = lock(&self.state);
+        let link = state
+            .links
+            .get(device)
+            .filter(|link| {
+                !state.disposed
+                    && link
+                        .requests
+                        .as_ref()
+                        .is_some_and(|current| current.same_connection(connection))
+            })
+            .ok_or_else(|| Fault::new("remote_changed", "The observed connection has changed"))?;
+        connection.admit_online(|| {
+            link.tabs
+                .iter()
+                .find(|(_, current)| current.same_instance(tab))
+                .map(|(rtab, _)| rtab.clone())
+                .ok_or_else(|| {
+                    Fault::new(
+                        "remote_changed",
+                        "The observed actor is no longer registered",
+                    )
+                })
+        })
+    }
+
+    /// The exact device-owned actor and authenticated connection, not a caller-supplied rtab lookup.
+    pub(crate) fn admit_tab_observation<T>(
+        &self,
+        device: &str,
+        rtab: &str,
+        tab: &RemoteTab,
+        connection: &RemoteRequests,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = lock(&self.state);
+        let current = state.links.get(device).filter(|link| {
+            !state.disposed
+                && link
+                    .requests
+                    .as_ref()
+                    .is_some_and(|current| current.same_connection(connection))
+                && link
+                    .tabs
+                    .get(rtab)
+                    .is_some_and(|current| current.same_instance(tab))
+        });
+        if current.is_none() {
+            return Err(Fault::new(
+                "remote_changed",
+                "The observed tab connection has changed",
+            ));
+        }
+        connection.admit_online(effect)
     }
     pub fn wake(&self, trigger: &str) {
         self.devices.wake_hosts(trigger);
@@ -653,6 +777,36 @@ impl<H: Host> Service<H> {
         link.tabs.insert(rtab, result.0.clone());
         Ok(result)
     }
+    pub(crate) fn capture_tab_release(
+        self: &Arc<Self>,
+        device: &str,
+        rtab: &str,
+        tab: &RemoteTab,
+    ) -> Result<TabRelease, Fault> {
+        let state = lock(&self.state);
+        if state.disposed
+            || !state
+                .links
+                .get(device)
+                .and_then(|link| link.tabs.get(rtab))
+                .is_some_and(|current| current.same_instance(tab))
+        {
+            return Err(Fault::new(
+                "remote_changed",
+                "The original remote tab is no longer registered",
+            ));
+        }
+        let service = Arc::clone(self);
+        let device = device.to_owned();
+        let rtab = rtab.to_owned();
+        let tab = tab.clone();
+        Ok(TabRelease {
+            release: Some(Box::new(move |keep| {
+                service.release_tab(&device, &rtab, &tab, keep)
+            })),
+        })
+    }
+
     pub fn release_tab(&self, device: &str, rtab: &str, tab: &RemoteTab, keep: bool) {
         let current = {
             let mut state = lock(&self.state);
@@ -1145,4 +1299,4 @@ fn remote_code(code: &str) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

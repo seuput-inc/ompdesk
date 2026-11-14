@@ -160,6 +160,11 @@ async fn abandoning_the_remote_source_retains_actual_actor_cleanup_until_close_a
     let weak = Arc::downgrade(&service);
     let source = Arc::new(Source::from_remote(Arc::clone(&service), held, release));
     let actual = service.when_disposed();
+    let run_devices = Arc::clone(&devices);
+    let run_host = host.clone();
+    let outcome = tokio::spawn(async move {
+        let devices = run_devices;
+        let host = run_host;
     source.start();
     let open = incoming.recv().await.unwrap();
     host.emit("tab.event", &json!({"rtab":"source-remote","name":"status","arg":{"status":"ready","processAlive":true,"omp":"original-omp"}})).unwrap();
@@ -191,9 +196,12 @@ async fn abandoning_the_remote_source_retains_actual_actor_cleanup_until_close_a
     host.answer(close.id, Ok(Value::Null)).unwrap();
     actual.await.unwrap();
     assert!(incoming.try_recv().is_err());
+    }).await;
     device.disconnect_for_test();
     host.disconnect_for_test();
-    devices.dispose().await.unwrap();
+    let disposed = devices.dispose().await;
+    outcome.unwrap();
+    disposed.unwrap();
 }
 
 #[tokio::test]
@@ -213,6 +221,11 @@ async fn remote_keep_on_host_is_preserved_by_source_retirement() {
     });
     let (service, held) = RemoteSidecar::from_tab(tab, events, sink);
     let source = Source::from_remote(Arc::clone(&service), held, release);
+    let run_devices = Arc::clone(&devices);
+    let run_host = host.clone();
+    let outcome = tokio::spawn(async move {
+        let devices = run_devices;
+        let host = run_host;
     source.start();
     let open = incoming.recv().await.unwrap();
     host.emit("tab.event", &json!({"rtab":"source-remote","name":"status","arg":{"status":"ready","processAlive":true,"omp":"original-omp"}})).unwrap();
@@ -228,9 +241,12 @@ async fn remote_keep_on_host_is_preserved_by_source_retirement() {
         "local actor retirement must preserve an execution kept on its original host"
     );
     assert!(!tab_present(&devices, "host", "source-remote"));
+    }).await;
     device.disconnect_for_test();
     host.disconnect_for_test();
-    devices.dispose().await.unwrap();
+    let disposed = devices.dispose().await;
+    outcome.unwrap();
+    disposed.unwrap();
 }
 
 #[tokio::test]
@@ -249,20 +265,27 @@ async fn an_original_source_release_cannot_remove_a_replacement_in_the_device_ma
     });
     let (service, held) = RemoteSidecar::from_tab(original.clone(), events, sink);
     let source = Source::from_remote(service, held, release);
-    devices.release_tab("host", "source-remote", &original, true);
-    let (replacement, _events) = devices.create_tab("host", options()).unwrap();
-    source.retire().wait().await.unwrap();
-    assert!(tab_present(&devices, "host", "source-remote"));
-    let release = devices
-        .capture_tab_release("host", "source-remote", &replacement)
-        .unwrap();
-    let done = replacement.when_disposed();
-    release.release(true);
-    done.await.unwrap();
-    assert!(!tab_present(&devices, "host", "source-remote"));
+    let run_devices = Arc::clone(&devices);
+    let outcome = tokio::spawn(async move {
+        let devices = run_devices;
+        devices.release_tab("host", "source-remote", &original, true);
+        let (replacement, _events) = devices.create_tab("host", options()).unwrap();
+        source.retire().wait().await.unwrap();
+        assert!(tab_present(&devices, "host", "source-remote"));
+        let release = devices
+            .capture_tab_release("host", "source-remote", &replacement)
+            .unwrap();
+        let done = replacement.when_disposed();
+        release.release(true);
+        done.await.unwrap();
+        assert!(!tab_present(&devices, "host", "source-remote"));
+    })
+    .await;
     device.disconnect_for_test();
     host.disconnect_for_test();
-    devices.dispose().await.unwrap();
+    let disposed = devices.dispose().await;
+    outcome.unwrap();
+    disposed.unwrap();
 }
 
 #[cfg(unix)]
@@ -282,7 +305,7 @@ mod local {
             events: output,
             flushes: AtomicUsize::new(0),
         });
-        let created = factory
+        let mut created = factory
             .create(
                 &world.spawn,
                 format!("source-{}", world.spawn.tab),
@@ -293,29 +316,50 @@ mod local {
             .unwrap();
         let original = Arc::clone(&created.source);
         let application = Arc::downgrade(&created.application);
+        let cleanup_held = Receipt::join(created.held);
+        created.held = cleanup_held.wait();
+        let cleanup_ingress = Arc::clone(&created.ingress);
         let source = Source::from_local(created);
         assert!(source.is_local());
         assert!(Arc::ptr_eq(source.local().unwrap(), &original));
         assert!(source.remote().is_none());
-        source.start();
-        native::tests::ready_with(&mut events, |_| None).await;
-        original.barrier().await.unwrap();
-        let run_exit = source.exit_waiter();
-        source.restart(None);
-        native::tests::ready_with(&mut events, |_| None).await;
-        run_exit.await.unwrap();
-        original.barrier().await.unwrap();
-        assert_eq!(source.facts()["processAlive"], true);
-        assert!(source.settled().is_none());
-        assert!(application.upgrade().is_some());
+        let world = Arc::new(tokio::sync::Mutex::new(world));
+        let run_world = Arc::clone(&world);
+        let outcome = tokio::spawn(async move {
+            let world = run_world.lock().await;
+            source.start();
+            native::tests::ready_with(&mut events, |_| None).await;
+            original.barrier().await.unwrap();
+            let run_exit = source.exit_waiter();
+            source.restart(None);
+            native::tests::ready_with(&mut events, |_| None).await;
+            run_exit.await.unwrap();
+            original.barrier().await.unwrap();
+            assert_eq!(source.facts()["processAlive"], true);
+            assert!(source.settled().is_none());
+            assert!(application.upgrade().is_some());
+            world.begin_close();
+            let retired = source.retire();
+            drop(retired.wait());
+            source.settled().unwrap().wait().await.unwrap();
+            drop(source);
+            assert!(application.upgrade().is_none());
+        })
+        .await;
+        let world = Arc::try_unwrap(world)
+            .ok()
+            .expect("the completed scenario released its World")
+            .into_inner();
         world.begin_close();
-        let retired = source.retire();
-        drop(retired.wait());
-        source.settled().unwrap().wait().await.unwrap();
-        drop(source);
-        assert!(application.upgrade().is_none());
-        factory.close().await.unwrap();
-        world.finish_close().await.unwrap();
+        let held = cleanup_held.wait().await;
+        let ingress = cleanup_ingress.close().await;
+        let factory = factory.close().await;
+        let closed = world.finish_close().await;
+        outcome.unwrap();
+        held.unwrap();
+        ingress.unwrap();
+        factory.unwrap();
+        closed.unwrap();
     }
 
     #[tokio::test]
@@ -349,28 +393,48 @@ mod local {
                 .map_err(|_| Fault::new("held_barrier", "Held barrier ended"))?;
             actual.and(last)
         });
+        let cleanup_held = actual_held.clone();
+        let cleanup_ingress = Arc::clone(&created.ingress);
         let source = Source::from_local(created);
-        source.start();
-        native::tests::ready_with(&mut events, |_| None).await;
-        original.barrier().await.unwrap();
+        let world = Arc::new(tokio::sync::Mutex::new(world));
+        let run_world = Arc::clone(&world);
+        let outcome = tokio::spawn(async move {
+            let world = run_world.lock().await;
+            source.start();
+            native::tests::ready_with(&mut events, |_| None).await;
+            original.barrier().await.unwrap();
+            world.begin_close();
+            let receipt = source.retire();
+            drop(receipt.wait());
+            let retained = source.settled().unwrap();
+            drop(source);
+            actual_held.wait().await.unwrap();
+            assert!(
+                application.upgrade().is_some(),
+                "Held still owns the original Application"
+            );
+            let mut waiting = retained.wait();
+            pending(&mut waiting).await;
+            let error = Fault::new("held_failure", "Original local Held failed");
+            finish.send(Err(error.clone())).unwrap();
+            assert_eq!(waiting.await, Err(error));
+            assert!(application.upgrade().is_none());
+        })
+        .await;
+        let world = Arc::try_unwrap(world)
+            .ok()
+            .expect("the completed scenario released its World")
+            .into_inner();
         world.begin_close();
-        let receipt = source.retire();
-        drop(receipt.wait());
-        let retained = source.settled().unwrap();
-        drop(source);
-        actual_held.wait().await.unwrap();
-        assert!(
-            application.upgrade().is_some(),
-            "Held still owns the original Application"
-        );
-        let mut waiting = retained.wait();
-        pending(&mut waiting).await;
-        let error = Fault::new("held_failure", "Original local Held failed");
-        finish.send(Err(error.clone())).unwrap();
-        assert_eq!(waiting.await, Err(error));
-        assert!(application.upgrade().is_none());
-        factory.close().await.unwrap();
-        world.finish_close().await.unwrap();
+        let held = cleanup_held.wait().await;
+        let ingress = cleanup_ingress.close().await;
+        let factory = factory.close().await;
+        let closed = world.finish_close().await;
+        outcome.unwrap();
+        held.unwrap();
+        ingress.unwrap();
+        factory.unwrap();
+        closed.unwrap();
     }
 
     #[tokio::test]
@@ -394,24 +458,47 @@ mod local {
         let original = Arc::clone(&created.source);
         let held = Receipt::join(created.held);
         created.held = held.wait();
+        let cleanup_held = held.clone();
+        let cleanup_ingress = Arc::clone(&created.ingress);
         let source = Arc::new(Source::from_local(created));
-        source.start();
-        native::tests::ready_with(&mut events, |_| None).await;
-        original.barrier().await.unwrap();
-        assert_eq!(source.facts()["processAlive"], true);
-        let survivor = Arc::clone(&source);
-        drop(source);
-        original.barrier().await.unwrap();
-        assert_eq!(survivor.facts()["processAlive"], true);
-        world.begin_close();
-        let exited = survivor.exit_waiter();
-        drop(survivor);
-        exited.await.unwrap();
-        held.wait().await.unwrap();
-        crate::application::launch_host::tests::concrete::event(&mut events, "sidecar.disposed")
+        let world = Arc::new(tokio::sync::Mutex::new(world));
+        let run_world = Arc::clone(&world);
+        let outcome = tokio::spawn(async move {
+            let world = run_world.lock().await;
+            source.start();
+            native::tests::ready_with(&mut events, |_| None).await;
+            original.barrier().await.unwrap();
+            assert_eq!(source.facts()["processAlive"], true);
+            let survivor = Arc::clone(&source);
+            drop(source);
+            original.barrier().await.unwrap();
+            assert_eq!(survivor.facts()["processAlive"], true);
+            world.begin_close();
+            let exited = survivor.exit_waiter();
+            drop(survivor);
+            exited.await.unwrap();
+            held.wait().await.unwrap();
+            crate::application::launch_host::tests::concrete::event(
+                &mut events,
+                "sidecar.disposed",
+            )
             .await;
-        assert_eq!(original.facts()["processAlive"], false);
-        factory.close().await.unwrap();
-        world.finish_close().await.unwrap();
+            assert_eq!(original.facts()["processAlive"], false);
+        })
+        .await;
+        let world = Arc::try_unwrap(world)
+            .ok()
+            .expect("the completed scenario released its World")
+            .into_inner();
+        world.begin_close();
+        let held = cleanup_held.wait().await;
+        let ingress = cleanup_ingress.close().await;
+        let factory = factory.close().await;
+        let closed = world.finish_close().await;
+        outcome.unwrap();
+        held.unwrap();
+        ingress.unwrap();
+        factory.unwrap();
+        closed.unwrap();
     }
 }
