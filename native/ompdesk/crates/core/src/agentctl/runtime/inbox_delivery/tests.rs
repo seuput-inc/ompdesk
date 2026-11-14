@@ -364,6 +364,8 @@ async fn card_closure_on_retry_preserves_requested_key_first_follow_up_and_dispa
         .await
         .unwrap();
     assert_eq!(accepted.persistence, Persistence::Disk);
+    assert_eq!(accepted.deliveries.len(), 1);
+    assert!(!accepted.deliveries[0].existing);
     assert_eq!(control.arrivals("hosted-only"), 0);
     crate::ports::apply_state(control.host.port(), 1, &snapshot(false).to_string()).unwrap();
     let mut retry = first.clone();
@@ -372,9 +374,11 @@ async fn card_closure_on_retry_preserves_requested_key_first_follow_up_and_dispa
     retry.entries[0].entry.payload = InboxPayload::Prompt {
         content: InboxContent::Text("changed presentation d2".into()),
     };
+    let mut existing = accepted;
+    existing.deliveries[0].existing = true;
     assert_eq!(
         runtime.accept_inbox(params(7_493, retry)).await.unwrap(),
-        accepted
+        existing
     );
     assert_eq!(control.arrivals("hosted-only"), 0);
     let pending = control
@@ -428,6 +432,8 @@ async fn current_context_receipt_replay_does_not_wake_a_second_blocking_wait() {
         .await
         .unwrap();
     assert_eq!(first.persistence, Persistence::Disk);
+    assert_eq!(first.deliveries.len(), 1);
+    assert!(!first.deliveries[0].existing);
     assert_eq!(control.arrivals("hosted-only"), 1);
     status.lock().unwrap().receipts.push(InboxContextReceipt {
         request_id: "sample-provider-request".into(),
@@ -438,9 +444,11 @@ async fn current_context_receipt_replay_does_not_wake_a_second_blocking_wait() {
     });
     let _blocked = control.block("hosted-only");
     let arrivals = control.arrivals("hosted-only");
+    let mut existing = first;
+    existing.deliveries[0].existing = true;
     assert_eq!(
         runtime.accept_inbox(params(7_494, input)).await.unwrap(),
-        first
+        existing
     );
     assert_eq!(control.arrivals("hosted-only"), arrivals);
     assert!(
