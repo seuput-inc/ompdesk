@@ -42,7 +42,7 @@ pub struct TabEvent {
     pub from_link: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TabSnapshot {
     pub status: String,
     pub cwd: String,
@@ -56,6 +56,25 @@ pub struct TabSnapshot {
     pub generation: u64,
     pub omp: Option<String>,
     pub bridge: Value,
+    connection: RemoteRequests,
+}
+
+impl std::fmt::Debug for TabSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("TabSnapshot")
+            .field("status", &self.status)
+            .field("generation", &self.generation)
+            .field("process_alive", &self.process_alive)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Original actor facts only; this value grants no connection, caller or card authority.
+pub(crate) struct ObservedRun {
+    pub generation: u64,
+    pub path: String,
+    pub omp: String,
+    pub connection: RemoteRequests,
 }
 
 #[derive(Clone)]
@@ -179,6 +198,7 @@ impl RemoteTab {
             generation: 1,
             omp: None,
             bridge: Value::Null,
+            connection: link.clone(),
         }));
         let mut state = State {
             options,
@@ -258,6 +278,17 @@ impl RemoteTab {
             .bridge["connected"]
             == true
     }
+    pub(crate) fn observed_run(&self) -> Result<ObservedRun, Fault> {
+        let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        if !snapshot.process_alive || !snapshot.connection.is_online() {
+            return Err(Fault::new("remote_run_changed", "The observed remote session is no longer current"));
+        }
+        let path = snapshot.session_path.as_deref().filter(|path| !path.is_empty())
+            .ok_or_else(|| Fault::new("remote_run_changed", "The remote tab has no saved session"))?;
+        let omp = snapshot.omp.as_deref().filter(|omp| !omp.is_empty())
+            .ok_or_else(|| Fault::new("remote_run_changed", "The remote tab has no execution binding"))?;
+        Ok(ObservedRun { generation: snapshot.generation, path: path.to_owned(), omp: omp.to_owned(), connection: snapshot.connection.clone() })
+    }
     /// Snapshot admission only; authentication and connection ownership remain the Root's.
     /// The synchronous effect must neither await nor re-enter this snapshot mutex.
     pub(crate) fn admit_observation<T>(
@@ -265,12 +296,15 @@ impl RemoteTab {
         generation: u64,
         session_path: &str,
         omp: &str,
+        connection: &RemoteRequests,
         effect: impl FnOnce() -> Result<T, Fault>,
     ) -> Result<T, Fault> {
         let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
         if snapshot.generation != generation
             || snapshot.session_path.as_deref() != Some(session_path)
             || snapshot.omp.as_deref() != Some(omp)
+            || !snapshot.connection.same_connection(connection)
+            || !snapshot.connection.is_online()
             || !snapshot.process_alive
         {
             return Err(Fault::new(
@@ -1032,6 +1066,8 @@ impl State {
                         let mut snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
                         snapshot.generation += 1;
                         snapshot.bridge = Value::Null;
+                        snapshot.connection = link.clone();
+                        snapshot.process_alive = false;
                     }
                     self.lost();
                     self.link = link;
