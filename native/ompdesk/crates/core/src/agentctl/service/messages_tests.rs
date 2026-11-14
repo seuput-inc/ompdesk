@@ -691,7 +691,8 @@ async fn answering_an_old_card_does_not_clear_a_new_question_admitted_while_it_w
 }
 
 #[tokio::test(start_paused = true)]
-async fn distinct_pending_native_progress_coalesces_and_done_supersedes_without_orphaning_callers() {
+async fn distinct_pending_native_progress_coalesces_and_done_supersedes_without_orphaning_callers()
+{
     use std::future::{Future, poll_fn};
     use std::task::Poll;
     use std::time::Duration;
@@ -768,8 +769,16 @@ async fn distinct_pending_native_progress_coalesces_and_done_supersedes_without_
     assert!(superseded.contains("before delivery"), "{superseded}");
     assert_eq!(done.await.unwrap().posted, Posted::Delivered);
     let completion = delivered(&mut channel).await;
-    let completion = &completion["request"]["entries"][0];
-    assert_eq!(completion["details"]["id"], "pending-done");
+    let entries = completion["request"]["entries"].as_array().unwrap();
+    let ids: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["details"]["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["pending-two", "pending-done"]);
+    let completion = entries
+        .iter()
+        .find(|entry| entry["details"]["id"] == "pending-done")
+        .unwrap();
     assert!(completion["details"].get("merged").is_none());
     assert_eq!(completion["triggerTurn"], true);
     tokio::task::yield_now().await;
@@ -884,15 +893,14 @@ async fn receiver_owned_follow_ups_seed_d2_and_d4_after_the_source_relaunches() 
                 count as usize
             );
         }
-        let (control, asked, mut channel, _fixture) =
-            crate::agentctl::runtime::tests::native_rig(
-                port + 1,
-                state(vec![tab("a"), tab("b")]),
-                Caps::default(),
-                &files,
-                Tuning::default(),
-                main_replies,
-            );
+        let (control, asked, mut channel, _fixture) = crate::agentctl::runtime::tests::native_rig(
+            port + 1,
+            state(vec![tab("a"), tab("b")]),
+            Caps::default(),
+            &files,
+            Tuning::default(),
+            main_replies,
+        );
         assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
         assert!(!control.mailbox.knows("b"));
         let retry = control
@@ -922,7 +930,10 @@ async fn receiver_owned_follow_ups_seed_d2_and_d4_after_the_source_relaunches() 
         assert!(!fresh.is_error, "{}", fresh.text);
         let transfers = asked_with(&asked, "inbox");
         assert_eq!(transfers.len(), 1);
-        assert_eq!(transfers[0]["transfer"]["entries"][0]["dispatch"], count + 1);
+        assert_eq!(
+            transfers[0]["transfer"]["entries"][0]["dispatch"],
+            count + 1
+        );
         let fresh_id = &transfers[0]["transfer"]["entries"][0]["entry"]["deliveryId"];
         loop {
             let delivery = delivered(&mut channel).await;
@@ -948,7 +959,10 @@ async fn receiver_owned_follow_ups_seed_d2_and_d4_after_the_source_relaunches() 
             .pending(&status.receiver)
             .unwrap()
             .1;
-        let dispatches: Vec<_> = pending.iter().map(|entry| entry.dispatch.unwrap()).collect();
+        let dispatches: Vec<_> = pending
+            .iter()
+            .map(|entry| entry.dispatch.unwrap())
+            .collect();
         assert_eq!(dispatches, (1..=(count + 1) as i64).collect::<Vec<_>>());
         assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
         control.host.port().close();

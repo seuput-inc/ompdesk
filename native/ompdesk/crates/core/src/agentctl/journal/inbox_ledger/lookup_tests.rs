@@ -179,7 +179,8 @@ fn existing_empty_attachment_identity_survives_restart_without_becoming_absent()
 }
 
 #[test]
-fn receiver_prompt_floor_survives_old_random_consumed_rows_and_excludes_other_addresses_and_reports() {
+fn receiver_prompt_floor_survives_old_random_consumed_rows_and_excludes_other_addresses_and_reports()
+ {
     let dir = Dir::new();
     let current = receiver("original-context");
     let ledger = InboxLedger::new(Some(dir.file()));
@@ -228,7 +229,9 @@ fn receiver_prompt_floor_survives_old_random_consumed_rows_and_excludes_other_ad
     );
     pending.logical.producer.session_path = "/isolated/another-producer.jsonl".into();
     pending.dispatch = Some(4);
-    ledger.keep(&current, std::slice::from_ref(&pending)).unwrap();
+    ledger
+        .keep(&current, std::slice::from_ref(&pending))
+        .unwrap();
     let mut other = receiver("other-session");
     other.session_path = "/isolated/other.jsonl".into();
     let mut unrelated = entry("other-session", InboxKind::Prompt);

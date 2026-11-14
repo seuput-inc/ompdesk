@@ -287,7 +287,10 @@ async fn progress_is_coalesced_and_a_done_supersedes_it() {
         Posted::Queued
     );
     let done = Mail::new("d1", "kid", "K", "boss", MailKind::Done, "done", 0.0);
-    assert_eq!(mailbox.post(done.clone()).await.unwrap().posted, Posted::Delivered);
+    assert_eq!(
+        mailbox.post(done.clone()).await.unwrap().posted,
+        Posted::Delivered
+    );
     assert_eq!(mailbox.post(done).await.unwrap().posted, Posted::Duplicate);
     tokio::time::advance(Duration::from_millis(5_000)).await;
     tokio::task::yield_now().await;
