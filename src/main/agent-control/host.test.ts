@@ -34,6 +34,7 @@ import { WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
 import {
 	INBOX_METHODS,
 	InboxAcceptParams,
+	InboxLookupParams,
 	InboxStatusParams,
 	SchedulesCommandParams,
 	SchedulesCreateParams,
@@ -1253,6 +1254,11 @@ describe("AgentControlRuntime", () => {
 					const parsed = InboxStatusParams.parse(params);
 					expect(parsed).toEqual({ rtab: route.rtab, sessionPath: selection.sessionPath });
 					return receiver.runtime.hostedInboxStatus(selection);
+				}
+				if (method === INBOX_METHODS.lookup) {
+					const parsed = InboxLookupParams.parse(params);
+					expect(parsed.rtab).toBe(route.rtab);
+					return receiver.runtime.lookupHostedInbox(selection, parsed.query, route.peerDeviceId);
 				}
 				if (method === INBOX_METHODS.accept) {
 					const parsed = InboxAcceptParams.parse(params);
