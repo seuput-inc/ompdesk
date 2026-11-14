@@ -73,7 +73,7 @@ impl Service {
         params: &Value,
         timeout: Duration,
         scope: Scope,
-    ) -> impl Future<Output = Result<Value, Fault>> + Send + 'static {
+    ) -> impl Future<Output = Result<Value, Fault>> + Send + 'static + use<> {
         let deadline = tokio::time::Instant::now() + timeout;
         let placed = if scope.cancelled() {
             Err(Fault::cancelled())
