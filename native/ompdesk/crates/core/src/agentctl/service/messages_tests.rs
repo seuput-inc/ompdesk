@@ -669,11 +669,46 @@ async fn answering_an_old_card_does_not_clear_a_new_question_admitted_while_it_w
     )
     .unwrap();
     control.child_asked("a", "b", "card-two").await.unwrap();
-    let second = delivered(&mut channel).await;
-    assert_ne!(
-        first["request"]["entries"][0]["deliveryId"],
-        second["request"]["entries"][0]["deliveryId"]
-    );
+    let status = control
+        .host
+        .inbox_status("a", "/s/a_1.jsonl", None)
+        .await
+        .unwrap();
+    let pending = control
+        .receiving_inbox
+        .as_ref()
+        .unwrap()
+        .ledger
+        .pending(&status.receiver)
+        .unwrap()
+        .1;
+    assert_eq!(pending.len(), 2);
+    let ids: Vec<_> = pending
+        .iter()
+        .map(|entry| entry.entry.delivery_id.as_str())
+        .collect();
+    assert_eq!(first["request"]["entries"][0]["deliveryId"], ids[0]);
+    assert_ne!(ids[0], ids[1]);
+    for (entry, expected_card) in pending.iter().zip(["card-one", "card-two"]) {
+        assert!(matches!(
+            &entry.logical.payload,
+            crate::agentctl::inbox::InboxLogicalPayload::Report { card: Some(card), .. }
+                if card == expected_card
+        ));
+    }
+    loop {
+        let second = delivered(&mut channel).await;
+        let entries = second["request"]["entries"].as_array().unwrap();
+        let observed: Vec<_> = entries
+            .iter()
+            .map(|entry| entry["deliveryId"].as_str().unwrap())
+            .collect();
+        assert!(ids.starts_with(&observed));
+        if observed.contains(&ids[1]) {
+            assert_eq!(observed, ids);
+            break;
+        }
+    }
     release_tx.send(Ok(Value::Null)).unwrap();
     let result = answering.await;
     assert!(!result.is_error, "{}", result.text);
