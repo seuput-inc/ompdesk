@@ -36,6 +36,7 @@ import {
 	InboxAcceptParams,
 	InboxLookupParams,
 	InboxStatusParams,
+	NativeInboxLookupReplySchema,
 	SchedulesCommandParams,
 	SchedulesCreateParams,
 } from "../remote/app-protocol";
@@ -464,6 +465,19 @@ describe("private Inbox receiving guards", () => {
 			}),
 		);
 	});
+
+	it.each([undefined, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY, Number.NaN])(
+		"rejects a missing or unsafe lookup dispatch floor %s",
+		dispatchFloor => {
+			expect(
+				NativeInboxLookupReplySchema.safeParse({
+					receiver: { sessionPath: "/s/recipient.jsonl", instance: "bridge-1" },
+					dispatchFloor,
+					entries: [],
+				}).success,
+			).toBe(false);
+		},
+	);
 
 	it("refuses the exact in-progress delete before returning an awaited receiving ACK", async () => {
 		const env = receiving();

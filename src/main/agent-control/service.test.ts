@@ -4824,37 +4824,50 @@ describe("ompdesk_report: sessions tell their opener", () => {
 		).toHaveLength(1);
 	});
 
-	it("coalesces progress into its latest report, without a turn, and a done supersedes the pending progress", async () => {
-		const { host, service, a, fire } = await family(true);
+	it("delivers each sequentially awaited report after its native Disk ACK without merging completed progress", async () => {
+		const { host, service, a } = await family(true);
 		const stock = host.stocks.get("boss0001")!;
-		await service.run(a, T.report, { kind: "progress", text: "step 1" });
-		await service.run(a, T.report, { kind: "progress", text: "step 2" });
-		expect(stock.requests).toHaveLength(0);
-		await fire();
-		await Promise.resolve();
-		const progress = await stock.waitForRequest(request => request.entries.some(entry => entry.kind === "report"));
-		expect(progress.entries).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					kind: "report",
-					triggerTurn: false,
-					details: expect.objectContaining({ text: "step 2", merged: 1 }),
-				}),
-			]),
-		);
-		await service.run(a, T.report, { kind: "progress", text: "step 3" });
-		await service.run(a, T.report, { kind: "done", text: "finished" });
-		await fire();
-		await Promise.resolve();
+		for (const text of ["step 1", "step 2", "step 3"]) {
+			const result = await service.run(a, T.report, { kind: "progress", text });
+			expect(result.isError, result.text).toBe(false);
+			const delivered = await stock.waitForRequest(request =>
+				request.entries.some(entry => entry.kind === "report" && entry.details.text === text),
+			);
+			expect(delivered.entries).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						kind: "report",
+						triggerTurn: false,
+						details: expect.objectContaining({ text }),
+					}),
+				]),
+			);
+			for (const entry of delivered.entries) {
+				if (entry.kind === "report" && entry.details.text === text)
+					expect(entry.details).not.toHaveProperty("merged");
+			}
+		}
+		const result = await service.run(a, T.report, { kind: "done", text: "finished" });
+		expect(result.isError, result.text).toBe(false);
 		const done = await stock.waitForRequest(request =>
 			request.entries.some(entry => entry.kind === "report" && entry.details.text === "finished"),
 		);
 		expect(done.entries).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ kind: "report", details: expect.objectContaining({ text: "finished" }) }),
+				expect.objectContaining({
+					kind: "report",
+					triggerTurn: true,
+					details: expect.objectContaining({ text: "finished" }),
+				}),
 			]),
 		);
-		expect(stock.admissions.some(event => JSON.stringify(event.message).includes("step 3"))).toBe(false);
+		expect(stock.admissions.filter(event => event.queue === "followUp").map(event => event.message.details)).toEqual([
+			expect.objectContaining({ text: "step 1" }),
+			expect.objectContaining({ text: "step 2" }),
+			expect.objectContaining({ text: "step 3" }),
+			expect.objectContaining({ text: "finished" }),
+		]);
+		expect((await stock.status()).receipts).toEqual([]);
 	});
 
 	it("sends progress to a busy opener as a no-turn report, never stock's hidden next-turn queue", async () => {
