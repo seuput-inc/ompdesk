@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -64,6 +65,7 @@ pub struct RemoteTab {
     cache: Arc<ContentCache>,
     execution_host: String,
     disposed: watch::Receiver<Option<Result<(), Fault>>>,
+    emitted: Arc<AtomicU64>,
 }
 
 type Answer = oneshot::Sender<Result<Value, RemoteError>>;
@@ -73,24 +75,30 @@ enum Input {
         cwd: Option<String>,
         session: Option<String>,
     },
+    AdoptCwd(String),
     Link(RemoteRequests),
     Lost(u64),
     Event(u64, RemoteEvent),
     Opened(u64, Result<Value, RemoteError>),
     Started(u64, Result<Value, RemoteError>),
-    Command(Value, Duration, Answer),
+    CachedCommand(RemoteTab, u64, Value, Duration, Answer),
+    Check(u64, oneshot::Sender<Result<(), RemoteError>>),
+    Bridge(Option<u64>, String, Answer),
+    Command(Option<u64>, Value, Duration, Answer),
     ReadDone(
         u64,
+        Option<u64>,
         Value,
         Duration,
         bool,
         Answer,
         Result<Value, RemoteError>,
     ),
-    SideChannel(Value, Answer),
+    SideChannel(Option<u64>, Value, Answer),
     Delivered(
         u64,
         Option<String>,
+        Option<u64>,
         Value,
         Answer,
         Result<Value, RemoteError>,
@@ -114,6 +122,7 @@ struct State {
     link: RemoteRequests,
     epoch: u64,
     phase: BringUp,
+    bound_omp: bool,
     wanted: bool,
     opened_once: bool,
     omp: Option<String>,
@@ -127,6 +136,7 @@ struct State {
     inbox: mpsc::UnboundedSender<Input>,
     output: mpsc::UnboundedSender<TabEvent>,
     snapshot: Arc<Mutex<TabSnapshot>>,
+    emitted: Arc<AtomicU64>,
     closes: Arc<PendingTabCloses>,
     relay: Option<NativeRelay>,
     relay_generation: u64,
@@ -156,6 +166,7 @@ impl RemoteTab {
         let execution_host = options.execution_host.clone();
         let (inbox, receiver) = mpsc::unbounded_channel();
         let (output, events) = mpsc::unbounded_channel();
+        let emitted = Arc::new(AtomicU64::new(0));
         let snapshot = Arc::new(Mutex::new(TabSnapshot {
             status: "asleep".into(),
             cwd: options.cwd.clone(),
@@ -174,6 +185,7 @@ impl RemoteTab {
             link,
             epoch: 1,
             phase: BringUp::Closed,
+            bound_omp: false,
             wanted: false,
             opened_once: false,
             omp: None,
@@ -187,6 +199,7 @@ impl RemoteTab {
             inbox: inbox.clone(),
             output,
             snapshot: Arc::clone(&snapshot),
+            emitted: Arc::clone(&emitted),
             closes,
             relay: None,
             relay_generation: 0,
@@ -200,7 +213,7 @@ impl RemoteTab {
             let result = tokio::spawn(state.run(receiver))
                 .await
                 .unwrap_or_else(|error| Err(Fault::new("remote_actor", error.to_string())));
-            finished.send_replace(Some(result));
+            let _ = finished.send_replace(Some(result));
         });
         (
             Self {
@@ -209,6 +222,7 @@ impl RemoteTab {
                 cache,
                 execution_host,
                 disposed,
+                emitted,
             },
             events,
         )
@@ -225,6 +239,36 @@ impl RemoteTab {
     }
     pub fn generation(&self) -> u64 {
         self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).generation
+    }
+    pub fn emitted_events(&self) -> u64 { self.emitted.load(Ordering::Acquire) }
+    pub fn facts(&self) -> Value {
+        let state = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        json!({"cwd":state.cwd,"kind":state.kind,"status":state.status,"processAlive":state.process_alive,
+            "shared":state.shared,"sleep":false,"rpc":state.status!="asleep","bridge":state.bridge["connected"]==true})
+    }
+    pub fn bridge_connected(&self) -> bool {
+        self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).bridge["connected"] == true
+    }
+    /// Snapshot admission only; authentication and connection ownership remain the Root's.
+    /// The synchronous effect must neither await nor re-enter this snapshot mutex.
+    pub(crate) fn admit_observation<T>(
+        &self,
+        generation: u64,
+        session_path: &str,
+        omp: &str,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        if snapshot.generation != generation
+            || snapshot.session_path.as_deref() != Some(session_path)
+            || snapshot.omp.as_deref() != Some(omp)
+            || !snapshot.process_alive
+        {
+            return Err(Fault::new("remote_run_changed", "The observed remote session is no longer current"));
+        }
+        let result = effect();
+        drop(snapshot);
+        result
     }
     pub fn start(&self) {
         let _ = self.inbox.send(Input::Start);
@@ -251,11 +295,40 @@ impl RemoteTab {
             }
         })
     }
-    pub async fn command(
-        &self,
-        mut command: Value,
-        timeout: Duration,
+    pub async fn command(&self, command: Value, timeout: Duration) -> Result<Value, RemoteError> {
+        self.command_inner(command, timeout, None).await
+    }
+    /// Enqueues against this actor before the returned receipt is polled.
+    pub fn command_for_generation(
+        &self, generation: u64, command: Value, timeout: Duration,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<Value, RemoteError>> {
+        let (answer, result) = oneshot::channel();
+        let sent = self.inbox.send(Input::CachedCommand(self.clone(), generation, command, timeout, answer));
+        Box::pin(async move {
+            sent.map_err(|_| offline())?;
+            result.await.unwrap_or_else(|_| Err(offline()))
+        })
+    }
+    async fn check(&self, expected: Option<u64>) -> Result<(), RemoteError> {
+        let Some(generation) = expected else { return Ok(()); };
+        let (answer, result) = oneshot::channel();
+        self.inbox.send(Input::Check(generation, answer)).map_err(|_| offline())?;
+        result.await.unwrap_or_else(|_| Err(offline()))
+    }
+    pub fn bridge(
+        &self, expected: Option<u64>, method: String,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<Value, RemoteError>> {
+        let (answer, result) = oneshot::channel();
+        let sent = self.inbox.send(Input::Bridge(expected, method, answer));
+        Box::pin(async move {
+            sent.map_err(|_| offline())?;
+            result.await.unwrap_or_else(|_| Err(offline()))
+        })
+    }
+    async fn command_inner(
+        &self, mut command: Value, timeout: Duration, expected: Option<u64>,
     ) -> Result<Value, RemoteError> {
+        self.check(expected).await?;
         let session = self.snapshot().session_path;
         let journal = matches!(
             command["type"].as_str(),
@@ -280,7 +353,7 @@ impl RemoteTab {
                     if let Some(tail) = tail {
                         command["knownTail"] = tail;
                     }
-                    self.request(command, timeout)
+                    self.request(command, timeout, expected)
                         .await
                         .map_err(|error| error.fault)
                 })
@@ -316,7 +389,7 @@ impl RemoteTab {
             if let Some(kept) = kept.as_ref() {
                 command["ifVersion"] = kept["version"].clone();
             }
-            let mut response = self.request(command, timeout).await?;
+            let mut response = self.request(command, timeout, expected).await?;
             if response["success"] == true
                 && let Some(key) = key
             {
@@ -328,6 +401,7 @@ impl RemoteTab {
                     .as_str()
                     .filter(|_| response["data"]["unchanged"] != true)
                 {
+                    self.check(expected).await?;
                     self.cache.keep_page(&key, version, &response["data"]).await;
                 }
             }
@@ -343,6 +417,7 @@ impl RemoteTab {
                         .request(
                             json!({"type":"read_image_blob","ref":reference}),
                             Duration::from_secs(8),
+                            expected,
                         )
                         .await
                         .ok()?;
@@ -352,21 +427,49 @@ impl RemoteTab {
                 })
                 .await;
         }
+        self.check(expected).await?;
         Ok(response)
     }
-    async fn request(&self, command: Value, timeout: Duration) -> Result<Value, RemoteError> {
+    async fn request(&self, command: Value, timeout: Duration, expected: Option<u64>) -> Result<Value, RemoteError> {
         let (answer, result) = oneshot::channel();
         self.inbox
-            .send(Input::Command(command, timeout, answer))
+            .send(Input::Command(expected, command, timeout, answer))
             .map_err(|_| offline())?;
         result.await.unwrap_or_else(|_| Err(offline()))
     }
     pub async fn side_channel(&self, frame: Value) -> Result<(), RemoteError> {
         let (answer, result) = oneshot::channel();
         self.inbox
-            .send(Input::SideChannel(frame, answer))
+            .send(Input::SideChannel(None, frame, answer))
             .map_err(|_| offline())?;
         result.await.unwrap_or_else(|_| Err(offline())).map(|_| ())
+    }
+    pub fn enqueue_side_channel(
+        &self, frame: Value,
+    ) -> Result<crate::sidecar::application::EffectFuture<'static, Result<(), RemoteError>>, RemoteError> {
+        let (answer, result) = oneshot::channel();
+        self.inbox.send(Input::SideChannel(None, frame, answer)).map_err(|_| offline())?;
+        Ok(Box::pin(async move {
+            result.await.unwrap_or_else(|_| Err(offline())).map(|_| ())
+        }))
+    }
+    pub fn side_channel_for_generation(
+        &self, generation: u64, frame: Value,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<(), RemoteError>> {
+        let (answer, result) = oneshot::channel();
+        let sent = self.inbox.send(Input::SideChannel(Some(generation), frame, answer));
+        Box::pin(async move {
+            sent.map_err(|_| offline())?;
+            result.await.unwrap_or_else(|_| Err(offline())).map(|_| ())
+        })
+    }
+    pub fn adopt_cwd(&self, cwd: &str) -> bool {
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        if snapshot.cwd == cwd { return false; }
+        snapshot.cwd = cwd.to_owned();
+        drop(snapshot);
+        let _ = self.inbox.send(Input::AdoptCwd(cwd.to_owned()));
+        true
     }
     pub async fn cancel_wait(&self) -> Result<(), RemoteError> {
         let (answer, result) = oneshot::channel();
@@ -383,12 +486,35 @@ impl RemoteTab {
 }
 
 impl State {
+    fn check_generation(&self, expected: Option<u64>) -> Result<(), RemoteError> {
+        let Some(expected) = expected else { return Ok(()); };
+        if !self.link.is_online() { return Err(offline()); }
+        let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        if snapshot.generation != expected || snapshot.omp.is_none() {
+            return Err(Fault::new("remote_run_changed", "The original remote tab run is no longer current").into());
+        }
+        Ok(())
+    }
+    fn bind_wire(&self, expected: Option<u64>, params: &mut Value) -> Result<(), RemoteError> {
+        self.check_generation(expected)?;
+        if expected.is_some() {
+            if !self.bound_omp {
+                return Err(Fault::new("remote_run_binding_unavailable", "The execution host does not support generation-bound tab effects").into());
+            }
+            let omp = self.omp.as_deref().filter(|omp| !omp.is_empty())
+                .ok_or_else(|| Fault::new("remote_run_changed", "The original remote tab run is no longer current"))?;
+            params["expectedOmp"] = omp.into();
+        }
+        Ok(())
+    }
     fn emit(&self, name: &str, arg: Value, from_link: bool) {
-        let _ = self.output.send(TabEvent {
+        if self.output.send(TabEvent {
             name: name.to_owned(),
             arg,
             from_link,
-        });
+        }).is_ok() {
+            self.emitted.fetch_add(1, Ordering::Release);
+        }
     }
     fn status(&mut self, status: &str, detail: Value, from_link: bool) {
         self.reattaching = status == "starting" && detail["reconnecting"] == true;
@@ -482,22 +608,30 @@ impl State {
             self.queued.pop_front();
         }
     }
-    fn deliver(&mut self, frame: Value, answer: Answer) {
+    fn deliver(&mut self, expected: Option<u64>, frame: Value, answer: Answer) {
         let link = self.link.clone();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
         let omp = self.omp.clone();
-        let params = json!({"rtab":self.options.rtab,"frame":frame});
+        let mut params = json!({"rtab":self.options.rtab,"frame":frame});
+        if let Err(error) = self.bind_wire(expected, &mut params) {
+            let _ = answer.send(Err(error));
+            return;
+        }
         self.work.spawn(async move {
             let result = link.request("tab.sideChannel", params, REQUEST).await;
-            let _ = inbox.send(Input::Delivered(epoch, omp, frame, answer, result));
+            let _ = inbox.send(Input::Delivered(epoch, omp, expected, frame, answer, result));
         });
     }
-    fn read(&mut self, command: Value, timeout: Duration, fresh: bool, answer: Answer) {
+    fn read(&mut self, expected: Option<u64>, command: Value, timeout: Duration, fresh: bool, answer: Answer) {
         let link = self.link.clone();
         let inbox = self.inbox.clone();
         let epoch = self.epoch;
         let mut params = json!({"rtab":self.options.rtab,"command":command,"timeoutMs":timeout.as_millis().min(u64::MAX as u128) as u64});
+        if let Err(error) = self.bind_wire(expected, &mut params) {
+            let _ = answer.send(Err(error));
+            return;
+        }
         if fresh {
             params["fresh"] = true.into();
         }
@@ -506,7 +640,7 @@ impl State {
                 .request("tab.command", params, timeout.saturating_add(LINK_SLACK))
                 .await;
             let _ = inbox.send(Input::ReadDone(
-                epoch, command, timeout, fresh, answer, result,
+                epoch, expected, command, timeout, fresh, answer, result,
             ));
         });
     }
@@ -518,8 +652,8 @@ impl State {
         if error.fault.code != "timeout" {
             for input in self.waiting.drain(..) {
                 match input {
-                    Input::Command(_, _, answer)
-                    | Input::SideChannel(_, answer)
+                    Input::Command(_, _, _, answer)
+                    | Input::SideChannel(_, _, answer)
                     | Input::CancelWait(answer) => {
                         let _ = answer.send(Err(error.clone()));
                     }
@@ -560,6 +694,7 @@ impl State {
     }
     fn lost(&mut self) {
         self.phase = BringUp::Closed;
+        self.bound_omp = false;
         self.reattach_run = None;
         self.snapshot
             .lock()
@@ -574,14 +709,14 @@ impl State {
         }
         while let Some(input) = self.waiting.pop_front() {
             match input {
-                Input::Command(_, _, answer) | Input::CancelWait(answer) => {
+                Input::Command(_, _, _, answer) | Input::CancelWait(answer) => {
                     let _ = answer.send(Err(offline()));
                 }
-                Input::SideChannel(frame, answer) if replayable(&frame) => {
+                Input::SideChannel(None, frame, answer) if replayable(&frame) => {
                     self.queue(frame);
                     let _ = answer.send(Ok(Value::Null));
                 }
-                Input::SideChannel(_, answer) => {
+                Input::SideChannel(_, _, answer) => {
                     let _ = answer.send(Err(offline()));
                 }
                 Input::ForwardSignIn(_, _, _, answer) => {
@@ -610,7 +745,7 @@ impl State {
                 ) {
                     return;
                 }
-                let omp = arg["omp"].as_str().map(str::to_owned);
+                let omp = arg["omp"].as_str().filter(|omp| !omp.is_empty()).map(str::to_owned);
                 if self.reattaching && (omp.is_none() || omp != self.omp) {
                     self.status("starting", json!({}), true);
                 }
@@ -824,6 +959,7 @@ impl State {
                                 && opened["attached"].is_boolean() =>
                         {
                             self.phase = BringUp::Open;
+                            self.bound_omp = opened["boundOmp"] == true;
                             self.options.cwd = opened["cwd"].as_str().unwrap_or_default().into();
                             self.snapshot.lock().unwrap_or_else(|p| p.into_inner()).cwd =
                                 self.options.cwd.clone();
@@ -842,7 +978,7 @@ impl State {
                                 while let Some((omp, frame)) = self.queued.pop_front() {
                                     if omp == self.omp {
                                         let (answer, _) = oneshot::channel();
-                                        self.deliver(frame, answer);
+                                        self.deliver(None, frame, answer);
                                     }
                                 }
                             } else {
@@ -863,20 +999,56 @@ impl State {
                     }
                 }
                 Input::Started(epoch, Err(error)) if epoch == self.epoch => self.failed(error),
-                Input::Command(command, timeout, answer) => {
-                    if !self.link.is_online() {
+                Input::AdoptCwd(cwd) => {
+                    self.options.cwd = cwd.clone();
+                    let _ = self.inbox.send(Input::Notify("tab.adoptCwd", json!({"cwd":cwd})));
+                }
+                Input::Check(generation, answer) => {
+                    let _ = answer.send(self.check_generation(Some(generation)));
+                }
+                Input::Bridge(expected, method, answer) => {
+                    let result = self.check_generation(expected).and_then(|()| {
+                        let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                        if method != "capabilities" {
+                            Err(Fault::new("remote_bridge_method", format!("Bridge method {method} is not available remotely")).into())
+                        } else if snapshot.bridge["connected"] != true {
+                            Err(Fault::new("bridge_disconnected", "The remote tab's bridge is not connected").into())
+                        } else {
+                            Ok(json!({"ompVersion":snapshot.bridge["ompVersion"],"unavailable":snapshot.bridge["unavailable"]}))
+                        }
+                    });
+                    let _ = answer.send(result);
+                }
+                Input::CachedCommand(tab, generation, command, timeout, answer) => {
+                    if let Err(error) = self.check_generation(Some(generation)) {
+                        let _ = answer.send(Err(error));
+                    } else {
+                        self.work.spawn(async move {
+                            let result = tab.command_inner(command, timeout, Some(generation)).await;
+                            let _ = answer.send(result);
+                        });
+                    }
+                }
+                Input::Command(expected, command, timeout, answer) => {
+                    if let Err(error) = self.check_generation(expected) {
+                        let _ = answer.send(Err(error));
+                    } else if !self.link.is_online() {
                         let _ = answer.send(Err(offline()));
                     } else if matches!(self.phase, BringUp::Open) {
-                        self.read(command, timeout, false, answer);
+                        self.read(expected, command, timeout, false, answer);
                     } else {
                         self.waiting
-                            .push_back(Input::Command(command, timeout, answer));
+                            .push_back(Input::Command(expected, command, timeout, answer));
                         self.open();
                     }
                 }
-                Input::ReadDone(epoch, command, timeout, fresh, answer, result) => {
+                Input::ReadDone(epoch, expected, command, timeout, fresh, answer, result) => {
                     if epoch != self.epoch {
                         let _ = answer.send(Err(offline()));
+                        continue;
+                    }
+                    if let Err(error) = self.check_generation(expected) {
+                        let _ = answer.send(Err(error));
                         continue;
                     }
                     match result {
@@ -885,7 +1057,7 @@ impl State {
                                 match self.reads.entry(key).or_default().decode(&response["data"]) {
                                     Some(data) => response["data"] = data,
                                     None if !fresh => {
-                                        self.read(command, timeout, true, answer);
+                                        self.read(expected, command, timeout, true, answer);
                                         continue;
                                     }
                                     None => {
@@ -905,30 +1077,34 @@ impl State {
                         }
                     }
                 }
-                Input::SideChannel(frame, answer) => {
-                    if !self.link.is_online() {
-                        if replayable(&frame) {
+                Input::SideChannel(expected, frame, answer) => {
+                    if let Err(error) = self.check_generation(expected) {
+                        let _ = answer.send(Err(error));
+                    } else if !self.link.is_online() {
+                        if expected.is_none() && replayable(&frame) {
                             self.queue(frame);
                             let _ = answer.send(Ok(Value::Null));
                         } else {
                             let _ = answer.send(Err(offline()));
                         }
                     } else if matches!(self.phase, BringUp::Open) {
-                        self.deliver(frame, answer);
+                        self.deliver(expected, frame, answer);
                     } else {
-                        self.waiting.push_back(Input::SideChannel(frame, answer));
+                        self.waiting.push_back(Input::SideChannel(expected, frame, answer));
                         self.open();
                     }
                 }
-                Input::Delivered(epoch, omp, frame, answer, result) => {
-                    let result = if epoch != self.epoch {
+                Input::Delivered(epoch, omp, expected, frame, answer, result) => {
+                    let result = if let Err(error) = self.check_generation(expected) {
+                        Err(error)
+                    } else if epoch != self.epoch {
                         Err(offline())
                     } else {
                         result
                     };
                     match result {
                         Err(error)
-                            if replayable(&frame) && error.fault.code == "remote_offline" =>
+                            if expected.is_none() && replayable(&frame) && error.fault.code == "remote_offline" =>
                         {
                             if omp == self.omp {
                                 self.queued.push_back((omp, frame));
