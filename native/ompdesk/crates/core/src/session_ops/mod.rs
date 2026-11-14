@@ -340,3 +340,6 @@ mod cancellation_tests;
 
 #[cfg(test)]
 mod drop_tests;
+
+#[cfg(all(test, unix))]
+mod sdk_tests;
