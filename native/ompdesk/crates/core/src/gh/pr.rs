@@ -589,12 +589,12 @@ async fn resolve_rev(tools: &Tools, root: &str, name: &str) -> Result<String, Fa
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftFacts {
-    root: String,
-    base: String,
-    head: String,
-    commits: Vec<String>,
-    files: Vec<String>,
-    diff_stat: String,
+    pub(crate) root: String,
+    pub(crate) base: String,
+    pub(crate) head: String,
+    pub(crate) commits: Vec<String>,
+    pub(crate) files: Vec<String>,
+    pub(crate) diff_stat: String,
 }
 
 pub async fn draft_facts(
@@ -660,12 +660,12 @@ pub async fn draft_facts(
 
 #[derive(Deserialize)]
 pub struct CreateInput {
-    title: String,
-    body: String,
-    base: Option<String>,
-    head: Option<String>,
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) base: Option<String>,
+    pub(crate) head: Option<String>,
     #[serde(default)]
-    draft: bool,
+    pub(crate) draft: bool,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
