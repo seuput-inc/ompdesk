@@ -6,6 +6,9 @@ use ompdesk_app_contract::{NativeCaller, Owner, OwnerIssuer, RequestId};
 
 use crate::server::{Cancellation, Fault, Gone, Scope};
 
+mod executions;
+pub use executions::{Execution, Reservation};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Principal {
     Page(NativeCaller),
@@ -28,6 +31,8 @@ struct State {
     owners: HashMap<Owner, Principal>,
     pages: HashMap<NativeCaller, Owner>,
     requests: HashMap<RequestId, Request>,
+    executions: HashMap<Owner, executions::Record>,
+    active_tabs: HashMap<String, Owner>,
     stopped: bool,
 }
 
