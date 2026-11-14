@@ -136,6 +136,7 @@ impl Service {
 
     /// Shutdown can leave the original hosted execution alive; ordinary tab close does not.
     pub fn keep_on_host(&self) { self.keep_on_host.store(true, Ordering::Release); }
+    pub(crate) fn keep_on_host_requested(&self) -> bool { self.keep_on_host.load(Ordering::Acquire) }
     pub fn dispose(&self) { self.tab.dispose(self.keep_on_host.load(Ordering::Acquire)); }
     pub fn when_disposed(&self) -> Held { receipt(self.completion.clone()) }
     pub fn before_response(&self) { self.sink.before_response(); }
