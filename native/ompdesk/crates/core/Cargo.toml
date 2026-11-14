@@ -34,6 +34,8 @@ serde_json = { version = "1", features = ["raw_value", "float_roundtrip", "prese
 serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize", "serialize"] }
 # Native MIME decoding follows the WHATWG TextDecoder labels used by routine mail sources.
 encoding_rs = "0.8.35"
+# Session pace replays the bridge's shell/check classifiers over stored journals.
+regex = "1"
 # Listings sort as the page's `Intl.Collator(locale, { numeric: true })` does: ICU's collation, same algorithm and data.
 icu_collator = "2"
 # The folder picker's filter lowercases as `toLocaleLowerCase()` does (Turkish, Azeri and Lithuanian rules included).

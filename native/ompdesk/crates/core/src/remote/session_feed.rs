@@ -21,7 +21,7 @@ impl Row {
     pub fn value(&self) -> &Value {
         &self.value
     }
-    fn parse(value: Value) -> Result<Self, String> {
+    pub(crate) fn parse(value: Value) -> Result<Self, String> {
         if !value["path"].is_string() || !value["modified"].is_string() {
             return Err("Invalid host session row".into());
         }
@@ -31,6 +31,9 @@ impl Row {
         )
         .unwrap_or(0);
         Ok(Self { value, modified_ms })
+    }
+    pub(crate) fn set_kind(&mut self, kind: &str) {
+        self.value["kind"] = Value::String(kind.to_owned());
     }
     pub(crate) fn own(mut self, device: &str) -> Self {
         self.value["device"] = device.into();
@@ -59,11 +62,11 @@ pub struct SessionDelta {
     pub set: Vec<Row>,
     pub remove: Vec<String>,
 }
-fn sort(rows: &mut [Row]) {
+pub(crate) fn sort(rows: &mut [Row]) {
     rows.sort_by(|a, b| {
         b.modified_ms
             .cmp(&a.modified_ms)
-            .then_with(|| a.path().cmp(b.path()))
+            .then_with(|| a.path().encode_utf16().cmp(b.path().encode_utf16()))
     });
 }
 pub fn older_version(a: &str, b: &str) -> bool {
@@ -88,17 +91,32 @@ fn apply(rows: &[Row], set: Vec<Row>, remove: &[String]) -> Vec<Row> {
     sort(&mut rows);
     rows
 }
-fn diff(before: &[Row], after: &[Row]) -> (Vec<Row>, Vec<String>) {
+fn same_row(a: &Row, b: &Row) -> bool {
+    let a = a.value.as_object().expect("validated session row");
+    let b = b.value.as_object().expect("validated session row");
+    a.len() == b.len()
+        && a.iter().all(|(key, value)| {
+            b.get(key).is_some_and(|other| match (value, other) {
+                (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+                _ => value == other,
+            })
+        })
+}
+pub(crate) fn diff(before: &[Row], after: &[Row]) -> (Vec<Row>, Vec<String>) {
     let mut old: HashMap<_, _> = before.iter().map(|row| (row.path(), row)).collect();
     let mut set = Vec::new();
     for row in after {
-        if old.remove(row.path()) != Some(row) {
+        if !old
+            .remove(row.path())
+            .is_some_and(|prior| same_row(prior, row))
+        {
             set.push(row.clone());
         }
     }
+    let mut removed = HashSet::new();
     let remove = before
         .iter()
-        .filter(|row| old.contains_key(row.path()))
+        .filter(|row| old.contains_key(row.path()) && removed.insert(row.path()))
         .map(|row| row.path().to_owned())
         .collect();
     (set, remove)

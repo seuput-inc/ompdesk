@@ -891,6 +891,24 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_single_exchange_retains_the_redirect_head_and_body_without_replaying_it() {
+        let (port, seen) = redirecting().await;
+        let redirect = format!("http://127.0.0.1:{port}/to/307");
+        let response = open_once(get(&redirect)).await.unwrap();
+        assert_eq!(response.status().as_u16(), 307);
+        assert!(response.headers().contains_key(LOCATION));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let bare = format!("http://127.0.0.1:{port}/bare");
+        let response = open_once(get(&bare)).await.unwrap();
+        assert_eq!(response.status().as_u16(), 302);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            b"bare"[..]
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn twenty_redirects_are_followed_and_the_twenty_first_fails() {
         let (port, seen) = redirecting().await;
         let twenty = format!("http://127.0.0.1:{port}/chain/20");

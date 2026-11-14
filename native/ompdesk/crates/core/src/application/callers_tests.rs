@@ -18,8 +18,8 @@ fn navigation_revokes_the_previous_owner_and_cancels_only_its_requests() {
         generation: 7,
         id: 10,
     };
-    let previous = callers.begin(&first.owner, id).unwrap();
-    let unrelated = callers
+    let (previous, _) = callers.begin(&first.owner, id).unwrap();
+    let (unrelated, _) = callers
         .begin(
             &other.owner,
             RequestId {
@@ -57,7 +57,7 @@ fn request_generation_owner_and_duplicate_identity_are_not_page_controlled() {
         generation: 8,
         id: 1,
     };
-    let scope = callers.begin(&first.owner, id).unwrap();
+    let (scope, _) = callers.begin(&first.owner, id).unwrap();
     assert!(callers.begin(&first.owner, id).is_err());
     assert!(!callers.cancel(&other.owner, id));
     assert!(!callers.finish(&other.owner, id));
@@ -94,7 +94,7 @@ fn shutdown_is_terminal_and_peers_are_not_forged_web_pages() {
         generation: 9,
         id: 1,
     };
-    let work = callers.begin(&peer.owner, id).unwrap();
+    let (work, _) = callers.begin(&peer.owner, id).unwrap();
     assert_eq!(callers.stop().len(), 1);
     assert!(work.cancelled());
     assert!(callers.principal(&peer.owner).is_err());

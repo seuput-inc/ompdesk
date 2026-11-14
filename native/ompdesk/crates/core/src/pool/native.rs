@@ -42,6 +42,14 @@ pub struct Acquire {
     pub former_ids: Option<Vec<String>>,
 }
 
+pub struct Selected<S: Sidecar + ?Sized> {
+    pub tab: String,
+    pub device: Option<String>,
+    pub window: i64,
+    pub session_file: Option<String>,
+    pub sidecar: Arc<S>,
+}
+
 pub trait Host: effects::Host<Sidecar: Sidecar<Error = Fault>> + 'static {
     type Reservation: Send + 'static;
     fn window_for(&self, owner: &Owner) -> Result<i64, Fault>;
@@ -337,6 +345,45 @@ impl<H: Host> Service<H> {
 
     pub fn side_channel(&self, owner: &Owner, tab: &str, frame: Value) -> Result<(), Fault> {
         self.source(owner, tab)?.send_now(frame)
+    }
+
+    pub fn target(
+        &self,
+        owner: &Owner,
+        tab: Option<&str>,
+    ) -> EffectFuture<'static, Result<Option<Selected<H::Sidecar>>, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.map(str::to_owned);
+        let app = Arc::clone(&self.app);
+        let out = self.out;
+        let (reply, answer) = oneshot::channel();
+        hub::post(move || {
+            if reply.is_closed() {
+                return;
+            }
+            let selected = (|| {
+                if !out.open() {
+                    return Err(closed());
+                }
+                let window = app.host.window_for(&owner)?;
+                let ctx = engine::POOLS
+                    .with(|pools| pools.borrow().get(&out.id()).cloned())
+                    .ok_or_else(closed)?;
+                let Some(selected) = ctx.selected_target(window, tab.as_deref()) else {
+                    return Ok(None);
+                };
+                app.host.authorize_tab(&owner, &selected.tab)?;
+                Ok(app.sidecar(&selected.tab).map(|sidecar| Selected {
+                    tab: selected.tab,
+                    device: selected.device,
+                    window: selected.window,
+                    session_file: selected.session_file,
+                    sidecar,
+                }))
+            })();
+            let _ = reply.send(selected);
+        });
+        Box::pin(async move { answer.await.map_err(|_| closed())? })
     }
     pub fn facts(&self, tab: &str) -> EffectFuture<'static, Result<Value, Fault>> {
         self.call("tabFacts", json!({"tab": tab}), false)

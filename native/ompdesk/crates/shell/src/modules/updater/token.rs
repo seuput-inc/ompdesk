@@ -10,12 +10,12 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use shell_core::secrets::key;
 use shell_core::updater_core::rules::{self, classify_repo_access};
-use shell_core::updater_core::secret::{KEYCHAIN_WOULD_ASK, Key};
+use shell_core::updater_core::secret::KEYCHAIN_WOULD_ASK;
 use shell_core::updater_core::status::Access;
 
 use super::fetch::{self, Redirect};
@@ -48,41 +48,6 @@ fn token_file(user_data: &Path) -> PathBuf {
 
 fn dropped_file(user_data: &Path) -> PathBuf {
     user_data.join("update-token.dropped")
-}
-
-/// The key, read once per run (a refused read is never repeated).
-static KEY: Mutex<Option<Result<Key, String>>> = Mutex::new(None);
-
-fn read_key(user_data: &Path) -> Result<Key, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use base64::Engine;
-        let answer = shell_core::sys_mac::keychain::key_json(user_data);
-        match answer["password"].as_str() {
-            Some(password) => base64::engine::general_purpose::STANDARD
-                .decode(password)
-                .map(Key::Mac)
-                .map_err(|e| e.to_string()),
-            None => Err(answer["unavailable"]
-                .as_str()
-                .unwrap_or("the keychain gave no key")
-                .to_string()),
-        }
-    }
-    #[cfg(windows)]
-    {
-        shell_core::migrate::safe_storage::windows_key(user_data).map(Key::Windows)
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = user_data;
-        Err("safeStorage is read on Windows and macOS only".to_string())
-    }
-}
-
-fn key(user_data: &Path) -> Result<Key, String> {
-    let mut slot = KEY.lock().unwrap();
-    slot.get_or_insert_with(|| read_key(user_data)).clone()
 }
 
 fn drop_stored(service: &Service, reason: &str) -> std::io::Result<()> {

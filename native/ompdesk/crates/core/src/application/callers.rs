@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tokio::sync::Notify;
 
 use ompdesk_app_contract::{NativeCaller, Owner, OwnerIssuer, RequestId};
 
-use crate::server::{Fault, Scope};
+use crate::server::{Cancellation, Fault, Gone, Scope};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Principal {
@@ -19,7 +20,7 @@ pub struct Admitted {
 
 struct Request {
     owner: Owner,
-    scope: Scope,
+    cancel: Cancellation,
 }
 
 #[derive(Default)]
@@ -35,6 +36,7 @@ pub struct Callers {
     generation: u64,
     issuer: OwnerIssuer,
     state: Mutex<State>,
+    finished: Notify,
 }
 
 impl Callers {
@@ -43,6 +45,7 @@ impl Callers {
             generation,
             issuer: OwnerIssuer::new(generation),
             state: Mutex::new(State::default()),
+            finished: Notify::new(),
         }
     }
 
@@ -110,8 +113,8 @@ impl Callers {
             .ok_or_else(|| Fault::new("caller_closed", "The caller is no longer admitted"))
     }
 
-    /// New requests cannot attach to an old app generation, a revoked owner or an already-used request identity.
-    pub fn begin(&self, owner: &Owner, id: RequestId) -> Result<Scope, Fault> {
+    /// Reject a revoked owner, old app generation or request identity that is already in flight.
+    pub fn begin(&self, owner: &Owner, id: RequestId) -> Result<(Scope, Gone), Fault> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if id.generation != self.generation || !state.owners.contains_key(owner) {
             return Err(Fault::new(
@@ -125,15 +128,15 @@ impl Callers {
                 "The request identity is already in flight",
             ));
         }
-        let scope = Scope::detached();
+        let (scope, gone) = Scope::watched();
         state.requests.insert(
             id,
             Request {
                 owner: owner.clone(),
-                scope: scope.clone(),
+                cancel: scope.cancellation(),
             },
         );
-        Ok(scope)
+        Ok((scope, gone))
     }
 
     pub fn finish(&self, owner: &Owner, id: RequestId) -> bool {
@@ -146,6 +149,7 @@ impl Callers {
             return false;
         }
         state.requests.remove(&id);
+        self.finished.notify_waiters();
         true
     }
 
@@ -158,8 +162,27 @@ impl Callers {
         else {
             return false;
         };
-        request.scope.cancel();
+        request.cancel.cancel();
         true
+    }
+
+    pub async fn joined(&self, owner: Option<&Owner>) {
+        loop {
+            let changed = self.finished.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let pending = self
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .requests
+                .values()
+                .any(|request| owner.is_none_or(|owner| &request.owner == owner));
+            if !pending {
+                return;
+            }
+            changed.await;
+        }
     }
 
     pub fn close_page(&self, caller: &NativeCaller) -> Option<Admitted> {
@@ -185,7 +208,7 @@ impl Callers {
             .values()
             .filter(|request| &request.owner == owner)
         {
-            request.scope.cancel();
+            request.cancel.cancel();
         }
         // Keep in-flight entries until their supervised effects have joined and finish removes them.
         Some(principal)
@@ -196,7 +219,7 @@ impl Callers {
         state.stopped = true;
         state.pages.clear();
         for request in state.requests.values() {
-            request.scope.cancel();
+            request.cancel.cancel();
         }
         state
             .owners

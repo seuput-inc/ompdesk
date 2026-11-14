@@ -164,3 +164,30 @@ fn version_ordering_preserves_captured_javascript_number_semantics() {
         assert_eq!(older_version(a, b), expected, "{a} < {b}");
     }
 }
+
+#[test]
+fn tied_rows_use_javascript_utf16_path_order() {
+    let mut rows = vec![
+        Row::parse(row("/\u{e000}", "2026-11-14T00:00:00Z")).unwrap(),
+        Row::parse(row("/\u{10000}", "2026-11-14T00:00:00Z")).unwrap(),
+    ];
+    sort(&mut rows);
+    assert_eq!(rows[0].path(), "/\u{10000}");
+    assert_eq!(rows[1].path(), "/\u{e000}");
+}
+
+#[test]
+fn row_deltas_compare_numbers_as_javascript_and_remove_each_path_once() {
+    let mut integer = row("/a", "2026-11-14T00:00:00Z");
+    integer["messageCount"] = json!(1);
+    let mut float = integer.clone();
+    float["messageCount"] = json!(1.0);
+    let integer = Row::parse(integer).unwrap();
+    let float = Row::parse(float).unwrap();
+    let (set, remove) = diff(std::slice::from_ref(&integer), &[float]);
+    assert!(set.is_empty());
+    assert!(remove.is_empty());
+    let (set, remove) = diff(&[integer.clone(), integer], &[]);
+    assert!(set.is_empty());
+    assert_eq!(remove, vec!["/a"]);
+}
