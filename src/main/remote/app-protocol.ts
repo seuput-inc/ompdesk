@@ -369,6 +369,7 @@ export const NativeInboxReplySchema: z.ZodType<NativeInboxReply> = z
 export const NativeInboxLookupReplySchema: z.ZodType<NativeInboxLookupReply> = z
 	.object({
 		receiver: InboxReceiverSchema,
+		dispatchFloor: z.number().int().nonnegative().safe(),
 		entries: z.array(
 			z.discriminatedUnion("state", [
 				z.object({ key: z.object(InboxKeyFields).strict(), state: z.literal("missing") }).strict(),

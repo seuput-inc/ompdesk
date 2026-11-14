@@ -273,6 +273,7 @@ export type NativeInboxLookupResult =
 
 export interface NativeInboxLookupReply {
 	receiver: NativeInboxTransfer["receiver"];
+	dispatchFloor: number;
 	entries: NativeInboxLookupResult[];
 }
 /** What the receiver's bridge answers a report with: `{duplicate, journaled}` for an id it already holds or queued. */
