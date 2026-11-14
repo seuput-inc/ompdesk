@@ -271,7 +271,7 @@ impl RemoteTab {
     }
     pub(crate) fn observed_run(&self) -> Result<ObservedRun, Fault> {
         let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
-        if !snapshot.process_alive || !snapshot.connection.is_online() {
+        if !snapshot.process_alive {
             return Err(Fault::new("remote_run_changed", "The observed remote session is no longer current"));
         }
         let path = snapshot.session_path.as_deref().filter(|path| !path.is_empty())
@@ -280,7 +280,7 @@ impl RemoteTab {
             .ok_or_else(|| Fault::new("remote_run_changed", "The remote tab has no execution binding"))?;
         Ok(ObservedRun { generation: snapshot.generation, path: path.to_owned(), omp: omp.to_owned(), connection: snapshot.connection.clone() })
     }
-    /// Snapshot admission only; authentication and connection ownership remain the Root's.
+    /// Snapshot admission only; Root must admit the original connection online before entering.
     /// The synchronous effect must neither await nor re-enter this snapshot mutex.
     pub(crate) fn admit_observation<T>(
         &self,
@@ -295,7 +295,6 @@ impl RemoteTab {
             || snapshot.session_path.as_deref() != Some(session_path)
             || snapshot.omp.as_deref() != Some(omp)
             || !snapshot.connection.same_connection(connection)
-            || !snapshot.connection.is_online()
             || !snapshot.process_alive
         {
             return Err(Fault::new("remote_run_changed", "The observed remote session is no longer current"));
