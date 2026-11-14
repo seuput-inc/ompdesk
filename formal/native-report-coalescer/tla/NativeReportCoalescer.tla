@@ -167,7 +167,7 @@ FenceUnstarted(g) ==
                    owned, effects, known, received, expectedJoin, unknownEnded>>
 
 \* SOURCE actual Deliver canonical lookup returns known responsibility; no carry/land.
-\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:794-807
+\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:791-804
 LookupKnown(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "lookup"
@@ -178,7 +178,7 @@ LookupKnown(g) ==
                    receiver, owned, effects, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE actual selected Deliver's second canonical lookup still says Missing.
-\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:794-816
+\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:791-813
 LookupMissing(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "lookup"
@@ -198,7 +198,7 @@ LookupConflict(g) ==
                    receiver, owned, effects, known, received, expectedJoin, unknownActive, unknownEnded, scheduled>>
 
 \* SOURCE materialize selected original Arc attachment plan outside the tables lock.
-\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:693-734
+\* @code native/ompdesk/crates/core/src/agentctl/service/attach.rs:690-731
 Materialize(g) ==
     /\ g \in inFlight
     /\ flights[g].phase = "carry"

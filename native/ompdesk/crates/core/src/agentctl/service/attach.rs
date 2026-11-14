@@ -45,7 +45,6 @@ pub enum Landing {
 pub(super) struct Carried {
     pub inline: Vec<Resolved>,
     pub set: AttachedSet,
-    pub count: usize,
 }
 
 /// A note that carries an answer's attachments ahead of the answer.
@@ -510,11 +509,9 @@ impl AgentControl {
     ) -> R<Carried> {
         let (images, to_land) = plan(resolved, inline);
         let set = carry_planned(&self.host, tab_id, device, &images, &to_land, remember).await?;
-        let count = set.count();
         Ok(Carried {
             inline: images,
             set,
-            count,
         })
     }
 
