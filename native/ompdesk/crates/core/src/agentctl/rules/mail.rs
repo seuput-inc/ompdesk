@@ -760,6 +760,18 @@ impl Mailbox {
             .cloned()
     }
 
+    /// A successful live-card answer settles only notifications of that exact card, not a newer question or block.
+    pub(crate) fn answered_card(&self, child: &str, card: &str) {
+        for state in self.inner.tables().state.values_mut() {
+            if state.last.from == child
+                && state.last.kind == Question
+                && state.last.card.as_deref() == Some(card)
+            {
+                state.waiting = false;
+            }
+        }
+    }
+
     fn prepare_post(&self, pending_mail: &mut Option<Mail>) -> Result<PostAdmission, String> {
         let mail = pending_mail
             .as_mut()
