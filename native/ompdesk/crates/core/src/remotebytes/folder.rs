@@ -148,6 +148,12 @@ impl Folder {
         }
         let mut kept = entries(&self.dir);
         kept.sort_by(|a, b| a.read.total_cmp(&b.read));
+        eprintln!(
+            "cache-order-probe {:?}",
+            kept.iter()
+                .map(|entry| (entry.file.file_name(), entry.read, entry.size))
+                .collect::<Vec<_>>()
+        );
         let mut total: u64 = kept.iter().map(|entry| entry.size).sum();
         for entry in kept {
             if total as f64 <= limit as f64 * TRIM_TO {
