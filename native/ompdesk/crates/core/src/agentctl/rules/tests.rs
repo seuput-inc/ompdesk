@@ -1277,3 +1277,20 @@ async fn forget_before_native_delivery_starts_fences_the_old_claim_and_its_late_
     assert_eq!(replacement.await.unwrap(), Posted::Delivered);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[test]
+fn dispatch_candidates_keep_all_actual_floors_and_refuse_number_overflow() {
+    let mailbox = mailbox_with(Arc::default());
+    assert_eq!(mailbox.candidate_dispatch("child", 0).unwrap(), 1);
+    assert_eq!(mailbox.candidate_dispatch("child", 3).unwrap(), 4);
+    mailbox.seed("child", 6);
+    assert_eq!(mailbox.candidate_dispatch("child", 3).unwrap(), 7);
+    let highest = crate::agentctl::inbox::MAX_DISPATCH as u64;
+    assert_eq!(
+        mailbox.candidate_dispatch("other", highest - 1).unwrap(),
+        highest
+    );
+    assert!(mailbox.candidate_dispatch("other", highest).is_err());
+    mailbox.seed("child", u64::MAX);
+    assert!(mailbox.candidate_dispatch("child", 0).is_err());
+}

@@ -112,6 +112,11 @@ fn validate_lookup_reply(query: &NativeInboxLookup, reply: &NativeInboxLookupRep
             "The native lookup reply names another receiving context",
         ));
     }
+    if !(0..=crate::agentctl::inbox::MAX_DISPATCH).contains(&reply.dispatch_floor) {
+        return Err(Fail::other(
+            "The native lookup dispatch floor is not an exact host number",
+        ));
+    }
     let mut expected: HashSet<_> = query.entries.iter().map(|entry| &entry.key).collect();
     if expected.len() != query.entries.len() || reply.entries.len() != expected.len() {
         return Err(Fail::other(

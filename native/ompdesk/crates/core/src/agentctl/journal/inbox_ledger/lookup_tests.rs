@@ -6,12 +6,8 @@ use crate::agentctl::inbox::{
 };
 use crate::agentctl::journal::Persistence;
 
-fn lookup(
-    ledger: &InboxLedger,
-    receiver: &InboxReceiver,
-    entry: &NativeInboxTransferEntry,
-) -> Result<Vec<NativeInboxLookupResult>, String> {
-    let query = NativeInboxLookupEntry {
+fn query(entry: &NativeInboxTransferEntry) -> NativeInboxLookupEntry {
+    NativeInboxLookupEntry {
         key: entry.entry.key(),
         logical: entry.logical.clone(),
         attachments: entry
@@ -21,8 +17,17 @@ fn lookup(
                 images: set.images.clone(),
                 files: set.files.iter().map(|landed| landed.file.clone()).collect(),
             }),
-    };
-    ledger.lookup(receiver, &[query])
+    }
+}
+
+fn lookup(
+    ledger: &InboxLedger,
+    receiver: &InboxReceiver,
+    entry: &NativeInboxTransferEntry,
+) -> Result<Vec<NativeInboxLookupResult>, String> {
+    ledger
+        .lookup(receiver, &[query(entry)])
+        .map(|reply| reply.entries)
 }
 
 #[test]
@@ -171,4 +176,106 @@ fn existing_empty_attachment_identity_survives_restart_without_becoming_absent()
     assert!(lookup(&reopened, &target, &absent).is_err());
     assert_eq!(std::fs::read(dir.file()).unwrap(), before);
     assert_eq!(reopened.pending(&target).unwrap().1, [original]);
+}
+
+#[test]
+fn receiver_prompt_floor_survives_old_random_consumed_rows_and_excludes_other_addresses_and_reports() {
+    let dir = Dir::new();
+    let current = receiver("original-context");
+    let ledger = InboxLedger::new(Some(dir.file()));
+    let fresh = entry(
+        &crate::agentctl::inbox::new_delivery_id().unwrap(),
+        InboxKind::Prompt,
+    );
+    let empty = ledger.lookup(&current, &[query(&fresh)]).unwrap();
+    assert_eq!(empty.dispatch_floor, 0);
+    assert!(matches!(
+        empty.entries.as_slice(),
+        [NativeInboxLookupResult::Missing { .. }]
+    ));
+
+    let mut old = entry(
+        &crate::agentctl::inbox::new_delivery_id().unwrap(),
+        InboxKind::Prompt,
+    );
+    old.dispatch = Some(3);
+    assert!(old.logical.request_id.is_none());
+    ledger.keep(&current, std::slice::from_ref(&old)).unwrap();
+    ledger
+        .reconcile(&current, &receipt(&current, std::slice::from_ref(&old)))
+        .unwrap();
+    drop(ledger);
+    let current = receiver("reopened-context");
+    let ledger = InboxLedger::new(Some(dir.file()));
+    let consumed = ledger.lookup(&current, &[query(&old)]).unwrap();
+    assert_eq!(consumed.dispatch_floor, 3);
+    assert!(matches!(
+        consumed.entries.as_slice(),
+        [NativeInboxLookupResult::ExistingContextObserved {
+            dispatch: Some(3),
+            ..
+        }]
+    ));
+    let mut retry = old.clone();
+    retry.dispatch = Some(999);
+    let repeated = ledger.keep(&current, &[retry]).unwrap();
+    assert!(repeated.deliveries[0].existing);
+    assert_eq!(repeated.deliveries[0].dispatch, Some(3));
+
+    let mut pending = entry(
+        &crate::agentctl::inbox::new_delivery_id().unwrap(),
+        InboxKind::Prompt,
+    );
+    pending.logical.producer.session_path = "/isolated/another-producer.jsonl".into();
+    pending.dispatch = Some(4);
+    ledger.keep(&current, std::slice::from_ref(&pending)).unwrap();
+    let mut other = receiver("other-session");
+    other.session_path = "/isolated/other.jsonl".into();
+    let mut unrelated = entry("other-session", InboxKind::Prompt);
+    unrelated.logical.target.session_path = other.session_path.clone();
+    unrelated.dispatch = Some(900);
+    ledger.keep(&other, &[unrelated]).unwrap();
+    let mut other = receiver("other-device");
+    other.device = Some("elsewhere".into());
+    let mut unrelated = entry("other-device", InboxKind::Prompt);
+    unrelated.logical.target.device_id = "other-host".into();
+    unrelated.dispatch = Some(901);
+    ledger.keep(&other, &[unrelated]).unwrap();
+    let mut report = entry("report", InboxKind::Report);
+    report.dispatch = Some(902);
+    ledger.keep(&current, &[report]).unwrap();
+
+    let before = std::fs::read(dir.file()).unwrap();
+    let reply = ledger.lookup(&current, &[query(&fresh)]).unwrap();
+    assert_eq!(reply.dispatch_floor, 4);
+    assert!(matches!(
+        reply.entries.as_slice(),
+        [NativeInboxLookupResult::Missing { .. }]
+    ));
+    assert_eq!(std::fs::read(dir.file()).unwrap(), before);
+    let owned = ledger.lookup(&current, &[query(&pending)]).unwrap();
+    assert_eq!(owned.dispatch_floor, 4);
+    assert!(matches!(
+        owned.entries.as_slice(),
+        [NativeInboxLookupResult::ExistingPending {
+            dispatch: Some(4),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn invalid_prompt_dispatch_floors_refuse_lookup_without_rewriting_the_ledger() {
+    for dispatch in [-1, crate::agentctl::inbox::MAX_DISPATCH + 1, i64::MAX] {
+        let dir = Dir::new();
+        let current = receiver("current");
+        let ledger = InboxLedger::new(Some(dir.file()));
+        let mut original = entry("invalid-floor", InboxKind::Prompt);
+        original.dispatch = Some(dispatch);
+        ledger.keep(&current, &[original]).unwrap();
+        let before = std::fs::read(dir.file()).unwrap();
+        let fresh = entry("new-request", InboxKind::Prompt);
+        assert!(ledger.lookup(&current, &[query(&fresh)]).is_err());
+        assert_eq!(std::fs::read(dir.file()).unwrap(), before);
+    }
 }

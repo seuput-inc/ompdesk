@@ -11,9 +11,9 @@ use super::attachments::{AttachedSet, UPLOAD_TTL_MS, sha256_hex};
 use super::system_clock;
 use super::{Clock, Persistence, persist_text};
 use crate::agentctl::inbox::{
-    InboxAcceptedDelivery, InboxContextReceipt, InboxEvidence, InboxIntent, InboxReceiver,
-    NativeInboxAcceptance, NativeInboxKey, NativeInboxLookupEntry, NativeInboxLookupResult,
-    NativeInboxReply, NativeInboxTransferEntry,
+    InboxAcceptedDelivery, InboxContextReceipt, InboxEvidence, InboxIntent, InboxKind,
+    InboxReceiver, MAX_DISPATCH, NativeInboxAcceptance, NativeInboxKey, NativeInboxLookupEntry,
+    NativeInboxLookupReply, NativeInboxLookupResult, NativeInboxReply, NativeInboxTransferEntry,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -463,11 +463,27 @@ impl InboxLedger {
         &self,
         receiver: &InboxReceiver,
         entries: &[NativeInboxLookupEntry],
-    ) -> Result<Vec<NativeInboxLookupResult>, String> {
+    ) -> Result<NativeInboxLookupReply, String> {
         let state = self.lock();
         state.readable()?;
         let disk = load(state.file.as_deref())?;
         let address = Address::from(receiver);
+        let mut dispatch_floor = 0;
+        if let Some(records) = disk.index.get(&address) {
+            for position in records.values() {
+                let record = &disk.entries[*position];
+                if record.key.kind == InboxKind::Prompt
+                    && let Some(dispatch) = record.dispatch
+                {
+                    if !(0..=MAX_DISPATCH).contains(&dispatch) {
+                        return Err(
+                            "Stored prompt dispatch is outside the exact host-number range".into(),
+                        );
+                    }
+                    dispatch_floor = dispatch_floor.max(dispatch);
+                }
+            }
+        }
         let mut seen = HashSet::with_capacity(entries.len());
         let mut result = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -518,7 +534,11 @@ impl InboxLedger {
                 }
             });
         }
-        Ok(result)
+        Ok(NativeInboxLookupReply {
+            receiver: receiver.clone(),
+            dispatch_floor,
+            entries: result,
+        })
     }
 
     pub fn receivers(&self) -> Result<Vec<Address>, String> {
