@@ -27,7 +27,7 @@
 # Evidence lines start with "EVIDENCE:". Exit 1 on any failed check.
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
-PORT=19230; FEEDPORT=18444; HTTPPORT=18445
+PORT=19230; FEEDPORT=18444; HTTPPORT=18445; SEEDPORT=18446
 SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-v0.127.0}
 case "$SOURCE_TAG" in v0.127.0|v0.128.0) ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
 LAST_ELECTRON_TAG=$(jq -r .tag "$REPO/native/ompdesk/crates/shell/last-electron.json")
@@ -101,8 +101,17 @@ mkdir "$W/dmgsrc" && ditto "$W/rollback.app" "$W/dmgsrc/OMPdesk.app"
 hdiutil create -volname OMPdesk -srcfolder "$W/dmgsrc" -fs HFS+ -ov -format UDZO "$W/rollback.dmg" 2>&1 | tail -3 | sed 's/^/EVIDENCE: hdiutil: /'
 test -s "$W/rollback.dmg"; check $? "the re-signed last Electron release $LAST_ELECTRON_TAG is in a DMG ($(stat -f %z "$W/rollback.dmg" 2>/dev/null) bytes)"
 test -s "$W/rollback.dmg" || exit 1
-start_feed $FEEDPORT "$W/new.dmg" --rollback-dmg "$W/rollback.dmg" --rollback-tag "$LAST_ELECTRON_TAG" --http-port $HTTPPORT
+start_feed $FEEDPORT "$W/new.dmg" --rollback-dmg "$W/rollback.dmg" --rollback-tag "$LAST_ELECTRON_TAG" --http-port $HTTPPORT --seed-port $SEEDPORT
 curl -s "http://127.0.0.1:$HTTPPORT/repos/SeuPut0705/ompdesk/releases/tags/$LAST_ELECTRON_TAG" | grep -q ompdesk-update; check $? "the stand-in serves the last Electron release's tag route on :$HTTPPORT"
+seed_repo=$(curl -sk -o /dev/null -w '%{http_code}' --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk")
+seed_latest=$(curl -sk -o /dev/null -w '%{http_code}' --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk/releases/latest")
+seed_list=$(curl -sk --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk/releases")
+seed_asset=$(curl -sk -o /dev/null -w '%{http_code}' --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk/releases/assets/1")
+evidence "seed feed: repository $seed_repo, latest $seed_latest, releases $seed_list, asset $seed_asset"
+if [ "$seed_repo" != 200 ] || [ "$seed_latest" != 404 ] || [ "$seed_list" != "[]" ] || [ "$seed_asset" != 404 ]; then
+  check 1 "seed feed validates repository access but offers no update or asset"
+  exit 1
+fi
 SWITCHES=(--host-resolver-rules="MAP api.github.com 127.0.0.1:$FEEDPORT" --ignore-certificate-errors)
 update_lines() { jq -r 'select(.source=="app-update") | "\(.message) \(.details.event // "") \(.details.outcome // "") \(.details.mode // "") \(.details.reason // "")"' "$1/logs/gui-runtime.jsonl" 2>/dev/null; }
 has_line() { update_lines "$1" | grep -q "^$2"; }
@@ -150,15 +159,37 @@ scenario() {
     launchctl setenv OMPDESK_LAUNCHER_START_WAIT_S 20
   fi
   step "$name: the released app seeds a token and Local Storage (its own IPC)"
-  # No feed for this run: its updater would start a download that the clean-up below pulls the folder from under.
-  OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT --host-resolver-rules="MAP api.github.com 127.0.0.1:1" --ignore-certificate-errors >"$W/$name-seed.out" 2>&1 &
-  (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT) | tee "$W/$name-seed.json"; check ${PIPESTATUS[0]} "$name: seeded"
+  # This feed validates the token but offers no release: seeding must not start a concurrent download.
+  OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT --host-resolver-rules="MAP api.github.com 127.0.0.1:$SEEDPORT" --ignore-certificate-errors >"$W/$name-seed.out" 2>&1 &
+  local seed_pid=$! seed_rc
+  (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT) | tee "$W/$name-seed.json"; seed_rc=${PIPESTATUS[0]}
+  if [ "$seed_rc" != 0 ] || [ ! -f "$UD/update-token.bin" ]; then
+    check 1 "$name: seed must validate and store the token in the test profile"
+    evidence "$name seed diagnostics: seed exit $seed_rc; app pid $seed_pid; token file $([ -f "$UD/update-token.bin" ] && echo present || echo absent); runtime log $([ -f "$UD/logs/gui-runtime.jsonl" ] && echo present || echo absent)"
+    evidence "$name seed output: $(tail -n 12 "$W/$name-seed.out" 2>&1 | cut -c1-220 | tr '\n' '|')"
+    kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+    restore
+    exit 1
+  fi
+  check 0 "$name: seed validated and stored a token in the test profile"
   kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
-  test -f "$UD/update-token.bin"; check $? "$name: update-token.bin is in the profile"
   rm -rf "$UD/logs" "$UD/updates"
   step "$name: the released app, left alone with its updater"
   env ${OLDENV[@]+"${OLDENV[@]}"} OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT "${SWITCHES[@]}" >"$W/$name-old.out" 2>&1 &
-  wait_for "has_line $UD 'download verified'" 240; check $? "$name: check found, download verified"
+  local old_pid=$! old_state=running
+  if wait_for "has_line $UD 'download verified'" 240; then
+    check 0 "$name: check found, download verified"
+  else
+    if ! kill -0 "$old_pid" 2>/dev/null; then
+      wait "$old_pid"; old_state="exited $?"
+    fi
+    check 1 "$name: check found, download verified"
+    evidence "$name update startup: pid $old_pid ($old_state); runtime log $([ -f "$UD/logs/gui-runtime.jsonl" ] && echo present || echo absent)"
+    evidence "$name update output: $(tail -n 12 "$W/$name-old.out" 2>&1 | cut -c1-220 | tr '\n' '|')"
+    kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+    restore
+    exit 1
+  fi
   if [ "$fail" = 1 ]; then
     chmod -R a-w "$APPS"; evidence "S2 the apps folder is read-only before the countdown ends ($(stat -f %Sp "$APPS"))"
   fi
