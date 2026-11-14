@@ -1335,7 +1335,9 @@ describe("ompdesk_session_send", () => {
 		const service = control(host);
 		const args = { session: "work0002", message: "please review", request_id: "r1" };
 		expect((await service.run("main0001", T.send, args)).isError).toBeFalsy();
-		await stock.waitForRequest();
+		const request = await stock.waitForRequest();
+		const entry = request.entries.find(item => item.kind === "prompt");
+		expect(entry?.deliveryId).toBeTruthy();
 		(host.tabsById.get("work0002") as FakeTab).drafting = true;
 		let answered: { text: string; isError?: boolean } | undefined;
 		void service.run("main0001", T.send, args).then(result => {
@@ -1343,9 +1345,15 @@ describe("ompdesk_session_send", () => {
 		});
 		// Well inside the draft wait (`draftWaitMs`, 400 ms here).
 		await sleep(250);
+		expect(answered).toBeDefined();
 		expect(answered?.isError).toBeFalsy();
-		expect(answered?.text).toMatch(/already delivered; nothing sent again/);
 		expect(stock.admissions.filter(event => event.queue !== "aside")).toHaveLength(1);
+		const ledger = JSON.parse(readFileSync(join(host.inboxRoot!, "inbox.json"), "utf8"));
+		expect(
+			ledger.entries.filter(
+				(record: { key: { deliveryId: string } }) => record.key.deliveryId === entry?.deliveryId,
+			),
+		).toHaveLength(1);
 	});
 
 	it("refuses a self-send, a hidden session, an unknown id and an ambiguous prefix", async () => {
@@ -4756,7 +4764,14 @@ describe("ompdesk_report: sessions tell their opener", () => {
 			),
 		).toHaveLength(1);
 		// Answered: no longer waiting.
-		await service.run("boss0001", T.answer, { session: a, choice: "다른 문구" });
+		const answer = await service.run("boss0001", T.answer, { session: a, choice: "다른 문구" });
+		expect(answer.isError, answer.text).toBe(false);
+		expect(host.answers).toContainEqual({
+			tabId: a,
+			id: "q1",
+			response: expect.objectContaining({ id: "q1" }),
+		});
+		expect(child.asks).toEqual([]);
 		expect((await service.reviewItems("boss0001")).find(item => item.tabId === a)?.waiting).toBeUndefined();
 		// A session it did not open, or a card that is gone, tells nobody.
 		await service.childAsked(b, a, "q1");
@@ -4917,11 +4932,21 @@ describe("ompdesk_report: sessions tell their opener", () => {
 		const first = await service.run("boss0001", T.send, { session: a, message: "go", request_id: "q1" });
 		const again = await service.run("boss0001", T.send, { session: a, message: "go", request_id: "q1" });
 		expect(first.text).toMatch(/accepted/);
-		expect(again.text).toMatch(/already delivered; nothing sent again/);
+		expect(again.isError, again.text).toBe(false);
+		expect(first.text).toContain("Dispatch d2");
+		expect(again.text).toContain("Dispatch d2");
 		const stock = host.stocks.get(a)!;
-		await stock.waitForRequest(request =>
+		const request = await stock.waitForRequest(request =>
 			request.entries.some(entry => entry.kind === "prompt" && entry.content.toString().includes("go")),
 		);
+		const entry = request.entries.find(item => item.kind === "prompt" && item.content.toString().includes("go"));
+		expect(entry?.deliveryId).toBeTruthy();
+		const ledger = JSON.parse(readFileSync(join(host.inboxRoot!, "inbox.json"), "utf8"));
+		expect(
+			ledger.entries.filter(
+				(record: { key: { deliveryId: string } }) => record.key.deliveryId === entry?.deliveryId,
+			),
+		).toHaveLength(1);
 		expect(
 			stock.admissions.filter(event => JSON.stringify(event.message).includes("go") && event.queue === "followUp"),
 		).toHaveLength(1);
@@ -5028,7 +5053,7 @@ describe("mail across failures and relaunches", () => {
 		const stale = await relaunched.run("kid00002", T.report, { kind: "done", text: "old", dispatch: "d1" });
 		expect(stale.text).toMatch(/Ignored: dispatch d1/);
 		const again = await relaunched.run("boss0001", T.send, args);
-		expect(again.text).toMatch(/already delivered/);
+		expect(again.isError, again.text).toBe(false);
 		expect(again.text).toContain("d3");
 		const conflict = await relaunched.run("boss0001", T.send, { ...args, message: "different" });
 		expect(conflict.isError).toBe(true);
@@ -5226,9 +5251,16 @@ describe("closing and stopping: ownership after a relaunch, cards by risk", () =
 		]);
 		expect([one.isError, two.isError]).toEqual([false, false]);
 		const stock = host.stocks.get("kid00002")!;
-		await stock.waitForRequest();
+		const request = await stock.waitForRequest();
 		expect(stock.admissions.filter(event => event.queue !== "aside")).toHaveLength(1);
-		expect([one.text, two.text].some(text => text.includes("nothing sent again"))).toBe(true);
+		const ledger = JSON.parse(readFileSync(join(host.inboxRoot!, "inbox.json"), "utf8"));
+		const entry = request.entries.find(item => item.kind === "prompt");
+		expect(entry?.deliveryId).toBeTruthy();
+		expect(
+			ledger.entries.filter(
+				(record: { key: { deliveryId: string } }) => record.key.deliveryId === entry?.deliveryId,
+			),
+		).toHaveLength(1);
 	});
 });
 
@@ -6212,9 +6244,11 @@ describe("messages that outlive the omp they were handed to", () => {
 		expect(queued.text).toContain("queued as a follow-up");
 		expect(queued.text).toContain("Dispatch d1");
 		const oldStock = before.stocks.get("kid00002")!;
-		await oldStock.waitForRequest(request =>
+		const original = await oldStock.waitForRequest(request =>
 			request.entries.some(entry => entry.content.toString().includes("Also do C")),
 		);
+		const firstEntry = original.entries.find(entry => entry.content.toString().includes("Also do C"));
+		expect(firstEntry?.deliveryId).toBeTruthy();
 		firstService.close();
 		before.inboxNetwork?.close();
 
@@ -6238,6 +6272,9 @@ describe("messages that outlive the omp they were handed to", () => {
 				expect.objectContaining({ content: expect.stringContaining("[ompdesk dispatch d1:") }),
 			]),
 		);
+		expect(redelivered.entries.find(entry => entry.content.toString().includes("Also do C"))?.deliveryId).toBe(
+			firstEntry?.deliveryId,
+		);
 
 		// The opener's next message, by the id it had: numbered past the one still on its way, and after it.
 		const next = await service.run("boss0009", T.send, { session: "kid00002", message: "And D" });
@@ -6246,6 +6283,12 @@ describe("messages that outlive the omp they were handed to", () => {
 		await newStock.waitForRequest(request =>
 			request.entries.some(entry => entry.content.toString().includes("And D")),
 		);
+		expect(
+			newStock.admissions
+				.filter(event => event.queue === "followUp")
+				.map(event => JSON.stringify(event.message))
+				.filter(message => message.includes("Also do C") || message.includes("And D")),
+		).toEqual([expect.stringContaining("Also do C"), expect.stringContaining("And D")]);
 		expect(
 			newStock.admissions.filter(
 				event => JSON.stringify(event.message).includes("Also do C") && event.queue === "followUp",
