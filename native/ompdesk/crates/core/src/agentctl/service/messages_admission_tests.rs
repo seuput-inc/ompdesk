@@ -333,9 +333,11 @@ async fn parent_change_while_reading_journal(id: u64, remove_parent: bool) {
     assert!(control.host.outbox().unwrap().pending().is_empty());
     let receiver = {
         let recorded = asked.lock().unwrap();
-        assert!(recorded.iter().all(|(method, _)| {
-            method != "inbox" && method != "deliverInbox"
-        }));
+        assert!(
+            recorded
+                .iter()
+                .all(|(method, _)| { method != "inbox" && method != "deliverInbox" })
+        );
         assert!(recorded[boundary..].iter().all(|(method, _)| {
             method != "inbox"
                 && method != "inboxStatus"
@@ -407,7 +409,13 @@ async fn draft_started_during_journal_read_waits_for_the_real_guard_and_state_ch
                 if held.is_some() {
                     let recorded = event_records.lock().unwrap();
                     let boundary = recorded.as_ref().unwrap().lock().unwrap().len();
-                    entered.lock().unwrap().take().unwrap().send(boundary).unwrap();
+                    entered
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap()
+                        .send(boundary)
+                        .unwrap();
                 }
                 held
             } else {
@@ -454,9 +462,11 @@ async fn draft_started_during_journal_read_waits_for_the_real_guard_and_state_ch
     assert!(control.send_outbox.as_ref().unwrap().pending().is_empty());
     let receiver_before_admission = {
         let recorded = asked.lock().unwrap();
-        assert!(recorded.iter().all(|(method, _)| {
-            method != "inbox" && method != "deliverInbox"
-        }));
+        assert!(
+            recorded
+                .iter()
+                .all(|(method, _)| { method != "inbox" && method != "deliverInbox" })
+        );
         assert!(recorded[boundary..].iter().all(|(method, _)| {
             method != "inbox"
                 && method != "inboxStatus"
