@@ -1645,15 +1645,13 @@ export function captureTabExtensionUiRequests(): Map<
 	{ runtime: SessionRuntime | null; state: ExtensionUiStore | undefined }
 > {
 	return new Map(
-		useTabsStore
-			.getState()
-			.tabs.map(tab => [
-				tab.id,
-				{
-					runtime: sessionRuntime(tab.id),
-					state: sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState(),
-				},
-			]),
+		useTabsStore.getState().tabs.map(tab => [
+			tab.id,
+			{
+				runtime: sessionRuntime(tab.id),
+				state: sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState(),
+			},
+		]),
 	);
 }
 

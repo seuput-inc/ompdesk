@@ -220,9 +220,7 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 			.poll(async () =>
 				(await recordsOfType(record, "extension_ui_response")).filter(item => item.id === "fixture-confirm"),
 			)
-			.toEqual([
-				{ type: "extension_ui_response", id: "fixture-confirm", confirmed: true, recordedBy: sessionId },
-			]);
+			.toEqual([{ type: "extension_ui_response", id: "fixture-confirm", confirmed: true, recordedBy: sessionId }]);
 		await expect
 			.poll(async () =>
 				(await recordsOfType(record, "extension_ui_response")).filter(item => item.id === "flow-ask-1"),
