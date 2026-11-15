@@ -123,11 +123,13 @@ function briefState(state: RpcSessionState): RpcSessionState {
 export const handlers: Record<string, LocalHandler> = {
 	prompt: async (command, ctx) => {
 		if ("streamingBehavior" in command) throw new Error("Delivery modes are not supported");
-		const { message, images, deliveryId } = command;
-		return ctx.bridge.request("composer.prompt", {
-			message,
-			...(images === undefined ? {} : { images }),
-			...(deliveryId === undefined ? {} : { deliveryId }),
+		await ctx.bridge.request("composer.prepare_prompt", {});
+		// Stock owns prompt tickets, slash-command completion and prompt_result.
+		return ctx.send({
+			type: "prompt",
+			message: command.message,
+			...(command.images === undefined ? {} : { images: command.images }),
+			streamingBehavior: "aside",
 		});
 	},
 
