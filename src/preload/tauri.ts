@@ -159,7 +159,8 @@ const transport: OmpTransport = {
 	},
 };
 
-async function evaluate(id: unknown, run: () => unknown): Promise<void> {
+async function evaluate(id: unknown, expectedGeneration: number, run: () => unknown): Promise<void> {
+	if ((await ready.promise) !== expectedGeneration) return;
 	let result: object;
 	try {
 		const value: unknown = await run();
@@ -175,11 +176,21 @@ async function evaluate(id: unknown, run: () => unknown): Promise<void> {
 try {
 	if (!invoke) throw new Error("Tauri invoke is unavailable");
 	Object.defineProperty(window, "__ompShellStream", { value: shellStream });
-	Object.defineProperty(window, "__ompTauriPush", { value: push });
+	Object.defineProperty(window, "__ompTauriPush", {
+		value: (expectedGeneration: number, raw: unknown) => {
+			return ready.promise
+				.then(current => {
+					if (current === expectedGeneration) push(raw);
+				})
+				.catch(() => undefined);
+		},
+	});
 	Object.defineProperty(window, "__ompTauriDropFiles", { value: dropFiles });
 	Object.defineProperty(window, "__ompTauriEvaluate", {
-		value: (id: unknown, run: () => unknown) => {
-			void evaluate(id, run).catch(error => console.error("Tauri evaluation response failed", error));
+		value: (id: unknown, expectedGeneration: number, run: () => unknown) => {
+			return evaluate(id, expectedGeneration, run).catch(error =>
+				console.error("Tauri evaluation response failed", error),
+			);
 		},
 	});
 	const shared = createOmpApi(transport);

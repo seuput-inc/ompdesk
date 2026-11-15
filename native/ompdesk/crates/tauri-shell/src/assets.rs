@@ -12,10 +12,13 @@ fn empty(status: StatusCode) -> Response<Vec<u8>> {
 }
 
 fn path_from_uri(uri: &tauri::http::Uri) -> Option<PathBuf> {
-    let valid_origin = matches!(
-        (uri.scheme_str(), uri.authority().map(|a| a.as_str())),
-        (Some("app"), Some("ompdesk")) | (Some("http"), Some("app.ompdesk"))
-    );
+    let origin = (uri.scheme_str(), uri.authority().map(|a| a.as_str()));
+    let valid_origin = origin == (Some("app"), Some("ompdesk"))
+        || (cfg!(windows)
+            && matches!(
+                origin,
+                (Some("app"), Some("localhost")) | (Some("http"), Some("app.localhost"))
+            ));
     if !valid_origin {
         return None;
     }
@@ -152,7 +155,7 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "no-cache");
     if mime(&relative) == "text/html" {
-        builder = builder.header(header::CONTENT_SECURITY_POLICY, "default-src 'self' app: http://app.ompdesk; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media:; media-src 'self' blob: omp-media:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'");
+        builder = builder.header(header::CONTENT_SECURITY_POLICY, "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media:; media-src 'self' blob: omp-media:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'");
     }
     if let Some((start, end)) = selected {
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
@@ -205,7 +208,10 @@ mod tests {
     fn serves_only_assets_from_the_expected_origin() {
         let f = Fixture::new();
         assert_eq!(f.get("app://ompdesk/?v=1").body(), b"index");
-        assert_eq!(f.get("http://app.ompdesk/app.js?x=1").body(), b"abcdef");
+        if cfg!(windows) {
+            assert_eq!(f.get("http://app.localhost/app.js?x=1").body(), b"abcdef");
+            assert_eq!(f.get("app://localhost/app.js?x=1").body(), b"abcdef");
+        }
         assert_eq!(f.get("app://other/app.js").status(), StatusCode::NOT_FOUND);
         assert_eq!(
             f.get("app://ompdesk/missing").status(),

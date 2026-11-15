@@ -1,7 +1,11 @@
 #![windows_subsystem = "windows"]
 
 mod assets;
+mod native_services;
 mod registry;
+mod theme;
+mod ui;
+use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
 pub mod host;
@@ -20,7 +24,7 @@ use shell_core::wire::WireError;
 use shell_core::{conn, facts, startup};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
@@ -40,6 +44,8 @@ struct Runtime {
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
     relaunch: Mutex<Option<Vec<String>>>,
+    stop_instance: AtomicBool,
+    instance_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 fn runtime() -> &'static Runtime {
@@ -242,6 +248,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     .visible(options["show"].as_bool().unwrap_or(true))
     .data_directory(runtime().user_data.join("tauri-webview"))
     .data_store_identifier(profile)
+    .theme(theme::for_new_window())
     .initialization_script(&runtime().preload)
     .on_navigation(move |url| {
         let allowed = trusted_url(url.as_str()) || url.as_str() == "about:blank";
@@ -281,6 +288,14 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             return Err(failed(error));
         }
     };
+    if !options["useContentSize"].as_bool().unwrap_or(false) {
+        apply_size(
+            &window,
+            options["width"].as_f64().unwrap_or(1200.0),
+            options["height"].as_f64().unwrap_or(800.0),
+            false,
+        )?;
+    }
     let observer = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
@@ -379,10 +394,15 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
                 .as_bool()
                 .ok_or_else(|| WireError::new("invalid", "missing ignore"))?,
         ),
-        "setSize" | "setContentSize" => window.set_size(tauri::LogicalSize::new(
-            dimension(a, "width")?,
-            dimension(a, "height")?,
-        )),
+        "setSize" | "setContentSize" => {
+            apply_size(
+                &window,
+                dimension(a, "width")?,
+                dimension(a, "height")?,
+                op == "setContentSize",
+            )?;
+            Ok(())
+        }
         "setPosition" => window.set_position(tauri::LogicalPosition::new(
             coordinate(a, "x")?,
             coordinate(a, "y")?,
@@ -395,10 +415,13 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
                     coordinate(b, "y")?,
                 ))
                 .map_err(failed)?;
-            window.set_size(tauri::LogicalSize::new(
+            apply_size(
+                &window,
                 dimension(b, "width")?,
                 dimension(b, "height")?,
-            ))
+                false,
+            )?;
+            Ok(())
         }
         _ => return Err(unsupported(&format!("win.op {op}"))),
     }
@@ -413,6 +436,38 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
         }
     }
     Ok(json!({}))
+}
+fn apply_size(
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+    content: bool,
+) -> Result<(), WireError> {
+    let (width, height) = if content {
+        (width, height)
+    } else {
+        let scale = window.scale_factor().map_err(failed)?;
+        let outer = window
+            .outer_size()
+            .map_err(failed)?
+            .to_logical::<f64>(scale);
+        let inner = window
+            .inner_size()
+            .map_err(failed)?
+            .to_logical::<f64>(scale);
+        let width = width - (outer.width - inner.width);
+        let height = height - (outer.height - inner.height);
+        if width <= 0.0 || height <= 0.0 {
+            return Err(WireError::new(
+                "invalid",
+                "outer size is smaller than native frame",
+            ));
+        }
+        (width, height)
+    };
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(failed)
 }
 fn coordinate(v: &Value, key: &str) -> Result<f64, WireError> {
     v[key]
@@ -445,7 +500,7 @@ fn wc_op(call: host::Call) {
                     ));
                 }
                 #[cfg(windows)]
-                let url = url.replacen("app://ompdesk", "http://app.ompdesk", 1);
+                let url = url.replacen("app://ompdesk", "http://app.localhost", 1);
                 window
                     .navigate(url.parse().map_err(failed)?)
                     .map_err(failed)?;
@@ -493,7 +548,8 @@ fn wc_op(call: host::Call) {
             };
             let id = runtime().next_evaluation.fetch_add(1, Ordering::Relaxed);
             let script = format!(
-                "window.__ompTauriEvaluate({id},()=>{{return (0,eval)({});}});",
+                "window.__ompTauriEvaluate({id},{},()=>{{return (0,eval)({});}});",
+                identity.generation,
                 json!(code)
             );
             let request_id = call.id();
@@ -543,6 +599,9 @@ fn dispatch(call: host::Call) {
     }
 }
 fn dispatch_ui(call: host::Call) {
+    let Some(call) = native_services::dispatch(call) else {
+        return;
+    };
     if call.method == "wc.op" {
         return wc_op(call);
     }
@@ -595,12 +654,24 @@ fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
             let Some(wc) = data["wcId"].as_u64() else {
                 return;
             };
+            let identity = runtime()
+                .registry
+                .lock()
+                .expect("registry")
+                .page(wc)
+                .map(|page| page.identity);
+            let Some(identity) = identity else {
+                return;
+            };
             let message = json!({"channel":data["channel"],"args":data["args"]}).to_string();
             let app = runtime().app.clone();
             let _ = app.run_on_main_thread(move || {
                 let deliver = {
                     let mut registry = runtime().registry.lock().expect("registry");
-                    let Some(page) = registry.page_mut(wc) else {
+                    let Some(page) = registry
+                        .page_mut(wc)
+                        .filter(|page| page.identity == identity)
+                    else {
                         return;
                     };
                     if page.ready {
@@ -616,9 +687,10 @@ fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
                 };
                 if deliver {
                     if let Ok(window) = window_for_wc(wc) {
-                        if let Err(error) =
-                            window.eval(format!("window.__ompTauriPush({message});"))
-                        {
+                        if let Err(error) = window.eval(format!(
+                            "window.__ompTauriPush({}, {message});",
+                            identity.generation
+                        )) {
                             log::log("push.failed", json!({"wcId":wc,"error":error.to_string()}));
                         }
                     }
@@ -629,7 +701,7 @@ fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
     }
 }
 fn node_gone(code: Option<i32>) {
-    if !lifecycle::EXITING.load(Ordering::SeqCst) {
+    if !lifecycle::EXITING.swap(true, Ordering::SeqCst) {
         runtime().app.exit(code.filter(|c| *c != 0).unwrap_or(1));
     }
 }
@@ -659,28 +731,46 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
     }
     match kind.as_str() {
         "ready" => {
-            let queued = {
-                let mut registry = runtime().registry.lock().expect("registry");
-                let Some(page) = registry
-                    .page_mut(identity.wc)
-                    .filter(|p| p.identity == identity)
-                else {
-                    return Err(json!({"code":"gone","message":"document ended"}));
-                };
-                page.ready = true;
-                std::mem::take(&mut page.pushes)
-            };
-            if let Some(ua) = value["userAgent"].as_str() {
-                *runtime().user_agent.lock().expect("user agent") = Some(ua.into());
-            }
-            for message in queued {
-                webview
-                    .eval(format!("window.__ompTauriPush({message});"))
-                    .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
-            }
-            wc_state(identity.wc);
-            wc_event(identity.wc, "dom-ready", json!([]));
-            Ok(json!({"generation":identity.generation}))
+            let (send, receive) = tokio::sync::oneshot::channel();
+            runtime()
+                .app
+                .run_on_main_thread(move || {
+                    let result = (|| -> Result<Value, Value> {
+                        let queued = {
+                            let mut registry = runtime().registry.lock().expect("registry");
+                            let Some(page) = registry
+                                .page_mut(identity.wc)
+                                .filter(|p| p.identity == identity)
+                            else {
+                                return Err(json!({"code":"gone","message":"document ended"}));
+                            };
+                            if page.ready {
+                                return Ok(json!({"generation":identity.generation}));
+                            }
+                            page.ready = true;
+                            std::mem::take(&mut page.pushes)
+                        };
+                        if let Some(ua) = value["userAgent"].as_str() {
+                            *runtime().user_agent.lock().expect("user agent") = Some(ua.into());
+                        }
+                        for message in queued {
+                            webview
+                                .eval(format!(
+                                    "window.__ompTauriPush({}, {message});",
+                                    identity.generation
+                                ))
+                                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+                        }
+                        wc_state(identity.wc);
+                        wc_event(identity.wc, "dom-ready", json!([]));
+                        Ok(json!({"generation":identity.generation}))
+                    })();
+                    let _ = send.send(result);
+                })
+                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+            receive
+                .await
+                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?
         }
         "preloadError" => {
             wc_event(identity.wc, "preload-error", json!(["tauri.js", value]));
@@ -860,15 +950,22 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     renderer,
                     user_agent: Mutex::new(None),
                     relaunch: Mutex::new(None),
+                    stop_instance: AtomicBool::new(false),
+                    instance_thread: Mutex::new(None),
                 })
                 .map_err(|_| "runtime already initialized")?;
-            std::thread::spawn(move || {
+            system::init();
+            let instance_thread = std::thread::spawn(move || {
                 while let Ok(mut connection) = instance.accept() {
+                    if runtime().stop_instance.load(Ordering::SeqCst) {
+                        break;
+                    }
                     if let Ok((argv, cwd)) = conn::take_hand_over(&mut connection) {
                         host::event("app.secondInstance", json!({"argv":argv,"cwd":cwd}));
                     }
                 }
             });
+            *runtime().instance_thread.lock().expect("instance thread") = Some(instance_thread);
             host::serve(
                 listener,
                 token.clone(),
@@ -900,6 +997,16 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         _ => {}
     });
+    runtime().stop_instance.store(true, Ordering::SeqCst);
+    drop(conn::connect(&instance_name)?);
+    if let Some(thread) = runtime()
+        .instance_thread
+        .lock()
+        .expect("instance thread")
+        .take()
+    {
+        thread.join().map_err(|_| "instance listener panicked")?;
+    }
     if let Some(args) = runtime().relaunch.lock().expect("relaunch").take() {
         std::process::Command::new(exe).args(args).spawn()?;
     }
