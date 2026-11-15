@@ -603,13 +603,15 @@ impl<H: Host> Application<H> {
             gate: Default::default(),
         }
     }
+    pub(crate) fn original_origin(&self) -> Option<Value> {
+        self.host.origin()
+    }
     pub(crate) fn handles(event: &super::LaneEvent) -> bool {
         matches!(
             event.name.as_str(),
             "sidecar.resolve" | "sidecar.launch" | "sidecar.gateAsk" | "sidecar.sessionWait"
         )
     }
-
 
     /// Consumes only the original bound Lane's internal asks. Root retains and joins every Pending effect.
     pub fn dispatch(

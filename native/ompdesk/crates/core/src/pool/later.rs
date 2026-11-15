@@ -7,7 +7,60 @@ use serde_json::{Map, Value, json};
 use super::routes::stop_settled;
 use super::state::{Ctx, R, owner_key};
 
+pub(super) enum Begin {
+    Unknown,
+    Refused,
+    Go { seq: u64, tab: String, shared: bool },
+}
+
 impl Ctx {
+    pub(super) fn route_answer_begin(
+        &self,
+        id: &str,
+        tab: Option<&str>,
+        responder: Option<i64>,
+    ) -> Begin {
+        self.with(|pool| {
+            let entry = match tab {
+                Some(tab) if !tab.is_empty() => pool.entry(tab),
+                _ => pool
+                    .request_owners
+                    .get(&id.to_string())
+                    .and_then(|seq| pool.by_seq(*seq).filter(|entry| pool.live(entry.seq)))
+                    .or_else(|| {
+                        pool.answered.get(&id.to_string()).and_then(|answered| {
+                            pool.by_seq(answered.seq)
+                                .filter(|entry| pool.live(entry.seq))
+                        })
+                    }),
+            };
+            let Some(entry) = entry else {
+                return Begin::Unknown;
+            };
+            let (seq, tab_id) = (entry.seq, entry.tab_id.clone());
+            let viewed = !entry.viewers.is_empty() || !entry.device_views.is_empty();
+            if let Some(answered) = pool.answered.get(&id.to_string())
+                && answered.seq == seq
+                // A device's answer has no window (JavaScript's NaN): nobody's later answer is the same one.
+                && (answered.win_id.is_none() || answered.win_id != responder)
+            {
+                return Begin::Refused;
+            }
+            let shared = responder.is_some()
+                && viewed
+                && pool.request_owners.get(&id.to_string()) == Some(&seq);
+            if shared {
+                pool.remember_answered(id, seq, responder);
+            }
+            pool.answering.insert(id.to_string());
+            Begin::Go {
+                seq,
+                tab: tab_id,
+                shared,
+            }
+        })
+    }
+
     /// `stopSession`: the person's Stop of the turn the tab holding `path` runs, in any window. Settles once that
     /// tab's run has ended, never on a timer; at once when nothing runs there. Fails `session_running` if the run has
     /// not ended after `STOP_SESSION_WAIT_MS` (`stop_timeout`).
@@ -82,9 +135,10 @@ impl Ctx {
                 return Ok(());
             }
             self.release_entry(&tab).await?;
-            self.notify_window_tabs_changed(win).await?;
-            self.send_tab_list(win, Some(std::slice::from_ref(&tab)), None)
-                .await?;
+            if let Some(win) = win {
+                self.notify_window_tabs_changed(win).await?;
+                self.send_tab_list(win, Some(std::slice::from_ref(&tab)), None).await?;
+            }
         }
         let ctx = self.clone();
         super::spawn(async move {
@@ -118,50 +172,7 @@ impl Ctx {
             self.settle_err(token, Some(&held.code), &held.message);
             return Ok(());
         }
-        enum Begin {
-            Unknown,
-            Refused,
-            Go { seq: u64, tab: String, shared: bool },
-        }
-        let begin = self.with(|pool| {
-            let entry = match tab {
-                Some(tab) if !tab.is_empty() => pool.entry(tab),
-                _ => pool
-                    .request_owners
-                    .get(&id.to_string())
-                    .and_then(|seq| pool.by_seq(*seq).filter(|entry| pool.live(entry.seq)))
-                    .or_else(|| {
-                        pool.answered.get(&id.to_string()).and_then(|answered| {
-                            pool.by_seq(answered.seq)
-                                .filter(|entry| pool.live(entry.seq))
-                        })
-                    }),
-            };
-            let Some(entry) = entry else {
-                return Begin::Unknown;
-            };
-            let (seq, tab_id) = (entry.seq, entry.tab_id.clone());
-            let viewed = !entry.viewers.is_empty() || !entry.device_views.is_empty();
-            if let Some(answered) = pool.answered.get(&id.to_string())
-                && answered.seq == seq
-                // A device's answer has no window (JavaScript's NaN): nobody's later answer is the same one.
-                && (answered.win_id.is_none() || answered.win_id != responder)
-            {
-                return Begin::Refused;
-            }
-            let shared = responder.is_some()
-                && viewed
-                && pool.request_owners.get(&id.to_string()) == Some(&seq);
-            if shared {
-                pool.remember_answered(id, seq, responder);
-            }
-            pool.answering.insert(id.to_string());
-            Begin::Go {
-                seq,
-                tab: tab_id,
-                shared,
-            }
-        });
+        let begin = self.route_answer_begin(id, tab, responder);
         let (seq, tab, shared) = match begin {
             Begin::Unknown => {
                 self.settle_ok(token, Value::from(false));
@@ -217,7 +228,7 @@ impl Ctx {
     }
 
     /// What follows a delivered answer: the request closes, observers hear it, the other windows' cards close.
-    async fn route_answered(
+    pub(super) async fn route_answered(
         &self,
         seq: u64,
         id: &str,

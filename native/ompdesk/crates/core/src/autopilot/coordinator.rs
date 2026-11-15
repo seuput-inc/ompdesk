@@ -125,7 +125,7 @@ pub enum Msg {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandParams {
     pub call: u64,
@@ -141,6 +141,8 @@ pub struct CommandParams {
     /// Created by native admission only. Page/legacy JSON cannot construct a caller.
     #[serde(skip)]
     pub native_owner: Option<Owner>,
+    #[serde(skip)]
+    pub native_request: Option<super::native_request::Binding>,
 }
 
 /// The tab a command came from (`sidecar.device`, `sidecar.cwd`).
@@ -488,9 +490,9 @@ impl Coordinator {
             Msg::Released { tab } => self.tab_released(&tab),
             Msg::Activity { tab, kind } => self.activity(&tab, &kind),
             Msg::Aborted { tab, reply } => {
-                let this = self.clone();
+                let work = self.aborted(&tab);
                 self.track(async move {
-                    this.aborted(&tab).await;
+                    work.await;
                     let _ = reply.send(json!({"ok": true}));
                 });
             }
@@ -498,7 +500,12 @@ impl Coordinator {
             Msg::Command { params, reply } => {
                 let this = self.clone();
                 self.track(async move {
-                    let answer = match this.command(&params).await {
+                    let command = this.command(&params);
+                    let result = match params.native_request.clone() {
+                        Some(request) => super::native_request::within(request, command).await,
+                        None => command.await,
+                    };
+                    let answer = match result {
                         Ok(value) => value,
                         Err(error) => failure_value(&error),
                     };

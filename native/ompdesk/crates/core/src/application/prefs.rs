@@ -72,6 +72,11 @@ impl Prefs {
         self.lock().clone()
     }
 
+    /// The effect must not await or reenter preferences.
+    pub(crate) fn with_snapshot<T>(&self, effect: impl FnOnce(&Value) -> T) -> T {
+        effect(&self.lock())
+    }
+
     pub fn get(&self, path: &str) -> Result<Option<Value>, Fault> {
         let segments = segments(path)?;
         let values = self.lock();

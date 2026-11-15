@@ -31,6 +31,9 @@ impl Sink for ChildEvents {
         let _ = self.events.send(event);
     }
     fn before_response(&self) {}
+    fn reply_barrier(&self) -> Held {
+        Box::pin(async { Ok(()) })
+    }
     fn remove_listeners(&self) {}
     fn sync_settings(&self) -> crate::sidecar::application::EffectFuture<'_, ()> {
         Box::pin(async {})

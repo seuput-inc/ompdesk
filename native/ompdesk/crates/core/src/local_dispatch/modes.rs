@@ -1,92 +1,197 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::pool::application::Sidecar;
-use crate::server::Fault;
 use super::protocol::{CommandError, CommandResult, RpcCommand};
 use super::session::Session;
+use crate::pool::application::Sidecar;
+use crate::server::Fault;
+
+pub(crate) const PLAN_APPROVAL_METHOD: &str = "modes.plan_approval";
 
 pub const COMMANDS: &[&str] = &[
-    "get_plan_mode", "set_plan_mode", "plan_approval", "get_goal", "set_goal", "guided_goal",
-    "set_agents_paused", "get_delegation", "set_delegation", "tan", "omfg",
-    "auto_mode_decide", "auto_mode_prefetch", "auto_mode_undo", "auto_mode_end",
-    "regenerate_session_title", "get_next_prompt", "set_next_prompt_draft", "refresh_next_prompt",
-    "cancel_next_prompt", "set_next_prompt_children", "complete_inline", "judge_preview_check",
-    "judge_available", "get_advisor_stats", "prompt_origin_set", "typed_prompt", "desktop_slot_bridge",
-    "get_directories", "add_directory", "remove_directory", "agent_control_confirm",
-    "agent_control_attachment", "agent_control_note", "agent_control_worker", "agent_control_turn",
-    "agent_control_judge", "agent_control_mail", "agent_control_sent", "get_checkout_peers",
+    "get_plan_mode",
+    "set_plan_mode",
+    "plan_approval",
+    "get_goal",
+    "set_goal",
+    "guided_goal",
+    "set_agents_paused",
+    "get_delegation",
+    "set_delegation",
+    "tan",
+    "omfg",
+    "auto_mode_decide",
+    "auto_mode_prefetch",
+    "auto_mode_undo",
+    "auto_mode_end",
+    "regenerate_session_title",
+    "get_next_prompt",
+    "set_next_prompt_draft",
+    "refresh_next_prompt",
+    "cancel_next_prompt",
+    "set_next_prompt_children",
+    "complete_inline",
+    "judge_preview_check",
+    "judge_available",
+    "get_advisor_stats",
+    "prompt_origin_set",
+    "typed_prompt",
+    "desktop_slot_bridge",
+    "get_directories",
+    "add_directory",
+    "remove_directory",
+    "agent_control_confirm",
+    "agent_control_attachment",
+    "agent_control_note",
+    "agent_control_worker",
+    "agent_control_turn",
+    "agent_control_judge",
+    "agent_control_mail",
+    "agent_control_sent",
+    "get_checkout_peers",
 ];
 
-fn invalid() -> CommandError { CommandError::Other("Invalid command parameters".into()) }
+fn invalid() -> CommandError {
+    CommandError::Other("Invalid command parameters".into())
+}
 fn text<'a>(v: &'a Value, min: usize, max: usize) -> Result<&'a str, CommandError> {
     let s = v.as_str().ok_or_else(invalid)?;
     let n = s.encode_utf16().count();
-    if n < min || n > max { return Err(invalid()); }
+    if n < min || n > max {
+        return Err(invalid());
+    }
     Ok(s)
 }
-fn bool_value(v: &Value) -> Result<bool, CommandError> { v.as_bool().ok_or_else(invalid) }
+fn bool_value(v: &Value) -> Result<bool, CommandError> {
+    v.as_bool().ok_or_else(invalid)
+}
 fn project(result: &Value) -> Value {
     let state = &result["state"];
     let goal = &state["goal"];
-    if goal.is_null() { return json!({"enabled":false}); }
+    if goal.is_null() {
+        return json!({"enabled":false});
+    }
     let mut out = Map::new();
-    for (from, to) in [(state, "enabled"), (goal, "status"), (goal, "objective"), (goal, "tokenBudget"), (goal, "tokensUsed"), (goal, "timeUsedSeconds"), (state, "mode")] {
-        if let Some(value) = from.get(to) { out.insert(to.into(), value.clone()); }
+    for (from, to) in [
+        (state, "enabled"),
+        (goal, "status"),
+        (goal, "objective"),
+        (goal, "tokenBudget"),
+        (goal, "tokensUsed"),
+        (goal, "timeUsedSeconds"),
+        (state, "mode"),
+    ] {
+        if let Some(value) = from.get(to) {
+            out.insert(to.into(), value.clone());
+        }
     }
     Value::Object(out)
 }
-async fn with_limit<S: Sidecar<Error=Fault> + ?Sized + 'static>(session: &Session<S>, mut state: Value) -> Value {
-    if !matches!(state["status"].as_str(), Some(s) if !s.is_empty() && s != "complete" && s != "dropped") { return state; }
+async fn with_limit<S: Sidecar<Error = Fault> + ?Sized + 'static>(
+    session: &Session<S>,
+    mut state: Value,
+) -> Value {
+    if !matches!(state["status"].as_str(), Some(s) if !s.is_empty() && s != "complete" && s != "dropped")
+    {
+        return state;
+    }
     if let Ok(limit) = session.bridge("modes.goal_time_limit", json!({})).await {
-        if let Some(value) = limit.get("timeLimitSeconds") { state["timeLimitSeconds"] = value.clone(); }
+        if let Some(value) = limit.get("timeLimitSeconds") {
+            state["timeLimitSeconds"] = value.clone();
+        }
     }
     state
 }
-async fn start_turn<S: Sidecar<Error=Fault> + ?Sized + 'static>(session: &Session<S>, objective: &str) -> Result<(), CommandError> {
+async fn start_turn<S: Sidecar<Error = Fault> + ?Sized + 'static>(
+    session: &Session<S>,
+    objective: &str,
+) -> Result<(), CommandError> {
     let state = session.stock(json!({"type":"get_state"})).await?;
     if state["isStreaming"] != true {
-        session.stock(json!({"type":"prompt","message":objective,"streamingBehavior":"followUp"})).await?;
+        session
+            .stock(json!({"type":"prompt","message":objective,"streamingBehavior":"followUp"}))
+            .await?;
     }
     Ok(())
 }
-async fn set_goal<S: Sidecar<Error=Fault> + ?Sized + 'static>(c: &RpcCommand, s: &Session<S>) -> Result<Value, CommandError> {
+async fn set_goal<S: Sidecar<Error = Fault> + ?Sized + 'static>(
+    c: &RpcCommand,
+    s: &Session<S>,
+) -> Result<Value, CommandError> {
     if let Some(action @ ("pause" | "resume" | "drop")) = c.string("action") {
-        if action == "resume" { let _ = s.bridge("modes.goal_resume_time_limit", json!({})).await; }
+        if action == "resume" {
+            let _ = s.bridge("modes.goal_resume_time_limit", json!({})).await;
+        }
         let result = s.stock(json!({"type":"goal","op":action})).await?;
         return Ok(with_limit(s, project(&result)).await);
     }
     let objective = crate::fs::order::js_trim(c.string("objective").unwrap_or(""));
     let budget = c.params.get("tokenBudget");
-    let limit = c.params.get("timeLimitMinutes").filter(|v| v.is_number() || v.is_null());
+    let limit = c
+        .params
+        .get("timeLimitMinutes")
+        .filter(|v| v.is_number() || v.is_null());
     if !objective.is_empty() {
         let current = s.stock(json!({"type":"goal","op":"get"})).await?;
         let result = if current["state"]["enabled"] == true {
             let mut params = json!({"objective":objective});
-            if let Some(b) = budget.filter(|b| b.is_number()) { params["tokenBudget"] = b.clone(); }
+            if let Some(b) = budget.filter(|b| b.is_number()) {
+                params["tokenBudget"] = b.clone();
+            }
             let replaced = s.bridge("modes.goal_replace", params).await?;
-            if let Some(l) = limit { s.bridge("modes.goal_set_time_limit", json!({"minutes":l})).await?; }
+            if let Some(l) = limit {
+                s.bridge("modes.goal_set_time_limit", json!({"minutes":l}))
+                    .await?;
+            }
             replaced
         } else {
-            if current["state"]["goal"]["status"] == "paused" { return Err(CommandError::Other("Resume the current goal first, or drop it before setting a new objective.".into())); }
+            if current["state"]["goal"]["status"] == "paused" {
+                return Err(CommandError::Other(
+                    "Resume the current goal first, or drop it before setting a new objective."
+                        .into(),
+                ));
+            }
             let mut request = json!({"type":"goal","op":"create","objective":objective});
-            if let Some(b) = budget.filter(|b| b.is_number()) { request["token_budget"] = b.clone(); }
+            if let Some(b) = budget.filter(|b| b.is_number()) {
+                request["token_budget"] = b.clone();
+            }
             let created = s.stock(request).await?;
-            if let Some(l) = limit.filter(|l| !l.is_null()) { s.bridge("modes.goal_set_time_limit", json!({"minutes":l})).await?; }
+            if let Some(l) = limit.filter(|l| !l.is_null()) {
+                s.bridge("modes.goal_set_time_limit", json!({"minutes":l}))
+                    .await?;
+            }
             created
         };
         start_turn(s, objective).await?;
         return Ok(with_limit(s, project(&result)).await);
     }
     if budget.is_some() || limit.is_some() {
-        let result = if let Some(b) = budget { Some(s.bridge("modes.goal_set_budget", json!({"tokenBudget":b})).await?) } else { None };
-        if let Some(l) = limit { s.bridge("modes.goal_set_time_limit", json!({"minutes":l})).await?; }
-        let result = match result { Some(v) => v, None => s.stock(json!({"type":"goal","op":"get"})).await? };
+        let result = if let Some(b) = budget {
+            Some(
+                s.bridge("modes.goal_set_budget", json!({"tokenBudget":b}))
+                    .await?,
+            )
+        } else {
+            None
+        };
+        if let Some(l) = limit {
+            s.bridge("modes.goal_set_time_limit", json!({"minutes":l}))
+                .await?;
+        }
+        let result = match result {
+            Some(v) => v,
+            None => s.stock(json!({"type":"goal","op":"get"})).await?,
+        };
         return Ok(with_limit(s, project(&result)).await);
     }
-    Err(CommandError::Other("set_goal requires an objective, a tokenBudget, a timeLimitMinutes, or an action.".into()))
+    Err(CommandError::Other(
+        "set_goal requires an objective, a tokenBudget, a timeLimitMinutes, or an action.".into(),
+    ))
 }
 
-pub async fn handle<S: Sidecar<Error=Fault> + ?Sized + 'static>(c: &RpcCommand, s: &Session<S>) -> CommandResult {
+pub async fn handle<S: Sidecar<Error = Fault> + ?Sized + 'static>(
+    c: &RpcCommand,
+    s: &Session<S>,
+) -> CommandResult {
     let p = Value::Object(c.params.clone());
     let result = match c.kind.as_str() {
         "get_plan_mode" | "set_plan_mode" | "plan_approval" | "guided_goal" | "set_agents_paused" | "get_delegation" | "set_delegation" | "tan" | "omfg" => s.forward(&format!("modes.{}", c.kind), c).await?,

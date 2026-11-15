@@ -77,7 +77,7 @@ fn state(tabs: Vec<Value>) -> Value {
     json!({ "enabled": true, "tabs": tabs, "windowOf": windows })
 }
 
-fn rig(
+pub(super) fn rig(
     id: u64,
     state: Value,
     files: Files,
@@ -103,6 +103,568 @@ fn rig(
     (control, runtime, told)
 }
 
+pub(crate) fn native_rig<F>(
+    id: u64,
+    state: Value,
+    caps: Caps,
+    files: &Files,
+    tuning: Tuning,
+    reply: F,
+) -> (
+    AgentControl,
+    Told,
+    tokio::sync::mpsc::UnboundedReceiver<Value>,
+    NativeFixture,
+)
+where
+    F: Fn(&str, &Value) -> Result<Value, String> + Send + Sync + 'static,
+{
+    native_rig_async(
+        id,
+        state,
+        caps,
+        files,
+        tuning,
+        move |method: String, args: Value| std::future::ready(reply(&method, &args)),
+    )
+}
+
+pub(crate) fn native_rig_async<F, Fut>(
+    id: u64,
+    state: Value,
+    caps: Caps,
+    files: &Files,
+    tuning: Tuning,
+    reply: F,
+) -> (
+    AgentControl,
+    Told,
+    tokio::sync::mpsc::UnboundedReceiver<Value>,
+    NativeFixture,
+)
+where
+    F: Fn(String, Value) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Value, String>> + Send + 'static,
+{
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use crate::agentctl::inbox::{InboxFiles, InboxRoute};
+
+    static RECEIVER_PORT: AtomicU64 = AtomicU64::new(u64::MAX);
+    let root = crate::fs::disk::make_temp_dir("ompdesk-native-rig-")
+        .expect("create native fixture directory");
+    let mut fixture = NativeFixture {
+        root: root.clone(),
+        ports: Vec::new(),
+        tasks: Vec::new(),
+        recorded: Arc::default(),
+    };
+    let host_id = state["deviceId"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .expect("native fixture requires a persistent source deviceId")
+        .to_owned();
+    let tabs: Vec<Value> = ["tabs", "mailTargets"]
+        .iter()
+        .flat_map(|key| state[*key].as_array().into_iter().flatten().cloned())
+        .collect();
+    for tab in &tabs {
+        assert!(
+            tab["tabId"].as_str().is_some_and(|value| !value.is_empty())
+                && tab["sessionPath"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+                && tab["runtimeInstance"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+            "native fixture requires current tab id, saved path and runtime instance: {tab}"
+        );
+    }
+
+    let mut source_files = files.clone();
+    if source_files
+        .send_outbox
+        .as_ref()
+        .and_then(|f| f.file.as_ref())
+        .is_none()
+    {
+        source_files.send_outbox = Some(JournalFile {
+            file: Some(root.join("send.json")),
+        });
+    }
+    if source_files
+        .mail_outbox
+        .as_ref()
+        .and_then(|f| f.file.as_ref())
+        .is_none()
+    {
+        source_files.mail_outbox = Some(JournalFile {
+            file: Some(root.join("mail.json")),
+        });
+    }
+    if source_files.attachments.is_none() {
+        source_files.attachments = Some(root.join("source-attachments"));
+    }
+    if source_files.inbox.is_none() {
+        source_files.inbox = Some(InboxFiles {
+            ledger: root.join("local-inbox.json"),
+            upload_user_data: root.join("local-uploads"),
+        });
+    }
+
+    let asked: Told = Arc::default();
+    let journal = Arc::new(Mutex::new(HashMap::<String, Vec<Value>>::new()));
+    let (delivered, received) = tokio::sync::mpsc::unbounded_channel();
+    let reply = Arc::new(reply);
+    let (source_port, source_lines, source_tx) = native_port(id, state.clone());
+    fixture.ports.push(source_port.clone());
+    let control = AgentControl::new(
+        source_port.clone(),
+        caps,
+        &source_files,
+        tuning.clone(),
+        system_clock(),
+    );
+    start(
+        control.clone(),
+        id,
+        RuntimeConfig {
+            sweep_ms: 0,
+            ..RuntimeConfig::default()
+        },
+    );
+
+    let mut destinations = HashMap::new();
+    let mut by_device: HashMap<String, Vec<Value>> = HashMap::new();
+    for tab in &tabs {
+        if let Some(device) = tab["device"].as_str() {
+            by_device
+                .entry(device.to_owned())
+                .or_default()
+                .push(tab.clone());
+        } else {
+            destinations.insert(
+                tab["tabId"].as_str().unwrap().to_owned(),
+                NativeDestination {
+                    control: control.clone(),
+                    route: None,
+                },
+            );
+        }
+    }
+    for (device, remote_tabs) in by_device {
+        assert_ne!(
+            device, host_id,
+            "remote fixture target must have a different host identity"
+        );
+        assert!(
+            state["devices"].as_array().is_some_and(|devices| devices
+                .iter()
+                .any(|item| item["id"] == device && item["state"] == "online")),
+            "native fixture requires paired online target {device}"
+        );
+        let receiver_id = RECEIVER_PORT.fetch_sub(1, Ordering::Relaxed);
+        let mut snapshot = state.clone();
+        snapshot["deviceId"] = json!(device);
+        snapshot["tabs"] = Value::Array(
+            remote_tabs
+                .iter()
+                .cloned()
+                .map(|mut tab| {
+                    tab.as_object_mut().expect("tab object").remove("device");
+                    tab
+                })
+                .collect(),
+        );
+        snapshot["mailTargets"] = json!([]);
+        snapshot["devices"] = json!([{ "id": host_id, "name": host_id, "state": "online" }]);
+        let routes: Vec<InboxRoute> = remote_tabs
+            .iter()
+            .map(|tab| InboxRoute {
+                peer_device_id: host_id.clone(),
+                connection_incarnation: format!("fixture-{id}-{receiver_id}"),
+                rtab: tab["tabId"].as_str().unwrap().to_owned(),
+                tab_id: tab["tabId"].as_str().unwrap().to_owned(),
+                session_path: tab["sessionPath"].as_str().unwrap().to_owned(),
+                runtime_instance: tab["runtimeInstance"].as_str().unwrap().to_owned(),
+            })
+            .collect();
+        snapshot["inboxRoutes"] = json!(routes);
+        let receiver_files = Files {
+            attachments: Some(root.join(format!("receiver-{receiver_id}-attachments"))),
+            inbox: Some(InboxFiles {
+                ledger: root.join(format!("receiver-{receiver_id}.json")),
+                upload_user_data: root.join(format!("receiver-{receiver_id}-uploads")),
+            }),
+            ..Files::default()
+        };
+        let (port, lines, tx) = native_port(receiver_id, snapshot);
+        fixture.ports.push(port.clone());
+        let receiver = AgentControl::new(
+            port.clone(),
+            caps,
+            &receiver_files,
+            tuning.clone(),
+            system_clock(),
+        );
+        start(
+            receiver.clone(),
+            receiver_id,
+            RuntimeConfig {
+                sweep_ms: 0,
+                ..RuntimeConfig::default()
+            },
+        );
+        for route in routes {
+            destinations.insert(
+                route.tab_id.clone(),
+                NativeDestination {
+                    control: receiver.clone(),
+                    route: Some(route),
+                },
+            );
+        }
+        fixture.tasks.push(native_main(
+            port,
+            lines,
+            tx,
+            Arc::new(NativeMain {
+                asked: asked.clone(),
+                recorded: fixture.recorded.clone(),
+                journal: journal.clone(),
+                delivered: delivered.clone(),
+                reply: reply.clone(),
+                destinations: HashMap::new(),
+                host_id: device,
+            }),
+        ));
+    }
+    fixture.tasks.push(native_main(
+        source_port.clone(),
+        source_lines,
+        source_tx,
+        Arc::new(NativeMain {
+            asked: asked.clone(),
+            recorded: fixture.recorded.clone(),
+            journal,
+            delivered,
+            reply,
+            destinations,
+            host_id,
+        }),
+    ));
+    (control, asked, received, fixture)
+}
+
+pub(crate) struct NativeFixture {
+    root: std::path::PathBuf,
+    ports: Vec<Arc<Port<HostState>>>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    recorded: Arc<tokio::sync::Notify>,
+}
+
+impl NativeFixture {
+    pub(crate) async fn until_told(&self, told: &Told, method: &str) -> Value {
+        loop {
+            let changed = self.recorded.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some((_, args)) = told.lock().unwrap().iter().find(|(name, _)| name == method) {
+                return args.clone();
+            }
+            changed.await;
+        }
+    }
+}
+
+impl Drop for NativeFixture {
+    fn drop(&mut self) {
+        for port in &self.ports {
+            port.close();
+        }
+        for task in &self.tasks {
+            task.abort();
+        }
+        let mut runtimes = super::lock(&super::RUNTIMES);
+        for port in &self.ports {
+            if runtimes
+                .get(&port.id())
+                .is_some_and(|runtime| Arc::ptr_eq(runtime.control.host.port(), port))
+            {
+                runtimes.remove(&port.id());
+            }
+        }
+        drop(runtimes);
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[derive(Clone)]
+struct NativeDestination {
+    control: AgentControl,
+    route: Option<crate::agentctl::inbox::InboxRoute>,
+}
+
+struct NativeMain<F> {
+    asked: Told,
+    recorded: Arc<tokio::sync::Notify>,
+    journal: Arc<Mutex<std::collections::HashMap<String, Vec<Value>>>>,
+    delivered: tokio::sync::mpsc::UnboundedSender<Value>,
+    reply: Arc<F>,
+    destinations: std::collections::HashMap<String, NativeDestination>,
+    host_id: String,
+}
+
+pub(crate) fn native_port(
+    id: u64,
+    state: Value,
+) -> (
+    Arc<Port<HostState>>,
+    tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
+    tokio::sync::mpsc::UnboundedSender<crate::wire::Frame>,
+) {
+    let (writer, reader) = tokio::io::duplex(1 << 24);
+    let (tx, _) = crate::wire::spawn_writer(writer);
+    let events = crate::server::test_events(&tx);
+    let port = Port::open(
+        &events,
+        id,
+        serde_json::from_value(state).expect("native fixture state"),
+    )
+    .unwrap_or_else(|error| panic!("opening native fixture port {id}: {}", error.message));
+    (port, BufReader::new(reader).lines(), tx)
+}
+
+fn native_main<F, Fut>(
+    port: Arc<Port<HostState>>,
+    mut lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
+    tx: tokio::sync::mpsc::UnboundedSender<crate::wire::Frame>,
+    context: Arc<NativeMain<F>>,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Fn(String, Value) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Value, String>> + Send + 'static,
+{
+    tokio::spawn(async move {
+        let _tx = tx;
+        let mut tasks = tokio::task::JoinSet::new();
+        loop {
+            let line = tokio::select! {
+                () = port.until_closed() => break,
+                line = lines.next_line() => match line {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break,
+                    Err(error) => panic!("native fixture port read: {error}"),
+                },
+            };
+            let event: Value = serde_json::from_str(&line).expect("native fixture event JSON");
+            let data = &event["data"];
+            let method = data["method"]
+                .as_str()
+                .expect("native fixture event method")
+                .to_owned();
+            let args = data["args"].clone();
+            context
+                .asked
+                .lock()
+                .unwrap()
+                .push((method.clone(), args.clone()));
+            context.recorded.notify_waiters();
+            let Some(ask) = data["ask"].as_u64() else {
+                continue;
+            };
+            let port = port.clone();
+            let context = context.clone();
+            tasks.spawn(async move {
+                let result = native_answer(method, args, &context).await;
+                match result {
+                    Ok(value) => crate::ports::apply_answer(&port, ask, Ok(&value.to_string())),
+                    Err(message) => crate::ports::apply_answer(&port, ask, Err((&message, None))),
+                }
+            });
+        }
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    })
+}
+
+async fn native_answer<F, Fut>(
+    method: String,
+    args: Value,
+    context: &NativeMain<F>,
+) -> Result<Value, String>
+where
+    F: Fn(String, Value) -> Fut + Send + Sync,
+    Fut: Future<Output = Result<Value, String>> + Send,
+{
+    use base64::Engine;
+
+    let journal = &context.journal;
+    let delivered = &context.delivered;
+    let destinations = &context.destinations;
+    let host_id = &context.host_id;
+    let reply = &context.reply;
+
+    match method.as_str() {
+        "state" => Ok(Value::Null),
+        "inboxStatus" => {
+            let path = args["sessionPath"]
+                .as_str()
+                .ok_or("inboxStatus missing sessionPath")?;
+            let device = args["device"].as_str().unwrap_or(host_id);
+            let key = format!("{device}\0{path}");
+            Ok(json!({
+                "receiver": { "sessionPath": path, "instance": format!("bridge-{device}-{path}") },
+                "entries": journal.lock().unwrap().get(&key).cloned().unwrap_or_default(),
+                "receipts": []
+            }))
+        }
+        "deliverInbox" => {
+            let request = &args["request"];
+            let path = request["receiver"]["sessionPath"]
+                .as_str()
+                .ok_or("delivery missing receiver path")?;
+            let entries = request["entries"]
+                .as_array()
+                .ok_or("delivery missing entries")?;
+            let mut journal = journal.lock().unwrap();
+            let saved = journal.entry(format!("{host_id}\0{path}")).or_default();
+            for entry in entries {
+                let kind = entry["kind"].as_str().ok_or("delivery missing kind")?;
+                let id = entry["deliveryId"]
+                    .as_str()
+                    .ok_or("delivery missing deliveryId")?;
+                if !saved
+                    .iter()
+                    .any(|row| row["kind"] == kind && row["deliveryId"] == id)
+                {
+                    saved.push(json!({ "kind": kind, "deliveryId": id, "state": "journaled" }));
+                }
+            }
+            let result =
+                json!({ "receiver": request["receiver"], "entries": saved, "receipts": [] });
+            let _ = delivered.send(args.clone());
+            Ok(result)
+        }
+        "land" | "inbox" | "lookupInbox" => {
+            let tab = args["tabId"]
+                .as_str()
+                .ok_or("native transport missing tabId")?;
+            let destination = destinations
+                .get(tab)
+                .ok_or_else(|| format!("no native destination for {tab}"))?;
+            let inbox = destination
+                .control
+                .receiving_inbox
+                .as_ref()
+                .ok_or("receiver inbox is not configured")?;
+            let owner = destination
+                .route
+                .as_ref()
+                .map_or(crate::web::uploads::LOCAL_DEVICE, |route| {
+                    route.peer_device_id.as_str()
+                });
+            if method == "land" {
+                let name = args["name"].as_str().ok_or("land missing name")?;
+                let data = args["dataBase64"]
+                    .as_str()
+                    .ok_or("land missing dataBase64")?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|error| format!("land invalid base64: {error}"))?;
+                let upload = inbox
+                    .uploads
+                    .store(
+                        system_clock()() as i64,
+                        crate::web::uploads::Limits::default(),
+                        owner,
+                        name,
+                        bytes,
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!("land failed ({}): {}", error.status, error.message)
+                    })?;
+                Ok(json!({ "ok": true, "path": upload.path }))
+            } else {
+                let state = destination.control.host.port().state();
+                let target = state
+                    .tabs
+                    .iter()
+                    .chain(state.mail_targets.iter())
+                    .find(|item| item.tab_id == tab)
+                    .ok_or_else(|| format!("receiver tab {tab} is not current"))?;
+                let runtime = target
+                    .runtime_instance
+                    .as_deref()
+                    .ok_or("receiver missing runtime instance")?;
+                let (method, field) = if method == "lookupInbox" {
+                    ("agentRuntime.lookupInbox", "query")
+                } else {
+                    ("agentRuntime.acceptInbox", "transfer")
+                };
+                let mut params = json!({
+                    "port": destination.control.host.port().id(),
+                    "tabId": tab,
+                    "uploadDeviceId": owner,
+                    "expectedProducerDeviceId": host_id,
+                    "expectedRuntimeInstance": runtime,
+                    "expectedRoute": destination.route,
+                });
+                params[field] = args[field].clone();
+                native_request(method, params).await
+            }
+        }
+        _ => reply(method, args).await,
+    }
+}
+
+async fn native_request(method: &str, params: Value) -> Result<Value, String> {
+    use tokio::io::AsyncWriteExt;
+
+    let (client, server) = tokio::io::duplex(1 << 24);
+    let (input, output) = tokio::io::split(server);
+    let mut registry = crate::server::Registry::default();
+    super::inbox_delivery::register(&mut registry);
+    tokio::spawn(async move {
+        if let Err(error) = crate::server::serve(input, output, registry).await {
+            eprintln!("native fixture server: {error}");
+        }
+    });
+    let (read, mut write) = tokio::io::split(client);
+    let mut lines = BufReader::new(read).lines();
+    let ready = lines
+        .next_line()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("native server closed before ready")?;
+    let ready: Value = serde_json::from_str(&ready).map_err(|e| e.to_string())?;
+    if ready["event"] != "ready" {
+        return Err(format!("native server expected ready, got {ready}"));
+    }
+    let request = json!({ "id": 1, "method": method, "params": params });
+    write
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("native server closed before response")?;
+        let frame: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        if frame["id"] == 1 {
+            return if frame["ok"] == true {
+                Ok(frame["result"].clone())
+            } else {
+                Err(format!("native {method} failed: {}", frame["error"]))
+            };
+        }
+    }
+}
+
 fn with_outbox() -> Files {
     Files {
         mail_outbox: Some(JournalFile { file: None }),
@@ -110,7 +672,7 @@ fn with_outbox() -> Files {
     }
 }
 
-fn told_of(told: &Told, method: &str) -> Vec<Value> {
+pub(super) fn told_of(told: &Told, method: &str) -> Vec<Value> {
     told.lock()
         .unwrap()
         .iter()
@@ -220,11 +782,15 @@ async fn a_pass_sends_a_kept_report_again_to_the_tab_that_holds_its_session_unti
             from_device: None,
             content: "c".into(),
             details: mail_details("m-5"),
+            delivery_id: None,
+            logical_content: None,
+            native_source: crate::agentctl::inbox::InboxLogicalSource::Legacy,
             delivery: DELIVERY,
             attachments: None,
             attachments_corrupt: false,
             at: control.now(),
-        });
+        })
+        .unwrap();
     for _ in 0..2 {
         runtime.redeliver_mail();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -589,4 +1155,416 @@ async fn a_running_child_is_read_again_only_when_it_moved_and_a_list_went_out() 
     settle().await;
     assert_eq!(asks_of(&told, "command"), after_live);
     control.host.port().close();
+}
+
+fn recipient(path: &str) -> super::wake::MailRecipient {
+    super::wake::MailRecipient {
+        session_path: path.into(),
+        device: None,
+    }
+}
+
+struct MailDir(std::path::PathBuf);
+
+impl MailDir {
+    fn new() -> Self {
+        Self(crate::fs::disk::make_temp_dir("ompdesk-runtime-mail-").unwrap())
+    }
+
+    fn files(&self) -> Files {
+        Files {
+            mail_outbox: Some(JournalFile {
+                file: Some(self.0.join("mail.json")),
+            }),
+            ..Files::default()
+        }
+    }
+}
+
+impl Drop for MailDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[tokio::test]
+async fn failed_wake_storage_removes_tracking_and_sends_no_prompt() {
+    let dir = MailDir::new();
+    let (control, runtime, told) = rig(
+        7_430,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        dir.files(),
+        wake_main,
+    );
+    std::fs::create_dir(dir.0.join("mail.json")).unwrap();
+    assert!(
+        runtime
+            .wake("failed", "/s/boss.jsonl", "routine", "work", 130)
+            .await
+            .is_err()
+    );
+    assert!(runtime.rt().wakes.is_empty());
+    assert!(told_of(&told, "mail").is_empty());
+    assert_eq!(
+        control.host.outbox().unwrap().pending()[0].id,
+        "wake-failed"
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_wake_without_an_outbox_cannot_send_or_leave_a_watcher() {
+    let (control, runtime, told) = rig(
+        7_431,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        Files::default(),
+        wake_main,
+    );
+    assert!(
+        runtime
+            .wake("missing", "/s/boss.jsonl", "routine", "work", 130)
+            .await
+            .is_err()
+    );
+    assert!(runtime.rt().wakes.is_empty());
+    assert!(told_of(&told, "mail").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn enqueue_memory_and_disk_failure_never_ack_disk_or_start_delivery() {
+    use crate::agentctl::journal::Persistence;
+    let expected = recipient("/s/boss.jsonl");
+    let (control, runtime, told) = rig(
+        7_432,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        with_outbox(),
+        wake_main,
+    );
+    assert_eq!(
+        runtime
+            .enqueue_mail(
+                "checks:hub:entry-1:result",
+                "boss",
+                "Checks",
+                "answer",
+                &expected
+            )
+            .unwrap(),
+        Persistence::Memory
+    );
+    assert!(runtime.rt().wakes.is_empty());
+    assert!(told_of(&told, "mail").is_empty());
+    control.host.port().close();
+    let dir = MailDir::new();
+    let (control, runtime, told) = rig(
+        7_433,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        dir.files(),
+        wake_main,
+    );
+    std::fs::create_dir(dir.0.join("mail.json")).unwrap();
+    assert!(
+        runtime
+            .enqueue_mail(
+                "checks:hub:entry-1:result",
+                "boss",
+                "Checks",
+                "answer",
+                &expected
+            )
+            .is_err()
+    );
+    assert!(told_of(&told, "mail").is_empty());
+    assert_eq!(
+        control.host.outbox().unwrap().pending()[0].id,
+        "system-checks:hub:entry-1:result"
+    );
+    assert!(runtime.rt().wakes.is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn enqueue_revalidates_resolved_identity_visibility_and_control_before_keep() {
+    let expected = recipient("/s/boss.jsonl");
+    let mut hidden = tab("boss", "/s/boss.jsonl");
+    hidden["hidden"] = json!(true);
+    let mut paired = tab("boss", "/s/boss.jsonl");
+    paired["device"] = json!("another-device");
+    let mut disabled = state(vec![tab("boss", "/s/boss.jsonl")]);
+    disabled["enabled"] = json!(false);
+    let mut deleted = state(vec![tab("boss", "/s/boss.jsonl")]);
+    deleted["deleted"] = json!({ "byPath": [{ "path": crate::agentctl::service::host::node_resolve("/s/boss.jsonl"), "at": 7.0 }] });
+    let mut deleting = state(vec![tab("boss", "/s/boss.jsonl")]);
+    deleting["mailBlocked"] = json!(["boss"]);
+    let states = [
+        state(vec![tab("boss", "/s/changed.jsonl")]),
+        state(vec![hidden]),
+        state(vec![paired]),
+        disabled,
+        deleted,
+        deleting,
+    ];
+    for (index, state) in states.into_iter().enumerate() {
+        let (control, runtime, told) = rig(7_440 + index as u64, state, with_outbox(), wake_main);
+        assert!(
+            runtime
+                .enqueue_mail(
+                    "checks:hub:entry-1:result",
+                    "boss",
+                    "Checks",
+                    "answer",
+                    &expected
+                )
+                .is_err()
+        );
+        assert!(control.host.outbox().unwrap().pending().is_empty());
+        assert!(told_of(&told, "mail").is_empty());
+        control.host.port().close();
+    }
+}
+
+#[tokio::test]
+async fn disk_enqueue_survives_reload_and_receiver_journal_deduplicates_effect() {
+    use crate::agentctl::journal::{Persistence, mail_outbox::MailOutbox};
+    let dir = MailDir::new();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let journal = Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let receiver = journal.clone();
+    let (control, runtime, _) = rig(
+        7_450,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        dir.files(),
+        move |method, args| {
+            if method != "mail" {
+                return Err(format!("unexpected {method}"));
+            }
+            let id = args["details"]["id"].as_str().unwrap().to_owned();
+            let duplicate = !receiver.lock().unwrap().insert(id.clone());
+            sent.send((id, duplicate)).unwrap();
+            Ok(json!({ "duplicate": duplicate, "journaled": duplicate }))
+        },
+    );
+    let expected = recipient("/s/boss.jsonl");
+    let delivery = "checks:hub:entry-1:result";
+    assert_eq!(
+        runtime
+            .enqueue_mail(delivery, "boss", "Checks", "answer", &expected)
+            .unwrap(),
+        Persistence::Disk
+    );
+    assert_eq!(
+        received.recv().await.unwrap(),
+        (format!("system-{delivery}"), false)
+    );
+    let restored = MailOutbox::new(Some(dir.0.join("mail.json")));
+    assert_eq!(restored.pending()[0].id, format!("system-{delivery}"));
+    assert_eq!(
+        runtime
+            .enqueue_mail(delivery, "boss", "Checks", "answer", &expected)
+            .unwrap(),
+        Persistence::Disk
+    );
+    assert_eq!(
+        received.recv().await.unwrap(),
+        (format!("system-{delivery}"), true)
+    );
+    assert_eq!(journal.lock().unwrap().len(), 1);
+    assert!(runtime.rt().wakes.is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn paired_mail_acceptance_rechecks_online_pairing_before_keep() {
+    use crate::agentctl::journal::Persistence;
+    for (index, link) in [None, Some("offline"), Some("connecting"), Some("online")]
+        .into_iter()
+        .enumerate()
+    {
+        let mut paired = tab("boss", "/s/boss.jsonl");
+        paired["device"] = json!("peer");
+        let mut snapshot = state(vec![paired]);
+        snapshot["devices"] = link.map_or_else(
+            || json!([]),
+            |state| json!([{ "id": "peer", "name": "Peer", "state": state }]),
+        );
+        let (control, runtime, told) =
+            rig(7_460 + index as u64, snapshot, with_outbox(), wake_main);
+        let expected = super::wake::MailRecipient {
+            session_path: "/s/boss.jsonl".into(),
+            device: Some("peer".into()),
+        };
+        let receipt = runtime.enqueue_mail(
+            "checks:hub:entry-1:result",
+            "boss",
+            "Checks",
+            "answer",
+            &expected,
+        );
+        if link == Some("online") {
+            assert_eq!(receipt.unwrap(), Persistence::Memory);
+            assert_eq!(
+                control.host.outbox().unwrap().pending()[0]
+                    .device
+                    .as_deref(),
+                Some("peer")
+            );
+        } else {
+            assert!(receipt.is_err());
+            assert!(control.host.outbox().unwrap().pending().is_empty());
+        }
+        assert!(told_of(&told, "mail").is_empty());
+        control.host.port().close();
+    }
+}
+
+#[tokio::test]
+async fn authenticated_mail_targets_rebind_by_session_without_reusing_stale_tokens() {
+    use crate::agentctl::journal::{Persistence, mail_outbox::RedeliverDeps};
+    let mut initial = state(Vec::new());
+    initial["mailTargets"] = json!([tab("connection-a:tab:omp-1", "/s/boss.jsonl")]);
+    let (control, runtime, told) = rig(7_470, initial, with_outbox(), |method, _| {
+        if method == "mail" {
+            Ok(json!({ "duplicate": false }))
+        } else {
+            Err(format!("unexpected {method}"))
+        }
+    });
+    let expected = recipient("/s/boss.jsonl");
+    assert_eq!(
+        runtime
+            .enqueue_mail(
+                "checks:hub:entry-1:result",
+                "connection-a:tab:omp-1",
+                "Checks",
+                "answer",
+                &expected
+            )
+            .unwrap(),
+        Persistence::Memory
+    );
+    let entry = control.host.outbox().unwrap().pending().remove(0);
+    let routes = super::MailTabs {
+        host: &control.host,
+    };
+    assert_eq!(
+        routes.tab_of("/s/boss.jsonl", None).as_deref(),
+        Some("connection-a:tab:omp-1")
+    );
+    let mut reconnected = state(Vec::new());
+    reconnected["mailTargets"] = json!([tab("connection-b:tab:omp-2", "/s/boss.jsonl")]);
+    crate::ports::apply_state(control.host.port(), 1, &reconnected.to_string()).unwrap();
+    assert!(
+        runtime
+            .enqueue_mail(
+                "checks:hub:entry-2:result",
+                "connection-a:tab:omp-1",
+                "Checks",
+                "answer",
+                &expected
+            )
+            .is_err()
+    );
+    assert_eq!(
+        routes.tab_of("/s/boss.jsonl", None).as_deref(),
+        Some("connection-b:tab:omp-2")
+    );
+    assert!(
+        routes
+            .send("connection-a:tab:omp-1", &entry)
+            .await
+            .is_none()
+    );
+    assert!(
+        routes
+            .send("connection-b:tab:omp-2", &entry)
+            .await
+            .is_some()
+    );
+    assert_eq!(told_of(&told, "mail")[0]["tabId"], "connection-b:tab:omp-2");
+    reconnected["mailTargets"] = json!([tab("connection-b:tab:omp-2", "/s/changed.jsonl")]);
+    crate::ports::apply_state(control.host.port(), 2, &reconnected.to_string()).unwrap();
+    assert!(
+        routes
+            .send("connection-b:tab:omp-2", &entry)
+            .await
+            .is_none()
+    );
+    assert!(routes.tab_of("/s/boss.jsonl", None).is_none());
+    crate::ports::apply_state(control.host.port(), 3, &state(Vec::new()).to_string()).unwrap();
+    assert!(routes.tab_of("/s/changed.jsonl", None).is_none());
+    assert_eq!(told_of(&told, "mail").len(), 1);
+    assert_eq!(control.host.outbox().unwrap().pending()[0].id, entry.id);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn immediate_delivery_rechecks_binding_after_spawn_before_its_first_poll() {
+    use crate::agentctl::journal::{Persistence, mail_outbox::OutboxMail};
+    for authenticated in [false, true] {
+        let dir = MailDir::new();
+        let mut initial = state(if authenticated {
+            Vec::new()
+        } else {
+            vec![tab("old-token", "/s/boss.jsonl")]
+        });
+        if authenticated {
+            initial["mailTargets"] = json!([tab("old-token", "/s/boss.jsonl")]);
+        }
+        let (control, runtime, told) = rig(
+            7_480 + u64::from(authenticated),
+            initial,
+            dir.files(),
+            |method, _| {
+                if method == "mail" {
+                    Ok(json!({ "duplicate": false }))
+                } else {
+                    Err(format!("unexpected {method}"))
+                }
+            },
+        );
+        let outbox = control.host.outbox().unwrap().clone();
+        let entry = OutboxMail {
+            id: "bound-result".into(),
+            session_path: "/s/boss.jsonl".into(),
+            device: None,
+            from: None,
+            from_device: None,
+            content: "answer".into(),
+            details: mail_details("bound-result"),
+            delivery_id: None,
+            logical_content: None,
+            native_source: crate::agentctl::inbox::InboxLogicalSource::Legacy,
+            delivery: DELIVERY,
+            attachments: None,
+            attachments_corrupt: false,
+            at: control.now(),
+        };
+        assert_eq!(outbox.keep(entry.clone()).unwrap(), Persistence::Disk);
+        let sending = runtime.send_kept_mail(outbox.clone(), "old-token".into(), entry.clone());
+        let mut switched = state(vec![tab("old-token", "/s/different.jsonl")]);
+        if authenticated {
+            switched = state(Vec::new());
+            switched["mailTargets"] = json!([tab("new-token", "/s/boss.jsonl")]);
+        }
+        crate::ports::apply_state(control.host.port(), 1, &switched.to_string()).unwrap();
+        sending.await.unwrap();
+        assert!(told_of(&told, "mail").is_empty());
+        assert_eq!(outbox.pending().as_slice(), std::slice::from_ref(&entry));
+        let mut restored = state(if authenticated {
+            Vec::new()
+        } else {
+            vec![tab("new-token", "/s/boss.jsonl")]
+        });
+        if authenticated {
+            restored["mailTargets"] = json!([tab("new-token", "/s/boss.jsonl")]);
+        }
+        crate::ports::apply_state(control.host.port(), 2, &restored.to_string()).unwrap();
+        runtime
+            .send_kept_mail(outbox, "new-token".into(), entry)
+            .await
+            .unwrap();
+        assert_eq!(told_of(&told, "mail")[0]["tabId"], "new-token");
+        control.host.port().close();
+    }
 }

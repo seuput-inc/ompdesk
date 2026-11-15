@@ -22,7 +22,12 @@ impl Sidecar for Bridge {
     fn before_response(&self) {}
     fn start(&self) {}
     fn restart(&self, _: Option<&str>) {}
-    fn sleep(&self) {}
+    fn sleep(&self) -> Result<(), Fault> {
+        Err(Fault::new(
+            "unsupported",
+            "This worktree bridge cannot sleep",
+        ))
+    }
     fn adopt_cwd(&self, _: &str) -> bool {
         false
     }
@@ -42,6 +47,7 @@ impl Sidecar for Bridge {
         &self,
         _: u64,
         _: Value,
+        _: crate::agentctl::service::host::Deadline,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
         Box::pin(async { Err(Fault::new("unused", "unused")) })
     }
@@ -66,6 +72,9 @@ impl Sidecar for Bridge {
         self.bridge_for_generation(7, method, params, timeout)
     }
     fn exit_waiter(&self) -> EffectFuture<'static, Result<(), Fault>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn reply_barrier(&self) -> EffectFuture<'static, Result<(), Fault>> {
         Box::pin(async { Ok(()) })
     }
     fn remove_listeners(&self) {}

@@ -48,6 +48,7 @@ pub struct Services {
     pub deliveries: DeliveryLedger,
     pub tombstones: Arc<Tombstones>,
     pub sessions: Arc<SessionIndex>,
+    pub project_metadata: Arc<crate::repo_images::Service>,
     pub outcomes: Mutex<Outcomes>,
 }
 
@@ -126,6 +127,7 @@ impl Services {
             deliveries: DeliveryLedger::default(),
             tombstones,
             sessions,
+            project_metadata: crate::repo_images::shared(),
             outcomes: Mutex::new(Outcomes::default()),
         })
     }

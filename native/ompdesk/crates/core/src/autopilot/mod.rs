@@ -21,6 +21,7 @@ mod cycle;
 pub mod effects;
 pub mod host;
 pub mod land_check;
+pub(crate) mod native_request;
 pub mod release;
 mod run;
 mod service;

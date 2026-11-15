@@ -59,7 +59,17 @@ thread_local! {
 
 fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
     let opts: Value = serde_json::from_str(opts.get()).unwrap_or(Value::Null);
+    let view_epoch = opts["viewEpoch"]
+        .as_str()
+        .filter(|epoch| !epoch.is_empty())
+        .ok_or_else(|| {
+            Fault::new(
+                "invalid_params",
+                "The pool requires its original view epoch",
+            )
+        })?;
     let pool = Pool {
+        view_epoch: view_epoch.into(),
         layout_version: opts["layoutVersion"].as_i64().unwrap_or(1),
         max_former_tab_ids: opts["maxFormerTabIds"]
             .as_u64()
@@ -118,7 +128,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "acquire" => later(async move {
             let args = windows::Acquire {
                 cwd: p.s("cwd")?,
-                win: p.i("win")?,
+                win: Some(p.i("win")?),
                 tab: p.s("tab")?,
                 session_path: p.os("sessionPath"),
                 kind: p.os("kind").unwrap_or_else(|| "agent".into()),
@@ -154,6 +164,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                     &p.s("event")?,
                     &p.v("payload"),
                     p.b("fromLink"),
+                    None,
                 )
                 .await,
             )

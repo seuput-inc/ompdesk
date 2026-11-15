@@ -22,6 +22,7 @@ struct Recorded(mpsc::UnboundedSender<LaneEvent>);
 impl Sink for Recorded {
     fn event(&self, event: LaneEvent) { let _ = self.0.send(event); }
     fn before_response(&self) {}
+    fn reply_barrier(&self) -> Held { Box::pin(async { Ok(()) }) }
     fn remove_listeners(&self) {}
     fn sync_settings(&self) -> EffectFuture<'_, ()> { Box::pin(async {}) }
 }
@@ -63,6 +64,7 @@ async fn frozen_effects_preserve_original_path_run_source_and_execution_owner() 
     let pool = NativePool::new(
         PoolConfig {
             id, layout_version: 1, max_former_tab_ids: 8, stop_session_wait_ms: 60_000,
+            view_epoch: format!("hosted-test-{id}"),
             window_tabs_hook: false, now_ms: || 1234,
             callers: Arc::clone(&callers), removal_claims: RemovalClaims::new(),
         },
@@ -75,7 +77,7 @@ async fn frozen_effects_preserve_original_path_run_source_and_execution_owner() 
     let (connection, remote, _keep_link) = pair().await;
     let admitted = callers.admit_peer("frozen-peer".into(), connection.link_id().unwrap()).unwrap();
     callers.bind_peer_connection(&admitted.owner, connection.clone()).unwrap();
-    let reservation = callers.reserve_execution(&admitted.owner, &tab, 0).unwrap();
+    let reservation = callers.reserve_execution(&admitted.owner, &tab, None).unwrap();
     callers.finish_execution_reservation(reservation, true);
     let run_original = Arc::clone(&original);
     let run_replacement = Arc::clone(&replacement);
@@ -137,7 +139,7 @@ async fn frozen_effects_preserve_original_path_run_source_and_execution_owner() 
         *observed_original_exit.lock().unwrap() = Some(exited.clone());
         exited.unwrap();
         assert!(callers.retire_execution(&execution_owner));
-        let reopened_reservation = callers.reserve_execution(&admitted.owner, &tab, 0).unwrap();
+        let reopened_reservation = callers.reserve_execution(&admitted.owner, &tab, None).unwrap();
         callers.finish_execution_reservation(reopened_reservation, true);
         run_pool.call("seed", json!({"tabs":[{"tab":tab,"win":0,"status":"ready","sessionFile":path_b}]}), false).await.unwrap();
         set_test_source(&app, &tab, Arc::clone(&run_replacement));

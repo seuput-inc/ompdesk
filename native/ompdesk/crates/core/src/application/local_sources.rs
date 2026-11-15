@@ -42,6 +42,7 @@ pub(crate) struct Config {
     pub host_tools: HostTools,
     pub events: Events,
     pub spawn: Arc<dyn SpawnAdapter>,
+    pub commands: Arc<crate::local_dispatch::Config>,
     pub bridge_dir: PathBuf,
     pub builtin_dir: PathBuf,
     pub memory_state_file: PathBuf,
@@ -63,6 +64,7 @@ pub(crate) struct Created {
     pub source: Arc<NativeSidecar>,
     pub application: Arc<Application<LaunchHost>>,
     pub ingress: Arc<LaunchIngress<LaunchHost>>,
+    pub commands: Arc<crate::local_dispatch::Commands<NativeSidecar>>,
     pub held: Held,
 }
 
@@ -146,7 +148,16 @@ impl LocalSources {
             retain_failed(cleanup, source, ingress, held);
             return Err(error);
         }
-        Ok(Created { source, application, ingress, held })
+        let commands = match crate::local_dispatch::Commands::new(
+            Arc::clone(&source), Arc::clone(&self.config.commands),
+        ) {
+            Ok(commands) => Arc::new(commands),
+            Err(error) => {
+                retain_failed(cleanup, source, ingress, held);
+                return Err(error);
+            }
+        };
+        Ok(Created { source, application, ingress, commands, held })
     }
 
     /// Latch synchronously, then join every failed construction independently of any waiter's lifetime.

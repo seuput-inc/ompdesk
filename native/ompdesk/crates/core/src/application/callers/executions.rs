@@ -10,7 +10,7 @@ use crate::server::Fault;
 pub struct Execution {
     pub owner: Owner,
     pub tab: String,
-    pub window: i64,
+    pub window: Option<i64>,
     /// Attribution of the original authenticated acquisition, not an execution-host selector or a new grant.
     pub creator: Principal,
 }
@@ -38,9 +38,10 @@ impl Callers {
         &self,
         caller: &Owner,
         tab: &str,
-        window: i64,
+        window: Option<i64>,
     ) -> Result<Reservation, Fault> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.stopped { return Err(closed()); }
         let creator = state.owners.get(caller).cloned().ok_or_else(closed)?;
         let actual_window = match &creator {
             Principal::Page(NativeCaller::Desktop { win_id, .. }) => Some(
@@ -50,12 +51,29 @@ impl Callers {
             Principal::Page(NativeCaller::Web { window_id, .. }) => Some(*window_id),
             Principal::Peer { .. } => None,
         };
-        if actual_window.is_some_and(|actual| actual != window) {
+        if actual_window != window {
             return Err(Fault::new(
                 "caller_window",
                 "The window does not belong to this caller",
             ));
         }
+        if let Principal::Peer { .. } = &creator {
+            let connection = state.peer_links.get(caller).cloned().ok_or_else(closed)?;
+            return connection.admit_online(|| {
+                self.reserve_execution_locked(&mut state, caller, tab, window, creator)
+            });
+        }
+        self.reserve_execution_locked(&mut state, caller, tab, window, creator)
+    }
+
+    fn reserve_execution_locked(
+        &self,
+        state: &mut State,
+        caller: &Owner,
+        tab: &str,
+        window: Option<i64>,
+        creator: Principal,
+    ) -> Result<Reservation, Fault> {
         if let Some(owner) = state.active_tabs.get(tab).cloned() {
             let record = state
                 .executions
@@ -185,6 +203,30 @@ impl Callers {
         remove_record(&mut state, owner);
         true
     }
+    /// Host-generated observations bind two existing executions, never an identity from report fields.
+    /// The effect is synchronous and must not reenter this registry.
+    pub(crate) fn admit_execution_pair<T>(
+        &self,
+        child: (&Owner, &str),
+        recipient: (&Owner, &str),
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.stopped {
+            return Err(closed());
+        }
+        for (owner, tab) in [child, recipient] {
+            if !state.executions.get(owner).is_some_and(|record| {
+                record.facts.tab == tab
+                    && matches!(record.life, Life::Bound { .. })
+                    && state.active_tabs.get(tab) == Some(owner)
+            }) {
+                return Err(closed());
+            }
+        }
+        effect()
+    }
+
 }
 
 fn remove_record(state: &mut State, owner: &Owner) {

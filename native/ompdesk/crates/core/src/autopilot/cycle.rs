@@ -886,9 +886,9 @@ impl Coordinator {
     // ---- stop, abort, resume ----------------------------------------------------------------------------------
 
     /// ■ (`STOP_COMMANDS` in `ipc.ts`): the running children stop with the parent; the run shows paused.
-    pub async fn aborted(self: &Arc<Self>, tab: &str) {
+    pub fn aborted(self: &Arc<Self>, tab: &str) -> super::ship::Fut<()> {
         let Some(run) = self.runs_get(tab) else {
-            return;
+            return Box::pin(async {});
         };
         let children: Vec<String> = run
             .lock()
@@ -896,24 +896,36 @@ impl Coordinator {
             .iter()
             .map(|child| child.tab.clone())
             .collect();
-        let stops = children.into_iter().map(|child| async move {
-            if !self.facts(&child).await.is_some_and(|facts| facts.busy) {
+        let this = Arc::clone(self);
+        let parent = tab.to_owned();
+        Box::pin(async move {
+            let stops = children.into_iter().map(|child| {
+                let this = &this;
+                let parent = &parent;
+                let run = &run;
+                async move {
+                    if !this.is_current(run)
+                        || !this.facts(&child).await.is_some_and(|facts| facts.busy)
+                        || !this.is_current(run)
+                    {
+                        return;
+                    }
+                    this.port.note_stopped(&child);
+                    this.port.turn_stop(&child, "run-stopped", Some(&parent));
+                    let _ = this.stock(&child, json!({"type": "abort"})).await;
+                }
+            });
+            futures_join(stops).await;
+            if !this.is_current(&run) || run.lock().stopping {
                 return;
             }
-            self.port.note_stopped(&child);
-            self.port.turn_stop(&child, "run-stopped", Some(tab));
-            let _ = self.stock(&child, json!({"type": "abort"})).await;
-        });
-        futures_join(stops).await;
-        if run.lock().stopping {
-            return;
-        }
-        if let Err(error) = self
-            .set_state(&run, json!({"state": "paused", "reason": "user_abort"}))
-            .await
-        {
-            self.log(&format!("abort state: {}", error.message));
-        }
+            if let Err(error) = this
+                .set_state(&run, json!({"state": "paused", "reason": "user_abort"}))
+                .await
+            {
+                this.log(&format!("abort state: {}", error.message));
+            }
+        })
     }
 
     /// "Stop" (the user ends the run) or an end the bridge asked for: finish the turn, then wind down.

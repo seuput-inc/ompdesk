@@ -2,13 +2,12 @@
 //! omp's memory and journals it only when its loop takes it, so an omp that ends first loses it (`send-outbox.ts`).
 //! Main keeps each message, per receiver session file (and paired device), until the receiver's journal holds its
 //! marker. It remembers which omp process it handed the message to: that omp still holds it, so it is never sent there
-//! again; a different omp (a relaunch's) gets it once, in the order sent. An omp that holds it no more while idle with
-//! nothing queued lets it go.
+//! again; a different omp (a relaunch's) gets it once, in the order sent. An empty queue is not a consumed receipt.
 //!
-//! Kept in `<userData>/send-outbox.json` (mode 0o600, written when a message is handed over, never in a quit hook),
-//! newest `SEND_OUTBOX_MAX`, none older than `SEND_OUTBOX_TTL_MS`.
+//! Kept in `<userData>/send-outbox.json` (mode 0o600), never in a quit hook. Unconsumed messages do not expire.
+//! A failed keep retains memory and the disk writer's retry, but cannot return a successful acceptance.
 //!
-//! Seams: the clock, and `OwedDeps` for what `deliver_owed` asks of the tab pool and the receiver's omp: its methods
+//! Seams: `OwedDeps` for what `deliver_owed` asks of the tab pool and the receiver's omp: its methods
 //! answer `None`/`Refused`/`false` where the TypeScript promise rejected (the TypeScript caught every rejection as
 //! those). The outbox is internally locked (`&self` methods) so a delivery may hold it across its awaits; `lane` runs
 //! work for one receiver at a time (a `tokio` mutex per key, first come first served).
@@ -21,13 +20,11 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Map, Value};
 
 use super::attachments::{Attached, AttachedSet, attached_sig, read_attached};
-use super::{
-    Clock, THREE_DAYS_MS, js_number, number, object, read_array, string, stringify, system_clock,
-    write_text,
+use super::{Persistence, js_number, number, object, persist_text, read_outbox, string, stringify};
+use crate::agentctl::inbox::{
+    InboxContent, InboxIntent, InboxLogicalSource, InboxPayload, InboxSender, NativeInboxEntry,
+    NativeInboxTransferEntry,
 };
-
-pub const SEND_OUTBOX_MAX: usize = 200;
-pub const SEND_OUTBOX_TTL_MS: f64 = THREE_DAYS_MS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingBehavior {
@@ -61,6 +58,10 @@ pub struct OutboxSend {
     pub body: String,
     /// The prompt as sent: wrapped, with its markers.
     pub message: String,
+    /// Only native-created entries have this identity and attachment-free logical prompt. Legacy records stay ambiguous.
+    pub delivery_id: Option<String>,
+    pub logical_message: Option<String>,
+    pub(crate) native_source: InboxLogicalSource,
     /// What the message carries: its pictures (bytes in the attachment store) and the files landed for its receiver.
     pub attachments: Option<AttachedSet>,
     /// Its record of attachments was damaged: it is never delivered as text alone.
@@ -96,6 +97,9 @@ impl OutboxSend {
             from_device: None,
             body,
             message,
+            delivery_id: None,
+            logical_message: None,
+            native_source: InboxLogicalSource::Legacy,
             attachments: None,
             attachments_corrupt: false,
             streaming_behavior,
@@ -138,7 +142,52 @@ impl OutboxSend {
         if let Some(instance) = self.instance.as_ref().filter(|_| self.instance_last) {
             map.insert("instance".into(), instance.clone().into());
         }
+        if let Some(id) = &self.delivery_id {
+            map.insert("deliveryId".into(), id.clone().into());
+        }
+        if let Some(message) = &self.logical_message {
+            map.insert("logicalMessage".into(), message.clone().into());
+        }
+        if let Some(source) = self.native_source.json() {
+            map.insert("nativeSource".into(), source);
+        }
         Value::Object(map)
+    }
+
+    pub(crate) fn native_entry(&self) -> Result<Option<NativeInboxTransferEntry>, String> {
+        let (Some(id), Some(message)) = (&self.delivery_id, &self.logical_message) else {
+            return Ok(None);
+        };
+        let Some(source) = self.native_source.bound()? else {
+            return Ok(None);
+        };
+        if self.attachments_corrupt {
+            return Err(
+                "The native prompt attachment record is damaged; original remains pending".into(),
+            );
+        }
+        Ok(Some(NativeInboxTransferEntry {
+            entry: NativeInboxEntry {
+                delivery_id: id.clone(),
+                sender: InboxSender {
+                    session: self.from.clone(),
+                    device: self.from_device.clone(),
+                },
+                intent: match self.streaming_behavior {
+                    StreamingBehavior::Steer => InboxIntent::Immediate,
+                    StreamingBehavior::FollowUp => InboxIntent::FollowUp,
+                },
+                trigger_turn: true,
+                observed_card: None,
+                legacy: false,
+                payload: InboxPayload::Prompt {
+                    content: InboxContent::Text(message.clone()),
+                },
+            },
+            logical: source.clone(),
+            dispatch: self.dispatch,
+            attachments: self.attachments.clone(),
+        }))
     }
 }
 
@@ -158,8 +207,16 @@ fn entry_key(session_path: &str, device: Option<&str>, mark: &str) -> String {
     format!("{}\n{mark}", receiver_key(session_path, device))
 }
 
+fn native_key(session_path: &str, device: Option<&str>, id: &str) -> String {
+    serde_json::to_string(&("native", session_path, device, id))
+        .expect("native identity tuple serializes")
+}
+
 fn key_of(entry: &OutboxSend) -> String {
-    entry_key(&entry.session_path, entry.device.as_deref(), &entry.mark)
+    match &entry.delivery_id {
+        Some(id) => native_key(&entry.session_path, entry.device.as_deref(), id),
+        None => entry_key(&entry.session_path, entry.device.as_deref(), &entry.mark),
+    }
 }
 
 pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
@@ -197,6 +254,11 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
             .map(str::to_owned),
         body: body.to_owned(),
         message: message.to_owned(),
+        delivery_id: string(fields, "deliveryId")
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
+        logical_message: string(fields, "logicalMessage").map(str::to_owned),
+        native_source: InboxLogicalSource::read(fields.get("nativeSource")),
         attachments,
         attachments_corrupt: corrupt
             || fields.get("attachmentsCorrupt") == Some(&Value::Bool(true)),
@@ -209,9 +271,16 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
     })
 }
 
+/// Read-only metadata from the canonical source row; absence never grants receiving responsibility.
+pub(crate) enum SourceDispatch {
+    Missing,
+    Kept(Option<i64>),
+}
+
 struct State {
     file: Option<PathBuf>,
-    now: Clock,
+    save_failed: bool,
+    read_error: Option<String>,
     /// Oldest first.
     entries: Vec<(String, OutboxSend)>,
 }
@@ -223,39 +292,37 @@ pub struct SendOutbox {
 }
 
 impl State {
+    fn readable(&self) -> Result<(), String> {
+        self.read_error
+            .as_ref()
+            .map_or(Ok(()), |error| Err(error.clone()))
+    }
+
     fn position(&self, key: &str) -> Option<usize> {
         self.entries.iter().position(|(held, _)| held == key)
     }
 
-    fn trim(&mut self) {
-        let oldest = (self.now)() - SEND_OUTBOX_TTL_MS;
-        let before = self.entries.len();
-        self.entries.retain(|(_, entry)| entry.at >= oldest);
-        let mut changed = self.entries.len() != before;
-        while self.entries.len() > SEND_OUTBOX_MAX {
-            self.entries.remove(0);
-            changed = true;
-        }
-        if changed {
-            self.save();
-        }
-    }
-
-    fn save(&self) {
-        let Some(file) = &self.file else { return };
+    fn save(&mut self) -> Result<Persistence, String> {
+        self.readable()?;
+        let Some(file) = self.file.as_deref() else {
+            self.save_failed = false;
+            return persist_text(None, "", Some(0o600));
+        };
         let text = stringify(
             self.entries
                 .iter()
                 .map(|(_, entry)| entry.to_json())
                 .collect(),
         );
-        if let Err(error) = write_text(file, &text, Some(0o600)) {
+        let result = persist_text(Some(file), &text, Some(0o600));
+        self.save_failed = result.is_err();
+        if let Err(error) = &result {
             eprintln!("[send-outbox] not saved: {error}");
         }
+        result
     }
 
-    fn pending(&mut self) -> Vec<OutboxSend> {
-        self.trim();
+    fn pending(&self) -> Vec<OutboxSend> {
         self.entries
             .iter()
             .map(|(_, entry)| entry.clone())
@@ -265,22 +332,44 @@ impl State {
 
 impl SendOutbox {
     pub fn new(file: Option<PathBuf>) -> SendOutbox {
-        SendOutbox::with_clock(file, system_clock())
-    }
-
-    pub fn with_clock(file: Option<PathBuf>, now: Clock) -> SendOutbox {
         let mut state = State {
             file,
-            now,
+            save_failed: false,
+            read_error: None,
             entries: Vec::new(),
         };
         if let Some(file) = state.file.clone() {
-            for item in read_array(&file) {
-                if let Some(entry) = parse_entry(&item) {
-                    let key = key_of(&entry);
-                    match state.position(&key) {
-                        Some(at) => state.entries[at].1 = entry,
-                        None => state.entries.push((key, entry)),
+            match read_outbox(&file) {
+                Err(error) => state.read_error = Some(error),
+                Ok(items) => {
+                    for item in items {
+                        let Some(entry) = parse_entry(&item) else {
+                            state.read_error =
+                                Some("Unreadable send outbox row; original retained".into());
+                            break;
+                        };
+                        let key = key_of(&entry);
+                        match state.position(&key) {
+                            Some(at)
+                                if entry.delivery_id.is_some()
+                                    || state.entries[at].1.delivery_id.is_some() =>
+                            {
+                                let result =
+                                    state.entries[at].1.native_entry().and_then(|previous| {
+                                        entry.native_entry().and_then(|incoming| {
+                                            crate::agentctl::inbox::same_native_source(
+                                                previous, incoming,
+                                            )
+                                        })
+                                    });
+                                if let Err(error) = result {
+                                    state.read_error = Some(error);
+                                    break;
+                                }
+                            }
+                            Some(at) => state.entries[at].1 = entry,
+                            None => state.entries.push((key, entry)),
+                        }
                     }
                 }
             }
@@ -297,16 +386,84 @@ impl SendOutbox {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Keep a message about to be handed over (the same marker to the same receiver replaces its entry).
-    pub fn keep(&self, entry: OutboxSend) {
+    /// Native retries retain the first presentation; legacy markers keep their existing replacement behavior.
+    pub(crate) fn keep(&self, entry: OutboxSend) -> Result<Persistence, String> {
         let mut state = self.state();
+        state.readable()?;
         let key = key_of(&entry);
-        if let Some(at) = state.position(&key) {
-            state.entries.remove(at);
+        match state.position(&key) {
+            Some(at) => {
+                let previous = &state.entries[at].1;
+                if previous.delivery_id.is_some() || entry.delivery_id.is_some() {
+                    crate::agentctl::inbox::same_native_source(
+                        previous.native_entry()?,
+                        entry.native_entry()?,
+                    )?;
+                } else {
+                    state.entries[at].1 = entry;
+                }
+            }
+            None => state.entries.push((key, entry)),
         }
-        state.entries.push((key, entry));
-        state.trim();
-        state.save();
+        state.save()
+    }
+
+    pub(crate) fn retry_failed_save(&self) -> Result<(), String> {
+        let mut state = self.state();
+        state.readable()?;
+        if state.save_failed {
+            state.save()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_readable(&self) -> Result<(), String> {
+        self.state().readable()
+    }
+
+    pub(crate) fn persist_pending(&self) -> Result<Persistence, String> {
+        self.state().save()
+    }
+
+    pub(crate) fn native_dispatch(
+        &self,
+        session_path: &str,
+        device: Option<&str>,
+        query: &crate::agentctl::inbox::NativeInboxLookupEntry,
+    ) -> Result<SourceDispatch, String> {
+        let state = self.state();
+        state.readable()?;
+        let key = native_key(session_path, device, &query.key.delivery_id);
+        let Some(position) = state.position(&key) else {
+            return Ok(SourceDispatch::Missing);
+        };
+        let entry = &state.entries[position].1;
+        if query.key.kind != crate::agentctl::inbox::InboxKind::Prompt
+            || entry.delivery_id.as_deref() != Some(query.key.delivery_id.as_str())
+            || entry.attachments_corrupt
+        {
+            return Err("Native source identity conflicts with an unreadable original".into());
+        }
+        let logical = entry.native_source.bound()?.ok_or(
+            "Native source identity conflicts with an ambiguous legacy record; original retained",
+        )?;
+        let previous = crate::agentctl::inbox::logical_payload(
+            logical,
+            entry.attachments.as_ref().map(|set| {
+                (
+                    set.images.iter(),
+                    set.files.iter().map(|landed| &landed.file),
+                )
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        if previous != query.logical_payload().map_err(|error| error.to_string())? {
+            return Err(
+                "Native source identity conflicts with an existing payload; original retained"
+                    .into(),
+            );
+        }
+        Ok(SourceDispatch::Kept(entry.dispatch))
     }
 
     /// The message is in the hands of the omp `instance` (it queues or runs it).
@@ -323,7 +480,7 @@ impl SendOutbox {
             kept.instance_last = true;
         }
         kept.instance = Some(instance.to_owned());
-        state.save();
+        let _ = state.save();
     }
 
     /// The receiver's journal holds it (or it will never be owed again): nothing more to do.
@@ -331,7 +488,16 @@ impl SendOutbox {
         let mut state = self.state();
         if let Some(at) = state.position(&entry_key(session_path, device, mark)) {
             state.entries.remove(at);
-            state.save();
+            let _ = state.save();
+        }
+    }
+
+    /// Only a matching receiving-native Disk ACK may release a trusted source row.
+    pub(crate) fn settle_native(&self, entry: &OutboxSend) {
+        let mut state = self.state();
+        if let Some(at) = state.position(&key_of(entry)) {
+            state.entries.remove(at);
+            let _ = state.save();
         }
     }
 
@@ -385,7 +551,7 @@ impl SendOutbox {
         let kept = &mut state.entries[at].1;
         kept.message = message.to_owned();
         kept.attachments = Some(attachments.clone());
-        state.save();
+        let _ = state.save();
     }
 
     /// The SHA-256 of every attachment a message still owed names: what the attachment store must keep.
@@ -442,8 +608,6 @@ pub trait OwedDeps: Sync {
     ) -> impl Future<Output = Option<SentAnswer>> + Send;
     /// Hand the prompt to the receiver's omp.
     fn prompt(&self, tab_id: &str, entry: &OutboxSend) -> impl Future<Output = HandOver> + Send;
-    /// The receiver's omp is idle with nothing queued: a message it held and did not journal was withdrawn.
-    fn drained(&self, tab_id: &str) -> impl Future<Output = bool> + Send;
 }
 
 /// Hand one receiver session what is still owed to it, in order: settle what its journal holds; leave what its
@@ -455,7 +619,14 @@ pub async fn deliver_owed<D: OwedDeps>(
     session_path: &str,
     device: Option<&str>,
 ) -> bool {
-    let owed = outbox.owed_to(session_path, device);
+    if outbox.retry_failed_save().is_err() {
+        return false;
+    }
+    let owed: Vec<_> = outbox
+        .owed_to(session_path, device)
+        .into_iter()
+        .filter(|entry| entry.delivery_id.is_none())
+        .collect();
     if owed.is_empty() {
         return true;
     }
@@ -466,7 +637,6 @@ pub async fn deliver_owed<D: OwedDeps>(
     let Some(answer) = deps.sent(&tab_id, &marks).await else {
         return false;
     };
-    let mut drained: Option<bool> = None;
     for entry in &owed {
         if answer.journaled.contains(&entry.mark) {
             outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
@@ -477,18 +647,6 @@ pub async fn deliver_owed<D: OwedDeps>(
             || entry.instance.as_deref() == Some(same_tab.as_str())
         {
             outbox.handed(entry, &answer.instance);
-            // Its omp holds it no more and never journaled it: withdrawn from the queue.
-            let gone = match drained {
-                Some(known) => known,
-                None => {
-                    let asked = deps.drained(&tab_id).await;
-                    drained = Some(asked);
-                    asked
-                }
-            };
-            if gone {
-                outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
-            }
             continue;
         }
         if deps.prompt(&tab_id, entry).await == HandOver::Refused {

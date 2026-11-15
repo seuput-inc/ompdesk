@@ -22,11 +22,16 @@
 //! out); the wire is `agentRuntime.*`, by the same port number.
 
 mod activity;
+pub(crate) mod inbox;
+mod inbox_attachments;
+mod inbox_delivery;
+mod inbox_observed_source;
+pub(crate) mod inbox_source;
 mod review;
 mod wake;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
@@ -36,10 +41,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
-use super::journal::mail_outbox::{MailAnswer, OutboxMail, RedeliverDeps, redeliver_mail};
+use super::journal::mail_outbox::{
+    MailAnswer, MailOutbox, OutboxMail, RedeliverDeps, redeliver_mail,
+};
 use super::service::AgentControl;
-use super::service::host::Host;
-use super::service::types::ClosedChild;
+use super::service::fail::{R, fail};
+use super::service::host::{Host, HostState};
+use super::service::types::{ClosedChild, ControlTab, DeviceState};
 use crate::server::{Call, Fault, Registry, Reply, at_once};
 
 pub use activity::Activity;
@@ -99,6 +107,8 @@ struct Rt {
     redelivering: bool,
     /// A pass was asked for while one ran: it runs once more when that one ends.
     redeliver_again: bool,
+    inbox_delivering: bool,
+    inbox_again: bool,
     resending: bool,
     wakes: HashMap<String, wake::Wake>,
 }
@@ -108,6 +118,7 @@ pub struct Runtime {
     control: AgentControl,
     config: RuntimeConfig,
     rt: Mutex<Rt>,
+    source_at: Mutex<f64>,
 }
 
 static RUNTIMES: LazyLock<Mutex<HashMap<u64, Arc<Runtime>>>> = LazyLock::new(Default::default);
@@ -123,10 +134,26 @@ const ATTACHMENT_SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// Starts the runtime of `control` (opened as port `port`): its timer runs until the port closes.
 pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Runtime> {
+    let source_at = control
+        .send_outbox
+        .as_ref()
+        .into_iter()
+        .flat_map(|outbox| outbox.pending())
+        .map(|entry| entry.at)
+        .chain(
+            control
+                .host
+                .outbox()
+                .into_iter()
+                .flat_map(|outbox| outbox.pending())
+                .map(|entry| entry.at),
+        )
+        .fold(0.0, f64::max);
     let runtime = Arc::new(Runtime {
         control: control.clone(),
         config,
         rt: Mutex::new(Rt::default()),
+        source_at: Mutex::new(source_at),
     });
     lock(&RUNTIMES).insert(port, runtime.clone());
     let timer = runtime.clone();
@@ -158,6 +185,7 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
                             pass.sweep_all();
                             pass.redeliver_mail();
                             pass.redeliver_sends();
+                            pass.redeliver_inbox();
                         });
                     }
                 }
@@ -174,6 +202,10 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
 impl Runtime {
     fn rt(&self) -> MutexGuard<'_, Rt> {
         lock(&self.rt)
+    }
+
+    pub(crate) fn has_parent(&self, tab: &str) -> bool {
+        self.host().state().parent_of(tab).is_some()
     }
 
     fn host(&self) -> &Host {
@@ -195,6 +227,23 @@ impl Runtime {
     }
 
     // ---- redelivery -------------------------------------------------------------------------------------------------
+
+    fn send_kept_mail(
+        self: &Arc<Self>,
+        outbox: Arc<MailOutbox>,
+        tab: String,
+        mail: OutboxMail,
+    ) -> JoinHandle<()> {
+        let me = self.clone();
+        tokio::spawn(async move {
+            if let Some(answer) = (MailTabs { host: me.host() }).send(&tab, &mail).await
+                && answer.duplicate
+                && answer.journaled
+            {
+                outbox.settle(&mail.id);
+            }
+        })
+    }
 
     /// Accepted reports whose receiver's journal does not hold them yet, sent again to its live tab (`#redeliverMail`).
     pub fn redeliver_mail(self: &Arc<Self>) {
@@ -235,6 +284,8 @@ impl Runtime {
         let me = self.clone();
         tokio::spawn(async move {
             let _ = me.control.redeliver_sends().await;
+            me.resend_native_sources().await;
+            me.redeliver_inbox();
             me.rt().resending = false;
         });
     }
@@ -313,6 +364,34 @@ impl Runtime {
     }
 }
 
+fn check_mail_target(state: &HostState, target: &ControlTab) -> R<()> {
+    if !state.enabled {
+        return fail("OMPdesk control tools are disabled.");
+    }
+    if state.mail_blocked.contains(&target.tab_id) {
+        return fail("The resolved mail recipient is being deleted.");
+    }
+    let Some(path) = target
+        .session_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    else {
+        return fail("The resolved mail target has no saved session path.");
+    };
+    let device = target.device.as_deref().filter(|device| !device.is_empty());
+    if target.hidden || state.deleted_at_path(path, device).is_some() {
+        return fail("The resolved mail recipient is hidden or deleted.");
+    }
+    if let Some(device) = device
+        && !state
+            .device(device)
+            .is_some_and(|peer| peer.state == DeviceState::Online)
+    {
+        return fail("The resolved mail recipient is offline or no longer paired.");
+    }
+    Ok(())
+}
+
 /// The live tab holding a receiver's session, and the receiver's bridge answer to a report again (`RedeliverDeps`).
 struct MailTabs<'a> {
     host: &'a Host,
@@ -324,20 +403,38 @@ impl RedeliverDeps for MailTabs<'_> {
         state
             .tabs
             .iter()
+            .chain(state.mail_targets.iter())
             .find(|tab| {
-                tab.session_path.as_deref() == Some(session_path) && tab.device.as_deref() == device
+                tab.session_path.as_deref() == Some(session_path)
+                    && tab.device.as_deref().filter(|device| !device.is_empty()) == device
+                    && check_mail_target(&state, tab).is_ok()
             })
             .map(|tab| tab.tab_id.clone())
     }
 
     async fn send(&self, tab_id: &str, mail: &OutboxMail) -> Option<MailAnswer> {
+        {
+            let state = self.host.state();
+            let target = state
+                .tabs
+                .iter()
+                .chain(state.mail_targets.iter())
+                .find(|target| target.tab_id == tab_id)?;
+            if target.session_path.as_deref() != Some(mail.session_path.as_str())
+                || target.device.as_deref().filter(|device| !device.is_empty())
+                    != mail.device.as_deref()
+                || check_mail_target(&state, target).is_err()
+            {
+                return None;
+            }
+        }
         self.host.redeliver_mail(tab_id, mail).await
     }
 }
 
 // ---- the wire ---------------------------------------------------------------------------------------------------------
 
-fn runtime_of(port: u64) -> Result<Arc<Runtime>, Fault> {
+pub(crate) fn runtime_of(port: u64) -> Result<Arc<Runtime>, Fault> {
     lock(&RUNTIMES).get(&port).cloned().ok_or_else(|| {
         Fault::new(
             "no_runtime",
@@ -474,6 +571,7 @@ pub fn register(registry: &mut Registry) {
         at_once(acknowledge(&call))
     });
     wake::register(registry);
+    inbox_delivery::register(registry);
 }
 
 /// `{ items: [], usage: {} }`: what the board shows while the control tools are off.

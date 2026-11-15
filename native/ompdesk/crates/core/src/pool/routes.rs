@@ -38,6 +38,13 @@ impl Pool {
     }
 }
 
+pub(super) struct SessionFileUpdate {
+    pub changed: bool,
+    held: bool,
+    registered: bool,
+}
+
+
 impl Ctx {
     pub(super) async fn register_session_file(&self, tab: &str, file: &str) -> R<()> {
         let Some(seq) = self.with(|pool| pool.entry(tab).map(|entry| entry.seq)) else {
@@ -48,43 +55,10 @@ impl Ctx {
 
     /// `#registerSessionFile`: sessionFile → owner, moving the entry off any previous file.
     pub(super) async fn register_session_file_of(&self, seq: u64, file: &str) -> R<()> {
-        let changed = self.with(|pool| {
-            let entry = pool.by_seq(seq)?;
-            let changed = entry.session_file.as_deref() != Some(file);
-            if changed {
-                pool.drop_session_owner(seq);
-            }
-            let entry = pool.by_seq_mut(seq)?;
-            entry.session_file = Some(file.to_string());
-            Some((
-                changed,
-                entry.tracking.run.running || entry.awaiting_connection,
-                entry.tab_id.clone(),
-            ))
-        });
-        let Some((changed, held, tab)) = changed else {
+        let Some(update) = self.session_file_start(seq, Some(file)) else {
             return Ok(());
         };
-        // The one place a tab's file is written (with `unregister_session_file_of`): main keeps it for a new core's seed.
-        self.push(&json!({"k": "sessionFile", "tab": tab, "file": file}));
-        // A run's file, and a held wait's: its continuation must not go into another session.
-        if changed && held {
-            self.on_running_change().await?;
-        }
-        self.with(|pool| {
-            if let Some(entry) = pool.by_seq(seq) {
-                let key = owner_key(entry.device.as_deref(), file);
-                let owner = Owner {
-                    tab_id: entry.tab_id.clone(),
-                    win_id: entry.win_id,
-                };
-                pool.session_owners.insert(key, owner);
-            }
-        });
-        if changed {
-            self.on_session_files_changed().await?;
-        }
-        Ok(())
+        self.session_file_finish(update).await
     }
 
     pub(super) async fn unregister_session_file(&self, tab: &str) -> R<()> {
@@ -97,22 +71,51 @@ impl Ctx {
     /// `#unregisterSessionFile`: the entry lets go of its file: the mapping goes and paired devices hear the listing
     /// may have changed.
     pub(super) async fn unregister_session_file_of(&self, seq: u64) -> R<()> {
-        let held = self.with(|pool| {
-            let entry = pool.by_seq(seq)?;
-            entry.session_file.as_ref()?;
-            let held = entry.awaiting_connection;
-            let tab = entry.tab_id.clone();
-            pool.drop_session_owner(seq);
-            Some((held, tab))
-        });
-        let Some((held, tab)) = held else {
+        let Some(update) = self.session_file_start(seq, None) else {
             return Ok(());
         };
-        self.push(&json!({"k": "sessionFile", "tab": tab, "file": null}));
-        self.on_session_files_changed().await?;
-        // A session-id change lets the held wait's file go (another session), as a switch does.
-        if held {
-            self.on_running_change().await?;
+        self.session_file_finish(update).await
+    }
+
+    /// The native response tail commits file ownership in its original hub admission, before any observer awaits.
+    pub(super) fn session_file_start(&self, seq: u64, file: Option<&str>) -> Option<SessionFileUpdate> {
+        let (update, tab) = self.with(|pool| {
+            let entry = pool.by_seq(seq)?;
+            let changed = entry.session_file.as_deref() != file;
+            if file.is_none() && !changed {
+                return None;
+            }
+            let held = entry.awaiting_connection || (file.is_some() && entry.tracking.run.running);
+            let tab = entry.tab_id.clone();
+            if changed {
+                pool.drop_session_owner(seq);
+            }
+            if let Some(file) = file {
+                let entry = pool.by_seq_mut(seq)?;
+                entry.session_file = Some(file.to_owned());
+                let key = owner_key(entry.device.as_deref(), file);
+                let owner = Owner { tab_id: entry.tab_id.clone(), win_id: entry.win_id };
+                pool.session_owners.insert(key, owner);
+            }
+            Some((SessionFileUpdate { changed, held, registered: file.is_some() }, tab))
+        })?;
+        self.push(&json!({"k":"sessionFile","tab":tab,"file":file}));
+        Some(update)
+    }
+
+    pub(super) async fn session_file_finish(&self, update: SessionFileUpdate) -> R<()> {
+        if update.registered {
+            if update.changed && update.held {
+                self.on_running_change().await?;
+            }
+            if update.changed {
+                self.on_session_files_changed().await?;
+            }
+        } else {
+            self.on_session_files_changed().await?;
+            if update.held {
+                self.on_running_change().await?;
+            }
         }
         Ok(())
     }
@@ -190,7 +193,13 @@ impl Ctx {
     // ---- requests -----------------------------------------------------------------------------------------------
 
     /// `#holdRequest`: route a blocking request back to the tab that raised it, keeping its body for a reloaded page.
-    pub(super) fn hold_request(pool: &mut Pool, seq: u64, request: &Value, kinds: Kinds) {
+    pub(super) fn hold_request(
+        pool: &mut Pool,
+        seq: u64,
+        request: &Value,
+        kinds: Kinds,
+        source_generation: Option<u64>,
+    ) {
         let Some(id) = request["id"].as_str().map(str::to_string) else {
             return;
         };
@@ -208,6 +217,7 @@ impl Ctx {
         pool.request_bodies.insert(
             id.clone(),
             Held {
+                source_generation,
                 request: request.clone(),
                 kinds,
             },
@@ -322,8 +332,8 @@ impl Ctx {
         let sent = self.with(|pool| {
             let entry = pool.by_seq(seq)?;
             let mut wins = Vec::new();
-            if Some(entry.win_id) != responder {
-                wins.push(entry.win_id);
+            if let Some(win) = entry.win_id && Some(win) != responder {
+                wins.push(win);
             }
             wins.extend(
                 entry

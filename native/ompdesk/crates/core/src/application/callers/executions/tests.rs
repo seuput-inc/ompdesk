@@ -14,15 +14,15 @@ fn refused_overlapping_acquisitions_release_only_their_provisional_identity() {
     let callers = Callers::new(1);
     let creator = page(&callers, 1);
     let viewer = page(&callers, 2);
-    let first = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let first = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     let original = callers.execution_owner("tab").unwrap();
-    let second = callers.reserve_execution(&viewer.owner, "tab", 2).unwrap();
+    let second = callers.reserve_execution(&viewer.owner, "tab", Some(2)).unwrap();
     callers.finish_execution_reservation(first, false);
     assert_eq!(callers.execution_owner("tab").unwrap(), original);
     callers.finish_execution_reservation(second, false);
     assert!(callers.execution_owner("tab").is_err());
     assert!(callers.execution_facts(&original).is_none());
-    let replacement = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let replacement = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     assert_ne!(callers.execution_owner("tab").unwrap(), original);
     callers.finish_execution_reservation(replacement, false);
 }
@@ -32,13 +32,13 @@ fn one_success_keeps_the_original_creator_not_the_latest_viewer() {
     let callers = Callers::new(1);
     let creator = page(&callers, 1);
     let viewer = page(&callers, 2);
-    let first = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let first = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     let original = callers.execution_owner("tab").unwrap();
-    let second = callers.reserve_execution(&viewer.owner, "tab", 2).unwrap();
+    let second = callers.reserve_execution(&viewer.owner, "tab", Some(2)).unwrap();
     callers.finish_execution_reservation(first, false);
     callers.finish_execution_reservation(second, true);
     let facts = callers.execution_facts(&original).unwrap();
-    assert_eq!(facts.window, 1);
+    assert_eq!(facts.window, Some(1));
     assert_eq!(facts.creator, creator.principal);
     assert!(!callers.finish_execution_retirement(&original));
     callers.close_page(&NativeCaller::Desktop {
@@ -62,7 +62,7 @@ fn one_success_keeps_the_original_creator_not_the_latest_viewer() {
 fn cancellation_after_factory_success_retains_the_exact_handle_until_exit() {
     let callers = Callers::new(1);
     let creator = page(&callers, 1);
-    let reservation = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let reservation = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     let original = callers.execution_owner("tab").unwrap();
     callers.keep_execution(&original).unwrap();
     callers.revoke(&creator.owner);
@@ -79,11 +79,11 @@ fn cancellation_after_factory_success_retains_the_exact_handle_until_exit() {
 fn an_old_receipt_or_reservation_cannot_erase_a_replacement_execution() {
     let callers = Callers::new(1);
     let creator = page(&callers, 1);
-    let stale = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let stale = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     let old = callers.execution_owner("tab").unwrap();
     callers.keep_execution(&old).unwrap();
     callers.retire_execution(&old);
-    let next = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let next = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     let replacement = callers.execution_owner("tab").unwrap();
     assert_ne!(old, replacement);
     callers.keep_execution(&replacement).unwrap();
@@ -99,10 +99,11 @@ fn an_old_receipt_or_reservation_cannot_erase_a_replacement_execution() {
 fn revoked_or_foreign_window_callers_never_mint_an_execution() {
     let callers = Callers::new(1);
     let creator = page(&callers, 1);
-    assert!(callers.reserve_execution(&creator.owner, "tab", 2).is_err());
+    assert!(callers.reserve_execution(&creator.owner, "tab", Some(2)).is_err());
+    assert!(callers.reserve_execution(&creator.owner, "tab", None).is_err());
     assert!(callers.execution_owner("tab").is_err());
     callers.revoke(&creator.owner);
-    assert!(callers.reserve_execution(&creator.owner, "tab", 1).is_err());
+    assert!(callers.reserve_execution(&creator.owner, "tab", Some(1)).is_err());
     assert!(callers.execution_owner("tab").is_err());
 }
 
@@ -110,14 +111,14 @@ fn revoked_or_foreign_window_callers_never_mint_an_execution() {
 fn shutdown_refuses_new_work_but_keeps_retirement_metadata_until_reaped() {
     let callers = Callers::new(1);
     let creator = page(&callers, 1);
-    let reservation = callers.reserve_execution(&creator.owner, "tab", 1).unwrap();
+    let reservation = callers.reserve_execution(&creator.owner, "tab", Some(1)).unwrap();
     let owner = callers.execution_owner("tab").unwrap();
     callers.keep_execution(&owner).unwrap();
     callers.finish_execution_reservation(reservation, true);
     callers.stop();
     assert!(
         callers
-            .reserve_execution(&creator.owner, "other", 1)
+            .reserve_execution(&creator.owner, "other", Some(1))
             .is_err()
     );
     assert!(callers.keep_execution(&owner).is_err());

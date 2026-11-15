@@ -21,9 +21,9 @@ async fn pending<F: Future + ?Sized>(future: &mut std::pin::Pin<Box<F>>) {
     ));
 }
 
-struct Forward {
-    output: Mutex<Option<mpsc::UnboundedSender<TabEvent>>>,
-    flushes: AtomicUsize,
+pub(crate) struct Forward {
+    pub(crate) output: Mutex<Option<mpsc::UnboundedSender<TabEvent>>>,
+    pub(crate) flushes: AtomicUsize,
 }
 
 impl RemoteSink for Forward {
@@ -35,12 +35,15 @@ impl RemoteSink for Forward {
     fn before_response(&self) {
         self.flushes.fetch_add(1, Ordering::AcqRel);
     }
+    fn reply_barrier(&self) -> crate::remote::native_sidecar::Held {
+        Box::pin(async { Ok(()) })
+    }
     fn remove_listeners(&self) {
         self.output.lock().unwrap().take();
     }
 }
 
-fn options() -> TabOptions {
+pub(crate) fn options() -> TabOptions {
     TabOptions {
         rtab: "source-remote".into(),
         cwd: "/isolated/source-workspace".into(),
@@ -103,7 +106,7 @@ async fn remote_retirement_joins_the_original_close_and_held_fault_after_a_waite
         assert_eq!(run.sleep().unwrap_err().code, "unsupported_remote_sleep");
         assert!(incoming.try_recv().is_err());
         let generation = run.generation();
-        let response = run.stock_for_generation(generation, json!({"type":"set_session_name","name":"Refused"}));
+        let response = run.stock_for_generation(generation, json!({"type":"set_session_name","name":"Refused"}), crate::agentctl::service::host::Deadline::Default);
         let answer = async {
             let request = incoming.recv().await.unwrap();
             assert_eq!(request.params["expectedOmp"], "original-omp");
@@ -433,6 +436,75 @@ mod local {
         outcome.unwrap();
         held.unwrap();
         ingress.unwrap();
+        factory.unwrap();
+        closed.unwrap();
+    }
+
+    struct Draining {
+        recorder: native::tests::Recorder,
+        captured: Mutex<Option<oneshot::Sender<()>>>,
+        removed: std::sync::atomic::AtomicBool,
+        drained: Receipt,
+    }
+
+    impl native::Sink for Draining {
+        fn event(&self, event: crate::sidecar::LaneEvent) { native::Sink::event(&self.recorder, event); }
+        fn before_response(&self) { native::Sink::before_response(&self.recorder); }
+        fn sync_settings(&self) -> EffectFuture<'_, ()> { native::Sink::sync_settings(&self.recorder) }
+        fn remove_listeners(&self) {
+            self.removed.store(true, Ordering::Release);
+            native::Sink::remove_listeners(&self.recorder);
+        }
+        fn reply_barrier(&self) -> native::Held {
+            assert!(self.removed.load(Ordering::Acquire), "retirement closes its original event admission first");
+            if let Some(captured) = self.captured.lock().unwrap().take() { let _ = captured.send(()); }
+            self.drained.wait()
+        }
+    }
+
+    #[tokio::test]
+    async fn local_retirement_waits_for_its_original_event_drain_after_the_lane_exits() {
+        use futures_util::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let world = World::new("source-local-event-drain").await;
+        let factory = LocalSources::new(world.config.clone());
+        let (output, mut events) = mpsc::unbounded_channel();
+        let (capture, captured) = oneshot::channel();
+        let (finish, finished) = oneshot::channel::<Result<(), Fault>>();
+        let sink = Arc::new(Draining {
+            recorder: native::tests::Recorder { events: output, flushes: AtomicUsize::new(0) },
+            captured: Mutex::new(Some(capture)), removed: Default::default(),
+            drained: Receipt::join(Box::pin(async move {
+                finished.await.map_err(|_| Fault::new("event_drain", "The original event drain ended"))?
+            })),
+        });
+        let mut created = factory.create(
+            &world.spawn, format!("source-{}", world.spawn.tab), sink, None, Environment::new(),
+        ).unwrap();
+        let held = Receipt::join(created.held);
+        created.held = held.wait();
+        let source = Source::from_local(created);
+        let outcome = AssertUnwindSafe(async {
+            source.start();
+            native::tests::ready_with(&mut events, |_| None).await;
+            let retirement = source.retire();
+            let mut waiting = retirement.wait();
+            tokio::select! {
+                result = captured => result.expect("the original event drain is captured"),
+                result = &mut waiting => panic!("Source retirement ended before its event drain was joined: {result:?}"),
+            }
+            held.wait().await.unwrap();
+            pending(&mut waiting).await;
+        }).catch_unwind().await;
+        let _ = finish.send(Ok(()));
+        let retired = source.retire().wait().await;
+        let held = held.wait().await;
+        let factory = factory.close().await;
+        world.begin_close();
+        let closed = world.finish_close().await;
+        if let Err(error) = outcome { std::panic::resume_unwind(error); }
+        retired.unwrap();
+        held.unwrap();
         factory.unwrap();
         closed.unwrap();
     }

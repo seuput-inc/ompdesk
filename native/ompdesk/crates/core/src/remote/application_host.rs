@@ -20,7 +20,7 @@ use crate::remotebytes::native::LoopbackCallback;
 use crate::server::Fault;
 
 const GRACE: Duration = Duration::from_secs(10 * 60);
-const MAX_COMMAND_MS: u64 = 960_000;
+pub(crate) const MAX_COMMAND_MS: u64 = 960_000;
 type ResultValue = Result<Value, RemoteError>;
 type Key = (String, String);
 
@@ -39,7 +39,7 @@ pub struct Open {
     pub fresh: bool,
     pub session_path: Option<String>,
 }
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardObservation {
     pub session_path: String,
@@ -68,6 +68,17 @@ pub struct Snapshot {
     pub pending_plan: Option<Value>,
     pub kept: Option<Value>,
 }
+/// The original authenticated HostServices call; none of its identity fields come from command JSON.
+pub struct CommandCall<'a, T, O> {
+    pub owner: &'a O,
+    pub target: &'a T,
+    pub command: Value,
+    pub timeout: Option<Duration>,
+    pub expected_omp: Option<String>,
+    pub connection: &'a RemoteRequests,
+    pub view_handle: u64,
+}
+
 
 /// Only the canonical native pool implementation chooses Target and Owner. `acquire` atomically applies its
 /// session claim/tombstone/removal fencing and creates either one runner or a view. `close` ends views before
@@ -125,15 +136,15 @@ pub trait Host: Send + Sync + 'static {
         cwd: Option<String>,
         session: Option<String>,
     ) -> Result<(), Fault>;
-    fn adopt_cwd(&self, target: &Self::Target, cwd: String) -> Result<bool, Fault>;
+    fn adopt_cwd(
+        &self,
+        target: &Self::Target,
+        cwd: String,
+        expected_omp: Option<String>,
+    ) -> impl Future<Output = Result<bool, Fault>> + Send;
     fn command(
         &self,
-        owner: &Self::Owner,
-        target: &Self::Target,
-        command: Value,
-        timeout: Option<Duration>,
-        expected_omp: Option<String>,
-        connection: &RemoteRequests,
+        call: CommandCall<'_, Self::Target, Self::Owner>,
     ) -> impl Future<Output = ResultValue> + Send;
     fn side_channel(
         &self,
@@ -154,7 +165,11 @@ pub trait Host: Send + Sync + 'static {
     ) -> impl Future<Output = Result<CardObservation, Fault>> + Send;
     fn close(&self, target: Self::Target) -> impl Future<Output = Result<(), Fault>> + Send;
     fn cancel_wait(&self, target: &Self::Target) -> impl Future<Output = Result<(), Fault>> + Send;
-    fn sync_image_generation(&self, target: &Self::Target) -> Result<(), Fault>;
+    fn sync_image_generation(
+        &self,
+        target: &Self::Target,
+        expected_omp: Option<String>,
+    ) -> impl Future<Output = Result<(), Fault>> + Send;
     fn upload(
         &self,
         owner: &Self::Owner,
@@ -702,7 +717,7 @@ impl<H: Host> HostServices<H> {
                 let cwd = params["cwd"]
                     .as_str()
                     .ok_or_else(|| invalid("cwd required"))?;
-                Ok(json!(self.host.adopt_cwd(&target, cwd.to_owned())?))
+                Ok(json!(self.host.adopt_cwd(&target, cwd.to_owned(), expected_omp(&params)?).await?))
             }
             "tab.close" => {
                 if let Some(target) = admission.closed {
@@ -768,7 +783,7 @@ impl<H: Host> HostServices<H> {
             }
             "tab.syncImageGeneration" => {
                 let target = target()?;
-                self.host.sync_image_generation(&target)?;
+                self.host.sync_image_generation(&target, expected_omp(&params)?).await?;
                 Ok(Value::Null)
             }
             "host.files.upload" => {
@@ -1175,14 +1190,15 @@ impl<H: Host> HostServices<H> {
             };
             let mut result = service
                 .host
-                .command(
-                    &owner,
-                    &target,
-                    command.clone(),
+                .command(CommandCall {
+                    owner: &owner,
+                    target: &target,
+                    command: command.clone(),
                     timeout,
-                    expected,
-                    &connection,
-                )
+                    expected_omp: expected,
+                    connection: &connection,
+                    view_handle: serial,
+                })
                 .await;
             if (result.as_ref().is_err()
                 || result
@@ -1645,6 +1661,7 @@ fn host_method(method: &str) -> Option<(RequestKind, &'static str)> {
         "host.schedules.create" => (Machine, "host.schedules.create"),
         "host.projects.command" => (Machine, "host.projects.command"),
         "host.git.facts" => (Git, "host.git.facts"),
+        "projectMetadata.get" => (Git, "projectMetadata.get"),
         "host.git.evidence" => (Git, "host.git.evidence"),
         "host.git.landing" => (Git, "host.git.landing"),
         "host.git.removeWorktree" => (Git, "host.git.removeWorktree"),

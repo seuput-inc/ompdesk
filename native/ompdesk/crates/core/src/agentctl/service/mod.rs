@@ -55,6 +55,7 @@ use self::types::{
     Target, Tool, ToolOutcome,
 };
 use self::util::{Flight, OrderedMap};
+use crate::agentctl::inbox::InboxFiles;
 use crate::agentctl::journal::attachments::AttachmentStore;
 use crate::agentctl::journal::call_journal::{CallBegin, CallJournal, CallRecord, CallResult};
 use crate::agentctl::journal::mail_outbox::MailOutbox;
@@ -62,7 +63,10 @@ use crate::agentctl::journal::pending_cleanups::PendingCleanups;
 use crate::agentctl::journal::send_outbox::SendOutbox;
 use crate::agentctl::journal::session_fates::{FatedSession, SessionFates, fate_by};
 use crate::agentctl::journal::{Clock, system_clock};
-use crate::agentctl::rules::mail::{Deliver, Mail, Mailbox, delivery_for, mail_details, mail_text};
+use crate::agentctl::rules::mail::{
+    Deliver, Mail, Mailbox, delivery_for, mail_details, mail_logical_text, mail_text,
+};
+use crate::agentctl::runtime::inbox::ReceivingInbox;
 use crate::ports::Port;
 use crate::server::{Call, Fault, Registry, Reply};
 
@@ -94,6 +98,7 @@ pub struct QueuedFollowUp {
     pub n: u64,
     pub id: String,
     pub from: String,
+    pub(crate) native_key: Option<crate::agentctl::inbox::NativeInboxKey>,
 }
 
 /// A session's last read cost and split, which stand while its omp cannot answer.
@@ -195,6 +200,7 @@ pub struct Inner {
     calls: Option<Mutex<CallJournal>>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
     pub send_outbox: Option<SendOutbox>,
+    pub(crate) receiving_inbox: Option<ReceivingInbox>,
     /// Reports between sessions: dispatch ids, coalescing, the last report of each child (`#mailbox`).
     pub mailbox: Mailbox,
     /// `ompdesk_app`'s control, built at its first use over this service's own ports (`work`'s `ServicePorts`).
@@ -265,6 +271,7 @@ pub struct Files {
     pub mail_outbox: Option<JournalFile>,
     /// Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only.
     pub attachments: Option<PathBuf>,
+    pub(crate) inbox: Option<InboxFiles>,
 }
 
 impl AgentControl {
@@ -284,25 +291,40 @@ impl AgentControl {
             )));
         if let Some(outbox) = &files.mail_outbox {
             host = host.with_outbox(
-                Arc::new(MailOutbox::with_clock(outbox.file.clone(), clock.clone())),
+                Arc::new(MailOutbox::new(outbox.file.clone())),
                 clock.clone(),
             );
         }
+        let receiving_inbox = files.inbox.as_ref().map(|files| {
+            ReceivingInbox::new(files, host.attachment_store().clone(), clock.clone())
+        });
         let deliver_host = host.clone();
-        let deliver: Deliver = Arc::new(move |mail: Mail| {
+        let deliver: Deliver = Arc::new(move |mut mail: Mail| {
             let host = deliver_host.clone();
             Box::pin(async move {
-                host.mail_attached(
-                    &mail.to,
-                    &mail_text(&mail),
-                    &mail_details(&mail),
-                    delivery_for(mail.kind),
-                    mail.attachments.as_ref(),
-                )
-                .await
-                .map_err(|error| error.message())?;
+                if let Some(receipt) = attach::prepare_native_report(&host, &mut mail)
+                    .await
+                    .map_err(|error| error.message())?
+                {
+                    return Ok(receipt);
+                }
+                let native_content = mail
+                    .native_source
+                    .as_ref()
+                    .map(|_| mail_logical_text(&mail));
+                let receipt = host
+                    .mail_attached(
+                        &mail.to,
+                        &mail_text(&mail),
+                        &mail_details(&mail),
+                        delivery_for(mail.kind),
+                        mail.attachments.as_ref(),
+                        mail.native_source.as_ref().zip(native_content.as_deref()),
+                    )
+                    .await
+                    .map_err(|error| error.message())?;
                 host.review_changed(&mail.to);
-                Ok(())
+                Ok(receipt)
             })
         });
         let mailbox =
@@ -318,8 +340,9 @@ impl AgentControl {
             send_outbox: files
                 .send_outbox
                 .as_ref()
-                .map(|outbox| SendOutbox::with_clock(outbox.file.clone(), clock.clone())),
+                .map(|outbox| SendOutbox::new(outbox.file.clone())),
             mailbox,
+            receiving_inbox,
             clock,
             mem: Mutex::new(Mem::default()),
             arrived: tokio::sync::Notify::new(),
@@ -1175,7 +1198,10 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             }
             Reply::json(&())
         }
-        "redeliverSends" => reply(control.redeliver_sends().await),
+        "redeliverSends" => {
+            crate::agentctl::runtime::runtime_of(params.port)?.redeliver_inbox();
+            reply(control.redeliver_sends().await)
+        }
         "reviewItems" => reply(
             control
                 .review_items(&text_arg(&args, "callerTabId", method)?)

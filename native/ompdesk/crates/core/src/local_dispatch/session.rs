@@ -16,11 +16,21 @@ pub struct Session<S: Sidecar<Error = Fault> + ?Sized> {
     generation: u64,
     cwd: Arc<str>,
     slash: Arc<Mutex<Option<HashSet<String>>>>,
+    admission: Option<
+        Arc<crate::application::callers::CommandAdmission<crate::application::source::Source>>,
+    >,
 }
 
 impl<S: Sidecar<Error = Fault> + ?Sized> Clone for Session<S> {
     fn clone(&self) -> Self {
-        Self { source: Arc::clone(&self.source), version: Arc::clone(&self.version), generation: self.generation, cwd: Arc::clone(&self.cwd), slash: Arc::clone(&self.slash) }
+        Self {
+            source: Arc::clone(&self.source),
+            version: Arc::clone(&self.version),
+            generation: self.generation,
+            cwd: Arc::clone(&self.cwd),
+            slash: Arc::clone(&self.slash),
+            admission: self.admission.clone(),
+        }
     }
 }
 
@@ -33,7 +43,14 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Session<S> {
     /// Only a host-selected native source generation may supply this value; never deserialize it from RPC data.
     pub fn from_captured(source: Arc<S>, version: Arc<str>, generation: u64) -> Self {
         let cwd = Arc::from(source.facts()["cwd"].as_str().unwrap_or_default());
-        Self { source, version, generation, cwd, slash: Arc::default() }
+        Self {
+            source,
+            version,
+            generation,
+            cwd,
+            slash: Arc::default(),
+            admission: None,
+        }
     }
 
     /// Override with the cwd selected alongside owner/source/generation before any admission await.
@@ -43,7 +60,23 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Session<S> {
     }
 
     pub async fn raw_stock(&self, command: Value) -> Result<Value, Fault> {
-        self.source.stock_for_generation(self.generation, command).await
+        self.raw_stock_with_deadline(command, crate::agentctl::service::host::Deadline::Default)
+            .await
+    }
+
+    pub(crate) async fn raw_stock_with_deadline(
+        &self,
+        command: Value,
+        deadline: crate::agentctl::service::host::Deadline,
+    ) -> Result<Value, Fault> {
+        match &self.admission {
+            Some(admission) => admission.stock_with_deadline(command, deadline).await,
+            None => {
+                self.source
+                    .stock_for_generation(self.generation, command, deadline)
+                    .await
+            }
+        }
     }
 
     pub fn cwd(&self) -> String {
@@ -58,8 +91,23 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Session<S> {
         self.bridge_optional(method, Some(params)).await
     }
 
-    pub async fn bridge_optional(&self, method: &str, params: Option<Value>) -> Result<Value, CommandError> {
-        self.source.bridge_for_generation(self.generation, method.to_owned(), params, None).await.map_err(Into::into)
+    pub async fn bridge_optional(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, CommandError> {
+        match &self.admission {
+            Some(admission) => {
+                admission
+                    .bridge_for_local(method.to_owned(), params, None)
+                    .await
+            }
+            None => self
+                .source
+                .bridge_for_generation(self.generation, method.to_owned(), params, None)
+                .await
+                .map_err(Into::into),
+        }
     }
 
     pub async fn stock(&self, command: Value) -> Result<Value, CommandError> {
@@ -77,26 +125,86 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Session<S> {
                 let answer = self.stock(json!({"type":"get_available_commands"})).await?;
                 let mut commands = HashSet::new();
                 for row in answer["commands"].as_array().into_iter().flatten() {
-                    if row["source"] != "builtin" { continue; }
+                    if row["source"] != "builtin" {
+                        continue;
+                    }
                     if let Some(name) = row["name"].as_str() {
                         commands.insert(name.to_owned());
-                        for alias in row["aliases"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                        for alias in row["aliases"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                        {
                             commands.insert(alias.to_owned());
                         }
                     }
                 }
                 *cached = Some(commands);
             }
-            cached.as_ref().is_some_and(|commands| commands.contains(name))
+            cached
+                .as_ref()
+                .is_some_and(|commands| commands.contains(name))
         };
         if !commands {
-            return Err(CommandError::local("unsupported", format!("omp {} has no /{name} command", self.version)));
+            return Err(CommandError::local(
+                "unsupported",
+                format!("omp {} has no /{name} command", self.version),
+            ));
         }
         let message = match args.filter(|args| !args.is_empty()) {
             Some(args) => format!("/{name} {args}"),
             None => format!("/{name}"),
         };
-        let result = self.stock(json!({"type":"prompt","message":message})).await?;
+        let result = self
+            .stock(json!({"type":"prompt","message":message}))
+            .await?;
         Ok(json!({"agentInvoked": result["agentInvoked"] == true}))
+    }
+}
+
+impl Session<crate::sidecar::native::Service> {
+    pub(crate) fn with_admission(
+        mut self,
+        admission: Arc<
+            crate::application::callers::CommandAdmission<crate::application::source::Source>,
+        >,
+    ) -> Result<Self, Fault> {
+        if !admission
+            .selected()
+            .sidecar
+            .local()
+            .is_some_and(|source| Arc::ptr_eq(source, &self.source))
+            || self.generation != admission.selected().generation
+        {
+            return Err(Fault::new(
+                "tab_stale",
+                "The original local command source has changed",
+            ));
+        }
+        self.cwd = Arc::from(admission.selected().cwd.as_str());
+        self.admission = Some(admission);
+        Ok(self)
+    }
+}
+
+impl Session<crate::application::source::Source> {
+    pub(crate) fn with_admission(
+        mut self,
+        admission: Arc<
+            crate::application::callers::CommandAdmission<crate::application::source::Source>,
+        >,
+    ) -> Result<Self, Fault> {
+        if !Arc::ptr_eq(&admission.selected().sidecar, &self.source)
+            || self.generation != admission.selected().generation
+        {
+            return Err(Fault::new(
+                "tab_stale",
+                "The original command source has changed",
+            ));
+        }
+        self.cwd = Arc::from(admission.selected().cwd.as_str());
+        self.admission = Some(admission);
+        Ok(self)
     }
 }

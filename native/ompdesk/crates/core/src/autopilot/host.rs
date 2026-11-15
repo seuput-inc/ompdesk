@@ -114,7 +114,14 @@ impl Backend {
                 .ask("stock", &json!({"tab":tab,"command":command}))
                 .await
                 .map_err(Fault::from),
-            Self::Native(native) => native.host.stock(tab.to_owned(), command).await,
+            Self::Native(native) => match super::native_request::current()
+                .filter(|request| request.admission().selected().tab == tab)
+            {
+                Some(request) => request
+                    .command(command, crate::agentctl::service::host::Deadline::Default)
+                    .await,
+                None => native.host.stock(tab.to_owned(), command).await,
+            },
         }
     }
     pub async fn bridge(
@@ -132,12 +139,25 @@ impl Backend {
                 }
                 port.ask("bridge", &args).await.map_err(Fault::from)
             }
-            Self::Native(native) => {
-                native
-                    .host
-                    .bridge(tab.to_owned(), method.to_owned(), params, timeout_ms)
-                    .await
-            }
+            Self::Native(native) => match super::native_request::current()
+                .filter(|request| request.admission().selected().tab == tab)
+            {
+                Some(request) => request
+                    .command(
+                        json!({"type":"autopilot_bridge","method":method,"params":params}),
+                        timeout_ms.map_or(
+                            crate::agentctl::service::host::Deadline::Default,
+                            crate::agentctl::service::host::Deadline::Ms,
+                        ),
+                    )
+                    .await,
+                None => {
+                    native
+                        .host
+                        .bridge(tab.to_owned(), method.to_owned(), params, timeout_ms)
+                        .await
+                }
+            },
         }
     }
     pub async fn facts(&self, tab: &str) -> Result<Option<Facts>, Fault> {
@@ -316,8 +336,10 @@ impl Backend {
                 Ok((result.title, result.body))
             }
             Self::Native(_) => {
-                let result =
-                    super::effects::pr_text(&branch, cycles.as_array().map_or(&[], Vec::as_slice));
+                let result = super::effects::pr_text(
+                    &branch,
+                    cycles.as_array().map_or(&[][..], Vec::as_slice),
+                );
                 Ok((result.title, result.body))
             }
         }

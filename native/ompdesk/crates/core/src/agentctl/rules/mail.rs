@@ -95,7 +95,69 @@ pub struct Mail {
     pub instruction: Option<String>,
     /// What it carries besides text: pictures sent inline (by reference, bytes in the attachment store), files landed.
     pub attachments: Option<AttachedSet>,
+    /// Captured from authenticated caller/target facts before generated presentation/custody text is added.
+    pub(crate) native_source: Option<crate::agentctl::inbox::InboxAdmission>,
+    /// Ephemeral original bytes for the one coalescer-selected native delivery; never board/JSON state.
+    pub(crate) native_attachment_plan: Option<Arc<NativeAttachmentPlan>>,
     pub at: f64,
+}
+
+pub(crate) struct NativeAttachmentPlan {
+    pub images: Vec<crate::agentctl::journal::attachments::Resolved>,
+    pub files: Vec<crate::agentctl::journal::attachments::Resolved>,
+    materialized: Mutex<Option<AttachedSet>>,
+}
+
+impl std::fmt::Debug for NativeAttachmentPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeAttachmentPlan")
+            .field("images", &self.images.len())
+            .field("files", &self.files.len())
+            .finish()
+    }
+}
+
+impl PartialEq for NativeAttachmentPlan {
+    fn eq(&self, other: &Self) -> bool {
+        self.images
+            .iter()
+            .map(|image| &image.file)
+            .eq(other.images.iter().map(|image| &image.file))
+            && self
+                .files
+                .iter()
+                .map(|file| &file.file)
+                .eq(other.files.iter().map(|file| &file.file))
+    }
+}
+
+impl NativeAttachmentPlan {
+    pub fn new(
+        images: Vec<crate::agentctl::journal::attachments::Resolved>,
+        files: Vec<crate::agentctl::journal::attachments::Resolved>,
+    ) -> Self {
+        Self {
+            images,
+            files,
+            materialized: Mutex::new(None),
+        }
+    }
+
+    pub fn record_materialized(&self, set: &AttachedSet) {
+        *self
+            .materialized
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(set.clone());
+    }
+
+    pub fn summary(&self) -> Option<String> {
+        self.materialized
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(AttachedSet::summary)
+    }
 }
 
 impl Mail {
@@ -123,6 +185,8 @@ impl Mail {
             card: None,
             instruction: None,
             attachments: None,
+            native_source: None,
+            native_attachment_plan: None,
             at,
         }
     }
@@ -171,6 +235,15 @@ fn in_mail(value: &str) -> String {
 
 /// What the receiving model reads (the transcript draws `mail_details` instead).
 pub fn mail_text(mail: &Mail) -> String {
+    render_mail_text(mail, true)
+}
+
+/// The same report before destination-only attachment paths are materialized.
+pub fn mail_logical_text(mail: &Mail) -> String {
+    render_mail_text(mail, false)
+}
+
+fn render_mail_text(mail: &Mail, include_attachment_paths: bool) -> String {
     let title = mail
         .from_title
         .replace('"', "'")
@@ -191,12 +264,14 @@ pub fn mail_text(mail: &Mail) -> String {
     if let Some(files) = mail.files.as_ref().filter(|files| !files.is_empty()) {
         lines.push(in_mail(&format!("changed files: {}", files.join(", "))));
     }
-    for line in mail
-        .attachments
-        .iter()
-        .flat_map(AttachedSet::attached_lines)
-    {
-        lines.push(in_mail(&line));
+    if include_attachment_paths {
+        for line in mail
+            .attachments
+            .iter()
+            .flat_map(AttachedSet::attached_lines)
+        {
+            lines.push(in_mail(&line));
+        }
     }
     if let Some(checks) = mail.checks.as_ref().filter(|checks| !checks.is_empty()) {
         let listed: Vec<String> = checks
@@ -282,8 +357,15 @@ pub fn mail_details(mail: &Mail) -> Value {
     Value::Object(map)
 }
 
+/// Receiver responsibility only; neither variant claims provider consumption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryReceipt {
+    New,
+    Existing,
+}
+
 /// A delivery into the receiver's session: resolves when it was taken, or says why not.
-pub type DeliverFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+pub type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryReceipt, String>> + Send>>;
 /// Deliver one mail into its receiver's session.
 pub type Deliver = Arc<dyn Fn(Mail) -> DeliverFuture + Send + Sync>;
 
@@ -315,9 +397,27 @@ impl Posted {
     }
 }
 
+/// The first actual delivery outcome. Shared summaries contain paths/counts only, never prepared attachment bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostedOutcome {
+    pub posted: Posted,
+    pub attachment_summary: Option<Arc<String>>,
+}
+
+impl From<Posted> for PostedOutcome {
+    fn from(posted: Posted) -> Self {
+        Self {
+            posted,
+            attachment_summary: None,
+        }
+    }
+}
+
 struct Waiting {
     mail: Mail,
     generation: u64,
+    native: Option<Arc<NativeCompletion>>,
+    attempted: bool,
 }
 
 #[derive(Default)]
@@ -328,7 +428,22 @@ struct Tables {
     state: HashMap<String, MailState>,
     seen: HashSet<String>,
     pending: HashMap<String, Waiting>,
+    /// Completion ownership for already-started native deliveries, not a second message queue.
+    in_flight: HashMap<Arc<String>, ActiveDelivery>,
     generations: u64,
+}
+
+fn activate_dispatch(tables: &mut Tables, child: &str, n: u64) {
+    if n <= tables.dispatch.get(child).copied().unwrap_or(0) {
+        return;
+    }
+    tables.dispatch.insert(child.to_owned(), n);
+    let prefix = format!("{child}>");
+    for (key, state) in &mut tables.state {
+        if key.starts_with(&prefix) {
+            state.waiting = false;
+        }
+    }
 }
 
 struct Inner {
@@ -337,6 +452,131 @@ struct Inner {
     tables: Mutex<Tables>,
 }
 
+struct NativeCompletion {
+    identity: Arc<String>,
+    fingerprint: String,
+    pair: String,
+    result: tokio::sync::watch::Sender<Option<Result<PostedOutcome, String>>>,
+}
+
+impl NativeCompletion {
+    fn finish(&self, result: impl FnOnce() -> Result<PostedOutcome, String>) {
+        self.result.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(result());
+            true
+        });
+    }
+
+    fn finished(&self) -> bool {
+        self.result.borrow().is_some()
+    }
+
+    async fn wait(&self) -> Result<PostedOutcome, String> {
+        let mut result = self.result.subscribe();
+        loop {
+            let observed = result.borrow_and_update().clone();
+            if let Some(observed) = observed {
+                return observed;
+            }
+            result
+                .changed()
+                .await
+                .map_err(|_| unknown_outcome("the completion channel closed"))?;
+        }
+    }
+}
+
+struct ActiveDelivery {
+    generation: u64,
+    completion: Arc<NativeCompletion>,
+    attempted: bool,
+}
+
+fn remove_active(tables: &mut Tables, progress: &Arc<NativeCompletion>, generation: u64) {
+    if tables
+        .in_flight
+        .get(progress.identity.as_ref())
+        .is_some_and(|active| {
+            active.generation == generation && Arc::ptr_eq(&active.completion, progress)
+        })
+    {
+        tables.in_flight.remove(progress.identity.as_ref());
+    }
+}
+
+/// A panicked/dropped delivery task must not leave its native caller waiting forever.
+struct ActiveGuard {
+    inner: Arc<Inner>,
+    progress: Option<Arc<NativeCompletion>>,
+    generation: u64,
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        if let Some(progress) = &self.progress {
+            remove_active(&mut self.inner.tables(), progress, self.generation);
+            progress.finish(|| {
+                Err(unknown_outcome(
+                    "the selected delivery task ended before a conclusive result",
+                ))
+            });
+        }
+    }
+}
+
+fn native_identity(mail: &Mail) -> Result<Option<(String, String)>, String> {
+    let Some(source) = &mail.native_source else {
+        return Ok(None);
+    };
+    let payload = if let Some(plan) = &mail.native_attachment_plan {
+        crate::agentctl::inbox::logical_payload(
+            &source.logical,
+            Some((
+                plan.images.iter().map(|image| &image.file),
+                plan.files.iter().map(|file| &file.file),
+            )),
+        )
+    } else {
+        crate::agentctl::inbox::logical_payload(
+            &source.logical,
+            mail.attachments.as_ref().map(|set| {
+                (
+                    set.images.iter(),
+                    set.files.iter().map(|landed| &landed.file),
+                )
+            }),
+        )
+    }
+    .map_err(|error| error.to_string())?;
+    Ok(Some((
+        source.logical.delivery_id()?,
+        crate::agentctl::journal::inbox_ledger::fingerprint_payload(payload)?,
+    )))
+}
+
+fn supersede(waiting: Waiting) {
+    if let Some(progress) = waiting.native {
+        progress.finish(|| Err(superseded_error(waiting.attempted)));
+    }
+}
+
+fn superseded_error(attempted: bool) -> String {
+    if attempted {
+        unknown_outcome("the report was superseded after a delivery attempt")
+    } else {
+        "This progress attempt was superseded before delivery; no receiver acceptance was confirmed"
+            .into()
+    }
+}
+
+fn unknown_outcome(reason: &str) -> String {
+    format!(
+        "Native report receiver outcome is unconfirmed; query or retry the same identity: {reason}"
+    )
+}
 impl Inner {
     fn tables(&self) -> std::sync::MutexGuard<'_, Tables> {
         self.tables
@@ -352,6 +592,19 @@ pub struct Mailbox {
     inner: Arc<Inner>,
 }
 
+enum PostAdmission {
+    Ready(Posted),
+    Joined(Arc<NativeCompletion>),
+    Queued {
+        generation: u64,
+        completion: Option<Arc<NativeCompletion>>,
+    },
+    Deliver {
+        generation: u64,
+        completion: Option<Arc<NativeCompletion>>,
+    },
+}
+
 /// Wait out the coalescing window, then deliver the pending report if it is still this timer's.
 fn arm(inner: Arc<Inner>, key: String, generation: u64, attempt: u32) {
     tokio::spawn(async move {
@@ -362,34 +615,103 @@ fn arm(inner: Arc<Inner>, key: String, generation: u64, attempt: u32) {
                 Some(waiting) if waiting.generation == generation => {}
                 _ => return,
             }
-            tables.pending.remove(&key).map(|waiting| waiting.mail)
-        };
-        let Some(next) = next else { return };
-        let delivered = (inner.deliver)(next.clone()).await;
-        let mut tables = inner.tables();
-        match delivered {
-            Ok(()) => {
-                tables.seen.insert(next.id);
-            }
-            Err(_) => {
-                // One failed delivery is retried a few times, unless newer progress replaced it meanwhile.
-                if attempt >= MAIL_PROGRESS_RETRIES || tables.pending.contains_key(&key) {
-                    return;
-                }
-                tables.generations += 1;
-                let generation = tables.generations;
-                tables.pending.insert(
-                    key.clone(),
-                    Waiting {
-                        mail: next,
+            let next = tables.pending.remove(&key);
+            if let Some(progress) = next.as_ref().and_then(|next| next.native.as_ref()) {
+                tables.in_flight.insert(
+                    progress.identity.clone(),
+                    ActiveDelivery {
                         generation,
+                        completion: progress.clone(),
+                        attempted: next.as_ref().is_some_and(|waiting| waiting.attempted),
                     },
                 );
-                drop(tables);
-                arm(inner.clone(), key, generation, attempt + 1);
             }
+            next
+        };
+        if let Some(next) = next {
+            deliver_claimed(inner, key, next, Some(attempt)).await;
         }
     });
+}
+
+async fn deliver_claimed(inner: Arc<Inner>, key: String, mut next: Waiting, attempt: Option<u32>) {
+    let generation = next.generation;
+    let mut guard = next.native.as_ref().map(|progress| ActiveGuard {
+        inner: inner.clone(),
+        progress: Some(progress.clone()),
+        generation,
+    });
+    if let Some(progress) = &next.native {
+        let mut tables = inner.tables();
+        let Some(active) = tables
+            .in_flight
+            .get_mut(progress.identity.as_ref())
+            .filter(|active| {
+                active.generation == generation && Arc::ptr_eq(&active.completion, progress)
+            })
+        else {
+            return;
+        };
+        if progress.finished() {
+            return;
+        }
+        active.attempted = true;
+    }
+    next.attempted = true;
+    let delivered = (inner.deliver)(next.mail.clone()).await;
+    let mut tables = inner.tables();
+    match delivered {
+        Ok(receipt) => {
+            tables.seen.insert(next.mail.id);
+            if let Some(progress) = &next.native {
+                progress.finish(|| {
+                    Ok(PostedOutcome {
+                        posted: match receipt {
+                            DeliveryReceipt::New => Posted::Delivered,
+                            DeliveryReceipt::Existing => Posted::Duplicate,
+                        },
+                        attachment_summary: next
+                            .mail
+                            .native_attachment_plan
+                            .take()
+                            .and_then(|plan| plan.summary())
+                            .map(Arc::new),
+                    })
+                });
+            }
+        }
+        Err(error) => {
+            let Some(attempt) = attempt.filter(|attempt| *attempt < MAIL_PROGRESS_RETRIES) else {
+                if let Some(progress) = &next.native {
+                    progress.finish(|| Err(unknown_outcome(&error)));
+                }
+                return;
+            };
+            if tables.pending.contains_key(&key)
+                || next
+                    .native
+                    .as_ref()
+                    .is_some_and(|progress| progress.finished())
+            {
+                if let Some(progress) = &next.native {
+                    progress.finish(|| Err(unknown_outcome(&error)));
+                }
+                return;
+            }
+            if let Some(progress) = &next.native {
+                remove_active(&mut tables, progress, generation);
+            }
+            if let Some(guard) = &mut guard {
+                guard.progress = None;
+            }
+            tables.generations += 1;
+            let generation = tables.generations;
+            next.generation = generation;
+            tables.pending.insert(key.clone(), next);
+            drop(tables);
+            arm(inner, key, generation, attempt + 1);
+        }
+    }
 }
 
 impl Mailbox {
@@ -411,14 +733,26 @@ impl Mailbox {
     pub fn dispatch(&self, child: &str) -> String {
         let mut tables = self.inner.tables();
         let n = tables.dispatch.get(child).copied().unwrap_or(0) + 1;
-        tables.dispatch.insert(child.to_owned(), n);
-        let prefix = format!("{child}>");
-        for (key, state) in tables.state.iter_mut() {
-            if key.starts_with(&prefix) {
-                state.waiting = false;
-            }
-        }
+        activate_dispatch(&mut tables, child, n);
         format!("d{n}")
+    }
+
+    pub fn candidate_dispatch(&self, child: &str, pending_floor: u64) -> Result<u64, String> {
+        self.inner
+            .tables()
+            .dispatch
+            .get(child)
+            .copied()
+            .unwrap_or(0)
+            .max(pending_floor)
+            .checked_add(1)
+            .filter(|next| *next <= crate::agentctl::inbox::MAX_DISPATCH as u64)
+            .ok_or_else(|| "The next dispatch exceeds the exact host-number range".into())
+    }
+
+    /// A retry activates the receiver's FIRST dispatch, never the discarded newly derived number.
+    pub fn accept_dispatch(&self, child: &str, n: u64) {
+        activate_dispatch(&mut self.inner.tables(), child, n);
     }
 
     pub fn current(&self, child: &str) -> Option<String> {
@@ -452,66 +786,186 @@ impl Mailbox {
             .cloned()
     }
 
-    /// Accept a report; resolves with what the sender is told. A repeated id is a no-op; a report naming an older
-    /// dispatch than the sender's current one is ignored. A failed delivery of a non-progress report is the error.
-    pub async fn post(&self, mail: Mail) -> Result<Posted, String> {
-        let inner = &self.inner;
-        let key = format!("{}>{}", mail.from, mail.to);
-        let stamped;
-        {
-            let mut tables = inner.tables();
-            if tables.seen.contains(&mail.id) {
-                return Ok(Posted::Duplicate);
-            }
-            let current = tables.dispatch.get(&mail.from).map(|n| format!("d{n}"));
-            if let (Some(sent), Some(current)) = (mail.dispatch.as_deref(), current.as_deref())
-                && !sent.is_empty()
-                && sent != current
+    /// A successful live-card answer settles only notifications of that exact card, not a newer question or block.
+    pub(crate) fn answered_card(&self, child: &str, card: &str) {
+        for state in self.inner.tables().state.values_mut() {
+            if state.last.from == child
+                && state.last.kind == Question
+                && state.last.card.as_deref() == Some(card)
             {
-                return Ok(Posted::Stale);
+                state.waiting = false;
             }
-            // Marked seen only once delivered: a delivery that failed leaves the id free, so the sender's retry with
-            // the same id goes through.
-            let mut with_dispatch = mail.clone();
-            if let Some(current) = current {
-                with_dispatch.dispatch = Some(current);
+        }
+    }
+
+    fn prepare_post(&self, pending_mail: &mut Option<Mail>) -> Result<PostAdmission, String> {
+        let mail = pending_mail
+            .as_mut()
+            .ok_or("Missing mailbox admission payload")?;
+        let native = native_identity(mail)?;
+        let key = format!("{}>{}", mail.from, mail.to);
+        let mut tables = self.inner.tables();
+        if native.is_none() && tables.seen.contains(&mail.id) {
+            return Ok(PostAdmission::Ready(Posted::Duplicate));
+        }
+        if let Some((identity, fingerprint)) = &native {
+            let completion = tables
+                .in_flight
+                .get(identity)
+                .map(|active| &active.completion)
+                .or_else(|| {
+                    tables
+                        .pending
+                        .get(&key)
+                        .and_then(|pending| pending.native.as_ref())
+                        .filter(|pending| pending.identity.as_ref() == identity)
+                });
+            if let Some(completion) = completion {
+                if completion.fingerprint != *fingerprint {
+                    return Err("A pending report identity conflicts with its logical payload; original retained".into());
+                }
+                return Ok(PostAdmission::Joined(completion.clone()));
             }
-            stamped = with_dispatch;
-            tables.state.insert(
-                key.clone(),
-                MailState {
-                    last: stamped.clone(),
-                    waiting: matches!(mail.kind, Question | Blocked),
+        } else if let Some(pending) = tables.pending.get(&key)
+            && pending.mail.id == mail.id
+            && pending.native.is_some()
+        {
+            return Err(
+                "A pending native report cannot be replaced by ambiguous legacy data".into(),
+            );
+        }
+        let current = tables.dispatch.get(&mail.from).map(|n| format!("d{n}"));
+        if let (Some(sent), Some(current)) = (mail.dispatch.as_deref(), current.as_deref())
+            && !sent.is_empty()
+            && sent != current
+        {
+            return Ok(PostAdmission::Ready(Posted::Stale));
+        }
+        if let Some(current) = current {
+            mail.dispatch = Some(current);
+        }
+        let plan = mail.native_attachment_plan.take();
+        tables.state.insert(
+            key.clone(),
+            MailState {
+                last: mail.clone(),
+                waiting: matches!(mail.kind, Question | Blocked),
+            },
+        );
+        mail.native_attachment_plan = plan;
+        let completion = native.map(|(identity, fingerprint)| {
+            Arc::new(NativeCompletion {
+                identity: Arc::new(identity),
+                fingerprint,
+                pair: key.clone(),
+                result: tokio::sync::watch::channel(None).0,
+            })
+        });
+        if mail.kind == Progress {
+            let merged = tables
+                .pending
+                .get(&key)
+                .map_or(0, |pending| pending.mail.merged.unwrap_or(0) + 1);
+            if merged != 0 {
+                mail.merged = Some(merged);
+            }
+            tables.generations += 1;
+            let generation = tables.generations;
+            let mail = pending_mail
+                .take()
+                .ok_or("Missing queued mailbox payload")?;
+            if let Some(previous) = tables.pending.insert(
+                key,
+                Waiting {
+                    mail,
+                    generation,
+                    native: completion.clone(),
+                    attempted: false,
+                },
+            ) {
+                supersede(previous);
+            }
+            return Ok(PostAdmission::Queued {
+                generation,
+                completion,
+            });
+        }
+        if let Some(previous) = tables.pending.remove(&key) {
+            supersede(previous);
+        }
+        let generation = if let Some(completion) = &completion {
+            tables.generations += 1;
+            let generation = tables.generations;
+            tables.in_flight.insert(
+                completion.identity.clone(),
+                ActiveDelivery {
+                    generation,
+                    completion: completion.clone(),
+                    attempted: false,
                 },
             );
-            if mail.kind == Progress {
-                let merged = tables
-                    .pending
-                    .get(&key)
-                    .map_or(0, |pending| pending.mail.merged.unwrap_or(0) + 1);
-                let mut next = stamped;
-                if merged != 0 {
-                    next.merged = Some(merged);
-                }
-                tables.generations += 1;
-                let generation = tables.generations;
-                tables.pending.insert(
-                    key.clone(),
-                    Waiting {
-                        mail: next,
-                        generation,
-                    },
-                );
-                drop(tables);
-                arm(inner.clone(), key, generation, 0);
-                return Ok(Posted::Queued);
+            generation
+        } else {
+            0
+        };
+        Ok(PostAdmission::Deliver {
+            generation,
+            completion,
+        })
+    }
+
+    /// Coalesces legacy progress immediately; native posts finish only at actual receiver acceptance or explicit failure.
+    pub async fn post(&self, mail: Mail) -> Result<PostedOutcome, String> {
+        let key = format!("{}>{}", mail.from, mail.to);
+        let mut mail = Some(mail);
+        match self.prepare_post(&mut mail)? {
+            PostAdmission::Ready(result) => Ok(result.into()),
+            PostAdmission::Joined(completion) => {
+                drop(mail);
+                completion.wait().await
             }
-            // Anything else supersedes the progress still waiting from the same sender.
-            tables.pending.remove(&key);
+            PostAdmission::Queued {
+                generation,
+                completion,
+            } => {
+                arm(self.inner.clone(), key, generation, 0);
+                match completion {
+                    Some(completion) => completion.wait().await,
+                    None => Ok(Posted::Queued.into()),
+                }
+            }
+            PostAdmission::Deliver {
+                generation,
+                completion,
+            } => {
+                let mail = mail.ok_or("Missing selected mailbox payload")?;
+                if let Some(completion) = completion {
+                    let inner = self.inner.clone();
+                    let native = completion.clone();
+                    tokio::spawn(deliver_claimed(
+                        inner,
+                        key,
+                        Waiting {
+                            mail,
+                            generation,
+                            native: Some(native),
+                            attempted: false,
+                        },
+                        None,
+                    ));
+                    completion.wait().await
+                } else {
+                    let id = mail.id.clone();
+                    let delivered = (self.inner.deliver)(mail).await?;
+                    self.inner.tables().seen.insert(id);
+                    let posted = match delivered {
+                        DeliveryReceipt::New => Posted::Delivered,
+                        DeliveryReceipt::Existing => Posted::Duplicate,
+                    };
+                    Ok(posted.into())
+                }
+            }
         }
-        (inner.deliver)(stamped).await?;
-        inner.tables().seen.insert(mail.id);
-        Ok(Posted::Delivered)
     }
 
     /// A closed session leaves nothing behind.
@@ -522,6 +976,23 @@ impl Mailbox {
         let to = format!(">{tab}");
         let names = |key: &String| key.starts_with(&from) || key.ends_with(&to);
         tables.state.retain(|key, _| !names(key));
-        tables.pending.retain(|key, _| !names(key));
+        tables.pending.retain(|key, pending| {
+            if !names(key) {
+                return true;
+            }
+            if let Some(progress) = &pending.native {
+                progress.finish(|| Err(superseded_error(pending.attempted)));
+            }
+            false
+        });
+        tables.in_flight.retain(|_, active| {
+            if !names(&active.completion.pair) {
+                return true;
+            }
+            active
+                .completion
+                .finish(|| Err(superseded_error(active.attempted)));
+            active.attempted
+        });
     }
 }

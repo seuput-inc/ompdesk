@@ -29,14 +29,16 @@ impl PendingCommand {
     }
 }
 
-impl<H: Host<Sidecar = Source>> Service<H> {
+impl<H: Host> Service<H> {
     pub(crate) fn select_page_command(
         &self,
         caller: Admitted,
         requested_tab: Option<String>,
         channel: Option<Arc<str>>,
         scope: Scope,
-    ) -> EffectFuture<'static, Result<PendingCommand, Fault>> {
+    ) -> EffectFuture<'static, Result<PendingCommand, Fault>>
+    where H: Host<Sidecar = Source>,
+    {
         let callers = Arc::clone(&self.callers);
         let app = Arc::clone(&self.app);
         self.execute_typed(move |ctx| {
@@ -44,7 +46,7 @@ impl<H: Host<Sidecar = Source>> Service<H> {
                 let window = app.host.window_for(&caller.owner)?;
                 let target = ctx
                     .selected_target(window, requested_tab.as_deref())
-                    .ok_or_else(super::stale)?;
+                    .ok_or_else(not_connected)?;
                 app.host.authorize_tab(&caller.owner, &target.tab)?;
                 let execution = callers.execution_owner(&target.tab)?;
                 let (source, incarnation, view) = callers
@@ -54,9 +56,12 @@ impl<H: Host<Sidecar = Source>> Service<H> {
                         &scope,
                         (&execution, &target.tab),
                         || {
-                            let source = app.sidecar(&target.tab).ok_or_else(super::stale)?;
+                            let source = app.sidecar(&target.tab).ok_or_else(not_connected)?;
                             let (incarnation, view) = ctx.with(|pool| {
                                 let entry = pool.entry(&target.tab).ok_or_else(super::stale)?;
+                                if entry.closing.is_some() {
+                                    return Err(super::stale());
+                                }
                                 Ok::<_, Fault>((
                                     entry.seq,
                                     entry
@@ -87,7 +92,9 @@ impl<H: Host<Sidecar = Source>> Service<H> {
     pub(crate) fn finish_page_command(
         self: &Arc<Self>,
         pending: PendingCommand,
-    ) -> EffectFuture<'static, Result<Arc<CommandAdmission<Source>>, Fault>> {
+    ) -> EffectFuture<'static, Result<Arc<CommandAdmission<Source>>, Fault>>
+    where H: Host<Sidecar = Source>,
+    {
         let settled = crate::application::command_start::settled_start(
             Arc::clone(pending.source()),
             pending.scope().clone(),
@@ -118,7 +125,8 @@ impl<H: Host<Sidecar = Source>> Service<H> {
                             }
                             ctx.with(|pool| {
                                 let entry = pool.entry(&pending.tab).ok_or_else(super::stale)?;
-                                if entry.seq != pending.incarnation
+                                if entry.closing.is_some()
+                                    || entry.seq != pending.incarnation
                                     || entry.view_id(&pool.view_epoch, pending.window).as_deref()
                                         != Some(pending.view.as_str())
                                 {
@@ -158,6 +166,10 @@ impl<H: Host<Sidecar = Source>> Service<H> {
             .await
         })
     }
+}
+
+fn not_connected() -> Fault {
+    Fault::new("sidecar_not_connected", "Sidecar not connected")
 }
 
 #[cfg(test)]

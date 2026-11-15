@@ -80,6 +80,11 @@ async fn a_page_revoked_during_original_source_start_cannot_finish_admission() {
 async fn finishing_an_unstarted_source_neither_starts_it_nor_issues_a_command_grant() {
     let rig = Rig::new("pending-command-asleep", 0x737461727433).await;
     let result = AssertUnwindSafe(async {
+        let missing = rig.pool.select_page_command(
+            rig.caller.clone(), Some("missing-original-tab".into()), None, Scope::detached(),
+        ).await.err().unwrap();
+        assert_eq!(missing.code, "sidecar_not_connected");
+        assert_eq!(missing.message, "Sidecar not connected");
         let pending = rig
             .pool
             .select_page_command(

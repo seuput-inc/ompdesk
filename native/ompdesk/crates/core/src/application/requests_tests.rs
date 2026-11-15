@@ -107,6 +107,35 @@ async fn replies_and_close_wait_for_the_effect_scope_instead_of_only_its_cancel_
 }
 
 #[tokio::test]
+async fn rpc_waiter_answers_while_the_same_request_still_owns_its_effects_and_close_joins_them() {
+    let requests = executor();
+    requests.admit(caller()).await.unwrap();
+    let (started, entered) = oneshot::channel();
+    let (release, blocked) = oneshot::channel();
+    let (done, completed) = oneshot::channel();
+    let response = requests.invoke_rpc(caller(), request(37), move |_, scope| async move {
+        tokio::spawn(async move {
+            started.send(()).unwrap();
+            blocked.await.unwrap();
+            done.send(scope.cancelled()).unwrap();
+            drop(scope);
+        });
+        Ok(serde_json::json!({"success":false,"error":"RPC timeout (1ms): local_write"}))
+    });
+    entered.await.unwrap();
+    let response = response.await.unwrap();
+    assert_eq!(response["success"], false);
+    let mut closing = requests.close(caller(), |_| async { Ok(()) });
+    assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending())).await);
+    let (fence, passed) = oneshot::channel();
+    hub::post(move || { let _ = fence.send(()); });
+    passed.await.unwrap();
+    release.send(()).unwrap();
+    assert!(completed.await.unwrap(), "closing the original caller still cancels its retained effect");
+    closing.await.unwrap();
+}
+
+#[tokio::test]
 async fn dropping_an_unpolled_answer_withdraws_only_its_own_request() {
     let requests = executor();
     requests.admit(caller()).await.unwrap();

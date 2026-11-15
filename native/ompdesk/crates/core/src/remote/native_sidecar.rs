@@ -17,6 +17,7 @@ use crate::sidecar::application::EffectFuture;
 pub trait RemoteSink: Send + Sync {
     fn event(&self, event: TabEvent);
     fn before_response(&self);
+    fn reply_barrier(&self) -> Held;
     fn remove_listeners(&self);
 }
 
@@ -128,6 +129,14 @@ impl Service {
         self.tab.facts()
     }
 
+    pub(crate) fn changes(&self) -> watch::Receiver<u64> {
+        self.delivered.clone()
+    }
+
+    pub(crate) fn reply_barrier(&self) -> Held {
+        self.sink.reply_barrier()
+    }
+
     pub fn generation(&self) -> u64 {
         self.tab.generation()
     }
@@ -151,6 +160,26 @@ impl Service {
     }
     pub fn adopt_cwd(&self, cwd: &str) -> bool {
         self.tab.adopt_cwd(cwd)
+    }
+    pub(crate) fn adopt_cwd_for_generation(
+        &self,
+        generation: u64,
+        cwd: String,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        self.finish(self.tab.adopt_cwd_for_generation(generation, cwd))
+    }
+    pub(crate) fn sync_image_generation_for_generation(
+        &self,
+        generation: u64,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        self.finish(self.tab.sync_image_generation_for_generation(generation))
+    }
+    pub(crate) fn kind_for_generation(
+        &self,
+        generation: u64,
+        session_path: String,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        self.finish(self.tab.kind_for_generation(generation, session_path))
     }
     pub fn sleep(&self) -> Result<(), Fault> {
         Err(Fault::new(
@@ -182,10 +211,16 @@ impl Service {
         &self,
         generation: u64,
         command: Value,
+        deadline: crate::agentctl::service::host::Deadline,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
         self.finish(
-            self.tab
-                .command_for_generation(generation, command, Duration::from_secs(8)),
+            self.tab.command_for_generation(
+                generation,
+                command,
+                deadline.timeout().unwrap_or_else(|| {
+                    Duration::from_millis(super::application_host::MAX_COMMAND_MS)
+                }),
+            ),
         )
     }
 
@@ -270,8 +305,9 @@ impl crate::pool::application::Sidecar for Service {
         &self,
         generation: u64,
         command: Value,
+        deadline: crate::agentctl::service::host::Deadline,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
-        Service::stock_for_generation(self, generation, command)
+        Service::stock_for_generation(self, generation, command, deadline)
     }
     fn bridge_for_generation(
         &self,
@@ -293,6 +329,9 @@ impl crate::pool::application::Sidecar for Service {
     /// This is the captured local actor receipt; Root must retain Released.local=false.
     fn exit_waiter(&self) -> EffectFuture<'static, Result<(), Fault>> {
         self.when_disposed()
+    }
+    fn reply_barrier(&self) -> Held {
+        Service::reply_barrier(self)
     }
     fn remove_listeners(&self) {
         Service::remove_listeners(self);

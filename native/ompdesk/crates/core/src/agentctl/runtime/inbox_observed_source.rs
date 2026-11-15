@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use super::Runtime;
 use crate::agentctl::inbox::{
-    HostObservedCardPrincipal, InboxAddress, InboxIntent, InboxLogicalMessage,
-    InboxLogicalPayload, InboxLogicalSource, InboxProducer, ObservedCardKind,
+    HostObservedCardPrincipal, InboxAddress, InboxIntent, InboxLogicalMessage, InboxLogicalPayload,
+    InboxLogicalSource, InboxProducer, ObservedCardKind,
 };
 use crate::agentctl::journal::Persistence;
 use crate::agentctl::journal::mail_outbox::OutboxMail;
@@ -33,9 +33,8 @@ impl Runtime {
                 "The observing host has no source report journal",
             )
         })?;
-        let request = UiRequest::deserialize(card.request).map_err(|error| {
-            Fault::new("observed_card_invalid_request", error.to_string())
-        })?;
+        let request = UiRequest::deserialize(card.request)
+            .map_err(|error| Fault::new("observed_card_invalid_request", error.to_string()))?;
         let text = format!(
             "OMPdesk host observed this question card; this is not a report written by the child:\n{}",
             card_text(&request),

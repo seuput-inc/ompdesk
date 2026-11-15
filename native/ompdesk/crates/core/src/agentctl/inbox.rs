@@ -1,0 +1,636 @@
+//! Private inbox wire data. Native receipt of responsibility is not a bridge/model-context receipt.
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use super::journal::Persistence;
+use super::journal::attachments::{Attached, AttachedSet, AttachmentRef, read_attached, read_ref};
+
+/// Dispatch metadata crosses the existing JavaScript host route without numeric rounding.
+pub(crate) const MAX_DISPATCH: i64 = (1_i64 << 53) - 1;
+
+/// Supplied only by the app's trusted native-service constructor, never by a delivery/tool payload.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxFiles {
+    pub ledger: PathBuf,
+    pub upload_user_data: PathBuf,
+}
+
+pub(crate) fn new_delivery_id() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    crate::sys::random(&mut bytes)
+        .map_err(|error| format!("Cannot create native inbox identity: {error}"))?;
+    Ok(crate::hex(&bytes))
+}
+
+/// Canonical persistent host and saved session identity, bound by the authenticated native route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InboxAddress {
+    pub device_id: String,
+    pub session_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ObservedCardKind {
+    HostObservedCard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct HostObservedCardPrincipal {
+    pub kind: ObservedCardKind,
+    pub observer_host: String,
+    pub subject: InboxAddress,
+    pub omp_epoch: String,
+    pub card_id: String,
+}
+
+/// Execution keeps its original flat wire bytes, tuple identity and logical fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum InboxProducer {
+    Execution(InboxAddress),
+    HostObservedCard(Box<HostObservedCardPrincipal>),
+}
+
+impl InboxProducer {
+    pub fn host(&self) -> &str {
+        match self {
+            Self::Execution(source) => &source.device_id,
+            Self::HostObservedCard(notice) => &notice.observer_host,
+        }
+    }
+
+    fn valid(&self) -> bool {
+        match self {
+            Self::Execution(source) => {
+                !source.device_id.is_empty() && !source.session_path.is_empty()
+            }
+            Self::HostObservedCard(notice) => {
+                !notice.observer_host.is_empty()
+                    && !notice.subject.device_id.is_empty()
+                    && !notice.subject.session_path.is_empty()
+                    && !notice.omp_epoch.is_empty()
+                    && !notice.card_id.is_empty()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum InboxLogicalPayload {
+    Prompt {
+        text: String,
+    },
+    Report {
+        text: String,
+        details: Map<String, Value>,
+        instruction: Option<String>,
+        card: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InboxLogicalMessage {
+    pub producer: InboxProducer,
+    pub target: InboxAddress,
+    pub request_id: Option<String>,
+    /// Requested semantics stay in the fingerprint; the first derived entry may only defer immediate delivery.
+    pub intent: InboxIntent,
+    pub trigger_turn: bool,
+    pub payload: InboxLogicalPayload,
+}
+
+impl InboxLogicalMessage {
+    /// No-ID calls receive a random identity before producer persistence, never a transcript-derived ID.
+    pub fn delivery_id(&self) -> Result<String, String> {
+        if let Some(request_id) = &self.request_id {
+            if request_id.is_empty() {
+                return Err("An explicit native inbox request identity cannot be empty".into());
+            }
+            serde_json::to_string(&(&self.producer, &self.target, request_id))
+                .map_err(|error| error.to_string())
+        } else {
+            new_delivery_id()
+        }
+    }
+
+    pub fn validate_identity(
+        &self,
+        entry_kind: InboxKind,
+        delivery_id: &str,
+    ) -> Result<(), String> {
+        let kind = match &self.payload {
+            InboxLogicalPayload::Prompt { .. } => InboxKind::Prompt,
+            InboxLogicalPayload::Report { .. } => InboxKind::Report,
+        };
+        if !self.producer.valid()
+            || self.target.device_id.is_empty()
+            || self.target.session_path.is_empty()
+            || self.request_id.as_ref().is_some_and(String::is_empty)
+            || delivery_id.is_empty()
+            || kind != entry_kind
+        {
+            return Err("Native logical identity or delivery semantics are invalid".into());
+        }
+        if self.request_id.is_some() && self.delivery_id()? != delivery_id {
+            return Err("Native request identity is not bound to its producer and target".into());
+        }
+        if let InboxProducer::HostObservedCard(notice) = &self.producer {
+            if self.intent != InboxIntent::Immediate
+                || !self.trigger_turn
+                || self
+                    .request_id
+                    .as_deref()
+                    .and_then(|id| id.strip_prefix("ask-"))
+                    != Some(notice.card_id.as_str())
+                || !matches!(&self.payload, InboxLogicalPayload::Report { card: Some(card), .. } if card == &notice.card_id)
+            {
+                return Err("Host-observed card identity or provenance is invalid".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self, entry: &NativeInboxEntry) -> Result<(), String> {
+        self.validate_identity(entry.payload.kind(), &entry.delivery_id)?;
+        if matches!(
+            (self.intent, entry.intent),
+            (InboxIntent::FollowUp, InboxIntent::Immediate)
+        ) || self.trigger_turn != entry.trigger_turn
+            || entry.legacy
+            || entry.observed_card.is_some()
+        {
+            return Err("Native logical identity or delivery semantics are invalid".into());
+        }
+        Ok(())
+    }
+}
+
+/// Initial admission only. Never part of the stable key, forwarded authority, or durable replay requirement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InboxSourceExecution {
+    pub tab_id: String,
+    pub runtime_instance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InboxAdmission {
+    pub logical: InboxLogicalMessage,
+    pub execution: InboxSourceExecution,
+}
+
+/// Preserve damaged native metadata as data; never drop an old outbox row or promote it from text.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum InboxLogicalSource {
+    Legacy,
+    Bound(InboxLogicalMessage),
+    Damaged(Value),
+}
+
+impl InboxLogicalSource {
+    pub fn read(value: Option<&Value>) -> Self {
+        match value {
+            None => Self::Legacy,
+            Some(value) => match serde_json::from_value(value.clone()) {
+                Ok(source) => Self::Bound(source),
+                Err(_) => Self::Damaged(value.clone()),
+            },
+        }
+    }
+
+    pub fn json(&self) -> Option<Value> {
+        match self {
+            Self::Legacy => None,
+            Self::Bound(source) => {
+                Some(serde_json::to_value(source).expect("logical inbox data serializes"))
+            }
+            Self::Damaged(value) => Some(value.clone()),
+        }
+    }
+
+    pub fn bound(&self) -> Result<Option<&InboxLogicalMessage>, String> {
+        match self {
+            Self::Legacy => Ok(None),
+            Self::Bound(source) => Ok(Some(source)),
+            Self::Damaged(_) => {
+                Err("Native source metadata is damaged; original remains pending".into())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxKind {
+    Prompt,
+    Report,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeInboxKey {
+    pub kind: InboxKind,
+    pub delivery_id: String,
+}
+
+impl NativeInboxKey {
+    pub fn provider_id(&self) -> String {
+        serde_json::to_string(&(self.kind, self.delivery_id.as_str()))
+            .expect("a tuple of strings always serializes")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InboxReceiver {
+    pub session_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub instance: String,
+}
+
+/// Private receiving-route capture, compared with the same current authenticated host snapshot before acceptance.
+/// Not part of logical source identity or persisted receiving responsibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InboxRoute {
+    pub peer_device_id: String,
+    pub connection_incarnation: String,
+    pub rtab: String,
+    pub tab_id: String,
+    pub session_path: String,
+    pub runtime_instance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct InboxSender {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxIntent {
+    Immediate,
+    FollowUp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub(crate) enum InboxBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum InboxContent {
+    Text(String),
+    Blocks(Vec<InboxBlock>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum InboxPayload {
+    Prompt {
+        content: InboxContent,
+    },
+    Report {
+        content: InboxContent,
+        details: Map<String, Value>,
+    },
+}
+
+impl InboxPayload {
+    pub fn kind(&self) -> InboxKind {
+        match self {
+            Self::Prompt { .. } => InboxKind::Prompt,
+            Self::Report { .. } => InboxKind::Report,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeInboxEntry {
+    pub delivery_id: String,
+    pub sender: InboxSender,
+    pub intent: InboxIntent,
+    pub trigger_turn: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_card: Option<Box<HostObservedCardPrincipal>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub legacy: bool,
+    #[serde(flatten)]
+    pub payload: InboxPayload,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+impl NativeInboxEntry {
+    pub fn key(&self) -> NativeInboxKey {
+        NativeInboxKey {
+            kind: self.payload.kind(),
+            delivery_id: self.delivery_id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NativeInboxRequest {
+    pub receiver: InboxReceiver,
+    pub entries: Vec<NativeInboxEntry>,
+}
+
+/// Exact logical request and its first derived stock presentation. Paths are transport materialization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct NativeInboxTransferEntry {
+    pub entry: NativeInboxEntry,
+    pub logical: InboxLogicalMessage,
+    pub dispatch: Option<i64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_attachments",
+        deserialize_with = "deserialize_attachments"
+    )]
+    pub attachments: Option<AttachedSet>,
+}
+
+impl NativeInboxTransferEntry {
+    pub fn into_bridge_entry(mut self) -> NativeInboxEntry {
+        if let InboxProducer::HostObservedCard(notice) = self.logical.producer {
+            self.entry.observed_card = Some(notice);
+        }
+        self.entry
+    }
+
+    /// Landing paths/times are transport materialization, not logical delivery identity.
+    pub fn logical_payload(&self) -> Result<Value, serde_json::Error> {
+        logical_payload(
+            &self.logical,
+            self.attachments.as_ref().map(|set| {
+                (
+                    set.images.iter(),
+                    set.files.iter().map(|landed| &landed.file),
+                )
+            }),
+        )
+    }
+}
+
+pub(crate) fn logical_payload<'a>(
+    logical: &InboxLogicalMessage,
+    attachments: Option<(
+        impl Iterator<Item = &'a AttachmentRef>,
+        impl Iterator<Item = &'a AttachmentRef>,
+    )>,
+) -> Result<Value, serde_json::Error> {
+    let mut value = serde_json::to_value(logical)?;
+    if let Some((images, files)) = attachments {
+        value["attachments"] = serde_json::json!({
+            "images": images.map(AttachmentRef::to_json).collect::<Vec<_>>(),
+            "files": files.map(AttachmentRef::to_json).collect::<Vec<_>>(),
+        });
+    }
+    Ok(value)
+}
+
+pub(crate) fn same_native_source(
+    previous: Option<NativeInboxTransferEntry>,
+    incoming: Option<NativeInboxTransferEntry>,
+) -> Result<(), String> {
+    let (Some(previous), Some(incoming)) = (previous, incoming) else {
+        return Err(
+            "Native source identity conflicts with an ambiguous legacy record; original retained"
+                .into(),
+        );
+    };
+    if previous
+        .logical_payload()
+        .map_err(|error| error.to_string())?
+        != incoming
+            .logical_payload()
+            .map_err(|error| error.to_string())?
+    {
+        return Err(
+            "Native source identity conflicts with an existing payload; original retained".into(),
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct NativeInboxTransfer {
+    pub receiver: InboxReceiver,
+    pub entries: Vec<NativeInboxTransferEntry>,
+    pub uploads: Vec<NativeInboxUpload>,
+}
+
+/// A landing issued by the existing upload service, read only in the authenticated transport peer's namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NativeInboxUpload {
+    pub sha256: String,
+    pub path: String,
+}
+
+fn serialize_attachments<S: serde::Serializer>(
+    set: &Option<AttachedSet>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    set.as_ref().map(AttachedSet::to_json).serialize(serializer)
+}
+
+fn deserialize_attachments<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AttachedSet>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    match read_attached(Some(&value)) {
+        Attached::None => Ok(Some(AttachedSet {
+            images: Vec::new(),
+            files: Vec::new(),
+        })),
+        Attached::Set(set) => Ok(Some(set)),
+        Attached::Corrupt => Err(serde::de::Error::custom(
+            "Invalid native inbox attachment references",
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum InboxEvidence {
+    #[serde(rename = "context-id-and-provider-output")]
+    ContextIdAndProviderOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InboxContextReceipt {
+    pub request_id: String,
+    pub session_path: String,
+    pub instance: String,
+    pub ids: Vec<String>,
+    pub evidence: InboxEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxEntryState {
+    Accepted,
+    Journaled,
+    ContextObserved,
+    LegacyAmbiguous,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InboxEntryReply {
+    #[serde(flatten)]
+    pub key: NativeInboxKey,
+    pub state: InboxEntryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct InboxAcceptedDelivery {
+    pub key: NativeInboxKey,
+    /// The first accepted presentation's dispatch, unchanged by lost ACKs, rebinds or title changes.
+    pub dispatch: Option<i64>,
+    /// Existing canonical receiver ownership, not provider consumption.
+    pub existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NativeInboxReply {
+    pub receiver: InboxReceiver,
+    pub entries: Vec<InboxEntryReply>,
+    pub receipts: Vec<InboxContextReceipt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeInboxAcceptance {
+    pub persistence: Persistence,
+    pub receiver: InboxReceiver,
+    pub deliveries: Vec<InboxAcceptedDelivery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InboxLogicalAttachments {
+    #[serde(
+        serialize_with = "serialize_refs",
+        deserialize_with = "deserialize_refs"
+    )]
+    pub images: Vec<AttachmentRef>,
+    #[serde(
+        serialize_with = "serialize_refs",
+        deserialize_with = "deserialize_refs"
+    )]
+    pub files: Vec<AttachmentRef>,
+}
+
+fn serialize_refs<S: serde::Serializer>(
+    files: &[AttachmentRef],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(files.len()))?;
+    for file in files {
+        sequence.serialize_element(&file.to_json())?;
+    }
+    sequence.end()
+}
+
+fn deserialize_refs<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<AttachmentRef>, D::Error> {
+    Vec::<Value>::deserialize(deserializer)?
+        .iter()
+        .map(|value| {
+            read_ref(value).ok_or_else(|| {
+                serde::de::Error::custom("Invalid native inbox attachment reference")
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeInboxLookupEntry {
+    pub key: NativeInboxKey,
+    pub logical: InboxLogicalMessage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<InboxLogicalAttachments>,
+}
+
+impl NativeInboxLookupEntry {
+    pub fn logical_payload(&self) -> Result<Value, serde_json::Error> {
+        logical_payload(
+            &self.logical,
+            self.attachments
+                .as_ref()
+                .map(|set| (set.images.iter(), set.files.iter())),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct NativeInboxLookup {
+    pub receiver: InboxReceiver,
+    pub entries: Vec<NativeInboxLookupEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "state",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum NativeInboxLookupResult {
+    Missing {
+        key: NativeInboxKey,
+    },
+    ExistingPending {
+        key: NativeInboxKey,
+        dispatch: Option<i64>,
+        intent: InboxIntent,
+    },
+    ExistingContextObserved {
+        key: NativeInboxKey,
+        dispatch: Option<i64>,
+        context_receipt: InboxContextReceipt,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeInboxLookupReply {
+    pub receiver: InboxReceiver,
+    pub dispatch_floor: i64,
+    pub entries: Vec<NativeInboxLookupResult>,
+}
+
+#[cfg(test)]
+#[path = "inbox/lookup_tests.rs"]
+mod lookup_tests;

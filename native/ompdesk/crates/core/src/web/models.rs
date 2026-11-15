@@ -236,7 +236,7 @@ fn commit(dir: &Path, file: &Path, before: Option<&Stamp>, bytes: &[u8]) -> Resu
     }
     if before.is_none() && fs::symlink_metadata(file).is_ok_and(|m| m.file_type().is_symlink()) {
         let link = fs::read_link(file).map_err(|e| tree::fault(&e, "readlink", file))?;
-        let target = super::paths::resolve(&file.parent().unwrap_or(dir).join(link));
+        let target = super::path_resolve::resolve(&file.parent().unwrap_or(dir).join(link));
         return Err(invalid(format!(
             "{} links to {}, which does not exist. Nothing was written; fix or remove the link.",
             file.display(),

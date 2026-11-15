@@ -18,7 +18,7 @@ fn opt(value: Option<String>) -> Value {
 pub(super) struct TabTarget {
     pub tab: String,
     pub device: Option<String>,
-    pub window: i64,
+    pub window: Option<i64>,
     pub session_file: Option<String>,
 }
 
@@ -37,6 +37,7 @@ impl Ctx {
                 Value::from(entry.title.clone().flatten().unwrap_or_default()),
             );
             facts.insert("busy".into(), Value::from(entry.busy()));
+            facts.insert("userTouched".into(), Value::from(entry.user_prompted));
             if entry.busy()
                 && let Some(since) = run.since
             {
@@ -166,21 +167,32 @@ impl Ctx {
 
     /// A window toggled a composer mode: the other windows that show the tab are told with a `config_update` frame.
     pub(super) fn note_mode_changed(&self, tab: &str, except: i64) {
+        self.note_mode_changed_from(tab, Some(except));
+    }
+
+    pub(super) fn note_mode_changed_from(&self, tab: &str, except: Option<i64>) {
         let wins = self.with(|pool| {
             let entry = pool.entry(tab)?;
             if entry.viewers.is_empty() {
                 return None;
             }
-            Some(entry.full.clone().unwrap_or_default())
+            Some(
+                entry
+                    .full
+                    .iter()
+                    .flatten()
+                    .filter_map(|win| entry.view_id(&pool.view_epoch, *win).map(|id| (*win, id)))
+                    .collect::<Vec<_>>(),
+            )
         });
-        for win in wins.unwrap_or_default() {
-            if win == except {
+        for (win, view_id) in wins.unwrap_or_default() {
+            if Some(win) == except {
                 continue;
             }
             self.send(
                 vec![win],
                 "CONFIG_UPDATE",
-                json!({"tabId": tab, "payload": {"type": "config_update", "modes": true}}),
+                json!({"tabId": tab, "viewId": view_id, "payload": {"type": "config_update", "modes": true}}),
             );
         }
     }
@@ -189,6 +201,11 @@ impl Ctx {
     /// title learn the name now.
     pub(super) async fn note_session_name(&self, tab: &str, title: &str) -> R<()> {
         let wins = self.with(|pool| {
+    pub(super) fn note_session_name_start(
+        &self,
+        tab: &str,
+        title: &str,
+    ) -> Option<Vec<(i64, String)>> {
             let entry = pool.entry_mut(tab)?;
             entry.title = Some(Some(title.to_string()));
             Some(entry.full.clone().unwrap_or_default())
@@ -197,11 +214,11 @@ impl Ctx {
             return Ok(());
         };
         self.forward_status(tab).await?;
-        for win in wins {
+        for (win, view_id) in wins {
             self.send(
                 vec![win],
                 "SESSION_INFO_UPDATE",
-                json!({"tabId": tab, "payload": {"type": "session_info_update", "title": title}}),
+                json!({"tabId": tab, "viewId": view_id, "payload": {"type": "session_info_update", "title": title}}),
             );
         }
         Ok(())
@@ -258,7 +275,7 @@ impl Ctx {
         if let Some(device) = selected.device {
             target.insert("device".into(), Value::from(device));
         }
-        target.insert("winId".into(), Value::from(selected.window));
+        target.insert("winId".into(), json!(selected.window));
         target.insert("sessionFile".into(), opt(selected.session_file));
         Value::Object(target)
     }
@@ -266,7 +283,7 @@ impl Ctx {
     pub(super) fn window_of_tab(&self, tab: &str) -> Value {
         self.with(|pool| {
             pool.entry(tab)
-                .map_or(Value::Null, |entry| Value::from(entry.win_id))
+                .map_or(Value::Null, |entry| json!(entry.win_id))
         })
     }
 
@@ -291,8 +308,8 @@ impl Ctx {
         self.with(|pool| {
             let mut wins: Vec<i64> = Vec::new();
             for entry in &pool.entries {
-                if !wins.contains(&entry.win_id) {
-                    wins.push(entry.win_id);
+                if let Some(win) = entry.win_id && !wins.contains(&win) {
+                    wins.push(win);
                 }
             }
             json!(wins)
@@ -310,8 +327,10 @@ impl Ctx {
             let list: Vec<Value> = pool
                 .active_by_window
                 .iter()
-                .filter(|(win, tab)| pool.entry(tab).is_some_and(|entry| entry.shown_in(**win)))
-                .map(|(win, tab)| json!([win, tab]))
+                .filter_map(|(win, tab)| {
+                    let view_id = pool.entry(tab)?.view_id(&pool.view_epoch, *win)?;
+                    Some(json!([win, tab, view_id]))
+                })
                 .collect();
             Value::Array(list)
         })
@@ -377,7 +396,10 @@ impl Ctx {
                 .and_then(|entry| entry.device.clone());
             match pool.session_owners.get(&owner_key(device.as_deref(), path)) {
                 Some(owner) if Some(owner.tab_id.as_str()) != tab => {
-                    json!({"tabId": owner.tab_id, "winId": owner.win_id})
+                    match owner.win_id {
+                        Some(win) => json!({"tabId": owner.tab_id, "winId": win}),
+                        None => json!({"tabId": owner.tab_id, "hosted": true}),
+                    }
                 }
                 _ => Value::Null,
             }
@@ -401,7 +423,7 @@ impl Ctx {
         });
         if changed {
             self.forward_status(tab).await?;
-            self.notify_window_tabs_changed(win).await?;
+            if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
         }
         Ok(())
     }
@@ -421,7 +443,7 @@ impl Ctx {
             return Ok(false);
         }
         self.forward_status(tab).await?;
-        self.notify_window_tabs_changed(win).await?;
+        if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
         Ok(true)
     }
 
@@ -498,7 +520,7 @@ impl Ctx {
                     let run = &entry.tracking.run;
                     let mut fact = Map::new();
                     fact.insert("tabId".into(), Value::from(entry.tab_id.clone()));
-                    fact.insert("winId".into(), Value::from(entry.win_id));
+                    fact.insert("winId".into(), json!(entry.win_id));
                     fact.insert("cwd".into(), facts[entry.tab_id.as_str()]["cwd"].clone());
                     fact.insert("kind".into(), Value::from(entry.kind.clone()));
                     fact.insert("running".into(), Value::from(run.running));
@@ -954,7 +976,7 @@ impl Ctx {
                 .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, entry)| entry.win_id == win)
+                .filter(|(_, entry)| entry.win_id == Some(win))
                 .map(|(at, _)| at)
                 .collect();
             let sorted: Vec<&String> = order
@@ -970,7 +992,7 @@ impl Ctx {
             for id in &sorted {
                 let at = taken.iter().position(|slot| {
                     slot.as_ref()
-                        .is_some_and(|entry| entry.tab_id == **id && entry.win_id == win)
+                        .is_some_and(|entry| entry.tab_id == **id && entry.win_id == Some(win))
                 });
                 if let Some(entry) = at.and_then(|at| taken[at].take()) {
                     mine_sorted.push(entry);
@@ -1010,20 +1032,24 @@ impl Ctx {
         Ok(())
     }
 
-    pub(super) async fn note_unstarted(&self, tab: &str, unstarted: bool) -> R<()> {
-        let win = self.with(|pool| {
+    pub(super) fn note_unstarted_start(&self, tab: &str, unstarted: bool) -> Option<Option<i64>> {
+        self.with(|pool| {
             let entry = pool.entry_mut(tab)?;
             if entry.unstarted == unstarted {
                 return None;
             }
             entry.unstarted = unstarted;
             Some(entry.win_id)
-        });
-        let Some(win) = win else {
+        })
+    }
+
+    pub(super) async fn note_unstarted(&self, tab: &str, unstarted: bool) -> R<()> {
+        let Some(win) = self.note_unstarted_start(tab, unstarted) else {
             return Ok(());
         };
         self.forward_status(tab).await?;
-        self.notify_window_tabs_changed(win).await
+        if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
+        Ok(())
     }
 
     pub(super) async fn note_counter(&self, tab: &str, touched: bool) -> R<()> {
@@ -1116,12 +1142,13 @@ impl Ctx {
             let Some(entry) = pool.entry(tab) else {
                 return 2;
             };
-            if pool.active_by_window.get(&entry.win_id).map(String::as_str) == Some(tab) {
+            let Some(win) = entry.win_id else { return 2; };
+            if pool.active_by_window.get(&win).map(String::as_str) == Some(tab) {
                 return 0;
             }
             if pool
                 .visible_by_window
-                .get(&entry.win_id)
+                .get(&win)
                 .is_some_and(|visible| visible.iter().any(|id| id == tab))
             {
                 1
@@ -1267,7 +1294,8 @@ impl Ctx {
             return Ok(());
         };
         self.forward_status(tab).await?;
-        self.notify_window_tabs_changed(win).await
+        if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
+        Ok(())
     }
 
     pub(super) async fn bind_worktree(&self, tab: &str, worktree: Value) -> R<bool> {
@@ -1280,7 +1308,7 @@ impl Ctx {
             return Ok(false);
         };
         self.forward_status(tab).await?;
-        self.notify_window_tabs_changed(win).await?;
+        if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
         Ok(true)
     }
 
@@ -1290,7 +1318,7 @@ impl Ctx {
             return Ok(false);
         };
         self.release_entry(tab).await?;
-        self.notify_window_tabs_changed(win).await?;
+        if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
         Ok(true)
     }
 
@@ -1525,15 +1553,19 @@ impl Ctx {
         })
     }
 
-    pub(super) async fn device_view_added(&self, tab: &str, view: u64) -> R<()> {
-        let known = self.with(|pool| {
-            pool.entry_mut(tab).map(|entry| {
+    pub(super) fn device_view_added_start(&self, tab: &str, view: u64) -> bool {
+        self.with(|pool| {
+            pool.entry_mut(tab).is_some_and(|entry| {
                 if !entry.device_views.contains(&view) {
                     entry.device_views.push(view);
                 }
+                true
             })
-        });
-        if known.is_some() {
+        })
+    }
+
+    pub(super) async fn device_view_added(&self, tab: &str, view: u64) -> R<()> {
+        if self.device_view_added_start(tab, view) {
             self.send_tab_lists(tab).await?;
         }
         Ok(())
@@ -1691,7 +1723,7 @@ impl Ctx {
                 let (created, _) = self
                     .acquire(super::windows::Acquire {
                         cwd: tab["cwd"].as_str().unwrap_or("").to_string(),
-                        win,
+                        win: Some(win),
                         tab: fresh.clone(),
                         session_path: path.map(str::to_string),
                         kind: tab["kind"].as_str().unwrap_or("agent").to_string(),
@@ -1825,11 +1857,22 @@ impl Ctx {
                 let mut entry = Entry::new(
                     seq,
                     id.to_string(),
-                    win,
+                    Some(win),
                     tab["kind"].as_str().unwrap_or("agent").to_string(),
                     tab["status"].as_str().unwrap_or("asleep").to_string(),
                 );
                 entry.device = tab["device"].as_str().map(str::to_string);
+                entry.owner_detached = tab["ownerDetached"].as_bool() == Some(true);
+                if entry.owner_detached {
+                    entry.view_generations.remove(&win);
+                }
+                if let Some(viewers) = tab["viewers"].as_array() {
+                    for viewer in viewers.iter().filter_map(Value::as_i64) {
+                        entry.viewers.push(viewer);
+                        entry.view_serial += 1;
+                        entry.view_generations.insert(viewer, entry.view_serial);
+                    }
+                }
                 // The file the tab held: it owns it again (F-OWN), as at its acquire. Tabs come in acquisition order.
                 if let Some(file) = tab["sessionFile"].as_str().filter(|file| !file.is_empty()) {
                     entry.session_file = Some(file.to_string());
@@ -1838,7 +1881,7 @@ impl Ctx {
                         key,
                         super::state::Owner {
                             tab_id: id.to_string(),
-                            win_id: win,
+                            win_id: Some(win),
                         },
                     );
                 }
@@ -1857,7 +1900,27 @@ impl Ctx {
                 pool.entries.push(entry);
                 seq
             });
-            self.when_closed(win, super::state::Closer::Entry(seq));
+            if let Some(wired) = tab["full"].as_array() {
+                for win in wired.iter().filter_map(Value::as_i64) {
+                    let view_id = self.with(|pool| pool.entry(id)?.view_id(&pool.view_epoch, win));
+                    if let Some(view_id) = view_id {
+                        self.push(&json!({
+                            "k": "wireFull", "tab": id, "win": win, "first": false, "viewId": view_id
+                        }));
+                    }
+                }
+            }
+            if tab["ownerDetached"].as_bool() != Some(true) {
+                self.when_closed(win, super::state::Closer::Entry(seq));
+            }
+            if let Some(viewers) = tab["viewers"].as_array() {
+                for viewer in viewers.iter().filter_map(Value::as_i64) {
+                    self.when_closed(viewer, super::state::Closer::Viewer(seq, viewer));
+                    if !windows.contains(&viewer) {
+                        windows.push(viewer);
+                    }
+                }
+            }
             if !windows.contains(&win) {
                 windows.push(win);
             }

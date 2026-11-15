@@ -36,6 +36,9 @@ pub mod settings;
 pub mod stock_commands;
 pub mod transcript;
 
+pub(crate) mod rpc_call;
+pub(crate) use rpc_call::{RpcError, RpcTimeout};
+
 use protocol::{RpcCommand, RpcResponse};
 use session::Session;
 
@@ -76,7 +79,10 @@ pub struct CommandTable(HashMap<&'static str, Area>);
 
 impl CommandTable {
     fn duplicate(name: &str, area: &str) -> Fault {
-        Fault::new("duplicate_local_command", format!("Local RPC command \"{name}\" is defined twice ({area})"))
+        Fault::new(
+            "duplicate_local_command",
+            format!("Local RPC command \"{name}\" is defined twice ({area})"),
+        )
     }
 
     pub fn new(areas: &[(&str, Area, &[&'static str])]) -> Result<Self, Fault> {
@@ -93,7 +99,9 @@ impl CommandTable {
 
     pub fn reject_shadowing(&self, area: &str, handles: fn(&str) -> bool) -> Result<(), Fault> {
         for &name in self.0.keys() {
-            if handles(name) { return Err(Self::duplicate(name, area)); }
+            if handles(name) {
+                return Err(Self::duplicate(name, area));
+            }
         }
         Ok(())
     }
@@ -132,33 +140,59 @@ struct Spawn<S: Sidecar<Error = Fault> + ?Sized> {
 /// Each spawn replaces only its local projection/cache state. Authority and source ownership remain Base's.
 pub struct Commands<S: Sidecar<Error = Fault> + ?Sized> {
     source: Arc<S>,
-    config: Config,
+    config: Arc<Config>,
     table: CommandTable,
     spawn: Mutex<Arc<Spawn<S>>>,
     next: AtomicU64,
 }
 
 impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Commands<S> {
-    pub fn new(source: Arc<S>, config: Config) -> Result<Self, Fault> {
+    pub fn new(source: Arc<S>, config: Arc<Config>) -> Result<Self, Fault> {
         let generation = source.generation();
         Self::from_captured(source, config, generation)
     }
 
     /// Native admission supplies the generation captured with the authenticated source in the same hub step.
-    pub fn from_captured(source: Arc<S>, config: Config, generation: u64) -> Result<Self, Fault> {
-        let spawn = Arc::new(Self::spawn(Arc::clone(&source), Arc::clone(&config.version), generation));
-        Ok(Self { source, config, table: CommandTable::builtin()?, spawn: Mutex::new(spawn), next: AtomicU64::new(0) })
+    pub fn from_captured(source: Arc<S>, config: Arc<Config>, generation: u64) -> Result<Self, Fault> {
+        let spawn = Arc::new(Self::spawn(
+            Arc::clone(&source),
+            Arc::clone(&config.version),
+            generation,
+        ));
+        Ok(Self {
+            source,
+            config,
+            table: CommandTable::builtin()?,
+            spawn: Mutex::new(spawn),
+            next: AtomicU64::new(0),
+        })
     }
 
     fn spawn(source: Arc<S>, version: Arc<str>, generation: u64) -> Spawn<S> {
-        Spawn { generation, session: Session::from_captured(source, version, generation), queue: queue::Queue::new(), transcript: transcript::Transcript::default() }
+        Spawn {
+            generation,
+            session: Session::from_captured(source, version, generation),
+            queue: queue::Queue::new(),
+            transcript: transcript::Transcript::default(),
+        }
     }
 
     fn captured(&self, generation: u64) -> Arc<Spawn<S>> {
-        let mut spawn = self.spawn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if spawn.generation == generation { return Arc::clone(&spawn); }
-        let selected = Arc::new(Self::spawn(Arc::clone(&self.source), Arc::clone(&self.config.version), generation));
-        if spawn.generation < generation { *spawn = Arc::clone(&selected); }
+        let mut spawn = self
+            .spawn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if spawn.generation == generation {
+            return Arc::clone(&spawn);
+        }
+        let selected = Arc::new(Self::spawn(
+            Arc::clone(&self.source),
+            Arc::clone(&self.config.version),
+            generation,
+        ));
+        if spawn.generation < generation {
+            *spawn = Arc::clone(&selected);
+        }
         selected
     }
 
@@ -166,7 +200,10 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Commands<S> {
     /// reads preserves chip ids through events, edits and moves, and resets them only for a new omp generation.
     pub fn project_frame(&self, frame: &mut Value) {
         if frame["type"] == "queue_update" {
-            *frame = self.captured(self.source.generation()).queue.project_queue_update(std::mem::take(frame));
+            *frame = self
+                .captured(self.source.generation())
+                .queue
+                .project_queue_update(std::mem::take(frame));
         }
     }
 
@@ -175,24 +212,51 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Commands<S> {
         self.command_for_generation(self.source.generation(), command)
     }
 
-    pub fn command_for_generation(&self, generation: u64, command: RpcCommand) -> EffectFuture<'_, Result<Value, Fault>> {
+    pub fn command_for_generation(
+        &self,
+        generation: u64,
+        command: RpcCommand,
+    ) -> EffectFuture<'_, Result<Value, Fault>> {
         let cwd = Arc::from(self.source.facts()["cwd"].as_str().unwrap_or_default());
         self.command_with_captured_cwd(generation, cwd, command, Scope::detached())
     }
 
     /// The caller supplies only the native selected cwd, never a page's command field or a late facts lookup.
-    pub fn command_with_captured_cwd(&self, generation: u64, cwd: Arc<str>, command: RpcCommand, scope: Scope) -> EffectFuture<'_, Result<Value, Fault>> {
+    pub fn command_with_captured_cwd(
+        &self,
+        generation: u64,
+        cwd: Arc<str>,
+        command: RpcCommand,
+        scope: Scope,
+    ) -> EffectFuture<'_, Result<Value, Fault>> {
         let spawn = self.captured(generation);
         let session = spawn.session.clone().with_captured_cwd(cwd);
-        Box::pin(self.execute(command, spawn, session, scope))
+        let area = self.table.0.get(command.kind.as_str()).copied();
+        Box::pin(self.execute(
+            command,
+            spawn,
+            session,
+            scope,
+            crate::agentctl::service::host::Deadline::Default,
+            area,
+        ))
     }
 
-    async fn execute(&self, mut command: RpcCommand, spawn: Arc<Spawn<S>>, session: Session<S>, scope: Scope) -> Result<Value, Fault> {
+    async fn execute(
+        &self,
+        mut command: RpcCommand,
+        spawn: Arc<Spawn<S>>,
+        session: Session<S>,
+        scope: Scope,
+        deadline: crate::agentctl::service::host::Deadline,
+        area: Option<Area>,
+    ) -> Result<Value, Fault> {
         let sequence = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         command.id = Some(format!("gui-{sequence}"));
-        let Some(area) = self.table.0.get(command.kind.as_str()) else {
-            let command = serde_json::to_value(command).map_err(|error| Fault::new("invalid_params", error.to_string()))?;
-            return session.raw_stock(command).await;
+        let Some(area) = area else {
+            let command = serde_json::to_value(command)
+                .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
+            return session.raw_stock_with_deadline(command, deadline).await;
         };
         // A hit is consumed regardless of its result. In particular a bridge or local error must never cause this
         // command to be sent to stock, which may interpret an unknown slash command as a model prompt.
@@ -208,13 +272,83 @@ impl<S: Sidecar<Error = Fault> + ?Sized + 'static> Commands<S> {
             Area::Live => live::handle(&command, &session).await,
             Area::Stock => stock_commands::handle(&command, &self.config.stock, scope).await,
             Area::Archive => ARCHIVES.handle(&command, &session, scope).await,
-            Area::Git => git_commands::handle(&command, &session, self.config.git.as_ref(), &self.config.omp, scope).await,
-            Area::Github => github_commands::handle(&command, &session, self.config.git.as_ref(), self.config.gh.as_ref(), &self.config.omp, scope).await,
+            Area::Git => {
+                git_commands::handle(
+                    &command,
+                    &session,
+                    self.config.git.as_ref(),
+                    &self.config.omp,
+                    scope,
+                )
+                .await
+            }
+            Area::Github => {
+                github_commands::handle(
+                    &command,
+                    &session,
+                    self.config.git.as_ref(),
+                    self.config.gh.as_ref(),
+                    &self.config.omp,
+                    scope,
+                )
+                .await
+            }
             Area::Cli => cli_commands::handle(&command, &session, &self.config.omp, scope).await,
-            Area::Fingerprint => self.config.fingerprints.read(&session.cwd(), command.string("root"), scope).await.map(Some).map_err(Into::into),
+            Area::Fingerprint => self
+                .config
+                .fingerprints
+                .read(&session.cwd(), command.string("root"), scope)
+                .await
+                .map(Some)
+                .map_err(Into::into),
         };
         self.source.before_response();
-        serde_json::to_value(RpcResponse::local(&command, result)).map_err(|error| Fault::new("internal", error.to_string()))
+        serde_json::to_value(RpcResponse::local(&command, result))
+            .map_err(|error| Fault::new("internal", error.to_string()))
+    }
+}
+
+impl Commands<crate::sidecar::native::Service> {
+    pub(crate) fn command_with_admission(
+        self: &Arc<Self>,
+        admission: Arc<
+            crate::application::callers::CommandAdmission<crate::application::source::Source>,
+        >,
+        command: RpcCommand,
+        deadline: crate::agentctl::service::host::Deadline,
+    ) -> EffectFuture<'static, Result<Value, RpcError>> {
+        let spawn = self.captured(admission.selected().generation);
+        let area = self.table.0.get(command.kind.as_str()).copied();
+        let stock = area.is_none().then(|| Arc::clone(&admission));
+        let scope = admission.scope().clone();
+        let session = match spawn.session.clone().with_admission(admission) {
+            Ok(session) => session,
+            Err(error) => return Box::pin(async move { Err(error.into()) }),
+        };
+        if let Some(admission) = stock {
+            return match serde_json::to_value(command) {
+                Ok(command) => admission.stock_call(command, deadline),
+                Err(error) => Box::pin(async move {
+                    Err(Fault::new("invalid_params", error.to_string()).into())
+                }),
+            };
+        }
+        let kind = command.kind.clone();
+        let commands = Arc::clone(self);
+        rpc_call::start(
+            async move {
+                commands.execute(
+                    command,
+                    spawn,
+                    session,
+                    scope,
+                    crate::agentctl::service::host::Deadline::None,
+                    area,
+                ).await
+            },
+            kind,
+            deadline,
+        )
     }
 }
 
@@ -227,17 +361,38 @@ mod tests {
 
     #[test]
     fn duplicate_registration_refuses_startup_and_stock_members_are_not_local_commands() {
-        let error = CommandTable::new(&[("first", Area::Modes, &["same"]), ("second", Area::Settings, &["same"])]).err().unwrap();
-        assert_eq!(error.message, "Local RPC command \"same\" is defined twice (second)");
+        let error = CommandTable::new(&[
+            ("first", Area::Modes, &["same"]),
+            ("second", Area::Settings, &["same"]),
+        ])
+        .err()
+        .unwrap();
+        assert_eq!(
+            error.message,
+            "Local RPC command \"same\" is defined twice (second)"
+        );
         let table = CommandTable::builtin().unwrap();
-        for stock in ["constructor", "get_messages", "btw", "btw_cancel", "get_btw_history"] { assert!(!table.0.contains_key(stock)); }
+        for stock in [
+            "constructor",
+            "get_messages",
+            "btw",
+            "btw_cancel",
+            "get_btw_history",
+        ] {
+            assert!(!table.0.contains_key(stock));
+        }
     }
 
     #[test]
     fn a_local_handler_cannot_shadow_the_actual_manual_domain_prefix_branch() {
         let table = CommandTable::new(&[("git", Area::Git, &["worktree_create"])]).unwrap();
-        let error = table.reject_shadowing("manual", crate::worktree_lifecycle::manual::handles).unwrap_err();
+        let error = table
+            .reject_shadowing("manual", crate::worktree_lifecycle::manual::handles)
+            .unwrap_err();
         assert_eq!(error.code, "duplicate_local_command");
-        assert_eq!(error.message, "Local RPC command \"worktree_create\" is defined twice (manual)");
+        assert_eq!(
+            error.message,
+            "Local RPC command \"worktree_create\" is defined twice (manual)"
+        );
     }
 }

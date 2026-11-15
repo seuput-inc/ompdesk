@@ -12,7 +12,7 @@ use super::state::{Closer, Ctx, Entry, Pool, R};
 /// What a tab acquired for a window needs from main's side (`acquire`'s arguments).
 pub(super) struct Acquire {
     pub cwd: String,
-    pub win: i64,
+    pub win: Option<i64>,
     pub tab: String,
     pub session_path: Option<String>,
     pub kind: String,
@@ -172,25 +172,25 @@ impl Ctx {
         if let Some(path) = args.session_path.as_ref().filter(|path| !path.is_empty()) {
             self.register_session_file(&tab, path).await?;
         }
-        if !args.defer_start {
+        if !args.defer_start && let Some(win) = args.win {
             let claim = self.with(|pool| {
-                if pool.active_by_window.contains(&args.win) {
+                if pool.active_by_window.contains(&win) {
                     false
                 } else {
-                    pool.active_by_window.insert(args.win, tab.clone());
-                    pool.visible_by_window.insert(args.win, vec![tab.clone()]);
+                    pool.active_by_window.insert(win, tab.clone());
+                    pool.visible_by_window.insert(win, vec![tab.clone()]);
                     true
                 }
             });
             if claim {
-                self.sync_full_wiring(args.win).await?;
+                self.sync_full_wiring(win).await?;
             }
         }
-        self.when_closed(args.win, Closer::Entry(seq));
+        if let Some(win) = args.win { self.when_closed(win, Closer::Entry(seq)); }
         if !args.defer_start {
             self.ensure_started(&tab).await?;
         }
-        self.notify_window_tabs_changed(args.win).await?;
+        if let Some(win) = args.win { self.notify_window_tabs_changed(win).await?; }
         Ok(())
     }
 
@@ -215,7 +215,7 @@ impl Ctx {
         }
         let seq = self.with(|pool| {
             let seq = pool.next_seq();
-            let mut entry = Entry::new(seq, tab.clone(), win, kind, status);
+            let mut entry = Entry::new(seq, tab.clone(), Some(win), kind, status);
             entry.hosted_view = true;
             // The device's tab may be mid-turn as this window joins it: its events so far reached nobody here.
             if let Some(reading) = &reading {
@@ -282,22 +282,23 @@ impl Ctx {
         }
         self.ensure_started(tab).await?;
         let first = self.with(|pool| {
+            let view_id = pool.entry(tab)?.view_id(&pool.view_epoch, win)?;
             let entry = pool.entry_mut(tab)?;
             match &mut entry.full {
                 Some(wins) => {
                     if !wins.contains(&win) {
                         wins.push(win);
                     }
-                    Some(false)
+                    Some((false, view_id))
                 }
                 None => {
                     entry.full = Some(vec![win]);
-                    Some(true)
+                    Some((true, view_id))
                 }
             }
         });
-        if let Some(first) = first {
-            self.push(&json!({"k": "wireFull", "tab": tab, "win": win, "first": first}));
+        if let Some((first, view_id)) = first {
+            self.push(&json!({"k": "wireFull", "tab": tab, "win": win, "first": first, "viewId": view_id}));
         }
         Ok(())
     }
@@ -402,7 +403,7 @@ impl Ctx {
             activity["session"] = Value::Object(session);
         }
         self.announce(activity).await?;
-        self.not_when_closed(win, Closer::Entry(seq));
+        if let Some(win) = win { self.not_when_closed(win, Closer::Entry(seq)); }
         // The devices viewing it hear the tab is gone while its omp still runs.
         if !devices.is_empty() {
             self.ask("endViews", json!({"tab": tab, "views": devices}))
@@ -417,7 +418,7 @@ impl Ctx {
             }),
         )
         .await?;
-        self.leave_window_view(tab, win).await?;
+        if let Some(win) = win { self.leave_window_view(tab, win).await?; }
         let viewers = self.with(|pool| {
             pool.by_seq_mut(seq)
                 .map(|entry| std::mem::take(&mut entry.viewers))
@@ -540,6 +541,8 @@ impl Ctx {
                 return Step::Already;
             }
             entry.viewers.push(win);
+            entry.view_serial += 1;
+            entry.view_generations.insert(win, entry.view_serial);
             let seq = entry.seq;
             let claim = !pool.active_by_window.contains(&win);
             if claim {
@@ -583,6 +586,7 @@ impl Ctx {
             let entry = pool.entry_mut(tab)?;
             let at = entry.viewers.iter().position(|viewer| *viewer == win)?;
             entry.viewers.remove(at);
+            entry.view_generations.remove(&win);
             Some(entry.seq)
         });
         let Some(seq) = seq else {
@@ -666,6 +670,9 @@ impl Ctx {
                 .map(|entry| {
                     let cwd = facts[entry.tab_id.as_str()]["cwd"].as_str().unwrap_or("");
                     let mut tab = Pool::tab_status(entry, cwd);
+                    if let Some(view_id) = entry.view_id(&pool.view_epoch, win) {
+                        tab.insert("viewId".into(), Value::from(view_id));
+                    }
                     if active.as_deref() == Some(entry.tab_id.as_str()) {
                         tab.insert("active".into(), Value::from(true));
                     }
@@ -688,7 +695,7 @@ impl Ctx {
                     }
                     let shared_sidecar =
                         facts[entry.tab_id.as_str()]["shared"].as_bool() == Some(true);
-                    if entry.win_id != win || entry.hosted_view || shared_sidecar {
+                    if entry.win_id != Some(win) || entry.hosted_view || shared_sidecar {
                         tab.insert("shared".into(), Value::from(true));
                     }
                     let viewer_count = entry.viewers.len() + entry.device_views.len();

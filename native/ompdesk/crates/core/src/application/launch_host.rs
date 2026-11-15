@@ -361,4 +361,4 @@ fn settings(prefs: &Value, device_language: Option<&str>, roles: &Path, ledger: 
 
 #[cfg(test)]
 #[path = "launch_host_tests.rs"]
-mod tests;
+pub(crate) mod tests;

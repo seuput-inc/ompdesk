@@ -17,6 +17,12 @@ pub fn moves_tab(kind: &str) -> bool {
     matches!(kind, "new_session" | "switch_session" | "switch_leaf" | "fork" | "branch")
 }
 
+#[derive(Clone, Copy)]
+pub enum SystemStop {
+    ScreenStop,
+    ScreenKill,
+}
+
 /// Facts supplied by the admitted native caller and the original source. Never deserialized from command args.
 #[derive(Default)]
 pub struct StopSite<'a> {
@@ -27,6 +33,7 @@ pub struct StopSite<'a> {
     pub peer: Option<&'a str>,
     pub host: Option<&'a str>,
     pub channel: Option<&'a str>,
+    pub system: Option<SystemStop>,
 }
 
 /// The outgoing stock frame and, for Stop, the same runtime-log details as turn-stop-log.ts. The caller writes the
@@ -35,8 +42,12 @@ pub fn dispatched_command(mut command: RpcCommand, site: StopSite<'_>) -> (RpcCo
     if !is_stop(&command.kind) { return (command, None); }
     let origin = command.params.get("origin");
     let agent = origin.and_then(|origin|origin.get("agentControl")).and_then(Value::as_str).filter(|value|!value.is_empty());
-    let surface = origin.and_then(|origin|origin.get("surface")).and_then(Value::as_str).filter(|value|!value.is_empty());
-    let by = if site.peer.is_some() { "desktop-device" } else if agent.is_some() { "agent-control" } else if site.web_device.is_some() { "web-device" } else { "window" };
+    let surface = match site.system {
+        Some(SystemStop::ScreenStop) => Some("screen-stop"),
+        Some(SystemStop::ScreenKill) => Some("screen-kill"),
+        None => origin.and_then(|origin|origin.get("surface")).and_then(Value::as_str).filter(|value|!value.is_empty()),
+    };
+    let by = if site.system.is_some() { "desktop-slot" } else if site.peer.is_some() { "desktop-device" } else if agent.is_some() { "agent-control" } else if site.web_device.is_some() { "web-device" } else { "window" };
     let mut details = Map::new();
     details.insert("command".into(), json!(command.kind));
     details.insert("tab".into(), json!(site.tab));
@@ -79,5 +90,19 @@ mod tests {
         let (remote, details) = dispatched_command(command.clone(), StopSite {tab:"tab",peer:Some("desktop"),host:Some("host"),..StopSite::default()});
         assert_eq!(remote.params["origin"], command.params["origin"]);
         assert_eq!(details.unwrap()["by"], "desktop-device");
+    }
+
+    #[test]
+    fn system_slot_stop_uses_the_same_session_basename_and_explicit_original_actor() {
+        let command: RpcCommand = serde_json::from_value(json!({"type":"abort"})).unwrap();
+        for (system, surface) in [(SystemStop::ScreenStop, "screen-stop"), (SystemStop::ScreenKill, "screen-kill")] {
+            let (_, details) = dispatched_command(command.clone(), StopSite {
+                tab: "original", session: Some("/private/original.jsonl"), system: Some(system),
+                ..StopSite::default()
+            });
+            assert_eq!(details.unwrap(), json!({
+                "command":"abort","tab":"original","session":"original.jsonl","by":"desktop-slot","surface":surface
+            }));
+        }
     }
 }

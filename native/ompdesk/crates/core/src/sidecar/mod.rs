@@ -113,6 +113,7 @@ pub struct LaneEvent {
     pub name: String,
     pub data: Value,
     pub bin: Option<std::sync::Arc<[u8]>>,
+    pub(crate) observation: Option<native::Observation>,
 }
 
 /// How many subscriptions are open: with none, a lane's events cost nothing more.
@@ -145,6 +146,7 @@ pub(crate) fn tap(tab: &str, name: &str, data: &Value, bin: Option<&[u8]>) {
         name: name.to_owned(),
         data: data.clone(),
         bin: bin.map(std::sync::Arc::from),
+        observation: None,
     };
     let before = senders.len();
     senders.retain(|sender| sender.send(event.clone()).is_ok());

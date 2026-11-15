@@ -165,6 +165,10 @@ impl Host for Lane {
 }
 
 fn fixture() -> (Arc<Service>, Arc<Lane>, Arc<Run>) {
+    fixture_with_status("status")
+}
+
+fn fixture_with_status(status_method: &str) -> (Arc<Service>, Arc<Lane>, Arc<Run>) {
     // This issuer stands for Base's authenticated registry only in this isolated fixture.
     let owner = OwnerIssuer::new(17).admit_authenticated().unwrap();
     let settings =
@@ -200,6 +204,7 @@ fn fixture() -> (Arc<Service>, Arc<Lane>, Arc<Run>) {
             name,
             match name {
                 "setState" => "set_state",
+                "status" => status_method,
                 _ => name,
             },
         )
@@ -270,7 +275,9 @@ async fn native_admission_uses_the_owner_not_command_json() {
         )
         .await
         .unwrap_err();
-    assert_eq!(denied.code, "invalid_caller");
+    assert!(
+        matches!(denied, crate::local_dispatch::protocol::CommandError::Other(ref message) if message == "Not this lane's owner")
+    );
     let status = service
         .command(
             lane.owner.clone(),
@@ -422,7 +429,7 @@ async fn readiness_then_restore_resumes_the_goal_only_once() {
 
 #[tokio::test]
 async fn native_close_cancels_pending_work_and_rejects_late_admission() {
-    let (service, lane, run) = fixture();
+    let (service, _lane, run) = fixture();
     let (entered, started) = oneshot::channel();
     let work = run.steps.run("held", None, async move {
         let _ = entered.send(());
@@ -450,16 +457,144 @@ async fn native_close_cancels_pending_work_and_rejects_late_admission() {
         "autopilot_closed"
     );
     assert!(!service.extension_ui("parent", card()));
+}
+
+#[tokio::test]
+async fn an_unpolled_abort_receipt_cannot_select_a_new_run_of_the_same_tab() {
+    let (service, lane, original) = fixture();
+    let stopped = service.aborted("parent");
+    let replacement = {
+        let old = original.lock();
+        RunState::begin(NewRun {
+            run: "replacement-run".into(),
+            root: old.root.clone(),
+            branch: old.branch.clone(),
+            base_branch: old.base_branch.clone(),
+            checkout_root: old.checkout_root.clone(),
+            target: old.target.clone(),
+            land_to: old.land_to.clone(),
+            settings: old.settings.clone(),
+            release_procedure: None,
+            release_blocked: None,
+        })
+    };
+    let replacement = service.coordinator.new_run("parent", replacement);
+    replacement.lock().children.push(Child {
+        tab: "replacement-child".into(),
+        branch: None,
+        worktree: None,
+        area: None,
+    });
+    stopped.await.unwrap();
+    service.idle().await;
+    assert!(service.coordinator.is_current(&replacement));
     assert_eq!(
-        service
-            .command(
-                lane.owner.clone(),
-                "parent".into(),
-                json!({"type":"get_autopilot"})
-            )
-            .await
-            .unwrap_err()
-            .code,
-        "autopilot_closed"
+        lane.count(json!(["stock","replacement-child",{"type":"abort"}])),
+        0
     );
+    assert_eq!(locked(&lane.status)["state"], "running");
+    assert!(!replacement.lock().stopping);
+    service.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn command_replies_preserve_explicit_domain_codes_but_not_incidental_effect_codes() {
+    let (service, lane, _) = fixture();
+    locked(&service.coordinator.runs).remove("parent");
+    locked(&lane.status)["active"] = json!(false);
+    let command: crate::local_dispatch::protocol::RpcCommand =
+        serde_json::from_value(json!({"type":"set_autopilot","action":"pause","id":"original"}))
+            .unwrap();
+    let error = service
+        .command(
+            lane.owner.clone(),
+            "parent".into(),
+            serde_json::to_value(&command).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    let explicit = serde_json::to_value(crate::local_dispatch::protocol::RpcResponse::local(
+        &command,
+        Err(error),
+    ))
+    .unwrap();
+    assert_eq!(explicit["code"], "autopilot_no_run");
+    assert_eq!(explicit["success"], false);
+    service.close().await.unwrap();
+    let error = service
+        .command(
+            lane.owner.clone(),
+            "parent".into(),
+            serde_json::to_value(&command).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    let closed = serde_json::to_value(crate::local_dispatch::protocol::RpcResponse::local(
+        &command,
+        Err(error),
+    ))
+    .unwrap();
+    assert_eq!(closed["success"], false);
+    assert_eq!(closed["error"], "Autopilot is closed");
+    assert!(closed.get("code").is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn original_pool_admission_enqueues_without_host_source_reentry_and_binds_parent_bridge() {
+    use crate::pool::application::native::dispatch::tests::Rig;
+    let rig = Arc::new(tokio::sync::Mutex::new(
+        Rig::new_with_bridge("autopilot-command-admission", 0x6175_746f_636d_6401).await,
+    ));
+    let (service, lane, _) = fixture_with_status("modes.autopilot_status");
+    let running = Arc::clone(&rig);
+    let actor = Arc::clone(&service);
+    let scenario = tokio::spawn(async move {
+        let mut rig = running.lock().await;
+        rig.ready().await;
+        let admission = rig.capture(crate::server::Scope::detached()).await;
+        let settings = Settings(json!({"ship":{"autoPush":false,"remote":"origin","autoRelease":{"on":false}},"limits":{}}));
+        actor.coordinator.new_run(&rig.world.spawn.tab, RunState::begin(NewRun {
+            run:"admitted-run".into(), root:"/isolated/native-command".into(), branch:"run-branch".into(),base_branch:"main".into(),checkout_root:"/isolated/native-command".into(),target:None,land_to:None,settings,release_procedure:None,release_blocked:None,
+        }));
+        // Lane::source would reject this real World caller. The admitted entry never calls it.
+        assert_ne!(admission.caller().owner, lane.owner);
+        let status = actor.command_admitted(Arc::clone(&admission), Arc::clone(&rig.commands), json!({"type":"get_autopilot"})).await.unwrap();
+        assert_eq!(status["ship"]["queue"], json!([]));
+        let log = std::fs::read_to_string(&rig.world.child_log).unwrap();
+        assert_eq!(log.lines().filter(|line| *line == "bridge modes.autopilot_status").count(), 1);
+        let binding = super::super::native_request::Binding::new(
+            Arc::clone(&admission),
+            Arc::clone(&rig.commands),
+        );
+        let before = rig.world.stdin();
+        let response = super::super::native_request::within(binding.clone(), actor.coordinator.port.stock(
+            &rig.world.spawn.tab,
+            json!({"type":"set_goal","tokenBudget":42}),
+        )).await.unwrap();
+        assert_eq!(response["success"], true);
+        let response = super::super::native_request::within(binding, actor.coordinator.port.bridge(
+            &rig.world.spawn.tab,
+            "modes.autopilot_status",
+            json!({}),
+            Some(1000),
+        )).await.unwrap();
+        assert_eq!(response["type"], "response");
+        assert_eq!(response["command"], "autopilot_bridge");
+        assert_eq!(response["success"], true);
+        assert_eq!(rig.world.stdin(), before, "local parent commands must never become stock input");
+        let log = std::fs::read_to_string(&rig.world.child_log).unwrap();
+        rig.world.callers.close_page(&ompdesk_app_contract::NativeCaller::Desktop {win_id:17,wc_id:117}).unwrap();
+        let error = actor.command_admitted(admission, Arc::clone(&rig.commands), json!({"type":"get_autopilot"})).await.unwrap_err();
+        assert_eq!(error.to_string(), "The original command admission has ended");
+        assert_eq!(std::fs::read_to_string(&rig.world.child_log).unwrap(), log);
+    }).await;
+    let service_closed = service.close().await;
+    let rig = Arc::try_unwrap(rig)
+        .ok()
+        .expect("scenario released original fixture")
+        .into_inner();
+    rig.close().await;
+    service_closed.unwrap();
+    scenario.unwrap();
 }

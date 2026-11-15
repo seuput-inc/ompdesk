@@ -29,6 +29,7 @@ struct Recorder {
 impl Sink for Recorder {
     fn event(&self, event: LaneEvent) { let _ = self.events.send(event); }
     fn before_response(&self) { self.flushes.fetch_add(1, Ordering::SeqCst); }
+    fn reply_barrier(&self) -> native::Held { Box::pin(async { Ok(()) }) }
     fn remove_listeners(&self) {}
     fn sync_settings(&self) -> EffectFuture<'_, ()> { Box::pin(async {}) }
 }
@@ -116,10 +117,10 @@ impl Rig {
         native::tests::ready(&source, &mut recorded).await;
         source.barrier().await.unwrap();
         let generation = source.generation();
-        let commands = Commands::from_captured(Arc::clone(&source), Config {
+        let commands = Commands::from_captured(Arc::clone(&source), Arc::new(Config {
             version: "18.20.0".into(), templates: Arc::from([]), stock: Arc::clone(&stock), omp,
             git: Some(git), gh: None, fingerprints: Arc::clone(&fingerprints),
-        }, generation).unwrap();
+        }), generation).unwrap();
         Self {
             source, commands, held, stock, fingerprints, sink, recorded, log,
             _transport: transport, _frames: frames, fixture,

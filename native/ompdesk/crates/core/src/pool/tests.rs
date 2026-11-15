@@ -180,7 +180,7 @@ impl Main {
 }
 
 fn opts() -> Value {
-    json!({"layoutVersion": 1, "maxFormerTabIds": 8, "stopSessionWaitMs": 60_000})
+    json!({"viewEpoch": "pool-test-epoch", "layoutVersion": 1, "maxFormerTabIds": 8, "stopSessionWaitMs": 60_000})
 }
 
 #[tokio::test]

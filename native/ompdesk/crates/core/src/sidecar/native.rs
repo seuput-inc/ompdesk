@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use super::application::{Answer, Ask, Command as LaunchCommand, EffectFuture, SessionFree};
 use super::lane::{Command, Msg};
@@ -41,6 +41,8 @@ impl SpawnAdapter for DirectSpawn {
 pub trait Sink: Send + Sync {
     fn event(&self, event: LaneEvent);
     fn before_response(&self);
+    /// Capture already-emitted domain work. Only the external RPC waiter awaits this, never the event pump.
+    fn reply_barrier(&self) -> Held;
     fn remove_listeners(&self);
     fn sync_settings(&self) -> EffectFuture<'_, ()>;
 }
@@ -65,6 +67,7 @@ pub struct Service {
     cwd_fence: AtomicU64,
     disposed: AtomicBool,
     state: Mutex<State>,
+    changed: watch::Sender<()>,
     pending: Arc<Mutex<Pending>>,
     sink: Arc<dyn Sink>,
     spawn: Arc<dyn SpawnAdapter>,
@@ -78,6 +81,27 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// The existing engine's lifetime. Base keeps it under the same supervised native app lifetime.
 pub type Held = EffectFuture<'static, Result<(), Fault>>;
+
+/// A Lane event already observed by this exact native handle. It grants delivery, not command authority.
+#[derive(Clone)]
+pub(crate) struct Observation {
+    source: Weak<Service>,
+    generation: u64,
+}
+
+impl Observation {
+    pub(crate) fn generation(&self) -> u64 { self.generation }
+
+    pub(crate) fn belongs_to(&self, source: &Service) -> bool {
+        self.source.upgrade().is_some_and(|original| std::ptr::eq(original.as_ref(), source))
+    }
+}
+
+impl std::fmt::Debug for Observation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Observation").field("generation", &self.generation).finish_non_exhaustive()
+    }
+}
 
 impl Service {
     pub fn new(
@@ -107,21 +131,35 @@ impl Service {
                 accepted_cmd: next - 1,
                 session: None,
             }),
+            changed: watch::channel(()).0,
             pending: Arc::new(Mutex::new(HashMap::new())),
             sink,
             spawn,
         });
-        tokio::spawn(pump(
+        let delivery = tokio::spawn(pump(
             Arc::downgrade(&service),
             Arc::clone(&service.sink),
             receiver,
         ));
-        let held = Box::pin(async move { answer.await.map_err(|_| disconnected())? });
+        let held = Box::pin(async move {
+            let (lane, delivered) = tokio::join!(answer, delivery);
+            let lane = lane.map_err(|_| disconnected()).and_then(|result| result);
+            let delivered = delivered.map_err(|error| Fault::new("native_delivery", error.to_string()));
+            lane.and(delivered)
+        });
         Ok((service, held))
     }
 
     pub fn tab(&self) -> &str {
         &self.tab
+    }
+
+    pub(crate) fn changes(&self) -> watch::Receiver<()> {
+        self.changed.subscribe()
+    }
+
+    pub(crate) fn reply_barrier(&self) -> Held {
+        self.sink.reply_barrier()
     }
 
     fn send(&self, command: Command, lifecycle: bool) -> u64 {
@@ -191,6 +229,38 @@ impl Service {
         self.cwd_fence.fetch_max(seq, Ordering::SeqCst);
         deliver(&self.tab, seq, Command::Cwd(cwd.into()));
         true
+    }
+
+    /// Original response metadata may update only the run admitted before this synchronous enqueue.
+    pub(crate) fn adopt_cwd_for_generation(
+        self: &Arc<Self>,
+        generation: u64,
+        cwd: String,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let state = locked(&self.state);
+        if self.disposed.load(Ordering::SeqCst)
+            || state.generation != generation
+            || state.accepted_cmd < self.fence.load(Ordering::SeqCst)
+        {
+            return Box::pin(async { Err(disconnected()) });
+        }
+        let (reply, answer) = oneshot::channel();
+        let seq = self.enqueue(Command::NativeCwd { generation, cwd: cwd.clone(), reply }, false);
+        self.cwd_fence.fetch_max(seq, Ordering::SeqCst);
+        drop(state);
+        let source = Arc::clone(self);
+        Box::pin(async move {
+            let changed = answer.await.map_err(|_| disconnected())??;
+            let mut state = locked(&source.state);
+            if state.generation == generation
+                && seq >= source.fence.load(Ordering::SeqCst)
+                && seq >= source.cwd_fence.load(Ordering::SeqCst)
+                && !source.disposed.load(Ordering::SeqCst)
+            {
+                state.cwd = cwd;
+            }
+            Ok(changed)
+        })
     }
 
     pub fn facts(&self) -> Value {
@@ -328,6 +398,13 @@ impl Service {
         command: Value,
         timeout: Option<Duration>,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let deadline = timeout.map(|timeout| (
+            tokio::time::Instant::now() + timeout,
+            crate::local_dispatch::RpcTimeout {
+                timeout_ms: timeout.as_millis() as u64,
+                command: command["type"].as_str().unwrap_or("").to_owned(),
+            },
+        ));
         let command = match serde_json::value::to_raw_value(&command) {
             Ok(command) => command,
             Err(error) => {
@@ -357,14 +434,22 @@ impl Service {
         };
         Box::pin(async move {
             let _waiting = waiting;
-            answered.await.map_err(|_| disconnected())??;
-            let bytes = framed
-                .await
-                .map_err(|_| disconnected())?
-                .ok_or_else(disconnected)?;
-            let frame: Value = serde_json::from_slice(&bytes)
-                .map_err(|error| Fault::new("sidecar_frame", error.to_string()))?;
-            Ok(crate::remote::events::slim::without_frame_bookkeeping(&frame).unwrap_or(frame))
+            let wait = async move {
+                answered.await.map_err(|_| disconnected())??;
+                let bytes = framed
+                    .await
+                    .map_err(|_| disconnected())?
+                    .ok_or_else(disconnected)?;
+                let frame: Value = serde_json::from_slice(&bytes)
+                    .map_err(|error| Fault::new("sidecar_frame", error.to_string()))?;
+                Ok(crate::remote::events::slim::without_frame_bookkeeping(&frame).unwrap_or(frame))
+            };
+            match deadline {
+                Some((at, timeout)) => tokio::time::timeout_at(at, wait)
+                    .await
+                    .map_err(|_| Fault::new("rpc_timeout", timeout.to_string()))?,
+                None => wait.await,
+            }
         })
     }
 
@@ -481,7 +566,7 @@ async fn pump(
     sink: Arc<dyn Sink>,
     mut events: tokio::sync::mpsc::UnboundedReceiver<LaneEvent>,
 ) {
-    while let Some(event) = events.recv().await {
+    while let Some(mut event) = events.recv().await {
         let Some(service) = service.upgrade() else {
             if event.name == "sidecar.disposed" {
                 sink.event(event);
@@ -504,6 +589,13 @@ async fn pump(
                 "sidecar.nativeGeneration" => {
                     service.fence.fetch_max(cmd, Ordering::SeqCst);
                     state.bridge = false;
+                }
+                "sidecar.nativeCwd" => {
+                    if cmd >= service.cwd_fence.load(Ordering::SeqCst)
+                        && let Some(cwd) = event.data["cwd"].as_str()
+                    {
+                        state.cwd = cwd.into();
+                    }
                 }
                 "sidecar.status" => {
                     if let Some(status) = event.data["payload"]["status"].as_str() {
@@ -541,8 +633,14 @@ async fn pump(
                 }
                 _ => {}
             }
+            if matches!(event.name.as_str(),
+                "sidecar.nativeGeneration" | "sidecar.status" | "sidecar.spawned"
+                | "sidecar.exited" | "sidecar.disposed")
+            {
+                service.changed.send_replace(());
+            }
         }
-        if event.name == "sidecar.nativeGeneration" {
+        if matches!(event.name.as_str(), "sidecar.nativeGeneration" | "sidecar.nativeCwd") {
             continue;
         }
         if event.name == "sidecar.answer" {
@@ -553,6 +651,10 @@ async fn pump(
                 let _ = waiting.send(event.bin);
             }
         } else if !stale || event.name == "sidecar.disposed" {
+            event.observation = Some(Observation {
+                source: Arc::downgrade(&service),
+                generation: event.generation,
+            });
             service.sink.event(event);
         }
     }
@@ -612,8 +714,9 @@ impl crate::pool::application::Sidecar for Service {
         &self,
         generation: u64,
         command: Value,
+        deadline: crate::agentctl::service::host::Deadline,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
-        Service::stock_for_generation(self, generation, command, Some(Duration::from_secs(8)))
+        Service::stock_for_generation(self, generation, command, deadline.timeout())
     }
     fn bridge_for_generation(
         &self,
@@ -640,6 +743,9 @@ impl crate::pool::application::Sidecar for Service {
     }
     fn exit_waiter(&self) -> EffectFuture<'static, Result<(), Fault>> {
         self.when_exited()
+    }
+    fn reply_barrier(&self) -> Held {
+        Service::reply_barrier(self)
     }
     fn remove_listeners(&self) {
         self.sink.remove_listeners();

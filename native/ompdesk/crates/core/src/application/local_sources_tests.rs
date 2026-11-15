@@ -123,6 +123,14 @@ async fn the_factory_keeps_the_external_execution_and_defers_its_bound_real_chil
         assert_eq!(command["env"]["OMP_GUI_SESSION_TAG"], tags["tags"][0]["tag"]);
         let mounted = rig.world.stdin().into_iter().find(|frame| frame["type"] == "set_host_tools").unwrap();
         assert_eq!(mounted["tools"], Value::Array(rig.world.base_tools.iter().cloned().collect()));
+        let local = Arc::clone(&rig.created.as_ref().unwrap().commands);
+        let failed = local.command(serde_json::from_value(json!({"type":"get_autopilot"})).unwrap()).await.unwrap();
+        assert_eq!(failed["success"], false);
+        assert!(!rig.world.stdin().iter().any(|frame| frame["type"] == "get_autopilot"));
+        let before = rig.world.stdin().iter().filter(|frame| frame["type"] == "get_state").count();
+        let state = local.command(serde_json::from_value(json!({"type":"get_state"})).unwrap()).await.unwrap();
+        assert_eq!(state["success"], true);
+        assert_eq!(rig.world.stdin().iter().filter(|frame| frame["type"] == "get_state").count(), before + 1);
     })).await;
 }
 

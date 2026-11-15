@@ -1,8 +1,8 @@
 use super::*;
 use crate::pool::application::{Released, Spawn, asks::Collaborators};
 
-#[derive(Default)]
 struct TestHost {
+pub(crate) struct TestHost<S: Sidecar<Error = Fault> + 'static = crate::sidecar::native::Service> {
     listening: Mutex<Vec<i64>>,
     announcements: Mutex<Vec<(Value, Value, Option<u64>)>>,
     running_changes: std::sync::atomic::AtomicUsize,
@@ -16,38 +16,48 @@ impl super::super::Host for TestHost {
     fn unknown_window(&self) -> Fault {
         Fault::new("window_unknown", "closed")
     }
-    fn canonical_cwd(&self, _: &str) -> String {
-        unreachable!()
+    fn canonical_cwd(&self, cwd: &str) -> String {
+        std::fs::canonicalize(cwd).expect("the fixture's real checkout").to_string_lossy().into_owned()
     }
-    fn create(&self, _: &Spawn, _: bool) -> Result<Arc<Self::Sidecar>, Fault> {
-        unreachable!()
+    fn create(&self, spawn: &Spawn, _: bool) -> Result<Arc<Self::Sidecar>, Fault> {
+        let (owner, tab, source) = locked(&self.constructed).take().expect("the actual LocalSources result");
+        assert_eq!(owner, spawn.owner);
+        assert_eq!(tab, spawn.tab);
+        assert_eq!(self.callers.as_ref().unwrap().execution_facts(&owner).unwrap().window, spawn.window);
+        locked(&self.spawned).push(Spawn {
+            owner: spawn.owner.clone(), tab: spawn.tab.clone(), window: spawn.window,
+            cwd: spawn.cwd.clone(), kind: spawn.kind.clone(), fresh: spawn.fresh,
+            device: spawn.device.clone(), session_path: spawn.session_path.clone(),
+            worktree: spawn.worktree.clone(), placeholder: spawn.placeholder, defer_start: spawn.defer_start,
+        });
+        Ok(source)
     }
     fn prepare_gate(&self, _: &Spawn, _: &Arc<Self::Sidecar>) {
-        unreachable!()
+        locked(&self.attached).push("prepare_gate");
     }
     fn wire_light(&self, _: &str, _: &Arc<Self::Sidecar>) {
-        unreachable!()
+        locked(&self.attached).push("wire_light");
     }
     fn track_summary(&self, _: &Arc<Self::Sidecar>) {
-        unreachable!()
+        locked(&self.attached).push("track_summary");
     }
     fn released(&self, _: Released) {
         unreachable!()
     }
 }
 
-impl Collaborators for TestHost {
+impl<S: Sidecar<Error = Fault> + 'static> Collaborators for TestHost<S> {
     fn error(&self, message: String) -> Fault {
         Fault::new("main_error", message)
     }
-    fn spawn_owner(&self, _: &str) -> Result<Owner, Fault> {
-        unreachable!()
+    fn spawn_owner(&self, tab: &str) -> Result<Owner, Fault> {
+        self.callers.as_ref().ok_or_else(closed)?.execution_owner(tab)
     }
     fn blocked(&self, _: Option<&str>, _: Option<&str>, _: &str, _: bool) -> bool {
-        unreachable!()
+        false
     }
     fn acquired(&self, _: &str, _: Arc<Self::Sidecar>) {
-        unreachable!()
+        locked(&self.attached).push("acquired");
     }
     fn end_views(&self, _: &str, _: &[i64]) {
         unreachable!()
@@ -75,14 +85,16 @@ impl Collaborators for TestHost {
     }
     fn command(
         &self,
-        _: Arc<Self::Sidecar>,
-        _: Value,
+        sidecar: Arc<Self::Sidecar>,
+        command: Value,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
-        unreachable!()
+        let generation = sidecar.generation();
+        self.command_for_generation(sidecar, generation, command)
     }
+            crate::agentctl::service::host::Deadline::Default,
 }
 
-impl effects::Host for TestHost {
+impl<S: Sidecar<Error = Fault> + 'static> effects::Host for TestHost<S> {
     fn notify(&self, notification: effects::Notification) {
         match notification {
             effects::Notification::ListenClosed { window } => locked(&self.listening).push(window),
@@ -99,6 +111,10 @@ impl Host for TestHost {
     }
     fn reserve_owner(&self, _: &Owner, _: &str) -> Result<(), Fault> {
         unreachable!()
+    fn window_for(&self, owner: &Owner) -> Result<i64, Fault> {
+        self.presentation_for(owner)?.ok_or_else(closed)
+    }
+            self.presentation_for(owner)?,
     }
     fn finish_reservation(&self, _: Self::Reservation, _: bool) {
         unreachable!()
@@ -116,10 +132,11 @@ impl Host for TestHost {
 
 #[tokio::test]
 async fn native_pool_finishes_effects_before_answer_and_keeps_seeded_host_identity() {
-    let host = Arc::new(TestHost::default());
+    let host = Arc::new(TestHost::<crate::sidecar::native::Service>::default());
     let service = Service::new(
         Config {
             id: 0x706f_6f6c_6170_7001,
+            view_epoch: "native-test-1".into(),
             layout_version: 1,
             max_former_tab_ids: 8,
             stop_session_wait_ms: 60_000,

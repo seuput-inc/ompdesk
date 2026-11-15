@@ -79,6 +79,11 @@ fn once_choice(request: &Value) -> Option<Once> {
     Some(once)
 }
 
+/// Stock approval-card syntax only; this grants no permission and performs no automatic answer.
+pub(crate) fn is_approval_select(request: &Value) -> bool {
+    once_choice(request).is_some()
+}
+
 /// The identity is copied from the actual sidecar request, never from the guard's reply.
 pub fn approval_response(request: &Value, once: Once, reason: Option<&str>) -> Value {
     json!({"type": "extension_ui_response", "id": request["id"], "value": if reason.is_some() { "Deny" } else { once.label() }})

@@ -1,25 +1,17 @@
 //! Family 2, messages: what sessions say to each other.
 //!
-//! Owns these TypeScript methods: `#send` (2574), `#untilDraftSent` (2606), `#deliverSend` (2623), `#handSend`
-//! (2649), `#owedDeps` and `redeliverSends` (2765-2798), `#journalMarks` (2800), `#turnStarts` (2809),
-//! `#reportFields` (2824), `#report` (2839), `#queuedNote` (2935), `#answer` (3363), `#answerPlan` (3474), the mail
-//! side of `childAsked` (1387) and `personTyped` (3739), and the receipts, in-flight sends and `#cardsTold` /
-//! `#reportedAt` / `#queuedFollowUp` / `#nudged` state in `Mem`. `#mailbox` is `self.mailbox`, the send outbox
-//! `self.send_outbox` (`journal::send_outbox::deliver_owed`, `redeliver_sends`, `OwedDeps`).
-//!
-//! `redeliverSends(tabOf)` takes no function over the wire: `tabOf(path, device)` is the tab of `HostState::tabs`
-//! holding that session on that computer (a tab main runs for a device is in no list of `tabs`, as with `hosted`),
-//! started with `host.start` when it reads `asleep`, and the receiver only when it is `ready`.
-//!
-//! Already shared: `find`, `open`, `send_target`, `own_closed`, `session_state`, `refuse_hidden`, `mailbox`.
+//! New native sends bind logical requests to authenticated producer/recipient identities before source persistence.
+//! The receiving ledger owns the first dispatch and Disk responsibility receipt; transcript markers are presentation.
+//! Unbound legacy outbox rows retain their original delivery path and cannot acquire native authority from text.
 
+use crate::agentctl::inbox::InboxProducer;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
 use super::fail::{Fail, R, fail, unanswered_text};
 use super::host::{Deadline, HostState};
-use super::js::{number, one_line, trim, trim_start};
+use super::js::{one_line, trim, trim_start};
 use super::pace::pace_line;
 use super::resolve::OpenOptions;
 use super::state::SessionState;
@@ -28,21 +20,18 @@ use super::text::{
     journal_marks, label, named, pick_option, response_data, saved_id_of_path, transcript_page,
     with_dispatch,
 };
-use super::types::{AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, UiRequest};
-use super::util::Flight;
-use super::wrap::{dispatch_mark, request_mark, wrap_agent_message};
+use super::types::{AnswerArgs, ControlTab, ReportArgs, SendArgs, UiRequest};
+use super::wrap::wrap_agent_message;
 use super::{AgentControl, QueuedFollowUp};
-use crate::agentctl::journal::attachments::{Resolved, image_block, shas_sig, with_attached};
+use crate::agentctl::journal::attachments::{Resolved, shas_sig};
 use crate::agentctl::journal::pending_cleanups::CleanupAction;
 use crate::agentctl::journal::send_outbox::{
-    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, deliver_owed,
-    receiver_key, redeliver_sends,
+    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, receiver_key,
+    redeliver_sends,
 };
 use crate::agentctl::journal::session_fates::FateState;
 use crate::agentctl::rules::custody::custody_of;
-use crate::agentctl::rules::mail::{
-    Mail, MailCheck, MailKind, Posted, delivery_for, mail_details, mail_text,
-};
+use crate::agentctl::rules::mail::{Mail, MailCheck, MailKind, Posted, delivery_for};
 
 /// `EVIDENCE_MESSAGES`.
 const EVIDENCE_MESSAGES: u64 = 200;
@@ -168,26 +157,6 @@ impl OwedDeps for Owed<'_> {
             HandOver::Refused
         }
     }
-
-    async fn drained(&self, tab_id: &str) -> bool {
-        let deadline = Deadline::Ms(self.ctl.tuning.state_timeout_ms);
-        let Ok(response) = self
-            .ctl
-            .host
-            .command(tab_id, &json!({ "type": "get_state" }), deadline)
-            .await
-        else {
-            return false;
-        };
-        if !response.success {
-            return false;
-        }
-        let Some(data) = response.data else {
-            return false;
-        };
-        data.get("isStreaming") == Some(&Value::Bool(false))
-            && data.get("queuedMessageCount").and_then(Value::as_f64) == Some(0.0)
-    }
 }
 
 fn sent_answer(value: &Value) -> Option<SentAnswer> {
@@ -227,52 +196,8 @@ impl AgentControl {
         if caller.tab_id == target.tab_id {
             return fail("A session cannot message itself.");
         }
-        // Idempotent: a retried call (a flaky link, a paired device) gets the first receipt, never a second delivery.
-        let Some(request_id) = args.request_id.as_deref().filter(|id| !id.is_empty()) else {
-            return self.deliver_send(caller, target, args, None).await;
-        };
-        let key = format!(
-            "{}|{}|{request_id}",
-            caller.session_path.as_deref().unwrap_or(&caller.tab_id),
-            target.session_path.as_deref().unwrap_or(&target.tab_id)
-        );
-        let again = format!(" (request {request_id} was already delivered; nothing sent again)");
-        enum Turn {
-            Own(Flight<Result<String, Fail>>),
-            Join(Flight<Result<String, Fail>>),
-        }
-        let turn = {
-            let mut mem = self.mem();
-            if let Some(known) = mem.receipts.get(&key) {
-                return Ok(format!("{known}{again}"));
-            }
-            // A same-id call arriving while the first is still on its way joins it instead of sending again.
-            match mem.inflight.get(&key) {
-                Some(pending) => Turn::Join(pending.clone()),
-                None => {
-                    let flight = Flight::new();
-                    mem.inflight.insert(key.clone(), flight.clone());
-                    Turn::Own(flight)
-                }
-            }
-        };
-        match turn {
-            Turn::Join(pending) => match pending.wait().await {
-                Some(Ok(receipt)) => Ok(format!("{receipt}{again}")),
-                Some(Err(error)) => Err(error),
-                None => {
-                    self.mem().inflight.remove(&key);
-                    fail("The first call of this request did not finish; send it again.")
-                }
-            },
-            Turn::Own(flight) => {
-                let _abandoned = flight.guard();
-                let result = self.deliver_send(caller, target, args, Some(&key)).await;
-                flight.settle(result.clone());
-                self.mem().inflight.remove(&key);
-                result
-            }
-        }
+        // The receiving native ledger owns idempotency and immutable payload comparison, including after restart.
+        self.deliver_send(caller, target, args).await
     }
 
     /// `#untilDraftSent`: a message never starts a turn under the person's hands: while they have a draft in the
@@ -308,7 +233,6 @@ impl AgentControl {
         caller: &ControlTab,
         found: &ControlTab,
         args: &SendArgs,
-        receipt_key: Option<&str>,
     ) -> R<String> {
         // What the message carries is read first, where the caller's omp runs: one that cannot be read refuses the send.
         let resolved = self
@@ -337,321 +261,316 @@ impl AgentControl {
         let (Some(outbox), Some(path)) =
             (self.send_outbox.as_ref(), target.session_path.as_deref())
         else {
-            return self
-                .hand_send(caller, &target, args, receipt_key, None, resolved)
-                .await;
+            return fail(
+                "Native inbox delivery requires the source journal and an actual saved recipient",
+            );
         };
-        // One delivery to a session at a time: what is still owed to it goes first, and the sweep never sends again what
-        // this send is handing over.
-        outbox
-            .lane(
-                &receiver_key(path, target.device.as_deref()),
-                self.hand_send(
-                    caller,
-                    &target,
-                    args,
-                    receipt_key,
-                    Some(Kept { outbox, path }),
-                    resolved,
-                ),
-            )
+        self.hand_send(caller, &target, args, Kept { outbox, path }, resolved)
             .await
     }
 
-    /// `#handSend`.
+    /// Source admission is native and durable; text markers remain presentation only.
     async fn hand_send(
         &self,
         caller: &ControlTab,
         target: &ControlTab,
         args: &SendArgs,
-        receipt_key: Option<&str>,
-        kept: Option<Kept<'_>>,
+        kept: Kept<'_>,
         resolved: Vec<Resolved>,
     ) -> R<String> {
-        let from = caller
-            .session_path
-            .clone()
-            .unwrap_or_else(|| caller.tab_id.clone());
-        let device = target.device.as_deref();
-        if let Some(kept) = &kept {
-            // Messages an omp before this one held and lost (a relaunch) reach it first, in order.
-            let owed = Owed {
-                ctl: self,
-                fixed: Some(target.tab_id.clone()),
-            };
-            deliver_owed(kept.outbox, &owed, kept.path, device).await;
-            // A resend of a message still on its way (its first send timed out, say) never runs it twice.
-            let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
-            if let Some(same) = kept
-                .outbox
-                .waiting(&from, kept.path, device, &args.message, &sig)
-            {
-                let dispatch = match same.dispatch {
-                    Some(n) if n != 0 => format!(" (dispatch d{n})"),
-                    _ => String::new(),
-                };
-                return Ok(format!(
-                    "Sent to {}: this same message is already on its way there{dispatch} and runs once; nothing sent again.",
-                    named(target)
-                ));
-            }
-        }
-        // The target's journal is the durable record: a relaunch (or a retry whose first receipt was lost) finds the
-        // request already there, and the last dispatch it was given.
-        let marks = self.journal_marks(&target.tab_id).await;
-        if let Some(id) = args.request_id.as_deref().filter(|id| !id.is_empty())
-            && marks.requests.contains(id)
-        {
-            return Ok(format!(
-                "Sent to {}: request {id} was already delivered; nothing sent again.",
-                named(target)
-            ));
-        }
-        // Only a send that will deliver waits on the person's draft: a repeat of a delivered request answers at once.
-        self.until_draft_sent(caller, target).await?;
-        // Files land on the receiver's computer before anything is numbered or kept: a failure leaves nothing behind.
-        let carried = self
-            .carry(&target.tab_id, device, resolved, true, kept.is_some())
-            .await?;
-        let running = target.busy
-            || self
-                .session_state(target)
-                .await
-                .state
-                .is_some_and(|state| state.is_streaming);
-        // The opener gives its child new work: a new dispatch (its older reports turn stale) and its question is answered.
-        let own_child = {
-            let state = self.host.state();
+        use crate::agentctl::inbox::{
+            InboxIntent, InboxKind, InboxLogicalAttachments, InboxLogicalMessage,
+            InboxLogicalPayload, InboxLogicalSource, NativeInboxKey, NativeInboxLookupEntry,
+            NativeInboxLookupResult,
+        };
+        use crate::agentctl::journal::Persistence;
+        use crate::agentctl::runtime::inbox_source;
+
+        self.host.fresh().await?;
+        let owns_target = |state: &HostState| {
             state.parent_of(&target.tab_id) == Some(caller.tab_id.as_str())
                 || self
                     .opened_by(
-                        &state,
+                        state,
                         &caller.tab_id,
                         &state.tabs(&caller.tab_id).unwrap_or_default(),
                     )
                     .contains(&target.tab_id)
         };
-        // Steer unless a follow-up is asked for. A follow-up to one that already reported back to the caller in this
-        // turn waits in it (an answer) or wraps up: it would sit unseen behind that turn, so it reaches it between
-        // steps instead.
-        let reported = self
-            .mem()
-            .reported_in
-            .get(&format!("{}\n{}", target.tab_id, caller.tab_id))
-            .copied();
-        let follow_up = args.delivery.as_deref() == Some("follow_up");
-        // It reported in the turn it runs now: main's stamp of that turn is the one it had at the report.
-        let promoted = running
-            && follow_up
-            && reported
-                .is_some_and(|turn| target.busy_since.is_none() || turn == target.busy_since);
-        // A follow-up queues the next task of a session the caller opened behind its turn. Any other session would hold
-        // it in its queue until that turn ends, so it gets a steer. A card of the person's open there takes no steer
-        // at all, whatever was asked, because stock closes the card for one ("Ask interrupted by message").
-        let card_open = !target.asks.is_empty();
-        let steer = !card_open && (!follow_up || promoted || !own_child);
-        // A dispatch still owed from before a relaunch is not in the journal yet: the next one is numbered past it.
-        if own_child {
-            let owed = kept
-                .as_ref()
-                .map_or(0, |kept| kept.outbox.last_dispatch(kept.path, device))
-                .max(0) as u64;
-            self.mailbox.seed(&target.tab_id, marks.dispatch.max(owed));
-        }
-        let dispatch = own_child.then(|| self.mailbox.dispatch(&target.tab_id));
-        // Every message names itself, so the receiver's journal can tell main it arrived.
-        let request_id = match &args.request_id {
-            Some(id) => Some(id.clone()),
-            None if dispatch.is_some() || kept.is_none() => None,
-            None => {
-                let mut bytes = [0u8; 4];
-                crate::sys::random(&mut bytes)
-                    .map_err(|error| Fail::other(format!("no random bytes: {error}")))?;
-                Some(format!(
-                    "m-{}",
-                    bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                ))
+        let admitted_state = self.host.state();
+        let (producer, recipient) = inbox_source::addresses(&admitted_state, caller, target)?;
+        let own_child = owns_target(&admitted_state);
+        let follow_up = own_child && args.delivery.as_deref() == Some("follow_up");
+        let logical = InboxLogicalMessage {
+            producer: InboxProducer::Execution(producer),
+            target: recipient,
+            request_id: args.request_id.clone(),
+            intent: if follow_up {
+                InboxIntent::FollowUp
+            } else {
+                InboxIntent::Immediate
+            },
+            trigger_turn: true,
+            payload: InboxLogicalPayload::Prompt {
+                text: args.message.clone(),
+            },
+        };
+        let delivery_id = logical.delivery_id().map_err(Fail::other)?;
+        let key = NativeInboxKey {
+            kind: InboxKind::Prompt,
+            delivery_id: delivery_id.clone(),
+        };
+        let execution = crate::agentctl::inbox::InboxSourceExecution {
+            tab_id: caller.tab_id.clone(),
+            runtime_instance: caller.runtime_instance.clone(),
+        };
+        let (images, to_land) = crate::agentctl::journal::attachments::plan(resolved, true);
+        let attachments =
+            (!images.is_empty() || !to_land.is_empty()).then(|| InboxLogicalAttachments {
+                images: images.iter().map(|item| item.file.clone()).collect(),
+                files: to_land.iter().map(|item| item.file.clone()).collect(),
+            });
+        let query = NativeInboxLookupEntry {
+            key: key.clone(),
+            logical: logical.clone(),
+            attachments,
+        };
+        let receipt_of_existing = |reply: &crate::agentctl::inbox::NativeInboxLookupReply| {
+            let (state, first_dispatch) = match reply.entries.first()? {
+                NativeInboxLookupResult::Missing { .. } => return None,
+                NativeInboxLookupResult::ExistingPending {
+                    dispatch, intent, ..
+                } => (
+                    match intent {
+                        InboxIntent::Immediate => {
+                            "accepted by its receiving native journal for immediate delivery; provider-context receipt is separate"
+                        }
+                        InboxIntent::FollowUp => {
+                            "accepted by its receiving native journal as a follow-up; provider-context receipt is separate"
+                        }
+                    },
+                    *dispatch,
+                ),
+                NativeInboxLookupResult::ExistingContextObserved { dispatch, .. } => {
+                    ("observed in its provider context", *dispatch)
+                }
+            };
+            let dispatch = first_dispatch
+                .map(|n| format!(" Dispatch d{n}."))
+                .unwrap_or_default();
+            Some(format!(
+                "Sent to {}: duplicate request, already {state}.{dispatch} No new message was queued or turn interrupted.",
+                named(target),
+            ))
+        };
+        let unchanged_relation = || {
+            let state = self.host.state();
+            if owns_target(&state) != own_child
+                || state.parent_of(&target.tab_id) != admitted_state.parent_of(&target.tab_id)
+            {
+                return fail(
+                    "The original sender/recipient relation changed before native lookup completed",
+                );
             }
+            Ok(())
+        };
+        let (query, reply) = inbox_source::lookup(
+            self.host.port().id(),
+            &target.tab_id,
+            vec![query],
+            &execution,
+        )
+        .await?;
+        unchanged_relation()?;
+        if let Some(receipt) = receipt_of_existing(&reply) {
+            return Ok(receipt);
+        }
+        let receiver_floor = reply.dispatch_floor;
+        kept.outbox.lane(&receiver_key(kept.path, target.device.as_deref()), async {
+        let (query, reply) = inbox_source::lookup(
+            self.host.port().id(), &target.tab_id, query.entries, &execution,
+        ).await?;
+        unchanged_relation()?;
+        if let Some(receipt) = receipt_of_existing(&reply) {
+            return Ok(receipt);
+        }
+        let receiver_floor = receiver_floor.max(reply.dispatch_floor);
+        self.until_draft_sent(caller, target).await?;
+        let carried = super::attach::carry_planned(
+            &self.host, &target.tab_id, target.device.as_deref(), &images, &to_land, true,
+        ).await?;
+        self.host.fresh().await?;
+        let (producer, recipient) = inbox_source::addresses(&self.host.state(), caller, target)?;
+        if !matches!(&logical.producer, InboxProducer::Execution(original) if original == &producer) || recipient != logical.target {
+            return fail("The native source or recipient changed while attachments were prepared");
+        }
+        if own_child {
+            // Transcript dN can seed presentation numbering, never authorize native consumption/deduplication.
+            let marks = self.journal_marks(&target.tab_id).await;
+            self.mailbox.seed(&target.tab_id, marks.dispatch);
+        }
+        self.host.fresh().await?;
+        self.until_draft_sent(caller, target).await?;
+        let state = self.host.state();
+        let (current_producer, current_recipient) =
+            inbox_source::addresses(&state, caller, target)?;
+        if !matches!(&logical.producer, InboxProducer::Execution(original) if original == &current_producer)
+            || current_recipient != logical.target
+            || owns_target(&state) != own_child
+            || state.parent_of(&target.tab_id) != admitted_state.parent_of(&target.tab_id)
+        {
+            return fail("The logical source or recipient changed before source persistence");
+        }
+        let current = state
+            .tabs
+            .iter()
+            .chain(state.mail_targets.iter())
+            .find(|current| current.tab_id == target.tab_id)
+            .ok_or_else(|| Fail::other("The message recipient is no longer current"))?;
+        let card_open = !current.asks.is_empty();
+        let immediate = !follow_up && !card_open;
+        let was_blocked = self.is_blocked(&target.tab_id);
+        let arrivals_before = self.arrivals(&target.tab_id);
+        let running = current.busy || was_blocked;
+        let original_dispatch = kept.outbox.native_dispatch(
+            kept.path, target.device.as_deref(), &query.entries[0],
+        ).map_err(Fail::other)?;
+        let dispatch = if let crate::agentctl::journal::send_outbox::SourceDispatch::Kept(original) =
+            original_dispatch
+        {
+            original.map(|dispatch| format!("d{dispatch}"))
+        } else if own_child {
+            let floor = kept
+                .outbox
+                .last_dispatch(kept.path, target.device.as_deref())
+                .max(0) as u64;
+            let next = self
+                .mailbox
+                .candidate_dispatch(&target.tab_id, floor.max(receiver_floor as u64))
+                .map_err(Fail::other)?;
+            Some(format!("d{next}"))
+        } else {
+            None
         };
         let message = wrap_agent_message(
             &with_dispatch(
-                &with_attached(&args.message, &carried.set.files),
+                &args.message,
                 dispatch.as_deref(),
-                request_id.as_deref(),
+                args.request_id.as_deref(),
             ),
             &caller.title,
             saved_id_of_path(caller.session_path.as_deref()).as_deref(),
         );
-        let behavior = if steer {
-            StreamingBehavior::Steer
-        } else {
-            StreamingBehavior::FollowUp
-        };
-        let dispatch_number = dispatch.as_deref().and_then(|d| d[1..].parse::<i64>().ok());
-        let mut entry: Option<OutboxSend> = None;
-        let mut instance = format!("tab:{}", target.tab_id);
-        if let Some(kept) = &kept {
-            let mark = match &dispatch {
-                Some(dispatch) => dispatch_mark(dispatch),
-                None => request_mark(request_id.as_deref().unwrap_or("")),
-            };
-            instance = match self
-                .host
-                .sent_marks(&target.tab_id, std::slice::from_ref(&mark))
-                .await
-            {
-                Ok(Some(answer)) => sent_answer(&answer).map(|answer| answer.instance),
-                _ => None,
-            }
-            .unwrap_or(instance);
-            let mut made = OutboxSend::new(
-                mark,
-                dispatch_number,
-                kept.path.to_owned(),
-                target.device.clone(),
-                from.clone(),
-                args.message.clone(),
-                message.clone(),
-                behavior,
-                self.now(),
-            );
-            made.from_device = caller.device.clone().filter(|device| !device.is_empty());
-            if carried.count > 0 {
-                made.attachments = Some(carried.set.clone());
-            }
-            kept.outbox.keep(made.clone());
-            entry = Some(made);
-        }
-        let settle = |entry: &Option<OutboxSend>| {
-            if let (Some(kept), Some(entry)) = (&kept, entry) {
-                kept.outbox
-                    .settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
-            }
-        };
-        // A command that never answered still reached the omp: one holding its command queue (stock's `login` while a
-        // provider sign-in waits) runs the prompt once that ends. Saying it failed made senders send it again.
-        let mut command =
-            json!({ "type": "prompt", "message": message, "streamingBehavior": behavior.as_str() });
-        if !carried.inline.is_empty() {
-            command["images"] = Value::Array(
-                carried
-                    .inline
-                    .iter()
-                    .map(|item| image_block(&item.file, &item.bytes))
-                    .collect(),
-            );
-        }
-        let held;
-        let mut response: Option<RpcResponse> = None;
-        match self
-            .host
-            .command(
-                &target.tab_id,
-                &command,
-                Deadline::Ms(self.tuning.prompt_ms),
-            )
-            .await
-        {
-            Ok(answer) => {
-                held = !answer.success && unanswered_text(answer.error.as_deref());
-                response = Some(answer);
-            }
-            Err(error) => {
-                if !error.unanswered() {
-                    settle(&entry);
-                    return Err(error);
-                }
-                held = true;
-            }
-        }
-        if !held
-            && let Some(answer) = &response
-            && !answer.success
-        {
-            settle(&entry);
-            // An omp that is not ready runs nothing there: never a success receipt.
-            return fail(format!(
-                "Not delivered to {}: its omp refused the message ({}). Nothing runs there; nothing was sent.",
-                named(target),
-                answer.error.as_deref().unwrap_or("no reason given")
-            ));
-        }
-        if let (Some(kept), Some(entry)) = (&kept, &entry) {
-            kept.outbox.handed(entry, &instance);
-        }
-        // A steer is read at the target's next step, which a blocking wait of its own would hold off: it ends now.
-        let woke = running && !held && !card_open && self.is_blocked(&target.tab_id);
-        if steer && !held {
-            self.arrive(&target.tab_id);
-        }
-        if running
-            && !steer
-            && !held
-            && let Some(dispatch) = &dispatch
-        {
-            self.mem().queued_follow_up.insert(
-                target.tab_id.clone(),
-                QueuedFollowUp {
-                    n: dispatch_number.unwrap_or(0) as u64,
-                    id: dispatch.clone(),
-                    from: caller.tab_id.clone(),
-                },
-            );
-        }
-        let started = !running && !held && self.turn_starts(&caller.tab_id, &target.tab_id).await;
-        let how = if held {
-            "queued: its omp is busy with another command (a provider sign-in, for one), and the message runs once that ends, so do not send it again".to_owned()
-        } else if !running {
-            if started {
-                "it was idle and starts on it".to_owned()
+        let mut entry = OutboxSend::new(
+            delivery_id.clone(),
+            dispatch
+                .as_deref()
+                .and_then(|dispatch| dispatch[1..].parse().ok()),
+            kept.path.to_owned(),
+            target.device.clone(),
+            producer.session_path.clone(),
+            args.message.clone(),
+            message.clone(),
+            if immediate {
+                StreamingBehavior::Steer
             } else {
-                format!(
-                    "it was idle, but no turn started within {} s: see ompdesk_session_result before sending it again",
-                    number(self.tuning.turn_start_wait_ms as f64 / 1000.0)
-                )
+                StreamingBehavior::FollowUp
+            },
+            self.now(),
+        );
+        entry.delivery_id = Some(delivery_id.clone());
+        entry.logical_message = Some(message);
+        entry.native_source = InboxLogicalSource::Bound(logical);
+        entry.from_device = Some(producer.device_id);
+        let attachment_summary = carried.summary();
+        if carried.count() > 0 {
+            entry.attachments = Some(carried);
+        }
+        let port = self.host.port().id();
+        let execution = crate::agentctl::inbox::InboxSourceExecution {
+            tab_id: caller.tab_id.clone(),
+            runtime_instance: caller.runtime_instance.clone(),
+        };
+        if inbox_source::keep_prompt(port, entry, &execution)? != Persistence::Disk {
+            return fail(
+                "The source message remains in memory; disk responsibility is not accepted",
+            );
+        }
+        let accepted = inbox_source::offer_locked(port, &target.tab_id).await?;
+        let accepted = accepted
+            .deliveries
+            .iter()
+            .find(|delivery| {
+                delivery.key.delivery_id == delivery_id
+                    && delivery.key.kind == crate::agentctl::inbox::InboxKind::Prompt
+            })
+            .ok_or_else(|| {
+                Fail::other("The receiving disk ACK did not identify this exact source message")
+            })?;
+        if accepted.existing {
+            let (_, reply) = inbox_source::lookup(
+                port, &target.tab_id, query.entries, &execution,
+            ).await?;
+            unchanged_relation()?;
+            return receipt_of_existing(&reply).ok_or_else(|| {
+                Fail::other("Existing native responsibility disappeared before duplicate reconciliation")
+            });
+        }
+        if own_child
+            && let Some(dispatch) = accepted
+                .dispatch
+                .and_then(|dispatch| u64::try_from(dispatch).ok())
+        {
+            self.mailbox.accept_dispatch(&target.tab_id, dispatch);
+            let id = format!("d{dispatch}");
+            if running
+                && !immediate
+                && self.mailbox.current(&target.tab_id).as_deref() == Some(id.as_str())
+            {
+                self.mem().queued_follow_up.insert(
+                    target.tab_id.clone(),
+                    QueuedFollowUp {
+                        n: dispatch,
+                        id,
+                        from: caller.tab_id.clone(),
+                        native_key: Some(key.clone()),
+                    },
+                );
             }
-        } else if card_open {
-            // Its turn stands on a question card, which stays open: the message waits behind the turn.
+        }
+        let dispatch = accepted
+            .dispatch
+            .map(|dispatch| format!(" Dispatch d{dispatch}: it reports back with ompdesk_report."))
+            .unwrap_or_default();
+        let mut receipt = format!(
+            "Sent to {}: the receiving native journal accepted disk responsibility; actual provider-context receipt is separate.{dispatch}",
+            named(target)
+        );
+        let how = if card_open {
             format!(
                 "it is {}, so this is queued behind that card, which stays open, and it reads this once the user has answered and its turn goes on",
-                self.state_line(&self.host.state(), target, &SessionState::default())
+                self.state_line(&state, current, &SessionState::default())
             )
-        } else if promoted {
-            "delivered as steer (it already reported to you in this turn, so it reads it between steps)".to_owned()
-        } else if steer && woke {
-            "delivered as steer; it is inside a blocking ompdesk_session_result wait, which returns now with a note, so it reads this at once".to_owned()
-        } else if steer {
-            format!(
-                "delivered as steer ({}it reads it between steps)",
-                if follow_up {
-                    "you did not open it, and a follow-up waits only behind the turn of a session you opened, so "
-                } else {
-                    ""
-                }
-            )
-        } else if woke {
-            "queued as a follow-up (it runs when the current turn ends; it is inside a blocking ompdesk_session_result wait, which a follow-up does not end: send it as a steer to be read at once)".to_owned()
-        } else {
+        } else if was_blocked && self.arrivals(&target.tab_id) != arrivals_before {
+            "it is inside a blocking ompdesk_session_result wait, which returns now with a note"
+                .to_owned()
+        } else if follow_up {
             "queued as a follow-up (it runs when the current turn ends; it is told so if it reports first)".to_owned()
+        } else {
+            String::new()
         };
-        let receipt = format!(
-            "Sent to {}: accepted{}; {how}.{}{}",
-            named(target),
-            if started { ", turn started" } else { "" },
-            dispatch
-                .as_ref()
-                .map(|d| format!(" Dispatch {d}: it reports back with ompdesk_report."))
-                .unwrap_or_default(),
-            if carried.count > 0 {
-                format!(" {}.", carried.set.summary())
-            } else {
-                String::new()
-            }
-        );
-        if let Some(key) = receipt_key {
-            self.mem().receipts.insert(key.to_owned(), receipt.clone());
+        if !how.is_empty() {
+            receipt.push(' ');
+            receipt.push_str(&how);
+            receipt.push('.');
+        }
+        if !attachment_summary.is_empty() {
+            receipt.push(' ');
+            receipt.push_str(&attachment_summary);
+            receipt.push('.');
         }
         Ok(receipt)
+        }).await
     }
 
     /// `redeliverSends`: one pass over every session still owed a message.
@@ -679,31 +598,6 @@ impl AgentControl {
             .and_then(|response| response.data)
             .and_then(|data| transcript_page(&data));
         journal_marks(page.as_ref().map_or(&[][..], |page| &page.messages))
-    }
-
-    /// `#turnStarts`: receipt stage "turn started": the target is seen running within a few seconds of an accepted
-    /// message.
-    async fn turn_starts(&self, caller_tab_id: &str, tab_id: &str) -> bool {
-        let deadline =
-            Instant::now() + std::time::Duration::from_millis(self.tuning.turn_start_wait_ms);
-        loop {
-            let tab = self
-                .host
-                .state()
-                .tabs(caller_tab_id)
-                .and_then(|tabs| tabs.into_iter().find(|tab| tab.tab_id == tab_id));
-            let Some(tab) = tab else { return false };
-            if tab.busy {
-                return true;
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return false;
-            }
-            self.host
-                .next_change(left.as_millis().min(250) as u64)
-                .await;
-        }
     }
 
     /// `#reportFields`: the work board's view of a child's mail to its opener: its last report, and whether its
@@ -827,54 +721,67 @@ impl AgentControl {
             .resolve_attachments(caller, args.attachments.as_deref())
             .await?;
         let to_tab = tabs.iter().find(|tab| tab.tab_id == to);
-        // A caller outside OMPdesk has no omp to show a picture to: everything lands as a file on this computer.
-        let attached = if resolved.is_empty() {
-            None
-        } else {
-            Some(
-                self.carry(
-                    &to,
-                    to_tab.and_then(|tab| tab.device.as_deref()),
-                    resolved.clone(),
-                    to_tab.is_some(),
-                    true,
-                )
-                .await?,
-            )
-        };
         let id = match &args.id {
             Some(id) => id.clone(),
             None => {
-                // The same report from the same session file is the same id, so a call stock re-runs after a relaunch
-                // (its result lost in the crash) is recognized by the receiver's journal instead of arriving twice.
                 let receiver = tabs
                     .iter()
                     .find(|tab| tab.tab_id == to)
-                    .and_then(|tab| tab.session_path.clone())
-                    .unwrap_or_else(|| to.clone());
-                let sender = caller
-                    .session_path
-                    .clone()
-                    .unwrap_or_else(|| caller.tab_id.clone());
-                let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
-                let mut parts = vec![
-                    sender.as_str(),
-                    receiver.as_str(),
+                    .and_then(|tab| tab.session_path.as_deref())
+                    .unwrap_or(&to);
+                let sender = caller.session_path.as_deref().unwrap_or(&caller.tab_id);
+                let mut digest = Sha256::new();
+                for (index, part) in [
+                    sender,
+                    receiver,
                     args.kind.as_str(),
                     args.dispatch.as_deref().unwrap_or(""),
                     args.text.as_str(),
-                ];
-                if !resolved.is_empty() {
-                    parts.push(sig.as_str());
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if index != 0 {
+                        digest.update([0u8]);
+                    }
+                    digest.update(part.as_bytes());
                 }
-                let joined = parts.join("\u{0}");
-                let digest = Sha256::digest(joined.as_bytes());
-                digest
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()[..24]
-                    .to_owned()
+                if !resolved.is_empty() {
+                    digest.update([0u8]);
+                    digest.update(shas_sig(
+                        resolved.iter().map(|item| item.file.sha256.as_str()),
+                    ));
+                }
+                crate::hex(&digest.finalize()[..12])
             }
+        };
+        let outside = self.host.state().outside_callers.contains_key(&to);
+        let (images, files) =
+            crate::agentctl::journal::attachments::plan(resolved, to_tab.is_some());
+        let (native_plan, attached) = if outside {
+            let attached = if images.is_empty() && files.is_empty() {
+                None
+            } else {
+                Some(
+                    super::attach::carry_planned(
+                        &self.host,
+                        &to,
+                        to_tab.and_then(|tab| tab.device.as_deref()),
+                        &images,
+                        &files,
+                        true,
+                    )
+                    .await?,
+                )
+            };
+            (None, attached)
+        } else {
+            let plan = (!images.is_empty() || !files.is_empty()).then(|| {
+                std::sync::Arc::new(crate::agentctl::rules::mail::NativeAttachmentPlan::new(
+                    images, files,
+                ))
+            });
+            (plan, None)
         };
         let text = [
             Some(args.text.clone()),
@@ -896,10 +803,8 @@ impl AgentControl {
             self.now(),
         );
         mail.files = args.files.clone();
-        mail.attachments = attached
-            .as_ref()
-            .filter(|carried| carried.count > 0)
-            .map(|carried| carried.set.clone());
+        mail.attachments = attached.clone();
+        mail.native_attachment_plan = native_plan.clone();
         mail.checks = args.checks.as_ref().map(|checks| {
             checks
                 .iter()
@@ -914,6 +819,51 @@ impl AgentControl {
             let seeded = self.journal_marks(&caller.tab_id).await.dispatch;
             self.mailbox.seed(&caller.tab_id, seeded);
         }
+        self.host.fresh().await?;
+        let state = self.host.state();
+        if !state.outside_callers.contains_key(&to) {
+            let recipient = state
+                .tabs
+                .iter()
+                .chain(state.mail_targets.iter())
+                .find(|tab| tab.tab_id == to)
+                .ok_or_else(|| Fail::other("The report recipient is no longer current"))?;
+            mail.native_source = Some(crate::agentctl::runtime::inbox_source::report_source(
+                &state, caller, recipient, &mail, &args.text,
+            )?);
+        }
+        // Receiver-owned duplicates are resolved before stale-dispatch/coalescing policy, without a new source keep.
+        let existing = if let Some(admission) = &mail.native_source {
+            use crate::agentctl::inbox::{
+                InboxKind, InboxLogicalAttachments, NativeInboxKey, NativeInboxLookupEntry,
+                NativeInboxLookupResult,
+            };
+            let key = NativeInboxKey {
+                kind: InboxKind::Report,
+                delivery_id: admission.logical.delivery_id().map_err(Fail::other)?,
+            };
+            let query = NativeInboxLookupEntry {
+                key,
+                logical: admission.logical.clone(),
+                attachments: native_plan.as_ref().map(|plan| InboxLogicalAttachments {
+                    images: plan.images.iter().map(|image| image.file.clone()).collect(),
+                    files: plan.files.iter().map(|file| file.file.clone()).collect(),
+                }),
+            };
+            let (_, reply) = crate::agentctl::runtime::inbox_source::lookup(
+                self.host.port().id(),
+                &to,
+                vec![query],
+                &admission.execution,
+            )
+            .await?;
+            !matches!(
+                reply.entries.as_slice(),
+                [NativeInboxLookupResult::Missing { .. }]
+            )
+        } else {
+            false
+        };
         // The turn of the mail the mailbox keeps: taken with the post (a reader during its delivery sees the new mail
         // with it), and given back only when the mailbox refuses a replay, which leaves its state as it was; a mail it
         // took and could not deliver is its newest all the same.
@@ -922,18 +872,27 @@ impl AgentControl {
             .mem()
             .mailed_in
             .insert(turn_key.clone(), caller.busy_since);
-        let outcome = self.mailbox.post(mail.clone()).await;
-        if matches!(outcome, Ok(Posted::Duplicate | Posted::Stale)) {
+        let report_id = mail.id.clone();
+        let report_kind = mail.kind;
+        drop(native_plan);
+        let outcome = if existing {
+            drop(mail);
+            Ok(Posted::Duplicate.into())
+        } else {
+            self.mailbox.post(mail).await
+        };
+        if outcome
+            .as_ref()
+            .is_ok_and(|result| matches!(result.posted, Posted::Duplicate | Posted::Stale))
+        {
             let mut mem = self.mem();
             match before {
                 Some(turn) => mem.mailed_in.insert(turn_key, turn),
                 None => mem.mailed_in.remove(&turn_key),
             };
         }
-        let outcome = outcome.map_err(Fail::other)?;
-        if outcome == Posted::Delivered {
-            self.arrive(&to);
-        }
+        let result = outcome.map_err(Fail::other)?;
+        let outcome = result.posted;
         if let Some(parent) = &parent {
             self.host.review_changed(parent);
         }
@@ -945,13 +904,19 @@ impl AgentControl {
                 .reported_in
                 .insert(format!("{}\n{to}", caller.tab_id), caller.busy_since);
         }
-        let mut waiting = match &attached {
-            Some(carried) if outcome != Posted::Duplicate && outcome != Posted::Stale => {
-                format!(" {}.", carried.set.summary())
+        let attached_summary = attached.as_ref().map(|set| set.summary());
+        let summary = result
+            .attachment_summary
+            .as_ref()
+            .map(|summary| summary.as_str())
+            .or(attached_summary.as_deref());
+        let mut waiting = match summary {
+            Some(summary) if outcome != Posted::Duplicate && outcome != Posted::Stale => {
+                format!(" {summary}.")
             }
             _ => String::new(),
         };
-        waiting.push_str(&self.queued_note(caller, tabs).await);
+        waiting.push_str(&self.queued_note(caller, tabs).await?);
         if let Some(gap) = custody
             .as_ref()
             .and_then(|c| c.gap.as_deref())
@@ -966,7 +931,7 @@ impl AgentControl {
         Ok(match outcome {
             Posted::Duplicate => format!(
                 "Report {} was already delivered; nothing sent again.{waiting}",
-                mail.id
+                report_id
             ),
             Posted::Stale => format!(
                 "Ignored: dispatch {} is no longer current (the session that opened you has since sent dispatch {}). Work on its latest message.{waiting}",
@@ -979,7 +944,7 @@ impl AgentControl {
                 "Progress noted; it reaches the session shortly (several progress reports arrive as the latest one).{waiting}"
             ),
             Posted::Delivered => {
-                if mail.kind == MailKind::Question || mail.kind == MailKind::Blocked {
+                if report_kind == MailKind::Question || report_kind == MailKind::Blocked {
                     format!(
                         "Delivered. Wait for the answer: it comes as a message (between your steps while this turn runs); do not guess the decision meanwhile.{waiting}"
                     )
@@ -993,21 +958,32 @@ impl AgentControl {
     /// `#queuedNote`: stock shows a queued follow-up to nobody until the turn ends, so a session that reports and then
     /// waits in the same turn never sees the message it waits for. When one is queued for `caller` and its transcript
     /// does not hold it yet, the report's answer says so.
-    async fn queued_note(&self, caller: &ControlTab, tabs: &[ControlTab]) -> String {
+    async fn queued_note(&self, caller: &ControlTab, tabs: &[ControlTab]) -> R<String> {
         let queued = self.mem().queued_follow_up.get(&caller.tab_id).cloned();
         let Some(queued) = queued else {
-            return String::new();
+            return Ok(String::new());
         };
-        if self.journal_marks(&caller.tab_id).await.dispatch >= queued.n {
+        let consumed = match &queued.native_key {
+            Some(key) => {
+                crate::agentctl::runtime::inbox_source::context_observed(
+                    self.host.port().id(),
+                    &caller.tab_id,
+                    key,
+                )
+                .await?
+            }
+            None => self.journal_marks(&caller.tab_id).await.dispatch >= queued.n,
+        };
+        if consumed {
             self.mem().queued_follow_up.remove(&caller.tab_id);
-            return String::new();
+            return Ok(String::new());
         }
         let sender = tabs.iter().find(|tab| tab.tab_id == queued.from);
-        format!(
+        Ok(format!(
             " A message from {} (dispatch {}) waits for you, queued until this turn ends: end your turn now to read it, rather than waiting for it in this turn.",
             sender.map_or_else(|| queued.from.clone(), label),
             queued.id
-        )
+        ))
     }
 
     /// `ompdesk_session_answer` (`#answer`, `#answerPlan`).
@@ -1260,6 +1236,7 @@ impl AgentControl {
             }
             None => self.host.answer(&target.tab_id, &ask.id, &response).await?,
         }
+        self.mailbox.answered_card(&target.tab_id, &ask.id);
         let by = if caller.title.is_empty() {
             &caller.tab_id
         } else {
@@ -1436,7 +1413,7 @@ impl AgentControl {
             }
         }
         let mut mail = Mail::new(
-            &format!("ask-{child_tab_id}-{request_id}"),
+            &format!("ask-{request_id}"),
             child_tab_id,
             if child.title.is_empty() {
                 child.task.as_deref().unwrap_or("")
@@ -1449,15 +1426,23 @@ impl AgentControl {
             self.now(),
         );
         mail.card = Some(request_id.to_owned());
-        let sent = self
-            .host
-            .mail(
-                opener_tab_id,
-                &mail_text(&mail),
-                &mail_details(&mail),
-                delivery_for(mail.kind),
-            )
-            .await;
+        let sent = async {
+            let opener = tabs
+                .iter()
+                .find(|tab| tab.tab_id == opener_tab_id)
+                .ok_or_else(|| Fail::other("The card recipient is no longer current"))?;
+            mail.native_source = Some(crate::agentctl::runtime::inbox_source::report_source(
+                &state, child, opener, &mail, &mail.text,
+            )?);
+            // The native identity was captured before this display-only child/tab correlation.
+            mail.id = format!("ask-{child_tab_id}-{request_id}");
+            self.mailbox
+                .post(mail)
+                .await
+                .map(|_| ())
+                .map_err(Fail::other)
+        }
+        .await;
         if let Err(error) = sent {
             // Not delivered (the opener's omp restarting): a later announcement of the same card may try again.
             if let Some(told) = self.mem().cards_told.get_mut(child_tab_id) {
@@ -1466,7 +1451,6 @@ impl AgentControl {
             return Err(error);
         }
         self.host.review_changed(opener_tab_id);
-        self.arrive(opener_tab_id);
         Ok(())
     }
 
@@ -1562,3 +1546,7 @@ impl AgentControl {
 #[cfg(test)]
 #[path = "messages_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "messages_admission_tests.rs"]
+mod admission_tests;

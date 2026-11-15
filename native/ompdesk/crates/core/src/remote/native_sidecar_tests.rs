@@ -50,6 +50,9 @@ impl RemoteSink for Sink {
     fn before_response(&self) {
         self.flushed.fetch_add(1, Ordering::AcqRel);
     }
+    fn reply_barrier(&self) -> Held {
+        Box::pin(async { Ok(()) })
+    }
     fn remove_listeners(&self) {
         self.output.lock().unwrap().take();
     }
@@ -208,8 +211,10 @@ async fn bound_actions_refuse_old_hosts_and_never_retry_or_replay_into_a_replace
         run_host.answer(opened.id, Ok(json!({"cwd":"/isolated/workspace","kind":"agent","attached":true}))).unwrap();
         while run_service.facts()["processAlive"] != true { next_status(&mut delivered).await; }
         let old_generation = run_service.generation();
-        assert_eq!(run_service.stock_for_generation(old_generation, json!({"type":"set_session_name","name":"Must not run on old host"})).await.unwrap_err().code, "remote_run_binding_unavailable");
+        assert_eq!(run_service.stock_for_generation(old_generation, json!({"type":"set_session_name","name":"Must not run on old host"}), crate::agentctl::service::host::Deadline::Default).await.unwrap_err().code, "remote_run_binding_unavailable");
         assert_eq!(run_service.send_for_generation(old_generation, json!({"type":"host_tool_result","id":"must-not-replay"})).await.unwrap_err().code, "remote_run_binding_unavailable");
+        assert_eq!(run_service.adopt_cwd_for_generation(old_generation, "/must-not-adopt".into()).await.unwrap_err().code, "remote_run_binding_unavailable");
+        assert_eq!(run_service.sync_image_generation_for_generation(old_generation).await.unwrap_err().code, "remote_run_binding_unavailable");
         assert!(incoming.try_recv().is_err(), "a host that ignores expectedOmp must receive no bound mutation");
         run_service.relink(run_replacement_device);
         let opened = replacement_incoming.recv().await.unwrap();
@@ -218,21 +223,31 @@ async fn bound_actions_refuse_old_hosts_and_never_retry_or_replay_into_a_replace
         while run_service.generation() == old_generation || run_service.facts()["processAlive"] != true { next_status(&mut delivered).await; }
         let captured = run_service.generation();
         assert_ne!(captured, old_generation, "link replacement changes the binding even when omp is unchanged");
-        let pending = run_service.stock_for_generation(captured, json!({"type":"get_autopilot"}));
+        let pending = run_service.stock_for_generation(captured, json!({"type":"get_autopilot"}), crate::agentctl::service::host::Deadline::Default);
         let pending = tokio::spawn(pending);
         let request = replacement_incoming.recv().await.unwrap();
         assert_eq!(request.method, "tab.command");
         assert_eq!(request.params["expectedOmp"], "original-omp");
+        run_replacement_host.emit("tab.event", &json!({"rtab":"remote-native","name":"extensionUi","arg":{"id":"original-card","method":"input","title":"Original question"}})).unwrap();
         run_replacement_host.emit("tab.event", &json!({"rtab":"remote-native","name":"status","arg":{"status":"ready","processAlive":true,"omp":"replacement-omp"}})).unwrap();
+        let original_card = loop {
+            let event = delivered.recv().await.unwrap();
+            if event.name == "extensionUi" && event.arg["id"] == "original-card" { break event; }
+        };
         while run_service.generation() == captured { next_status(&mut delivered).await; }
+        assert_eq!(original_card.generation, captured, "queued cards retain their emitting run, not the later snapshot");
+        assert_ne!(original_card.generation, run_service.generation());
         run_replacement_host.answer(request.id, Ok(json!({"success":true,"data":{"~read":"old.2","base":"old.1","delta":{"~delta":"x","set":{},"unset":[]}}}))).unwrap();
         assert_eq!(pending.await.unwrap().unwrap_err().code, "remote_run_changed");
-        assert_eq!(run_service.stock_for_generation(captured, json!({"type":"set_session_name","name":"Must not rename replacement"})).await.unwrap_err().code, "remote_run_changed");
+        assert_eq!(run_service.stock_for_generation(captured, json!({"type":"set_session_name","name":"Must not rename replacement"}), crate::agentctl::service::host::Deadline::Default).await.unwrap_err().code, "remote_run_changed");
         assert_eq!(run_service.send_for_generation(captured, json!({"type":"host_tool_result","id":"must-not-replay"})).await.unwrap_err().code, "remote_run_changed");
         assert_eq!(run_service.bridge_for_generation(captured, "capabilities".into(), None, None).await.unwrap_err().code, "remote_run_changed");
+        assert_eq!(run_service.adopt_cwd_for_generation(captured, "/stale-cwd".into()).await.unwrap_err().code, "remote_run_changed");
+        assert_eq!(run_service.sync_image_generation_for_generation(captured).await.unwrap_err().code, "remote_run_changed");
+        assert_eq!(run_service.kind_for_generation(captured, "/old/session.jsonl".into()).await.unwrap_err().code, "remote_run_changed");
         assert!(replacement_incoming.try_recv().is_err(), "no fresh read retry or stale host reply may reach the replacement");
         let current = run_service.generation();
-        let current_read = run_service.stock_for_generation(current, json!({"type":"get_state"}));
+        let current_read = run_service.stock_for_generation(current, json!({"type":"get_state"}), crate::agentctl::service::host::Deadline::Default);
         let serve = async {
             let request = replacement_incoming.recv().await.unwrap();
             assert_eq!(request.params["expectedOmp"], "replacement-omp");
@@ -240,6 +255,35 @@ async fn bound_actions_refuse_old_hosts_and_never_retry_or_replay_into_a_replace
         };
         let (response, ()) = tokio::join!(current_read, serve);
         assert_eq!(response.unwrap()["data"]["sessionFile"], "/isolated/replacement.jsonl");
+        let adopt = run_service.adopt_cwd_for_generation(current, "/isolated/adopted".into());
+        let serve = async {
+            let request = replacement_incoming.recv().await.unwrap();
+            assert_eq!(request.method, "tab.adoptCwd");
+            assert_eq!(request.params["expectedOmp"], "replacement-omp");
+            assert_eq!(request.params["cwd"], "/isolated/adopted");
+            run_replacement_host.answer(request.id, Ok(Value::Bool(true))).unwrap();
+        };
+        let (changed, ()) = tokio::join!(adopt, serve);
+        assert!(changed.unwrap());
+        assert_eq!(run_service.facts()["cwd"], "/isolated/adopted");
+        let refresh = run_service.sync_image_generation_for_generation(current);
+        let serve = async {
+            let request = replacement_incoming.recv().await.unwrap();
+            assert_eq!(request.method, "tab.syncImageGeneration");
+            assert_eq!(request.params["expectedOmp"], "replacement-omp");
+            run_replacement_host.answer(request.id, Ok(Value::Null)).unwrap();
+        };
+        let (refreshed, ()) = tokio::join!(refresh, serve);
+        refreshed.unwrap();
+        let kind = run_service.kind_for_generation(current, "/isolated/replacement.jsonl".into());
+        let serve = async {
+            let request = replacement_incoming.recv().await.unwrap();
+            assert_eq!(request.method, "sessions.kindFor");
+            assert_eq!(request.params["sessionPath"], "/isolated/replacement.jsonl");
+            run_replacement_host.answer(request.id, Ok(json!("chat"))).unwrap();
+        };
+        let (kind, ()) = tokio::join!(kind, serve);
+        assert_eq!(kind.unwrap(), "chat");
         run_service.keep_on_host();
         run_service.dispose();
         run_service.when_disposed().await.unwrap();

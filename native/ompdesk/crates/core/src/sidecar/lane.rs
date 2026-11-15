@@ -76,6 +76,11 @@ pub enum Command {
         stdin_grace: Duration,
     },
     Cwd(String),
+    NativeCwd {
+        generation: u64,
+        cwd: String,
+        reply: oneshot::Sender<Result<bool, Fault>>,
+    },
     Gate,
     Stock {
         seq: u64,
@@ -106,6 +111,9 @@ impl Command {
             }
             Command::Barrier(_, reply) | Command::WhenExited(reply) => {
                 let _ = reply.send(());
+            }
+            Command::NativeCwd { reply, .. } => {
+                let _ = reply.send(Err(disconnected()));
             }
             _ => {}
         }
@@ -810,6 +818,22 @@ impl Lane {
             Command::Sleep => self.sleep(),
             Command::Dispose { stdin_grace } => self.dispose(stdin_grace),
             Command::Cwd(cwd) => self.cwd = cwd,
+            Command::NativeCwd { generation, cwd, reply } => {
+                if !self.is_live(generation) {
+                    let _ = reply.send(Err(disconnected()));
+                    return;
+                }
+                let changed = self.cwd != cwd;
+                self.cwd = cwd;
+                super::tap(
+                    &self.tab,
+                    "sidecar.nativeCwd",
+                    &json!({ "cmd": self.applied, "cwd": self.cwd }),
+                    None,
+                    self.generation,
+                );
+                let _ = reply.send(Ok(changed));
+            }
             Command::Gate => self.start_gate = true,
             Command::Stock {
                 seq,

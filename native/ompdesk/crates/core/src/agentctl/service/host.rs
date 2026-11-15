@@ -23,10 +23,15 @@ use super::types::{
     WorktreeRef, WorktreeRemoval,
 };
 use crate::agentctl::app::AppState;
+use crate::agentctl::inbox::{
+    InboxAdmission, InboxLogicalSource, InboxProducer, InboxRoute, NativeInboxAcceptance,
+    NativeInboxLookup, NativeInboxLookupReply, NativeInboxReply, NativeInboxRequest,
+    NativeInboxTransfer,
+};
 use crate::agentctl::journal::Clock;
 use crate::agentctl::journal::attachments::{AttachedSet, AttachmentStore, LandedCache};
 use crate::agentctl::journal::mail_outbox::{MailAnswer, MailOutbox, OutboxMail};
-use crate::agentctl::rules::mail::MailDelivery;
+use crate::agentctl::rules::mail::{DeliveryReceipt, MailDelivery};
 use crate::ports::Port;
 
 /// Who opened a tab (`host.parentOf`): the opener's tab, and the tag the open carried (`autopilot-child`).
@@ -59,6 +64,8 @@ pub struct Tombstones {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct HostState {
+    /// This app's persistent identity from main's trusted remote identity service.
+    pub device_id: String,
     /// `enabled()`: Settings › Tools & extensions switch.
     pub enabled: bool,
     /// `fullEnabled()`.
@@ -73,6 +80,11 @@ pub struct HostState {
     pub closed_children: Vec<ClosedChild>,
     /// `tabs(caller)`: every open tab of this app once, in the pool's order, without `here`.
     pub tabs: Vec<ControlTab>,
+    /// Authenticated hosted executions eligible for system mail, never visible-window roster entries.
+    pub mail_targets: Vec<ControlTab>,
+    /// Current tab identities blocked by main's in-progress deletion fence, before a tombstone exists.
+    pub mail_blocked: HashSet<String>,
+    pub(crate) inbox_routes: Vec<InboxRoute>,
     /// Each open tab's window (any stable key): `here` and the caller's-window-first order come from the caller's.
     pub window_of: HashMap<String, String>,
     /// `outsideCaller(id)`: the stand-in tab of each process calling over the control socket, never listed in `tabs`.
@@ -280,6 +292,16 @@ pub enum Deadline {
     None,
 }
 
+impl Deadline {
+    pub(crate) fn timeout(self) -> Option<std::time::Duration> {
+        match self {
+            Self::Default => Some(std::time::Duration::from_secs(8)),
+            Self::Ms(ms) => Some(std::time::Duration::from_millis(ms)),
+            Self::None => None,
+        }
+    }
+}
+
 /// A typed wrapper over the port: main's snapshot, its asks and its tells.
 #[derive(Clone)]
 pub struct Host {
@@ -442,63 +464,119 @@ impl Host {
         details: &Value,
         delivery: MailDelivery,
     ) -> R<()> {
-        self.mail_attached(tab_id, content, details, delivery, None)
+        self.mail_attached(tab_id, content, details, delivery, None, None)
             .await
+            .map(|_| ())
     }
 
     /// `mail` with what the report carries: its pictures go inline (read from the attachment store), its files are
     /// named in the text. The entry kept names them, so a redelivery brings them again.
-    pub async fn mail_attached(
+    pub(crate) async fn mail_attached(
         &self,
         tab_id: &str,
         content: &str,
         details: &Value,
         delivery: MailDelivery,
         attached: Option<&AttachedSet>,
-    ) -> R<()> {
-        let images = self.stored_images(attached).await?;
-        let kept = self.outbox.as_ref().and_then(|(outbox, clock)| {
-            let id = details.get("id")?.as_str()?;
+        native: Option<(&InboxAdmission, &str)>,
+    ) -> R<DeliveryReceipt> {
+        if let Some((admission, logical_content)) = native {
             let state = self.state();
-            let tab = state.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
-            // The reporting session, told when this cannot be delivered with its attachments.
-            let sender = details.get("from").and_then(Value::as_str).map(|from| {
-                match state.tabs.iter().find(|tab| tab.tab_id == from) {
-                    Some(tab) => (
-                        tab.session_path
-                            .clone()
-                            .filter(|p| !p.is_empty())
-                            .unwrap_or_else(|| from.to_owned()),
-                        tab.device.clone().filter(|d| !d.is_empty()),
-                    ),
-                    None => (from.to_owned(), None),
-                }
-            });
-            outbox.keep(OutboxMail {
-                id: id.to_owned(),
-                session_path: tab.session_path.clone().filter(|path| !path.is_empty())?,
-                device: tab.device.clone().filter(|device| !device.is_empty()),
-                from: sender.as_ref().map(|(path, _)| path.clone()),
-                from_device: sender.as_ref().and_then(|(_, device)| device.clone()),
+            let logical = &admission.logical;
+            let InboxProducer::Execution(producer) = &logical.producer else {
+                return Err(Fail::other(
+                    "Host-observed card admission requires its captured Root proof",
+                ));
+            };
+            let entry = OutboxMail {
+                id: details
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| Fail::other("A native report requires its original report id"))?
+                    .to_owned(),
+                session_path: logical.target.session_path.clone(),
+                device: (logical.target.device_id != state.device_id)
+                    .then(|| logical.target.device_id.clone()),
+                from: Some(producer.session_path.clone()),
+                from_device: (producer.device_id != state.device_id)
+                    .then(|| producer.device_id.clone()),
                 content: content.to_owned(),
                 details: details.clone(),
+                delivery_id: Some(logical.delivery_id().map_err(Fail::other)?),
+                logical_content: Some(logical_content.to_owned()),
+                native_source: InboxLogicalSource::Bound(logical.clone()),
                 delivery,
                 attachments: attached.cloned(),
                 attachments_corrupt: false,
-                at: clock(),
-            });
-            Some((outbox, id.to_owned()))
-        });
+                at: (self.clock)(),
+            };
+            return crate::agentctl::runtime::inbox_source::post_report(
+                self.port.id(),
+                tab_id,
+                entry,
+                &admission.execution,
+            )
+            .await;
+        }
+        let images = self.stored_images(attached).await?;
+        let kept = self
+            .outbox
+            .as_ref()
+            .and_then(|(outbox, clock)| {
+                let id = details.get("id")?.as_str()?;
+                let state = self.state();
+                let tab = state.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
+                // The reporting session, told when this cannot be delivered with its attachments.
+                let sender = details.get("from").and_then(Value::as_str).map(|from| {
+                    match state.tabs.iter().find(|tab| tab.tab_id == from) {
+                        Some(tab) => (
+                            tab.session_path
+                                .clone()
+                                .filter(|p| !p.is_empty())
+                                .unwrap_or_else(|| from.to_owned()),
+                            tab.device.clone().filter(|d| !d.is_empty()),
+                        ),
+                        None => (from.to_owned(), None),
+                    }
+                });
+                let acceptance = outbox.keep(OutboxMail {
+                    id: id.to_owned(),
+                    session_path: tab.session_path.clone().filter(|path| !path.is_empty())?,
+                    device: tab.device.clone().filter(|device| !device.is_empty()),
+                    from: sender.as_ref().map(|(path, _)| path.clone()),
+                    from_device: sender.as_ref().and_then(|(_, device)| device.clone()),
+                    content: content.to_owned(),
+                    details: details.clone(),
+                    delivery_id: None,
+                    logical_content: None,
+                    native_source: InboxLogicalSource::Legacy,
+                    delivery,
+                    attachments: attached.cloned(),
+                    attachments_corrupt: false,
+                    at: clock(),
+                });
+                Some(acceptance.map(|_| (outbox, id.to_owned())))
+            })
+            .transpose()
+            .map_err(Fail::other)?;
         let answer = self
             .send_mail_with(tab_id, content, details, delivery, &images)
             .await?;
+        let existing = answer
+            .as_ref()
+            .is_some_and(|answer| answer.duplicate && answer.journaled);
         if let (Some((outbox, id)), Some(answer)) = (kept, answer)
             && answer.duplicate
             && answer.journaled
         {
             outbox.settle(&id);
         }
-        Ok(())
+        Ok(if existing {
+            DeliveryReceipt::Existing
+        } else {
+            DeliveryReceipt::New
+        })
     }
 
     /// One report to a tab's omp; the bridge's answer (`{duplicate, journaled}` for an id it already holds or queued).
@@ -539,6 +617,48 @@ impl Host {
             duplicate: answer.get("duplicate").and_then(Value::as_bool) == Some(true),
             journaled: answer.get("journaled").and_then(Value::as_bool) == Some(true),
         }))
+    }
+    pub(crate) async fn inbox_status(
+        &self,
+        tab_id: &str,
+        session_path: &str,
+        device: Option<&str>,
+    ) -> R<NativeInboxReply> {
+        self.ask(
+            "inboxStatus",
+            json!({ "tabId": tab_id, "sessionPath": session_path, "device": device }),
+        )
+        .await
+    }
+
+    pub(crate) async fn lookup_inbox(
+        &self,
+        tab_id: &str,
+        query: &NativeInboxLookup,
+    ) -> R<NativeInboxLookupReply> {
+        self.ask("lookupInbox", json!({ "tabId": tab_id, "query": query }))
+            .await
+    }
+
+    pub(crate) async fn inbox(
+        &self,
+        tab_id: &str,
+        transfer: &NativeInboxTransfer,
+    ) -> R<NativeInboxAcceptance> {
+        self.ask("inbox", json!({ "tabId": tab_id, "transfer": transfer }))
+            .await
+    }
+
+    pub(crate) async fn deliver_inbox(
+        &self,
+        tab_id: &str,
+        request: &NativeInboxRequest,
+    ) -> R<NativeInboxReply> {
+        self.ask(
+            "deliverInbox",
+            json!({ "tabId": tab_id, "request": request }),
+        )
+        .await
     }
 
     /// `reach {sessionPath}`: the tab holding a session this computer runs, started when it is asleep; with none, the

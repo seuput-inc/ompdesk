@@ -29,13 +29,15 @@ impl Serialize for Payload {
 
 pub struct Data {
     pub tab: Arc<str>,
+    pub view_id: Arc<str>,
     pub payload: Payload,
 }
 
 impl Serialize for Data {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut data = serializer.serialize_struct("TabPush", 2)?;
+        let mut data = serializer.serialize_struct("TabPush", 3)?;
         data.serialize_field("tabId", &self.tab.as_ref())?;
+        data.serialize_field("viewId", &self.view_id.as_ref())?;
         data.serialize_field("payload", &self.payload)?;
         data.end()
     }
@@ -48,11 +50,16 @@ pub struct Delivery {
     pub data: Data,
 }
 
+struct Receiver {
+    view_id: Arc<str>,
+    slimmer: Slimmer,
+}
+
 /// A tab's full channel. One slimmer per receiver and one subagent queue, as in SidecarPool.#wireFull.
 /// The native host arms its existing 32 ms presentation timer when `subagent` returns true.
 pub struct FullChannel {
     tab: Arc<str>,
-    windows: BTreeMap<i64, Slimmer>,
+    windows: BTreeMap<i64, Receiver>,
     pending: Vec<Value>,
 }
 
@@ -65,8 +72,23 @@ impl FullChannel {
         }
     }
 
-    pub fn attach(&mut self, window: i64) {
-        self.windows.entry(window).or_default();
+    pub fn attach(&mut self, window: i64, view_id: Arc<str>, send: &mut impl FnMut(Delivery)) {
+        if self
+            .windows
+            .get(&window)
+            .is_some_and(|target| target.view_id == view_id)
+        {
+            return;
+        }
+        // Pending frames belong to the old attachments, never to a later view of the same tab.
+        self.flush(send);
+        self.windows.insert(
+            window,
+            Receiver {
+                view_id,
+                slimmer: Slimmer::default(),
+            },
+        );
     }
 
     /// Flush while the departing receiver is still attached. Detaching never closes or disposes an owner.
@@ -79,8 +101,8 @@ impl FullChannel {
     }
 
     pub fn resnapshot(&mut self, window: i64) {
-        if let Some(slimmer) = self.windows.get_mut(&window) {
-            slimmer.reset();
+        if let Some(target) = self.windows.get_mut(&window) {
+            target.slimmer.reset();
         }
     }
 
@@ -100,39 +122,33 @@ impl FullChannel {
             return;
         }
         let batch = Arc::from(std::mem::take(&mut self.pending));
-        send(Delivery {
-            windows: self.windows.keys().copied().collect(),
-            channel: "SUBAGENT_FRAMES",
-            data: Data {
-                tab: Arc::clone(&self.tab),
-                payload: Payload::Batch(batch),
-            },
-        });
+        for (window, target) in &self.windows {
+            send(Delivery {
+                windows: vec![*window],
+                channel: "SUBAGENT_FRAMES",
+                data: Data {
+                    tab: Arc::clone(&self.tab),
+                    view_id: Arc::clone(&target.view_id),
+                    payload: Payload::Batch(Arc::clone(&batch)),
+                },
+            });
+        }
     }
 
     pub fn events(&mut self, events: Arc<[Value]>, send: &mut impl FnMut(Delivery)) {
         self.flush(send);
         let mut shared = SharedBatch::default();
-        let mut groups: Vec<(Arc<[Value]>, Vec<i64>)> = Vec::new();
-        for (window, slimmer) in &mut self.windows {
-            let batch = slimmer
+        for (window, target) in &mut self.windows {
+            let batch = target
+                .slimmer
                 .slim_shared(&events, &mut shared)
                 .unwrap_or_else(|| Arc::clone(&events));
-            if let Some((_, windows)) = groups
-                .iter_mut()
-                .find(|(known, _)| Arc::ptr_eq(known, &batch))
-            {
-                windows.push(*window);
-            } else {
-                groups.push((batch, vec![*window]));
-            }
-        }
-        for (batch, windows) in groups {
             send(Delivery {
-                windows,
+                windows: vec![*window],
                 channel: "EVENTS_BATCH",
                 data: Data {
                     tab: Arc::clone(&self.tab),
+                    view_id: Arc::clone(&target.view_id),
                     payload: Payload::Batch(batch),
                 },
             });
@@ -143,14 +159,18 @@ impl FullChannel {
         if self.windows.is_empty() {
             return;
         }
-        send(Delivery {
-            windows: self.windows.keys().copied().collect(),
-            channel,
-            data: Data {
-                tab: Arc::clone(&self.tab),
-                payload: Payload::Value(Arc::new(payload)),
-            },
-        });
+        let payload = Arc::new(payload);
+        for (window, target) in &self.windows {
+            send(Delivery {
+                windows: vec![*window],
+                channel,
+                data: Data {
+                    tab: Arc::clone(&self.tab),
+                    view_id: Arc::clone(&target.view_id),
+                    payload: Payload::Value(Arc::clone(&payload)),
+                },
+            });
+        }
     }
 }
 
@@ -224,11 +244,12 @@ pub trait Sidecar: Send + Sync {
     fn facts(&self) -> Value;
     fn start(&self);
     fn restart(&self, session: Option<&str>);
-    fn sleep(&self);
+    fn sleep(&self) -> Result<(), Self::Error>;
     fn adopt_cwd(&self, cwd: &str) -> bool;
     fn send_now(&self, frame: Value) -> Result<(), Self::Error>;
     fn send(&self, frame: Value) -> EffectFuture<'_, Result<(), Self::Error>>;
     fn stock(&self, command: Value) -> EffectFuture<'static, Result<Value, Self::Error>>;
+        deadline: crate::agentctl::service::host::Deadline,
     fn bridge(
         &self,
         method: String,
@@ -237,6 +258,7 @@ pub trait Sidecar: Send + Sync {
     ) -> EffectFuture<'static, Result<Value, Self::Error>>;
     /// Must capture the currently exiting generation before dispose forgets it, not when first polled.
     fn exit_waiter(&self) -> EffectFuture<'static, ()>;
+    fn reply_barrier(&self) -> EffectFuture<'static, Result<(), Self::Error>>;
     fn remove_listeners(&self);
     fn dispose(&self);
     fn sync_settings(&self) -> EffectFuture<'_, ()>;
@@ -246,7 +268,7 @@ pub trait Sidecar: Send + Sync {
 pub struct Spawn {
     pub owner: Owner,
     pub tab: String,
-    pub window: i64,
+    pub window: Option<i64>,
     pub cwd: String,
     pub kind: String,
     pub fresh: bool,
@@ -313,10 +335,11 @@ impl<H: Host> Application<H> {
     }
 
     pub fn spawn(&self, mut spawn: Spawn) -> Result<Value, <H::Sidecar as Sidecar>::Error> {
-        let (destroyed, web) = self.host.window(spawn.window);
-        if destroyed {
-            return Err(self.host.unknown_window());
-        }
+        let web = if let Some(window) = spawn.window {
+            let (destroyed, web) = self.host.window(window);
+            if destroyed { return Err(self.host.unknown_window()); }
+            web
+        } else { false };
         if spawn.device.is_none() {
             spawn.cwd = self.host.canonical_cwd(&spawn.cwd);
         }
@@ -364,10 +387,14 @@ impl<H: Host> Application<H> {
         }
     }
 
-    pub fn sleep(&self, tab: &str) {
-        if let Some(sidecar) = self.sidecar(tab) {
-            sidecar.sleep();
-        }
+    pub fn sleep(&self, tab: &str) -> Result<(), <H::Sidecar as Sidecar>::Error>
+    where
+        H: asks::Collaborators,
+    {
+        let sidecar = self
+            .sidecar(tab)
+            .ok_or_else(|| self.host.error("The tab is not open".into()))?;
+        sidecar.sleep()
     }
 
     pub fn adopt_cwd(&self, tab: &str, cwd: &str) -> bool {

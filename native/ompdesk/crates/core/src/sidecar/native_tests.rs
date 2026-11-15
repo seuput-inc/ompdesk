@@ -16,6 +16,9 @@ impl Sink for Recorder {
     fn before_response(&self) {
         self.flushes.fetch_add(1, Ordering::SeqCst);
     }
+    fn reply_barrier(&self) -> Held {
+        Box::pin(async { Ok(()) })
+    }
     fn remove_listeners(&self) {}
     fn sync_settings(&self) -> EffectFuture<'_, ()> {
         Box::pin(async {})
@@ -108,6 +111,18 @@ async fn native_commands_flush_before_reply_and_close_waits_for_the_real_child()
         "the ordered stream flush happens before the stock answer becomes visible"
     );
     service.barrier().await.unwrap();
+    let original_cwd = service.facts()["cwd"].as_str().unwrap().to_owned();
+    let adopted_cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let adoption = service.adopt_cwd_for_generation(first_generation, adopted_cwd.clone());
+    drop(adoption);
+    service.barrier().await.unwrap();
+    assert_eq!(service.facts()["cwd"], adopted_cwd);
+    assert!(!service.adopt_cwd_for_generation(first_generation, adopted_cwd).await.unwrap());
+    assert!(service.adopt_cwd_for_generation(first_generation, original_cwd.clone()).await.unwrap());
+    assert!(service.adopt_cwd_for_generation(first_generation, "stale-original-cwd".into()).await.is_err());
+    assert_eq!(service.facts()["cwd"], original_cwd);
+    let stale_cwd = service.adopt_cwd_for_generation(generation, "queued-stale-cwd".into());
+    assert!(stale_cwd.await.is_err());
     let exited = service.when_exited();
     service.dispose(Duration::ZERO);
     exited.await;

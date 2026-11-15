@@ -8,6 +8,7 @@ use ompdesk_app_contract::{NativeCaller, RequestId};
 use tokio::sync::oneshot;
 
 use crate::hub;
+use crate::pool::application::Sidecar;
 use crate::server::{Fault, Scope};
 
 use super::callers::{Admitted, Callers};
@@ -18,6 +19,21 @@ pub type Task<T> = Pin<Box<dyn Future<Output = Result<T, Fault>> + Send>>;
 /// Domain executors must retain the supplied Scope while reaping the effects they started.
 pub struct Requests {
     callers: Arc<Callers>,
+}
+
+
+/// Parsed page payload plus transport-owned attribution. It contains no caller or execution grant.
+pub(crate) struct CommandRequest {
+    pub command: crate::local_dispatch::protocol::RpcCommand,
+    pub tab: Option<String>,
+    pub deadline: crate::agentctl::service::host::Deadline,
+    pub channel: Arc<str>,
+    pub origin: Option<serde_json::Value>,
+}
+#[derive(Clone, Copy)]
+enum ReplyWhen {
+    EffectsJoined,
+    HandlerAnswered,
 }
 
 impl Requests {
@@ -41,6 +57,78 @@ impl Requests {
         caller: NativeCaller,
         id: RequestId,
         prepare: impl FnOnce(Admitted, Scope) -> F + Send + 'static,
+    ) -> Task<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, Fault>> + 'static,
+    {
+        self.invoke_when(caller, id, prepare, ReplyWhen::EffectsJoined)
+    }
+
+    /// RPC deadlines end only the waiter; the original request remains registered until retained effects join.
+    pub fn invoke_rpc<T, F>(
+        &self,
+        caller: NativeCaller,
+        id: RequestId,
+        prepare: impl FnOnce(Admitted, Scope) -> F + Send + 'static,
+    ) -> Task<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, Fault>> + 'static,
+    {
+        self.invoke_when(caller, id, prepare, ReplyWhen::HandlerAnswered)
+    }
+
+    pub(crate) fn invoke_command<P, R>(
+        &self,
+        caller: NativeCaller,
+        id: RequestId,
+        pool: Arc<crate::pool::application::native::Service<P>>,
+        policy: Arc<super::dispatch_policy::Policy<P, R>>,
+        request: CommandRequest,
+    ) -> Task<serde_json::Value>
+    where
+        P: crate::pool::application::native::Host<Sidecar = super::source::Source>,
+        R: crate::remote::application_host::Host,
+    {
+        self.invoke_rpc(caller, id, move |caller, scope| async move {
+            let CommandRequest { command, tab, deadline, channel, origin } = request;
+            if let Some(work) = policy.slot_command(caller.clone(), None, scope.clone(), &command) {
+                return work.await;
+            }
+            let pending = pool.select_page_command(caller, tab, Some(channel), scope).await;
+            let mut source = None;
+            let admitted = match pending {
+                Ok(pending) => {
+                    source = Some(Arc::clone(pending.source()));
+                    pool.finish_page_command(pending).await
+                }
+                Err(error) => Err(error),
+            };
+            let result = match admitted {
+                Ok(admission) => policy.command(admission, command, deadline, origin).await,
+                Err(error) => {
+                    serde_json::to_value(crate::local_dispatch::protocol::RpcResponse::local(
+                        &command,
+                        Err(crate::local_dispatch::protocol::CommandError::local(error.code, error.message)),
+                    )).map_err(|error| Fault::new("internal", error.to_string()))
+                }
+            };
+            if let Some(source) = source {
+                let delivered = source.reply_barrier().await;
+                crate::pool::application::Sidecar::before_response(source.as_ref());
+                return result.and_then(|value| delivered.map(|()| value));
+            }
+            result
+        })
+    }
+
+    fn invoke_when<T, F>(
+        &self,
+        caller: NativeCaller,
+        id: RequestId,
+        prepare: impl FnOnce(Admitted, Scope) -> F + Send + 'static,
+        reply_when: ReplyWhen,
     ) -> Task<T>
     where
         T: Send + 'static,
@@ -91,6 +179,14 @@ impl Requests {
                 };
                 drop(scope);
                 gone.wait().await;
+                if matches!(reply_when, ReplyWhen::HandlerAnswered) {
+                    if reply.send(result).is_err() {
+                        cancel.cancel();
+                    }
+                    gone.wait().await;
+                    callers.finish(&owner, id);
+                    return;
+                }
                 callers.finish(&owner, id);
                 let _ = reply.send(result);
             });

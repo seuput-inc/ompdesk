@@ -227,19 +227,17 @@ impl Host for Effects {
     ) -> Result<(), Fault> {
         self.start(target)
     }
-    fn adopt_cwd(&self, target: &Arc<Target>, cwd: String) -> Result<bool, Fault> {
-        lock(&target.state).cwd = cwd;
-        Ok(true)
+    async fn adopt_cwd(&self, target: &Arc<Target>, cwd: String, expected_omp: Option<String>) -> Result<bool, Fault> {
+        let mut state = lock(&target.state);
+        if expected_omp.as_deref().is_some_and(|expected| expected != state.omp) {
+            return Err(Fault::new("remote_run_changed", "The captured run changed"));
+        }
+        let changed = state.cwd != cwd;
+        state.cwd = cwd;
+        Ok(changed)
     }
-    async fn command(
-        &self,
-        _: &Caller,
-        target: &Arc<Target>,
-        _: Value,
-        _: Option<Duration>,
-        expected_omp: Option<String>,
-        _: &RemoteRequests,
-    ) -> ResultValue {
+    async fn command(&self, call: CommandCall<'_, Arc<Target>, Caller>) -> ResultValue {
+        let CommandCall { target, expected_omp, .. } = call;
         if expected_omp
             .as_deref()
             .is_some_and(|expected| expected != lock(&target.state).omp)
@@ -313,7 +311,10 @@ impl Host for Effects {
     async fn cancel_wait(&self, _: &Arc<Target>) -> Result<(), Fault> {
         Ok(())
     }
-    fn sync_image_generation(&self, _: &Arc<Target>) -> Result<(), Fault> {
+    async fn sync_image_generation(&self, target: &Arc<Target>, expected_omp: Option<String>) -> Result<(), Fault> {
+        if expected_omp.as_deref().is_some_and(|expected| expected != lock(&target.state).omp) {
+            return Err(Fault::new("remote_run_changed", "The captured run changed"));
+        }
         Ok(())
     }
     async fn upload(&self, _: &Caller, upload: super::super::uploads::Upload) -> ResultValue {

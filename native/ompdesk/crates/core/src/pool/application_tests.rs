@@ -15,12 +15,12 @@ fn batches(deliveries: &[Delivery], window: i64) -> Vec<Value> {
 #[test]
 fn reconnecting_receiver_gets_a_whole_snapshot_without_resetting_other_viewers() {
     let mut full = FullChannel::new("tab");
-    full.attach(1);
+    full.attach(1, Arc::from("original.1"), &mut |_| {});
     let mut sent = Vec::new();
     full.events(Arc::from([update("first")]), &mut |delivery| {
         sent.push(delivery)
     });
-    full.attach(-2);
+    full.attach(-2, Arc::from("original.-2"), &mut |_| {});
     full.events(Arc::from([update("second")]), &mut |delivery| {
         sent.push(delivery)
     });
@@ -51,8 +51,8 @@ fn reconnecting_receiver_gets_a_whole_snapshot_without_resetting_other_viewers()
 #[test]
 fn detaching_a_viewer_flushes_received_frames_then_only_removes_that_receiver() {
     let mut full = FullChannel::new("tab");
-    full.attach(1);
-    full.attach(-2);
+    full.attach(1, Arc::from("original.1"), &mut |_| {});
+    full.attach(-2, Arc::from("original.-2"), &mut |_| {});
     assert!(full.subagent(json!({"type": "subagent_progress", "payload": {"id": "child"}})));
     assert!(!full.subagent(
         json!({"type": "subagent_progress", "payload": {"id": "child", "text": "last"}})
@@ -62,16 +62,11 @@ fn detaching_a_viewer_flushes_received_frames_then_only_removes_that_receiver() 
     full.events(Arc::from([update("owner continues")]), &mut |delivery| {
         sent.push(delivery)
     });
-    assert_eq!(
-        sent[0].windows,
-        [1, -2]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(sent[0].channel, "SUBAGENT_FRAMES");
+    assert_eq!(sent[0].windows, [-2]);
     assert_eq!(sent[1].windows, [1]);
+    assert_eq!(sent[0].channel, "SUBAGENT_FRAMES");
+    assert_eq!(sent[1].channel, "SUBAGENT_FRAMES");
+    assert_eq!(sent[2].windows, [1]);
     assert_eq!(batches(&sent, -2).len(), 1);
     assert_eq!(
         batches(&sent, 1)[1]["payload"][0]["message"]["content"][0]["text"],
@@ -82,7 +77,7 @@ fn detaching_a_viewer_flushes_received_frames_then_only_removes_that_receiver() 
 #[test]
 fn frames_flush_before_agent_events_and_before_a_transcript_answer() {
     let mut full = FullChannel::new("tab");
-    full.attach(1);
+    full.attach(1, Arc::from("original.1"), &mut |_| {});
     full.subagent(json!({"type": "subagent_progress", "payload": {"id": "child"}}));
     let mut order = Vec::new();
     full.events(Arc::from([json!({"type": "agent_end"})]), &mut |delivery| {
@@ -106,21 +101,51 @@ fn frames_flush_before_agent_events_and_before_a_transcript_answer() {
 }
 
 #[test]
-fn receivers_at_the_same_message_share_one_slimmed_push() {
+fn receivers_at_the_same_message_share_payload_but_keep_their_original_view_envelopes() {
     let mut full = FullChannel::new("tab");
-    full.attach(1);
-    full.attach(-2);
+    full.attach(1, Arc::from("original.1"), &mut |_| {});
+    full.attach(-2, Arc::from("original.-2"), &mut |_| {});
     full.events(Arc::from([update("first")]), &mut |_| {});
     let mut sent = Vec::new();
     full.events(Arc::from([update("second")]), &mut |delivery| {
         sent.push(delivery)
     });
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].windows, [-2, 1]);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].windows, [-2]);
+    assert_eq!(sent[1].windows, [1]);
+    assert_eq!(batches(&sent, -2)[0]["viewId"], "original.-2");
+    assert_eq!(batches(&sent, 1)[0]["viewId"], "original.1");
+    match (&sent[0].data.payload, &sent[1].data.payload) {
+        (Payload::Batch(left), Payload::Batch(right)) => assert!(Arc::ptr_eq(left, right)),
+        _ => panic!("both original envelopes carry the same slimmed batch"),
+    }
     assert!(
         batches(&sent, 1)[0]["payload"][0]["message"]
             .get("content")
             .is_none()
+    );
+}
+
+#[test]
+fn rejoining_the_same_window_flushes_old_frames_with_the_old_view_before_replacing_it() {
+    let mut full = FullChannel::new("tab");
+    full.attach(1, Arc::from("epoch.1.0"), &mut |_| {});
+    full.subagent(json!({"type": "subagent_progress", "payload": {"id": "old"}}));
+    let mut sent = Vec::new();
+    full.attach(1, Arc::from("epoch.1.1"), &mut |delivery| {
+        sent.push(delivery)
+    });
+    full.events(Arc::from([update("new view")]), &mut |delivery| {
+        sent.push(delivery)
+    });
+    let old = serde_json::to_value(&sent[0].data).unwrap();
+    assert_eq!(old["viewId"], "epoch.1.0");
+    assert_eq!(old["payload"][0]["payload"]["id"], "old");
+    let new = serde_json::to_value(&sent[1].data).unwrap();
+    assert_eq!(new["viewId"], "epoch.1.1");
+    assert_eq!(
+        new["payload"][0]["message"]["content"][0]["text"],
+        "new view"
     );
 }
 

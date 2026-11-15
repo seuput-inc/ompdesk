@@ -40,6 +40,8 @@ pub struct TabEvent {
     pub arg: Value,
     /// Only link-derived status preserves the pool's open question routes.
     pub from_link: bool,
+    /// Captured before queued delivery can observe a later actor run.
+    pub generation: u64,
 }
 
 #[derive(Clone)]
@@ -61,7 +63,8 @@ pub struct TabSnapshot {
 
 impl std::fmt::Debug for TabSnapshot {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("TabSnapshot")
+        formatter
+            .debug_struct("TabSnapshot")
             .field("status", &self.status)
             .field("generation", &self.generation)
             .field("process_alive", &self.process_alive)
@@ -95,6 +98,11 @@ enum Input {
         session: Option<String>,
     },
     AdoptCwd(String),
+    NativeAdoptCwd(u64, String, oneshot::Sender<Result<bool, RemoteError>>),
+    NativeAdopted(u64, u64, String, oneshot::Sender<Result<bool, RemoteError>>, Result<Value, RemoteError>),
+    NativeNotify(u64, &'static str, Answer),
+    NativeKindFor(u64, String, Answer),
+    NativeQueried(u64, u64, Answer, Result<Value, RemoteError>),
     Link(RemoteRequests),
     Lost(u64),
     Event(u64, RemoteEvent),
@@ -268,8 +276,12 @@ impl RemoteTab {
     }
     pub fn facts(&self) -> Value {
         let state = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
-        json!({"cwd":state.cwd,"kind":state.kind,"status":state.status,"processAlive":state.process_alive,
-            "shared":state.shared,"sleep":false,"rpc":state.status!="asleep","bridge":state.bridge["connected"]==true})
+        let mut facts = json!({"cwd":state.cwd,"kind":state.kind,"status":state.status,"processAlive":state.process_alive,
+            "shared":state.shared,"sleep":false,"rpc":state.status!="asleep","bridge":state.bridge["connected"]==true});
+        let connection = state.connection.clone();
+        drop(state);
+        facts["offline"] = Value::Bool(!connection.is_online());
+        facts
     }
     pub fn bridge_connected(&self) -> bool {
         self.snapshot
@@ -281,13 +293,34 @@ impl RemoteTab {
     pub(crate) fn observed_run(&self) -> Result<ObservedRun, Fault> {
         let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
         if !snapshot.process_alive {
-            return Err(Fault::new("remote_run_changed", "The observed remote session is no longer current"));
+            return Err(Fault::new(
+                "remote_run_changed",
+                "The observed remote session is no longer current",
+            ));
         }
-        let path = snapshot.session_path.as_deref().filter(|path| !path.is_empty())
-            .ok_or_else(|| Fault::new("remote_run_changed", "The remote tab has no saved session"))?;
-        let omp = snapshot.omp.as_deref().filter(|omp| !omp.is_empty())
-            .ok_or_else(|| Fault::new("remote_run_changed", "The remote tab has no execution binding"))?;
-        Ok(ObservedRun { generation: snapshot.generation, path: path.to_owned(), omp: omp.to_owned(), connection: snapshot.connection.clone() })
+        let path = snapshot
+            .session_path
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                Fault::new("remote_run_changed", "The remote tab has no saved session")
+            })?;
+        let omp = snapshot
+            .omp
+            .as_deref()
+            .filter(|omp| !omp.is_empty())
+            .ok_or_else(|| {
+                Fault::new(
+                    "remote_run_changed",
+                    "The remote tab has no execution binding",
+                )
+            })?;
+        Ok(ObservedRun {
+            generation: snapshot.generation,
+            path: path.to_owned(),
+            omp: omp.to_owned(),
+            connection: snapshot.connection.clone(),
+        })
     }
     /// Snapshot admission only; Root must admit the original connection online before entering.
     /// The synchronous effect must neither await nor re-enter this snapshot mutex.
@@ -557,6 +590,41 @@ impl RemoteTab {
         let _ = self.inbox.send(Input::AdoptCwd(cwd.to_owned()));
         true
     }
+    pub(crate) fn adopt_cwd_for_generation(
+        &self,
+        generation: u64,
+        cwd: String,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<bool, RemoteError>> {
+        let (answer, result) = oneshot::channel();
+        let sent = self.inbox.send(Input::NativeAdoptCwd(generation, cwd, answer));
+        Box::pin(async move {
+            sent.map_err(|_| offline())?;
+            result.await.unwrap_or_else(|_| Err(offline()))
+        })
+    }
+    pub(crate) fn sync_image_generation_for_generation(
+        &self,
+        generation: u64,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<Value, RemoteError>> {
+        let (answer, result) = oneshot::channel();
+        let sent = self.inbox.send(Input::NativeNotify(generation, "tab.syncImageGeneration", answer));
+        Box::pin(async move {
+            sent.map_err(|_| offline())?;
+            result.await.unwrap_or_else(|_| Err(offline()))
+        })
+    }
+    pub(crate) fn kind_for_generation(
+        &self,
+        generation: u64,
+        session_path: String,
+    ) -> crate::sidecar::application::EffectFuture<'static, Result<Value, RemoteError>> {
+        let (answer, result) = oneshot::channel();
+        let sent = self.inbox.send(Input::NativeKindFor(generation, session_path, answer));
+        Box::pin(async move {
+            sent.map_err(|_| offline())?;
+            result.await.unwrap_or_else(|_| Err(offline()))
+        })
+    }
     pub async fn cancel_wait(&self) -> Result<(), RemoteError> {
         let (answer, result) = oneshot::channel();
         self.inbox
@@ -614,12 +682,18 @@ impl State {
         Ok(())
     }
     fn emit(&self, name: &str, arg: Value, from_link: bool) {
+        let generation = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .generation;
         if self
             .output
             .send(TabEvent {
                 name: name.to_owned(),
                 arg,
                 from_link,
+                generation,
             })
             .is_ok()
         {
@@ -1131,6 +1205,61 @@ impl State {
                     let _ = self
                         .inbox
                         .send(Input::Notify("tab.adoptCwd", json!({"cwd":cwd})));
+                }
+                Input::NativeAdoptCwd(generation, cwd, answer) => {
+                    let mut params = json!({"rtab":self.options.rtab,"cwd":cwd});
+                    if let Err(error) = self.bind_wire(Some(generation), &mut params) {
+                        let _ = answer.send(Err(error));
+                        continue;
+                    }
+                    let epoch = self.epoch;
+                    let inbox = self.inbox.clone();
+                    let link = self.link.clone();
+                    self.work.spawn(async move {
+                        let result = link.request("tab.adoptCwd", params, REQUEST).await;
+                        let _ = inbox.send(Input::NativeAdopted(epoch, generation, cwd, answer, result));
+                    });
+                }
+                Input::NativeAdopted(epoch, generation, cwd, answer, result) => {
+                    let result = result.and_then(|_| {
+                        if epoch != self.epoch { return Err(offline()); }
+                        self.check_generation(Some(generation))?;
+                        let mut snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                        let changed = snapshot.cwd != cwd;
+                        snapshot.cwd = cwd.clone();
+                        self.options.cwd = cwd;
+                        Ok(changed)
+                    });
+                    let _ = answer.send(result);
+                }
+                Input::NativeNotify(generation, method, answer) => {
+                    let mut params = json!({"rtab":self.options.rtab});
+                    if let Err(error) = self.bind_wire(Some(generation), &mut params) {
+                        let _ = answer.send(Err(error));
+                        continue;
+                    }
+                    let link = self.link.clone();
+                    self.work.spawn(async move {
+                        let _ = answer.send(link.request(method, params, REQUEST).await);
+                    });
+                }
+                Input::NativeKindFor(generation, session_path, answer) => {
+                    if let Err(error) = self.check_generation(Some(generation)) {
+                        let _ = answer.send(Err(error));
+                        continue;
+                    }
+                    let epoch = self.epoch;
+                    let link = self.link.clone();
+                    let inbox = self.inbox.clone();
+                    self.work.spawn(async move {
+                        let result = link.request("sessions.kindFor", json!({"sessionPath":session_path}), REQUEST).await;
+                        let _ = inbox.send(Input::NativeQueried(epoch, generation, answer, result));
+                    });
+                }
+                Input::NativeQueried(epoch, generation, answer, result) => {
+                    let result = if epoch != self.epoch { Err(offline()) }
+                        else { self.check_generation(Some(generation)).and(result) };
+                    let _ = answer.send(result);
                 }
                 Input::Check(generation, answer) => {
                     let _ = answer.send(self.check_generation(Some(generation)));

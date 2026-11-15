@@ -32,14 +32,15 @@ impl Retirement {
 }
 
 pub(crate) struct Local {
-    source: Arc<LocalSidecar>,
+    pub(super) source: Arc<LocalSidecar>,
     application: Arc<Application<LaunchHost>>,
     ingress: Arc<LaunchIngress<LaunchHost>>,
+    commands: Arc<crate::local_dispatch::Commands<LocalSidecar>>,
     retirement: Retirement,
 }
 
 pub(crate) struct Remote {
-    source: Arc<RemoteSidecar>,
+    pub(super) source: Arc<RemoteSidecar>,
     release: Mutex<Option<TabRelease>>,
     retirement: Retirement,
 }
@@ -55,6 +56,7 @@ impl Source {
             source: created.source,
             application: created.application,
             ingress: created.ingress,
+            commands: created.commands,
             retirement: Retirement::new(created.held),
         })
     }
@@ -74,6 +76,20 @@ impl Source {
         }
     }
 
+    pub(crate) fn local_commands(&self) -> Option<&Arc<crate::local_dispatch::Commands<LocalSidecar>>> {
+        match self {
+            Self::Local(local) => Some(&local.commands),
+            Self::Remote(_) => None,
+        }
+    }
+
+    pub(crate) fn local_application(&self) -> Option<&Arc<Application<LaunchHost>>> {
+        match self {
+            Self::Local(local) => Some(&local.application),
+            Self::Remote(_) => None,
+        }
+    }
+
     pub(crate) fn remote(&self) -> Option<&Arc<RemoteSidecar>> {
         match self {
             Self::Local(_) => None,
@@ -84,6 +100,37 @@ impl Source {
     /// A remote receipt joins this computer's actor and delivery, not the execution host's omp.
     pub(crate) fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
+    }
+
+    pub(crate) fn original_origin(&self) -> Option<Value> {
+        match self {
+            Self::Local(local) => local.application.original_origin(),
+            Self::Remote(_) => None,
+        }
+    }
+
+
+    pub(crate) fn adopt_cwd_for_generation(
+        &self,
+        generation: u64,
+        cwd: String,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        match self {
+            Self::Local(local) => local.source.adopt_cwd_for_generation(generation, cwd),
+            Self::Remote(remote) => remote.source.adopt_cwd_for_generation(generation, cwd),
+        }
+    }
+
+    pub(crate) fn sync_image_generation_for_generation(
+        &self,
+        generation: u64,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        match self {
+            Self::Local(local) => local.source.bridge_for_generation(
+                generation, "image_generation_sync".into(), None, None,
+            ),
+            Self::Remote(remote) => remote.source.sync_image_generation_for_generation(generation),
+        }
     }
 
     fn sidecar(&self) -> &dyn Sidecar<Error = Fault> {
@@ -123,11 +170,13 @@ impl Source {
                         source.dispose(Duration::ZERO);
                         Box::pin(async move {
                             let (exited, held, joined) = tokio::join!(exited, held, joined);
-                            // The application is kept through the ingress's last real dispatch.
+                            source.remove_listeners();
+                            let drained = source.reply_barrier().await;
+                            // Keep the application through both launch dispatch and final event delivery.
                             drop(application);
                             drop(ingress);
                             drop(source);
-                            exited.and(held).and(joined)
+                            exited.and(held).and(joined).and(drained)
                         })
                     }
                     Self::Remote(remote) => {
@@ -143,8 +192,10 @@ impl Source {
                         release.release(source.keep_on_host_requested());
                         Box::pin(async move {
                             let (disposed, held) = tokio::join!(disposed, held);
+                            source.remove_listeners();
+                            let drained = source.reply_barrier().await;
                             drop(source);
-                            disposed.and(held)
+                            disposed.and(held).and(drained)
                         })
                     }
                 };
@@ -212,8 +263,10 @@ impl Sidecar for Source {
         &self,
         generation: u64,
         command: Value,
+        deadline: crate::agentctl::service::host::Deadline,
     ) -> EffectFuture<'static, Result<Value, Fault>> {
-        self.sidecar().stock_for_generation(generation, command)
+        self.sidecar()
+            .stock_for_generation(generation, command, deadline)
     }
     fn bridge_for_generation(
         &self,
@@ -237,6 +290,9 @@ impl Sidecar for Source {
     fn exit_waiter(&self) -> EffectFuture<'static, Result<(), Fault>> {
         self.sidecar().exit_waiter()
     }
+    fn reply_barrier(&self) -> Held {
+        self.sidecar().reply_barrier()
+    }
     fn remove_listeners(&self) {
         self.sidecar().remove_listeners();
     }
@@ -250,4 +306,4 @@ impl Sidecar for Source {
 
 #[cfg(test)]
 #[path = "source_tests.rs"]
-mod tests;
+pub(crate) mod tests;

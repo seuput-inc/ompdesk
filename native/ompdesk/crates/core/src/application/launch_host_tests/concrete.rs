@@ -134,7 +134,7 @@ impl World {
         let callers = Arc::new(Callers::new(1));
         let page = callers.admit_page(ompdesk_app_contract::NativeCaller::Desktop { win_id: 17, wc_id: 117 }).unwrap();
         let tab = fixture.dir.file_name().unwrap().to_string_lossy().into_owned();
-        let reservation = callers.reserve_execution(&page.owner, &tab, 17).unwrap();
+        let reservation = callers.reserve_execution(&page.owner, &tab, Some(17)).unwrap();
         let owner = callers.execution_owner(&tab).unwrap();
         callers.keep_execution(&owner).unwrap();
         callers.finish_execution_reservation(reservation, true);
@@ -146,9 +146,21 @@ impl World {
         let mcp_fixture = McpFixture::new().await;
         let hub = Arc::new(McpHub::start(mcp_fixture.config()).await.unwrap());
         let base_tools = Arc::clone(&tools.base);
+        let mut git = crate::git::session_lifecycle::test_support::runner();
+        git.env = env.clone();
+        let fingerprints = Arc::new(crate::local_dispatch::fingerprints::Service::new(Some(git.clone())));
+        let commands = Arc::new(crate::local_dispatch::Config {
+            version: "18.20.0".into(), templates: Arc::from([]),
+            stock: Arc::clone(&stock),
+            omp: crate::application::omp_cli::Service::new(
+                Arc::clone(&machine),
+                SetupRunner::new(machine.core_bin().to_owned(), fixture.dir.join("command-scratch")),
+            ),
+            git: Some(git), gh: None, fingerprints,
+        });
         let config = SourceConfig {
             callers, machine, prefs, sessions, memory, hub, ownership, browsers, host_tools: tools,
-            events, spawn: Arc::new(DirectSpawn), bridge_dir: bridge, builtin_dir: builtin,
+            events, spawn: Arc::new(DirectSpawn), commands, bridge_dir: bridge, builtin_dir: builtin,
             memory_state_file: data.join("recall.json"), roles_file: data.join("roles.json"),
             rotation_ledger: data.join("rotation.json"), user_flags: Vec::new(),
             session_owned_text: "The session is owned by another omp process.".into(),
@@ -156,7 +168,7 @@ impl World {
             ledger_file: None, start_slow_ms: None, entry_id_timeout_ms: None, tuning: None,
         };
         let spawn = crate::pool::application::Spawn {
-            owner: owner.clone(), tab, window: 17, cwd: fixture.dir.to_string_lossy().into_owned(),
+            owner: owner.clone(), tab, window: Some(17), cwd: fixture.dir.to_string_lossy().into_owned(),
             kind: "agent".into(), fresh: false, device: None,
             session_path: Some(unwritten.to_string_lossy().into_owned()), worktree: None,
             placeholder: false, defer_start: false,
@@ -182,6 +194,7 @@ impl World {
     }
 
     pub(crate) async fn finish_close(self) -> Result<(), Fault> {
+        self.config.commands.fingerprints.dispose();
         self.sessions.stop();
         self.memory.close().await;
         let hub = self.hub.shutdown().await.map_err(|error| Fault::new("fixture_hub_close", error.to_string()));

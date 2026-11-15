@@ -44,7 +44,7 @@ impl<H: Collaborators> Application<H> {
             "spawn" => self.spawn(Spawn {
                 owner: self.host.spawn_owner(tab)?,
                 tab: tab.into(),
-                window: item["win"].as_i64().unwrap_or_default(),
+                window: item["win"].as_i64(),
                 cwd: item["cwd"].as_str().unwrap_or_default().into(),
                 kind: item["kind"].as_str().unwrap_or("agent").into(),
                 fresh: item["fresh"] == true,
@@ -80,7 +80,7 @@ impl<H: Collaborators> Application<H> {
                 Ok(self.facts(&tabs))
             }
             "window" => {
-                let (destroyed, web) = self.host.window(item["win"].as_i64().unwrap_or_default());
+                let (destroyed, web) = item["win"].as_i64().map_or((false, false), |win| self.host.window(win));
                 Ok(json!({"destroyed": destroyed, "web": web}))
             }
             "start" => {
@@ -92,7 +92,7 @@ impl<H: Collaborators> Application<H> {
                 Ok(Value::Null)
             }
             "sleep" => {
-                self.sleep(tab);
+                self.sleep(tab)?;
                 Ok(Value::Null)
             }
             "adoptCwd" => Ok(Value::Bool(

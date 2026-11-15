@@ -16,6 +16,7 @@ impl Ctx {
         event: &str,
         payload: &Value,
         from_link: bool,
+        source_generation: Option<u64>,
     ) -> R<()> {
         if !self.with(|pool| pool.has(tab)) {
             return Ok(());
@@ -30,8 +31,11 @@ impl Ctx {
             "viewEnded" => self.feed_view_ended(tab).await,
             "sessionInfoUpdate" => self.feed_session_info(tab, payload).await,
             "session" => self.feed_session(tab, payload).await,
-            "extensionUi" => self.feed_extension_ui(tab, payload).await,
-            "openAsks" => self.feed_open_asks(tab, payload).await,
+            "extensionUi" => {
+                self.feed_extension_ui(tab, payload, source_generation)
+                    .await
+            }
+            "openAsks" => self.feed_open_asks(tab, payload, source_generation).await,
             "signIn" => self.feed_sign_in(tab, payload),
             "signInRelay" => self.feed_sign_in_relay(tab, payload),
             "settle" => {
@@ -50,7 +54,7 @@ impl Ctx {
                 let retry = (!payload.is_null()).then(|| payload.clone());
                 self.set_scheduled_retry(tab, retry).await
             }
-            "events" => self.feed_events(tab, payload).await,
+            "events" => self.feed_events(tab, payload, source_generation).await,
             other => Err(fault("no_event", format!("The pool hears no `{other}`"))),
         }
     }
@@ -110,6 +114,7 @@ impl Ctx {
                             .and_then(|ids| ids.last().cloned()),
                     );
                     entry.plan_proposal = None;
+                    entry.plan_source_generation = None;
                     owned = pool
                         .request_owners
                         .iter()
@@ -181,7 +186,7 @@ impl Ctx {
             let entry = pool.entry(tab);
             (
                 entry.and_then(|entry| entry.device.clone()),
-                entry.map_or(0, |entry| entry.win_id),
+                entry.and_then(|entry| entry.win_id),
             )
         });
         if let (Some(path), Some(device)) =
@@ -195,9 +200,11 @@ impl Ctx {
             return Ok(());
         }
         self.release_entry(tab).await?;
-        self.notify_window_tabs_changed(win).await?;
-        self.send_tab_list(win, Some(&[tab.to_string()]), None)
-            .await
+        if let Some(win) = win {
+            self.notify_window_tabs_changed(win).await?;
+            self.send_tab_list(win, Some(&[tab.to_string()]), None).await?;
+        }
+        Ok(())
     }
 
     async fn feed_view_ended(&self, tab: &str) -> R<()> {
@@ -205,8 +212,11 @@ impl Ctx {
             return Ok(());
         };
         self.release_entry(tab).await?;
-        self.notify_window_tabs_changed(win).await?;
-        self.send_tab_list(win, None, None).await
+        if let Some(win) = win {
+            self.notify_window_tabs_changed(win).await?;
+            self.send_tab_list(win, None, None).await?;
+        }
+        Ok(())
     }
 
     async fn feed_session_info(&self, tab: &str, frame: &Value) -> R<()> {
@@ -297,7 +307,7 @@ impl Ctx {
             return Ok(());
         }
         self.forward_status(tab).await?;
-        if file_changed {
+        if file_changed && let Some(win) = win {
             self.notify_window_tabs_changed(win).await?;
         }
         Ok(())
@@ -305,7 +315,12 @@ impl Ctx {
 
     /// Extension UI rides the light channel: a background agent's ask/confirm blocks until answered, so it must reach
     /// that tab's runtime, and widgets/status/notify set while hidden must be current when the tab comes back.
-    async fn feed_extension_ui(&self, tab: &str, payload: &Value) -> R<()> {
+    async fn feed_extension_ui(
+        &self,
+        tab: &str,
+        payload: &Value,
+        source_generation: Option<u64>,
+    ) -> R<()> {
         let request = &payload["request"];
         let kinds = Kinds::of(&payload["kinds"]);
         let seq = self.with(|pool| pool.entry(tab).map(|entry| entry.seq));
@@ -313,7 +328,7 @@ impl Ctx {
             return Ok(());
         };
         if kinds.blocking {
-            self.with(|pool| Ctx::hold_request(pool, seq, request, kinds));
+            self.with(|pool| Ctx::hold_request(pool, seq, request, kinds, source_generation));
             self.on_running_change().await?;
             self.announce_ask(tab, request, kinds).await?;
         } else if request["method"] == "cancel" {
@@ -339,7 +354,12 @@ impl Ctx {
     }
 
     /// A paired host re-attached the tab: the asks its omp holds now are the tab's whole open set.
-    async fn feed_open_asks(&self, tab: &str, payload: &Value) -> R<()> {
+    async fn feed_open_asks(
+        &self,
+        tab: &str,
+        payload: &Value,
+        source_generation: Option<u64>,
+    ) -> R<()> {
         let requests: Vec<Value> = payload["requests"].as_array().cloned().unwrap_or_default();
         let kinds: Vec<Kinds> = payload["kinds"]
             .as_array()
@@ -384,7 +404,7 @@ impl Ctx {
             }
             // Already this tab's before the link dropped: the window notified for it then.
             let resent = self.with(|pool| pool.request_owners.get(&id) == Some(&seq));
-            self.with(|pool| Ctx::hold_request(pool, seq, request, kind));
+            self.with(|pool| Ctx::hold_request(pool, seq, request, kind, source_generation));
             if !resent {
                 self.announce_ask(tab, request, kind).await?;
             }
@@ -485,7 +505,12 @@ impl Ctx {
     /// Agent-end means one run yielded; upstream prompt/session-settled frames keep background async work
     /// represented as running until it is quiet. `events` holds only the events the rules read (`message_update`
     /// and the rest never cross: the page's forwarder has them).
-    async fn feed_events(&self, tab: &str, events: &Value) -> R<()> {
+    async fn feed_events(
+        &self,
+        tab: &str,
+        events: &Value,
+        source_generation: Option<u64>,
+    ) -> R<()> {
         struct Seen {
             was_busy: bool,
             was_settling: bool,
@@ -495,12 +520,34 @@ impl Ctx {
             unsaved_before: Option<String>,
         }
         let list = events.as_array().cloned().unwrap_or_default();
+        let hidden_targets = if list.iter().any(|event| {
+            matches!(
+                event["type"].as_str(),
+                Some("plan_proposal" | "plan_proposal_resolved")
+            )
+        }) {
+            self.with(|pool| {
+                pool.entry(tab)
+                    .map(|entry| {
+                        Pool::windows_of(entry)
+                            .into_iter()
+                            .filter(|win| !entry.wired_in(*win))
+                            .filter_map(|win| {
+                                entry.view_id(&pool.view_epoch, win).map(|id| (win, id))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+        } else {
+            Vec::new()
+        };
         let (seen, run_ended, retry_started, stepped, hidden, win) = self.with(|pool| {
             let now = pool.now;
             let mut serial = pool.retry_serial;
             let mut plan_serial = pool.plan_serial;
             let Some(entry) = pool.entry_mut(tab) else {
-                return (None, false, false, false, Vec::new(), 0);
+                return (None, false, false, false, Vec::new(), None);
             };
             let seen = Seen {
                 was_busy: entry.busy(),
@@ -530,6 +577,7 @@ impl Ctx {
                         if kind == "plan_proposal" {
                             let title = event["title"].as_str().unwrap_or("").to_string();
                             entry.plan_proposal = Some((title, path));
+                            entry.plan_source_generation = source_generation;
                             // A tab a paired host runs keeps the host's own number: it is what that host's answer step
                             // compares. Only a tab of this computer is numbered here.
                             entry.plan_generation =
@@ -546,6 +594,7 @@ impl Ctx {
                             .is_some_and(|(_, current)| *current == path)
                         {
                             entry.plan_proposal = None;
+                            entry.plan_source_generation = None;
                         }
                         hidden.push(event.clone());
                     }
@@ -617,32 +666,19 @@ impl Ctx {
             self.schedule_omp_restart(tab);
             self.schedule_extension_apply(tab);
         }
-        if placeholder != seen.was_placeholder {
+        if placeholder != seen.was_placeholder && let Some(win) = win {
             self.notify_window_tabs_changed(win).await?;
         }
         if !hidden.is_empty() {
-            self.forward_to_hidden(
-                tab,
-                "EVENTS_BATCH",
-                json!({"tabId": tab, "payload": hidden}),
-            );
+            for (win, view_id) in hidden_targets {
+                self.send(
+                    vec![win],
+                    "EVENTS_BATCH",
+                    json!({"tabId": tab, "viewId": view_id, "payload": &hidden}),
+                );
+            }
         }
         Ok(())
-    }
-
-    /// Frames a hidden tab's sidebar row needs go to the windows that show the tab without its full channel.
-    pub(super) fn forward_to_hidden(&self, tab: &str, channel: &str, data: Value) {
-        let wins = self.with(|pool| {
-            pool.entry(tab)
-                .map(|entry| {
-                    Pool::windows_of(entry)
-                        .into_iter()
-                        .filter(|win| !entry.wired_in(*win))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        });
-        self.send(wins, channel, data);
     }
 
     /// A turn ended on a tab that waits for the new omp: one tick later (main's `setImmediate`), so every listener of
@@ -776,9 +812,11 @@ impl Ctx {
                 continue;
             };
             self.release_entry(tab).await?;
-            match closed.iter_mut().find(|(candidate, _)| *candidate == win) {
-                Some((_, list)) => list.push(tab.clone()),
-                None => closed.push((win, vec![tab.clone()])),
+            if let Some(win) = win {
+                match closed.iter_mut().find(|(candidate, _)| *candidate == win) {
+                    Some((_, list)) => list.push(tab.clone()),
+                    None => closed.push((win, vec![tab.clone()])),
+                }
             }
         }
         for (win, list) in closed {
@@ -845,14 +883,19 @@ impl Ctx {
             None
         };
         self.release_entry(tab).await?;
-        self.notify_window_tabs_changed(win).await?;
+        if let Some(win) = win {
+            self.notify_window_tabs_changed(win).await?;
+        }
         let closed = [tab.to_string()];
         if let Some((owner_tab, owner_win)) = &owner
             && *owner_win != win
         {
-            self.send_tab_list(win, Some(&closed), None).await?;
-            self.send_tab_list(*owner_win, None, Some(json!({"tabId": owner_tab})))
-                .await?;
+            if let Some(win) = win {
+                self.send_tab_list(win, Some(&closed), None).await?;
+            }
+            if let Some(owner_win) = owner_win {
+                self.send_tab_list(*owner_win, None, Some(json!({"tabId": owner_tab}))).await?;
+            }
             return Ok(());
         }
         let shown = match &owner {
@@ -869,6 +912,9 @@ impl Ctx {
                 Value::Object(shown)
             }
         };
-        self.send_tab_list(win, Some(&closed), Some(shown)).await
+        if let Some(win) = win {
+            self.send_tab_list(win, Some(&closed), Some(shown)).await?;
+        }
+        Ok(())
     }
 }

@@ -65,14 +65,53 @@ impl Service {
         owner: Owner,
         tab: String,
         command: Value,
-    ) -> Fut<Result<Value, Fault>> {
+    ) -> Fut<Result<Value, crate::local_dispatch::protocol::CommandError>> {
         if *locked(&self.lifecycle) != Lifecycle::Open {
-            return Box::pin(async { Err(closed()) });
+            return Box::pin(async { Err(closed().into()) });
         }
         let source = match self.host.source(&owner, &tab) {
             Ok(source) => source,
-            Err(error) => return Box::pin(async move { Err(error) }),
+            Err(error) => return Box::pin(async move { Err(error.into()) }),
         };
+        self.command_from_source(owner, tab, command, source, None)
+    }
+
+    pub(crate) fn command_admitted(
+        self: &Arc<Self>,
+        admission: super::native_request::Admission,
+        commands: Arc<crate::local_dispatch::Commands<crate::sidecar::native::Service>>,
+        command: Value,
+    ) -> Fut<Result<Value, crate::local_dispatch::protocol::CommandError>> {
+        let this = Arc::clone(self);
+        let original = Arc::clone(&admission);
+        let binding = super::native_request::Binding::new(Arc::clone(&admission), commands);
+        let queued_binding = binding.clone();
+        let queued = admission.effect(move |selected| {
+            Ok(this.command_from_source(
+                original.caller().owner.clone(),
+                selected.tab.clone(),
+                command,
+                super::coordinator::Source {
+                    cwd: selected.cwd.clone(),
+                    device: selected.device.is_some(),
+                },
+                Some(queued_binding),
+            ))
+        });
+        Box::pin(async move {
+            let work = queued.await?;
+            super::native_request::within(binding, work).await
+        })
+    }
+
+    fn command_from_source(
+        self: &Arc<Self>,
+        owner: Owner,
+        tab: String,
+        command: Value,
+        source: super::coordinator::Source,
+        native_request: Option<super::native_request::Binding>,
+    ) -> Fut<Result<Value, crate::local_dispatch::protocol::CommandError>> {
         let all_cycles =
             text(&command, "type") == Some("get_autopilot") && flag(&command, "allCycles");
         let (reply, response) = oneshot::channel();
@@ -84,13 +123,14 @@ impl Service {
             today: self.host.today(),
             now: Some(now_ms()),
             native_owner: Some(owner),
+            native_request,
         };
         let sent = self.send(Msg::Command { params, reply });
         let this = self.clone();
         Box::pin(async move {
             sent?;
             let answer = received(response).await?;
-            checked(&answer)?;
+            checked_command(&answer)?;
             let tab = text(&answer, "tabId").unwrap_or(&tab).to_owned();
             let status = answer.get("status").cloned().unwrap_or(Value::Null);
             let mut status = this
@@ -172,13 +212,18 @@ impl Service {
         })
     }
 
-    pub async fn aborted(&self, tab: &str) -> Result<(), Fault> {
+    pub fn aborted(&self, tab: &str) -> Fut<Result<(), Fault>> {
+        let lifecycle = locked(&self.lifecycle);
+        if *lifecycle != Lifecycle::Open {
+            return Box::pin(async { Err(closed()) });
+        }
+        let work = self.coordinator.aborted(tab);
         let (reply, response) = oneshot::channel();
-        self.send(Msg::Aborted {
-            tab: tab.to_owned(),
-            reply,
-        })?;
-        checked(&received(response).await?)
+        self.coordinator.track(async move {
+            work.await;
+            let _ = reply.send(json!({"ok":true}));
+        });
+        Box::pin(async move { checked(&received(response).await?) })
     }
     pub async fn resume_goal(&self, tab: &str) -> Result<(), Fault> {
         let (reply, response) = oneshot::channel();
@@ -412,6 +457,19 @@ async fn received(response: oneshot::Receiver<Value>) -> Result<Value, Fault> {
     response
         .await
         .map_err(|_| Fault::new("autopilot_closed", "Autopilot ended before it answered"))
+}
+fn checked_command(answer: &Value) -> Result<(), crate::local_dispatch::protocol::CommandError> {
+    use crate::local_dispatch::protocol::CommandError;
+    if flag(answer, "ok") {
+        return Ok(());
+    }
+    let message = text(answer, "error")
+        .unwrap_or("Autopilot failed")
+        .to_owned();
+    Err(match text(answer, "code") {
+        Some(code) => CommandError::local(code, message),
+        None => CommandError::Other(message),
+    })
 }
 fn checked(answer: &Value) -> Result<(), Fault> {
     if flag(answer, "ok") {

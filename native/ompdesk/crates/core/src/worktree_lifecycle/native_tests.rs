@@ -68,6 +68,9 @@ struct Recorder(mpsc::UnboundedSender<crate::sidecar::LaneEvent>);
 impl Sink for Recorder {
     fn event(&self, event: crate::sidecar::LaneEvent) { let _ = self.0.send(event); }
     fn before_response(&self) {}
+    fn reply_barrier(&self) -> crate::sidecar::native::Held {
+        Box::pin(async { Ok(()) })
+    }
     fn remove_listeners(&self) {}
     fn sync_settings(&self) -> EffectFuture<'_, ()> { Box::pin(async {}) }
 }

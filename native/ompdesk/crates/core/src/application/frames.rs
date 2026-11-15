@@ -59,8 +59,28 @@ impl Frames {
         self.inner.change(f);
     }
 
-    pub fn attach(&self, tab: &str, window: i64) {
-        self.change(|state, _| {
+    /// Consumes only the original pool's full-stream attachment notifications.
+    pub fn notify(&self, notification: &crate::pool::application::effects::Notification) -> bool {
+        use crate::pool::application::effects::Notification;
+        match notification {
+            Notification::WireFull {
+                tab,
+                window,
+                view_id,
+            } => {
+                self.attach(tab, *window, Arc::clone(view_id));
+                true
+            }
+            Notification::UnwireFull { tab, window, .. } => {
+                self.detach(tab, *window);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn attach(&self, tab: &str, window: i64, view_id: Arc<str>) {
+        self.change(|state, deliveries| {
             state
                 .tabs
                 .entry(tab.to_owned())
@@ -69,7 +89,7 @@ impl Frames {
                     timer: None,
                 })
                 .channel
-                .attach(window);
+                .attach(window, view_id, &mut |delivery| deliveries.push(delivery));
         });
     }
 

@@ -5,6 +5,7 @@ use super::{Application, EffectFuture, asks::Collaborators};
 use serde_json::Value;
 
 pub enum Notification {
+    ProtocolFault(crate::server::Fault),
     Send {
         windows: Vec<i64>,
         channel: String,
@@ -13,6 +14,7 @@ pub enum Notification {
     WireFull {
         tab: String,
         window: i64,
+        view_id: std::sync::Arc<str>,
     },
     UnwireFull {
         tab: String,
@@ -87,10 +89,21 @@ impl<H: Host> Application<H> {
                 channel: text("channel"),
                 data: item["data"].clone(),
             },
-            "wireFull" => Notification::WireFull {
-                tab: tab(),
-                window: item["win"].as_i64().unwrap_or_default(),
-            },
+            "wireFull" => {
+                let Some(view_id) = item["viewId"].as_str().filter(|id| !id.is_empty()) else {
+                    self.host
+                        .notify(Notification::ProtocolFault(crate::server::Fault::new(
+                            "unsupported_protocol",
+                            "The pool did not supply the original view binding for its stream",
+                        )));
+                    return None;
+                };
+                Notification::WireFull {
+                    tab: tab(),
+                    window: item["win"].as_i64().unwrap_or_default(),
+                    view_id: view_id.into(),
+                }
+            }
             "unwireFull" => Notification::UnwireFull {
                 tab: tab(),
                 window: item["win"].as_i64().unwrap_or_default(),

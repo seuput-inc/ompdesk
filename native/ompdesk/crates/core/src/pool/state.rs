@@ -35,13 +35,18 @@ pub(super) enum StartWait {
 pub(super) struct Entry {
     /// Identity: the TypeScript compared entry objects, and a tab id can come back after a release.
     pub seq: u64,
+    pub closing: Option<futures_util::future::Shared<crate::hub::LocalFuture<R<()>>>>,
     pub tab_id: String,
-    /// The owner window: it spawned the tab, persists it in its layout, and closing it releases the tab.
-    pub win_id: i64,
+    /// The actual owner window; a hosted execution has no page or synthetic window identity.
+    pub win_id: Option<i64>,
     /// Paired host deviceId the tab runs on; none = this machine.
     pub device: Option<String>,
     /// Windows besides the owner that show the tab (multi-viewer), in the order they joined.
     pub viewers: Vec<i64>,
+    pub user_prompted: bool,
+    pub owner_detached: bool,
+    pub view_serial: u64,
+    pub view_generations: OMap<i64, u64>,
     /// Latest `setStatus` per key, `setWidget` per key and `setTitle` (keys `status:`, `widget:`, `title`).
     pub ui_state: Option<OMap<String, Value>>,
     pub hosted_view: bool,
@@ -70,10 +75,12 @@ pub(super) struct Entry {
     pub plan_proposal: Option<(String, String)>,
     /// Which proposal of the tab it is: bumped for every new one (stock rewrites one plan file for a revision).
     pub plan_generation: u64,
+    pub plan_source_generation: Option<u64>,
     pub resuming: bool,
     pub unsaved_prompt: Option<String>,
     pub scheduled_retry: Option<Value>,
     pub touched: u64,
+    pub moves: tokio::sync::watch::Sender<usize>,
     pub prompted: u64,
     pub exits: u64,
     pub omp_restart_pending: bool,
@@ -94,16 +101,26 @@ impl Entry {
     pub(super) fn new(
         seq: u64,
         tab_id: String,
-        win_id: i64,
+        win_id: Option<i64>,
         kind: String,
         status: String,
     ) -> Entry {
         Entry {
             seq,
+            closing: None,
             tab_id,
             win_id,
             device: None,
             viewers: Vec::new(),
+            user_prompted: false,
+            moves: tokio::sync::watch::channel(0).0,
+            owner_detached: false,
+            view_serial: 0,
+            view_generations: {
+                let mut generations = OMap::default();
+                if let Some(win_id) = win_id { generations.insert(win_id, 0); }
+                generations
+            },
             ui_state: None,
             hosted_view: false,
             device_views: Vec::new(),
@@ -128,6 +145,7 @@ impl Entry {
             start_wait: None,
             plan_proposal: None,
             plan_generation: 0,
+            plan_source_generation: None,
             resuming: false,
             unsaved_prompt: None,
             scheduled_retry: None,
@@ -149,7 +167,15 @@ impl Entry {
 
     /// `windowOf(entry, winId)`: whether window `win_id` shows the tab (its owner, or one of its viewers).
     pub(super) fn shown_in(&self, win_id: i64) -> bool {
-        self.win_id == win_id || self.viewers.contains(&win_id)
+        (!self.owner_detached && self.win_id == Some(win_id)) || self.viewers.contains(&win_id)
+    }
+
+    pub(super) fn view_id(&self, epoch: &str, win: i64) -> Option<String> {
+        if !self.shown_in(win) {
+            return None;
+        }
+        let generation = self.view_generations.get(&win)?;
+        Some(format!("{epoch}.{:x}.{:x}", self.seq, generation))
     }
 
     pub(super) fn busy(&self) -> bool {
@@ -193,6 +219,7 @@ impl Kinds {
 /// A blocking request held for a reloaded page, with what main worked out of it.
 #[derive(Clone, Debug)]
 pub(super) struct Held {
+    pub source_generation: Option<u64>,
     pub request: Value,
     pub kinds: Kinds,
 }
@@ -209,7 +236,7 @@ pub(super) enum Closer {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Owner {
     pub tab_id: String,
-    pub win_id: i64,
+    pub win_id: Option<i64>,
 }
 
 /// A request a shared tab answered: the tab and the answering window (none for a device: nobody's later answer wins).
@@ -231,6 +258,7 @@ pub(super) struct Pool {
     /// The clock of the call being served: main's `Date.now()`.
     pub now: i64,
     pub next_seq: u64,
+    pub view_epoch: String,
     pub retry_serial: u64,
     /// Every live tab, in acquisition order.
     pub entries: Vec<Entry>,
@@ -340,7 +368,10 @@ impl Pool {
 
     /// Windows that show the tab: its owner, then its viewers.
     pub(super) fn windows_of(entry: &Entry) -> Vec<i64> {
-        let mut wins = vec![entry.win_id];
+        let mut wins = Vec::with_capacity(entry.viewers.len() + usize::from(!entry.owner_detached));
+        if !entry.owner_detached && let Some(win) = entry.win_id {
+            wins.push(win);
+        }
         wins.extend(entry.viewers.iter().copied());
         wins
     }
@@ -562,14 +593,18 @@ impl Ctx {
     /// `TAB_STATUS` to the owner and every viewer (`#forwardToTab`), the payload as of now.
     pub(super) async fn forward_status(&self, tab_id: &str) -> R<()> {
         let cwd = self.cwd_of(tab_id).await?;
+        self.forward_status_now(tab_id, &cwd);
+        Ok(())
+    }
+
+    pub(super) fn forward_status_now(&self, tab_id: &str, cwd: &str) {
         self.with(|pool| {
             if let Some(entry) = pool.entry(tab_id) {
-                let payload = Value::Object(Pool::tab_status(entry, &cwd));
+                let payload = Value::Object(Pool::tab_status(entry, cwd));
                 let wins = Pool::windows_of(entry);
                 self.send(wins, "TAB_STATUS", payload);
             }
         });
-        Ok(())
     }
 }
 

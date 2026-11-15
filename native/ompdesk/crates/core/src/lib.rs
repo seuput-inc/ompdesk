@@ -33,6 +33,7 @@ pub mod ports;
 pub mod procs;
 pub mod remote;
 pub mod remotebytes;
+pub mod repo_images;
 pub mod resume;
 pub mod routines;
 mod run;

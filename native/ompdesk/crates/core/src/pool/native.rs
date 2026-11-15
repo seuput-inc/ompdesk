@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use futures_util::FutureExt;
 use ompdesk_app_contract::Owner;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -17,9 +18,23 @@ use crate::pool::{
 };
 use crate::server::Fault;
 
+
+#[path = "peer_views.rs"]
+mod peer_views;
+pub(crate) use peer_views::PeerPresentation;
+
+#[path = "host_snapshot.rs"]
+mod host_snapshot;
+
+#[path = "dispatch.rs"]
+pub(crate) mod dispatch;
+#[path = "observed.rs"]
+mod observed;
+pub(crate) use observed::ObservedTargets;
 pub struct Config {
     /// Allocated by Base's native instance registry, not page data.
     pub id: u64,
+    pub view_epoch: String,
     pub layout_version: i64,
     pub max_former_tab_ids: usize,
     pub stop_session_wait_ms: u64,
@@ -45,14 +60,20 @@ pub struct Acquire {
 pub struct Selected<S: Sidecar + ?Sized> {
     pub tab: String,
     pub device: Option<String>,
-    pub window: i64,
+    pub window: Option<i64>,
     pub session_file: Option<String>,
     pub sidecar: Arc<S>,
 }
 
 pub trait Host: effects::Host<Sidecar: Sidecar<Error = Fault>> + 'static {
     type Reservation: Send + 'static;
+    /// A borrowed projection of this exact unified source, never a lookup by tab or device.
+    fn local_source<'a>(
+        &self,
+        source: &'a Self::Sidecar,
+    ) -> Option<&'a crate::sidecar::native::Service>;
     fn window_for(&self, owner: &Owner) -> Result<i64, Fault>;
+    fn presentation_for(&self, owner: &Owner) -> Result<Option<i64>, Fault>;
     fn reserve_owner(&self, owner: &Owner, tab: &str) -> Result<Self::Reservation, Fault>;
     fn finish_reservation(&self, reservation: Self::Reservation, acquired: bool);
     fn authorize_tab(&self, owner: &Owner, tab: &str) -> Result<(), Fault>;
@@ -79,6 +100,13 @@ impl<H: Host> Drop for Reserved<H> {
     fn drop(&mut self) {
         self.finish(false);
     }
+}
+
+pub(crate) struct CapturedEvent {
+    pub generation: u64,
+    pub name: String,
+    pub payload: Value,
+    pub from_link: bool,
 }
 
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, Fault>>>;
@@ -160,6 +188,7 @@ pub struct Service<H: Host> {
     next: AtomicU64,
     now_ms: fn() -> i64,
     window_tabs_hook: bool,
+    run_namespace: Arc<str>,
 }
 
 impl<H: Host> Service<H> {
@@ -170,6 +199,7 @@ impl<H: Host> Service<H> {
         let (bound, binding) = oneshot::channel();
         let now_ms = config.now_ms;
         let window_tabs_hook = config.window_tabs_hook;
+        let run_namespace: Arc<str> = Arc::from(config.view_epoch.as_str());
         hub::post(move || {
             let sink = Rc::new(Sink {
                 id: config.id,
@@ -178,6 +208,7 @@ impl<H: Host> Service<H> {
             });
             let opts = serde_json::value::to_raw_value(&json!({
                 "layoutVersion": config.layout_version, "maxFormerTabIds": config.max_former_tab_ids,
+                "viewEpoch": config.view_epoch,
                 "stopSessionWaitMs": config.stop_session_wait_ms,
             })).map_err(|error| Fault::new("invalid_params", error.to_string()));
             let result = opts.and_then(|opts| {
@@ -197,6 +228,7 @@ impl<H: Host> Service<H> {
             next: AtomicU64::new(1),
             now_ms,
             window_tabs_hook,
+            run_namespace,
         }))
     }
 
@@ -279,7 +311,7 @@ impl<H: Host> Service<H> {
         owner: &Owner,
         request: Acquire,
     ) -> Result<EffectFuture<'static, Result<Value, Fault>>, Fault> {
-        let window = self.app.host.window_for(owner)?;
+        let window = self.app.host.presentation_for(owner)?;
         let mut reservation = Reserved {
             host: Arc::clone(&self.app.host),
             value: Some(self.app.host.reserve_owner(owner, &request.tab)?),
@@ -319,8 +351,7 @@ impl<H: Host> Service<H> {
     }
 
     pub fn sleep(&self, owner: &Owner, tab: &str) -> Result<(), Fault> {
-        self.source(owner, tab)?.sleep();
-        Ok(())
+        self.source(owner, tab)?.sleep()
     }
 
     pub fn stock(
@@ -397,6 +428,105 @@ impl<H: Host> Service<H> {
         self.call("noteStopped", json!({"tab": tab}), false)
     }
 
+    /// Capture/enqueue an original source's native observer effect, never an arbitrary page command.
+    pub(crate) fn source_effect_captured<T: Send + 'static>(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        generation: u64,
+        effect: impl FnOnce(&Arc<H::Sidecar>) -> Result<T, Fault> + Send + 'static,
+    ) -> EffectFuture<'static, Result<T, Fault>> {
+        self.source_capture(owner, tab, source, EventRun::Current(generation), effect)
+    }
+
+    /// Deliver an event already admitted by the original native pump, even if its mirror has moved ahead.
+    pub(crate) fn source_observation_captured<T: Send + 'static>(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        observation: crate::sidecar::native::Observation,
+        effect: impl FnOnce(&Arc<H::Sidecar>) -> Result<T, Fault> + Send + 'static,
+    ) -> EffectFuture<'static, Result<T, Fault>> {
+        self.source_capture(owner, tab, source, EventRun::Observed(observation), effect)
+    }
+
+    fn source_capture<T: Send + 'static>(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        run: EventRun,
+        effect: impl FnOnce(&Arc<H::Sidecar>) -> Result<T, Fault> + Send + 'static,
+    ) -> EffectFuture<'static, Result<T, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let callers = Arc::clone(&self.callers);
+        let app = Arc::clone(&self.app);
+        self.execute_typed(move |ctx| Box::pin(async move {
+            callers.admit_execution(&owner, &tab, None, || {
+                let (generation, observation) = match &run {
+                    EventRun::Current(generation) => (*generation, None),
+                    EventRun::Observed(observation) => (observation.generation(), Some(observation)),
+                };
+                observed_source(&ctx, &app, &tab, &source, generation, observation)?;
+                effect(&source)
+            })
+        }))
+    }
+
+    /// Only an event captured from this original source can attach run provenance to a held request.
+    pub(crate) fn feed_captured(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        event: CapturedEvent,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        self.feed_event_captured(owner, tab, source, event, None)
+    }
+
+    pub(crate) fn feed_observed(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        event: CapturedEvent,
+        observation: crate::sidecar::native::Observation,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        self.feed_event_captured(owner, tab, source, event, Some(observation))
+    }
+
+    fn feed_event_captured(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        event: CapturedEvent,
+        observation: Option<crate::sidecar::native::Observation>,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let callers = Arc::clone(&self.callers);
+        let app = Arc::clone(&self.app);
+        self.execute_typed(move |ctx| {
+            Box::pin(async move {
+                callers.admit_execution(&owner, &tab, None, || {
+                    observed_source(&ctx, &app, &tab, &source, event.generation, observation.as_ref())
+                })?;
+                ctx.feed(
+                    &tab,
+                    &event.name,
+                    &event.payload,
+                    event.from_link,
+                    Some(event.generation),
+                )
+                .await
+            })
+        })
+    }
+
     pub fn feed(
         &self,
         tab: &str,
@@ -432,7 +562,7 @@ impl<H: Host> Service<H> {
         let closed = self.execute(false, move |ctx, _| {
             Outcome::Later(Box::pin(async move {
                 let owns =
-                    ctx.with(|pool| pool.entry(&tab).is_some_and(|entry| entry.win_id == window));
+                    ctx.with(|pool| pool.entry(&tab).is_some_and(|entry| entry.win_id == Some(window)));
                 let closed = if owns {
                     ctx.release_tab(&tab).await?
                 } else {

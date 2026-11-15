@@ -143,6 +143,10 @@ impl<H: Host + 'static> Sink for LaunchIngress<H> {
         self.downstream.before_response();
     }
 
+    fn reply_barrier(&self) -> crate::sidecar::native::Held {
+        self.downstream.reply_barrier()
+    }
+
     fn remove_listeners(&self) {
         drop(self.close());
         self.downstream.remove_listeners();

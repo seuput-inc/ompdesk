@@ -11,6 +11,7 @@ use super::super::host::{Caps, HostState};
 use super::super::tuning::Tuning;
 use super::super::{AgentControl, Files, JournalFile};
 use crate::agentctl::journal::system_clock;
+use crate::agentctl::runtime::tests::native_rig;
 use crate::ports::Port;
 
 type Asked = Arc<Mutex<Vec<(String, Value)>>>;
@@ -137,6 +138,21 @@ fn state(tabs: Vec<Value>) -> Value {
         "parents": { "b": { "callerTabId": "a" } },
     })
 }
+fn native_state(tabs: Vec<Value>) -> Value {
+    let mut state = state(tabs);
+    state["deviceId"] = json!("test-host");
+    for tab in state["tabs"].as_array_mut().unwrap() {
+        tab["runtimeInstance"] = json!(format!("runtime-{}", tab["tabId"].as_str().unwrap()));
+    }
+    state
+}
+
+async fn delivered(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Value>) -> Value {
+    tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+        .await
+        .expect("native delivery timed out")
+        .expect("native delivery channel closed")
+}
 
 fn asked_with(asked: &Asked, method: &str) -> Vec<Value> {
     asked
@@ -179,49 +195,72 @@ fn temp(name: &str) -> std::path::PathBuf {
 #[tokio::test]
 async fn a_send_carries_a_picture_inline_and_a_file_by_path_and_the_same_bytes_once() {
     let dir = temp("send");
-    let (control, asked) = rig(
+    let (control, asked, mut deliveries, _fixture) = native_rig(
         9_401,
-        state(vec![tab("a"), tab("b")]),
+        native_state(vec![tab("a"), tab("b")]),
         Caps::default(),
         &files_in(&dir),
+        Tuning::default(),
         omp,
     );
     let args = json!({ "session": "b", "message": "look", "attachments": [
         { "image": 1 }, { "path": "/w/shot.png" }, { "path": "/w/doc.pdf" }, { "path": "/w/same.pdf" } ] });
     let sent = control.run("a", "ompdesk_session_send", args, None).await;
     assert!(!sent.is_error, "{}", sent.text);
+    let delivery = delivered(&mut deliveries).await;
+    let transfers = asked_with(&asked, "inbox");
+    assert_eq!(transfers.len(), 1);
+    let transfer = &transfers[0]["transfer"];
+    let attachments = &transfer["entries"][0]["attachments"];
+    assert_eq!(attachments["images"].as_array().unwrap().len(), 1);
+    assert_eq!(attachments["files"].as_array().unwrap().len(), 1);
+    assert_eq!(attachments["images"][0]["name"], "shot.png");
+    assert_eq!(attachments["files"][0]["name"], "doc.pdf");
+    assert_eq!(transfer["uploads"].as_array().unwrap().len(), 2);
+    for reference in [&attachments["images"][0], &attachments["files"][0]] {
+        assert_eq!(
+            transfer["uploads"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|upload| upload["sha256"] == reference["sha256"])
+                .count(),
+            1
+        );
+    }
+    let source_path = attachments["files"][0]["path"].as_str().unwrap();
+    let entries = delivery["request"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["kind"], "prompt");
+    let blocks = entries[0]["content"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0]["type"], "text");
+    let text = blocks[0]["text"].as_str().unwrap();
+    let path = text.rsplit("Attached: ").next().unwrap().trim();
+    assert!(text.contains("look"));
+    assert!(text.contains("\n\nAttached: "));
+    assert_eq!(std::fs::read(path).unwrap(), PDF);
+    assert_eq!(
+        std::path::Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        attachments["files"][0]["sha256"].as_str().unwrap()
+    );
+    assert_eq!(blocks[1]["type"], "image");
+    assert_eq!(blocks[1]["data"], b64(PNG));
+    let image_sha = attachments["images"][0]["sha256"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read(std::path::Path::new(path).with_file_name(image_sha)).unwrap(),
+        PNG
+    );
     assert!(
-        sent.text
-            .ends_with("attached: 2 (1 image inline, 1 file at /up/doc.pdf)."),
+        sent.text.ends_with(&format!(
+            "attached: 2 (1 image inline, 1 file at {source_path})."
+        )),
         "{}",
         sent.text
-    );
-    let prompts = commands(&asked, "prompt");
-    assert_eq!(prompts.len(), 1);
-    assert_eq!(prompts[0]["images"].as_array().unwrap().len(), 1);
-    assert_eq!(prompts[0]["images"][0]["data"], b64(PNG));
-    assert!(
-        prompts[0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("look\n\nAttached: /up/doc.pdf")
-    );
-    let landed = asked_with(&asked, "land");
-    assert_eq!(landed.len(), 1);
-    assert_eq!(landed[0]["name"], "doc.pdf");
-    // The outbox keeps references, and the bytes are in the content-addressed store.
-    let kept: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("send-outbox.json")).unwrap())
-            .unwrap();
-    let entry = &kept[0];
-    assert_eq!(entry["attachments"]["images"].as_array().unwrap().len(), 1);
-    assert_eq!(entry["attachments"]["files"][0]["path"], "/up/doc.pdf");
-    let sha = entry["attachments"]["images"][0]["sha256"]
-        .as_str()
-        .unwrap();
-    assert_eq!(
-        std::fs::read(dir.join("agent-attachments").join(sha)).unwrap(),
-        PNG
     );
     control.host.port().close();
 }
@@ -292,11 +331,12 @@ async fn a_caller_outside_the_app_carries_no_attachments() {
 #[tokio::test]
 async fn a_report_carries_its_pictures_as_content_blocks_and_keeps_references() {
     let dir = temp("report");
-    let (control, asked) = rig(
+    let (control, asked, mut deliveries, _fixture) = native_rig(
         9_404,
-        state(vec![tab("a"), tab("b")]),
+        native_state(vec![tab("a"), tab("b")]),
         Caps::default(),
         &files_in(&dir),
+        Tuning::default(),
         omp,
     );
     let done = control
@@ -308,29 +348,46 @@ async fn a_report_carries_its_pictures_as_content_blocks_and_keeps_references() 
         )
         .await;
     assert!(!done.is_error, "{}", done.text);
-    assert!(
-        done.text
-            .contains("attached: 2 (1 image inline, 1 file at /up/doc.pdf)."),
-        "{}",
-        done.text
-    );
-    let mails = asked_with(&asked, "mail");
-    assert_eq!(mails.len(), 1);
-    let content = mails[0]["content"].as_array().unwrap();
+    let delivery = delivered(&mut deliveries).await;
+    let transfers = asked_with(&asked, "inbox");
+    assert_eq!(transfers.len(), 1);
+    let transfer = &transfers[0]["transfer"];
+    let attachments = &transfer["entries"][0]["attachments"];
+    assert_eq!(attachments["images"].as_array().unwrap().len(), 1);
+    assert_eq!(attachments["files"].as_array().unwrap().len(), 1);
+    assert_eq!(attachments["files"][0]["name"], "doc.pdf");
+    assert_eq!(transfer["uploads"].as_array().unwrap().len(), 2);
+    let source_path = attachments["files"][0]["path"].as_str().unwrap();
+    let entries = delivery["request"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["kind"], "report");
+    let content = entries[0]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
     assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["data"], b64(PNG));
+    let path = entries[0]["details"]["attachments"][1]["path"]
+        .as_str()
+        .unwrap();
     assert!(
         content[0]["text"]
             .as_str()
             .unwrap()
-            .contains("Attached: /up/doc.pdf")
+            .contains(&format!("Attached: {path}"))
     );
-    assert_eq!(content[1]["type"], "image");
-    assert_eq!(mails[0]["details"]["attachments"][1]["path"], "/up/doc.pdf");
-    let kept: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("mail-outbox.json")).unwrap())
-            .unwrap();
-    assert_eq!(kept[0]["attachments"]["files"][0]["path"], "/up/doc.pdf");
-    assert_eq!(kept[0]["from"], "/s/b_1.jsonl");
+    assert_eq!(std::fs::read(path).unwrap(), PDF);
+    let image_sha = attachments["images"][0]["sha256"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read(std::path::Path::new(path).with_file_name(image_sha)).unwrap(),
+        PNG
+    );
+    assert!(
+        done.text.contains(&format!(
+            "attached: 2 (1 image inline, 1 file at {source_path})."
+        )),
+        "{}",
+        done.text
+    );
     control.host.port().close();
 }
 
@@ -624,11 +681,14 @@ async fn pictures_for_a_paired_device_stay_under_the_links_frame_cap() {
         let dir = temp(&format!("device-{inline}"));
         let mut device = tab("b");
         device["device"] = json!("dev-1");
-        let (control, asked) = rig(
+        let mut host_state = native_state(vec![tab("a"), device]);
+        host_state["devices"] = json!([{ "id": "dev-1", "name": "paired", "state": "online" }]);
+        let (control, asked, mut deliveries, _fixture) = native_rig(
             9_420 + inline as u64,
-            state(vec![tab("a"), device]),
+            host_state,
             Caps::default(),
             &files_in(&dir),
+            Tuning::default(),
             omp,
         );
         let sent = control
@@ -640,28 +700,57 @@ async fn pictures_for_a_paired_device_stay_under_the_links_frame_cap() {
             )
             .await;
         assert!(!sent.is_error, "{}", sent.text);
-        let prompts = asked_with(&asked, "command")
-            .into_iter()
-            .filter(|args| args["command"]["type"] == "prompt")
-            .collect::<Vec<_>>();
-        assert_eq!(prompts.len(), 1);
-        let command = &prompts[0]["command"];
-        assert_eq!(command["images"].as_array().map_or(0, Vec::len), inline);
+        let delivery = delivered(&mut deliveries).await;
+        let transfers = asked_with(&asked, "inbox");
+        assert_eq!(transfers.len(), 1);
+        let wire = &transfers[0];
         assert!(
-            command.to_string().len() < FRAME_CAP,
-            "the command over the link is {} bytes",
-            command.to_string().len()
+            wire.to_string().len() < FRAME_CAP,
+            "the inbox transfer exceeds the link frame cap"
         );
-        // Whatever did not go inline landed on that computer and is named in the message.
-        assert_eq!(asked_with(&asked, "land").len(), 2 - inline);
-        assert_eq!(
-            command["message"]
-                .as_str()
-                .unwrap()
-                .matches("Attached: /up/")
-                .count(),
-            2 - inline
-        );
+        let transfer = &wire["transfer"];
+        let attachments = &transfer["entries"][0]["attachments"];
+        assert_eq!(attachments["images"].as_array().unwrap().len(), inline);
+        assert_eq!(attachments["files"].as_array().unwrap().len(), 2 - inline);
+        assert_eq!(transfer["uploads"].as_array().unwrap().len(), 2);
+        let entries = delivery["request"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["kind"], "prompt");
+        let content = &entries[0]["content"];
+        let (text, images) = if let Some(blocks) = content.as_array() {
+            assert_eq!(blocks[0]["type"], "text");
+            (blocks[0]["text"].as_str().unwrap(), &blocks[1..])
+        } else {
+            (content.as_str().unwrap(), &[][..])
+        };
+        assert_eq!(images.len(), inline);
+        let paths: Vec<_> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("Attached: "))
+            .collect();
+        assert_eq!(paths.len(), 2 - inline);
+        for (index, source) in [first, second].iter().enumerate() {
+            let size = if inline == 0 { 10 } else { 7 } * 1024 * 1024;
+            let mut expected = vec![7u8; size];
+            expected[..PNG.len()].copy_from_slice(PNG);
+            expected[PNG.len()] = source.as_bytes()[source.len() - 5];
+            if index < inline {
+                assert_eq!(images[index]["type"], "image");
+                assert_eq!(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(images[index]["data"].as_str().unwrap())
+                        .unwrap(),
+                    expected
+                );
+            } else {
+                let file_index = index - inline;
+                assert_eq!(
+                    attachments["files"][file_index]["name"],
+                    source.rsplit('/').next().unwrap()
+                );
+                assert_eq!(std::fs::read(paths[file_index]).unwrap(), expected);
+            }
+        }
         control.host.port().close();
     }
 }
@@ -728,4 +817,375 @@ async fn two_revisions_of_a_plan_with_the_same_title_and_files_are_two_steps_wit
     assert_ne!(keys[0].0, keys[1].0, "the replay keys differ");
     assert_ne!(keys[0].1, keys[1].1, "the notes differ");
     assert!(keys[0].0.as_str().unwrap().ends_with("|plan:3"));
+}
+
+#[tokio::test]
+async fn a_report_retry_or_conflict_does_not_land_or_restore_source_bytes_after_receiver_disk_acceptance()
+ {
+    let dir = temp("report-lookup-before-landing");
+    let mut parent = tab("a");
+    parent["device"] = json!("dev-1");
+    let mut host_state = native_state(vec![parent, tab("b")]);
+    host_state["devices"] = json!([{ "id": "dev-1", "name": "paired", "state": "online" }]);
+    let (control, asked, mut deliveries, _fixture) = native_rig(
+        9_419,
+        host_state,
+        Caps::default(),
+        &files_in(&dir),
+        Tuning::default(),
+        omp,
+    );
+    let args = json!({
+        "id": "stable-file-report", "kind": "note", "text": "original report",
+        "attachments": [{ "path": "/w/doc.pdf" }],
+    });
+    let first = control.run("b", "ompdesk_report", args.clone(), None).await;
+    assert!(!first.is_error, "{}", first.text);
+    let delivery = delivered(&mut deliveries).await;
+    let entry = &delivery["request"]["entries"][0];
+    let receiver_path = entry["details"]["attachments"][0]["path"].as_str().unwrap();
+    assert_eq!(std::fs::read(receiver_path).unwrap(), PDF);
+    let sha = crate::agentctl::journal::attachments::sha256_hex(PDF);
+    let source_blob = dir.join("agent-attachments").join(&sha);
+    std::fs::remove_file(&source_blob).unwrap();
+    std::fs::create_dir(&source_blob).unwrap();
+    control
+        .host
+        .landed
+        .set(Some("dev-1"), &sha, "/expired/source-landing", 0.0);
+    let landed_before_retry = asked_with(&asked, "land").len();
+    use crate::agentctl::inbox::{
+        InboxLogicalAttachments, InboxSourceExecution, NativeInboxLookupEntry,
+        NativeInboxTransferEntry,
+    };
+    let original: NativeInboxTransferEntry =
+        serde_json::from_value(asked_with(&asked, "inbox")[0]["transfer"]["entries"][0].clone())
+            .unwrap();
+    let query = NativeInboxLookupEntry {
+        key: original.entry.key(),
+        logical: original.logical,
+        attachments: original
+            .attachments
+            .as_ref()
+            .map(|set| InboxLogicalAttachments {
+                images: set.images.clone(),
+                files: set.files.iter().map(|landed| landed.file.clone()).collect(),
+            }),
+    };
+    let execution = InboxSourceExecution {
+        tab_id: "b".into(),
+        runtime_instance: control
+            .host
+            .state()
+            .tabs
+            .iter()
+            .find(|tab| tab.tab_id == "b")
+            .unwrap()
+            .runtime_instance
+            .clone(),
+    };
+    let (query, first_ownership) = crate::agentctl::runtime::inbox_source::lookup(
+        control.host.port().id(),
+        "a",
+        vec![query],
+        &execution,
+    )
+    .await
+    .unwrap();
+    let repeated = control.run("b", "ompdesk_report", args.clone(), None).await;
+    assert!(!repeated.is_error, "{}", repeated.text);
+    assert_eq!(asked_with(&asked, "land").len(), landed_before_retry);
+    assert!(source_blob.is_dir());
+    assert_eq!(std::fs::read(receiver_path).unwrap(), PDF);
+    let mut changed = args;
+    changed["text"] = json!("conflicting logical report");
+    let conflict = control.run("b", "ompdesk_report", changed, None).await;
+    assert!(conflict.is_error, "{}", conflict.text);
+    assert_eq!(asked_with(&asked, "land").len(), landed_before_retry);
+    assert!(source_blob.is_dir());
+    let (_, retained_ownership) = crate::agentctl::runtime::inbox_source::lookup(
+        control.host.port().id(),
+        "a",
+        query.entries,
+        &execution,
+    )
+    .await
+    .unwrap();
+    assert_eq!(retained_ownership.entries, first_ownership.entries);
+    assert_eq!(std::fs::read(receiver_path).unwrap(), PDF);
+    control.host.port().close();
+}
+
+async fn an_attached_report_shares_its_held_receiver_result(kind: &str, port: u64) {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+
+    use crate::agentctl::inbox::{InboxKind, NativeInboxTransfer};
+
+    let dir = temp(&format!("held-{kind}-attachment"));
+    let mut snapshot = native_state(vec![tab("a"), tab("b")]);
+    snapshot["tabs"][1]["busySince"] = json!(1.0);
+    let (control, asked, mut deliveries, fixture) = native_rig(
+        port,
+        snapshot.clone(),
+        Caps::default(),
+        &files_in(&dir),
+        Tuning::default(),
+        omp,
+    );
+    let receiver = control
+        .host
+        .inbox_status("a", "/s/a_1.jsonl", None)
+        .await
+        .unwrap()
+        .receiver;
+    let inbox = control.receiving_inbox.as_ref().unwrap();
+    let held = inbox.lane(&receiver).await;
+    let args = json!({
+        "id": format!("held-{kind}-file"), "kind": kind, "text": "original attached report",
+        "blocking": false, "attachments": [{ "path": "/w/doc.pdf" }],
+    });
+    let first = control.run("b", "ompdesk_report", args.clone(), None);
+    tokio::pin!(first);
+    let request = tokio::select! {
+        result = &mut first => panic!("{kind} completed before receiver acceptance: {}", result.text),
+        request = fixture.until_told(&asked, "inbox") => request,
+    };
+    assert_eq!(request["tabId"], "a");
+    let transfer: NativeInboxTransfer =
+        serde_json::from_value(request["transfer"].clone()).unwrap();
+    assert_eq!(transfer.receiver, receiver);
+    assert_eq!(transfer.entries.len(), 1);
+    let original = &transfer.entries[0];
+    let key = original.entry.key();
+    assert_eq!(key.kind, InboxKind::Report);
+    let original_files = &original.attachments.as_ref().unwrap().files;
+    assert_eq!(original_files.len(), 1);
+    assert_eq!(original_files[0].file.name, "doc.pdf");
+    assert!(
+        inbox
+            .ledger
+            .known(&receiver, std::slice::from_ref(original))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(inbox.ledger.pending(&receiver).unwrap().1.is_empty());
+
+    // The selected delivery has already carried its bytes. A second carry cannot repair this poisoned source.
+    let sha = crate::agentctl::journal::attachments::sha256_hex(PDF);
+    let source_blob = dir.join("agent-attachments").join(&sha);
+    assert_eq!(std::fs::read(&source_blob).unwrap(), PDF);
+    std::fs::remove_file(&source_blob).unwrap();
+    std::fs::create_dir(&source_blob).unwrap();
+    control
+        .host
+        .landed
+        .set(None, &sha, "/expired/source-landing", 0.0);
+    let first_lands = asked_with(&asked, "land");
+    assert_eq!(
+        first_lands,
+        vec![json!({ "tabId": "a", "name": "doc.pdf", "dataBase64": b64(PDF) })]
+    );
+    assert_eq!(original_files[0].file.sha256, sha);
+    assert_eq!(original_files[0].file.size, PDF.len() as u64);
+    assert_eq!(transfer.uploads.len(), 1);
+    assert_eq!(transfer.uploads[0].sha256, sha);
+    assert_eq!(transfer.uploads[0].path, original_files[0].path);
+    let landed_before_join = first_lands.len();
+
+    snapshot["tabs"][1]["busySince"] = json!(2.0);
+    crate::ports::apply_state(control.host.port(), 1, &snapshot.to_string()).unwrap();
+    let repeated = control.run("b", "ompdesk_report", args.clone(), None);
+    tokio::pin!(repeated);
+    // This marker is set immediately before polling the real Mailbox post, after its actual lookup completed.
+    poll_fn(|cx| match repeated.as_mut().poll(cx) {
+        Poll::Ready(result) => {
+            panic!(
+                "{kind} retry did not await the first receiver result: {}",
+                result.text
+            )
+        }
+        Poll::Pending if control.mem().mailed_in.get("b\na") == Some(&Some(2.0)) => Poll::Ready(()),
+        Poll::Pending => Poll::Pending,
+    })
+    .await;
+    let mut changed = args;
+    changed["text"] = json!("conflicting attached report");
+    let conflict = control.run("b", "ompdesk_report", changed, None).await;
+    assert!(conflict.is_error, "{}", conflict.text);
+    assert!(
+        conflict.text.to_ascii_lowercase().contains("conflict"),
+        "{}",
+        conflict.text
+    );
+    assert_eq!(asked_with(&asked, "land").len(), landed_before_join);
+    assert_eq!(asked_with(&asked, "inbox").len(), 1);
+    assert!(source_blob.is_dir());
+    assert!(
+        inbox
+            .ledger
+            .known(&receiver, std::slice::from_ref(original))
+            .unwrap()
+            .is_empty()
+    );
+
+    std::fs::remove_dir(&source_blob).unwrap();
+    std::fs::write(&source_blob, PDF).unwrap();
+    drop(held);
+    let (first, repeated) = tokio::join!(first, repeated);
+    assert!(!first.is_error, "{}", first.text);
+    assert!(!repeated.is_error, "{}", repeated.text);
+    let delivery = delivered(&mut deliveries).await;
+    assert_eq!(
+        delivery["request"]["entries"][0]["deliveryId"],
+        key.delivery_id
+    );
+    let file = &delivery["request"]["entries"][0]["details"]["attachments"][0];
+    assert_eq!(file["name"], "doc.pdf");
+    assert_eq!(std::fs::read(file["path"].as_str().unwrap()).unwrap(), PDF);
+    let pending = inbox.ledger.pending(&receiver).unwrap().1;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entry.key(), key);
+    assert_eq!(pending[0].logical, original.logical);
+    assert_eq!(asked_with(&asked, "land").len(), landed_before_join);
+    assert_eq!(asked_with(&asked, "inbox").len(), 1);
+    assert!(deliveries.try_recv().is_err());
+    let summary = format!("attached: 1 (1 file at {})", original_files[0].path);
+    assert!(first.text.contains(&summary), "{}", first.text);
+    assert!(repeated.text.contains(&summary), "{}", repeated.text);
+    assert_eq!(repeated.text, first.text);
+    control.host.port().close();
+}
+
+#[tokio::test(start_paused = true)]
+async fn attached_done_joins_its_active_receiver_acceptance_without_preparing_again() {
+    an_attached_report_shares_its_held_receiver_result("done", 9_420).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn attached_question_joins_its_active_receiver_acceptance_without_preparing_again() {
+    an_attached_report_shares_its_held_receiver_result("question", 9_421).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn attached_progress_joins_its_selected_receiver_acceptance_without_preparing_again() {
+    an_attached_report_shares_its_held_receiver_result("progress", 9_422).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn attached_progress_joins_before_selection_without_preparing_either_waiter() {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+
+    use crate::agentctl::inbox::{InboxKind, NativeInboxTransfer};
+
+    let dir = temp("pending-progress-attachment");
+    let mut snapshot = native_state(vec![tab("a"), tab("b")]);
+    snapshot["tabs"][1]["busySince"] = json!(1.0);
+    let (control, asked, mut deliveries, fixture) = native_rig(
+        9_423,
+        snapshot.clone(),
+        Caps::default(),
+        &files_in(&dir),
+        Tuning::default(),
+        omp,
+    );
+    let receiver = control
+        .host
+        .inbox_status("a", "/s/a_1.jsonl", None)
+        .await
+        .unwrap()
+        .receiver;
+    let inbox = control.receiving_inbox.as_ref().unwrap();
+    let held = inbox.lane(&receiver).await;
+    let args = json!({
+        "id": "pending-file-progress", "kind": "progress", "text": "original progress",
+        "blocking": false, "attachments": [{ "path": "/w/doc.pdf" }],
+    });
+    let first = control.run("b", "ompdesk_report", args.clone(), None);
+    tokio::pin!(first);
+    poll_fn(|cx| match first.as_mut().poll(cx) {
+        Poll::Ready(result) => panic!("progress completed before selection: {}", result.text),
+        Poll::Pending if control.mem().mailed_in.get("b\na") == Some(&Some(1.0)) => Poll::Ready(()),
+        Poll::Pending => Poll::Pending,
+    })
+    .await;
+    snapshot["tabs"][1]["busySince"] = json!(2.0);
+    crate::ports::apply_state(control.host.port(), 1, &snapshot.to_string()).unwrap();
+    let repeated = control.run("b", "ompdesk_report", args, None);
+    tokio::pin!(repeated);
+    poll_fn(|cx| match repeated.as_mut().poll(cx) {
+        Poll::Ready(result) => panic!("pending progress retry completed early: {}", result.text),
+        Poll::Pending if control.mem().mailed_in.get("b\na") == Some(&Some(2.0)) => Poll::Ready(()),
+        Poll::Pending => Poll::Pending,
+    })
+    .await;
+    assert!(asked_with(&asked, "land").is_empty());
+    assert!(asked_with(&asked, "inbox").is_empty());
+    let sha = crate::agentctl::journal::attachments::sha256_hex(PDF);
+    assert!(!dir.join("agent-attachments").join(&sha).exists());
+    assert!(inbox.ledger.pending(&receiver).unwrap().1.is_empty());
+
+    // Only the coalescer's selected Deliver can now materialize and reach the real held receiver.
+    let request = tokio::select! {
+        result = &mut first => panic!("progress completed before receiver acceptance: {}", result.text),
+        result = &mut repeated => panic!("joined progress completed before receiver acceptance: {}", result.text),
+        request = fixture.until_told(&asked, "inbox") => request,
+    };
+    let transfer: NativeInboxTransfer =
+        serde_json::from_value(request["transfer"].clone()).unwrap();
+    assert_eq!(transfer.receiver, receiver);
+    assert_eq!(transfer.entries.len(), 1);
+    let original = &transfer.entries[0];
+    let key = original.entry.key();
+    assert_eq!(key.kind, InboxKind::Report);
+    assert_eq!(
+        asked_with(&asked, "land"),
+        vec![json!({ "tabId": "a", "name": "doc.pdf", "dataBase64": b64(PDF) })]
+    );
+    let original_file = &original.attachments.as_ref().unwrap().files[0].file;
+    assert_eq!(original_file.sha256, sha);
+    assert_eq!(original_file.size, PDF.len() as u64);
+    assert_eq!(transfer.uploads.len(), 1);
+    assert_eq!(transfer.uploads[0].sha256, sha);
+    assert_eq!(
+        transfer.uploads[0].path,
+        original.attachments.as_ref().unwrap().files[0].path
+    );
+    assert_eq!(
+        std::fs::read(dir.join("agent-attachments").join(&sha)).unwrap(),
+        PDF
+    );
+    assert!(
+        inbox
+            .ledger
+            .known(&receiver, std::slice::from_ref(original))
+            .unwrap()
+            .is_empty()
+    );
+    drop(held);
+    let (first, repeated) = tokio::join!(first, repeated);
+    assert!(!first.is_error, "{}", first.text);
+    assert!(!repeated.is_error, "{}", repeated.text);
+    let delivery = delivered(&mut deliveries).await;
+    assert_eq!(
+        delivery["request"]["entries"][0]["deliveryId"],
+        key.delivery_id
+    );
+    let file = &delivery["request"]["entries"][0]["details"]["attachments"][0];
+    assert_eq!(file["name"], "doc.pdf");
+    assert_eq!(std::fs::read(file["path"].as_str().unwrap()).unwrap(), PDF);
+    let pending = inbox.ledger.pending(&receiver).unwrap().1;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entry.key(), key);
+    assert_eq!(asked_with(&asked, "land").len(), 1);
+    assert_eq!(asked_with(&asked, "inbox").len(), 1);
+    let summary = format!(
+        "attached: 1 (1 file at {})",
+        original.attachments.as_ref().unwrap().files[0].path
+    );
+    assert!(first.text.contains(&summary), "{}", first.text);
+    assert!(repeated.text.contains(&summary), "{}", repeated.text);
+    assert_eq!(repeated.text, first.text);
+    control.host.port().close();
 }

@@ -45,6 +45,8 @@ fn say(line: &str) {
 }
 
 fn fake_omp(mode: &str) {
+    let mail_barrier = (std::env::var("OMPDESK_FAKE_MAIL_BARRIER").as_deref() == Ok("1"))
+        .then(|| Arc::new(tokio::sync::Notify::new()));
     note(&format!(
         "start {}",
         std::env::args().skip(4).collect::<Vec<_>>().join(" ")
@@ -87,7 +89,7 @@ fn fake_omp(mode: &str) {
         _ => {
             // The extension listens before omp prints `ready`.
             if let Ok(address) = std::env::var("OMP_GUI_BRIDGE") {
-                serve_bridge(address);
+                serve_bridge(address, mail_barrier.clone());
             }
             say(LIMITS);
         }
@@ -113,6 +115,11 @@ fn fake_omp(mode: &str) {
             say(&json!({ "type": "response", "id": id, "command": ty, "success": true, "data": data }).to_string());
         };
         match ty {
+            "test_release_mail" if mail_barrier.is_some() => {
+                mail_barrier.as_ref().unwrap().notify_one();
+                reply(json!({}));
+            }
+            "test_no_reply" if mail_barrier.is_some() => {}
             "get_state" => {
                 let file = std::env::var("FAKE_SESSION_FILE").ok();
                 reply(json!({ "sessionId": "s1", "sessionFile": file }));
@@ -160,7 +167,7 @@ fn fake_omp(mode: &str) {
 }
 
 /// The bridge extension's stand-in: answers `sessions.attach_entry_ids` with an `entryId` per message.
-fn serve_bridge(address: String) {
+fn serve_bridge(address: String, mail_barrier: Option<Arc<tokio::sync::Notify>>) {
     let (up, ready) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -173,7 +180,7 @@ fn serve_bridge(address: String) {
             let _ = up.send(());
             let mut streams = streams;
             while let Some(stream) = streams.recv().await {
-                tokio::spawn(bridge_connection(stream));
+                tokio::spawn(bridge_connection(stream, mail_barrier.clone()));
             }
         });
     });
@@ -217,7 +224,7 @@ fn listen_for_bridge(address: &str) -> mpsc::UnboundedReceiver<BoxedIo> {
     streams
 }
 
-async fn bridge_connection(stream: BoxedIo) {
+async fn bridge_connection(stream: BoxedIo, mail_barrier: Option<Arc<tokio::sync::Notify>>) {
     let (read, mut write) = tokio::io::split(stream);
     let mut read = tokio::io::BufReader::new(read);
     let mut line = String::new();
@@ -229,6 +236,12 @@ async fn bridge_connection(stream: BoxedIo) {
         line.clear();
         let method = request["method"].as_str().unwrap_or("");
         note(&format!("bridge {method}"));
+        if method == "agent_control.mail"
+            && let Some(barrier) = &mail_barrier
+        {
+            say(&json!({"type":"test_mail_waiting"}).to_string());
+            barrier.notified().await;
+        }
         let result = if method == "sessions.attach_entry_ids" {
             let messages: Vec<Value> = request["params"]["messages"]
                 .as_array()

@@ -22,6 +22,7 @@ pub mod notification_batch;
 pub mod notifier;
 pub mod pairing;
 pub mod paths;
+mod path_resolve;
 pub mod push;
 pub mod quota;
 pub mod refusal;
