@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 use shell_core::menu_model::{self, Hit, Item};
 
 use crate::host::{self, Call};
-use crate::state;
 use crate::ui;
 
 #[cfg(windows)]
@@ -57,7 +56,7 @@ fn popup_request(call: Call) {
     };
     ui::post(move || {
         let owner = match win_id {
-            Some(id) => match window_handle(id) {
+            Some(id) => match ui::window_handle(id) {
                 Some(handle) => handle,
                 None => return call.err("gone", format!("menu.popup: window {id} does not exist")),
             },
@@ -68,18 +67,6 @@ fn popup_request(call: Call) {
             Err(message) => call.err("failed", format!("menu.popup: {message}")),
         }
     });
-}
-
-/// The OS handle of window `id` (0 when it has none yet). The registry borrow ends here: a popup's modal loop runs
-/// other tasks that borrow it.
-fn window_handle(id: u64) -> Option<isize> {
-    let entry = state::win(id)?;
-    let handle = entry
-        .borrow()
-        .window
-        .as_ref()
-        .map_or(0, state::native_handle);
-    Some(handle)
 }
 
 /// Shows `items` as a popup menu and returns the id of the chosen item (`None`: dismissed), reporting `menu.event`
