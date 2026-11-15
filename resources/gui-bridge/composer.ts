@@ -17,6 +17,7 @@ import { requireFn } from "./capabilities";
 import { ManualInstructionArchive } from "./composer-manual";
 import { InstructionQueueView } from "./composer-queue";
 import { buildCopyTargets } from "./copy-targets";
+import { prepareCurrentInstruction } from "./current-instruction";
 import { guard } from "./health";
 import { jobRows } from "./jobs-core";
 import { boundEnv } from "./modes/shared";
@@ -367,6 +368,11 @@ async function closeShutdownSubagents(
 
 // ── Methods ──────────────────────────────────────────────────────────────────
 export const methods: BridgeMethods = {
+	"composer.prepare_prompt": async (_params, env) => {
+		prepareCurrentInstruction(env.session());
+		return {};
+	},
+
 	...guard("composer", {
 		"composer.get_queue": async (_params, env) => (await instructionView(env)).snapshot(),
 
@@ -682,7 +688,7 @@ export const methods: BridgeMethods = {
 					});
 				} else {
 					// Not awaited: a dispatched prompt settles with its whole turn; the restore answers at once.
-					void session.promptCustomMessage(message, { streamingBehavior: "followUp" }).catch(failed);
+					void session.promptCustomMessage(message, { streamingBehavior: "aside" }).catch(failed);
 				}
 			}
 			return {
@@ -698,19 +704,6 @@ export const methods: BridgeMethods = {
 		},
 
 		"composer.skill_count": async (_params, env) => ({ skills: (env.session() as Session).skills?.length ?? 0 }),
-
-		/** Pop the newest user-queued message back to the composer (TUI dequeue). */
-		"composer.dequeue": async (_params, env) => {
-			const session = env.session() as Session;
-			requireFn(session, "popLastQueuedMessage", "composer");
-			requireFn(session, "getQueuedMessages", "composer");
-			const before = session.getQueuedMessages();
-			const popped = session.popLastQueuedMessage();
-			if (!popped) return null;
-			const after = session.getQueuedMessages();
-			const mode = after.steering.length < before.steering.length ? "steer" : "followUp";
-			return { text: popped.text, images: popped.images, mode };
-		},
 	}),
 	...guard("share", {
 		"composer.share_preview": async (_params, env) => sharePreview(env.session() as Session),

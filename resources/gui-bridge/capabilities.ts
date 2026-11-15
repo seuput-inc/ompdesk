@@ -16,7 +16,8 @@
 
 export const FEATURES = {
 	core: "GUI bridge core",
-	composer: "Composer extras (eval, forced tool, prewalk, context, jobs, dequeue)",
+	composer: "Composer extras (eval, forced tool, prewalk, context, jobs, original queue recovery)",
+	currentInstruction: "Current-context instruction admission",
 	share: "Session sharing",
 	planMode: "Plan mode",
 	goalMode: "Goal mode",
@@ -124,6 +125,9 @@ const AGENT = "@oh-my-pi/pi-coding-agent";
 const UTILS = "@oh-my-pi/pi-utils";
 
 export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
+	currentInstruction: {
+		session: ["transferQueuedMessagesToAside()", "peekAsideMessages()", "agent.requestModelBoundary()"],
+	},
 	core: {
 		pkg: ["VERSION", "AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 	},
@@ -184,14 +188,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"isFastModeActive()",
 			"isUltrafastModeEnabled()",
 			"setUltrafastMode()",
-			"popLastQueuedMessage()",
 			"withdrawQueuedMessage()",
 			"heldQueuedMessages",
 			"agent.peekSteeringQueue()",
 			"agent.peekFollowUpQueue()",
 			"agent.peekUndeliveredQueuedMessages()",
 			"agent.onQueueChange()",
-			"getQueuedMessages()",
 			"agent.state",
 			"hasBuiltInTool()",
 			"getXdevToolEntries()",

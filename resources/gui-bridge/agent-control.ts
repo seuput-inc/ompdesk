@@ -26,6 +26,7 @@ import {
 	sniffImageType,
 } from "./agent-control-contracts";
 import { crossFamily, JUDGE_ROLES, modelFamily } from "./agent-control-judge-core";
+import { prepareCurrentInstruction } from "./current-instruction";
 import { completeOnSmol, type ModelLike, type NextPromptSession } from "./modes/next-prompt-engine";
 import { type PromptSectionContext, type PromptSectionHost, registerPromptSection } from "./prompt-sections";
 
@@ -216,16 +217,10 @@ function mailContent(value: unknown): MailContent | undefined {
 }
 
 export const methods: BridgeMethods = {
-	/**
-	 * `{content, details, triggerTurn, deliverAs?}` → `{}`: a report from another session (`ompdesk_report`), as one
-	 * stock custom message: journaled with the session (a relaunch neither loses nor repeats it), shown as a quiet line,
-	 * and delivered by stock's own rules (`aside` at the next step boundary, an interruptible `wait` returning on it;
-	 * `triggerTurn` wakes an idle session). A no-turn report (`triggerTurn: false`, no `deliverAs`) that finds a turn
-	 * running goes as an `aside` too: stock's no-turn delivery into a running turn would steer (cutting the tool batch)
-	 * and its `nextTurn` stays hidden until the person's next prompt.
-	 */
+	/** One report envelope; triggerTurn is its idle-wake domain flag, never a delivery choice. */
 	"agent_control.mail": async (params, env) => {
 		const record = (params ?? {}) as Record<string, unknown>;
+		if ("deliverAs" in record) throw new Error("Report delivery selectors have been removed");
 		const content = mailContent(record.content);
 		if (!content) throw new Error("agent_control.mail needs content");
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
@@ -237,12 +232,18 @@ export const methods: BridgeMethods = {
 		const branch = env.session().sessionManager.getBranch();
 		const journaled = id !== undefined && hasMailEntry(branch, id);
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
+		prepareCurrentInstruction(env.session());
 		if (id) queuedMail.add(id);
 		const message = { customType: MAIL_CUSTOM_TYPE, content, display: true, details };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
-		const deliverAs = record.deliverAs === "aside" || env.session().isStreaming ? "aside" : undefined;
+		const deliverAs = env.session().isStreaming ? "aside" : undefined;
 		const triggerTurn = record.triggerTurn === true;
-		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
+		try {
+			mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
+		} catch (error) {
+			if (id) queuedMail.delete(id);
+			throw error;
+		}
 		return {};
 	},
 	/**

@@ -9,6 +9,7 @@
 
 import { stat } from "node:fs/promises";
 import { isAbsolute, posix, resolve } from "node:path";
+import { isAgentInstructionCommand } from "../../../resources/gui-bridge/instruction-contracts";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	AGENT_CARD_PREFIX,
@@ -50,6 +51,7 @@ import type {
 import { IPC_COMMANDS } from "../../shared/ipc-types";
 import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
 import {
+	type AgentControlInstructionCommand,
 	type AgentMessage,
 	BLOCKING_UI_METHODS,
 	type ExtensionUIResponse,
@@ -1117,6 +1119,8 @@ export class AgentControlRuntime {
 				}
 			},
 			command: (tabId, command, timeoutMs) => {
+				if (isAgentInstructionCommand(command))
+					return this.#agentInstruction(tabId, command as unknown as AgentControlInstructionCommand, timeoutMs);
 				const win = this.#win(tabId) ?? [...this.#windows.values()][0];
 				const sidecar = deps.pool.sidecarOf(tabId);
 				if (!win || !sidecar)
@@ -1339,6 +1343,55 @@ export class AgentControlRuntime {
 		});
 		if (!response.success) throw new Error(response.error ?? "The report could not be delivered.");
 		return typeof response.data === "object" && response.data !== null ? (response.data as MailAnswer) : undefined;
+	}
+
+	async #agentInstruction(
+		tabId: string,
+		command: AgentControlInstructionCommand,
+		timeoutMs?: number,
+	): Promise<RpcResponse> {
+		if (!command.requestId?.trim() || typeof command.message !== "string") {
+			throw new Error("An agent instruction requires its original native request identity and message");
+		}
+		const sidecar = this.#deps.pool.sidecarOf(tabId);
+		const original = this.#hostTabs().find(tab => tab.tabId === tabId);
+		const local = !sidecar?.device && sidecar?.bridgeRequest !== undefined;
+		const client = local ? sidecar?.rpcClient : undefined;
+		const pid = local ? sidecar?.pid : undefined;
+		const current = () => {
+			const target = this.#hostTabs().find(tab => tab.tabId === tabId);
+			return (
+				this.#controlEnabled() &&
+				original?.sessionPath &&
+				target?.sessionPath === original.sessionPath &&
+				target.device === original.device &&
+				!target.hidden &&
+				!deletedSessions().has(target.sessionPath, target.device) &&
+				this.#deps.pool.sidecarOf(tabId) === sidecar &&
+				(!local || (client != null && sidecar?.rpcClient === client && sidecar.pid === pid)) &&
+				sidecar?.processAlive === true
+			);
+		};
+		if (!sidecar || !current()) throw new Error("The original agent instruction receiver is no longer available");
+		const payload = { requestId: command.requestId, message: command.message, images: command.images };
+		// This method is entered only from the native CorePort callback, never the page RPC dispatcher.
+		const result =
+			local && sidecar.bridgeRequest
+				? await sidecar.bridgeRequest("agent_control.instruction", payload, timeoutMs)
+				: sidecar.sendAgentInstruction
+					? await sidecar.sendAgentInstruction(payload, timeoutMs)
+					: undefined;
+		if (!current()) throw new Error("The receiver changed; instruction admission is unconfirmed");
+		if (typeof result !== "object" || result === null || !("accepted" in result) || result.accepted !== true) {
+			throw new Error("The private receiver did not confirm instruction admission");
+		}
+		return {
+			id: command.id,
+			type: "response",
+			command: command.type,
+			success: true,
+			data: { accepted: true },
+		};
 	}
 
 	async #hostCommand(tabId: string, command: RpcCommand, timeoutMs = CARD_TIMEOUT_MS): Promise<RpcResponse> {
