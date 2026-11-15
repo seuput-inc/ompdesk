@@ -306,7 +306,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn homepage_redirect_uses_the_final_directory_for_relative_icons() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

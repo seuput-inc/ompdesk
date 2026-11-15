@@ -14,7 +14,7 @@ use crate::server::{Fault, Registry, Reply, Scope};
 mod discovery;
 mod raster;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod test_support;
 
 #[cfg(test)]
