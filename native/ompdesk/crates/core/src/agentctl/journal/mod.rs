@@ -113,4 +113,4 @@ pub(crate) fn stringify(items: Vec<Value>) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

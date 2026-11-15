@@ -401,8 +401,8 @@ async fn a_wake_up_that_starts_no_turn_fails_its_run() {
 
 #[tokio::test]
 async fn a_failed_report_save_cannot_send_mail_or_acknowledge_the_original() {
-    let directory = crate::fs::disk::make_temp_dir("ompdesk-mail-save-").unwrap();
-    let file = directory.join("mail.json");
+    let directory = crate::agentctl::journal::tests::Dir::new();
+    let file = directory.file("mail.json");
     let files = Files {
         mail_outbox: Some(JournalFile {
             file: Some(file.clone()),
@@ -433,13 +433,12 @@ async fn a_failed_report_save_cannot_send_mail_or_acknowledge_the_original() {
     assert_eq!(pending[0].content, "original report");
     assert!(told_of(&told, "mail").is_empty());
     control.host.port().close();
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[tokio::test]
 async fn a_failed_wake_save_preserves_the_original_without_sending_or_tracking_a_turn() {
-    let directory = crate::fs::disk::make_temp_dir("ompdesk-wake-save-").unwrap();
-    let file = directory.join("mail.json");
+    let directory = crate::agentctl::journal::tests::Dir::new();
+    let file = directory.file("mail.json");
     let files = Files {
         mail_outbox: Some(JournalFile {
             file: Some(file.clone()),
@@ -472,7 +471,6 @@ async fn a_failed_wake_save_preserves_the_original_without_sending_or_tracking_a
     assert!(told_of(&told, "mail").is_empty());
     assert!(told_of(&told, "wakeDone").is_empty());
     control.host.port().close();
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[tokio::test]

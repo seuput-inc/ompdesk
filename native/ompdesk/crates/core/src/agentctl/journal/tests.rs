@@ -21,14 +21,14 @@ fn captured() -> Value {
     serde_json::from_str(include_str!("captured.json")).unwrap()
 }
 
-struct Dir(PathBuf);
+pub(crate) struct Dir(PathBuf);
 
 impl Dir {
-    fn new() -> Dir {
+    pub(crate) fn new() -> Dir {
         Dir(crate::fs::disk::make_temp_dir("ompdesk-journal-").unwrap())
     }
 
-    fn file(&self, name: &str) -> PathBuf {
+    pub(crate) fn file(&self, name: &str) -> PathBuf {
         self.0.join(name)
     }
 }
@@ -922,4 +922,110 @@ fn only_acknowledged_calls_are_forgotten() {
     assert!(journal.get("old1\n\nc1").is_none());
     assert!(journal.get("old2\n\nc2").is_some());
     assert!(CALL_JOURNAL_MAX > 0 && js_number(1.0) == json!(1));
+}
+
+#[tokio::test]
+async fn an_unsaved_send_cannot_escape_through_either_redelivery_entry() {
+    let dir = Dir::new();
+    let file = dir.file("send.json");
+    let outbox = SendOutbox::new(Some(file.clone()));
+    let original = send(1);
+    std::fs::create_dir(&file).unwrap();
+    assert!(outbox.keep(original.clone()).is_err());
+    let receiver = Omp::new("current-omp");
+
+    redeliver_sends(&outbox, &receiver).await;
+    assert!(
+        receiver.prompts().is_empty(),
+        "the sweep handed an unsaved instruction to stock"
+    );
+    assert!(
+        !deliver_owed(
+            &outbox,
+            &receiver,
+            &original.session_path,
+            original.device.as_deref()
+        )
+        .await,
+        "an unsaved original is still owed, not a successful empty delivery"
+    );
+    assert!(
+        receiver.prompts().is_empty(),
+        "the direct receiver lane bypassed persistence"
+    );
+    assert_eq!(outbox.pending().as_slice(), std::slice::from_ref(&original));
+
+    std::fs::remove_dir(&file).unwrap();
+    outbox.keep(original.clone()).unwrap();
+    assert_eq!(
+        SendOutbox::new(Some(file)).pending().as_slice(),
+        std::slice::from_ref(&original)
+    );
+    redeliver_sends(&outbox, &receiver).await;
+    redeliver_sends(&outbox, &receiver).await;
+    assert_eq!(receiver.prompts(), [original.mark]);
+}
+
+#[tokio::test]
+async fn a_failed_new_send_does_not_revoke_an_older_durable_send_or_advance_past_it() {
+    let dir = Dir::new();
+    let file = dir.file("send.json");
+    let outbox = SendOutbox::new(Some(file.clone()));
+    let first = send(1);
+    let second = send(2);
+    outbox.keep(first.clone()).unwrap();
+    std::fs::rename(&file, dir.file("saved-send.json")).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    assert!(outbox.keep(second.clone()).is_err());
+    let receiver = Omp::new("current-omp");
+
+    redeliver_sends(&outbox, &receiver).await;
+    assert_eq!(receiver.prompts(), [first.mark.clone()]);
+    assert_eq!(
+        outbox
+            .pending()
+            .iter()
+            .map(|entry| entry.mark.as_str())
+            .collect::<Vec<_>>(),
+        [first.mark.as_str(), second.mark.as_str()]
+    );
+    std::fs::remove_dir(&file).unwrap();
+    outbox.keep(second.clone()).unwrap();
+    redeliver_sends(&outbox, &receiver).await;
+    redeliver_sends(&outbox, &receiver).await;
+    assert_eq!(receiver.prompts(), [first.mark, second.mark]);
+}
+
+#[tokio::test]
+async fn an_unsaved_report_cannot_escape_through_redelivery_before_same_id_save_recovers() {
+    let dir = Dir::new();
+    let file = dir.file("mail.json");
+    let outbox = MailOutbox::new(Some(file.clone()));
+    let original = mail("unsaved");
+    std::fs::create_dir(&file).unwrap();
+    assert!(outbox.keep(original.clone()).is_err());
+    let receiver = Mails {
+        answers: Mutex::new(vec![Some(MailAnswer {
+            duplicate: true,
+            journaled: true,
+        })]),
+        sent: Mutex::new(Vec::new()),
+    };
+
+    redeliver_mail(&outbox, &receiver).await;
+    assert!(
+        receiver.sent.lock().unwrap().is_empty(),
+        "the sweep delivered or acknowledged an unsaved report"
+    );
+    assert_eq!(outbox.pending().as_slice(), std::slice::from_ref(&original));
+    std::fs::remove_dir(&file).unwrap();
+    outbox.keep(original.clone()).unwrap();
+    assert_eq!(
+        MailOutbox::new(Some(file.clone())).pending().as_slice(),
+        std::slice::from_ref(&original)
+    );
+    redeliver_mail(&outbox, &receiver).await;
+    redeliver_mail(&outbox, &receiver).await;
+    assert_eq!(*receiver.sent.lock().unwrap(), ["tab9:unsaved"]);
+    assert!(MailOutbox::new(Some(file)).pending().is_empty());
 }
