@@ -124,7 +124,7 @@ fn step(request: &str, target: Value) -> RpcCommand {
     params.insert("requestId".into(), json!(request));
     params.insert("companion".into(), json!({
         "content":"A synthetic attachment note", "details":{"id":request},
-        "delivery":{"triggerTurn":false,"deliverAs":"aside"},
+        "delivery":{"triggerTurn":false},
     }));
     RpcCommand { kind:"agent_control_answer".into(), id:Some(format!("frame-{request}")), params }
 }

@@ -42,13 +42,6 @@ type RunningAnswer = watch::Receiver<Option<AnswerResult>>;
 #[serde(rename_all = "camelCase")]
 struct CompanionDelivery {
     trigger_turn: bool,
-    deliver_as: Option<Aside>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Aside {
-    Aside,
 }
 
 #[derive(Deserialize)]
@@ -165,14 +158,11 @@ impl TargetAnswers {
         deadline: Deadline,
     ) -> AnswerResult {
         let Companion { content, details, delivery } = step.companion;
-        let mut params = Map::from_iter([
+        let params = Map::from_iter([
             ("content".into(), content),
             ("details".into(), Value::Object(details)),
             ("triggerTurn".into(), Value::Bool(delivery.trigger_turn)),
         ]);
-        if delivery.deliver_as.is_some() {
-            params.insert("deliverAs".into(), json!("aside"));
-        }
         let note = RpcCommand { kind: "agent_control_mail".into(), id: None, params };
         match step.target {
             AnswerTarget::Plan { plan, plan_file, plan_generation } => {
@@ -266,9 +256,8 @@ impl ResponseTail {
     }
 }
 
-/// Root supplies the existing per-source local Commands Arc, or forwards the whole command to the execution host.
-/// Neither variant issues authority or owns another Source.
-pub(crate) enum Route {
+/// The original source owns its one local Commands Arc; a remote source forwards the whole command.
+enum Route {
     Local(Arc<Commands<LocalSidecar>>),
     Remote,
 }
@@ -306,7 +295,6 @@ impl<P: PoolHost<Sidecar = Source>, R: HostedHost> Policy<P, R> {
     pub(crate) fn command(
         self: &Arc<Self>,
         admission: Arc<CommandAdmission<Source>>,
-        route: Route,
         mut command: RpcCommand,
         deadline: Deadline,
         origin: Option<Value>,
@@ -316,10 +304,11 @@ impl<P: PoolHost<Sidecar = Source>, R: HostedHost> Policy<P, R> {
             let reply = RpcCommand { kind: command.kind.clone(), id: command.id.clone(), params: Map::new() };
             let source = Arc::clone(&admission.selected().sidecar);
             let local = source.is_local();
-            let matches_source = matches!((&route, local), (Route::Local(_), true) | (Route::Remote, false));
-            let result = if !matches_source {
-                Err(Fault::new("tab_stale", "The command route does not name its original source"))
-            } else if let Err(error) = admission.effect(|_| Ok(())).await {
+            let route = match source.local_commands() {
+                Some(commands) => Route::Local(Arc::clone(commands)),
+                None => Route::Remote,
+            };
+            let result = if let Err(error) = admission.effect(|_| Ok(())).await {
                 Err(error)
             } else {
                 let delivery = (local && admission.connection().is_none() && command.kind == "prompt")
@@ -390,10 +379,12 @@ impl<P: PoolHost<Sidecar = Source>, R: HostedHost> Policy<P, R> {
             if let Some(path) = command.string("sessionPath") {
                 let blocker = self.config.pool.foreign_session_owner_command(Arc::clone(&admission), path.to_owned()).await?;
                 if !blocker.is_null() {
-                    let mut response = local_frame(&command, Err(CommandError::local(
-                        "session_owned_elsewhere", "Session is already open in another tab",
-                    )))?;
-                    response["data"] = json!({"ownerTabId":blocker["tabId"],"ownerWinId":blocker["winId"]});
+                    let hosted = blocker["hosted"] == true;
+                    let message = if hosted { "A paired device's tab runs this session" } else { "Session is already open in another tab" };
+                    let mut response = local_frame(&command, Err(CommandError::local("session_owned_elsewhere", message)))?;
+                    response["data"] = if hosted { json!({"hosted":true}) } else {
+                        json!({"ownerTabId":blocker["tabId"],"ownerWinId":blocker["winId"]})
+                    };
                     return Ok(response);
                 }
                 if selected.sidecar.is_local() {
@@ -577,11 +568,12 @@ impl<P: PoolHost<Sidecar = Source>, R: HostedHost> Policy<P, R> {
         caller: Admitted,
         connection: Option<RemoteRequests>,
         scope: Scope,
-        command: RpcCommand,
+        command: &RpcCommand,
     ) -> Option<EffectFuture<'static, Result<Value, Fault>>> {
         if !matches!(command.kind.as_str(), "get_desktop_slot" | "desktop_slot_stop" | "desktop_slot_retry" | "desktop_slot_kill") {
             return None;
         }
+        let command = command.clone();
         let policy = Arc::clone(self);
         Some(Box::pin(async move {
             let config = &policy.config;
