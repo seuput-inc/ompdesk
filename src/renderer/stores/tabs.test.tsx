@@ -1862,6 +1862,39 @@ describe("tabs store background tab signals", () => {
 		},
 	);
 
+	it.each([
+		{ name: "keeps this page's selection inside the split", selected: "t2", host: "t1", split: true, want: "t2" },
+		{ name: "takes a fresh page's host selection", selected: null, host: "t2", split: true, want: "t2" },
+		{ name: "falls back to a pane without a host selection", selected: "t0", host: null, split: true, want: "t1" },
+		{ name: "rejects a host selection outside its split", selected: "t0", host: "t0", split: true, want: "t1" },
+		{ name: "keeps a single-pane page's selection", selected: "t0", host: "t1", split: false, want: "t0" },
+		{ name: "takes a fresh single-pane page's host selection", selected: null, host: "t1", split: false, want: "t1" },
+	] as const)("reconciles a host view: $name", async ({ selected, host, split: hasSplit, want }) => {
+		webMode.on = true;
+		try {
+			if (selected) seedTabs(selected);
+			const split: SplitLayout | undefined = hasSplit
+				? { axis: "columns", ratio: 0.5, first: { tabId: "t1" }, second: { tabId: "t2" } }
+				: undefined;
+			omp.tabs.list.mockResolvedValue(
+				["t0", "t1", "t2"].map(id => ({
+					...tabInfo(id, `/${id}`),
+					active: id === host,
+					visible: hasSplit ? id !== "t0" : id === host,
+					...(hasSplit && id !== "t0" ? { split } : {}),
+				})),
+			);
+			omp.tabs.setView.mockImplementation(async (focused, visible) => visible.includes(focused));
+
+			expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(true);
+			expect(useTabsStore.getState()).toMatchObject({ activeTabId: want, split: split ?? null });
+			if (split) expect(omp.tabs.setView).toHaveBeenCalledWith(want, ["t1", "t2"], split, []);
+			else expect(omp.tabs.setActive).toHaveBeenCalledWith(want);
+		} finally {
+			webMode.on = false;
+		}
+	});
+
 	describe("a provider sign-in's requests, restored", () => {
 		const paste: ExtensionUIRequest = {
 			type: "extension_ui_request",
