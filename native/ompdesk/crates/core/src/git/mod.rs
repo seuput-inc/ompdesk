@@ -15,7 +15,7 @@
 pub mod branches;
 mod checkout;
 pub(crate) mod freshness;
-mod origin;
+pub(crate) mod origin;
 mod orphans;
 pub(crate) mod parse;
 pub(crate) mod read;
@@ -25,6 +25,9 @@ mod seed;
 mod triggers;
 mod unlanded;
 mod worktree;
+
+#[cfg(all(test, unix))]
+pub(crate) use scm::tests::{repo_at, sh};
 
 use serde::Deserialize;
 
