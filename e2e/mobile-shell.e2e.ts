@@ -84,7 +84,7 @@ async function openHarness(
 	browser: Browser,
 	device: string,
 	look: Look,
-	options: { landscape?: boolean } = {},
+	options: { landscape?: boolean; usage?: "blocked" } = {},
 ): Promise<Page> {
 	const preset = devices[device];
 	if (!preset) throw new Error(`unknown device ${device}`);
@@ -100,7 +100,9 @@ async function openHarness(
 	page.on("pageerror", error => {
 		throw error;
 	});
-	await page.goto(`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}`);
+	await page.goto(
+		`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}${options.usage ? "&usage=blocked" : ""}`,
+	);
 	await reassertTouch(page);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });
 	if (preset.hasTouch) await expectTouchInput(page);
@@ -211,7 +213,12 @@ async function capture(page: Page, name: string, tag: string): Promise<void> {
 test("a tablet usage deep link scrolls settings without displacing the shell", async () => {
 	const browser = await chromium.launch();
 	try {
-		const page = await openHarness(browser, "iPad Pro 11", { theme: "light", lang: "en" }, { landscape: true });
+		const page = await openHarness(
+			browser,
+			"iPad Pro 11",
+			{ theme: "light", lang: "en" },
+			{ landscape: true, usage: "blocked" },
+		);
 		await page.locator("[data-sidebar-usage-open]").click();
 		await expect(page.locator("#settings-models-accounts")).toBeVisible();
 		await page.evaluate(

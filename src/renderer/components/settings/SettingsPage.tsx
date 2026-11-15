@@ -254,7 +254,7 @@ export function SettingsPage() {
 			const offset = focusRowId
 				? (content.clientHeight - box.height) / 2
 				: Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
-			content.scrollTo({ top: top - offset });
+			content.scrollTop = top - offset;
 			if (focusRowId) {
 				// The focus lands a frame later; if the user already started typing
 				// somewhere (a new search), taking focus would send their keystrokes
