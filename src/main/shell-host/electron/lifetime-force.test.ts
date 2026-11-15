@@ -154,7 +154,9 @@ process.send?.({ core: startGit() });`,
 globalThis.__shellTestExit = process.exit.bind(process);
 process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 `;
-			node = spawn(process.execPath, ["--input-type=module", "--eval", `${prelude}${chunk.code}`], {
+			const bundled = join(dir, "main.mjs");
+			await writeFile(bundled, `${prelude}${chunk.code}`);
+			node = spawn(process.execPath, [bundled], {
 				stdio: ["pipe", "ignore", "pipe", "ipc"],
 				env: { ...process.env, OMPDESK_SHELL_SOCKET: socketPath, OMPDESK_SHELL_TOKEN: randomUUID() },
 			});

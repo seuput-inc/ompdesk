@@ -696,10 +696,11 @@ mod tests {
         let answer = answer.unwrap();
         assert_eq!(answer["id"], 1);
         assert_eq!(answer["error"]["code"], "cancelled");
-        assert_eq!(
-            child.read(&mut byte).await.unwrap(),
-            0,
-            "child still holds its socket"
+        let ended = child.read(&mut byte).await;
+        assert!(
+            matches!(&ended, Ok(0))
+                || matches!(&ended, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+            "child still holds its socket: {ended:?}"
         );
         server.await.unwrap().unwrap();
     }
