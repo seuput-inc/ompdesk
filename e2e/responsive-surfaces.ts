@@ -646,6 +646,7 @@ const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]
 	{ id: "dialog-whats-new", action: "openWhatsNew", args: ["0.36.1", "0.35.0"], title: "What's new" },
 	{ id: "dialog-feedback", action: "openFeedback", title: "Feedback" },
 	{ id: "dialog-command-palette", action: "openCommandPalette", title: "Command palette" },
+	{ id: "dialog-workspace", action: "openProjectPicker", title: "Projects" },
 	{ id: "dialog-theme-picker", action: "openThemePicker", title: "Theme picker" },
 	{ id: "dialog-quick-open", action: "openQuickOpen", title: "Quick open" },
 	{ id: "dialog-share-session", action: "openShareSession", title: "Share session" },
