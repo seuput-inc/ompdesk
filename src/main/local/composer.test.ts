@@ -168,27 +168,59 @@ describe("stock composer authority", () => {
 });
 
 describe("current instruction admission", () => {
-	it.each([false, true])(
-		"delivers text and original images through the bridge while streaming=%s",
-		async isStreaming => {
-			const ctx = fakeContext({
-				stock: { get_state: { ...STOCK_STATE, isStreaming } },
-				bridge: { "composer.prompt": { accepted: true } },
-			});
-			const bridge = vi.spyOn(ctx.bridge, "request");
-			const stock = vi.spyOn(ctx, "send");
-			const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
-			await expect(
-				handlers.prompt({ type: "prompt", message: "apply now", images, deliveryId: "original-id" }, ctx),
-			).resolves.toEqual({ accepted: true });
-			expect(bridge).toHaveBeenCalledExactlyOnceWith("composer.prompt", {
-				message: "apply now",
-				images,
-				deliveryId: "original-id",
-			});
-			expect(stock).not.toHaveBeenCalled();
-		},
-	);
+	it.each([
+		{ agentInvoked: true, status: "completed", sessionSettled: true },
+		{ agentInvoked: false, ticket: "slash-ticket" },
+	])("returns the actual stock prompt lifecycle result %j after preflight", async result => {
+		const ctx = fakeContext({ bridge: { "composer.prepare_prompt": {} }, stock: { prompt: result } });
+		const bridge = vi.spyOn(ctx.bridge, "request");
+		const stock = vi.spyOn(ctx, "send");
+		const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
+		await expect(
+			handlers.prompt({ type: "prompt", message: "apply now", images, deliveryId: "outer-delivery-id" }, ctx),
+		).resolves.toBe(result);
+		expect(bridge).toHaveBeenCalledExactlyOnceWith("composer.prepare_prompt", {});
+		expect(stock).toHaveBeenCalledExactlyOnceWith({
+			type: "prompt",
+			message: "apply now",
+			images,
+			streamingBehavior: "aside",
+		});
+	});
+
+	it("does not dispatch stock input before a failed current-instruction preflight", async () => {
+		const ctx = fakeContext();
+		const stock = vi.spyOn(ctx, "send");
+		vi.spyOn(ctx.bridge, "request").mockRejectedValue(
+			new LocalCommandError("unsupported current instruction", "unsupported_omp"),
+		);
+		await expect(handlers.prompt({ type: "prompt", message: "apply now" }, ctx)).rejects.toMatchObject({
+			code: "unsupported_omp",
+		});
+		expect(stock).not.toHaveBeenCalled();
+	});
+
+	it("keeps the stock prompt pending until its actual result settles", async () => {
+		const ctx = fakeContext({ bridge: { "composer.prepare_prompt": {} } });
+		const completion = Promise.withResolvers<unknown>();
+		vi.spyOn(ctx, "send").mockImplementation(() => completion.promise);
+		const result = handlers.prompt({ type: "prompt", message: "/reload-plugins" }, ctx);
+		let settled = false;
+		void result.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		const stockResult = { agentInvoked: false, ticket: "reload-ticket" };
+		completion.resolve(stockResult);
+		await expect(result).resolves.toBe(stockResult);
+	});
 
 	it("refuses old per-message modes instead of forwarding a hidden stock follow-up", async () => {
 		const ctx = fakeContext({ bridge: { "composer.prompt": { accepted: true } } });
