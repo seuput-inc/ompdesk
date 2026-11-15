@@ -613,6 +613,9 @@ impl AgentControl {
         several: bool,
     ) -> R<String> {
         let arrived_before = self.arrivals(&caller.tab_id);
+        let waiting = args.wait == Some(true);
+        // A waiting caller is blocked from entry, including while saved results are read.
+        let _blocked = waiting.then(|| self.block(&caller.tab_id));
         let seconds = args.timeout_seconds.unwrap_or(RESULT_WAIT_DEFAULT_SECONDS);
         let deadline = Instant::now() + Duration::from_secs(seconds);
         let per_answer = if several {
@@ -629,7 +632,7 @@ impl AgentControl {
             if row.hidden {
                 return fail("The user hid a session you asked about from other agents.");
             }
-            reads.push(join::boxed(async move {
+            let read = join::boxed(async move {
                 let (messages, pace) = tokio::join!(
                     self.over_link(row.device.as_deref(), || self.host.stored_messages(row)),
                     self.pace_of(&row.path, row.device.as_deref())
@@ -662,13 +665,55 @@ impl AgentControl {
                         ),
                     },
                 ))
-            }));
+            });
+            reads.push((Some(read), None));
         }
-        let saved: HashMap<String, Summary> = join::all(reads)
-            .await
+        {
+            use std::task::Poll;
+
+            let read_saved = std::future::poll_fn(|cx| -> Poll<R<()>> {
+                let mut pending = false;
+                for (read, summary) in &mut reads {
+                    if let Some(future) = read {
+                        match std::future::Future::poll(future.as_mut(), cx) {
+                            Poll::Ready(Ok(value)) => {
+                                *summary = Some(value);
+                                *read = None;
+                            }
+                            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                            Poll::Pending => pending = true,
+                        }
+                    }
+                }
+                if !pending
+                    || waiting
+                        && (self.arrivals(&caller.tab_id) > arrived_before
+                            || Instant::now() >= deadline)
+                {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            });
+            let arrived = async {
+                loop {
+                    let notified = self.arrived.notified();
+                    if self.arrivals(&caller.tab_id) > arrived_before {
+                        return;
+                    }
+                    notified.await;
+                }
+            };
+            tokio::select! {
+                biased;
+                result = read_saved => result?,
+                () = arrived, if waiting => {}
+                () = tokio::time::sleep_until(deadline), if waiting => {}
+            }
+        }
+        let saved: HashMap<String, Summary> = reads
             .into_iter()
-            .collect::<R<Vec<_>>>()?
-            .into_iter()
+            .filter_map(|(_, summary)| summary)
             .collect();
         let ids: Vec<String> = targets
             .iter()
@@ -677,9 +722,6 @@ impl AgentControl {
                 Target::Stored(row) => row.id.clone(),
             })
             .collect();
-        // Inside a blocking wait main owns, the caller cannot read a steer until the call returns: it says so to a
-        // sender (`block`), and the wait ends when a message reaches the caller (`arrivals`).
-        let _blocked = (args.wait == Some(true)).then(|| self.block(&caller.tab_id));
         self.result_until(
             caller,
             &targets,
@@ -741,21 +783,13 @@ impl AgentControl {
             let mut summaries: Vec<_> = current
                 .iter()
                 .zip(ids)
-                .map(|(target, id)| {
-                    (
-                        Some(join::boxed(async move {
-                            match target {
-                                Some(Target::Tab(tab)) => {
-                                    self.session_summary(caller, tab, per_answer).await
-                                }
-                                _ => Ok(saved.get(id).cloned().unwrap_or(Summary {
-                                    settled: true,
-                                    text: String::new(),
-                                })),
-                            }
-                        })),
+                .map(|(target, id)| match target {
+                    Some(Target::Tab(tab)) => (
+                        Some(join::boxed(self.session_summary(caller, tab, per_answer))),
                         None,
-                    )
+                    ),
+                    Some(Target::Stored(_)) => (None, saved.get(id).cloned()),
+                    None => (None, None),
                 })
                 .collect();
             {
@@ -826,10 +860,17 @@ impl AgentControl {
                         summaries.len()
                     )
                 } else if waiting && timed_out && !ready {
-                    format!(
-                        "Still running after waiting {seconds} s ({done}/{} finished).\n",
-                        summaries.len()
-                    )
+                    if summaries.iter().any(|(_, summary)| summary.is_none()) {
+                        format!(
+                            "Returned at the {seconds} s wait deadline ({done}/{} finished so far; unanswered summaries unconfirmed). Call ompdesk_session_result again to query them.\n",
+                            summaries.len()
+                        )
+                    } else {
+                        format!(
+                            "Still running after waiting {seconds} s ({done}/{} finished).\n",
+                            summaries.len()
+                        )
+                    }
                 } else {
                     String::new()
                 };
