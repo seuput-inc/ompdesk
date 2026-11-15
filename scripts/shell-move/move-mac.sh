@@ -243,7 +243,12 @@ scenario() {
     (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT read) | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the shell's page answered"
     grep -q '"href":"app://ompdesk/' "$W/$name-read.json"; check $? "S1: the page loaded from app://ompdesk"
     grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
-    grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; check $? "S1: the seeded token was decrypted (source stored, none dropped)"
+    if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
+      check 0 "S1: the seeded token was decrypted (source stored, none dropped)"
+    else
+      check 1 "S1: the seeded token was decrypted (source stored, none dropped)"
+      evidence "S1 token-read failure phases: $(grep -F '"event":"stored-token-read"' "$UD/logs/gui-runtime.jsonl" 2>/dev/null | tail -8 | cut -c1-500 | tr '\n' '|')"
+    fi
     wait_for "has_line $UD 'swap result'" 60; update_lines "$UD" | grep -q '^swap result installed'; check $? "S1: swap result outcome installed"
     codesign --verify --deep --strict "$APPS/OMPdesk.app"; check $? "S1: the installed app verifies"
     [ "$(xattr -lr "$APPS/OMPdesk.app" 2>/dev/null | grep -c com.apple.quarantine)" = 0 ]; check $? "S1: the moved bundle and everything in it carries no com.apple.quarantine (the swap's xattr -dr covers it)"

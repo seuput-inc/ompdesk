@@ -179,6 +179,26 @@ describe("safeStorage on macOS reads the keychain lazily", () => {
 		},
 	);
 
+	it.skipIf(process.platform === "win32")(
+		"a failed reader reports its exit status without exposing child output",
+		() => {
+			const output = "stand-in private reader output";
+			const exe = writeFakeExe(
+				`console.log(${JSON.stringify(output)}); console.error(${JSON.stringify(output)}); process.exit(7);`,
+			);
+			const warnings: string[] = [];
+			const storage = createSafeStorage(
+				{ kind: "mac-v10-lazy" },
+				{ fetchKey: keychainFetcher(exe, "UD"), warn: message => warnings.push(message) },
+			);
+			expect(storage.isEncryptionAvailable()).toBe(false);
+			expect(storage.getUnavailableReason()).toContain("status=7");
+			expect(storage.getUnavailableReason()).not.toContain(output);
+			expect(warnings.join("\n")).not.toContain(output);
+			expect(() => storage.encryptString("must not become plaintext")).toThrow(/not available/);
+		},
+	);
+
 	it("a binary that cannot run is unavailable with the reason, never a throw", () => {
 		expect(keychainFetcher(join(tmpdir(), "no-such-shell-binary.exe"), "UD")()).toMatchObject({
 			unavailable: expect.stringContaining("could not be read"),

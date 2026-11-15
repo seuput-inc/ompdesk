@@ -32,6 +32,7 @@ import { writeRuntimeLog } from "./runtime-log";
 import { resolveLoginShellEnv, spawnPath } from "./shell-env";
 import { safeStorageUnavailableReason } from "./shell-host/shell-calls";
 import { executableName } from "./spawn";
+import { scrubUpdateText } from "./update-log-core";
 import { classifyRepoAccess, firstUpdateToken, githubApiHeaders, type ResolvedUpdateToken } from "./updater-state";
 
 export const GITHUB_API_REPO = `https://api.github.com/repos/${PRODUCT_REPO}`;
@@ -83,21 +84,35 @@ async function ghToken(): Promise<string | undefined> {
 	return promise;
 }
 
+function noteStoredTokenFailure(phase: "file" | "key" | "decrypt", reason: string): void {
+	writeRuntimeLog({
+		source: "app-update",
+		message: "The saved update token could not be read",
+		details: { event: "stored-token-read", phase, reason: scrubUpdateText(reason) },
+	});
+}
+
 async function storedToken(): Promise<string | undefined> {
 	let encrypted: Buffer;
 	try {
 		encrypted = await fs.readFile(storedTokenPath());
-	} catch {
+	} catch (error) {
+		const code: unknown = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
+		if (code !== "ENOENT") noteStoredTokenFailure("file", typeof code === "string" ? code : "unknown");
 		return undefined;
 	}
+	let phase: "key" | "decrypt" = "key";
 	try {
 		if (!safeStorage.isEncryptionAvailable()) {
 			// The key was refused without a dialog: the token will never decrypt on this computer, so it goes.
 			if (safeStorageUnavailableReason() === KEYCHAIN_WOULD_ASK) await dropStoredToken(KEYCHAIN_WOULD_ASK);
+			else noteStoredTokenFailure("key", safeStorageUnavailableReason() ?? "unavailable");
 			return undefined;
 		}
+		phase = "decrypt";
 		return safeStorage.decryptString(encrypted);
 	} catch {
+		noteStoredTokenFailure(phase, phase === "decrypt" ? "ciphertext-rejected" : "keychain-operation-failed");
 		return undefined;
 	}
 }

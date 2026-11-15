@@ -106,8 +106,15 @@ export function keychainFetcher(exe: string, userData: string): KeyFetcher {
 			}
 			return { unavailable: "the shell answered the keychain request with something unreadable" };
 		} catch (error) {
+			const fields: string[] = [];
+			if (typeof error === "object" && error !== null) {
+				for (const key of ["code", "status", "signal"]) {
+					const value: unknown = Reflect.get(error, key);
+					if (typeof value === "string" || typeof value === "number") fields.push(`${key}=${value}`);
+				}
+			}
 			return {
-				unavailable: `the keychain key could not be read: ${error instanceof Error ? error.message : String(error)}`,
+				unavailable: `the keychain key could not be read (${fields.join(", ") || "unknown process failure"})`,
 			};
 		}
 	};
