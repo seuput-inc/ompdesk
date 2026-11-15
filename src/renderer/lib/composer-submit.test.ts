@@ -118,6 +118,25 @@ const guiOnly = (name: string): AvailableCommand => ({
 	textModeExecutable: false,
 });
 describe("planComposerSubmit", () => {
+	it.each([false, true])("sends current instructions through prompt while busy (shared=%s)", async hostDecides => {
+		const omp = installMockOmp();
+		const beforePrompt = vi.fn();
+		const submit = planComposerSubmit({
+			message: "Apply this instruction to the current work",
+			images: [],
+			isStreaming: true,
+			commands: [],
+			hostDecides,
+			beforePrompt,
+		});
+		if (submit.kind !== "send") throw new Error("expected send");
+		await submit.request();
+		expect(omp.rpc.prompt).toHaveBeenCalledWith("Apply this instruction to the current work", []);
+		expect(omp.rpc.steer).not.toHaveBeenCalled();
+		expect(omp.rpc.followUp).not.toHaveBeenCalled();
+		expect(beforePrompt).not.toHaveBeenCalled();
+	});
+
 	it("typed share still requires a desktop preview when Core can upload directly or discovery is pending", () => {
 		const omp = installMockOmp();
 		for (const commands of [[{ ...guiOnly("share"), textModeExecutable: true }], []]) {
