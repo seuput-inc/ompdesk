@@ -25,6 +25,28 @@
 			"verifySkill": ".omp/skills/shell-stream-recovery-verify/SKILL.md"
 		},
 		{
+			"id": "shell-exit-receipt",
+			"title": "Shell exit acceptance, receipt and Node join before relaunch",
+			"kind": "tla",
+			"dir": "shell-exit-receipt/tla",
+			"spec": "ShellExitReceipt.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/main/shell-host/electron/app.ts:286-310",
+				"src/main/shell-host/electron/index.ts:26-39",
+				"src/main/shell-host/client.ts:115-155",
+				"src/main/shell-host/client.ts:190-226",
+				"native/ompdesk/crates/shell/src/dispatch.rs:19-25",
+				"native/ompdesk/crates/shell/src/dispatch.rs:55-62",
+				"native/ompdesk/crates/shell/src/host.rs:231-283",
+				"native/ompdesk/crates/shell/src/lifecycle.rs:64-107",
+				"native/ompdesk/crates/shell/src/node.rs:106-126",
+				"native/ompdesk/crates/shell/src/main.rs:330-358"
+			],
+			"syncCommit": "f966f0beadd26ef19a5a84494c18cadb2f123e3c"
+		},
+		{
 			"id": "turn-resume",
 			"title": "Connection wait of a failed turn: probe, hold, flush, scheduled retry",
 			"kind": "tla",

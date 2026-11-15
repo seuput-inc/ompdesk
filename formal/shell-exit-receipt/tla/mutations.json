@@ -1,0 +1,9 @@
+{
+  "checker": { "kind": "tlc", "config": "MC.cfg" },
+  "mutations": [
+    { "name": "answer-before-acceptance", "why": "A successful answer must not precede accepted exit state.", "search": "s.answer = \"queued\" /\\ s.node = \"alive\"", "replace": "s.phase = \"requested\" /\\ s.node = \"alive\"", "breaks": "ReceiptAfterAcceptance" },
+    { "name": "relaunch-before-child-exit", "why": "Finalizing before the old child ends starts a second instance alongside it.", "search": "s.phase = \"stopping\" /\\ s.node = \"ended\" /\\ s.result = \"none\"", "replace": "s.phase = \"stopping\" /\\ s.result = \"none\"", "breaks": "RelaunchAfterJoin" },
+    { "name": "close-stdin-before-receipt", "why": "Closing stdin during an accepted exit lets EOF force failure before the answer arrives.", "search": "IF KeepStdin THEN \"open\" ELSE \"closed\"", "replace": "\"closed\"", "breaks": "NoPrematureEOF" },
+    { "name": "accepted-death-reported-as-crash", "why": "Death after acceptance is not classified as an unexpected pre-exit failure.", "search": "IF s.accepted THEN \"none\" ELSE \"failure\"", "replace": "\"failure\"", "breaks": "FailureBeforeAcceptance" }
+  ]
+}
