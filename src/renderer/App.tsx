@@ -261,7 +261,6 @@ export function App() {
 				onLoaded: module => {
 					onDemandLoaded.current = true;
 					setOnDemandDialogs(() => module.OnDemandDialogs);
-					setRetryOnDemand(null);
 				},
 				// What it would have shown closes, so nothing waits on a dialog that is not there (Esc, the chords).
 				onFailed: retry => {
@@ -917,7 +916,7 @@ export function App() {
 					</TabRuntimeProvider>
 				))}
 				<FirstRunGate />
-				{OnDemandDialogs ? <OnDemandDialogs /> : null}
+				{OnDemandDialogs && <OnDemandDialogs />}
 				{!OnDemandDialogs && retryOnDemand && btwRequest !== null && (
 					<Modal
 						open
