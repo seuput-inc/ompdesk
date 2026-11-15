@@ -98,6 +98,40 @@ The public Source is the single cleanup owner. Its opaque device release capabil
 
 Run `20261114-221812-4920` retained a real failure after eight passing consumers: after the original child exit, Lane lifetime and terminal `sidecar.disposed` event, the local mirror still reported `processAlive: true`. The shared mirror correction consumes that terminal event, which the Lane emits only after all original exits have joined. Its follow-up proof remains distinct from the earlier eight observations.
 
+Run `20261114-222949-0de5` passed the corrected seven Source lifetime consumers and two authenticated peer consumers (nine fresh results, unchanged inputs, Rust 1.95). The final-Arc cleanup gate is bounded to those original actors and receipts. It does not instantiate a production RootHost.
+
+### Observed question provenance
+
+The native observation path issues no authority from a JSON ask. Its execution-host gate checks the original authenticated peer, execution Owner, source Arc, entry incarnation, saved path, current run, blocking card, settings and canonical deletion authority. The observer retains the original device-map actor and connection, then repeats its card/family/recipient checks before lending `VerifiedCard` to a synchronous source-journal keep. The borrowed proof has no deserializer or external constructor. The original Execution-only admission remains unchanged.
+
+Run `20261114-224938-6d73` reproduced a stale pooled question being issued under a replacement omp token. `Held` now retains its emitting Source generation, supplied only through typed source ingress; legacy JSON feed cannot manufacture it. Remote events capture generation before queued delivery. Run `20261114-230139-0c12` passed the two peer consumers and original remote-adapter replacement consumer. Receiver-proof/source-journal composition and production Root ingress remain separate, unfinished gates.
+
+The approved 36-leaf Inbox intake preserves the existing source/receiver journals, request tuple and Execution wire shape. Its first combined compile (`20261114-230606-1902`) failed at the Base integration's misplaced method boundaries, an obsolete Execution field projection and the missing canonical non-destructive upload-read prerequisite. These are integration failures, not a reclassification of Main's independently passing Inbox source cohort. No receiving, provider-context or full-application success follows from source intake alone.
+
+### Captured RPC integration, 15 Nov 2026
+
+The original command admission binds the caller, execution Owner, Source Arc, entry/view identity, session path, cwd, generation and Scope. Local Session helpers recheck that admission at each actual enqueue. Private plan approval uses the existing local `modes.plan_approval` bridge, not stock fallback. The RPC waiter has a typed timeout distinct from ordinary local failure; retained work and cleanup can outlive its waiter.
+
+| Actual Rust 1.95 run | Observed scope | Result |
+|---|---|---|
+| `20261115-012553-f7a0` | Slot policy, original child and eagerly admitted stop/kill before receipt polling | Slot 11 passed; a separate Autopilot case failed in the same run |
+| `20261115-013918-b88d` | Captured local-first Autopilot, command admission and RPC waiter consumers | 15 passed |
+| `20261115-014324-2fda` | Registered Requests reply/effect lifetime separation and original shutdown barriers | 7 passed |
+| `20261115-021844-e159` | First registered outer-policy compile | Two compile errors; no runtime cases. Owner corrections remain separate inputs |
+| `20261115-023252-16e6` | Original Source startup wait, cancellation, 60-second boundary and remote offline skip | Three passed; slow-child consumer failed reading its not-yet-created log |
+| `20261115-031146-0b2f` | The same four startup consumers after the opt-in real child-entry barrier | Four fresh cases passed; unchanged inputs |
+| `20261115-031751-24eb` | First completion/move/login cohort compile | Integration brace/path and owner borrow errors; no runtime cases |
+| `20261115-032016-7382` | Registered RPC/Pool/remote consumers | 38 passed, 13 failed; fixture hub failure unresolved in this run |
+| `20261115-032403-605a` | Nocapture diagnosis of the same cohort | 41 passed, 9 failed; first hub panic was the existing TestHost's unimplemented internal command consumer |
+| `20261115-032620-34e0` | The cohort with TestHost forwarding through its existing generation-bound command implementation | 51 fresh cases passed; unchanged inputs |
+| `20261115-033539-bcc3` | Final command capture waits on the original Source and checks its ready run without starting an asleep child | Three fresh cases passed; unchanged inputs |
+
+The startup test now waits for the existing child fixture's opt-in post-start-log frame before inspecting that log; no ready frame, sleep or file polling substitutes for child entry. The corrected four-case run passed with input digest `b785dc535384c645652c5cde04124524c014be28c6925c9d999ab736fde327df` and no changes during execution. An earlier preflight below the 20 GiB floor started no check; the two Main-approved retired Cargo-output batches preserved source, refs, evidence and the sole warm target. The previous failed run remains separate evidence.
+
+Completion/move/login consumers now compile and pass in the 51-case run, with input digest `922f4cbfc2aaafca135016a72df38c07d382fce96134c41bb0d66269b1a0a64b`. They exercise original-source startup capture, immutable old admissions after file/cwd completion, actual multi-window aggregates, move tokens and provider cleanup after caller retirement. The diagnostic fixture fix delegates to the existing NativeLane command implementation; it is not a production Root adapter. Sixteen unused/private-bound warnings remain, including the unconstructed full Policy. Production Root constructors/ingress remain unfinished. No Node spawn, bundle or shim has been removed.
+
+The final page-command capture now consumes `settled_start` itself. Caller, execution, entry and view checks precede the final offline/readiness check and generation capture. An asleep Source receives `sidecar_not_ready` without starting a child; a page revoked while its original Source starts receives no grant. The three-case follow-up used digest `7dc37310688bcaa78b7354be4ae6c38d3092ba38c3230b6e9252eff611094698`. The production page request entry still must invoke this capture.
+
 ## Intentionally TypeScript
 
 Renderer UI and its shared page contracts; the stock omp bridge/extensions and SDK-facing stock workers; build/test/capture tooling. A stock worker may load installed omp session storage. Application decisions performed around that SDK read are not automatically exempt from native migration. Runtime-loaded probes and embedded worker scripts require explicit inventory before deleting Node.
