@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.132.0] - 2026-11-16
+
+데스크톱 창을 Rust/CEF 셸로 교체하고, 기존 세션과 계정·원격 기능을 이어서 사용해요.
+
+### 바뀐 것
+- 창·메뉴·트레이 등 데스크톱 기능은 Rust/CEF 셸이 맡아요. 이번 첫 교체판은 기존 Node 서비스를 함께 사용하며, 나머지 Rust 전환은 이어서 진행해요.
+- 기존 앱의 자동 업데이트와 사용자 데이터 경로를 유지해요. 시작에 실패한 교체판은 이전 앱으로 되돌려요.
+- 셸의 이벤트 연결이 바뀌거나 버퍼에서 이벤트가 빠지면 목록·대화·대기 요청을 다시 읽어요. 페이지를 새로고침하거나 초안·대기 메시지를 지우지 않아요.
+- 종료 중에는 새 core 실행을 막고 이미 시작한 프로세스의 종료를 기다려요. 중첩된 중지 요청도 같은 종료 결과를 기다려요.
+- 프로젝트 선택과 보조 질문 화면은 첫 화면 이후에 불러와요. 보조 질문을 불러오지 못해도 질문을 보존하며, Ask 전에는 실행하지 않고 Escape로 본 작업을 중단하지 않아요.
+
+<!-- en -->
+
+The desktop window now uses a Rust/CEF shell while keeping existing sessions, accounts and remote features.
+
+### Changed
+- Rust/CEF handles desktop windows, menus and the tray. This first replacement still uses the existing Node services; the remaining Rust migration continues separately.
+- Existing automatic updates and user-data paths are retained. A replacement that fails to start rolls back to the previous app.
+- A replaced shell event connection or an event-buffer gap triggers authoritative reads of lists, conversations and pending requests, without reloading the page or clearing drafts and queued messages.
+- Shutdown refuses new core launches and waits for processes already started. Overlapping stop requests wait for the same exit result.
+- Project selection and side questions load after the first screen. Failed side-question loads retain the question; nothing runs before Ask, and Escape does not stop the main turn.
+
 ## [0.131.0] - 2026-11-15
 
 사용 한도에서 설정을 열 때 생기던 하단 공백을 고치고, 대화 끝에 작은 여백을 더했어요.
