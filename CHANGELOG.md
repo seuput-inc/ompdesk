@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.130.2] - 2026-11-15
+
+모바일 원격의 상태 경고와 재접속 시 화면 복구 오류를 수정했어요.
+
+### 고친 것
+- 일시적인 연결 끊김을 omp 중단으로 잘못 표시하지 않아요. 실제 응답 정지는 계속 감지해요.
+- 같은 기기의 다른 페이지에서 분할 화면을 바꾼 뒤 돌아와도, 현재 화면 안의 탭으로 다시 연결해요.
+- stock omp의 Antigravity CLI 공급자에 기존 브랜드 아이콘을 표시해요.
+
+<!-- en -->
+
+Fixed status warnings and view recovery when reconnecting from the mobile web app.
+
+### Fixed
+- A temporary connection drop no longer reports a working omp session as unavailable. Persistent unresponsiveness is still detected.
+- Returning after another page changes the same device's split view reconnects to a tab inside the current view.
+- The stock Antigravity CLI provider uses its existing brand icon.
+
 ## [0.130.1] - 2026-11-15
 
 삭제 중인 세션이 다시 열리거나, 늦게 도착한 목록 응답으로 삭제한 행이 돌아오는 문제를 고쳤어요.
