@@ -136,21 +136,25 @@ struct State {
     file: Option<PathBuf>,
     /// Oldest first.
     entries: Vec<OutboxMail>,
+    /// Only this prefix was loaded or included in a successful save; pending ownership includes the suffix.
+    saved_prefix: usize,
 }
 
 impl State {
-    fn save(&self) {
+    fn save(&mut self) {
         if let Err(error) = self.persist() {
             eprintln!("[mail-outbox] not saved: {error}");
         }
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let Some(file) = &self.file else {
-            return Ok(());
-        };
-        let text = stringify(self.entries.iter().map(OutboxMail::to_json).collect());
-        write_text(file, &text, Some(0o600))
+    fn persist(&mut self) -> Result<(), String> {
+        if let Some(file) = &self.file {
+            let text = stringify(self.entries.iter().map(OutboxMail::to_json).collect());
+            write_text(file, &text, Some(0o600))?;
+        }
+        // Fileless instances are intentionally memory-only, never a Disk acknowledgement.
+        self.saved_prefix = self.entries.len();
+        Ok(())
     }
 }
 
@@ -163,6 +167,7 @@ impl MailOutbox {
         let mut state = State {
             file,
             entries: Vec::new(),
+            saved_prefix: 0,
         };
         if let Some(file) = state.file.clone() {
             for item in read_array(&file) {
@@ -174,6 +179,7 @@ impl MailOutbox {
                 }
             }
         }
+        state.saved_prefix = state.entries.len();
         MailOutbox {
             state: Mutex::new(state),
         }
@@ -242,9 +248,11 @@ impl MailOutbox {
     /// The receiver's journal holds `id`: nothing more to do for it.
     pub fn settle(&self, id: &str) {
         let mut state = self.state();
-        let before = state.entries.len();
-        state.entries.retain(|held| held.id != id);
-        if state.entries.len() != before {
+        if let Some(at) = state.entries.iter().position(|held| held.id == id) {
+            state.entries.remove(at);
+            if at < state.saved_prefix {
+                state.saved_prefix -= 1;
+            }
             state.save();
         }
     }
@@ -252,6 +260,15 @@ impl MailOutbox {
     /// The reports still waiting for their receiver's journal, oldest first.
     pub fn pending(&self) -> Vec<OutboxMail> {
         self.state().entries.clone()
+    }
+
+    /// Retry the same canonical save; failed originals stay visible to dedup and attachment retention only.
+    fn delivery_pending(&self) -> Vec<OutboxMail> {
+        let mut state = self.state();
+        if state.saved_prefix < state.entries.len() {
+            state.save();
+        }
+        state.entries[..state.saved_prefix].to_vec()
     }
 }
 
@@ -276,7 +293,7 @@ pub trait RedeliverDeps: Sync {
 /// One pass over the outbox: each report whose receiver has a live tab is sent again with its id. An answer that says
 /// the journal holds it settles it; any other answer keeps it for the next pass.
 pub async fn redeliver_mail<D: RedeliverDeps>(outbox: &MailOutbox, deps: &D) {
-    for mail in outbox.pending() {
+    for mail in outbox.delivery_pending() {
         let Some(tab_id) = deps.tab_of(&mail.session_path, mail.device.as_deref()) else {
             continue;
         };

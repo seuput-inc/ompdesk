@@ -201,6 +201,8 @@ struct State {
     file: Option<PathBuf>,
     /// Oldest first.
     entries: Vec<(String, OutboxSend)>,
+    /// Only this prefix was loaded or included in a successful save. The suffix still owns its originals.
+    saved_prefix: usize,
 }
 
 pub struct SendOutbox {
@@ -214,23 +216,25 @@ impl State {
         self.entries.iter().position(|(held, _)| held == key)
     }
 
-    fn save(&self) {
+    fn save(&mut self) {
         if let Err(error) = self.persist() {
             eprintln!("[send-outbox] not saved: {error}");
         }
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let Some(file) = &self.file else {
-            return Ok(());
-        };
-        let text = stringify(
-            self.entries
-                .iter()
-                .map(|(_, entry)| entry.to_json())
-                .collect(),
-        );
-        write_text(file, &text, Some(0o600))
+    fn persist(&mut self) -> Result<(), String> {
+        if let Some(file) = &self.file {
+            let text = stringify(
+                self.entries
+                    .iter()
+                    .map(|(_, entry)| entry.to_json())
+                    .collect(),
+            );
+            write_text(file, &text, Some(0o600))?;
+        }
+        // A deliberately fileless outbox keeps its existing in-memory behavior, not a Disk acknowledgement.
+        self.saved_prefix = self.entries.len();
+        Ok(())
     }
 
     fn pending(&self) -> Vec<OutboxSend> {
@@ -246,6 +250,7 @@ impl SendOutbox {
         let mut state = State {
             file,
             entries: Vec::new(),
+            saved_prefix: 0,
         };
         if let Some(file) = state.file.clone() {
             for item in read_array(&file) {
@@ -258,6 +263,7 @@ impl SendOutbox {
                 }
             }
         }
+        state.saved_prefix = state.entries.len();
         SendOutbox {
             state: Mutex::new(state),
             lanes: Mutex::new(HashMap::new()),
@@ -317,6 +323,9 @@ impl SendOutbox {
         let mut state = self.state();
         if let Some(at) = state.position(&entry_key(session_path, device, mark)) {
             state.entries.remove(at);
+            if at < state.saved_prefix {
+                state.saved_prefix -= 1;
+            }
             state.save();
         }
     }
@@ -333,6 +342,28 @@ impl SendOutbox {
             .into_iter()
             .filter(|entry| receiver_key(&entry.session_path, entry.device.as_deref()) == key)
             .collect()
+    }
+
+    /// Retry the canonical save before exposing new originals to the delivery consumer.
+    fn delivery_to(&self, session_path: &str, device: Option<&str>) -> (Vec<OutboxSend>, bool) {
+        let mut state = self.state();
+        if state.saved_prefix < state.entries.len() {
+            state.save();
+        }
+        let mut ready = Vec::new();
+        let mut all_saved = true;
+        for (at, (_, entry)) in state.entries.iter().enumerate() {
+            if entry.session_path == session_path
+                && entry.device.as_deref().unwrap_or("") == device.unwrap_or("")
+            {
+                if at < state.saved_prefix {
+                    ready.push(entry.clone());
+                } else {
+                    all_saved = false;
+                }
+            }
+        }
+        (ready, all_saved)
     }
 
     /// The highest dispatch number still owed to a receiver (0: none), above which a new dispatch is numbered.
@@ -439,9 +470,9 @@ pub async fn deliver_owed<D: OwedDeps>(
     session_path: &str,
     device: Option<&str>,
 ) -> bool {
-    let owed = outbox.owed_to(session_path, device);
+    let (owed, all_saved) = outbox.delivery_to(session_path, device);
     if owed.is_empty() {
-        return true;
+        return all_saved;
     }
     let Some(tab_id) = deps.tab_of(session_path, device) else {
         return false;
@@ -467,7 +498,7 @@ pub async fn deliver_owed<D: OwedDeps>(
         }
         outbox.handed(entry, &answer.instance);
     }
-    true
+    all_saved
 }
 
 /// One pass over every receiver owed a message (the runtime's sweep).

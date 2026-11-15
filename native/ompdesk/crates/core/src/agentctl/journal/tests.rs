@@ -1029,3 +1029,85 @@ async fn an_unsaved_report_cannot_escape_through_redelivery_before_same_id_save_
     assert_eq!(*receiver.sent.lock().unwrap(), ["tab9:unsaved"]);
     assert!(MailOutbox::new(Some(file)).pending().is_empty());
 }
+
+#[tokio::test]
+async fn a_retry_pass_recovers_the_retained_originals_without_a_new_producer_request() {
+    let dir = Dir::new();
+    let send_file = dir.file("send.json");
+    let mail_file = dir.file("mail.json");
+    let sends = SendOutbox::new(Some(send_file.clone()));
+    let mails = MailOutbox::new(Some(mail_file.clone()));
+    std::fs::create_dir(&send_file).unwrap();
+    std::fs::create_dir(&mail_file).unwrap();
+    let instruction = send(1);
+    let report = mail("recover");
+    assert!(sends.keep(instruction.clone()).is_err());
+    assert!(mails.keep(report.clone()).is_err());
+    let receiver = Omp::new("recovered-omp");
+    let report_receiver = Mails {
+        answers: Mutex::new(Vec::new()),
+        sent: Mutex::new(Vec::new()),
+    };
+    redeliver_sends(&sends, &receiver).await;
+    redeliver_mail(&mails, &report_receiver).await;
+    assert!(receiver.prompts().is_empty());
+    assert!(report_receiver.sent.lock().unwrap().is_empty());
+
+    std::fs::remove_dir(&send_file).unwrap();
+    std::fs::remove_dir(&mail_file).unwrap();
+    redeliver_sends(&sends, &receiver).await;
+    redeliver_mail(&mails, &report_receiver).await;
+    let stored_send = SendOutbox::new(Some(send_file)).pending();
+    assert_eq!(stored_send[0].mark, instruction.mark);
+    assert_eq!(stored_send[0].body, instruction.body);
+    assert_eq!(MailOutbox::new(Some(mail_file)).pending(), [report]);
+    assert_eq!(receiver.prompts(), [instruction.mark]);
+    assert_eq!(*report_receiver.sent.lock().unwrap(), ["tab9:recover"]);
+}
+
+#[tokio::test]
+async fn settling_a_saved_original_during_write_failure_cannot_promote_the_unsaved_suffix() {
+    let dir = Dir::new();
+    let send_file = dir.file("send.json");
+    let mail_file = dir.file("mail.json");
+    let sends = SendOutbox::new(Some(send_file.clone()));
+    let mails = MailOutbox::new(Some(mail_file.clone()));
+    let first = send(1);
+    let second = send(2);
+    sends.keep(first.clone()).unwrap();
+    mails.keep(mail("saved")).unwrap();
+    std::fs::rename(&send_file, dir.file("saved-send.json")).unwrap();
+    std::fs::rename(&mail_file, dir.file("saved-mail.json")).unwrap();
+    std::fs::create_dir(&send_file).unwrap();
+    std::fs::create_dir(&mail_file).unwrap();
+    assert!(sends.keep(second.clone()).is_err());
+    assert!(mails.keep(mail("unsaved")).is_err());
+    let receiver = Omp::new("current-omp");
+    receiver.journal.lock().unwrap().push(first.mark);
+    let report_receiver = Mails {
+        answers: Mutex::new(vec![Some(MailAnswer {
+            duplicate: true,
+            journaled: true,
+        })]),
+        sent: Mutex::new(Vec::new()),
+    };
+
+    for _ in 0..2 {
+        redeliver_sends(&sends, &receiver).await;
+        redeliver_mail(&mails, &report_receiver).await;
+    }
+    assert!(receiver.prompts().is_empty());
+    assert_eq!(*report_receiver.sent.lock().unwrap(), ["tab9:saved"]);
+    assert_eq!(sends.pending(), [second.clone()]);
+    assert_eq!(mails.pending(), [mail("unsaved")]);
+
+    std::fs::remove_dir(&send_file).unwrap();
+    std::fs::remove_dir(&mail_file).unwrap();
+    redeliver_sends(&sends, &receiver).await;
+    redeliver_mail(&mails, &report_receiver).await;
+    assert_eq!(receiver.prompts(), [second.mark]);
+    assert_eq!(
+        *report_receiver.sent.lock().unwrap(),
+        ["tab9:saved", "tab9:unsaved"]
+    );
+}
