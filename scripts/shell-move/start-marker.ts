@@ -10,8 +10,13 @@ export function rollbackStartMarker(
 	} catch {
 		return { marker: null, valid: false };
 	}
-	const valid = typeof marker === "object" && marker !== null && "version" in marker && "pid" in marker &&
-		marker.version === releasedVersion && typeof marker.pid === "number" &&
+	const valid =
+		typeof marker === "object" &&
+		marker !== null &&
+		"version" in marker &&
+		"pid" in marker &&
+		marker.version === releasedVersion &&
+		typeof marker.pid === "number" &&
 		running.some(process_ => process_.id === marker.pid && process_.name.toLowerCase() === "ompdesk");
 	return { marker, valid };
 }

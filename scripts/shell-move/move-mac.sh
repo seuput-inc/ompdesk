@@ -1,6 +1,6 @@
 #!/bin/bash
-# move-mac.sh: the whole update move on macOS, from the released v0.127.0 into the real shell bundle, on a throwaway GitHub
-# macOS runner only (shell-batch-checks.yml `move-mac`, macos-15 and macos-26; macOS 27 has no hosted runner). The mac twin of
+# move-mac.sh: the whole update move on macOS, from the selected released Electron app into the real shell bundle, on a
+# throwaway GitHub macOS runner only (shell-batch-checks.yml, macos-15 and macos-26).
 # run-move.ts. Nothing here runs on a person's Mac: it re-signs apps, makes keychains, sets launchd variables and opens apps.
 #  - the released app is copied out of its DMG into a temp "Applications" folder and re-signed with a throwaway certificate and
 #    the release's form of designated requirement (resign-mac.sh), so its keychain item is a release-signed one;
@@ -16,11 +16,11 @@
 #  S3 a new shell that does not start (OMP_GUI_TEST_SHELL_FAIL_START=1 in the relaunch's launchd environment): v0.127.0's swap
 #     script installs it and deletes `.previous`, so the shell bundle's launcher, which sees no page within the window
 #     (OMPDESK_LAUNCHER_START_WAIT_S), downloads the last Electron release from the stand-in (OMPDESK_LAUNCHER_RELEASE_URL: the
-#     released v0.127.0 re-signed stands in for it), swaps it back and opens it; swap.log reports it and Electron says
+#     pinned final Electron app re-signed stands in for it), swaps it back and opens it; swap.log reports it and Electron says
 #     `swap result … rolled back`; no dialog.
 #  S2 a failed move: the apps folder is made read-only before the countdown ends; the swap fails (copy failed), Electron is
 #     untouched, and the next launch of the released app logs `swap result outcome rolled back`.
-# OMP_MOVE_RELEASED_TAG=v0.128.0 selects the real release 1 DMG instead of v0.127.0. Its start-checked SWAP_SCRIPT keeps
+# OMP_MOVE_RELEASED_TAG selects v0.127.0, v0.128.0 or the pinned final Electron release (the default). Releases from v0.128.0 keep
 # `<app>.previous` until the new app writes app-started.json for the offered version: S1 then says `started`, and S4
 # (the new shell does not start) has the script restore `.previous` (`start failed; previous app restored`) and reopen
 # the old app, which logs `swap result … rolled back`; the launcher only notes that the swap restores.
