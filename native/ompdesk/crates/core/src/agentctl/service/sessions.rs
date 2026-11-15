@@ -612,6 +612,7 @@ impl AgentControl {
         args: ResultArgs,
         several: bool,
     ) -> R<String> {
+        let arrived_before = self.arrivals(&caller.tab_id);
         let seconds = args.timeout_seconds.unwrap_or(RESULT_WAIT_DEFAULT_SECONDS);
         let deadline = Instant::now() + Duration::from_secs(seconds);
         let per_answer = if several {
@@ -680,7 +681,15 @@ impl AgentControl {
         // sender (`block`), and the wait ends when a message reaches the caller (`arrivals`).
         let _blocked = (args.wait == Some(true)).then(|| self.block(&caller.tab_id));
         self.result_until(
-            caller, &targets, &ids, &saved, &args, seconds, deadline, per_answer,
+            caller,
+            &targets,
+            &ids,
+            &saved,
+            &args,
+            seconds,
+            deadline,
+            per_answer,
+            arrived_before,
         )
         .await
     }
@@ -697,11 +706,21 @@ impl AgentControl {
         seconds: u64,
         deadline: Instant,
         per_answer: usize,
+        arrived_before: u64,
     ) -> R<String> {
-        let arrived_before = self.arrivals(&caller.tab_id);
+        use std::task::Poll;
+
         loop {
-            // Created before the state is read: an arrival from here on wakes the pause below.
-            let arrived = self.arrived.notified();
+            let arrived = async {
+                loop {
+                    let notified = self.arrived.notified();
+                    if self.arrivals(&caller.tab_id) > arrived_before {
+                        return;
+                    }
+                    notified.await;
+                }
+            };
+            tokio::pin!(arrived);
             let tabs = self.host.state().tabs(&caller.tab_id);
             let current: Vec<Option<Target>> = targets
                 .iter()
@@ -718,12 +737,13 @@ impl AgentControl {
             {
                 return fail(format!("{} was closed while you waited.", label(tab)));
             }
-            let summaries: Vec<Summary> = join::all(
-                current
-                    .iter()
-                    .zip(ids)
-                    .map(|(target, id)| {
-                        join::boxed(async move {
+            let waiting = args.wait == Some(true);
+            let mut summaries: Vec<_> = current
+                .iter()
+                .zip(ids)
+                .map(|(target, id)| {
+                    (
+                        Some(join::boxed(async move {
                             match target {
                                 Some(Target::Tab(tab)) => {
                                     self.session_summary(caller, tab, per_answer).await
@@ -733,21 +753,58 @@ impl AgentControl {
                                     text: String::new(),
                                 })),
                             }
-                        })
-                    })
-                    .collect(),
-            )
-            .await
-            .into_iter()
-            .collect::<R<Vec<_>>>()?;
-            let done = summaries.iter().filter(|summary| summary.settled).count();
+                        })),
+                        None,
+                    )
+                })
+                .collect();
+            {
+                let read_summaries = std::future::poll_fn(|cx| -> Poll<R<()>> {
+                    let mut pending = false;
+                    for (read, summary) in &mut summaries {
+                        if let Some(future) = read {
+                            match std::future::Future::poll(future.as_mut(), cx) {
+                                Poll::Ready(Ok(value)) => {
+                                    *summary = Some(value);
+                                    *read = None;
+                                }
+                                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                                Poll::Pending => pending = true,
+                            }
+                        }
+                    }
+                    let any_ready = args.until.as_deref() == Some("any")
+                        && summaries.iter().any(|(_, summary)| {
+                            summary.as_ref().is_some_and(|summary| summary.settled)
+                        });
+                    if !pending
+                        || waiting
+                            && (any_ready
+                                || self.arrivals(&caller.tab_id) > arrived_before
+                                || Instant::now() >= deadline)
+                    {
+                        Poll::Ready(Ok(()))
+                    } else {
+                        Poll::Pending
+                    }
+                });
+                tokio::select! {
+                    biased;
+                    result = read_summaries => result?,
+                    () = &mut arrived, if waiting => {}
+                    () = tokio::time::sleep_until(deadline), if waiting => {}
+                }
+            }
+            let done = summaries
+                .iter()
+                .filter(|(_, summary)| summary.as_ref().is_some_and(|summary| summary.settled))
+                .count();
             let ready = if args.until.as_deref() == Some("any") {
                 done > 0
             } else {
                 done == summaries.len()
             };
             let timed_out = Instant::now() >= deadline;
-            let waiting = args.wait == Some(true);
             // A steer or report reached the waiting session: the call ends so it is read at its next step.
             let woken =
                 waiting && !ready && !timed_out && self.arrivals(&caller.tab_id) > arrived_before;
@@ -755,8 +812,10 @@ impl AgentControl {
                 // The opener has the answer now: the session may close once its work landed.
                 {
                     let mut mem = self.mem();
-                    for (summary, target) in summaries.iter().zip(&current) {
-                        if let (true, Some(Target::Tab(tab))) = (summary.settled, target) {
+                    for ((_, summary), target) in summaries.iter().zip(&current) {
+                        if let (Some(summary), Some(Target::Tab(tab))) = (summary, target)
+                            && summary.settled
+                        {
                             mem.collected.insert(tab.tab_id.clone());
                         }
                     }
@@ -774,21 +833,35 @@ impl AgentControl {
                 } else {
                     String::new()
                 };
-                return Ok(format!(
-                    "{note}{}",
-                    summaries
-                        .iter()
-                        .map(|summary| summary.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                ));
+                let mut text = note;
+                for (index, (((_, summary), target), id)) in
+                    summaries.iter().zip(&current).zip(ids).enumerate()
+                {
+                    if index > 0 {
+                        text.push_str("\n\n");
+                    }
+                    if let Some(summary) = summary {
+                        text.push_str(&summary.text);
+                    } else {
+                        if let Some(Target::Tab(tab)) = target {
+                            text.push_str(&label(tab));
+                        } else {
+                            text.push_str("Session");
+                        }
+                        text.push_str(" [");
+                        text.push_str(id);
+                        text.push_str("]: summary unconfirmed (its host has not answered).");
+                    }
+                }
+                return Ok(text);
             }
             let left = deadline.saturating_duration_since(Instant::now());
             tokio::select! {
                 () = self.host.next_change(
                     left.as_millis().min(u128::from(self.tuning.poll_ms)) as u64
                 ) => {}
-                () = arrived => {}
+                () = &mut arrived => {}
+                () = tokio::time::sleep_until(deadline) => {}
             }
         }
     }
