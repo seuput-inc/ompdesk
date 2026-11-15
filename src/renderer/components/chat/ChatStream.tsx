@@ -451,6 +451,7 @@ function SessionTranscript() {
 	);
 	const virtualizer = useVirtualizer({
 		count: rows.length,
+		paddingEnd: 8, // --sc-space-2; include the composer gap in tail-following and restored measurements.
 		initialOffset: restoreView?.scrollOffset ?? 0,
 		initialMeasurementsCache: restoreView?.measurements,
 		getItemKey: index => rowKeys[index] ?? index,

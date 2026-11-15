@@ -19,6 +19,8 @@ globs:
 
 User's rules: **composer controls never move outside the composer box, and the phone composer never folds**; **the Run sheet is one line per row**. Never undo either.
 
+- The transcript ends with 8 CSS px of space (`--sc-space-2`) before the composer. `ChatStream` includes it in the virtualizer's `paddingEnd`, so tail following, keyboard resizing and restored reading positions use the same scroll extent; composer placement and gaps between messages do not change.
+
 ### Answering a steer first
 
 - **A person's message that joins a running turn is answered in text before the next tool call**. Bridge `resources/gui-bridge/answer-first.ts` (feature `answerFirst`) and `typed-prompts.ts` (feature `typedPrompts`), main `src/main/local/prompt-origin.ts` `noteTypedPrompt`.
