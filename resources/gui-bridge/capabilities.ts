@@ -157,6 +157,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		},
 	},
 	composer: {
+		pkg: ["AgentRegistry.global()", "MAIN_AGENT_ID"],
 		session: [
 			"getActiveToolNames()",
 			"toolChoiceQueue.pushSequence()",
@@ -184,6 +185,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"isUltrafastModeEnabled()",
 			"setUltrafastMode()",
 			"popLastQueuedMessage()",
+			"withdrawQueuedMessage()",
+			"heldQueuedMessages",
+			"agent.peekSteeringQueue()",
+			"agent.peekFollowUpQueue()",
+			"agent.peekUndeliveredQueuedMessages()",
+			"agent.onQueueChange()",
 			"getQueuedMessages()",
 			"agent.state",
 			"hasBuiltInTool()",
@@ -207,12 +214,21 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			// The restart notice for a turn stock's restore continues is queued at that turn's `turn_start`.
 			"subscribe()",
 			"sessionManager.appendMessage()",
+			"sessionManager.appendCustomEntry()",
+			"sessionManager.ensureOnDisk()",
+			"sessionManager.flush()",
 			"isStreaming",
 			"getGoalModeState()",
 			"asyncJobManager",
 			"sessionManager.getSessionFile()",
 		],
 		modules: {
+			"@oh-my-pi/pi-coding-agent/session/queued-messages": [
+				"isDisplayableQueuedMessage()",
+				"isUserAuthoredQueuedMessage()",
+				"toRestoredQueuedMessage()",
+			],
+			"@oh-my-pi/pi-coding-agent/registry/agent-awaits": ["USER_AWAIT_ID"],
 			"@oh-my-pi/pi-agent-core": ["agentPauseGate.paused", "agentPauseGate.pausedAt"],
 			"@oh-my-pi/pi-ai": ["serviceTierFamily()", "shouldSendServiceTier()"],
 			"@oh-my-pi/pi-tui/overlays/job-tree": ["buildJobTree()"],
@@ -1549,6 +1565,10 @@ export const COPY_SAFE: Readonly<Record<string, string>> = {
 	"@oh-my-pi/pi-ai/auth/blocks": "block-scope constants and key helpers: no setting, no state",
 	"@oh-my-pi/pi-ai/auth/rank": "the usage-ranking comparator: pure, imports nothing",
 	"@oh-my-pi/pi-ai/auth/usage-report": "usage-window arithmetic: pure",
+	[`${AGENT}/session/queued-messages`]:
+		"queue display and editor-restoration helpers only: pure operations on the running session's original objects; no queue, settings or singleton is read from the copy",
+	[`${AGENT}/registry/agent-awaits`]:
+		"USER_AWAIT_ID constant only; all wait state and subscriptions come from the running AgentRegistry",
 	[`${AGENT}/autolearn/managed-skills`]:
 		"only the provider id and the name sanitizer (pure); writes go through stock's `manage_skill` tool, never the copy's own per-skill mutation chain",
 	[`${AGENT}/config`]:

@@ -113,6 +113,9 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/modes/model-browser-source": () =>
 		import("@oh-my-pi/pi-coding-agent/modes/model-browser-source"),
 	"@oh-my-pi/pi-coding-agent/session/agent-storage": () => import("@oh-my-pi/pi-coding-agent/session/agent-storage"),
+	"@oh-my-pi/pi-coding-agent/session/queued-messages": () =>
+		import("@oh-my-pi/pi-coding-agent/session/queued-messages"),
+	"@oh-my-pi/pi-coding-agent/registry/agent-awaits": () => import("@oh-my-pi/pi-coding-agent/registry/agent-awaits"),
 	"@oh-my-pi/pi-coding-agent/session/context-settings": () =>
 		import("@oh-my-pi/pi-coding-agent/session/context-settings"),
 	"@oh-my-pi/pi-coding-agent/session/cache-warmer": () => import("@oh-my-pi/pi-coding-agent/session/cache-warmer"),

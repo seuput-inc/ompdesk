@@ -9,13 +9,17 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RestoreOptions } from "@oh-my-pi/pi-coding-agent/task/restore";
 import type { AgentMessage } from "../../src/shared/rpc-types";
 import { requireFn } from "./capabilities";
+import { ManualInstructionArchive } from "./composer-manual";
+import { InstructionQueueView } from "./composer-queue";
 import { buildCopyTargets } from "./copy-targets";
 import { guard } from "./health";
 import { jobRows } from "./jobs-core";
+import { boundEnv } from "./modes/shared";
 import { keepSectionsOnRestore } from "./prompt-sections";
 import {
 	cutByEarlierStop,
@@ -38,6 +42,105 @@ type Session = AgentSession & Record<string, unknown>;
 
 function record(params: unknown): Record<string, unknown> {
 	return typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
+}
+
+let activeInstructions:
+	| {
+			session: Session;
+			sessionId: string;
+			view: InstructionQueueView;
+			archive: ManualInstructionArchive;
+			dispose(): void;
+	  }
+	| undefined;
+
+async function instructionView(env: Parameters<BridgeMethods[string]>[1]): Promise<InstructionQueueView> {
+	const session = env.session() as Session;
+	const sessionId = session.sessionManager.getSessionId();
+	const current = activeInstructions;
+	if (current?.session === session && current.sessionId === sessionId) return current.view;
+	const [presentation, { USER_AWAIT_ID }] = await Promise.all([
+		import("@oh-my-pi/pi-coding-agent/session/queued-messages"),
+		import("@oh-my-pi/pi-coding-agent/registry/agent-awaits"),
+	]);
+	if (env.session() !== session || session.sessionManager.getSessionId() !== sessionId) {
+		throw new Error("The instruction queue changed while its original messages were being resolved.");
+	}
+	const existing = activeInstructions;
+	if (existing?.session === session && existing.sessionId === sessionId) return existing.view;
+	existing?.dispose();
+	const registry = env.pi.pi.AgentRegistry.global();
+	const mainId = env.pi.pi.MAIN_AGENT_ID;
+	const view = new InstructionQueueView(session, presentation, () =>
+		registry.awaits.blocksOn(mainId, USER_AWAIT_ID, Date.now()),
+	);
+	const manager = session.sessionManager;
+	const archive = new ManualInstructionArchive(manager, () => {
+		if (
+			activeInstructions?.view !== view ||
+			env.session() !== session ||
+			session.sessionManager !== manager ||
+			manager.getSessionId() !== sessionId
+		) {
+			throw new Error("The manual instruction belongs to an earlier session.");
+		}
+	});
+	const publish = () => {
+		if (
+			activeInstructions?.view !== view ||
+			env.session() !== session ||
+			session.sessionManager.getSessionId() !== sessionId
+		)
+			return;
+		env.emit({ type: "queue_update", ...view.snapshot() });
+	};
+	const offQueue = session.agent.onQueueChange(publish);
+	const offWait = registry.awaits.onChange(publish);
+	const offSession = session.subscribe(event => {
+		if (event.type === "message_end" || event.type === "agent_end") publish();
+	});
+	activeInstructions = {
+		session,
+		sessionId,
+		view,
+		archive,
+		dispose() {
+			offQueue();
+			offWait();
+			offSession();
+		},
+	};
+	publish();
+	return view;
+}
+
+async function instructionArchive(
+	env: Parameters<BridgeMethods[string]>[1],
+	expectedView?: InstructionQueueView,
+): Promise<ManualInstructionArchive> {
+	const view = await instructionView(env);
+	const current = activeInstructions;
+	if (
+		!current ||
+		current.session !== env.session() ||
+		current.view !== view ||
+		(expectedView && current.view !== expectedView)
+	)
+		throw new Error("The manual instruction session changed.");
+	return current.archive;
+}
+
+export function install(pi: ExtensionAPI): void {
+	const attach = () => {
+		const env = boundEnv();
+		if (env)
+			void instructionView(env).catch(error =>
+				pi.logger.error("Instruction queue unavailable", { error: String(error) }),
+			);
+	};
+	pi.on("session_start", attach);
+	pi.on("session_switch", attach);
+	attach();
 }
 
 // ── Forced tool ──────────────────────────────────────────────────────────────
@@ -265,6 +368,27 @@ async function closeShutdownSubagents(
 // ── Methods ──────────────────────────────────────────────────────────────────
 export const methods: BridgeMethods = {
 	...guard("composer", {
+		"composer.get_queue": async (_params, env) => (await instructionView(env)).snapshot(),
+
+		"composer.queue_remove": async (params, env) => {
+			const { instance, id, intent } = record(params);
+			if (typeof instance !== "string" || typeof id !== "string") {
+				throw new Error("queue_remove requires the original instance and id");
+			}
+			const view = await instructionView(env);
+			return (await instructionArchive(env, view)).withdraw(view, instance, id, intent);
+		},
+
+		"composer.get_manual_recovery": async (_params, env) => (await instructionArchive(env)).recover(),
+
+		"composer.ack_manual_recovery": async (params, env) => {
+			const { recoveryId, disposition } = record(params);
+			if (typeof recoveryId !== "string") {
+				throw new Error("Manual recovery acknowledgement requires recoveryId and an explicit disposition");
+			}
+			return (await instructionArchive(env)).acknowledge(recoveryId, disposition);
+		},
+
 		/** The get_state fields stock omits. */
 		"composer.state": async (_params, env) => {
 			const session = env.session() as Session;
