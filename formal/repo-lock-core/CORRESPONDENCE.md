@@ -32,3 +32,9 @@
 - POSIX: every git (and what it starts: hooks, ssh, credential helpers) stays in the core's process group; a process that makes a group or session of its own leaves it, and main neither kills nor waits for it.
 - Windows: `MainSeesDeath` waits for `alive = 0`, but main has nothing to poll there. The model assumes the job object ended the gits by the time main sees the core's `close` (the job's last handle closes while the core's process is torn down, before it is signalled); not verified on Windows.
 - pid reuse: main signals `-pid` only while the dead core's group can still have members; POSIX does not reuse a pid as a group id while that group exists.
+
+## Additional first-shell lifetime path
+
+`CoreProcess.stop()` now retains every known stopping core's existing exit receipt, including abandonment and unexpected death. `shutdown()` first closes admission; shell loss additionally force-ends known live groups before joining those receipts. `server.rs` cancels registered requests when its input ends before draining the supervisors. These paths are checked by the real-child tests listed in SCOPE, not by treating EOF as a fictitious `CoreReadsCancel` frame.
+
+The model's `CoreDies`/`MainSeesDeath` pair still assumes that main remains available to observe the death. It does not prove that a dead Node or a replacement app instance can join those receipts. No frozen property, bound, fairness condition or mutation was changed to imply that stronger guarantee.

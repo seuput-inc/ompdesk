@@ -35,3 +35,11 @@ One holder and one next holder, one request of at most 2 gits one at a time (`MC
 - `core-death-settled-at-once` (fixed): main settled what waited on a dead core at its `close`, and the lock's next holder started while the orphaned git still ran. Reproduced as a failing test first (`evidence/core-death-before.log`), fixed by the process group and the job object (`evidence/core-death-after.log`); `NoOverlapAfterCoreDeath` now holds.
 - `group-outlives-its-bound` (residue, by design): a git still in the group `GROUP_GONE_MS` (3 s) after SIGKILL (a process stuck in the kernel) is settled past, with an error and a log line that say gits of the dead core may still run.
 - `scratch-left-by-a-dead-core` (residue, by design): a core that dies while a request holds its scratch store leaves that folder in the temp directory (`ompdesk-merge-tree-XXXXXX`), as a main process that died between `mkdtemp` and `rm` left it before 2f. It holds only trees `merge-tree` built, never repository state; `NoScratchAfterStop` therefore speaks of a live core.
+
+## First Rust-shell boundary
+
+The frozen model keeps main alive and represents one core. It does not model CEF/Node disconnection, input EOF, overlapping core generations, final shutdown admission or a replacement app instance. Its passing matrix therefore does not establish those additional lifetime guarantees.
+
+The first-shell changes use deterministic real-child regressions for these boundaries: `server.rs` EOF cancellation, `core/process.test.ts` overlapping stop, `app-quit-failure.test.ts` cleanup failure and `shell-host/electron/lifetime-force.test.ts` socket/stdin loss with a stopped prior core and a current core. Shell loss force-ends known live core groups and joins their existing receipts; ordinary quit retains EOF draining. A failed group receipt remains a failure.
+
+Abrupt death of both main and the shell, descendants that leave their process group, an exited core whose inherited stdio delays `close`, PID reuse without an OS-stable group handle, and next-instance fencing remain outside this model and these regression claims. Windows job-close ordering remains the explicit assumption above.
