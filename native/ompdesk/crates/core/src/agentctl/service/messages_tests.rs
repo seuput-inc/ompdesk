@@ -8,8 +8,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use super::super::host::{Caps, HostState};
 use super::super::tuning::Tuning;
-use super::super::{AgentControl, Files};
-use crate::agentctl::journal::system_clock;
+use super::super::{AgentControl, Files, JournalFile};
+use crate::agentctl::journal::send_outbox::OutboxSend;
+use crate::agentctl::journal::{system_clock, tests::Dir};
 use crate::ports::Port;
 
 type Asked = Arc<Mutex<Vec<(String, Value)>>>;
@@ -18,6 +19,17 @@ fn rig(
     id: u64,
     state: Value,
     tuning: Tuning,
+    reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
+) -> (AgentControl, Asked) {
+    rig_with_files(id, state, tuning, &Files::default(), Caps::default(), reply)
+}
+
+fn rig_with_files(
+    id: u64,
+    state: Value,
+    tuning: Tuning,
+    files: &Files,
+    caps: Caps,
     reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
     let (writer, reader) = tokio::io::duplex(1 << 20);
@@ -47,13 +59,7 @@ fn rig(
             }
         }
     });
-    let control = AgentControl::new(
-        port,
-        Caps::default(),
-        &Files::default(),
-        tuning,
-        system_clock(),
-    );
+    let control = AgentControl::new(port, caps, files, tuning, system_clock());
     (control, asked)
 }
 
@@ -436,4 +442,194 @@ async fn a_message_to_a_session_with_an_open_card_queues_behind_it_whatever_deli
         );
         control.host.port().close();
     }
+}
+
+fn retained_original() -> OutboxSend {
+    OutboxSend::new(
+        super::super::wrap::dispatch_mark("d1"),
+        Some(1),
+        "/s/b_1.jsonl".into(),
+        None,
+        "/s/a_1.jsonl".into(),
+        "original instruction".into(),
+        "original instruction".into(),
+        1_000.0,
+    )
+}
+
+#[tokio::test]
+async fn retrying_an_unsaved_original_cannot_report_success_or_already_on_its_way() {
+    let directory = Dir::new();
+    let file = directory.file("send.json");
+    let files = Files {
+        send_outbox: Some(JournalFile {
+            file: Some(file.clone()),
+        }),
+        ..Files::default()
+    };
+    let (control, asked) = rig_with_files(
+        9_320,
+        state(vec![tab("a"), busy("b")]),
+        Tuning::default(),
+        &files,
+        Caps::default(),
+        main_replies,
+    );
+    std::fs::create_dir(&file).unwrap();
+    let original = retained_original();
+    let outbox = control.send_outbox.as_ref().unwrap();
+    assert!(outbox.keep(original.clone()).is_err());
+    let receipt = control
+        .run(
+            "a",
+            "ompdesk_session_send",
+            json!({"session": "b", "message": original.body}),
+            None,
+        )
+        .await;
+    assert!(
+        receipt.is_error,
+        "an unsaved original received a successful receipt: {}",
+        receipt.text
+    );
+    assert!(
+        !receipt.text.contains("already on its way"),
+        "{}",
+        receipt.text
+    );
+    assert_eq!(outbox.pending(), [original]);
+    assert!(
+        asked_with(&asked, "command")
+            .iter()
+            .all(|args| args["command"]["type"] != "agent_control_instruction")
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_saved_original_with_an_unanswered_receiver_keeps_an_unconfirmed_queue_receipt() {
+    let directory = Dir::new();
+    let file = directory.file("send.json");
+    let files = Files {
+        send_outbox: Some(JournalFile { file: Some(file) }),
+        ..Files::default()
+    };
+    let (control, asked) = rig_with_files(
+        9_321,
+        state(vec![tab("a"), busy("b")]),
+        Tuning::default(),
+        &files,
+        Caps {
+            sent_marks: true,
+            ..Caps::default()
+        },
+        |method, args| {
+            if method == "sentMarks" {
+                return Err("the receiver cannot answer yet".into());
+            }
+            main_replies(method, args)
+        },
+    );
+    let original = retained_original();
+    let outbox = control.send_outbox.as_ref().unwrap();
+    outbox.keep(original.clone()).unwrap();
+    let receipt = control
+        .run(
+            "a",
+            "ompdesk_session_send",
+            json!({"session": "b", "message": original.body}),
+            None,
+        )
+        .await;
+    assert!(!receipt.is_error, "{}", receipt.text);
+    assert!(receipt.text.contains("unconfirmed"), "{}", receipt.text);
+    assert_eq!(outbox.pending(), [original]);
+    assert!(
+        asked_with(&asked, "command")
+            .iter()
+            .all(|args| args["command"]["type"] != "agent_control_instruction")
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn storage_recovery_during_a_new_send_cannot_bypass_an_earlier_original() {
+    let directory = Dir::new();
+    let file = directory.file("send.json");
+    let files = Files {
+        send_outbox: Some(JournalFile {
+            file: Some(file.clone()),
+        }),
+        ..Files::default()
+    };
+    let recover_at_journal = file.clone();
+    let (control, asked) = rig_with_files(
+        9_322,
+        state(vec![tab("a"), busy("b")]),
+        Tuning::default(),
+        &files,
+        Caps {
+            sent_marks: true,
+            ..Caps::default()
+        },
+        move |method, args| {
+            if method == "sentMarks" {
+                return Ok(json!({"instance": "current-omp", "journaled": []}));
+            }
+            if method == "command" {
+                match args["command"]["type"].as_str() {
+                    Some("get_transcript_page") => {
+                        std::fs::remove_dir(&recover_at_journal).unwrap();
+                        return Ok(json!({"success": true, "data": {"messages": []}}));
+                    }
+                    Some("agent_control_instruction") => return Ok(json!({"success": true})),
+                    _ => {}
+                }
+            }
+            main_replies(method, args)
+        },
+    );
+    std::fs::create_dir(&file).unwrap();
+    let original = retained_original();
+    let outbox = control.send_outbox.as_ref().unwrap();
+    assert!(outbox.keep(original.clone()).is_err());
+    let receipt = control
+        .run(
+            "a",
+            "ompdesk_session_send",
+            json!({"session": "b", "message": "next instruction", "request_id": "next"}),
+            None,
+        )
+        .await;
+    assert!(!receipt.is_error, "{}", receipt.text);
+    assert!(
+        asked_with(&asked, "command")
+            .iter()
+            .all(|args| args["command"]["type"] != "agent_control_instruction"),
+        "a newer instruction bypassed unresolved earlier debt"
+    );
+    assert!(receipt.text.contains("unconfirmed"), "{}", receipt.text);
+    let pending = outbox.pending();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|entry| entry.body.as_str())
+            .collect::<Vec<_>>(),
+        ["original instruction", "next instruction"]
+    );
+    assert_eq!(pending[0], original);
+    control.redeliver_sends().await.unwrap();
+    let delivered = asked_with(&asked, "command")
+        .into_iter()
+        .filter(|args| args["command"]["type"] == "agent_control_instruction")
+        .map(|args| args["command"]["requestId"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        delivered,
+        pending
+            .iter()
+            .map(|entry| Value::String(entry.mark.clone()))
+            .collect::<Vec<_>>()
+    );
+    control.host.port().close();
 }
