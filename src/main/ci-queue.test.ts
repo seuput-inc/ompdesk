@@ -222,6 +222,50 @@ describe("the macOS checks of a push to main", () => {
 	});
 });
 
+describe.skipIf(process.platform === "win32")("shell dispatch admission", () => {
+	it("requires an admitted ref and protects a pending shell request", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-shell-admission-"));
+		try {
+			fs.writeFileSync(
+				path.join(dir, "gh"),
+				`#!/bin/sh
+case "$1 $2" in
+  "variable get") echo allowed; exit 0 ;;
+esac
+case "$2" in
+  */actions/workflows/shell-batch-checks.yml/runs?*)
+    if [ "$SHELL_PENDING" = yes ]; then echo '{"workflow_runs":[{"id":707,"status":"pending","head_branch":"shell-owner"}]}'; else echo '{"workflow_runs":[]}'; fi ;;
+  */actions/workflows/*/runs?*) echo '{"workflow_runs":[]}' ;;
+  */actions/runs/707/jobs?*) echo '[{"status":"pending","labels":[]}]' ;;
+  *) echo '{}' ;;
+esac
+`,
+				{ mode: 0o755 },
+			);
+			const run = (args: string[], pending = false) =>
+				spawnSync("bun", [path.join(REPO, "scripts/ci-run.ts"), ...args, "--dry-run"], {
+					encoding: "utf8",
+					env: {
+						...process.env,
+						PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}`,
+						SHELL_PENDING: pending ? "yes" : "no",
+					},
+				});
+			const denied = run(["shell-batch-checks", "--ref", "unlisted"]);
+			expect(denied.status).toBe(2);
+			expect(denied.stderr).toContain("MAC_REFS");
+			expect(run(["shell-batch-checks.yml", "--ref", "allowed"]).status).toBe(0);
+			expect(run(["shell-batch-checks", "--ref", "main"]).status).toBe(0);
+			const blocked = run(["ci", "--ref", "allowed", "-f", "mac=true"], true);
+			expect(blocked.status).toBe(3);
+			expect(blocked.stderr).toContain("707 (shell-batch-checks, shell-owner)");
+			expect(blocked.stdout).not.toContain("dry run:");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("the queue gate's steps, run as the runner runs them", () => {
 	const gate = workflows.get("queue-gate.yml") as Workflow;
 	const step = (id: string): Step => {

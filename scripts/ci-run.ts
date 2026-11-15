@@ -29,9 +29,10 @@ const WORKFLOWS: Record<string, (inputs: Record<string, string>) => boolean> = {
 	ci: inputs => inputs.mac === "true" || inputs.e2e === "true",
 	"e2e-nightly": () => true,
 	"flake-probe": inputs => (inputs.os ?? "all") === "macos" || (inputs.os ?? "all") === "all",
+	"shell-batch-checks": () => true,
 	formal: () => false,
 };
-const LANE_WORKFLOWS = ["ci", "e2e-nightly", "flake-probe"];
+const LANE_WORKFLOWS = ["ci", "e2e-nightly", "flake-probe", "shell-batch-checks"];
 
 export interface CiRunArgs {
 	workflow: string;

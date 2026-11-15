@@ -5,17 +5,17 @@
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import * as fs from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { get } from "node:https";
 import { tmpdir } from "node:os";
-import { createInterface } from "node:readline";
-import * as fs from "node:fs";
 import * as path from "node:path";
+import { createInterface } from "node:readline";
 import { describe, expect, it, vi } from "vitest";
+import lastElectron from "../../native/ompdesk/crates/shell/last-electron.json";
 import { findEmbedded7z } from "./build-setups";
 import { TEST_GUID, TEST_SHORTCUT } from "./constants";
 import { diffOwner, type OwnerSnapshot, REAL_GUID } from "./guard";
-import lastElectron from "../../native/ompdesk/crates/shell/last-electron.json";
 
 const ROOT = path.join(__dirname, "..", "..");
 const read = (name: string) => fs.readFileSync(path.join(ROOT, name), "utf8");
@@ -208,13 +208,28 @@ it("serves both released and current repository identities without offering a se
 	const folder = await mkdtemp(path.join(tmpdir(), "shell-move-routes-"));
 	const asset = path.join(folder, "candidate.dmg");
 	await writeFile(asset, "candidate");
-	const child = spawn("bun", [
-		"scripts/shell-move/feed.ts", "--setup", asset, "--cert-dir", folder, "--platform", "mac",
-		"--port", "0", "--seed-port", "0",
-	], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn(
+		"bun",
+		[
+			"scripts/shell-move/feed.ts",
+			"--setup",
+			asset,
+			"--cert-dir",
+			folder,
+			"--platform",
+			"mac",
+			"--port",
+			"0",
+			"--seed-port",
+			"0",
+		],
+		{ cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] },
+	);
 	const ended = once(child, "close");
 	let errors = "";
-	child.stderr.on("data", chunk => { errors += String(chunk); });
+	child.stderr.on("data", chunk => {
+		errors += String(chunk);
+	});
 	try {
 		const ready = Promise.withResolvers<{ seed: number; update: number }>();
 		let seed: number | undefined;
@@ -232,7 +247,9 @@ it("serves both released and current repository identities without offering a se
 			get({ hostname: "127.0.0.1", port, path: url, rejectUnauthorized: false }, response => {
 				let body = "";
 				response.setEncoding("utf8");
-				response.on("data", chunk => { body += chunk; });
+				response.on("data", chunk => {
+					body += chunk;
+				});
 				response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
 				response.on("error", reject);
 			}).on("error", reject);

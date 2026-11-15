@@ -128,7 +128,7 @@ for arg do
     */actions/workflows/e2e-nightly.yml/runs?*)
       if [ "$PENDING_ONLY" = yes ]; then echo '{"workflow_runs":[{"id":707,"status":"pending","head_branch":"parity-owner"}]}'; else echo '{"workflow_runs":[]}'; fi
       exit 0 ;;
-    */actions/workflows/ci.yml/runs?*|*/actions/workflows/flake-probe.yml/runs?*)
+    */actions/workflows/ci.yml/runs?*|*/actions/workflows/flake-probe.yml/runs?*|*/actions/workflows/shell-batch-checks.yml/runs?*)
       echo '{"workflow_runs":[]}'; exit 0 ;;
     */actions/runs/707/jobs?*)
       echo '[{"status":"pending","labels":[]}]'; exit 0 ;;
@@ -176,6 +176,14 @@ fi
 		expect(first.stdout).toContain("watch it once: bun scripts/watch-run.ts 101");
 		expect(second.stdout).toContain("watch it once: bun scripts/watch-run.ts 202");
 		expect(first.stdout + second.stdout).not.toContain("watch it once: bun scripts/watch-run.ts 999999");
+	});
+
+	it("dispatches an admitted shell run and reports its receipt", async () => {
+		const { start, dir } = fixture();
+		const result = await start(505, undefined, ["shell-batch-checks", "--ref", "concurrent-dispatch"]);
+		expect(result.stdout).toContain("watch it once: bun scripts/watch-run.ts 505");
+		const trace = fs.readFileSync(path.join(dir, "trace-505"), "utf8");
+		expect(trace).toContain("actions/workflows/shell-batch-checks.yml/dispatches");
 	});
 
 	it.each([
