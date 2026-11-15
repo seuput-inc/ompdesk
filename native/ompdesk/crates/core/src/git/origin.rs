@@ -23,6 +23,12 @@ pub struct Facts {
     primary: Option<String>,
 }
 
+impl Facts {
+    pub(crate) fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+}
+
 /// Trimmed stdout of a git that succeeded with some, else none.
 async fn out(git: &Git, cwd: &str, args: &[&str], timeout_ms: u64) -> Option<String> {
     let opts = Opts {
