@@ -28,8 +28,8 @@ import { useStore } from "zustand";
 import { reviewUnmerged } from "../../../../shared/agent-control";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionKind } from "../../../../shared/ipc-types";
-import { unsavedSessionKey } from "../../../../shared/session-summary";
 import { sessionProjectPaths } from "../../../../shared/session-project-targets";
+import { unsavedSessionKey } from "../../../../shared/session-summary";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,

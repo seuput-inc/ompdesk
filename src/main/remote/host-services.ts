@@ -91,6 +91,7 @@ import type { MachineServices } from "../machine-services";
 import type { ModelWaitTracker } from "../model-wait-count";
 import { noteOmpExit } from "../omp-exits";
 import { ompRestartDecision } from "../omp-restart";
+import { readProjectMetadata } from "../project-metadata";
 import type { SessionIndex } from "../session-index";
 import { SessionListShare } from "../session-list-share";
 import { deleteSession, moveSession, recordSessionDelete, renameSession } from "../session-mutations";
@@ -138,7 +139,6 @@ import {
 	readWorkspaceRange,
 	statWorkspacePath,
 } from "../workspace-fs";
-import { readProjectMetadata } from "../project-metadata";
 import { searchWorkspace } from "../workspace-search";
 import { sessionOpenFolders } from "../worktree-orphans";
 import { removalHolds } from "../worktree-removals";

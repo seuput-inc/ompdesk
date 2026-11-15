@@ -25,7 +25,6 @@ import type {
 } from "./ai-memory";
 import type { BuiltinReaState } from "./builtin-mcp";
 import type { CliToolId, CliUpdateState } from "./cli-update";
-import type { ProjectMetadataBatch } from "./project-metadata";
 import type { CreditSpendState } from "./credit-spend";
 import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -41,6 +40,7 @@ import type { MobileWebApi } from "./mobile-web";
 import type { ModelSetupPlan, ModelSetupRequest, ModelSetupResearchPick, ModelSetupStatus } from "./model-setup";
 import type { OmpUpdatedNotice, OmpUpdateState } from "./omp-update";
 import type { PreviewApi } from "./preview";
+import type { ProjectMetadataBatch } from "./project-metadata";
 import type { ProjectOrigin } from "./project-origin";
 import type { SessionRpcClient } from "./rpc-client";
 import type {

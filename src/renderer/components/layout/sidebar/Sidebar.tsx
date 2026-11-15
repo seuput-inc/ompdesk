@@ -46,8 +46,8 @@ import { SIDEBAR_WIDTH } from "../../../../shared/boot-shell-geometry";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
-import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
 import { sessionProjectPaths } from "../../../../shared/session-project-targets";
+import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
 import type { RailPin } from "../../../../shared/sidebar-prefs";
 import {
 	CHATS_ORDER_KEY,

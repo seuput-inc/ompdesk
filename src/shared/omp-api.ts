@@ -5,7 +5,6 @@
  */
 
 import type { AccountRotationMode, AccountRotationState } from "./account-rotation";
-import type { ProjectMetadataBatch } from "./project-metadata";
 import {
 	AGENT_CONTROL_APP,
 	AGENT_CONTROL_REVIEW,
@@ -147,6 +146,7 @@ import {
 	type PreviewState,
 	type PreviewVisualEvent,
 } from "./preview";
+import type { ProjectMetadataBatch } from "./project-metadata";
 import type { ProjectOrigin } from "./project-origin";
 import { createSessionRpcClient, timeoutForCommand } from "./rpc-client";
 import type {

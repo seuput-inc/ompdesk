@@ -85,6 +85,7 @@ export {
 } from "./ProgressBar";
 export { isTabbable, popoverTabStops, tabOutOfPopover } from "./popover-focus";
 export { QrCode } from "./QrCode";
+export { RepositoryImage } from "./RepositoryImage";
 export { RootErrorBoundary } from "./RootErrorBoundary";
 export { SectionLabel, type SectionLabelProps } from "./SectionLabel";
 export {
@@ -127,5 +128,4 @@ export { MAX_USAGE_COLUMNS, NEAR_FRACTION, UsageGauges, usageDescription, usageT
 export { useHeldOverlay } from "./use-held-overlay";
 export { useModalLayer } from "./use-modal-layer";
 export { WorkingArc } from "./WorkingArc";
-export { RepositoryImage } from "./RepositoryImage";
 export { type GalleryImage, ZoomableImage, type ZoomableImageHandle, type ZoomableImageProps } from "./ZoomableImage";
