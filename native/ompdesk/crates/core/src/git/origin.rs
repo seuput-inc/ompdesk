@@ -27,6 +27,16 @@ impl Facts {
     pub(crate) fn branch(&self) -> Option<&str> {
         self.branch.as_deref()
     }
+
+    // Native counterpart of shared/project-origin.ts mainRoot; a relocated git directory is not a checkout.
+    pub(crate) fn project_root(&self) -> Option<&Path> {
+        let common = Path::new(&self.common_dir);
+        if common.file_name() == Some(std::ffi::OsStr::new(".git")) {
+            common.parent()
+        } else {
+            self.primary.as_deref().map(Path::new)
+        }
+    }
 }
 
 /// Trimmed stdout of a git that succeeded with some, else none.
