@@ -20,6 +20,7 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 	const firstRead = Promise.withResolvers<void>();
 	const retryRead = Promise.withResolvers<void>();
 	let reconnectHeld = false;
+	let replacementsRouted = 0;
 	let readsHeld = 0;
 	let armReads = false;
 	let firstRequest: Route | undefined;
@@ -79,6 +80,7 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 
 		await page.route("**/__ipc/events", async route => {
 			if (route.request().headers()["x-omp-recovery-test"] === "replace") {
+				replacementsRouted++;
 				await route.continue();
 				return;
 			}
@@ -105,17 +107,28 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 		await page.evaluate(() => {
 			const controller = new AbortController();
 			Reflect.set(window, "__recoveryFetch", controller);
+			Reflect.set(window, "__recoveryFetchResult", { state: "pending" });
 			void fetch("app://ompdesk/__ipc/events", {
 				headers: { "x-omp-recovery-test": "replace" },
 				signal: controller.signal,
-			}).catch(() => {});
+			}).then(
+				response => Reflect.set(window, "__recoveryFetchResult", { state: "open", status: response.status }),
+				error => Reflect.set(window, "__recoveryFetchResult", { state: "failed", error: String(error) }),
+			);
 		});
 		await expect
-			.poll(() => reconnectHeld, {
-				timeout: 30_000,
-				message: "CEF events reconnect was not intercepted after the real reader replacement",
-			})
-			.toBe(true);
+			.poll(
+				async () => ({
+					reconnectHeld,
+					replacementsRouted,
+					replacement: await page.evaluate(() => Reflect.get(window, "__recoveryFetchResult")),
+				}),
+				{
+					timeout: 30_000,
+					message: "CEF events reconnect was not intercepted after the real reader replacement",
+				},
+			)
+			.toMatchObject({ reconnectHeld: true });
 
 		await run({ type: "queue_remove", queueId: remove.id });
 		await run({ type: "follow_up", message: "Added while events were disconnected" });
