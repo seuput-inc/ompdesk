@@ -93,6 +93,21 @@ pub struct Port<S> {
     closed: watch::Sender<bool>,
 }
 
+struct PendingAsk<'a, S> {
+    inner: &'a Mutex<Inner<S>>,
+    ask: u64,
+}
+
+impl<S> Drop for PendingAsk<'_, S> {
+    fn drop(&mut self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pending
+            .remove(&self.ask);
+    }
+}
+
 #[derive(Serialize)]
 struct AskEvent<'a, A: Serialize> {
     port: u64,
@@ -197,6 +212,10 @@ impl<S: DeserializeOwned + Send + Sync + 'static> Port<S> {
             }
             inner.pending.insert(ask, tx);
         }
+        let _pending = PendingAsk {
+            inner: &self.inner,
+            ask,
+        };
         self.events.send(
             "port",
             &AskEvent {
