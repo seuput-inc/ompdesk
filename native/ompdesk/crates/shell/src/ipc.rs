@@ -31,7 +31,9 @@ struct Stream {
 
 impl Stream {
     fn is_reader(&self, reader: &Reader) -> bool {
-        self.reader.as_ref().is_some_and(|current| Arc::ptr_eq(current, reader))
+        self.reader
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, reader))
     }
 
     fn reset_after_queued(&mut self) {
@@ -121,10 +123,14 @@ pub fn push(wc_id: u64, channel: &str, args: &Value) {
 /// the next `push`, where the reader calls `pull`.
 pub fn read_or_park(wc_id: u64, reader: &Reader, out: &mut [u8], waker: Waker) -> Option<usize> {
     with_streams(|streams| {
-        let Some(stream) = streams.get_mut(&wc_id).filter(|stream| stream.is_reader(reader)) else {
+        let Some(stream) = streams
+            .get_mut(&wc_id)
+            .filter(|stream| stream.is_reader(reader))
+        else {
             return Some(0);
         };
-        if stream.queue.is_empty() && stream.reset_after.is_none() && stream.reset_offset.is_none() {
+        if stream.queue.is_empty() && stream.reset_after.is_none() && stream.reset_offset.is_none()
+        {
             stream.waiting = Some(waker);
             None
         } else {
@@ -147,7 +153,10 @@ pub fn pull(wc_id: u64, reader: &Reader, out: &mut [u8]) -> usize {
 /// A reader went away: keep its queued bytes and announce the possible gap after them.
 pub fn reader_gone(wc_id: u64, reader: &Reader) {
     with_streams(|streams| {
-        if let Some(stream) = streams.get_mut(&wc_id).filter(|stream| stream.is_reader(reader)) {
+        if let Some(stream) = streams
+            .get_mut(&wc_id)
+            .filter(|stream| stream.is_reader(reader))
+        {
             stream.reader = None;
             stream.waiting = None;
             stream.reset_after_queued();

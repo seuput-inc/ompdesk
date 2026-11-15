@@ -27,7 +27,9 @@ fn frames(bytes: &[u8]) -> Vec<Value> {
     bytes
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).expect("each event and reset is a complete JSON line"))
+        .map(|line| {
+            serde_json::from_slice(line).expect("each event and reset is a complete JSON line")
+        })
         .collect()
 }
 
@@ -102,9 +104,11 @@ fn another_overflow_during_a_partial_reset_reports_another_reset() {
     let received = frames(&prefix);
     assert_eq!(received.len(), 2 * CAPACITY + 2);
     assert_eq!(received[CAPACITY], json!({ "stream": "reset" }));
-    assert!(received[CAPACITY + 1..2 * CAPACITY + 1]
-        .iter()
-        .all(|frame| *frame == json!({ "channel": "noise", "args": [2] })));
+    assert!(
+        received[CAPACITY + 1..2 * CAPACITY + 1]
+            .iter()
+            .all(|frame| *frame == json!({ "channel": "noise", "args": [2] }))
+    );
     assert_eq!(received[2 * CAPACITY + 1], json!({ "stream": "reset" }));
     ipc::drop_page(wc);
 }
@@ -141,26 +145,42 @@ fn stale_reader_cannot_drain_or_cancel_the_replacement() {
     let mut buffer = [0; 16];
     assert_eq!(ipc::pull(wc, &old, &mut buffer), 0);
     assert_eq!(
-        ipc::read_or_park(wc, &old, &mut buffer, Box::new(|| panic!("stale reader was parked"))),
+        ipc::read_or_park(
+            wc,
+            &old,
+            &mut buffer,
+            Box::new(|| panic!("stale reader was parked"))
+        ),
         Some(0)
     );
     assert_eq!(
         frames(&drain(wc, &reader)),
-        vec![json!({ "channel": "kept", "args": [1] }), json!({ "stream": "reset" })]
+        vec![
+            json!({ "channel": "kept", "args": [1] }),
+            json!({ "stream": "reset" })
+        ]
     );
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&wakes);
     assert_eq!(
-        ipc::read_or_park(wc, &reader, &mut buffer, Box::new(move || {
-            count.fetch_add(1, Ordering::SeqCst);
-        })),
+        ipc::read_or_park(
+            wc,
+            &reader,
+            &mut buffer,
+            Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })
+        ),
         None
     );
     ipc::reader_gone(wc, &old);
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
     ipc::push(wc, "next", &json!([2]));
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
-    assert_eq!(frames(&drain(wc, &reader)), vec![json!({ "channel": "next", "args": [2] })]);
+    assert_eq!(
+        frames(&drain(wc, &reader)),
+        vec![json!({ "channel": "next", "args": [2] })]
+    );
     ipc::drop_page(wc);
 }
 
@@ -174,7 +194,10 @@ fn a_reader_from_a_destroyed_page_cannot_touch_a_reused_wc_id() {
     let mut buffer = [0; 16];
     assert_eq!(ipc::pull(wc, &old, &mut buffer), 0);
     ipc::reader_gone(wc, &old);
-    assert_eq!(frames(&drain(wc, &reader)), vec![json!({ "channel": "new-page", "args": [3] })]);
+    assert_eq!(
+        frames(&drain(wc, &reader)),
+        vec![json!({ "channel": "new-page", "args": [3] })]
+    );
     ipc::drop_page(wc);
 }
 
@@ -186,14 +209,22 @@ fn replacing_a_parked_reader_releases_only_the_old_reader() {
     let count = Arc::clone(&wakes);
     let mut buffer = [0; 16];
     assert_eq!(
-        ipc::read_or_park(wc, &old, &mut buffer, Box::new(move || {
-            count.fetch_add(1, Ordering::SeqCst);
-        })),
+        ipc::read_or_park(
+            wc,
+            &old,
+            &mut buffer,
+            Box::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })
+        ),
         None
     );
     let reader = ipc::open_reader(wc);
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
-    assert_eq!(frames(&drain(wc, &reader)), vec![json!({ "stream": "reset" })]);
+    assert_eq!(
+        frames(&drain(wc, &reader)),
+        vec![json!({ "stream": "reset" })]
+    );
     assert_eq!(ipc::pull(wc, &old, &mut buffer), 0);
     ipc::drop_page(wc);
 }
