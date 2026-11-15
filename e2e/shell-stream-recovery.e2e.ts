@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
-import type { ElectronApplication, Page, Route } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import type { RpcCommand, RpcGetQueueResult } from "../src/shared/rpc-types";
 import { exitApp, launchApp, recordsOfType } from "./harness";
 
@@ -16,19 +16,13 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 	const agent = path.join(root, "agent");
 	const record = path.join(root, "rpc.jsonl");
 	let app: ElectronApplication | undefined;
-	const reconnect = Promise.withResolvers<void>();
-	const firstRead = Promise.withResolvers<void>();
-	const retryRead = Promise.withResolvers<void>();
-	let reconnectHeld = false;
-	let replacementsRouted = 0;
-	let readsHeld = 0;
-	let armReads = false;
-	let firstRequest: Route | undefined;
+	let cleanupPage: Page | undefined;
 	try {
 		await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
 		await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
 		app = await launchApp({ project, desktop, agent, profile: root, env: { OMP_GUI_TEST_RECORD: record } });
-		const page: Page = await app.firstWindow();
+		const page = await app.firstWindow();
+		cleanupPage = page;
 		await page.waitForFunction(() => window.omp?.rpc != null);
 		await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
 		const tab = (await page.evaluate(() => window.omp.tabs.list())).find(item => item.active)?.tabId;
@@ -78,65 +72,85 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 			stream.onReset(() => Reflect.set(window, "__recoveryToken", stream.pending()));
 		});
 
-		await page.route("**/__ipc/events", async route => {
-			if (route.request().headers()["x-omp-recovery-test"] === "replace") {
-				replacementsRouted++;
-				await route.continue();
-				return;
-			}
-			reconnectHeld = true;
-			await reconnect.promise;
-			await route.continue();
-		});
-		await page.route("**/__ipc/invoke", async route => {
-			const body = route.request().postDataJSON() as { channel?: string } | null;
-			if (!armReads || body?.channel !== "extension-ui:open") {
-				await route.continue();
-				return;
-			}
-			readsHeld++;
-			if (readsHeld === 1) {
-				firstRequest = route;
-				await firstRead.promise;
-				await route.abort("failed");
-			} else if (readsHeld === 2) {
-				await retryRead.promise;
-				await route.continue();
-			} else await route.continue();
-		});
 		await page.evaluate(() => {
-			const controller = new AbortController();
-			Reflect.set(window, "__recoveryFetch", controller);
-			Reflect.set(window, "__recoveryFetchResult", { state: "pending" });
-			void fetch("app://ompdesk/__ipc/events", {
-				headers: { "x-omp-recovery-test": "replace" },
-				signal: controller.signal,
-			}).then(
-				response => Reflect.set(window, "__recoveryFetchResult", { state: "open", status: response.status }),
-				error => Reflect.set(window, "__recoveryFetchResult", { state: "failed", error: String(error) }),
+			const originalFetch = window.fetch.bind(window);
+			const reconnect = Promise.withResolvers<void>();
+			const firstRead = Promise.withResolvers<void>();
+			const retryRead = Promise.withResolvers<void>();
+			const boundary = {
+				reconnectHeld: false,
+				readsHeld: 0,
+				armReads: false,
+				replacement: { state: "pending", status: 0, error: "" },
+				success: null as { status: number; body: unknown } | null,
+				reconnect,
+				firstRead,
+				retryRead,
+				controller: new AbortController(),
+			};
+			Reflect.set(window, "__recoveryBoundary", boundary);
+			window.fetch = async (input, init) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+				if (url.endsWith("/__ipc/events")) {
+					boundary.reconnectHeld = true;
+					await reconnect.promise;
+				}
+				if (url.endsWith("/__ipc/invoke") && boundary.armReads && typeof init?.body === "string") {
+					const body = JSON.parse(init.body) as { channel?: string };
+					if (body.channel === "extension-ui:open") {
+						const attempt = ++boundary.readsHeld;
+						if (attempt === 1) {
+							await firstRead.promise;
+							const controller = new AbortController();
+							controller.abort();
+							return originalFetch(input, { ...init, signal: controller.signal });
+						}
+						if (attempt === 2) {
+							await retryRead.promise;
+							const response = await originalFetch(input, init);
+							boundary.success = { status: response.status, body: await response.clone().json() };
+							return response;
+						}
+					}
+				}
+				return originalFetch(input, init);
+			};
+			void originalFetch("app://ompdesk/__ipc/events", { signal: boundary.controller.signal }).then(
+				response => {
+					boundary.replacement = { state: "open", status: response.status, error: "" };
+				},
+				error => {
+					boundary.replacement = { state: "failed", status: 0, error: String(error) };
+				},
 			);
 		});
 		try {
 			await expect
 				.poll(
-					async () => ({
-						reconnectHeld,
-						replacementsRouted,
-						replacement: await page.evaluate(() => Reflect.get(window, "__recoveryFetchResult")),
-					}),
+					() =>
+						page.evaluate(() => {
+							const boundary = Reflect.get(window, "__recoveryBoundary");
+							return { reconnectHeld: boundary.reconnectHeld, replacement: boundary.replacement };
+						}),
 					{
 						timeout: 30_000,
 						message: "CEF events reconnect was not intercepted after the real reader replacement",
 					},
 				)
-				.toMatchObject({ reconnectHeld: true });
+				.toMatchObject({ reconnectHeld: true, replacement: { state: "open", status: 200 } });
 		} catch (error) {
 			await test.info().attach("cef-replacement-boundary", {
-				body: JSON.stringify({
-					reconnectHeld,
-					replacementsRouted,
-					replacement: await page.evaluate(() => Reflect.get(window, "__recoveryFetchResult")),
-				}),
+				body: JSON.stringify(
+					await page.evaluate(() => {
+						const boundary = Reflect.get(window, "__recoveryBoundary");
+						return {
+							reconnectHeld: boundary.reconnectHeld,
+							readsHeld: boundary.readsHeld,
+							replacement: boundary.replacement,
+							success: boundary.success,
+						};
+					}),
+				),
 				contentType: "application/json",
 			});
 			throw error;
@@ -168,14 +182,19 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 			"Added while events were disconnected",
 		]);
 		expect(authoritative.followUp[0]?.id).toBe(keep.id);
-		armReads = true;
-		reconnect.resolve();
+		await page.evaluate(() => {
+			const boundary = Reflect.get(window, "__recoveryBoundary");
+			boundary.armReads = true;
+			boundary.reconnect.resolve();
+		});
 		await expect
-			.poll(() => readsHeld, { timeout: 30_000, message: "CEF strict open-requests read was not intercepted" })
+			.poll(() => page.evaluate(() => Reflect.get(window, "__recoveryBoundary").readsHeld), {
+				timeout: 30_000,
+				message: "CEF strict open-requests read was not intercepted",
+			})
 			.toBe(1);
 		await page.evaluate(() => {
-			const controller = Reflect.get(window, "__recoveryFetch") as AbortController;
-			controller.abort();
+			Reflect.get(window, "__recoveryBoundary").controller.abort();
 		});
 		await expect
 			.poll(() =>
@@ -185,25 +204,23 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 				}),
 			)
 			.toBe(true);
-		expect(firstRequest).toBeDefined();
-		firstRead.resolve();
-		await expect.poll(() => readsHeld, { timeout: 30_000, message: "A failed strict read did not retry" }).toBe(2);
+		await page.evaluate(() => Reflect.get(window, "__recoveryBoundary").firstRead.resolve());
+		await expect
+			.poll(() => page.evaluate(() => Reflect.get(window, "__recoveryBoundary").readsHeld), {
+				timeout: 30_000,
+				message: "A failed strict read did not retry",
+			})
+			.toBe(2);
 		expect(
 			await page.evaluate(() => {
 				const stream = Reflect.get(window, "__ompShellStream") as { pending(): object | null };
 				return stream.pending() !== null && stream.pending() === Reflect.get(window, "__recoveryToken");
 			}),
 		).toBe(true);
-		const successfulRead = page.waitForResponse(
-			response =>
-				response.url().endsWith("/__ipc/invoke") &&
-				response.request().postDataJSON()?.channel === "extension-ui:open",
-			{ timeout: 30_000 },
-		);
-		retryRead.resolve();
-		const response = await successfulRead;
-		expect(response.ok()).toBe(true);
-		expect(await response.json()).toHaveProperty("value");
+		await page.evaluate(() => Reflect.get(window, "__recoveryBoundary").retryRead.resolve());
+		await expect
+			.poll(() => page.evaluate(() => Reflect.get(window, "__recoveryBoundary").success), { timeout: 30_000 })
+			.toMatchObject({ status: 200, body: { value: expect.anything() } });
 		await expect
 			.poll(
 				() =>
@@ -252,10 +269,20 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 			)
 			.toHaveLength(1);
 	} finally {
-		reconnect.resolve();
-		firstRead.resolve();
-		retryRead.resolve();
-		if (app) await exitApp(app);
+		try {
+			if (cleanupPage && !cleanupPage.isClosed()) {
+				await cleanupPage.evaluate(() => {
+					const boundary = Reflect.get(window, "__recoveryBoundary");
+					if (!boundary) return;
+					boundary.reconnect.resolve();
+					boundary.firstRead.resolve();
+					boundary.retryRead.resolve();
+					boundary.controller.abort();
+				});
+			}
+		} finally {
+			if (app) await exitApp(app);
+		}
 		await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
