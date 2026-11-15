@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.131.0] - 2026-11-15
+
+사용 한도에서 설정을 열 때 생기던 하단 공백을 고치고, 대화 끝에 작은 여백을 더했어요.
+
+### 바뀐 것
+- 사이드바 사용 한도 바로가기는 설정 본문 안에서만 이동해요. 설정을 열어도 사이드바와 설정 화면이 위로 밀려 하단에 공백이 생기지 않아요.
+- 마지막 메시지와 입력창 사이에 8px 여백을 더했어요. 입력창 위치와 메시지 사이 간격은 그대로이며, 새 메시지 따라가기와 과거 대화의 읽던 위치를 유지해요.
+
+<!-- en -->
+
+Fixed the bottom gap when opening settings from usage limits and added a small space at the end of a conversation.
+
+### Changed
+- The sidebar usage shortcut scrolls only the settings content. Opening settings no longer displaces the sidebar and settings panes, leaving a blank area below.
+- Added 8px between the last message and composer without moving the composer or changing message spacing. Following new messages and the reading position in earlier history are preserved.
+
 ## [0.130.2] - 2026-11-15
 
 모바일 원격의 상태 경고와 재접속 시 화면 복구 오류를 수정했어요.
