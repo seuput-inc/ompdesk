@@ -707,7 +707,6 @@ describe("useRpcEvents context usage sync", () => {
 			);
 		}
 
-
 		it("does not call a live phone session unavailable after its boot check loses the link", async () => {
 			const { emitTabStatus, emitTabBatch, commandForTab } = installTabRoutedMockOmp();
 			const session = seedReadyTab("t-phone");
@@ -742,6 +741,7 @@ describe("useRpcEvents context usage sync", () => {
 			await flush();
 			expect(session.getState().sidecarError).toBeNull();
 		});
+
 		it("does not call omp unresponsive for one slow answer that the next probe gets", async () => {
 			const { emitTabStatus, commandForTab } = installTabRoutedMockOmp();
 			const session = seedReadyTab("t-slow");

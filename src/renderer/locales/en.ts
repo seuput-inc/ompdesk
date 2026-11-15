@@ -5563,7 +5563,6 @@ export const en: Record<string, string> = {
 	"events.retryScheduledAt": "Retry {attempt}/{max} at {time}: {error}",
 	"events.retrySucceeded": "Retry succeeded",
 	"events.sessionOpenFailed": "Couldn't open session",
-	"events.sidecarHealthFailed": "omp health check failed. The agent may be stuck; restart it if this continues.",
 	"events.sidecarNoResponse": "omp started but isn't responding. Restart it to continue.",
 	"events.sidecarProcessFailed": "omp process failed",
 	"events.goalTimeLimit":

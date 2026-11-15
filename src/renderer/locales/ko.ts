@@ -5557,7 +5557,6 @@ export const ko: Record<string, string> = {
 	"events.retryScheduledAt": "{time}에 재시도 {attempt}/{max}: {error}",
 	"events.retrySucceeded": "재시도에 성공했어요",
 	"events.sessionOpenFailed": "세션을 열지 못했어요",
-	"events.sidecarHealthFailed": "omp 상태 확인에 실패했어요. 에이전트가 멈췄을 수 있으니 계속되면 다시 시작하세요.",
 	"events.sidecarNoResponse": "omp가 시작됐지만 응답하지 않아요. 계속하려면 다시 시작하세요.",
 	"events.sidecarProcessFailed": "omp 프로세스가 실패했어요",
 	"events.goalTimeLimit":

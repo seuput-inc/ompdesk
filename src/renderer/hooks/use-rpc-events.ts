@@ -74,6 +74,7 @@ import { toastError, useToastStore } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
 import { useToolsStore } from "../stores/tools";
 import { useUiStore } from "../stores/ui";
+import { webRuntime } from "../web/runtime";
 
 /**
  * Frames that change nothing a `get_state` or transcript snapshot reports, so
@@ -671,10 +672,22 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 		// tab is called unresponsive only after WEDGE_PROBES failed probes in a row with no frame from it in between.
 		let heartbeat: ReturnType<typeof setInterval> | null = null;
 		const probing = new Set<string>();
+		const linkOpen = () => (webRuntime()?.connectionState() ?? "open") === "open";
+		const missedProbe = (tabId: string, sentAt: number) => {
+			if (!linkOpen()) {
+				missedProbes.delete(tabId);
+				return;
+			}
+			const session = sessionRuntimeStore<SessionStore>(tabId, "session") ?? useSessionStore;
+			if (session.getState().status !== "ready" || (lastEventAt.get(tabId) ?? 0) > sentAt) return;
+			const misses = (missedProbes.get(tabId) ?? 0) + 1;
+			missedProbes.set(tabId, misses);
+			if (misses >= WEDGE_PROBES) session.getState().setSidecarError(translate("events.sidecarNoResponse"));
+		};
 		const startHeartbeat = () => {
 			if (heartbeat) return;
 			heartbeat = setInterval(() => {
-				if (document.visibilityState === "hidden") return;
+				if (document.visibilityState === "hidden" || !linkOpen()) return;
 				const ids = visibleTabIds(useTabsStore.getState());
 				if (ids.length === 0) ids.push("");
 				for (const probeTabId of ids) {
@@ -688,10 +701,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 					const sentAt = performance.now();
 					const missed = () => {
 						if (!current()) return;
-						if ((lastEventAt.get(probeTabId) ?? 0) > sentAt) return;
-						const misses = (missedProbes.get(probeTabId) ?? 0) + 1;
-						missedProbes.set(probeTabId, misses);
-						if (misses >= WEDGE_PROBES) session.getState().setSidecarError(translate("events.sidecarNoResponse"));
+						missedProbe(probeTabId, sentAt);
 					};
 					void command({ type: "get_state", brief: true })
 						.then(res => {
@@ -772,6 +782,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 					const isCurrent = () =>
 						!disposed &&
 						(runtime ? sessionRuntime(statusTabId) === runtime : focusedSessionRuntime() === focusedAtStart);
+					const sentAt = performance.now();
 					try {
 						// A window opened "in new window" for a specific session
 						// switches to it BEFORE hydrating, so the first transcript
@@ -784,10 +795,9 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						const res = await command({ type: "get_state", brief: true });
 						if (!isCurrent()) return;
 						if (!res.success) {
-							withSessionRuntime(statusTabId, () =>
-								useSessionStore.getState().setSidecarError(translate("events.sidecarNoResponse")),
-							);
+							missedProbe(statusTabId, sentAt);
 						} else {
+							missedProbes.delete(statusTabId);
 							withSessionRuntime(statusTabId, () => useSessionStore.getState().clearSidecarError());
 							if (runtime) {
 								// A pending open just switched sessions: never join a fetch started before it.
@@ -812,9 +822,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						}
 					} catch {
 						if (!isCurrent()) return;
-						withSessionRuntime(statusTabId, () =>
-							useSessionStore.getState().setSidecarError(translate("events.sidecarHealthFailed")),
-						);
+						missedProbe(statusTabId, sentAt);
 					}
 				})();
 			}
