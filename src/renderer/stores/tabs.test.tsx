@@ -1833,6 +1833,35 @@ describe("tabs store background tab signals", () => {
 		expect(session("n1")).toMatchObject({ status: "ready", cwd: "/beta", isStreaming: true });
 	});
 
+	it.each(["ready", "running"] as const)(
+		"rejoins a host split with %s tabs when another page moved it outside this page's selection",
+		async status => {
+			webMode.on = true;
+			try {
+				seedTabs("t0");
+				const split: SplitLayout = {
+					axis: "columns",
+					ratio: 0.5,
+					first: { tabId: "t1" },
+					second: { tabId: "t2" },
+				};
+				omp.tabs.list.mockResolvedValue([
+					{ ...tabInfo("t0", "/alpha", status), shared: true },
+					{ ...tabInfo("t1", "/beta", status), shared: true, active: true, visible: true, split },
+					{ ...tabInfo("t2", "/gamma", status), shared: true, visible: true, split },
+				]);
+				// The host's set_tab_view rejects a focused tab outside its visible panes.
+				omp.tabs.setView.mockImplementation(async (focused, visible) => visible.includes(focused));
+
+				expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(true);
+				expect(useTabsStore.getState()).toMatchObject({ activeTabId: "t1", split });
+				expect(omp.tabs.setView).toHaveBeenCalledWith("t1", ["t1", "t2"], split, []);
+			} finally {
+				webMode.on = false;
+			}
+		},
+	);
+
 	describe("a provider sign-in's requests, restored", () => {
 		const paste: ExtensionUIRequest = {
 			type: "extension_ui_request",
