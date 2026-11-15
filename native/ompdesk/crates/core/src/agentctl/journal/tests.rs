@@ -9,14 +9,10 @@ use serde_json::{Value, json};
 use super::call_journal::{
     CALL_JOURNAL_MAX, CALL_JOURNAL_TTL_MS, CallBegin, CallJournal, CallResult, parse_intent,
 };
-use super::mail_outbox::{
-    MAIL_OUTBOX_MAX, MAIL_OUTBOX_TTL_MS, MailAnswer, MailOutbox, OutboxMail, RedeliverDeps,
-    redeliver_mail,
-};
+use super::mail_outbox::{MailAnswer, MailOutbox, OutboxMail, RedeliverDeps, redeliver_mail};
 use super::pending_cleanups::{PendingCleanup, PendingCleanups};
 use super::send_outbox::{
-    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, deliver_owed,
-    redeliver_sends,
+    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, deliver_owed, redeliver_sends,
 };
 use super::session_fates::{FatedSession, SessionFates, fate_when};
 use super::{Clock, js_number};
@@ -166,214 +162,110 @@ fn send_entry(value: &Value) -> OutboxSend {
     super::send_outbox::parse_entry(value).unwrap()
 }
 
-fn entry_ref(entry: &OutboxSend) -> (String, Option<String>, String) {
-    (
-        entry.session_path.clone(),
-        entry.device.clone(),
-        entry.mark.clone(),
-    )
+#[test]
+fn historical_delivery_tags_round_trip_without_selecting_a_runtime_mode() {
+    let dir = Dir::new();
+    let file = dir.file("send-outbox.json");
+    let original = json!([
+        {"mark":"old-steer","sessionPath":"/s/kid.jsonl","from":"/s/boss.jsonl",
+         "body":"one","message":"wrapped one","streamingBehavior":"steer","at":1},
+        {"mark":"old-follow-up","sessionPath":"/s/kid.jsonl","from":"/s/boss.jsonl",
+         "body":"two","message":"wrapped two","streamingBehavior":"followUp","at":2}
+    ]);
+    std::fs::write(&file, serde_json::to_string(&original).unwrap()).unwrap();
+    let outbox = SendOutbox::new(Some(file.clone()));
+    let rows = outbox.pending();
+    assert_eq!(
+        rows.iter().map(OutboxSend::to_json).collect::<Vec<_>>(),
+        original.as_array().unwrap().as_slice()
+    );
+    outbox.keep(send(3)).unwrap();
+    let reopened = SendOutbox::new(Some(file));
+    let rows = reopened.pending();
+    assert_eq!(rows[0].to_json(), original[0]);
+    assert_eq!(rows[1].to_json(), original[1]);
+    assert!(rows[2].to_json().get("streamingBehavior").is_none());
 }
 
 #[test]
-fn send_outbox_replays_the_typescripts() {
-    let data = captured();
-    for case in data["sendOutbox"].as_array().unwrap() {
-        let dir = Dir::new();
-        let (file, clock, now) = start(case, &dir, "send-outbox.json");
-        let outbox = SendOutbox::with_clock(file.clone(), clock);
-        for (i, op) in case["ops"].as_array().unwrap().iter().enumerate() {
-            let list = |entries: Vec<OutboxSend>| {
-                Value::Array(entries.iter().map(OutboxSend::to_json).collect())
-            };
-            let device = opt_str(&op["device"]);
-            let out = match op["op"].as_str().unwrap() {
-                "now" => {
-                    *now.lock().unwrap() = op["ms"].as_f64().unwrap();
-                    Value::Null
-                }
-                "keep" => {
-                    outbox.keep(send_entry(&op["entry"]));
-                    Value::Null
-                }
-                "handed" => {
-                    outbox.handed(&send_entry(&op["entry"]), op["instance"].as_str().unwrap());
-                    Value::Null
-                }
-                "settle" => {
-                    let (path, device, mark) = entry_ref(&send_entry(&op["entry"]));
-                    outbox.settle(&path, device.as_deref(), &mark);
-                    Value::Null
-                }
-                "pending" => list(outbox.pending()),
-                "owedTo" => list(outbox.owed_to(op["path"].as_str().unwrap(), device)),
-                "lastDispatch" => {
-                    json!(outbox.last_dispatch(op["path"].as_str().unwrap(), device))
-                }
-                "waiting" => outbox
-                    .waiting(
-                        op["from"].as_str().unwrap(),
-                        op["path"].as_str().unwrap(),
-                        device,
-                        op["body"].as_str().unwrap(),
-                        "",
-                    )
-                    .map_or(Value::Null, |entry| entry.to_json()),
-                other => panic!("{other}"),
-            };
-            check(case, i, &case["steps"][i], &out, &file);
-        }
+fn pending_instructions_survive_old_retention_limits_and_keep_first_identity_on_retry() {
+    let dir = Dir::new();
+    let file = dir.file("send-outbox.json");
+    let (clock, now) = clock_at(1_000.0);
+    let outbox = SendOutbox::with_clock(Some(file.clone()), clock);
+    for n in 1..=205 {
+        outbox.keep(send(n)).unwrap();
     }
+    let mut retry = send(1);
+    retry.message = "a later display wrapper must not replace the first envelope".into();
+    outbox.keep(retry).unwrap();
+    let mut conflicting = send(1);
+    conflicting.body = "different instruction".into();
+    assert!(outbox.keep(conflicting).is_err());
+    *now.lock().unwrap() = 4.0 * super::THREE_DAYS_MS;
+    let reopened = SendOutbox::new(Some(file));
+    assert_eq!(outbox.pending(), reopened.pending());
+    assert_eq!(reopened.pending(), (1..=205).map(send).collect::<Vec<_>>());
 }
 
-/// A receiver omp the case describes (the capture script's `fakeSendDeps`).
-struct SendEnv {
-    env: Value,
-    log: Mutex<Value>,
+#[test]
+fn a_failed_source_save_preserves_the_original_for_the_same_retry() {
+    let dir = Dir::new();
+    let file = dir.file("send-outbox.json");
+    let outbox = SendOutbox::new(Some(file.clone()));
+    std::fs::create_dir(&file).unwrap();
+    assert!(outbox.keep(send(1)).is_err());
+    assert_eq!(outbox.pending(), [send(1)]);
+    std::fs::remove_dir(&file).unwrap();
+    outbox.keep(send(1)).unwrap();
+    assert_eq!(SendOutbox::new(Some(file)).pending(), [send(1)]);
 }
 
-impl SendEnv {
-    fn new(env: &Value) -> SendEnv {
-        SendEnv {
-            env: env.clone(),
-            log: Mutex::new(json!({"looked": [], "sentMarks": [], "prompts": [], "drained": []})),
-        }
-    }
-
-    fn push(&self, list: &str, item: Value) {
-        self.log.lock().unwrap()[list]
-            .as_array_mut()
-            .unwrap()
-            .push(item);
-    }
-}
-
-impl OwedDeps for SendEnv {
-    fn tab_of(&self, session_path: &str, device: Option<&str>) -> Option<String> {
-        self.push("looked", json!([session_path, device]));
-        self.env["tab"].as_str().map(str::to_owned)
-    }
-
-    async fn sent(&self, tab_id: &str, marks: &[String]) -> Option<SentAnswer> {
-        self.push("sentMarks", json!([tab_id, marks]));
-        let sent = &self.env["sent"];
-        if sent.is_null() || sent.is_string() {
-            return None;
-        }
-        let held: Vec<String> = sent["journaled"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(str_of)
-            .collect();
-        Some(SentAnswer {
-            instance: str_of(&sent["instance"]),
-            journaled: marks
-                .iter()
-                .filter(|mark| held.contains(mark))
-                .cloned()
-                .collect(),
-        })
-    }
-
-    async fn prompt(&self, tab_id: &str, entry: &OutboxSend) -> HandOver {
-        self.push("prompts", json!([tab_id, entry.mark]));
-        let refused = self.env["refuse"]
-            .as_array()
-            .is_some_and(|marks| marks.iter().any(|mark| mark == &json!(entry.mark)));
-        match self.env["prompt"].as_str() {
-            Some("throw" | "refused") => HandOver::Refused,
-            _ if refused => HandOver::Refused,
-            _ => HandOver::Handed,
-        }
-    }
-
-    async fn drained(&self, tab_id: &str) -> bool {
-        self.push("drained", json!(tab_id));
-        self.env["drained"] == json!(true)
-    }
-}
-
-#[tokio::test]
-async fn send_delivery_replays_the_typescripts() {
-    let data = captured();
-    for case in data["sendDelivery"].as_array().unwrap() {
-        let dir = Dir::new();
-        let (file, clock, _) = start(case, &dir, "send-outbox.json");
-        let outbox = SendOutbox::with_clock(file.clone(), clock);
-        for (i, op) in case["ops"].as_array().unwrap().iter().enumerate() {
-            let deps = SendEnv::new(&op["env"]);
-            let kind = op["op"].as_str().unwrap();
-            let mut res: Option<Value> = None;
-            match kind {
-                "keep" => outbox.keep(send_entry(&op["entry"])),
-                "handed" => {
-                    outbox.handed(&send_entry(&op["entry"]), op["instance"].as_str().unwrap())
-                }
-                "pending" => {
-                    res = Some(Value::Array(
-                        outbox.pending().iter().map(OutboxSend::to_json).collect(),
-                    ));
-                }
-                "deliver" => {
-                    res = Some(json!(
-                        deliver_owed(
-                            &outbox,
-                            &deps,
-                            op["path"].as_str().unwrap(),
-                            opt_str(&op["device"])
-                        )
-                        .await
-                    ));
-                }
-                "redeliver" => redeliver_sends(&outbox, &deps).await,
-                other => panic!("{other}"),
-            }
-            let mut out = serde_json::Map::new();
-            if let Some(res) = res {
-                out.insert("res".into(), res);
-            }
-            out.insert(
-                "log".into(),
-                if matches!(kind, "keep" | "handed" | "pending") {
-                    Value::Null
-                } else {
-                    deps.log.lock().unwrap().clone()
-                },
-            );
-            check(case, i, &case["steps"][i], &Value::Object(out), &file);
-        }
-    }
+#[test]
+fn same_identity_preserves_original_attachment_metadata_and_ignores_only_relanded_paths() {
+    let dir = Dir::new();
+    let file = dir.file("send-outbox.json");
+    let mut encoded = send(7).to_json();
+    encoded["attachments"] = json!({
+        "images": [
+            {"sha256": "a".repeat(64), "name": "picture.png", "mimeType": "image/png", "size": 1},
+            {"sha256": "c".repeat(64), "name": "second.png", "mimeType": "image/png", "size": 2}
+        ],
+        "files": [
+            {"sha256": "b".repeat(64), "name": "notes.txt", "mimeType": "text/plain", "size": 1,
+             "path": "/landed/original.txt", "landedAt": 1000},
+            {"sha256": "d".repeat(64), "name": "other.txt", "mimeType": "text/plain", "size": 2,
+             "path": "/landed/other.txt", "landedAt": 1000}
+        ]
+    });
+    let original = send_entry(&encoded);
+    let outbox = SendOutbox::new(Some(file.clone()));
+    outbox.keep(original.clone()).unwrap();
+    let mut changed = original.clone();
+    changed.attachments.as_mut().unwrap().images[0].name = "different.png".into();
+    assert!(outbox.keep(changed).is_err());
+    let mut reordered = original.clone();
+    reordered.attachments.as_mut().unwrap().images.swap(0, 1);
+    assert!(outbox.keep(reordered).is_err());
+    let mut reordered = original.clone();
+    reordered.attachments.as_mut().unwrap().files.swap(0, 1);
+    assert!(outbox.keep(reordered).is_err());
+    let mut relanded = original.clone();
+    let landed = &mut relanded.attachments.as_mut().unwrap().files[0];
+    landed.path = "/landed/retry.txt".into();
+    landed.landed_at = 2000.0;
+    outbox.keep(relanded).unwrap();
+    assert_eq!(SendOutbox::new(Some(file)).pending(), [original]);
+    let empty = send(8);
+    outbox.keep(empty.clone()).unwrap();
+    let mut changed = empty.clone();
+    changed.attachments = Some(super::attachments::AttachedSet::default());
+    assert!(outbox.keep(changed).is_err());
+    assert_eq!(outbox.pending().last(), Some(&empty));
 }
 
 fn mail_entry(value: &Value) -> OutboxMail {
     super::mail_outbox::parse_entry(value).unwrap()
-}
-
-#[test]
-fn mail_outbox_replays_the_typescripts() {
-    let data = captured();
-    for case in data["mailOutbox"].as_array().unwrap() {
-        let dir = Dir::new();
-        let (file, clock, _) = start(case, &dir, "mail-outbox.json");
-        let outbox = MailOutbox::with_clock(file.clone(), clock);
-        for (i, op) in case["ops"].as_array().unwrap().iter().enumerate() {
-            let out = match op["op"].as_str().unwrap() {
-                "keep" => {
-                    outbox.keep(mail_entry(&op["entry"]));
-                    Value::Null
-                }
-                "settle" => {
-                    outbox.settle(op["id"].as_str().unwrap());
-                    Value::Null
-                }
-                "pending" => {
-                    Value::Array(outbox.pending().iter().map(OutboxMail::to_json).collect())
-                }
-                other => panic!("{other}"),
-            };
-            check(case, i, &case["steps"][i], &out, &file);
-        }
-    }
 }
 
 struct MailEnv {
@@ -424,7 +316,7 @@ async fn mail_redelivery_replays_the_typescripts() {
             };
             let mut out = serde_json::Map::new();
             match kind {
-                "keep" => outbox.keep(mail_entry(&op["entry"])),
+                "keep" => outbox.keep(mail_entry(&op["entry"])).unwrap(),
                 "pending" => {
                     out.insert(
                         "res".into(),
@@ -552,10 +444,8 @@ fn mail(id: &str) -> OutboxMail {
         from_device: None,
         content: format!("<ompdesk-mail>{id}</ompdesk-mail>"),
         details: json!({"id": id, "kind": "done"}),
-        delivery: super::super::rules::mail::MailDelivery {
-            trigger_turn: true,
-            aside: true,
-        },
+        delivery: super::super::rules::mail::MailDelivery { trigger_turn: true },
+        historical_delivery: None,
         attachments: None,
         attachments_corrupt: false,
         at: 1_000.0,
@@ -576,7 +466,9 @@ fn a_report_survives_a_relaunch_until_it_is_settled() {
     let file = dir.file("mail-outbox.json");
     let mut with_device = mail("a");
     with_device.device = Some("dev-1".into());
-    MailOutbox::with_clock(Some(file.clone()), fixed(2_000.0)).keep(with_device.clone());
+    MailOutbox::with_clock(Some(file.clone()), fixed(2_000.0))
+        .keep(with_device.clone())
+        .unwrap();
     let reopened = MailOutbox::with_clock(Some(file.clone()), fixed(2_000.0));
     assert_eq!(reopened.pending(), vec![with_device]);
     reopened.settle("a");
@@ -588,35 +480,54 @@ fn a_report_survives_a_relaunch_until_it_is_settled() {
 }
 
 #[test]
-fn a_repeated_id_is_kept_once() {
-    let outbox = MailOutbox::with_clock(None, fixed(2_000.0));
-    outbox.keep(mail("a"));
-    let mut newer = mail("a");
-    newer.content = "newer".into();
-    outbox.keep(newer);
-    let contents: Vec<String> = outbox
-        .pending()
-        .into_iter()
-        .map(|mail| mail.content)
-        .collect();
-    assert_eq!(contents, ["newer"]);
+fn a_same_report_id_preserves_the_first_envelope_and_order_and_rejects_conflicts() {
+    let outbox = MailOutbox::new(None);
+    let first = mail("a");
+    outbox.keep(first.clone()).unwrap();
+    outbox.keep(mail("b")).unwrap();
+    let mut retry = first.clone();
+    retry.at = 2_000.0;
+    outbox.keep(retry).unwrap();
+    let mut conflicting = first.clone();
+    conflicting.content = "different report".into();
+    assert!(outbox.keep(conflicting).is_err());
+    assert_eq!(outbox.pending(), [first, mail("b")]);
 }
 
 #[test]
-fn a_report_past_its_age_and_the_oldest_past_the_bound_go() {
-    let outbox = MailOutbox::with_clock(None, fixed(MAIL_OUTBOX_TTL_MS + 5_000.0));
-    let mut old = mail("old");
-    old.at = 1_000.0;
-    outbox.keep(old);
-    for n in 0..MAIL_OUTBOX_MAX + 3 {
-        let mut entry = mail(&format!("m{n}"));
-        entry.at = MAIL_OUTBOX_TTL_MS;
-        outbox.keep(entry);
+fn unconsumed_reports_survive_the_old_age_and_count_limits_and_restart() {
+    let dir = Dir::new();
+    let file = dir.file("mail-outbox.json");
+    let outbox = MailOutbox::with_clock(Some(file.clone()), fixed(1_000.0));
+    let mut expected = Vec::new();
+    for n in 0..105 {
+        let mut encoded = mail(&format!("m{n}")).to_json();
+        encoded["delivery"]["deliverAs"] = if n % 2 == 0 { "followUp" } else { "aside" }.into();
+        encoded["from"] = "/s/original-sender.jsonl".into();
+        encoded["fromDevice"] = "source-device".into();
+        let original = mail_entry(&encoded);
+        outbox.keep(original.clone()).unwrap();
+        expected.push(original);
     }
-    let held = ids(&outbox);
-    assert_eq!(held.len(), MAIL_OUTBOX_MAX);
-    assert_eq!(held[0], "m3");
-    assert!(!held.contains(&"old".to_owned()));
+    let reopened = MailOutbox::with_clock(Some(file), fixed(4.0 * super::THREE_DAYS_MS));
+    assert_eq!(reopened.pending(), expected);
+}
+
+#[test]
+fn a_report_save_failure_keeps_the_first_original_and_same_identity_retry() {
+    let dir = Dir::new();
+    let file = dir.file("mail-outbox.json");
+    let outbox = MailOutbox::new(Some(file.clone()));
+    let original = mail("a");
+    std::fs::create_dir(&file).unwrap();
+    assert!(outbox.keep(original.clone()).is_err());
+    assert_eq!(outbox.pending().as_slice(), std::slice::from_ref(&original));
+    let mut changed = original.clone();
+    changed.details["text"] = "changed payload".into();
+    assert!(outbox.keep(changed).is_err());
+    std::fs::remove_dir(&file).unwrap();
+    outbox.keep(original.clone()).unwrap();
+    assert_eq!(MailOutbox::new(Some(file)).pending(), [original]);
 }
 
 #[test]
@@ -640,24 +551,29 @@ fn a_damaged_mail_file_and_its_non_reports_are_ignored() {
 }
 
 #[test]
-fn a_follow_up_an_earlier_build_kept_reads_as_an_aside() {
+fn old_report_tags_are_preserved_only_in_storage() {
     let dir = Dir::new();
     let file = dir.file("mail-outbox.json");
-    let mut old = mail("old").to_json();
-    old["delivery"] = json!({"triggerTurn": true, "deliverAs": "followUp"});
-    std::fs::write(&file, Value::Array(vec![old]).to_string()).unwrap();
-    let outbox = MailOutbox::with_clock(Some(file), fixed(2_000.0));
-    assert_eq!(
-        outbox.pending()[0].delivery.to_json(),
-        json!({"triggerTurn": true, "deliverAs": "aside"})
-    );
+    for tag in ["followUp", "aside"] {
+        let mut old = mail("old").to_json();
+        old["delivery"] = json!({"triggerTurn": true, "deliverAs": tag});
+        std::fs::write(&file, Value::Array(vec![old.clone()]).to_string()).unwrap();
+        let outbox = MailOutbox::with_clock(Some(file.clone()), fixed(2_000.0));
+        assert_eq!(outbox.pending()[0].to_json(), old);
+        assert_eq!(
+            outbox.pending()[0].delivery.to_json(),
+            json!({"triggerTurn": true})
+        );
+    }
 }
 
 #[test]
 fn the_mail_file_is_written_when_a_report_is_kept() {
     let dir = Dir::new();
     let file = dir.file("mail-outbox.json");
-    MailOutbox::with_clock(Some(file.clone()), fixed(2_000.0)).keep(mail("a"));
+    MailOutbox::with_clock(Some(file.clone()), fixed(2_000.0))
+        .keep(mail("a"))
+        .unwrap();
     let held: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(held.as_array().unwrap().len(), 1);
 }
@@ -672,10 +588,12 @@ fn the_outbox_files_are_private_and_the_call_journal_is_not_pinned() {
     let mode = |file: &Path| std::fs::metadata(file).unwrap().permissions().mode() & 0o777;
     let sends = dir.file("s.json");
     SendOutbox::with_clock(Some(sends.clone()), fixed(2_000.0))
-        .keep(send_entry(&json!({"mark": "m", "sessionPath": "/p", "from": "f", "body": "b", "message": "x", "streamingBehavior": "steer", "at": 1_000})));
+        .keep(send_entry(&json!({"mark": "m", "sessionPath": "/p", "from": "f", "body": "b", "message": "x", "streamingBehavior": "steer", "at": 1_000}))).unwrap();
     assert_eq!(mode(&sends), 0o600);
     let mails = dir.file("m.json");
-    MailOutbox::with_clock(Some(mails.clone()), fixed(2_000.0)).keep(mail("a"));
+    MailOutbox::with_clock(Some(mails.clone()), fixed(2_000.0))
+        .keep(mail("a"))
+        .unwrap();
     assert_eq!(mode(&mails), 0o600);
     let fates = dir.file("f.json");
     SessionFates::with_clock(Some(fates.clone()), fixed(2_000.0)).closed(
@@ -726,7 +644,7 @@ impl RedeliverDeps for Mails {
 #[tokio::test]
 async fn redelivery_settles_once_the_journal_holds_the_report() {
     let outbox = MailOutbox::with_clock(None, fixed(2_000.0));
-    outbox.keep(mail("a"));
+    outbox.keep(mail("a")).unwrap();
     let deps = Mails {
         answers: Mutex::new(vec![
             Some(MailAnswer::default()),
@@ -754,8 +672,8 @@ async fn a_report_without_a_tab_or_an_answering_omp_waits_for_the_next_pass() {
     let outbox = MailOutbox::with_clock(None, fixed(2_000.0));
     let mut closed = mail("closed");
     closed.session_path = "/s/closed.jsonl".into();
-    outbox.keep(closed);
-    outbox.keep(mail("starting"));
+    outbox.keep(closed).unwrap();
+    outbox.keep(mail("starting")).unwrap();
     let deps = Mails {
         answers: Mutex::new(vec![None]),
         sent: Mutex::new(Vec::new()),
@@ -774,7 +692,6 @@ fn send(n: i64) -> OutboxSend {
         "/s/boss.jsonl".into(),
         format!("do part {n}"),
         format!("do part {n}\n\n[ompdesk dispatch d{n}: report]"),
-        StreamingBehavior::FollowUp,
         1_000.0,
     )
 }
@@ -785,7 +702,6 @@ struct Omp {
     journal: Mutex<Vec<String>>,
     prompts: Mutex<Vec<String>>,
     refuse: bool,
-    drained: bool,
     tab: Option<&'static str>,
     mute: bool,
     looked: Mutex<Vec<(String, Option<String>)>>,
@@ -798,7 +714,6 @@ impl Omp {
             journal: Mutex::new(Vec::new()),
             prompts: Mutex::new(Vec::new()),
             refuse: false,
-            drained: false,
             tab: Some("kid00009"),
             mute: false,
             looked: Mutex::new(Vec::new()),
@@ -842,10 +757,6 @@ impl OwedDeps for Omp {
             HandOver::Handed
         }
     }
-
-    async fn drained(&self, _tab_id: &str) -> bool {
-        self.drained
-    }
 }
 
 #[tokio::test]
@@ -853,7 +764,7 @@ async fn an_ended_omps_message_reaches_the_relaunched_omp_exactly_once() {
     let dir = Dir::new();
     let file = dir.file("send-outbox.json");
     let before = SendOutbox::with_clock(Some(file.clone()), fixed(2_000.0));
-    before.keep(send(2));
+    before.keep(send(2)).unwrap();
     before.handed(&send(2), "omp-a");
 
     let outbox = SendOutbox::with_clock(Some(file.clone()), fixed(2_000.0));
@@ -879,7 +790,7 @@ async fn an_ended_omps_message_reaches_the_relaunched_omp_exactly_once() {
 async fn a_message_is_never_handed_again_to_its_omp_and_a_journaled_one_settles() {
     let outbox = SendOutbox::with_clock(None, fixed(2_000.0));
     for n in [1, 2] {
-        outbox.keep(send(n));
+        outbox.keep(send(n)).unwrap();
         outbox.handed(&send(n), "omp-a");
     }
     let same = Omp::new("omp-a");
@@ -898,23 +809,33 @@ async fn a_message_is_never_handed_again_to_its_omp_and_a_journaled_one_settles(
 }
 
 #[tokio::test]
-async fn a_withdrawn_queue_lets_the_message_go() {
-    let outbox = SendOutbox::with_clock(None, fixed(2_000.0));
-    outbox.keep(send(2));
+async fn an_empty_receiver_queue_is_not_an_acknowledgement() {
+    let outbox = SendOutbox::new(None);
+    outbox.keep(send(2)).unwrap();
     outbox.handed(&send(2), "omp-a");
-    let mut withdrawn = Omp::new("omp-a");
-    withdrawn.drained = true;
-    redeliver_sends(&outbox, &withdrawn).await;
-    assert!(outbox.pending().is_empty());
-    redeliver_sends(&outbox, &Omp::new("omp-b")).await;
-    assert!(withdrawn.prompts().is_empty());
+    let same = Omp::new("omp-a");
+    redeliver_sends(&outbox, &same).await;
+    let mut expected = send(2).to_json();
+    expected["instance"] = "omp-a".into();
+    assert_eq!(
+        outbox
+            .pending()
+            .iter()
+            .map(OutboxSend::to_json)
+            .collect::<Vec<_>>(),
+        [expected]
+    );
+    assert!(same.prompts().is_empty());
+    let restarted = Omp::new("omp-b");
+    redeliver_sends(&outbox, &restarted).await;
+    assert_eq!(restarted.prompts(), ["[ompdesk dispatch d2:"]);
 }
 
 #[tokio::test]
 async fn the_order_is_kept_while_an_earlier_message_cannot_be_handed_over() {
     let outbox = SendOutbox::with_clock(None, fixed(2_000.0));
     for n in [2, 3] {
-        outbox.keep(send(n));
+        outbox.keep(send(n)).unwrap();
         outbox.handed(&send(n), "omp-a");
     }
     let mut refusing = Omp::new("omp-b");
@@ -935,7 +856,7 @@ async fn it_waits_without_a_tab_or_an_answering_bridge_and_looks_up_a_device_by_
     let mut entry = send(2);
     entry.device = Some("dev-1".into());
     entry.instance = Some("omp-a".into());
-    outbox.keep(entry);
+    outbox.keep(entry).unwrap();
     let mut none = Omp::new("omp-b");
     none.tab = None;
     redeliver_sends(&outbox, &none).await;
@@ -953,12 +874,12 @@ async fn it_waits_without_a_tab_or_an_answering_bridge_and_looks_up_a_device_by_
 #[test]
 fn a_dispatch_is_numbered_past_the_one_still_owed_and_a_resend_is_recognized() {
     let outbox = SendOutbox::with_clock(None, fixed(2_000.0));
-    outbox.keep(send(4));
+    outbox.keep(send(4)).unwrap();
     let mut other = send(1);
     other.mark = "[ompdesk request m-1]".into();
     other.dispatch = None;
     other.session_path = "/s/other.jsonl".into();
-    outbox.keep(other);
+    outbox.keep(other).unwrap();
     assert_eq!(outbox.last_dispatch("/s/kid.jsonl", None), 4);
     assert_eq!(outbox.last_dispatch("/s/kid.jsonl", Some("dev-1")), 0);
     let joined = outbox.waiting("/s/boss.jsonl", "/s/kid.jsonl", None, "do part 4", "");

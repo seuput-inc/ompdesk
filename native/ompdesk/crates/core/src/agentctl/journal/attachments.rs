@@ -152,6 +152,23 @@ pub fn attached_sig(set: Option<&AttachedSet>) -> String {
     shas_sig(set.into_iter().flat_map(AttachedSet::shas))
 }
 
+/// Original attachment identity excludes only the receiver's derived landing location and time.
+pub(crate) fn same_attached_refs(left: Option<&AttachedSet>, right: Option<&AttachedSet>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.images == right.images
+                && left.files.len() == right.files.len()
+                && left
+                    .files
+                    .iter()
+                    .zip(&right.files)
+                    .all(|(a, b)| a.file == b.file)
+        }
+        _ => false,
+    }
+}
+
 impl AttachmentRef {
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();

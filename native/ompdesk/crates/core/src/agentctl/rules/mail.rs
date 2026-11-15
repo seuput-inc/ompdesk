@@ -128,37 +128,23 @@ impl Mail {
     }
 }
 
-/// How stock delivers a report: `aside` is `deliverAs: "aside"`.
+/// Whether this report's domain event should start an idle turn; not a delivery-mode selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MailDelivery {
     pub trigger_turn: bool,
-    pub aside: bool,
 }
 
 impl MailDelivery {
-    /// `{ triggerTurn, deliverAs? }`, keys in that order.
     pub fn to_json(self) -> Value {
         let mut map = Map::new();
         map.insert("triggerTurn".into(), self.trigger_turn.into());
-        if self.aside {
-            map.insert("deliverAs".into(), "aside".into());
-        }
         Value::Object(map)
     }
 }
 
-/// How stock delivers a report of this kind (a no-turn one becomes an `aside` in the receiver's bridge while a turn
-/// runs).
 pub fn delivery_for(kind: MailKind) -> MailDelivery {
-    match kind {
-        Question | Blocked | Done | Review => MailDelivery {
-            trigger_turn: true,
-            aside: true,
-        },
-        Progress | Note => MailDelivery {
-            trigger_turn: false,
-            aside: false,
-        },
+    MailDelivery {
+        trigger_turn: matches!(kind, Question | Blocked | Done | Review),
     }
 }
 

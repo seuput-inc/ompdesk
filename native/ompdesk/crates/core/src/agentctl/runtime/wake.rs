@@ -16,7 +16,7 @@ use super::activity::{Activity, ActivityKind};
 use super::{Runtime, runtime_of};
 use crate::agentctl::journal::mail_outbox::OutboxMail;
 use crate::agentctl::rules::mail::{Mail, MailDelivery, MailKind, mail_details, mail_text};
-use crate::agentctl::service::fail::R;
+use crate::agentctl::service::fail::{Fail, R};
 use crate::agentctl::service::host::HostState;
 use crate::server::{Call, Fault, Registry, Reply, at_once};
 
@@ -121,16 +121,13 @@ impl Runtime {
         );
         mail.instruction =
             Some("One of your routines started this turn: act on it now.".to_owned());
-        let delivery = MailDelivery {
-            trigger_turn: true,
-            aside: true,
-        };
+        let delivery = MailDelivery { trigger_turn: true };
         let (content, details) = (mail_text(&mail), mail_details(&mail));
         // Kept until the session's journal holds it, and sent to its tab when there is one; with none yet, or its omp
         // starting, the outbox pass sends it once the tab answers.
         let outbox = self.host().outbox().cloned();
         if let Some(outbox) = &outbox {
-            outbox.keep(OutboxMail {
+            let saved = outbox.keep(OutboxMail {
                 id: id.clone(),
                 session_path: session_path.to_owned(),
                 device: None,
@@ -139,10 +136,17 @@ impl Runtime {
                 content: content.clone(),
                 details: details.clone(),
                 delivery,
+                historical_delivery: None,
                 attachments: None,
                 attachments_corrupt: false,
                 at: mail.at,
             });
+            if let Err(error) = saved {
+                if let Some(wake) = self.rt().wakes.remove(run_id) {
+                    wake.cancel();
+                }
+                return Err(Fail::other(error));
+            }
         }
         if let Some(tab) = existing {
             let (me, outbox) = (self.clone(), outbox);

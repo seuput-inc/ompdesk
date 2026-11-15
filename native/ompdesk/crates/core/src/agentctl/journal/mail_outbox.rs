@@ -3,8 +3,8 @@
 //! device), until the receiver's journal holds its id. Every pass asks the receiver's current omp again with the same
 //! id: its bridge answers `{duplicate, journaled}` for an id it holds or queued and delivers one it has never seen.
 //!
-//! Kept in `<userData>/mail-outbox.json` (mode 0o600, newest `MAIL_OUTBOX_MAX`, none older than `MAIL_OUTBOX_TTL_MS`),
-//! written when a report is accepted, never in a quit hook.
+//! Kept in `<userData>/mail-outbox.json` (mode 0o600) until the receiver's journal acknowledges its id.
+//! Unconsumed originals never expire or disappear to make room for newer reports.
 //!
 //! Seams: the clock, and `RedeliverDeps` (the tab pool's `tabOf` and the receiver's bridge answer). The outbox is
 //! internally locked (`&self`), so a pass may await the bridge while the host keeps reports. `RedeliverDeps::send`
@@ -16,15 +16,18 @@ use std::sync::Mutex;
 
 use serde_json::{Map, Value};
 
-use super::attachments::{Attached, AttachedSet, read_attached};
-use super::{
-    Clock, THREE_DAYS_MS, js_number, number, object, read_array, string, stringify, system_clock,
-    write_text,
-};
+#[cfg(test)]
+use super::Clock;
+use super::attachments::{Attached, AttachedSet, read_attached, same_attached_refs};
+use super::{js_number, number, object, read_array, string, stringify, write_text};
 use crate::agentctl::rules::mail::MailDelivery;
 
-pub const MAIL_OUTBOX_MAX: usize = 100;
-pub const MAIL_OUTBOX_TTL_MS: f64 = THREE_DAYS_MS;
+/// Old journal spelling only. It never enters the active effect payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoricalMailDelivery {
+    Aside,
+    FollowUp,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboxMail {
@@ -40,6 +43,7 @@ pub struct OutboxMail {
     /// What the transcript draws (any JSON value the file held; a report's own is an object).
     pub details: Value,
     pub delivery: MailDelivery,
+    pub(crate) historical_delivery: Option<HistoricalMailDelivery>,
     /// What the report carries: its pictures (bytes in the attachment store) and the files landed for its receiver.
     pub attachments: Option<AttachedSet>,
     /// Its record of attachments was damaged: it is never delivered as text alone.
@@ -63,7 +67,15 @@ impl OutboxMail {
         }
         map.insert("content".into(), self.content.clone().into());
         map.insert("details".into(), self.details.clone());
-        map.insert("delivery".into(), self.delivery.to_json());
+        let mut delivery = self.delivery.to_json();
+        if let Some(tag) = self.historical_delivery {
+            delivery["deliverAs"] = match tag {
+                HistoricalMailDelivery::Aside => "aside",
+                HistoricalMailDelivery::FollowUp => "followUp",
+            }
+            .into();
+        }
+        map.insert("delivery".into(), delivery);
         if let Some(attachments) = &self.attachments {
             map.insert("attachments".into(), attachments.to_json());
         }
@@ -91,10 +103,10 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxMail> {
         Attached::Corrupt => (None, true),
     };
     let trigger_turn = delivery.get("triggerTurn")?.as_bool()?;
-    // `followUp`: what an earlier build kept; reports are asides now.
-    let aside = match delivery.get("deliverAs") {
-        None => false,
-        Some(Value::String(kind)) if kind == "aside" || kind == "followUp" => true,
+    let historical_delivery = match delivery.get("deliverAs") {
+        None => None,
+        Some(Value::String(kind)) if kind == "aside" => Some(HistoricalMailDelivery::Aside),
+        Some(Value::String(kind)) if kind == "followUp" => Some(HistoricalMailDelivery::FollowUp),
         Some(_) => return None,
     };
     Some(OutboxMail {
@@ -111,10 +123,8 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxMail> {
             .map(str::to_owned),
         content: content.to_owned(),
         details: details.clone(),
-        delivery: MailDelivery {
-            trigger_turn,
-            aside,
-        },
+        delivery: MailDelivery { trigger_turn },
+        historical_delivery,
         attachments,
         attachments_corrupt: corrupt
             || fields.get("attachmentsCorrupt") == Some(&Value::Bool(true)),
@@ -124,32 +134,23 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxMail> {
 
 struct State {
     file: Option<PathBuf>,
-    now: Clock,
     /// Oldest first.
     entries: Vec<OutboxMail>,
 }
 
 impl State {
-    fn trim(&mut self) {
-        let oldest = (self.now)() - MAIL_OUTBOX_TTL_MS;
-        let before = self.entries.len();
-        self.entries.retain(|entry| entry.at >= oldest);
-        let mut changed = self.entries.len() != before;
-        while self.entries.len() > MAIL_OUTBOX_MAX {
-            self.entries.remove(0);
-            changed = true;
-        }
-        if changed {
-            self.save();
+    fn save(&self) {
+        if let Err(error) = self.persist() {
+            eprintln!("[mail-outbox] not saved: {error}");
         }
     }
 
-    fn save(&self) {
-        let Some(file) = &self.file else { return };
+    fn persist(&self) -> Result<(), String> {
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
         let text = stringify(self.entries.iter().map(OutboxMail::to_json).collect());
-        if let Err(error) = write_text(file, &text, Some(0o600)) {
-            eprintln!("[mail-outbox] not saved: {error}");
-        }
+        write_text(file, &text, Some(0o600))
     }
 }
 
@@ -159,13 +160,8 @@ pub struct MailOutbox {
 
 impl MailOutbox {
     pub fn new(file: Option<PathBuf>) -> MailOutbox {
-        MailOutbox::with_clock(file, system_clock())
-    }
-
-    pub fn with_clock(file: Option<PathBuf>, now: Clock) -> MailOutbox {
         let mut state = State {
             file,
-            now,
             entries: Vec::new(),
         };
         if let Some(file) = state.file.clone() {
@@ -183,19 +179,43 @@ impl MailOutbox {
         }
     }
 
+    #[cfg(test)]
+    pub fn with_clock(file: Option<PathBuf>, _now: Clock) -> MailOutbox {
+        Self::new(file)
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Keep an accepted report (the same id replaces its entry).
-    pub fn keep(&self, entry: OutboxMail) {
+    /// A same-id retry joins the first envelope without changing its position or contents.
+    pub fn keep(&self, entry: OutboxMail) -> Result<(), String> {
         let mut state = self.state();
-        state.entries.retain(|held| held.id != entry.id);
-        state.entries.push(entry);
-        state.trim();
-        state.save();
+        if let Some(original) = state
+            .entries
+            .iter()
+            .find(|original| original.id == entry.id)
+        {
+            if original.session_path != entry.session_path
+                || original.device != entry.device
+                || original.from != entry.from
+                || original.from_device != entry.from_device
+                || original.content != entry.content
+                || original.details != entry.details
+                || original.delivery != entry.delivery
+                || original.attachments_corrupt != entry.attachments_corrupt
+                || !same_attached_refs(original.attachments.as_ref(), entry.attachments.as_ref())
+            {
+                return Err(
+                    "An existing report has different content, recipient or attachments".into(),
+                );
+            }
+        } else {
+            state.entries.push(entry);
+        }
+        state.persist()
     }
 
     /// The files of a report landed again (their uploads were deleted): its text and files as they stand now.
@@ -229,11 +249,9 @@ impl MailOutbox {
         }
     }
 
-    /// The reports still waiting for their receiver's journal, oldest first; one past its age is dropped.
+    /// The reports still waiting for their receiver's journal, oldest first.
     pub fn pending(&self) -> Vec<OutboxMail> {
-        let mut state = self.state();
-        state.trim();
-        state.entries.clone()
+        self.state().entries.clone()
     }
 }
 

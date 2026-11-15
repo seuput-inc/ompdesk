@@ -57,7 +57,7 @@ fn mail_of(value: &Value) -> Mail {
 }
 
 #[test]
-fn mail_text_details_and_delivery_replay_the_typescripts() {
+fn mail_text_and_details_replay_the_typescripts() {
     let data = captured();
     for case in data["mailText"].as_array().unwrap() {
         let mail = mail_of(&case["mail"]);
@@ -72,10 +72,6 @@ fn mail_text_details_and_delivery_replay_the_typescripts() {
             case["details"].to_string(),
             "{}",
             case["mail"]
-        );
-        assert_eq!(
-            delivery_for(mail.kind).to_json().to_string(),
-            case["delivery"].to_string()
         );
     }
 }

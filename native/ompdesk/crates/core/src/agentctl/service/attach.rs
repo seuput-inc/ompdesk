@@ -211,10 +211,7 @@ impl Host {
             text,
             (self.clock)(),
         );
-        let delivery = MailDelivery {
-            trigger_turn: true,
-            aside: true,
-        };
+        let delivery = MailDelivery { trigger_turn: true };
         self.send_mail(&tab, &mail_text(&mail), &mail_details(&mail), delivery)
             .await
             .is_ok()
@@ -613,9 +610,9 @@ impl AgentControl {
         }
         let images = self.host.stored_images_p(attached.as_ref()).await?;
         let mut command = json!({
-            "type": "prompt",
+            "type": "agent_control_instruction",
+            "requestId": entry.mark,
             "message": message,
-            "streamingBehavior": entry.streaming_behavior.as_str(),
         });
         if !images.is_empty() {
             command["images"] = Value::Array(images);

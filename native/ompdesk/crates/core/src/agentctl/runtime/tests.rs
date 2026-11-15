@@ -124,10 +124,7 @@ fn mail_details(id: &str) -> Value {
 }
 
 const DELIVERY: crate::agentctl::rules::mail::MailDelivery =
-    crate::agentctl::rules::mail::MailDelivery {
-        trigger_turn: true,
-        aside: true,
-    };
+    crate::agentctl::rules::mail::MailDelivery { trigger_turn: true };
 
 #[tokio::test]
 async fn a_report_is_kept_until_the_receiver_s_journal_holds_it() {
@@ -221,10 +218,12 @@ async fn a_pass_sends_a_kept_report_again_to_the_tab_that_holds_its_session_unti
             content: "c".into(),
             details: mail_details("m-5"),
             delivery: DELIVERY,
+            historical_delivery: None,
             attachments: None,
             attachments_corrupt: false,
             at: control.now(),
-        });
+        })
+        .unwrap();
     for _ in 0..2 {
         runtime.redeliver_mail();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -318,10 +317,7 @@ async fn a_wake_up_is_kept_and_handed_to_the_tab_that_holds_the_session() {
     .unwrap();
     let sent = &told_of(&told, "mail")[0];
     assert_eq!(sent["tabId"], "boss");
-    assert_eq!(
-        sent["delivery"],
-        json!({ "triggerTurn": true, "deliverAs": "aside" })
-    );
+    assert_eq!(sent["delivery"], json!({ "triggerTurn": true }));
     assert_eq!(sent["details"]["id"], "wake-run-1");
     assert_eq!(sent["details"]["kind"], "note");
     assert!(sent["content"].as_str().unwrap().contains("Look at it"));
@@ -401,6 +397,82 @@ async fn a_wake_up_that_starts_no_turn_fails_its_run() {
         "The session started no turn on the wake-up within 2 minutes"
     );
     control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_failed_report_save_cannot_send_mail_or_acknowledge_the_original() {
+    let directory = crate::fs::disk::make_temp_dir("ompdesk-mail-save-").unwrap();
+    let file = directory.join("mail.json");
+    let files = Files {
+        mail_outbox: Some(JournalFile {
+            file: Some(file.clone()),
+        }),
+        ..Files::default()
+    };
+    let (control, _runtime, told) = rig(
+        7_499_001,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        files,
+        wake_main,
+    );
+    std::fs::create_dir(&file).unwrap();
+    assert!(
+        control
+            .host
+            .mail(
+                "boss",
+                "original report",
+                &mail_details("save-failed"),
+                DELIVERY
+            )
+            .await
+            .is_err()
+    );
+    let pending = control.host.outbox().unwrap().pending();
+    assert_eq!(pending[0].id, "save-failed");
+    assert_eq!(pending[0].content, "original report");
+    assert!(told_of(&told, "mail").is_empty());
+    control.host.port().close();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_wake_save_preserves_the_original_without_sending_or_tracking_a_turn() {
+    let directory = crate::fs::disk::make_temp_dir("ompdesk-wake-save-").unwrap();
+    let file = directory.join("mail.json");
+    let files = Files {
+        mail_outbox: Some(JournalFile {
+            file: Some(file.clone()),
+        }),
+        ..Files::default()
+    };
+    let (control, runtime, told) = rig(
+        7_499_002,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        files,
+        wake_main,
+    );
+    std::fs::create_dir(&file).unwrap();
+    assert!(
+        runtime
+            .wake(
+                "save-failed",
+                "/s/boss.jsonl",
+                "routine",
+                "original wake",
+                130
+            )
+            .await
+            .is_err()
+    );
+    let pending = control.host.outbox().unwrap().pending();
+    assert_eq!(pending[0].id, "wake-save-failed");
+    assert!(pending[0].content.contains("original wake"));
+    assert!(runtime.rt().wakes.is_empty());
+    assert!(told_of(&told, "mail").is_empty());
+    assert!(told_of(&told, "wakeDone").is_empty());
+    control.host.port().close();
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[tokio::test]

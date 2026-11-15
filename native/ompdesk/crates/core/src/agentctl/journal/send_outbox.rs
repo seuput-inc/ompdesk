@@ -1,17 +1,7 @@
-//! A message one session sends another (`ompdesk_session_send`) is a stock `prompt`; a busy receiver queues it in its
-//! omp's memory and journals it only when its loop takes it, so an omp that ends first loses it (`send-outbox.ts`).
-//! Main keeps each message, per receiver session file (and paired device), until the receiver's journal holds its
-//! marker. It remembers which omp process it handed the message to: that omp still holds it, so it is never sent there
-//! again; a different omp (a relaunch's) gets it once, in the order sent. An omp that holds it no more while idle with
-//! nothing queued lets it go.
-//!
-//! Kept in `<userData>/send-outbox.json` (mode 0o600, written when a message is handed over, never in a quit hook),
-//! newest `SEND_OUTBOX_MAX`, none older than `SEND_OUTBOX_TTL_MS`.
-//!
-//! Seams: the clock, and `OwedDeps` for what `deliver_owed` asks of the tab pool and the receiver's omp: its methods
-//! answer `None`/`Refused`/`false` where the TypeScript promise rejected (the TypeScript caught every rejection as
-//! those). The outbox is internally locked (`&self` methods) so a delivery may hold it across its awaits; `lane` runs
-//! work for one receiver at a time (a `tokio` mutex per key, first come first served).
+//! Original instructions retained until the receiving journal acknowledges their stable markers.
+//! A handover or an empty in-memory queue is not an acknowledgement. Historical delivery tags are
+//! preserved as storage data only; every delivery uses the single current-instruction path.
+//! Per-receiver lanes preserve the original order across retries and relaunches.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,26 +10,23 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value};
 
-use super::attachments::{Attached, AttachedSet, attached_sig, read_attached};
-use super::{
-    Clock, THREE_DAYS_MS, js_number, number, object, read_array, string, stringify, system_clock,
-    write_text,
-};
+#[cfg(test)]
+use super::Clock;
+use super::attachments::{Attached, AttachedSet, attached_sig, read_attached, same_attached_refs};
+use super::{js_number, number, object, read_array, string, stringify, write_text};
 
-pub const SEND_OUTBOX_MAX: usize = 200;
-pub const SEND_OUTBOX_TTL_MS: f64 = THREE_DAYS_MS;
-
+/// Decoded only to preserve an existing journal row; never controls delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamingBehavior {
+enum HistoricalStreamingBehavior {
     Steer,
     FollowUp,
 }
 
-impl StreamingBehavior {
-    pub fn as_str(self) -> &'static str {
+impl HistoricalStreamingBehavior {
+    fn as_str(self) -> &'static str {
         match self {
-            StreamingBehavior::Steer => "steer",
-            StreamingBehavior::FollowUp => "followUp",
+            Self::Steer => "steer",
+            Self::FollowUp => "followUp",
         }
     }
 }
@@ -65,7 +52,7 @@ pub struct OutboxSend {
     pub attachments: Option<AttachedSet>,
     /// Its record of attachments was damaged: it is never delivered as text alone.
     pub attachments_corrupt: bool,
-    pub streaming_behavior: StreamingBehavior,
+    historical_streaming_behavior: Option<HistoricalStreamingBehavior>,
     /// The receiver omp it was handed to, or `tab:<tab id>`; absent: not handed to any omp yet.
     pub instance: Option<String>,
     pub at: f64,
@@ -84,7 +71,6 @@ impl OutboxSend {
         from: String,
         body: String,
         message: String,
-        streaming_behavior: StreamingBehavior,
         at: f64,
     ) -> OutboxSend {
         OutboxSend {
@@ -98,7 +84,7 @@ impl OutboxSend {
             message,
             attachments: None,
             attachments_corrupt: false,
-            streaming_behavior,
+            historical_streaming_behavior: None,
             instance: None,
             at,
             instance_last: false,
@@ -127,10 +113,9 @@ impl OutboxSend {
         if self.attachments_corrupt {
             map.insert("attachmentsCorrupt".into(), true.into());
         }
-        map.insert(
-            "streamingBehavior".into(),
-            self.streaming_behavior.as_str().into(),
-        );
+        if let Some(behavior) = self.historical_streaming_behavior {
+            map.insert("streamingBehavior".into(), behavior.as_str().into());
+        }
         if let Some(instance) = self.instance.as_ref().filter(|_| !self.instance_last) {
             map.insert("instance".into(), instance.clone().into());
         }
@@ -169,9 +154,12 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
     let from = string(fields, "from")?;
     let body = string(fields, "body")?;
     let message = string(fields, "message").filter(|message| !message.is_empty())?;
-    let streaming_behavior = match string(fields, "streamingBehavior")? {
-        "steer" => StreamingBehavior::Steer,
-        "followUp" => StreamingBehavior::FollowUp,
+    let historical_streaming_behavior = match fields.get("streamingBehavior") {
+        None => None,
+        Some(Value::String(value)) if value == "steer" => Some(HistoricalStreamingBehavior::Steer),
+        Some(Value::String(value)) if value == "followUp" => {
+            Some(HistoricalStreamingBehavior::FollowUp)
+        }
         _ => return None,
     };
     let at = number(fields, "at")?;
@@ -200,7 +188,7 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
         attachments,
         attachments_corrupt: corrupt
             || fields.get("attachmentsCorrupt") == Some(&Value::Bool(true)),
-        streaming_behavior,
+        historical_streaming_behavior,
         instance: string(fields, "instance")
             .filter(|i| !i.is_empty())
             .map(str::to_owned),
@@ -211,7 +199,6 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
 
 struct State {
     file: Option<PathBuf>,
-    now: Clock,
     /// Oldest first.
     entries: Vec<(String, OutboxSend)>,
 }
@@ -227,35 +214,26 @@ impl State {
         self.entries.iter().position(|(held, _)| held == key)
     }
 
-    fn trim(&mut self) {
-        let oldest = (self.now)() - SEND_OUTBOX_TTL_MS;
-        let before = self.entries.len();
-        self.entries.retain(|(_, entry)| entry.at >= oldest);
-        let mut changed = self.entries.len() != before;
-        while self.entries.len() > SEND_OUTBOX_MAX {
-            self.entries.remove(0);
-            changed = true;
-        }
-        if changed {
-            self.save();
+    fn save(&self) {
+        if let Err(error) = self.persist() {
+            eprintln!("[send-outbox] not saved: {error}");
         }
     }
 
-    fn save(&self) {
-        let Some(file) = &self.file else { return };
+    fn persist(&self) -> Result<(), String> {
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
         let text = stringify(
             self.entries
                 .iter()
                 .map(|(_, entry)| entry.to_json())
                 .collect(),
         );
-        if let Err(error) = write_text(file, &text, Some(0o600)) {
-            eprintln!("[send-outbox] not saved: {error}");
-        }
+        write_text(file, &text, Some(0o600))
     }
 
-    fn pending(&mut self) -> Vec<OutboxSend> {
-        self.trim();
+    fn pending(&self) -> Vec<OutboxSend> {
         self.entries
             .iter()
             .map(|(_, entry)| entry.clone())
@@ -265,13 +243,8 @@ impl State {
 
 impl SendOutbox {
     pub fn new(file: Option<PathBuf>) -> SendOutbox {
-        SendOutbox::with_clock(file, system_clock())
-    }
-
-    pub fn with_clock(file: Option<PathBuf>, now: Clock) -> SendOutbox {
         let mut state = State {
             file,
-            now,
             entries: Vec::new(),
         };
         if let Some(file) = state.file.clone() {
@@ -291,22 +264,35 @@ impl SendOutbox {
         }
     }
 
+    #[cfg(test)]
+    pub fn with_clock(file: Option<PathBuf>, _now: Clock) -> SendOutbox {
+        Self::new(file)
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Keep a message about to be handed over (the same marker to the same receiver replaces its entry).
-    pub fn keep(&self, entry: OutboxSend) {
+    /// Same-key retries preserve the first envelope and its position; conflicts leave it untouched.
+    pub fn keep(&self, entry: OutboxSend) -> Result<(), String> {
         let mut state = self.state();
         let key = key_of(&entry);
         if let Some(at) = state.position(&key) {
-            state.entries.remove(at);
+            let original = &state.entries[at].1;
+            if original.from != entry.from
+                || original.from_device != entry.from_device
+                || original.body != entry.body
+                || original.attachments_corrupt != entry.attachments_corrupt
+                || !same_attached_refs(original.attachments.as_ref(), entry.attachments.as_ref())
+            {
+                return Err("An existing instruction has different content or attachments".into());
+            }
+        } else {
+            state.entries.push((key, entry));
         }
-        state.entries.push((key, entry));
-        state.trim();
-        state.save();
+        state.persist()
     }
 
     /// The message is in the hands of the omp `instance` (it queues or runs it).
@@ -442,8 +428,6 @@ pub trait OwedDeps: Sync {
     ) -> impl Future<Output = Option<SentAnswer>> + Send;
     /// Hand the prompt to the receiver's omp.
     fn prompt(&self, tab_id: &str, entry: &OutboxSend) -> impl Future<Output = HandOver> + Send;
-    /// The receiver's omp is idle with nothing queued: a message it held and did not journal was withdrawn.
-    fn drained(&self, tab_id: &str) -> impl Future<Output = bool> + Send;
 }
 
 /// Hand one receiver session what is still owed to it, in order: settle what its journal holds; leave what its
@@ -466,7 +450,6 @@ pub async fn deliver_owed<D: OwedDeps>(
     let Some(answer) = deps.sent(&tab_id, &marks).await else {
         return false;
     };
-    let mut drained: Option<bool> = None;
     for entry in &owed {
         if answer.journaled.contains(&entry.mark) {
             outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
@@ -477,18 +460,6 @@ pub async fn deliver_owed<D: OwedDeps>(
             || entry.instance.as_deref() == Some(same_tab.as_str())
         {
             outbox.handed(entry, &answer.instance);
-            // Its omp holds it no more and never journaled it: withdrawn from the queue.
-            let gone = match drained {
-                Some(known) => known,
-                None => {
-                    let asked = deps.drained(&tab_id).await;
-                    drained = Some(asked);
-                    asked
-                }
-            };
-            if gone {
-                outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
-            }
             continue;
         }
         if deps.prompt(&tab_id, entry).await == HandOver::Refused {

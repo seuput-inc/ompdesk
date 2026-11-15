@@ -353,10 +353,7 @@ impl AgentControl {
                         &tab.tab_id,
                         &text,
                         &quiet(&text),
-                        MailDelivery {
-                            trigger_turn: true,
-                            aside: true,
-                        },
+                        MailDelivery { trigger_turn: true },
                     )
                     .await;
             }

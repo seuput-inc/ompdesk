@@ -21,7 +21,7 @@ use crate::agentctl::service::types::{
     ChildWorktree, ControlDevice, ControlTab, ModelInfo, OpenArgs, OpenOne, OpenedChild,
     RpcResponse, SpawnRequest, SpawnWorktree, StoredSession, WorktreeArg, WorktreeRemoval,
 };
-use crate::agentctl::service::wrap::{agent_task_title, wrap_agent_message};
+use crate::agentctl::service::wrap::{agent_task_title, dispatch_mark, wrap_agent_message};
 
 /// One session of an open, as it came out: its tab and what was set up, or why it did not open.
 #[derive(Clone, Debug, Default)]
@@ -605,13 +605,13 @@ impl AgentControl {
                 let dispatch = self.mailbox.dispatch(tab_id);
                 let answer = send
                     .send(json!({
-                        "type": "prompt",
+                        "type": "agent_control_instruction",
+                        "requestId": dispatch_mark(&dispatch),
                         "message": wrap_agent_message(
                             &with_dispatch(message, Some(&dispatch), None),
                             &caller.title,
                             saved_id_of_path(caller.session_path.as_deref()).as_deref(),
                         ),
-                        "streamingBehavior": "followUp",
                     }))
                     .await?;
                 response_data(&answer, "Sending the first message")?;

@@ -457,38 +457,50 @@ impl Host {
         attached: Option<&AttachedSet>,
     ) -> R<()> {
         let images = self.stored_images(attached).await?;
-        let kept = self.outbox.as_ref().and_then(|(outbox, clock)| {
-            let id = details.get("id")?.as_str()?;
-            let state = self.state();
-            let tab = state.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
-            // The reporting session, told when this cannot be delivered with its attachments.
-            let sender = details.get("from").and_then(Value::as_str).map(|from| {
-                match state.tabs.iter().find(|tab| tab.tab_id == from) {
-                    Some(tab) => (
-                        tab.session_path
-                            .clone()
-                            .filter(|p| !p.is_empty())
-                            .unwrap_or_else(|| from.to_owned()),
-                        tab.device.clone().filter(|d| !d.is_empty()),
-                    ),
-                    None => (from.to_owned(), None),
-                }
-            });
-            outbox.keep(OutboxMail {
-                id: id.to_owned(),
-                session_path: tab.session_path.clone().filter(|path| !path.is_empty())?,
-                device: tab.device.clone().filter(|device| !device.is_empty()),
-                from: sender.as_ref().map(|(path, _)| path.clone()),
-                from_device: sender.as_ref().and_then(|(_, device)| device.clone()),
-                content: content.to_owned(),
-                details: details.clone(),
-                delivery,
-                attachments: attached.cloned(),
-                attachments_corrupt: false,
-                at: clock(),
-            });
-            Some((outbox, id.to_owned()))
-        });
+        let kept = self
+            .outbox
+            .as_ref()
+            .and_then(|(outbox, clock)| {
+                let id = details.get("id")?.as_str()?;
+                let state = self.state();
+                let tab = state.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
+                // The reporting session, told when this cannot be delivered with its attachments.
+                let sender = details.get("from").and_then(Value::as_str).map(|from| {
+                    match state.tabs.iter().find(|tab| tab.tab_id == from) {
+                        Some(tab) => (
+                            tab.session_path
+                                .clone()
+                                .filter(|p| !p.is_empty())
+                                .unwrap_or_else(|| from.to_owned()),
+                            tab.device.clone().filter(|d| !d.is_empty()),
+                        ),
+                        None => (from.to_owned(), None),
+                    }
+                });
+                Some(
+                    outbox
+                        .keep(OutboxMail {
+                            id: id.to_owned(),
+                            session_path: tab
+                                .session_path
+                                .clone()
+                                .filter(|path| !path.is_empty())?,
+                            device: tab.device.clone().filter(|device| !device.is_empty()),
+                            from: sender.as_ref().map(|(path, _)| path.clone()),
+                            from_device: sender.as_ref().and_then(|(_, device)| device.clone()),
+                            content: content.to_owned(),
+                            details: details.clone(),
+                            delivery,
+                            historical_delivery: None,
+                            attachments: attached.cloned(),
+                            attachments_corrupt: false,
+                            at: clock(),
+                        })
+                        .map(|()| (outbox, id.to_owned())),
+                )
+            })
+            .transpose()
+            .map_err(Fail::other)?;
         let answer = self
             .send_mail_with(tab_id, content, details, delivery, &images)
             .await?;
