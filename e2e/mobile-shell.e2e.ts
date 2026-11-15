@@ -208,6 +208,45 @@ async function capture(page: Page, name: string, tag: string): Promise<void> {
 	await page.screenshot({ path: path.join(captures, `${tag}-${name}.png`), animations: "disabled" });
 }
 
+test("a tablet usage deep link scrolls settings without displacing the shell", async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await openHarness(browser, "iPad Pro 11", { theme: "light", lang: "en" }, { landscape: true });
+		await page.locator("[data-sidebar-usage-open]").click();
+		await expect(page.locator("#settings-models-accounts")).toBeVisible();
+		await page.evaluate(
+			() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))),
+		);
+		const geometry = await page.evaluate(() => {
+			const root = document.querySelector<HTMLElement>(".omp-app-root");
+			const shell = document.querySelector<HTMLElement>(".omp-shell");
+			const sidebar = document.querySelector<HTMLElement>(".omp-session-sidebar");
+			const content = document.querySelector<HTMLElement>(".settings-content");
+			const target = document.getElementById("settings-models-accounts");
+			if (!root || !shell || !sidebar || !content || !target) throw new Error("settings did not mount");
+			return {
+				rootScroll: root.scrollTop,
+				rootTop: root.getBoundingClientRect().top,
+				rootBottom: root.getBoundingClientRect().bottom,
+				shellTop: shell.getBoundingClientRect().top,
+				shellBottom: shell.getBoundingClientRect().bottom,
+				sidebarBottom: sidebar.getBoundingClientRect().bottom,
+				targetTop: target.getBoundingClientRect().top,
+				contentTop: content.getBoundingClientRect().top,
+				contentBottom: content.getBoundingClientRect().bottom,
+			};
+		});
+		expect(geometry.rootScroll).toBe(0);
+		expect(geometry.shellTop).toBeCloseTo(geometry.rootTop, 0);
+		expect(geometry.shellBottom).toBeCloseTo(geometry.rootBottom, 0);
+		expect(geometry.sidebarBottom).toBeCloseTo(geometry.rootBottom, 0);
+		expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.contentTop);
+		expect(geometry.targetTop).toBeLessThan(geometry.contentBottom);
+	} finally {
+		await browser.close();
+	}
+});
+
 // The default run keeps each shell mode once in Chromium plus WebKit on a phone; the other engine × device
 // pairs repeat a mode and run with OMP_GUI_VARIANTS=1.
 for (const { engine, device } of variants(
