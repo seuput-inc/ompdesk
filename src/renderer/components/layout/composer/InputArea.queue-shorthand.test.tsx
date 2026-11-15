@@ -7,7 +7,8 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { AgentMessage, RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
+import type { AgentMessage, MessagesPage, RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
+import * as sessionHydration from "../../../hooks/session-hydration";
 import { resetSessionSurface } from "../../../hooks/use-session-switch";
 import { filePickInProgress } from "../../../lib/file-pick";
 import { clearHistoryImages, rememberHistoryImages } from "../../../lib/history-images";
@@ -246,6 +247,8 @@ async function mount(withRuntime = false): Promise<void> {
 					planModeEnabled: false,
 					todoPhases: [],
 				});
+			if (command.type === "get_transcript_page")
+				return ok({ messages: [], totalMessages: 0 } satisfies MessagesPage);
 			return ok({});
 		});
 	}
@@ -339,6 +342,7 @@ describe("InputArea queue shorthand submit", () => {
 
 	it("restores an unacknowledged send after process recovery and blocks duplicate submission", async () => {
 		await mount(true);
+		const hydration = vi.spyOn(sessionHydration, "hydrateTabSession");
 		const pending = Promise.withResolvers<RpcResponse>();
 		prompt.mockReturnValueOnce(pending.promise);
 		await typeInto(findTextarea(), "preserve in-flight input");
@@ -372,6 +376,10 @@ describe("InputArea queue shorthand submit", () => {
 			error: "Process restarted before acknowledgement",
 		});
 		await flush();
+		expect(hydration).toHaveBeenCalledExactlyOnceWith("t0");
+		await act(async () => {
+			await expect(hydration.mock.results[0]?.value).resolves.toBeUndefined();
+		});
 		// Joined like every restore (prependToDraft): a blank line between.
 		expect(useComposerStore.getState().draft).toBe("preserve in-flight input\n\nnext draft");
 		expect(useComposerStore.getState().submissionUncertain).toBe(true);
