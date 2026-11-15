@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RpcAbortAndRestoreQueueResult, RpcForkFromResult, RpcSessionTreeNode } from "../../shared/rpc-types";
+import type {
+	ImageContent,
+	RpcAbortAndRestoreQueueResult,
+	RpcForkFromResult,
+	RpcGetQueueResult,
+	RpcManualRecovery,
+	RpcSessionTreeNode,
+} from "../../shared/rpc-types";
 import { draftKeys, loadDraft } from "../components/layout/composer/draft-persistence";
 import { type ComposerStore, DOUBLE_ESC_MS, useComposerStore } from "../stores/composer";
 import { useMessagesStore } from "../stores/messages";
 import { useSessionStore } from "../stores/session";
+import { useOutboxStore } from "../stores/outbox";
 import { sessionRuntimeStore } from "../stores/session-runtime-context";
 import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";
@@ -95,6 +103,7 @@ afterEach(() => {
 	useToastStore.setState({ toasts: [] });
 	useTabsStore.getState().reset();
 	useSessionStore.setState({ switchPending: null });
+	useOutboxStore.getState().reset();
 	vi.restoreAllMocks();
 });
 
@@ -641,41 +650,119 @@ describe("stopFromEscape", () => {
 });
 
 describe("restoreQueuedMessages", () => {
-	it("puts the popped message into the composer without re-queuing anything", async () => {
-		const harness = installWindow([{ text: "last steer" }]);
+	function pending() {
+		const harness = installWindow([]);
+		(globalThis as Record<string, unknown>).localStorage = memoryStorage();
+		useTabsStore.setState({
+			activeTabId: "tab-a",
+			tabs: [
+				{ id: "tab-a", sessionId: "session-a", cwd: "/project", status: "ready", kind: "agent", unreadDone: false },
+			],
+		});
+		useSessionStore.setState({ sessionId: "session-a", status: "ready" });
+		useComposerStore.getState().setDraft("previous draft");
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "AAAA" };
+		const envelope = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "" }, image],
+			timestamp: 1,
+		};
+		let queue: RpcGetQueueResult = {
+			instance: "original-process",
+			entries: [
+				{ id: "first", text: "same text", state: "ready" },
+				{ id: "picture", text: "", images: [image], state: "ready" },
+				{ id: "executing", text: "leave this running", state: "in_flight" },
+			],
+		};
+		let recoveries: RpcManualRecovery[] = [];
+		const rpc = Object.assign(harness.rpc, {
+			getQueue: vi.fn(async () => ({ success: true as const, data: queue })),
+			queueRemove: vi.fn(async (instance: string, id: string, intent: string) => {
+				if (instance !== queue.instance || id !== "picture" || intent !== "draft")
+					throw new Error("wrong original handle");
+				queue = { ...queue, entries: queue.entries.filter(entry => entry.id !== id) };
+				const entry = { id, text: "", images: [image], envelope };
+				recoveries = [{ recoveryId: "recovery-picture", instance, id, intent: "draft", state: "withdrawn", entry }];
+				return {
+					success: true as const,
+					data: { removed: true, recoveryId: "recovery-picture", intent: "draft", entry },
+				};
+			}),
+			getManualRecovery: vi.fn(async () => ({ success: true as const, data: { entries: recoveries } })),
+			ackManualRecovery: vi.fn(async (recoveryId: string, disposition: { kind: "draft"; draftId: string }) => ({
+				success: true as const,
+				data: { acknowledged: true, recoveryId, disposition },
+			})),
+		});
+		return { ...harness, rpc, image, envelope, queue: () => queue };
+	}
 
+	it("withdraws the newest ready original by identity and durably adopts its full image-only payload", async () => {
+		const harness = pending();
 		await restoreQueuedMessages(() => {
 			throw new Error("queue unexpectedly empty");
 		});
-
-		expect(harness.fillDetail()).toMatchObject({ text: "last steer", prepend: true });
-		expect(harness.deliveryOrder).toEqual([]);
-	});
-
-	it("reports an empty queue without dispatching or re-queuing", async () => {
-		const harness = installWindow([]);
-		const onEmpty = vi.fn();
-
-		await restoreQueuedMessages(onEmpty);
-
-		expect(onEmpty).toHaveBeenCalledTimes(1);
+		expect(harness.queue().entries.map(entry => entry.id)).toEqual(["first", "executing"]);
+		expect(useComposerStore.getState().draft).toBe("");
+		expect(useComposerStore.getState().images.map(image => image.content)).toEqual([harness.image]);
+		const manual = useOutboxStore.getState().items[0];
+		expect(manual?.send).toMatchObject({
+			kind: "manual",
+			acknowledged: true,
+			source: {
+				instance: "original-process",
+				id: "picture",
+				recoveryId: "recovery-picture",
+				envelope: harness.envelope,
+			},
+			previous: { draft: "previous draft", images: [] },
+		});
+		expect(useComposerStore.getState().editingRecovered?.id).toBe(manual.id);
 		expect(harness.fillDetail()).toBeUndefined();
 		expect(harness.deliveryOrder).toEqual([]);
 	});
 
-	it("names the tab that asked, so on a shared tab only that window's composer takes the popped message", async () => {
-		const harness = installWindow([]);
-		useTabsStore.setState({ activeTabId: "tab-a" });
-		harness.rpc.dequeue.mockImplementationOnce(async () => {
-			// Focus moves while the RPC runs; the answer still belongs to the tab the request came from.
-			useTabsStore.setState({ activeTabId: "tab-b" });
-			return { success: true as const, data: { messages: [{ text: "someone else's steer" }] } };
+	it("reports no eligible original without withdrawing an in-flight instruction or changing the draft", async () => {
+		const harness = pending();
+		harness.rpc.getQueue.mockResolvedValueOnce({
+			success: true,
+			data: { instance: "original-process", entries: [{ id: "executing", text: "running", state: "in_flight" }] },
 		});
+		const onEmpty = vi.fn();
+		await restoreQueuedMessages(onEmpty);
+		expect(onEmpty).toHaveBeenCalledOnce();
+		expect(harness.rpc.queueRemove).not.toHaveBeenCalled();
+		expect(useComposerStore.getState().draft).toBe("previous draft");
+		expect(useOutboxStore.getState().items).toEqual([]);
+	});
 
-		await restoreQueuedMessages(() => {
-			throw new Error("queue unexpectedly empty");
+	it("leaves the draft and original untouched when the asking session changes during the snapshot read", async () => {
+		const harness = pending();
+		const before = harness.queue();
+		harness.rpc.getQueue.mockImplementationOnce(async () => {
+			useSessionStore.setState({ sessionId: "replacement-session" });
+			return { success: true, data: before };
 		});
+		await restoreQueuedMessages(vi.fn());
+		expect(harness.rpc.queueRemove).not.toHaveBeenCalled();
+		expect(harness.queue()).toBe(before);
+		expect(useComposerStore.getState().draft).toBe("previous draft");
+	});
 
-		expect(harness.fillDetail()).toMatchObject({ text: "someone else's steer", prepend: true, tabId: "tab-a" });
+	it("keeps the draft unchanged and withholds ACK when manual recovery cannot be persisted", async () => {
+		const harness = pending();
+		vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+			throw new Error("quota");
+		});
+		await restoreQueuedMessages(vi.fn());
+		expect(harness.rpc.ackManualRecovery).not.toHaveBeenCalled();
+		expect(useComposerStore.getState().draft).toBe("previous draft");
+		expect(useComposerStore.getState().editingRecovered).toBeNull();
+		expect(useOutboxStore.getState().items[0]?.send).toMatchObject({
+			kind: "manual",
+			acknowledged: false,
+			source: { id: "picture", envelope: harness.envelope },
+		});
 	});
 });

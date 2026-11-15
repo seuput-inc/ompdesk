@@ -4,6 +4,7 @@ import { RpcClient } from "./rpc-client";
 describe("current instruction admission", () => {
 	it.each([
 		{ type: "follow_up", message: "later" },
+		{ type: "steer", message: "bypass current-instruction preflight" },
 		{ type: "set_steering_mode", mode: "one-at-a-time" },
 		{ type: "set_follow_up_mode", mode: "all" },
 		{ type: "set_interrupt_mode", mode: "wait" },
