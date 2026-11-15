@@ -111,10 +111,10 @@ test("a phone can retry or cancel a side question when its dialogs fail to load"
 		const field = phone.locator("[data-composer-input]").first();
 		await expect(field).toBeVisible({ timeout: 60_000 });
 		await field.fill("fixture stream parts");
-		await phone.getByRole("button", { name: "Send" }).click();
+		await phone.getByRole("button", { name: "Send", exact: true }).click();
 		await expect(phone.getByRole("button", { name: "Stop" })).toBeVisible();
 		await field.fill("/btw What should I check next?");
-		await phone.getByRole("button", { name: "Send" }).click();
+		await phone.getByRole("button", { name: "Send", exact: true }).click();
 		await expect.poll(() => attempts).toBeGreaterThan(0);
 		const history = async () => phone.evaluate(() => window.omp.rpc.command({ type: "get_btw_history" }));
 		expect(await history()).toMatchObject({ success: true, data: { records: [] } });
@@ -155,7 +155,7 @@ test("a phone can retry or cancel a side question when its dialogs fail to load"
 		await phone.reload();
 		await expect(field).toBeVisible();
 		await field.fill("/btw Cancel this retained question");
-		await phone.getByRole("button", { name: "Send" }).click();
+		await phone.getByRole("button", { name: "Send", exact: true }).click();
 		await expect(failed.getByRole("alert")).toBeVisible();
 		await expect(failed.getByText("Cancel this retained question", { exact: true })).toBeVisible();
 		const beforeCancelRetry = attempts;
