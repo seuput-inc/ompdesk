@@ -458,10 +458,10 @@ describe("Stop with a queue", () => {
 		const state = useComposerStore.getState();
 		expect(state.draft).toBe("my half-typed draft");
 		expect(state.images).toEqual([]);
-		expect(state.restoredQueue.map(item => [item.lane, item.text, item.images.length])).toEqual([
-			["steering", "queued one", 0],
-			["followUp", "queued two", 0],
-			["followUp", "", 1],
+		expect(state.restoredQueue.map(item => [item.text, item.images.length])).toEqual([
+			["queued one", 0],
+			["queued two", 0],
+			["", 1],
 		]);
 		// The queue stays paused: nothing was re-sent, and the reader is not toasted about a merge that did not happen.
 		expect(harness.rpc.steer).not.toHaveBeenCalled();
@@ -474,9 +474,8 @@ describe("Stop with a queue", () => {
 		const composer = useComposerStore.getState();
 		composer.setDraft("draft");
 		composer.holdRestored([
-			{ lane: "steering", text: "one", images: [] },
+			{ text: "one", images: [] },
 			{
-				lane: "followUp",
 				text: "",
 				images: [{ content: image, preview: "data:image/png;base64,AAAA" }],
 			},
@@ -490,43 +489,36 @@ describe("Stop with a queue", () => {
 		expect(useComposerStore.getState().restoredQueue).toEqual([]);
 	});
 
-	it("resumes the held messages in order: the first starts the turn again, the rest queue behind it", async () => {
+	it("resumes each held instruction through the current prompt path in order", async () => {
 		const composer = useComposerStore.getState();
 		composer.holdRestored([
-			{ lane: "steering", text: "one", images: [] },
-			{ lane: "followUp", text: "two", images: [] },
-			{ lane: "followUp", text: "three", images: [] },
+			{ text: "one", images: [] },
+			{ text: "two", images: [] },
+			{ text: "three", images: [] },
 		]);
 		const sent: string[] = [];
 		const rpc = {
-			prompt: vi.fn(async (text: string, _images?: unknown, behavior?: string) => {
-				sent.push(`prompt:${text}:${behavior}`);
+			prompt: vi.fn(async (text: string) => {
+				sent.push(`prompt:${text}`);
 				return { type: "response" as const, command: "prompt", success: true as const };
-			}),
-			followUp: vi.fn(async (text: string) => {
-				sent.push(`followUp:${text}`);
-				return { type: "response" as const, command: "follow_up", success: true as const };
 			}),
 		};
 		await resumeRestoredQueue(rpc);
-		expect(sent).toEqual(["prompt:one:followUp", "followUp:two", "followUp:three"]);
+		expect(sent).toEqual(["prompt:one", "prompt:two", "prompt:three"]);
 		expect(useComposerStore.getState().restoredQueue).toEqual([]);
 	});
 
 	it("keeps the refused message and the ones after it held, and says so", async () => {
 		const composer = useComposerStore.getState();
 		composer.holdRestored([
-			{ lane: "steering", text: "one", images: [] },
-			{ lane: "followUp", text: "two", images: [] },
+			{ text: "one", images: [] },
+			{ text: "two", images: [] },
 		]);
 		const rpc = {
-			prompt: vi.fn(async () => ({ type: "response" as const, command: "prompt", success: true as const })),
-			followUp: vi.fn(async () => ({
-				type: "response" as const,
-				command: "follow_up",
-				success: false as const,
-				error: "busy",
-			})),
+			prompt: vi
+				.fn()
+				.mockResolvedValueOnce({ type: "response", command: "prompt", success: true })
+				.mockResolvedValueOnce({ type: "response", command: "prompt", success: false, error: "busy" }),
 		};
 		await resumeRestoredQueue(rpc);
 		expect(useComposerStore.getState().restoredQueue.map(item => item.text)).toEqual(["two"]);

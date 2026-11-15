@@ -49,7 +49,7 @@ const viaBridge: LocalHandler = async ({ type, id: _id, ...params }, ctx) =>
 /** Like the TUI, a new objective starts working at once; while streaming the goal context was steered in instead. */
 async function startObjectiveTurn(ctx: LocalCommandContext, objective: string): Promise<void> {
 	const state = await ctx.send<{ isStreaming?: boolean }>({ type: "get_state" });
-	if (!state.isStreaming) await ctx.send({ type: "prompt", message: objective, streamingBehavior: "followUp" });
+	if (!state.isStreaming) await ctx.bridge.request("composer.prompt", { message: objective });
 }
 
 /**

@@ -1,157 +1,169 @@
-/**
- * Queue mutations of the composer's queue popover and its edit-in-field: edit (omp re-queues the text at the end of its lane),
- * cross-lane move (queue_move with toLane, appended to the target lane's end),
- * per-item remove (queue_remove) and per-lane clear (queue_clear). omp cannot
- * reorder within a lane. Every mutation applies optimistically, rolls back on
- * a failed response or rejected transport call unless a newer snapshot
- * superseded it, then resyncs from get_queue so the server stays the single
- * source of truth.
- */
-
+/** Withdraw pending instructions by opaque bridge identity. */
 import { useCallback } from "react";
 import { useStore } from "zustand";
-import type { StoreApi } from "zustand/vanilla";
-import type { RpcQueuedMessage } from "../../../shared/rpc-types";
 import { useT } from "../../lib/i18n";
-import { optimisticWrite } from "../../lib/optimistic";
-import { type TabRpc, useTabRpc } from "../../lib/tab-rpc";
-import { type QueueLane, type QueueStore, useQueueStore } from "../../stores/queue";
+import { reconcileManualRecovery } from "../../lib/manual-recovery";
+import { useTabRpc } from "../../lib/tab-rpc";
+import { type ComposerStore, useComposerStore } from "../../stores/composer";
+import { outboxSession, useOutboxStore } from "../../stores/outbox";
+import { type QueueStore, useQueueStore } from "../../stores/queue";
 import { type SessionStore, useSessionStore } from "../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../stores/session-runtime-context";
-import { toastError } from "../../stores/toast";
-
-async function applyLaneMutation(
-	queueStore: StoreApi<QueueStore>,
-	lane: QueueLane,
-	optimistic: (items: RpcQueuedMessage[]) => RpcQueuedMessage[],
-	persist: () => Promise<{ success: boolean; error?: string }>,
-	failureKey: string,
-	t: (key: string) => string,
-): Promise<void> {
-	await optimisticWrite({
-		store: queueStore,
-		mutate: state =>
-			lane === "steering" ? { steering: optimistic(state.steering) } : { followUp: optimistic(state.followUp) },
-		persist,
-		onFailure: failure => toastError({ title: t(failureKey), error: failure }),
-		resync: () => queueStore.getState().refresh(),
-	});
-}
-
-/** Remember where stock put a re-queued message (the end of its lane), for the tray to point at it. */
-function noteLanded(queueStore: StoreApi<QueueStore>, lane: QueueLane, id: string, kind: "edit" | "lane"): void {
-	const items = queueStore.getState()[lane];
-	const index = items.findIndex(entry => entry.id === id);
-	if (index !== -1) queueStore.getState().noteMoved({ id, lane, position: index + 1, count: items.length, kind });
-}
-
-async function applyCrossLaneMove(
-	queueStore: StoreApi<QueueStore>,
-	rpc: TabRpc,
-	lane: QueueLane,
-	id: string,
-	t: (key: string) => string,
-): Promise<void> {
-	const target: QueueLane = lane === "steering" ? "followUp" : "steering";
-	const settled = optimisticWrite({
-		store: queueStore,
-		mutate: state => {
-			const item = state[lane].find(entry => entry.id === id);
-			if (!item) return {};
-			const without = state[lane].filter(entry => entry.id !== id);
-			return lane === "steering"
-				? { steering: without, followUp: [...state.followUp, item] }
-				: { steering: [...state.steering, item], followUp: without };
-		},
-		persist: () => rpc.queueMove(id, Number.MAX_SAFE_INTEGER, target),
-		onFailure: failure => {
-			queueStore.setState({ moved: null });
-			toastError({ title: t("queuePanel.moveFailed"), error: failure });
-		},
-		resync: () => queueStore.getState().refresh(),
-	});
-	// Stock re-queues a steer as a follow-up with its text only; a follow-up promoted to a steer keeps its pictures.
-	if (lane === "steering") queueStore.getState().forgetImages(id);
-	noteLanded(queueStore, target, id, "lane");
-	await settled;
-}
+import { useTabsStore } from "../../stores/tabs";
+import { toast, toastError } from "../../stores/toast";
 
 export interface QueueActions {
-	/** Mutations need a ready sidecar; every action is a no-op otherwise. */
 	ready: boolean;
-	remove: (lane: QueueLane, id: string) => void;
-	edit: (lane: QueueLane, id: string, text: string) => void;
-	moveToLane: (lane: QueueLane, id: string) => void;
-	clearLane: (lane: QueueLane) => void;
+	remove: (instance: string, id: string) => Promise<boolean>;
+	edit: (instance: string, id: string) => Promise<boolean>;
 }
 
 export function useQueueActions(): QueueActions {
-	const tabRpc = useTabRpc();
+	const rpc = useTabRpc();
 	const tabId = useRuntimeTabId();
-	const queueStore = sessionRuntimeStore<QueueStore>(tabId, "queue") ?? useQueueStore;
+	const queue = sessionRuntimeStore<QueueStore>(tabId, "queue") ?? useQueueStore;
+	const session = sessionRuntimeStore<SessionStore>(tabId, "session") ?? useSessionStore;
+	const ready = useStore(session, state => state.status) === "ready";
 	const t = useT();
-	const sessionStore = sessionRuntimeStore<SessionStore>(tabId, "session");
-	const ready = useStore(sessionStore ?? useSessionStore, state => state.status) === "ready";
 
 	const remove = useCallback(
-		(lane: QueueLane, id: string) => {
-			if (!ready) return;
-			void applyLaneMutation(
-				queueStore,
-				lane,
-				items => items.filter(item => item.id !== id),
-				() => tabRpc.queueRemove(id),
-				"queuePanel.removeFailed",
-				t,
-			);
+		async (instance: string, id: string): Promise<boolean> => {
+			const snapshot = queue.getState();
+			if (
+				!ready ||
+				snapshot.instance !== instance ||
+				!snapshot.entries.some(entry => entry.id === id && entry.state === "ready")
+			)
+				return false;
+			const targetId = tabId ?? useTabsStore.getState().activeTabId;
+			const tab = useTabsStore.getState().tabs.find(entry => entry.id === targetId);
+			const sessionId = tab?.sessionId || session.getState().sessionId;
+			const composer = targetId
+				? (sessionRuntimeStore<ComposerStore>(targetId, "composer") ?? useComposerStore)
+				: null;
+			const stillCurrent = () =>
+				!!targetId &&
+				!!tab &&
+				!!sessionId &&
+				!!composer &&
+				session.getState().sessionId === sessionId &&
+				(sessionRuntimeStore<ComposerStore>(targetId, "composer") ?? useComposerStore) === composer;
+			let acknowledged = false;
+			try {
+				const response = await rpc.queueRemove(instance, id, "discard");
+				if (!response.success) {
+					toastError({ title: t("queuePanel.removeFailed"), error: response });
+					return false;
+				}
+				const data = response.data;
+				if (
+					typeof data !== "object" ||
+					data === null ||
+					!("removed" in data) ||
+					data.removed !== true ||
+					!("recoveryId" in data) ||
+					typeof data.recoveryId !== "string" ||
+					!("intent" in data) ||
+					data.intent !== "discard"
+				)
+					return false;
+				const ack = await rpc.ackManualRecovery(data.recoveryId, { kind: "discard" });
+				if (
+					!ack.success ||
+					typeof ack.data !== "object" ||
+					ack.data === null ||
+					!("acknowledged" in ack.data) ||
+					ack.data.acknowledged !== true ||
+					!("recoveryId" in ack.data) ||
+					ack.data.recoveryId !== data.recoveryId ||
+					!("disposition" in ack.data) ||
+					typeof ack.data.disposition !== "object" ||
+					ack.data.disposition === null ||
+					!("kind" in ack.data.disposition) ||
+					ack.data.disposition.kind !== "discard"
+				) {
+					toast({ variant: "warning", message: t("composerQueue.discardPending") });
+					return false;
+				}
+				acknowledged = true;
+				const current = queue.getState();
+				if (current.instance !== instance) return false;
+				current.setFromFrame({ instance, entries: current.entries.filter(entry => entry.id !== id) });
+				return true;
+			} catch (error) {
+				toastError({ title: t("queuePanel.removeFailed"), error });
+				return false;
+			} finally {
+				void queue.getState().refresh();
+				if (!acknowledged && tab && sessionId && composer && stillCurrent())
+					await reconcileManualRecovery(rpc, outboxSession({ ...tab, sessionId }), composer, stillCurrent);
+			}
 		},
-		[ready, t, tabRpc.queueRemove, queueStore],
+		[queue, ready, rpc, session, t, tabId],
 	);
 
 	const edit = useCallback(
-		(lane: QueueLane, id: string, text: string) => {
-			if (!ready) return;
-			void applyLaneMutation(
-				queueStore,
-				lane,
-				items => {
-					// omp re-queues edited text at the end of its lane.
-					const edited = items.find(item => item.id === id);
-					return edited ? [...items.filter(item => item.id !== id), { ...edited, text }] : items;
-				},
-				() => tabRpc.queueEdit(id, text),
-				"queuePanel.editFailed",
-				t,
-			);
-			// The re-queue carries the text only.
-			queueStore.getState().forgetImages(id);
-			noteLanded(queueStore, lane, id, "edit");
+		async (instance: string, id: string): Promise<boolean> => {
+			const snapshot = queue.getState();
+			if (
+				!ready ||
+				snapshot.instance !== instance ||
+				!snapshot.entries.some(entry => entry.id === id && entry.state === "ready")
+			)
+				return false;
+			const targetId = tabId ?? useTabsStore.getState().activeTabId;
+			const tab = useTabsStore.getState().tabs.find(entry => entry.id === targetId);
+			const sessionId = tab?.sessionId || session.getState().sessionId;
+			if (!targetId || !tab || !sessionId) {
+				toastError({ title: t("queuePanel.editFailed"), error: t("input.agentConnecting") });
+				return false;
+			}
+			const composer = sessionRuntimeStore<ComposerStore>(targetId, "composer") ?? useComposerStore;
+			if (composer.getState().editingRecovered) return false;
+			const stillCurrent = () =>
+				session.getState().sessionId === sessionId &&
+				(sessionRuntimeStore<ComposerStore>(targetId, "composer") ?? useComposerStore) === composer;
+			let recoveryChecked = false;
+			try {
+				const response = await rpc.queueRemove(instance, id, "draft");
+				if (!response.success) {
+					toastError({ title: t("queuePanel.editFailed"), error: response });
+					return false;
+				}
+				const data = response.data;
+				if (
+					typeof data !== "object" ||
+					data === null ||
+					!("removed" in data) ||
+					data.removed !== true ||
+					!("recoveryId" in data) ||
+					typeof data.recoveryId !== "string" ||
+					!("intent" in data) ||
+					data.intent !== "draft"
+				)
+					return false;
+				if (!stillCurrent()) return false;
+				await reconcileManualRecovery(rpc, outboxSession({ ...tab, sessionId }), composer, stillCurrent);
+				recoveryChecked = true;
+				if (!stillCurrent()) return false;
+				const manual = useOutboxStore
+					.getState()
+					.items.find(item => item.send.kind === "manual" && item.send.source.recoveryId === data.recoveryId);
+				if (manual?.send.kind === "manual" && manual.send.acknowledged)
+					return composer.getState().beginRecoveredEdit(manual.id);
+				toast({ variant: "warning", message: t("composerQueue.recoveryPending") });
+				return false;
+			} catch (error) {
+				toastError({ title: t("queuePanel.editFailed"), error });
+				return false;
+			} finally {
+				void queue.getState().refresh();
+				if (!recoveryChecked && stillCurrent())
+					await reconcileManualRecovery(rpc, outboxSession({ ...tab, sessionId }), composer, stillCurrent);
+			}
 		},
-		[ready, t, tabRpc.queueEdit, queueStore],
+		[queue, ready, rpc, session, t, tabId],
 	);
 
-	const moveToLane = useCallback(
-		(lane: QueueLane, id: string) => {
-			if (!ready) return;
-			void applyCrossLaneMove(queueStore, tabRpc, lane, id, t);
-		},
-		[ready, t, tabRpc, queueStore],
-	);
-
-	const clearLane = useCallback(
-		(lane: QueueLane) => {
-			if (!ready) return;
-			void applyLaneMutation(
-				queueStore,
-				lane,
-				() => [],
-				() => tabRpc.queueClear(lane),
-				"queuePanel.clearFailed",
-				t,
-			);
-		},
-		[ready, t, tabRpc.queueClear, queueStore],
-	);
-
-	return { ready, remove, edit, moveToLane, clearLane };
+	return { ready, remove, edit };
 }

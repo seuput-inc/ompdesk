@@ -4,8 +4,6 @@
  *   bash badge), and ↑ sends the paste's text again, never the bare `[Paste #N]` marker;
  * - "+ › Use a skill…" puts the keys in the picker's search (they went to the composer, and Enter
  *   sent the draft);
- * - a Follow-up picked on the send-mode chip lasts for that run only, the chip and Stop leave
- *   typing in the field;
  * - Stop and Esc withdraw a prompt the automatic mode choice still holds back: nothing reaches
  *   omp, the plan it picked ends, the draft returns (there was no Stop, and Esc Esc opened the
  *   rewind picker);
@@ -84,14 +82,17 @@ async function ready(page: Page): Promise<void> {
 
 const composer = (page: Page) => page.locator(".omp-composer-input").first();
 const stop = (page: Page) => page.getByRole("button", { name: "Stop", exact: true });
-/** The lane chip shows exactly while a turn runs; with a draft the one action button is Send, so Stop is not the cue. */
-const running = (page: Page) => page.locator("[data-send-mode]");
+const running = (page: Page) =>
+	page.evaluate(async () => {
+		const data = (await window.omp.rpc.getState()).data;
+		return typeof data === "object" && data !== null && "isStreaming" in data && data.isStreaming === true;
+	});
 const composerFocused = (page: Page) =>
 	page.evaluate(() => document.activeElement?.classList.contains("omp-composer-input") === true);
 
 async function sentOfType(file: string, type: string): Promise<string[]> {
 	return (await readRecords(file))
-		.filter(record => record.type === type)
+		.filter(record => record.type === (type === "prompt" ? "composer.prompt" : type))
 		.map(record => String(record.message ?? record.command ?? ""));
 }
 
@@ -106,7 +107,7 @@ async function pasteText(page: Page, text: string): Promise<void> {
 	}, text);
 }
 
-test("+ › Use a skill… takes the keys; the send-mode chip lasts one run; the chip and Stop keep typing in the field", async () => {
+test("+ › Use a skill… takes the keys; Stop keeps typing in the field", async () => {
 	test.setTimeout(120_000);
 	const dirs = await profile("focus");
 	const { app, page, errors } = await launch(dirs);
@@ -124,10 +125,7 @@ test("+ › Use a skill… takes the keys; the send-mode chip lasts one run; the
 
 		await input.fill("fixture running");
 		await input.press("Enter");
-		const chip = page.locator("[data-send-mode]");
-		await expect(chip).toHaveAttribute("data-send-mode", "steer");
-		await chip.click();
-		await expect(chip).toHaveAttribute("data-send-mode", "followUp");
+		await expect.poll(() => running(page)).toBe(true);
 		expect(await composerFocused(page)).toBe(true);
 		await stop(page).click();
 		await expect(stop(page)).toHaveCount(0);
@@ -135,11 +133,10 @@ test("+ › Use a skill… takes the keys; the send-mode chip lasts one run; the
 
 		await input.fill("fixture running");
 		await input.press("Enter");
-		await expect(chip).toHaveAttribute("data-send-mode", "steer");
+		await expect.poll(() => running(page)).toBe(true);
 		await input.fill("steer again");
 		await input.press("Enter");
-		await expect.poll(() => sentOfType(dirs.record, "steer")).toEqual(["steer again"]);
-		expect(await sentOfType(dirs.record, "follow_up")).toEqual([]);
+		await expect.poll(() => sentOfType(dirs.record, "prompt")).toContain("steer again");
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);
@@ -359,25 +356,13 @@ test("removing an attachment, a card or a queued message, or cancelling a paste,
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(stop(page)).toBeVisible();
-		// Queue once the turn runs: the composer takes one submission at a time (Stop also shows for a prompt the
-		// automatic mode choice still holds back).
-		await expect(running(page)).toBeVisible();
+		await expect.poll(() => running(page)).toBe(true);
 		await input.fill("queued one");
 		await input.press("Enter");
 		const pill = page.locator("[data-queue-pill]");
 		await expect(pill).toContainText("1 queued");
 		await pill.click();
-		await page.getByRole("button", { name: "Edit: queued one" }).click();
-		// The field itself edits the queued message; Enter saves it.
-		await expect(input).toHaveValue("queued one");
-		await input.fill("queued edited");
-		await input.press("Enter");
-		await expect(page.locator("[data-queue-edit-banner]")).toHaveCount(0);
-		expect(await composerFocused(page)).toBe(true);
-		await page.waitForTimeout(800);
-		await pill.click();
-		await page.getByRole("button", { name: "More actions: queued edited" }).click();
-		await page.getByRole("menuitem", { name: "Remove" }).click();
+		await page.getByRole("button", { name: "Remove: queued one" }).click();
 		await expect(pill).toHaveCount(0);
 		expect(await composerFocused(page)).toBe(true);
 		await stop(page).click();
@@ -423,8 +408,7 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 			await input.fill("fixture running");
 			await input.press("Enter");
 			await expect(stop(page)).toBeVisible();
-			// The turn itself runs (the send-mode chip appears): before that Stop only withdraws the pending prompt.
-			await expect(page.locator("[data-send-mode]")).toBeVisible();
+			await expect.poll(() => running(page)).toBe(true);
 		};
 
 		await run();
@@ -433,9 +417,9 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 		await page.waitForTimeout(400);
 		// A stray Esc never kills a turn that has a draft.
 		expect(await aborts(dirs)).toBe(0);
-		await expect(running(page)).toBeVisible();
+		await expect.poll(() => running(page)).toBe(true);
 		await input.press("Escape");
-		await expect(running(page)).toHaveCount(0);
+		await expect.poll(() => running(page)).toBe(false);
 		expect(await aborts(dirs)).toBe(1);
 		await expect(input).toHaveValue("my unsent draft");
 
@@ -447,10 +431,10 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 		await input.press("Escape");
 		await page.waitForTimeout(400);
 		expect(await aborts(dirs)).toBe(1);
-		await expect(running(page)).toBeVisible();
+		await expect.poll(() => running(page)).toBe(true);
 		// That Esc armed again; the next one inside its window stops.
 		await input.press("Escape");
-		await expect(running(page)).toHaveCount(0);
+		await expect.poll(() => running(page)).toBe(false);
 		expect(await aborts(dirs)).toBe(2);
 
 		// An empty field stops with the first Esc, and two Esc in one tick send one command.
@@ -460,7 +444,7 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 			for (let press = 0; press < 2; press++)
 				document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 		});
-		await expect(running(page)).toHaveCount(0);
+		await expect.poll(() => running(page)).toBe(false);
 		await page.waitForTimeout(400);
 		expect(await aborts(dirs)).toBe(3);
 
@@ -471,7 +455,7 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 			(button as HTMLElement).click();
 		});
 		await expect.poll(() => aborts(dirs)).toBe(4);
-		await expect(running(page)).toHaveCount(0);
+		await expect.poll(() => running(page)).toBe(false);
 		await page.waitForTimeout(400);
 		expect(await aborts(dirs)).toBe(4);
 		expect(errors).toEqual([]);
@@ -481,53 +465,55 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 	}
 });
 
-test("Stop with queued messages pauses the queue: separate chips in one row, the draft untouched, nothing sent until Resume", async () => {
+test("Stop holds pending instructions and pictures until Resume sends them in order", async () => {
 	test.setTimeout(120_000);
 	const dirs = await profile("stop-queue");
-	// A slow automatic mode choice, as the real judge's round trip can be on a loaded machine: the composer takes one
-	// submission at a time, so the messages to queue are typed once the turn runs (the lane chip), not when Stop shows
-	// (Stop already withdraws the prompt the choice holds back).
 	const { app, page, errors } = await launch(dirs, { OMP_GUI_TEST_AUTO_MODE_DELAY_MS: "1500" });
 	try {
 		const input = composer(page);
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(stop(page)).toBeVisible();
-		await expect(running(page)).toBeVisible();
-		for (const text of ["queued one", "queued two"]) {
-			await input.fill(text);
-			await input.press("Enter");
-			await expect(input).toHaveValue("");
-		}
+		await expect.poll(() => running(page)).toBe(true);
+		await input.fill("queued one");
+		await input.press("Enter");
+		await expect(input).toHaveValue("");
+		await input.fill("queued two");
+		await input.focus();
+		await page.evaluate(() => {
+			const field = document.querySelector<HTMLTextAreaElement>(".omp-composer-input");
+			const data = new DataTransfer();
+			const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+			data.items.add(new File([Uint8Array.from(atob(png), c => c.charCodeAt(0))], "p.png", { type: "image/png" }));
+			field?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+		});
+		await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+		await input.press("Enter");
+		await expect(input).toHaveValue("");
 		await expect(page.locator("[data-queue-pill]")).toContainText("2 queued");
 		await input.fill("my half-typed draft");
 		// With a draft the button is Send: its right click offers the Stop that keeps the draft.
 		await page.locator('[data-slot="send"] button').click({ button: "right" });
 		await page.locator("[data-menu-item]").filter({ hasText: "Stop" }).click();
-		await expect(running(page)).toHaveCount(0);
-
-		// The draft stays the user's own; the queued messages come back as their own chips, oldest first.
+		await expect.poll(() => running(page)).toBe(false);
 		await expect(input).toHaveValue("my half-typed draft");
-		const paused = page.locator("[data-restored-queue]");
-		await expect(paused).toBeVisible();
-		await expect(paused).toContainText("Queue paused because you stopped");
-		await expect(paused.locator("[data-restored-item]")).toHaveText([/queued one$/, /queued two$/]);
-		expect(Math.round((await paused.boundingBox())?.height ?? 0)).toBe(36);
-		await expect(page.locator("[data-queue-pill]")).toHaveCount(0);
-		await expect(page.locator("[data-composer-live]")).toContainText(
-			"Stopped. 2 queued messages are back, nothing will send until you resume",
-		);
-		// Nothing was released: the stopped turn's queue is not sent on its own.
+		const held = page.locator("[data-restored-queue]");
+		await expect(held.locator("[data-restored-item]")).toHaveCount(2);
+		await expect(held).toContainText("queued one");
+		await expect(held).toContainText("queued two");
+		await expect(held.locator("[data-queue-images] img")).toHaveCount(1);
 		await page.waitForTimeout(800);
-		expect(await sentOfType(dirs.record, "prompt")).toEqual(["fixture running"]);
-		expect(await sentOfType(dirs.record, "follow_up")).toEqual([]);
-
-		// Resume sends them in order through stock's calls: the first starts the turn again, the rest queue behind it.
-		await page.mouse.move(0, 0);
-		await paused.getByRole("button", { name: "Resume" }).click();
-		await expect(paused).toHaveCount(0);
-		await expect.poll(() => sentOfType(dirs.record, "prompt")).toEqual(["fixture running", "queued one"]);
-		await expect.poll(() => sentOfType(dirs.record, "follow_up")).toEqual(["queued two"]);
+		expect(await sentOfType(dirs.record, "prompt")).toEqual(["fixture running", "queued one", "queued two"]);
+		await held.getByRole("button", { name: "Resume" }).click();
+		await expect(held).toHaveCount(0);
+		await expect
+			.poll(() => sentOfType(dirs.record, "prompt"))
+			.toEqual(["fixture running", "queued one", "queued two", "queued one", "queued two"]);
+		const resumed = (await readRecords(dirs.record)).filter(
+			record => record.type === "composer.prompt" && record.message === "queued two",
+		);
+		expect(resumed).toHaveLength(2);
+		expect(resumed[1].images).toEqual(resumed[0].images);
 		await expect(input).toHaveValue("my half-typed draft");
 		expect(errors).toEqual([]);
 	} finally {
@@ -536,38 +522,17 @@ test("Stop with queued messages pauses the queue: separate chips in one row, the
 	}
 });
 
-test("Discard and a chip's × drop restored messages; a chip's text puts it in the field; Esc arms the stop with a hint", async () => {
+test("Esc arms the stop with a hint", async () => {
 	test.setTimeout(120_000);
 	const dirs = await profile("stop-queue-discard");
 	const { app, page, errors } = await launch(dirs);
 	try {
 		const input = composer(page);
-		await input.fill("fixture running");
-		await input.press("Enter");
-		await expect(stop(page)).toBeVisible();
-		// Queue once the turn runs: the composer takes one submission at a time (see the test above).
-		await expect(running(page)).toBeVisible();
-		for (const text of ["queued one", "queued two", "queued three"]) {
-			await input.fill(text);
-			await input.press("Enter");
-			await expect(input).toHaveValue("");
-		}
-		await stop(page).click();
-		const paused = page.locator("[data-restored-queue]");
-		await expect(paused.locator("[data-restored-item]")).toHaveCount(3);
-		await paused.getByRole("button", { name: "Remove restored message: queued two" }).click();
-		await expect(paused.locator("[data-restored-item]")).toHaveText([/queued one$/, /queued three$/]);
-		await paused.getByRole("button", { name: "Put in the field: queued three" }).click();
-		await expect(input).toHaveValue("queued three");
-		await paused.getByRole("button", { name: "Discard all restored messages" }).click();
-		await expect(paused).toHaveCount(0);
-		expect(await sentOfType(dirs.record, "follow_up")).toEqual([]);
-
 		// Esc with a draft while a turn runs only arms the stop, and the field says so; typing disarms it.
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(stop(page)).toBeVisible();
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
+		await expect.poll(() => running(page)).toBe(true);
 		await input.fill("an unsent draft");
 		await input.press("Escape");
 		await expect(page.locator("[data-stop-hint]")).toHaveText("Press Esc again to stop the turn. Your draft stays.");
@@ -679,7 +644,7 @@ test("dictation leaves the draft in view, Esc discards the take without stopping
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(stop(page)).toBeVisible();
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
+		await expect.poll(() => running(page)).toBe(true);
 		await input.fill("my draft");
 
 		await mic.click();
@@ -698,7 +663,7 @@ test("dictation leaves the draft in view, Esc discards the take without stopping
 		await expect(bar).toHaveCount(0);
 		await page.waitForTimeout(400);
 		expect(await aborts(dirs)).toBe(0);
-		await expect(running(page)).toBeVisible();
+		await expect.poll(() => running(page)).toBe(true);
 		await expect(input).toHaveValue("my draft");
 
 		// The fake omp cannot transcribe: the failure is a plain sentence, the raw error sits behind Details.

@@ -98,6 +98,7 @@ import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/cl
 import { useComposerStore } from "../../../stores/composer";
 import { LOCAL_SUMMARIES, summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { useMessagesStore } from "../../../stores/messages";
+import { outboxSession, useOutboxStore } from "../../../stores/outbox";
 import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
@@ -206,8 +207,9 @@ function activeTabUntouched(): boolean {
 		!session.isCompacting &&
 		session.messageCount === 0 &&
 		useMessagesStore.getState().messages.length === 0 &&
-		queue.steering.length === 0 &&
-		queue.followUp.length === 0 &&
+		queue.entries.length === 0 &&
+		composer.restoredQueue.length === 0 &&
+		!useOutboxStore.getState().items.some(item => item.session === outboxSession(tab)) &&
 		composer.draft.trim().length === 0 &&
 		composer.images.length === 0
 	);

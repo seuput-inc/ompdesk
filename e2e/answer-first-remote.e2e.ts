@@ -12,7 +12,7 @@ import { exitApp, readRecords } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, openHostFolder, type RemoteInstance } from "./remote-harness";
 
 const QUESTION = "어느정도 됐어?";
-const SENDS: Record<string, true> = { prompt: true, steer: true, follow_up: true, typed_prompt: true };
+const SENDS: Record<string, true> = { "composer.prompt": true, typed_prompt: true };
 
 test("a message a paired computer's tab sends into a running host turn is noted as a typed steer before the steer", async () => {
 	test.setTimeout(240_000);
@@ -36,7 +36,6 @@ test("a message a paired computer's tab sends into a running host turn is noted 
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(a.getByRole("button", { name: "Stop", exact: true })).toBeVisible({ timeout: 30_000 });
-		await expect(a.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", { timeout: 30_000 });
 
 		await input.fill(QUESTION);
 		await expect(a.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
@@ -61,7 +60,7 @@ test("a message a paired computer's tab sends into a running host turn is noted 
 		const first = frames.findIndex(record => record.type === "typed_prompt" && record.text === "fixture running");
 		expect(first).toBeGreaterThanOrEqual(0);
 		expect(frames[first]).toMatchObject({ steer: false });
-		expect(frames[first + 1]).toMatchObject({ type: "prompt", message: "fixture running" });
+		expect(frames[first + 1]).toMatchObject({ type: "composer.prompt", message: "fixture running" });
 
 		const note = frames.findIndex(record => record.type === "typed_prompt" && record.text === QUESTION);
 		expect(note).toBeGreaterThan(first);
@@ -70,8 +69,7 @@ test("a message a paired computer's tab sends into a running host turn is noted 
 		const joined = frames[note + 1];
 		expect(joined).toBeDefined();
 		expect(joined?.message).toBe(QUESTION);
-		const asSteer = joined?.type === "steer" || (joined?.type === "prompt" && joined.streamingBehavior === "steer");
-		expect(asSteer, JSON.stringify(joined)).toBe(true);
+		expect(joined?.type).toBe("composer.prompt");
 		expect(host.errors).toEqual([]);
 		expect(client.errors).toEqual([]);
 	} finally {

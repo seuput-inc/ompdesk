@@ -115,7 +115,7 @@ for (const [hostOld, label] of [
 			await a.getByRole("button", { name: "Send", exact: true }).click();
 			await expect(a.locator("[data-transcript-kind]").filter({ hasText: "Local fixture reply" })).toHaveCount(1);
 			const isPrompt = (frame: Record<string, unknown>) =>
-				frame.type === "prompt" && frame.message === "mixed hello";
+				frame.type === "composer.prompt" && frame.message === "mixed hello";
 			await expect.poll(async () => (await readRecords(host?.record ?? "")).some(isPrompt)).toBe(true);
 
 			// The link drops with the host's sharing and comes back with it.

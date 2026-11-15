@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { createSessionRpcClient } from "./rpc-client";
 import type { RpcResponse } from "./rpc-types";
 
+describe("current instruction RPC", () => {
+	it("sends a prompt without a delivery selector", async () => {
+		const calls: unknown[] = [];
+		const rpc = createSessionRpcClient(async command => {
+			calls.push(command);
+			return { type: "response", command: command.type, success: true };
+		});
+		await rpc.prompt("go");
+		expect(calls).toEqual([{ type: "prompt", message: "go", images: undefined }]);
+		expect(rpc).not.toHaveProperty("followUp");
+		expect(rpc).not.toHaveProperty("setFollowUpMode");
+		expect(rpc).not.toHaveProperty("setSteeringMode");
+		expect(rpc).not.toHaveProperty("setInterruptMode");
+	});
+});
+
 describe("model RPC timeouts", () => {
 	it("gives model switches enough time for provider/session reconfiguration", async () => {
 		const calls: Array<{ type: string; timeoutMs: number | undefined }> = [];

@@ -35,6 +35,7 @@ import type { ExtensionUiStore } from "../stores/extension-ui";
 import { type MessagesStore, useMessagesStore } from "../stores/messages";
 import { type ModelStore, useModelStore } from "../stores/model";
 import type { PlanApprovalStore } from "../stores/plan-approval";
+import type { QueueStore } from "../stores/queue";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import { sessionRuntime, sessionRuntimeStore, setFocusedSessionRuntime } from "../stores/session-runtime-context";
 import { useSettingsStore } from "../stores/settings";
@@ -185,7 +186,7 @@ function installMockOmp(): {
 			getTranscriptPage: vi.fn(async () => success({ messages: [], totalMessages: 0 })),
 			getSubagents: vi.fn(async () => success({ subagents: [] })),
 			getGoal: vi.fn(async () => success({ enabled: false })),
-			getQueue: vi.fn(async () => success({ steering: [], followUp: [] })),
+			getQueue: vi.fn(async () => success({ instance: "test", entries: [] })),
 			getSettings: vi.fn(async () => success({ values: {} })),
 			setSubagentSubscription: vi.fn(async () => success({})),
 		},
@@ -291,7 +292,7 @@ function installTabRoutedMockOmp(): {
 			case "get_goal":
 				return success({ enabled: false });
 			case "get_queue":
-				return success({ steering: [], followUp: [] });
+				return success({ instance: "test", entries: [] });
 			case "get_settings":
 				return success({ values: {} });
 			default:
@@ -838,6 +839,38 @@ describe("useRpcEvents on a dropped link", () => {
 	});
 });
 
+describe("pending instruction events", () => {
+	it("applies canonical snapshots and treats a stock queue event only as a wake", async () => {
+		const { emitTabBatch, commandForTab } = installTabRoutedMockOmp();
+		seedReadyTab("t-queue");
+		await mount(<RpcEventsProbe />);
+		await act(async () => {
+			await attachTabSession("t-queue");
+		});
+		const queue = sessionRuntimeStore<QueueStore>("t-queue", "queue")!;
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		const first = { id: "original", text: "", images: [image], state: "ready" as const };
+		commandForTab.mockClear();
+		await act(async () => {
+			emitTabBatch([{ type: "queue_update", instance: "bridge-1", entries: [first] }], "t-queue");
+		});
+		expect(queue.getState()).toMatchObject({ instance: "bridge-1", entries: [first] });
+		expect(commandForTab.mock.calls.some(([, command]) => command.type === "get_queue")).toBe(false);
+
+		const second = { id: "next", text: "same", state: "ready" as const };
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((id, command) =>
+			command.type === "get_queue"
+				? Promise.resolve(success({ instance: "bridge-1", entries: [first, second] }))
+				: original(id, command),
+		);
+		await act(async () => emitTabBatch([{ type: "queue_update" }], "t-queue"));
+		await flush();
+		expect(queue.getState()).toMatchObject({ instance: "bridge-1", entries: [first, second] });
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "get_queue")).toHaveLength(1);
+	});
+});
+
 describe("useRpcEvents snapshot churn", () => {
 	/** Mount on a settled tab, then park every later get_state until the test answers it. */
 	async function holdNextState(tabId: string) {
@@ -904,7 +937,7 @@ describe("useRpcEvents snapshot churn", () => {
 			hydration = hydrateTabSession("t-churn");
 		});
 		await act(async () => {
-			emitTabBatch([{ type: "queue_update", steering: [], followUp: [] }], "t-churn");
+			emitTabBatch([{ type: "queue_update", instance: "test", entries: [] }], "t-churn");
 		});
 		state.resolve(
 			settledState({
@@ -960,7 +993,7 @@ describe("useRpcEvents snapshot churn", () => {
 	it("keeps plan mode from a turn-end refresh that a trailing frame outdated", async () => {
 		const { emitTabBatch, session, state } = await holdNextState("t-refresh");
 		await act(async () => {
-			emitTabBatch([{ type: "agent_end" }, { type: "queue_update", steering: [], followUp: [] }], "t-refresh");
+			emitTabBatch([{ type: "agent_end" }, { type: "queue_update", instance: "test", entries: [] }], "t-refresh");
 		});
 		state.resolve(settledState({ planModeEnabled: true }));
 		await flush();

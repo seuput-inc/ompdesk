@@ -153,54 +153,7 @@ test("an opened child keeps its id and its name through a relaunch", async () =>
 	}
 });
 
-test("a busy child that reports learns of the follow-up queued behind its turn, and the next send steers", async () => {
-	test.setTimeout(180_000);
-	const profile = await makeProfile();
-	let current: ElectronApplication | undefined;
-	try {
-		const { app, page } = await launch(profile);
-		current = app;
-		const opener = (await tabs(page)).find(tab => tab.active)?.tabId ?? "";
-		await busy(page, opener);
-		const opened = await call(profile, page, opener, "ompdesk_session_open", { message: "Title: part A\nDo A" });
-		const kid = /Opened session (\w+)/.exec(opened.text)?.[1] ?? "";
-		await expect
-			.poll(async () => (await tabs(page)).find(tab => tab.tabId === kid)?.lastRun?.stopReason)
-			.toBe("stop");
-		// The child's next turn keeps running (the fake omp's long turn), as a worker's does while it works.
-		await busy(page, kid);
-
-		const queued = await call(profile, page, opener, "ompdesk_session_send", {
-			session: kid,
-			message: "Also do C",
-			delivery: "follow_up",
-		});
-		expect(queued.text).toContain("queued as a follow-up");
-		expect(queued.text).toContain("Dispatch d2");
-
-		// The child reports and would wait in the same turn: stock shows it no queued follow-up, so the report says so.
-		const report = await call(profile, page, kid, "ompdesk_report", { kind: "done", text: "A done", dispatch: "d2" });
-		expect(report.isError).toBe(false);
-		expect(report.text).toContain("(dispatch d2) waits for you");
-		expect(report.text).toContain("end your turn now");
-
-		const next = await call(profile, page, opener, "ompdesk_session_send", {
-			session: kid,
-			message: "And D",
-			delivery: "follow_up",
-		});
-		expect(next.text).toContain("delivered as steer (it already reported to you in this turn");
-		const prompts = (await readRecords(profile.record)).filter(
-			frame => frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes("And D"),
-		);
-		expect(prompts.at(-1)?.streamingBehavior).toBe("steer");
-	} finally {
-		if (current) await exitApp(current);
-		await fs.rm(profile.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-	}
-});
-
-test("a follow-up queued in a busy child survives a relaunch, its done report reaches the relaunched opener, and its old id takes the next message", async () => {
+test("an instruction pending in a busy child survives a relaunch, its done report reaches the relaunched opener, and its old id takes the next message", async () => {
 	test.setTimeout(240_000);
 	// Interrupted turns stay stopped, so the child's restored tab is idle and takes the message it lost at once.
 	const profile = await makeProfile({ resumeInterrupted: false });
@@ -208,7 +161,7 @@ test("a follow-up queued in a busy child survives a relaunch, its done report re
 	let current: ElectronApplication | undefined;
 	const marked = async (mark: string) =>
 		(await readRecords(profile.record)).filter(
-			frame => frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes(mark),
+			frame => frame.type === "composer.prompt" && typeof frame.message === "string" && frame.message.includes(mark),
 		);
 	try {
 		const first = await launch(profile);
@@ -224,13 +177,12 @@ test("a follow-up queued in a busy child survives a relaunch, its done report re
 		await expect.poll(async () => (await child(first.page, oldId))?.status, { timeout: 60_000 }).toBe("running");
 		await expect.poll(async () => (await child(first.page, oldId))?.sessionPath ?? "").not.toBe("");
 		const childPath = (await child(first.page, oldId))?.sessionPath ?? "";
-		// The opener's next message waits in the child's omp's follow-up queue.
+		// The opener's next instruction is accepted while the child's turn is running.
 		const queued = await call(profile, first.page, opener, "ompdesk_session_send", {
 			session: oldId,
 			message: "Also do C fixture:result-ok",
-			delivery: "follow_up",
 		});
-		expect(queued.text).toContain("queued as a follow-up");
+		expect(queued.isError, queued.text).toBe(false);
 		expect(queued.text).toContain("Dispatch d2");
 		await quit(first.app);
 		current = undefined;

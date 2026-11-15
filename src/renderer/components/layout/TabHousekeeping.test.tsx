@@ -15,6 +15,7 @@ import { closeActiveTab } from "../../lib/tab-close";
 import { useComposerStore } from "../../stores/composer";
 import { type MessagesStore, useMessagesStore } from "../../stores/messages";
 import { useModelStore } from "../../stores/model";
+import { useOutboxStore } from "../../stores/outbox";
 import { useQueueStore } from "../../stores/queue";
 import { useSessionStore } from "../../stores/session";
 import { deleteSessionRuntime } from "../../stores/session-runtime-context";
@@ -132,7 +133,7 @@ function installMockOmp(): MockOmp {
 			getTranscriptPage: vi.fn(async () => ok({ messages: [], totalMessages: 0 })),
 			getSubagents: vi.fn(async () => ok({ subagents: [] })),
 			getGoal: vi.fn(async () => ok({ enabled: false })),
-			getQueue: vi.fn(async () => ok({ steering: [], followUp: [] })),
+			getQueue: vi.fn(async () => ok({ instance: "test", entries: [] })),
 			setSubagentSubscription: vi.fn(async () => ok({})),
 			commandForTab: vi.fn(async (tabId, command) => {
 				switch (command.type) {
@@ -155,7 +156,7 @@ function installMockOmp(): MockOmp {
 					case "get_subagents":
 						return ok({ subagents: [] });
 					case "get_queue":
-						return ok({ steering: [], followUp: [] });
+						return ok({ instance: "test", entries: [] });
 					default:
 						return ok({ enabled: false });
 				}
@@ -197,11 +198,12 @@ afterEach(async () => {
 	container?.remove();
 	useTabsStore.getState().reset();
 	useComposerStore.getState().reset();
+	useOutboxStore.getState().reset();
 	useSessionStore.getState().reset();
 	useSidebarPrefs.getState().reset();
 	useMessagesStore.getState().reset();
 	useTodoStore.getState().reset();
-	useQueueStore.setState({ steering: [], followUp: [] });
+	useQueueStore.setState({ instance: null, entries: [] });
 	useSubagentsStore.getState().reset();
 	useModelStore.getState().reset();
 	useToolsStore.getState().reset();
@@ -289,6 +291,73 @@ describe("TabHousekeeping", () => {
 
 		expect(omp.tabs.close).not.toHaveBeenCalled();
 		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["t-empty", "t-real"]);
+	});
+
+	it("keeps an active placeholder with instructions withdrawn by Stop", async () => {
+		const tab = { kind: "chat" as const, cwd: "/neutral", status: "ready" as const, unreadDone: false };
+		useTabsStore.setState({
+			tabs: [
+				{ ...tab, id: "t-empty", placeholder: true },
+				{ ...tab, id: "t-real" },
+			],
+			activeTabId: "t-empty",
+			bundles: new Map(),
+		});
+		const image = { content: { type: "image" as const, data: "AA==", mimeType: "image/png" }, preview: "data:" };
+		useComposerStore.getState().holdRestored([{ id: "held-1", text: "", images: [image] }]);
+
+		await mount(<TabHousekeeping />);
+		expect(omp.tabs.close).not.toHaveBeenCalled();
+		expect(useComposerStore.getState().restoredQueue).toEqual([{ id: "held-1", text: "", images: [image] }]);
+	});
+
+	it("keeps an active placeholder with a pending instruction", async () => {
+		const tab = { kind: "chat" as const, cwd: "/neutral", status: "ready" as const, unreadDone: false };
+		useTabsStore.setState({
+			tabs: [
+				{ ...tab, id: "t-empty", placeholder: true },
+				{ ...tab, id: "t-real" },
+			],
+			activeTabId: "t-empty",
+			bundles: new Map(),
+		});
+		useQueueStore.getState().setFromFrame({
+			instance: "bridge-1",
+			entries: [{ id: "pending", text: "keep", state: "ready" }],
+		});
+
+		await mount(<TabHousekeeping />);
+		expect(omp.tabs.close).not.toHaveBeenCalled();
+		expect(useQueueStore.getState().entries.map(item => item.id)).toEqual(["pending"]);
+	});
+
+	it("keeps an unsaved session with an offline outbox message when the person leaves it", async () => {
+		const tab = { kind: "agent" as const, cwd: "/work", status: "ready" as const, unreadDone: false };
+		useTabsStore.setState({
+			tabs: [
+				{ ...tab, id: "t-left", unstarted: true },
+				{ ...tab, id: "t-now", unstarted: true },
+			],
+			activeTabId: "t-left",
+			bundles: new Map(),
+		});
+		useOutboxStore.setState({
+			items: [
+				{
+					id: "held-1",
+					session: "|t:t-left",
+					at: 1,
+					state: "held",
+					send: { kind: "message", text: "keep this", images: [] },
+				},
+			],
+		});
+
+		await mount(<TabHousekeeping />);
+		await act(async () => useTabsStore.setState({ activeTabId: "t-now" }));
+		await flush();
+		expect(omp.tabs.close).not.toHaveBeenCalled();
+		expect(useOutboxStore.getState().items.map(item => item.id)).toEqual(["held-1"]);
 	});
 
 	it("closes an empty new session the person showed and left, never one it never showed", async () => {

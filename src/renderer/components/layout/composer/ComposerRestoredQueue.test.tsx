@@ -100,8 +100,8 @@ describe("ComposerRestoredQueue", () => {
 		expect(container.textContent).toBe("");
 		await act(async () => {
 			useComposerStore.getState().holdRestored([
-				{ lane: "steering", text: "queued one", images: [] },
-				{ lane: "followUp", text: "", images: [{ content: image, preview: "data:" }] },
+				{ id: "first", text: "queued one", images: [] },
+				{ id: "second", text: "", images: [{ content: image, preview: "data:" }] },
 			]);
 		});
 		const section = document.querySelector("section[data-restored-queue]") as unknown as TestElement;
@@ -113,21 +113,51 @@ describe("ComposerRestoredQueue", () => {
 			expect.stringContaining("queued one"),
 			expect.stringContaining("Image only"),
 		]);
+		expect(useComposerStore.getState().restoredQueue.map(item => item.id)).toEqual(["first", "second"]);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(section.textContent).not.toContain("After this turn");
+		expect(section.textContent).not.toContain("After next step");
 	});
 
 	it("resumes every held message in order and clears the tray, handing focus back", async () => {
 		await mount();
 		await act(async () => {
 			useComposerStore.getState().holdRestored([
-				{ lane: "steering", text: "one", images: [] },
-				{ lane: "followUp", text: "two", images: [] },
+				{ id: "first", text: "one", images: [] },
+				{ id: "second", text: "", images: [{ content: image, preview: "data:" }] },
 			]);
 		});
 		await click(button("Resume"));
 		await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
-		expect(prompt).toHaveBeenCalledWith("one", undefined, "followUp");
-		expect(followUp).toHaveBeenCalledWith("two", undefined);
+		expect(prompt.mock.calls).toEqual([
+			["one", undefined],
+			["", [image]],
+		]);
+		expect(followUp).not.toHaveBeenCalled();
 		expect(useComposerStore.getState().restoredQueue).toEqual([]);
+	});
+
+	it("keeps the refused message and the remaining IDs and pictures until another explicit resume", async () => {
+		await mount();
+		prompt.mockResolvedValueOnce(ok()).mockResolvedValueOnce({ ...ok(), success: false, error: "refused" });
+		const picture = { content: image, preview: "data:" };
+		await act(async () => {
+			useComposerStore.getState().holdRestored([
+				{ id: "first", text: "one", images: [] },
+				{ id: "second", text: "", images: [picture] },
+				{ id: "third", text: "three", images: [] },
+			]);
+		});
+		await click(button("Resume"));
+		expect(useComposerStore.getState().restoredQueue).toEqual([
+			{ id: "second", text: "", images: [picture] },
+			{ id: "third", text: "three", images: [] },
+		]);
+		expect(prompt.mock.calls).toEqual([
+			["one", undefined],
+			["", [image]],
+		]);
+		expect(followUp).not.toHaveBeenCalled();
 	});
 
 	it("puts one message in the field on demand, apart from the others and ahead of the draft", async () => {
@@ -135,8 +165,8 @@ describe("ComposerRestoredQueue", () => {
 		await act(async () => {
 			useComposerStore.getState().setDraft("my draft");
 			useComposerStore.getState().holdRestored([
-				{ lane: "steering", text: "one", images: [] },
-				{ lane: "followUp", text: "two", images: [] },
+				{ id: "first", text: "one", images: [] },
+				{ id: "second", text: "two", images: [] },
 			]);
 		});
 		await click(button("Put in the field: two"));
@@ -150,8 +180,8 @@ describe("ComposerRestoredQueue", () => {
 		await mount();
 		await act(async () => {
 			useComposerStore.getState().holdRestored([
-				{ lane: "steering", text: "one", images: [] },
-				{ lane: "followUp", text: "two", images: [] },
+				{ id: "first", text: "one", images: [] },
+				{ id: "second", text: "two", images: [] },
 			]);
 		});
 		await click(button("Remove restored message: one"));

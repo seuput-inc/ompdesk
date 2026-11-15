@@ -523,7 +523,7 @@ for (const engine of ENGINES)
 						async () =>
 							(await fs.readFile(record, "utf8"))
 								.split("\n")
-								.filter(line => line.includes(sent) && /"type":"(prompt|steer|follow_up)"/.test(line)).length,
+								.filter(line => line.includes(sent) && /"type":"composer\.prompt"/.test(line)).length,
 						{ timeout: 20_000 },
 					)
 					.toBe(1);
@@ -565,7 +565,7 @@ for (const engine of ENGINES)
 			expect(
 				(await fs.readFile(record, "utf8"))
 					.split("\n")
-					.filter(line => line.includes(sent) && /"type":"(prompt|steer|follow_up)"/.test(line)).length,
+					.filter(line => line.includes(sent) && /"type":"composer\.prompt"/.test(line)).length,
 			).toBe(1);
 
 			const body = JSON.stringify({ engine: engine.name, numbers }, null, "\t");

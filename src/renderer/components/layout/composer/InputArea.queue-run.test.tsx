@@ -1,13 +1,11 @@
 /**
- * The composer's run-state wiring: the Esc hints under the field (Esc again to stop, deciding), Stop busy while a stop is
- * in flight, the placeholder priority (blocked > editing queued > follow-up > steer > idle) and Edit queued, where the
- * field holds a queued message and Cancel / Esc restore the exact previous draft and pictures.
+ * The composer's run-state wiring: Esc hints, Stop busy while a stop is in flight, and placeholder priority.
  */
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { RpcCommand, RpcQueuedMessage, RpcResponse } from "../../../../shared/rpc-types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
 import type * as ShellMode from "../../../hooks/use-shell-mode";
 import { resetHardwareKeyboardForTests } from "../../../lib/hardware-keyboard";
 import { I18nProvider } from "../../../lib/i18n";
@@ -75,15 +73,9 @@ interface TestElement {
 type Handler = (event: Record<string, unknown>) => void;
 
 const ok = (data?: unknown) => ({ type: "response" as const, command: "x", success: true as const, data });
-const image = {
-	content: { type: "image" as const, data: "AA==", mimeType: "image/png" },
-	preview: "data:image/png;base64,AA==",
-};
 
 let container: TestElement;
 let root: Root;
-let queueEdit: Mock;
-let prompt: Mock<(...args: unknown[]) => Promise<unknown>>;
 
 function propsOf(element: unknown): Record<string, Handler | undefined> {
 	const record = element as Record<string, unknown>;
@@ -98,43 +90,12 @@ function findTextarea(): TestElement {
 	return textarea;
 }
 
-function fieldValue(): string {
-	return (findTextarea() as unknown as { value: string }).value;
-}
-
 async function typeInto(value: string): Promise<void> {
 	const element = findTextarea();
 	const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
 	if (descriptor?.set) descriptor.set.call(element, value);
 	else (element as unknown as { value: string }).value = value;
 	await act(async () => propsOf(element).onChange?.({ target: element, currentTarget: element }));
-}
-
-/** A keydown on the field; says whether the composer kept the browser's default and the app-wide Escape away. */
-async function press(
-	key: string,
-	init: Record<string, unknown> = {},
-): Promise<{ prevented: boolean; stopped: boolean }> {
-	const state = { prevented: false, stopped: false };
-	await act(async () =>
-		propsOf(findTextarea()).onKeyDown?.({
-			key,
-			shiftKey: false,
-			ctrlKey: false,
-			metaKey: false,
-			altKey: false,
-			repeat: false,
-			nativeEvent: { isComposing: false },
-			preventDefault: () => {
-				state.prevented = true;
-			},
-			stopPropagation: () => {
-				state.stopped = true;
-			},
-			...init,
-		}),
-	);
-	return state;
 }
 
 async function flush(): Promise<void> {
@@ -151,17 +112,10 @@ function button(label: string): TestElement | null {
 
 const placeholder = () => findTextarea().getAttribute("placeholder");
 
-function queued(id: string, text: string): RpcQueuedMessage {
-	return { id, text, editable: true, timestamp: 1 };
-}
-
-async function mount(opts: { streaming?: boolean; steering?: RpcQueuedMessage[]; followUp?: RpcQueuedMessage[] } = {}) {
-	const steering = opts.steering ?? [];
-	const followUp = opts.followUp ?? [];
-	prompt = vi.fn(async () => ok());
-	queueEdit = vi.fn(async () => ok({ updated: true }));
+async function mount(opts: { streaming?: boolean } = {}) {
+	const prompt = vi.fn(async () => ok());
 	const rpcCommand = vi.fn(async (command: RpcCommand): Promise<RpcResponse> => {
-		if (command.type === "get_queue") return ok({ steering, followUp });
+		if (command.type === "get_queue") return ok({ instance: "test", entries: [] });
 		return ok();
 	});
 	(window as unknown as Record<string, unknown>).omp = {
@@ -173,20 +127,19 @@ async function mount(opts: { streaming?: boolean; steering?: RpcQueuedMessage[];
 			historySearch: vi.fn(async () => ok([])),
 			getAvailableCommands: vi.fn(async () => ok({ commands: [] })),
 			command: rpcCommand,
-			queueEdit,
 			prompt,
 		},
 	};
 	useSessionStore.setState({
 		status: "ready",
 		isStreaming: opts.streaming ?? false,
-		queuedMessageCount: steering.length + followUp.length,
+		queuedMessageCount: 0,
 		cwd: "/tmp",
 		sessionId: "s1",
 		sessionFile: null,
 		sessionName: null,
 	});
-	useQueueStore.getState().setFromFrame({ steering, followUp });
+	useQueueStore.getState().setFromFrame({ instance: "test", entries: [] });
 	useTabsStore.setState({
 		tabs: [{ kind: "agent", id: "t0", cwd: "/tmp", status: "ready", unreadDone: false }],
 		activeTabId: "t0",
@@ -217,7 +170,7 @@ afterEach(async () => {
 	useMessagesStore.getState().reset();
 	useModelStore.getState().reset();
 	useComposerStore.getState().reset();
-	useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
+	useQueueStore.getState().setFromFrame({ instance: "test", entries: [] });
 	useExtensionUiStore.setState({ pendingRequests: [], loginRequestIds: {} });
 	useInputHistoryStore.setState({ entries: [], navIndex: -1, navDraft: "", navContext: undefined });
 	useNextPromptStore.getState().reset();
@@ -269,10 +222,8 @@ describe("the field's placeholder, by priority", () => {
 		expect(placeholder()).not.toBe("Add an instruction…");
 	});
 
-	it("puts a pending question above everything, a queued edit above the lane", async () => {
-		await mount({ streaming: true, steering: [queued("s1", "queued text")] });
-		await act(async () => useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "" }));
-		expect(placeholder()).toBe("Edit the queued message…");
+	it("puts a pending question above the current instruction placeholder", async () => {
+		await mount({ streaming: true });
 		await act(async () =>
 			useExtensionUiStore.getState().pushRequest({
 				type: "extension_ui_request",
@@ -282,111 +233,5 @@ describe("the field's placeholder, by priority", () => {
 			}),
 		);
 		expect(placeholder()).toBe("Answer above, or add an instruction…");
-	});
-});
-
-describe("Edit queued", () => {
-	async function mountEditing(): Promise<void> {
-		await mount({ streaming: true, steering: [queued("s1", "queued text")] });
-		await act(async () => {
-			useComposerStore.getState().setDraft("my draft");
-			useComposerStore.getState().setImages([image]);
-			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "queued text" });
-		});
-	}
-
-	it("puts the message in the field under a banner, with Send as a check", async () => {
-		await mountEditing();
-		expect(fieldValue()).toBe("queued text");
-		const banner = document.querySelector("[data-queue-edit-banner]");
-		expect(banner?.textContent).toContain("Edit queued");
-		expect(banner?.textContent).toContain("Saves as last in “After next step”");
-		expect(button("Save queued message")).not.toBeNull();
-		expect(button("Send")).toBeNull();
-		// The pill gives way to the editor.
-		expect(document.querySelector("[data-queue-pill]")).toBeNull();
-	});
-
-	it("restores the exact previous draft and pictures on Esc, claiming the key from the app-wide Stop", async () => {
-		await mountEditing();
-		await typeInto("changed my mind");
-		const result = await press("Escape");
-		expect(result).toEqual({ prevented: true, stopped: true });
-		expect(useComposerStore.getState().editingQueued).toBeNull();
-		expect(useComposerStore.getState().draft).toBe("my draft");
-		expect(useComposerStore.getState().images).toEqual([image]);
-		expect(queueEdit).not.toHaveBeenCalled();
-		expect(document.querySelector("[data-queue-edit-banner]")).toBeNull();
-		expect(fieldValue()).toBe("my draft");
-	});
-
-	it("restores the same on the banner's Cancel", async () => {
-		await mountEditing();
-		const cancel = document.querySelector("[data-queue-edit-cancel]");
-		await act(async () => propsOf(cancel).onClick?.({}));
-		expect(useComposerStore.getState().draft).toBe("my draft");
-		expect(useComposerStore.getState().images).toEqual([image]);
-	});
-
-	it("saves on Enter: the queue's edit gets the text and the draft comes back", async () => {
-		await mountEditing();
-		await typeInto("better text");
-		const result = await press("Enter");
-		expect(result.prevented).toBe(true);
-		await flush();
-		expect(queueEdit).toHaveBeenCalledWith("s1", "better text");
-		expect(prompt).not.toHaveBeenCalled();
-		expect(useComposerStore.getState().editingQueued).toBeNull();
-		expect(useComposerStore.getState().draft).toBe("my draft");
-		expect(useComposerStore.getState().images).toEqual([image]);
-	});
-
-	it("saves nothing when the text is unchanged, and still restores", async () => {
-		await mountEditing();
-		await press("Enter");
-		expect(queueEdit).not.toHaveBeenCalled();
-		expect(useComposerStore.getState().draft).toBe("my draft");
-	});
-
-	it("never saves an emptied message", async () => {
-		await mountEditing();
-		await typeInto("   ");
-		await press("Enter");
-		expect(queueEdit).not.toHaveBeenCalled();
-		expect(useComposerStore.getState().editingQueued).not.toBeNull();
-	});
-
-	it("keeps ↑ for the caret instead of recalling history over the edit", async () => {
-		await mountEditing();
-		const result = await press("ArrowUp");
-		expect(result.prevented).toBe(false);
-		expect(fieldValue()).toBe("queued text");
-	});
-
-	it("on a touch keyboard Enter is a newline and the check button saves", async () => {
-		input.current = "touch";
-		await mountEditing();
-		await typeInto("better text");
-		const result = await press("Enter");
-		expect(result.prevented).toBe(false);
-		expect(queueEdit).not.toHaveBeenCalled();
-		const save = button("Save queued message");
-		await act(async () => propsOf(save).onClick?.({ preventDefault: () => {} }));
-		await flush();
-		expect(queueEdit).toHaveBeenCalledWith("s1", "better text");
-		expect(useComposerStore.getState().draft).toBe("my draft");
-	});
-
-	it("ends by itself when the message was delivered meanwhile: the edit goes ahead of the restored draft", async () => {
-		await mountEditing();
-		await typeInto("better text");
-		await act(async () => useQueueStore.getState().setFromFrame({ steering: [], followUp: [] }));
-		expect(useComposerStore.getState().editingQueued).toBeNull();
-		expect(useComposerStore.getState().draft).toBe("better text\n\nmy draft");
-		expect(useComposerStore.getState().images).toEqual([image]);
-		expect(useToastStore.getState().toasts.map(toast => toast.message)).toEqual([
-			"“queued text” was already delivered. Your edit is in the field, ahead of your draft.",
-		]);
-		expect(prompt).not.toHaveBeenCalled();
 	});
 });

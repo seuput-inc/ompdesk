@@ -40,7 +40,7 @@ async function received(record: string, texts: readonly string[]): Promise<strin
 		} catch {
 			continue;
 		}
-		if (frame.type !== "prompt" && frame.type !== "steer" && frame.type !== "follow_up") continue;
+		if (frame.type !== "composer.prompt") continue;
 		const text = texts.find(candidate => frame.message?.includes(candidate));
 		if (text) out.push(text);
 	}

@@ -33,7 +33,6 @@ import { CoreError, core } from "./core/process";
 import { EventBatcher } from "./event-batcher";
 import { withoutFrameBookkeeping } from "./frame-bookkeeping";
 import { localHandlerFor, runLocalCommand } from "./local";
-import { projectQueueUpdate } from "./local/queue";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError, type OmpRuntime } from "./local/types";
 import {
 	type BuiltinLaunch,
@@ -615,8 +614,6 @@ export class SidecarManager extends EventEmitter {
 	#rpcClient: RpcClient | null = null;
 	/** The running omp's bridge; null while none runs. */
 	#bridge: BridgeRelay | null = null;
-	/** The last omp's bridge, kept until the next spawn: frames the lane releases after a stop still project their queues by it. */
-	#spawnRelay: BridgeRelay | null = null;
 	#batcher: EventBatcher | null = null;
 	/**
 	 * The lane sends every `message_update` after the first of its message reduced (`sidecar/stream.rs`); this rebuilds
@@ -924,7 +921,6 @@ export class SidecarManager extends EventEmitter {
 		this.#processes?.setPid(pid);
 		const relay = new BridgeRelay(this.#tab, () => ++this.#seq);
 		this.#bridge = relay;
-		this.#spawnRelay = relay;
 		this.#batcher = new EventBatcher(events => {
 			this.emit("events", events);
 		});
@@ -1083,8 +1079,6 @@ export class SidecarManager extends EventEmitter {
 		// Before anything in main reads it.
 		if (obj.type === "message_update")
 			[obj] = this.#rebuild.events([obj as unknown as AgentSessionEvent]) as unknown as Frame[];
-		// Stock queue lanes are bare text; ids are assigned on arrival, in stream order.
-		if (obj.type === "queue_update" && this.#spawnRelay) obj = projectQueueUpdate(this.#spawnRelay, obj);
 		this.#dispatchFrame(obj);
 	}
 

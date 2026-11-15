@@ -1,8 +1,7 @@
 /**
  * Sends what waits in the outbox (stores/outbox.ts) once the link to the computer running its session is back:
  * each session's items one at a time, oldest first, each to the tab that holds the session now (a computer that
- * restarted gave it a new id). A message goes as a `prompt` that says how to join a run (`streamingBehavior`): the
- * host decides at arrival whether it starts a turn or joins the one going, whatever the session did meanwhile. Every
+ * restarted gave it a new id). A message goes as a `prompt`. Every
  * try carries the item's id as `deliveryId`, so a try whose answer the link lost and the next one reach omp once
  * (main's delivery-ledger.ts).
  *
@@ -116,7 +115,7 @@ type Outcome = "delivered" | "later" | { failed: string };
 
 async function deliverMessage(item: OutboxItem, tab: SessionTab): Promise<Outcome> {
 	if (item.send.kind !== "message") return "delivered";
-	const { text, images, behavior } = item.send;
+	const { text, images } = item.send;
 	// The host's echo of this message is this page's own, not "from another device".
 	sessionRuntimeStore<MessagesStore>(tab.id, "messages")?.getState().noteOwnSend(text);
 	let response: RpcResponse;
@@ -125,7 +124,6 @@ async function deliverMessage(item: OutboxItem, tab: SessionTab): Promise<Outcom
 			type: "prompt",
 			message: text,
 			images,
-			streamingBehavior: behavior,
 			deliveryId: item.id,
 		});
 	} catch (error) {
@@ -233,6 +231,7 @@ async function pass(): Promise<void> {
 			// Read again: the person may have cancelled or edited it while the one before it went.
 			const item = useOutboxStore.getState().items.find(entry => entry.id === queued.id);
 			if (!item) continue;
+			if (item.send.kind === "manual") continue;
 			if (item.state === "failed") break;
 			const tab = readyTab(session);
 			if (!tab) break;

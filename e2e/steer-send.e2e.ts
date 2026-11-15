@@ -1,20 +1,12 @@
-/**
- * A message sent while a turn runs is a steer (stock `steer`), whichever way it is sent:
- * plain Enter, the Send button, and the platform's send chord (⌘↵ on macOS, Ctrl+Enter on
- * Windows, the chord the expanded composer advertises). Only the follow-up chord (⌃↵ on
- * macOS, Alt+Enter on Windows) queues a `follow_up` for after the turn. On Windows,
- * Ctrl+Enter used to read as the follow-up chord, so a Windows user's "추가 지시" waited
- * in the follow-up lane until the turn ended.
- */
+/** Sending during a running turn delivers a current instruction from every send control. */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { exitApp, launchApp } from "./harness";
 
 const WINDOWS = process.platform === "win32";
 const SEND_CHORD = WINDOWS ? "Control+Enter" : "Meta+Enter";
-const FOLLOW_UP_CHORD = WINDOWS ? "Alt+Enter" : "Control+Enter";
 
 async function frames(file: string): Promise<Array<{ type: string; message?: unknown }>> {
 	const text = await fs.readFile(file, "utf8").catch(() => "");
@@ -26,18 +18,10 @@ async function frames(file: string): Promise<Array<{ type: string; message?: unk
 			(frame): frame is { type: string; message?: unknown } =>
 				typeof frame === "object" && frame !== null && "type" in frame && typeof frame.type === "string",
 		)
-		.filter(frame => frame.type === "steer" || frame.type === "follow_up");
+		.filter(frame => frame.type === "composer.prompt");
 }
 
-async function lanes(page: Page): Promise<{ steering: string[]; followUp: string[] }> {
-	return page.evaluate(async () => {
-		const response = await window.omp.rpc.getQueue();
-		const data = response.data as { steering: { text: string }[]; followUp: { text: string }[] };
-		return { steering: data.steering.map(item => item.text), followUp: data.followUp.map(item => item.text) };
-	});
-}
-
-test("@smoke a message sent while a turn runs steers it from Enter, the Send button and the send chord; only the follow-up chord queues", async () => {
+test("@smoke a message sent while a turn runs is delivered from Enter, Send and the send chord", async () => {
 	test.setTimeout(90_000);
 	const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-steer-send-")));
 	const desktop = path.join(profile, "desktop");
@@ -68,11 +52,6 @@ test("@smoke a message sent while a turn runs steers it from Enter, the Send but
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
-		// The turn itself runs once the send-mode chip shows (it shows only while a turn runs; before it, Stop only
-		// withdraws the pending prompt, and a message sent now is a prompt, not a steer).
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
-		// The chip reads Steer: nothing has switched it to follow-ups.
-		await expect(page.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer");
 
 		/**
 		 * Type `message` once the composer takes it. Send stays disabled while the previous message is still being
@@ -85,36 +64,58 @@ test("@smoke a message sent while a turn runs steers it from Enter, the Send but
 			await expect(send).toBeEnabled();
 		};
 
-		/** The stock command the fake omp received for `message`. */
-		const sentAs = async (message: string, type: "steer" | "follow_up") => {
+		const sent = async (message: string) => {
 			await expect(input).toHaveValue("");
-			await expect
-				.poll(async () => (await frames(record)).find(frame => frame.message === message)?.type)
-				.toBe(type);
+			await expect.poll(async () => (await frames(record)).some(frame => frame.message === message)).toBe(true);
 		};
 
 		await draft("steer by enter");
 		await input.press("Enter");
-		await sentAs("steer by enter", "steer");
+		await sent("steer by enter");
 
 		await draft("steer by button");
 		await send.click();
-		await sentAs("steer by button", "steer");
+		await sent("steer by button");
 
 		await draft("steer by chord");
 		await input.press(SEND_CHORD);
-		await sentAs("steer by chord", "steer");
-
-		// Every steer waits in stock's steering lane for the loop's next step; none is a follow-up.
-		expect(await lanes(page)).toEqual({
-			steering: ["steer by enter", "steer by button", "steer by chord"],
-			followUp: [],
+		await sent("steer by chord");
+		await expect
+			.poll(async () => (await page.evaluate(() => window.omp.rpc.getQueue())).data)
+			.toMatchObject({
+				entries: [{ text: "steer by enter" }, { text: "steer by button" }, { text: "steer by chord" }],
+			});
+		await draft("duplicate");
+		await input.press("Enter");
+		await sent("duplicate");
+		await draft("duplicate");
+		await input.press("Enter");
+		await expect
+			.poll(
+				async () =>
+					(
+						(await page.evaluate(() => window.omp.rpc.getQueue())).data as {
+							entries: { text: string }[];
+						}
+					).entries.filter(entry => entry.text === "duplicate").length,
+			)
+			.toBe(2);
+		const duplicates = await page.evaluate(async () => {
+			const data = (await window.omp.rpc.getQueue()).data as {
+				instance: string;
+				entries: { id: string; text: string }[];
+			};
+			const entries = data.entries.filter(entry => entry.text === "duplicate");
+			await window.omp.rpc.queueRemove(data.instance, entries[0].id, "discard");
+			return entries.map(entry => entry.id);
 		});
-
-		await draft("later by chord");
-		await input.press(FOLLOW_UP_CHORD);
-		await sentAs("later by chord", "follow_up");
-		expect((await lanes(page)).followUp).toEqual(["later by chord"]);
+		expect(duplicates[0]).not.toBe(duplicates[1]);
+		await expect
+			.poll(async () => {
+				const data = (await page.evaluate(() => window.omp.rpc.getQueue())).data as { entries: { id: string }[] };
+				return data.entries.filter(entry => duplicates.includes(entry.id)).map(entry => entry.id);
+			})
+			.toEqual([duplicates[1]]);
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);
@@ -125,7 +126,7 @@ test("@smoke a message sent while a turn runs steers it from Enter, the Send but
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 for (const language of ["en", "ko"] as const) {
-	test(`a picture sent as a steer shows in the queue popover, and a picture-only steer reads in the interface language (${language})`, async () => {
+	test(`pictures sent during a turn show in the pending list (${language})`, async () => {
 		test.setTimeout(90_000);
 		const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-steer-image-")));
 		const desktop = path.join(profile, "desktop");
@@ -145,15 +146,13 @@ for (const language of ["en", "ko"] as const) {
 			const input = page.locator("textarea").first();
 			await input.fill("fixture running");
 			await input.press("Enter");
-			// The turn itself runs once the send-mode chip shows (it shows only while a turn runs).
-			await expect(page.locator("[data-send-mode]")).toBeVisible();
-			await expect(page.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer");
+			await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
 			const rows = page.locator("[data-queue-row]");
 			const queued = async () =>
 				page.evaluate(async () => {
-					const data = (await window.omp.rpc.getQueue()).data as { steering: unknown[]; followUp: unknown[] };
-					return data.steering.length + data.followUp.length;
+					const data = (await window.omp.rpc.getQueue()).data as { entries: unknown[] };
+					return data.entries.length;
 				});
 			const paste = async (caption: string, rowsAfter: number) => {
 				await input.focus();
@@ -180,9 +179,17 @@ for (const language of ["en", "ko"] as const) {
 
 			await paste("look at this picture", 1);
 			await paste("", 2);
+			await paste("", 3);
+			const snapshot = await page.evaluate(
+				async () =>
+					(await window.omp.rpc.getQueue()).data as {
+						entries: { id: string; text: string }[];
+					},
+			);
+			expect(snapshot.entries[1].id).not.toBe(snapshot.entries[2].id);
+			expect(snapshot.entries.slice(1).map(entry => entry.text)).toEqual(["", ""]);
 			const counts = language === "en" ? "1 image" : "이미지 1개";
 			const wordOnly = language === "en" ? "Image only" : "이미지만";
-			// The stock queue lane carries text only; the popover still says a picture went with each steer.
 			await page.locator("[data-queue-pill]").click();
 			await expect(rows.nth(0)).toContainText("look at this picture");
 			await expect(rows.nth(0).locator("[data-queue-images]")).toHaveText(counts);
@@ -197,7 +204,7 @@ for (const language of ["en", "ko"] as const) {
 	});
 }
 
-test("queued messages sit in one toolbar pill: the transcript and the composer never move, the popover lists both lanes, Steer now and Edit work from it", async () => {
+test("pending instructions leave the transcript and composer in place", async () => {
 	test.setTimeout(150_000);
 	const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-queue-pill-")));
 	const desktop = path.join(profile, "desktop");
@@ -219,9 +226,6 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
-		// The turn itself runs once the send-mode chip shows (it shows only while a turn runs).
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
-		await expect(page.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer");
 
 		const pane = page.locator('.omp-session-pane[data-active="true"]');
 		/** The transcript's height and the composer's box, in px: what queuing must leave alone. */
@@ -237,15 +241,15 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 			});
 		const queueCount = () =>
 			page.evaluate(async () => {
-				const data = (await window.omp.rpc.getQueue()).data as { steering: unknown[]; followUp: unknown[] };
-				return data.steering.length + data.followUp.length;
+				const data = (await window.omp.rpc.getQueue()).data as { entries: unknown[] };
+				return data.entries.length;
 			});
-		const queue = async (text: string, chord?: string) => {
+		const queue = async (text: string) => {
 			const before = await queueCount();
 			await input.fill(text);
 			// Send stays disabled while the previous message is being delivered, and Enter and the chords read the same state.
 			await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
-			await input.press(chord ?? "Enter");
+			await input.press("Enter");
 			await expect(input).toHaveValue("");
 			await expect.poll(queueCount).toBe(before + 1);
 		};
@@ -256,70 +260,22 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 		// The first message adds nothing above, under or inside the box.
 		expect(await geometry()).toEqual(empty);
 		expect(await page.locator(".omp-composer-queue").count()).toBe(0);
-		await queue("later one", FOLLOW_UP_CHORD);
-		await queue("later two", FOLLOW_UP_CHORD);
-		await queue("steer two");
+		await queue("instruction two");
+		await queue("instruction three");
+		await queue("instruction four");
 		await expect(page.locator("[data-queue-pill]")).toContainText("4 queued");
 		expect(await geometry()).toEqual(empty);
-		for (let index = 3; index <= 8; index++) await queue(`more ${index}`, FOLLOW_UP_CHORD);
+		for (let index = 5; index <= 10; index++) await queue(`more ${index}`);
 		await expect(page.locator("[data-queue-pill]")).toContainText("10 queued");
 		expect(await geometry()).toEqual(empty);
 
-		// The popover: both lanes under their headings, the policy line, rows named by their text. It floats: 0 px too.
+		// The list floats without changing the layout.
 		await page.locator("[data-queue-pill]").click();
 		const popover = page.locator("[data-queue-popover]");
 		await expect(popover).toBeVisible();
-		await expect(popover.locator("[data-lane-head]")).toHaveText([/^After next step\s*2/, /^After this turn\s*8/]);
-		await expect(popover.locator("[data-queue-policy]")).toContainText("Steers arrive together");
+		await expect(popover.locator("[data-queue-row]")).toHaveCount(10);
 		expect(await geometry()).toEqual(empty);
 
-		// Steer now: stock promotes the follow-up into the steering lane.
-		await popover.getByRole("button", { name: "Steer now: later one" }).click();
-		await expect(popover.locator("[data-lane-head]").first()).toHaveText(/^After next step\s*3/);
-		await expect
-			.poll(() =>
-				page.evaluate(async () => {
-					const data = (await window.omp.rpc.getQueue()).data as { steering: { text: string }[] };
-					return data.steering.map(item => item.text);
-				}),
-			)
-			.toEqual(["steer one", "steer two", "later one"]);
-		// It lands last in its lane and says so, on the row and on the pill.
-		await expect(page.locator("[data-queue-moved-note]")).toContainText("now last in “After next step”");
-
-		// Edit takes the field over, Esc puts the exact draft back.
-		await page.keyboard.press("Escape");
-		await expect(popover).toHaveCount(0);
-		await input.fill("my half-typed draft");
-		await page.locator("[data-queue-pill]").click();
-		await page.getByRole("button", { name: "Edit: steer one" }).click();
-		await expect(page.locator("[data-queue-edit-banner]")).toContainText("Edit queued");
-		await expect(input).toHaveValue("steer one");
-		await expect(page.locator("[data-queue-pill]")).toHaveCount(0);
-		await input.press("Escape");
-		await expect(page.locator("[data-queue-edit-banner]")).toHaveCount(0);
-		await expect(input).toHaveValue("my half-typed draft");
-		// The turn went on: Esc in the edit never reached the app-wide Stop (the lane chip shows only while it runs; with
-		// a draft the one action button is Send).
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
-		await expect(page.locator('[data-slot="send"] button')).toHaveAttribute("data-send-state", "send");
-		expect(await geometry()).toEqual(empty);
-
-		// Saving re-queues the message at the end of its lane and brings the draft back.
-		await page.locator("[data-queue-pill]").click();
-		await page.getByRole("button", { name: "Edit: steer one" }).click();
-		await input.fill("steer one, edited");
-		await input.press("Enter");
-		await expect(input).toHaveValue("my half-typed draft");
-		await expect(page.locator("[data-queue-pill]")).toContainText("Edited · now last");
-		await expect
-			.poll(() =>
-				page.evaluate(async () => {
-					const data = (await window.omp.rpc.getQueue()).data as { steering: { text: string }[] };
-					return data.steering.map(item => item.text);
-				}),
-			)
-			.toEqual(["steer two", "later one", "steer one, edited"]);
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);

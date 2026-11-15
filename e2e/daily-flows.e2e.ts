@@ -669,7 +669,7 @@ async function dFrames(file: string): Promise<Array<{ type: string; message?: un
 }
 
 const dSent = (f: { type: string; message?: unknown }) =>
-	["prompt", "steer", "follow_up"].includes(f.type) && f.message === "steer from the phone";
+	f.type === "composer.prompt" && f.message === "steer from the phone";
 
 const dActiveTab = (phone: Page) =>
 	phone.evaluate(async () => (await window.omp.tabs.list()).find(tab => tab.active)?.tabId ?? null);
@@ -816,9 +816,6 @@ test("daily flow d: a notification click opens its tab on the phone, a steer arr
 			await expect(send).toBeEnabled();
 			await send.click();
 			await expect(phone.getByRole("button", { name: /^(Stop|중지)$/ })).toBeVisible({ timeout: 30_000 });
-			await expect(phone.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", {
-				timeout: 30_000,
-			});
 			await field.fill("steer from the phone");
 			await expect(send).toBeEnabled({ timeout: 30_000 });
 			await send.click();
@@ -832,8 +829,7 @@ test("daily flow d: a notification click opens its tab on the phone, a steer arr
 			// its echo), never twice, and the record holds one frame.
 			await phone.waitForTimeout(1500);
 			expect(await steerRows.count()).toBeLessThanOrEqual(1);
-			// A web page's composer leaves the choice to the host: stock's steer is a prompt with `streamingBehavior: "steer"`.
-			expect((await dFrames(record)).filter(dSent)).toMatchObject([{ type: "prompt", streamingBehavior: "steer" }]);
+			expect((await dFrames(record)).filter(dSent)).toMatchObject([{ type: "composer.prompt" }]);
 			// The running loop takes the steer in as its own user message: it stays on the page as the person's bubble
 			// and the record still holds the one frame.
 			expect(await dBash(phone, tabA, "fixture:steer-next")).toMatchObject({ success: true });

@@ -9,7 +9,7 @@
  * reach omp once.
  */
 import { create } from "zustand";
-import type { ExtensionUIRequest, ExtensionUIResponse, ImageContent } from "../../shared/rpc-types";
+import type { AgentMessage, ExtensionUIRequest, ExtensionUIResponse, ImageContent } from "../../shared/rpc-types";
 
 export type OutboxSend =
 	| {
@@ -17,8 +17,8 @@ export type OutboxSend =
 			/** As the model gets it (paste markers and emoticons expanded). */
 			text: string;
 			images: ImageContent[];
-			/** How it joins a run still going when it arrives; an idle session takes it as a prompt (the host decides). */
-			behavior: "steer" | "followUp";
+			/** Local recovery lineage; only text and images are sent to the host. */
+			recovered?: { source: ManualOutboxSend["source"]; previous: ManualOutboxSend["previous"] };
 	  }
 	| {
 			kind: "answer";
@@ -29,7 +29,25 @@ export type OutboxSend =
 			request?: ExtensionUIRequest;
 			/** What the person answered, in words. */
 			summary: string;
-	  };
+	  }
+	| ManualOutboxSend;
+
+/** Withdrawn for explicit editing. It is never delivered by the outbox worker. */
+export interface ManualOutboxSend {
+	kind: "manual";
+	source: { recoveryId: string; instance: string; id: string; intent: "draft" | "discard"; envelope: AgentMessage };
+	text: string;
+	images: ImageContent[];
+	previous: { draft: string; images: ImageContent[] };
+	editing: boolean;
+	acknowledged: boolean;
+	recovery:
+		| { kind: "draft" }
+		| { kind: "attempt"; deliveryId: string }
+		| { kind: "previous" }
+		| { kind: "withdrawal_uncertain"; intent: "draft" | "discard" }
+		| { kind: "discard_pending" };
+}
 
 export type OutboxState =
 	/** Waiting for the link. */
@@ -56,7 +74,12 @@ interface OutboxStore {
 	items: OutboxItem[];
 	/** False once a write did not fit in the browser's storage: what waits would not outlive a reload. */
 	saved: boolean;
-	hold: (item: OutboxItem) => void;
+	hold: (item: OutboxItem) => boolean;
+	updateManual: (
+		id: string,
+		change: Partial<Pick<ManualOutboxSend, "text" | "images" | "previous" | "editing" | "recovery" | "acknowledged">>,
+	) => boolean;
+	queueManual: (id: string, deliveryId: string, text: string, images: ImageContent[]) => boolean;
 	patch: (id: string, change: Partial<Pick<OutboxItem, "state" | "tried" | "error" | "misses">>) => void;
 	drop: (id: string) => void;
 	/** Read the list again (another window or page changed it). */
@@ -88,7 +111,7 @@ function isItem(value: unknown): value is OutboxItem {
 		typeof item.at === "number" &&
 		typeof item.send === "object" &&
 		item.send !== null &&
-		(item.send.kind === "message" || item.send.kind === "answer")
+		(item.send.kind === "message" || item.send.kind === "answer" || item.send.kind === "manual")
 	);
 }
 
@@ -97,7 +120,13 @@ function readStored(): OutboxItem[] | null {
 	if (!store) return null;
 	try {
 		const parsed: unknown = JSON.parse(store.getItem(STORAGE_KEY) ?? "[]");
-		return Array.isArray(parsed) ? parsed.filter(isItem) : [];
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(isItem).map(item => {
+			if (item.send.kind !== "message" || !("behavior" in item.send)) return item;
+			const send: typeof item.send & { behavior?: unknown } = { ...item.send };
+			delete send.behavior;
+			return { ...item, send };
+		});
 	} catch {
 		return [];
 	}
@@ -112,22 +141,92 @@ export const useOutboxStore = create<OutboxStore>()((set, get) => {
 	/** Apply `change` to the stored list (another window may have changed it since this one read it) and keep it. */
 	const write = (change: (items: OutboxItem[]) => OutboxItem[]) => {
 		const next = change(readStored() ?? get().items);
-		let saved = true;
+		let saved = false;
 		try {
 			const store = storage();
 			if (store) {
 				if (next.length === 0) store.removeItem(STORAGE_KEY);
 				else store.setItem(STORAGE_KEY, JSON.stringify(next));
+				saved = true;
 			}
 		} catch {
 			saved = false;
 		}
 		set({ items: next, saved });
+		return saved;
 	};
 	return {
 		items: settled(readStored() ?? []),
 		saved: true,
-		hold: item => write(items => [...items.filter(entry => entry.id !== item.id), item]),
+		hold: item =>
+			write(items =>
+				items.some(entry => entry.id === item.id)
+					? items.map(entry => (entry.id === item.id ? item : entry))
+					: [...items, item],
+			),
+		updateManual: (id, change) => {
+			const store = storage();
+			const items = readStored();
+			if (!store || !items) {
+				set({ saved: false });
+				return false;
+			}
+			const item = items.find(entry => entry.id === id);
+			if (!item || item.send.kind !== "manual") return false;
+			const next = items.map(entry =>
+				entry.id === id && entry.send.kind === "manual" ? { ...entry, send: { ...entry.send, ...change } } : entry,
+			);
+			try {
+				store.setItem(STORAGE_KEY, JSON.stringify(next));
+			} catch {
+				set({ saved: false });
+				return false;
+			}
+			set({ items: next, saved: true });
+			return true;
+		},
+		queueManual: (id, deliveryId, text, images) => {
+			const store = storage();
+			const items = readStored();
+			if (!store || !items || items.some(item => item.id === deliveryId)) {
+				set({ saved: false });
+				return false;
+			}
+			const manual = items.find(item => item.id === id);
+			if (
+				!manual ||
+				manual.send.kind !== "manual" ||
+				!manual.send.acknowledged ||
+				manual.send.recovery.kind !== "attempt" ||
+				manual.send.recovery.deliveryId !== deliveryId
+			)
+				return false;
+			const { source, previous } = manual.send;
+			const next = items.map(item =>
+				item.id !== id
+					? item
+					: {
+							id: deliveryId,
+							session: item.session,
+							at: Date.now(),
+							state: "held" as const,
+							send: {
+								kind: "message" as const,
+								text,
+								images,
+								recovered: { source, previous },
+							},
+						},
+			);
+			try {
+				store.setItem(STORAGE_KEY, JSON.stringify(next));
+			} catch {
+				set({ saved: false });
+				return false;
+			}
+			set({ items: next, saved: true });
+			return true;
+		},
 		patch: (id, change) =>
 			write(items =>
 				items.map(item => {

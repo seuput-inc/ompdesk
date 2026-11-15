@@ -50,19 +50,15 @@ describe("noteTypedPrompt", () => {
 		return { client: { command }, command };
 	};
 
-	it("names a person's steer as one, a prompt or follow-up as none", async () => {
+	it("marks every current instruction without selecting a deferred delivery mode", async () => {
 		const { client: c, command } = client();
 		await noteTypedPrompt(c, { type: "steer", message: "how far?" });
-		await noteTypedPrompt(c, { type: "prompt", message: "join", streamingBehavior: "steer" });
-		await noteTypedPrompt(c, { type: "prompt", message: "later", streamingBehavior: "followUp" });
-		await noteTypedPrompt(c, { type: "follow_up", message: "after" });
+		await noteTypedPrompt(c, { type: "prompt", message: "join" });
 		await noteTypedPrompt(c, { type: "prompt", message: "fresh" });
 		expect(command.mock.calls.map(([sent]) => sent)).toEqual([
 			{ type: "typed_prompt", text: "how far?", steer: true },
 			{ type: "typed_prompt", text: "join", steer: true },
-			{ type: "typed_prompt", text: "later", steer: false },
-			{ type: "typed_prompt", text: "after", steer: false },
-			{ type: "typed_prompt", text: "fresh", steer: false },
+			{ type: "typed_prompt", text: "fresh", steer: true },
 		]);
 	});
 

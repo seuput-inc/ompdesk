@@ -15,7 +15,7 @@ import { exitApp, readRecords } from "./harness";
 import { launchRemote, makeRemoteProfile, type RemoteInstance } from "./remote-harness";
 
 const QUESTION = "어느정도 됐어?";
-const SENDS: Record<string, true> = { prompt: true, steer: true, follow_up: true, typed_prompt: true };
+const SENDS: Record<string, true> = { "composer.prompt": true, typed_prompt: true };
 
 test("a message the phone sends into a running turn is noted as a typed steer before the steer", async () => {
 	test.setTimeout(180_000);
@@ -56,7 +56,6 @@ test("a message the phone sends into a running turn is noted as a typed steer be
 		await input.fill("fixture running");
 		await send.click();
 		await expect(phone.getByRole("button", { name: /^(Stop|중단)$/ })).toBeVisible({ timeout: 30_000 });
-		await expect(phone.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", { timeout: 30_000 });
 
 		await input.fill(QUESTION);
 		await expect(send).toBeEnabled();
@@ -80,9 +79,7 @@ test("a message the phone sends into a running turn is noted as a typed steer be
 		const frames = await sends();
 		const first = frames.findIndex(record => record.type === "typed_prompt" && record.text === "fixture running");
 		expect(first).toBeGreaterThanOrEqual(0);
-		expect(frames[first + 1]).toMatchObject({ type: "prompt", message: "fixture running" });
-		// The note is the sender's own command, whether or not a turn runs yet.
-		expect(frames[first]?.steer).toBe(frames[first + 1]?.streamingBehavior === "steer");
+		expect(frames[first + 1]).toMatchObject({ type: "composer.prompt", message: "fixture running" });
 
 		const note = frames.findIndex(record => record.type === "typed_prompt" && record.text === QUESTION);
 		expect(note).toBeGreaterThan(first);
@@ -91,8 +88,7 @@ test("a message the phone sends into a running turn is noted as a typed steer be
 		const joined = frames[note + 1];
 		expect(joined).toBeDefined();
 		expect(joined?.message).toBe(QUESTION);
-		const asSteer = joined?.type === "steer" || (joined?.type === "prompt" && joined.streamingBehavior === "steer");
-		expect(asSteer, JSON.stringify(joined)).toBe(true);
+		expect(joined?.type).toBe("composer.prompt");
 		expect(phoneErrors).toEqual([]);
 	} finally {
 		await browser?.close().catch(() => undefined);

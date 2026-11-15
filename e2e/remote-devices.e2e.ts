@@ -179,7 +179,8 @@ test("@smoke connects two computers over the tailnet with no code, runs a prompt
 		await a.screenshot({ path: "test-results/remote-client-session.png", scale: "css", animations: "disabled" });
 
 		// The prompt reached B's omp, never A's.
-		const isPrompt = (frame: Record<string, unknown>) => frame.type === "prompt" && frame.message === "remote hello";
+		const isPrompt = (frame: Record<string, unknown>) =>
+			frame.type === "composer.prompt" && frame.message === "remote hello";
 		await expect.poll(async () => (await readRecords(host?.record ?? "")).some(isPrompt)).toBe(true);
 		expect((await readRecords(client.record)).some(isPrompt)).toBe(false);
 

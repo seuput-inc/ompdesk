@@ -66,7 +66,6 @@ export type RpcCommand =
 			type: "prompt";
 			message: string;
 			images?: ImageContent[];
-			streamingBehavior?: "steer" | "followUp";
 			/**
 			 * A message a page or a paired computer held while its link was down (renderer lib/outbox-delivery.ts): every
 			 * try of it carries the same id, and the computer running the tab hands it to omp once (main delivery-ledger.ts).
@@ -74,7 +73,6 @@ export type RpcCommand =
 			deliveryId?: string;
 	  }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
-	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort"; origin?: StopOrigin }
 	| { id?: string; type: "abort_and_prompt"; message: string; images?: ImageContent[]; origin?: StopOrigin }
 	// Stock queue edits (queued messages are identified by chip text + lane, as
@@ -121,9 +119,6 @@ export type RpcCommand =
 	| { id?: string; type: "get_model_release_dates" }
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel | "auto" }
 	| { id?: string; type: "cycle_thinking_level" }
-	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
-	| { id?: string; type: "set_follow_up_mode"; mode: "all" | "one-at-a-time" }
-	| { id?: string; type: "set_interrupt_mode"; mode: "immediate" | "wait" }
 	| { id?: string; type: "compact"; customInstructions?: string }
 	| { id?: string; type: "set_auto_compaction"; enabled: boolean }
 	| { id?: string; type: "set_auto_retry"; enabled: boolean }
@@ -136,16 +131,11 @@ export type RpcCommand =
 	/** Cancels a running manual `/compact` or handoff (stock `abortCompaction`/`abortHandoff`); `{aborted}`. */
 	| { id?: string; type: "abort_maintenance" }
 	| { id?: string; type: "dequeue" }
-	// Queue management (answered in main over stock omp's text lanes, see
-	// src/main/local/queue.ts): queueId is the stable id main assigns each chip;
-	// queue_edit re-queues the new text at the end of its lane; queue_move only
-	// switches lanes (same-lane reorder is refused); queue_clear drops
-	// user-restorable entries only.
+	/** Pending instructions are identified by an opaque entry id within a bridge instance. */
 	| { id?: string; type: "get_queue" }
-	| { id?: string; type: "queue_edit"; queueId: string; text: string }
-	| { id?: string; type: "queue_remove"; queueId: string }
-	| { id?: string; type: "queue_move"; queueId: string; toIndex: number; toLane?: "steering" | "followUp" }
-	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
+	| { id?: string; type: "queue_remove"; instance: string; queueId: string; intent: RpcManualRecoveryIntent }
+	| { id?: string; type: "get_manual_recovery" }
+	| { id?: string; type: "ack_manual_recovery"; recoveryId: string; disposition: RpcManualRecoveryDisposition }
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	// Stock's `/dump all|anon` zip (gui-bridge session-dump.ts) repacked with every member redacted in os.tmpdir() (local/session-dump.ts); the answer is a `SessionArchive` (shared/diagnostic-bundle.ts), an error `no_messages` while the session is empty.
@@ -185,7 +175,6 @@ export type RpcCommand =
 			content: string | (TextContent | ImageContent)[];
 			details: Record<string, unknown>;
 			triggerTurn: boolean;
-			deliverAs?: "aside";
 	  }
 	// Which message markers main sent this session its journal holds, and which omp process answers
 	// (main/agent-control/send-outbox.ts): `{instance, journaled}`.
@@ -199,7 +188,7 @@ export type RpcCommand =
 			companion: {
 				content: string | (TextContent | ImageContent)[];
 				details: Record<string, unknown>;
-				delivery: { triggerTurn: boolean; deliverAs?: "aside" };
+				delivery: { triggerTurn: boolean };
 			};
 			askId?: string;
 			response?: ExtensionUIResponse;
@@ -937,33 +926,42 @@ export interface RpcLiveMuteResult {
 }
 
 // ============================================================================
-// Queue Management (get_queue / queue_edit / queue_remove / queue_move / queue_clear)
+// Pending instructions
 // ============================================================================
 
-/**
- * One user-restorable queued message surfaced by get_queue. `id` is the
- * stable per-entry queue id assigned at enqueue time, valid for queue
- * operations until the entry is consumed or removed. `editable` distinguishes
- * plain user prompts from structured command payloads.
- */
+/** An instruction retained by the bridge, in delivery order. */
 export interface RpcQueuedMessage {
 	id: string;
 	text: string;
 	images?: ImageContent[];
-	editable: boolean;
-	timestamp: number;
+	state: "ready" | "in_flight" | "approval_safety";
 }
 
-/** get_queue result: both lanes in visible execution order. */
 export interface RpcGetQueueResult {
-	steering: RpcQueuedMessage[];
-	followUp: RpcQueuedMessage[];
+	instance: string;
+	entries: RpcQueuedMessage[];
 }
 
-/** queue_move result: the entry's lane and final visible index. */
-export interface RpcQueueMoveResult {
-	lane: "steering" | "followUp";
-	index: number;
+/** The full original payload returned by an identity-safe withdrawal. */
+export type RpcQueueRemoveResult =
+	| { removed: false }
+	| {
+			removed: true;
+			recoveryId: string;
+			intent: RpcManualRecoveryIntent;
+			entry: { id: string; text: string; images?: ImageContent[]; envelope: AgentMessage };
+	  };
+
+export type RpcManualRecoveryIntent = "draft" | "discard";
+export type RpcManualRecoveryDisposition = { kind: "draft"; draftId: string } | { kind: "discard" };
+
+export interface RpcManualRecovery {
+	recoveryId: string;
+	instance: string;
+	id: string;
+	intent: RpcManualRecoveryIntent;
+	state: "unconfirmed" | "withdrawn";
+	entry: { id: string; text: string; images?: ImageContent[]; envelope: AgentMessage };
 }
 
 /** One queued message stock handed back: its chip text and attached images. */
@@ -1665,9 +1663,6 @@ export interface RpcSessionState {
 	availableThinkingLevels?: ThinkingLevel[];
 	isStreaming: boolean;
 	isCompacting: boolean;
-	steeringMode: "all" | "one-at-a-time";
-	followUpMode: "all" | "one-at-a-time";
-	interruptMode: "immediate" | "wait";
 	sessionFile?: string | null;
 	cwd: string;
 	sessionId: string;
@@ -2941,10 +2936,8 @@ export type AgentSessionEvent =
 	| NextPromptConfigFrame
 	// Bridge modes/goal.ts paused the goal at its OMPdesk time limit.
 	| { type: "goal_time_limit_reached"; minutes: number }
-	// Authoritative queue snapshot after every queue mutation (enqueue,
-	// drain/consume, remove, move, clear, dequeue restore). The queue store
-	// treats this as the update channel; get_queue is only a hydrate fallback.
-	| { type: "queue_update"; steering: RpcQueuedMessage[]; followUp: RpcQueuedMessage[] };
+	/** A canonical snapshot, or a stock wake that requires a fresh canonical read. */
+	| ({ type: "queue_update" } & Partial<RpcGetQueueResult>);
 
 /**
  * Streaming increment of a `message_update`. omp sends `partial` (the whole

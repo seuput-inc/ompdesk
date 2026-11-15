@@ -158,8 +158,8 @@ test("a typed prompt that starts a goal joins the goal's own turn and never come
 		await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 		await expect(composer(page)).toHaveValue("");
 		await expect(page.getByText("Message not sent")).toHaveCount(0);
-		const prompts = (await recordsOfType(record, "prompt")).filter(frame => frame.message === GOAL_PROMPT);
-		expect(prompts).toMatchObject([{ streamingBehavior: "steer" }]);
+		const prompts = (await recordsOfType(record, "composer.prompt")).filter(frame => frame.message === GOAL_PROMPT);
+		expect(prompts).toHaveLength(1);
 	} finally {
 		await finish(launched);
 	}
@@ -250,7 +250,10 @@ test("a plan asked about while typing is still in plan mode before its prompt le
 		await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
 		const decided = await recordIndex(record, frame => frame.type === "modes.auto_mode_decide");
 		const planOn = await recordIndex(record, frame => frame.type === "modes.set_plan_mode" && frame.enabled === true);
-		const prompt = await recordIndex(record, frame => frame.type === "prompt" && frame.message === PLAN_PROMPT);
+		const prompt = await recordIndex(
+			record,
+			frame => frame.type === "composer.prompt" && frame.message === PLAN_PROMPT,
+		);
 		expect(decided).toBeGreaterThanOrEqual(0);
 		expect(planOn).toBeGreaterThan(decided);
 		expect(prompt).toBeGreaterThan(planOn);
@@ -259,7 +262,7 @@ test("a plan asked about while typing is still in plan mode before its prompt le
 	}
 });
 
-test("a goal asked about while typing still joins the goal's own turn as a steer", async () => {
+test("a goal asked about while typing still receives the current instruction in its own turn", async () => {
 	const launched = await launch({}, PREFETCH_ENV);
 	const { page, record } = launched;
 	try {
@@ -268,12 +271,15 @@ test("a goal asked about while typing still joins the goal's own turn as a steer
 		await expect(chip(page)).toHaveText("This request: Goal");
 		await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
 		const created = await recordIndex(record, frame => frame.type === "goal" && frame.op === "create");
-		const prompt = await recordIndex(record, frame => frame.type === "prompt" && frame.message === GOAL_PROMPT);
+		const prompt = await recordIndex(
+			record,
+			frame => frame.type === "composer.prompt" && frame.message === GOAL_PROMPT,
+		);
 		expect(created).toBeGreaterThanOrEqual(0);
 		expect(prompt).toBeGreaterThan(created);
-		expect((await recordsOfType(record, "prompt")).filter(frame => frame.message === GOAL_PROMPT)).toMatchObject([
-			{ streamingBehavior: "steer" },
-		]);
+		expect(
+			(await recordsOfType(record, "composer.prompt")).filter(frame => frame.message === GOAL_PROMPT),
+		).toHaveLength(1);
 		await expect(page.getByText("Message not sent")).toHaveCount(0);
 	} finally {
 		await finish(launched);

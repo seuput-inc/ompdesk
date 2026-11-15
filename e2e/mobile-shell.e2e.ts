@@ -15,7 +15,7 @@ import {
 import { createServer, type ViteDevServer } from "vite";
 import { expectTouchInput, reassertTouch } from "./fixture/touch-emulation";
 import { hitSizes, variants } from "./harness";
-import { composerGeometry, seedPaused, seedQueue, tapProbe } from "./queue-harness";
+import { composerGeometry, seedQueue, tapProbe } from "./queue-harness";
 
 // The mobile shell (design §6) in Chromium and WebKit device emulation, on the dev harness: the renderer in a
 // browser over a fixture transport (src/renderer/dev-harness), served by Vite from vite.harness.config.ts. Each
@@ -505,12 +505,12 @@ for (const { engine, device } of variants(
 			await page.context().close();
 		});
 
-		test("queued messages are one pill: the composer never moves, the popover is a bottom sheet on a phone with 44 px rows, no tap is stolen, a pause is one 36 px row", async () => {
+		test("queued messages float without moving the composer, with touch-sized rows and no stolen taps", async () => {
 			const page = await openHarness(browser, device.name, { theme: "light", lang: "en" });
 			// The baseline is a running turn with nothing queued: queuing must change nothing from there.
-			await seedQueue(page, { steering: [], followUp: [] });
+			await seedQueue(page, { entries: [] });
 			const idle = await composerGeometry(page);
-			await seedQueue(page, { steering: ["s1", "s2"], followUp: ["f1", "f2", "f3"] });
+			await seedQueue(page, { entries: ["s1", "s2", "f1", "f2", "f3"] });
 			const pill = page.locator("[data-queue-pill]");
 			await expect(pill).toBeVisible();
 			// A phone's pill is the icon and the number; the tray that resized the transcript is gone.
@@ -518,8 +518,7 @@ for (const { engine, device } of variants(
 			await expect(page.locator(".omp-composer-queue")).toHaveCount(0);
 			expect(await composerGeometry(page)).toEqual(idle);
 			await seedQueue(page, {
-				steering: ["s1", "s2"],
-				followUp: ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8"],
+				entries: ["s1", "s2", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8"],
 			});
 			await expect(pill).toContainText(device.shell === "phone" ? /^10$/ : /10 queued/);
 			expect(await composerGeometry(page)).toEqual(idle);
@@ -536,12 +535,11 @@ for (const { engine, device } of variants(
 			expect(box.x + box.width).toBeLessThanOrEqual(viewport?.width ?? 0);
 			// The open list floats: the transcript and the composer still have their heights.
 			expect(await composerGeometry(page)).toEqual(idle);
-			await expect(popover.locator("[data-lane-head]")).toHaveCount(2);
-			await expect(popover.locator("[data-queue-policy]")).toBeVisible();
+			await expect(popover.locator("[data-queue-row]")).toHaveCount(10);
 
 			// Rows are named by their text and never narrower than a finger's row.
 			const row = popover.locator("[data-queue-row]").first();
-			await expect(row.getByRole("button", { name: /^Edit: Also cover the 429 case/ })).toBeVisible();
+			await expect(row.getByRole("button", { name: /^Remove: Also cover the 429 case/ })).toBeVisible();
 			for (const { visual } of await hitSizes(popover.locator("[data-queue-row]"))) {
 				expect(visual.height).toBeGreaterThanOrEqual(44 - 0.5);
 			}
@@ -556,22 +554,6 @@ for (const { engine, device } of variants(
 			await page.keyboard.press("Escape");
 			await expect(popover).toHaveCount(0);
 
-			// Stop with a queue: the held messages are chips in ONE row of 36 px on every shell, and nothing overflows.
-			await seedQueue(page, { steering: [], followUp: [], running: false });
-			await seedPaused(page, [
-				{ id: "s1", lane: "steering" },
-				{ id: "f1", lane: "followUp" },
-				{ id: "f2", lane: "followUp" },
-			]);
-			const paused = page.locator("[data-restored-queue]");
-			await expect(paused).toBeVisible();
-			expect(Math.round((await paused.boundingBox())?.height ?? 0)).toBe(36);
-			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-			await expect(paused.getByRole("button", { name: "Resume" })).toBeVisible();
-			await expect(paused.getByRole("button", { name: "Discard all restored messages" })).toBeVisible();
-			const pausedControls = paused.locator("button");
-			for (const probe of await tapProbe(pausedControls)) expect(probe, probe.label).toMatchObject({ stolen: 0 });
-			await capture(page, "queue-paused", `${engine.name}-${device.name.replace(/ /g, "-")}-light-en`);
 			await page.context().close();
 		});
 

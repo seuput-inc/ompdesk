@@ -818,7 +818,7 @@ describe("LocalHostServices", () => {
 			{ type: "message_end", message: { role: "assistant", usage: { totalTokens: 1_200 } } },
 			{ type: "message_end", message: { role: "user" } },
 		]);
-		await send("follow_up", "then this");
+		await send("prompt", "then this");
 		expect(stored.get("device-x")?.usage).toMatchObject({ requests: 2, tokens: 1_200 });
 
 		const refused = await send("steer", "and this").catch((error: unknown) => error);
@@ -831,12 +831,12 @@ describe("LocalHostServices", () => {
 			"prompt",
 			"get_state",
 			"typed_prompt",
-			"follow_up",
+			"prompt",
 			"get_state",
 		]);
 		expect(sidecars[0]?.commands.filter(command => command.type === "typed_prompt")).toEqual([
-			{ type: "typed_prompt", text: "start", steer: false },
-			{ type: "typed_prompt", text: "then this", steer: false },
+			{ type: "typed_prompt", text: "start", steer: true },
+			{ type: "typed_prompt", text: "then this", steer: true },
 		]);
 	});
 
@@ -2053,7 +2053,7 @@ describe("LocalHostServices", () => {
 		await services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "prompt", message: "hello" } }, x);
 		expect(fact()?.prompted).toBe(1);
 		expect(resume.sync).toHaveBeenCalled();
-		await services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "follow_up", message: "more" } }, x);
+		await services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "prompt", message: "more" } }, x);
 		expect(fact()?.prompted).toBe(2);
 
 		const wrapped = wrapAgentMessage("do it", "an agent");

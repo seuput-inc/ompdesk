@@ -142,7 +142,7 @@ function resetAll(): void {
 	useSessionStore.getState().reset();
 	useMessagesStore.getState().reset();
 	useTodoStore.getState().reset();
-	useQueueStore.setState({ steering: [], followUp: [] });
+	useQueueStore.getState().reset();
 	useSubagentsStore.getState().reset();
 	useModelStore.getState().reset();
 	useToolsStore.getState().reset();
@@ -323,8 +323,8 @@ describe("switchSessionNow F-OWN owner guard", () => {
 			]),
 		});
 		useQueueStore.setState({
-			steering: [{ id: "old-queue", text: "old follow-up", editable: true, timestamp: 1 }],
-			followUp: [],
+			instance: "old-process",
+			entries: [{ id: "old-queue", text: "old instruction", state: "ready" }],
 		});
 		useTodoStore.getState().setPhases([{ name: "old phase", tasks: [] }]);
 		useModelStore.setState({ model: { provider: "old", id: "old-model" } });

@@ -165,7 +165,7 @@ function installMockOmp(): { omp: MockOmp; emitTabStatus: TabStatusHandler } {
 			getTranscriptPage: vi.fn(async () => ok({ messages: [], totalMessages: 0 })),
 			getSubagents: vi.fn(async () => ok({ subagents: [] })),
 			getGoal: vi.fn(async () => ok({ enabled: false })),
-			getQueue: vi.fn(async () => ok({ steering: [], followUp: [] })),
+			getQueue: vi.fn(async () => ok({ instance: "test", entries: [] })),
 			switchSession: vi.fn(async () => ok({})),
 			setSubagentSubscription: vi.fn(async () => ok({})),
 		}),
@@ -203,8 +203,8 @@ function fillLiveStores(tag: string): void {
 	useMessagesStore.setState({ messages: [msg(`hello-${tag}`)] });
 	useTodoStore.getState().setPhases([{ name: `phase-${tag}`, tasks: [] } as TodoPhase]);
 	useQueueStore.setState({
-		steering: [{ id: `q-${tag}`, text: `steer-${tag}`, editable: true, timestamp: 1 }],
-		followUp: [],
+		instance: `bridge-${tag}`,
+		entries: [{ id: `q-${tag}`, text: `instruction-${tag}`, state: "ready" }],
 	});
 	useSubagentsStore.setState({
 		subagents: new Map<string, SubagentSnapshot>([
@@ -259,7 +259,7 @@ function resetAll(): void {
 	useSessionStore.getState().reset();
 	useMessagesStore.getState().reset();
 	useTodoStore.getState().reset();
-	useQueueStore.setState({ steering: [], followUp: [] });
+	useQueueStore.setState({ instance: null, entries: [] });
 	useSubagentsStore.getState().reset();
 	useModelStore.getState().reset();
 	useToolsStore.getState().reset();
@@ -809,7 +809,7 @@ describe("tabs store switch", () => {
 		expect(useSessionStore.getState().planModeEnabled).toBe(true);
 		expect(useSessionStore.getState().goal?.objective).toBe("goal-t0");
 		expect(useTodoStore.getState().phases.map(phase => phase.name)).toEqual(["phase-t0"]);
-		expect(useQueueStore.getState().steering.map(entry => entry.id)).toEqual(["q-t0"]);
+		expect(useQueueStore.getState().entries.map(entry => entry.id)).toEqual(["q-t0"]);
 		expect(useSubagentsStore.getState().subagents.has("a-t0")).toBe(true);
 		expect(useModelStore.getState().model?.id).toBe("m-t0");
 		expect(useModelStore.getState().fastModeEnabled).toBe(true);

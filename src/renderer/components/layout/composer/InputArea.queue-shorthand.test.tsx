@@ -189,7 +189,7 @@ async function mount(withRuntime = false): Promise<void> {
 			getAvailableCommands: vi.fn(async () => ok({ commands: [] })),
 			getGoal: vi.fn(async () => ok({ enabled: false, status: "none" })),
 			command: vi.fn(async (command: RpcCommand) => {
-				if (command.type === "get_queue") return ok({ steering: [], followUp: [] });
+				if (command.type === "get_queue") return ok({ instance: "test", entries: [] });
 				if (command.type === "set_setting") return setSetting(command.path, command.value);
 				return ok();
 			}),
@@ -231,7 +231,7 @@ async function mount(withRuntime = false): Promise<void> {
 		);
 		window.omp.rpc.commandForTab = vi.fn(async (_tabId, command) => {
 			if (command.type === "prompt") return prompt(command.message, command.images);
-			if (command.type === "get_queue") return ok({ steering: [], followUp: [] });
+			if (command.type === "get_queue") return ok({ instance: "test", entries: [] });
 			if (command.type === "get_state")
 				return ok({
 					sessionId: useSessionStore.getState().sessionId,
@@ -276,7 +276,7 @@ afterEach(async () => {
 	useModelStore.getState().reset();
 	useComposerStore.getState().reset();
 	useInputHistoryStore.setState({ entries: [], navIndex: -1, navDraft: "", navContext: undefined });
-	useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
+	useQueueStore.getState().setFromFrame({ instance: "test", entries: [] });
 	useSettingsStore.getState().reset();
 	useTabsStore.getState().reset();
 	useFirstRunStore.getState().reset();
@@ -404,94 +404,37 @@ describe("InputArea queue shorthand submit", () => {
 		expect(props?.autoCapitalize).toBe("sentences");
 	});
 
-	it("routes `-> text` to followUp with the prefix stripped while streaming", async () => {
-		await mount();
-		await typeInto(findTextarea(), "-> ord alpha");
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
+	it.each(["-> ord alpha", "=> ship it", "->\n1. alpha\n2. beta", "-> /my_cmd now"])(
+		"sends %s literally as one current instruction while streaming",
+		async text => {
+			await mount();
+			await typeInto(findTextarea(), text);
+			await pressEnter(findTextarea());
+			await flush();
+			await flush();
+			expect(prompt).toHaveBeenCalledWith(text, []);
+			expect(followUp).not.toHaveBeenCalled();
+			expect(steer).not.toHaveBeenCalled();
+		},
+	);
 
-		expect(followUp).toHaveBeenCalledTimes(1);
-		expect(followUp).toHaveBeenCalledWith("ord alpha", []);
-		expect(steer).not.toHaveBeenCalled();
-		expect(prompt).not.toHaveBeenCalled();
-	});
-
-	it("queues an extension command whose name has an underscore through prompt, not followUp", async () => {
-		await mount();
-		const subscribe = window.omp.events.onTabCommandsUpdate as unknown as Mock;
-		const deliver = subscribe.mock.calls.at(-1)?.[0] as (commands: unknown[], tabId: string) => void;
-		await act(async () => deliver([{ name: "my_cmd", description: "Ext", source: "extension" }], "t0"));
-		await typeInto(findTextarea(), "-> /my_cmd now");
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
-
-		expect(prompt).toHaveBeenCalledWith("/my_cmd now", []);
-		expect(followUp).not.toHaveBeenCalled();
-	});
-
-	it("routes `=> text` the same way while streaming", async () => {
-		await mount();
-		await typeInto(findTextarea(), "=> ship it");
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
-
-		expect(followUp).toHaveBeenCalledWith("ship it", []);
-		expect(steer).not.toHaveBeenCalled();
-	});
-
-	it("preserves only the unacknowledged queue remainder and prevents retry after transport loss", async () => {
-		await mount();
-		followUp.mockResolvedValueOnce(ok()).mockRejectedValueOnce(new Error("transport disconnected"));
-		await typeInto(findTextarea(), "=>\n1. accepted\n2. uncertain\n3. unsent");
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
-		expect(followUp).toHaveBeenCalledTimes(2);
-		expect(useComposerStore.getState().draft).toBe("=>\n1. uncertain\n2. unsent");
-		expect(useComposerStore.getState().submissionUncertain).toBe(true);
-		await pressEnter(findTextarea());
-		await flush();
-		expect(followUp).toHaveBeenCalledTimes(2);
-	});
-
-	it("splits an enumerated list into one followUp per item while streaming", async () => {
-		await mount();
-		await typeInto(findTextarea(), "->\n1. alpha\n2. beta");
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
-
-		expect(followUp).toHaveBeenCalledTimes(2);
-		expect(followUp).toHaveBeenNthCalledWith(1, "alpha", []);
-		expect(followUp).toHaveBeenNthCalledWith(2, "beta", undefined);
-		expect(steer).not.toHaveBeenCalled();
-	});
-
-	it("starts immediately as a followUp-behavior prompt when idle", async () => {
+	it("sends the same literal text when idle", async () => {
 		await mount();
 		await act(async () => useSessionStore.setState({ isStreaming: false }));
 		await typeInto(findTextarea(), "-> ord alpha");
 		await pressEnter(findTextarea());
 		await flush();
 		await flush();
-
-		expect(prompt).toHaveBeenCalledWith("ord alpha", [], "followUp");
-		expect(followUp).not.toHaveBeenCalled();
-		expect(steer).not.toHaveBeenCalled();
+		expect(prompt).toHaveBeenCalledWith("-> ord alpha", []);
 	});
 
-	it("still steers a plain (non-shorthand) message while streaming", async () => {
+	it("sends plain guidance as a current instruction while streaming", async () => {
 		await mount();
 		await typeInto(findTextarea(), "plain guidance");
 		await pressEnter(findTextarea());
 		await flush();
 		await flush();
-
-		expect(steer).toHaveBeenCalledWith("plain guidance", []);
-		expect(followUp).not.toHaveBeenCalled();
+		expect(prompt).toHaveBeenCalledWith("plain guidance", []);
 	});
 
 	it("renders an idle prompt before its RPC settles and replaces the local echo on delivery", async () => {
@@ -536,26 +479,6 @@ describe("InputArea queue shorthand submit", () => {
 
 		deferred.resolve(ok());
 		await flush();
-	});
-
-	it("starts every run as Steer: a Follow-up picked on the chip lasts for that run only", async () => {
-		await mount();
-		const chip = () => document.querySelector("[data-send-mode]") as unknown as TestElement | null;
-		expect(chip()?.getAttribute("data-send-mode")).toBe("steer");
-		await click(chip() as TestElement);
-		expect(chip()?.getAttribute("data-send-mode")).toBe("followUp");
-		await typeInto(findTextarea(), "after this run");
-		await pressEnter(findTextarea());
-		await flush();
-		expect(followUp).toHaveBeenCalledWith("after this run", []);
-
-		await act(async () => useSessionStore.setState({ isStreaming: false }));
-		await act(async () => useSessionStore.setState({ isStreaming: true }));
-		expect(chip()?.getAttribute("data-send-mode")).toBe("steer");
-		await typeInto(findTextarea(), "next run steer");
-		await pressEnter(findTextarea());
-		await flush();
-		expect(steer).toHaveBeenCalledWith("next run steer", []);
 	});
 
 	it("offers Stop while the automatic mode choice holds a prompt back, and Stop withdraws it into the draft", async () => {
@@ -631,22 +554,6 @@ describe("InputArea queue shorthand submit", () => {
 
 		expect(prompt).not.toHaveBeenCalled();
 		expect(useComposerStore.getState().draft).toBe("");
-	});
-
-	it("stops a multi-item queue before a later item can cross into another tab", async () => {
-		await mount();
-		const first = Promise.withResolvers<RpcResponse>();
-		followUp.mockReturnValueOnce(first.promise);
-		await typeInto(findTextarea(), "->\n1. alpha\n2. beta");
-		await pressEnter(findTextarea());
-		expect(followUp).toHaveBeenCalledTimes(1);
-
-		await act(async () => useTabsStore.setState({ activeTabId: "t1" }));
-		first.resolve(ok());
-		await flush();
-		await flush();
-
-		expect(followUp).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -737,18 +644,6 @@ describe("InputArea prompt history", () => {
 		await flush();
 
 		expect(prompt).not.toHaveBeenCalled();
-		expect(useInputHistoryStore.getState().entries).toEqual([]);
-	});
-
-	it("does not record a shorthand whose remaining items were never dispatched", async () => {
-		await mount();
-		followUp.mockRejectedValueOnce(new Error("transport disconnected"));
-		await typeInto(findTextarea(), "=>\n1. alpha\n2. beta");
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
-
-		expect(followUp).toHaveBeenCalledTimes(1);
 		expect(useInputHistoryStore.getState().entries).toEqual([]);
 	});
 
@@ -1154,7 +1049,7 @@ describe("InputArea next-prompt suggestion", () => {
 		await typeInto(findTextarea(), "steer this");
 		// Same node: nothing came or went, so nothing moved.
 		expect(button()).toBe(node);
-		expect(node?.getAttribute("aria-label")).toBe("Send");
+		expect(node?.getAttribute("aria-label")).toBe(translate("input.currentInstruction"));
 		expect(node?.disabled).toBe(false);
 		expect(node?.querySelector("[data-send-stop-hint]")).not.toBeNull();
 		expect(document.querySelector('button[aria-label="Stop"]')).toBeNull();
@@ -2325,10 +2220,10 @@ describe("InputArea composer audit", () => {
 		// Shift+Enter: the field's own newline, never the completion.
 		expect((await pressKey({ key: "Enter", shiftKey: true })).defaultPrevented).toBe(false);
 		expect(draft()).toBe("check /rev");
-		// ⌘↵ sends what is typed (a steer while the turn runs).
+		// ⌘↵ sends what is typed as the current instruction.
 		await pressKey({ key: "Enter", metaKey: true });
 		await flush();
-		expect(steer).toHaveBeenCalledWith("check /rev", []);
+		expect(prompt).toHaveBeenCalledWith("check /rev", []);
 	});
 
 	it("L1: a menu closed with Esc or ← stays closed while the caret moves in its token, until an edit", async () => {
@@ -2542,7 +2437,7 @@ describe("InputArea composer audit", () => {
 			await click(stopAndSend);
 			await flush();
 			await flush();
-			expect(steer).toHaveBeenCalledWith("hello there", [image("AQ==").content]);
+			expect(prompt).toHaveBeenCalledWith("hello there", [image("AQ==").content]);
 		} finally {
 			uninstallFakeMic();
 		}

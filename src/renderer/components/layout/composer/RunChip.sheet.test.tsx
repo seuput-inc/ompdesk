@@ -124,26 +124,24 @@ describe("the Run sheet is one line per row", () => {
 			"input.more.autoCompactDesc",
 			"input.more.autoRetryDesc",
 			"cmd.prewalk.desc",
-			"input.more.steeringAllDesc",
-			"input.more.interruptImmediateDesc",
 			"input.delegation.note",
 			"input.approval.yolo.desc",
 			"input.thinking.level.auto",
 		]) {
 			expect(text, key).toContain(translate(key));
 		}
-		expect(sheet.querySelectorAll("[data-setting-info]").length).toBeGreaterThanOrEqual(12);
+		expect(sheet.querySelectorAll("[data-setting-info]").length).toBeGreaterThanOrEqual(10);
 	});
 
 	it("lays the switches out as icon tiles, two to a row, each with its (i) glyph", async () => {
 		const sheet = await openSheet();
 		const grids = Array.from(sheet.querySelectorAll("[data-switch-grid]"));
-		// Speed (Fast, Slow, Ultrafast) and Advanced (Auto-compact, Extended, Auto-retry, Prewalk, Steer, Interrupt).
+		// Speed and Advanced controls retain their two-column layout.
 		expect(grids).toHaveLength(2);
 		for (const grid of grids) expect(grid.className).toContain("grid-cols-2");
 		// Plus the Mode section's Plan and Auto mode, each a whole-row tile with its glyph like the others.
 		const tiles = Array.from(sheet.querySelectorAll("[data-switch-tile]"));
-		expect(tiles).toHaveLength(11);
+		expect(tiles).toHaveLength(9);
 		expect(sheet.querySelector("[data-switch-field]")).toBeNull();
 		for (const tile of tiles) {
 			expect(tile.querySelector("[data-setting-icon] svg")).not.toBeNull();
@@ -172,7 +170,7 @@ describe("the Run sheet is one line per row", () => {
 	it("ends every row in its (i), so the glyphs stand in one column", async () => {
 		const sheet = await openSheet();
 		const rows = Array.from(sheet.querySelectorAll("[data-switch-tile], [data-choice-row], [data-context-size]"));
-		expect(rows.length).toBeGreaterThanOrEqual(15);
+		expect(rows.length).toBeGreaterThanOrEqual(13);
 		for (const row of rows) {
 			const controls = row.querySelectorAll("[role=switch], [role=radiogroup], select, [data-setting-info]");
 			expect(controls[controls.length - 1]?.hasAttribute("data-setting-info")).toBe(true);
@@ -199,7 +197,7 @@ describe("the Run sheet is one line per row", () => {
 
 describe("Advanced", () => {
 	it("starts closed even when a value in it differs from the default", async () => {
-		useSettingsStore.setState({ interruptMode: "immediate", autoRetry: false });
+		useSettingsStore.setState({ autoRetry: false });
 		await openSheet({ openAdvanced: false });
 		const advanced = Array.from(document.querySelectorAll("button")).find(
 			button => button.textContent?.trim() === translate("input.runSettings.advanced"),

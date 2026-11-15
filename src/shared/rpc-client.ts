@@ -8,6 +8,8 @@ import type {
 	MessagesPage,
 	RpcCommand,
 	RpcDebugParams,
+	RpcManualRecoveryDisposition,
+	RpcManualRecoveryIntent,
 	RpcMcpServerInput,
 	RpcResponse,
 	RpcSecurityDispositionStatus,
@@ -22,9 +24,8 @@ import type {
 export interface SessionRpcClient {
 	command: RpcTransport;
 	getState(): Promise<RpcResponse>;
-	prompt(message: string, images?: ImageContent[], streamingBehavior?: "steer" | "followUp"): Promise<RpcResponse>;
+	prompt(message: string, images?: ImageContent[]): Promise<RpcResponse>;
 	steer(message: string, images?: ImageContent[]): Promise<RpcResponse>;
-	followUp(message: string, images?: ImageContent[]): Promise<RpcResponse>;
 	/** `origin`: who asked for the Stop, for main's log (never sent to omp). */
 	abort(origin?: StopOrigin): Promise<RpcResponse>;
 	abortAndPrompt(message: string, origin?: StopOrigin): Promise<RpcResponse>;
@@ -39,10 +40,9 @@ export interface SessionRpcClient {
 	abortMaintenance(): Promise<RpcResponse>;
 	dequeue(): Promise<RpcResponse>;
 	getQueue(): Promise<RpcResponse>;
-	queueEdit(queueId: string, text: string): Promise<RpcResponse>;
-	queueRemove(queueId: string): Promise<RpcResponse>;
-	queueMove(queueId: string, toIndex: number, toLane?: "steering" | "followUp"): Promise<RpcResponse>;
-	queueClear(lane?: "steering" | "followUp"): Promise<RpcResponse>;
+	queueRemove(instance: string, queueId: string, intent: RpcManualRecoveryIntent): Promise<RpcResponse>;
+	getManualRecovery(): Promise<RpcResponse>;
+	ackManualRecovery(recoveryId: string, disposition: RpcManualRecoveryDisposition): Promise<RpcResponse>;
 	setModel(provider: string, modelId: string): Promise<RpcResponse>;
 	cycleModel(direction?: "forward" | "backward"): Promise<RpcResponse>;
 	retry(): Promise<RpcResponse>;
@@ -121,9 +121,6 @@ export interface SessionRpcClient {
 	cycleThinkingLevel(): Promise<RpcResponse>;
 	setFastMode(enabled: boolean): Promise<RpcResponse>;
 	setSlowMode(enabled: boolean): Promise<RpcResponse>;
-	setSteeringMode(mode: "all" | "one-at-a-time"): Promise<RpcResponse>;
-	setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<RpcResponse>;
-	setInterruptMode(mode: "immediate" | "wait"): Promise<RpcResponse>;
 	compact(customInstructions?: string): Promise<RpcResponse>;
 	setAutoCompaction(enabled: boolean): Promise<RpcResponse>;
 	setAutoRetry(enabled: boolean): Promise<RpcResponse>;
@@ -425,10 +422,8 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 	return {
 		command: rpcCommand,
 		getState: () => rpcCommand({ type: "get_state" }),
-		prompt: (message, images, streamingBehavior) =>
-			rpcCommand({ type: "prompt", message, images, streamingBehavior }),
+		prompt: (message, images) => rpcCommand({ type: "prompt", message, images }),
 		steer: (message, images) => rpcCommand({ type: "steer", message, images }),
-		followUp: (message, images) => rpcCommand({ type: "follow_up", message, images }),
 		abort: origin => rpcCommand({ type: "abort", origin }),
 		abortAndPrompt: (message, origin) => rpcCommand({ type: "abort_and_prompt", message, origin }),
 		abortAndRestoreQueue: origin => rpcCommand({ type: "abort_and_restore_queue", origin }),
@@ -441,10 +436,10 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		abortMaintenance: () => rpcCommand({ type: "abort_maintenance" }),
 		dequeue: () => rpcCommand({ type: "dequeue" }),
 		getQueue: () => rpcCommand({ type: "get_queue" }),
-		queueEdit: (queueId, text) => rpcCommand({ type: "queue_edit", queueId, text }),
-		queueRemove: queueId => rpcCommand({ type: "queue_remove", queueId }),
-		queueMove: (queueId, toIndex, toLane) => rpcCommand({ type: "queue_move", queueId, toIndex, toLane }),
-		queueClear: lane => rpcCommand({ type: "queue_clear", lane }),
+		queueRemove: (instance, queueId, intent) => rpcCommand({ type: "queue_remove", instance, queueId, intent }),
+		getManualRecovery: () => rpcCommand({ type: "get_manual_recovery" }),
+		ackManualRecovery: (recoveryId, disposition) =>
+			rpcCommand({ type: "ack_manual_recovery", recoveryId, disposition }),
 		setModel: (provider, modelId) => rpcCommand({ type: "set_model", provider, modelId }),
 		cycleModel: direction => rpcCommand({ type: "cycle_model", direction }),
 		retry: () => rpcCommand({ type: "retry" }),
@@ -512,9 +507,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		cycleThinkingLevel: () => rpcCommand({ type: "cycle_thinking_level" }),
 		setFastMode: enabled => rpcCommand({ type: "set_fast_mode", enabled }),
 		setSlowMode: enabled => rpcCommand({ type: "set_slow_mode", enabled }),
-		setSteeringMode: mode => rpcCommand({ type: "set_steering_mode", mode }),
-		setFollowUpMode: mode => rpcCommand({ type: "set_follow_up_mode", mode }),
-		setInterruptMode: mode => rpcCommand({ type: "set_interrupt_mode", mode }),
 		compact: customInstructions => rpcCommand({ type: "compact", customInstructions }),
 		setAutoCompaction: enabled => rpcCommand({ type: "set_auto_compaction", enabled }),
 		setAutoRetry: enabled => rpcCommand({ type: "set_auto_retry", enabled }),

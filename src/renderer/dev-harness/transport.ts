@@ -442,7 +442,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case "get_jobs":
 				return respond(command, { rows: BOARD_BUSY ? boardJobs() : JOBS_TREE ? jobTreeRows() : [] });
 			case "get_queue":
-				return respond(command, { steering: [], followUp: [] });
+				return respond(command, { instance: "harness-process", entries: [] });
 			case "agent_control_review":
 				return respond(command, BOARD_BUSY ? boardReview() : { items: [] });
 			case "get_session_tree":

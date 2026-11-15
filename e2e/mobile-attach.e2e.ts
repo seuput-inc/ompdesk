@@ -118,7 +118,7 @@ async function receivedPrompt(record: string, message: string): Promise<Received
 		.split("\n")
 		.filter(line => line.trim())
 		.map(line => JSON.parse(line) as Received)
-		.find(frame => frame.type === "prompt" && frame.message === message);
+		.find(frame => frame.type === "composer.prompt" && frame.message === message);
 }
 
 /** The pictures of the sent bubbles that decoded (a broken one shows the unavailable chip instead). */

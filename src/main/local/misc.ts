@@ -110,8 +110,7 @@ export const handlers: Record<string, LocalHandler> = {
 			scanId: command.scanId,
 			findingId: command.findingId,
 		});
-		// A normal user turn; while the agent streams it queues as a follow-up (fork parity).
-		await ctx.send({ type: "prompt", message: prompt, streamingBehavior: "followUp" });
+		await ctx.bridge.request("composer.prompt", { message: prompt });
 		return { accepted: true };
 	},
 	get_ssh_hosts: viaBridge("ssh_hosts"),

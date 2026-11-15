@@ -40,7 +40,7 @@ test("the host's own window lists, views and works in a session its paired devic
 			.toBe("online");
 		const prompts = async () =>
 			(await readRecords(hostProfile.record))
-				.filter(frame => frame.type === "prompt")
+				.filter(frame => frame.type === "composer.prompt")
 				.map(frame => ({ by: frame.recordedBy, message: String(frame.message) }));
 		const launches = async () =>
 			(await readRecords(hostProfile.record)).filter(frame => frame.type === "launch").length;

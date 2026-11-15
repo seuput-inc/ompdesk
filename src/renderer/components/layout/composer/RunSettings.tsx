@@ -15,8 +15,6 @@ import {
 	ArrowUpRight,
 	ChevronRight,
 	Gauge,
-	Layers,
-	OctagonX,
 	Rocket,
 	RotateCw,
 	Shrink,
@@ -169,8 +167,6 @@ export function AdvancedAndRoles({ onClose }: { onClose: () => void }) {
 	const rpc = useTabRpc();
 	const autoCompaction = useSettingsStore(s => s.autoCompaction);
 	const autoRetry = useSettingsStore(s => s.autoRetry);
-	const steeringMode = useSettingsStore(s => s.steeringMode);
-	const interruptMode = useSettingsStore(s => s.interruptMode);
 	const prewalkArmed = useSessionStore(s => s.prewalkArmed);
 	const { pending, run } = useSessionToggle();
 	const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -224,24 +220,6 @@ export function AdvancedAndRoles({ onClose }: { onClose: () => void }) {
 							icon={<Rocket />}
 							label={t("cmd.prewalk")}
 							onCheckedChange={next => void run(() => rpc.setPrewalk(next), "prewalk")}
-						/>
-						<SwitchTile
-							infoEnd
-							checked={steeringMode === "all"}
-							description={t("input.more.steeringAllDesc")}
-							disabled={pending}
-							icon={<Layers />}
-							label={t("input.more.steeringAll")}
-							onCheckedChange={next => void run(() => rpc.setSteeringMode(next ? "all" : "one-at-a-time"))}
-						/>
-						<SwitchTile
-							infoEnd
-							checked={interruptMode === "immediate"}
-							description={t("input.more.interruptImmediateDesc")}
-							disabled={pending}
-							icon={<OctagonX />}
-							label={t("input.more.interruptImmediate")}
-							onCheckedChange={next => void run(() => rpc.setInterruptMode(next ? "immediate" : "wait"))}
 						/>
 					</div>
 				)}

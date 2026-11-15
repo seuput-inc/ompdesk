@@ -13,6 +13,8 @@
  */
 import { createStore } from "zustand/vanilla";
 import type { ImageContent } from "../../shared/rpc-types";
+import { expandPasteMarkers } from "../lib/paste-blobs";
+import { useOutboxStore } from "./outbox";
 import { createScopedStoreHook } from "./session-runtime-context";
 
 export interface ComposerImage {
@@ -32,29 +34,20 @@ export function prependToDraft(restored: string, draft: string): string {
 }
 
 /**
- * One queued message a Stop withdrew (stock's `abort_and_restore_queue`), held apart from the draft until the
- * user decides: Resume sends it, Edit brings it into the field, Remove drops it. `text` is "" for a picture-only
- * message (stock's `[Image]` chip text is not content); show it with `restoredQueueLabel`.
+ * One message withdrawn by Stop, held apart from the draft until the person resumes,
+ * edits or removes it. Picture-only messages have empty text.
  */
 export interface RestoredQueueItem {
 	id: string;
-	lane: "steering" | "followUp";
 	text: string;
 	images: ComposerImage[];
 }
 
-type QueueLaneName = "steering" | "followUp";
-
-/** The queued message the field is editing, and what Cancel puts back (RA-21). */
-export interface EditingQueued {
+export interface RecoveredEditing {
 	id: string;
-	lane: QueueLaneName;
-	/** The message's text when the edit began. */
-	original: string;
-	/** The draft and pictures the field held before the edit took it over. */
-	snapshot: { draft: string; images: ComposerImage[] };
+	previous: { draft: string; images: ComposerImage[] };
+	frozen: boolean;
 }
-
 export interface ComposerStore {
 	draft: string;
 	sending: boolean;
@@ -71,14 +64,17 @@ export interface ComposerStore {
 	/** When the first Esc of "Esc again to stop" was pressed; null when none waits (an edit of the draft disarms it). */
 	stopArmedAt: number | null;
 	/**
-	 * Queued messages the last Stop withdrew, oldest first (steers, then follow-ups). Filled only while a view that
-	 * shows them is mounted (`restoredTrayMounted`); otherwise Stop merges them into the draft.
+	 * Messages withdrawn by the last Stop, oldest first and held apart from the draft.
 	 */
 	restoredQueue: RestoredQueueItem[];
 	/** A tray that renders `restoredQueue` is mounted (ComposerRestoredQueue): the only thing that makes Stop keep them apart. */
 	restoredTrayMounted: number;
-	/** A queued message is being edited in the field (Edit queued): its draft and pictures wait in the snapshot. */
-	editingQueued: EditingQueued | null;
+	editingRecovered: RecoveredEditing | null;
+	beginRecoveredEdit: (id: string) => boolean;
+	cancelRecoveredEdit: () => boolean;
+	freezeRecoveredEdit: (deliveryId: string) => RecoveredEditing | null;
+	thawRecoveredEdit: (id: string, uncertain?: boolean) => void;
+	finishRecoveredEdit: (id: string) => RecoveredEditing["previous"] | null;
 	setSending: (value: boolean) => void;
 	setCancelSubmit: (cancel: (() => boolean) | null) => void;
 	setSubmissionUncertain: (value: boolean) => void;
@@ -88,17 +84,13 @@ export interface ComposerStore {
 	armStop: (now?: number) => void;
 	disarmStop: () => void;
 	/** Hold withdrawn queue entries apart from the draft. */
-	holdRestored: (items: Omit<RestoredQueueItem, "id">[]) => void;
+	holdRestored: (items: (Omit<RestoredQueueItem, "id"> & { id?: string })[]) => void;
 	dropRestored: (id: string) => void;
 	clearRestored: () => void;
 	/** Move held entries (all, or one) into the field: text ahead of the draft, blank-line separated; pictures join the strip. */
 	restoreHeldToDraft: (id?: string) => void;
 	/** A tray registers while mounted; the count keeps two panes of one store from unregistering each other. */
 	setRestoredTrayMounted: (mounted: boolean) => void;
-	/** The field takes over a queued message (snapshotting the draft and pictures it held). */
-	beginEditQueued: (target: { id: string; lane: QueueLaneName; text: string }) => void;
-	/** Leave the edit: the snapshot returns exactly; `prepend` (an edit whose message was already delivered) goes ahead of it. */
-	endEditQueued: (prepend?: string) => void;
 	images: ComposerImage[];
 	/** Replace the draft, or compute the next value from the current one
 	 * (React setState parity — InputArea's updater-form call sites unchanged). */
@@ -109,8 +101,8 @@ export interface ComposerStore {
 
 let nextRestoredId = 0;
 
-export const createComposerStore = () =>
-	createStore<ComposerStore>()((set, get) => ({
+export const createComposerStore = () => {
+	const store = createStore<ComposerStore>()((set, get) => ({
 		draft: "",
 		sending: false,
 		submissionUncertain: false,
@@ -120,7 +112,85 @@ export const createComposerStore = () =>
 		stopArmedAt: null,
 		restoredQueue: [],
 		restoredTrayMounted: 0,
-		editingQueued: null,
+		editingRecovered: null,
+		beginRecoveredEdit: id => {
+			if (get().editingRecovered) return false;
+			const item = useOutboxStore.getState().items.find(entry => entry.id === id);
+			if (!item || item.send.kind !== "manual") return false;
+			const send = item.send;
+			if (
+				!send.acknowledged ||
+				send.recovery.kind === "attempt" ||
+				send.recovery.kind === "withdrawal_uncertain" ||
+				send.recovery.kind === "discard_pending"
+			)
+				return false;
+			const fromContents = (images: ImageContent[]): ComposerImage[] =>
+				images.map(content => ({ content, preview: `data:${content.mimeType};base64,${content.data}` }));
+			const previous = send.editing
+				? { draft: send.previous.draft, images: fromContents(send.previous.images) }
+				: { draft: get().draft, images: get().images };
+			if (
+				!useOutboxStore.getState().updateManual(id, {
+					editing: true,
+					previous: {
+						draft: expandPasteMarkers(previous.draft),
+						images: previous.images.map(image => image.content),
+					},
+				})
+			)
+				return false;
+			set({
+				editingRecovered: { id, previous, frozen: false },
+				draft: send.text,
+				images: fromContents(send.images),
+			});
+			return true;
+		},
+		cancelRecoveredEdit: () => {
+			const editing = get().editingRecovered;
+			if (!editing || editing.frozen) return false;
+			if (!useOutboxStore.getState().updateManual(editing.id, { editing: false })) return false;
+			set({ editingRecovered: null, draft: editing.previous.draft, images: editing.previous.images });
+			return true;
+		},
+		freezeRecoveredEdit: deliveryId => {
+			const { editingRecovered, draft, images } = get();
+			if (!editingRecovered || editingRecovered.frozen) return null;
+			const manual = useOutboxStore.getState().items.find(item => item.id === editingRecovered.id);
+			if (
+				!manual ||
+				manual.send.kind !== "manual" ||
+				!manual.send.acknowledged ||
+				manual.send.recovery.kind === "attempt" ||
+				manual.send.recovery.kind === "withdrawal_uncertain" ||
+				manual.send.recovery.kind === "discard_pending"
+			)
+				return null;
+			if (
+				!useOutboxStore.getState().updateManual(editingRecovered.id, {
+					text: expandPasteMarkers(draft),
+					images: images.map(image => image.content),
+					recovery: { kind: "attempt", deliveryId },
+				})
+			)
+				return null;
+			set({ editingRecovered: { ...editingRecovered, frozen: true } });
+			return editingRecovered;
+		},
+		thawRecoveredEdit: (id, uncertain = false) => {
+			const editing = get().editingRecovered;
+			if (editing?.id !== id) return;
+			if (!uncertain && !useOutboxStore.getState().updateManual(id, { recovery: { kind: "draft" } }))
+				set({ submissionUncertain: true });
+			set({ editingRecovered: { ...editing, frozen: false } });
+		},
+		finishRecoveredEdit: id => {
+			const editing = get().editingRecovered;
+			if (!editing || editing.id !== id) return null;
+			set({ editingRecovered: null });
+			return editing.previous;
+		},
 		setSending: sending => set({ sending }),
 		setCancelSubmit: cancelSubmit => set({ cancelSubmit }),
 		setSubmissionUncertain: submissionUncertain => set({ submissionUncertain }),
@@ -136,9 +206,22 @@ export const createComposerStore = () =>
 			if (get().stopArmedAt !== null) set({ stopArmedAt: null });
 		},
 		holdRestored: items =>
-			set(state => ({
-				restoredQueue: [...state.restoredQueue, ...items.map(item => ({ ...item, id: `r${++nextRestoredId}` }))],
-			})),
+			set(state => {
+				const usedIds = new Set([
+					...state.restoredQueue.map(item => item.id),
+					...items.flatMap(item => item.id ?? []),
+				]);
+				const held = items.map(item => {
+					let id = item.id;
+					if (id === undefined) {
+						do id = `r${++nextRestoredId}`;
+						while (usedIds.has(id));
+						usedIds.add(id);
+					}
+					return { ...item, id };
+				});
+				return { restoredQueue: [...state.restoredQueue, ...held] };
+			}),
 		dropRestored: id => set(state => ({ restoredQueue: state.restoredQueue.filter(item => item.id !== id) })),
 		clearRestored: () => set({ restoredQueue: [] }),
 		restoreHeldToDraft: id =>
@@ -158,30 +241,6 @@ export const createComposerStore = () =>
 			}),
 		setRestoredTrayMounted: mounted =>
 			set(state => ({ restoredTrayMounted: Math.max(0, state.restoredTrayMounted + (mounted ? 1 : -1)) })),
-		beginEditQueued: ({ id, lane, text }) =>
-			set(state => ({
-				// A second Edit while one runs keeps the first snapshot: Cancel still returns to what the user typed.
-				editingQueued: {
-					id,
-					lane,
-					original: text,
-					snapshot: state.editingQueued?.snapshot ?? { draft: state.draft, images: state.images },
-				},
-				draft: text,
-				images: [],
-				stopArmedAt: null,
-			})),
-		endEditQueued: prepend =>
-			set(state => {
-				const editing = state.editingQueued;
-				if (!editing) return state;
-				return {
-					editingQueued: null,
-					draft: prepend ? prependToDraft(prepend, editing.snapshot.draft) : editing.snapshot.draft,
-					images: editing.snapshot.images,
-					stopArmedAt: null,
-				};
-			}),
 		images: [],
 		setDraft: next =>
 			set(state => {
@@ -200,9 +259,21 @@ export const createComposerStore = () =>
 				stopping: false,
 				stopArmedAt: null,
 				restoredQueue: [],
-				editingQueued: null,
+				editingRecovered: null,
 			}),
 	}));
+	store.subscribe((state, previous) => {
+		const editing = state.editingRecovered;
+		if (!editing || editing.frozen) return;
+		if (state.draft === previous.draft && state.images === previous.images && !previous.editingRecovered?.frozen)
+			return;
+		useOutboxStore.getState().updateManual(editing.id, {
+			text: expandPasteMarkers(state.draft),
+			images: state.images.map(image => image.content),
+		});
+	});
+	return store;
+};
 
 const defaultComposerStore = createComposerStore();
 export const useComposerStore = createScopedStoreHook("composer", defaultComposerStore);

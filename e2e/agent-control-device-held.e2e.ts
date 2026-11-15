@@ -58,7 +58,8 @@ test("an agent on one device messages and reopens a session another device's tab
 				.toBe("online");
 		const records = () => readRecords(hostProfile.record);
 		const promptBy = async (text: string) =>
-			(await records()).find(frame => frame.type === "prompt" && String(frame.message).includes(text))?.recordedBy;
+			(await records()).find(frame => frame.type === "composer.prompt" && String(frame.message).includes(text))
+				?.recordedBy;
 		const launches = async () => (await records()).filter(frame => frame.type === "launch").length;
 
 		// A opens a session on B and works in it: A's own tab on the host holds it.

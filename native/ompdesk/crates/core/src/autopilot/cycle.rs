@@ -752,7 +752,7 @@ impl Coordinator {
         let asked = self
             .stock_response(
                 &run.tab,
-                json!({"type": "prompt", "message": nudge_message(reason), "streamingBehavior": "followUp"}),
+                json!({"type": "prompt", "message": nudge_message(reason)}),
             )
             .await;
         if let Err(error) = asked {
@@ -1289,7 +1289,7 @@ impl Coordinator {
             run.lock().release_item = Some(item.id);
             self.stock_response(
                 &run.tab,
-                json!({"type": "prompt", "message": RELEASE_NOW_MESSAGE, "streamingBehavior": "followUp"}),
+                json!({"type": "prompt", "message": RELEASE_NOW_MESSAGE}),
             )
             .await?;
             return Ok(());

@@ -173,7 +173,7 @@ describe("ship actions from the screen", () => {
 		expect(errorOf(refused)).toMatch(/release procedure/i);
 	});
 
-	it("Release sends the user's own words as a follow-up and shows a tracked item", async () => {
+	it("Release sends the user's instruction and shows a tracked item", async () => {
 		build({ releaseProcedure: true });
 		await start();
 		const sidecar = world.sidecars.get("ap-1") as unknown as SidecarLike;
@@ -189,7 +189,6 @@ describe("ship actions from the screen", () => {
 		]);
 		expect(world.stock("ap-1", "prompt")[0]?.params).toEqual({
 			message: RELEASE_NOW_MESSAGE,
-			streamingBehavior: "followUp",
 		});
 	});
 });

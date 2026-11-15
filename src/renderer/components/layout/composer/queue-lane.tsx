@@ -1,15 +1,9 @@
-/**
- * What every view of the queue shares: the lane names ("After next step" / "After this turn"), the heading above a
- * lane's rows (with its Clear), and how a row is named for assistive tech, so the composer's queue popover and its
- * edit-in-field never call the same lane differently (DR-7).
- */
+/** Labels and picture tiles shared by pending and restored instructions. */
 
 import { Image as ImageIcon } from "lucide-react";
 import type { ImageContent } from "../../../../shared/rpc-types";
 import { useT } from "../../../lib/i18n";
 import { queueChipLabel } from "../../../lib/queue-chip";
-import type { QueueLane } from "../../../stores/queue";
-import { LinkButton } from "../../common";
 
 /** Characters of a message that name its row's buttons ("Edit: <first 40 chars>", DR-11). */
 const ROW_NAME_CHARS = 40;
@@ -18,33 +12,6 @@ const ROW_NAME_CHARS = 40;
 export function queueRowName(text: string, imageCount = 0): string {
 	const label = queueChipLabel(text, imageCount).replace(/\s+/g, " ").trim();
 	return label.length > ROW_NAME_CHARS ? `${label.slice(0, ROW_NAME_CHARS - 1)}…` : label;
-}
-
-/** The lane's heading: its name, how many wait in it, how they are delivered, and `onClear` empties only this lane. */
-export function QueueLaneHeading({ lane, count, onClear }: { lane: QueueLane; count: number; onClear?: () => void }) {
-	const t = useT();
-	return (
-		<div
-			className="flex h-5 items-center gap-1.5 px-2 text-sc-xs font-medium text-(--sc-text-subtle)"
-			data-lane-head={lane}
-			title={t(`composerQueue.laneTip.${lane}`)}
-		>
-			<span className="shrink-0">{t(`composerQueue.lane.${lane}`)}</span>
-			<span className="shrink-0 tabular-nums">{count}</span>
-			<span className="min-w-0 flex-1 truncate font-normal">· {t(`composerQueue.laneSub.${lane}`)}</span>
-			{onClear ? (
-				<LinkButton
-					aria-label={t("composerQueue.clearLane", { lane: t(`composerQueue.lane.${lane}`) })}
-					className="shrink-0 px-1 font-normal"
-					data-lane-clear={lane}
-					onClick={onClear}
-					tone="muted"
-				>
-					{t("queuePanel.clearLane")}
-				</LinkButton>
-			) : null}
-		</div>
-	);
 }
 
 /** Picture tiles of a queued message (at most three, then "+N"); a tile is the picture itself while the renderer still has it. */

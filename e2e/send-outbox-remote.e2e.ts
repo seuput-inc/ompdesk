@@ -93,7 +93,9 @@ async function journaled(sessionPath: string): Promise<string[]> {
 async function handed(profile: RemoteProfile, dispatch: string): Promise<number> {
 	return (await readRecords(profile.record)).filter(
 		frame =>
-			frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes(dispatchMark(dispatch)),
+			frame.type === "composer.prompt" &&
+			typeof frame.message === "string" &&
+			frame.message.includes(dispatchMark(dispatch)),
 	).length;
 }
 
@@ -173,9 +175,8 @@ async function queuedOnHost(resume = true): Promise<Paired> {
 		["d2", "Also do C"],
 		["d3", "Then D fixture:result-ok"],
 	] as const) {
-		const queued = await call("ompdesk_session_send", { session: kid, message, delivery: "follow_up" });
+		const queued = await call("ompdesk_session_send", { session: kid, message });
 		expect(queued.isError, queued.text).toBe(false);
-		expect(queued.text).toContain("queued as a follow-up");
 		expect(queued.text).toContain(`Dispatch ${dispatch}`);
 	}
 	expect(await journaled(childPath)).toEqual(["d1"]);
@@ -183,7 +184,7 @@ async function queuedOnHost(resume = true): Promise<Paired> {
 	return { hostProfile, clientProfile, opener, kid, childPath, call };
 }
 
-test("the host relaunches: the device hands its queued follow-ups to the new omp once, in order, and hears the done report", async () => {
+test("the host relaunches: the device hands its pending instructions to the new omp once, in order, and hears the done report", async () => {
 	test.setTimeout(300_000);
 	const { hostProfile, opener, kid, childPath, call } = await queuedOnHost();
 	const a = (client as RemoteInstance).page;

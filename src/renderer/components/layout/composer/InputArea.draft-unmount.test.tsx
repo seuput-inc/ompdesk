@@ -121,7 +121,7 @@ async function flush(): Promise<void> {
 async function mount(): Promise<void> {
 	prompt = vi.fn(async () => ok());
 	rpcCommand = vi.fn(async (command: RpcCommand) => {
-		if (command.type === "get_queue") return ok({ steering: [], followUp: [] });
+		if (command.type === "get_queue") return ok({ instance: "test", entries: [] });
 		return ok();
 	});
 	(window as unknown as Record<string, unknown>).omp = {

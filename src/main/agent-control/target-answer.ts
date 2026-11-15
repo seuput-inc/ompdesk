@@ -20,7 +20,7 @@ import type { ExtensionUIResponse, RpcCommand } from "../../shared/rpc-types";
 export interface AnswerCompanion {
 	content: string | { type: string; [key: string]: unknown }[];
 	details: Record<string, unknown>;
-	delivery: { triggerTurn: boolean; deliverAs?: "aside" };
+	delivery: { triggerTurn: boolean };
 }
 
 export type AnswerStep = { requestId: string; companion: AnswerCompanion } & (
@@ -89,7 +89,6 @@ export class TargetAnswer {
 			content,
 			details,
 			triggerTurn: delivery.triggerTurn,
-			...(delivery.deliverAs ? { deliverAs: delivery.deliverAs } : {}),
 		} as RpcCommand;
 		const failed = (why: string | undefined) =>
 			new Error(

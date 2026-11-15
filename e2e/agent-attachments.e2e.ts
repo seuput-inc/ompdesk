@@ -110,7 +110,9 @@ test("a session sends another the picture the person pasted and a text file; the
 	await untilAnswered(page, child, { after: "Look at the screenshot and read the notes" });
 
 	const prompt = (await readRecords(record)).findLast(
-		frame => frame.type === "prompt" && String(frame.message).includes("Look at the screenshot and read the notes"),
+		frame =>
+			frame.type === "composer.prompt" &&
+			String(frame.message).includes("Look at the screenshot and read the notes"),
 	) as { message: string; images?: { type: string; data: string; mimeType: string }[] } | undefined;
 	expect(prompt?.images).toEqual([{ type: "image", data: PNG.toString("base64"), mimeType: "image/png" }]);
 	const landed = /Attached: (.+notes\.txt)/.exec(prompt?.message ?? "")?.[1] ?? "";
@@ -120,7 +122,7 @@ test("a session sends another the picture the person pasted and a text file; the
 	expect(sent.text).toContain(landed);
 
 	// A file that is missing refuses the whole send: nothing reaches the session.
-	const before = (await readRecords(record)).filter(frame => frame.type === "prompt").length;
+	const before = (await readRecords(record)).filter(frame => frame.type === "composer.prompt").length;
 	const refused = await call("ompdesk_session_send", {
 		session: child,
 		message: "This never arrives",
@@ -128,5 +130,5 @@ test("a session sends another the picture the person pasted and a text file; the
 	});
 	expect(refused.isError).toBe(true);
 	expect(refused.text).toContain("attachment 2 (missing.pdf) could not be read");
-	expect((await readRecords(record)).filter(frame => frame.type === "prompt")).toHaveLength(before);
+	expect((await readRecords(record)).filter(frame => frame.type === "composer.prompt")).toHaveLength(before);
 });

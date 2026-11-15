@@ -37,8 +37,6 @@ const mailCommand = z.object({
 	content: z.union([z.string().min(1).max(200_000), mailBlocks.min(1)]),
 	details: z.record(z.string(), z.unknown()),
 	triggerTurn: z.boolean(),
-	// `followUp`: what a paired device's older main still sends; the bridge turns it into an aside while a turn runs.
-	deliverAs: z.enum(["followUp", "aside"]).optional(),
 });
 
 export const handlers: Record<string, LocalHandler> = {

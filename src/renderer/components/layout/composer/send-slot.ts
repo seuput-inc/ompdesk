@@ -3,22 +3,19 @@
  * turn to start. First match wins:
  *
  *   dictation recording        → `dictation` (stop the take and send it)
- *   editing a queued message   → `save` (a check)
  *   a turn runs, empty draft   → `stop` (■, the same Stop as Esc)
  *   phone dictation, no draft  → `mic`
- *   otherwise                  → `send` (disabled while there is nothing to send; while a turn runs it steers or
- *                                queues)
+ *   otherwise                  → `send` (disabled while there is nothing to send)
  *
  * While a turn runs, every state but `stop` carries `stopHint`: a long press or right click on the button still stops
  * the turn and keeps the draft (touch has no Esc).
  */
 
-export type SendSlotState = "dictation" | "save" | "stop" | "mic" | "send";
+export type SendSlotState = "dictation" | "stop" | "mic" | "send";
 
 export interface SendSlotFacts {
 	/** A dictation take is recording. */
 	recording: boolean;
-	editingQueued: boolean;
 	/** Something Stop ends: the run, or a prompt not yet sent. */
 	stoppable: boolean;
 	/** The draft holds text or a picture. */
@@ -33,15 +30,13 @@ export interface SendSlot {
 	stopHint: boolean;
 }
 
-export function sendSlot({ recording, editingQueued, stoppable, hasDraft, micOffered }: SendSlotFacts): SendSlot {
+export function sendSlot({ recording, stoppable, hasDraft, micOffered }: SendSlotFacts): SendSlot {
 	const state: SendSlotState = recording
 		? "dictation"
-		: editingQueued
-			? "save"
-			: stoppable && !hasDraft
-				? "stop"
-				: micOffered && !hasDraft
-					? "mic"
-					: "send";
+		: stoppable && !hasDraft
+			? "stop"
+			: micOffered && !hasDraft
+				? "mic"
+				: "send";
 	return { state, stopHint: stoppable && state !== "stop" };
 }

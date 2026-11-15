@@ -255,15 +255,11 @@ function isRestoreResult(value: unknown): value is RpcAbortAndRestoreQueueResult
  * lines, ahead of any draft (kept after a blank line); images join the strip; one toast says so.
  */
 export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortAndRestoreQueueResult): void {
-	const entries = [
-		...restored.steering.map(entry => ({ lane: "steering" as const, entry })),
-		...restored.followUp.map(entry => ({ lane: "followUp" as const, entry })),
-	];
+	const entries = [...restored.steering, ...restored.followUp];
 	if (entries.length === 0) return;
 	const toImages = (contents: ImageContent[] | undefined): ComposerImage[] =>
 		(contents ?? []).map(content => ({ content, preview: `data:${content.mimeType};base64,${content.data}` }));
-	const items = entries.map(({ lane, entry }) => ({
-		lane,
+	const items = entries.map(entry => ({
 		text: entry.text === IMAGE_ONLY_CHIP && entry.images?.length ? "" : entry.text,
 		images: toImages(entry.images),
 	}));
@@ -291,22 +287,17 @@ export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortA
 	}
 }
 
-/**
- * Resume what a Stop held: the first message starts the turn again (a follow-up behaviour, so it queues instead
- * when another device's turn already runs), the rest queue behind it as follow-ups, in order. Each leaves the held
- * list once omp accepted it; a refusal keeps it and the ones after it held and says why.
- */
+/** Resume only on request. Each held instruction leaves the tray after canonical admission succeeds. */
 export async function resumeRestoredQueue(
-	rpc: Pick<TabRpc, "prompt" | "followUp"> = window.omp.rpc,
+	rpc: Pick<TabRpc, "prompt"> = window.omp.rpc,
 	tabId?: string | null,
 ): Promise<void> {
 	const composer = (tabId ? sessionRuntimeStore<ComposerStore>(tabId, "composer") : null) ?? useComposerStore;
 	const held = composer.getState().restoredQueue;
-	for (const [index, item] of held.entries()) {
+	for (const item of held) {
 		const images = item.images.length > 0 ? item.images.map(image => image.content) : undefined;
 		try {
-			const response =
-				index === 0 ? await rpc.prompt(item.text, images, "followUp") : await rpc.followUp(item.text, images);
+			const response = await rpc.prompt(item.text, images);
 			if (!response.success) {
 				toastError({ title: translate("input.sendFailed"), error: response });
 				return;

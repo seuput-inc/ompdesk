@@ -1,8 +1,6 @@
 /**
  * Contract tests for composer submission policy (lib/composer-submit):
- * typed slash commands always route through the prompt RPC (the server
- * parses them even mid-stream; steer/followUp would inject the text as a
- * user steer), session-replacing commands (/new, /clear) are blocked while
+ * typed slash commands route through prompt, session-replacing commands are blocked while
  * a turn runs instead of silently killing it, and local-only resolutions
  * (agentInvoked:false, no agent events) trigger a rehydrate so the
  * transcript/context bar reflect the mutation.
@@ -25,7 +23,7 @@ function success(data: unknown): RpcResponse {
 
 interface MockOmp {
 	rpc: {
-		prompt: Mock<(message: string, images?: unknown[], streamingBehavior?: string) => Promise<RpcResponse>>;
+		prompt: Mock<(message: string, images?: unknown[]) => Promise<RpcResponse>>;
 		compact: Mock<() => Promise<RpcResponse>>;
 		steer: Mock<(message: string, images?: unknown[]) => Promise<RpcResponse>>;
 		followUp: Mock<(message: string, images?: unknown[]) => Promise<RpcResponse>>;
@@ -118,15 +116,14 @@ const guiOnly = (name: string): AvailableCommand => ({
 	textModeExecutable: false,
 });
 describe("planComposerSubmit", () => {
-	it.each([false, true])("sends current instructions through prompt while busy (shared=%s)", async hostDecides => {
+	it.each([false, true])("sends one current instruction through prompt (streaming=%s)", async isStreaming => {
 		const omp = installMockOmp();
 		const beforePrompt = vi.fn();
 		const submit = planComposerSubmit({
 			message: "Apply this instruction to the current work",
 			images: [],
-			isStreaming: true,
+			isStreaming,
 			commands: [],
-			hostDecides,
 			beforePrompt,
 		});
 		if (submit.kind !== "send") throw new Error("expected send");
@@ -134,7 +131,7 @@ describe("planComposerSubmit", () => {
 		expect(omp.rpc.prompt).toHaveBeenCalledWith("Apply this instruction to the current work", []);
 		expect(omp.rpc.steer).not.toHaveBeenCalled();
 		expect(omp.rpc.followUp).not.toHaveBeenCalled();
-		expect(beforePrompt).not.toHaveBeenCalled();
+		expect(beforePrompt).toHaveBeenCalledTimes(isStreaming ? 0 : 1);
 	});
 
 	it("typed share still requires a desktop preview when Core can upload directly or discovery is pending", () => {
@@ -145,7 +142,6 @@ describe("planComposerSubmit", () => {
 				message: "/share",
 				images: [],
 				isStreaming: false,
-				mode: "prompt",
 				commands,
 			});
 			expect(submit.kind).toBe("handled");
@@ -160,7 +156,6 @@ describe("planComposerSubmit", () => {
 			message: "/live",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [{ ...guiOnly("live"), textModeExecutable: true }],
 		});
 		expect(useUiStore.getState().liveOpen).toBe(true);
@@ -168,7 +163,6 @@ describe("planComposerSubmit", () => {
 			message: "/btw local question",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [{ ...guiOnly("btw"), textModeExecutable: true }],
 		});
 		expect(useUiStore.getState().btwRequest).toBe("local question");
@@ -181,7 +175,6 @@ describe("planComposerSubmit", () => {
 			message: "/compact",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [],
 		});
 		expect(submit.kind).toBe("send");
@@ -192,13 +185,12 @@ describe("planComposerSubmit", () => {
 		expect(omp.rpc.prompt).not.toHaveBeenCalled();
 	});
 
-	it("routes /compact through its dedicated RPC even while streaming — never steer/followUp", async () => {
+	it("routes /compact through its dedicated RPC while streaming", async () => {
 		const omp = installMockOmp();
 		const submit = planComposerSubmit({
 			message: "/compact",
 			images: [],
 			isStreaming: true,
-			mode: "steer",
 			commands: [],
 		});
 		expect(submit.kind).toBe("send");
@@ -210,68 +202,7 @@ describe("planComposerSubmit", () => {
 		expect(omp.rpc.followUp).not.toHaveBeenCalled();
 	});
 
-	it("routes plain text through steer (or followUp) while streaming", async () => {
-		const omp = installMockOmp();
-		const steerSubmit = planComposerSubmit({
-			message: "hello",
-			images: [],
-			isStreaming: true,
-			mode: "steer",
-			commands: [],
-		});
-		if (steerSubmit.kind !== "send") throw new Error("expected send");
-		await steerSubmit.request();
-		expect(omp.rpc.steer).toHaveBeenCalledWith("hello", []);
-		expect(omp.rpc.prompt).not.toHaveBeenCalled();
-
-		const followUpSubmit = planComposerSubmit({
-			message: "again",
-			images: [],
-			isStreaming: true,
-			mode: "followUp",
-			commands: [],
-		});
-		if (followUpSubmit.kind !== "send") throw new Error("expected send");
-		await followUpSubmit.request();
-		expect(omp.rpc.followUp).toHaveBeenCalledWith("again", []);
-	});
-
-	describe("when the host decides (a shared tab, or a page on a phone)", () => {
-		it("sends a plain message as one prompt that says how to join a run, whatever this window thinks is running", async () => {
-			const omp = installMockOmp();
-			for (const isStreaming of [true, false]) {
-				const submit = planComposerSubmit({
-					message: "hello",
-					images: [],
-					isStreaming,
-					mode: "steer",
-					commands: [],
-					hostDecides: true,
-				});
-				if (submit.kind !== "send") throw new Error("expected send");
-				await submit.request();
-			}
-			expect(omp.rpc.prompt).toHaveBeenNthCalledWith(1, "hello", [], "steer");
-			expect(omp.rpc.prompt).toHaveBeenNthCalledWith(2, "hello", [], "steer");
-			expect(omp.rpc.steer).not.toHaveBeenCalled();
-			expect(omp.rpc.followUp).not.toHaveBeenCalled();
-		});
-
-		it("asks for a follow-up when the follow-up mode is chosen", async () => {
-			const omp = installMockOmp();
-			const submit = planComposerSubmit({
-				message: "later",
-				images: [],
-				isStreaming: true,
-				mode: "followUp",
-				commands: [],
-				hostDecides: true,
-			});
-			if (submit.kind !== "send") throw new Error("expected send");
-			await submit.request();
-			expect(omp.rpc.prompt).toHaveBeenCalledWith("later", [], "followUp");
-		});
-
+	describe("submission boundaries", () => {
 		it("runs the pre-prompt work only when this window sees an idle agent", async () => {
 			installMockOmp();
 			const beforePrompt = vi.fn(async () => undefined);
@@ -280,9 +211,7 @@ describe("planComposerSubmit", () => {
 					message: "hello",
 					images: [],
 					isStreaming,
-					mode: "steer",
 					commands: [],
-					hostDecides: true,
 					beforePrompt,
 				});
 				if (submit.kind !== "send") throw new Error("expected send");
@@ -297,9 +226,7 @@ describe("planComposerSubmit", () => {
 				message: "/compact",
 				images: [],
 				isStreaming: true,
-				mode: "steer",
 				commands: [],
-				hostDecides: true,
 			});
 			if (submit.kind !== "send") throw new Error("expected send");
 			await submit.request();
@@ -314,7 +241,6 @@ describe("planComposerSubmit", () => {
 			message: "/clear",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [],
 		});
 		expect(submit.kind).toBe("clear");
@@ -327,7 +253,6 @@ describe("planComposerSubmit", () => {
 			message: "/clear extra",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [],
 		});
 		expect(submit.kind).toBe("send");
@@ -340,7 +265,7 @@ describe("planComposerSubmit", () => {
 		"blocks %s while a turn is running instead of silently killing it",
 		async message => {
 			const omp = installMockOmp();
-			const submit = planComposerSubmit({ message, images: [], isStreaming: true, mode: "prompt", commands: [] });
+			const submit = planComposerSubmit({ message, images: [], isStreaming: true, commands: [] });
 			expect(submit.kind).toBe("blocked");
 			expect(omp.rpc.prompt).not.toHaveBeenCalled();
 			expect(omp.rpc.steer).not.toHaveBeenCalled();
@@ -354,7 +279,6 @@ describe("planComposerSubmit", () => {
 			message: "/new",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [],
 		});
 		expect(submit.kind).toBe("send");
@@ -369,7 +293,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/settings",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("settings")],
 		});
 		expect(submit.kind).toBe("handled");
@@ -385,7 +308,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/exit",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("exit")],
 		});
 
@@ -404,7 +326,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/guided-goal ship reliable sync",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("guided-goal")],
 		});
 
@@ -419,7 +340,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/pause",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("pause")],
 		});
 		await Promise.resolve();
@@ -437,7 +357,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/plan",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			// Stock lists its own builtins but not /plan; the composer merges GUI commands in.
 			commands: withGuiCommands([{ name: "compact", source: "builtin", description: "compact" }]),
 		});
@@ -477,7 +396,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/definitely-not-a-command hi",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: withGuiCommands([{ name: "compact", source: "builtin", description: "compact" }]),
 		});
 		expect(submit.kind).toBe("send");
@@ -490,7 +408,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/copy",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("copy")],
 		});
 
@@ -505,7 +422,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/btw why did this fail?",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("btw")],
 		});
 
@@ -522,7 +438,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 				message,
 				images: [],
 				isStreaming: false,
-				mode: "prompt",
 				commands: [guiOnly("tan")],
 			});
 			await Promise.resolve();
@@ -540,7 +455,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/omfg stop repeating stale advice",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("omfg")],
 		});
 		await Promise.resolve();
@@ -564,7 +478,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 				message: "/drop",
 				images: [],
 				isStreaming: false,
-				mode: "prompt",
 				commands: [guiOnly("drop")],
 			});
 			await Promise.resolve();
@@ -585,7 +498,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/future-native",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: [guiOnly("future-native")],
 		});
 		expect(submit.kind).toBe("blocked");
@@ -605,7 +517,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message,
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: withGuiCommands([]),
 		});
 		expect(submit.kind).toBe("blocked");
@@ -624,7 +535,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: '/cleanse "ts errors" -n 4',
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: withGuiCommands([]),
 		});
 		expect(submit.kind).toBe("handled");
@@ -646,7 +556,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/open",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: withGuiCommands([]),
 		});
 		expect(submit.kind).toBe("handled");
@@ -662,7 +571,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/open",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: withGuiCommands([]),
 		});
 		await vi.waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1));
@@ -671,7 +579,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			message: "/open docs",
 			images: [],
 			isStreaming: false,
-			mode: "prompt",
 			commands: withGuiCommands([]),
 		});
 		await vi.waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(2));
@@ -683,7 +590,7 @@ describe("planComposerSubmit GUI-only routing", () => {
 
 describe("planComposerSubmit typed /mcp", () => {
 	const submitTyped = (message: string) =>
-		planComposerSubmit({ message, images: [], isStreaming: false, mode: "prompt", commands: [] });
+		planComposerSubmit({ message, images: [], isStreaming: false, commands: [] });
 	const toastMessages = () => useToastStore.getState().toasts.map(toast => toast.message);
 
 	it("signs in through the bridge for /mcp reauth <name> instead of sending prompt text", async () => {

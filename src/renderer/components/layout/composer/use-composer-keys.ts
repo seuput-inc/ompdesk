@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import type { InlineCompletion } from "../../../hooks/use-inline-completion";
 import { composerEnterNewline, noteHardwareKey } from "../../../lib/hardware-keyboard";
 import { isImeKeyEvent } from "../../../lib/ime";
-import { chordFromEvent, isComposerFollowUpKey, PLATFORM } from "../../../lib/keymap";
+import { chordFromEvent, PLATFORM } from "../../../lib/keymap";
 import { listboxTarget } from "../../../lib/listbox-nav";
 import { dropReferencedPastes, releasePaste, widenToPasteMarkers } from "../../../lib/paste-blobs";
 import type { TabRpc } from "../../../lib/tab-rpc";
@@ -54,7 +54,6 @@ export function useComposerKeys({
 	runActive,
 	touchInput,
 	enterSends,
-	queueEdit,
 	send,
 }: {
 	rpc: TabRpc;
@@ -85,14 +84,12 @@ export function useComposerKeys({
 	toggleHistorySearch: () => void;
 	/** A run, a prompt not yet sent, or a manual compaction holds Esc: it is their stop/cancel, not the draft's. */
 	runActive: boolean;
-	/** Send the draft (`followUp`: the follow-up lane); true when it went out. */
-	send: (overrideText?: string, forceMode?: "followUp") => boolean;
+	/** Send the draft; true when it went out. */
+	send: (overrideText?: string) => boolean;
 	/** A touch input (phone, tablet): without a physical keyboard plain Enter adds a line and only Send sends. */
 	touchInput: boolean;
 	/** The "Enter sends on mobile" setting: a touch device's Enter sends like the desktop's. */
 	enterSends: boolean;
-	/** A queued message is being edited in the field: Esc cancels the edit (`cancel`), ↑ does not recall history. Null when none is. */
-	queueEdit: { cancel: () => void } | null;
 }): ComposerKeys {
 	const { menu, setMenu } = menuHandle;
 	/** First Esc of a double-Esc, and whether its "Esc again" hint shows. */
@@ -262,14 +259,6 @@ export function useComposerKeys({
 			toggleExpanded();
 			return;
 		}
-		// Edit queued: Esc puts the previous draft back (the IME guard above ran first).
-		if (queueEdit && e.key === "Escape" && plainKey) {
-			// Claim the key: the app-wide Escape would abort a running turn.
-			e.preventDefault();
-			e.stopPropagation();
-			queueEdit.cancel();
-			return;
-		}
 		if (expanded && e.key === "Escape") {
 			// Claim the key: the app-wide Escape would abort a running turn.
 			e.preventDefault();
@@ -336,7 +325,6 @@ export function useComposerKeys({
 		// next press in the same direction satisfies the same rule; turning around takes one caret move.
 		if (
 			!expanded &&
-			!queueEdit &&
 			(e.key === "ArrowUp" || e.key === "ArrowDown") &&
 			!e.ctrlKey &&
 			!e.metaKey &&
@@ -362,20 +350,15 @@ export function useComposerKeys({
 			return;
 		}
 		if (e.key === "Enter" && !e.shiftKey) {
-			// Soft keyboard: Enter is the return key. The chords (⌘↵, the follow-up chord) are a physical keyboard's and still send.
+			// Soft keyboard Enter inserts a line when configured; modified Enter sends.
 			if (enterNewline && !e.metaKey && !e.ctrlKey && !e.altKey) return;
-			// The follow-up chord (⌃↵ on macOS, ⌥↵ on Windows) sends as a follow-up, queueing
-			// behind the current yield (TUI app.message.followUp); idle sessions start
-			// immediately either way. Every other Enter sends in the chip's mode, so the
-			// platform's send chord (⌘↵, Ctrl+Enter on Windows) steers a running turn.
-			const followUp = isComposerFollowUpKey(e);
 			// Expanded: plain Enter is a newline; ⌘↵ sends and collapses.
-			if (expanded && !e.metaKey && !e.ctrlKey && !followUp) return;
+			if (expanded && !e.metaKey && !e.ctrlKey) return;
 			e.preventDefault();
 			// A held Enter sends once, never again on auto-repeat.
 			if (e.repeat) return;
 			// ⌘↵ collapses the expanded composer only once the draft went out.
-			if (send(undefined, followUp ? "followUp" : undefined) && expanded) collapse();
+			if (send() && expanded) collapse();
 		}
 	};
 

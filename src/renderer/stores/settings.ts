@@ -7,9 +7,6 @@ import { toastError } from "./toast";
 
 export interface SettingsStore {
 	approvalMode: ApprovalMode;
-	steeringMode: "all" | "one-at-a-time";
-	followUpMode: "all" | "one-at-a-time";
-	interruptMode: "immediate" | "wait";
 	autoCompaction: boolean;
 	autoRetry: boolean;
 	/** Agent `hideThinkingBlock` setting: suppress the reasoning block entirely. */
@@ -42,22 +39,12 @@ export interface SettingsStore {
 	syncDisplaySettings: () => Promise<void>;
 	/** Re-read the live tools.approvalMode into the store (config_update / TUI edits). */
 	syncApproval: () => Promise<void>;
-	update: (
-		partial: Partial<
-			Pick<
-				SettingsStore,
-				"approvalMode" | "steeringMode" | "followUpMode" | "interruptMode" | "autoCompaction" | "autoRetry"
-			>
-		>,
-	) => void;
+	update: (partial: Partial<Pick<SettingsStore, "approvalMode" | "autoCompaction" | "autoRetry">>) => void;
 	reset: () => void;
 }
 
 const initialState = {
 	approvalMode: "yolo" as ApprovalMode,
-	steeringMode: "all" as const,
-	followUpMode: "all" as const,
-	interruptMode: "immediate" as const,
 	autoCompaction: true,
 	autoRetry: true,
 	// Schema defaults (settings-schema.ts): blocks shown, prose-only elision on.
@@ -194,9 +181,6 @@ export const createSettingsStore = (command: TabCommand = activeTabCommand) => {
 			...initialState,
 			setFromState: state => {
 				set({
-					steeringMode: state.steeringMode,
-					followUpMode: state.followUpMode,
-					interruptMode: state.interruptMode,
 					autoCompaction: state.autoCompactionEnabled,
 					autoRetry: state.autoRetryEnabled,
 				});

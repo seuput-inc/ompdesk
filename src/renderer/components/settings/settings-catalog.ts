@@ -79,9 +79,6 @@ export function resolveSettingsTarget(target: string | null | undefined): Settin
 
 /** Curated agent-schema rows and the section that shows them (human copy: `settings.field.<path>`). */
 export const CURATED_SCHEMA_ROWS: Readonly<Record<string, SettingsSectionId>> = {
-	steeringMode: "agent",
-	followUpMode: "agent",
-	interruptMode: "agent",
 	"compaction.enabled": "agent",
 	"tui.renderMermaid": "agent",
 	defaultThinkingLevel: "models",

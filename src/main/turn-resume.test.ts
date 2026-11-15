@@ -2796,7 +2796,7 @@ describe("TurnResume races (review of v0.82.0)", () => {
 		it("is the person's own prompt, steer or follow-up, never an agent's wrapped message or another command", () => {
 			expect(personsPrompt({ type: "prompt", message: "hello" })).toBe(true);
 			expect(personsPrompt({ type: "steer", message: "hello" })).toBe(true);
-			expect(personsPrompt({ type: "follow_up", message: "hello" })).toBe(true);
+			expect(personsPrompt({ type: "follow_up", message: "hello" })).toBe(false);
 			expect(personsPrompt({ type: "prompt", message: wrapAgentMessage("do it", "an agent") })).toBe(false);
 			expect(personsPrompt({ type: "get_state" })).toBe(false);
 			expect(personsPrompt({ type: "bash", message: "ls" })).toBe(false);

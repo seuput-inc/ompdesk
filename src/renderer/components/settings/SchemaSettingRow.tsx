@@ -17,10 +17,7 @@ import {
 	KeyRound,
 	Lightbulb,
 	ListChecks,
-	ListPlus,
 	type LucideIcon,
-	MessageSquarePlus,
-	OctagonX,
 	RotateCw,
 	ScrollText,
 	ShieldCheck,
@@ -67,9 +64,6 @@ const COMMON_SHELLS: readonly ModelValueGroup[] = [
  * rows under Advanced have none: none of them do.
  */
 const CURATED_ICONS: Readonly<Record<string, LucideIcon>> = {
-	steeringMode: MessageSquarePlus,
-	followUpMode: ListPlus,
-	interruptMode: OctagonX,
 	"compaction.enabled": Shrink,
 	"tui.renderMermaid": Workflow,
 	defaultThinkingLevel: Brain,

@@ -54,7 +54,7 @@ export function resetSessionSurface(closeOverlays = true): void {
 	const { availableModels, providers, discoveryStates, catalogGeneration } = useModelStore.getState();
 	useModelStore.getState().reset();
 	useModelStore.setState({ availableModels, providers, discoveryStates, catalogGeneration });
-	useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
+	useQueueStore.getState().reset();
 	useExtensionUiStore.getState().clearAll();
 	usePlanApprovalStore.getState().clearProposal();
 	if (closeOverlays) {

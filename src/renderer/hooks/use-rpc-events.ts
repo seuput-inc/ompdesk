@@ -648,10 +648,8 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 							break;
 						}
 						case "queue_update": {
-							// Authoritative queue snapshot — fires on every queue mutation
-							// (enqueue, drain/consume, remove, move, clear), so the composer's
-							// queue tray and the queue panel never poll mid-run.
-							useQueueStore.getState().setFromFrame({ steering: event.steering, followUp: event.followUp });
+							const queue = useQueueStore.getState();
+							if (!queue.setFromFrame(event)) void queue.refresh();
 							break;
 						}
 						default:

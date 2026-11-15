@@ -21,6 +21,7 @@ import { useSessionList } from "../../hooks/use-session-list";
 import { sessionHasContent } from "../../lib/session-title";
 import { type ComposerStore, useComposerStore } from "../../stores/composer";
 import { type MessagesStore, useMessagesStore } from "../../stores/messages";
+import { outboxSession, useOutboxStore } from "../../stores/outbox";
 import { type QueueStore, useQueueStore } from "../../stores/queue";
 import { type SessionStore, useSessionStore } from "../../stores/session";
 import { sessionRuntimeStore } from "../../stores/session-runtime-context";
@@ -37,11 +38,14 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 	const closeTab = useTabsStore(s => s.closeTab);
 	const liveDraft = useComposerStore(s => s.draft);
 	const liveImageCount = useComposerStore(s => s.images.length);
+	const liveRestoredCount = useComposerStore(s => s.restoredQueue.length);
+	const liveSending = useComposerStore(s => s.sending || s.decidingMode);
 	const liveMessageCount = useSessionStore(s => s.messageCount);
 	const liveStreaming = useSessionStore(s => s.isStreaming);
 	const liveCompacting = useSessionStore(s => s.isCompacting);
 	const liveRenderedMessages = useMessagesStore(s => s.messages.length);
-	const liveQueuedMessages = useQueueStore(s => s.steering.length + s.followUp.length);
+	const liveQueuedMessages = useQueueStore(s => s.entries.length);
+	const outbox = useOutboxStore(s => s.items);
 	const armedCloseTab = useUiStore(s => s.armedCloseTab);
 	const cancelCloseTab = useUiStore(s => s.cancelCloseTab);
 	const pruningPlaceholderRef = useRef<string | null>(null);
@@ -62,6 +66,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 		if (tabs.length <= 1 || pruningPlaceholderRef.current) return;
 		const inSplit = new Set(split ? splitTabIds(split) : []);
 		const emptyBehind = (tab: (typeof tabs)[number]) => {
+			if (outbox.some(item => item.session === outboxSession(tab))) return false;
 			const session = sessionRuntimeStore<SessionStore>(tab.id, "session")?.getState();
 			const messages = sessionRuntimeStore<MessagesStore>(tab.id, "messages")?.getState();
 			const queue = sessionRuntimeStore<QueueStore>(tab.id, "queue")?.getState();
@@ -78,8 +83,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 				!composer.sending &&
 				!composer.decidingMode &&
 				composer.restoredQueue.length === 0 &&
-				queue.steering.length === 0 &&
-				queue.followUp.length === 0 &&
+				queue.entries.length === 0 &&
 				composer.draft.trim().length === 0 &&
 				composer.images.length === 0
 			);
@@ -122,6 +126,9 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 						!liveCompacting &&
 						liveMessageCount === 0 &&
 						liveRenderedMessages === 0 &&
+						liveRestoredCount === 0 &&
+						!liveSending &&
+						!outbox.some(item => item.session === outboxSession(tab)) &&
 						liveQueuedMessages === 0 &&
 						liveDraft.trim().length === 0 &&
 						liveImageCount === 0
@@ -143,8 +150,11 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 		liveImageCount,
 		liveMessageCount,
 		liveQueuedMessages,
+		liveRestoredCount,
+		liveSending,
 		liveRenderedMessages,
 		liveStreaming,
+		outbox,
 		sessionsById,
 		sessionsByPath,
 		tabs,

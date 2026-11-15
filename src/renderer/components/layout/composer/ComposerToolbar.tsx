@@ -17,26 +17,12 @@
  * (`keepFocus`: a cancelled `mousedown`, never `pointerdown`). Memoised: its props are scalars and stable callbacks,
  * so a keystroke in the field re-renders it only when what it shows changes.
  */
-import {
-	ArrowUp,
-	Check,
-	ChevronDown,
-	CornerDownRight,
-	Cpu,
-	History,
-	ListPlus,
-	Mic,
-	MicOff,
-	Paperclip,
-	Plus,
-	Sparkles,
-	Square,
-} from "lucide-react";
+import { ArrowUp, ChevronDown, Cpu, History, Mic, MicOff, Paperclip, Plus, Sparkles, Square } from "lucide-react";
 import { type ChangeEvent, type MouseEvent, memo, type ReactNode, type RefObject, useId, useState } from "react";
 import { useShellMode } from "../../../hooks/use-shell-mode";
 import { useT } from "../../../lib/i18n";
 import type { ComposerInputMode } from "../../../lib/input-modes";
-import { actionKbd, composerFollowUpChord, formatShortcut } from "../../../lib/keymap";
+import { actionKbd } from "../../../lib/keymap";
 import { useComposerStore } from "../../../stores/composer";
 import { useFirstRunStore } from "../../../stores/first-run";
 import { chosenModelOf, useModelStore } from "../../../stores/model";
@@ -81,17 +67,11 @@ export interface ComposerToolbarProps {
 	onOpenSkills: () => void;
 	/** The draft's `!` (bash) / `$` (python) mode, if any. */
 	composerMode: ComposerInputMode | undefined;
-	/** The draft is a `->` / `=>` queue shorthand; `queueSplitCount` > 1 when it splits into that many messages. */
-	queued: boolean;
-	queueSplitCount: number;
 	/** The `!!` / `$$` form: kept out of the model context. */
 	composerExcluded?: boolean;
 	dictationPhase: DictationPhase;
 	onMic: () => void;
 	onStopAndSend: () => void;
-	/** The steer/follow-up chip says Follow-up. */
-	followUp: boolean;
-	onToggleSendMode: () => void;
 	/** Something Stop ends: the run, or a prompt not yet sent. */
 	stoppable: boolean;
 	/** The draft holds text or a picture: while a turn runs the button is Send, else Stop. */
@@ -102,8 +82,6 @@ export interface ComposerToolbarProps {
 	onSend: () => void;
 	/** The queue pill (QueueImpl): rendered before the action button; `null` when nothing is queued, so it reserves no width. */
 	queueSlot?: ReactNode;
-	/** A queued message is being edited: Send saves it (a check) and the lane chip steps aside (QueueImpl). */
-	editingQueued?: boolean;
 }
 
 export const ComposerToolbar = memo(function ComposerToolbar({
@@ -116,20 +94,15 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	onOpenSkills,
 	composerMode,
 	composerExcluded,
-	queued,
-	queueSplitCount,
 	dictationPhase,
 	onMic,
 	onStopAndSend,
-	followUp,
-	onToggleSendMode,
 	stoppable,
 	hasDraft,
 	sendDisabled,
 	onStop,
 	onSend,
 	queueSlot,
-	editingQueued = false,
 }: ComposerToolbarProps) {
 	const t = useT();
 	const isStreaming = useSessionStore(s => s.isStreaming);
@@ -146,7 +119,6 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	/** Touch presses keep focus in the field: a tap on a control never closes the soft keyboard. */
 	const hold = touchInput ? keepFocus : undefined;
 	const recording = dictationPhase !== "idle";
-	const modeLabel = followUp ? t("input.followUp") : t("input.steer");
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const stopping = useComposerStore(s => s.stopping);
 	const thinkingName = useThinkingName();
@@ -170,7 +142,6 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 			: null;
 	const slot = sendSlot({
 		recording: dictationPhase === "recording",
-		editingQueued,
 		stoppable,
 		hasDraft,
 		micOffered: phone && sttEnabled && !recording,
@@ -195,11 +166,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 		) : (
 			glyph
 		);
-	// The button's tooltip names the lane a running turn sends into and the chord of the other one; on the desktop it
-	// also says how to stop without losing the draft.
-	const laneTip = followUp
-		? t("input.send.tipFollowUp")
-		: t("input.send.tipSteer", { chord: formatShortcut(composerFollowUpChord()) });
+	const laneTip = t("input.currentInstruction");
 	const sendTip = !isStreaming
 		? t("input.send")
 		: slot.stopHint && !touchInput
@@ -239,32 +206,24 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 				) : (
 					<ComposerSend
 						cue={!stopState}
-						label={stopState ? t("input.abort") : slot.state === "save" ? t("composerQueue.editSave") : sendTip}
+						label={stopState ? t("input.abort") : sendTip}
 						shortcut={stopState ? "Esc" : isStreaming || touchInput ? undefined : "↵"}
 					>
 						<IconButton
 							{...hold}
 							{...stopHintProps}
 							className="omp-composer-action relative"
-							data-send-editing={slot.state === "save" || undefined}
-							data-send-lane={isStreaming && !stopState ? (followUp ? "followUp" : "steer") : undefined}
 							data-send-state={slot.state}
 							disabled={stopState ? !routeReady : sendDisabled}
 							icon={
 								stopState ? (
 									<Square className="omp-composer-stop-glyph" fill="currentColor" />
 								) : (
-									withStopHint(
-										slot.state === "save" ? <Check strokeWidth={2.25} /> : <ArrowUp strokeWidth={2.25} />,
-									)
+									withStopHint(<ArrowUp strokeWidth={2.25} />)
 								)
 							}
 							label={
-								stopState
-									? t("input.abort")
-									: slot.state === "save"
-										? t("composerQueue.editSave")
-										: t("input.send")
+								stopState ? t("input.abort") : isStreaming ? t("input.currentInstruction") : t("input.send")
 							}
 							loading={stopState && stopping}
 							onClick={stopState ? () => onStop("stop-button") : onSend}
@@ -370,39 +329,8 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 					</span>
 				</Tooltip>
 			)}
-			{queued && (
-				<Tooltip content={t("input.queue.title")}>
-					<span className="omp-composer-badge inline-flex min-w-0">
-						<Badge className="min-w-0 shrink!" variant="warning">
-							<span className="truncate">
-								{queueSplitCount > 1
-									? t("input.queue.badgeSplit", { count: queueSplitCount })
-									: stoppable
-										? t("input.queue.badge")
-										: t("input.queue.badgeIdle")}
-							</span>
-						</Badge>
-					</span>
-				</Tooltip>
-			)}
-			{/* While a turn runs: the lane Send goes to. It takes the free room before the send cluster, so it appearing
-			    moves nothing and nothing waits for it while idle. */}
-			{isStreaming && !editingQueued && (
-				<Tooltip content={t("input.sendModeHint")} shortcut={followUp ? undefined : composerFollowUpChord()}>
-					<Button
-						{...hold}
-						aria-label={t("input.sendModeLabel", { mode: modeLabel })}
-						className="omp-composer-chip omp-composer-fold-1"
-						data-send-mode={followUp ? "followUp" : "steer"}
-						disabled={!routeReady}
-						icon={followUp ? <ListPlus aria-hidden /> : <CornerDownRight aria-hidden />}
-						onClick={onToggleSendMode}
-						size="sm"
-						variant="ghost"
-					>
-						<span className="omp-composer-control-label">{modeLabel}</span>
-					</Button>
-				</Tooltip>
+			{isStreaming && (
+				<span className="omp-composer-control-label text-(--sc-text-muted)">{t("input.currentInstruction")}</span>
 			)}
 
 			<div className="flex-1" />

@@ -1421,7 +1421,6 @@ describe("AgentControlRuntime", () => {
 		expect(mail?.tabId).toBe("main0001");
 		expect(mail?.command).toMatchObject({
 			triggerTurn: true,
-			deliverAs: "aside",
 			details: { kind: "question", from: "remo0004" },
 		});
 	});
@@ -1891,7 +1890,6 @@ describe("a session's own wake-up", () => {
 		expect(command).toMatchObject({
 			type: "agent_control_mail",
 			triggerTurn: true,
-			deliverAs: "aside",
 			details: { id: "wake-run-1", from: "ompdesk", kind: "note", fromTitle: "check the build" },
 		});
 		expect((command as { content: string }).content).toContain("Look at the build and tell the owner if it failed");

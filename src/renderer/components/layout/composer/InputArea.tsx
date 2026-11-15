@@ -12,12 +12,12 @@ import { useT } from "../../../lib/i18n";
 import { parseComposerMode } from "../../../lib/input-modes";
 import { abortActiveTurn } from "../../../lib/messages";
 import { useSendsHeld } from "../../../lib/outbox-delivery";
-import { parseQueueShorthand, splitQueuedMessages } from "../../../lib/queue-input";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { type ComposerStore, useComposerStore } from "../../../stores/composer";
 import { useFirstRunStore } from "../../../stores/first-run";
 import { useMessagesStore } from "../../../stores/messages";
 import { useNextPromptStore } from "../../../stores/next-prompt";
+import { useOutboxStore } from "../../../stores/outbox";
 import { useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useActiveTabKind, useTabsStore } from "../../../stores/tabs";
@@ -33,7 +33,6 @@ import { ComposerLiveSweep } from "./ComposerLive";
 import { ComposerOutbox } from "./ComposerOutbox";
 import { ComposerPickers } from "./ComposerPickers";
 import { ComposerQueueLive, ComposerQueuePill } from "./ComposerQueue";
-import { ComposerEditBanner, useComposerQueueEdit } from "./ComposerQueueEdit";
 import { ComposerRestoredQueue } from "./ComposerRestoredQueue";
 import { ComposerToolbar } from "./ComposerToolbar";
 import { ComposerUnderField } from "./ComposerUnderField";
@@ -53,12 +52,8 @@ import { useComposerSubmit } from "./use-composer-submit";
 import { useComposerSuggestions } from "./use-composer-suggestions";
 import { useStableCallback } from "./use-stable-callback";
 
-type SendMode = "prompt" | "steer" | "followUp";
-
 /**
- * Composer: auto-growing textarea, Enter to send / Shift+Enter for newline,
- * image paste, @file mentions, /command completion, steering-mode selector,
- * and an abort button while the agent streams.
+ * image paste, @file mentions, /command completion, and an abort button while the agent streams.
  */
 export function InputArea() {
 	const isStreaming = useSessionStore(s => s.isStreaming);
@@ -79,7 +74,6 @@ export function InputArea() {
 		sendsHeld ? "ready" : s.status === "error" && s.sidecarHeld ? "starting" : s.status,
 	);
 	const sessionId = useSessionStore(s => s.sessionId);
-	const queuedMessageCount = useSessionStore(s => s.queuedMessageCount);
 	const cwd = useSessionStore(s => s.cwd);
 	const settingUp = useFirstRunStore(s => s.phase !== "idle");
 	// Before any provider is connected the small model is missing; the hint would only add noise to the setup.
@@ -99,15 +93,14 @@ export function InputArea() {
 	const setText = useComposerStore(s => s.setDraft);
 	const images = useComposerStore(s => s.images);
 	const setImages = useComposerStore(s => s.setImages);
-	/** A queued message is being edited in the field (ComposerQueueEdit.tsx): the saved draft is the one it replaced. */
-	const editingQueued = useComposerStore(s => s.editingQueued);
-	const [mode, setMode] = useState<SendMode>("prompt");
-	// The chip says how messages join the run on screen: a Follow-up picked there lasts until that run
-	// ends, and the next run starts as Steer again (the chip is hidden between runs, so a choice that
-	// carried over sent every later message to the follow-up lane unseen).
-	useEffect(() => {
-		if (!isStreaming) setMode("prompt");
-	}, [isStreaming]);
+	const editingRecovered = useComposerStore(s => s.editingRecovered);
+	const cancelRecoveredEdit = useComposerStore(s => s.cancelRecoveredEdit);
+	const recoveredAttempt = useOutboxStore(s =>
+		s.items.some(
+			item =>
+				item.id === editingRecovered?.id && item.send.kind === "manual" && item.send.recovery.kind === "attempt",
+		),
+	);
 	/** ⌃G: the composer expands in place to fill the session pane. */
 	const [expanded, setExpanded] = useState(false);
 	const { textareaRef, ownEdit, placeDraft, continueListAtCaret, insertAtCaret, fieldNarrow } = useComposerField({
@@ -148,9 +141,8 @@ export function InputArea() {
 	// The unsent draft outlives a reload and a relaunch (draft-persistence.ts): the session's saved
 	// text comes back into an empty field once the session is known, and every change is saved.
 	useComposerDraft({
-		// While a queued message is edited the field holds it, not the draft: the saved draft stays the one it replaced.
-		text: editingQueued ? editingQueued.snapshot.draft : text,
-		imageCount: images.length,
+		text: editingRecovered?.previous.draft ?? text,
+		imageCount: editingRecovered?.previous.images.length ?? images.length,
 		runtimeTabId,
 		device: historyDevice,
 		sessionFile,
@@ -231,30 +223,14 @@ export function InputArea() {
 	// appears while the user is still typing.
 	const composerMode = useMemo(() => parseComposerMode(text), [text]);
 
-	// `->` / `=>` yield-queue shorthand (TUI queue-input.ts parity). The badge
-	// preview and the send-path dispatch share this one parser so the "splits
-	// into N" promise always matches what actually gets queued.
-	const queueBody = useMemo(() => parseQueueShorthand(text), [text]);
-	const queueSplitCount = useMemo(() => {
-		if (queueBody === undefined || queueBody.length === 0) return 0;
-		const items = splitQueuedMessages(queueBody);
-		return items.length > 1 ? items.length : 0;
-	}, [queueBody]);
-
 	useComposerEvents({ runtimeTabId, textareaRef, setText, setImages, placeDraft });
 
-	const queueEdit = useComposerQueueEdit();
 	const blockedBy = useComposerBlockedBy();
 	const deciding = useComposerStore(state => state.decidingMode);
 	const stopArmed = useComposerStore(state => state.stopArmedAt !== null);
 	/** The suggestion shows as the placeholder only while nothing more urgent owns it. */
-	const shownPrompt = blockedBy === null && queueEdit.editing === null ? placeholderPrompt : undefined;
+	const shownPrompt = blockedBy === null ? placeholderPrompt : undefined;
 	const focusField = useCallback(() => textareaRef.current?.focus(), [textareaRef]);
-	/** Cancel or Esc: the draft and pictures the edit took over come back exactly, and typing goes on in the field. */
-	const cancelQueueEdit = useCallback(() => {
-		queueEdit.cancel();
-		textareaRef.current?.focus();
-	}, [queueEdit.cancel, textareaRef]);
 	const queueSlot = useMemo(() => <ComposerQueuePill onSettled={focusField} />, [focusField]);
 	const dispatchSend = useComposerSubmit({
 		text,
@@ -262,8 +238,6 @@ export function InputArea() {
 		sending,
 		status: sendStatus,
 		isStreaming,
-		mode,
-		queuedMessageCount,
 		commands,
 		emojiAutocomplete,
 		routeReady,
@@ -277,18 +251,16 @@ export function InputArea() {
 	 * suggestion stale. False when nothing left: empty, still sending or connecting, delivery unknown.
 	 */
 	const send = useCallback(
-		(overrideText?: string, forceMode?: SendMode): boolean => {
+		(overrideText?: string): boolean => {
 			const composer = sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer") ?? useComposerStore;
-			// Edit queued: Send saves the message back into the queue instead of sending the field.
-			if (composer.getState().editingQueued) return queueEdit.save(composer.getState().draft);
 			const hadContent = (overrideText ?? composer.getState().draft).trim() !== "" || images.length > 0;
-			dispatchSend(overrideText, forceMode);
+			dispatchSend(overrideText);
 			const after = composer.getState();
 			const sent = hadContent && after.draft === "" && after.images.length === 0;
 			if (sent) useNextPromptStore.getState().clear(nextPromptKey);
 			return sent;
 		},
-		[dispatchSend, queueEdit.save, runtimeTabId, images.length, nextPromptKey],
+		[dispatchSend, runtimeTabId, images.length, nextPromptKey],
 	);
 	/** Touch long press on a suggestion chip, "send now": the chip's text goes out as it is. */
 	const sendChip = useCallback((chip: string) => void send(chip), [send]);
@@ -338,7 +310,6 @@ export function InputArea() {
 		runActive: isStreaming || submitPending || manualMaintenance,
 		touchInput,
 		enterSends,
-		queueEdit: queueEdit.editing ? { cancel: cancelQueueEdit } : null,
 		send,
 	});
 	const sendDisabled =
@@ -361,11 +332,6 @@ export function InputArea() {
 		// The button leaves with the run: typing goes on in the field, never on <body>.
 		textareaRef.current?.focus();
 	});
-	const toggleSendMode = useCallback(() => {
-		setMode(current => (current === "followUp" ? "steer" : "followUp"));
-		// The choice is for the message being typed: typing goes on in the field.
-		textareaRef.current?.focus();
-	}, [textareaRef]);
 	const filesPicked = useStableCallback(onFilesPicked);
 	const openHistorySearch = useCallback(() => setHistorySearchOpen(true), []);
 	const openSkillPicker = useCallback(() => setSkillPickerOpen(true), []);
@@ -377,24 +343,19 @@ export function InputArea() {
 		else openFilePicker();
 	});
 	useComposerActionEvents(runtimeTabId, onPaletteAction);
-	// What the field's placeholder says, first match wins (RA-20): a question, approval or plan waits on the user, a queued
-	// message is being edited, the suggestion the user can take, then the lane Enter sends to, then idle.
+	// A waiting card takes priority over suggestions and the current instruction placeholder.
 	const placeholder =
 		status !== "ready" && status !== "starting"
 			? t("input.placeholder.connecting")
 			: blockedBy !== null
 				? t(COMPOSER_BLOCKED_PLACEHOLDER[blockedBy])
-				: queueEdit.editing
-					? t("composerQueue.editPlaceholder")
-					: shownPrompt !== undefined
-						? shownPrompt
-						: isStreaming
-							? mode === "followUp"
-								? t("input.placeholder.followUp")
-								: t("input.placeholder.streaming")
-							: isChat || fieldNarrow
-								? t("input.placeholder.chat")
-								: t("input.placeholder.idle");
+				: shownPrompt !== undefined
+					? shownPrompt
+					: isStreaming
+						? t("input.placeholder.streaming")
+						: isChat || fieldNarrow
+							? t("input.placeholder.chat")
+							: t("input.placeholder.idle");
 	/** Tab-accept hint chip: only while the suggestion is the visible placeholder. */
 	const showSuggestionHint = shownPrompt !== undefined && text === "";
 	const menuId = useId();
@@ -484,9 +445,11 @@ export function InputArea() {
 						{submissionUncertain && (
 							<Banner
 								actions={
-									<Button onClick={() => setSubmissionUncertain(false)} size="sm">
-										{t("input.allowResend")}
-									</Button>
+									!recoveredAttempt && (
+										<Button onClick={() => setSubmissionUncertain(false)} size="sm">
+											{t("input.allowResend")}
+										</Button>
+									)
 								}
 								className="m-2 mb-0"
 								live
@@ -495,7 +458,24 @@ export function InputArea() {
 								{t("input.deliveryUnknown")}
 							</Banner>
 						)}
-						<ComposerEditBanner onCancel={cancelQueueEdit} />
+						{editingRecovered && (
+							<Banner
+								actions={
+									<Button
+										disabled={editingRecovered.frozen}
+										onClick={() => {
+											if (cancelRecoveredEdit()) textareaRef.current?.focus();
+										}}
+										size="sm"
+									>
+										{t("common.cancel")}
+									</Button>
+								}
+								className="m-2 mb-0"
+							>
+								{t("composerQueue.editingRecovered")}
+							</Banner>
+						)}
 						<ComposerRestoredQueue onSettled={focusField} />
 						<ComposerOutbox onSettled={focusField} />
 						<ComposerAttachments
@@ -540,9 +520,7 @@ export function InputArea() {
 							composerMode={composerMode?.mode}
 							composerExcluded={composerMode?.excluded}
 							dictationPhase={dictation.phase}
-							editingQueued={editingQueued !== null}
 							fileInputRef={fileInputRef}
-							followUp={mode === "followUp"}
 							onFilesPicked={filesPicked}
 							onMic={dictation.toggle}
 							onOpenFilePicker={openFilePicker}
@@ -551,9 +529,6 @@ export function InputArea() {
 							onSend={sendFromToolbar}
 							onStop={stopFromToolbar}
 							onStopAndSend={dictation.stopAndSend}
-							onToggleSendMode={toggleSendMode}
-							queueSplitCount={queueSplitCount}
-							queued={queueBody !== undefined}
 							queueSlot={queueSlot}
 							routeReady={routeReady}
 							sendDisabled={sendDisabled}

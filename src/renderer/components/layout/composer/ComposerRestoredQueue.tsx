@@ -1,16 +1,10 @@
 /**
- * The queued messages a Stop withdrew, held apart from the draft ("Queue paused because you stopped"). Stock's Stop
- * takes every steer and follow-up back (`abort_and_restore_queue`); merging them into the field made them look like
- * the user's own typing and sent them out as one prompt. Here each stays its own removable chip: Resume sends them in
- * order (the first starts the turn again, the rest queue behind it), a chip's text puts that one in the field to edit,
- * its × drops it, Discard drops all. Nothing is sent until the user chooses. While this is mounted Stop keeps them here
- * (`composer.restoredTrayMounted`); without it Stop merges them into the draft.
- *
- * ONE 36 px row at the top of the composer box, on every width: the sentence and the chips scroll together, Resume and
- * Discard stay put at the end. `onSettled`: a control left with its row; the composer takes focus back.
+ * Messages withdrawn by Stop stay apart from the draft until the person resumes or removes them.
+ * Each chip can put its message back in the field, including its pictures. Resume sends the held
+ * messages in order. The row fits inside the composer on every width.
  */
 
-import { CornerDownRight, ListPlus, Pause, Play } from "lucide-react";
+import { Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useT } from "../../../lib/i18n";
 import { resumeRestoredQueue } from "../../../lib/messages";
@@ -26,8 +20,6 @@ function HeldChip({ item, onSettled }: { item: RestoredQueueItem; onSettled: () 
 	const t = useT();
 	const dropRestored = useComposerStore(state => state.dropRestored);
 	const restoreHeldToDraft = useComposerStore(state => state.restoreHeldToDraft);
-	const LaneIcon = item.lane === "steering" ? CornerDownRight : ListPlus;
-	const laneName = t(`composerQueue.lane.${item.lane}`);
 	const name = queueRowName(item.text, item.images.length);
 	return (
 		<Chip
@@ -35,14 +27,6 @@ function HeldChip({ item, onSettled }: { item: RestoredQueueItem; onSettled: () 
 			as="li"
 			className="max-w-56"
 			data-restored-item
-			icon={
-				<Tooltip content={laneName} describe={false}>
-					<span className="inline-flex shrink-0 text-(--sc-text-muted)">
-						<LaneIcon aria-hidden className="size-(--sc-icon-sm)" />
-						<span className="sr-only">{laneName}</span>
-					</span>
-				</Tooltip>
-			}
 			onClick={() => {
 				restoreHeldToDraft(item.id);
 				onSettled();

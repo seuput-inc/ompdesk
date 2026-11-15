@@ -142,7 +142,7 @@ async function suggest(...candidates: string[]): Promise<void> {
 async function mount(): Promise<void> {
 	prompt = vi.fn(async () => ok());
 	rpcCommand = vi.fn(async (command: RpcCommand) => {
-		if (command.type === "get_queue") return ok({ steering: [], followUp: [] });
+		if (command.type === "get_queue") return ok({ instance: "test", entries: [] });
 		if (command.type === "complete_inline")
 			return ok({ requestId: command.requestId, text: completeInline(command.draft) });
 		return ok();

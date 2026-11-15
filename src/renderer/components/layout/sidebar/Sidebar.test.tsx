@@ -34,6 +34,7 @@ import { useClosedChildrenStore } from "../../../stores/closed-children";
 import { useComposerStore } from "../../../stores/composer";
 import { LOCAL_SUMMARIES, useHostedSessionsStore } from "../../../stores/hosted-sessions";
 import { useMessagesStore } from "../../../stores/messages";
+import { useOutboxStore } from "../../../stores/outbox";
 import { useProjectOrigins } from "../../../stores/project-origins";
 import { useQueueStore } from "../../../stores/queue";
 import { useRemoteStore } from "../../../stores/remote";
@@ -383,8 +384,9 @@ afterEach(async () => {
 	useSessionStore.getState().reset();
 	useTabsStore.getState().reset();
 	useComposerStore.getState().reset();
+	useOutboxStore.getState().reset();
 	useMessagesStore.getState().reset();
-	useQueueStore.setState({ steering: [], followUp: [] });
+	useQueueStore.setState({ instance: null, entries: [] });
 	useSidebarSubagentsStore.setState({
 		expanded: new Set(),
 		hidden: new Set(),
@@ -711,6 +713,36 @@ describe("Sidebar menus and pinned ordering", () => {
 		await flush();
 		expect(omp.tabs.spawn).not.toHaveBeenCalled();
 		expect(omp.rpc.switchSession).toHaveBeenCalledWith("/work/alpha/one.jsonl");
+	});
+
+	it.each(["restored", "outbox"] as const)("does not replace a landing tab with %s instructions", async kind => {
+		const omp = installMockOmp(LIST);
+		useSessionStore.setState({ sessionId: "empty", cwd: "/work/alpha", isStreaming: false, messageCount: 0 });
+		useTabsStore.setState({
+			tabs: [{ id: "t0", cwd: "/work/alpha", status: "ready", kind: "agent", unreadDone: false }],
+			activeTabId: "t0",
+			bundles: new Map(),
+		});
+		if (kind === "restored") {
+			useComposerStore.getState().holdRestored([{ id: "held", text: "keep", images: [] }]);
+		} else {
+			useOutboxStore.setState({
+				items: [
+					{
+						id: "held",
+						session: "|t:t0",
+						at: 1,
+						state: "held",
+						send: { kind: "message", text: "keep", images: [] },
+					},
+				],
+			});
+		}
+		await mount(<Sidebar />);
+		await fire(rowButton("Session /work/alpha/one"), "onClick");
+		await flush();
+		expect(omp.tabs.spawn).toHaveBeenCalled();
+		expect(omp.rpc.switchSession).not.toHaveBeenCalled();
 	});
 
 	it("keeps sessions and projects in place when one is opened", async () => {

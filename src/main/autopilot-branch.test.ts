@@ -307,7 +307,7 @@ describe("a failed turn", () => {
 		autopilot.observeActivity(failed("Provider returned 500: overloaded"));
 		await vi.waitFor(() => expect(asked()).toBe(1), { timeout: 5_000 });
 		await autopilot.idle();
-		expect(world.stock("ap-1", "prompt").at(-1)?.params).toMatchObject({ streamingBehavior: "followUp" });
+		expect(world.stock("ap-1", "prompt").at(-1)?.params).toEqual({ message: expect.any(String) });
 		expect(world.stock("ap-1", "set_goal").map(call => call.params?.action ?? "create")).toEqual(["create"]);
 		expect(
 			world.bridgeCalls("ap-1", AUTOPILOT_BRIDGE_METHODS.setState).some(call => call.params?.state === "paused"),

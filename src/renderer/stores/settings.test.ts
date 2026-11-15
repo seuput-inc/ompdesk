@@ -94,9 +94,6 @@ describe("settings store display sync", () => {
 	it("joins the latest read for a session state instead of reading again, until reset", async () => {
 		getSettings.mockImplementation(() => success({ "goal.statusInFooter": false }));
 		const state = {
-			steeringMode: "all",
-			followUpMode: "all",
-			interruptMode: "immediate",
 			autoCompactionEnabled: true,
 			autoRetryEnabled: true,
 		} as never;

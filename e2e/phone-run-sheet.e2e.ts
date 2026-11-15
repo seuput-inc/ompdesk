@@ -219,7 +219,6 @@ for (const width of WIDTHS) {
 					"idle row needs no scroll",
 				).toBeLessThanOrEqual(width === 360 ? 8 : 1);
 				await setRunning(page, true);
-				await expect(page.locator("[data-send-mode]")).toBeVisible();
 				await expectRowClear(page, "running");
 			} finally {
 				await page.context().close();
@@ -396,11 +395,12 @@ for (const engine of ["pixel8", "webkit"] as const) {
 				const items = Array.from({ length: 28 }, (_, index) => ({
 					id: `q${index}`,
 					text: `대기 중인 메시지 ${index}`,
+					state: "ready" as const,
 				}));
 				window.__stores?.session.setState({ isStreaming: true });
 				window.__stores?.queue.setState({
-					steering: items.slice(0, 14),
-					followUp: items.slice(14),
+					instance: "harness",
+					entries: items,
 					refresh: async () => {},
 				});
 			});

@@ -1,7 +1,5 @@
 /**
- * Helpers for the composer queue specs on the dev harness (the real renderer over a fixture transport): seed the
- * queue, the held-after-Stop list and the edit state through the stores the page exposes (`window.__stores`), and
- * probe touch targets the way a finger would meet them (`elementFromPoint`).
+ * Helpers for the composer queue specs on the dev harness: seed pending instructions and probe touch targets.
  */
 import type { Locator, Page } from "@playwright/test";
 
@@ -19,39 +17,23 @@ export const SAMPLE_QUEUE: Record<string, string> = {
 };
 
 export interface QueueSeed {
-	/** Ids of SAMPLE_QUEUE for each lane. */
-	steering: string[];
-	followUp: string[];
+	/** Ids of SAMPLE_QUEUE, in pending order. */
+	entries: string[];
 	/** A turn is running (the queue only matters then). Default true. */
 	running?: boolean;
 }
 
-/** Put messages in the queue lanes (and a running turn behind them) the way a `queue_update` frame would. */
+/** Put pending instructions and a running turn into the harness stores. */
 export async function seedQueue(page: Page, seed: QueueSeed): Promise<void> {
 	await page.evaluate(
-		({ steering, followUp, running, texts }) => {
+		({ entries, running, texts }) => {
 			const stores = window.__stores;
 			if (!stores) throw new Error("the harness stores are missing");
-			const item = (id: string) => ({ id, text: texts[id] ?? id, editable: true, timestamp: 1 });
+			const item = (id: string) => ({ id, text: texts[id] ?? id, state: "ready" as const });
 			stores.session.setState({ isStreaming: running, status: "ready" });
-			stores.queue.setState({ steering: steering.map(item), followUp: followUp.map(item) });
+			stores.queue.setState({ instance: "harness", entries: entries.map(item) });
 		},
-		{ steering: seed.steering, followUp: seed.followUp, running: seed.running ?? true, texts: SAMPLE_QUEUE },
-	);
-}
-
-/** Hold messages as a Stop would have withdrawn them (`composer.restoredQueue`); nothing is sent. */
-export async function seedPaused(page: Page, ids: Array<{ id: string; lane: "steering" | "followUp" }>): Promise<void> {
-	await page.evaluate(
-		({ entries, texts }) => {
-			const composer = window.__stores?.composer;
-			if (!composer) throw new Error("the harness stores are missing");
-			const state = composer.getState() as {
-				holdRestored: (items: Array<{ lane: string; text: string; images: unknown[] }>) => void;
-			};
-			state.holdRestored(entries.map(({ id, lane }) => ({ lane, text: texts[id] ?? id, images: [] })));
-		},
-		{ entries: ids, texts: SAMPLE_QUEUE },
+		{ entries: seed.entries, running: seed.running ?? true, texts: SAMPLE_QUEUE },
 	);
 }
 

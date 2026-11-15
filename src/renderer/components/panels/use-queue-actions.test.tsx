@@ -1,16 +1,16 @@
-/**
- * The queue's mutations (the composer's queue popover and its edit-in-field run them): edit (omp re-queues the text
- * at the end of its lane), remove, the lane switch (a follow-up is sent now as a steer, a steer can wait for the turn
- * to end) and clearing a lane, all applied optimistically and rolled back when the transport rejects.
- */
+/** Queue removal uses the bridge's instance and opaque entry identity. */
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { RpcQueuedMessage } from "../../../shared/rpc-types";
+import type { RpcManualRecoveryDisposition, RpcQueuedMessage, RpcResponse } from "../../../shared/rpc-types";
 import { I18nProvider } from "../../lib/i18n";
+import { useComposerStore } from "../../stores/composer";
+import { useOutboxStore } from "../../stores/outbox";
 import { useQueueStore } from "../../stores/queue";
 import { useSessionStore } from "../../stores/session";
+import { useTabsStore } from "../../stores/tabs";
+import { routeCommands } from "../../test-support/route-commands";
 import { type QueueActions, useQueueActions } from "./use-queue-actions";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -22,15 +22,19 @@ Object.assign(globalThis as Record<string, unknown>, {
 	Node,
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
+const storage = new Map<string, string>();
+vi.stubGlobal("localStorage", {
+	getItem: (key: string) => storage.get(key) ?? null,
+	setItem: (key: string, value: string) => storage.set(key, value),
+	removeItem: (key: string) => storage.delete(key),
+});
 
-const ok = (data?: unknown) => ({ type: "response" as const, command: "x", success: true as const, data });
-
+const ok = (data?: unknown): RpcResponse => ({ type: "response", command: "x", success: true, data });
 let root: Root;
 let actions: QueueActions;
-let queueMove: Mock;
-let queueEdit: Mock;
 let queueRemove: Mock;
-let queueClear: Mock;
+let getManualRecovery: Mock;
+let ackManualRecovery: Mock;
 
 function Probe() {
 	actions = useQueueActions();
@@ -38,97 +42,178 @@ function Probe() {
 }
 
 function queued(id: string, text: string): RpcQueuedMessage {
-	return { id, text, editable: true, timestamp: 1 };
+	return { id, text, state: "ready" };
 }
 
-async function mount(steering: RpcQueuedMessage[], followUp: RpcQueuedMessage[] = []): Promise<void> {
-	queueMove = vi.fn(async () => ok({ lane: "steering", index: 0 }));
-	queueEdit = vi.fn(async () => ok({ updated: true }));
-	queueRemove = vi.fn(async () => ok({ removed: true }));
-	queueClear = vi.fn(async () => ok({ removed: 0 }));
+async function mount(entries: RpcQueuedMessage[]): Promise<void> {
+	queueRemove = vi.fn(async () => ok({ removed: true, recoveryId: "recovery-1", intent: "discard" }));
+	const getQueue = vi.fn(async () => {
+		const { instance, entries: current } = useQueueStore.getState();
+		return ok({ instance, entries: current });
+	});
+	getManualRecovery = vi.fn(async () => ok({ entries: [] }));
+	ackManualRecovery = vi.fn(async (recoveryId: string, disposition: RpcManualRecoveryDisposition) =>
+		ok({ acknowledged: true, recoveryId, disposition }),
+	);
 	(window as unknown as Record<string, unknown>).omp = {
-		rpc: { getQueue: vi.fn(async () => ok({ steering, followUp })), queueEdit, queueMove, queueRemove, queueClear },
+		rpc: routeCommands({ getQueue, getManualRecovery, queueRemove, ackManualRecovery }),
 	};
-	useSessionStore.setState({ status: "ready" });
-	useQueueStore.getState().setFromFrame({ steering, followUp });
+	useSessionStore.setState({ status: "ready", sessionId: "session-1" });
+	useTabsStore.setState({
+		tabs: [{ id: "tab-1", sessionId: "session-1", cwd: "/p", status: "ready", kind: "agent", unreadDone: false }],
+		activeTabId: "tab-1",
+	});
+	useQueueStore.getState().setFromFrame({ instance: "bridge-1", entries });
 	root = createRoot(document.createElement("div") as unknown as Element);
-	await act(async () =>
+	await act(async () => {
 		root.render(
 			<I18nProvider>
 				<Probe />
 			</I18nProvider>,
-		),
-	);
+		);
+	});
 }
-
-async function flush(): Promise<void> {
-	for (let index = 0; index < 3; index++)
-		await act(async () => {
-			const { promise, resolve } = Promise.withResolvers<void>();
-			setTimeout(resolve, 0);
-			await promise;
-		});
-}
-
-const lanes = () => ({
-	steering: useQueueStore.getState().steering.map(entry => entry.id),
-	followUp: useQueueStore.getState().followUp.map(entry => entry.id),
-});
 
 afterEach(async () => {
 	await act(async () => root.unmount());
-	useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
+	useQueueStore.getState().setFromFrame({ instance: "reset", entries: [] });
 	useSessionStore.getState().reset();
+	useComposerStore.getState().reset();
+	useOutboxStore.getState().reset();
+	useTabsStore.getState().reset();
+	storage.clear();
 	vi.restoreAllMocks();
 });
 
 describe("useQueueActions", () => {
-	it("edits a queued message, moving it to the end of its lane", async () => {
-		await mount([queued("s1", "before"), queued("s2", "untouched")]);
-		await act(async () => actions.edit("steering", "s1", "after"));
-		await flush();
-		expect(queueEdit).toHaveBeenCalledWith("s1", "after");
-		expect(useQueueStore.getState().steering.map(entry => entry.text)).toEqual(["untouched", "after"]);
+	it("waits for confirmation and removes only the selected ID with duplicate text", async () => {
+		await mount([queued("first", "same"), queued("second", "same")]);
+		const result = Promise.withResolvers<RpcResponse>();
+		queueRemove.mockReturnValueOnce(result.promise);
+		let removal = Promise.resolve(false);
+		await act(async () => {
+			removal = actions.remove("bridge-1", "second");
+		});
+		expect(useQueueStore.getState().entries.map(entry => entry.id)).toEqual(["first", "second"]);
+		expect(queueRemove).toHaveBeenCalledWith("bridge-1", "second", "discard");
+		await act(async () => {
+			result.resolve(ok({ removed: true, recoveryId: "recovery-1", intent: "discard" }));
+			expect(await removal).toBe(true);
+		});
+		expect(useQueueStore.getState().entries.map(entry => entry.id)).toEqual(["first"]);
 	});
 
-	it("rolls back an optimistic edit when the transport rejects", async () => {
-		await mount([queued("s1", "before")]);
-		queueEdit.mockRejectedValueOnce(new Error("sidecar unavailable"));
-		await act(async () => actions.edit("steering", "s1", "after"));
-		await flush();
-		expect(useQueueStore.getState().steering.map(entry => entry.text)).toEqual(["before"]);
+	it("brings the authoritative payload and images into the composer only after durable acknowledgement", async () => {
+		await mount([queued("original-id", "same")]);
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		const envelope = { role: "user" as const, content: "actual", requestId: "request-1" };
+		const original = { id: "original-id", text: "actual", images: [image], envelope };
+		queueRemove.mockResolvedValueOnce(
+			ok({ removed: true, recoveryId: "recovery-1", intent: "draft", entry: original }),
+		);
+		getManualRecovery.mockResolvedValueOnce(
+			ok({
+				entries: [
+					{
+						recoveryId: "recovery-1",
+						instance: "bridge-1",
+						id: "original-id",
+						intent: "draft",
+						state: "withdrawn",
+						entry: original,
+					},
+				],
+			}),
+		);
+		useComposerStore.getState().setDraft("prior");
+		await act(async () => expect(await actions.edit("bridge-1", "original-id")).toBe(true));
+		expect(queueRemove).toHaveBeenCalledWith("bridge-1", "original-id", "draft");
+		expect(useComposerStore.getState()).toMatchObject({ draft: "actual", images: [{ content: image }] });
+		expect(useOutboxStore.getState().items[0]?.send).toMatchObject({
+			kind: "manual",
+			source: { id: "original-id", recoveryId: "recovery-1", envelope },
+			acknowledged: true,
+		});
 	});
 
-	it("removes only the named item, by its stable queue id", async () => {
-		await mount([queued("s1", "same text"), queued("s2", "same text")], [queued("f1", "later")]);
-		await act(async () => actions.remove("steering", "s2"));
-		await flush();
-		expect(queueRemove).toHaveBeenCalledTimes(1);
-		expect(queueRemove).toHaveBeenCalledWith("s2");
-		expect(lanes()).toEqual({ steering: ["s1"], followUp: ["f1"] });
+	it("keeps a refused or failed removal", async () => {
+		await mount([queued("first", "keep")]);
+		queueRemove.mockResolvedValueOnce(ok({ removed: false })).mockRejectedValueOnce(new Error("offline"));
+		await act(async () => expect(await actions.remove("bridge-1", "first")).toBe(false));
+		await act(async () => expect(await actions.remove("bridge-1", "first")).toBe(false));
+		expect(useQueueStore.getState().entries).toEqual([queued("first", "keep")]);
 	});
 
-	it("promotes a follow-up through queue_move to the steering lane", async () => {
-		await mount([queued("s1", "steer")], [queued("f1", "later one"), queued("f2", "later two")]);
-		await act(async () => actions.moveToLane("followUp", "f2"));
-		await flush();
-		expect(queueMove).toHaveBeenCalledWith("f2", Number.MAX_SAFE_INTEGER, "steering");
-		expect(lanes()).toEqual({ steering: ["s1", "f2"], followUp: ["f1"] });
+	it.each(["draft", "discard"] as const)(
+		"shows an uncertain %s withdrawal without hiding the original or acknowledging it",
+		async intent => {
+			await mount([queued("original-id", "pending")]);
+			const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+			const envelope = { role: "user" as const, content: "pending", requestId: "request-1" };
+			const entry = { id: "original-id", text: "pending", images: [image], envelope };
+			queueRemove.mockRejectedValueOnce(new Error("response lost"));
+			getManualRecovery.mockResolvedValueOnce(
+				ok({
+					entries: [
+						{
+							recoveryId: "recovery-1",
+							instance: "bridge-1",
+							id: "original-id",
+							intent,
+							state: "unconfirmed",
+							entry,
+						},
+					],
+				}),
+			);
+			useComposerStore.getState().setDraft("prior");
+			await act(async () => {
+				const result =
+					intent === "draft"
+						? await actions.edit("bridge-1", "original-id")
+						: await actions.remove("bridge-1", "original-id");
+				expect(result).toBe(false);
+			});
+			expect(useQueueStore.getState().entries).toEqual([queued("original-id", "pending")]);
+			expect(useComposerStore.getState().draft).toBe("prior");
+			expect(useOutboxStore.getState().items[0]?.send).toMatchObject({
+				kind: "manual",
+				source: { recoveryId: "recovery-1", intent, envelope },
+				images: [image],
+				acknowledged: false,
+				recovery: { kind: "withdrawal_uncertain", intent },
+			});
+			expect(ackManualRecovery).not.toHaveBeenCalled();
+		},
+	);
+
+	it("never removes an in-flight, approval-held or stale-instance entry", async () => {
+		await mount([
+			{ ...queued("flight", "one"), state: "in_flight" },
+			{ ...queued("safety", "two"), state: "approval_safety" },
+			queued("ready", "three"),
+		]);
+		await act(async () => {
+			expect(await actions.remove("bridge-1", "flight")).toBe(false);
+			expect(await actions.remove("bridge-1", "safety")).toBe(false);
+			expect(await actions.remove("old-instance", "ready")).toBe(false);
+		});
+		expect(queueRemove).not.toHaveBeenCalled();
 	});
 
-	it("moves a steer to the end of the follow-up lane", async () => {
-		await mount([queued("s1", "one"), queued("s2", "two")], [queued("f1", "queued one")]);
-		await act(async () => actions.moveToLane("steering", "s1"));
-		await flush();
-		expect(queueMove).toHaveBeenCalledWith("s1", Number.MAX_SAFE_INTEGER, "followUp");
-		expect(lanes()).toEqual({ steering: ["s2"], followUp: ["f1", "s1"] });
-	});
-
-	it("rolls back an optimistic cross-lane move when the transport rejects", async () => {
-		await mount([queued("s1", "one"), queued("s2", "two")]);
-		queueMove.mockRejectedValueOnce(new Error("sidecar unavailable"));
-		await act(async () => actions.moveToLane("steering", "s1"));
-		await flush();
-		expect(lanes()).toEqual({ steering: ["s1", "s2"], followUp: [] });
+	it("does not remove a matching ID from a newer bridge instance when an old acknowledgement arrives", async () => {
+		await mount([queued("same-id", "old")]);
+		const result = Promise.withResolvers<RpcResponse>();
+		queueRemove.mockReturnValueOnce(result.promise);
+		let removal = Promise.resolve(false);
+		await act(async () => {
+			removal = actions.remove("bridge-1", "same-id");
+		});
+		useQueueStore.getState().setFromFrame({ instance: "bridge-2", entries: [queued("same-id", "new")] });
+		await act(async () => {
+			result.resolve(ok({ removed: true, recoveryId: "recovery-1", intent: "discard" }));
+			await removal;
+		});
+		expect(useQueueStore.getState()).toMatchObject({ instance: "bridge-2", entries: [queued("same-id", "new")] });
 	});
 });

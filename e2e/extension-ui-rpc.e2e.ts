@@ -180,7 +180,7 @@ for (const language of variants(["en", "ko"] as const))
 				// With an argument the completion menu is closed, so Enter submits (stock accepts `link`).
 				await submit(page, "/open link");
 				await expect(page.getByText(text.noLink)).toBeVisible();
-				const prompts = (await readRecords(record)).filter(frame => frame.type === "prompt");
+				const prompts = (await readRecords(record)).filter(frame => frame.type === "composer.prompt");
 				expect(prompts).toEqual([]);
 
 				// ── Slow mode through set_slow_mode ──────────────────────────────

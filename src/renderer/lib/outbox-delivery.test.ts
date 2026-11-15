@@ -89,8 +89,8 @@ describe("outbox delivery", () => {
 		const { holdMessage, sendsHeld, installOutboxDelivery, useOutboxStore, tab } = await page();
 		stop = installOutboxDelivery();
 		expect(sendsHeld(tab)).toBe(true);
-		holdMessage(tab, { text: "one", images: [], behavior: "steer" });
-		holdMessage(tab, { text: "two", images: [], behavior: "followUp" });
+		holdMessage(tab, { text: "one", images: [] });
+		holdMessage(tab, { text: "two", images: [] });
 		await Promise.resolve();
 		expect(commandForTab).not.toHaveBeenCalled();
 		const ids = useOutboxStore.getState().items.map(item => item.id);
@@ -101,23 +101,23 @@ describe("outbox delivery", () => {
 			{ message: "one", deliveryId: ids[0] },
 			{ message: "two", deliveryId: ids[1] },
 		]);
-		expect(commandForTab.mock.calls.find(([, command]) => command.type === "prompt")?.[1]).toMatchObject({
-			streamingBehavior: "steer",
-		});
+		for (const [, command] of commandForTab.mock.calls) {
+			if (command.type === "prompt") expect(command).not.toHaveProperty("streamingBehavior");
+		}
 	});
 
 	it("keeps what waits across a reload, and a send a reload cut off waits again with the same id", async () => {
 		const first = await page();
-		first.holdMessage(first.tab, { text: "one", images: [], behavior: "steer" });
-		first.holdMessage(first.tab, { text: "two", images: [], behavior: "steer" });
+		first.holdMessage(first.tab, { text: "one", images: [] });
+		first.holdMessage(first.tab, { text: "two", images: [] });
 		const [id] = first.useOutboxStore.getState().items.map(item => item.id);
 		if (!id) throw new Error("nothing held");
 		first.useOutboxStore.getState().patch(id, { state: "sending" });
 
 		const second = await page();
 		expect(second.useOutboxStore.getState().items.map(item => [item.send, item.state])).toEqual([
-			[{ kind: "message", text: "one", images: [], behavior: "steer" }, "held"],
-			[{ kind: "message", text: "two", images: [], behavior: "steer" }, "held"],
+			[{ kind: "message", text: "one", images: [] }, "held"],
+			[{ kind: "message", text: "two", images: [] }, "held"],
 		]);
 		setLink("open");
 		stop = second.installOutboxDelivery();
@@ -125,12 +125,177 @@ describe("outbox delivery", () => {
 		expect(sentPrompts()[0]).toEqual({ message: "one", deliveryId: id });
 	});
 
+	it("loads old choices without losing identities, pictures, or per-session order and sends without a destination mode", async () => {
+		const image = { type: "image", data: "AA==", mimeType: "image/png" };
+		stored.set(
+			"omp.outbox.v1",
+			JSON.stringify([
+				{
+					id: "later",
+					session: "|s:s1",
+					at: 2,
+					state: "held",
+					send: { kind: "message", text: "later", images: [], behavior: "followUp" },
+				},
+				{
+					id: "other",
+					session: "|s:s2",
+					at: 1,
+					state: "held",
+					send: { kind: "message", text: "other", images: [], behavior: "steer" },
+				},
+				{
+					id: "picture",
+					session: "|s:s1",
+					at: 1,
+					state: "sending",
+					send: { kind: "message", text: "", images: [image], behavior: "steer" },
+				},
+			]),
+		);
+		const { installOutboxDelivery, useOutboxStore, useTabsStore, tab } = await page();
+		expect(useOutboxStore.getState().items).toEqual([
+			{ id: "later", session: "|s:s1", at: 2, state: "held", send: { kind: "message", text: "later", images: [] } },
+			{ id: "other", session: "|s:s2", at: 1, state: "held", send: { kind: "message", text: "other", images: [] } },
+			{
+				id: "picture",
+				session: "|s:s1",
+				at: 1,
+				state: "held",
+				tried: true,
+				send: { kind: "message", text: "", images: [image] },
+			},
+		]);
+
+		setLink("open");
+		stop = installOutboxDelivery();
+		await vi.waitFor(() => expect(useOutboxStore.getState().items.map(item => item.id)).toEqual(["other"]));
+		const promptCalls = () => commandForTab.mock.calls.filter(([, command]) => command.type === "prompt");
+		expect(promptCalls()).toEqual([
+			["t1", { type: "prompt", message: "", images: [image], deliveryId: "picture" }],
+			["t1", { type: "prompt", message: "later", images: [], deliveryId: "later" }],
+		]);
+
+		useTabsStore.setState({ tabs: [tab, { ...tab, id: "t2", sessionId: "s2" }] });
+		await vi.waitFor(() => expect(useOutboxStore.getState().items).toEqual([]));
+		expect(promptCalls()[2]).toEqual(["t2", { type: "prompt", message: "other", images: [], deliveryId: "other" }]);
+	});
+
+	it("persists manual edits and pictures across reload without sending the manual item", async () => {
+		const first = await page();
+		const { useComposerStore } = await import("../stores/composer");
+		// A fresh module graph models a renderer reload; the composer must share that graph's outbox.
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		const replacement = { type: "image" as const, data: "BB==", mimeType: "image/png" };
+		const envelope = { role: "user" as const, content: "original", timestamp: 1, requestId: "request-1" };
+		first.useOutboxStore.getState().hold({
+			id: "manual-1",
+			session: "|s:s1",
+			at: 1,
+			state: "held",
+			send: {
+				kind: "manual",
+				source: { recoveryId: "recovery-1", instance: "bridge-1", id: "original-id", intent: "draft", envelope },
+				text: "original",
+				images: [image],
+				previous: { draft: "", images: [] },
+				editing: false,
+				acknowledged: true,
+				recovery: { kind: "draft" },
+			},
+		});
+		useComposerStore.getState().setDraft("previous");
+		useComposerStore.getState().setImages([{ content: image, preview: "old-preview" }]);
+		expect(useComposerStore.getState().beginRecoveredEdit("manual-1")).toBe(true);
+		useComposerStore.getState().setDraft("edited");
+		useComposerStore.getState().setImages([{ content: replacement, preview: "new-preview" }]);
+		expect(useComposerStore.getState().cancelRecoveredEdit()).toBe(true);
+		expect(useComposerStore.getState()).toMatchObject({
+			draft: "previous",
+			images: [{ content: image, preview: "old-preview" }],
+			editingRecovered: null,
+		});
+		first.holdMessage(first.tab, { text: "ordinary", images: [] });
+
+		const second = await page();
+		expect(second.useOutboxStore.getState().items[0]).toMatchObject({
+			id: "manual-1",
+			send: {
+				kind: "manual",
+				source: { recoveryId: "recovery-1", instance: "bridge-1", id: "original-id", intent: "draft", envelope },
+				text: "edited",
+				images: [replacement],
+				previous: { draft: "previous", images: [image] },
+				editing: false,
+				acknowledged: true,
+				recovery: { kind: "draft" },
+			},
+		});
+		setLink("open");
+		stop = second.installOutboxDelivery();
+		await vi.waitFor(() => expect(second.useOutboxStore.getState().items.map(item => item.id)).toEqual(["manual-1"]));
+		expect(sentPrompts().map(item => item.message)).toEqual(["ordinary"]);
+	});
+
+	it("atomically converts a manual draft into one explicitly requested offline send", async () => {
+		const { useOutboxStore, installOutboxDelivery } = await page();
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		const envelope = { role: "user" as const, content: "original", requestId: "request-1" };
+		const source = {
+			recoveryId: "recovery-1",
+			instance: "bridge-1",
+			id: "original-id",
+			intent: "draft" as const,
+			envelope,
+		};
+		useOutboxStore.getState().hold({
+			id: "manual-1",
+			session: "|s:s1",
+			at: 1,
+			state: "held",
+			send: {
+				kind: "manual",
+				source,
+				text: "edited",
+				images: [image],
+				previous: { draft: "prior", images: [] },
+				editing: true,
+				acknowledged: true,
+				recovery: { kind: "attempt", deliveryId: "new-id" },
+			},
+		});
+		const failedWrite = vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
+			throw new Error("quota");
+		});
+		expect(useOutboxStore.getState().queueManual("manual-1", "new-id", "edited", [image])).toBe(false);
+		expect(useOutboxStore.getState().items.map(item => item.id)).toEqual(["manual-1"]);
+		failedWrite.mockRestore();
+		expect(useOutboxStore.getState().queueManual("manual-1", "new-id", "edited", [image])).toBe(true);
+		expect(useOutboxStore.getState().items).toEqual([
+			expect.objectContaining({
+				id: "new-id",
+				send: {
+					kind: "message",
+					text: "edited",
+					images: [image],
+					recovered: { source, previous: { draft: "prior", images: [] } },
+				},
+			}),
+		]);
+		setLink("open");
+		stop = installOutboxDelivery();
+		await vi.waitFor(() => expect(useOutboxStore.getState().items).toEqual([]));
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "prompt")).toEqual([
+			["t1", { type: "prompt", message: "edited", images: [image], deliveryId: "new-id" }],
+		]);
+	});
+
 	it("tries a send the link cut again with the same id, and stops at one the computer refused until it is retried", async () => {
 		vi.useFakeTimers();
 		const { holdMessage, installOutboxDelivery, useOutboxStore, tab } = await page();
-		holdMessage(tab, { text: "cut", images: [], behavior: "steer" });
-		holdMessage(tab, { text: "refused", images: [], behavior: "steer" });
-		holdMessage(tab, { text: "after", images: [], behavior: "steer" });
+		holdMessage(tab, { text: "cut", images: [] });
+		holdMessage(tab, { text: "refused", images: [] });
+		holdMessage(tab, { text: "after", images: [] });
 		// The first try of "cut" is lost on the link, every try of "refused" until the person retries it is refused.
 		let cutTries = 0;
 		let refusing = true;

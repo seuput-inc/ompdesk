@@ -573,9 +573,6 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "Git 연동 사용",
 		description: "TUI에 git 브랜치, 상태, PR 정보를 표시하고 저장소 메타데이터를 감시해요.",
 	},
-	steeringMode: { label: "추가 지시 모드", description: "에이전트 실행 중 대기열 메시지 처리 방식이에요" },
-	followUpMode: { label: "후속 모드", description: "턴이 끝난 뒤 후속 메시지를 내보내는 방식이에요" },
-	interruptMode: { label: "중단 모드", description: "추가 지시 메시지가 도구 실행을 중단하는 시점이에요" },
 	"loop.mode": { label: "루프 모드", description: "/loop 반복 사이, 프롬프트를 다시 제출하기 전에 수행할 동작이에요" },
 	doubleEscapeAction: {
 		label: "Escape 두 번 동작",

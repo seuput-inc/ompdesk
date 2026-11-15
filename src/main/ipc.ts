@@ -443,8 +443,8 @@ function settledStart(sidecar: SidecarLike): Promise<void> {
 	return promise;
 }
 
-/** Commands that carry what the person typed into a session: a prompt, a steer or follow-up, a shell or eval line. */
-const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "follow_up", "bash", "eval"]);
+/** Commands that carry what the person typed: a current instruction, a shell line, or eval code. */
+const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "bash", "eval"]);
 /** Shown notifications that switch to a tab on click, kept alive until then. */
 const liveNotifications = new Set<Notification>();
 /** Windows whose close already cancels their pending notification summary. */
@@ -1089,7 +1089,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		try {
 			// A prompt from a paired web device names its device to the omp first: the bridge journals it for the
 			// message with that text, so every window can say who typed it.
-			if ((cmd.type === "prompt" || cmd.type === "steer" || cmd.type === "follow_up") && !sidecar.device) {
+			if ((cmd.type === "prompt" || cmd.type === "steer") && !sidecar.device) {
 				const origin = promptOriginOf(win);
 				if (origin)
 					await client.command({ type: "prompt_origin_set", origin, text: cmd.message }).catch(() => undefined);

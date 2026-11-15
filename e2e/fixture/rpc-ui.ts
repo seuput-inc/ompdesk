@@ -407,6 +407,24 @@ export function runRpcUi(): void {
 		process.env.OMP_GUI_TEST_STAND_IN === "1" ? { provider: model.provider, id: model.id, name: model.name } : null;
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
+	const queueInstance = `fixture-queue-${process.pid}`;
+	let queueSequence = 0;
+	const queuedEntries: Array<{ id: string; text: string; images: ImageContent[]; envelope: AgentMessage }> = [];
+	const queuePositions = new WeakMap<(typeof queuedEntries)[number], number>();
+	const recoveryEntries = new Map<
+		string,
+		{
+			recoveryId: string;
+			instance: string;
+			id: string;
+			intent: "draft" | "discard";
+			state: "withdrawn";
+			entry: (typeof queuedEntries)[number];
+		}
+	>();
+	const recoveryIntents = new Map<string, "draft" | "discard">();
+	const acknowledgedRecoveries = new Map<string, string>();
+	const deliveries = new Set<string>();
 	let isStreaming = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
 	let thinking = { level: "medium", configured: "medium" };
@@ -819,8 +837,14 @@ export function runRpcUi(): void {
 		}
 		process.stdout.write(lines);
 	};
-	const emitQueue = () =>
-		write({ type: "queue_update", steering: [...lanes.steering], followUp: [...lanes.followUp] });
+	const emitQueue = () => {
+		if (lanes.steering.length === 0) queuedEntries.length = 0;
+		write({
+			type: "queue_update",
+			instance: queueInstance,
+			entries: queuedEntries.map(({ envelope: _envelope, ...entry }) => ({ ...entry, state: "ready" })),
+		});
+	};
 	const endTurn = (messages: AgentMessage[]) => {
 		isStreaming = false;
 		write({ type: "agent_end", messages });
@@ -2004,6 +2028,82 @@ export function runRpcUi(): void {
 			prewalkArmed: false,
 			agentsPaused: false,
 		}),
+		"composer.prompt": (params, reply) => {
+			const message = typeof params.message === "string" ? params.message : "";
+			const images = Array.isArray(params.images) ? (params.images as ImageContent[]) : [];
+			const deliveryId = typeof params.deliveryId === "string" ? params.deliveryId : undefined;
+			if (deliveryId && deliveries.has(deliveryId)) return { accepted: true };
+			if ((isStreaming || goalTurnRunning) && !message.startsWith("/")) {
+				const envelope: AgentMessage = {
+					role: "user",
+					content: [{ type: "text", text: message }, ...images],
+					timestamp: Date.now(),
+				};
+				const entry = { id: `fixture-entry-${++queueSequence}`, text: message, images, envelope };
+				queuePositions.set(entry, lanes.steering.length);
+				queuedEntries.push(entry);
+				lanes.steering.push(message || (images.length ? "[Image]" : ""));
+				if (deliveryId) deliveries.add(deliveryId);
+				emitQueue();
+				return { accepted: true };
+			}
+			handleCommand({ type: "prompt", message, images }, () => {
+				if (deliveryId) deliveries.add(deliveryId);
+				reply({ accepted: true });
+			});
+			return undefined;
+		},
+		"composer.get_queue": () => ({
+			instance: queueInstance,
+			entries: queuedEntries.map(({ envelope: _envelope, ...entry }) => ({ ...entry, state: "ready" })),
+		}),
+		"composer.queue_remove": params => {
+			if (params.intent !== "draft" && params.intent !== "discard") throw new Error("Invalid intent");
+			const recoveryId = `fixture-recovery-${String(params.id)}`;
+			const previousIntent = recoveryIntents.get(recoveryId);
+			if (previousIntent && previousIntent !== params.intent) throw new Error("Conflicting intent");
+			if (params.instance !== queueInstance) return { removed: false };
+			const index = queuedEntries.findIndex(entry => entry.id === params.id);
+			if (index < 0) return { removed: false };
+			const [entry] = queuedEntries.splice(index, 1);
+			const position = queuePositions.get(entry);
+			if (position === undefined) throw new Error("Missing fixture queue position");
+			lanes.steering.splice(position, 1);
+			for (const remaining of queuedEntries) {
+				const current = queuePositions.get(remaining);
+				if (current !== undefined && current > position) queuePositions.set(remaining, current - 1);
+			}
+			emitQueue();
+			recoveryIntents.set(recoveryId, params.intent);
+			recoveryEntries.set(recoveryId, {
+				recoveryId,
+				instance: queueInstance,
+				id: entry.id,
+				intent: params.intent,
+				state: "withdrawn",
+				entry,
+			});
+			return { removed: true, recoveryId, intent: params.intent, entry };
+		},
+		"composer.get_manual_recovery": () => ({ entries: [...recoveryEntries.values()] }),
+		"composer.ack_manual_recovery": params => {
+			const recoveryId = typeof params.recoveryId === "string" ? params.recoveryId : "";
+			const disposition = params.disposition;
+			if (!disposition || typeof disposition !== "object" || !("kind" in disposition))
+				throw new Error("Invalid disposition");
+			const value = disposition as { kind: string; draftId?: string };
+			if (value.kind !== "discard" && (value.kind !== "draft" || typeof value.draftId !== "string")) {
+				throw new Error("Invalid disposition");
+			}
+			if (recoveryIntents.get(recoveryId) !== value.kind) throw new Error("Conflicting intent");
+			const key = JSON.stringify(value);
+			const previous = acknowledgedRecoveries.get(recoveryId);
+			if (previous !== undefined && previous !== key) throw new Error("Conflicting disposition");
+			if (previous === undefined && !recoveryEntries.has(recoveryId)) throw new Error("Unknown recovery");
+			acknowledgedRecoveries.set(recoveryId, key);
+			recoveryEntries.delete(recoveryId);
+			return { acknowledged: true, recoveryId, disposition };
+		},
 		"composer.cycle_model_backward": () => {
 			model.id = model.id === "local-fixture" ? "local-fixture-alt" : "local-fixture";
 			return { model, thinkingLevel: "medium", isScoped: false };
@@ -5837,14 +5937,21 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 		}
 	};
 
-	const handleCommand = (command: { type?: unknown; id?: unknown; [key: string]: unknown }) => {
-		record(command);
+	const handleCommand = (
+		command: { type?: unknown; id?: unknown; [key: string]: unknown },
+		bridgeReply?: () => void,
+	) => {
+		if (!bridgeReply) record(command);
 		const type = String(command.type);
 		const text = (key: string) => (typeof command[key] === "string" ? command[key] : "");
-		const ok = (data: unknown = {}) =>
-			write({ type: "response", id: command.id, command: type, success: true, data });
-		const fail = (error: string, code?: string) =>
+		const ok = (data: unknown = {}) => {
+			if (bridgeReply) bridgeReply();
+			else write({ type: "response", id: command.id, command: type, success: true, data });
+		};
+		const fail = (error: string, code?: string) => {
+			if (bridgeReply) throw new Error(error);
 			write({ type: "response", id: command.id, command: type, success: false, error, code });
+		};
 		switch (type) {
 			case "negotiate_protocol":
 				if (command.protocolVersion !== 2) {
@@ -7088,7 +7195,10 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			case "abort_and_restore_queue": {
 				// Stock (TUI Esc parity): withdraw the queued input first, then abort.
 				const restored = {
-					steering: lanes.steering.map(message => ({ text: message })),
+					steering: lanes.steering.map((message, index) => {
+						const entry = queuedEntries.find(item => queuePositions.get(item) === index);
+						return entry ? { text: entry.text, images: entry.images } : { text: message };
+					}),
 					followUp: lanes.followUp.map(message => ({ text: message })),
 				};
 				const hadQueue = lanes.steering.length + lanes.followUp.length > 0;

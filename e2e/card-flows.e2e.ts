@@ -229,7 +229,7 @@ test("steers, a removed steer and a follow-up during a long multi-agent run", as
 		await input.press("Enter");
 		await input.fill("And the changelog");
 		await input.press("Enter");
-		await page.evaluate(() => window.omp.rpc.followUp("Then summarize the run"));
+		await page.evaluate(() => window.omp.rpc.prompt("Then summarize the run"));
 		const tray = page.getByRole("region", { name: "Queued", exact: true });
 		await expect(tray.locator("li")).toHaveCount(3);
 		await capture(page, "steer-1-queued");

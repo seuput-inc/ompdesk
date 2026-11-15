@@ -1,6 +1,6 @@
 /**
  * Prompt origins for a tab several windows show (gui-bridge prompt-origin.ts): main names the device a
- * prompt, steer or follow-up came from just before it hands the text to the omp, and the bridge journals that
+ * prompt or current instruction came from just before it hands the text to omp, and the bridge journals that
  * device for the user message with that text. Not a stock command and never sent by a renderer.
  */
 import { z } from "zod";
@@ -29,15 +29,14 @@ export const handlers: Record<string, LocalHandler> = {
 	},
 };
 
-/** Whether the message is meant to join the running turn: stock `steer`, or a `prompt` whose host-side join is a steer. */
+/** Every prompt can join the current run; the bridge decides from its live run state. */
 export function joinsAsSteer(command: RpcCommand): boolean {
-	return command.type === "steer" || (command.type === "prompt" && command.streamingBehavior === "steer");
+	return command.type === "steer" || command.type === "prompt";
 }
 
 /**
- * Tells the omp that the prompt, steer or follow-up a person sends was typed, and whether it was sent to join the
- * running turn. Only a person's own (`personsPrompt`: an agent's wrapped message is none; the callers keep main's own
- * prompts, Autopilot's and a relaunch's, away). Best effort: an older bridge refuses it.
+ * Tells omp that a person's prompt was typed and can join the current run. Only a person's own (`personsPrompt`:
+ * an agent's wrapped message is none; the callers keep main's own prompts, Autopilot's and a relaunch's away).
  */
 export async function noteTypedPrompt(
 	client: { command(command: RpcCommand): Promise<unknown> },

@@ -327,7 +327,8 @@ test.describe("on a paired device", () => {
 		// The prompt ran on the device's omp, not this computer's.
 		const prompted = (records: Record<string, unknown>[]) =>
 			records.some(
-				frame => frame.type === "prompt" && String(frame.message).includes("Run this on the other computer"),
+				frame =>
+					frame.type === "composer.prompt" && String(frame.message).includes("Run this on the other computer"),
 			);
 		expect(prompted(await readRecords(hostProfile.record))).toBe(true);
 		expect(prompted(await readRecords(clientProfile.record))).toBe(false);

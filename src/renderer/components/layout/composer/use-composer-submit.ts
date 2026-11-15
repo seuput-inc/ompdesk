@@ -1,7 +1,6 @@
 /**
  * useComposerSubmit: the composer submit controller extracted from InputArea.
- * Owns the entire send pipeline: bash/python mode dispatch, yield-queue
- * shorthand, slash-command routing, and the prompt/steer/followUp dispatch.
+ * Owns shell execution, slash-command routing, and current-instruction submission.
  */
 
 import { useCallback, useEffect, useRef } from "react";
@@ -9,12 +8,7 @@ import type { AgentMessage, AvailableCommand } from "../../../../shared/rpc-type
 import { refreshNextPromptAfterBash } from "../../../hooks/use-next-prompt";
 import { hydrateTabSession } from "../../../hooks/use-rpc-events";
 import { endAutoPlan, runAutoMode } from "../../../lib/auto-mode-client";
-import {
-	isGuiOnlyBuiltinCommand,
-	planComposerSubmit,
-	SUBMIT_CANCELLED,
-	settleComposerResponse,
-} from "../../../lib/composer-submit";
+import { planComposerSubmit, SUBMIT_CANCELLED, settleComposerResponse } from "../../../lib/composer-submit";
 import { expandEmoticons } from "../../../lib/emoji";
 import { errorDetail } from "../../../lib/error-detail";
 import { rememberHistoryImages } from "../../../lib/history-images";
@@ -23,15 +17,12 @@ import { parseComposerMode } from "../../../lib/input-modes";
 import { abortActiveTurn, clearSessionContext } from "../../../lib/messages";
 import { holdMessage, sendsHeld } from "../../../lib/outbox-delivery";
 import { danglingPasteFragment, dropReferencedPastes, expandPasteMarkers } from "../../../lib/paste-blobs";
-import { IMAGE_ONLY_CHIP } from "../../../lib/queue-chip";
-import { parseQueueShorthand, splitQueuedMessages } from "../../../lib/queue-input";
-import { parseSlashCommand } from "../../../lib/slash-command";
 import { useTabRpc } from "../../../lib/tab-rpc";
-import { type ComposerImage, type ComposerStore, useComposerStore } from "../../../stores/composer";
+import { type ComposerImage, type ComposerStore, prependToDraft, useComposerStore } from "../../../stores/composer";
 import { useInputHistoryStore } from "../../../stores/input-history";
 import { type MessagesStore, useMessagesStore } from "../../../stores/messages";
+import { useOutboxStore } from "../../../stores/outbox";
 import { type PlanApprovalStore, usePlanApprovalStore } from "../../../stores/plan-approval";
-import { type QueueStore, useQueueStore } from "../../../stores/queue";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { restoreTabComposer, useTabsStore } from "../../../stores/tabs";
@@ -39,16 +30,12 @@ import { toast, toastError } from "../../../stores/toast";
 import { webRuntime } from "../../../web/runtime";
 import { useAutoModePrefetch } from "./use-auto-mode-prefetch";
 
-type SendMode = "prompt" | "steer" | "followUp";
-
 export function useComposerSubmit({
 	text,
 	images,
 	sending,
 	status,
 	isStreaming,
-	mode,
-	queuedMessageCount,
 	commands,
 	emojiAutocomplete,
 	routeReady,
@@ -62,8 +49,6 @@ export function useComposerSubmit({
 	sending: boolean;
 	status: string;
 	isStreaming: boolean;
-	mode: SendMode;
-	queuedMessageCount: number;
 	commands: AvailableCommand[];
 	emojiAutocomplete: boolean;
 	routeReady: boolean;
@@ -83,18 +68,17 @@ export function useComposerSubmit({
 		[emojiAutocomplete],
 	);
 	useAutoModePrefetch({ text, isStreaming, status, tabId: runtimeTabId, rpc, expand: expandProse });
-	const heldSend = useRef<{ message: string; overrideText?: string; forceMode?: SendMode } | null>(null);
+	const heldSend = useRef<{ message: string; overrideText?: string } | null>(null);
 	const send = useCallback(
 		// `overrideText` sends a freshly computed value (voice dictation submit
 		// trigger) instead of the rendered `text` state, which lags a setText.
-		// `forceMode` overrides the steer/followUp toggle for one send (the follow-up chord).
-		(overrideText?: string, forceMode?: SendMode) => {
+		(overrideText?: string) => {
 			const message = (overrideText ?? text).trim();
 			if (!message && images.length === 0) return;
 			// The previous send is still being answered (a prompt's round trip, a `!` command's whole run): the Enter is
 			// held, not dropped, and goes out once that send settles (the effect below).
 			if (sending) {
-				heldSend.current = { message, overrideText, forceMode };
+				heldSend.current = { message, overrideText };
 				return;
 			}
 			// An edit that cut into a paste marker left text that names a paste but is not one: sending it would
@@ -118,13 +102,14 @@ export function useComposerSubmit({
 			const originSession = sessionRuntimeStore<SessionStore>(originTabId, "session");
 			const originComposer = sessionRuntimeStore<ComposerStore>(originTabId, "composer") ?? useComposerStore;
 			if (originComposer.getState().sending || originComposer.getState().submissionUncertain) return;
+			const recovering = originComposer.getState().editingRecovered;
 
 			const originMessages = sessionRuntimeStore<MessagesStore>(originTabId, "messages") ?? useMessagesStore;
 			const originSessionId = originSession?.getState().sessionId ?? useSessionStore.getState().sessionId;
 			const originCwd = (originSession?.getState() ?? useSessionStore.getState()).cwd;
 			const originDevice = useTabsStore.getState().tabs.find(tab => tab.id === originTabId)?.device;
 			// A shared tab, or any tab a phone sends to, can be sent to by another device at the same moment:
-			// whether a message joins the run (steer/follow-up) or starts one is the host's word, not this window's.
+			// whether a message joins the run or starts one is the host's word, not this window's.
 			const originTab = useTabsStore.getState().tabs.find(tab => tab.id === originTabId);
 			const hostDecides = webRuntime() !== null || originTab?.shared === true || (originTab?.viewerCount ?? 0) > 0;
 			const originStillActive = () =>
@@ -140,6 +125,17 @@ export function useComposerSubmit({
 					attachments,
 					originSession ? originComposer : undefined,
 				);
+			const restorePrevious = (previous: { draft: string; images: ComposerImage[] }) => {
+				originComposer.setState(current => ({
+					draft: previous.draft ? prependToDraft(previous.draft, current.draft) : current.draft,
+					images: [...previous.images, ...current.images],
+				}));
+			};
+			const recoveredBlocked = () => {
+				const manual = useOutboxStore.getState().items.find(item => item.id === recovering?.id);
+				const pending = manual?.send.kind === "manual" && manual.send.recovery.kind === "attempt";
+				toast({ variant: "warning", message: t(pending ? "input.deliveryUnknown" : "outbox.notKept") });
+			};
 
 			let uncertain = false;
 			const showSendError = (title: string, error: unknown) =>
@@ -171,19 +167,43 @@ export function useComposerSubmit({
 			// once delivery is confirmed. Recording up front left every failed or
 			// blocked send in the list, and a recalled entry replays a prompt that
 			// never ran.
-			const typedMode = parseComposerMode(message);
+			const typedMode = recovering ? null : parseComposerMode(message);
 			// The link to the computer is down: a message waits in the outbox, shown above the field, and goes once the
-			// link is back (lib/outbox-delivery.ts). A command, a shell line or a queue list needs the computer's answer
-			// now: it stays in the field.
+			// link is back (lib/outbox-delivery.ts). A command or shell line needs the computer's answer now.
 			if (originTab && sendsHeld(originTab)) {
-				if (typedMode || message.startsWith("/") || parseQueueShorthand(message) !== undefined) {
+				if (recovering) {
+					const deliveryId = crypto.randomUUID();
+					if (!originComposer.getState().freezeRecoveredEdit(deliveryId)) {
+						recoveredBlocked();
+						return;
+					}
+					if (
+						!useOutboxStore.getState().queueManual(
+							recovering.id,
+							deliveryId,
+							expandedMessage,
+							images.map(image => image.content),
+						)
+					) {
+						originComposer.getState().thawRecoveredEdit(recovering.id);
+						toast({ variant: "warning", message: t("outbox.notKept") });
+						return;
+					}
+					setText("");
+					setImages([]);
+					const previous = originComposer.getState().finishRecoveredEdit(recovering.id);
+					if (previous) restorePrevious(previous);
+					setMenu(null);
+					dropReferencedPastes(message);
+					return;
+				}
+				if (typedMode || message.startsWith("/")) {
 					toast({ variant: "warning", message: t("outbox.messagesOnly") });
 					return;
 				}
 				holdMessage(originTab, {
 					text: expandedMessage,
 					images: images.map(image => image.content),
-					behavior: (forceMode ?? mode) === "followUp" ? "followUp" : "steer",
 				});
 				setText("");
 				setImages([]);
@@ -267,105 +287,6 @@ export function useComposerSubmit({
 				return;
 			}
 
-			// `->` / `=>` yield-queue shorthand (TUI #queueForYield parity): split an
-			// enumerated list into one queue entry per item; first item prompts with
-			// streamingBehavior:"followUp" when idle, everything else followUps;
-			// images ride on the first item only.
-			const queueBody = parseQueueShorthand(message);
-			if (queueBody !== undefined) {
-				const payload = images.map(image => image.content);
-				// Split the folded draft, then expand each item: a pasted block stays inside its own item.
-				const items = splitQueuedMessages(queueBody).map(expandProse);
-				// Bare prefix + no images hits the usage warning, it does NOT enqueue
-				// (input-controller.ts:1186-1190). Images alone queue a single empty item.
-				if (items.length === 0 && payload.length === 0) {
-					toast({ variant: "warning", message: t("input.queue.usage") });
-					return;
-				}
-				const previousImages = images;
-				setText("");
-				setImages([]);
-				setMenu(null);
-				const dispatchItems = items.length > 0 ? items : [""];
-				if (dispatchItems.some(item => isGuiOnlyBuiltinCommand(item, commands))) {
-					setText(message);
-					setImages(previousImages);
-					toast({ variant: "warning", message: t("input.queue.guiCommand") });
-					return;
-				}
-				const startImmediately = hostDecides || (!isStreaming && queuedMessageCount === 0);
-				if (hostDecides) for (const item of dispatchItems) originMessages.getState().noteOwnSend(item);
-				// session.followUp throws on extension-command text (agent-session.ts:5508-5510),
-				// so those items go through prompt, whose slash chain executes them.
-				const extensionCommandNames = new Set(
-					commands.filter(command => command.source === "extension").map(command => command.name),
-				);
-				setSending(true);
-				void (async () => {
-					let sent = 0;
-					let deliveryPending = false;
-					try {
-						for (let index = 0; index < dispatchItems.length; index++) {
-							if (!originStillActive()) throw new Error("Tab changed during queue dispatch");
-							const item = dispatchItems[index] ?? "";
-							const itemImages = index === 0 ? payload : undefined;
-							if (itemImages && itemImages.length > 0 && !(startImmediately && index === 0)) {
-								(sessionRuntimeStore<QueueStore>(originTabId, "queue") ?? useQueueStore)
-									.getState()
-									.expectImages(item || IMAGE_ONLY_CHIP, itemImages);
-							}
-							const isExtensionCommand = extensionCommandNames.has(parseSlashCommand(item)?.name ?? "");
-							deliveryPending = true;
-							const response =
-								startImmediately && index === 0
-									? await rpc.prompt(item, itemImages, "followUp")
-									: isExtensionCommand
-										? await rpc.prompt(item, itemImages)
-										: await rpc.followUp(item, itemImages);
-							deliveryPending = false;
-							if (!response.success) {
-								if (response.code === "rpc_delivery_unknown") markUncertain();
-								throw new Error(response.error ?? "queue dispatch failed");
-							}
-							sent += 1;
-						}
-						// Only a fully dispatched shorthand enters history. A partial run
-						// restores the unsent remainder as the draft, so recording the
-						// original would offer ↑ a list whose first items already ran.
-						useInputHistoryStore.getState().record(historyText, originCwd, rpc, originDevice);
-						if (originStillActive()) dropReferencedPastes(message);
-					} catch (error) {
-						if (deliveryPending) markUncertain();
-						if (sent === 0) {
-							// Zero items sent: restore the original draft (markers) and images.
-							restoreDraft(message, previousImages);
-						} else {
-							// Partial failure: restore the remainder in the exact shorthand
-							// shape the parser can consume again. Continuation indentation
-							// prevents marker-looking lines inside one item from splitting.
-							const remaining = dispatchItems.slice(sent);
-							const remainingDraft =
-								remaining.length === 1
-									? `=> ${remaining[0]}`
-									: `=>\n${remaining
-											.map((item, index) => `${index + 1}. ${item.replaceAll("\n", "\n   ")}`)
-											.join("\n")}`;
-							restoreDraft(remainingDraft, []);
-							if (originStillActive()) dropReferencedPastes(message);
-						}
-						toast({
-							variant: "error",
-							title: uncertain ? t("input.deliveryUnknownTitle") : t("input.sendFailed"),
-							message:
-								sent > 0 ? t("input.queue.partial", { sent, total: dispatchItems.length }) : String(error),
-						});
-					} finally {
-						if (originStillActive()) setSending(false);
-					}
-				})();
-				return;
-			}
-
 			// Routing/guarding/hydration policy lives in lib/composer-submit:
 			// slash commands always go through prompt (server parses them even
 			// while streaming), session-replacing commands are blocked while
@@ -377,15 +298,20 @@ export function useComposerSubmit({
 			const withdraw = new AbortController();
 			let left = false;
 			const session = originSession ?? useSessionStore;
+			const deliveryId = recovering ? crypto.randomUUID() : undefined;
 			const submit = planComposerSubmit({
 				message: expandedMessage,
-				typed: message,
+				typed: recovering ? "" : message,
 				images: payload,
 				isStreaming,
-				mode: forceMode ?? mode,
 				commands,
-				hostDecides,
-				rpc,
+				rpc: deliveryId
+					? {
+							compact: rpc.compact,
+							prompt: (text, pictures) =>
+								rpc.command({ type: "prompt", message: text, images: pictures, deliveryId }),
+						}
+					: rpc,
 				signal: withdraw.signal,
 				beforePrompt: async () => {
 					if (withdraw.signal.aborted) return null;
@@ -440,8 +366,27 @@ export function useComposerSubmit({
 				return;
 			}
 			const previousImages = images;
+			if (recovering && (!deliveryId || !originComposer.getState().freezeRecoveredEdit(deliveryId))) {
+				recoveredBlocked();
+				return;
+			}
+			const restoreFailedSubmit = (unknown = false) => {
+				if (!recovering) {
+					restoreDraft(message, previousImages);
+					return;
+				}
+				if (!originStillActive()) {
+					if (!unknown) useOutboxStore.getState().updateManual(recovering.id, { recovery: { kind: "draft" } });
+					return;
+				}
+				originComposer.setState(current => ({
+					draft: message ? prependToDraft(message, current.draft) : current.draft,
+					images: [...previousImages, ...current.images],
+				}));
+				originComposer.getState().thawRecoveredEdit(recovering.id, unknown);
+			};
 			const optimisticMessage: AgentMessage | undefined =
-				!isStreaming && !message.startsWith("/")
+				!isStreaming && (recovering !== null || !message.startsWith("/"))
 					? {
 							role: "user",
 							content: [{ type: "text", text: expandedMessage }, ...payload],
@@ -452,7 +397,8 @@ export function useComposerSubmit({
 						}
 					: undefined;
 			if (optimisticMessage) originMessages.getState().appendLiveMessage(optimisticMessage);
-			else if (hostDecides && !message.startsWith("/")) originMessages.getState().noteOwnSend(expandedMessage);
+			else if (hostDecides && (recovering !== null || !message.startsWith("/")))
+				originMessages.getState().noteOwnSend(expandedMessage);
 			// On a tab other devices send to, the host's own word that the prompt arrived (its echo claimed by the
 			// delivery, or dropped on a failure) frees the composer too, so a slow reply to this window's request
 			// never keeps it from steering. The request's own settling stays the fallback.
@@ -471,13 +417,6 @@ export function useComposerSubmit({
 			setImages([]);
 			setMenu(null);
 			setSending(true);
-			// A message with pictures that joins the run shows up as a text-only queue chip: remember its pictures
-			// for the tray (the chip's id is assigned later, in main).
-			if (payload.length > 0 && (isStreaming || hostDecides) && !message.startsWith("/")) {
-				(sessionRuntimeStore<QueueStore>(originTabId, "queue") ?? useQueueStore)
-					.getState()
-					.expectImages(expandedMessage || IMAGE_ONLY_CHIP, payload);
-			}
 			const cancelSubmit = optimisticMessage
 				? () => {
 						if (left || withdraw.signal.aborted) return false;
@@ -494,7 +433,7 @@ export function useComposerSubmit({
 				if (!originStillActive()) {
 					stopWatching?.();
 					if (optimisticMessage) originMessages.getState().removeLiveMessage(optimisticMessage);
-					restoreDraft(message, previousImages);
+					restoreFailedSubmit();
 					return;
 				}
 				void submit
@@ -502,13 +441,32 @@ export function useComposerSubmit({
 					.then(async response => {
 						if (!response.success) {
 							if (optimisticMessage) originMessages.getState().removeLiveMessage(optimisticMessage);
-							restoreDraft(message, previousImages);
+							restoreFailedSubmit(response.code === "rpc_delivery_unknown");
 							if (response.code === SUBMIT_CANCELLED) return;
 							if (response.code === "rpc_delivery_unknown") markUncertain();
 							showSendError(t("input.sendFailed"), response);
 							return;
 						}
 						accepted = true;
+						if (recovering) {
+							if (originStillActive()) {
+								const previous = originComposer.getState().finishRecoveredEdit(recovering.id);
+								if (previous) {
+									restorePrevious(previous);
+									useOutboxStore.getState().drop(recovering.id);
+								}
+							} else if (recovering.previous.draft || recovering.previous.images.length > 0) {
+								useOutboxStore.getState().updateManual(recovering.id, {
+									text: expandPasteMarkers(recovering.previous.draft),
+									images: recovering.previous.images.map(image => image.content),
+									previous: { draft: "", images: [] },
+									editing: false,
+									recovery: { kind: "previous" },
+								});
+							} else {
+								useOutboxStore.getState().drop(recovering.id);
+							}
+						}
 						useInputHistoryStore.getState().record(historyText, originCwd, rpc, originDevice);
 						if (!originStillActive()) return;
 						dropReferencedPastes(message);
@@ -521,7 +479,7 @@ export function useComposerSubmit({
 						}
 						markUncertain();
 						if (optimisticMessage) originMessages.getState().removeLiveMessage(optimisticMessage);
-						restoreDraft(message, previousImages);
+						restoreFailedSubmit(true);
 						showSendError(t("input.sendFailed"), error);
 					})
 					.finally(() => {
@@ -538,8 +496,6 @@ export function useComposerSubmit({
 			sending,
 			status,
 			isStreaming,
-			mode,
-			queuedMessageCount,
 			commands,
 			expandProse,
 			routeReady,
@@ -562,7 +518,7 @@ export function useComposerSubmit({
 		if (sending || !held) return;
 		heldSend.current = null;
 		if (held.overrideText === undefined && text.trim() !== held.message) return;
-		latestSend.current(held.overrideText, held.forceMode);
+		latestSend.current(held.overrideText);
 	}, [sending, text]);
 
 	return send;
