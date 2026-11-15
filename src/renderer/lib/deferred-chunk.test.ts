@@ -114,7 +114,8 @@ describe("a deferred chunk", () => {
 		target.dispatchEvent(new Event("keydown"));
 		await settle();
 		expect(load).toHaveBeenCalledTimes(1);
-		retry();
+		Reflect.apply(retry, undefined, [new Event("click")]);
+		expect(load).toHaveBeenCalledTimes(2);
 		retry();
 		expect(load).toHaveBeenCalledTimes(2);
 		pending.resolve("module");

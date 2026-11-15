@@ -55,9 +55,9 @@ export function loadDeferredChunk<T>(
 			},
 			(error: unknown) => {
 				loading = false;
-				if (!isChunkLoadError(error)) console.error("[deferred-chunk] load failed", error);
+				if (!isChunkLoadError(error)) console.error("[deferred-chunk]", error);
 				if (cancelled) return;
-				chunk.onFailed?.(trigger);
+				chunk.onFailed?.(() => trigger());
 				arm();
 			},
 		);
