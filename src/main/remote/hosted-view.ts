@@ -30,6 +30,7 @@ import type { PromptOrigin } from "../../../resources/gui-bridge/prompt-origin-c
 import { codedError } from "../../shared/ipc-error-codes";
 import type { IpcScheduledRetry } from "../../shared/ipc-types";
 import type {
+	AgentControlInstructionCommand,
 	ExtensionUIRequest,
 	RpcCommand,
 	RpcResponse,
@@ -42,6 +43,7 @@ import type { RpcClient } from "../rpc-client";
 import type { RunReading } from "../sidecar-run-state";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { STOP_COMMANDS } from "../turn-stop-log";
+import { AgentInstructionReceipt } from "./app-protocol";
 
 /** The hosted omp's events a window shows. `hostToolCall` and `hostUriRequest` stay the device's to answer. */
 const VIEW_EVENTS = [
@@ -177,6 +179,33 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 
 	sendSideChannel(frame: object): void {
 		this.#port.answer(frame);
+	}
+
+	async sendAgentInstruction(
+		payload: Pick<AgentControlInstructionCommand, "message" | "images">,
+		timeoutMs?: number,
+	): Promise<{ accepted: true }> {
+		const sidecar = this.#port.sidecar;
+		const client = sidecar.rpcClient;
+		const sessionId = this.#port.snapshot().sessionId;
+		if (this.#left || sidecar.status !== "ready" || !client || !sidecar.processAlive || !sessionId || sidecar.offline)
+			throw codedError("sidecar_not_connected", "Sidecar not connected");
+		let receipt: unknown;
+		if (sidecar.sendAgentInstruction) receipt = await sidecar.sendAgentInstruction(payload, timeoutMs);
+		else if (sidecar.bridgeRequest)
+			receipt = await sidecar.bridgeRequest("agent_control.instruction", payload, timeoutMs);
+		else throw codedError("sidecar_not_connected", "Sidecar not connected");
+		if (
+			this.#left ||
+			this.#port.sidecar !== sidecar ||
+			sidecar.status !== "ready" ||
+			sidecar.rpcClient !== client ||
+			!sidecar.processAlive ||
+			this.#port.snapshot().sessionId !== sessionId ||
+			sidecar.offline
+		)
+			throw codedError("sidecar_not_connected", "Sidecar not connected");
+		return AgentInstructionReceipt.parse(receipt);
 	}
 
 	async cancelHostWait(): Promise<void> {

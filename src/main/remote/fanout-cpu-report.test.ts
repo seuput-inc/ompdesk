@@ -295,6 +295,7 @@ function hostServices(local: SidecarPool, workDir: string): LocalHostServices {
 			throw new Error("the replay opens views only");
 		},
 		hostName: () => "Studio",
+		agentControlEnabled: () => false,
 		sessionIndex,
 		renameStoredSession: async () => {},
 		defaultWorkspace: () => workDir,

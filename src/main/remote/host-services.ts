@@ -149,7 +149,10 @@ import { searchWorkspace } from "../workspace-search";
 import { sessionOpenFolders } from "../worktree-orphans";
 import { removalHolds } from "../worktree-removals";
 import {
+	AGENT_INSTRUCTION_METHOD,
 	AGENT_REVIEW_EVENT,
+	AgentInstructionParams,
+	AgentInstructionReceipt,
 	AUTOPILOT_NOTICE_EVENT,
 	type AutopilotNoticeEvent,
 	BenchmarkOptionsSchema,
@@ -270,6 +273,8 @@ export interface HostServicesDeps {
 		Partial<Pick<SessionIndex, "pace">>;
 	/** Session files this computer's user hid from agents (Sidebar › Hide from other agents); a device's agent never reads them. */
 	agentHidden?: () => ReadonlySet<string>;
+	/** The same live control-tools switch the local native host reads. Never a caller-provided permission. */
+	agentControlEnabled: () => boolean;
 	/** Stored-file rename for a session no live tab holds (`omp` on this machine). */
 	renameStoredSession: (sessionPath: string, name: string) => Promise<void>;
 	/** The GUI-owned Work workspace, created on demand. */
@@ -1186,6 +1191,8 @@ export class LocalHostServices implements HostServices {
 				this.#closeTab(key);
 				return null;
 			}
+			case AGENT_INSTRUCTION_METHOD:
+				return this.#agentInstruction(peer, parse(AgentInstructionParams, method, params), conn);
 			case "tab.command": {
 				const command = parse(CommandParams, method, params);
 				if (isAgentInstructionCommand(command.command))
@@ -1706,6 +1713,44 @@ export class LocalHostServices implements HostServices {
 		const tab = this.#tabs.get(this.#key(peer.deviceId, rtab));
 		if (!tab) throw codedError("unknown_tab", "Unknown tab");
 		return tab;
+	}
+
+	async #agentInstruction(
+		peer: PeerInfo,
+		params: z.infer<typeof AgentInstructionParams>,
+		conn: HostConnection,
+	): Promise<{ accepted: true }> {
+		const tab = this.#tab(peer, params.rtab);
+		const sidecar = tab.sidecar;
+		const current = (): void => {
+			if (!this.#deps.agentControlEnabled())
+				throw codedError("unsupported", "OMPdesk control tools are off on this computer.");
+			if (this.#deps.agentHidden?.().has(params.sessionPath))
+				throw codedError("session_hidden", "The user hid that session from agents.");
+			if (
+				this.#tabs.get(this.#key(peer.deviceId, params.rtab)) !== tab ||
+				tab.conn !== conn ||
+				tab.sidecar !== sidecar ||
+				tab.sessionFile !== params.sessionPath ||
+				tab.omp !== params.omp
+			)
+				throw codedError("unknown_tab", "The captured agent instruction target changed.");
+			if (sidecar.status !== "ready" || !sidecar.processAlive)
+				throw codedError("sidecar_not_ready", "The captured agent instruction target is not ready.");
+		};
+		current();
+		const payload = {
+			message: params.message,
+			...(params.images === undefined ? {} : { images: params.images }),
+		};
+		current();
+		let receipt: unknown;
+		if (sidecar.sendAgentInstruction) receipt = await sidecar.sendAgentInstruction(payload, params.timeoutMs);
+		else if (sidecar.bridgeRequest)
+			receipt = await sidecar.bridgeRequest("agent_control.instruction", payload, params.timeoutMs);
+		else throw codedError("unsupported", "The captured sidecar has no private agent instruction ingress.");
+		current();
+		return AgentInstructionReceipt.parse(receipt);
 	}
 
 	#byResumeId(id: string): HostTab | undefined {

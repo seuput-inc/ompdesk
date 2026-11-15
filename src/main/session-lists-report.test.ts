@@ -238,6 +238,7 @@ describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired com
 						throw new Error("no tabs in this audit");
 					},
 					hostName: () => "Studio",
+					agentControlEnabled: () => false,
 					sessionIndex: index,
 					renameStoredSession: async () => {},
 					defaultWorkspace: () => "/work/default",
