@@ -536,7 +536,7 @@ async fn held_summary_does_not_hold_result(arrival: bool, until_any: bool, port_
             outcome.contains(if arrival {
                 "Returned early: a message reached you"
             } else {
-                "Still running after waiting 30 s"
+                "Returned at the 30 s wait deadline"
             }),
             "{outcome}"
         );
@@ -650,6 +650,7 @@ async fn an_arrival_during_saved_result_preparation_is_not_absorbed_by_the_wait_
 async fn a_held_stored_result_respects_its_wait_boundary(
     arrival: bool,
     waiting: bool,
+    fail_read: bool,
     port_id: u64,
 ) {
     use std::collections::HashSet;
@@ -697,6 +698,7 @@ async fn a_held_stored_result_respects_its_wait_boundary(
     let mut lines = BufReader::new(reader).lines();
     let mut requests = HashSet::new();
     let mut held = None;
+    let mut first = None;
     while requests.len() < 2 {
         let line = tokio::select! {
             biased;
@@ -714,11 +716,35 @@ async fn a_held_stored_result_respects_its_wait_boundary(
         if id == "held" {
             held = Some(ask);
         } else {
-            crate::ports::apply_answer(&port, ask, Ok("[]"));
+            first = Some(ask);
         }
     }
     let held = held.expect("the actual storedMessages response remains withheld");
     let blocked_while_held = control.is_blocked("a");
+    let first = first.expect("the first actual storedMessages request was observed");
+    if fail_read {
+        control.arrive("a");
+        crate::ports::apply_answer(
+            &port,
+            first,
+            Err(("stored transcript was refused", None)),
+        );
+        let error = poll_fn(|cx| {
+            let Poll::Ready(outcome) = result.as_mut().poll(cx) else {
+                panic!("the observed stored-read error is still held behind another read");
+            };
+            Poll::Ready(outcome)
+        })
+        .await
+        .unwrap_err();
+        assert!(format!("{error:?}").contains("stored transcript was refused"));
+        assert!(blocked_while_held);
+        assert!(!control.is_blocked("a"));
+        assert!(control.mem().collected.is_empty());
+        port.close();
+        return;
+    }
+    crate::ports::apply_answer(&port, first, Ok("[]"));
     poll_fn(|cx| {
         assert!(result.as_mut().poll(cx).is_pending());
         Poll::Ready(())
@@ -753,13 +779,16 @@ async fn a_held_stored_result_respects_its_wait_boundary(
             outcome.contains(if arrival {
                 "Returned early: a message reached you"
             } else {
-                "Still running after waiting 30 s"
+                "Returned at the 30 s wait deadline"
             }),
             "{outcome}"
         );
         assert!(outcome.contains("1/2 finished"), "{outcome}");
         assert!(outcome.contains("[held]: summary unconfirmed"), "{outcome}");
         assert!(!outcome.contains("\"Held\" [held]: saved"), "{outcome}");
+        if !arrival {
+            assert!(!outcome.contains("Still running after waiting"), "{outcome}");
+        }
         // No response to `held` is supplied, even after the result has returned.
     } else {
         assert!(outcome.contains("\"Held\" [held]: saved"), "{outcome}");
@@ -774,15 +803,20 @@ async fn a_held_stored_result_respects_its_wait_boundary(
 
 #[tokio::test(start_paused = true)]
 async fn an_arrival_returns_without_releasing_a_stored_messages_answer() {
-    a_held_stored_result_respects_its_wait_boundary(true, true, 7_324).await;
+    a_held_stored_result_respects_its_wait_boundary(true, true, false, 7_324).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_deadline_returns_without_releasing_a_stored_messages_answer() {
-    a_held_stored_result_respects_its_wait_boundary(false, true, 7_325).await;
+    a_held_stored_result_respects_its_wait_boundary(false, true, false, 7_325).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_nonwaiting_stored_result_keeps_waiting_for_its_actual_read_not_arrival_or_deadline() {
-    a_held_stored_result_respects_its_wait_boundary(true, false, 7_326).await;
+    a_held_stored_result_respects_its_wait_boundary(true, false, false, 7_326).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observed_stored_read_error_is_not_hidden_by_arrival_or_another_pending_read() {
+    a_held_stored_result_respects_its_wait_boundary(true, true, true, 7_327).await;
 }
