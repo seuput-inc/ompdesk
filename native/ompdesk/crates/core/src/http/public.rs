@@ -109,10 +109,10 @@ async fn addresses(url: &Url) -> Result<Vec<SocketAddr>, Failure> {
     // Only test builds can dial a local stand-in for this one synthetic public origin. Production DNS admission,
     // redirect validation and transport are unchanged; no test bypass is exported in the application.
     #[cfg(test)]
-    if host == "repository-artwork-fixture.example.org" {
-        if let Ok(socket) = FIXTURE_SOCKET.try_with(|socket| *socket) {
-            return Ok(vec![socket]);
-        }
+    if host == "repository-artwork-fixture.example.org"
+        && let Ok(socket) = FIXTURE_SOCKET.try_with(|socket| *socket)
+    {
+        return Ok(vec![socket]);
     }
     // Validate the entire DNS answer, then connect to these exact sockets. TLS still authenticates URL.hostname.
     let resolved =
