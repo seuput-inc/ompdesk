@@ -6,6 +6,7 @@
  * `get_logout_accounts` / `logout` and add only the per-account quota stock lacks.
  */
 import { z } from "zod";
+import { RETIRED_INSTRUCTION_SETTINGS } from "../../../resources/gui-bridge/instruction-contracts";
 import type {
 	AccountCredits,
 	AccountUsageState,
@@ -120,17 +121,15 @@ export async function cancelBrowserLogin(authorizationUrl: string): Promise<void
 	await fetch(callback, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
 }
 
-const retiredDeliverySettings = ["steeringMode", "followUpMode", "interruptMode"];
-
 function refuseRetiredSetting(path: unknown): void {
-	if (typeof path === "string" && retiredDeliverySettings.includes(path))
+	if (typeof path === "string" && RETIRED_INSTRUCTION_SETTINGS.has(path))
 		throw new LocalCommandError(`Setting ${path} is no longer available`, "unsupported");
 }
 
 export const handlers: Record<string, LocalHandler> = {
 	get_settings_schema: async (_command, ctx) => {
 		const schema = await ctx.bridge.request<{ entries: { path: string }[]; tabs: unknown }>("settings_schema");
-		return { ...schema, entries: schema.entries.filter(entry => !retiredDeliverySettings.includes(entry.path)) };
+		return { ...schema, entries: schema.entries.filter(entry => !RETIRED_INSTRUCTION_SETTINGS.has(entry.path)) };
 	},
 	get_settings: async (command, ctx) => {
 		if (Array.isArray(command.paths)) command.paths.forEach(refuseRetiredSetting);
@@ -141,10 +140,10 @@ export const handlers: Record<string, LocalHandler> = {
 		return {
 			...result,
 			values: Object.fromEntries(
-				Object.entries(result.values).filter(([path]) => !retiredDeliverySettings.includes(path)),
+				Object.entries(result.values).filter(([path]) => !RETIRED_INSTRUCTION_SETTINGS.has(path)),
 			),
 			provenance: Object.fromEntries(
-				Object.entries(result.provenance).filter(([path]) => !retiredDeliverySettings.includes(path)),
+				Object.entries(result.provenance).filter(([path]) => !RETIRED_INSTRUCTION_SETTINGS.has(path)),
 			),
 		};
 	},

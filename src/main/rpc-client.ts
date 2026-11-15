@@ -4,6 +4,7 @@
  * answered in-process and never reach omp; everything else, and `stock()` always, goes to omp through the tab's lane in
  * the core (`SidecarManager`'s `send`: a `sidecar.command` request whose answer is an event, in order with the frames).
  */
+import { RETIRED_INSTRUCTION_SETTINGS } from "../../resources/gui-bridge/instruction-contracts";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 
 /** How long a command may take before the caller gets `RPC timeout`. */
@@ -14,7 +15,6 @@ const REMOVED_DELIVERY_COMMANDS = new Set([
 	"set_follow_up_mode",
 	"set_interrupt_mode",
 ]);
-const REMOVED_DELIVERY_SETTINGS = new Set(["steeringMode", "followUpMode", "interruptMode"]);
 
 /** A command that got no answer in time: its outcome is unknown (omp may still have run it). */
 export class RpcTimeoutError extends Error {
@@ -53,8 +53,8 @@ export class RpcClient {
 		if (
 			REMOVED_DELIVERY_COMMANDS.has(cmd.type) ||
 			(cmd.type === "prompt" && "streamingBehavior" in cmd) ||
-			(cmd.type === "set_setting" && REMOVED_DELIVERY_SETTINGS.has(cmd.path)) ||
-			(cmd.type === "get_settings" && cmd.paths?.some(path => REMOVED_DELIVERY_SETTINGS.has(path)))
+			(cmd.type === "set_setting" && RETIRED_INSTRUCTION_SETTINGS.has(cmd.path)) ||
+			(cmd.type === "get_settings" && cmd.paths?.some(path => RETIRED_INSTRUCTION_SETTINGS.has(path)))
 		)
 			return Promise.reject(new Error("Delivery modes are not supported"));
 		// Always a fresh id: renderer-chosen ids are only unique per window.

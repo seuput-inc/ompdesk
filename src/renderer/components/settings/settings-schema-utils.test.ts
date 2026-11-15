@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { SettingEntry } from "../../../shared/rpc-types";
-import { conditionParent, isSettingVisible } from "./settings-schema-utils";
+import { conditionParent, isSettingSupportedInGui, isSettingVisible } from "./settings-schema-utils";
 
 const stockRoot = path.join(os.homedir(), ".bun/install/global/node_modules/@oh-my-pi/pi-coding-agent");
 // Gate on the exact modules evaluated below: a CI runner can carry the package
@@ -20,6 +20,13 @@ const gated = (condition: string): SettingEntry => ({
 	default: false,
 	condition,
 });
+
+it.each(["steeringMode", "followUpMode", "interruptMode"])(
+	"hides retired delivery setting %s from a stock schema",
+	path => {
+		expect(isSettingSupportedInGui({ path })).toBe(false);
+	},
+);
 /** Gates evaluated without setting values; source gates also use each entry's provenance. */
 const HOST_GATES = [
 	"macOS",

@@ -1,5 +1,6 @@
 /** Settings schema helpers: condition-gated visibility and GUI support. */
 
+import { RETIRED_INSTRUCTION_SETTINGS } from "../../../../resources/gui-bridge/instruction-contracts";
 import type { SettingEntry } from "../../../shared/rpc-types";
 import { GUI_DISPLAY_LEGACY_PATHS } from "../../lib/display-preferences";
 
@@ -98,6 +99,7 @@ const STOCK_MEMORY_PATH = /^(memory|memories|mnemopi|hindsight|sharpshooter|auto
 
 export function isSettingSupportedInGui(entry: { path?: string; tab?: string; tuiOnly?: boolean }): boolean {
 	if (entry.tuiOnly === true || TERMINAL_DISPLAY_SETTINGS.has(entry.path ?? "")) return false;
+	if (RETIRED_INSTRUCTION_SETTINGS.has(entry.path ?? "")) return false;
 	return entry.tab !== "memory" && !STOCK_MEMORY_PATH.test(entry.path ?? "");
 }
 
