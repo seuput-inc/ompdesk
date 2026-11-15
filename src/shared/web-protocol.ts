@@ -17,6 +17,8 @@ export const WEB_PROTOCOL_VERSION = 2;
  * too). The page reads its own from its document; the host reads the file it serves and says it in `hello.build`.
  */
 export const WEB_BUILD_META = "omp-build";
+/** The same build's retryable dialogs entry, written into desktop and web HTML. */
+export const ON_DEMAND_DIALOGS_META = "omp-on-demand-dialogs";
 
 /**
  * What a call may do, declared per channel (main/web/ipc-policy.ts). `workspace` already runs code as the

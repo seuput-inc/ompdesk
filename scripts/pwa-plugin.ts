@@ -12,10 +12,9 @@
  */
 import { createHash } from "node:crypto";
 import { build, type Plugin, type Rollup } from "vite";
-import { ON_DEMAND_DIALOGS_META } from "../src/renderer/lib/on-demand-dialogs";
 import { SESSION_LIST_META } from "../src/renderer/web/session-list-preload";
 import { PRECACHE_LIMITS, type PrecacheEntry, selectPrecache } from "../src/renderer/web/sw-core";
-import { WEB_BUILD_META } from "../src/shared/web-protocol";
+import { ON_DEMAND_DIALOGS_META, WEB_BUILD_META } from "../src/shared/web-protocol";
 
 type BundleEntry = Rollup.OutputAsset | Rollup.OutputChunk;
 

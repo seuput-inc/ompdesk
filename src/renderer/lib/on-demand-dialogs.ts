@@ -1,6 +1,5 @@
+import { ON_DEMAND_DIALOGS_META } from "../../shared/web-protocol";
 import type { OnDemandDialogs } from "../components/dialogs/OnDemandDialogs";
-
-export const ON_DEMAND_DIALOGS_META = "omp-on-demand-dialogs";
 
 type DialogModule = { OnDemandDialogs: typeof OnDemandDialogs };
 let attempts = 0;
