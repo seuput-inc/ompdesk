@@ -707,6 +707,41 @@ describe("useRpcEvents context usage sync", () => {
 			);
 		}
 
+
+		it("does not call a live phone session unavailable after its boot check loses the link", async () => {
+			const { emitTabStatus, emitTabBatch, commandForTab } = installTabRoutedMockOmp();
+			const session = seedReadyTab("t-phone");
+			await mount(<RpcEventsProbe heartbeatMs={25} />);
+			await flush();
+			let failures = 1;
+			failGetState(commandForTab, () => failures-- > 0);
+			emitTabStatus({ status: "ready", cwd: "/alpha" }, "t-phone");
+			await flush();
+			expect(session.getState().sidecarError).toBeNull();
+			await act(async () => emitTabBatch([{ type: "turn_start" } as never], "t-phone"));
+			expect(session.getState().sidecarError).toBeNull();
+			await elapse(50);
+			expect(session.getState().sidecarError).toBeNull();
+		});
+
+		it("does not let a late failed boot check override a newer live frame", async () => {
+			const { emitTabStatus, emitTabBatch, commandForTab } = installTabRoutedMockOmp();
+			const session = seedReadyTab("t-boot-frame");
+			await mount(<RpcEventsProbe heartbeatMs={25} />);
+			await flush();
+			const failed = Promise.withResolvers<RpcResponse>();
+			const original = commandForTab.getMockImplementation()!;
+			commandForTab.mockImplementation((tabId, command) =>
+				command.type === "get_state" ? failed.promise : original(tabId, command),
+			);
+			emitTabStatus({ status: "ready", cwd: "/alpha" }, "t-boot-frame");
+			await flush();
+			await elapse(1);
+			await act(async () => emitTabBatch([{ type: "turn_start" } as never], "t-boot-frame"));
+			failed.reject(new Error("Connection to your computer was lost"));
+			await flush();
+			expect(session.getState().sidecarError).toBeNull();
+		});
 		it("does not call omp unresponsive for one slow answer that the next probe gets", async () => {
 			const { emitTabStatus, commandForTab } = installTabRoutedMockOmp();
 			const session = seedReadyTab("t-slow");
