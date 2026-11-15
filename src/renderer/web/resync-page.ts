@@ -37,21 +37,25 @@ export async function resyncPage(options?: { strict?: boolean }): Promise<boolea
 		return [options?.strict ? recoverTabSession(tabId) : hydrateTabSession(tabId)];
 	});
 	const before = captureTabExtensionUiRequests();
-	const [open, shown, remoteOk, hostedOk, listsOk, ...outcomes] = await Promise.all([
+	const [open, shown, reads] = await Promise.all([
 		window.omp.ui.openRequests(),
 		window.omp.ui.shownState(),
-		loadRemoteState(),
-		loadHostedSessions(),
-		refreshHeldSessionLists(),
-		...visibleTabIds(state).map(tabId => useAgentReviewStore.getState().refresh(tabId)),
-		...sessions,
+		Promise.allSettled([
+			loadRemoteState(),
+			loadHostedSessions(),
+			refreshHeldSessionLists(),
+			...visibleTabIds(state).map(tabId => useAgentReviewStore.getState().refresh(tabId)),
+			...sessions,
+		]),
 	]);
-	if (
-		!listsOk ||
-		(options?.strict && (!remoteOk || !hostedOk || outcomes.some(outcome => outcome !== true))) ||
-		!settleTabExtensionUiRequests(open, before)
-	)
-		return false;
-	restoreTabExtensionUiRequests(shown);
-	return true;
+	const settled = settleTabExtensionUiRequests(open, before);
+	if (settled) restoreTabExtensionUiRequests(shown);
+	const lists = reads[2];
+	return (
+		settled &&
+		lists?.status === "fulfilled" &&
+		lists.value === true &&
+		reads.every(result => result.status === "fulfilled") &&
+		(!options?.strict || reads.every(result => result.status === "fulfilled" && result.value === true))
+	);
 }

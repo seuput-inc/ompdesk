@@ -750,6 +750,8 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					})
 				: [],
 		);
+		// The list predates a live change. Leave the whole view and its host route untouched until a fresh pass.
+		if (raced.size > 0) return false;
 		// A tab this window is closing is gone for it even while main still lists it.
 		const list = listed.filter(info => !isTabClosed(info.tabId) && !raced.has(info.tabId));
 		const resync = options?.resync === true;
