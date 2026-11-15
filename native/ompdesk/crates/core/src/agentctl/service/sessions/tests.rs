@@ -435,3 +435,127 @@ async fn a_delete_of_an_own_idle_child_removes_it_journals_it_and_remembers_the_
     assert!(!control.mem().closing.contains("c1"));
     control.host.port().close();
 }
+
+async fn held_summary_does_not_hold_result(arrival: bool, port_id: u64) {
+    use std::collections::{HashMap, HashSet};
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use std::time::Duration;
+
+    let mut tabs = vec![tab("a", "/s/a"), tab("b", "/s/b"), tab("c", "/s/c")];
+    for tab in &mut tabs {
+        tab["sessionPath"] = Value::Null;
+    }
+    let state: HostState = serde_json::from_value(json!({
+        "enabled": true,
+        "tabs": tabs,
+        "windowOf": { "a": "w", "b": "w", "c": "w" }
+    }))
+    .unwrap();
+    let (writer, reader) = tokio::io::duplex(1 << 20);
+    let (tx, _writer) = crate::wire::spawn_writer(writer);
+    let port = Port::open(&crate::server::test_events(&tx), port_id, state).unwrap();
+    let control = AgentControl::new(
+        port.clone(),
+        Caps::default(),
+        &Files::default(),
+        Tuning::default(),
+        system_clock(),
+    );
+    let state = control.host.state();
+    let tabs = state.tabs("a").unwrap();
+    let caller = tabs.iter().find(|tab| tab.tab_id == "a").unwrap();
+    let targets: Vec<_> = ["b", "c"]
+        .iter()
+        .map(|id| {
+            super::Target::Tab(Box::new(
+                tabs.iter().find(|tab| tab.tab_id == *id).unwrap().clone(),
+            ))
+        })
+        .collect();
+    let ids = vec!["b".to_owned(), "c".to_owned()];
+    let saved = HashMap::new();
+    let args = super::ResultArgs {
+        wait: Some(true),
+        ..super::ResultArgs::default()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let result = control.result_until(caller, &targets, &ids, &saved, &args, 30, deadline, 1_500);
+    tokio::pin!(result);
+    let mut lines = BufReader::new(reader).lines();
+    let mut requests = HashSet::new();
+    let mut held = None;
+    while requests.len() < 4 {
+        let line = tokio::select! {
+            biased;
+            result = &mut result => panic!("result returned before the held-summary barrier: {result:?}"),
+            line = lines.next_line() => line.unwrap().unwrap(),
+        };
+        let event: Value = serde_json::from_str(&line).unwrap();
+        let data = &event["data"];
+        assert_eq!(data["method"], "command");
+        let tab_id = data["args"]["tabId"].as_str().unwrap();
+        let command = data["args"]["command"]["type"].as_str().unwrap();
+        assert!(["b", "c"].contains(&tab_id));
+        assert!(["get_state", "get_last_assistant_text"].contains(&command));
+        assert!(requests.insert((tab_id.to_owned(), command.to_owned())));
+        let ask = data["ask"].as_u64().unwrap();
+        if tab_id == "b" && command == "get_last_assistant_text" {
+            held = Some(ask);
+        } else {
+            let response = json!({
+                "success": true,
+                "data": if command == "get_last_assistant_text" {
+                    json!({ "text": "confirmed answer from c" })
+                } else {
+                    json!({})
+                }
+            });
+            crate::ports::apply_answer(&port, ask, Ok(&response.to_string()));
+        }
+    }
+    let held = held.expect("the actual Port summary answer stays withheld");
+    if arrival {
+        control.arrive("a");
+    } else {
+        tokio::time::advance(Duration::from_secs(30)).await;
+    }
+    let outcome = poll_fn(|cx| {
+        let Poll::Ready(outcome) = result.as_mut().poll(cx) else {
+            panic!("the result still waits for an unanswered summary after its wake boundary");
+        };
+        Poll::Ready(outcome)
+    })
+    .await
+    .unwrap();
+    assert!(
+        outcome.contains(if arrival {
+            "Returned early: a message reached you"
+        } else {
+            "Still running after waiting 30 s"
+        }),
+        "{outcome}"
+    );
+    assert!(outcome.contains("1/2 finished"), "{outcome}");
+    assert!(outcome.contains("summary unconfirmed"), "{outcome}");
+    assert!(outcome.contains("confirmed answer from c"), "{outcome}");
+    assert!(!control.mem().collected.contains("b"));
+    assert!(control.mem().collected.contains("c"));
+    crate::ports::apply_answer(
+        &port,
+        held,
+        Ok(r#"{"success":true,"data":{"text":"late answer from b"}}"#),
+    );
+    assert!(!control.mem().collected.contains("b"));
+    port.close();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_arrival_returns_while_a_real_port_summary_answer_is_still_held() {
+    held_summary_does_not_hold_result(true, 7_320).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deadline_returns_while_a_real_port_summary_answer_is_still_held() {
+    held_summary_does_not_hold_result(false, 7_321).await;
+}
