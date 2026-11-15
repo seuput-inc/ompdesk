@@ -12,6 +12,10 @@ rust-version = "1.95"
 license = "Apache-2.0"
 publish = false
 
+[features]
+default = ["cef-host"]
+cef-host = ["dep:cef"]
+
 # The pure parts (framing, ranges, paths, safeStorage, Local Storage) are the library, so `cargo test` runs them in a
 # test executable that never imports libcef.dll; the binary links CEF and has no tests of its own.
 [lib]
@@ -22,6 +26,7 @@ path = "src/lib.rs"
 name = "ompdesk-shell"
 path = "src/main.rs"
 test = false
+required-features = ["cef-host"]
 
 # The macOS bundle's CFBundleExecutable (`Contents/MacOS/OMPdesk`): no CEF, only std and what the library needs. It execs
 # `ompdesk-shell` and watches the first start of a freshly installed version (launcher.rs). Windows builds a stub.
@@ -37,7 +42,7 @@ embed-resource = "3"
 [dependencies]
 # Default features off: `sandbox` would link CEF's sandbox library (the shell runs with no_sandbox, as Electron's
 # sandbox was off for the main window's helpers) and `resources` is for bundling tools we do not use.
-cef = { version = "=156.4.0", default-features = false, features = ["build-util"] }
+cef = { version = "=156.4.0", optional = true, default-features = false, features = ["build-util"] }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a number is read as its digits say, as the core's wire does (crates/core).
 serde_json = { version = "1", features = ["float_roundtrip"] }
