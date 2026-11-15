@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcSessionsChanged, SessionInfo } from "../../shared/ipc-types";
 import type { VersionedSessionList } from "../../shared/session-list-delta";
 import { resetSnapshotsForTest, snapshots } from "../lib/snapshot-cache";
-import { READ_RETRY_MS, resetSessionListFeeds, sessionListFeed } from "./session-list";
+import { READ_RETRY_MS, refreshHeldSessionLists, resetSessionListFeeds, sessionListFeed } from "./session-list";
 
 class Memory {
 	readonly map = new Map<string, string>();
@@ -438,6 +438,49 @@ describe("session list snapshot", () => {
 	});
 });
 
+describe("held list recovery", () => {
+	it("waits for the read after an in-flight snapshot before acknowledging resync", async () => {
+		const old = Promise.withResolvers<SessionInfo[]>();
+		const fresh = Promise.withResolvers<SessionInfo[]>();
+		let reads = 0;
+		install(() => (++reads === 1 ? old.promise : fresh.promise));
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		try {
+			let completed = false;
+			const recovery = Promise.resolve(refreshHeldSessionLists()).then(value => {
+				completed = true;
+				return value;
+			});
+			await Promise.resolve();
+			expect(completed).toBe(false);
+			old.resolve([row("/deleted")]);
+			await vi.waitFor(() => expect(reads).toBe(2));
+			expect(completed).toBe(false);
+			fresh.resolve([row("/kept")]);
+			expect(await recovery).toBe(true);
+			expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]);
+		} finally {
+			release();
+		}
+	});
+
+	it("reports a failed authoritative read without clearing the last known rows", async () => {
+		let reads = 0;
+		install(() => (++reads === 1 ? Promise.resolve([row("/kept")]) : Promise.reject(new Error("list unavailable"))));
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		try {
+			await vi.waitFor(() => expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]));
+			expect(await Promise.resolve(refreshHeldSessionLists())).toBe(false);
+			expect(feed.store.getState().error).toBe("list unavailable");
+			expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]);
+		} finally {
+			release();
+		}
+	});
+});
+
 describe("the numbered global list", () => {
 	const at = (path: string, title = path): SessionInfo =>
 		({ path, title, modified: "2026-10-30T10:00:00.000Z", size: 1 }) as unknown as SessionInfo;
@@ -487,6 +530,30 @@ describe("the numbered global list", () => {
 		return { state, push, land, together };
 	}
 	afterEach(() => vi.useRealTimers());
+
+	it("waits for another authoritative read if a new incarnation changes the list during recovery", async () => {
+		const { state, push, land } = numbered({ version: "old.1", sessions: [at("/deleted")] });
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		try {
+			await vi.runAllTimersAsync();
+			state.hold = true;
+			let completed = false;
+			const recovery = Promise.resolve(refreshHeldSessionLists()).then(ok => {
+				completed = true;
+				return ok;
+			});
+			await push({ list: { base: "new.1", version: "new.2", set: [at("/kept")], remove: ["/deleted"] } });
+			await land();
+			expect(completed).toBe(false);
+			state.answer = { version: "new.2", sessions: [at("/kept")] };
+			await land();
+			expect(await recovery).toBe(true);
+			expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]);
+		} finally {
+			release();
+		}
+	});
 
 	it("forgets the numbered copy on delete so a delta cannot restore its deleted row after a failed read", async () => {
 		const { state, push, land } = numbered({ version: "e.1", sessions: [at("/P"), at("/kept")] });

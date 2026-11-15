@@ -47,12 +47,13 @@ import { useForkHandoffStore } from "./fork-handoff";
 import { type MessagesStore, useMessagesStore } from "./messages";
 import { useModelStore } from "./model";
 import { usePlanApprovalStore } from "./plan-approval";
-import { useQueueStore } from "./queue";
+import { type QueueStore, useQueueStore } from "./queue";
 import { type SessionStore, useSessionStore } from "./session";
 import { sessionRuntime, sessionRuntimeStore, setFocusedSessionRuntime } from "./session-runtime-context";
 import { useSubagentsStore } from "./subagents";
 import { READY_WAIT_CAP_MS, tabReady } from "./tab-ready-gate";
 import { ensureTabRuntime } from "./tab-runtime";
+import * as tabsModule from "./tabs";
 import {
 	endTabSignIn,
 	isTabClosed,
@@ -1810,6 +1811,50 @@ describe("tabs store background tab signals", () => {
 		expect(pending("t1")).toEqual([]);
 		expect(tabOf("t1")?.awaitingInput).toBeUndefined();
 		expect(pending("t2")).toEqual(["new"]);
+	});
+
+	it("keeps a tab and its queued message created while a resync list is in flight", async () => {
+		seedTabs();
+		const listed = Promise.withResolvers<IpcTabInfo[]>();
+		omp.tabs.list.mockReturnValueOnce(listed.promise);
+		const resync = useTabsStore.getState().reconcileTabs({ resync: true });
+		useTabsStore.getState().applyTabStatus({ kind: "agent", tabId: "late", cwd: "/late", status: "ready" });
+		ensureTabRuntime("late");
+		const runtime = sessionRuntime("late");
+		const queue = sessionRuntimeStore<QueueStore>("late", "queue");
+		queue?.setState({ steering: [{ id: "queued", text: "keep me", editable: true, timestamp: 1 }] });
+		listed.resolve([tabInfo("t0", "/alpha"), tabInfo("t1", "/beta"), tabInfo("t2", "/gamma")]);
+		await resync;
+		expect(sessionRuntime("late")).toBe(runtime);
+		expect(useTabsStore.getState().tabs.some(tab => tab.id === "late")).toBe(true);
+		expect(sessionRuntimeStore<QueueStore>("late", "queue")?.getState().steering[0]?.text).toBe(
+			"keep me",
+		);
+	});
+
+	it("does not discard a queued message when an authoritative list omits its tab", async () => {
+		seedTabs();
+		const queue = sessionRuntimeStore<QueueStore>("t1", "queue");
+		queue?.setState({ followUp: [{ id: "queued", text: "keep me", editable: true, timestamp: 1 }] });
+		const runtime = sessionRuntime("t1");
+		omp.tabs.list.mockResolvedValue([tabInfo("t0", "/alpha"), tabInfo("t2", "/gamma")]);
+		expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(false);
+		expect(sessionRuntime("t1")).toBe(runtime);
+		expect(queue?.getState().followUp[0]?.text).toBe("keep me");
+	});
+
+	it("does not settle a new ask that arrived after the open-requests snapshot began", async () => {
+		seedTabs();
+		pushTabExtensionUiRequest("t1", { type: "extension_ui_request", id: "old", method: "ask", questions: [] });
+		const capture = Reflect.get(tabsModule, "captureTabExtensionUiRequests");
+		const captured = typeof capture === "function" ? capture() : undefined;
+		pushTabExtensionUiRequest("t1", { type: "extension_ui_request", id: "new", method: "ask", questions: [] });
+		Reflect.apply(settleTabExtensionUiRequests, undefined, [[], captured]);
+		expect(
+			sessionRuntimeStore<ExtensionUiStore>("t1", "extensionUi")
+				?.getState()
+				.pendingRequests.map(request => request.id),
+		).toEqual(["old", "new"]);
 	});
 
 	it("takes the host's list as the whole truth after a reconnect: a restarted host's old tab ids go", async () => {
