@@ -109,10 +109,9 @@ fn icon_links(html: &str) -> Vec<String> {
             rel.split_ascii_whitespace().any(|part| {
                 part.eq_ignore_ascii_case("icon") || part.eq_ignore_ascii_case("apple-touch-icon")
             })
-        }) {
-            if let Some(href) = attribute(tag, "href") {
-                links.push(href.replace("&amp;", "&"));
-            }
+        }) && let Some(href) = attribute(tag, "href")
+        {
+            links.push(href.replace("&amp;", "&"));
         }
         if links.len() == 4 {
             break;
@@ -173,12 +172,11 @@ fn attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
 
 /// Extract only github.com's public owner name. Neither a repository path, token nor raw origin becomes a request.
 pub(super) fn github_owner(remote: &str) -> Option<String> {
-    if let Ok(url) = Url::parse(remote) {
-        if url.password().is_some()
-            || (!url.username().is_empty() && !(url.scheme() == "ssh" && url.username() == "git"))
-        {
-            return None;
-        }
+    if let Ok(url) = Url::parse(remote)
+        && (url.password().is_some()
+            || !(url.username().is_empty() || url.scheme() == "ssh" && url.username() == "git"))
+    {
+        return None;
     }
     let canonical = crate::git::parse::remote_web_base(remote)?;
     let web = Url::parse(&canonical).ok()?;
@@ -211,43 +209,37 @@ pub(super) fn github_owner(remote: &str) -> Option<String> {
 
 pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwork> {
     for relative in FILES {
-        if let Some(bytes) = read(root, relative, raster::INPUT_BYTES).await {
-            if let Some(image) = raster(bytes, Source::Repository).await {
-                return Some(image);
-            }
+        if let Some(bytes) = read(root, relative, raster::INPUT_BYTES).await
+            && let Some(image) = raster(bytes, Source::Repository).await
+        {
+            return Some(image);
         }
     }
     let homepage = async {
-        if let Some(bytes) = read(root, "package.json", 64 * 1024).await {
-            if let Ok(package) = serde_json::from_slice::<Value>(&bytes) {
-                if let Some(homepage) = package["homepage"].as_str().and_then(external_url) {
-                    let mut base = homepage.clone();
-                    if let Ok(response) =
-                        crate::http::public_get(homepage.as_str(), 64 * 1024).await
-                    {
-                        if response.status == 200 {
-                            base = response.url;
-                            if let Ok(html) = std::str::from_utf8(&response.body) {
-                                for href in icon_links(html) {
-                                    if let Ok(icon) = base.join(&href) {
-                                        if let Some(icon) = external_url(icon.as_str()) {
-                                            if let Some(image) =
-                                                fetch_image(&icon, Source::Homepage).await
-                                            {
-                                                return Some(image);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Ok(icon) = base.join("/favicon.ico") {
-                        if let Some(image) = fetch_image(&icon, Source::Homepage).await {
+        if let Some(bytes) = read(root, "package.json", 64 * 1024).await
+            && let Ok(package) = serde_json::from_slice::<Value>(&bytes)
+            && let Some(homepage) = package["homepage"].as_str().and_then(external_url)
+        {
+            let mut base = homepage.clone();
+            if let Ok(response) = crate::http::public_get(homepage.as_str(), 64 * 1024).await
+                && response.status == 200
+            {
+                base = response.url;
+                if let Ok(html) = std::str::from_utf8(&response.body) {
+                    for href in icon_links(html) {
+                        if let Ok(icon) = base.join(&href)
+                            && let Some(icon) = external_url(icon.as_str())
+                            && let Some(image) = fetch_image(&icon, Source::Homepage).await
+                        {
                             return Some(image);
                         }
                     }
                 }
+            }
+            if let Ok(icon) = base.join("/favicon.ico")
+                && let Some(image) = fetch_image(&icon, Source::Homepage).await
+            {
+                return Some(image);
             }
         }
         None
@@ -257,10 +249,10 @@ pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwor
     {
         return Some(image);
     }
-    if let Some(owner) = remote.and_then(github_owner) {
-        if let Ok(url) = Url::parse(&format!("https://github.com/{owner}.png")) {
-            return fetch_image(&url, Source::Owner).await;
-        }
+    if let Some(owner) = remote.and_then(github_owner)
+        && let Ok(url) = Url::parse(&format!("https://github.com/{owner}.png"))
+    {
+        return fetch_image(&url, Source::Owner).await;
     }
     None
 }
