@@ -33,8 +33,8 @@ await page.waitForFunction(() => typeof (window as unknown as SeedWindow).omp?.u
 	timeout: 30_000,
 });
 if (mode === "read") {
-	// The shell's page after the move: the token the released app saved is readable through the shell's safeStorage,
-	// and the file:// Local Storage the shell imported is there under app://ompdesk.
+	// Read the restarted released page before migration, or the shell's page after it, without rewriting either
+	// the stored token or Local Storage. The two observations distinguish producer persistence from the move.
 	await page.waitForFunction(
 		() => typeof (window as unknown as SeedWindow).omp?.updater?.authInfo === "function",
 		null,

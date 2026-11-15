@@ -182,6 +182,20 @@ scenario() {
   step "$name: the released app, left alone with its updater"
   env ${OLDENV[@]+"${OLDENV[@]}"} OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT "${SWITCHES[@]}" >"$W/$name-old.out" 2>&1 &
   local old_pid=$! old_state=running
+  (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT read) | tee "$W/$name-persisted.json"
+  local persisted_rc=${PIPESTATUS[0]}
+  if [ "$persisted_rc" != 0 ] ||
+     ! grep -q '"href":"file://' "$W/$name-persisted.json" ||
+     ! grep -q '"source":"stored"' "$W/$name-persisted.json" ||
+     ! grep -q '"draft":"a draft typed in Electron"' "$W/$name-persisted.json" ||
+     ! grep -q '"korean":"한국어 초안 ✓"' "$W/$name-persisted.json" ||
+     ! grep -q '"large":200000' "$W/$name-persisted.json"; then
+    check 1 "$name: the restarted released app retained the original token and Local Storage before migration"
+    stop_or_exit "$APPS/OMPdesk.app"
+    restore
+    exit 1
+  fi
+  check 0 "$name: the restarted released app retained the original token and Local Storage before migration"
   if wait_for "has_line $UD 'download verified'" 240; then
     check 0 "$name: check found, download verified"
   else
@@ -242,7 +256,7 @@ scenario() {
     evidence "S1 shell log: $(grep -E 'migrate|cef.ready|window.created' "$UD/shell-webview/shell.log.jsonl" | cut -c1-200 | tr '\n' '|')"
     (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT read) | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the shell's page answered"
     grep -q '"href":"app://ompdesk/' "$W/$name-read.json"; check $? "S1: the page loaded from app://ompdesk"
-    grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
+    grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"korean":"한국어 초안 ✓"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
     if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
       check 0 "S1: the seeded token was decrypted (source stored, none dropped)"
     else
