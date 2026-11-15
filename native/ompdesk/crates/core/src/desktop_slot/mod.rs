@@ -254,21 +254,30 @@ impl Service {
         answer.await.map_err(|_| closed())
     }
 
-    pub async fn stop(&self, capture: &Capture) -> Result<(), Fault> {
-        self.depart(capture, Reason::Stop).await
+    pub fn stop(&self, capture: &Capture) -> EffectFuture<'static, Result<(), Fault>> {
+        self.depart(capture, Reason::Stop)
     }
 
     pub async fn released(&self, capture: &Capture) -> Result<(), Fault> {
         self.depart(capture, Reason::Closed).await
     }
 
-    async fn depart(&self, capture: &Capture, reason: Reason) -> Result<(), Fault> {
-        self.admit(capture)?;
-        let (reply, answer) = oneshot::channel();
-        self.events
-            .send(Event::Depart(capture.clone(), reason, reply))
-            .map_err(|_| closed())?;
-        answer.await.map_err(|_| closed())
+    fn depart(
+        &self,
+        capture: &Capture,
+        reason: Reason,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let admitted = self.admit(capture).and_then(|()| {
+            let (reply, answer) = oneshot::channel();
+            self.events
+                .send(Event::Depart(capture.clone(), reason, reply))
+                .map_err(|_| closed())?;
+            Ok(answer)
+        });
+        Box::pin(async move {
+            let answer = admitted?;
+            answer.await.map_err(|_| closed())
+        })
     }
 
     pub fn retry(&self) -> Result<(), Fault> {
@@ -279,13 +288,18 @@ impl Service {
     }
 
     /// Root notes stopped and logs the stop under this same capture before calling stop/kill.
-    pub async fn kill(&self, capture: &Capture) -> Result<bool, Fault> {
-        self.admit(capture)?;
-        let (reply, answer) = oneshot::channel();
-        self.events
-            .send(Event::Kill(capture.clone(), reply))
-            .map_err(|_| closed())?;
-        answer.await.map_err(|_| closed())
+    pub fn kill(&self, capture: &Capture) -> EffectFuture<'static, Result<bool, Fault>> {
+        let admitted = self.admit(capture).and_then(|()| {
+            let (reply, answer) = oneshot::channel();
+            self.events
+                .send(Event::Kill(capture.clone(), reply))
+                .map_err(|_| closed())?;
+            Ok(answer)
+        });
+        Box::pin(async move {
+            let answer = admitted?;
+            answer.await.map_err(|_| closed())
+        })
     }
 
     pub async fn close(&self) -> Result<(), Fault> {
