@@ -25,6 +25,7 @@ import type {
 } from "./ai-memory";
 import type { BuiltinReaState } from "./builtin-mcp";
 import type { CliToolId, CliUpdateState } from "./cli-update";
+import type { ProjectMetadataBatch } from "./project-metadata";
 import type { CreditSpendState } from "./credit-spend";
 import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -530,6 +531,7 @@ export const IPC_COMMANDS = {
 	WORKTREE_PROMPT_ANSWER: "worktree-lifecycle:answer",
 	/** The project each folder belongs to, from git (`string[]` → `Record<string, ProjectOrigin | null>`). */
 	PROJECT_ORIGINS_GET: "project-origin:get",
+	PROJECT_METADATA_GET: "project-metadata:get",
 } as const;
 
 export type RuntimeErrorSource =
@@ -2652,5 +2654,9 @@ export interface OmpApi {
 	/** The project each folder belongs to (the main checkout a linked worktree was cut from), read from git on this computer. */
 	projectOrigins: {
 		get(cwds: string[]): Promise<Record<string, ProjectOrigin | null>>;
+	};
+	/** Verified checkout paths, read only on the named execution host. */
+	projectMetadata: {
+		get(paths: string[], device?: string): Promise<ProjectMetadataBatch>;
 	};
 }

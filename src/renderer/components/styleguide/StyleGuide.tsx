@@ -93,6 +93,7 @@ import {
 	SegmentedChoice,
 	Select,
 	SessionTitle,
+	RepositoryImage,
 	SettingInfo,
 	Sheet,
 	Skeleton,
@@ -1711,6 +1712,9 @@ export default function StyleGuide() {
 								className="max-h-40 rounded-(--sc-radius-md)"
 								src="./screenshots/wide.png"
 							/>
+						</Block>
+						<Block label="RepositoryImage">
+							<RepositoryImage />
 						</Block>
 						<Block label="PinchZoomArea (two fingers on a touch screen)">
 							<Card className="h-40 overflow-hidden" padding="none">

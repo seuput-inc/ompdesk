@@ -51,6 +51,8 @@ export interface FamilyRowProps {
 	auto?: string;
 	/** Whole units only ("12s", "10m", "2h", or the sidebar's time ago, a ticking `TimeAgo`). */
 	age?: ReactNode;
+	/** Repository thumbnail for an opened session; subagents keep their kind glyph. */
+	image?: ReactNode;
 	/** The paired device a session runs on, by name: a short muted label before the token. */
 	device?: string;
 	/** Native tooltip: the status, folder, model, progress — whatever the one line has no room for. */
@@ -73,6 +75,7 @@ export function FamilyRow({
 	title,
 	auto,
 	age,
+	image,
 	device,
 	tooltip,
 	selected,
@@ -101,7 +104,7 @@ export function FamilyRow({
 					className="flex size-(--sc-icon-md) shrink-0 items-center justify-center text-(--sc-text-subtle)"
 					data-family-glyph={kind}
 				>
-					<Icon className="size-(--sc-icon-md)" />
+					{image ?? <Icon className="size-(--sc-icon-md)" />}
 				</span>
 				{/* controls-ok: the omp-family-row class draws the sidebar row whole; this button is its click target */}
 				<button

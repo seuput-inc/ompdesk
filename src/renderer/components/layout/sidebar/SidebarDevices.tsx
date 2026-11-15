@@ -29,6 +29,7 @@ import { reviewUnmerged } from "../../../../shared/agent-control";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionKind } from "../../../../shared/ipc-types";
 import { unsavedSessionKey } from "../../../../shared/session-summary";
+import { sessionProjectPaths } from "../../../../shared/session-project-targets";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,
@@ -103,6 +104,7 @@ import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { SidebarRenameField } from "./SidebarRenameField";
+import { SidebarRepositoryImage } from "./SidebarRepositoryImage";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
@@ -719,6 +721,7 @@ function DeviceSessions({
 		const key = `session:${id}`;
 		return {
 			key: id,
+			image: <SidebarRepositoryImage device={host.deviceId} paths={sessionProjectPaths(child)} />,
 			kind: review?.branch !== undefined || projectList.worktrees[child.cwd] !== undefined ? "worktree" : "session",
 			status,
 			state: status ? CHILD_TOKEN[status] : null,
@@ -1039,8 +1042,7 @@ function DeviceSessions({
 				</div>
 			);
 		}
-		// No leading slot (the local rows' rule, Sidebar.tsx): the title starts at the group's content edge, a chat's
-		// glyph sits at the end before the age, and a tab open elsewhere is said in words only.
+		// Repository artwork uses the execution host's metadata; status and age keep their own trailing slots.
 		const openElsewhere = tab !== undefined && !current && !inVisibleSplit;
 		const chat = session.kind === "chat" ? <MessageCircle aria-hidden className="size-(--sc-icon-sm)" /> : null;
 		// Its family, as a local row's (Sidebar.tsx): the tab's subagents and the sessions its agent opened. The ones
@@ -1066,6 +1068,7 @@ function DeviceSessions({
 		return (
 			<Fragment key={session.path}>
 				<ListRow
+					leading={<SidebarRepositoryImage device={host.deviceId} paths={sessionProjectPaths(session)} />}
 					// One ⋯ on every input, so the title keeps its width; at rest under touch, on hover or focus elsewhere.
 					actions={
 						<IconButton
@@ -1291,7 +1294,6 @@ function DeviceSessions({
 				<SortableContext items={groups.map(group => group.cwd)} strategy={verticalListSortingStrategy}>
 					{groups.map(group => {
 						const groupCollapsed = !query && deviceGroupFolds[deviceGroupKey(host.deviceId, group.cwd)] === true;
-						const FolderIcon = groupCollapsed ? Folder : FolderOpen;
 						const name = basename(group.cwd) || group.cwd;
 						const groupIndex = query ? -1 : groups.indexOf(group);
 						const groupItems = projectMenuItems({
@@ -1332,7 +1334,7 @@ function DeviceSessions({
 												tabIndex={-1}
 												title={group.missing ? `${group.cwd}\n${t("sidebar.project.missing")}` : group.cwd}
 												folded={groupCollapsed}
-												icon={<FolderIcon aria-hidden className="size-(--sc-icon-sm) shrink-0" />}
+												icon={<SidebarRepositoryImage device={host.deviceId} paths={[group.cwd]} />}
 											>
 												<span className="min-w-0 flex-1 truncate">{name}</span>
 												{group.missing && <span className="sr-only">, {t("sidebar.project.missing")}</span>}

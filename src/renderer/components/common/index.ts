@@ -127,4 +127,5 @@ export { MAX_USAGE_COLUMNS, NEAR_FRACTION, UsageGauges, usageDescription, usageT
 export { useHeldOverlay } from "./use-held-overlay";
 export { useModalLayer } from "./use-modal-layer";
 export { WorkingArc } from "./WorkingArc";
+export { RepositoryImage } from "./RepositoryImage";
 export { type GalleryImage, ZoomableImage, type ZoomableImageHandle, type ZoomableImageProps } from "./ZoomableImage";

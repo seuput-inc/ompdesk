@@ -138,6 +138,7 @@ import {
 	readWorkspaceRange,
 	statWorkspacePath,
 } from "../workspace-fs";
+import { readProjectMetadata } from "../project-metadata";
 import { searchWorkspace } from "../workspace-search";
 import { sessionOpenFolders } from "../worktree-orphans";
 import { removalHolds } from "../worktree-removals";
@@ -1312,6 +1313,10 @@ export class LocalHostServices implements HostServices {
 			case SIGN_IN_CALLBACK_METHOD: {
 				const { rtab, path, query } = parse(SignInCallbackParams, method, params);
 				return await this.#signInCallback(this.#tab(peer, rtab), path, query);
+			}
+			case "projectMetadata.get": {
+				const { paths } = parse(z.object({ paths: z.array(AbsolutePath).max(24) }), method, params);
+				return readProjectMetadata(paths);
 			}
 			case "fs.list": {
 				const { rtab, cwd, ...payload } = parse(FsListParams, method, params);

@@ -18,7 +18,7 @@
 //! (`Tls`) is rustls's account of a handshake, which ends before any header or body of the request is written.
 
 use std::ffi::OsString;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
@@ -33,6 +33,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use url::{Host, Position, Url};
+
+mod public;
+pub(crate) use public::public_get;
 
 /// The longest answer kept. `fetch` had no bound; nothing the memory server answers comes near this.
 pub const BODY_MAX: usize = 64 * 1024 * 1024;
@@ -148,14 +151,16 @@ fn target(url: &Url) -> Result<Target, Failure> {
 trait Io: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Io for T {}
 
-async fn connect(target: &Target, tls: Tls) -> Result<Box<dyn Io>, Failure> {
+async fn connect(target: &Target, tls: Tls, addresses: Option<&[SocketAddr]>) -> Result<Box<dyn Io>, Failure> {
     let config = if target.tls { Some(tls()?) } else { None };
-    let stream = match &target.host {
-        Host::Domain(name) => TcpStream::connect((name.as_str(), target.port)).await,
-        Host::Ipv4(address) => TcpStream::connect((*address, target.port)).await,
-        Host::Ipv6(address) => TcpStream::connect((*address, target.port)).await,
-    }
-    .map_err(|_| Failure::Connect)?;
+    let stream = match addresses {
+        Some(addresses) => TcpStream::connect(addresses).await,
+        None => match &target.host {
+            Host::Domain(name) => TcpStream::connect((name.as_str(), target.port)).await,
+            Host::Ipv4(address) => TcpStream::connect((*address, target.port)).await,
+            Host::Ipv6(address) => TcpStream::connect((*address, target.port)).await,
+        },
+    }.map_err(|_| Failure::Connect)?;
     let _ = stream.set_nodelay(true);
     let Some(config) = config else {
         return Ok(Box::new(stream));
@@ -187,6 +192,16 @@ async fn exchange_once(
     body: Option<&[u8]>,
     tls: Tls,
 ) -> Result<hyper::Response<Incoming>, Failure> {
+    exchange_at(url, headers, body, tls, None).await
+}
+
+async fn exchange_at(
+    url: &Url,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+    tls: Tls,
+    addresses: Option<&[SocketAddr]>,
+) -> Result<hyper::Response<Incoming>, Failure> {
     let target = target(url)?;
     let method = if body.is_some() { "POST" } else { "GET" };
     let mut message = hyper::Request::builder()
@@ -205,7 +220,7 @@ async fn exchange_once(
     }
     let body = Full::new(Bytes::copy_from_slice(body.unwrap_or_default()));
     let message = message.body(body).map_err(|_| Failure::Request)?;
-    let stream = connect(&target, tls).await?;
+    let stream = connect(&target, tls, addresses).await?;
     let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
         .map_err(|_| Failure::Broken)?;

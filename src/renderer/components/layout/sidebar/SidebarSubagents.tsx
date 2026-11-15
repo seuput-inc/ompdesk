@@ -83,6 +83,7 @@ export interface FamilyOpened {
 	/** The automatic title beside a title the person set. */
 	auto?: string;
 	age?: ReactNode;
+	image?: ReactNode;
 	/** The paired device it runs on, by name; absent = this computer. */
 	device?: string;
 	tooltip: string;
@@ -434,6 +435,7 @@ function OpenedRow({ child }: { child: FamilyOpened }) {
 	return (
 		<FamilyRow
 			age={child.age}
+			image={child.image}
 			buttonProps={child.buttonProps}
 			device={child.device}
 			indent={INDENT[0]}

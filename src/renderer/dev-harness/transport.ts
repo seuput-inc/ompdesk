@@ -555,6 +555,12 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			// The harness has no files: a reply's picture reads as main answers a missing one, so it settles on its chip.
 			case IPC_COMMANDS.FS_READ_IMAGE:
 				return { ok: false, dataUrl: null, mime: null, size: 0, error: "ENOENT" } satisfies IpcFsReadImageResult;
+			case IPC_COMMANDS.PROJECT_METADATA_GET: {
+				const paths = payload && typeof payload === "object" && "paths" in payload ? payload.paths : [];
+				return Array.isArray(paths)
+					? Object.fromEntries(paths.filter(path => typeof path === "string").map(path => [path, null]))
+					: {};
+			}
 			case IPC_COMMANDS.RPC_COMMAND:
 				return rpc({ command: (payload as RpcPayload).command });
 			case IPC_COMMANDS.RPC_COMMAND_FOR_TAB:

@@ -123,6 +123,12 @@ globs:
 - Cost: computed only while folded (a folded group still builds no rows). A folded paired computer's section reads no list: the host's summaries (`hostSectionSummary`), its tab subscription off while open.
 - Tests: `fold-summary.test.ts`, "Sidebar folded headers say what works inside" in `Sidebar.test.tsx`, `e2e/fold-summary.e2e.ts` (`OMP_GUI_FOLD_SUMMARY_SHOTS=<dir>` writes captures).
 
+#### Repository thumbnails
+
+- Every session row and project group uses one decorative 16px `RepositoryImage`; state, title, age, row height and trailing marks stay independent. Opened session children use the same image; subagents retain their kind glyph.
+- `sessionProjectPaths` supplies lookup inputs. Empty or multiple targets show the generic mark; no child repository is guessed. The execution host verifies each path through `projectMetadata.get`, returning one checkout/main-root/head/image snapshot. Linked worktrees share their main repository's artwork, not their branch.
+- Artwork priority is a local raster logo/favicon, package homepage icon, then GitHub owner avatar. No social-preview or third-party favicon service is used. The host admits public DNS addresses only, pins the connection while verifying TLS against the original hostname, revalidates redirects, and returns a bounded normalized PNG, never SVG or an external image URL. Image requests coalesce/cache per main-repository identity; the renderer batches paths per device with no row polling or automatic retry loop.
+
 #### Subagent titles
 
 - `subagentPrimaryLabel` (`panels/subagent-graph.ts`), store rules in `stores/subagents.ts`, `unwrapStockPrompt` in `resources/gui-bridge/modes/subagent-title-contracts.ts`. A subagent's row, panel header and board card read the `Title:` line of its ORIGINAL assignment, else stock's own label (`description`), else the first line of that assignment, else the role name; never a later message.

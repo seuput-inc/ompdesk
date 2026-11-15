@@ -5,6 +5,7 @@
  */
 
 import type { AccountRotationMode, AccountRotationState } from "./account-rotation";
+import type { ProjectMetadataBatch } from "./project-metadata";
 import {
 	AGENT_CONTROL_APP,
 	AGENT_CONTROL_REVIEW,
@@ -834,6 +835,10 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		projectOrigins: {
 			get: (cwds: string[]) =>
 				transport.invoke(IPC_COMMANDS.PROJECT_ORIGINS_GET, cwds) as Promise<Record<string, ProjectOrigin | null>>,
+		},
+		projectMetadata: {
+			get: (paths: string[], device?: string) =>
+				transport.invoke(IPC_COMMANDS.PROJECT_METADATA_GET, { paths, device }) as Promise<ProjectMetadataBatch>,
 		},
 	};
 }

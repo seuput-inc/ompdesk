@@ -75,6 +75,7 @@ allow-list beside the marker.
 | A panel fed by free-form data | `PanelErrorBoundary` (the app root alone has `RootErrorBoundary`) | an unguarded subtree |
 | Back to the newest row of a scrolled transcript | `JumpToLatest` | another floating button |
 | An image that opens full size | `ZoomableImage` | your own viewer |
+| A repository's small decorative logo with a same-size fallback | `RepositoryImage` (normalized PNG data from execution-host project metadata) | an external favicon URL or a row-specific fetch |
 | Content that zooms with two fingers on a touch screen (an opened file) | `PinchZoomArea` | the browser's page zoom (the page never zooms) |
 | Ages, costs, account usage | `TimeAgo`, `CostAmount`, `UsageGauges` | formatting them again |
 | Work going on | `LiveText`/`LiveSweep` (`LiveShimmer`), `WorkingArc` | a new animation |

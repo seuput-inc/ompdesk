@@ -47,6 +47,7 @@ import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
 import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
+import { sessionProjectPaths } from "../../../../shared/session-project-targets";
 import type { RailPin } from "../../../../shared/sidebar-prefs";
 import {
 	CHATS_ORDER_KEY,
@@ -153,6 +154,7 @@ import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
 import { SidebarRenameField } from "./SidebarRenameField";
+import { SidebarRepositoryImage } from "./SidebarRepositoryImage";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
 import { SidebarUsage } from "./SidebarUsage";
@@ -1445,6 +1447,7 @@ export function Sidebar() {
 		const model = (childUsage[child.path] ?? closedChildren.find(row => row.path === child.path))?.model;
 		return {
 			key: child.path,
+			image: <SidebarRepositoryImage paths={sessionProjectPaths(child)} />,
 			kind: row.tab?.worktree !== undefined || origin.worktree ? "worktree" : "session",
 			status,
 			ask: isAsk(row.waiting) ? row.waiting : undefined,
@@ -1570,6 +1573,7 @@ export function Sidebar() {
 		const model = childUsage[tab.sessionPath ?? tab.id]?.model;
 		return {
 			key: id,
+			image: <SidebarRepositoryImage device={here ? undefined : tab.device} paths={sessionProjectPaths(tab)} />,
 			kind: tab.worktree !== undefined ? "worktree" : "session",
 			status,
 			ask: run.ask,
@@ -1709,10 +1713,7 @@ export function Sidebar() {
 		const worktree = worktreeOrigin?.worktree
 			? { kind: worktreeOrigin.worktree.kind, label: worktreeLabel(worktreeOrigin, kindLabels) }
 			: null;
-		// The state is the row's own title sweeping (`SessionLiveTitle`) or its left-edge bar (sidebar.css `data-signal`), its words the
-		// tooltip and screen-reader text. Nothing leads the row: its title starts at the group's content edge. One small
-		// mark sits at the end, before the age: an unseen finish (no light or bar says it) as a ✓, a shape, not a colour
-		// alone; else a chat, a pin, a worktree's kind or a fork.
+		// Repository artwork leads every row. State remains its own signal, title cue and trailing mark.
 		// Anything that needs the person is the warning signal; a failed run is the danger one.
 		const signal = waiting ? "waiting" : running ? "running" : failed ? "error" : undefined;
 		const WorktreeMark = worktree?.kind === "autopilot" ? Rocket : GitBranch;
@@ -1754,6 +1755,7 @@ export function Sidebar() {
 		return (
 			<Fragment key={session.path}>
 				<ListRow
+					leading={<SidebarRepositoryImage paths={sessionProjectPaths(session)} />}
 					actionsAtRest={touchInput}
 					actionsOnHover={!touchInput}
 					actionCount={1}
@@ -1892,7 +1894,6 @@ export function Sidebar() {
 		const isCurrentProject = group.cwd === cwd && activeTabKind !== "chat" && !activeTabRemote;
 		const tabIndex = -1;
 		const pinned = pinnedGroups.includes(group.cwd);
-		const FolderIcon = groupCollapsed ? Folder : FolderOpen;
 		// Sessions an agent opened that no opener row holds: only the ones that need a look or a tab holds are listed, so
 		// a group made only of those, with nothing to show, is not drawn. A project of the list is, empty or not.
 		const loose = looseOf(group);
@@ -1966,13 +1967,7 @@ export function Sidebar() {
 									tabIndex={tabIndex}
 									title={group.missing ? `${group.tooltip}\n${t("sidebar.project.missing")}` : group.tooltip}
 									folded={groupCollapsed}
-									icon={
-										<FolderIcon
-											aria-hidden
-											className="size-(--sc-icon-sm) shrink-0"
-											data-sidebar-workspace-icon
-										/>
-									}
+									icon={<SidebarRepositoryImage paths={[group.cwd]} />}
 								>
 									<span className="min-w-0 flex-1 truncate">{group.name}</span>
 									{group.missing && <span className="sr-only">, {t("sidebar.project.missing")}</span>}

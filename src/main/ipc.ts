@@ -163,6 +163,7 @@ import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
 import { readOriginFacts, readProjectOrigin } from "./local/git/origin";
+import { readProjectMetadata } from "./project-metadata";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
 import type { LogWatcher } from "./log-watcher";
@@ -1761,6 +1762,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			: [];
 		const origins = await Promise.all(folders.map(cwd => readProjectOrigin(cwd)));
 		return Object.fromEntries(folders.map((cwd, index) => [cwd, origins[index] ?? null]));
+	});
+	ipc.handle(IPC_COMMANDS.PROJECT_METADATA_GET, async (_caller, payload: { paths?: unknown; device?: unknown }) => {
+		if (!Array.isArray(payload?.paths) || payload.paths.some(path => typeof path !== "string")) {
+			throw new Error("Project metadata needs checkout paths");
+		}
+		const paths = payload.paths.filter((path): path is string => typeof path === "string");
+		const device = deviceOf(payload.device);
+		return device
+			? remoteDevices.request(device, "projectMetadata.get", { paths }, 120_000)
+			: readProjectMetadata(paths);
 	});
 
 	// Move full event forwarding to the window's active tab (listeners move,
