@@ -268,6 +268,7 @@ export function App() {
 						branchPickerOpen: false,
 						quickOpenOpen: false,
 						tabOverviewOpen: false,
+						projectPickerOpen: false,
 					}),
 				start: document.documentElement.dataset.platform === "web" ? "idle" : "now",
 			}),
@@ -660,7 +661,8 @@ export function App() {
 					ui.sessionPickerOpen ||
 					ui.branchPickerOpen ||
 					ui.quickOpenOpen ||
-					ui.tabOverviewOpen);
+					ui.tabOverviewOpen ||
+					ui.projectPickerOpen);
 			const overlayOpen =
 				onDemandOpen || ui.destination !== "session" || ui.benchmarkOpen || ui.modelSetupOpen || ui.tabSwitcherOpen;
 			if (event.key === "Escape") {

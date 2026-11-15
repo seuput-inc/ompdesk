@@ -63,7 +63,6 @@ import {
 	Spinner,
 	Tooltip,
 } from "../common";
-import { WorkspaceDialog } from "../dialogs/WorkspaceDialog";
 import { DeviceChip } from "../remote/DeviceChip";
 import { ForkParent } from "./ForkParent";
 import { sessionCacheHitPercent, sessionExecutionDurationMs } from "./session-metrics";
@@ -248,7 +247,6 @@ export function TitleBar() {
 		!isChat && cwd ? (groupAliases[cwd] ?? shown.worktree?.project ?? shown.name) : t("sidebar.chats");
 
 	const [editingName, setEditingName] = useState(false);
-	const workspaceOpen = useUiStore(s => s.projectPickerOpen);
 	const [statusOpen, setStatusOpen] = useState(false);
 	const [draft, setDraft] = useState("");
 	const [stats, setStats] = useState<SessionStats | null>(null);
@@ -647,7 +645,6 @@ export function TitleBar() {
 					{t("sessionStatus.openInsights")}
 				</Button>
 			</Popover>
-			<WorkspaceDialog onClose={() => useUiStore.getState().closeProjectPicker()} open={workspaceOpen} />
 		</header>
 	);
 }

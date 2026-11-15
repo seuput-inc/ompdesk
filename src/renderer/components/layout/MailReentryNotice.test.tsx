@@ -79,7 +79,9 @@ describe("MailReentryNotice", () => {
 		await act(async () => {
 			useMailReentryStore.getState().adopt([account("a", "Work", true)]);
 		});
-		await vi.waitFor(() => expect(container.textContent).toContain("The email account Work needs its password again"));
+		await vi.waitFor(() =>
+			expect(container.textContent).toContain("The email account Work needs its password again"),
+		);
 	});
 
 	it("names every account that needs it in one notice, not one per account", async () => {

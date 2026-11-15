@@ -4,6 +4,7 @@
  * the desktop and on a paired web page once its first screen settled or at the first touch or key. Dialogs main or an
  * agent opens (asks, plan approval, worktree prompts, SSH prompts) stay in App.
  */
+import { useUiStore } from "../../stores/ui";
 import { ActiveToolsDialog } from "./ActiveToolsDialog";
 import { BranchPickerDialog } from "./BranchPickerDialog";
 import { CommandPalette } from "./CommandPalette";
@@ -18,10 +19,12 @@ import { SessionPickerDialog } from "./SessionPickerDialog";
 import { SessionSwitchDialog } from "./SessionSwitchDialog";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TabOverviewDialog } from "./TabOverviewDialog";
+import { WorkspaceDialog } from "./WorkspaceDialog";
 import { WorktreeCloseDialog } from "./WorktreeCloseDialog";
 import { WorktreeDialog } from "./WorktreeDialog";
 
 export function OnDemandDialogs() {
+	const workspaceOpen = useUiStore(state => state.projectPickerOpen);
 	return (
 		<>
 			<CommandPalette />
@@ -40,6 +43,7 @@ export function OnDemandDialogs() {
 			<ShareSessionDialog />
 			<ForceToolDialog />
 			<HandoffDialog />
+			<WorkspaceDialog onClose={() => useUiStore.getState().closeProjectPicker()} open={workspaceOpen} />
 		</>
 	);
 }
