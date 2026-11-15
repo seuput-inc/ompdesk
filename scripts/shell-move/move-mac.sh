@@ -33,6 +33,39 @@ SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-$LAST_ELECTRON_TAG}
 case "$SOURCE_TAG" in v0.127.0|v0.128.0|"$LAST_ELECTRON_TAG") ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
 cleanup() { for v in OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" 2>/dev/null; }
 trap cleanup EXIT
+app_pids() {
+  local processes
+  processes=$(ps -axo pid=,command=) || return 1
+  printf '%s\n' "$processes" | awk -v app="$1/" '{ pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if (index($0, app) == 1) print pid }'
+}
+stop_app() {
+  local app=$1 owned_pid=${2:-} pids pid n=0 signalled
+  pids=$(app_pids "$app") || { evidence "stop failed: cannot list processes"; return 1; }
+  signalled=$pids
+  if [ -n "$owned_pid" ] && kill -0 "$owned_pid" 2>/dev/null; then
+    case " $pids " in *" $owned_pid "*) ;; *) pids="$pids $owned_pid";; esac
+    signalled=$pids
+  fi
+  for pid in $pids; do
+    kill -TERM "$pid" 2>/dev/null || {
+      kill -0 "$pid" 2>/dev/null && { evidence "stop failed: pid $pid still running"; return 1; }
+    }
+  done
+  while :; do
+    pids=$(app_pids "$app") || { evidence "stop failed: cannot list processes"; return 1; }
+    if [ -n "$owned_pid" ] && kill -0 "$owned_pid" 2>/dev/null; then pids="$pids $owned_pid"; fi
+    if [ -z "$pids" ]; then evidence "stopped $app; signalled pids: ${signalled:-none}"; return 0; fi
+    if [ "$n" -ge 30 ]; then
+      evidence "stop failed: $app still has pids $(echo "$pids" | tr '\n' ' ')"
+      ps -p "$(echo "$pids" | paste -sd, -)" -o pid=,ppid=,stat= 2>/dev/null | head -20 | sed 's/^/EVIDENCE: stop process: /'
+      return 1
+    fi
+    sleep 3
+    n=$((n+3))
+  done
+}
+stop_or_exit() { stop_app "$@" || { check 1 "app processes did not exit"; restore; exit 1; }; }
+
 
 step "control: a prompt-free keychain read"
 control_chatter
@@ -75,7 +108,7 @@ open_probe() {
   local running; running=$(ps -axo command | grep "$app/Contents/MacOS/" | grep -v grep | head -1 | cut -c1-140)
   evidence "probe $label: open -n exit $rc, output: $(head -c 300 "$W/probe-$label.out" | tr '\n' '|'); running afterwards: ${running:-nothing}"
   log show --start "$t0" --predicate 'process == "syspolicyd" OR subsystem == "com.apple.launchservices"' --style compact 2>/dev/null | grep -i 'ompdesk\|reject\|denied\|not allowed\|assess' | tail -12 | cut -c1-260 | sed "s/^/EVIDENCE: probe $label log: /"
-  kill_apps "$app/Contents/MacOS"; launchctl unsetenv OMP_GUI_TEST_USER_DATA_DIR
+  stop_or_exit "$app"; launchctl unsetenv OMP_GUI_TEST_USER_DATA_DIR
   [ -n "$running" ]
 }
 mkdir -p "$W/probe-apps"
@@ -136,7 +169,7 @@ relaunch_diag() {
   sleep 20
   evidence "diag: open -n exit $rc: $(head -c 400 "$W/$name-open.out" | tr '\n' '|'); running afterwards: $(ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" | grep -v grep | head -1 | cut -c1-120)"
   log show --last 2m --predicate 'process == "syspolicyd" OR process == "amfid" OR process == "launchservicesd" OR process == "runningboardd"' --style compact 2>/dev/null | grep -i 'ompdesk\|reject\|deny\|kill' | tail -12 | cut -c1-260 | sed 's/^/EVIDENCE: diag system: /'
-  kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+  stop_or_exit "$APPS/OMPdesk.app"
   OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT "${SWITCHES[@]}" >"$W/$name-direct.out" 2>&1 &
   sleep 25
   evidence "diag: started directly: $(ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" | grep -v grep | head -1 | cut -c1-160); output: $(head -c 600 "$W/$name-direct.out" | tr '\n' '|')"
@@ -167,12 +200,14 @@ scenario() {
     check 1 "$name: seed must validate and store the token in the test profile"
     evidence "$name seed diagnostics: seed exit $seed_rc; app pid $seed_pid; token file $([ -f "$UD/update-token.bin" ] && echo present || echo absent); runtime log $([ -f "$UD/logs/gui-runtime.jsonl" ] && echo present || echo absent)"
     evidence "$name seed output: $(tail -n 12 "$W/$name-seed.out" 2>&1 | cut -c1-220 | tr '\n' '|')"
-    kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+    stop_or_exit "$APPS/OMPdesk.app"
     restore
     exit 1
   fi
   check 0 "$name: seed validated and stored a token in the test profile"
-  kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+  stop_or_exit "$APPS/OMPdesk.app" "$seed_pid"
+  if wait "$seed_pid"; then seed_rc=0; else seed_rc=$?; fi
+  evidence "$name seed process: pid $seed_pid exited $seed_rc"
   rm -rf "$UD/logs" "$UD/updates"
   step "$name: the released app, left alone with its updater"
   env ${OLDENV[@]+"${OLDENV[@]}"} OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT "${SWITCHES[@]}" >"$W/$name-old.out" 2>&1 &
@@ -186,7 +221,7 @@ scenario() {
     check 1 "$name: check found, download verified"
     evidence "$name update startup: pid $old_pid ($old_state); runtime log $([ -f "$UD/logs/gui-runtime.jsonl" ] && echo present || echo absent)"
     evidence "$name update output: $(tail -n 12 "$W/$name-old.out" 2>&1 | cut -c1-220 | tr '\n' '|')"
-    kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+    stop_or_exit "$APPS/OMPdesk.app"
     restore
     exit 1
   fi
@@ -255,7 +290,7 @@ scenario() {
     sleep 5
     [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APPS/OMPdesk.app/Contents/Info.plist")" = $OLD_VERSION ]; check $? "S2: the Electron app is untouched (the old version)"
     ls "$APPS" | grep -q 'updating\|previous'; [ $? != 0 ]; check $? "S2: no .updating or .previous leftovers"
-    kill_apps "$APPS/OMPdesk.app/Contents/MacOS"
+    stop_or_exit "$APPS/OMPdesk.app"
     chmod -R u+w "$APPS"
     # The next launch, as a person's: the released app reports the failed move.
     OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT --host-resolver-rules="MAP api.github.com 127.0.0.1:1" --ignore-certificate-errors >"$W/$name-again.out" 2>&1 &
@@ -263,7 +298,7 @@ scenario() {
   fi
   evidence "$name feed log: $(tail -n 6 "$W/feed.log" | cut -c1-120 | tr '\n' '|')"
   dialogs; check $? "$name: no dialog (SecurityAgent) line"
-  kill_apps "$APPS/OMPdesk.app/Contents/MacOS"; pkill -f "$W/$name" 2>/dev/null
+  stop_or_exit "$APPS/OMPdesk.app"
   for v in OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done
   restore
 }
