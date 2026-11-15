@@ -7,7 +7,10 @@ pub(super) struct Fixture {
 impl Fixture {
     pub(super) fn new(name: &str) -> Self {
         Self {
-            dir: crate::fs::disk::make_temp_dir(&format!("ompdesk-{name}-")).unwrap(),
+            dir: crate::fs::disk::make_temp_dir(&format!("ompdesk-{name}-"))
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
         }
     }
 }
