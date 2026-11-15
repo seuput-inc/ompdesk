@@ -5,6 +5,7 @@
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { UUID } from "builder-util-runtime";
+import lastElectron from "../../native/ompdesk/crates/shell/last-electron.json";
 import { REAL_DIR, REAL_GUID, REAL_UPDATER_CACHE } from "./guard";
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -19,13 +20,13 @@ export const LOCAL = process.env.LOCALAPPDATA ?? "";
 export const TEST_DIR = join(LOCAL, "Programs", "OMPdesk-movetest");
 export const TEST_UNINSTALL_KEY = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${TEST_GUID}`;
 export const TEST_INSTALL_KEY = `HKCU\\Software\\${TEST_GUID}`;
-/** Select either released Electron app, without changing the test identity or accepting an arbitrary build. */
-export const RELEASED_TAG = process.env.OMP_MOVE_RELEASED_TAG ?? "v0.127.0";
-if (!["v0.127.0", "v0.128.0"].includes(RELEASED_TAG))
-	throw new Error("OMP_MOVE_RELEASED_TAG must be v0.127.0 or v0.128.0");
+/** Keep both historical update contracts and the pinned final Electron release. */
+export const RELEASED_TAG = process.env.OMP_MOVE_RELEASED_TAG ?? lastElectron.tag;
+if (!["v0.127.0", "v0.128.0", lastElectron.tag].includes(RELEASED_TAG))
+	throw new Error(`Unsupported released Electron baseline: ${RELEASED_TAG}`);
 export const RELEASED_VERSION = RELEASED_TAG.slice(1);
 export const OFFERED_VERSION = "0.200.0";
-export const REPO = "SeuPut0705/ompdesk";
+export const REPO = "seuput-inc/ompdesk";
 
 /** Throws unless the test identity is nothing the person's install can be mistaken for. */
 export function assertTestIdentity(): void {

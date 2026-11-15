@@ -81,6 +81,10 @@ const release = {
 		{ id: 1, name, size: bytes.length, url: "https://api.github.com/repos/SeuPut0705/ompdesk/releases/assets/1" },
 	],
 };
+function repoPath(pathname: string): string {
+	return pathname.replace(/^\/repos\/seuput-inc\/ompdesk(?=\/|$)/i, "/repos/SeuPut0705/ompdesk");
+}
+
 const server = Bun.serve({
 	port: Number(values.port),
 	hostname: "127.0.0.1",
@@ -88,15 +92,16 @@ const server = Bun.serve({
 	fetch(request) {
 		const url = new URL(request.url);
 		console.log(JSON.stringify({ at: Date.now(), method: request.method, path: url.pathname }));
+		const path = repoPath(url.pathname);
 		// The token probe (update-auth.ts checkRepoAccess): a public repository answers 200.
-		if (url.pathname === "/repos/SeuPut0705/ompdesk")
-			return Response.json({ full_name: "SeuPut0705/ompdesk", private: false });
-		if (url.pathname === "/repos/SeuPut0705/ompdesk/releases/latest") return Response.json(release);
-		if (url.pathname === "/repos/SeuPut0705/ompdesk/releases") return Response.json([release]);
+		if (path === "/repos/SeuPut0705/ompdesk")
+			return Response.json({ full_name: url.pathname.slice("/repos/".length), private: false });
+		if (path === "/repos/SeuPut0705/ompdesk/releases/latest") return Response.json(release);
+		if (path === "/repos/SeuPut0705/ompdesk/releases") return Response.json([release]);
 		// macOS reads the asset as GitHub serves it: a 302 from the API to the storage host (updater.ts signedAssetUrl).
-		if (platform === "mac" && url.pathname === "/repos/SeuPut0705/ompdesk/releases/assets/1")
+		if (platform === "mac" && path === "/repos/SeuPut0705/ompdesk/releases/assets/1")
 			return new Response(null, { status: 302, headers: { location: `https://api.github.com/download/${name}` } });
-		if (url.pathname === "/repos/SeuPut0705/ompdesk/releases/assets/1" || url.pathname === `/download/${name}`)
+		if (path === "/repos/SeuPut0705/ompdesk/releases/assets/1" || path === `/download/${name}`)
 			return new Response(bytes, { headers: { "content-type": "application/octet-stream" } });
 		return new Response("not here", { status: 404 });
 	},
@@ -109,9 +114,10 @@ if (values["seed-port"]) {
 		fetch(request) {
 			const url = new URL(request.url);
 			console.log(JSON.stringify({ at: Date.now(), seed: true, method: request.method, path: url.pathname }));
-			if (url.pathname === "/repos/SeuPut0705/ompdesk")
-				return Response.json({ full_name: "SeuPut0705/ompdesk", private: false });
-			if (url.pathname === "/repos/SeuPut0705/ompdesk/releases") return Response.json([]);
+			const path = repoPath(url.pathname);
+			if (path === "/repos/SeuPut0705/ompdesk")
+				return Response.json({ full_name: url.pathname.slice("/repos/".length), private: false });
+			if (path === "/repos/SeuPut0705/ompdesk/releases") return Response.json([]);
 			return new Response("not here", { status: 404 });
 		},
 	});
@@ -155,8 +161,9 @@ if (values["rollback-dmg"]) {
 		fetch(request) {
 			const url = new URL(request.url);
 			console.log(JSON.stringify({ at: Date.now(), http: true, method: request.method, path: url.pathname }));
-			if (url.pathname === `/repos/SeuPut0705/ompdesk/releases/tags/${tag}`) return Response.json(previousRelease);
-			if (url.pathname === "/repos/SeuPut0705/ompdesk/releases/assets/2")
+			const path = repoPath(url.pathname);
+			if (path === `/repos/SeuPut0705/ompdesk/releases/tags/${tag}`) return Response.json(previousRelease);
+			if (path === "/repos/SeuPut0705/ompdesk/releases/assets/2")
 				return new Response(previous, { headers: { "content-type": "application/octet-stream" } });
 			return new Response("not here", { status: 404 });
 		},

@@ -28,9 +28,9 @@
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
 PORT=19230; FEEDPORT=18444; HTTPPORT=18445; SEEDPORT=18446
-SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-v0.127.0}
-case "$SOURCE_TAG" in v0.127.0|v0.128.0) ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
-LAST_ELECTRON_TAG=$(jq -r .tag "$REPO/native/ompdesk/crates/shell/last-electron.json")
+LAST_ELECTRON_TAG=$(jq -er .tag "$REPO/native/ompdesk/crates/shell/last-electron.json") || exit 1
+SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-$LAST_ELECTRON_TAG}
+case "$SOURCE_TAG" in v0.127.0|v0.128.0|"$LAST_ELECTRON_TAG") ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
 cleanup() { for v in OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" 2>/dev/null; }
 trap cleanup EXIT
 
@@ -45,7 +45,7 @@ cp "$DMG" "$W/new.dmg"
 # The released app is downloaded as shipped; the only change is the throwaway certificate.
 download_app() {
   local tag=$1 destination=$2 mount="$W/mnt-$1"
-  curl -fsSL -o "$W/$tag.dmg" "https://github.com/SeuPut0705/ompdesk/releases/download/$tag/ompdesk-mac-arm64.dmg" || return 1
+  curl -fsSL -o "$W/$tag.dmg" "https://github.com/seuput-inc/ompdesk/releases/download/$tag/ompdesk-mac-arm64.dmg" || return 1
   mkdir -p "$mount"
   hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mount" "$W/$tag.dmg" >/dev/null || return 1
   ditto "$mount/OMPdesk.app" "$destination"; local copied=$?
@@ -243,7 +243,7 @@ scenario() {
     codesign --verify --deep --strict "$APPS/OMPdesk.app"; check $? "S1: the installed app verifies"
     [ "$(xattr -lr "$APPS/OMPdesk.app" 2>/dev/null | grep -c com.apple.quarantine)" = 0 ]; check $? "S1: the moved bundle and everything in it carries no com.apple.quarantine (the swap's xattr -dr covers it)"
     evidence "S1 spctl: $(spctl --assess -vv --type execute "$APPS/OMPdesk.app" 2>&1 | tr '\n' ' ') (no spctl rule)"
-    if [ "$SOURCE_TAG" = v0.128.0 ]; then
+    if [ "$SOURCE_TAG" != v0.127.0 ]; then
       wait_for "grep -q '^started' $UD/updates/swap.log" 180; check $? "S1: the start-checked script saw app-started.json for the new version (swap.log started)"
       evidence "S1 app-started.json: $(cat "$UD/app-started.json" 2>&1 | cut -c1-120)"
       ls "$APPS" | grep -q 'previous'; [ $? != 0 ]; check $? "S1: .previous is gone once the new app proved it started"
@@ -268,7 +268,7 @@ scenario() {
   restore
 }
 scenario s1 0
-if [ "$SOURCE_TAG" = v0.128.0 ]; then
+if [ "$SOURCE_TAG" != v0.127.0 ]; then
   scenario s4 3
 else
   scenario s3 2

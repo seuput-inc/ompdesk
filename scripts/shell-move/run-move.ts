@@ -1,5 +1,5 @@
 /**
- * The dry run of the update from either released Electron app (v0.127.0 or v0.128.0) to the CEF shell, never touching the
+ * The dry run of the update from a released Electron app to the CEF shell, never touching the
  * person's install (native-rust › S):
  *
  *   bun scripts/shell-move/run-move.ts [--label success] [--fail-at swap|start|start-twice] [--work <dir>] [--keep] [--stand-in <project>]
@@ -10,7 +10,7 @@
  *
  * 1. `build-setups.ts` makes two real electron-builder NSIS setups under a TEST identity (an `nsis.guid` shaped like
  *    electron-builder's, shortcut `OMPdesk-movetest`, folder `%LOCALAPPDATA%\Programs\OMPdesk-movetest`): the released
- *    Electron files selected by OMP_MOVE_RELEASED_TAG (default v0.127.0) in a setup of the same shape, and this checkout's shell build offered as
+ *    Electron files selected by OMP_MOVE_RELEASED_TAG (default: the pinned final Electron release) in a setup of the same shape, and this checkout's shell build offered as
  *    v0.200.0. Neither can touch the person's install: other GUID, other folder, other shortcuts; the setup's own
  *    process search is path-prefixed on the install folder (checked first: `setupCanFindProcesses`), and the folder is
  *    also pinned through the registry (`HKCU\Software\<test guid>\InstallLocation`) before the old setup runs.
@@ -68,6 +68,7 @@ import {
 	TEST_UNINSTALL_KEY,
 } from "./constants";
 import { diffOwner, powershell, run, setupCanFindProcesses, snapshotOwner } from "./guard";
+import { rollbackStartMarker } from "./start-marker";
 
 const { values } = parseArgs({
 	options: {
@@ -550,22 +551,18 @@ async function verifyRolledBack(reason: "swap" | "start", final: boolean): Promi
 		`the setup logged ${reason === "swap" ? "the incomplete unpack" : "`start-failed`"} (in %TEMP%\\ompdesk-setup.log), no dialog`,
 		setupText.trim(),
 	);
-	const markerFile = join(profile, "app-started.json");
-	let marker: unknown = null;
-	let markerValid = true;
-	if (existsSync(markerFile)) {
-		try {
-			marker = JSON.parse(readFileSync(markerFile, "utf8")) as unknown;
-			markerValid =
-				typeof marker === "object" && marker !== null && "version" in marker && marker.version === RELEASED_VERSION;
-		} catch {
-			markerValid = false;
-		}
-	}
-	evidence.rollbackStartMarker = marker;
-	expect(markerValid, "the rollback start marker is absent or names the restored Electron version", marker);
-	expect(await noWindows(), "no window appeared during the failed move");
 	const running = await processesUnder(TEST_DIR);
+	const markerFile = join(profile, "app-started.json");
+	let markerRaw: string | undefined;
+	try {
+		if (existsSync(markerFile)) markerRaw = readFileSync(markerFile, "utf8");
+	} catch {
+		markerRaw = "";
+	}
+	const { marker, valid: markerValid } = rollbackStartMarker(markerRaw, RELEASED_VERSION, running);
+	evidence.rollbackStartMarker = marker;
+	expect(markerValid, "the rollback start marker is absent or belongs to the running restored Electron version", marker);
+	expect(await noWindows(), "no window appeared during the failed move");
 	evidence.running = running;
 	expect(
 		running.some(process_ => process_.name.toLowerCase() === "ompdesk") &&
@@ -604,7 +601,7 @@ async function verifyNotTriedAgain(entry: string): Promise<void> {
 		line => line.message === "swap" && line.details?.event === "helper",
 	).length;
 	const beforeRound = updateLines().length;
-	const updaterHolds = RELEASED_TAG === "v0.128.0";
+	const updaterHolds = RELEASED_TAG !== "v0.127.0";
 	const started = Date.now();
 	const second = Bun.spawn([join(TEST_DIR, "OMPdesk.exe"), `--user-data-dir=${profile}`, ...switches(feedPort)], {
 		env: testEnv(),
@@ -640,7 +637,7 @@ async function verifyNotTriedAgain(entry: string): Promise<void> {
 	if (updaterHolds) {
 		expect(
 			skipped,
-			"v0.128.0's updater withdrew the repeat (`scheduler withdrawn`, reason `start failed before`)",
+			`${RELEASED_TAG}'s updater withdrew the repeat (\`scheduler withdrawn\`, reason \`start failed before\`)`,
 			updateLines().slice(beforeRound),
 		);
 		expect(

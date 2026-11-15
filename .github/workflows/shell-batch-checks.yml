@@ -11,12 +11,12 @@
 #              swap helper, swap.log installed, the shell on Electron's profile with Local Storage and the seeded token), and
 #              a move that fails (read-only apps folder) rolls back; no SecurityAgent or coreauthd line.
 #  move-win    the whole update move on windows-latest (scripts/shell-move/run-move.ts, a test identity, silent): the released
-#              v0.127.0 and v0.128.0 each update through their unchanged updater into the real shell (the success run: the main's
+#              v0.127.0, v0.128.0 and v0.131.0 each update through their unchanged updater into the real shell (the success run: the main's
 #              app-started.json of the new version appears and the old folder's backup is gone), an unpack made incomplete
 #              puts the Electron app back, and a new shell that exits after CEF init (OMP_GUI_TEST_SHELL_FAIL_START=1)
 #              gets Electron back too, started, `swap result outcome rolled back`, no window, no dialog; and the same
-#              version offered again after that failure is held (v0.127.0's NSIS guard, v0.128.0's updater).
-#  move-mac-release1  the same move from the real v0.128.0 DMG, re-signed with the throwaway certificate:
+#              version offered again after that failure is held.
+#  move-mac-release1  the same move from the real v0.128.0 and v0.131.0 DMGs, re-signed with the throwaway certificate:
 #              its start-checked swap script keeps `<app>.previous` until the
 #              new app writes app-started.json for the offered version (the success path says `started`), and puts it back
 #              by itself when the shell does not come up (OMP_GUI_TEST_SHELL_FAIL_START=1), no dialog.
@@ -196,12 +196,12 @@ jobs:
       - uses: ./.github/actions/shell-mac-inputs
       - name: The update move (success, then a failed move)
         shell: bash
-        run: set -o pipefail; bash scripts/shell-move/move-mac.sh 2>&1 | tee move-mac.log
+        run: set -o pipefail; OMP_MOVE_RELEASED_TAG=v0.127.0 bash scripts/shell-move/move-mac.sh 2>&1 | tee move-mac.log
       - name: Evidence lines
         if: always()
         shell: bash
         run: |
-          { echo "### update move, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### update move from v0.127.0, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -221,7 +221,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        released-tag: [v0.127.0, v0.128.0]
+        released-tag: [v0.127.0, v0.128.0, v0.131.0]
     env:
       ELECTRON_BUILDER_COMPRESSION_LEVEL: "4"
       OMP_MOVE_RELEASED_TAG: ${{ matrix.released-tag }}
@@ -279,7 +279,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   move-mac-release1:
-    name: move-mac-release1 (${{ matrix.os }})
+    name: move-mac-release1 (${{ matrix.released-tag }}, ${{ matrix.os }})
     needs: [gate, move-mac]
     if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true'"
     concurrency:
@@ -292,24 +292,25 @@ jobs:
       max-parallel: 1
       matrix:
         os: [macos-15, macos-26]
+        released-tag: [v0.128.0, v0.131.0]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/shell-mac-inputs
-      - name: The update move from released v0.128.0 (success, then a new shell that does not start)
+      - name: The update move from ${{ matrix.released-tag }} (success, then a new shell that does not start)
         shell: bash
-        run: set -o pipefail; OMP_MOVE_RELEASED_TAG=v0.128.0 bash scripts/shell-move/move-mac.sh 2>&1 | tee move-mac-release1.log
+        run: set -o pipefail; OMP_MOVE_RELEASED_TAG=${{ matrix.released-tag }} bash scripts/shell-move/move-mac.sh 2>&1 | tee move-mac-release1.log
       - name: Evidence lines
         if: always()
         shell: bash
         run: |
-          { echo "### update move from release 1, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac-release1.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### update move from ${{ matrix.released-tag }}, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac-release1.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: move-mac-release1-${{ matrix.os }}
+          name: move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}
           path: move-mac-release1.log
           if-no-files-found: ignore
           retention-days: 7

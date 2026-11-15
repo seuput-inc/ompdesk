@@ -3,12 +3,19 @@
  * shell; its real run is the evidence in the batch's report). What is pinned here is what keeps the run off the
  * person's install and what the setups it builds have to carry.
  */
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { get } from "node:https";
+import { tmpdir } from "node:os";
+import { createInterface } from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { findEmbedded7z } from "./build-setups";
 import { TEST_GUID, TEST_SHORTCUT } from "./constants";
 import { diffOwner, type OwnerSnapshot, REAL_GUID } from "./guard";
+import lastElectron from "../../native/ompdesk/crates/shell/last-electron.json";
 
 const ROOT = path.join(__dirname, "..", "..");
 const read = (name: string) => fs.readFileSync(path.join(ROOT, name), "utf8");
@@ -33,10 +40,10 @@ describe("the test identity", () => {
 });
 
 describe("the released Electron selection", () => {
-	it("keeps both released update paths and rejects an unrecognised source", async () => {
+	it("keeps historical contracts and the pinned Electron release, rejecting an unrecognised source", async () => {
 		// Import after changing the environment: this exercises the module-load selection, which a static import caches.
 		try {
-			for (const tag of ["v0.127.0", "v0.128.0"]) {
+			for (const tag of ["v0.127.0", "v0.128.0", lastElectron.tag]) {
 				vi.stubEnv("OMP_MOVE_RELEASED_TAG", tag);
 				vi.resetModules();
 				const released = await import("./constants");
@@ -44,9 +51,9 @@ describe("the released Electron selection", () => {
 				expect(released.RELEASED_VERSION).toBe(tag.slice(1));
 				expect(released.TEST_GUID).toBe(TEST_GUID);
 			}
-			vi.stubEnv("OMP_MOVE_RELEASED_TAG", "v0.129.0");
+			vi.stubEnv("OMP_MOVE_RELEASED_TAG", "../unreleased");
 			vi.resetModules();
-			await expect(import("./constants")).rejects.toThrow("OMP_MOVE_RELEASED_TAG must be v0.127.0 or v0.128.0");
+			await expect(import("./constants")).rejects.toThrow("Unsupported released Electron baseline");
 		} finally {
 			vi.unstubAllEnvs();
 			vi.resetModules();
@@ -196,3 +203,54 @@ describe("resources/installer.nsh and the test seams", () => {
 		expect(seams).toContain("OMP_GUI_HEADLESS");
 	});
 });
+
+it("serves both released and current repository identities without offering a seed update", async () => {
+	const folder = await mkdtemp(path.join(tmpdir(), "shell-move-routes-"));
+	const asset = path.join(folder, "candidate.dmg");
+	await writeFile(asset, "candidate");
+	const child = spawn("bun", [
+		"scripts/shell-move/feed.ts", "--setup", asset, "--cert-dir", folder, "--platform", "mac",
+		"--port", "0", "--seed-port", "0",
+	], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+	const ended = once(child, "close");
+	let errors = "";
+	child.stderr.on("data", chunk => { errors += String(chunk); });
+	try {
+		const ready = Promise.withResolvers<{ seed: number; update: number }>();
+		let seed: number | undefined;
+		const lines = createInterface({ input: child.stdout });
+		child.once("error", ready.reject);
+		child.once("close", code => ready.reject(new Error(`feed exited ${code}: ${errors}`)));
+		lines.on("line", line => {
+			const value = JSON.parse(line) as { seedListening?: number; listening?: number };
+			if (value.seedListening !== undefined) seed = value.seedListening;
+			if (seed !== undefined && value.listening !== undefined) ready.resolve({ seed, update: value.listening });
+		});
+		const ports = await ready.promise;
+		const request = (port: number, url: string) => {
+			const { promise, resolve, reject } = Promise.withResolvers<{ status: number; body: string }>();
+			get({ hostname: "127.0.0.1", port, path: url, rejectUnauthorized: false }, response => {
+				let body = "";
+				response.setEncoding("utf8");
+				response.on("data", chunk => { body += chunk; });
+				response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
+				response.on("error", reject);
+			}).on("error", reject);
+			return promise;
+		};
+		for (const repo of ["SeuPut0705/ompdesk", "seuput-inc/ompdesk"]) {
+			const base = `/repos/${repo}`;
+			expect(JSON.parse((await request(ports.seed, base)).body)).toEqual({ full_name: repo, private: false });
+			expect(await request(ports.seed, `${base}/releases`)).toEqual({ status: 200, body: "[]" });
+			expect((await request(ports.seed, `${base}/releases/latest`)).status).toBe(404);
+			expect((await request(ports.seed, `${base}/releases/assets/1`)).status).toBe(404);
+			expect((await request(ports.update, `${base}/releases/latest`)).status).toBe(200);
+			expect((await request(ports.update, `${base}/releases/assets/1`)).status).toBe(302);
+		}
+		expect((await request(ports.update, "/repos/other/ompdesk/releases/latest")).status).toBe(404);
+	} finally {
+		child.kill();
+		await ended;
+		await rm(folder, { recursive: true, force: true });
+	}
+}, 20_000);
