@@ -13,6 +13,7 @@ import { existsSync, promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, clipboard, dialog, type Notification, screen, shell } from "electron";
+import { isAgentInstructionCommand } from "../../resources/gui-bridge/instruction-contracts";
 import { AUTO_TITLE_EVOLVE_PREF, AUTO_TITLE_PREF } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { DELEGATION_PREF, isDelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import { JUDGE_ASSIST_PREF, judgeAssistEnabled } from "../../resources/gui-bridge/modes/judge-assist-contracts";
@@ -802,6 +803,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		payload: IpcRpcCommandPayload,
 		channel?: string,
 	): Promise<RpcResponse> => {
+		if (isAgentInstructionCommand(payload.command))
+			return {
+				id: payload.command.id,
+				type: "response",
+				command: payload.command.type,
+				success: false,
+				code: "unsupported",
+				error: "Agent instructions require the authenticated agent ingress.",
+			};
 		// The desktop slot is app-wide, not a tab's: answered here, whatever the tab's omp is doing.
 		const slotCommand = payload.command.type;
 		if (
