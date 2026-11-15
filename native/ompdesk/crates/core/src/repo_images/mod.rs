@@ -98,17 +98,34 @@ impl Service {
             read::primary_root(git, checkout),
         );
         let facts = facts?;
-        let head = match (facts.branch(), sha.ok()?) {
+        let branch = facts.branch().map(str::to_owned);
+        let sha = sha.ok()?;
+        let head = match (branch.as_deref(), sha.as_deref()) {
             (Some(name), Some(_)) => Head::Branch { name: name.to_owned() },
             (Some(name), None) => Head::Unborn { name: name.to_owned() },
-            (None, Some(sha)) => Head::Detached { sha },
+            (None, Some(sha)) => Head::Detached { sha: sha.to_owned() },
             (None, None) => return None,
         };
         let root = tokio::fs::canonicalize(root.ok()?).await.ok()?;
         let project = root.file_name()?.to_string_lossy().into_owned();
         let repository = Some(Repository { root: root.to_str()?.to_owned(), head });
         drop(permit);
-        let image = self.image(root, runner).await;
+        let image = self.image(root.clone(), runner).await;
+        // Discovery may wait on public I/O. Reject a checkout/head replacement instead of attaching its old facts
+        // to a completed image. No retries or current-target reselection occur here.
+        let _permit = self.slots.acquire().await.ok()?;
+        let current_path = tokio::fs::canonicalize(input).await.ok()?;
+        if current_path != path { return None; }
+        let (current_checkout, current_facts, current_sha, current_root) = tokio::join!(
+            read::repo_root(git, cwd),
+            origin::facts(git, checkout, 3000),
+            read::head_sha(git, checkout),
+            read::primary_root(git, checkout),
+        );
+        let current_checkout = tokio::fs::canonicalize(current_checkout.ok()??).await.ok()?;
+        let current_root = tokio::fs::canonicalize(current_root.ok()?).await.ok()?;
+        if current_checkout.to_str()? != checkout || current_root != root
+            || current_facts?.branch() != branch.as_deref() || current_sha.ok()? != sha { return None; }
         Some(Metadata { path: checkout.to_owned(), project, repository, image })
     }
 
@@ -177,10 +194,13 @@ impl Service {
 #[derive(Deserialize)]
 struct Batch { paths: Vec<String>, git: Runner }
 
+static SERVICE: std::sync::LazyLock<Arc<Service>> = std::sync::LazyLock::new(|| Arc::new(Service::default()));
+
+pub(crate) fn shared() -> Arc<Service> { Arc::clone(&SERVICE) }
+
 pub fn register(registry: &mut Registry) {
     registry.add("projectMetadata.get", |request| {
-        static SERVICE: std::sync::LazyLock<Arc<Service>> = std::sync::LazyLock::new(|| Arc::new(Service::default()));
-        let service = Arc::clone(&SERVICE);
+        let service = shared();
         Box::pin(async move {
             let batch: Batch = request.params()?;
             let images = service.batch(batch.paths, batch.git, request.scope).await?;
