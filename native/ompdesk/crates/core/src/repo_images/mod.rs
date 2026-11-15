@@ -114,7 +114,7 @@ impl Service {
             (None, Some(sha)) => Head::Detached { sha: sha.to_owned() },
             (None, None) => return None,
         };
-        let root = tokio::fs::canonicalize(facts.project_root()?).await.ok()?;
+        let root = facts.project_root(git, 3000).await?;
         let project = root.file_name()?.to_string_lossy().into_owned();
         let repository = Some(Repository { root: root.to_str()?.to_owned(), head });
         drop(permit);
@@ -131,7 +131,7 @@ impl Service {
         );
         let current_checkout = tokio::fs::canonicalize(current_checkout.ok()??).await.ok()?;
         let current_facts = current_facts?;
-        let current_root = tokio::fs::canonicalize(current_facts.project_root()?).await.ok()?;
+        let current_root = current_facts.project_root(git, 3000).await?;
         if current_checkout.to_str()? != checkout || current_root != root
             || current_facts.branch() != branch.as_deref() || current_sha.ok()? != sha { return None; }
         Some(Metadata { path: checkout.to_owned(), project, repository, image })

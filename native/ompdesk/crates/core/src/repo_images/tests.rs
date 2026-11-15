@@ -94,6 +94,11 @@ async fn relocated_git_storage_is_not_mistaken_for_the_repository_checkout() {
     repo_at(&root);
     picture(&root, [40, 150, 80, 255]);
     sh(&root, &["init", "-q", "--separate-git-dir", storage.to_str().unwrap()]);
+    let service = Arc::new(Service::default());
+    let original = root.to_string_lossy().into_owned();
+    let unknown = service.batch(vec![original.clone()], runner(), Scope::detached()).await.unwrap();
+    assert!(serde_json::to_value(unknown).unwrap()[&original].is_null());
+    sh(&root, &["config", "core.worktree", root.to_str().unwrap()]);
     let linked = temp.dir.join("linked");
     sh(&root, &["worktree", "add", "-qb", "feature", linked.to_str().unwrap()]);
     let path = linked.to_string_lossy().into_owned();

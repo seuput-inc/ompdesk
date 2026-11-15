@@ -95,12 +95,18 @@ fn attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
 }
 
 /// Extract only github.com's public owner name. Neither a repository path, token nor raw origin becomes a request.
-pub(super) fn github_owner(remote: &str) -> Option<&str> {
-    let path = remote.strip_prefix("git@github.com:").or_else(|| remote.strip_prefix("https://github.com/"))?;
-    let (owner, repo) = path.split_once('/')?;
-    if repo.is_empty() || owner.is_empty() || owner.len() > 39 || owner.starts_with('-') || owner.ends_with('-')
+pub(super) fn github_owner(remote: &str) -> Option<String> {
+    if let Ok(url) = Url::parse(remote) {
+        if url.password().is_some()
+            || (!url.username().is_empty() && !(url.scheme() == "ssh" && url.username() == "git")) { return None; }
+    }
+    let web = crate::git::parse::remote_web_base(remote)?;
+    let web = Url::parse(&web).ok()?;
+    if web.host_str()? != "github.com" { return None; }
+    let owner = web.path_segments()?.next()?;
+    if owner.is_empty() || owner.len() > 39 || owner.starts_with('-') || owner.ends_with('-')
         || !owner.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') { return None; }
-    Some(owner)
+    Some(owner.to_owned())
 }
 
 pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwork> {
@@ -113,11 +119,13 @@ pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwor
     if let Some(bytes) = read(root, "package.json", 64 * 1024).await {
         if let Ok(package) = serde_json::from_slice::<Value>(&bytes) {
             if let Some(homepage) = package["homepage"].as_str().and_then(external_url) {
+                let mut base = homepage.clone();
                 if let Ok(response) = crate::http::public_get(homepage.as_str(), 64 * 1024).await {
                     if response.status == 200 {
+                        base = response.url;
                         if let Ok(html) = std::str::from_utf8(&response.body) {
                             for href in icon_links(html) {
-                                if let Ok(icon) = homepage.join(&href) {
+                                if let Ok(icon) = base.join(&href) {
                                     if let Some(icon) = external_url(icon.as_str()) {
                                         if let Some(image) = fetch_image(&icon, Source::Homepage).await { return Some(image); }
                                     }
@@ -126,7 +134,7 @@ pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwor
                         }
                     }
                 }
-                if let Ok(icon) = homepage.join("/favicon.ico") {
+                if let Ok(icon) = base.join("/favicon.ico") {
                     if let Some(image) = fetch_image(&icon, Source::Homepage).await { return Some(image); }
                 }
             }
@@ -159,10 +167,50 @@ mod tests {
 
     #[test]
     fn owner_avatar_never_receives_the_private_repository_or_credentials() {
-        assert_eq!(github_owner("git@github.com:synthetic-owner/private-project.git"), Some("synthetic-owner"));
-        assert_eq!(github_owner("https://github.com/synthetic-owner/private-project.git"), Some("synthetic-owner"));
+        assert_eq!(github_owner("git@github.com:synthetic-owner/private-project.git").as_deref(), Some("synthetic-owner"));
+        assert_eq!(github_owner("https://github.com/synthetic-owner/private-project.git").as_deref(), Some("synthetic-owner"));
         for remote in ["https://synthetic-token@github.com/owner/private.git", "https://internal.example/owner/private.git", "git@github.com:../../private.git", "https://github.com.evil.invalid/owner/project"] {
             assert!(github_owner(remote).is_none());
         }
+    }
+
+    #[test]
+    fn standard_ssh_remote_keeps_only_the_canonical_public_owner() {
+        assert_eq!(github_owner("ssh://git@github.com/synthetic-owner/private-project.git").as_deref(), Some("synthetic-owner"));
+        assert!(github_owner("ssh://secret:token@github.com/synthetic-owner/private-project.git").is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn homepage_redirect_uses_the_final_directory_for_relative_icons() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let temp = crate::models::test_rig::Fixture::new("homepage-final-origin");
+        std::fs::write(temp.dir.join("package.json"), br#"{"homepage":"http://repository-artwork-fixture.example.org/start"}"#).unwrap();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(16, 16, image::Rgba([20, 100, 180, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let png = bytes.into_inner();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = listener.local_addr().unwrap();
+        let served = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let length = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let path = request.split_whitespace().nth(1).unwrap_or("");
+                let (status, extra, body): (&str, &str, &[u8]) = match path {
+                    "/start" => ("302 Found", "Location: /app/\r\n", b""),
+                    "/app/" => ("200 OK", "", br#"<link rel="icon" href="brand/icon.png">"#),
+                    "/app/brand/icon.png" => ("200 OK", "", &png),
+                    _ => ("404 Not Found", "", b""),
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                stream.write_all(body).await.unwrap();
+            }
+        });
+        let result = crate::http::fixture_request(socket, discover(&temp.dir, None)).await;
+        served.abort();
+        let _ = served.await;
+        assert!(matches!(result.map(|image| image.source), Some(Source::Homepage)));
     }
 }

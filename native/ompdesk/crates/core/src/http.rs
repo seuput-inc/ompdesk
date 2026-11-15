@@ -36,6 +36,8 @@ use url::{Host, Position, Url};
 
 mod public;
 pub(crate) use public::public_get;
+#[cfg(test)]
+pub(crate) use public::fixture_request;
 
 /// The longest answer kept. `fetch` had no bound; nothing the memory server answers comes near this.
 pub const BODY_MAX: usize = 64 * 1024 * 1024;

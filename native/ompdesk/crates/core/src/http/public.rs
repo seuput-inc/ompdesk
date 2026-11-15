@@ -2,7 +2,13 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use super::{BodyExt, Failure, Limited, LOCATION, Response, Url, exchange_at, machine_tls};
+use super::{BodyExt, Failure, Limited, LOCATION, Url, exchange_at, machine_tls};
+
+pub(crate) struct PublicResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+    pub url: Url,
+}
 
 const REDIRECTS: usize = 3;
 const MAX_BYTES: usize = 512 * 1024;
@@ -58,8 +64,22 @@ fn checked_addresses(addresses: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Fail
     Ok(addresses)
 }
 
+#[cfg(test)]
+tokio::task_local! { static FIXTURE_SOCKET: SocketAddr; }
+
+#[cfg(test)]
+pub(crate) async fn fixture_request<F: std::future::Future>(socket: SocketAddr, future: F) -> F::Output {
+    FIXTURE_SOCKET.scope(socket, future).await
+}
+
 async fn addresses(url: &Url) -> Result<Vec<SocketAddr>, Failure> {
     let host = url.host_str().ok_or(Failure::Request)?;
+    // Only test builds can dial a local stand-in for this one synthetic public origin. Production DNS admission,
+    // redirect validation and transport are unchanged; no test bypass is exported in the application.
+    #[cfg(test)]
+    if host == "repository-artwork-fixture.example.org" {
+        if let Ok(socket) = FIXTURE_SOCKET.try_with(|socket| *socket) { return Ok(vec![socket]); }
+    }
     // Validate the entire DNS answer, then connect to these exact sockets. TLS still authenticates URL.hostname.
     let resolved = tokio::net::lookup_host((host, url.port_or_known_default().ok_or(Failure::Request)?))
         .await.map_err(|_| Failure::Connect)?;
@@ -74,7 +94,7 @@ fn redirect(url: &Url, location: &str) -> Result<Url, Failure> {
     checked_url(next.as_str()).map_err(|_| Failure::Redirect)
 }
 
-async fn fetch(input: &str, max_bytes: usize) -> Result<Response, Failure> {
+async fn fetch(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
     let mut url = checked_url(input)?;
     for hop in 0..=REDIRECTS {
         let pinned = addresses(&url).await?;
@@ -90,13 +110,13 @@ async fn fetch(input: &str, max_bytes: usize) -> Result<Response, Failure> {
             return Err(Failure::Request);
         }
         let bytes = Limited::new(response.into_body(), max_bytes.min(MAX_BYTES)).collect().await.map_err(|_| Failure::TooLarge)?;
-        return Ok(Response { status, body: bytes.to_bytes().to_vec() });
+        return Ok(PublicResponse { status, body: bytes.to_bytes().to_vec(), url });
     }
     Err(Failure::Redirect)
 }
 
 /// A credential-free, bounded public GET. No caller headers, cookies, proxies or referrer cross this boundary.
-pub(crate) async fn public_get(input: &str, max_bytes: usize) -> Result<Response, Failure> {
+pub(crate) async fn public_get(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
     tokio::time::timeout(TIMEOUT, fetch(input, max_bytes)).await.map_err(|_| Failure::Connect)?
 }
 
