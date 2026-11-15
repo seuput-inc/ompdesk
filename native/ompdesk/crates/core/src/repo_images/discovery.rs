@@ -100,10 +100,16 @@ pub(super) fn github_owner(remote: &str) -> Option<String> {
         if url.password().is_some()
             || (!url.username().is_empty() && !(url.scheme() == "ssh" && url.username() == "git")) { return None; }
     }
-    let web = crate::git::parse::remote_web_base(remote)?;
-    let web = Url::parse(&web).ok()?;
+    let canonical = crate::git::parse::remote_web_base(remote)?;
+    let web = Url::parse(&canonical).ok()?;
     if web.host_str()? != "github.com" { return None; }
-    let owner = web.path_segments()?.next()?;
+    // A web URL must not turn a malformed SCP path into a different public owner while normalizing dot segments.
+    let raw_path = canonical.splitn(4, '/').nth(3)?;
+    if web.path().strip_prefix('/')? != raw_path { return None; }
+    let mut parts = web.path_segments()?;
+    let owner = parts.next()?;
+    let repository = parts.next()?;
+    if repository.is_empty() || parts.next().is_some() { return None; }
     if owner.is_empty() || owner.len() > 39 || owner.starts_with('-') || owner.ends_with('-')
         || !owner.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') { return None; }
     Some(owner.to_owned())
@@ -172,6 +178,7 @@ mod tests {
         for remote in ["https://synthetic-token@github.com/owner/private.git", "https://internal.example/owner/private.git", "git@github.com:../../private.git", "https://github.com.evil.invalid/owner/project"] {
             assert!(github_owner(remote).is_none());
         }
+        assert!(github_owner("git@github.com:../../synthetic-owner/private.git").is_none());
     }
 
     #[test]
