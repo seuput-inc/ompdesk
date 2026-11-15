@@ -63,3 +63,25 @@ async fn artwork_symlinks_cannot_read_files_outside_the_repository() {
     let result = Arc::new(Service::default()).batch(vec![path.clone()], runner(), Scope::detached()).await.unwrap();
     assert!(serde_json::to_value(result).unwrap()[&path]["image"].is_null());
 }
+
+#[tokio::test]
+async fn a_head_changed_while_artwork_waits_never_returns_an_old_snapshot() {
+    let temp = Fixture::new("repository-metadata-inflight");
+    let root = temp.dir.join("project");
+    repo_at(&root);
+    let path = root.to_string_lossy().into_owned();
+    let canonical = root.canonicalize().unwrap();
+    let service = Arc::new(Service::default());
+    let (finish, waiting) = watch::channel(None);
+    service.cache.lock().unwrap().loading.insert(canonical, waiting);
+    let work = {
+        let service = Arc::clone(&service);
+        let path = path.clone();
+        tokio::spawn(async move { service.batch(vec![path], runner(), Scope::detached()).await })
+    };
+    service.image_waiting.notified().await;
+    sh(&root, &["checkout", "-qb", "replacement"]);
+    finish.send_replace(Some(None));
+    let result = work.await.unwrap().unwrap();
+    assert!(serde_json::to_value(result).unwrap()[&path].is_null());
+}

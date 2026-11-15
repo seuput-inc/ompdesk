@@ -73,10 +73,19 @@ struct Cache {
 pub struct Service {
     cache: Mutex<Cache>,
     slots: Arc<Semaphore>,
+    #[cfg(test)]
+    image_waiting: tokio::sync::Notify,
 }
 
 impl Default for Service {
-    fn default() -> Self { Self { cache: Mutex::new(Cache::default()), slots: Arc::new(Semaphore::new(4)) } }
+    fn default() -> Self {
+        Self {
+            cache: Mutex::new(Cache::default()),
+            slots: Arc::new(Semaphore::new(4)),
+            #[cfg(test)]
+            image_waiting: tokio::sync::Notify::new(),
+        }
+    }
 }
 
 impl Service {
@@ -160,6 +169,8 @@ impl Service {
                 waiting
             }
         };
+        #[cfg(test)]
+        self.image_waiting.notify_one();
         loop {
             if let Some(image) = waiting.borrow_and_update().clone() { return image; }
             if waiting.changed().await.is_err() { return None; }
