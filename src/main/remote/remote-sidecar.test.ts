@@ -6,9 +6,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import type { RemoteLinkState } from "../../shared/ipc-types";
+import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
 import type { RpcResponse, SidecarStatusPayload } from "../../shared/rpc-types";
 import type { BridgeConnectResult } from "../bridge-health";
-import { SIGN_IN_CALLBACK_METHOD, type TabEventMessage, type TabStatusArg } from "./app-protocol";
+import {
+	AGENT_INSTRUCTION_METHOD,
+	HOST_COMMAND_TIMEOUT_MS,
+	LINK_SLACK_MS,
+	SIGN_IN_CALLBACK_METHOD,
+	type TabEventMessage,
+	type TabStatusArg,
+} from "./app-protocol";
 import { ImageBlobCache } from "./image-blob-cache";
 import { createReadEncoder } from "./link-events";
 import { PendingTabCloses, type RemoteLink, RemoteSidecar, type RemoteSidecarOptions } from "./remote-sidecar";
@@ -98,7 +106,169 @@ async function settle(): Promise<void> {
 	for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
+async function instructionReady() {
+	const rig = setup();
+	rig.sidecar.restart(undefined, "/sessions/one.jsonl");
+	await settle();
+	rig.sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
+	return rig;
+}
+
 describe("RemoteSidecar", () => {
+	describe("agent instructions", () => {
+		it("sends the exact request and waits for the host's admission receipt", async () => {
+			const { link, sidecar } = await instructionReady();
+			const admission = Promise.withResolvers<unknown>();
+			link.handlers[AGENT_INSTRUCTION_METHOD] = () => admission.promise;
+			const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+			let settled = false;
+			const result = sidecar.sendAgentInstruction({ message: "Do this", images }, 42_000);
+			void result.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await settle();
+			expect(settled).toBe(false);
+			expect(link.sent.at(-1)).toEqual({
+				method: AGENT_INSTRUCTION_METHOD,
+				params: {
+					rtab: "tab-1",
+					sessionPath: "/sessions/one.jsonl",
+					omp: "omp-1",
+					message: "Do this",
+					images,
+					timeoutMs: 42_000,
+				},
+				timeoutMs: 42_000 + LINK_SLACK_MS,
+			});
+			admission.resolve({ accepted: true });
+			await expect(result).resolves.toEqual({ accepted: true });
+			expect(link.methods().filter(method => method === AGENT_INSTRUCTION_METHOD)).toHaveLength(1);
+			expect(link.methods()).not.toContain("tab.command");
+		});
+
+		it("bounds an infinite timeout and uses link slack for the default", async () => {
+			const { link, sidecar } = await instructionReady();
+			link.handlers[AGENT_INSTRUCTION_METHOD] = () => ({ accepted: true });
+			await sidecar.sendAgentInstruction({ message: "one" }, Infinity);
+			await sidecar.sendAgentInstruction({ message: "two" });
+			expect(link.sent.slice(-2)).toEqual([
+				{
+					method: AGENT_INSTRUCTION_METHOD,
+					params: {
+						rtab: "tab-1",
+						sessionPath: "/sessions/one.jsonl",
+						omp: "omp-1",
+						message: "one",
+						timeoutMs: MAX_RPC_COMMAND_TIMEOUT_MS,
+					},
+					timeoutMs: MAX_RPC_COMMAND_TIMEOUT_MS + LINK_SLACK_MS,
+				},
+				{
+					method: AGENT_INSTRUCTION_METHOD,
+					params: { rtab: "tab-1", sessionPath: "/sessions/one.jsonl", omp: "omp-1", message: "two" },
+					timeoutMs: HOST_COMMAND_TIMEOUT_MS + LINK_SLACK_MS,
+				},
+			]);
+		});
+
+		it("does not open or send when offline, unready, unopened, or missing identity", async () => {
+			const unopened = setup();
+			unopened.sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
+			unopened.sidecar.handleEvent({ rtab: "tab-1", name: "session", arg: { sessionFile: "/sessions/one.jsonl" } });
+			await expect(unopened.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			expect(unopened.link.methods()).toEqual([]);
+
+			const rig = setup();
+			rig.sidecar.start();
+			await settle();
+			const before = rig.link.methods().slice();
+			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			rig.sidecar.handleEvent(hostStatus("ready"));
+			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			rig.sidecar.handleEvent({ rtab: "tab-1", name: "session", arg: { sessionFile: "/sessions/one.jsonl" } });
+			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			rig.sidecar.handleEvent({ rtab: "tab-1", name: "session", arg: {} });
+			rig.sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
+			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			rig.link.state = "offline";
+			const offline = await rig.sidecar.sendAgentInstruction({ message: "x" }).catch((error: unknown) => error);
+			expect(ipcErrorCode(offline)).toBe("remote_offline");
+			expect(rig.link.methods()).toEqual(before);
+		});
+
+		it("preserves link failures and rejects malformed receipts without retry", async () => {
+			const { link, sidecar } = await instructionReady();
+			const error = Object.assign(new Error("delivery unknown"), { code: "timeout" });
+			link.handlers[AGENT_INSTRUCTION_METHOD] = () => Promise.reject(error);
+			await expect(sidecar.sendAgentInstruction({ message: "x" })).rejects.toBe(error);
+			for (const receipt of [null, {}, { accepted: false }, { accepted: true, extra: true }]) {
+				link.handlers[AGENT_INSTRUCTION_METHOD] = () => receipt;
+				await expect(sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			}
+			expect(link.methods().filter(method => method === AGENT_INSTRUCTION_METHOD)).toHaveLength(5);
+			expect(link.methods()).not.toContain("tab.command");
+		});
+
+		it.each(["disposed", "offline", "relinked", "session", "omp", "unready"])(
+			"rejects a receipt after the target becomes %s",
+			async change => {
+				const { link, sidecar } = await instructionReady();
+				const admission = Promise.withResolvers<unknown>();
+				link.handlers[AGENT_INSTRUCTION_METHOD] = () => admission.promise;
+				const result = sidecar.sendAgentInstruction({ message: "x" });
+				await settle();
+				switch (change) {
+					case "disposed":
+						sidecar.dispose();
+						break;
+					case "offline":
+						link.state = "offline";
+						sidecar.linkStateChanged("offline");
+						break;
+					case "relinked":
+						sidecar.relink(new FakeLink());
+						break;
+					case "session":
+						sidecar.handleEvent({
+							rtab: "tab-1",
+							name: "session",
+							arg: { sessionFile: "/sessions/two.jsonl" },
+						});
+						break;
+					case "omp":
+						sidecar.handleEvent(hostStatus("ready", { omp: "omp-2" }));
+						break;
+					case "unready":
+						sidecar.handleEvent(hostStatus("starting", { omp: "omp-1" }));
+						break;
+				}
+				admission.resolve({ accepted: true });
+				expect(ipcErrorCode(await result.catch((error: unknown) => error))).toBe("sidecar_not_connected");
+				expect(link.methods().filter(method => method === AGENT_INSTRUCTION_METHOD)).toHaveLength(1);
+				expect(link.methods()).not.toContain("tab.command");
+			},
+		);
+
+		it("does not send after the open awaited by a ready tab becomes stale", async () => {
+			const { link, sidecar } = setup();
+			const opening = Promise.withResolvers<unknown>();
+			link.handlers["tab.open"] = () => opening.promise;
+			sidecar.restart(undefined, "/sessions/one.jsonl");
+			sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
+			const result = sidecar.sendAgentInstruction({ message: "x" });
+			link.state = "offline";
+			sidecar.linkStateChanged("offline");
+			opening.resolve({ cwd: "/canonical/p", kind: "agent", attached: true });
+			expect(ipcErrorCode(await result.catch((error: unknown) => error))).toBe("sidecar_not_connected");
+			expect(link.methods()).toEqual(["tab.open"]);
+		});
+	});
+
 	it("opens and starts the tab on the host, then re-emits the host's events verbatim", async () => {
 		const { link, sidecar, statuses } = setup();
 		expect(sidecar.status).toBe("asleep");

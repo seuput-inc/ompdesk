@@ -269,6 +269,7 @@ function hostServices(bin: string, workDir: string, raw: RawTap, bridgeDir?: str
 			return sidecar as unknown as SidecarLike;
 		},
 		hostName: () => "Studio",
+		agentControlEnabled: () => false,
 		sessionIndex: {
 			list: async () => [],
 			relist: () => {},

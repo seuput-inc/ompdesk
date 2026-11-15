@@ -389,6 +389,7 @@ function setup(graceMs = 60_000, extra: Partial<HostServicesDeps> = {}) {
 			readMessages: async (path: string) => [{ role: "user", content: `read ${path}`, timestamp: 1 }] as never,
 		},
 		agentHidden: () => new Set(["/hidden/session.jsonl"]),
+		agentControlEnabled: () => true,
 		renameStoredSession,
 		defaultWorkspace: () => workDir,
 		launchProfiles: { get: () => undefined, set: () => {} },
@@ -3029,6 +3030,78 @@ describe("LocalHostServices for this computer's own windows", () => {
 		if (!view) throw new Error("expected a view");
 		return view;
 	}
+
+	it.each(["private-port", "local-bridge"] as const)(
+		"a hosted agent instruction waits for actual admission through %s without using page RPC",
+		async route => {
+			const { services, sidecar } = await hosted();
+			const view = viewOf(services);
+			if (!view.sendAgentInstruction) throw new Error("missing private hosted ingress");
+			const receipt = Promise.withResolvers<{ accepted: true }>();
+			const effect = vi.fn(() => receipt.promise);
+			Object.assign(
+				sidecar,
+				route === "private-port" ? { sendAgentInstruction: effect } : { bridgeRequest: effect },
+			);
+			const payload = {
+				message: "An unchanged agent instruction",
+				images: [{ type: "image" as const, data: "AAAA", mimeType: "image/png" }],
+			};
+			let settled = false;
+			const result = view.sendAgentInstruction(payload, 4321).finally(() => {
+				settled = true;
+			});
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			expect(effect.mock.calls).toEqual(
+				route === "private-port" ? [[payload, 4321]] : [["agent_control.instruction", payload, 4321]],
+			);
+			expect(sidecar.commands).toEqual([]);
+			receipt.resolve({ accepted: true });
+			await expect(result).resolves.toEqual({ accepted: true });
+			view.dispose();
+		},
+	);
+
+	it.each(["left", "session", "not-ready"] as const)(
+		"a hosted agent instruction refuses a %s change while its original receipt is pending",
+		async change => {
+			const { services, sidecar } = await hosted();
+			const view = viewOf(services);
+			if (!view.sendAgentInstruction) throw new Error("missing private hosted ingress");
+			const receipt = Promise.withResolvers<{ accepted: true }>();
+			const bridge = vi.fn(() => receipt.promise);
+			Object.assign(sidecar, { bridgeRequest: bridge });
+			const result = view.sendAgentInstruction({ message: "for the original session" });
+			const refused = expect(result).rejects.toThrow();
+			if (change === "left") view.dispose();
+			if (change === "session") sidecar.emit("session", { sessionId: "replacement", sessionFile: "/s/new.jsonl" });
+			if (change === "not-ready") sidecar.setStatus("restarting");
+			receipt.resolve({ accepted: true });
+			await refused;
+			expect(bridge).toHaveBeenCalledTimes(1);
+			expect(sidecar.commands).toEqual([]);
+			view.dispose();
+		},
+	);
+
+	it("a hosted private ingress preserves failures, rejects non-admission, and refuses an unready or left view", async () => {
+		const { services, sidecar } = await hosted();
+		const view = viewOf(services);
+		if (!view.sendAgentInstruction) throw new Error("missing private hosted ingress");
+		const failure = codedError("remote_protocol", "original admission failed");
+		const bridge = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({});
+		Object.assign(sidecar, { bridgeRequest: bridge });
+		await expect(view.sendAgentInstruction({ message: "first" })).rejects.toBe(failure);
+		await expect(view.sendAgentInstruction({ message: "second" })).rejects.toThrow();
+		sidecar.setStatus("starting");
+		await expect(view.sendAgentInstruction({ message: "not ready" })).rejects.toThrow();
+		sidecar.setStatus("ready");
+		view.dispose();
+		await expect(view.sendAgentInstruction({ message: "left" })).rejects.toThrow();
+		expect(bridge).toHaveBeenCalledTimes(2);
+		expect(sidecar.commands).toEqual([]);
+	});
 
 	/** The one builder of this computer's summaries wired to these services as `index.ts` wires it. */
 	function withSummaries(graceMs?: number) {

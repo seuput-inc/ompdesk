@@ -298,6 +298,7 @@ function hostServices(pool: SidecarPool, create: LocalSidecarFactory): LocalHost
 	return new LocalHostServices({
 		createSidecar: (cwd, kind, fresh, origin) => create(cwd, kind, fresh, origin),
 		hostName: () => "Desk",
+		agentControlEnabled: () => true,
 		sessionIndex: {
 			list: async () => [],
 			relist: () => {},

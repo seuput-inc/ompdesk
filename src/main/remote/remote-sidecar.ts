@@ -34,12 +34,20 @@ import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import type { IpcScheduledRetry, RemoteLinkState } from "../../shared/ipc-types";
 import { isOmpdeskWorktreeFolder } from "../../shared/project-origin";
 import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
-import type { RpcCommand, RpcResponse, SidecarStatus, SidecarStatusPayload } from "../../shared/rpc-types";
+import type {
+	AgentControlInstructionCommand,
+	RpcCommand,
+	RpcResponse,
+	SidecarStatus,
+	SidecarStatusPayload,
+} from "../../shared/rpc-types";
 import type { BridgeConnectResult } from "../bridge-health";
 import type { RpcClient } from "../rpc-client";
 import type { SidecarLike } from "../sidecar-types";
 import type { SignInCallbackPage } from "../sign-in-callback";
 import {
+	AGENT_INSTRUCTION_METHOD,
+	AgentInstructionReceipt,
 	HOST_COMMAND_TIMEOUT_MS,
 	LINK_SLACK_MS,
 	SIGN_IN_CALLBACK_METHOD,
@@ -322,6 +330,45 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		if (this.#link.state === "online" && this.#opened) return this.#deliver(frame);
 		if (!isReplayable(frame)) throw codedError("remote_offline", OFFLINE_TEXT);
 		this.#queueReply(frame);
+	}
+
+	async sendAgentInstruction(
+		payload: Pick<AgentControlInstructionCommand, "message" | "images">,
+		wanted?: number,
+	): Promise<{ accepted: true }> {
+		const link = this.#link;
+		const rtab = this.#rtab;
+		const opened = this.#opened;
+		const sessionPath = this.#resume;
+		const omp = this.#omp;
+		const current = () =>
+			!this.#disposed &&
+			this.#link === link &&
+			link.state === "online" &&
+			this.#status === "ready" &&
+			this.#processAlive &&
+			this.#opened === opened &&
+			this.#resume === sessionPath &&
+			this.#omp === omp;
+		if (link.state !== "online") throw codedError("remote_offline", OFFLINE_TEXT);
+		if (!opened || !sessionPath || !omp || !current())
+			throw codedError("sidecar_not_connected", "Sidecar not connected");
+		await opened;
+		if (!current()) throw codedError("sidecar_not_connected", "Sidecar not connected");
+		const timeoutMs = wanted !== undefined && !Number.isFinite(wanted) ? MAX_RPC_COMMAND_TIMEOUT_MS : wanted;
+		const receipt = await link.request<unknown>(
+			AGENT_INSTRUCTION_METHOD,
+			{
+				rtab,
+				sessionPath,
+				omp,
+				...payload,
+				...(timeoutMs !== undefined ? { timeoutMs } : {}),
+			},
+			(timeoutMs ?? HOST_COMMAND_TIMEOUT_MS) + LINK_SLACK_MS,
+		);
+		if (!current()) throw codedError("sidecar_not_connected", "Sidecar not connected");
+		return AgentInstructionReceipt.parse(receipt);
 	}
 
 	/** The host holds this tab's connection wait and its scheduled retry: the user's Cancel on either goes there. */

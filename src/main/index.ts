@@ -47,6 +47,7 @@ import {
 	AGENT_CLOSED_CHILDREN_PREF,
 	AGENT_CONTROL_PREF,
 	AGENT_HIDDEN_PREFS_KEY,
+	agentControlEnabled,
 	agentHiddenPaths,
 	parseClosedChildren,
 	sidebarViewOf,
@@ -1277,6 +1278,7 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
+		agentControlEnabled: () => agentControlEnabled(prefs.get(AGENT_CONTROL_PREF)),
 		renameStoredSession: async (sessionPath, name) => {
 			const omp = await systemOmp();
 			if (!omp.ok) throw new Error(omp.error);
