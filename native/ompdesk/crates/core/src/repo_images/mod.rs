@@ -188,10 +188,10 @@ impl Service {
     async fn image(self: &Arc<Self>, root: PathBuf, runner: &Runner) -> Image {
         let mut waiting = {
             let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(cached) = cache.images.get(&root) {
-                if cached.until > Instant::now() {
-                    return cached.image.clone();
-                }
+            if let Some(cached) = cache.images.get(&root)
+                && cached.until > Instant::now()
+            {
+                return cached.image.clone();
             }
             if let Some(waiting) = cache.loading.get(&root) {
                 waiting.clone()
@@ -228,15 +228,14 @@ impl Service {
                         .cache
                         .lock()
                         .unwrap_or_else(|error| error.into_inner());
-                    if cache.images.len() >= CACHE {
-                        if let Some(oldest) = cache
+                    if cache.images.len() >= CACHE
+                        && let Some(oldest) = cache
                             .images
                             .iter()
                             .min_by_key(|(_, value)| value.until)
                             .map(|(key, _)| key.clone())
-                        {
-                            cache.images.remove(&oldest);
-                        }
+                    {
+                        cache.images.remove(&oldest);
                     }
                     cache.images.insert(
                         root.clone(),
