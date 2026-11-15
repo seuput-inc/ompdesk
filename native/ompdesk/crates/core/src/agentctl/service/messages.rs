@@ -353,23 +353,36 @@ impl AgentControl {
             .clone()
             .unwrap_or_else(|| caller.tab_id.clone());
         let device = target.device.as_deref();
+        let mut earlier_handed = true;
         if let Some(kept) = &kept {
             // Messages an omp before this one held and lost (a relaunch) reach it first, in order.
             let owed = Owed {
                 ctl: self,
                 fixed: Some(target.tab_id.clone()),
             };
-            deliver_owed(kept.outbox, &owed, kept.path, device).await;
+            earlier_handed = deliver_owed(kept.outbox, &owed, kept.path, device).await;
             // A resend of a message still on its way (its first send timed out, say) never runs it twice.
             let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
             if let Some(same) = kept
                 .outbox
                 .waiting(&from, kept.path, device, &args.message, &sig)
             {
+                if !kept.outbox.is_saved(&same) {
+                    return fail(format!(
+                        "Not accepted by {}: the original instruction remains in memory under the same identity, but its journal save is unconfirmed. Nothing was sent again; retry the same request after storage recovers.",
+                        named(target)
+                    ));
+                }
                 let dispatch = match same.dispatch {
                     Some(n) if n != 0 => format!(" (dispatch d{n})"),
                     _ => String::new(),
                 };
+                if !earlier_handed {
+                    return Ok(format!(
+                        "Queued for {}: the original instruction is saved{dispatch}, but receiver admission is unconfirmed. Nothing was sent again; OMPdesk retains the same identity for retry.",
+                        named(target)
+                    ));
+                }
                 return Ok(format!(
                     "Sent to {}: this same message is already on its way there{dispatch} and runs once; nothing sent again.",
                     named(target)
@@ -478,6 +491,20 @@ impl AgentControl {
             }
             kept.outbox.keep(made.clone()).map_err(Fail::other)?;
             entry = Some(made);
+        }
+        if !earlier_handed {
+            return Ok(format!(
+                "Queued for {}: the original instruction is saved{}, behind earlier unresolved instructions. Receiver admission is unconfirmed; OMPdesk retains their original order and identities for retry.{}",
+                named(target),
+                dispatch
+                    .as_deref()
+                    .map_or_else(String::new, |id| format!(" (dispatch {id})")),
+                if carried.count > 0 {
+                    format!(" {}.", carried.set.summary())
+                } else {
+                    String::new()
+                }
+            ));
         }
         // A command that never answered still reached the omp: one holding its command queue (stock's `login` while a
         // provider sign-in waits) runs the prompt once that ends. Saying it failed made senders send it again.

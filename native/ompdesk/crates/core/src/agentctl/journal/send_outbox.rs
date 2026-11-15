@@ -301,6 +301,14 @@ impl SendOutbox {
         state.persist()
     }
 
+    /// Whether this original is inside the same journal's confirmed delivery prefix.
+    pub(crate) fn is_saved(&self, entry: &OutboxSend) -> bool {
+        let state = self.state();
+        state
+            .position(&key_of(entry))
+            .is_some_and(|at| at < state.saved_prefix)
+    }
+
     /// The message is in the hands of the omp `instance` (it queues or runs it).
     pub fn handed(&self, entry: &OutboxSend, instance: &str) {
         let mut state = self.state();
