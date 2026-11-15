@@ -783,7 +783,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				ghostSelected && mainActiveTabId
 					? mainActiveTabId
 					: (state.activeTabId && adopted.get(state.activeTabId)) || state.activeTabId;
-			const activeTabId =
+			let activeTabId =
 				wantedActive && tabs.some(tab => tab.id === wantedActive)
 					? wantedActive
 					: mainActiveTabId && tabs.some(tab => tab.id === mainActiveTabId)
@@ -797,6 +797,12 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			const split =
 				restoredSplit ??
 				(state.split && splitTabIds(state.split).every(id => mainVisible.includes(id)) ? state.split : null);
+			if (split) {
+				const panes = splitTabIds(split);
+				if (!activeTabId || !panes.includes(activeTabId)) {
+					activeTabId = mainActiveTabId && panes.includes(mainActiveTabId) ? mainActiveTabId : (panes[0] ?? null);
+				}
+			}
 			// Main's remembered splits win; without any, what this window already
 			// remembers stays (a failed route converges here), minus closed tabs.
 			const claimed = new Set(visibleTabIds({ activeTabId, split }));
