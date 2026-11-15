@@ -34,7 +34,7 @@ export const ko: Record<string, string> = {
 	"settings.note.native": "OMPdesk는 기본으로 켜지만 이 omp의 네이티브 애드온에 기능이 없어 omp 기본값을 써요.",
 
 	"btw.ask": "지금 질문",
-	"btw.dialogLoadFailed": "질문창을 불러오지 못했어요. 아직 보내지 않았어요.",
+	"btw.dialogLoadFailed": "질문창 로드 실패. 질문은 보내지 않았어요.",
 	"live.start": "음성 세션 시작",
 	"live.ready": "준비됨 — 마이크가 꺼져 있어요",
 
