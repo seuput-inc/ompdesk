@@ -68,6 +68,7 @@ import {
 import { ECC_PREF } from "../shared/ecc";
 import { nativeAccelerator } from "../shared/hotkeys";
 import { IPC_COMMANDS, IPC_EVENTS, type SessionKind } from "../shared/ipc-types";
+import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import {
 	LOCAL_ENGINE_DETECT_PREF,
 	LOCAL_ENGINES_LEDGER_PREF,
@@ -201,6 +202,13 @@ import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } fr
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
+import {
+	accessibilityTrusted,
+	defaultSessionCachePath,
+	readClipboardText,
+	safeStorageUnavailableReason,
+	screenRecordingGranted,
+} from "./shell-host/shell-calls";
 import { SidebarProjects } from "./sidebar-projects";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
@@ -210,6 +218,7 @@ import { StatsClient } from "./stats-client";
 import { StatsServerManager } from "./stats-server";
 import { stockHelperRequest, stopStockHelper } from "./stock-helper";
 import { seedSpellchecker } from "./system-languages";
+import { shellEngine, systemVersion } from "./system-version";
 import { type PersistedTabLayout, sanitizePersistedTabLayouts, type TabLayoutDrop } from "./tab-layout";
 import { startTailscaleApp } from "./tailscale/cli";
 import { locateTailscale } from "./tailscale/locate";
@@ -302,6 +311,9 @@ app.commandLine.appendSwitch(
 	[blinkSettings, "dnsPrefetchingEnabled=false"].filter(Boolean).join(","),
 );
 const mediaStreams = new MediaStreams();
+// Test seam (unpackaged only, the parity sheet's launch): the mail accounts read as if the macOS keychain would ask for
+// the login password, so an account saved through the page shows the re-entry notice (e2e/responsive-surfaces.ts).
+const keychainWouldAskForTests = !app.isPackaged && process.env.OMP_GUI_TEST_KEYCHAIN_WOULD_ASK === "1";
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -363,7 +375,7 @@ exitWithLauncher(process.env, () => app.exit(0));
  * bundle (out/main/index.js → ../..), not app.getAppPath(): that is the
  * project root under `electron-vite dev` but `out/main` when Electron is
  * launched on the bundle directly (e2e, `electron out/main/index.js`).
- * Packaged apps ship gui-bridge outside the asar (`extraResources`) because
+ * Packaged apps ship gui-bridge beside the app (`extraResources`) because
  * omp, a separate process, loads it with `-e`.
  */
 const devResourcesDir = join(__dirname, "..", "..", "resources");
@@ -417,9 +429,9 @@ function prefsStore(): Store<MainPrefs> {
 }
 
 function resolveExplicitStartupCwd(): string | undefined {
-	// `electron <main.js> <dir>` (dev, e2e) carries the script path; a packaged
-	// app (`ompdesk.app/…/ompdesk <dir>`) does not. Flags (`--user-data-dir=…`) are skipped.
-	const explicitCwd = process.argv.slice(process.defaultApp ? 2 : 1).find(arg => !arg.startsWith("-"));
+	// Node runs `<main.js> <the shell's own arguments>`: argv[0] is node and argv[1] the bundle. Flags
+	// (`--user-data-dir=…`) are skipped.
+	const explicitCwd = process.argv.slice(2).find(arg => !arg.startsWith("-"));
 	return explicitCwd && existsSync(explicitCwd) ? explicitCwd : undefined;
 }
 
@@ -1491,8 +1503,8 @@ app.whenReady().then(async () => {
 		agentDesktop: async () =>
 			(await agentDesktopToRun({ toolsDir, bundleDir: agentDesktopBundle, platform }))?.path ?? null,
 		run: async (executable, args) => (await promisify(execFile)(executable, [...args], { timeout: 30_000 })).stdout,
-		accessibilityTrusted: prompt => systemPreferences.isTrustedAccessibilityClient(prompt),
-		screenGranted: () => systemPreferences.getMediaAccessStatus("screen") === "granted",
+		accessibilityTrusted: prompt => accessibilityTrusted(prompt),
+		screenGranted: () => screenRecordingGranted(),
 		openPane: url => shell.openExternal(url),
 	});
 	// Only a packaged, non-headless app asks on its own: a dev or test launch must never raise a system prompt. After
@@ -1577,13 +1589,13 @@ app.whenReady().then(async () => {
 		system: () => ({
 			appVersion: appVersion(),
 			packaged: app.isPackaged,
-			electron: process.versions.electron ?? "?",
+			electron: shellEngine(),
 			chrome: process.versions.chrome ?? "?",
 			node: process.versions.node ?? "?",
 			platform: process.platform,
 			arch: process.arch,
 			osRelease: release(),
-			osVersion: process.getSystemVersion(),
+			osVersion: systemVersion(),
 			language: deviceLanguage() ?? null,
 		}),
 		setupState: () => setup.state(),
@@ -1948,7 +1960,7 @@ app.whenReady().then(async () => {
 	registerAiMemoryIpc(ipc, aiMemory, {
 		openExternal: url => shell.openExternal(url),
 		openPath: path => shell.openPath(path),
-		readClipboard: () => clipboard.readText(),
+		readClipboard: () => readClipboardText(),
 		writeClipboard: text => clipboard.writeText(text),
 		care: () => aiMemoryCare,
 	});
@@ -2030,10 +2042,12 @@ app.whenReady().then(async () => {
 	// The owner's mailboxes for email routines; each password is kept encrypted by the OS keystore (mail-accounts.ts).
 	mailAccounts = new MailAccounts({
 		dir: app.getPath("userData"),
+		...(keychainWouldAskForTests ? { rememberSaved: false } : {}),
 		// A test launch reaches its fake IMAP server over plain TCP on this computer; a real launch always uses TLS.
 		...(process.env.OMP_GUI_TEST_IMAP_PLAIN ? { connect: plainImapConnect } : {}),
 		box: {
 			available: () => safeStorage.isEncryptionAvailable(),
+			blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
 			encrypt: text => safeStorage.encryptString(text),
 			decrypt: data => safeStorage.decryptString(data),
 		},
@@ -2274,6 +2288,7 @@ app.whenReady().then(async () => {
 		userData: app.getPath("userData"),
 		saved: savedWorktrees,
 		clearHttpCache: () => session.defaultSession.clearCache(),
+		httpCachePath: () => defaultSessionCachePath() ?? join(app.getPath("userData"), "Cache"),
 		cacheTools: systemCacheTools(),
 		scratch: scratchCare,
 		automatic: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
@@ -2332,7 +2347,7 @@ app.whenReady().then(async () => {
 				devices.keepAwakeChanged();
 			}
 			if (key === RESUME_INTERRUPTED_PREF) turnResume.sync();
-			if (key === APP_AUTO_UPDATE_PREF) appAutoUpdatePrefChanged();
+			if (key === APP_AUTO_UPDATE_PREF) void appAutoUpdatePrefChanged();
 			if (key === TOOLS_AUTO_UPDATE_PREF) {
 				updater.prefChanged();
 				cliToolUpdater.prefChanged();

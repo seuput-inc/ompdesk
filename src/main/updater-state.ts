@@ -140,7 +140,6 @@ export interface StageBundleOptions {
 	/** Running bundle; the staged one must carry its bundle id. */
 	ownBundle: string;
 	run: ToolRunner;
-	/** Electron's `original-fs` in the app: plain fs never mistakes `app.asar` for a directory. */
 	fs: Pick<typeof nodeFs.promises, "mkdir" | "mkdtemp" | "readdir" | "rm" | "rmdir">;
 }
 
