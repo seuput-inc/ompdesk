@@ -88,7 +88,7 @@ pub fn trusted_url(url: &str) -> bool {
     base == "app://ompdesk"
         || base.starts_with("app://ompdesk/")
         || (cfg!(windows)
-            && (base == "http://app.ompdesk" || base.starts_with("http://app.ompdesk/")))
+            && (base == "http://app.localhost" || base.starts_with("http://app.localhost/")))
 }
 
 #[cfg(test)]
@@ -121,12 +121,19 @@ mod tests {
     #[test]
     fn app_origin_lookalikes_are_denied() {
         assert!(trusted_url("app://ompdesk/index.html?x=1"));
+        assert_eq!(
+            trusted_url("http://app.localhost/index.html"),
+            cfg!(windows)
+        );
         for url in [
             "app://ompdesk.attacker/",
             "app://ompdesk@attacker/",
             "https://ompdesk/",
             "file:///index.html",
             "app://ompdesk:80/",
+            "http://app.localhost.attacker/",
+            "http://app.localhost@attacker/",
+            "http://app.localhost:80/",
         ] {
             assert!(!trusted_url(url), "{url}");
         }
