@@ -40,6 +40,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fsp } from "node:fs";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { isAgentInstructionCommand } from "../../../resources/gui-bridge/instruction-contracts";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
 import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
@@ -1185,8 +1186,12 @@ export class LocalHostServices implements HostServices {
 				this.#closeTab(key);
 				return null;
 			}
-			case "tab.command":
-				return this.#command(peer, parse(CommandParams, method, params));
+			case "tab.command": {
+				const command = parse(CommandParams, method, params);
+				if (isAgentInstructionCommand(command.command))
+					throw codedError("unsupported", "Agent instructions require the authenticated agent ingress.");
+				return this.#command(peer, command);
+			}
 			case "tab.sideChannel": {
 				const { rtab, frame } = parse(SideChannelParams, method, params);
 				this.#answer(this.#tab(peer, rtab), frame, "device");

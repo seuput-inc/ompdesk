@@ -50,6 +50,14 @@ export interface StopOrigin {
 	agentControl?: string;
 }
 
+/** Internal agent ingress only. A command body or a renderer cannot establish this origin. */
+export interface AgentControlInstructionCommand {
+	id?: string;
+	type: "agent_control_instruction";
+	message: string;
+	images?: ImageContent[];
+}
+
 export type RpcCommand =
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
 	| {
