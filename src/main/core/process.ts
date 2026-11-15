@@ -211,6 +211,7 @@ class FrameReader {
 
 export class CoreProcess {
 	#child: ChildProcessWithoutNullStreams | null = null;
+	#shuttingDown = false;
 	/** Whether the running core answered anything yet: a start that ends before that counts as failed. */
 	#answered = false;
 	#failedStarts = 0;
@@ -219,8 +220,8 @@ export class CoreProcess {
 	readonly #pending = new Map<number, Pending>();
 	readonly #late = new Map<number, Late>();
 	readonly #stopping = new Set<ChildProcessWithoutNullStreams>();
-	/** Resolves once a core ended and every process it started is gone (or past `GROUP_GONE_MS`). */
-	readonly #gone = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
+	/** Resolves after a core ended, with whether its process group is gone. */
+	readonly #gone = new WeakMap<ChildProcessWithoutNullStreams, Promise<boolean>>();
 	readonly #listeners = new Map<string, Set<(data: unknown, bin: Uint8Array | null, generation: number) => void>>();
 	#stops = 0;
 	/** Where the running core's hub listens (`hub.ts` connects there), made fresh for each start. */
@@ -289,6 +290,7 @@ export class CoreProcess {
 		// Forgotten now, not at its exit event: main's thread may call again before that event can run, and that call
 		// must start the next core. Its exit still fails what waited on it, as a core that died does.
 		this.#child = null;
+		this.#stopping.add(child);
 		killTree(child);
 	}
 
@@ -346,17 +348,34 @@ export class CoreProcess {
 	async stop(): Promise<void> {
 		this.#stops++;
 		const child = this.#child;
-		if (!child) return;
-		this.#child = null;
-		this.#stopping.add(child);
-		const gone = this.#gone.get(child);
-		child.stdin.end();
-		const kill = setTimeout(() => killTree(child), STOP_KILL_MS);
-		try {
-			await gone;
-		} finally {
-			clearTimeout(kill);
+		if (child) {
+			this.#child = null;
+			this.#stopping.add(child);
+			const gone = this.#gone.get(child);
+			if (!gone) {
+				killTree(child);
+				throw new Error("ompdesk-core has no exit receipt");
+			}
+			child.stdin.end();
+			const kill = setTimeout(() => killTree(child), STOP_KILL_MS);
+			void gone.then(() => clearTimeout(kill));
 		}
+		const gone = await Promise.all([...this.#stopping].map(stopping => this.#gone.get(stopping)));
+		if (gone.some(empty => empty !== true))
+			throw new CoreError("core_exited", "git processes it started may still run");
+	}
+
+	/** Refuses new work and joins every core. A lost shell ends their groups without the normal quit grace. */
+	shutdown(force = false): Promise<void> {
+		this.#shuttingDown = true;
+		if (force) {
+			const current = this.#child;
+			this.abandon("the shell ended");
+			for (const stopping of this.#stopping) {
+				if (stopping !== current && stopping.exitCode === null && stopping.signalCode === null) killTree(stopping);
+			}
+		}
+		return this.stop();
 	}
 
 	/** Asks the core that has request `id` to stop it; a core that already ended or answered has nothing to stop. */
@@ -365,6 +384,7 @@ export class CoreProcess {
 	}
 
 	#start(): ChildProcessWithoutNullStreams {
+		if (this.#shuttingDown) throw new CoreError("core_unavailable", "ompdesk-core is shutting down");
 		if (this.#child) return this.#child;
 		if (Date.now() < this.#restUntil)
 			throw new CoreError(
@@ -395,7 +415,7 @@ export class CoreProcess {
 		createInterface({ input: child.stderr }).on("line", line => this.#log(line));
 		// A write to a core that already ended fails here; its close rejects what waits.
 		child.stdin.on("error", () => {});
-		const gone = Promise.withResolvers<void>();
+		const gone = Promise.withResolvers<boolean>();
 		this.#gone.set(child, gone.promise);
 		let ended = false;
 		const end = (error: CoreError) => {
@@ -447,8 +467,14 @@ export class CoreProcess {
 			);
 	}
 
-	#ended(child: ChildProcessWithoutNullStreams, generation: number, error: CoreError, gone: () => void): void {
-		const expected = this.#stopping.delete(child);
+	#ended(
+		child: ChildProcessWithoutNullStreams,
+		generation: number,
+		error: CoreError,
+		gone: (empty: boolean) => void,
+	): void {
+		const expected = this.#stopping.has(child);
+		this.#stopping.add(child);
 		if (this.#child === child) {
 			this.#child = null;
 			if (!this.#answered && ++this.#failedStarts >= MAX_FAILED_STARTS) {
@@ -478,7 +504,8 @@ export class CoreProcess {
 				pending.reject(failure);
 			}
 			for (const [, entry] of late) entry.onEnded();
-			gone();
+			if (empty) this.#stopping.delete(child);
+			gone(empty);
 		});
 	}
 }
@@ -511,4 +538,9 @@ export function core(): CoreProcess {
 /** Ends the app's core (quit); a later request starts it again. */
 export function stopCore(): Promise<void> {
 	return instance?.stop() ?? Promise.resolve();
+}
+
+/** Ends the app's core for good, including when it has not started yet. */
+export function shutdownCore(force = false): Promise<void> {
+	return core().shutdown(force);
 }

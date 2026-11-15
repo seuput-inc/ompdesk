@@ -4,6 +4,7 @@
  * for the facts before any main code runs, so Electron's synchronous `app.getPath()` and friends work at module top
  * level, as they do there.
  */
+import { shutdownCore } from "../../core/process";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
 import { createElectron } from "./create";
@@ -22,11 +23,22 @@ const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello",
 });
 if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
 
-/** The shell going away ends main: nothing it shows is left to serve, and its next launch reads this from stderr. */
-client.onClose(reason => {
-	console.error(`[shell-host] the shell connection ended${reason ? `: ${reason.message}` : ""}; exiting`);
-	process.exit(1);
-});
+let stopping = false;
+function endMain(reason: string): void {
+	if (stopping) return;
+	stopping = true;
+	console.error(`[shell-host] ${reason}; exiting`);
+	void shutdownCore(true).then(
+		() => process.exit(1),
+		(error: unknown) => {
+			console.error(`[shell-host] core shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+			process.exit(1);
+		},
+	);
+}
+client.onClose(reason => endMain(`the shell connection ended${reason ? `: ${reason.message}` : ""}`));
+process.stdin.once("end", () => endMain("the shell's stdin ended"));
+process.stdin.resume();
 
 const electron = createElectron(client, hello.facts, { patchProcess: true });
 

@@ -170,13 +170,18 @@ export function installQuitGuard(
 		if (exiting) return;
 		exiting = true;
 		event.preventDefault();
-		markMainStep("quit", "will-quit: waiting for every omp to exit and the schedules' journal");
-		void settled()
-			.catch((err: unknown) => console.warn(`[quit] the last stops failed: ${String(err)}`))
-			.finally(() => {
-				markMainStep("quit", "omps exited, schedules saved");
+		markMainStep("quit", "will-quit: waiting for omps, schedules and core");
+		void settled().then(
+			() => {
+				markMainStep("quit", "omps exited, schedules saved, core stopped");
 				app.exit(0);
-			});
+			},
+			(err: unknown) => {
+				console.warn(`[quit] the last stops failed: ${String(err)}`);
+				markMainStep("quit", "last stops failed");
+				app.exit(1);
+			},
+		);
 	});
 	app.on("before-quit", event => {
 		if (latch.approved && finalizing !== "done") {

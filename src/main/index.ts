@@ -119,7 +119,7 @@ import {
 } from "./connectivity";
 import { installCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
-import { core, stopCore } from "./core/process";
+import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { setupDeepLinks } from "./deep-link";
 import { ensureDefaultWorkspace } from "./default-workspace";
@@ -572,6 +572,8 @@ let scheduleService: ScheduleService | null = null;
 let schedulesClosed: Promise<void> = Promise.resolve();
 /** The quit's stop of every omp (`sidecar.stopAll`), started with the tabs' disposal: the core ends only after it answered. */
 let ompsStopped: Promise<void> = Promise.resolve();
+/** The core and the processes it started, after the omps and schedule writes have settled. */
+let coreStopped: Promise<void> = Promise.resolve();
 /** Watches what event routines (Settings › Schedules) wait for (src/main/routines). */
 let routineTriggers: RoutineTriggers | null = null;
 let routineMarks: FileMarks | null = null;
@@ -2640,8 +2642,13 @@ installQuitGuard(
 			["web-host", () => void webHost?.stop()],
 			["session-index", () => sessionIndex?.stop()],
 			["log-watcher", () => logWatcher?.stop()],
-			// After the schedules' last write and the omps' stop: the core answers both before its input ends.
-			["core", () => void Promise.all([schedulesClosed, ompsStopped]).then(() => stopCore())],
+			[
+				"core",
+				() => {
+					coreStopped = Promise.allSettled([schedulesClosed, ompsStopped]).then(() => shutdownCore());
+					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
+				},
+			],
 			["tray", () => destroyTray()],
 		];
 		for (const [name, run] of steps) {
@@ -2665,8 +2672,10 @@ installQuitGuard(
 			release: tabId => sidecarPool.releaseTabWhenExited(tabId),
 		});
 	},
-	// Main's exit ends the core at once on Windows: the schedules' journal is written before it.
+	// Main must not exit until the core and the processes it started have ended too.
 	async () => {
-		await Promise.all([ompsStopped, schedulesClosed]);
+		const results = await Promise.allSettled([ompsStopped, schedulesClosed, coreStopped]);
+		const failure = results.find(result => result.status === "rejected");
+		if (failure?.status === "rejected") throw failure.reason;
 	},
 );

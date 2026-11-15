@@ -1,6 +1,6 @@
 //! Methods and dispatch. A handler is an async function from a request's params (and its `bin` tail) to a result or
-//! a coded error. Requests run concurrently and are answered in completion order; at end of input the server waits
-//! for the ones in flight, then returns. A `{"cancel": id}` frame stops the request `id` where its handler looks
+//! a coded error. Requests run concurrently and are answered in completion order; when input ends the server cancels
+//! the ones in flight and waits for them. A `{"cancel": id}` frame stops the request `id` where its handler looks
 //! (every git it runs, `Scope`), and a request answers only once every process it started has ended. What a request
 //! leaves running on purpose (a watch) reports through `Events` and ends with the process.
 
@@ -367,6 +367,9 @@ where
         }
         while tasks.try_join_next().is_some() {}
     };
+    for cancel in in_flight(&requests).values() {
+        cancel.send_replace(true);
+    }
     // Listeners outlive their starting request, but not the input. Check again as each in-flight request ends,
     // including one that was still binding a listener when EOF arrived.
     let ending = Events {
@@ -693,7 +696,11 @@ mod tests {
         let answer = answer.unwrap();
         assert_eq!(answer["id"], 1);
         assert_eq!(answer["error"]["code"], "cancelled");
-        assert_eq!(child.read(&mut byte).await.unwrap(), 0, "child still holds its socket");
+        assert_eq!(
+            child.read(&mut byte).await.unwrap(),
+            0,
+            "child still holds its socket"
+        );
         server.await.unwrap().unwrap();
     }
 
