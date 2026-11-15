@@ -140,7 +140,9 @@ export const handlers: Record<string, LocalHandler> = {
 		);
 		return {
 			...result,
-			values: Object.fromEntries(Object.entries(result.values).filter(([path]) => !retiredDeliverySettings.includes(path))),
+			values: Object.fromEntries(
+				Object.entries(result.values).filter(([path]) => !retiredDeliverySettings.includes(path)),
+			),
 			provenance: Object.fromEntries(
 				Object.entries(result.provenance).filter(([path]) => !retiredDeliverySettings.includes(path)),
 			),

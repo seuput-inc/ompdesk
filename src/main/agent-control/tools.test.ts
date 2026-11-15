@@ -20,7 +20,9 @@ describe("OMPdesk control tool definitions", () => {
 		const send = ARGS[AGENT_CONTROL_TOOLS.send];
 		expect(send.parse({ session: "abcd", message: "go" })).toEqual({ session: "abcd", message: "go" });
 		for (const delivery of ["follow_up", "steer"]) {
-			expect(() => send.parse(looseArgs(AGENT_CONTROL_TOOLS.send, { session: "abcd", message: "go", delivery }))).toThrow();
+			expect(() =>
+				send.parse(looseArgs(AGENT_CONTROL_TOOLS.send, { session: "abcd", message: "go", delivery })),
+			).toThrow();
 		}
 	});
 
