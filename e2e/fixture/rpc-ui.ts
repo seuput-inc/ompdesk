@@ -686,6 +686,17 @@ export function runRpcUi(): void {
 	const leftoverLoginInputs = new Set<string>();
 	const values: Record<string, unknown> = {
 		"approval.mode": "ask",
+		"tools.approvalMode": "yolo",
+		hideThinkingBlock: false,
+		proseOnlyThinking: true,
+		omitThinking: false,
+		"display.showTokenUsage": false,
+		"display.collapseCompacted": true,
+		"goal.statusInFooter": true,
+		"speech.enabled": false,
+		"stt.enabled": false,
+		"paste.largeMenuThreshold": 100,
+		emojiAutocomplete: true,
 		"theme.dark": "dark",
 		"theme.light": "light",
 		"theme.mode": "dark",

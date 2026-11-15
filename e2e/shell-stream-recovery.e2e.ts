@@ -89,7 +89,10 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 				controller: new AbortController(),
 			};
 			Reflect.set(window, "__recoveryBoundary", boundary);
-			window.fetch = async (input, init) => {
+			const fetchWithRecovery = async (
+				input: Parameters<typeof window.fetch>[0],
+				init?: Parameters<typeof window.fetch>[1],
+			) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 				if (url.endsWith("/__ipc/events")) {
 					boundary.reconnectHeld = true;
@@ -115,6 +118,7 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 				}
 				return originalFetch(input, init);
 			};
+			window.fetch = Object.assign(fetchWithRecovery, window.fetch);
 			void originalFetch("app://ompdesk/__ipc/events", { signal: boundary.controller.signal }).then(
 				response => {
 					boundary.replacement = { state: "open", status: response.status, error: "" };
