@@ -518,4 +518,72 @@ mod tests {
         assert!(port.ask_raw("y", &()).await.is_err());
         assert!(sink(9_002).is_none());
     }
+
+    #[tokio::test]
+    async fn dropping_one_ask_releases_only_its_response_and_late_state_still_applies() {
+        use std::future::{Future, poll_fn};
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let port: Arc<Port<State>> =
+            Port::open(&crate::server::test_events(&tx), 9_006, State::default()).unwrap();
+        let mut withdrawn = Box::pin(port.ask_raw("summary", &()));
+        poll_fn(|cx| {
+            assert!(withdrawn.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let withdrawn_id = *port.lock().pending.keys().next().unwrap();
+        let mut kept = Box::pin(port.ask_raw("other", &()));
+        poll_fn(|cx| {
+            assert!(kept.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let kept_id = *port
+            .lock()
+            .pending
+            .keys()
+            .find(|id| **id != withdrawn_id)
+            .unwrap();
+        drop(withdrawn);
+        assert!(!port.lock().pending.contains_key(&withdrawn_id));
+        assert!(port.lock().pending.contains_key(&kept_id));
+        Sink::state(&*port, 1, &raw(r#"{"n":7}"#)).unwrap();
+        Sink::answer(&*port, withdrawn_id, Ok(raw(r#""late summary""#)));
+        assert_eq!(port.state().n, 7);
+        assert!(port.lock().pending.contains_key(&kept_id));
+        Sink::answer(&*port, kept_id, Ok(raw(r#""kept response""#)));
+        assert_eq!(kept.await.unwrap().get(), r#""kept response""#);
+        assert!(port.lock().pending.is_empty());
+        port.close();
+    }
+
+    #[tokio::test]
+    async fn dropping_an_old_closed_ask_does_not_touch_a_reopened_ports_ask() {
+        use std::future::{Future, poll_fn};
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let events = crate::server::test_events(&tx);
+        let old: Arc<Port<State>> = Port::open(&events, 9_007, State::default()).unwrap();
+        let mut old_ask = Box::pin(old.ask_raw("old", &()));
+        poll_fn(|cx| {
+            assert!(old_ask.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        old.close();
+        let current: Arc<Port<State>> = Port::open(&events, 9_007, State::default()).unwrap();
+        let mut current_ask = Box::pin(current.ask_raw("current", &()));
+        poll_fn(|cx| {
+            assert!(current_ask.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        drop(old_ask);
+        let current_id = *current.lock().pending.keys().next().unwrap();
+        Sink::answer(&*current, current_id, Ok(raw("7")));
+        assert_eq!(current_ask.await.unwrap().get(), "7");
+        assert!(current.lock().pending.is_empty());
+        current.close();
+    }
 }
