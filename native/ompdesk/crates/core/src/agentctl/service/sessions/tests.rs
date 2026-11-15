@@ -646,3 +646,143 @@ async fn an_arrival_during_saved_result_preparation_is_not_absorbed_by_the_wait_
     assert!(!control.mem().collected.contains("b"));
     port.close();
 }
+
+async fn a_held_stored_result_respects_its_wait_boundary(
+    arrival: bool,
+    waiting: bool,
+    port_id: u64,
+) {
+    use std::collections::HashSet;
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use std::time::Duration;
+
+    let state: HostState = serde_json::from_value(json!({
+        "enabled": true,
+        "tabs": [tab("a", "/s/a")],
+        "windowOf": { "a": "w" }
+    }))
+    .unwrap();
+    let (writer, reader) = tokio::io::duplex(1 << 20);
+    let (tx, _writer) = crate::wire::spawn_writer(writer);
+    let port = Port::open(&crate::server::test_events(&tx), port_id, state).unwrap();
+    let control = AgentControl::new(
+        port.clone(),
+        Caps::default(),
+        &Files::default(),
+        Tuning::default(),
+        system_clock(),
+    );
+    let state = control.host.state();
+    let tabs = state.tabs("a").unwrap();
+    let caller = tabs.iter().find(|tab| tab.tab_id == "a").unwrap();
+    let targets = [("done", "Done"), ("held", "Held")]
+        .into_iter()
+        .map(|(id, title)| {
+            super::Target::Stored(Box::new(
+                serde_json::from_value(json!({
+                    "id": id, "path": format!("/s/{id}.jsonl"), "title": title
+                }))
+                .unwrap(),
+            ))
+        })
+        .collect();
+    let args = super::ResultArgs {
+        wait: Some(waiting),
+        timeout_seconds: Some(30),
+        ..super::ResultArgs::default()
+    };
+    let result = control.result(caller, targets, args, true);
+    tokio::pin!(result);
+    let mut lines = BufReader::new(reader).lines();
+    let mut requests = HashSet::new();
+    let mut held = None;
+    while requests.len() < 2 {
+        let line = tokio::select! {
+            biased;
+            result = &mut result => panic!("result returned before the stored-read barrier: {result:?}"),
+            line = lines.next_line() => line.unwrap().unwrap(),
+        };
+        let event: Value = serde_json::from_str(&line).unwrap();
+        let data = &event["data"];
+        assert_eq!(data["method"], "storedMessages");
+        let id = data["args"]["session"]["id"].as_str().unwrap();
+        assert!(["done", "held"].contains(&id));
+        assert!(requests.insert(id.to_owned()));
+        assert_eq!(data["args"]["session"]["path"], format!("/s/{id}.jsonl"));
+        let ask = data["ask"].as_u64().unwrap();
+        if id == "held" {
+            held = Some(ask);
+        } else {
+            crate::ports::apply_answer(&port, ask, Ok("[]"));
+        }
+    }
+    let held = held.expect("the actual storedMessages response remains withheld");
+    let blocked_while_held = control.is_blocked("a");
+    poll_fn(|cx| {
+        assert!(result.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    if arrival {
+        control.arrive("a");
+    } else {
+        tokio::time::advance(Duration::from_secs(30)).await;
+    }
+    if !waiting {
+        tokio::time::advance(Duration::from_secs(30)).await;
+        poll_fn(|cx| {
+            assert!(result.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        crate::ports::apply_answer(&port, held, Ok("[]"));
+    }
+    let outcome = poll_fn(|cx| {
+        let Poll::Ready(outcome) = result.as_mut().poll(cx) else {
+            panic!("the wait boundary is still blocked on its unanswered storedMessages read");
+        };
+        Poll::Ready(outcome)
+    })
+    .await
+    .unwrap();
+    assert!(outcome.contains("\"Done\" [done]: saved"), "{outcome}");
+    assert!(outcome.contains("Last answer:\n(no answer)"), "{outcome}");
+    if waiting {
+        assert!(
+            outcome.contains(if arrival {
+                "Returned early: a message reached you"
+            } else {
+                "Still running after waiting 30 s"
+            }),
+            "{outcome}"
+        );
+        assert!(outcome.contains("1/2 finished"), "{outcome}");
+        assert!(outcome.contains("[held]: summary unconfirmed"), "{outcome}");
+        assert!(!outcome.contains("\"Held\" [held]: saved"), "{outcome}");
+        // No response to `held` is supplied, even after the result has returned.
+    } else {
+        assert!(outcome.contains("\"Held\" [held]: saved"), "{outcome}");
+        assert!(!outcome.contains("summary unconfirmed"), "{outcome}");
+        assert!(!outcome.contains("Returned early:"), "{outcome}");
+    }
+    assert_eq!(blocked_while_held, waiting);
+    assert!(!control.is_blocked("a"));
+    assert!(control.mem().collected.is_empty());
+    port.close();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_arrival_returns_without_releasing_a_stored_messages_answer() {
+    a_held_stored_result_respects_its_wait_boundary(true, true, 7_324).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deadline_returns_without_releasing_a_stored_messages_answer() {
+    a_held_stored_result_respects_its_wait_boundary(false, true, 7_325).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_nonwaiting_stored_result_keeps_waiting_for_its_actual_read_not_arrival_or_deadline() {
+    a_held_stored_result_respects_its_wait_boundary(true, false, 7_326).await;
+}
