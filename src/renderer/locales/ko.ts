@@ -4398,6 +4398,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.separator": ", ",
 	"bridgeHealth.feature.core": "핵심 기능",
 	"bridgeHealth.feature.composer": "입력창 확장 기능",
+	"bridgeHealth.feature.currentInstruction": "현재 지시",
 	"bridgeHealth.feature.share": "세션 공유",
 	"bridgeHealth.feature.planMode": "계획 모드",
 	"bridgeHealth.feature.goalMode": "목표 모드",

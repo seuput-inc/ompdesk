@@ -5,7 +5,11 @@ import { translate } from "./i18n";
 describe("bridgeHealthToast", () => {
 	it("names the unavailable features in the UI language and stays until dismissed", () => {
 		const input = bridgeHealthToast(
-			{ kind: "unsupported", ompVersion: "19.0.0", features: ["planMode", "mcp", "futureFeature"] },
+			{
+				kind: "unsupported",
+				ompVersion: "19.0.0",
+				features: ["planMode", "mcp", "currentInstruction", "futureFeature"],
+			},
 			translate,
 		);
 		expect(input.variant).toBe("warning");
@@ -13,7 +17,7 @@ describe("bridgeHealthToast", () => {
 		expect(input.title).toBe(translate("bridgeHealth.unsupportedTitle"));
 		// Unknown ids (a newer bridge than these locales) fall back to the raw id.
 		expect(input.message).toBe(
-			"omp 19.0.0 lacks internals OMPdesk needs for: Plan mode, MCP servers, futureFeature. OMPdesk looks for a newer omp and repairs the install itself. If this stays, report an issue.",
+			"omp 19.0.0 lacks internals OMPdesk needs for: Plan mode, MCP servers, Current instructions, futureFeature. OMPdesk looks for a newer omp and repairs the install itself. If this stays, report an issue.",
 		);
 	});
 

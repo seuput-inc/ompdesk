@@ -4403,6 +4403,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.separator": ", ",
 	"bridgeHealth.feature.core": "Core features",
 	"bridgeHealth.feature.composer": "Composer extras",
+	"bridgeHealth.feature.currentInstruction": "Current instructions",
 	"bridgeHealth.feature.share": "Session sharing",
 	"bridgeHealth.feature.planMode": "Plan mode",
 	"bridgeHealth.feature.goalMode": "Goal mode",
