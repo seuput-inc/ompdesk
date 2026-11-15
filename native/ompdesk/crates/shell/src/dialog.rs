@@ -1,6 +1,6 @@
 //! `dialog.*` (PROTOCOL.md §8): message boxes and the file open / save dialogs, owned by the window `winId` names.
 //!
-//! On Windows a dialog runs on a thread of its own: it is modal and loops on messages until closed, and CEF's UI
+//! On Windows a dialog runs on a thread of its own: it is modal and loops on messages until closed, and the UI
 //! thread must keep running tasks meanwhile (page IPC, the window state mirror, Node's other requests). The owner is
 //! looked up on the UI thread; the system disables it while the dialog is open. On macOS AppKit wants the main thread,
 //! so the dialog runs there.
@@ -15,7 +15,7 @@ use shell_core::dialog_spec::{DialogCancel, FileDialogSpec, MessageBoxSpec};
 
 use crate::host::{self, Call};
 use crate::log::log;
-use crate::{state, ui};
+use crate::ui;
 
 #[cfg(windows)]
 use shell_core::sys::dialogs as native;
@@ -59,11 +59,7 @@ pub fn handle(call: Call) {
 
 /// The OS handle of window `win_id`; 0 (no owner) when it is unknown or already closed. UI thread only.
 fn owner_handle(win_id: Option<u64>) -> isize {
-    let Some(entry) = win_id.and_then(state::win) else {
-        return 0;
-    };
-    let entry = entry.borrow();
-    entry.window.as_ref().map_or(0, state::native_handle)
+    win_id.and_then(ui::window_handle).unwrap_or(0)
 }
 
 /// Answers `call` with what `show` returns: `ok` with its JSON, or `failed` with its message.

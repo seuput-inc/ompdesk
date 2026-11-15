@@ -42,3 +42,14 @@ pub fn run(f: impl FnOnce() + Send + 'static) {
         post(f);
     }
 }
+
+/// UI thread only. Releases the registry borrow before a native menu or dialog starts its modal loop.
+pub fn window_handle(id: u64) -> Option<isize> {
+    let entry = crate::state::win(id)?;
+    let handle = entry
+        .borrow()
+        .window
+        .as_ref()
+        .map_or(0, crate::state::native_handle);
+    Some(handle)
+}
