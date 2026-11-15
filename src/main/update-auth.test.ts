@@ -12,7 +12,7 @@ import { createSafeStorage, type KeyFetcher } from "./shell-host/electron/safe-s
 
 const holder = vi.hoisted(() => ({ userData: "", safeStorage: null as unknown }));
 vi.mock("electron", () => ({
-	app: { getPath: () => holder.userData },
+	app: { getPath: () => holder.userData, getVersion: () => "0.0.0" },
 	net: { fetch: vi.fn() },
 	get safeStorage() {
 		return holder.safeStorage;
@@ -117,6 +117,33 @@ describe("a stored update token when the keychain would ask", () => {
 			"safe_storage_unavailable",
 		);
 	});
+
+	it.each(["key", "decrypt"] as const)(
+		"distinguishes a %s failure without deleting the token or exposing it in diagnostics",
+		async phase => {
+			const token = "private-diagnostic-fixture-token";
+			const sealed = createSafeStorage(WORKING_KEY).encryptString(token);
+			if (phase === "decrypt") sealed.write("v11", 0, "ascii");
+			writeFileSync(tokenFile(), sealed);
+			keychain(phase === "key" ? { unavailable: "reader failed (status=7)" } : WORKING_KEY);
+			const { resolveUpdateToken, updateAuthInfo } = await authModule();
+			expect(await resolveUpdateToken()).toBeUndefined();
+			expect(readFileSync(tokenFile())).toEqual(sealed);
+			expect(await updateAuthInfo()).toMatchObject({ source: null, hasStoredToken: true, droppedReason: null });
+			const text = readFileSync(join(holder.userData, "logs", "gui-runtime.jsonl"), "utf8");
+			const records: unknown[] = text
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					details: expect.objectContaining({ event: "stored-token-read", phase }),
+				}),
+			);
+			expect(text).not.toContain(token);
+			expect(text).not.toContain(sealed.toString("base64"));
+		},
+	);
 });
 
 describe("a stored update token when the keychain answers", () => {
