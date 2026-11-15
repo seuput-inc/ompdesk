@@ -17,12 +17,13 @@ console.log('ready');
 const consumerScript = `
 . "$1"
 evidence() { echo "$*"; }
-if [ "$4" = controlled ]; then
+if [ "$4" = controlled ] || [ "$4" = graceful ]; then
   sleep() { echo waiting; read -r release; }
 else
   sleep() { :; }
 fi
-if stop_app "$2" "$3"; then
+if [ "$4" = graceful ]; then action=wait_app; else action=stop_app; fi
+if "$action" "$2" "$3"; then
   rm "$5"
   echo launched > "$6"
 else
@@ -31,11 +32,13 @@ fi
 `;
 
 describe.skipIf(process.platform === "win32")("macOS move process stop", () => {
-	for (const mode of ["controlled", "stubborn"] as const) {
+	for (const mode of ["controlled", "stubborn", "graceful"] as const) {
 		it(
-			mode === "controlled"
-				? "waits for the owned process before cleanup and launch"
-				: "refuses to continue while the owned process remains alive",
+			mode === "graceful"
+				? "observes a normal quit without signalling the owned process"
+				: mode === "controlled"
+					? "waits for the owned process before cleanup and launch"
+					: "refuses to continue while the owned process remains alive",
 			async () => {
 				const dir = await mkdtemp(join(tmpdir(), "mac-stop-"));
 				const log = join(dir, "seed.log");
@@ -65,13 +68,14 @@ describe.skipIf(process.platform === "win32")("macOS move process stop", () => {
 					);
 					consumerExit = once(consumer, "close");
 					const lines = createInterface({ input: consumer.stdout! })[Symbol.asyncIterator]();
-					if (mode === "controlled") {
-						expect((await childLines.next()).value).toBe("term");
+					if (mode !== "stubborn") {
+						if (mode === "controlled") expect((await childLines.next()).value).toBe("term");
 						expect((await lines.next()).value).toBe("waiting");
 						expect(await readFile(log, "utf8")).toBe("seed evidence");
 						await expect(readFile(launch)).rejects.toMatchObject({ code: "ENOENT" });
 						child.stdin.write("exit\n");
 						await childExit;
+						if (mode === "graceful") expect((await childLines.next()).done).toBe(true);
 						consumer.stdin!.write("continue\n");
 						expect((await consumerExit)[0]).toBe(0);
 						await expect(readFile(log)).rejects.toMatchObject({ code: "ENOENT" });

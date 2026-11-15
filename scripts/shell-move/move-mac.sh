@@ -175,9 +175,20 @@ scenario() {
     exit 1
   fi
   check 0 "$name: seed validated and stored a token in the test profile"
-  stop_or_exit "$APPS/OMPdesk.app" "$seed_pid"
+  (cd "$REPO" && limit 90 bun scripts/shell-move/cdp-seed-mac.ts $PORT quit) | tee "$W/$name-quit.json"; seed_rc=${PIPESTATUS[0]}
+  if [ "$seed_rc" != 0 ] || ! wait_app "$APPS/OMPdesk.app" "$seed_pid"; then
+    check 1 "$name: the seeded released app quit normally before its profile was read again"
+    stop_or_exit "$APPS/OMPdesk.app" "$seed_pid"
+    restore
+    exit 1
+  fi
   if wait "$seed_pid"; then seed_rc=0; else seed_rc=$?; fi
   evidence "$name seed process: pid $seed_pid exited $seed_rc"
+  if [ "$seed_rc" != 0 ]; then
+    check 1 "$name: the seeded released app exited successfully"
+    restore
+    exit 1
+  fi
   rm -rf "$UD/logs" "$UD/updates"
   step "$name: the released app, left alone with its updater"
   env ${OLDENV[@]+"${OLDENV[@]}"} OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT "${SWITCHES[@]}" >"$W/$name-old.out" 2>&1 &

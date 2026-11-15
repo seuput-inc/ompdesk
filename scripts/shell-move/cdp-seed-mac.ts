@@ -1,4 +1,4 @@
-// bun cdp-seed-mac.ts <port> [read]: in the released app's own page, save a stand-in update token through its own IPC
+// bun cdp-seed-mac.ts <port> [read|quit]: in the released app's own page, save a stand-in update token through its own IPC
 // (main encrypts it with safeStorage) and write file:// Local Storage keys. Prints one JSON line.
 import { type Browser, chromium, type Page } from "playwright";
 
@@ -15,6 +15,7 @@ let page: Page | undefined;
 /** What the seed reads of the released app's page: its `window.omp` updater calls. */
 type SeedWindow = {
 	omp?: {
+		app?: { quit(): void };
 		updater?: {
 			saveAuth(token: string): Promise<{ access?: string; source?: string | null }>;
 			authInfo(): Promise<{ source?: string | null; hasStoredToken?: boolean }>;
@@ -32,6 +33,25 @@ if (!page) throw new Error("no app page");
 await page.waitForFunction(() => typeof (window as unknown as SeedWindow).omp?.updater?.saveAuth === "function", null, {
 	timeout: 30_000,
 });
+if (mode === "quit") {
+	await page.waitForFunction(() => typeof (window as unknown as SeedWindow).omp?.app?.quit === "function", null, {
+		timeout: 30_000,
+	});
+	const disconnected = browser.waitForEvent("disconnected", { timeout: 60_000 });
+	const requested = page.evaluate(() => {
+		const app = (window as unknown as SeedWindow).omp?.app;
+		if (!app) throw new Error("the released app has no quit API");
+		app.quit();
+	});
+	await Promise.all([
+		disconnected,
+		requested.catch(error => {
+			if (browser.isConnected() || !/closed/i.test(String(error))) throw error;
+		}),
+	]);
+	console.log(JSON.stringify({ quit: "requested", transport: "disconnected" }));
+	process.exit(0);
+}
 if (mode === "read") {
 	// Read the restarted released page before migration, or the shell's page after it, without rewriting either
 	// the stored token or Local Storage. The two observations distinguish producer persistence from the move.
