@@ -15,8 +15,10 @@ const TRIGGERS = ["pointerdown", "keydown"] as const;
 export interface DeferredChunk<T> {
 	load: () => Promise<T>;
 	onLoaded: (value: T) => void;
-	/** After a failed load, before the next touch or key tries again. */
-	onFailed?: () => void;
+	/** After a failed load; retry shares the initial load's single-flight and cancellation. */
+	onFailed?: (retry: () => void) => void;
+	/** Keep recovery controls usable without their pointerdown or keydown starting another load. */
+	canRetryOnInteraction?: () => boolean;
 	/** `now`: start loading at once; `idle`: in the first idle moment. */
 	start: "now" | "idle";
 }
@@ -37,11 +39,14 @@ export function loadDeferredChunk<T>(
 	let loading = false;
 	let cancelIdle = () => {};
 	const disarm = () => {
-		for (const type of TRIGGERS) scheduling.target.removeEventListener(type, trigger, true);
+		for (const type of TRIGGERS) scheduling.target.removeEventListener(type, onInteraction, true);
 	};
 	const arm = () => {
-		for (const type of TRIGGERS) scheduling.target.addEventListener(type, trigger, true);
+		for (const type of TRIGGERS) scheduling.target.addEventListener(type, onInteraction, true);
 	};
+	function onInteraction(): void {
+		if (chunk.canRetryOnInteraction?.() !== false) trigger();
+	}
 	function trigger(): void {
 		if (cancelled || loading) return;
 		loading = true;
@@ -55,7 +60,7 @@ export function loadDeferredChunk<T>(
 				loading = false;
 				if (!isChunkLoadError(error)) console.error("[deferred-chunk] load failed", error);
 				if (cancelled) return;
-				chunk.onFailed?.();
+				chunk.onFailed?.(trigger);
 				arm();
 			},
 		);

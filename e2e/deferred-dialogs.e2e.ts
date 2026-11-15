@@ -56,7 +56,7 @@ test("a side question waits for Ask and Escape leaves the running turn alone", a
 	}
 });
 
-test("a phone retains a side question when its dialogs fail to load", async () => {
+test("a phone can retry or cancel a side question when its dialogs fail to load", async () => {
 	test.skip(process.platform === "win32", "the fake Tailscale is a bun shebang script");
 	test.setTimeout(120_000);
 	const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-deferred-phone-")));
@@ -80,7 +80,7 @@ test("a phone retains a side question when its dialogs fail to load", async () =
 	const browser = await chromium.launch();
 	let proxy: ServeProxy | undefined;
 	const gate = Promise.withResolvers<void>();
-	const retryGate = Promise.withResolvers<void>();
+	let retryGate = Promise.withResolvers<void>();
 	try {
 		const host = await app.firstWindow();
 		await host.waitForFunction(() => window.omp?.mobileWeb != null);
@@ -93,13 +93,12 @@ test("a phone retains a side question when its dialogs fail to load", async () =
 		proxy = await ServeProxy.start(site, "seuput@example.com");
 		const context = await browser.newContext({ ...devices["Pixel 7"], serviceWorkers: "block" });
 		let attempts = 0;
-		let failures = 0;
+		let allowEntry = false;
 		await context.route(/\/assets\/OnDemandDialogs-[^/]+\.js(?:\?.*)?$/, async route => {
-			const attempt = ++attempts;
-			if (attempt <= 2) {
+			attempts++;
+			if (!allowEntry) {
 				await gate.promise;
 				await route.abort();
-				failures++;
 			} else {
 				await retryGate.promise;
 				await route.continue();
@@ -120,11 +119,20 @@ test("a phone retains a side question when its dialogs fail to load", async () =
 		const history = async () => phone.evaluate(() => window.omp.rpc.command({ type: "get_btw_history" }));
 		expect(await history()).toMatchObject({ success: true, data: { records: [] } });
 		gate.resolve();
-		await expect.poll(() => failures).toBe(2);
+		const failed = phone.getByRole("dialog", { name: "Side question" });
+		await expect(failed.getByRole("alert")).toBeVisible();
+		await expect(failed.getByText("What should I check next?", { exact: true })).toBeVisible();
+		await test
+			.info()
+			.attach("phone-question-load-failed", { body: await failed.screenshot(), contentType: "image/png" });
 		expect(await history()).toMatchObject({ success: true, data: { records: [] } });
-		await field.click();
-		await expect.poll(() => attempts).toBeGreaterThan(2);
-		await expect(phone.getByRole("button", { name: "Stop" })).toBeVisible();
+		const beforeRetry = attempts;
+		allowEntry = true;
+		await failed.getByRole("button", { name: "Retry", exact: true }).click();
+		await expect.poll(() => attempts).toBe(beforeRetry + 1);
+		await failed.getByRole("button", { name: "Retry", exact: true }).click();
+		expect(attempts).toBe(beforeRetry + 1);
+		await expect(failed.getByText("What should I check next?", { exact: true })).toBeVisible();
 		retryGate.resolve();
 		const dialog = phone.getByRole("dialog", { name: "Side question" });
 		await expect(dialog.getByRole("textbox", { name: "Side question" })).toHaveValue("What should I check next?", {
@@ -139,8 +147,36 @@ test("a phone retains a side question when its dialogs fail to load", async () =
 			success: true,
 			data: { records: [{ question: "What should I check next?" }] },
 		});
-		await phone.keyboard.press("Escape");
+		await dialog.getByRole("button", { name: "Close", exact: true }).tap();
 		await expect(dialog).toHaveCount(0);
+
+		allowEntry = false;
+		retryGate = Promise.withResolvers<void>();
+		await phone.reload();
+		await expect(field).toBeVisible();
+		await field.fill("/btw Cancel this retained question");
+		await phone.getByRole("button", { name: "Send" }).click();
+		await expect(failed.getByRole("alert")).toBeVisible();
+		await expect(failed.getByText("Cancel this retained question", { exact: true })).toBeVisible();
+		const beforeCancelRetry = attempts;
+		allowEntry = true;
+		await failed.getByRole("button", { name: "Retry", exact: true }).tap();
+		await expect.poll(() => attempts).toBe(beforeCancelRetry + 1);
+		await failed.getByRole("button", { name: "Cancel", exact: true }).tap();
+		await expect(failed).toHaveCount(0);
+		retryGate.resolve();
+		const paletteEntry = phone.locator("[data-command-center-entry]:visible").first();
+		if (!(await paletteEntry.isVisible()))
+			await phone.getByRole("button", { name: "Open menu", exact: true }).first().tap();
+		await paletteEntry.tap();
+		const palette = phone.locator('[role="dialog"]:has([data-palette-index])');
+		await expect(palette).toBeVisible();
+		await expect(dialog).toHaveCount(0);
+		await phone.keyboard.press("Escape");
+		expect(await history()).toMatchObject({
+			success: true,
+			data: { records: [{ question: "What should I check next?" }] },
+		});
 		await expect(phone.getByRole("button", { name: "Stop" })).toBeVisible();
 		expect(await phone.evaluate(() => window.omp.rpc.command({ type: "get_state" }))).toMatchObject({
 			success: true,

@@ -1,6 +1,6 @@
 import { type ComponentType, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { MenuAction, RunProgressState } from "../shared/ipc-types";
-import { ToastStack } from "./components/common";
+import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
@@ -251,6 +251,9 @@ export function App() {
 	// dialogs and is tried again at the next touch or key (lib/deferred-chunk.ts); a /btw question is retained.
 	const [OnDemandDialogs, setOnDemandDialogs] = useState<ComponentType | null>(null);
 	const onDemandLoaded = useRef(false);
+	const [retryOnDemand, setRetryOnDemand] = useState<(() => void) | null>(null);
+	const btwRequest = useUiStore(s => s.btwRequest);
+	const closeBtw = useUiStore(s => s.closeBtw);
 	useEffect(
 		() =>
 			loadDeferredChunk({
@@ -258,9 +261,11 @@ export function App() {
 				onLoaded: module => {
 					onDemandLoaded.current = true;
 					setOnDemandDialogs(() => module.OnDemandDialogs);
+					setRetryOnDemand(null);
 				},
 				// What it would have shown closes, so nothing waits on a dialog that is not there (Esc, the chords).
-				onFailed: () =>
+				onFailed: retry => {
+					setRetryOnDemand(() => retry);
 					useUiStore.setState({
 						commandPaletteOpen: false,
 						modelPickerOpen: false,
@@ -269,7 +274,9 @@ export function App() {
 						quickOpenOpen: false,
 						tabOverviewOpen: false,
 						projectPickerOpen: false,
-					}),
+					});
+				},
+				canRetryOnInteraction: () => useUiStore.getState().btwRequest === null,
 				start: document.documentElement.dataset.platform === "web" ? "idle" : "now",
 			}),
 		[],
@@ -911,6 +918,26 @@ export function App() {
 				))}
 				<FirstRunGate />
 				{OnDemandDialogs ? <OnDemandDialogs /> : null}
+				{!OnDemandDialogs && retryOnDemand && btwRequest !== null && (
+					<Modal
+						open
+						onClose={closeBtw}
+						title={t("btw.title")}
+						footer={
+							<>
+								<Button onClick={closeBtw} variant="ghost">
+									{t("common.cancel")}
+								</Button>
+								<Button onClick={retryOnDemand} variant="primary">
+									{t("common.retry")}
+								</Button>
+							</>
+						}
+					>
+						<p className="whitespace-pre-wrap break-words text-sc-sm">{btwRequest}</p>
+						<InlineNotice live title={t("btw.dialogLoadFailed")} tone="danger" />
+					</Modal>
+				)}
 				<WorktreeLifecycleDialog />
 				<TabSwitcher />
 				<ModelRestoreDialog />
