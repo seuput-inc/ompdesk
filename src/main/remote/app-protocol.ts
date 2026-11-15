@@ -7,8 +7,8 @@
  * - `tab.open {rtab, cwd?, kind?, fresh, sessionPath?}` → TabOpenResult
  * - `tab.start {rtab}`, `tab.restart {rtab, cwd?, sessionPath?}`, `tab.adoptCwd {rtab, cwd}`, `tab.close {rtab}`
  * - `tab.command {rtab, command, timeoutMs?}` → RpcResponse
- * - `tab.agentInstruction {rtab, sessionPath, omp, message, images?, timeoutMs?}` → `{accepted:true}` after actual
- *   agent admission; authenticated app effects only, never renderer `tab.command`, no re-open or retry.
+ * - `tab.agentInstruction {rtab, sessionPath, omp, requestId, message, images?, timeoutMs?}` → `{accepted:true}` after actual
+ *   agent admission; preserves the original request identity, authenticated app effects only, no re-open or retry.
  * - `tabs.kept {}` → `{tabs: KeptTab[]}`: the tabs the host keeps for the asking device that no live connection holds
  *   and that are running a turn, settling, waiting on an ask or held for the host's connection (a relaunched device
  *   opens the ones its layout lost, `readopt.ts`); an older host answers `unsupported`
@@ -197,6 +197,7 @@ export const AgentInstructionParams = z
 			.min(1)
 			.refine(path => path.endsWith(".jsonl"), "session path required"),
 		omp: z.string().min(1),
+		requestId: z.string().min(1),
 		message: z.string().min(1).max(200_000),
 		images: z
 			.array(z.object({ type: z.literal("image"), data: z.string().min(1), mimeType: z.string().min(1) }).strict())

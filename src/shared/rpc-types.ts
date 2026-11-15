@@ -54,6 +54,7 @@ export interface StopOrigin {
 export interface AgentControlInstructionCommand {
 	id?: string;
 	type: "agent_control_instruction";
+	requestId: string;
 	message: string;
 	images?: ImageContent[];
 }

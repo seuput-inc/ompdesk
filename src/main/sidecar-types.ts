@@ -72,7 +72,7 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	bridgeRequest?(method: string, params?: unknown, timeoutMs?: number): Promise<unknown>;
 	/** Native agent effects only; never renderer RPC. Resolves after actual prompt admission, not model consumption. */
 	sendAgentInstruction?(
-		payload: Pick<AgentControlInstructionCommand, "message" | "images">,
+		payload: Pick<AgentControlInstructionCommand, "requestId" | "message" | "images">,
 		timeoutMs?: number,
 	): Promise<{ accepted: true }>;
 	/** Re-register the GUI-executed host tools (the OMPdesk control tools follow their Settings switch). */

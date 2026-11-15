@@ -182,7 +182,7 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 	}
 
 	async sendAgentInstruction(
-		payload: Pick<AgentControlInstructionCommand, "message" | "images">,
+		payload: Pick<AgentControlInstructionCommand, "requestId" | "message" | "images">,
 		timeoutMs?: number,
 	): Promise<{ accepted: true }> {
 		const sidecar = this.#port.sidecar;

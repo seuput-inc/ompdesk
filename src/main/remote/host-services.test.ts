@@ -2860,6 +2860,125 @@ describe("LocalHostServices", () => {
 	});
 });
 
+describe("authenticated private agent instructions", () => {
+	async function target(extra: Partial<HostServicesDeps> = {}) {
+		const context = setup(60_000, extra);
+		const conn = new FakeConnection(peer("agent-device"));
+		await context.services.call(conn.peer, "tab.open", { rtab: "target", cwd: workDir, fresh: true }, conn);
+		const sidecar = context.sidecars[0];
+		if (!sidecar) throw new Error("missing target sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("session", { sessionId: "target-session", sessionFile: "/s/target.jsonl" });
+		const status = conn.tabEvents().find(event => event.name === "status");
+		const omp = TabStatusArg.parse(status?.arg).omp;
+		if (!omp) throw new Error("missing captured omp");
+		const request = {
+			rtab: "target",
+			sessionPath: "/s/target.jsonl",
+			omp,
+			requestId: "native-original-request",
+			message: "Keep the original instruction",
+			images: [{ type: "image" as const, data: "AAAA", mimeType: "image/png" }],
+			timeoutMs: 1234,
+		};
+		return { ...context, conn, sidecar, request };
+	}
+
+	it("waits for the captured receiver's actual bridge admission and preserves the original payload", async () => {
+		const { services, conn, sidecar, request } = await target();
+		const admission = Promise.withResolvers<{ accepted: true }>();
+		const bridge = vi.fn(() => admission.promise);
+		Object.assign(sidecar, { bridgeRequest: bridge });
+		let settled = false;
+		const result = services.call(conn.peer, "tab.agentInstruction", request, conn).finally(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		expect(bridge).toHaveBeenCalledExactlyOnceWith(
+			"agent_control.instruction",
+			{ requestId: request.requestId, message: request.message, images: request.images },
+			1234,
+		);
+		expect(sidecar.commands).toEqual([]);
+		admission.resolve({ accepted: true });
+		await expect(result).resolves.toEqual({ accepted: true });
+	});
+
+	it.each([undefined, ""])("refuses a missing or empty original request identity (%s)", async requestId => {
+		const { services, conn, sidecar, request } = await target();
+		const bridge = vi.fn();
+		Object.assign(sidecar, { bridgeRequest: bridge });
+		await expect(services.call(conn.peer, "tab.agentInstruction", { ...request, requestId }, conn)).rejects.toThrow();
+		expect(bridge).not.toHaveBeenCalled();
+		expect(sidecar.commands).toEqual([]);
+	});
+
+	it.each(["disabled", "hidden", "foreign-peer", "old-connection", "wrong-session", "wrong-omp"] as const)(
+		"refuses %s before any bridge effect",
+		async refusal => {
+			let enabled = true;
+			const hidden = new Set<string>();
+			const { services, conn, sidecar, request } = await target({
+				agentControlEnabled: () => enabled,
+				agentHidden: () => hidden,
+			});
+			const bridge = vi.fn(async () => ({ accepted: true }));
+			Object.assign(sidecar, { bridgeRequest: bridge });
+			if (refusal === "disabled") enabled = false;
+			if (refusal === "hidden") hidden.add(request.sessionPath);
+			if (refusal === "wrong-session") request.sessionPath = "/s/another.jsonl";
+			if (refusal === "wrong-omp") request.omp = "replacement-omp";
+			const caller =
+				refusal === "foreign-peer"
+					? new FakeConnection(peer("another-device"))
+					: refusal === "old-connection"
+						? new FakeConnection(conn.peer)
+						: conn;
+			await expect(services.call(caller.peer, "tab.agentInstruction", request, caller)).rejects.toThrow();
+			expect(bridge).not.toHaveBeenCalled();
+			expect(sidecar.commands).toEqual([]);
+		},
+	);
+
+	it.each(["disabled", "hidden", "new-omp", "new-session", "new-connection"] as const)(
+		"does not claim confirmed admission when %s changes while a bridge effect is pending",
+		async change => {
+			let enabled = true;
+			const hidden = new Set<string>();
+			const { services, conn, sidecar, request } = await target({
+				agentControlEnabled: () => enabled,
+				agentHidden: () => hidden,
+			});
+			const admission = Promise.withResolvers<{ accepted: true }>();
+			const bridge = vi.fn(() => admission.promise);
+			Object.assign(sidecar, { bridgeRequest: bridge });
+			const result = services.call(conn.peer, "tab.agentInstruction", request, conn);
+			const refused = expect(result).rejects.toThrow();
+			if (change === "disabled") enabled = false;
+			if (change === "hidden") hidden.add(request.sessionPath);
+			if (change === "new-omp") sidecar.setStatus("restarting");
+			if (change === "new-session") sidecar.emit("session", { sessionFile: "/s/replaced.jsonl" });
+			if (change === "new-connection") {
+				const replacement = new FakeConnection(conn.peer);
+				await services.call(replacement.peer, "tab.open", { rtab: request.rtab, cwd: workDir }, replacement);
+			}
+			admission.resolve({ accepted: true });
+			await refused;
+			expect(bridge).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("propagates receiver failure and refuses a non-admission response without falling back to RPC", async () => {
+		const { services, conn, sidecar, request } = await target();
+		const failure = codedError("remote_protocol", "receiver failed before admission");
+		const bridge = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({ accepted: false });
+		Object.assign(sidecar, { bridgeRequest: bridge });
+		await expect(services.call(conn.peer, "tab.agentInstruction", request, conn)).rejects.toBe(failure);
+		await expect(services.call(conn.peer, "tab.agentInstruction", request, conn)).rejects.toThrow();
+		expect(sidecar.commands).toEqual([]);
+	});
+});
 describe("LocalHostServices for this computer's own windows", () => {
 	const SESSION = "/s/x.jsonl";
 	const ask = (id: string) => ({ type: "extension_ui_request", id, method: "confirm", title: "Deploy?", message: "" });
@@ -2905,6 +3024,7 @@ describe("LocalHostServices for this computer's own windows", () => {
 				route === "private-port" ? { sendAgentInstruction: effect } : { bridgeRequest: effect },
 			);
 			const payload = {
+				requestId: "native-hosted-request",
 				message: "An unchanged agent instruction",
 				images: [{ type: "image" as const, data: "AAAA", mimeType: "image/png" }],
 			};
@@ -2933,7 +3053,10 @@ describe("LocalHostServices for this computer's own windows", () => {
 			const receipt = Promise.withResolvers<{ accepted: true }>();
 			const bridge = vi.fn(() => receipt.promise);
 			Object.assign(sidecar, { bridgeRequest: bridge });
-			const result = view.sendAgentInstruction({ message: "for the original session" });
+			const result = view.sendAgentInstruction({
+				requestId: "native-hosted-request",
+				message: "for the original session",
+			});
 			const refused = expect(result).rejects.toThrow();
 			if (change === "left") view.dispose();
 			if (change === "session") sidecar.emit("session", { sessionId: "replacement", sessionFile: "/s/new.jsonl" });
@@ -2953,13 +3076,21 @@ describe("LocalHostServices for this computer's own windows", () => {
 		const failure = codedError("remote_protocol", "original admission failed");
 		const bridge = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({});
 		Object.assign(sidecar, { bridgeRequest: bridge });
-		await expect(view.sendAgentInstruction({ message: "first" })).rejects.toBe(failure);
-		await expect(view.sendAgentInstruction({ message: "second" })).rejects.toThrow();
+		await expect(view.sendAgentInstruction({ requestId: "native-hosted-request", message: "first" })).rejects.toBe(
+			failure,
+		);
+		await expect(
+			view.sendAgentInstruction({ requestId: "native-hosted-request", message: "second" }),
+		).rejects.toThrow();
 		sidecar.setStatus("starting");
-		await expect(view.sendAgentInstruction({ message: "not ready" })).rejects.toThrow();
+		await expect(
+			view.sendAgentInstruction({ requestId: "native-hosted-request", message: "not ready" }),
+		).rejects.toThrow();
 		sidecar.setStatus("ready");
 		view.dispose();
-		await expect(view.sendAgentInstruction({ message: "left" })).rejects.toThrow();
+		await expect(
+			view.sendAgentInstruction({ requestId: "native-hosted-request", message: "left" }),
+		).rejects.toThrow();
 		expect(bridge).toHaveBeenCalledTimes(2);
 		expect(sidecar.commands).toEqual([]);
 	});
