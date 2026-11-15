@@ -50,4 +50,15 @@ mod tests {
         picture.write_to(&mut encoded, ImageFormat::Png).unwrap();
         assert!(data_url(encoded.get_ref()).is_none());
     }
+
+    #[test]
+    fn all_enabled_favicon_codecs_are_normalized_and_truncation_is_rejected() {
+        for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::WebP, ImageFormat::Ico] {
+            let picture = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(24, 12, image::Rgb([20, 100, 180])));
+            let mut encoded = Cursor::new(Vec::new());
+            picture.write_to(&mut encoded, format).unwrap();
+            assert!(data_url(encoded.get_ref()).is_some(), "{format:?}");
+            assert!(data_url(&encoded.get_ref()[..10]).is_none(), "{format:?}");
+        }
+    }
 }

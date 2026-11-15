@@ -101,10 +101,9 @@ impl Service {
         };
         let checkout = tokio::fs::canonicalize(checkout).await.ok()?;
         let checkout = checkout.to_str()?;
-        let (facts, sha, root) = tokio::join!(
+        let (facts, sha) = tokio::join!(
             origin::facts(git, checkout, 3000),
             read::head_sha(git, checkout),
-            read::primary_root(git, checkout),
         );
         let facts = facts?;
         let branch = facts.branch().map(str::to_owned);
@@ -115,7 +114,7 @@ impl Service {
             (None, Some(sha)) => Head::Detached { sha: sha.to_owned() },
             (None, None) => return None,
         };
-        let root = tokio::fs::canonicalize(root.ok()?).await.ok()?;
+        let root = tokio::fs::canonicalize(facts.project_root()?).await.ok()?;
         let project = root.file_name()?.to_string_lossy().into_owned();
         let repository = Some(Repository { root: root.to_str()?.to_owned(), head });
         drop(permit);
@@ -125,16 +124,16 @@ impl Service {
         let _permit = self.slots.acquire().await.ok()?;
         let current_path = tokio::fs::canonicalize(input).await.ok()?;
         if current_path != path { return None; }
-        let (current_checkout, current_facts, current_sha, current_root) = tokio::join!(
+        let (current_checkout, current_facts, current_sha) = tokio::join!(
             read::repo_root(git, cwd),
             origin::facts(git, checkout, 3000),
             read::head_sha(git, checkout),
-            read::primary_root(git, checkout),
         );
         let current_checkout = tokio::fs::canonicalize(current_checkout.ok()??).await.ok()?;
-        let current_root = tokio::fs::canonicalize(current_root.ok()?).await.ok()?;
+        let current_facts = current_facts?;
+        let current_root = tokio::fs::canonicalize(current_facts.project_root()?).await.ok()?;
         if current_checkout.to_str()? != checkout || current_root != root
-            || current_facts?.branch() != branch.as_deref() || current_sha.ok()? != sha { return None; }
+            || current_facts.branch() != branch.as_deref() || current_sha.ok()? != sha { return None; }
         Some(Metadata { path: checkout.to_owned(), project, repository, image })
     }
 

@@ -85,3 +85,21 @@ async fn a_head_changed_while_artwork_waits_never_returns_an_old_snapshot() {
     let result = work.await.unwrap().unwrap();
     assert!(serde_json::to_value(result).unwrap()[&path].is_null());
 }
+
+#[tokio::test]
+async fn relocated_git_storage_is_not_mistaken_for_the_repository_checkout() {
+    let temp = Fixture::new("repository-metadata-relocated");
+    let root = temp.dir.join("project");
+    let storage = temp.dir.join("git-storage");
+    repo_at(&root);
+    picture(&root, [40, 150, 80, 255]);
+    sh(&root, &["init", "-q", "--separate-git-dir", storage.to_str().unwrap()]);
+    let linked = temp.dir.join("linked");
+    sh(&root, &["worktree", "add", "-qb", "feature", linked.to_str().unwrap()]);
+    let path = linked.to_string_lossy().into_owned();
+    let result = Arc::new(Service::default()).batch(vec![path.clone()], runner(), Scope::detached()).await.unwrap();
+    let json = serde_json::to_value(result).unwrap();
+    assert_eq!(json[&path]["repository"]["root"], root.canonicalize().unwrap().to_str().unwrap());
+    assert_eq!(json[&path]["image"]["source"], "repository");
+    assert_eq!(json[&path]["repository"]["head"], serde_json::json!({"kind":"branch","name":"feature"}));
+}
