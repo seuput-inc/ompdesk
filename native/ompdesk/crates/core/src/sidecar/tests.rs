@@ -60,7 +60,11 @@ fn fake_omp(mode: &str) {
             eprintln!("error: saved model gone");
             std::process::exit(3);
         }
-        "silent" => {}
+        "silent" => {
+            if std::env::var("OMPDESK_FAKE_START_EVENT").as_deref() == Ok("1") {
+                say("{\"type\":\"test_start_barrier\"}");
+            }
+        }
         "refresh" => {
             say("up");
             // An omp whose exit waits on a login refresh it has to save: asked to stop (its stdin ends, as on
