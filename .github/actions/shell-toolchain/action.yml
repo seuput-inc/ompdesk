@@ -1,7 +1,8 @@
 # What `cargo` needs to compile the CEF shell (native/ompdesk/crates/shell, a cargo workspace of its own): the Rust
-# toolchain native/ompdesk/rust-toolchain.toml pins with the shell workspace's own cargo cache, CEF's pinned archive
-# (native/ompdesk/crates/shell/cef-pin.json; about 175 MB on Windows, 135 MB on macOS) from `actions/cache` so a run
-# downloads it from Spotify's CEF builds only on a miss, and cmake and Ninja on macOS (Windows takes them from the
+# toolchain native/ompdesk/rust-toolchain.toml pins with rust-src prepared before parallel compilation, the shell
+# workspace's own cargo cache, and CEF's pinned archive (native/ompdesk/crates/shell/cef-pin.json; about 175 MB on
+# Windows, 135 MB on macOS) from `actions/cache`, so a run downloads it from Spotify's CEF builds only on a miss, and
+# cmake and Ninja on macOS (Windows takes them from the
 # runner's Visual Studio, which scripts/build-shell.ts finds with vswhere). Used by the `shell` action on a staged-build
 # cache miss and by the jobs that run clippy and `cargo test` on the shell.
 name: OMPdesk's CEF shell toolchain
@@ -13,6 +14,8 @@ runs:
     - uses: ./.github/actions/native-toolchain
       with:
         workspaces: native/ompdesk/crates/shell
+        # Avoid concurrent rustup downloads from parallel build-script compiler processes.
+        components: rustfmt, clippy, rust-src
 
     - name: Restore CEF's archive
       id: cef-archive

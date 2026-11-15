@@ -3,12 +3,15 @@
 # native/ompdesk/rust-toolchain.toml pins, so a toolchain bump there is the only edit; rustfmt and clippy come with it,
 # and Swatinem/rust-cache keeps the workspace's build per job, OS and toolchain.
 name: OMPdesk's Rust toolchain
-description: The toolchain native/ompdesk/rust-toolchain.toml pins, with rustfmt and clippy, and the workspace's cargo cache.
+description: The toolchain native/ompdesk/rust-toolchain.toml pins, with requested components and the workspace's cargo cache.
 
 inputs:
   workspaces:
     description: "The cargo workspace Swatinem/rust-cache keeps: native/ompdesk, or native/ompdesk/crates/shell for the CEF shell."
     default: native/ompdesk
+  components:
+    description: Rust components to prepare before compiling.
+    default: rustfmt, clippy
 
 runs:
   using: composite
@@ -28,7 +31,7 @@ runs:
     - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
       with:
         toolchain: ${{ steps.pin.outputs.channel }}
-        components: rustfmt, clippy
+        components: ${{ inputs.components }}
 
     - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       with:
