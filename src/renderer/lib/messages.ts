@@ -14,6 +14,8 @@ import { draftKeys, saveDraft } from "../components/layout/composer/draft-persis
 import { hydrateSession, resetRetryPending } from "../hooks/use-rpc-events";
 import { type ComposerImage, type ComposerStore, DOUBLE_ESC_MS, useComposerStore } from "../stores/composer";
 import { useMessagesStore } from "../stores/messages";
+import { outboxSession } from "../stores/outbox";
+import { type QueueStore, useQueueStore } from "../stores/queue";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import { focusedRuntimeTabId, sessionRuntimeStore, withSessionRuntime } from "../stores/session-runtime-context";
 import { ensureTabRuntime } from "../stores/tab-runtime";
@@ -21,9 +23,10 @@ import { useTabsStore } from "../stores/tabs";
 import { toast, toastError } from "../stores/toast";
 import { endAutoGoal } from "./auto-mode-client";
 import { translate } from "./i18n";
+import { editQueuedInstruction } from "./manual-recovery";
 import { promptDisplayText } from "./prompt-text";
 import { IMAGE_ONLY_CHIP } from "./queue-chip";
-import type { TabRpc } from "./tab-rpc";
+import { focusedTabRpc, type TabRpc } from "./tab-rpc";
 
 /**
  * Message-level actions shared between the command palette and the global
@@ -541,43 +544,44 @@ export async function forkSessionFromMessageInNewTab(
 	return forkSessionFromEntryInNewTab(entryId, sourceTabId, rpc);
 }
 
-/** The queued steer/follow-up message pulled back by the dequeue RPC. */
-interface DequeuedMessage {
-	text: string;
-	images?: ImageContent[];
-}
-
-/**
- * Restore a queued message into the composer (TUI app.message.dequeue / Alt+Up
- * parity): the RPC pops the last queued steer (else follow-up) with its
- * attachments and leaves the rest queued; it goes back into the composer for
- * editing — text prepended ahead of any draft, images appended to the image
- * strip. `onEmpty` fires when nothing was queued; RPC failures throw for the
- * caller to surface.
- */
+/** Alt+Up edits the newest ready original through the same durable withdrawal as the queue's Edit action. */
 export async function restoreQueuedMessages(onEmpty: () => void): Promise<void> {
-	// The tab that asked, taken now: focus can move while the RPC runs, and on a shared tab the popped
-	// message may be another device's — it still goes back into the composer of the window that asked.
-	const askedTabId = focusedRuntimeTabId() ?? useTabsStore.getState().activeTabId;
-	const response = await window.omp.rpc.dequeue();
+	const tabId = focusedRuntimeTabId() ?? useTabsStore.getState().activeTabId;
+	const tab = useTabsStore.getState().tabs.find(tab => tab.id === tabId);
+	const session = sessionRuntimeStore<SessionStore>(tabId, "session") ?? useSessionStore;
+	const sessionId = tab?.sessionId || session.getState().sessionId;
+	if (!tabId || !tab || !sessionId) return;
+	const composer = sessionRuntimeStore<ComposerStore>(tabId, "composer") ?? useComposerStore;
+	if (composer.getState().editingRecovered) return;
+	const queue = sessionRuntimeStore<QueueStore>(tabId, "queue") ?? useQueueStore;
+	const rpc = focusedTabRpc();
+	const isCurrent = () =>
+		useTabsStore.getState().tabs.some(current => current.id === tabId && current.sessionId === tab.sessionId) &&
+		session.getState().sessionId === sessionId &&
+		(sessionRuntimeStore<ComposerStore>(tabId, "composer") ?? useComposerStore) === composer;
+	const response = await rpc.getQueue();
 	if (!response.success) throw new Error(response.error);
-	const data = response.data as { messages?: DequeuedMessage[] } | undefined;
-	const restored = data?.messages?.[0];
-	if (!restored) {
+	if (!isCurrent()) return;
+	if (!queue.getState().setFromFrame(response.data)) throw new Error("Invalid pending instruction snapshot");
+	const { instance, entries } = queue.getState();
+	const original = entries.findLast(entry => entry.state === "ready");
+	if (!instance || !original) {
 		onEmpty();
 		return;
 	}
-	// InputArea owns the "omp:fill-composer" listener.
-	window.dispatchEvent(
-		new CustomEvent("omp:fill-composer", {
-			detail: {
-				text: restored.text,
-				images: restored.images,
-				prepend: true,
-				...(askedTabId ? { tabId: askedTabId } : {}),
-			},
-		}),
-	);
+	try {
+		const opened = await editQueuedInstruction({
+			rpc,
+			instance,
+			id: original.id,
+			session: outboxSession({ ...tab, sessionId }),
+			composer,
+			isCurrent,
+		});
+		if (!opened && isCurrent()) toast({ variant: "warning", message: translate("composerQueue.recoveryPending") });
+	} finally {
+		void queue.getState().refresh();
+	}
 }
 
 /**

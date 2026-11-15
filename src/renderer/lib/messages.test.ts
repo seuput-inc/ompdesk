@@ -10,8 +10,8 @@ import type {
 import { draftKeys, loadDraft } from "../components/layout/composer/draft-persistence";
 import { type ComposerStore, DOUBLE_ESC_MS, useComposerStore } from "../stores/composer";
 import { useMessagesStore } from "../stores/messages";
-import { useSessionStore } from "../stores/session";
 import { useOutboxStore } from "../stores/outbox";
+import { useSessionStore } from "../stores/session";
 import { sessionRuntimeStore } from "../stores/session-runtime-context";
 import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";

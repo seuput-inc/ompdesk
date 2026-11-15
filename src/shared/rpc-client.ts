@@ -25,7 +25,6 @@ export interface SessionRpcClient {
 	command: RpcTransport;
 	getState(): Promise<RpcResponse>;
 	prompt(message: string, images?: ImageContent[]): Promise<RpcResponse>;
-	steer(message: string, images?: ImageContent[]): Promise<RpcResponse>;
 	/** `origin`: who asked for the Stop, for main's log (never sent to omp). */
 	abort(origin?: StopOrigin): Promise<RpcResponse>;
 	abortAndPrompt(message: string, origin?: StopOrigin): Promise<RpcResponse>;
@@ -38,7 +37,6 @@ export interface SessionRpcClient {
 	eval(code: string, language?: "python" | "js" | "ruby" | "julia", excluded?: boolean): Promise<RpcResponse>;
 	abortEval(): Promise<RpcResponse>;
 	abortMaintenance(): Promise<RpcResponse>;
-	dequeue(): Promise<RpcResponse>;
 	getQueue(): Promise<RpcResponse>;
 	queueRemove(instance: string, queueId: string, intent: RpcManualRecoveryIntent): Promise<RpcResponse>;
 	getManualRecovery(): Promise<RpcResponse>;
@@ -423,7 +421,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		command: rpcCommand,
 		getState: () => rpcCommand({ type: "get_state" }),
 		prompt: (message, images) => rpcCommand({ type: "prompt", message, images }),
-		steer: (message, images) => rpcCommand({ type: "steer", message, images }),
 		abort: origin => rpcCommand({ type: "abort", origin }),
 		abortAndPrompt: (message, origin) => rpcCommand({ type: "abort_and_prompt", message, origin }),
 		abortAndRestoreQueue: origin => rpcCommand({ type: "abort_and_restore_queue", origin }),
@@ -434,7 +431,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		eval: (code, language, excluded) => rpcCommand({ type: "eval", code, language, excluded }),
 		abortEval: () => rpcCommand({ type: "abort_eval" }),
 		abortMaintenance: () => rpcCommand({ type: "abort_maintenance" }),
-		dequeue: () => rpcCommand({ type: "dequeue" }),
 		getQueue: () => rpcCommand({ type: "get_queue" }),
 		queueRemove: (instance, queueId, intent) => rpcCommand({ type: "queue_remove", instance, queueId, intent }),
 		getManualRecovery: () => rpcCommand({ type: "get_manual_recovery" }),

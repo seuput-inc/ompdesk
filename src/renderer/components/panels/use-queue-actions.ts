@@ -2,10 +2,10 @@
 import { useCallback } from "react";
 import { useStore } from "zustand";
 import { useT } from "../../lib/i18n";
-import { reconcileManualRecovery } from "../../lib/manual-recovery";
+import { editQueuedInstruction, reconcileManualRecovery } from "../../lib/manual-recovery";
 import { useTabRpc } from "../../lib/tab-rpc";
 import { type ComposerStore, useComposerStore } from "../../stores/composer";
-import { outboxSession, useOutboxStore } from "../../stores/outbox";
+import { outboxSession } from "../../stores/outbox";
 import { type QueueStore, useQueueStore } from "../../stores/queue";
 import { type SessionStore, useSessionStore } from "../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../stores/session-runtime-context";
@@ -123,43 +123,22 @@ export function useQueueActions(): QueueActions {
 			const stillCurrent = () =>
 				session.getState().sessionId === sessionId &&
 				(sessionRuntimeStore<ComposerStore>(targetId, "composer") ?? useComposerStore) === composer;
-			let recoveryChecked = false;
 			try {
-				const response = await rpc.queueRemove(instance, id, "draft");
-				if (!response.success) {
-					toastError({ title: t("queuePanel.editFailed"), error: response });
-					return false;
-				}
-				const data = response.data;
-				if (
-					typeof data !== "object" ||
-					data === null ||
-					!("removed" in data) ||
-					data.removed !== true ||
-					!("recoveryId" in data) ||
-					typeof data.recoveryId !== "string" ||
-					!("intent" in data) ||
-					data.intent !== "draft"
-				)
-					return false;
-				if (!stillCurrent()) return false;
-				await reconcileManualRecovery(rpc, outboxSession({ ...tab, sessionId }), composer, stillCurrent);
-				recoveryChecked = true;
-				if (!stillCurrent()) return false;
-				const manual = useOutboxStore
-					.getState()
-					.items.find(item => item.send.kind === "manual" && item.send.source.recoveryId === data.recoveryId);
-				if (manual?.send.kind === "manual" && manual.send.acknowledged)
-					return composer.getState().beginRecoveredEdit(manual.id);
-				toast({ variant: "warning", message: t("composerQueue.recoveryPending") });
-				return false;
+				const opened = await editQueuedInstruction({
+					rpc,
+					instance,
+					id,
+					session: outboxSession({ ...tab, sessionId }),
+					composer,
+					isCurrent: stillCurrent,
+				});
+				if (!opened && stillCurrent()) toast({ variant: "warning", message: t("composerQueue.recoveryPending") });
+				return opened;
 			} catch (error) {
 				toastError({ title: t("queuePanel.editFailed"), error });
 				return false;
 			} finally {
 				void queue.getState().refresh();
-				if (!recoveryChecked && stillCurrent())
-					await reconcileManualRecovery(rpc, outboxSession({ ...tab, sessionId }), composer, stillCurrent);
 			}
 		},
 		[queue, ready, rpc, session, t, tabId],

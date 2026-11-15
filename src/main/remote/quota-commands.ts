@@ -20,7 +20,6 @@ type RpcType = RpcCommand["type"];
 export const MODEL_COMMAND_TYPES = [
 	"prompt",
 	"abort_and_prompt",
-	"steer",
 	"steer_subagent",
 	"btw",
 	"compact",
@@ -119,7 +118,6 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"debug",
 	"delete_agent_file",
 	"delete_plugin_setting",
-	"dequeue",
 	// Stock's `/dump` archive and its cleanup (bridge session-dump.ts): file work on this computer, no model.
 	"discard_session_archive",
 	"dump_session_archive",

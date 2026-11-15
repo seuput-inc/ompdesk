@@ -9,7 +9,6 @@ import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { type TabRpc, useTabRpc } from "../../lib/tab-rpc";
 import { useAutopilotStore } from "../../stores/autopilot";
-import { useSessionStore } from "../../stores/session";
 import { toastError } from "../../stores/toast";
 import {
 	Badge,
@@ -175,7 +174,6 @@ function ReleaseStatus() {
 export function AutopilotShipSection() {
 	const t = useT();
 	const rpc: TabRpc = useTabRpc();
-	const streaming = useSessionStore(s => s.isStreaming);
 	const state = useAutopilotStore(s => s.status.state);
 	const ship = useAutopilotStore(s => s.status.ship);
 	const ahead = useAutopilotStore(s => s.branchStatus?.ahead);
@@ -203,7 +201,7 @@ export function AutopilotShipSection() {
 	// "Release" is the user's own request in chat: the agent finishes the item in progress and follows the procedure.
 	const requestRelease = async () => {
 		const message = t("autopilot.ship.releaseMessage");
-		const response = streaming ? await rpc.steer(message) : await rpc.prompt(message);
+		const response = await rpc.prompt(message);
 		if (!response.success) toastError({ title: t("autopilot.actionFailed"), error: response });
 	};
 

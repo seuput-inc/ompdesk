@@ -139,3 +139,58 @@ export async function reconcileManualRecovery(
 		}
 	}
 }
+
+/** Withdraw one original instruction, persist its recovery, then open that saved draft for editing. */
+export async function editQueuedInstruction({
+	rpc,
+	instance,
+	id,
+	session,
+	composer,
+	isCurrent,
+}: {
+	rpc: Pick<TabRpc, "queueRemove" | "getManualRecovery" | "ackManualRecovery">;
+	instance: string;
+	id: string;
+	session: string;
+	composer: StoreApi<ComposerStore>;
+	isCurrent: () => boolean;
+}): Promise<boolean> {
+	if (!isCurrent() || composer.getState().editingRecovered) return false;
+	let recoveryChecked = false;
+	try {
+		const response = await rpc.queueRemove(instance, id, "draft");
+		if (!response.success) throw new Error(response.error);
+		const data = response.data;
+		if (
+			typeof data !== "object" ||
+			data === null ||
+			!("removed" in data) ||
+			data.removed !== true ||
+			!("recoveryId" in data) ||
+			typeof data.recoveryId !== "string" ||
+			!("intent" in data) ||
+			data.intent !== "draft" ||
+			!isCurrent()
+		)
+			return false;
+		await reconcileManualRecovery(rpc, session, composer, isCurrent);
+		recoveryChecked = true;
+		if (!isCurrent()) return false;
+		const manual = useOutboxStore
+			.getState()
+			.items.find(
+				item =>
+					item.session === session &&
+					item.send.kind === "manual" &&
+					item.send.source.instance === instance &&
+					item.send.source.id === id &&
+					item.send.source.recoveryId === data.recoveryId,
+			);
+		return manual?.send.kind === "manual" && manual.send.acknowledged
+			? composer.getState().beginRecoveredEdit(manual.id)
+			: false;
+	} finally {
+		if (!recoveryChecked && isCurrent()) await reconcileManualRecovery(rpc, session, composer, isCurrent);
+	}
+}

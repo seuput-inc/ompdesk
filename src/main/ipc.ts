@@ -13,7 +13,10 @@ import { existsSync, promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, clipboard, dialog, type Notification, screen, shell } from "electron";
-import { isAgentInstructionCommand } from "../../resources/gui-bridge/instruction-contracts";
+import {
+	isAgentInstructionCommand,
+	RETIRED_INSTRUCTION_COMMANDS,
+} from "../../resources/gui-bridge/instruction-contracts";
 import { AUTO_TITLE_EVOLVE_PREF, AUTO_TITLE_PREF } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { DELEGATION_PREF, isDelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import { JUDGE_ASSIST_PREF, judgeAssistEnabled } from "../../resources/gui-bridge/modes/judge-assist-contracts";
@@ -444,7 +447,7 @@ function settledStart(sidecar: SidecarLike): Promise<void> {
 }
 
 /** Commands that carry what the person typed: a current instruction, a shell line, or eval code. */
-const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "bash", "eval"]);
+const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "bash", "eval"]);
 /** Shown notifications that switch to a tab on click, kept alive until then. */
 const liveNotifications = new Set<Notification>();
 /** Windows whose close already cancels their pending notification summary. */
@@ -803,6 +806,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		payload: IpcRpcCommandPayload,
 		channel?: string,
 	): Promise<RpcResponse> => {
+		if (RETIRED_INSTRUCTION_COMMANDS.has(payload.command.type))
+			return {
+				id: payload.command.id,
+				type: "response",
+				command: payload.command.type,
+				success: false,
+				code: "unsupported",
+				error: "Delivery modes are not supported",
+			};
 		if (isAgentInstructionCommand(payload.command))
 			return {
 				id: payload.command.id,
@@ -1089,7 +1101,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		try {
 			// A prompt from a paired web device names its device to the omp first: the bridge journals it for the
 			// message with that text, so every window can say who typed it.
-			if ((cmd.type === "prompt" || cmd.type === "steer") && !sidecar.device) {
+			if (cmd.type === "prompt" && !sidecar.device) {
 				const origin = promptOriginOf(win);
 				if (origin)
 					await client.command({ type: "prompt_origin_set", origin, text: cmd.message }).catch(() => undefined);

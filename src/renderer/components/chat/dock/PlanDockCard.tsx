@@ -133,14 +133,9 @@ function truncate(text: string, max: number): string {
 	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** Deliver review feedback to the agent: steer mid-turn, prompt when idle. */
-async function sendPlanMessage(
-	message: string,
-	t: (key: string) => string,
-	rpc: TabRpc,
-	streaming: boolean,
-): Promise<boolean> {
-	const response = streaming ? await rpc.steer(message) : await rpc.prompt(message);
+/** Deliver review feedback through canonical current-instruction admission. */
+async function sendPlanMessage(message: string, t: (key: string) => string, rpc: TabRpc): Promise<boolean> {
+	const response = await rpc.prompt(message);
 	if (!response.success) {
 		toastError({ title: t("planPanel.feedbackFailed"), error: response });
 		return false;
@@ -317,7 +312,7 @@ export function PlanDockCard({
 		setApproving(true);
 		try {
 			const target = displayPath ?? t("planPanel.fallbackTarget");
-			const ok = await sendPlanMessage(t("planPanel.approveMessage", { target }), t, rpc, isStreaming);
+			const ok = await sendPlanMessage(t("planPanel.approveMessage", { target }), t, rpc);
 			if (ok) {
 				setApprovedContent(planText);
 				toast({ variant: "success", message: t("planPanel.approvalSent") });
@@ -326,7 +321,7 @@ export function PlanDockCard({
 			approvingRef.current = false;
 			setApproving(false);
 		}
-	}, [content, displayPath, rpc, t, isStreaming]);
+	}, [content, displayPath, rpc, t]);
 
 	const requestChanges = useCallback(async () => {
 		const text = planFeedback.trim();
@@ -334,17 +329,12 @@ export function PlanDockCard({
 		setSendingPlan(true);
 		try {
 			const target = displayPath ?? t("planPanel.fallbackTarget");
-			const ok = await sendPlanMessage(
-				t("planPanel.reviseMessage", { target, feedback: text }),
-				t,
-				rpc,
-				isStreaming,
-			);
+			const ok = await sendPlanMessage(t("planPanel.reviseMessage", { target, feedback: text }), t, rpc);
 			if (ok) setPlanFeedback("");
 		} finally {
 			setSendingPlan(false);
 		}
-	}, [planFeedback, displayPath, rpc, t, isStreaming]);
+	}, [planFeedback, displayPath, rpc, t]);
 
 	const submitStepFeedback = useCallback(async () => {
 		if (!stepFeedback) return;
@@ -356,11 +346,10 @@ export function PlanDockCard({
 			`Feedback on plan step ${stepFeedback.step.ordinal} — “${truncate(stepFeedback.step.text, 80)}” (${target}):\n${text}`,
 			t,
 			rpc,
-			isStreaming,
 		);
 		if (ok) setStepFeedback(null);
 		else setStepFeedback({ ...stepFeedback, sending: false });
-	}, [stepFeedback, displayPath, rpc, t, isStreaming]);
+	}, [stepFeedback, displayPath, rpc, t]);
 
 	const sections = useMemo(() => parsePlanSections(content ?? ""), [content]);
 	// The count names the steps to take: numbered and checklist items, or every item of a plan made only of bullets.

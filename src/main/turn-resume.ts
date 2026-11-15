@@ -191,9 +191,7 @@ export function movesTab(type: string, response: RpcResponse): boolean {
 /** Whether a command sends the tab a prompt of the person's own (an agent's message is wrapped, and is none): their run is theirs. */
 export function personsPrompt(command: { type: string; message?: unknown }): boolean {
 	return (
-		(command.type === "prompt" || command.type === "steer") &&
-		typeof command.message === "string" &&
-		parseAgentMessage(command.message) === null
+		command.type === "prompt" && typeof command.message === "string" && parseAgentMessage(command.message) === null
 	);
 }
 

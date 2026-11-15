@@ -72,7 +72,6 @@ export type RpcCommand =
 			 */
 			deliveryId?: string;
 	  }
-	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort"; origin?: StopOrigin }
 	| { id?: string; type: "abort_and_prompt"; message: string; images?: ImageContent[]; origin?: StopOrigin }
 	// Stock queue edits (queued messages are identified by chip text + lane, as
@@ -130,7 +129,6 @@ export type RpcCommand =
 	| { id?: string; type: "abort_eval" }
 	/** Cancels a running manual `/compact` or handoff (stock `abortCompaction`/`abortHandoff`); `{aborted}`. */
 	| { id?: string; type: "abort_maintenance" }
-	| { id?: string; type: "dequeue" }
 	/** Pending instructions are identified by an opaque entry id within a bridge instance. */
 	| { id?: string; type: "get_queue" }
 	| { id?: string; type: "queue_remove"; instance: string; queueId: string; intent: RpcManualRecoveryIntent }

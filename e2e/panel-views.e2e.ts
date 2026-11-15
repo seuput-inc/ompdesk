@@ -147,7 +147,7 @@ for (const theme of variants(["light", "dark"] as const)) {
 			await capture(page.getByRole("dialog", { name: "Session tree" }), "tree-populated");
 			await page.evaluate(() =>
 				window.omp.rpc.command({
-					type: "steer",
+					type: "prompt",
 					message:
 						"Review this long queued message and preserve its complete text while keeping the row actions aligned in a narrow panel.",
 				}),

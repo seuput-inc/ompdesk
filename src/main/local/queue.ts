@@ -1,4 +1,4 @@
-import type { ImageContent, RpcGetQueueResult } from "../../shared/rpc-types";
+import type { RpcGetQueueResult } from "../../shared/rpc-types";
 import type { LocalHandler } from "./types";
 
 /** Opaque original-object handles belong to the live bridge, never to chip text. */
@@ -39,10 +39,5 @@ export const handlers: Record<string, LocalHandler> = {
 			recoveryId: command.recoveryId,
 			disposition,
 		});
-	},
-
-	dequeue: async (_command, ctx) => {
-		const popped = await ctx.bridge.request<{ text: string; images?: ImageContent[] } | null>("composer.dequeue");
-		return { messages: popped ? [popped] : [] };
 	},
 };

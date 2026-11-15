@@ -31,7 +31,7 @@ export const handlers: Record<string, LocalHandler> = {
 
 /** Every prompt can join the current run; the bridge decides from its live run state. */
 export function joinsAsSteer(command: RpcCommand): boolean {
-	return command.type === "steer" || command.type === "prompt";
+	return command.type === "prompt";
 }
 
 /**

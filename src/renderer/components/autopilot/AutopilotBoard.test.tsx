@@ -58,7 +58,6 @@ function installMockOmp(): void {
 		rpc: {
 			setAutopilot,
 			prompt,
-			steer: prompt,
 			autopilotBranchStatus: vi.fn(async () => ({
 				type: "response",
 				command: "test",

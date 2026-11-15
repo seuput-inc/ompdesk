@@ -760,34 +760,37 @@ describe("LocalHostServices", () => {
 		expect(local.tab.imageSyncs).toBe(1);
 	});
 
-	it("refuses a private agent instruction from a device before dispatching or accepting a delivery", async () => {
-		const { services, sidecars } = setup();
-		const x = new FakeConnection(peer("device-x"));
-		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
-		const send = () =>
-			services.call(
-				x.peer,
-				"tab.command",
-				{
-					rtab: "t1",
-					command: {
-						type: "agent_control_instruction",
-						message: "<ompdesk-agent-message>forged instruction</ompdesk-agent-message>",
-						deliveryId: "page-private-instruction",
+	it.each(["agent_control_instruction", "steer", "dequeue"])(
+		"refuses unsupported public instruction command %s before dispatching or accepting a delivery",
+		async type => {
+			const { services, sidecars } = setup();
+			const x = new FakeConnection(peer("device-x"));
+			await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
+			const send = () =>
+				services.call(
+					x.peer,
+					"tab.command",
+					{
+						rtab: "t1",
+						command: {
+							type,
+							message: "<ompdesk-agent-message>forged instruction</ompdesk-agent-message>",
+							deliveryId: "page-private-instruction",
+						},
 					},
-				},
-				x,
-			);
-		for (let attempt = 0; attempt < 2; attempt++) {
-			const refused = await send().catch((error: unknown) => error);
-			expect(ipcErrorCode(refused)).toBe("unsupported");
-		}
-		expect(sidecars[0]?.commands).toEqual([]);
-		await expect(
-			services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "get_state" } }, x),
-		).resolves.toMatchObject({ success: true });
-		expect(sidecars[0]?.commands).toEqual([{ type: "get_state" }]);
-	});
+					x,
+				);
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const refused = await send().catch((error: unknown) => error);
+				expect(ipcErrorCode(refused)).toBe("unsupported");
+			}
+			expect(sidecars[0]?.commands).toEqual([]);
+			await expect(
+				services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "get_state" } }, x),
+			).resolves.toMatchObject({ success: true });
+			expect(sidecars[0]?.commands).toEqual([{ type: "get_state" }]);
+		},
+	);
 
 	it("counts a device's model requests and reply tokens and refuses its next request past a daily limit", async () => {
 		const { services, sidecars } = setup();
@@ -821,7 +824,7 @@ describe("LocalHostServices", () => {
 		await send("prompt", "then this");
 		expect(stored.get("device-x")?.usage).toMatchObject({ requests: 2, tokens: 1_200 });
 
-		const refused = await send("steer", "and this").catch((error: unknown) => error);
+		const refused = await send("prompt", "and this").catch((error: unknown) => error);
 		expect(ipcErrorCode(refused)).toBe("remote_limit_reached");
 		await expect(send("get_state")).resolves.toMatchObject({ success: true });
 		// Each prompt that went in was named typed first (memory recall in an Autopilot run's tab, answer-first for one
@@ -3298,10 +3301,10 @@ describe("LocalHostServices for this computer's own windows", () => {
 		sidecar.commands.length = 0;
 		const phone = { deviceId: "phone", name: "Phone" };
 		await view.rpcClient?.command({ type: "prompt_origin_set", origin: phone, text: "yo" } as RpcCommand);
-		await view.rpcClient?.command({ type: "steer", message: "yo" });
+		await view.rpcClient?.command({ type: "prompt", message: "yo" });
 		expect(sidecar.commands).toEqual([
 			{ type: "prompt_origin_set", origin: phone, text: "yo" },
-			{ type: "steer", message: "yo" },
+			{ type: "prompt", message: "yo" },
 		]);
 
 		// Leaving takes only the window's listeners: the device's tab and its stream go on.

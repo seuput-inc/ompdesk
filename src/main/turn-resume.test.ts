@@ -2792,17 +2792,6 @@ describe("TurnResume races (review of v0.82.0)", () => {
 		});
 	});
 
-	describe("personsPrompt", () => {
-		it("is the person's own prompt, steer or follow-up, never an agent's wrapped message or another command", () => {
-			expect(personsPrompt({ type: "prompt", message: "hello" })).toBe(true);
-			expect(personsPrompt({ type: "steer", message: "hello" })).toBe(true);
-			expect(personsPrompt({ type: "follow_up", message: "hello" })).toBe(false);
-			expect(personsPrompt({ type: "prompt", message: wrapAgentMessage("do it", "an agent") })).toBe(false);
-			expect(personsPrompt({ type: "get_state" })).toBe(false);
-			expect(personsPrompt({ type: "bash", message: "ls" })).toBe(false);
-		});
-	});
-
 	describe("trackMove", () => {
 		const ok = (command: string, data: unknown = {}): RpcResponse => ({
 			type: "response",
@@ -3024,5 +3013,16 @@ describe("a continuation held for the connection", () => {
 		await fireNext();
 		expect(h.commands.filter(cmd => cmd.type === "retry")).toHaveLength(3);
 		expect(h.facts.map(entry => entry.awaitingConnection)).toEqual([false, false, false]);
+	});
+});
+
+describe("personsPrompt", () => {
+	it("is the person's own current prompt, never a retired delivery command or an agent's wrapped message", () => {
+		expect(personsPrompt({ type: "prompt", message: "hello" })).toBe(true);
+		expect(personsPrompt({ type: "steer", message: "hello" })).toBe(false);
+		expect(personsPrompt({ type: "follow_up", message: "hello" })).toBe(false);
+		expect(personsPrompt({ type: "prompt", message: wrapAgentMessage("do it", "an agent") })).toBe(false);
+		expect(personsPrompt({ type: "get_state" })).toBe(false);
+		expect(personsPrompt({ type: "bash", message: "ls" })).toBe(false);
 	});
 });

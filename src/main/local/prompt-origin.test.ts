@@ -52,7 +52,7 @@ describe("noteTypedPrompt", () => {
 
 	it("marks every current instruction without selecting a deferred delivery mode", async () => {
 		const { client: c, command } = client();
-		await noteTypedPrompt(c, { type: "steer", message: "how far?" });
+		await noteTypedPrompt(c, { type: "prompt", message: "how far?" });
 		await noteTypedPrompt(c, { type: "prompt", message: "join" });
 		await noteTypedPrompt(c, { type: "prompt", message: "fresh" });
 		expect(command.mock.calls.map(([sent]) => sent)).toEqual([
@@ -65,7 +65,7 @@ describe("noteTypedPrompt", () => {
 	it("says nothing for an agent's wrapped message, a retry or a command without text", async () => {
 		const { client: c, command } = client();
 		await noteTypedPrompt(c, {
-			type: "steer",
+			type: "prompt",
 			message: '<ompdesk-agent-message from="worker">\nstatus?\n</ompdesk-agent-message>',
 		});
 		await noteTypedPrompt(c, { type: "abort_and_prompt", message: "again" });
@@ -77,7 +77,7 @@ describe("noteTypedPrompt", () => {
 		vi.useFakeTimers();
 		try {
 			const never = vi.fn(() => new Promise<never>(() => {}));
-			const slow = noteTypedPrompt({ command: never }, { type: "steer", message: "x" });
+			const slow = noteTypedPrompt({ command: never }, { type: "prompt", message: "x" });
 			await vi.advanceTimersByTimeAsync(600);
 			await expect(slow).resolves.toBeUndefined();
 		} finally {
@@ -86,6 +86,6 @@ describe("noteTypedPrompt", () => {
 		const refusing = vi.fn(async () => {
 			throw new Error("Unknown bridge method: typed_prompt");
 		});
-		await expect(noteTypedPrompt({ command: refusing }, { type: "steer", message: "x" })).resolves.toBeUndefined();
+		await expect(noteTypedPrompt({ command: refusing }, { type: "prompt", message: "x" })).resolves.toBeUndefined();
 	});
 });

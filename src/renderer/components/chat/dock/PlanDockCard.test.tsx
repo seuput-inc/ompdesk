@@ -31,7 +31,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
 		rpc: {
 			getPlanMode: async () => ok("get_plan_mode", { enabled: true, planFilePath: "/work/PLAN.md" }),
 			prompt,
-			steer: prompt,
 		},
 		fs: { readPlan: async () => ({ ok: true, path: "/work/PLAN.md", content: planText }) },
 	},

@@ -4,17 +4,14 @@
  * answered in-process and never reach omp; everything else, and `stock()` always, goes to omp through the tab's lane in
  * the core (`SidecarManager`'s `send`: a `sidecar.command` request whose answer is an event, in order with the frames).
  */
-import { RETIRED_INSTRUCTION_SETTINGS } from "../../resources/gui-bridge/instruction-contracts";
+import {
+	RETIRED_INSTRUCTION_COMMANDS,
+	RETIRED_INSTRUCTION_SETTINGS,
+} from "../../resources/gui-bridge/instruction-contracts";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 
 /** How long a command may take before the caller gets `RPC timeout`. */
 const DEFAULT_TIMEOUT_MS = 8_000;
-const REMOVED_DELIVERY_COMMANDS = new Set([
-	"follow_up",
-	"set_steering_mode",
-	"set_follow_up_mode",
-	"set_interrupt_mode",
-]);
 
 /** A command that got no answer in time: its outcome is unknown (omp may still have run it). */
 export class RpcTimeoutError extends Error {
@@ -51,7 +48,7 @@ export class RpcClient {
 	 */
 	command(cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
 		if (
-			REMOVED_DELIVERY_COMMANDS.has(cmd.type) ||
+			RETIRED_INSTRUCTION_COMMANDS.has(cmd.type) ||
 			(cmd.type === "prompt" && "streamingBehavior" in cmd) ||
 			(cmd.type === "set_setting" && RETIRED_INSTRUCTION_SETTINGS.has(cmd.path)) ||
 			(cmd.type === "get_settings" && cmd.paths?.some(path => RETIRED_INSTRUCTION_SETTINGS.has(path)))

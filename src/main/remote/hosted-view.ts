@@ -243,7 +243,7 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		const client = this.#port.sidecar.rpcClient;
 		if (!client) throw codedError("sidecar_not_connected", "Sidecar not connected");
 		if (command.type === "prompt_origin_set") this.#namedOrigin = command.text;
-		else if (command.type === "prompt" || command.type === "steer") {
+		else if (command.type === "prompt") {
 			const named = this.#namedOrigin === command.message;
 			this.#namedOrigin = undefined;
 			if (!named) {
