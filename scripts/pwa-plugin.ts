@@ -12,6 +12,7 @@
  */
 import { createHash } from "node:crypto";
 import { build, type Plugin, type Rollup } from "vite";
+import { ON_DEMAND_DIALOGS_META } from "../src/renderer/lib/on-demand-dialogs";
 import { SESSION_LIST_META } from "../src/renderer/web/session-list-preload";
 import { PRECACHE_LIMITS, type PrecacheEntry, selectPrecache } from "../src/renderer/web/sw-core";
 import { WEB_BUILD_META } from "../src/shared/web-protocol";
@@ -94,6 +95,8 @@ export interface PwaPluginOptions {
 	page?: string;
 	/** Absolute path of the session list's module (components/layout/sidebar/Sidebar.tsx), a chunk of its own. */
 	sessionList?: string;
+	/** Absolute path of the dialogs' dynamic entry, named in both pages for same-build retries. */
+	dialogs?: string;
 }
 
 export function pwaPlugin(options: PwaPluginOptions): Plugin {
@@ -103,6 +106,26 @@ export function pwaPlugin(options: PwaPluginOptions): Plugin {
 		apply: "build",
 		enforce: "post",
 		async generateBundle(_output, bundle) {
+			if (options.dialogs) {
+				const id = options.dialogs.replaceAll("\\", "/");
+				const chunks = Object.values(bundle).filter(
+					(entry): entry is Rollup.OutputChunk =>
+						entry.type === "chunk" && entry.facadeModuleId?.replaceAll("\\", "/") === id,
+				);
+				const chunk = chunks[0];
+				if (chunks.length !== 1 || !chunk?.isDynamicEntry || !chunk.exports.includes("OnDemandDialogs"))
+					throw new Error(`No dynamic OnDemandDialogs export for ${options.dialogs}`);
+				for (const name of new Set(["index.html", page])) {
+					const entry = bundle[name];
+					if (entry?.type !== "asset") throw new Error(`No renderer page ${name}`);
+					const source =
+						typeof entry.source === "string" ? entry.source : Buffer.from(entry.source).toString("utf8");
+					entry.source = source.replace(
+						"</head>",
+						`  <meta name="${ON_DEMAND_DIALOGS_META}" content="./${chunk.fileName}" />\n  </head>`,
+					);
+				}
+			}
 			const html = bundle[page];
 			if (html?.type !== "asset") return;
 			const built = typeof html.source === "string" ? html.source : Buffer.from(html.source).toString("utf8");

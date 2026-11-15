@@ -27,7 +27,12 @@ export function pageSafeMoment(isVisible: () => boolean = () => document.visibil
 		// dialog on screen: the editor and models-config sheets keep their draft in the sheet itself.
 		editing: () => {
 			const ui = useUiStore.getState();
-			return ui.fileEditDirty || ui.pendingFileSwitch !== null || useHostUiStore.getState().queue.length > 0;
+			return (
+				ui.fileEditDirty ||
+				ui.pendingFileSwitch !== null ||
+				ui.btwRequest !== null ||
+				useHostUiStore.getState().queue.length > 0
+			);
 		},
 	};
 }

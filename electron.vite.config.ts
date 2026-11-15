@@ -344,7 +344,11 @@ export default defineConfig({
 		plugins: [
 			tailwindcss(),
 			woff2OnlyFonts(),
-			pwaPlugin({ entry: resolve(__dirname, "src/renderer/web/sw.ts"), sessionList: SESSION_LIST_MODULE }),
+			pwaPlugin({
+				entry: resolve(__dirname, "src/renderer/web/sw.ts"),
+				sessionList: SESSION_LIST_MODULE,
+				dialogs: resolve(__dirname, "src/renderer/components/dialogs/OnDemandDialogs.tsx"),
+			}),
 			precompressPlugin(),
 		],
 		resolve: {

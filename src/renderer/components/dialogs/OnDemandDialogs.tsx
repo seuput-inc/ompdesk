@@ -7,6 +7,7 @@
 import { useUiStore } from "../../stores/ui";
 import { ActiveToolsDialog } from "./ActiveToolsDialog";
 import { BranchPickerDialog } from "./BranchPickerDialog";
+import { BtwDialog } from "./BtwDialog";
 import { CommandPalette } from "./CommandPalette";
 import { CopySelectorDialog } from "./CopySelectorDialog";
 import { ForceToolDialog } from "./ForceToolDialog";
@@ -28,6 +29,7 @@ export function OnDemandDialogs() {
 	return (
 		<>
 			<CommandPalette />
+			<BtwDialog />
 			<ModelPicker />
 			<RenameSessionDialog />
 			<WorktreeDialog />

@@ -10,7 +10,7 @@ const picture = { content: { type: "image" as const, data: "AA==", mimeType: "im
 
 afterEach(() => {
 	useComposerStore.getState().reset();
-	useUiStore.setState({ fileEditDirty: false, pendingFileSwitch: null });
+	useUiStore.setState({ fileEditDirty: false, pendingFileSwitch: null, btwRequest: null });
 	useHostUiStore.getState().reset();
 });
 
@@ -36,6 +36,14 @@ describe("pageSafeMoment", () => {
 		useHostUiStore.getState().push({ kind: "quit", resolve: () => {} });
 		expect(safeToReload(moment)).toBe(false);
 		useHostUiStore.getState().shift();
+		expect(safeToReload(moment)).toBe(true);
+	});
+
+	it("keeps an unmounted side question through a failed chunk load, even while hidden", () => {
+		useUiStore.getState().openBtw("Keep this question");
+		expect(safeToReload(moment)).toBe(false);
+		expect(reloadLosesNothing(pageSafeMoment(() => false))).toBe(false);
+		useUiStore.getState().closeBtw();
 		expect(safeToReload(moment)).toBe(true);
 	});
 
