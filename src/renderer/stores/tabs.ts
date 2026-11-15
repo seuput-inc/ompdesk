@@ -89,6 +89,7 @@ import {
 	type PlanApprovalSubmitState,
 	usePlanApprovalStore,
 } from "./plan-approval";
+import type { QueueStore } from "./queue";
 import { useRemoteStore } from "./remote";
 import { type SessionStore, useSessionStore } from "./session";
 import {
@@ -696,22 +697,68 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 	listed: false,
 
 	reconcileTabs: async options => {
+		const before = options?.resync
+			? new Map(
+					get().tabs.map(tab => {
+						const runtime = sessionRuntime(tab.id);
+						return [
+							tab.id,
+							{
+								tab,
+								runtime,
+								queue: runtime?.stores.get("queue")?.getState(),
+								composer: runtime?.stores.get("composer")?.getState(),
+								extensionUi: runtime?.stores.get("extensionUi")?.getState(),
+								plan: runtime?.stores.get("planApproval")?.getState(),
+							},
+						] as const;
+					}),
+				)
+			: null;
 		const listed = await window.omp.tabs.list().catch(() => null);
 		if (!listed) {
 			// Bridge down — the tab strip simply stays as it is and TAB_STATUS
 			// pushes rebuild it.
 			return false;
 		}
-		// A tab this window is closing is gone for it even while main still lists
-		// it (its release is in flight): reviving it would recreate its runtime.
-		const list = listed.filter(info => !isTabClosed(info.tabId));
+		const listedById = before ? new Map(listed.map(info => [info.tabId, info])) : null;
+		const raced = new Set(
+			before
+				? get().tabs.flatMap(tab => {
+						const prior = before.get(tab.id);
+						const runtime = sessionRuntime(tab.id);
+						const composer = sessionRuntimeStore<ComposerStore>(tab.id, "composer")?.getState();
+						const queue = sessionRuntimeStore<QueueStore>(tab.id, "queue")?.getState();
+						const ui = sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState();
+						const plan = sessionRuntimeStore<PlanApprovalStore>(tab.id, "planApproval")?.getState();
+						const info = listedById?.get(tab.id);
+						const hasPending = (!info || tabSessionChanged(tab, info)) && (
+							Boolean(composer?.draft || composer?.images.length || composer?.sending ||
+								composer?.submissionUncertain || composer?.cancelSubmit || composer?.restoredQueue.length ||
+								composer?.editingQueued || queue?.steering.length || queue?.followUp.length || plan?.pending) ||
+							ui?.pendingRequests.some(request => BLOCKING_UI_METHODS[request.method] === true)
+						);
+						return hasPending || !prior ||
+							prior.tab !== tab ||
+							prior.runtime !== runtime ||
+							prior.queue !== runtime?.stores.get("queue")?.getState() ||
+							prior.composer !== runtime?.stores.get("composer")?.getState() ||
+							prior.extensionUi !== runtime?.stores.get("extensionUi")?.getState() ||
+							prior.plan !== runtime?.stores.get("planApproval")?.getState()
+							? [tab.id]
+							: [];
+					})
+				: [],
+		);
+		// A tab this window is closing is gone for it even while main still lists it.
+		const list = listed.filter(info => !isTabClosed(info.tabId) && !raced.has(info.tabId));
 		const resync = options?.resync === true;
 		if (resync) {
 			// Outside set(): dropping a runtime fires the focus listeners synchronously (see applyTabStatus).
 			const keep = new Set(list.map(info => info.tabId));
-			const gone = get().tabs.filter(tab => !keep.has(tab.id) && !tab.ghost);
+			const gone = get().tabs.filter(tab => !keep.has(tab.id) && !tab.ghost && !raced.has(tab.id));
 			if (gone.length > 0) {
-				set(state => ({ tabs: state.tabs.filter(tab => keep.has(tab.id)) }));
+				set(state => ({ tabs: state.tabs.filter(tab => keep.has(tab.id) || raced.has(tab.id)) }));
 				for (const tab of gone) deleteSessionRuntime(tab.id);
 			}
 		}
@@ -774,7 +821,13 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			});
 			// Entries the reply doesn't know (a spawn reply raced this reconcile)
 			// survive appended at the end.
-			const tabs = resync ? merged : [...merged, ...leftovers.values()];
+			const tabs = resync
+				? [
+						...merged,
+						...[...leftovers.values()].filter(tab => raced.has(tab.id)),
+						...unclaimed.filter(tab => raced.has(tab.id)),
+					]
+				: [...merged, ...leftovers.values()];
 			const mainActiveTabId = list.find(info => info.active)?.tabId;
 			// A ghost's selection is the snapshot's, written after a quiet moment (a quit right after a pick leaves the
 			// one before it): main's restored layout wins; it holds only when main names no active tab.
@@ -842,13 +895,13 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			try {
 				const routed = await routeTabView(activeTabId, visibleTabIds(get()), get().split);
 				if (version === switchVersion) reconcileTabRoute(activeTabId, routed);
-				return routed;
+				return routed && raced.size === 0;
 			} catch {
 				if (version === switchVersion) reconcileTabRoute(activeTabId, false);
 				return false;
 			}
 		}
-		return true;
+		return raced.size === 0;
 	},
 
 	// Commands given until it settles belong to the tab it opens (lib/tab-routing.ts `waitForActiveTab`).
@@ -1585,13 +1638,34 @@ export function restoreTabExtensionUiRequests(open: readonly IpcOpenExtensionReq
 	for (const { tabId, request, signIn } of open) pushTabExtensionUiRequest(tabId, request, signIn);
 }
 
+export function captureTabExtensionUiRequests(): Map<
+	string,
+	{ runtime: SessionRuntime | null; state: ExtensionUiStore | undefined }
+> {
+	return new Map(
+		useTabsStore.getState().tabs.map(tab => [
+			tab.id,
+			{ runtime: sessionRuntime(tab.id), state: sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState() },
+		]),
+	);
+}
+
 /**
  * A web page catching up after a reconnect (web/resync-page.ts): `open` is everything main still waits on for this
  * window. Shows what the page missed, and drops the cards of blocking asks (`BLOCKING_UI_METHODS`, the ones main
  * holds) answered or withdrawn meanwhile (their `cancel` frame was among the missed events), except a sign-in's own
  * requests, which end with the sign-in.
  */
-export function settleTabExtensionUiRequests(open: readonly IpcOpenExtensionRequest[]): void {
+export function settleTabExtensionUiRequests(
+	open: readonly IpcOpenExtensionRequest[],
+	before = captureTabExtensionUiRequests(),
+): boolean {
+	const current = captureTabExtensionUiRequests();
+	if (before.size !== current.size) return false;
+	for (const [tabId, prior] of before) {
+		const now = current.get(tabId);
+		if (!now || now.runtime !== prior.runtime || now.state !== prior.state) return false;
+	}
 	restoreTabExtensionUiRequests(open);
 	const stillOpen = new Set(open.map(entry => entry.request.id));
 	for (const tab of useTabsStore.getState().tabs) {
@@ -1606,6 +1680,7 @@ export function settleTabExtensionUiRequests(open: readonly IpcOpenExtensionRequ
 		for (const request of stale) state?.removeRequest(request.id);
 		watchTabAwaitingInput(tab.id);
 	}
+	return true;
 }
 
 /** Runtimes whose extension-UI and plan stores already feed their tab's `awaitingInput`. */

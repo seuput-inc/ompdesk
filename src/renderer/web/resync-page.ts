@@ -14,36 +14,44 @@
  *
  * Imported dynamically by web-boot.ts once the app has loaded (it reads the stores).
  */
-import { hydrateTabSession } from "../hooks/session-hydration";
+import { hydrateTabSession, recoverTabSession } from "../hooks/session-hydration";
 import { useAgentReviewStore } from "../stores/agent-review";
 import { loadHostedSessions } from "../stores/hosted-sessions";
 import { loadRemoteState } from "../stores/remote";
 import { refreshHeldSessionLists } from "../stores/session-list";
 import {
+	captureTabExtensionUiRequests,
 	restoreTabExtensionUiRequests,
 	settleTabExtensionUiRequests,
 	useTabsStore,
 	visibleTabIds,
 } from "../stores/tabs";
 
-/** False when the host could not list the tabs (the link dropped again): the pass is tried again. */
-export async function resyncPage(): Promise<boolean> {
+/** A strict desktop loss pass acknowledges only when all applicable authoritative reads succeeded. */
+export async function resyncPage(options?: { strict?: boolean }): Promise<boolean> {
 	if (!(await useTabsStore.getState().reconcileTabs({ resync: true }))) return false;
 	const state = useTabsStore.getState();
 	const sessions = visibleTabIds(state).flatMap(tabId => {
 		const status = state.tabs.find(tab => tab.id === tabId)?.status;
-		return status === "ready" || status === "running" ? [hydrateTabSession(tabId)] : [];
+		if (status !== "ready" && status !== "running") return [];
+		return [options?.strict ? recoverTabSession(tabId) : hydrateTabSession(tabId)];
 	});
-	const [open, shown] = await Promise.all([
+	const before = captureTabExtensionUiRequests();
+	const [open, shown, remoteOk, hostedOk, listsOk, ...outcomes] = await Promise.all([
 		window.omp.ui.openRequests(),
 		window.omp.ui.shownState(),
 		loadRemoteState(),
 		loadHostedSessions(),
+		refreshHeldSessionLists(),
 		...visibleTabIds(state).map(tabId => useAgentReviewStore.getState().refresh(tabId)),
 		...sessions,
 	]);
+	if (
+		!listsOk ||
+		(options?.strict && (!remoteOk || !hostedOk || outcomes.some(outcome => outcome !== true))) ||
+		!settleTabExtensionUiRequests(open, before)
+	)
+		return false;
 	restoreTabExtensionUiRequests(shown);
-	settleTabExtensionUiRequests(open);
-	refreshHeldSessionLists();
 	return true;
 }

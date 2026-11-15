@@ -27,7 +27,7 @@ enum Source {
     Mem(Vec<u8>),
     File(File),
     /// The page's `wc.send` stream (never ends).
-    Events(u64),
+    Events(u64, ipc::Reader),
 }
 
 struct Resp {
@@ -360,7 +360,7 @@ fn route(
             }
             ("GET", "events") => {
                 let mut r = Resp::empty();
-                r.source = Source::Events(wc_id);
+                r.source = Source::Events(wc_id, ipc::open_reader(wc_id));
                 r.mime = "application/x-ndjson";
                 r.length = -1;
                 r.end = u64::MAX;
@@ -510,12 +510,15 @@ wrap_resource_handler! {
         fn read(&self, data_out: *mut u8, bytes_to_read: i32, bytes_read: Option<&mut i32>, callback: Option<&mut ResourceReadCallback>) -> i32 {
             let mut r = self.shared.lock().unwrap();
             let want = bytes_to_read.max(0) as usize;
-            if let Source::Events(wc_id) = r.source {
+            if let Source::Events(wc_id, reader) = &r.source {
+                let wc_id = *wc_id;
+                let reader = Arc::clone(reader);
                 drop(r);
                 // SAFETY: CEF gives a buffer of `bytes_to_read` bytes, valid until the read completes.
                 let out = unsafe { std::slice::from_raw_parts_mut(data_out, want) };
                 let Some(callback) = callback.cloned().map(AnyThread) else { return 0 };
                 let (buffer, stop) = (data_out as usize, self.stop.clone());
+                let woken_reader = Arc::clone(&reader);
                 let waker = Box::new(move || {
                     // Held across the write and `cont`: `cancel` cannot slip in between and free the buffer.
                     let cancelled = stop.lock().unwrap();
@@ -525,16 +528,16 @@ wrap_resource_handler! {
                     // SAFETY: the same buffer, still ours until `cont` is called below; `stop` is set (under CEF's
                     // `cancel`) before the buffer is reused, and checked first.
                     let out = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, want) };
-                    let n = ipc::pull(wc_id, out);
+                    let n = ipc::pull(wc_id, &woken_reader, out);
                     callback.0.cont(n as i32);
                     drop(cancelled);
                 });
-                return match ipc::read_or_park(wc_id, out, waker) {
+                return match ipc::read_or_park(wc_id, &reader, out, waker) {
                     Some(n) => {
                         if let Some(b) = bytes_read {
                             *b = n as i32;
                         }
-                        1
+                        i32::from(n > 0)
                     }
                     None => {
                         if let Some(b) = bytes_read {
@@ -554,7 +557,7 @@ wrap_resource_handler! {
                     let _ = f.seek(SeekFrom::Start(pos));
                     f.read(out).unwrap_or(0)
                 }
-                Source::Empty | Source::Events(_) => 0,
+                Source::Empty | Source::Events(_, _) => 0,
             };
             r.pos += n as u64;
             if let Some(b) = bytes_read {
@@ -566,8 +569,8 @@ wrap_resource_handler! {
         fn cancel(&self) {
             *self.stop.lock().unwrap() = true;
             let r = self.shared.lock().unwrap();
-            if let Source::Events(wc_id) = r.source {
-                ipc::reader_gone(wc_id);
+            if let Source::Events(wc_id, reader) = &r.source {
+                ipc::reader_gone(*wc_id, reader);
             }
         }
     }

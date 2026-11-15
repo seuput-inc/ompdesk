@@ -44,6 +44,7 @@ import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";
 import { selectTodoCardVisible, useTodoStore } from "../stores/todo";
 import { type ToolsStore, useToolsStore } from "../stores/tools";
+import * as hydrationModule from "./session-hydration";
 import { loadOlderTranscript } from "./session-hydration";
 import { attachTabSession, hydrateSession, hydrateTabSession, useRpcEvents } from "./use-rpc-events";
 
@@ -835,6 +836,72 @@ describe("useRpcEvents on a dropped link", () => {
 			true,
 		);
 		expect(unhandled).toEqual([]);
+	});
+});
+
+describe("stream-loss hydration", () => {
+	function completeRecoveryReads(commandForTab: Mock<(tabId: string, command: RpcCommand) => Promise<RpcResponse>>) {
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((tabId, command) => {
+			switch (command.type) {
+				case "get_autopilot":
+					return Promise.resolve(success({ active: false }));
+				case "get_checkout_peers":
+					return Promise.resolve(success({ peers: null }));
+				case "get_next_prompt":
+					return Promise.resolve(success({
+						suggestions: false,
+						inline: false,
+						legacyExtension: false,
+						requests: { suggest: 0, inline: 0 },
+					}));
+				case "get_settings":
+					return Promise.resolve(success({
+						values: {
+							"tools.approvalMode": "yolo",
+							hideThinkingBlock: false,
+							proseOnlyThinking: true,
+							omitThinking: false,
+							"display.showTokenUsage": false,
+							"display.collapseCompacted": true,
+							"goal.statusInFooter": true,
+							"speech.enabled": false,
+							"stt.enabled": false,
+							emojiAutocomplete: true,
+							"paste.largeMenuThreshold": 100,
+						},
+						provenance: { "tools.approvalMode": { layers: [] } },
+					}));
+				default:
+					return original(tabId, command);
+			}
+		});
+	}
+
+	it("reports a failed queue read instead of acknowledging a fresh session", async () => {
+		const { commandForTab } = installTabRoutedMockOmp();
+		seedReadyTab("t-loss");
+		completeRecoveryReads(commandForTab);
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((tabId, command) =>
+			command.type === "get_queue" ? Promise.reject(new Error("queue unavailable")) : original(tabId, command),
+		);
+		const recover = Reflect.get(hydrationModule, "recoverTabSession");
+		const result = typeof recover === "function" ? await recover("t-loss") : await hydrateTabSession("t-loss");
+		expect(result).toBe(false);
+	});
+
+	it("does not migrate approval settings during a stream-loss recovery", async () => {
+		const { commandForTab } = installTabRoutedMockOmp();
+		seedReadyTab("t-loss");
+		vi.mocked(window.omp.prefs.get).mockResolvedValue("write");
+		completeRecoveryReads(commandForTab);
+		const recover = Reflect.get(hydrationModule, "recoverTabSession");
+		const result = typeof recover === "function" ? await recover("t-loss") : await hydrateTabSession("t-loss");
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_setting")).toEqual([]);
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_subagent_subscription")).toEqual([]);
+		expect(window.omp.prefs.set).not.toHaveBeenCalled();
+		expect(result).toBe(true);
 	});
 });
 

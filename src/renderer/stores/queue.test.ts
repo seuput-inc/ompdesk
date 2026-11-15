@@ -67,11 +67,11 @@ describe("queue store", () => {
 			error: "unsupported",
 		} satisfies RpcResponse);
 
-		await useQueueStore.getState().refresh();
+		expect(await useQueueStore.getState().refresh()).toBe(false);
 		expect(useQueueStore.getState().followUp.map(entry => entry.id)).toEqual(["f9"]);
 
 		getQueue.mockRejectedValueOnce(new Error("sidecar down"));
-		await useQueueStore.getState().refresh();
+		expect(await useQueueStore.getState().refresh()).toBe(false);
 		expect(useQueueStore.getState().followUp.map(entry => entry.id)).toEqual(["f9"]);
 	});
 });

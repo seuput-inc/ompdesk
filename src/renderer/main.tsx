@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { createRoot } from "react-dom/client";
+import type { ShellStreamReset } from "../preload/shell";
 import { App } from "./App";
 import { RootErrorBoundary } from "./components/common/RootErrorBoundary";
 import { loadSidebar, sessionListBeforeFirstRender } from "./components/layout/sidebar-chunk";
@@ -23,6 +24,35 @@ const StyleGuide = lazyChunk(() => import("./components/styleguide/StyleGuide"))
 
 installGlobalRuntimeErrorHandlers();
 watchChunkFailures();
+const shellStream = (window as Window & { __ompShellStream?: ShellStreamReset }).__ompShellStream;
+if (shellStream) {
+	let installing = false;
+	const wake = () => {
+		if (installing || !shellStream.pending()) return;
+		window.removeEventListener("online", wake);
+		document.removeEventListener("visibilitychange", visible);
+		installing = true;
+		// Recovery is loaded only after a stream gap, outside the first-screen bundle.
+		void import("./web/resync")
+			.then(({ installShellResync }) =>
+				installShellResync(
+					shellStream,
+					async () => (await import("./web/resync-page")).resyncPage({ strict: true }),
+					failures => reportRuntimeError("background-task", new Error("Shell resync failed"), { details: { failures } }),
+				),
+			)
+			.catch(error => {
+				installing = false;
+				reportRuntimeError("background-task", error, { details: { task: "shell-resync" } });
+				window.addEventListener("online", wake);
+				document.addEventListener("visibilitychange", visible);
+			});
+	};
+	const visible = () => {
+		if (document.visibilityState === "visible") wake();
+	};
+	shellStream.onReset(wake);
+}
 // A tab's last known transcript page paints as soon as the tab is known (lib/transcript-snapshot.ts): the tabs of
 // the last run (lib/tab-snapshot.ts) are in the store before the first render, so their rows are too.
 installTranscriptSeeding();

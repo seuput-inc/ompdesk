@@ -47,7 +47,7 @@ export interface QueueStore {
 	/** The last edit or lane switch's landing place, for a few seconds; null otherwise. */
 	moved: QueueMoved | null;
 	/** Hydrate fallback pull via get_queue; only the latest response may apply. */
-	refresh: () => Promise<void>;
+	refresh: () => Promise<boolean>;
 	/** Apply an authoritative queue_update frame. */
 	setFromFrame: (snapshot: RpcGetQueueResult) => void;
 	/**
@@ -103,11 +103,13 @@ export const createQueueStore = (command: TabCommand = activeTabCommand) => {
 				const version = ++refreshVersion;
 				try {
 					const response = await command({ type: "get_queue" });
-					if (version !== refreshVersion || !response.success) return;
+					if (version !== refreshVersion || !response.success) return false;
 					set(enrich(response.data as RpcGetQueueResult));
+					return true;
 				} catch {
 					// Sidecar mid-restart or a stale session: keep the last snapshot;
 					// the next hydrate/queue_update refetches.
+					return false;
 				}
 			},
 			setFromFrame: snapshot => {

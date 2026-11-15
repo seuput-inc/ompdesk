@@ -75,22 +75,26 @@ export function tabSummary(
 	return summariesOf(state, tab.device).find(summary => summary.sessionPath === key);
 }
 
-/** Read one computer's summaries whole; null (an older host, a link down) leaves none for it. */
-async function loadSummaries(device?: string): Promise<void> {
+/** A null answer cannot establish a current copy (an older host or a down link). */
+async function loadSummaries(device?: string, guard = false): Promise<boolean> {
 	const key = device ?? LOCAL_SUMMARIES;
+	const before = useHostedSessionsStore.getState().summaries[key];
 	try {
 		const read = await window.omp.sessions.summaries(device);
+		if (!read) return false;
 		const held = useHostedSessionsStore.getState().summaries[key];
-		const next = read ? applySummaryChange(held ?? null, read) : null;
-		if (next === held) return;
+		if (guard && held !== before) return false;
+		const next = applySummaryChange(held ?? null, read);
+		if (!next) return false;
+		if (next === held) return true;
 		useHostedSessionsStore.setState(state => {
 			const summaries = { ...state.summaries };
-			if (next) summaries[key] = next;
-			else delete summaries[key];
+			summaries[key] = next;
 			return { summaries };
 		});
+		return true;
 	} catch {
-		// The next change, or the next resync, reads again.
+		return false;
 	}
 }
 
@@ -112,28 +116,40 @@ function applyChange({ device, change }: SummariesChanged): void {
  * then on main's pushes keep them: each change, and each host's whole set again when its link comes up. No view
  * reads them on its own. A push that lands meanwhile wins over the reply.
  */
-export async function loadHostedSessions(): Promise<void> {
+export async function loadHostedSessions(): Promise<boolean> {
 	const { heldRevision, remoteOpenedRevision } = useHostedSessionsStore.getState();
 	const held = async () => {
 		try {
 			const held = await window.omp.sessions.held();
 			if (useHostedSessionsStore.getState().heldRevision === heldRevision) useHostedSessionsStore.setState({ held });
-		} catch {}
+			return true;
+		} catch {
+			return false;
+		}
 	};
 	const remoteOpened = async () => {
 		try {
 			const remoteOpened = await window.omp.sessions.remoteOpened();
 			if (useHostedSessionsStore.getState().remoteOpenedRevision === remoteOpenedRevision)
 				useHostedSessionsStore.setState({ remoteOpened });
-		} catch {}
+			return true;
+		} catch {
+			return false;
+		}
 	};
 	const hosts = async () => {
 		try {
 			const { hosts } = await window.omp.remote.getState();
-			await Promise.all(hosts.map(host => loadSummaries(host.deviceId)));
-		} catch {}
+			const results = await Promise.all(
+				hosts.map(host => (host.state === "online" ? loadSummaries(host.deviceId, true) : false)),
+			);
+			return results.every(Boolean);
+		} catch {
+			return false;
+		}
 	};
-	await Promise.all([held(), remoteOpened(), loadSummaries(), hosts()]);
+	const results = await Promise.all([held(), remoteOpened(), loadSummaries(undefined, true), hosts()]);
+	return results.every(Boolean);
 }
 
 /** Boot wiring (App): the first read plus the pushes, once per window. */

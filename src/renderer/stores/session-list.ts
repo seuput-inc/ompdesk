@@ -102,7 +102,7 @@ export const READ_RETRY_MS = 2_000;
 export const READ_RETRY_MAX_MS = 30_000;
 
 /** Feeds someone shows right now (`retain`ed). */
-const heldRefreshes = new Set<() => void>();
+const heldRefreshes = new Set<() => Promise<boolean>>();
 
 function createSessionListFeed(scope: SessionListScope, device: string | undefined): ManagedSessionListFeed {
 	const ns = snapshotNs(device);
@@ -135,6 +135,13 @@ function createSessionListFeed(scope: SessionListScope, device: string | undefin
 	let copy: VersionedSessionList | null = null;
 	/** The newest version a change named while a read was under way: the read's answer must be at least that one. */
 	let announced: string | null = null;
+	let activeWaiters: Array<(success: boolean) => void> = [];
+	let nextWaiters: Array<(success: boolean) => void> = [];
+	const cancelWaiters = () => {
+		for (const resolve of [...activeWaiters, ...nextWaiters]) resolve(false);
+		activeWaiters = [];
+		nextWaiters = [];
+	};
 
 	const accept = (list: SessionInfo[]): void => {
 		loaded = true;
@@ -174,16 +181,32 @@ function createSessionListFeed(scope: SessionListScope, device: string | undefin
 			return;
 		}
 		inFlight = true;
+		activeWaiters = nextWaiters;
+		nextWaiters = [];
+		let success = false;
+		let stale = false;
 		const version = generation;
 		read()
 			.then(
 				answer => {
 					if (version !== generation) return;
-					if (Array.isArray(answer)) return accept(answer);
+					if (Array.isArray(answer)) {
+						accept(answer);
+						success = true;
+						return;
+					}
 					copy = answer;
 					accept(answer.sessions);
-					// A change main published in the moment between taking this answer and sending it.
-					if (announced !== null && olderSessionListVersion(answer.version, announced)) queued = true;
+					if (
+						announced !== null &&
+						(olderSessionListVersion(answer.version, announced) ||
+							answer.version.split(".")[0] !== announced.split(".")[0])
+					) {
+						queued = true;
+						stale = true;
+					} else {
+						success = true;
+					}
 				},
 				(cause: unknown) => {
 					// A read that never answered is not a read that found nothing — the
@@ -202,12 +225,22 @@ function createSessionListFeed(scope: SessionListScope, device: string | undefin
 			)
 			.finally(() => {
 				if (version !== generation) return;
+				if (stale) nextWaiters.unshift(...activeWaiters);
+				else for (const resolve of activeWaiters) resolve(success);
+				activeWaiters = [];
 				inFlight = false;
 				announced = null;
 				if (!queued) return;
 				queued = false;
 				refresh();
 			});
+	};
+
+	const refreshHeld = (): Promise<boolean> => {
+		const { promise, resolve } = Promise.withResolvers<boolean>();
+		nextWaiters.push(resolve);
+		refresh();
+		return promise;
 	};
 
 	const retain = (): (() => void) => {
@@ -232,7 +265,7 @@ function createSessionListFeed(scope: SessionListScope, device: string | undefin
 				debounceTimer = window.setTimeout(() => refresh(), REFRESH_DEBOUNCE_MS);
 			});
 			refresh(true);
-			heldRefreshes.add(refresh);
+			heldRefreshes.add(refreshHeld);
 		}
 		return () => {
 			holders--;
@@ -242,10 +275,11 @@ function createSessionListFeed(scope: SessionListScope, device: string | undefin
 			failures = 0;
 			unsubscribe?.();
 			unsubscribe = null;
-			heldRefreshes.delete(refresh);
+			heldRefreshes.delete(refreshHeld);
 			// Nobody shows the list: it keeps the last rows (the next holder paints them at once) and
 			// reads again in place; answers to the read that was in flight are dropped.
 			generation++;
+			cancelWaiters();
 			loaded = false;
 			inFlight = false;
 			queued = false;
@@ -260,6 +294,7 @@ function createSessionListFeed(scope: SessionListScope, device: string | undefin
 		forgetSession: path => {
 			// Both scopes may already be reading the row that was just deleted.
 			generation++;
+			cancelWaiters();
 			inFlight = false;
 			queued = false;
 			copy = null;
@@ -312,8 +347,9 @@ export function sessionListFeed(scope: SessionListScope, device?: string): Sessi
 }
 
 /** Read every shown list again: a web page whose link dropped missed the SESSIONS_CHANGED pushes (web/resync-page.ts). */
-export function refreshHeldSessionLists(): void {
-	for (const refresh of heldRefreshes) refresh();
+export async function refreshHeldSessionLists(): Promise<boolean> {
+	const results = await Promise.all([...heldRefreshes].map(refresh => refresh()));
+	return results.every(Boolean);
 }
 
 /** Tests: forget every feed, so rows kept from an earlier mount cannot leak into the next. */

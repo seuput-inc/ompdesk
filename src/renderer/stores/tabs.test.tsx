@@ -1843,6 +1843,74 @@ describe("tabs store background tab signals", () => {
 		expect(queue?.getState().followUp[0]?.text).toBe("keep me");
 	});
 
+	it("keeps the split and does not route an older view when queue updates race its tab list", async () => {
+		seedTabs("t1");
+		const split: SplitLayout = {
+			axis: "columns",
+			ratio: 0.5,
+			first: { tabId: "t1" },
+			second: { tabId: "t2" },
+		};
+		useTabsStore.setState({ split });
+		const listed = Promise.withResolvers<IpcTabInfo[]>();
+		omp.tabs.list.mockReturnValueOnce(listed.promise);
+		const resync = useTabsStore.getState().reconcileTabs({ resync: true });
+		for (const tabId of ["t1", "t2"]) {
+			sessionRuntimeStore<QueueStore>(tabId, "queue")!.getState().setFromFrame({
+				steering: [{ id: `queued-${tabId}`, text: "keep me", editable: true, timestamp: 1 }],
+				followUp: [],
+			});
+		}
+		listed.resolve([
+			tabInfo("t0", "/alpha"),
+			{ ...tabInfo("t1", "/beta"), active: true, visible: true, split },
+			{ ...tabInfo("t2", "/gamma"), visible: true, split },
+		]);
+		expect(await resync).toBe(false);
+		expect(useTabsStore.getState().split).toEqual(split);
+		expect(useTabsStore.getState().activeTabId).toBe("t1");
+		expect(omp.tabs.setView).not.toHaveBeenCalled();
+		expect(omp.tabs.setActive).not.toHaveBeenCalled();
+		for (const tabId of ["t1", "t2"])
+			expect(sessionRuntimeStore<QueueStore>(tabId, "queue")?.getState().steering[0]?.text).toBe("keep me");
+	});
+
+	it("recovers a local ask despite an offline host and preserves an ask received during the next snapshot", async () => {
+		seedTabs("t0");
+		const list = ["t0", "t1", "t2"].map((tabId, index) => ({
+			...tabInfo(tabId, ["/alpha", "/beta", "/gamma"][index], "error"),
+			active: tabId === "t0",
+			visible: tabId === "t0",
+		}));
+		omp.tabs.list.mockResolvedValue(list);
+		const missed: ExtensionUIRequest = { type: "extension_ui_request", id: "missed", method: "ask", questions: [] };
+		const late: ExtensionUIRequest = { type: "extension_ui_request", id: "late", method: "ask", questions: [] };
+		const open = [{ tabId: "t1", request: missed }];
+		const openRequests = vi.fn(async () => open);
+		Object.assign(window.omp, {
+			ui: { openRequests, shownState: async () => [] },
+			remote: { getState: async () => ({ hosts: [{ deviceId: "offline", state: "offline" }] }) },
+			sessions: {
+				held: async () => [],
+				remoteOpened: async () => [],
+				summaries: async () => ({ version: "e.1", sessions: [] }),
+			},
+		});
+		const { resyncPage } = await import("../web/resync-page");
+		expect(await resyncPage({ strict: true })).toBe(false);
+		const pending = () =>
+			sessionRuntimeStore<ExtensionUiStore>("t1", "extensionUi")?.getState().pendingRequests.map(request => request.id);
+		expect(pending()).toEqual(["missed"]);
+		const held = Promise.withResolvers<typeof open>();
+		openRequests.mockReturnValueOnce(held.promise);
+		const recovery = resyncPage({ strict: true });
+		await vi.waitFor(() => expect(openRequests).toHaveBeenCalledTimes(2));
+		pushTabExtensionUiRequest("t1", late);
+		held.resolve(open);
+		expect(await recovery).toBe(false);
+		expect(pending()).toEqual(["missed", "late"]);
+	});
+
 	it("does not settle a new ask that arrived after the open-requests snapshot began", async () => {
 		seedTabs();
 		pushTabExtensionUiRequest("t1", { type: "extension_ui_request", id: "old", method: "ask", questions: [] });

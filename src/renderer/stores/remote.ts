@@ -45,14 +45,16 @@ export const useRemoteStore = create<RemoteStore>()(set => ({
 }));
 
 /** Read the whole state from main; a push that lands meanwhile wins over the reply. */
-export async function loadRemoteState(): Promise<void> {
+export async function loadRemoteState(): Promise<boolean> {
 	const store = useRemoteStore.getState();
 	const revision = store.revision;
 	try {
 		const state = await window.omp.remote.getState();
 		if (useRemoteStore.getState().revision === revision) useRemoteStore.getState().apply(state);
+		return true;
 	} catch (error) {
 		if (useRemoteStore.getState().revision === revision) useRemoteStore.getState().setLoadError(error);
+		return false;
 	}
 }
 

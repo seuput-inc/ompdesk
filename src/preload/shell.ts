@@ -66,13 +66,54 @@ function importLocalStorage(): void {
 	}
 }
 
+export interface ShellStreamReset {
+	onReset(listener: () => void): () => void;
+	pending(): object | null;
+	acknowledge(token: object): void;
+}
+
+let pendingReset: object | null = null;
+const resetListeners = new Set<() => void>();
+const shellStream: ShellStreamReset = {
+	onReset(listener) {
+		resetListeners.add(listener);
+		if (pendingReset) listener();
+		return () => resetListeners.delete(listener);
+	},
+	pending: () => pendingReset,
+	acknowledge(token) {
+		if (pendingReset === token) pendingReset = null;
+	},
+};
+
+function resetStream(): void {
+	pendingReset = {};
+	for (const listener of [...resetListeners]) listener();
+}
+
 const listeners = new Map<string, Set<(data: unknown) => void>>();
 
 function dispatch(line: string): void {
-	let message: { channel: string; args: unknown[] };
+	let message: unknown;
 	try {
-		message = decode(line) as { channel: string; args: unknown[] };
+		message = decode(line);
 	} catch {
+		resetStream();
+		return;
+	}
+	if (message && typeof message === "object" && "stream" in message && message.stream === "reset") {
+		resetStream();
+		return;
+	}
+	if (
+		!message ||
+		typeof message !== "object" ||
+		!("channel" in message) ||
+		typeof message.channel !== "string" ||
+		!("args" in message) ||
+		!Array.isArray(message.args)
+	) {
+		resetStream();
 		return;
 	}
 	const set = listeners.get(message.channel);
@@ -83,13 +124,16 @@ function dispatch(line: string): void {
 
 /** The push stream: one reader for the page's life, started now so nothing the main process sends waits for a listener. */
 async function readEvents(): Promise<never> {
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let connected = false;
 	for (;;) {
 		try {
 			const response = await fetch(`${BASE}__ipc/events`);
-			if (!response.body) throw new Error("no body");
+			if (!response.ok || !response.body) throw new Error("no event stream");
+			if (connected) resetStream();
+			connected = true;
 			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done) break;
@@ -197,6 +241,7 @@ function start(): void {
 	);
 
 	importLocalStorage();
+	Object.defineProperty(window, "__ompShellStream", { value: shellStream });
 	void readEvents();
 
 	const shared = createOmpApi(shellTransport);
