@@ -11,7 +11,7 @@ Each OMPdesk session is a tab in one of the user's windows, on this computer or 
 
 - `ompdesk_sessions` — `scope` (`window` default, `app`, `stored`), `device`, `folder`, `status`, `mine`, `query`, `limit`: state, step, subagents, todos, your own marked, and paired devices.
 - `ompdesk_session_open` — `message`, `folder`, `device`, `model`, `mode`, `worktree`, `throwaway` (a one-off: closed and deleted once its Result: ok answer reaches you), `reopen` (`restore` with it); `sessions` for several at once; `show`.
-- `ompdesk_session_send` — `session`, `message`, `delivery` (`steer` default: read between its steps; `follow_up` only queues a session you opened its next task behind its turn), `request_id`, `attachments` (pictures and files along with it: skill://ompdesk/references/orchestration.md).
+- `ompdesk_session_send` — `session`, `message`, `request_id`, `attachments` (pictures and files along with the current instruction: skill://ompdesk/references/orchestration.md).
 - `ompdesk_session_result` — `session` or `sessions`, `wait`, `until` (`all`, `any`), `timeout_seconds`.
 - `ompdesk_session_read` — `session` (open or saved), `limit`, `before`: transcript pages, newest first.
 - `ompdesk_session_answer` — `session`, `request`, `choice` / `approve` / `text` / `answers`, `attachments` (reach it first as a note, then the answer).

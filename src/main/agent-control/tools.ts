@@ -193,18 +193,12 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Message OMPdesk session",
 		description:
 			"Send a message to another open session.\n" +
-			'Send a message to any other open session. An idle session starts on it; a running one reads it between its steps (steer, the default). follow_up holds it until that turn ends, and only for a session you opened: to queue its next task behind the one it works on, never for an answer, a result or news it needs now (the user sees a held message waiting in that session\'s queue). To a session you did not open it goes as steer. A session that shows the user a question card never takes a steer (it would close the card): the message queues behind the card, which stays open, and is read after the user answers. A session blocked in ompdesk_session_result with wait takes a steer at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. Pictures and files go along in attachments. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
+			'An idle session starts on the message. A running session reads it between its steps. If the session shows the user a question card, the message waits until the user answers so the card stays open. A session blocked in ompdesk_session_result with wait takes the message at once, and its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached and what happens to the message. Pictures and files go along in attachments. Only the user answers a pending question. See skill://ompdesk.',
 		parameters: {
 			type: "object",
 			properties: {
 				session: SESSION,
 				message: { type: "string" },
-				delivery: {
-					type: "string",
-					enum: ["follow_up", "steer"],
-					description:
-						"For a running session. steer (default): read between its steps. follow_up: held until its turn ends, only for a session you opened (its next task); any other session gets it as steer. A session showing the user a question card always queues it behind the card, whichever you ask.",
-				},
 				request_id: {
 					type: "string",
 					description:
@@ -774,7 +768,6 @@ export const ARGS = {
 		.object({
 			session: sessionArg,
 			message: z.string().trim().min(1).max(MESSAGE_MAX_CHARS),
-			delivery: z.enum(["follow_up", "steer"]).optional(),
 			request_id: z.string().trim().min(1).max(200).optional(),
 			attachments: attachmentsArg.optional(),
 		})

@@ -1104,14 +1104,12 @@ pub struct ListArgs {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SendArgs {
     pub session: String,
     pub message: String,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
-    /// `follow_up` or `steer`.
-    #[serde(default)]
-    pub delivery: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }

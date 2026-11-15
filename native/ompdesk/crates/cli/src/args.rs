@@ -250,9 +250,6 @@ fn build_send(p: &Parsed) -> Result<Built, String> {
         }
         .into(),
     );
-    if p.bool("steer") {
-        b.insert("delivery".into(), "steer".into());
-    }
     if let Some(id) = p.str("request-id") {
         b.insert("requestId".into(), id.into());
     }
@@ -548,10 +545,9 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         name: "send",
-        usage: "send SESSION MESSAGE|- [--steer] [--request-id ID] [--force] [--wait] [--until idle|blocked|done|any] [--timeout SECONDS]",
+        usage: "send SESSION MESSAGE|- [--request-id ID] [--force] [--wait] [--until idle|blocked|done|any] [--timeout SECONDS]",
         summary: "Message a session; --wait returns after its turn. Refused while it waits on the person unless --force.",
         flags: &[
-            ("steer", B),
             ("request-id", S),
             ("force", B),
             ("wait", B),
@@ -1022,12 +1018,11 @@ mod tests {
                     "send",
                     "s1",
                     "hi",
-                    "--steer",
                     "--request-id",
                     "r1",
                     "--force",
                 ],
-                json!({ "method": "send", "session": "s1", "message": "hi", "delivery": "steer", "requestId": "r1", "force": true }),
+                json!({ "method": "send", "session": "s1", "message": "hi", "requestId": "r1", "force": true }),
             ),
             (
                 &[
@@ -1197,12 +1192,11 @@ mod tests {
             "--force",
             "--request-id",
             "r",
-            "--steer",
         ])
         .body;
         assert_eq!(
             serde_json::to_string(&body).unwrap(),
-            r#"{"method":"send","session":"s","message":"hi","delivery":"steer","requestId":"r","force":true,"wait":{"timeoutMs":2000}}"#
+            r#"{"method":"send","session":"s","message":"hi","requestId":"r","force":true,"wait":{"timeoutMs":2000}}"#
         );
         let body = run(&[
             "schedule",
@@ -1282,6 +1276,7 @@ mod tests {
         );
         assert!(help_text(None).contains("Exit codes"));
         assert!(help_text(Some("send")).starts_with("ompdesk send SESSION MESSAGE|-"));
+        assert!(!help_text(Some("send")).contains("--steer"));
         assert!(
             help_text(Some("nope"))
                 .starts_with("ompdesk: unknown command \"nope\"\nompdesk: drive")
@@ -1291,6 +1286,8 @@ mod tests {
     #[test]
     fn usage_errors() {
         let cases: &[(&[&str], Option<&str>)] = &[
+            (&["send", "s", "hi", "--steer"], Some("Unknown option")),
+            (&["send", "s", "hi", "--delivery", "follow_up"], Some("Unknown option")),
             (&["nope"], Some("unknown command \"nope\"")),
             (
                 &["sessions", "--bogus"],

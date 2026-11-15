@@ -120,10 +120,36 @@ export async function cancelBrowserLogin(authorizationUrl: string): Promise<void
 	await fetch(callback, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
 }
 
+const retiredDeliverySettings = ["steeringMode", "followUpMode", "interruptMode"];
+
+function refuseRetiredSetting(path: unknown): void {
+	if (typeof path === "string" && retiredDeliverySettings.includes(path))
+		throw new LocalCommandError(`Setting ${path} is no longer available`, "unsupported");
+}
+
 export const handlers: Record<string, LocalHandler> = {
-	get_settings_schema: (_command, ctx) => ctx.bridge.request("settings_schema"),
-	get_settings: (command, ctx) => ctx.bridge.request("settings_get", { paths: command.paths }),
-	set_setting: (command, ctx) => ctx.bridge.request("settings_set", { path: command.path, value: command.value }),
+	get_settings_schema: async (_command, ctx) => {
+		const schema = await ctx.bridge.request<{ entries: { path: string }[]; tabs: unknown }>("settings_schema");
+		return { ...schema, entries: schema.entries.filter(entry => !retiredDeliverySettings.includes(entry.path)) };
+	},
+	get_settings: async (command, ctx) => {
+		if (Array.isArray(command.paths)) command.paths.forEach(refuseRetiredSetting);
+		const result = await ctx.bridge.request<{ values: Record<string, unknown>; provenance: Record<string, unknown> }>(
+			"settings_get",
+			{ paths: command.paths },
+		);
+		return {
+			...result,
+			values: Object.fromEntries(Object.entries(result.values).filter(([path]) => !retiredDeliverySettings.includes(path))),
+			provenance: Object.fromEntries(
+				Object.entries(result.provenance).filter(([path]) => !retiredDeliverySettings.includes(path)),
+			),
+		};
+	},
+	set_setting: (command, ctx) => {
+		refuseRetiredSetting(command.path);
+		return ctx.bridge.request("settings_set", { path: command.path, value: command.value });
+	},
 	get_available_models: (command, ctx) =>
 		ctx.bridge.request("models_catalog", { forceRefresh: command.forceRefresh === true }),
 	get_model_release_dates: () => getModelReleaseDates(),

@@ -1292,6 +1292,9 @@ describe("omp_settings", () => {
 			entry("compaction.thresholdTokens", "number", { label: "Compaction threshold" }),
 			entry("compaction.strategy", "enum", { options: [{ value: "context-full", label: "Full" }] }),
 			entry("tui.renderMermaid", "boolean"),
+			...["steeringMode", "followUpMode", "interruptMode"].map(path =>
+				entry(path, "enum", { options: [{ value: "one-at-a-time", label: "One" }] }),
+			),
 			entry("tools.approvalMode", "enum", { options: [{ value: "yolo", label: "Yolo" }] }),
 			entry("search.apiKey", "string", { secret: true, value: "sk-live-secret", label: "Search key" }),
 		],
@@ -1339,6 +1342,20 @@ describe("omp_settings", () => {
 		expect(ports.rpcOns.filter(call => call.command.type === "get_settings")).toEqual([]);
 		await refusal(control.run(CALLER, "omp_settings.set", { path: "search.apiKey", value: "x", device: "Studio" }));
 		expect(ports.deviceStock.Studio?.["search.apiKey"]).toBe("sk-live-secret");
+	});
+	it("refuses retired delivery settings without reading or changing them", async () => {
+		for (const full of [false, true]) {
+			const ports = studio();
+			ports.full = full;
+			const control = new AppControl(ports);
+			for (const path of ["steeringMode", "followUpMode", "interruptMode"]) {
+				await refusal(control.run(CALLER, "omp_settings.get", { paths: [path], device: "Studio" }));
+				await refusal(control.run(CALLER, "omp_settings.set", { path, value: "one-at-a-time", device: "Studio" }));
+				const found = await control.run(CALLER, "omp_settings.get", { query: path, device: "Studio" });
+				expect(found).not.toContain(`${path}:`);
+			}
+			expect(ports.rpcOns.filter(call => call.command.type !== "get_settings_schema")).toEqual([]);
+		}
 	});
 
 	it("refuses the power switches and a path the schema does not list, for get and for set", async () => {

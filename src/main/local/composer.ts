@@ -121,6 +121,16 @@ function briefState(state: RpcSessionState): RpcSessionState {
 }
 
 export const handlers: Record<string, LocalHandler> = {
+	prompt: async (command, ctx) => {
+		if ("streamingBehavior" in command) throw new Error("Delivery modes are not supported");
+		const { message, images, deliveryId } = command;
+		return ctx.bridge.request("composer.prompt", {
+			message,
+			...(images === undefined ? {} : { images }),
+			...(deliveryId === undefined ? {} : { deliveryId }),
+		});
+	},
+
 	get_state: async (command, ctx) => {
 		const [whole, levels, extras, choice] = await Promise.all([
 			ctx.send<RpcSessionState>({ type: "get_state" }),

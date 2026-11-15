@@ -720,6 +720,24 @@ async fn a_context_refuses_the_routes_to_the_agents_own_power() {
 }
 
 #[tokio::test]
+async fn scripts_cannot_read_or_write_retired_delivery_settings() {
+    for path in ["steeringMode", "followUpMode", "interruptMode"] {
+        for command in [
+            json!({"type": "get_settings", "paths": [path]}),
+            json!({"type": "set_setting", "path": path, "value": "one-at-a-time"}),
+            json!({"type": "set_setting", "path": "advisor.enabled", "value": {
+                "type": "set_setting", "path": path, "value": "one-at-a-time"
+            }}),
+        ] {
+            let (answer, fake) = scripted(json!([{"op": "rpc", "command": command}]), "sensitive").await;
+            assert!(answer.is_err(), "{path}");
+            let world = fake.world();
+            assert!(world.rpcs.is_empty() && world.writes.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn list_names_every_action_and_shows_schemas_once_narrowed() {
     let fake = Fake::new();
     let control = control(&fake);

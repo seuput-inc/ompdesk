@@ -14,6 +14,16 @@ describe("OMPdesk control tool definitions", () => {
 		}
 	});
 
+	it("accepts current instructions and rejects obsolete delivery selection", () => {
+		const definition = AGENT_CONTROL_DEFINITIONS.find(entry => entry.name === AGENT_CONTROL_TOOLS.send);
+		expect(definition?.parameters.properties).not.toHaveProperty("delivery");
+		const send = ARGS[AGENT_CONTROL_TOOLS.send];
+		expect(send.parse({ session: "abcd", message: "go" })).toEqual({ session: "abcd", message: "go" });
+		for (const delivery of ["follow_up", "steer"]) {
+			expect(() => send.parse(looseArgs(AGENT_CONTROL_TOOLS.send, { session: "abcd", message: "go", delivery }))).toThrow();
+		}
+	});
+
 	it("offers no tool for accounts, settings, permissions or approvals-by-default", () => {
 		for (const name of Object.values(AGENT_CONTROL_TOOLS))
 			expect(name).not.toMatch(/account|setting|permission|login|token|pref|yolo/i);

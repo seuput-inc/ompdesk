@@ -149,6 +149,9 @@ pub fn setting_tier(path: &str, full: bool) -> Tier {
 /// names stay `agent_power.set`'s (read under full control, `Sensitive` to write). Everything else the schema lists
 /// reads free and writes at `Change`, or at the tier of its Settings row.
 pub fn omp_setting_tier(path: &str, entry: Option<&Value>, write: bool, full: bool) -> Tier {
+    if matches!(path, "steeringMode" | "followUpMode" | "interruptMode") {
+        return Tier::Never;
+    }
     let Some(entry) = entry else {
         return Tier::Never;
     };

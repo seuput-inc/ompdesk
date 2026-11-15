@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
 
 use super::conn::{self, Serving};
@@ -365,6 +365,71 @@ async fn waits_answer_as_the_typescript_router_did() {
 #[tokio::test(start_paused = true)]
 async fn sends_answer_as_the_typescript_router_did() {
     replay("sends", 907).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn send_rejects_obsolete_delivery_instead_of_forwarding_it() {
+    for delivery in [json!("follow_up"), json!("steer"), Value::Null] {
+        let row = json!([
+            {"method": "send", "session": "t1", "message": "go", "delivery": delivery},
+            "idle", [], [], null, [], null
+        ]);
+        let answer: Value = serde_json::from_str(&scenario(&row).await).unwrap();
+        assert_eq!(answer["error"]["code"], "bad_request");
+        assert_eq!(answer["error"]["message"], "delivery is no longer supported");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn socket_rejects_obsolete_delivery_without_calling_main() {
+    let mut main = Main::new(Tuning::default());
+    main.sessions.add("t1", SessionState::Idle);
+    let token = "5".repeat(64);
+    let serving = Serving {
+        link: Arc::clone(&main.link),
+        token: token.as_str().into(),
+        home: "/the/home".into(),
+        caller_prefix: "".into(),
+        hello_timeout: Duration::from_secs(10),
+        max_in_flight: 16,
+        half_close: true,
+    };
+    let (client, server) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server);
+    let (shutdown, closed) = watch::channel(false);
+    let task = tokio::spawn(conn::serve(serving, 1, server_read, server_write, closed));
+    let (reader, mut writer) = tokio::io::split(client);
+    let mut lines = BufReader::new(reader).lines();
+    writer
+        .write_all(format!("{{\"id\":1,\"method\":\"hello\",\"token\":\"{token}\",\"protocol\":1}}\n").as_bytes())
+        .await
+        .unwrap();
+    let hello_line = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let hello: Value = serde_json::from_str(&hello_line).unwrap();
+    assert_eq!(hello["ok"], true);
+    for (id, delivery) in [(2, "\"follow_up\""), (3, "\"steer\""), (4, "null")] {
+        writer
+            .write_all(format!("{{\"id\":{id},\"method\":\"send\",\"session\":\"t1\",\"message\":\"go\",\"delivery\":{delivery}}}\n").as_bytes())
+            .await
+            .unwrap();
+        let line = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(reply["error"]["code"], "bad_request");
+        assert_eq!(reply["id"], id);
+    }
+    assert!(main.asks.is_empty());
+    assert!(main.calls.is_empty());
+    shutdown.send_replace(true);
+    drop(writer);
+    task.await.unwrap();
 }
 
 /// `<DIR>` and `<HOME>` in a captured row are a real folder and the caller's home here.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handlers } from "./composer";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError } from "./types";
 
@@ -164,6 +164,41 @@ describe("stock composer authority", () => {
 				{ name: "xd://tool", description: "Mounted", source: "extension" },
 			],
 		});
+	});
+});
+
+describe("current instruction admission", () => {
+	it.each([false, true])(
+		"delivers text and original images through the bridge while streaming=%s",
+		async isStreaming => {
+			const ctx = fakeContext({
+				stock: { get_state: { ...STOCK_STATE, isStreaming } },
+				bridge: { "composer.prompt": { accepted: true } },
+			});
+			const bridge = vi.spyOn(ctx.bridge, "request");
+			const stock = vi.spyOn(ctx, "send");
+			const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
+			await expect(
+				handlers.prompt({ type: "prompt", message: "apply now", images, deliveryId: "original-id" }, ctx),
+			).resolves.toEqual({ accepted: true });
+			expect(bridge).toHaveBeenCalledExactlyOnceWith("composer.prompt", {
+				message: "apply now",
+				images,
+				deliveryId: "original-id",
+			});
+			expect(stock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("refuses old per-message modes instead of forwarding a hidden stock follow-up", async () => {
+		const ctx = fakeContext({ bridge: { "composer.prompt": { accepted: true } } });
+		const bridge = vi.spyOn(ctx.bridge, "request");
+		const stock = vi.spyOn(ctx, "send");
+		await expect(
+			handlers.prompt({ type: "prompt", message: "later", streamingBehavior: "followUp" }, ctx),
+		).rejects.toThrow("Delivery modes");
+		expect(bridge).not.toHaveBeenCalled();
+		expect(stock).not.toHaveBeenCalled();
 	});
 });
 

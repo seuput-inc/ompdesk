@@ -8,6 +8,13 @@ import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 
 /** How long a command may take before the caller gets `RPC timeout`. */
 const DEFAULT_TIMEOUT_MS = 8_000;
+const REMOVED_DELIVERY_COMMANDS = new Set([
+	"follow_up",
+	"set_steering_mode",
+	"set_follow_up_mode",
+	"set_interrupt_mode",
+]);
+const REMOVED_DELIVERY_SETTINGS = new Set(["steeringMode", "followUpMode", "interruptMode"]);
 
 /** A command that got no answer in time: its outcome is unknown (omp may still have run it). */
 export class RpcTimeoutError extends Error {
@@ -43,6 +50,13 @@ export class RpcClient {
 	 * `Number.POSITIVE_INFINITY`: no deadline, for a GUI-side handler as for omp.
 	 */
 	command(cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
+		if (
+			REMOVED_DELIVERY_COMMANDS.has(cmd.type) ||
+			(cmd.type === "prompt" && "streamingBehavior" in cmd) ||
+			(cmd.type === "set_setting" && REMOVED_DELIVERY_SETTINGS.has(cmd.path)) ||
+			(cmd.type === "get_settings" && cmd.paths?.some(path => REMOVED_DELIVERY_SETTINGS.has(path)))
+		)
+			return Promise.reject(new Error("Delivery modes are not supported"));
 		// Always a fresh id: renderer-chosen ids are only unique per window.
 		const id = `gui-${++this.#nextId}`;
 		const local = this.#local?.({ ...cmd, id });

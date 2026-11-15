@@ -41,6 +41,34 @@ function fakeCtx(send: Fake, request: Fake): LocalCommandContext {
 	};
 }
 
+describe("retired delivery settings", () => {
+	it("filters schema and unqualified reads and refuses explicit reads and writes", async () => {
+		const retired = ["steeringMode", "followUpMode", "interruptMode"];
+		const request = vi.fn(async (method: string) =>
+			method === "settings_schema"
+				? { entries: [...retired, "advisor.enabled"].map(path => ({ path })), tabs: [] }
+				: { values: { steeringMode: "old", "advisor.enabled": true }, provenance: { steeringMode: "global" } },
+		);
+		const ctx = fakeCtx(vi.fn(), request);
+		expect(await handlers.get_settings_schema({ type: "get_settings_schema" }, ctx)).toEqual({
+			entries: [{ path: "advisor.enabled" }],
+			tabs: [],
+		});
+		expect(await handlers.get_settings({ type: "get_settings" }, ctx)).toEqual({
+			values: { "advisor.enabled": true },
+			provenance: {},
+		});
+		request.mockClear();
+		for (const path of retired) {
+			await expect(handlers.get_settings({ type: "get_settings", paths: [path] }, ctx)).rejects.toThrow();
+			expect(() => handlers.set_setting({ type: "set_setting", path, value: "old" }, ctx)).toThrow();
+		}
+		expect(request).not.toHaveBeenCalled();
+		await handlers.set_setting({ type: "set_setting", path: "advisor.enabled", value: true }, ctx);
+		expect(request).toHaveBeenCalledWith("settings_set", { path: "advisor.enabled", value: true });
+	});
+});
+
 describe("get_available_models handler", () => {
 	it("returns the catalog when release metadata cannot be fetched", async () => {
 		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
