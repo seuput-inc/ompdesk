@@ -502,6 +502,6 @@ const sessionListBytes = (await fs.stat(path.join(RENDERER, sessionListFiles[0] 
 console.log(
 	"main bundle is self-contained: no un-bundled runtime imports, no optional-peer stubs, the bundled ws carries " +
 		`masked frames; the renderer ships no axe-core and no .woff/.ttf fonts; the phone's first screen loads ` +
-		`${(firstScreenBytes / 1e6).toFixed(2)} MB of JavaScript, a first visit ` +
+		`${firstScreenBytes.toLocaleString("en-US")} bytes of JavaScript in ${firstScreen.size} files, a first visit ` +
 		`${((firstScreenBytes + sessionListBytes) / 1e6).toFixed(2)} MB with the session list`,
 );
