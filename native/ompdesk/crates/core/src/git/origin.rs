@@ -3,7 +3,7 @@
 //! checkout when the common dir is not `<main>/.git`. Every git gets main's short timeout, and any that fails counts
 //! as git not knowing. Main keeps the cache and the rule that makes a project of the facts (`deriveProjectOrigin`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -28,14 +28,17 @@ impl Facts {
         self.branch.as_deref()
     }
 
-    // Native counterpart of shared/project-origin.ts mainRoot; a relocated git directory is not a checkout.
-    pub(crate) fn project_root(&self) -> Option<&Path> {
+    /// Use mainRoot's candidate, but require Git to identify a relocated checkout rather than its storage.
+    pub(crate) async fn project_root(&self, git: &Git, timeout_ms: u64) -> Option<PathBuf> {
         let common = Path::new(&self.common_dir);
         if common.file_name() == Some(std::ffi::OsStr::new(".git")) {
-            common.parent()
-        } else {
-            self.primary.as_deref().map(Path::new)
+            return tokio::fs::canonicalize(common.parent()?).await.ok();
         }
+        let primary = self.primary.as_deref()?;
+        let checkout = out(git, primary, &["rev-parse", "--show-toplevel"], timeout_ms).await?;
+        let checkout = tokio::fs::canonicalize(resolve(primary, &checkout)).await.ok()?;
+        let storage = tokio::fs::canonicalize(common).await.ok()?;
+        (checkout != storage).then_some(checkout)
     }
 }
 
