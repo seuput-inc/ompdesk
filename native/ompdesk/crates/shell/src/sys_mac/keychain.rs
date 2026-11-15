@@ -45,40 +45,50 @@ fn make_item() -> Result<Vec<u8>, String> {
     Ok(password)
 }
 
+fn without_user_interaction<G, E: std::fmt::Display>(
+    disabled: Result<G, E>,
+    read: impl FnOnce() -> Value,
+) -> Value {
+    let _guard = match disabled {
+        Ok(guard) => guard,
+        Err(error) => {
+            return json!({
+                "unavailable": format!("keychain interaction could not be disabled: {error}")
+            });
+        }
+    };
+    read()
+}
+
 /// `{"kind":"mac-v10","password":"<base64>"}` (the item's password bytes) or `{"unavailable":"<why>"}`. The profile
 /// folder is not needed: macOS keeps the key in the keychain, not beside the profile. User interaction is switched off
 /// for the read, so a read that would show a dialog fails with `errSecInteractionNotAllowed` and answers
 /// `unavailable: "keychain-would-ask"`: no dialog is ever shown by this process. A missing item is created, as
 /// Chromium's OSCrypt does (creating one never asks).
 pub fn key_json(_user_data: &Path) -> Value {
-    // Held until the read is over; dropping it restores the previous setting.
-    let _no_dialogs = SecKeychain::disable_user_interaction().ok();
-    let interaction_off = _no_dialogs.is_some();
-    let found = match get_generic_password(SERVICE, ACCOUNT) {
-        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => make_item().map_err(Err),
-        Ok(password) => Ok(password),
-        Err(error) => Err(Ok(error)),
-    };
-    match found {
-        Ok(password) => json!({ "kind": "mac-v10", "password": STANDARD.encode(password) }),
-        Err(Err(why)) => json!({ "unavailable": why }),
-        Err(Ok(error)) => {
-            let why = match error.code() {
-                ERR_SEC_INTERACTION_NOT_ALLOWED => WOULD_ASK.to_string(),
-                // With dialogs off, an item whose access list does not name this process answers "authorization
-                // failed" instead of asking (seen on macOS 15 for an ad-hoc signed item): the read was refused
-                // without a prompt, which is what `keychain-would-ask` says.
-                ERR_SEC_AUTH_FAILED if interaction_off => WOULD_ASK.to_string(),
-                ERR_SEC_USER_CANCELED | ERR_SEC_AUTH_FAILED => {
-                    format!("access to the keychain item \"{SERVICE}\" was denied")
-                }
-                code => format!(
-                    "reading the keychain item \"{SERVICE}\" failed: {error} (OSStatus {code})"
-                ),
-            };
-            json!({ "unavailable": why })
+    without_user_interaction(SecKeychain::disable_user_interaction(), || {
+        let found = match get_generic_password(SERVICE, ACCOUNT) {
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => make_item().map_err(Err),
+            Ok(password) => Ok(password),
+            Err(error) => Err(Ok(error)),
+        };
+        match found {
+            Ok(password) => json!({ "kind": "mac-v10", "password": STANDARD.encode(password) }),
+            Err(Err(why)) => json!({ "unavailable": why }),
+            Err(Ok(error)) => {
+                let why = match error.code() {
+                    ERR_SEC_INTERACTION_NOT_ALLOWED | ERR_SEC_AUTH_FAILED => WOULD_ASK.to_string(),
+                    ERR_SEC_USER_CANCELED => {
+                        format!("access to the keychain item \"{SERVICE}\" was denied")
+                    }
+                    code => format!(
+                        "reading the keychain item \"{SERVICE}\" failed: {error} (OSStatus {code})"
+                    ),
+                };
+                json!({ "unavailable": why })
+            }
         }
-    }
+    })
 }
 
 /// The one-shot mode: `args` (the process's arguments without the executable) is `["--keychain-key", "<userData>"]` →
@@ -91,5 +101,42 @@ pub fn cli(args: &[String]) -> Option<i32> {
             Some(0)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn failed_interaction_control_never_accesses_the_keychain() {
+        let accessed = Cell::new(false);
+        let result = without_user_interaction(Err::<(), _>("refused"), || {
+            accessed.set(true);
+            json!({ "kind": "mac-v10" })
+        });
+        assert_eq!(
+            result,
+            json!({ "unavailable": "keychain interaction could not be disabled: refused" })
+        );
+        assert!(!accessed.get());
+    }
+
+    #[test]
+    fn interaction_control_lives_through_the_read_and_is_restored_afterward() {
+        struct Guard<'a>(&'a Cell<bool>);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let disabled = Cell::new(true);
+        let result = without_user_interaction(Ok::<_, &str>(Guard(&disabled)), || {
+            assert!(disabled.get());
+            json!({ "unavailable": WOULD_ASK })
+        });
+        assert_eq!(result, json!({ "unavailable": WOULD_ASK }));
+        assert!(!disabled.get());
     }
 }
