@@ -3,6 +3,27 @@
 	"codeRoot": "..",
 	"models": [
 		{
+			"id": "shell-stream-recovery",
+			"title": "CEF stream loss: partial frames, reader incarnation and current successful read before ACK",
+			"kind": "tla",
+			"dir": "shell-stream-recovery/tla",
+			"spec": "ShellStreamRecovery.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"native/ompdesk/crates/shell/src/ipc.rs",
+				"native/ompdesk/crates/shell/src/scheme.rs:28-32",
+				"native/ompdesk/crates/shell/src/scheme.rs:358-366",
+				"native/ompdesk/crates/shell/src/scheme.rs:509-542",
+				"native/ompdesk/crates/shell/src/scheme.rs:568-577",
+				"src/preload/shell.ts:69-123",
+				"src/preload/shell.ts#readEvents",
+				"src/renderer/web/resync.ts#installShellResync",
+				"src/renderer/web/resync-page.ts#resyncPage"
+			],
+			"syncCommit": null
+		},
+		{
 			"id": "turn-resume",
 			"title": "Connection wait of a failed turn: probe, hold, flush, scheduled retry",
 			"kind": "tla",
