@@ -39,16 +39,13 @@ export function loadDeferredChunk<T>(
 	let loading = false;
 	let cancelIdle = () => {};
 	const disarm = () => {
-		for (const type of TRIGGERS) scheduling.target.removeEventListener(type, onInteraction, true);
+		for (const type of TRIGGERS) scheduling.target.removeEventListener(type, trigger, true);
 	};
 	const arm = () => {
-		for (const type of TRIGGERS) scheduling.target.addEventListener(type, onInteraction, true);
+		for (const type of TRIGGERS) scheduling.target.addEventListener(type, trigger, true);
 	};
-	function onInteraction(): void {
-		if (chunk.canRetryOnInteraction?.() !== false) trigger();
-	}
-	function trigger(): void {
-		if (cancelled || loading) return;
+	function trigger(event?: Event): void {
+		if (cancelled || loading || (event && chunk.canRetryOnInteraction?.() === false)) return;
 		loading = true;
 		disarm();
 		cancelIdle();

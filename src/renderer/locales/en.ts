@@ -34,7 +34,7 @@ export const en: Record<string, string> = {
 	"settings.note.native": "On by default in OMPdesk, but this omp's native addon lacks it, so omp's default applies.",
 
 	"btw.ask": "Ask now",
-	"btw.dialogLoadFailed": "Couldn't load the question dialog. Your question hasn't been sent.",
+	"btw.dialogLoadFailed": "Question not sent. Couldn't load the dialog.",
 	"live.start": "Start voice session",
 	"live.ready": "Ready — microphone is off",
 
