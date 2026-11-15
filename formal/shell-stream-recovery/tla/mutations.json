@@ -5,6 +5,13 @@
 	},
 	"mutations": [
 		{
+			"name": "unbounded-retained-queue",
+			"why": "Removing eviction lets the native stream grow beyond its configured capacity.",
+			"search": "kept == IF overflow THEN",
+			"replace": "kept == IF FALSE THEN",
+			"breaks": "TypeOK"
+		},
+		{
 			"name": "evict-partial-frame",
 			"why": "An overflow discards a frame whose prefix already reached the page.",
 			"search": "IF s.partial # 0 /\\ KeepPartial THEN",
