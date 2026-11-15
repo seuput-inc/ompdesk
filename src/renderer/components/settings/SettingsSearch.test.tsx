@@ -24,6 +24,7 @@ Object.assign(globalThis, {
 	Element,
 	Node,
 	IS_REACT_ACT_ENVIRONMENT: true,
+	getComputedStyle: () => ({ scrollMarginTop: "0px" }),
 	requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0),
 	cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
