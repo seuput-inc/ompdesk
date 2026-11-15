@@ -366,4 +366,24 @@ NeverUnknown == unknownEnded = {}
 NeverRetryQueued == \A g \in Gens : ~(flights[g].phase = "queued" /\ flights[g].ever)
 NeverUnadmitted == \A g \in Gens : flights[g].outcome # "unadmitted"
 NeverUnknownLateEffect == \A event \in received : ~event[3]
+
+LocalViewReceiptValues == {"none", "new", "existing", "error"}
+
+LocalViewClosed(g) ==
+    /\ flights[g].phase = "finished"
+    /\ pending # g
+    /\ g \notin inFlight
+    /\ g \notin scheduled
+
+LocalViewFlight(g) ==
+    [flights[g] EXCEPT
+        !.kind = IF @ = "question" THEN "done" ELSE @,
+        !.receipt = IF LocalViewClosed(g) /\ @ \in LocalViewReceiptValues
+                    THEN "none" ELSE @]
+
+ProposedLocalView ==
+    <<[g \in Gens |-> LocalViewFlight(g)],
+      originalHash, requests, counts, lastGen, pending, inFlight,
+      receiver, owned, effects, known, received, expectedJoin,
+      unknownActive, unknownEnded, scheduled>>
 =============================================================================

@@ -111,3 +111,27 @@ missing supersede/forget settlement, conflict overwrite, active-handle removal, 
 and an old unstarted task deleting a new same-identity handle.
 Unique application and SANY success are not mutation kills.
 Main must observe each named violation on the coherent source.
+
+## Local observation quotient
+
+Main d97 authorizes only `ProposedLocalView` and its use by the nine existing configs.
+Its immutable input is `c0204edecf47f76cb22054f5ef939e614e997ad0`, including the original actions,
+eight frozen predicates, seven negative/sanity observations and thirteen exact mutation replacements.
+The transition relation, allocation bounds, actor/caller order and production correspondence above are unchanged.
+
+Two states are equivalent only when the complete original `vars` tuple agrees after mapping
+`flights[g].kind = "question"` to the existing `"done"` value and mapping a valid receipt to `"none"`
+for a finished g absent from pending, inFlight and scheduled. Invalid receipt values remain visible.
+All generation/attempt references, outcomes, Unknown observations and history sets are retained.
+Flights remain a Gens-indexed function; equal normalized record values never merge distinct g handles.
+
+The source-change rationale is Main d96's manual per-action argument against that exact input and all thirteen
+mutated transition systems. Done/Question have the same non-progress branches; Return reads receipt only while
+inFlight at phase return, where it is not hidden. Re-registering a hidden record requires Admit's complete
+overwrite. The argument covers TypeOK and predicate truth saturation, Init, successor congruence for any
+representative, and finite trace lifting in both directions. It is not a Lean/TLAPS proof or a checker verdict.
+No alpha-renaming, observer-history summary, fairness, symmetry or behavior-pruning constraint is introduced.
+
+The original run43651310403 TIMEOUTs, mutation-baseline failure and unstamped status remain open.
+Source parsing and unique mutation-anchor application do not establish quotient equivalence, Safety,
+mutation kills, code refinement or convergence. Main owns the next separately authorized hosted decision.

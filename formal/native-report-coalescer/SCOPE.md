@@ -62,3 +62,17 @@ It is a source-read mapping, not a mechanically checked refinement or runtime ve
 Only parse and mutation-applicability checks may run locally. No local TLC, matrix or mutation execution, no downloads, no native build, no new CI/session and no edits outside this directory. Main owns the single actual hosted TLC run, its full logs, mutation outcomes, registration/handoff and any eventual stamp. A parse or unique mutation match is not a safety verdict or a mutation kill.
 
 All baseline, sanity and mutation execution expectations in the matrix are proposed until observed on Main's coherent source. No fairness or state constraint is introduced to hide a counterexample; finite generation/call/retry domains are explicit bounds and the spec allows terminal stuttering.
+
+## Approved local VIEW source
+
+Main d97 adds the two-component `ProposedLocalView` to the unchanged source system from
+`c0204edecf47f76cb22054f5ef939e614e997ad0` and selects it in the nine original configs.
+Only Done/Question observation and a finished, unreferenced, valid terminal receipt are normalized.
+Generation/attempt/caller order, every action/await boundary, all eight frozen predicates and seven
+negative/sanity observations remain unchanged. The thirteen mutation replacements and all original
+bounds, 7200-second timeouts, early-ACK/deadlock settings and absence of fairness/SYMMETRY are preserved.
+
+The preservation rationale is a manual quotient-congruence and finite-trace-lifting argument,
+not mechanically checked equivalence. Original run43651310403 TIMEOUT reports remain evidence of incomplete
+Safety and an incomplete mutation baseline; they are not superseded by this source change.
+No stamp or syncCommit advancement, estimated speedup, runtime proof or provider-consumption claim follows.
