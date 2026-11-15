@@ -319,3 +319,81 @@ async fn real_children_preserve_failed_grant_fifo_and_exact_generation_cleanup()
     b_held.unwrap();
     outcome.unwrap();
 }
+
+#[tokio::test]
+async fn stop_and_kill_enter_under_the_original_caller_before_their_receipts_are_polled() {
+    use crate::pool::application::native::dispatch::tests::Rig;
+
+    let rig = Arc::new(tokio::sync::Mutex::new(
+        Rig::new("slot-original-caller-enqueue", 0x736c_6f74_6561_6765).await,
+    ));
+    let slot = Arc::new(Service::new(Config::default()));
+    let running = Arc::clone(&rig);
+    let actor = Arc::clone(&slot);
+    let scenario = tokio::spawn(async move {
+        let mut rig = running.lock().await;
+        rig.ready().await;
+        let source = Arc::clone(rig.source.local().unwrap());
+        let generation = source.generation();
+        let original_exit = source.when_exited();
+        let capture = actor.capture(Acquired {
+            owner: rig.world.owner.clone(),
+            tab: rig.world.spawn.tab.clone(),
+            title: "Original execution".into(),
+            source: Arc::clone(&source),
+            generation,
+            exited: source.when_exited(),
+        });
+        let mut states = actor.subscribe();
+        actor
+            .frame(&capture, Frame::Acquire { request_id: "original-slot".into() })
+            .unwrap();
+        state_where(&mut states, |state| is_holder(state, &capture)).await;
+        let stop_page = NativeCaller::Desktop { win_id: 21, wc_id: 121 };
+        let stop_caller = rig.world.callers.admit_page(stop_page.clone()).unwrap();
+        let stopped = rig.world.callers.request_effect(
+            &stop_caller, None, &crate::server::Scope::detached(),
+            || Ok(actor.stop(&capture)),
+        ).unwrap();
+        rig.world.callers.close_page(&stop_page).unwrap();
+        drop(stopped);
+        // Inspect is the existing actor FIFO barrier. A stop admitted before it must already have enqueued abort.
+        actor.holder().await.unwrap();
+        source.stock_for_generation(generation, json!({"type":"get_state"}), None).await.unwrap();
+        assert_eq!(
+            rig.world.stdin().iter().filter(|command| command["type"] == "abort").count(),
+            1,
+            "dropping an unpolled receipt must not withdraw the stop already admitted by the original caller"
+        );
+        assert!(source.admit_observation(generation, || Ok(())).is_ok());
+        let kill_page = NativeCaller::Desktop { win_id: 22, wc_id: 122 };
+        let kill_caller = rig.world.callers.admit_page(kill_page.clone()).unwrap();
+        let killed = rig.world.callers.request_effect(
+            &kill_caller, None, &crate::server::Scope::detached(),
+            || Ok(actor.kill(&capture)),
+        ).unwrap();
+        rig.world.callers.close_page(&kill_page).unwrap();
+        drop(killed);
+        actor.holder().await.unwrap();
+        source.barrier().await.unwrap();
+        assert!(
+            source.admit_observation(generation, || Ok(())).is_err(),
+            "kill must have fenced the original run before its receipt is polled"
+        );
+        original_exit.await.unwrap();
+        while source.generation() == generation || source.facts()["status"] != "ready" {
+            let event = rig.events.recv().await.expect("original Source still delivers its restart");
+            assert!(
+                event.name != "sidecar.status" || event.data["status"] != "error",
+                "the original Source restart failed: {}",
+                event.data
+            );
+        }
+        assert_ne!(source.generation(), generation);
+    }).await;
+    let slot_closed = slot.close().await;
+    let rig = Arc::try_unwrap(rig).ok().expect("scenario released the real fixture").into_inner();
+    rig.close().await;
+    slot_closed.unwrap();
+    scenario.unwrap();
+}
