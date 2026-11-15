@@ -24,6 +24,8 @@ describe("rollback start marker", () => {
 
 	it("rejects a PID that is not running or belongs to another process", () => {
 		expect(rollbackStartMarker('{"version":"0.131.0","pid":43}', "0.131.0", running).valid).toBe(false);
-		expect(rollbackStartMarker('{"version":"0.131.0","pid":42}', "0.131.0", [{ id: 42, name: "node" }]).valid).toBe(false);
+		expect(rollbackStartMarker('{"version":"0.131.0","pid":42}', "0.131.0", [{ id: 42, name: "node" }]).valid).toBe(
+			false,
+		);
 	});
 });

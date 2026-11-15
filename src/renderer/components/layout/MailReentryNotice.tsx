@@ -6,7 +6,6 @@
  * glyph, the sentence keeps the row), exactly as `UpdateBanner` does.
  */
 import { KeyRound } from "lucide-react";
-import { useEffect } from "react";
 import { useShellMode } from "../../hooks/use-shell-mode";
 import { useT } from "../../lib/i18n";
 import { useMailReentryAccounts, useMailReentryStore } from "../../stores/mail-reentry";
@@ -16,12 +15,8 @@ import { Banner, Button, IconButton } from "../common";
 export function MailReentryNotice() {
 	const t = useT();
 	const accounts = useMailReentryAccounts();
-	const refresh = useMailReentryStore(state => state.refresh);
 	const dismiss = useMailReentryStore(state => state.dismiss);
 	const phone = useShellMode() === "phone";
-	useEffect(() => {
-		void refresh();
-	}, [refresh]);
 	if (accounts.length === 0) return null;
 	const open = () => {
 		useMailReentryStore.getState().requestEdit(accounts[0]?.id ?? "");

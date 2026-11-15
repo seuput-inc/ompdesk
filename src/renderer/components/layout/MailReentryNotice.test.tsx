@@ -6,7 +6,7 @@ import type { MailAccount } from "../../../shared/mail-accounts";
 import { I18nProvider } from "../../lib/i18n";
 import { useMailReentryStore } from "../../stores/mail-reentry";
 import { useUiStore } from "../../stores/ui";
-import { MailReentryNotice } from "./MailReentryNotice";
+import { MailReentryNoticeGate } from "./MailReentryNoticeGate";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
 const globals = globalThis as Record<string, unknown>;
@@ -47,10 +47,13 @@ async function mount(accounts: MailAccount[]): Promise<void> {
 	await act(async () => {
 		root.render(
 			<I18nProvider>
-				<MailReentryNotice />
+				<MailReentryNoticeGate />
 			</I18nProvider>,
 		);
 	});
+	if (accounts.some(account => account.needsReentry)) {
+		await vi.waitFor(() => expect(container.querySelector("[data-mail-reentry-notice]")).not.toBeNull());
+	}
 }
 
 afterEach(async () => {
@@ -68,6 +71,15 @@ describe("MailReentryNotice", () => {
 		await mount([account("a", "Work", false)]);
 		expect(list).toHaveBeenCalledWith({ action: "list" });
 		expect(container.querySelector("[data-mail-reentry-notice]")).toBeNull();
+	});
+
+	it("shows a notice when an account later needs its password", async () => {
+		await mount([]);
+		expect(container.querySelector("[data-mail-reentry-notice]")).toBeNull();
+		await act(async () => {
+			useMailReentryStore.getState().adopt([account("a", "Work", true)]);
+		});
+		await vi.waitFor(() => expect(container.textContent).toContain("The email account Work needs its password again"));
 	});
 
 	it("names every account that needs it in one notice, not one per account", async () => {

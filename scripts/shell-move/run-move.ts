@@ -561,7 +561,11 @@ async function verifyRolledBack(reason: "swap" | "start", final: boolean): Promi
 	}
 	const { marker, valid: markerValid } = rollbackStartMarker(markerRaw, RELEASED_VERSION, running);
 	evidence.rollbackStartMarker = marker;
-	expect(markerValid, "the rollback start marker is absent or belongs to the running restored Electron version", marker);
+	expect(
+		markerValid,
+		"the rollback start marker is absent or belongs to the running restored Electron version",
+		marker,
+	);
 	expect(await noWindows(), "no window appeared during the failed move");
 	evidence.running = running;
 	expect(
