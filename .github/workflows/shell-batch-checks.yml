@@ -34,6 +34,12 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && 'shell-batch-checks [m
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Diagnostic subset, not the full shell landing gate"
+        type: choice
+        options: [all, move-current-mac]
+        default: all
   push:
     branches: [omp/agent/rust-batch-shell]
     paths:
@@ -74,7 +80,7 @@ jobs:
   shell-mac:
     name: shell-mac (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only != 'move-current-mac'"
     concurrency:
       group: mac-dispatch
       cancel-in-progress: false
@@ -101,6 +107,7 @@ jobs:
 
   title-bar:
     name: title-bar (windows-latest)
+    if: inputs.only != 'move-current-mac'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -127,7 +134,7 @@ jobs:
   title-bar-mac:
     name: title-bar (${{ matrix.os }})
     needs: [gate, shell-mac]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only != 'move-current-mac'"
     concurrency:
       group: mac-dispatch
       cancel-in-progress: false
@@ -177,7 +184,7 @@ jobs:
   move-mac:
     name: move-mac (${{ matrix.os }})
     needs: [gate, title-bar-mac]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only != 'move-current-mac'"
     concurrency:
       group: mac-dispatch
       cancel-in-progress: false
@@ -216,6 +223,7 @@ jobs:
 
   move-win:
     name: move-win (${{ matrix.released-tag }})
+    if: inputs.only != 'move-current-mac'
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -291,8 +299,8 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        os: [macos-15, macos-26]
-        released-tag: [v0.128.0, v0.131.0]
+        os: ${{ fromJSON(inputs.only == 'move-current-mac' && '["macos-15"]' || '["macos-15","macos-26"]') }}
+        released-tag: ${{ fromJSON(inputs.only == 'move-current-mac' && '["v0.131.0"]' || '["v0.128.0","v0.131.0"]') }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -322,7 +330,7 @@ jobs:
   keychain:
     name: keychain (${{ matrix.os }})
     needs: [gate, move-mac-release1]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only != 'move-current-mac'"
     concurrency:
       group: mac-dispatch
       cancel-in-progress: false
