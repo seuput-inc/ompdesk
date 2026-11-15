@@ -407,38 +407,100 @@ async fn a_report_or_the_person_s_prompt_ends_the_blocking_wait_too() {
     control.host.port().close();
 }
 
-/// 13 Nov 2026: three default sends to a session waiting for the person's answer closed its question card each time,
-/// while the receipt said they would be read after the user answers.
+/// An instruction must leave the person's approval card open and send no answer or abort.
 #[tokio::test]
-async fn a_message_to_a_session_with_an_open_card_queues_behind_it_whatever_delivery_says() {
-    for (n, delivery) in [None, Some("steer"), Some("follow_up")]
-        .into_iter()
-        .enumerate()
-    {
+async fn a_current_instruction_preserves_the_open_approval_card_without_a_mode_selector() {
+    let mut card = busy("c");
+    card["asks"] = json!([{ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Which?", "options": ["x", "y"] } }]);
+    let (control, asked) = rig(
+        9_312,
+        state(vec![tab("s"), card]),
+        Tuning::default(),
+        |method, args| {
+            if method == "command" && args["command"]["type"] == "agent_control_instruction" {
+                return Ok(json!({"success": true}));
+            }
+            main_replies(method, args)
+        },
+    );
+    let receipt = control
+        .run(
+            "s",
+            "ompdesk_session_send",
+            json!({"session": "c", "message": "an update", "request_id": "card-update"}),
+            None,
+        )
+        .await;
+    assert!(!receipt.is_error, "{}", receipt.text);
+    let commands = asked_with(&asked, "command");
+    let instructions = commands
+        .iter()
+        .filter(|args| args["command"]["type"] == "agent_control_instruction")
+        .collect::<Vec<_>>();
+    assert_eq!(instructions.len(), 1);
+    assert!(
+        instructions[0]["command"]
+            .get("streamingBehavior")
+            .is_none()
+    );
+    assert!(
+        receipt.text.contains("which stays open")
+            && receipt.text.contains("once the user has answered"),
+        "{}",
+        receipt.text
+    );
+    let live = control.host.state();
+    let actual = live.tabs.iter().find(|tab| tab.tab_id == "c").unwrap();
+    assert_eq!(actual.asks.len(), 1);
+    assert_eq!(actual.asks[0].id, "r1");
+    assert_eq!(actual.asks[0].request.method, "select");
+    assert_eq!(actual.asks[0].request.title.as_deref(), Some("Which?"));
+    assert_eq!(actual.asks[0].request.options, ["x", "y"]);
+    assert!(commands.iter().all(|args| {
+        !matches!(
+            args["command"]["type"].as_str(),
+            Some("abort" | "extension_ui_response" | "plan_approval")
+        )
+    }));
+    assert!(asked_with(&asked, "answer").is_empty());
+    assert!(asked_with(&asked, "markAnswered").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn retired_instruction_delivery_inputs_are_refused_without_card_or_instruction_effects() {
+    for (n, delivery) in ["steer", "follow_up"].into_iter().enumerate() {
         let mut card = busy("c");
         card["asks"] = json!([{ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Which?", "options": ["x", "y"] } }]);
         let (control, asked) = rig(
-            9_312 + n as u64,
+            9_313 + n as u64,
             state(vec![tab("s"), card]),
             Tuning::default(),
             main_replies,
         );
-        let mut args = json!({ "session": "c", "message": "an update" });
-        if let Some(delivery) = delivery {
-            args["delivery"] = json!(delivery);
-        }
-        let receipt = control.run("s", "ompdesk_session_send", args, None).await;
-        let prompts: Vec<Value> = asked_with(&asked, "command")
-            .into_iter()
-            .filter(|args| args["command"]["type"] == "prompt")
-            .collect();
-        assert_eq!(prompts[0]["command"]["streamingBehavior"], "followUp");
-        assert!(
-            receipt.text.contains("which stays open")
-                && receipt.text.contains("once the user has answered")
-                && !receipt.text.contains("delivered as steer"),
-            "{}",
-            receipt.text
+        let receipt = control
+            .run(
+                "s",
+                "ompdesk_session_send",
+                json!({"session": "c", "message": "an update", "delivery": delivery}),
+                None,
+            )
+            .await;
+        assert!(receipt.is_error, "{delivery}: {}", receipt.text);
+        assert!(asked_with(&asked, "command").is_empty());
+        assert!(asked_with(&asked, "answer").is_empty());
+        assert!(asked_with(&asked, "markAnswered").is_empty());
+        assert_eq!(
+            control
+                .host
+                .state()
+                .tabs
+                .iter()
+                .find(|tab| tab.tab_id == "c")
+                .unwrap()
+                .asks
+                .len(),
+            1
         );
         control.host.port().close();
     }
