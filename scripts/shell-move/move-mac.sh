@@ -27,43 +27,13 @@
 # Evidence lines start with "EVIDENCE:". Exit 1 on any failed check.
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
+. "$HERE/mac-processes.sh"
 PORT=19230; FEEDPORT=18444; HTTPPORT=18445; SEEDPORT=18446
 LAST_ELECTRON_TAG=$(jq -er .tag "$REPO/native/ompdesk/crates/shell/last-electron.json") || exit 1
 SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-$LAST_ELECTRON_TAG}
 case "$SOURCE_TAG" in v0.127.0|v0.128.0|"$LAST_ELECTRON_TAG") ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
 cleanup() { for v in OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" 2>/dev/null; }
 trap cleanup EXIT
-app_pids() {
-  local processes
-  processes=$(ps -axo pid=,command=) || return 1
-  printf '%s\n' "$processes" | awk -v app="$1/" '{ pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if (index($0, app) == 1) print pid }'
-}
-stop_app() {
-  local app=$1 owned_pid=${2:-} pids pid n=0 signalled
-  pids=$(app_pids "$app") || { evidence "stop failed: cannot list processes"; return 1; }
-  signalled=$pids
-  if [ -n "$owned_pid" ] && kill -0 "$owned_pid" 2>/dev/null; then
-    case " $pids " in *" $owned_pid "*) ;; *) pids="$pids $owned_pid";; esac
-    signalled=$pids
-  fi
-  for pid in $pids; do
-    kill -TERM "$pid" 2>/dev/null || {
-      kill -0 "$pid" 2>/dev/null && { evidence "stop failed: pid $pid still running"; return 1; }
-    }
-  done
-  while :; do
-    pids=$(app_pids "$app") || { evidence "stop failed: cannot list processes"; return 1; }
-    if [ -n "$owned_pid" ] && kill -0 "$owned_pid" 2>/dev/null; then pids="$pids $owned_pid"; fi
-    if [ -z "$pids" ]; then evidence "stopped $app; signalled pids: ${signalled:-none}"; return 0; fi
-    if [ "$n" -ge 30 ]; then
-      evidence "stop failed: $app still has pids $(echo "$pids" | tr '\n' ' ')"
-      ps -p "$(echo "$pids" | paste -sd, -)" -o pid=,ppid=,stat= 2>/dev/null | head -20 | sed 's/^/EVIDENCE: stop process: /'
-      return 1
-    fi
-    sleep 3
-    n=$((n+3))
-  done
-}
 stop_or_exit() { stop_app "$@" || { check 1 "app processes did not exit"; restore; exit 1; }; }
 
 
