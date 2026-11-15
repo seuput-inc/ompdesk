@@ -86,9 +86,9 @@ on:
         type: boolean
         default: false
       legacy_tag:
-        description: "Release whose assisted-installer setup the installer check installs for all users first"
+        description: "All-users seed: fixture (v0.26.0 NSIS options) or an actual assisted-installer release tag"
         type: string
-        default: v0.26.0
+        default: fixture
       force:
         description: "Run even when this commit already has a green run with these inputs (otherwise the run cancels itself)"
         type: boolean
@@ -420,7 +420,7 @@ jobs:
   # resources/installer.nsh) on a real Windows: scripts/windows-installer-check.ps1
   # runs `setup /S`, then the setup as a double-click runs it (no arguments;
   # it must finish with only a progress bar and start OMPdesk), then an
-  # all-users install from `legacy_tag`'s assisted installer that the new
+  # all-users install from the assisted NSIS fixture (or `legacy_tag` release) that the new
   # setup must remove. Each checks the install folder, the Start-menu and
   # desktop shortcuts, the uninstall entry (HKCU only), the app's first
   # window, and the uninstall. Captures land in the `installer-check` artifact.
@@ -477,20 +477,22 @@ jobs:
         run: bun run build:agent-desktop
       - name: Package
         run: bunx electron-builder --config electron-builder.win.yml --win --x64 --publish never
-      - name: Stage the setup under its release name and the assisted-installer release
+      - name: Stage the setup and an actual assisted NSIS seed
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        # Releases before v0.42.0 were removed from GitHub: without the assisted-installer release the
-        # all-users step is skipped with a warning instead of failing every other check.
+          LEGACY_TAG: ${{ inputs.legacy_tag }}
         run: |
           set -euo pipefail
           cp "dist/ompdesk-$(node -p 'require("./package.json").version')-setup.exe" ompdesk-windows-setup.exe
-          if gh release download "${{ inputs.legacy_tag }}" --pattern ompdesk-windows-setup.exe --output legacy-setup.exe; then
-            ls -l ompdesk-windows-setup.exe legacy-setup.exe
+          if [ "$LEGACY_TAG" = fixture ]; then
+            bunx electron-builder --config scripts/shell-move/assisted-installer.yml --prepackaged dist/win-unpacked --win --x64 --publish never
+            cp dist/assisted-fixture/legacy-assisted-fixture.exe legacy-setup.exe
+            echo "All-users seed: real candidate payload with v0.26.0 assisted NSIS options, not an old released application"
           else
-            echo "::warning::release ${{ inputs.legacy_tag }} not found: the all-users install step is skipped"
+            gh release download "$LEGACY_TAG" --pattern ompdesk-windows-setup.exe --output legacy-setup.exe
           fi
+          ls -l ompdesk-windows-setup.exe legacy-setup.exe
       - name: Silent install
         shell: pwsh
         run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode silent
@@ -498,7 +500,6 @@ jobs:
         shell: pwsh
         run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode ui -Captures installer-captures
       - name: Over an all-users install
-        if: hashFiles('legacy-setup.exe') != ''
         shell: pwsh
         run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode legacy -LegacySetup legacy-setup.exe
       - if: always()

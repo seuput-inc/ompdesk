@@ -1,0 +1,32 @@
+# Hosted installer fixture, not an old released application. Package the real
+# dist/win-unpacked payload with the assisted NSIS identity/options from v0.26.0
+# (6aa5972eaf91278cab2207136ed5c71ae109f481). Both lockfiles pin electron-builder
+# 26.15.3. No current custom installer include: it would remove the seed itself.
+appId: com.seuput.ompdesk
+productName: OMPdesk
+extraMetadata:
+  version: 0.26.0
+directories:
+  buildResources: resources
+  output: dist/assisted-fixture
+protocols:
+  - name: omp
+    schemes:
+      - omp
+compression: maximum
+win:
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  verifyUpdateCodeSignature: false
+nsis:
+  include: null
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OMPdesk
+  runAfterFinish: false
+  artifactName: legacy-assisted-fixture.exe
