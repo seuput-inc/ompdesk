@@ -281,12 +281,28 @@ describe("CoreProcess", () => {
 			standIn = pid;
 			const group = core.pid as number;
 			const settled = answer.catch((error: unknown) => error);
-			// stdin's end leaves the request running, so this waits for stop()'s kill.
+			// EOF cancels the request; its answer arrives only after the git is gone.
 			await core.stop();
 			expect(alive(standIn)).toBe(false);
 			expect(alive(group)).toBe(false);
 			if (process.platform !== "win32") expect(() => process.kill(-group, 0)).toThrow(/ESRCH/);
-			expect(await settled).toMatchObject({ code: "core_exited" });
+			expect(await settled).toMatchObject({ code: "cancelled" });
+		}, 60_000);
+
+		it("a second stop waits for the first stop's running git to exit", async () => {
+			dir = await mkdtemp(join(tmpdir(), "omp-core-stop-join-"));
+			const core = startCore();
+			const { answer, pid } = await standInRequest(core, dir);
+			standIn = pid;
+			const settled = answer.catch((error: unknown) => error);
+			const first = core.stop();
+			const second = core.stop();
+			await second;
+			const aliveWhenSecondStopped = alive(standIn);
+			if (aliveWhenSecondStopped) process.kill(standIn, "SIGKILL");
+			await first;
+			await settled;
+			expect(aliveWhenSecondStopped).toBe(false);
 		}, 60_000);
 	});
 

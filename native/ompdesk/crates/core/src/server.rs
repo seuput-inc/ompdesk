@@ -600,6 +600,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn input_eof_cancels_every_outstanding_request() {
+        use std::time::Duration;
+
+        let (mut lines, mut client_write, server) = start(registry()).await;
+        client_write
+            .write_all(b"{\"id\":1,\"method\":\"core.echo\",\"params\":{\"waitFor\":\"eof-held\"}}\n{\"id\":2,\"method\":\"core.echo\",\"params\":{\"value\":\"ready\"}}\n")
+            .await
+            .unwrap();
+        assert_eq!(next(&mut lines).await["id"], 2);
+        client_write.shutdown().await.unwrap();
+        drop(client_write);
+        let answer = tokio::time::timeout(Duration::from_secs(5), next(&mut lines)).await;
+        if answer.is_err() {
+            server.abort();
+        } else {
+            server.await.unwrap().unwrap();
+        }
+        let answer = answer.expect("EOF did not cancel the outstanding request");
+        assert_eq!(answer["id"], 1);
+        assert_eq!(answer["error"]["code"], "cancelled");
+    }
+
+    #[test]
+    fn eof_child_process() {
+        use std::io::{Read, Write};
+
+        let Ok(address) = std::env::var("OMPDESK_TEST_EOF_CHILD") else {
+            return;
+        };
+        let mut socket = std::net::TcpStream::connect(address).unwrap();
+        socket.write_all(b"r").unwrap();
+        let _ = socket.read(&mut [0]);
+    }
+
+    #[tokio::test]
+    async fn input_eof_cancels_a_running_child_and_waits_for_its_exit() {
+        use std::collections::BTreeMap;
+        use std::time::Duration;
+
+        use crate::run::{Exec, Opts, Runner};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let mut env: BTreeMap<String, String> = std::env::vars().collect();
+        env.insert(
+            "OMPDESK_TEST_EOF_CHILD".into(),
+            listener.local_addr().unwrap().to_string(),
+        );
+        let mut registry = Registry::default();
+        registry.add("test.run", |call| {
+            Box::pin(async move {
+                let runner: Runner = call.params()?;
+                Exec::new(runner, call.scope, "git")
+                    .run(".", &[], Opts::default())
+                    .await?;
+                Reply::json(&())
+            })
+        });
+        let (mut lines, mut client_write, server) = start(registry).await;
+        let request = serde_json::json!({
+            "id": 1,
+            "method": "test.run",
+            "params": {
+                "bin": std::env::current_exe().unwrap(),
+                "args": ["--exact", "server::tests::eof_child_process", "--nocapture"],
+                "env": env,
+                "timeoutMs": 600_000,
+                "maxBytes": 1024
+            }
+        });
+        client_write
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let (mut child, _) = tokio::time::timeout(Duration::from_secs(15), listener.accept())
+            .await
+            .expect("child did not connect")
+            .unwrap();
+        let mut byte = [0];
+        child.read_exact(&mut byte).await.unwrap();
+        assert_eq!(byte, *b"r");
+        client_write.shutdown().await.unwrap();
+        drop(client_write);
+
+        let answer = tokio::time::timeout(Duration::from_secs(10), next(&mut lines)).await;
+        if answer.is_err() {
+            drop(child);
+            server.await.unwrap().unwrap();
+            panic!("EOF did not cancel the running child");
+        }
+        let answer = answer.unwrap();
+        assert_eq!(answer["id"], 1);
+        assert_eq!(answer["error"]["code"], "cancelled");
+        assert_eq!(child.read(&mut byte).await.unwrap(), 0, "child still holds its socket");
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn answers_only_once_what_the_request_left_running_has_ended() {
         static LEFT: LazyLock<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
             LazyLock::new(Default::default);
