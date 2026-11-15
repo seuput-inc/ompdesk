@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { type Server, type Socket, createServer } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -148,7 +148,7 @@ process.send?.({ core: startGit() });`,
 			const chunk = outputs
 				.flatMap(output => ("output" in output ? output.output : []))
 				.find(output => output.type === "chunk");
-			if (!chunk || chunk.type !== "chunk") throw new Error("main fixture was not bundled");
+			if (chunk?.type !== "chunk") throw new Error("main fixture was not bundled");
 			// Hold the real Node exit at the boundary so the test can inspect both process groups and issue a late call.
 			const prelude = `const __dirname = ${JSON.stringify(mainDir)};
 globalThis.__shellTestExit = process.exit.bind(process);
@@ -176,7 +176,10 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 					exitRequested.resolve(message.exitRequested);
 				if ("stdinCore" in message && (typeof message.stdinCore === "number" || message.stdinCore === null))
 					stdinEnded.resolve(message.stdinCore);
-				if ("afterShutdown" in message && (typeof message.afterShutdown === "number" || message.afterShutdown === null))
+				if (
+					"afterShutdown" in message &&
+					(typeof message.afterShutdown === "number" || message.afterShutdown === null)
+				)
 					restartAttempt.resolve(message.afterShutdown);
 				if ("lateCode" in message && typeof message.lateCode === "string") lateAnswer.resolve(message.lateCode);
 			});

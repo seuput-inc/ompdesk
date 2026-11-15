@@ -185,8 +185,8 @@ describe("resources/installer.nsh and the test seams", () => {
 		expect(shipping).toContain("ReadEnvStr $ompUserData OMP_GUI_TEST_USER_DATA_DIR");
 		expect(shipping).toContain('StrCpy $ompUserData "$APPDATA\\ompdesk"');
 		expect(shipping).toMatch(/Delete "\$ompMarker"\n[\s\S]*ExecShellAsUser\} \$0 "\$launchLink" "open" "\$ompArgs"/);
-		expect(shipping).toContain("${For} $ompWaited 1 120");
-		expect(shipping).toContain('$\\"version$\\":$\\"${VERSION}$\\"');
+		expect(shipping).toContain(`\${For} $ompWaited 1 120`);
+		expect(shipping).toContain(`$\\"version$\\":$\\"\${VERSION}$\\"`);
 		// The proof removes the backup; the lack of it kills the new app's processes, restores and exits 2, no dialog.
 		expect(shipping).toMatch(
 			/\$\{if\} \$ompSeen == "1"\n\s+RMDir \/r "\$ompBackup"\n\s+Delete "\$ompFailed"\n\s+\$\{else\}\n\s+!insertmacro ompRecordFailure\n\s+!insertmacro ompLog "start-failed:[^\n]*\n\s+!insertmacro KILL_PROCESS "\$\{APP_EXECUTABLE_FILENAME\}" 1\n\s+Sleep 3000\n\s+!insertmacro ompRestoreOldFolder "start-failed"/,

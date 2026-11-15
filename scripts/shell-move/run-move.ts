@@ -695,7 +695,7 @@ async function verifyNotTriedAgain(entry: string): Promise<void> {
 async function uninstallQuiet(entry: string): Promise<void> {
 	const quiet = regValue(entry, "QuietUninstallString") ?? "";
 	const match = /^"([^"]+)"\s*(.*)$/.exec(quiet);
-	if (!match?.[1] || !match[1].toLowerCase().startsWith(TEST_DIR.toLowerCase())) {
+	if (!match?.[1]?.toLowerCase().startsWith(TEST_DIR.toLowerCase())) {
 		note("no quiet uninstaller inside the test folder", quiet);
 		return;
 	}
