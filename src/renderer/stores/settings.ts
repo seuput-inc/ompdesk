@@ -189,7 +189,12 @@ export const createSettingsStore = (command: TabCommand = activeTabCommand) => {
 	return createStore<SettingsStore>()(set => {
 		const syncApproval = (options?: { readOnly?: boolean }): Promise<boolean> => {
 			const version = ++approvalSyncVersion;
-			approvalRead = syncApprovalMode(set, command, () => version === approvalSyncVersion, options?.readOnly === true);
+			approvalRead = syncApprovalMode(
+				set,
+				command,
+				() => version === approvalSyncVersion,
+				options?.readOnly === true,
+			);
 			return approvalRead;
 		};
 		const syncDisplay = (): Promise<boolean> => {

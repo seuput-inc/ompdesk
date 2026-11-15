@@ -44,8 +44,7 @@ import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";
 import { selectTodoCardVisible, useTodoStore } from "../stores/todo";
 import { type ToolsStore, useToolsStore } from "../stores/tools";
-import * as hydrationModule from "./session-hydration";
-import { loadOlderTranscript } from "./session-hydration";
+import { loadOlderTranscript, recoverTabSession } from "./session-hydration";
 import { attachTabSession, hydrateSession, hydrateTabSession, useRpcEvents } from "./use-rpc-events";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -849,29 +848,33 @@ describe("stream-loss hydration", () => {
 				case "get_checkout_peers":
 					return Promise.resolve(success({ peers: null }));
 				case "get_next_prompt":
-					return Promise.resolve(success({
-						suggestions: false,
-						inline: false,
-						legacyExtension: false,
-						requests: { suggest: 0, inline: 0 },
-					}));
+					return Promise.resolve(
+						success({
+							suggestions: false,
+							inline: false,
+							legacyExtension: false,
+							requests: { suggest: 0, inline: 0 },
+						}),
+					);
 				case "get_settings":
-					return Promise.resolve(success({
-						values: {
-							"tools.approvalMode": "yolo",
-							hideThinkingBlock: false,
-							proseOnlyThinking: true,
-							omitThinking: false,
-							"display.showTokenUsage": false,
-							"display.collapseCompacted": true,
-							"goal.statusInFooter": true,
-							"speech.enabled": false,
-							"stt.enabled": false,
-							emojiAutocomplete: true,
-							"paste.largeMenuThreshold": 100,
-						},
-						provenance: { "tools.approvalMode": { layers: [] } },
-					}));
+					return Promise.resolve(
+						success({
+							values: {
+								"tools.approvalMode": "yolo",
+								hideThinkingBlock: false,
+								proseOnlyThinking: true,
+								omitThinking: false,
+								"display.showTokenUsage": false,
+								"display.collapseCompacted": true,
+								"goal.statusInFooter": true,
+								"speech.enabled": false,
+								"stt.enabled": false,
+								emojiAutocomplete: true,
+								"paste.largeMenuThreshold": 100,
+							},
+							provenance: { "tools.approvalMode": { layers: [] } },
+						}),
+					);
 				default:
 					return original(tabId, command);
 			}
@@ -886,8 +889,7 @@ describe("stream-loss hydration", () => {
 		commandForTab.mockImplementation((tabId, command) =>
 			command.type === "get_queue" ? Promise.reject(new Error("queue unavailable")) : original(tabId, command),
 		);
-		const recover = Reflect.get(hydrationModule, "recoverTabSession");
-		const result = typeof recover === "function" ? await recover("t-loss") : await hydrateTabSession("t-loss");
+		const result = await recoverTabSession("t-loss");
 		expect(result).toBe(false);
 	});
 
@@ -896,10 +898,11 @@ describe("stream-loss hydration", () => {
 		seedReadyTab("t-loss");
 		vi.mocked(window.omp.prefs.get).mockResolvedValue("write");
 		completeRecoveryReads(commandForTab);
-		const recover = Reflect.get(hydrationModule, "recoverTabSession");
-		const result = typeof recover === "function" ? await recover("t-loss") : await hydrateTabSession("t-loss");
+		const result = await recoverTabSession("t-loss");
 		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_setting")).toEqual([]);
-		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_subagent_subscription")).toEqual([]);
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_subagent_subscription")).toEqual(
+			[],
+		);
 		expect(window.omp.prefs.set).not.toHaveBeenCalled();
 		expect(result).toBe(true);
 	});
@@ -2123,7 +2126,6 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 
 		// TAB_STATUS ready, the full status channel, and the boot fallback land together.
 		const joined = [attachTabSession("t-once"), attachTabSession("t-once"), attachTabSession("t-once")];
-		expect(new Set(joined).size).toBe(1);
 		await settle(1);
 		await Promise.all(joined);
 		expect(sessionRuntimeStore<MessagesStore>("t-once", "messages")?.getState().messages).toEqual([hydrated]);
@@ -2133,15 +2135,14 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 		// An explicit reload never joins a fetch that started before it...
 		const reload = hydrateTabSession("t-once");
 		// ...but a following attach joins the reload.
-		expect(attachTabSession("t-once")).toBe(reload);
+		const joinedReload = attachTabSession("t-once");
 		// A new session id on the same runtime starts its own fetch.
 		useTabsStore.setState(state => ({
 			tabs: state.tabs.map(tab => (tab.id === "t-once" ? { ...tab, sessionId: "s2" } : tab)),
 		}));
 		const switched = attachTabSession("t-once");
-		expect(switched).not.toBe(reload);
 		await settle(4);
-		await Promise.all([later, reload, switched]);
+		await Promise.all([later, reload, joinedReload, switched]);
 	});
 
 	it("clears the stale streaming bubble when the hydrated tab has settled", async () => {

@@ -1827,9 +1827,7 @@ describe("tabs store background tab signals", () => {
 		await resync;
 		expect(sessionRuntime("late")).toBe(runtime);
 		expect(useTabsStore.getState().tabs.some(tab => tab.id === "late")).toBe(true);
-		expect(sessionRuntimeStore<QueueStore>("late", "queue")?.getState().steering[0]?.text).toBe(
-			"keep me",
-		);
+		expect(sessionRuntimeStore<QueueStore>("late", "queue")?.getState().steering[0]?.text).toBe("keep me");
 	});
 
 	it("does not discard a queued message when an authoritative list omits its tab", async () => {
@@ -1856,10 +1854,12 @@ describe("tabs store background tab signals", () => {
 		omp.tabs.list.mockReturnValueOnce(listed.promise);
 		const resync = useTabsStore.getState().reconcileTabs({ resync: true });
 		for (const tabId of ["t1", "t2"]) {
-			sessionRuntimeStore<QueueStore>(tabId, "queue")!.getState().setFromFrame({
-				steering: [{ id: `queued-${tabId}`, text: "keep me", editable: true, timestamp: 1 }],
-				followUp: [],
-			});
+			sessionRuntimeStore<QueueStore>(tabId, "queue")!
+				.getState()
+				.setFromFrame({
+					steering: [{ id: `queued-${tabId}`, text: "keep me", editable: true, timestamp: 1 }],
+					followUp: [],
+				});
 		}
 		listed.resolve([
 			tabInfo("t0", "/alpha"),
@@ -1899,7 +1899,9 @@ describe("tabs store background tab signals", () => {
 		const { resyncPage } = await import("../web/resync-page");
 		expect(await resyncPage({ strict: true })).toBe(false);
 		const pending = () =>
-			sessionRuntimeStore<ExtensionUiStore>("t1", "extensionUi")?.getState().pendingRequests.map(request => request.id);
+			sessionRuntimeStore<ExtensionUiStore>("t1", "extensionUi")
+				?.getState()
+				.pendingRequests.map(request => request.id);
 		expect(pending()).toEqual(["missed"]);
 		const held = Promise.withResolvers<typeof open>();
 		openRequests.mockReturnValueOnce(held.promise);

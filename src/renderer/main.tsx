@@ -38,7 +38,8 @@ if (shellStream) {
 				installShellResync(
 					shellStream,
 					async () => (await import("./web/resync-page")).resyncPage({ strict: true }),
-					failures => reportRuntimeError("background-task", new Error("Shell resync failed"), { details: { failures } }),
+					failures =>
+						reportRuntimeError("background-task", new Error("Shell resync failed"), { details: { failures } }),
 				),
 			)
 			.catch(error => {

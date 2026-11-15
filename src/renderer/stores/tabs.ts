@@ -722,45 +722,51 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			return false;
 		}
 		const listedById = before ? new Map(listed.map(info => [info.tabId, info])) : null;
-		const raced = new Set(
-			before
-				? get().tabs.flatMap(tab => {
-						const prior = before.get(tab.id);
-						const runtime = sessionRuntime(tab.id);
-						const composer = sessionRuntimeStore<ComposerStore>(tab.id, "composer")?.getState();
-						const queue = sessionRuntimeStore<QueueStore>(tab.id, "queue")?.getState();
-						const ui = sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState();
-						const plan = sessionRuntimeStore<PlanApprovalStore>(tab.id, "planApproval")?.getState();
-						const info = listedById?.get(tab.id);
-						const hasPending = (!info || tabSessionChanged(tab, info)) && (
-							Boolean(composer?.draft || composer?.images.length || composer?.sending ||
-								composer?.submissionUncertain || composer?.cancelSubmit || composer?.restoredQueue.length ||
-								composer?.editingQueued || queue?.steering.length || queue?.followUp.length || plan?.pending) ||
-							ui?.pendingRequests.some(request => BLOCKING_UI_METHODS[request.method] === true)
-						);
-						return hasPending || !prior ||
-							prior.tab !== tab ||
-							prior.runtime !== runtime ||
-							prior.queue !== runtime?.stores.get("queue")?.getState() ||
-							prior.composer !== runtime?.stores.get("composer")?.getState() ||
-							prior.extensionUi !== runtime?.stores.get("extensionUi")?.getState() ||
-							prior.plan !== runtime?.stores.get("planApproval")?.getState()
-							? [tab.id]
-							: [];
-					})
-				: [],
-		);
-		// The list predates a live change. Leave the whole view and its host route untouched until a fresh pass.
-		if (raced.size > 0) return false;
-		// A tab this window is closing is gone for it even while main still lists it.
-		const list = listed.filter(info => !isTabClosed(info.tabId) && !raced.has(info.tabId));
+		const cannotReconcile =
+			before &&
+			get().tabs.some(tab => {
+				const prior = before.get(tab.id);
+				const runtime = sessionRuntime(tab.id);
+				const composer = sessionRuntimeStore<ComposerStore>(tab.id, "composer")?.getState();
+				const queue = sessionRuntimeStore<QueueStore>(tab.id, "queue")?.getState();
+				const ui = sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState();
+				const plan = sessionRuntimeStore<PlanApprovalStore>(tab.id, "planApproval")?.getState();
+				const info = listedById?.get(tab.id);
+				const hasPending =
+					(!info || tabSessionChanged(tab, info)) &&
+					(Boolean(
+						composer?.draft ||
+							composer?.images.length ||
+							composer?.sending ||
+							composer?.submissionUncertain ||
+							composer?.cancelSubmit ||
+							composer?.restoredQueue.length ||
+							composer?.editingQueued ||
+							queue?.steering.length ||
+							queue?.followUp.length ||
+							plan?.pending,
+					) ||
+						ui?.pendingRequests.some(request => BLOCKING_UI_METHODS[request.method] === true));
+				return (
+					hasPending ||
+					!prior ||
+					prior.tab !== tab ||
+					prior.runtime !== runtime ||
+					prior.queue !== runtime?.stores.get("queue")?.getState() ||
+					prior.composer !== runtime?.stores.get("composer")?.getState() ||
+					prior.extensionUi !== runtime?.stores.get("extensionUi")?.getState() ||
+					prior.plan !== runtime?.stores.get("planApproval")?.getState()
+				);
+			});
+		if (cannotReconcile) return false;
+		const list = listed.filter(info => !isTabClosed(info.tabId));
 		const resync = options?.resync === true;
 		if (resync) {
 			// Outside set(): dropping a runtime fires the focus listeners synchronously (see applyTabStatus).
 			const keep = new Set(list.map(info => info.tabId));
-			const gone = get().tabs.filter(tab => !keep.has(tab.id) && !tab.ghost && !raced.has(tab.id));
+			const gone = get().tabs.filter(tab => !keep.has(tab.id) && !tab.ghost);
 			if (gone.length > 0) {
-				set(state => ({ tabs: state.tabs.filter(tab => keep.has(tab.id) || raced.has(tab.id)) }));
+				set(state => ({ tabs: state.tabs.filter(tab => keep.has(tab.id)) }));
 				for (const tab of gone) deleteSessionRuntime(tab.id);
 			}
 		}
@@ -823,13 +829,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			});
 			// Entries the reply doesn't know (a spawn reply raced this reconcile)
 			// survive appended at the end.
-			const tabs = resync
-				? [
-						...merged,
-						...[...leftovers.values()].filter(tab => raced.has(tab.id)),
-						...unclaimed.filter(tab => raced.has(tab.id)),
-					]
-				: [...merged, ...leftovers.values()];
+			const tabs = resync ? merged : [...merged, ...leftovers.values()];
 			const mainActiveTabId = list.find(info => info.active)?.tabId;
 			// A ghost's selection is the snapshot's, written after a quiet moment (a quit right after a pick leaves the
 			// one before it): main's restored layout wins; it holds only when main names no active tab.
@@ -897,13 +897,13 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			try {
 				const routed = await routeTabView(activeTabId, visibleTabIds(get()), get().split);
 				if (version === switchVersion) reconcileTabRoute(activeTabId, routed);
-				return routed && raced.size === 0;
+				return routed;
 			} catch {
 				if (version === switchVersion) reconcileTabRoute(activeTabId, false);
 				return false;
 			}
 		}
-		return raced.size === 0;
+		return true;
 	},
 
 	// Commands given until it settles belong to the tab it opens (lib/tab-routing.ts `waitForActiveTab`).

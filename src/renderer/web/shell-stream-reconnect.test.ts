@@ -5,7 +5,9 @@ class NoStorageImport {
 	status = 204;
 	open(): void {}
 	send(): void {}
-	getResponseHeader(): null { return null; }
+	getResponseHeader(): null {
+		return null;
+	}
 }
 
 afterEach(() => {
@@ -20,18 +22,31 @@ it("keeps a partial UTF-8 event in order across a reader reconnect and signals r
 	vi.stubGlobal("document", new EventTarget());
 	vi.stubGlobal("XMLHttpRequest", NoStorageImport);
 	const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
-	const responses = Array.from({ length: 2 }, () =>
-		new Response(new ReadableStream<Uint8Array>({ start: controller => { controllers.push(controller); } })),
+	const responses = Array.from(
+		{ length: 2 },
+		() =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start: controller => {
+						controllers.push(controller);
+					},
+				}),
+			),
 	);
-	vi.stubGlobal("fetch", vi.fn(async () => {
-		const response = responses.shift();
-		if (!response) throw new Error("unexpected reconnect");
-		return response;
-	}));
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => {
+			const response = responses.shift();
+			if (!response) throw new Error("unexpected reconnect");
+			return response;
+		}),
+	);
 	await import("../../preload/shell");
 	const seen: unknown[] = [];
 	const stop = window.omp.events.onLogBatch(value => seen.push(value));
-	const bytes = new TextEncoder().encode(`${JSON.stringify({ channel: IPC_EVENTS.LOG_LINE, args: [{ text: "한글" }] })}\n`);
+	const bytes = new TextEncoder().encode(
+		`${JSON.stringify({ channel: IPC_EVENTS.LOG_LINE, args: [{ text: "한글" }] })}\n`,
+	);
 	const split = bytes.indexOf(0xed) + 1;
 	expect(split).toBeGreaterThan(1);
 	controllers[0].enqueue(bytes.slice(0, split));

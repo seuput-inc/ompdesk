@@ -79,7 +79,14 @@ describe("desktop stream resync", () => {
 		vi.useFakeTimers();
 		let notify = (_state: { hosts: { deviceId: string; state: string }[] }) => {};
 		const win = Object.assign(new EventTarget(), {
-			omp: { remote: { onState: (listener: typeof notify) => { notify = listener; return () => {}; } } },
+			omp: {
+				remote: {
+					onState: (listener: typeof notify) => {
+						notify = listener;
+						return () => {};
+					},
+				},
+			},
 		});
 		vi.stubGlobal("window", win);
 		vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));

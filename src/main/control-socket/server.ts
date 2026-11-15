@@ -127,7 +127,6 @@ export class ControlServer {
 				if (error instanceof CoreError && error.code === "timeout") continue;
 				this.#serving = false;
 				this.#release();
-				// Input EOF cancels this waiter during an ordered core stop; it is not a crash to restart.
 				if (error instanceof CoreError && error.code === "cancelled") return;
 				try {
 					await this.listen(path);

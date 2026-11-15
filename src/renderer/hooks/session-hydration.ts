@@ -295,7 +295,11 @@ export async function syncAutopilot(tabId: string, command: TabCommand, isCurren
  * Fetch the other sessions sharing the tab's checkout (`get_checkout_peers`); `checkout_peers` frames keep the value
  * current afterwards, and one that lands while this read is in flight wins. An omp without the method leaves it null.
  */
-export async function syncCheckoutPeers(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<boolean> {
+export async function syncCheckoutPeers(
+	tabId: string,
+	command: TabCommand,
+	isCurrent: HydrationGuard,
+): Promise<boolean> {
 	const before = withSessionRuntime(tabId, () => useSessionStore.getState().checkoutPeers);
 	try {
 		const res = await command({ type: "get_checkout_peers" });
@@ -386,7 +390,11 @@ function isPlanProposal(value: unknown): value is PendingPlanProposal {
  * A proposal already on screen is left alone, keeping its feedback and
  * submit state.
  */
-export async function syncPlanProposal(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<boolean> {
+export async function syncPlanProposal(
+	tabId: string,
+	command: TabCommand,
+	isCurrent: HydrationGuard,
+): Promise<boolean> {
 	const plan = sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval");
 	const before = plan?.getState();
 	try {
@@ -949,8 +957,10 @@ async function loadTabSession(
 	]);
 	const [stateResult, messagesResult] = await coreResult;
 	if (!isCurrent()) return false;
-	const stateData = stateResult.status === "fulfilled" && stateResult.value.success ? stateResult.value.data : undefined;
-	const pageData = messagesResult.status === "fulfilled" && messagesResult.value.success ? messagesResult.value.data : undefined;
+	const stateData =
+		stateResult.status === "fulfilled" && stateResult.value.success ? stateResult.value.data : undefined;
+	const pageData =
+		messagesResult.status === "fulfilled" && messagesResult.value.success ? messagesResult.value.data : undefined;
 	const coreOk =
 		!!stateData &&
 		typeof stateData === "object" &&
