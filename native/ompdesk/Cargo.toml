@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["crates/shell"]
+exclude = ["crates/shell", "crates/tauri-shell", "crates/shell-preview"]
 
 [workspace.package]
 edition = "2024"

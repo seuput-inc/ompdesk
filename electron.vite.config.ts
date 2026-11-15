@@ -330,7 +330,10 @@ export default defineConfig({
 		build: {
 			minify: "esbuild",
 			rollupOptions: {
-				input: { shell: resolve(__dirname, "src/preload/shell.ts") },
+				input: {
+					shell: resolve(__dirname, "src/preload/shell.ts"),
+					tauri: resolve(__dirname, "src/preload/tauri.ts"),
+				},
 				output: { format: "cjs", entryFileNames: "[name].js", banner: "(() => {", footer: "})();" },
 			},
 		},
