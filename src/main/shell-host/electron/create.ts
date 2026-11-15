@@ -38,7 +38,6 @@ function gated(client: HostClient, ready: Promise<void>): HostClient {
 		event: (name, data, bin) => client.event(name, data, bin),
 		handle: (method, handler) => client.handle(method, handler),
 		on: (name, listener) => client.on(name, listener),
-		flush: () => client.flush(),
 	};
 }
 

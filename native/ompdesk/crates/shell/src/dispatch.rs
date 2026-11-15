@@ -17,6 +17,12 @@ pub fn request(call: Call) {
     }
     match method.as_str() {
         "app.init" => lifecycle::init(call),
+        "app.exit" => {
+            lifecycle::request_exit(
+                call.params.get("code").and_then(Value::as_i64).unwrap_or(0) as i32
+            );
+            call.ok(serde_json::json!({}));
+        }
         m if m.starts_with("app.") => crate::appops::handle(call),
         "win.create" => crate::window::create(call),
         "win.op" => crate::window::op(call),
@@ -47,7 +53,13 @@ pub fn request(call: Call) {
 pub fn event(name: &str, data: Value, bin: Option<Vec<u8>>) {
     let id = |key: &str| data.get(key).and_then(Value::as_u64);
     match name {
-        "app.exit" | "app.relaunch" => lifecycle::on_event(name, data, bin),
+        "app.relaunch" => {
+            lifecycle::set_relaunch(data.get("args").and_then(Value::as_array).map(|args| {
+                args.iter()
+                    .filter_map(|arg| arg.as_str().map(String::from))
+                    .collect()
+            }))
+        }
         "wc.send" => {
             if let (Some(wc_id), Some(channel)) =
                 (id("wcId"), data.get("channel").and_then(Value::as_str))

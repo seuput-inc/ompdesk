@@ -83,7 +83,7 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 |---|---|---|---|
 | `app.init` | Node | `{name, switches: [[name, value\|null]], schemes: Scheme[], disableHardwareAcceleration: boolean, appUserModelId?: string, activationPolicy?: "regular"\|"accessory"\|"prohibited", aboutPanel?: {applicationName?, iconPath?}}` | `{}` — sent once, on the first macrotask after main's top-level code ran (everything Electron's main does before `whenReady`). The shell then initialises CEF with these switches and schemes and sends `app.ready`. |
 | `app.ready` (event) | shell→Node | `{}` | CEF's context is up; windows may be created. `app.whenReady()` resolves here. |
-| `app.exit` (event) | Node | `{code}` | Node finished its quit sequence (`before-quit`, window closes, `will-quit`, `quit`) or `app.exit(code)` was called. The shell closes every window without asking, tears CEF down and exits with `code`; a pending `app.relaunch` is started after teardown. |
+| `app.exit` | Node | `{code}` | `{}` after the shell accepts the exit and preceding `app.relaunch`. Node waits for this receipt before ending. The shell closes windows without asking, tears CEF down and exits with `code`; a pending relaunch starts after teardown. |
 | `app.relaunch` (event) | Node | `{args: string[] \| null}` | After the shell exits, start `exe` again with `args`, or its own launch args when `null` (Electron's default). Last call wins. |
 | `app.focus` | Node | `{steal?: boolean}` | `{}` |
 | `app.hide` / `app.show` | Node | `{}` | macOS `NSApp hide/unhide`; no-op elsewhere. |
@@ -391,8 +391,8 @@ What the Rust shell does differently from this table or from Electron. README.md
   executable is the shell's own argv after it. `OMPDESK_APP_ENTRY`, `OMPDESK_APP_DIR`, `OMPDESK_NODE`,
   `OMP_GUI_TEST_USER_DATA_DIR`, `OMP_GUI_TEST_NODE_INSPECT` are the shell's environment seams.
 - **Ids**: Node's `winId`/`wcId`/`viewId` are used as sent; the shell's own counters only serve a create that omits them.
-- **`app.exit`**: windows close without `win.closeRequested`; browsers that have not closed after 4 s do not hold the quit.
-  Node dying unexpectedly: the shell exits 1 after logging it on stderr.
+- **`app.exit`**: the shell records the exit before answering. Windows close without `win.closeRequested`; browsers that have not closed after 4 s do not hold the quit. Node's stdin stays open while its accepted exit finishes, so stdin EOF cannot overtake the receipt.
+  Node dying unexpectedly still makes the shell exit 1 after logging it on stderr.
 - **`app.secondInstance`** is sent for a second launch of the same user-data folder (named pipe, unix socket on macOS: `$TMPDIR/ompdesk-<16 hex of SHA-256(userData)>-shell.sock`, `/tmp/…` when TMPDIR is long, 0600; the host socket Node gets is `…-host-<pid>.sock` beside it);
   `app.openUrl`, `app.openFile`, `app.activate` are macOS only and unverified.
 - **`wc.navigate`**: for main-frame navigations Node did not start itself. A click on a `file:` link is reported by the

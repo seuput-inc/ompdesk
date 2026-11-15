@@ -14,7 +14,6 @@ export interface HostClient {
 	event(name: string, data?: unknown, bin?: Uint8Array): Promise<void>;
 	handle(method: string, handler: (params: never, context: HandlerContext) => unknown): void;
 	on(name: string, listener: (data: never, bin?: Buffer) => void): () => void;
-	flush(): Promise<void>;
 }
 
 /** `event.preventDefault()` as Electron's events have it. */

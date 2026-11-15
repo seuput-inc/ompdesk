@@ -327,10 +327,7 @@ fn browser(argv: Vec<String>) -> i32 {
     // Everything Electron's main does before `whenReady` arrives as `app.init`; CEF starts from it.
     let init_call = match boot.recv_timeout(Duration::from_secs(180)) {
         Ok(Boot::Init(call)) => call,
-        Ok(Boot::Exit(code)) => {
-            node::stop(Duration::from_secs(3));
-            return code;
-        }
+        Ok(Boot::Exit(code)) => return finish_exit(&exe, &args, code, Duration::from_secs(3)),
         Ok(Boot::NodeGone) | Err(_) => {
             node::stop(Duration::from_secs(1));
             return 1;
@@ -347,16 +344,20 @@ fn browser(argv: Vec<String>) -> i32 {
     }
     let _ = app::INIT.set(init);
     let code = run_cef(&web_dir, &app_locale, &languages, &args, init_call);
-    node::stop(Duration::from_secs(5));
+    finish_exit(&exe, &args, code, Duration::from_secs(5))
+}
+
+fn finish_exit(exe: &Path, args: &[String], code: i32, grace: Duration) -> i32 {
+    node::stop(grace);
     let exit = lifecycle::take_exit();
     log("exit", json!({ "code": code }));
     if let Some(relaunch) = exit.relaunch {
-        relaunch_self(&exe, relaunch.unwrap_or_else(|| args.clone()));
+        relaunch_self(exe, relaunch.as_deref().unwrap_or(args));
     }
     code
 }
 
-fn relaunch_self(exe: &Path, args: Vec<String>) {
+fn relaunch_self(exe: &Path, args: &[String]) {
     let mut command = std::process::Command::new(exe);
     command
         .args(args)

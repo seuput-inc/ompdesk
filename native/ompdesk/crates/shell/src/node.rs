@@ -103,12 +103,17 @@ pub fn watch(on_exit: impl FnOnce(Option<i32>) + Send + 'static) {
         .expect("node watch thread");
 }
 
-/// Closes Node's stdin (it ends on its own) and, when it is still running after `grace`, kills it.
+/// Waits for an accepted exit without closing stdin ahead of its reply; otherwise asks Node to stop through stdin.
 pub fn stop(grace: std::time::Duration) {
     let Some(mut node) = NODE.lock().unwrap().take() else {
         return;
     };
-    drop(node._stdin);
+    let _stdin = if crate::lifecycle::EXITING.load(std::sync::atomic::Ordering::SeqCst) {
+        Some(node._stdin)
+    } else {
+        drop(node._stdin);
+        None
+    };
     let deadline = std::time::Instant::now() + grace;
     while std::time::Instant::now() < deadline {
         if matches!(node.child.try_wait(), Ok(Some(_))) {

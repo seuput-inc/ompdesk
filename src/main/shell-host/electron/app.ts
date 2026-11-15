@@ -293,19 +293,20 @@ export class App extends EventEmitter {
 	 * its course alike: electron-updater installs a downloaded update on it (`autoInstallOnAppQuit`, code 0 only).
 	 */
 	exit(code = 0): void {
-		if (!this.#quitEmitted) {
-			this.#quitEmitted = true;
-			try {
-				this.emit("quit", makeEvent(), code);
-			} catch (error) {
-				this.#host.warn(`app quit listener: ${String(error)}`);
-			}
+		if (this.#quitEmitted) return;
+		this.#quitEmitted = true;
+		try {
+			this.emit("quit", makeEvent(), code);
+		} catch (error) {
+			this.#host.warn(`app quit listener: ${String(error)}`);
 		}
-		void this.#host.client.event("app.exit", { code });
 		const exit = this.#deps.exitProcess ?? ((status: number) => process.exit(status));
-		this.#host.client.flush().then(
+		void this.#host.client.call("app.exit", { code }).then(
 			() => exit(code),
-			() => exit(code),
+			error => {
+				this.#host.warn(`app exit request: ${String(error)}`);
+				exit(code);
+			},
 		);
 	}
 

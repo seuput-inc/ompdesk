@@ -93,6 +93,7 @@ function fakeShell(shell: ShellClient) {
 	>();
 	const methods = [
 		"app.init",
+		"app.exit",
 		"app.setAsDefaultProtocolClient",
 		"app.getGPUInfo",
 		"win.create",
@@ -129,7 +130,7 @@ function fakeShell(shell: ShellClient) {
 			return answer instanceof Answered ? answer : (answer ?? {});
 		});
 	}
-	for (const name of ["app.exit", "app.relaunch", "wc.send", "protocol.chunk", "protocol.end", "net.cancel"]) {
+	for (const name of ["app.relaunch", "wc.send", "protocol.chunk", "protocol.end", "net.cancel"]) {
 		shell.on(name, (data: Record<string, unknown>, bin) => events.push({ name, data, bin }));
 	}
 	return {
@@ -265,10 +266,19 @@ describe("app", () => {
 		]);
 	});
 
-	it("exits through the shell: the exit event, then the process", async () => {
-		electron.app.exit(3);
-		await settle();
-		expect(fake.eventsOf("app.exit")[0].data).toEqual({ code: 3 });
+	it("keeps Node alive until the shell accepts the requested relaunch and exit", async () => {
+		const accepted = Promise.withResolvers<void>();
+		fake.answers.set("app.exit", () => accepted.promise);
+		try {
+			electron.app.relaunch({ args: ["--retained-profile"] });
+			electron.app.exit(3);
+			await settle();
+			expect(fake.eventsOf("app.relaunch").map(event => event.data)).toEqual([{ args: ["--retained-profile"] }]);
+			expect(exited).toEqual([]);
+		} finally {
+			accepted.resolve();
+			await settle();
+		}
 		expect(exited).toEqual([3]);
 	});
 
@@ -311,7 +321,6 @@ describe("the quit sequence", () => {
 		await shell.event("win.event", { winId: win.id, name: "closed" });
 		await settle();
 		expect(order).toEqual(["before-quit", "close", "will-quit", "quit"]);
-		expect(fake.eventsOf("app.exit")[0].data).toEqual({ code: 0 });
 		expect(exited).toEqual([0]);
 	});
 
@@ -328,8 +337,14 @@ describe("the quit sequence", () => {
 		app.exit(5);
 		await settle();
 		expect(order).toEqual(["quit:5"]);
-		expect(fake.eventsOf("app.exit")[0].data).toEqual({ code: 5 });
-		expect(exited[0]).toBe(5);
+		expect(exited).toEqual([5]);
+	});
+
+	it("keeps the first exit code when a quit listener calls exit again", async () => {
+		electron.app.on("quit", () => electron.app.exit(7));
+		electron.app.exit(3);
+		await settle();
+		expect(exited).toEqual([3]);
 	});
 
 	it("exit() still ends the process when a quit listener throws", async () => {

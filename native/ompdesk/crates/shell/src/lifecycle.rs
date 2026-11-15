@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::host::Call;
 use crate::log::log;
@@ -66,7 +66,7 @@ pub fn set_relaunch(args: Option<Vec<String>>) {
     EXIT.lock().unwrap().relaunch = Some(args);
 }
 
-/// `app.exit {code}` (an event): Node ran its quit sequence; close every window without asking and end the loop.
+/// Accepts `app.exit {code}` before its request is answered; the Node process may end only after that receipt.
 pub fn request_exit(code: i32) {
     EXIT.lock().unwrap().code = code;
     EXITING.store(true, Ordering::SeqCst);
@@ -104,18 +104,6 @@ pub fn node_gone(code: Option<i32>) {
         std::process::exit(1);
     }
     boot_send(Boot::NodeGone);
-}
-
-pub fn on_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
-    match name {
-        "app.exit" => request_exit(data.get("code").and_then(Value::as_i64).unwrap_or(0) as i32),
-        "app.relaunch" => set_relaunch(data.get("args").and_then(Value::as_array).map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })),
-        _ => {}
-    }
 }
 
 /// Used by the host's request handler for `app.init`.

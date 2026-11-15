@@ -148,7 +148,7 @@ export class ShellClient {
 		return (await this.request<T>(method, params, options)).result;
 	}
 
-	/** An event to the shell. Resolves once the bytes left Node's buffer (a streamed body waits on it). */
+	/** An event to the shell; streamed bodies wait for backpressure to clear. */
 	event(name: string, data: unknown = {}, bin?: Uint8Array): Promise<void> {
 		if (this.#closed) return Promise.resolve();
 		this.#write({ event: name, data }, bin);
@@ -166,11 +166,6 @@ export class ShellClient {
 		this.#listeners.set(name, set);
 		set.add(listener);
 		return () => set.delete(listener);
-	}
-
-	/** Resolves once every frame written so far left Node's buffer. */
-	flush(): Promise<void> {
-		return this.#draining ?? Promise.resolve();
 	}
 
 	/** Ends the connection. */
