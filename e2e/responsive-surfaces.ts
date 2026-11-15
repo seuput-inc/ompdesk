@@ -279,6 +279,13 @@ async function clickCommandPalette(page: Page): Promise<void> {
 	await entry.click();
 }
 
+async function openWorkspaceDialog(page: Page): Promise<void> {
+	await clickCommandPalette(page);
+	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+	await palette.getByRole("combobox").fill("switch-project");
+	await palette.locator('[data-command-name="switch-project"]').click();
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -1708,18 +1715,25 @@ export const SURFACES: readonly Surface[] = [
 			open: (page, look) =>
 				dialog.id === "dialog-command-palette"
 					? clickCommandPalette(page)
-					: dialog.id === "dialog-model-setup"
-						? openModelSetup(page, look)
-						: ui(page, dialog.action, ...(dialog.args ?? [])),
+					: dialog.id === "dialog-workspace"
+						? openWorkspaceDialog(page)
+						: dialog.id === "dialog-model-setup"
+							? openModelSetup(page, look)
+							: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
-				: dialog.id === "dialog-model-setup"
+				: dialog.id === "dialog-workspace"
 					? {
-							// Ready at the research model selector beside "Find more evidence".
-							ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
+							ready: "[role=dialog] [role=listbox]",
 							parity: { session: "work" as const, after: closeOverlay },
 						}
-					: {}),
+					: dialog.id === "dialog-model-setup"
+						? {
+								// Ready at the research model selector beside "Find more evidence".
+								ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
+								parity: { session: "work" as const, after: closeOverlay },
+							}
+						: {}),
 			settle: 700,
 		}),
 	),

@@ -46,6 +46,7 @@ it.each(["socket", "stdin", "both"] as const)(
 		const sockets = new Set<Socket>();
 		const gits: Git[] = [];
 		let shell: ShellClient | undefined;
+		let shuttingDown = false;
 		const shellServer = createServer(socket => {
 			shell = new ShellClient(socket);
 			shell.handle("hello", () => ({
@@ -73,17 +74,24 @@ it.each(["socket", "stdin", "both"] as const)(
 			sockets.add(socket);
 			const closed = Promise.withResolvers<void>();
 			socket.once("close", () => closed.resolve());
+			const onError = (error: Error): void => {
+				if (process.platform === "win32" && shuttingDown && "code" in error && error.code === "ECONNRESET") return;
+				failed.reject(error);
+			};
+			socket.on("error", onError);
 			let git: Git | undefined;
-			createInterface({ input: socket }).on("line", line => {
-				if (line.startsWith("ready:")) {
-					git = { socket, pid: Number(line.slice(6)), term: false, closed: closed.promise };
-					gits.push(git);
-					if (gits.length === 1) firstGitReady.resolve(git);
-					if (gits.length === 2) secondGitReady.resolve(git);
-				} else if (line === "term" && git) {
-					git.term = true;
-				}
-			});
+			createInterface({ input: socket })
+				.on("error", onError)
+				.on("line", line => {
+					if (line.startsWith("ready:")) {
+						git = { socket, pid: Number(line.slice(6)), term: false, closed: closed.promise };
+						gits.push(git);
+						if (gits.length === 1) firstGitReady.resolve(git);
+						if (gits.length === 2) secondGitReady.resolve(git);
+					} else if (line === "term" && git) {
+						git.term = true;
+					}
+				});
 		});
 		let node: ChildProcess | undefined;
 		let firstCore: number | undefined;
@@ -208,6 +216,7 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 			expect(() => process.kill(firstGit.pid, 0)).not.toThrow();
 			expect(() => process.kill(secondGit.pid, 0)).not.toThrow();
 
+			shuttingDown = true;
 			if (shutdown !== "stdin") shell.close();
 			if (shutdown !== "socket") {
 				if (!node.stdin) throw new Error("main has no stdin pipe");
