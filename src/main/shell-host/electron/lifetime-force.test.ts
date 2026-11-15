@@ -137,6 +137,7 @@ process.send?.({ core: startGit() });`,
 				configFile: false,
 				logLevel: "silent",
 				build: {
+					target: "esnext",
 					ssr: fixture,
 					write: false,
 					minify: false,
