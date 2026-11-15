@@ -122,7 +122,10 @@ describe("RemoteSidecar", () => {
 			link.handlers[AGENT_INSTRUCTION_METHOD] = () => admission.promise;
 			const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
 			let settled = false;
-			const result = sidecar.sendAgentInstruction({ message: "Do this", images }, 42_000);
+			const result = sidecar.sendAgentInstruction(
+				{ requestId: "native-original-request", message: "Do this", images },
+				42_000,
+			);
 			void result.then(
 				() => {
 					settled = true;
@@ -139,6 +142,7 @@ describe("RemoteSidecar", () => {
 					rtab: "tab-1",
 					sessionPath: "/sessions/one.jsonl",
 					omp: "omp-1",
+					requestId: "native-original-request",
 					message: "Do this",
 					images,
 					timeoutMs: 42_000,
@@ -154,8 +158,8 @@ describe("RemoteSidecar", () => {
 		it("bounds an infinite timeout and uses link slack for the default", async () => {
 			const { link, sidecar } = await instructionReady();
 			link.handlers[AGENT_INSTRUCTION_METHOD] = () => ({ accepted: true });
-			await sidecar.sendAgentInstruction({ message: "one" }, Infinity);
-			await sidecar.sendAgentInstruction({ message: "two" });
+			await sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "one" }, Infinity);
+			await sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "two" });
 			expect(link.sent.slice(-2)).toEqual([
 				{
 					method: AGENT_INSTRUCTION_METHOD,
@@ -163,6 +167,7 @@ describe("RemoteSidecar", () => {
 						rtab: "tab-1",
 						sessionPath: "/sessions/one.jsonl",
 						omp: "omp-1",
+						requestId: "native-original-request",
 						message: "one",
 						timeoutMs: MAX_RPC_COMMAND_TIMEOUT_MS,
 					},
@@ -170,7 +175,13 @@ describe("RemoteSidecar", () => {
 				},
 				{
 					method: AGENT_INSTRUCTION_METHOD,
-					params: { rtab: "tab-1", sessionPath: "/sessions/one.jsonl", omp: "omp-1", message: "two" },
+					params: {
+						rtab: "tab-1",
+						sessionPath: "/sessions/one.jsonl",
+						omp: "omp-1",
+						requestId: "native-original-request",
+						message: "two",
+					},
 					timeoutMs: HOST_COMMAND_TIMEOUT_MS + LINK_SLACK_MS,
 				},
 			]);
@@ -180,23 +191,35 @@ describe("RemoteSidecar", () => {
 			const unopened = setup();
 			unopened.sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
 			unopened.sidecar.handleEvent({ rtab: "tab-1", name: "session", arg: { sessionFile: "/sessions/one.jsonl" } });
-			await expect(unopened.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			await expect(
+				unopened.sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+			).rejects.toThrow();
 			expect(unopened.link.methods()).toEqual([]);
 
 			const rig = setup();
 			rig.sidecar.start();
 			await settle();
 			const before = rig.link.methods().slice();
-			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			await expect(
+				rig.sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+			).rejects.toThrow();
 			rig.sidecar.handleEvent(hostStatus("ready"));
-			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			await expect(
+				rig.sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+			).rejects.toThrow();
 			rig.sidecar.handleEvent({ rtab: "tab-1", name: "session", arg: { sessionFile: "/sessions/one.jsonl" } });
-			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			await expect(
+				rig.sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+			).rejects.toThrow();
 			rig.sidecar.handleEvent({ rtab: "tab-1", name: "session", arg: {} });
 			rig.sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
-			await expect(rig.sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+			await expect(
+				rig.sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+			).rejects.toThrow();
 			rig.link.state = "offline";
-			const offline = await rig.sidecar.sendAgentInstruction({ message: "x" }).catch((error: unknown) => error);
+			const offline = await rig.sidecar
+				.sendAgentInstruction({ requestId: "native-original-request", message: "x" })
+				.catch((error: unknown) => error);
 			expect(ipcErrorCode(offline)).toBe("remote_offline");
 			expect(rig.link.methods()).toEqual(before);
 		});
@@ -205,10 +228,14 @@ describe("RemoteSidecar", () => {
 			const { link, sidecar } = await instructionReady();
 			const error = Object.assign(new Error("delivery unknown"), { code: "timeout" });
 			link.handlers[AGENT_INSTRUCTION_METHOD] = () => Promise.reject(error);
-			await expect(sidecar.sendAgentInstruction({ message: "x" })).rejects.toBe(error);
+			await expect(
+				sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+			).rejects.toBe(error);
 			for (const receipt of [null, {}, { accepted: false }, { accepted: true, extra: true }]) {
 				link.handlers[AGENT_INSTRUCTION_METHOD] = () => receipt;
-				await expect(sidecar.sendAgentInstruction({ message: "x" })).rejects.toThrow();
+				await expect(
+					sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" }),
+				).rejects.toThrow();
 			}
 			expect(link.methods().filter(method => method === AGENT_INSTRUCTION_METHOD)).toHaveLength(5);
 			expect(link.methods()).not.toContain("tab.command");
@@ -220,7 +247,7 @@ describe("RemoteSidecar", () => {
 				const { link, sidecar } = await instructionReady();
 				const admission = Promise.withResolvers<unknown>();
 				link.handlers[AGENT_INSTRUCTION_METHOD] = () => admission.promise;
-				const result = sidecar.sendAgentInstruction({ message: "x" });
+				const result = sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" });
 				await settle();
 				switch (change) {
 					case "disposed":
@@ -260,7 +287,7 @@ describe("RemoteSidecar", () => {
 			link.handlers["tab.open"] = () => opening.promise;
 			sidecar.restart(undefined, "/sessions/one.jsonl");
 			sidecar.handleEvent(hostStatus("ready", { omp: "omp-1" }));
-			const result = sidecar.sendAgentInstruction({ message: "x" });
+			const result = sidecar.sendAgentInstruction({ requestId: "native-original-request", message: "x" });
 			link.state = "offline";
 			sidecar.linkStateChanged("offline");
 			opening.resolve({ cwd: "/canonical/p", kind: "agent", attached: true });

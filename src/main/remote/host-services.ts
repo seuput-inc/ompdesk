@@ -1740,6 +1740,7 @@ export class LocalHostServices implements HostServices {
 		};
 		current();
 		const payload = {
+			requestId: params.requestId,
 			message: params.message,
 			...(params.images === undefined ? {} : { images: params.images }),
 		};

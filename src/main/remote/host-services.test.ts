@@ -2905,6 +2905,7 @@ describe("authenticated private agent instructions", () => {
 			rtab: "target",
 			sessionPath: "/s/target.jsonl",
 			omp,
+			requestId: "native-original-request",
 			message: "Keep the original instruction",
 			images: [{ type: "image" as const, data: "AAAA", mimeType: "image/png" }],
 			timeoutMs: 1234,
@@ -2925,12 +2926,21 @@ describe("authenticated private agent instructions", () => {
 		expect(settled).toBe(false);
 		expect(bridge).toHaveBeenCalledExactlyOnceWith(
 			"agent_control.instruction",
-			{ message: request.message, images: request.images },
+			{ requestId: request.requestId, message: request.message, images: request.images },
 			1234,
 		);
 		expect(sidecar.commands).toEqual([]);
 		admission.resolve({ accepted: true });
 		await expect(result).resolves.toEqual({ accepted: true });
+	});
+
+	it.each([undefined, ""])("refuses a missing or empty original request identity (%s)", async requestId => {
+		const { services, conn, sidecar, request } = await target();
+		const bridge = vi.fn();
+		Object.assign(sidecar, { bridgeRequest: bridge });
+		await expect(services.call(conn.peer, "tab.agentInstruction", { ...request, requestId }, conn)).rejects.toThrow();
+		expect(bridge).not.toHaveBeenCalled();
+		expect(sidecar.commands).toEqual([]);
 	});
 
 	it.each(["disabled", "hidden", "foreign-peer", "old-connection", "wrong-session", "wrong-omp"] as const)(
@@ -3044,6 +3054,7 @@ describe("LocalHostServices for this computer's own windows", () => {
 				route === "private-port" ? { sendAgentInstruction: effect } : { bridgeRequest: effect },
 			);
 			const payload = {
+				requestId: "native-hosted-request",
 				message: "An unchanged agent instruction",
 				images: [{ type: "image" as const, data: "AAAA", mimeType: "image/png" }],
 			};
@@ -3072,7 +3083,10 @@ describe("LocalHostServices for this computer's own windows", () => {
 			const receipt = Promise.withResolvers<{ accepted: true }>();
 			const bridge = vi.fn(() => receipt.promise);
 			Object.assign(sidecar, { bridgeRequest: bridge });
-			const result = view.sendAgentInstruction({ message: "for the original session" });
+			const result = view.sendAgentInstruction({
+				requestId: "native-hosted-request",
+				message: "for the original session",
+			});
 			const refused = expect(result).rejects.toThrow();
 			if (change === "left") view.dispose();
 			if (change === "session") sidecar.emit("session", { sessionId: "replacement", sessionFile: "/s/new.jsonl" });
@@ -3092,13 +3106,21 @@ describe("LocalHostServices for this computer's own windows", () => {
 		const failure = codedError("remote_protocol", "original admission failed");
 		const bridge = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({});
 		Object.assign(sidecar, { bridgeRequest: bridge });
-		await expect(view.sendAgentInstruction({ message: "first" })).rejects.toBe(failure);
-		await expect(view.sendAgentInstruction({ message: "second" })).rejects.toThrow();
+		await expect(view.sendAgentInstruction({ requestId: "native-hosted-request", message: "first" })).rejects.toBe(
+			failure,
+		);
+		await expect(
+			view.sendAgentInstruction({ requestId: "native-hosted-request", message: "second" }),
+		).rejects.toThrow();
 		sidecar.setStatus("starting");
-		await expect(view.sendAgentInstruction({ message: "not ready" })).rejects.toThrow();
+		await expect(
+			view.sendAgentInstruction({ requestId: "native-hosted-request", message: "not ready" }),
+		).rejects.toThrow();
 		sidecar.setStatus("ready");
 		view.dispose();
-		await expect(view.sendAgentInstruction({ message: "left" })).rejects.toThrow();
+		await expect(
+			view.sendAgentInstruction({ requestId: "native-hosted-request", message: "left" }),
+		).rejects.toThrow();
 		expect(bridge).toHaveBeenCalledTimes(2);
 		expect(sidecar.commands).toEqual([]);
 	});

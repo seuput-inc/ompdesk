@@ -333,7 +333,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	}
 
 	async sendAgentInstruction(
-		payload: Pick<AgentControlInstructionCommand, "message" | "images">,
+		payload: Pick<AgentControlInstructionCommand, "requestId" | "message" | "images">,
 		wanted?: number,
 	): Promise<{ accepted: true }> {
 		const link = this.#link;
