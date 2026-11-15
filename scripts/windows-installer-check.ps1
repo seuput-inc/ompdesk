@@ -197,8 +197,8 @@ function Stop-App {
 	Wait-Until { -not (Get-Process OMPdesk -ErrorAction SilentlyContinue) } 30 'OMPdesk to exit'
 }
 
-# Electron's main process: an OMPdesk.exe whose parent is no OMPdesk.exe and with no `--type=` switch. The switch alone
-# is not enough: an OMPdesk.exe that main starts without one (once the setup supervisor, run as Node) is no main.
+# The desktop shell (or Electron main): no `--type=` and no other OMPdesk.exe parent.
+# Node runs under resources\node in the Rust shell and is not this process.
 function Get-MainPids {
 	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue)
 	$ids = @($all | ForEach-Object { $_.ProcessId })
@@ -209,6 +209,23 @@ function Get-MainPids {
 function Show-AppProcesses {
 	Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue |
 		ForEach-Object { Write-Host "     pid $($_.ProcessId) parent $($_.ParentProcessId): $($_.CommandLine)" }
+}
+
+function Show-GpuEvidence {
+	Show-AppProcesses
+	$data = Join-Path $env:APPDATA 'ompdesk'
+	foreach ($spec in @(
+		@{ Name = 'gpu-runtime.jsonl'; Path = 'logs\gui-runtime.jsonl'; Pattern = '"source":"(gpu-fallback|launch-guard|child-process)"' },
+		@{ Name = 'gpu-shell.jsonl'; Path = 'shell-webview\shell.log.jsonl'; Pattern = '"event":"(child\.[^"]+|node\.[^"]+|app\.[^"]+|cef\.[^"]+)"' }
+	)) {
+		$file = Join-Path $data $spec.Path
+		if (-not (Test-Path -LiteralPath $file)) { continue }
+		$lines = @(Get-Content -LiteralPath $file -Tail 1000 | Where-Object { $_ -match $spec.Pattern })
+		foreach ($line in $lines) { Write-Host "     $line" }
+		if ($Captures) { $lines | Set-Content -LiteralPath (Join-Path $Captures $spec.Name) -Encoding utf8 }
+	}
+	$marker = Join-Path $data 'gpu-fallback.json'
+	if (Test-Path -LiteralPath $marker) { Write-Host "     GPU marker: $(Get-Content -LiteralPath $marker -Raw)" }
 }
 
 # A fresh install must not open and close by itself (v0.44.0: a GPU-fallback relaunch loop on a laptop): the
@@ -238,7 +255,7 @@ function Assert-StaysUp([int] $Seconds = 60) {
 
 # Ends the app's GPU process the way a driver crash does (exit code 0xC0000005, which Chromium reports as
 # "crashed"; Stop-Process's exit code 1 reads as "killed", which the fallback ignores).
-function Stop-GpuProcessAsCrash {
+function Stop-GpuProcessAsCrash([int] $MainId) {
 	if (-not ('GpuCrash' -as [type])) {
 		Add-Type -TypeDefinition @'
 using System;
@@ -247,18 +264,22 @@ public static class GpuCrash {
 	[DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
 	[DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
 	[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-	public static bool Crash(int pid) {
+	public static void Crash(int pid) {
 		IntPtr handle = OpenProcess(0x0001, false, pid);
-		if (handle == IntPtr.Zero) return false;
-		try { return TerminateProcess(handle, 0xC0000005); } finally { CloseHandle(handle); }
+		if (handle == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+		try {
+			if (!TerminateProcess(handle, 0xC0000005))
+				throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+		} finally { CloseHandle(handle); }
 	}
 }
 '@
 	}
 	$gpu = @(Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue |
-			Where-Object { $_.CommandLine -match '--type=gpu-process' })
+			Where-Object { $_.ParentProcessId -eq $MainId -and $_.ExecutablePath -eq $exe -and $_.CommandLine -match '--type=gpu-process' })
 	if ($gpu.Count -eq 0) { return $false }
-	[GpuCrash]::Crash([int] $gpu[0].ProcessId) | Out-Null
+	Write-Host "     crashing GPU pid $($gpu[0].ProcessId), parent $MainId"
+	[GpuCrash]::Crash([int] $gpu[0].ProcessId)
 	return $true
 }
 
@@ -267,18 +288,23 @@ public static class GpuCrash {
 function Assert-NoGpuRelaunchLoop {
 	$first = Get-MainPids
 	if ($first.Count -ne 1) { Fail "expected one OMPdesk main process, found $($first.Count)" }
-	Wait-Until { Stop-GpuProcessAsCrash } 30 'a GPU process to crash'
-	Wait-Until {
-		$now = Get-MainPids
-		$now.Count -eq 1 -and $now[0] -ne $first[0]
-	} 60 'the one relaunch into software rendering'
+	try {
+		Wait-Until { Stop-GpuProcessAsCrash $first[0] } 30 'a GPU process to crash'
+		Wait-Until {
+			$now = Get-MainPids
+			$now.Count -eq 1 -and $now[0] -ne $first[0]
+		} 60 'the one relaunch into software rendering'
+	} catch {
+		Show-GpuEvidence
+		throw
+	}
 	$second = (Get-MainPids)[0]
 	Ok "a GPU crash in the hardware launch relaunched it once ($($first[0]) -> $second)"
 	Wait-Until { @(Get-Process OMPdesk -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count -gt 0 } 60 'the relaunched window'
 	$crashes = 0
 	for ($i = 0; $i -lt 2; $i++) {
 		Start-Sleep -Seconds 5
-		if (Stop-GpuProcessAsCrash) { $crashes++ }
+		if (Stop-GpuProcessAsCrash $second) { $crashes++ }
 	}
 	if ($crashes -eq 0) { Fail 'the software launch runs no GPU process to crash: the check proves nothing' }
 	Write-Host "     crashed the software launch's GPU process $crashes times"
