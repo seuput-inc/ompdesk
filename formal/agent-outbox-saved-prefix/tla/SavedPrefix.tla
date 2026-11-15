@@ -35,18 +35,16 @@ FailSave(s, prefix, retain) ==
     /\ UNCHANGED <<disk, durableOrder>>
     /\ savedPrefix' = prefix /\ deferred' = IF retain THEN s ELSE NoWrite
 
-\* Initial disk content is arbitrary within the stated finite original-key/payload bounds.
+\* Start from empty canonical sender/receiver history; loaded snapshots arise through real actions.
 \* @code native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs:249-270
 \* @code native/ompdesk/crates/core/src/agentctl/journal/mail_outbox.rs:166-185
 Init ==
-    /\ disk \in Snapshots /\ entries = disk /\ savedPrefix = Len(disk)
+    /\ entries = <<>> /\ disk = <<>> /\ savedPrefix = 0
     /\ deferred = NoWrite /\ batch = <<>> /\ cursor = 1 /\ phase = "idle"
-    /\ firstPayload = [id \in Ids |-> IF id \in Members(Keys(disk))
-                        THEN disk[Position(Keys(disk), id)].payload ELSE NoPayload]
-    /\ durableOrder = Keys(disk) /\ seen \subseteq Members(Keys(disk))
-    /\ effects = [id \in Ids |-> IF id \in seen THEN 1 ELSE 0]
-    /\ effectOrder = SelectSeq(durableOrder, LAMBDA id : id \in seen)
-    /\ owned = Members(Keys(entries))
+    /\ firstPayload = [id \in Ids |-> NoPayload]
+    /\ durableOrder = <<>> /\ seen = {}
+    /\ effects = [id \in Ids |-> 0] /\ effectOrder = <<>>
+    /\ owned = {}
 
 \* One new keep holds the existing mutex through append and the save result.
 \* @code native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs:285-302

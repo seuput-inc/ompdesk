@@ -20,7 +20,7 @@ One disk-backed outbox and one receiver. Two logical original IDs and two opaque
 - `seen/effects`: environment receiver's atomic durable dedup/effect state.
 - `firstPayload`, `durableOrder`, `effectOrder`, `owned`: proof-only history/obligation observations, not proposed production caches or authority.
 
-Initial disk snapshots and already-observed receiver subsets are nondeterministic within the finite bound. Keep success/failure and exact retry/conflict, ACK success/failure, retry snapshot success/failure, receiver delivery, disk-full retry success/final failure, and sender crash/reload are explicit transitions. An ACK may remove an original while an existing snapshot still holds it. ACK loss is represented by delivery without removal. A sender crash reloads only the last physical disk snapshot and drops its pending save thread and volatile batch.
+The initial sender journal, receiver dedup state and ghost history are empty. Nonempty loaded snapshots arise through the existing keep/save, receive, ACK and crash/reload actions, not arbitrary combinations of disk rows and receiver subsets. Keep success/failure and exact retry/conflict, ACK success/failure, retry snapshot success/failure, receiver delivery, disk-full retry success/final failure, and sender crash/reload are explicit transitions. An ACK may remove an original while an existing snapshot still holds it. ACK loss is represented by delivery without removal. A sender crash reloads only the last physical disk snapshot and drops its pending save thread and volatile batch; it preserves first-payload, first-durable and receiver-effect history.
 
 ## Important assumptions and exclusions
 
@@ -30,6 +30,19 @@ Initial disk snapshots and already-observed receiver subsets are nondeterministi
 4. One serialized receiver-delivery iteration is modeled. Production direct-new-send bypass is excluded by the separately tested `hand_send` prerequisite2bc; that caller branch is not falsely claimed as a transition proof here. Cross-receiver scheduling and the full Root permission graph are excluded.
 5. Unsaved memory originals can be lost if the sender core crashes before physical persistence. They are never described as durable acceptance. Successful intentionally fileless test outboxes are excluded from this disk-backed model.
 6. Attachment bytes/store import/rehome/GC execution is not modeled. `PendingInventory` covers retention of original logical references while the process lives. No automatic old queue migration, manual editor archive, approval ownership, model-only yield, UI, or active delivery mode is modeled.
+
+## Reachable restart history
+
+Main d130 corrects only the initial-state representation from original source `816a682a65eb27401cf31edad9a6a9b47e666240`. The original model and its manually substituted `disk=<<a,b>>, seen={b}` counterexample remain preserved. The eight frozen predicates and finite bounds are unchanged. No `seen`-prefix constraint or future-effects-only property replaces them.
+
+The existing actions still permit this history with one opaque payload `p`:
+
+1. From empty `Init`, `Keep(a,p,TRUE,FALSE)`, `Snapshot(TRUE,FALSE)`, `Receive`, `FinishSnapshot`, and `Ack(1,TRUE,FALSE)` leave the source empty after the receiver observes `a`.
+2. `Keep(b,p,TRUE,FALSE)` followed by `Keep(a,p,TRUE,FALSE)` yields source/disk order `<<b,a>>`. Reusing the same retired key with its original payload remains allowed.
+3. `CrashLoad` preserves `durableOrder=<<a,b>>`, `seen={a}` and `effectOrder=<<a>>`, while loading `entries=<<b,a>>`. It does not reconstruct history from disk order.
+4. A new snapshot receives `b` and then the duplicate `a`. Under the explicit receiver dedup assumption, the first-effect order is `<<a,b>>` and each effect count is one.
+
+This is a manual action substitution, not an executed trace or proof that every transition preserves the predicates. Sender `keep` only checks current pending rows; `settle` removes them, so neither source outbox forbids the re-keep in step2. Receiver dedup must retain the original identity through this history. Actual report reception consults the current receiver journal branch and queued-mail set; the model does not prove retention after receiver history loss, branch replacement, or provider consumption. Arbitrary preexisting files without a represented reachable history are outside this initialization, not silently granted a compatible receiver history.
 
 ## Bounds and remaining gate
 
