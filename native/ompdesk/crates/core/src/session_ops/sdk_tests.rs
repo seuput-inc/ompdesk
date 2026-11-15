@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde_json::json;
 
 use super::*;
 use crate::application::callers::Callers;
@@ -94,6 +93,7 @@ await storage.writeText(file,rows.map(row=>JSON.stringify(row)).join('\n')+'\n')
     let app = Arc::new(Application::new(test_host(Arc::clone(&callers))));
     let pool = pool::Service::new(pool::Config {
         id: 0x7364_6b64_656c_0001, layout_version: 1, max_former_tab_ids: 8,
+        view_epoch: "session-ops-installed-sdk".into(),
         stop_session_wait_ms: 60_000, window_tabs_hook: false, now_ms: || 1,
         callers: Arc::clone(&callers), removal_claims: RemovalClaims::new(),
     }, app).await.unwrap();
