@@ -1336,7 +1336,6 @@ export class AgentControlRuntime {
 			content,
 			details,
 			triggerTurn: delivery.triggerTurn,
-			...(delivery.deliverAs ? { deliverAs: delivery.deliverAs } : {}),
 		});
 		if (!response.success) throw new Error(response.error ?? "The report could not be delivered.");
 		return typeof response.data === "object" && response.data !== null ? (response.data as MailAnswer) : undefined;
