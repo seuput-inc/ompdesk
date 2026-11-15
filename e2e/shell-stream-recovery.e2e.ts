@@ -116,19 +116,31 @@ test("a replaced CEF event reader catches up without losing a draft, queue, or a
 				error => Reflect.set(window, "__recoveryFetchResult", { state: "failed", error: String(error) }),
 			);
 		});
-		await expect
-			.poll(
-				async () => ({
+		try {
+			await expect
+				.poll(
+					async () => ({
+						reconnectHeld,
+						replacementsRouted,
+						replacement: await page.evaluate(() => Reflect.get(window, "__recoveryFetchResult")),
+					}),
+					{
+						timeout: 30_000,
+						message: "CEF events reconnect was not intercepted after the real reader replacement",
+					},
+				)
+				.toMatchObject({ reconnectHeld: true });
+		} catch (error) {
+			await test.info().attach("cef-replacement-boundary", {
+				body: JSON.stringify({
 					reconnectHeld,
 					replacementsRouted,
 					replacement: await page.evaluate(() => Reflect.get(window, "__recoveryFetchResult")),
 				}),
-				{
-					timeout: 30_000,
-					message: "CEF events reconnect was not intercepted after the real reader replacement",
-				},
-			)
-			.toMatchObject({ reconnectHeld: true });
+				contentType: "application/json",
+			});
+			throw error;
+		}
 
 		await run({ type: "queue_remove", queueId: remove.id });
 		await run({ type: "follow_up", message: "Added while events were disconnected" });
