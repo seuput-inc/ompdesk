@@ -44,7 +44,7 @@ interface BuilderConfig {
 
 interface ReleaseWorkflow {
 	env: Record<string, string>;
-	jobs: Record<string, { steps: { name?: string; run?: string }[] }>;
+	jobs: Record<string, { steps: { name?: string; run?: string; uses?: string; with?: Record<string, string> }[] }>;
 }
 
 const PACKAGE_ROOT = path.join(__dirname, "..", "..");
@@ -1494,13 +1494,22 @@ describe("workflows", () => {
 
 	it("smokes the packaged app on every release, and offers the @smoke e2e by hand with captures and the omp update lock check", () => {
 		const release = parse(workflows.find(entry => entry.name === "release.yml")?.text ?? "") as ReleaseWorkflow;
-		const runs = (job: string) => release.jobs[job]?.steps.map(step => step.run ?? "") ?? [];
-		// Playwright cannot drive WKWebView: both packaged apps run the native WebDriver smoke.
-		for (const job of ["mac", "win"])
-			expect(
-				runs(job).some(run => run.includes("bun scripts/tauri-native-smoke.ts")),
-				job,
-			).toBe(true);
+		// Playwright cannot drive WKWebView: both packaged apps run the native WebDriver smoke, on a copy whose host is built
+		// with the test-automation feature, after the shipped app proved it has no WebDriver server.
+		for (const job of ["mac", "win"]) {
+			const steps = release.jobs[job]?.steps ?? [];
+			const packaged = steps.findIndex(step => step.name === "Verify bundle" || step.name === "Verify package");
+			const proof = steps.findIndex(step => step.run?.includes("bun scripts/tauri-release-automation-check.ts\n"));
+			const testHost = steps.findIndex(
+				step => step.uses === "./.github/actions/tauri-shell" && step.with?.["test-automation"] === "true",
+			);
+			const smoke = steps.findIndex(step => step.run?.includes("bun scripts/tauri-native-smoke.ts"));
+			expect(packaged, job).toBeGreaterThan(-1);
+			expect(proof, job).toBeGreaterThan(packaged);
+			expect(testHost, job).toBeGreaterThan(proof);
+			expect(smoke, job).toBeGreaterThan(testHost);
+			expect(steps[smoke]?.run, job).toContain("--expect-automation");
+		}
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "scripts/omp-update-lock-check.ts"))).toBe(true);
 
 		const ci = parse(workflows.find(entry => entry.name === "ci.yml")?.text ?? "") as {

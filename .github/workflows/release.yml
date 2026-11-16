@@ -446,24 +446,52 @@ jobs:
           bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
           "$HOME/.bun/bin/omp" --version
-      # Playwright cannot drive WKWebView: the actual packaged app is launched on a copy out of the DMG that ships and
-      # driven through the test-only native WebDriver (the Node test inspector, a test profile and a port):
-      # bridge, new tab, a prompt round trip on the fake omp, settings, a clean quit.
-      - name: Smoke the packaged Tauri app
+      # Playwright cannot drive WKWebView. The app that ships is copied out of its DMG and never changed: first it proves
+      # it has no WebDriver server (scripts/tauri-release-automation-check.ts), then a second copy whose host is swapped
+      # for the same source built with the test-automation feature is driven through the native WebDriver (the Node test
+      # inspector, a test profile and a port): bridge, new tab, a prompt round trip on the fake omp, settings, a clean quit.
+      - name: Extract the shipped app from the DMG
         run: |
           set -euo pipefail
           MNT=$(mktemp -d)
           hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "dist/ompdesk-$V-arm64.dmg"
           trap 'hdiutil detach "$MNT" -quiet || true' EXIT
-          APP="$RUNNER_TEMP/OMPdesk.app"
-          ditto "$MNT/OMPdesk.app" "$APP"
+          mkdir -p "$RUNNER_TEMP/release-app"
+          ditto "$MNT/OMPdesk.app" "$RUNNER_TEMP/release-app/OMPdesk.app"
           hdiutil detach "$MNT" -quiet
           trap - EXIT
+          echo "RELEASE_APP=$RUNNER_TEMP/release-app/OMPdesk.app" >> "$GITHUB_ENV"
+      - name: Prove the shipped app has no WebDriver server
+        run: |
+          set -euo pipefail
+          REC="$RELEASE_APP/Contents/Resources/ompdesk-tauri.build.json"
+          test "$(jq -c .features "$REC")" = "[]"
           mkdir -p "$RUNNER_TEMP/tauri-smoke"
-          export OMPDESK_TAURI_TEST_BINARY="$APP/Contents/MacOS/$(jq -er .binary "$APP/Contents/Resources/ompdesk-tauri.build.json")"
+          export OMPDESK_TAURI_TEST_BINARY="$RELEASE_APP/Contents/MacOS/$(jq -er .binary "$REC")"
+          export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_NODE="$RELEASE_APP/Contents/Resources/node/node"
+          export OMP_GUI_E2E_OUT="$RELEASE_APP/Contents/Resources/app/out"
+          bun scripts/tauri-release-automation-check.ts
+      # The host of the test copy: the staged build again, with the test-automation feature (it replaces the release host
+      # staged above, which packaging has already taken).
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      - name: Smoke the packaged Tauri app with a test host
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/test-app/OMPdesk.app"
+          mkdir -p "$RUNNER_TEMP/test-app" "$RUNNER_TEMP/tauri-smoke"
+          ditto "$RELEASE_APP" "$APP"
+          BINARY=$(jq -er .binary "$APP/Contents/Resources/ompdesk-tauri.build.json")
+          cp "resources/ompdesk-tauri/darwin-arm64/$BINARY" "$APP/Contents/MacOS/$BINARY"
+          codesign --force --deep -s - "$APP"
+          codesign --verify --strict "$APP"
+          export OMPDESK_TAURI_TEST_BINARY="$APP/Contents/MacOS/$BINARY"
           export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
           export OMPDESK_TAURI_TEST_NODE="$APP/Contents/Resources/node/node"
           export OMP_GUI_E2E_OUT="$APP/Contents/Resources/app/out"
+          bun scripts/tauri-release-automation-check.ts --expect-automation "$OMPDESK_TAURI_TEST_BINARY"
           bun scripts/tauri-native-smoke.ts
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -594,6 +622,9 @@ jobs:
         run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml
         env:
           OMPDESK_PROFILE_TEST_ROOT: ${{ runner.temp }}/ompdesk-profile
+      - name: Test the WebDriver test build's gate
+        shell: bash
+        run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --features test-automation -- automation::tests
       - name: Exercise the real preload attachment and migration consumers
         shell: bash
         run: |
@@ -624,6 +655,7 @@ jobs:
           set -euo pipefail
           cargo fmt --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml -- --check
           cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets --features test-automation -- -D warnings
       - name: Check the Preview consumer
         shell: bash
         run: |
@@ -637,6 +669,14 @@ jobs:
           cargo tree --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --edges normal --prefix none --format '{p}' > tauri-dependencies.txt
           if grep -E '^cef(-| )|^cef_dll_sys ' tauri-dependencies.txt; then
             echo "::error::The system-WebView host still links CEF"
+            exit 1
+          fi
+      - name: Refuse a WebDriver server in the release dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -E '^tauri-plugin-wdio-webdriver ' tauri-dependencies.txt; then
+            echo "::error::The release host still depends on the WebDriver plugin"
             exit 1
           fi
       - if: failure()
@@ -822,18 +862,40 @@ jobs:
           # OMPdesk's own Rust (native/ompdesk): the CLI runs.
           dist/win-unpacked/resources/ompdesk-bin/ompdesk.exe help | grep -F "Exit codes"
           dist/win-unpacked/resources/ompdesk-bin/ompdesk-core.exe < /dev/null | grep -F '"event":"ready"'
-      # Playwright cannot drive WebView2 either: the packaged win-unpacked app, driven through the test-only native
-      # WebDriver on the fake omp (bridge, new tab, a prompt round trip, settings, a clean quit).
-      - name: Smoke the packaged Tauri app
+      # Playwright cannot drive WebView2 either. The packaged win-unpacked app is never changed: first it proves it has no
+      # WebDriver server (scripts/tauri-release-automation-check.ts), then a copy whose OMPdesk.exe is the same source built
+      # with the test-automation feature is driven through the native WebDriver on the fake omp (bridge, new tab, a
+      # prompt round trip, settings, a clean quit).
+      - name: Prove the shipped app has no WebDriver server
         shell: bash
         run: |
           set -euo pipefail
           APP=$(cygpath -m "$PWD/dist/win-unpacked")
+          test "$(jq -c .features "$APP/ompdesk-tauri.build.json")" = "[]"
           mkdir -p "$RUNNER_TEMP/tauri-smoke"
           export OMPDESK_TAURI_TEST_BINARY="$APP/OMPdesk.exe"
           export OMPDESK_TAURI_TEST_OUTPUT=$(cygpath -m "$RUNNER_TEMP/tauri-smoke")
           export OMPDESK_TAURI_TEST_NODE="$APP/resources/node/node.exe"
           export OMP_GUI_E2E_OUT="$APP/resources/app/out"
+          bun scripts/tauri-release-automation-check.ts
+      # The host of the test copy: the staged build again, with the test-automation feature (it replaces the release host
+      # staged above, which packaging has already taken).
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      - name: Smoke the packaged Tauri app with a test host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R dist/win-unpacked "$RUNNER_TEMP/test-app"
+          cp resources/ompdesk-tauri/win32-x64/ompdesk-shell.exe "$RUNNER_TEMP/test-app/OMPdesk.exe"
+          APP=$(cygpath -m "$RUNNER_TEMP/test-app")
+          mkdir -p "$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_BINARY="$APP/OMPdesk.exe"
+          export OMPDESK_TAURI_TEST_OUTPUT=$(cygpath -m "$RUNNER_TEMP/tauri-smoke")
+          export OMPDESK_TAURI_TEST_NODE="$APP/resources/node/node.exe"
+          export OMP_GUI_E2E_OUT="$APP/resources/app/out"
+          bun scripts/tauri-release-automation-check.ts --expect-automation "$OMPDESK_TAURI_TEST_BINARY"
           bun scripts/tauri-native-smoke.ts
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

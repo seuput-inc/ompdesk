@@ -100,14 +100,25 @@ export async function until(label: string, probe: () => Promise<boolean>, exited
 	}
 }
 
-async function main(): Promise<void> {
+export interface NativeApp {
+	child: Bun.Subprocess<"pipe", "pipe", "pipe">;
+	binary: string;
+	profile: string;
+	desktop: string;
+	port: number;
+	logs: Promise<unknown>;
+	exited: Promise<never>;
+}
+
+/** Starts the host on a private profile with the test inspector, that profile and a free port named, as every native check does. */
+export async function launchNative(prefix = "native-smoke-"): Promise<NativeApp> {
 	assert(["darwin", "win32"].includes(process.platform), "Native smoke requires the actual shipping OS");
 	const binary = process.env.OMPDESK_TAURI_TEST_BINARY;
 	const output = process.env.OMPDESK_TAURI_TEST_OUTPUT;
 	assert(binary && path.isAbsolute(binary), "OMPDESK_TAURI_TEST_BINARY must name the built Tauri executable");
 	assert(output && path.isAbsolute(output), "OMPDESK_TAURI_TEST_OUTPUT must name the caller's private evidence root");
 	await mkdir(output, { recursive: true });
-	const profile = await mkdtemp(path.join(output, "native-smoke-"));
+	const profile = await mkdtemp(path.join(output, prefix));
 	const desktop = path.join(profile, "desktop");
 	const project = path.join(profile, "project");
 	const agent = path.join(profile, "agent");
@@ -142,6 +153,25 @@ async function main(): Promise<void> {
 		throw new Error(`Native app exited during smoke (${code})`);
 	});
 	void exited.catch(() => undefined);
+	return { child, binary, profile, desktop, port, logs: Promise.all([stdout, stderr]), exited };
+}
+
+/** Ends what `launchNative` started: the app and every process below it, then its logs. */
+export async function stopNative({ child, logs }: NativeApp): Promise<void> {
+	if (child.exitCode === null) {
+		const owned = processesBelow(child.pid);
+		child.stdin.end();
+		child.kill();
+		await child.exited;
+		await waitForProcessesToExit(owned, 10_000);
+	}
+	await logs;
+}
+
+async function main(): Promise<void> {
+	console.log("test build: release bytes + feature test-automation (tauri-plugin-wdio-webdriver)");
+	const app = await launchNative();
+	const { child, binary, profile, port, exited } = app;
 	const driver = new Driver(port);
 	let quitRequested = false;
 	try {
@@ -250,14 +280,7 @@ async function main(): Promise<void> {
 		);
 		console.log(`Actual native smoke passed; evidence: ${profile}`);
 	} finally {
-		if (child.exitCode === null) {
-			const owned = processesBelow(child.pid);
-			child.stdin.end();
-			child.kill();
-			await child.exited;
-			await waitForProcessesToExit(owned, 10_000);
-		}
-		await Promise.all([stdout, stderr]);
+		await stopNative(app);
 		if (!quitRequested) console.error(`Native smoke failed; original output preserved in ${profile}`);
 	}
 }

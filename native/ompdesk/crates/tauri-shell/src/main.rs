@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod assets;
+#[cfg(feature = "test-automation")]
 mod automation;
 mod native_chrome;
 mod native_services;
@@ -49,6 +50,8 @@ struct Migration {
     offers: HashMap<u64, (Identity, String, usize)>,
 }
 
+type AppInitialization = tokio::sync::watch::Receiver<Option<Result<(), String>>>;
+
 struct Runtime {
     app: tauri::AppHandle,
     preview: preview::Service,
@@ -57,8 +60,7 @@ struct Runtime {
     registry: Mutex<Registry>,
     migration: Mutex<Migration>,
     evaluations: Mutex<HashMap<u64, Evaluation>>,
-    app_initializations:
-        Mutex<HashMap<u64, tokio::sync::watch::Receiver<Option<Result<(), String>>>>>,
+    app_initializations: Mutex<HashMap<u64, AppInitialization>>,
     next_evaluation: AtomicU64,
     preload: String,
     user_data: PathBuf,
@@ -1207,6 +1209,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let content_policy =
         assets::content_policy(Some(&media_origin)).map_err(std::io::Error::other)?;
     let builder = tauri::Builder::default();
+    #[cfg(feature = "test-automation")]
     let builder = automation::install(builder, &user_data).map_err(std::io::Error::other)?;
     #[cfg(windows)]
     let builder = preview::media::configure(builder);

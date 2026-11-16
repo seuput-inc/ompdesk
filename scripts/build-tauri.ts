@@ -8,6 +8,8 @@ import { cargoEnv, cargoPath, rustcPath } from "./cargo";
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const TAURI_DIR = path.join(REPO_ROOT, "native/ompdesk/crates/tauri-shell");
 export const RECORD_NAME = "ompdesk-tauri.build.json";
+/** The cargo feature that compiles the embedded WebDriver server; only a test build has it, never a released binary. */
+export const TEST_AUTOMATION = "test-automation";
 
 export interface TauriBuildRecord {
 	engine: "tauri";
@@ -18,6 +20,7 @@ export interface TauriBuildRecord {
 	files: Record<string, string>;
 	sourceSha256: string;
 	rustc: string;
+	features: string[];
 }
 
 function filesUnder(root: string, relative = "", files: string[] = []): string[] {
@@ -53,8 +56,14 @@ export function stagedDir(): string {
 	return path.join(REPO_ROOT, "resources/ompdesk-tauri", `${process.platform}-${process.arch}`);
 }
 
-export function checkTauri(target = stagedDir()): TauriBuildRecord {
+export function checkTauri(target = stagedDir(), testAutomation = false): TauriBuildRecord {
 	const record = JSON.parse(fs.readFileSync(path.join(target, RECORD_NAME), "utf8")) as TauriBuildRecord;
+	const features = testAutomation ? [TEST_AUTOMATION] : [];
+	if (JSON.stringify(record.features) !== JSON.stringify(features)) {
+		throw new Error(
+			`The staged Tauri host was built with features [${record.features ?? "unrecorded"}], not [${features}]`,
+		);
+	}
 	if (
 		record.engine !== "tauri" ||
 		record.platform !== process.platform ||
@@ -84,7 +93,7 @@ export function checkTauri(target = stagedDir()): TauriBuildRecord {
 	return record;
 }
 
-export async function buildTauri(): Promise<string> {
+export async function buildTauri(testAutomation = false): Promise<string> {
 	if (!["darwin", "win32"].includes(process.platform)) throw new Error("OMPdesk ships on macOS and Windows only");
 	const cargo = cargoPath(TAURI_DIR);
 	if (!cargo) throw new Error("Rust is required to build the Tauri host");
@@ -96,7 +105,9 @@ export async function buildTauri(): Promise<string> {
 		CARGO_TARGET_DIR: targetDir,
 		...(process.platform === "darwin" ? { MACOSX_DEPLOYMENT_TARGET: compatibility.minimumMacOS } : {}),
 	};
-	const child = Bun.spawn([cargo, "build", "--locked", "--release", ...bins.flatMap(name => ["--bin", name])], {
+	const features = testAutomation ? [TEST_AUTOMATION] : [];
+	const args = ["build", "--locked", "--release", ...features.flatMap(name => ["--features", name])];
+	const child = Bun.spawn([cargo, ...args, ...bins.flatMap(name => ["--bin", name])], {
 		cwd: TAURI_DIR,
 		env,
 		stdin: "inherit",
@@ -129,12 +140,14 @@ export async function buildTauri(): Promise<string> {
 		files,
 		sourceSha256: sourceBefore,
 		rustc: new TextDecoder().decode(version.stdout).trim(),
+		features,
 	};
 	fs.writeFileSync(path.join(target, RECORD_NAME), `${JSON.stringify(record, null, "\t")}\n`);
 	return target;
 }
 
 if (import.meta.main) {
-	if (process.argv.includes("--check")) console.log(checkTauri());
-	else console.log(await buildTauri());
+	const testAutomation = process.argv.includes("--test-automation");
+	if (process.argv.includes("--check")) console.log(checkTauri(stagedDir(), testAutomation));
+	else console.log(await buildTauri(testAutomation));
 }

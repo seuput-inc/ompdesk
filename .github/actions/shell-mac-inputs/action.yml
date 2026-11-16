@@ -30,6 +30,9 @@ runs:
           licenses: "true"
       - if: inputs.runtime == 'tauri'
         uses: ./.github/actions/tauri-shell
+        # The move checks drive the updated page through the embedded WebDriver, which only a test build carries.
+        with:
+          test-automation: "true"
       - run: bun run build
         shell: bash
       # What the bundle packages besides the shell, as release.yml's mac job: the memory binary (cached), agent-desktop.
