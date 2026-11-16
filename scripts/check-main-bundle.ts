@@ -347,7 +347,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // The input history's hydrate stops logging a paired host's `remote_offline` as a failed read (16 Nov 2026, 1326c4dc0;
 // `stores/input-history.ts` is on the phone's first screen): measured 2,203,024 by the runner's build (branch run
 // 43849653388), 24 bytes over. The budget is that measure plus 76 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_203_100;
+// The side panel paints its last width on the first frame (16 Nov 2026, `PanelContainer` reads `lib/last-read`), and the
+// Tauri preload stays out of subframes: measured 2,203,306 by the runner's build (branch run 43874132984), 206 bytes
+// over. The budget is that measure plus 94 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_203_400;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

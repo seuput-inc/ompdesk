@@ -557,7 +557,7 @@ function traceTargets(browser: Browser, pid: number | undefined): void {
 const TAIL_BYTES = 16 * 1024;
 
 /** The pinned Node the packaged app runs (`bun run build:node`) for the host's child, else `node` on PATH. */
-export function usePinnedNode(env: NodeJS.ProcessEnv): void {
+export function pinNodeRuntime(env: NodeJS.ProcessEnv): void {
 	const pinnedNode = path.join(
 		REPO_ROOT,
 		"resources",
@@ -593,7 +593,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		env.OMPDESK_APP_ENTRY = path.resolve(entry);
 	}
 	assertTestAutomationHost(executable);
-	usePinnedNode(env);
+	pinNodeRuntime(env);
 	const userData = userDataFromArgs(args) ?? env.OMP_GUI_TEST_USER_DATA_DIR;
 	if (!userData)
 		throw new Error("launchShell: pass --user-data-dir=<private dir>; the shell would use the real profile");

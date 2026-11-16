@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
-import { appDirOfEntry, assertShellBuilt, copyShellDiagnostics, usePinnedNode } from "./fixture/shell-launch";
+import { appDirOfEntry, assertShellBuilt, copyShellDiagnostics, pinNodeRuntime } from "./fixture/shell-launch";
 import { processesBelow, processKey, waitForProcessesToExit } from "./process-tree";
 
 /**
@@ -63,7 +63,7 @@ async function runFixture(work: string, bundle: string): Promise<{ output: strin
 	// reads the renderer and preload next to `main/`); nothing opens a window, the fixture drives the preview alone.
 	env.OMPDESK_APP_DIR = appDirOfEntry(bundle);
 	env.OMPDESK_APP_ENTRY = bundle;
-	usePinnedNode(env);
+	pinNodeRuntime(env);
 	const child = spawn(host, [`--user-data-dir=${userData}`], {
 		env,
 		stdio: ["ignore", "pipe", "pipe"],
