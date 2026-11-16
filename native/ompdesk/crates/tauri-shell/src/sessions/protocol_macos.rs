@@ -73,7 +73,7 @@ define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[ivars = HandlerIvars]
-    pub struct OmpdeskURLSchemeHandler;
+    struct OmpdeskURLSchemeHandler;
 
     unsafe impl NSObjectProtocol for OmpdeskURLSchemeHandler {}
 

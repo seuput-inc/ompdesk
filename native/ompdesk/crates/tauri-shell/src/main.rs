@@ -1245,6 +1245,13 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 .map_err(|_| "runtime already initialized")?;
             system::init();
             sessions::init(runtime().user_data.clone()).map_err(std::io::Error::other)?;
+            // `net.*` reads the same canonical partitions: their cookies (on a worker, never this UI thread) and policy.
+            network::session::install_cookie_authority(std::sync::Arc::new(
+                sessions::cookies::Authority::new(std::thread::current().id()),
+            ))
+            .map_err(std::io::Error::other)?;
+            network::session::install_policy_source(sessions::network_policy)
+                .map_err(std::io::Error::other)?;
             if std::env::var("OMP_GUI_TEST_SHELL_FAIL_START").as_deref() == Ok("1") {
                 let test_profile = std::env::var_os(startup::USER_DATA_ENV)
                     .filter(|value| !value.is_empty())

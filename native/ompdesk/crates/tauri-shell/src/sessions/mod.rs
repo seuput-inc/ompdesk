@@ -57,16 +57,11 @@ pub fn policy(partition: &str) -> Result<Policy, String> {
     with(|r| Ok(r.get(partition)?.policy.clone()))
 }
 
-pub struct NetworkPolicy {
-    pub user_agent: Option<String>,
-    pub accept_languages: Option<String>,
-    pub deny_network: bool,
-}
-
-pub fn network_policy(partition: &str) -> Result<NetworkPolicy, String> {
+/// The canonical partition's network facts the native `net.*` transport applies to each request.
+pub fn network_policy(partition: &str) -> Result<crate::network::session::NetworkPolicy, String> {
     with(|r| {
         let policy = &r.get(partition)?.policy;
-        Ok(NetworkPolicy {
+        Ok(crate::network::session::NetworkPolicy {
             deny_network: policy.deny_network(),
             user_agent: policy.user_agent.clone(),
             accept_languages: policy.accept_languages.clone(),
