@@ -236,10 +236,24 @@ for (const language of variants(["en", "ko"] as const))
 				await page_
 					.getByRole("button", { name: language === "en" ? "More for page.html" : "page.html 메뉴" })
 					.click();
+				// The reveal item names the OS's file manager, as the app's own label does on this computer.
+				const windows = process.platform === "win32";
 				await expect(page.getByRole("menuitem")).toHaveText(
 					language === "en"
-						? ["Preview", "Open in default app", "Reveal in Finder", "Save a copy…", "Copy path"]
-						: ["미리보기", "기본 앱으로 열기", "Finder에서 보기", "다른 곳에 저장…", "경로 복사"],
+						? [
+								"Preview",
+								"Open in default app",
+								windows ? "Show in Explorer" : "Reveal in Finder",
+								"Save a copy…",
+								"Copy path",
+							]
+						: [
+								"미리보기",
+								"기본 앱으로 열기",
+								windows ? "탐색기에서 보기" : "Finder에서 보기",
+								"다른 곳에 저장…",
+								"경로 복사",
+							],
 				);
 				await page.keyboard.press("Escape");
 				// An archive has nothing to draw: a row named by its extension.
