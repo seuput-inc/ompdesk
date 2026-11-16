@@ -141,6 +141,8 @@ async function startOmp(provider: Provider, isolated: string, extension: string)
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			// Declared, not left unknown: omp 18.21 probes an unknown model's thinking controls with extra requests first.
+			"        reasoning: false",
 			"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 			"",
 		].join("\n"),
