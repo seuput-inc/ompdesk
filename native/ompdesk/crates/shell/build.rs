@@ -4,26 +4,13 @@
 // a path relative to the crate would not find `resources/icon.ico`. `scripts/build-shell.ts` passes OMPDESK_ICON.
 use std::path::PathBuf;
 
+#[path = "build/last_electron.rs"]
+mod last_electron;
+
 fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-env-changed=OMPDESK_ICON");
-    println!("cargo:rerun-if-changed=last-electron.json");
-    // The macOS launcher restores this Electron release if the new shell never starts.
-    // Set last-electron.json to the newest Electron release before landing the shell swap.
-    let tag = std::fs::read_to_string("last-electron.json")
-        .ok()
-        .and_then(|text| {
-            let after = text.split_once("\"tag\"")?.1;
-            let value = after.split_once('"')?.1;
-            Some(value.split_once('"')?.0.trim().to_string())
-        })
-        .unwrap_or_default();
-    if tag.is_empty() && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        panic!(
-            "last-electron.json has no \"tag\": the macOS launcher needs the last Electron release to restore"
-        );
-    }
-    println!("cargo:rustc-env=OMPDESK_LAST_ELECTRON_TAG={tag}");
+    last_electron::emit("last-electron.json");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
