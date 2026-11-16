@@ -107,7 +107,7 @@ impl Parent {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         view.setFrame(self.frame(bounds));
         view.ivars().image_geometry.set(None);
-        NSView::setNeedsDisplay(&view, true);
+        NSView::setNeedsDisplay(view, true);
         if bounds.rect.width > 0.0 && bounds.rect.height > 0.0 {
             let geometry = view.ivars().shared.publisher().geometry()?;
             view.ivars().image_geometry.set(geometry);

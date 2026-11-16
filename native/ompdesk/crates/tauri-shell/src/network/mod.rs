@@ -277,10 +277,10 @@ impl Transfer {
                     return;
                 };
                 let mut state = transfer.state.lock().unwrap();
-                if !state
+                if state
                     .login
                     .as_ref()
-                    .is_some_and(|(waiting, _)| *waiting == seq)
+                    .is_none_or(|(waiting, _)| *waiting != seq)
                 {
                     return;
                 }

@@ -122,7 +122,7 @@ pub fn header(view: tauri::webview::PlatformWebview, url: Url, done: Done<Option
                     let value = cookie_string(cookie, "value")?;
                     selected.push((path.len(), format!("{name}={value}")));
                 }
-                selected.sort_by(|a, b| b.0.cmp(&a.0));
+                selected.sort_by_key(|b| std::cmp::Reverse(b.0));
                 if selected.is_empty() {
                     Ok(None)
                 } else {

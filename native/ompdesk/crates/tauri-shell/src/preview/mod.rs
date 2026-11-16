@@ -350,10 +350,10 @@ async fn serve(
         let id = call.id();
         if cancelled.try_recv().is_ok() {
             host::forget_cancel(id);
-            if matches!(call.method.as_str(), "view.create" | "win.create") {
-                if let Some(wc) = call.params["wcId"].as_u64() {
-                    crate::close_record(wc);
-                }
+            if matches!(call.method.as_str(), "view.create" | "win.create")
+                && let Some(wc) = call.params["wcId"].as_u64()
+            {
+                crate::close_record(wc);
             }
             call.err("cancelled", "Preview request cancelled before execution");
             continue;
@@ -410,10 +410,10 @@ async fn serve(
                 }
                 Err(error) => {
                     host::forget_cancel(id);
-                    if matches!(call.method.as_str(), "view.create" | "win.create") {
-                        if let Some(wc) = call.params["wcId"].as_u64() {
-                            crate::close_record(wc);
-                        }
+                    if matches!(call.method.as_str(), "view.create" | "win.create")
+                        && let Some(wc) = call.params["wcId"].as_u64()
+                    {
+                        crate::close_record(wc);
                     }
                     call.err(&error.code, error.message);
                     continue;
@@ -422,10 +422,10 @@ async fn serve(
         }
         if cancelled.try_recv().is_ok() {
             host::forget_cancel(id);
-            if matches!(call.method.as_str(), "view.create" | "win.create") {
-                if let Some(wc) = call.params["wcId"].as_u64() {
-                    crate::close_record(wc);
-                }
+            if matches!(call.method.as_str(), "view.create" | "win.create")
+                && let Some(wc) = call.params["wcId"].as_u64()
+            {
+                crate::close_record(wc);
             }
             call.err("cancelled", "Preview request cancelled before execution");
             continue;
@@ -453,29 +453,30 @@ async fn serve(
             Ok(Answer::Json(value)) => call.ok(value),
             Ok(Answer::Binary(value, bytes, page, ack)) => {
                 call.ok_bin(value, &bytes);
-                if let Some(ack) = ack {
-                    if let Err(error) = page.ack_frame(ack).await {
-                        crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
-                    }
+                if let Some(ack) = ack
+                    && let Err(error) = page.ack_frame(ack).await
+                {
+                    crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
                 }
             }
             Err(mut error) => {
-                if matches!(call.method.as_str(), "view.create" | "win.create") {
-                    if let Some(wc) = call.params["wcId"].as_u64() {
-                        if pages.entry(wc).is_ok() {
-                            if let Err(cleanup) = close(&pages, wc).await {
-                                error.message =
-                                    format!("{}; cleanup: {}", error.message, cleanup.message);
-                            }
-                        } else {
-                            crate::close_record(wc);
+                if matches!(call.method.as_str(), "view.create" | "win.create")
+                    && let Some(wc) = call.params["wcId"].as_u64()
+                {
+                    if pages.entry(wc).is_ok() {
+                        if let Err(cleanup) = close(&pages, wc).await {
+                            error.message =
+                                format!("{}; cleanup: {}", error.message, cleanup.message);
                         }
+                    } else {
+                        crate::close_record(wc);
                     }
                 }
-                if call.method == "wc.op" && call.params["op"].as_str() == Some("loadURL") {
-                    if let Some(wc) = call.params["wcId"].as_u64() {
-                        reject_load(&pages, wc, &call.params["args"], &error).await;
-                    }
+                if call.method == "wc.op"
+                    && call.params["op"].as_str() == Some("loadURL")
+                    && let Some(wc) = call.params["wcId"].as_u64()
+                {
+                    reject_load(&pages, wc, &call.params["args"], &error).await;
                 }
                 call.err(&error.code, error.message);
             }
@@ -492,10 +493,10 @@ async fn serve(
             Message::Native(_) => continue,
         };
         host::forget_cancel(call.id());
-        if matches!(call.method.as_str(), "view.create" | "win.create") {
-            if let Some(wc) = call.params["wcId"].as_u64() {
-                crate::close_record(wc);
-            }
+        if matches!(call.method.as_str(), "view.create" | "win.create")
+            && let Some(wc) = call.params["wcId"].as_u64()
+        {
+            crate::close_record(wc);
         }
         call.err("gone", "Preview service is stopping");
     }
@@ -882,7 +883,7 @@ async fn create(
             "Preview cannot use the privileged app partition",
         ));
     }
-    let result = async {
+    async {
         let context = crate::sessions::preview::context_for(partition)
             .await
             .map_err(crate::failed)?;
@@ -979,8 +980,7 @@ async fn create(
         }
         Ok(json!({}))
     }
-    .await;
-    result
+    .await
 }
 fn load_failure(entry: &Entry, wc: u64, code: i32, message: &str, url: &str) {
     let generation = runtime()
@@ -1022,10 +1022,10 @@ async fn reject_load(pages: &Pages, wc: u64, args: &Value, error: &WireError) {
         Ok(None) => raw.to_owned(),
         Err(_) => return,
     };
-    if error.code == "navigation" {
-        if let Some(code) = shell_core::netmap::error_code(&error.message) {
-            load_failure(&entry, wc, code, &error.message, &url);
-        }
+    if error.code == "navigation"
+        && let Some(code) = shell_core::netmap::error_code(&error.message)
+    {
+        load_failure(&entry, wc, code, &error.message, &url);
     }
 }
 async fn close(pages: &Pages, wc: u64) -> Result<(), WireError> {
@@ -1274,10 +1274,10 @@ async fn ack_retained(entry: &Entry) {
         .expect("Preview document")
         .pending_ack
         .take();
-    if let Some(ack) = ack {
-        if let Err(error) = entry.page.ack_frame(ack).await {
-            crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
-        }
+    if let Some(ack) = ack
+        && let Err(error) = entry.page.ack_frame(ack).await
+    {
+        crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
     }
 }
 async fn resynchronize(browser: &Browser, pages: &Pages) {
@@ -1355,12 +1355,10 @@ fn unmap_urls<'a>(
                         if let Some(url) = value
                             .as_str()
                             .filter(|url| url.contains(':') && *url != "://")
-                        {
-                            if let Some(original) =
+                            && let Some(original) =
                                 runtime().gateway.original_url(partition, url).await?
-                            {
-                                *value = json!(original);
-                            }
+                        {
+                            *value = json!(original);
                         }
                     } else {
                         unmap_urls(partition, value).await?;
@@ -1469,28 +1467,28 @@ async fn observe(
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 let detached = pages.routes.lock().expect("Preview routes").remove(session);
-                if let Some(route) = detached {
-                    if let Ok(entry) = pages.entry(route.wc) {
-                        let primary = entry.page.session_id == session;
-                        let root = route.debugger.as_deref() == Some(session);
-                        if root {
-                            entry.document.lock().expect("Preview document").debugger = None;
-                            pages
-                                .routes
-                                .lock()
-                                .expect("Preview routes")
-                                .retain(|_, child| child.debugger.as_deref() != Some(session));
-                            host::event(
-                                "wc.cdp.detached",
-                                json!({"wcId":route.wc,"reason":"target closed"}),
-                            );
-                        }
-                        if route.iframe && route.debugger.is_none() {
-                            invalidate_document(&entry, route.wc, None, Some(session)).await;
-                        }
-                        if primary {
-                            let _ = close(&pages, route.wc).await;
-                        }
+                if let Some(route) = detached
+                    && let Ok(entry) = pages.entry(route.wc)
+                {
+                    let primary = entry.page.session_id == session;
+                    let root = route.debugger.as_deref() == Some(session);
+                    if root {
+                        entry.document.lock().expect("Preview document").debugger = None;
+                        pages
+                            .routes
+                            .lock()
+                            .expect("Preview routes")
+                            .retain(|_, child| child.debugger.as_deref() != Some(session));
+                        host::event(
+                            "wc.cdp.detached",
+                            json!({"wcId":route.wc,"reason":"target closed"}),
+                        );
+                    }
+                    if route.iframe && route.debugger.is_none() {
+                        invalidate_document(&entry, route.wc, None, Some(session)).await;
+                    }
+                    if primary {
+                        let _ = close(&pages, route.wc).await;
                     }
                 }
             }
@@ -1526,24 +1524,21 @@ async fn observe(
                         })
                     })
             });
-        if event.method == "Target.attachedToTarget" {
-            if let (Some(mut route), Some(session)) =
+        if event.method == "Target.attachedToTarget"
+            && let (Some(mut route), Some(session)) =
                 (route.clone(), event.params["sessionId"].as_str())
-            {
-                if event
-                    .params
-                    .pointer("/targetInfo/type")
-                    .and_then(Value::as_str)
-                    == Some("iframe")
-                {
-                    route.iframe = true;
-                    pages
-                        .routes
-                        .lock()
-                        .expect("Preview routes")
-                        .insert(session.to_owned(), route);
-                }
-            }
+            && event
+                .params
+                .pointer("/targetInfo/type")
+                .and_then(Value::as_str)
+                == Some("iframe")
+        {
+            route.iframe = true;
+            pages
+                .routes
+                .lock()
+                .expect("Preview routes")
+                .insert(session.to_owned(), route);
         }
         let Some(route) = route else {
             continue;
@@ -1627,38 +1622,36 @@ async fn observe(
                 .and_then(Value::as_str);
             invalidate_document(&entry, route.wc, frame, None).await;
         }
-        if event.method == "Runtime.executionContextCreated" {
-            if event
+        if event.method == "Runtime.executionContextCreated"
+            && event
                 .params
                 .pointer("/context/name")
                 .and_then(Value::as_str)
                 == Some(initialize::WORLD)
-            {
-                if let (Some(id), Some(frame)) = (
-                    event.params.pointer("/context/id").and_then(Value::as_i64),
-                    event
-                        .params
-                        .pointer("/context/auxData/frameId")
-                        .and_then(Value::as_str),
-                ) {
-                    entry
-                        .document
-                        .lock()
-                        .expect("Preview document")
-                        .native_contexts
-                        .insert((session.to_owned(), id), frame.to_owned());
-                }
-            }
+            && let (Some(id), Some(frame)) = (
+                event.params.pointer("/context/id").and_then(Value::as_i64),
+                event
+                    .params
+                    .pointer("/context/auxData/frameId")
+                    .and_then(Value::as_str),
+            )
+        {
+            entry
+                .document
+                .lock()
+                .expect("Preview document")
+                .native_contexts
+                .insert((session.to_owned(), id), frame.to_owned());
         }
-        if event.method == "Runtime.executionContextDestroyed" {
-            if let Some(id) = event.params["executionContextId"].as_i64() {
-                entry
-                    .document
-                    .lock()
-                    .expect("Preview document")
-                    .native_contexts
-                    .remove(&(session.to_owned(), id));
-            }
+        if event.method == "Runtime.executionContextDestroyed"
+            && let Some(id) = event.params["executionContextId"].as_i64()
+        {
+            entry
+                .document
+                .lock()
+                .expect("Preview document")
+                .native_contexts
+                .remove(&(session.to_owned(), id));
         }
         if event.method == "Runtime.executionContextsCleared" {
             entry
@@ -1678,15 +1671,16 @@ async fn observe(
                     .native_contexts
                     .contains_key(&(session.to_owned(), id))
             });
-            if authorized && event.params["name"].as_str() == Some(initialize::BINDING) {
-                if let Ok(key) = surface::key(route.wc) {
-                    let flags = if event.params["payload"].as_str() == Some("text") {
-                        TEXT
-                    } else {
-                        TEXT | AX
-                    };
-                    request_refresh(&entry, key, flags);
-                }
+            if authorized
+                && event.params["name"].as_str() == Some(initialize::BINDING)
+                && let Ok(key) = surface::key(route.wc)
+            {
+                let flags = if event.params["payload"].as_str() == Some("text") {
+                    TEXT
+                } else {
+                    TEXT | AX
+                };
+                request_refresh(&entry, key, flags);
             }
             continue;
         }
@@ -2049,25 +2043,24 @@ async fn refresh_state(entry: &Entry, wc: u64) {
         }
     }
     let context = entry.document.lock().expect("Preview document").context;
-    if let Some(context) = context {
-        if let Ok(title) = entry
+    if let Some(context) = context
+        && let Ok(title) = entry
             .page
             .command(
                 "Runtime.evaluate",
                 json!({"expression":"document.title","contextId":context,"returnByValue":true}),
             )
             .await
-        {
-            if original(identity).is_err() {
-                return;
+    {
+        if original(identity).is_err() {
+            return;
+        }
+        if let Some(title) = title.pointer("/result/value").and_then(Value::as_str) {
+            if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
+                page.title = title.to_owned();
             }
-            if let Some(title) = title.pointer("/result/value").and_then(Value::as_str) {
-                if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
-                    page.title = title.to_owned();
-                }
-                wc_state(wc);
-                wc_event(wc, "page-title-updated", json!([title, true]));
-            }
+            wc_state(wc);
+            wc_event(wc, "page-title-updated", json!([title, true]));
         }
     }
 }

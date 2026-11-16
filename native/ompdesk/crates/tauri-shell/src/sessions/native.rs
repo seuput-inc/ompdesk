@@ -36,10 +36,9 @@ pub fn dispatch<T: Send + 'static>(
             .take()
             .expect("one callback");
         work(view, done);
-    }) {
-        if let Some(done) = done.lock().expect("session callback").take() {
-            done(Err(error.to_string()));
-        }
+    }) && let Some(done) = done.lock().expect("session callback").take()
+    {
+        done(Err(error.to_string()));
     }
 }
 

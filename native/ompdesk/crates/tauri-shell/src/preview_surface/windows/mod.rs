@@ -14,7 +14,7 @@ impl NativeParent {
         let hwnd = window
             .hwnd()
             .map_err(|error| SurfaceError::Native(error.to_string()))?;
-        sys::Parent::from_raw(hwnd.0 as *mut std::ffi::c_void).map(Self)
+        sys::Parent::from_raw(hwnd.0).map(Self)
     }
 
     #[cfg(test)]

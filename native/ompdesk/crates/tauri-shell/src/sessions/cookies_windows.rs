@@ -94,10 +94,10 @@ pub fn store(view: tauri::webview::PlatformWebview, cookies: Vec<Cookie>, done: 
     }));
     // SAFETY: GetCookies runs after the preceding cookie writes on this native manager; its callback is an
     // asynchronous browser round trip, not a UI-thread wait or a second cookie jar.
-    if let Err(e) = unsafe { manager.GetCookies(PCWSTR::null(), &handler) } {
-        if let Some(done) = completion.borrow_mut().take() {
-            done(Err(error("write completion", e)));
-        }
+    if let Err(e) = unsafe { manager.GetCookies(PCWSTR::null(), &handler) }
+        && let Some(done) = completion.borrow_mut().take()
+    {
+        done(Err(error("write completion", e)));
     }
 }
 
@@ -128,10 +128,9 @@ pub fn clear(view: tauri::webview::PlatformWebview, done: Done<()>) {
     // retains the completion handler and answers only after the native profile deletion operation completes.
     if let Err(e) =
         unsafe { profile.ClearBrowsingData(COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES, &handler) }
+        && let Some(done) = completion.borrow_mut().take()
     {
-        if let Some(done) = completion.borrow_mut().take() {
-            done(Err(error("start clear", e)));
-        }
+        done(Err(error("start clear", e)));
     }
 }
 
@@ -189,9 +188,9 @@ pub fn secure_scopes(
         Ok(())
     }));
     // SAFETY: null URL requests all unexpired cookies in this actual WebView2 partition; no UI thread is blocked.
-    if let Err(e) = unsafe { manager.GetCookies(PCWSTR::null(), &handler) } {
-        if let Some(done) = completion.borrow_mut().take() {
-            done(Err(error("start secure scope read", e)));
-        }
+    if let Err(e) = unsafe { manager.GetCookies(PCWSTR::null(), &handler) }
+        && let Some(done) = completion.borrow_mut().take()
+    {
+        done(Err(error("start secure scope read", e)));
     }
 }

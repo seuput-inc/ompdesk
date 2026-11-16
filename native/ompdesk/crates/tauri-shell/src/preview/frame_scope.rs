@@ -638,10 +638,10 @@ async fn focused_frame(
                     let actual = target
                         .command("DOM.getFrameOwner", json!({"frameId":frame.id}))
                         .await?;
-                    if actual.get("backendNodeId").and_then(Value::as_i64) == Some(owner) {
-                        if child.replace(frame.id.as_str()).is_some() {
-                            return Err(error("Focused iframe owner is ambiguous"));
-                        }
+                    if actual.get("backendNodeId").and_then(Value::as_i64) == Some(owner)
+                        && child.replace(frame.id.as_str()).is_some()
+                    {
+                        return Err(error("Focused iframe owner is ambiguous"));
                     }
                 }
                 current =

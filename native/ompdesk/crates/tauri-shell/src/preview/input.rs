@@ -252,10 +252,10 @@ pub async fn apply(page: &Target<'_>, input: Input, zoom: f64) -> Result<(), Wir
             repeat,
         } => {
             let mut p = json!({"type":if kind == KeyKind::Up {"keyUp"} else if text.is_some() {"keyDown"} else {"rawKeyDown"},"key":key,"code":code,"windowsVirtualKeyCode":windows_virtual_key_code,"nativeVirtualKeyCode":native_virtual_key_code,"modifiers":mods(modifiers),"autoRepeat":repeat});
-            if kind == KeyKind::Down {
-                if let Some(text) = text {
-                    p["text"] = json!(text);
-                }
+            if kind == KeyKind::Down
+                && let Some(text) = text
+            {
+                p["text"] = json!(text);
             }
             mutation(page, "Input.dispatchKeyEvent", p).await?;
         }

@@ -76,13 +76,13 @@ impl<'a> Target<'a> {
         }
     }
     fn valid(&self) -> Result<(), WireError> {
-        if let Some(key) = self.key {
-            if super::surface::key(key.wc).ok() != Some(key) {
-                return Err(WireError::new(
-                    "gone",
-                    "original native Preview document ended",
-                ));
-            }
+        if let Some(key) = self.key
+            && super::surface::key(key.wc).ok() != Some(key)
+        {
+            return Err(WireError::new(
+                "gone",
+                "original native Preview document ended",
+            ));
         }
         Ok(())
     }

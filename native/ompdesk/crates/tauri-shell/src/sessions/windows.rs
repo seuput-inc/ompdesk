@@ -100,10 +100,9 @@ fn add_preloads(
     // SAFETY: WebView2 copies the source and retains the callback during this UI-thread call.
     if let Err(error) =
         unsafe { view.AddScriptToExecuteOnDocumentCreated(PCWSTR(source.as_ptr()), &handler) }
+        && let Some(done) = done.borrow_mut().take()
     {
-        if let Some(done) = done.borrow_mut().take() {
-            done(Err(format!("WebView2 start adding preload: {error}")));
-        }
+        done(Err(format!("WebView2 start adding preload: {error}")));
     }
 }
 
@@ -189,10 +188,10 @@ pub fn describe(view: tauri::webview::PlatformWebview, done: Done<Snapshot>) {
     }));
     let script = wide("navigator.languages").expect("constant contains no NUL");
     // SAFETY: the script and handler remain valid for the duration of the call; WebView2 retains the handler.
-    if let Err(error) = unsafe { view.ExecuteScript(PCWSTR(script.as_ptr()), &handler) } {
-        if let Some(done) = done.borrow_mut().take() {
-            done(Err(format!("WebView2 start navigator.languages: {error}")));
-        }
+    if let Err(error) = unsafe { view.ExecuteScript(PCWSTR(script.as_ptr()), &handler) }
+        && let Some(done) = done.borrow_mut().take()
+    {
+        done(Err(format!("WebView2 start navigator.languages: {error}")));
     }
 }
 
@@ -232,10 +231,9 @@ pub fn apply(view: tauri::webview::PlatformWebview, op: Operation, done: Done<()
             // SAFETY: the profile and handler are valid on the UI thread; WebView2 retains the handler.
             if let Err(error) = unsafe {
                 profile.ClearBrowsingData(COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, &handler)
-            } {
-                if let Some(done) = done.borrow_mut().take() {
-                    done(Err(format!("WebView2 start clearing HTTP cache: {error}")));
-                }
+            } && let Some(done) = done.borrow_mut().take()
+            {
+                done(Err(format!("WebView2 start clearing HTTP cache: {error}")));
             }
         }
         Operation::SetSpellLanguages => done(Err(

@@ -343,7 +343,7 @@ mod tests {
         let routes = PreviewOrigins::new("visual-a", Arc::new(Semaphore::new(2))).unwrap();
         let authority = routes.map_authority(first, 40000).unwrap();
         let hostname = authority.split_once(':').unwrap().0;
-        assert!(reserved_hostname(&hostname));
+        assert!(reserved_hostname(hostname));
         assert!(hostname.split('.').all(|label| label.len() <= 63));
         let mapped = Url::parse(&format!("http://{hostname}:40000/dir/page.html")).unwrap();
         assert_eq!(

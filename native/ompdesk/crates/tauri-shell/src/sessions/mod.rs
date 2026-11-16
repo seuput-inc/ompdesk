@@ -291,11 +291,11 @@ pub fn dispatch_with_cancel(call: Call, cancelled: oneshot::Receiver<()>) -> Opt
     let cache = call.params["cache"].as_bool().unwrap_or(true);
     match queue(&partition, cache) {
         Ok(queue) => {
-            if let Err(error) = queue.send(Command::Request(call, cancelled)) {
-                if let Command::Request(call, _) = error.0 {
-                    host::forget_cancel(call.id());
-                    call.err("failed", "session command queue closed");
-                }
+            if let Err(error) = queue.send(Command::Request(call, cancelled))
+                && let Command::Request(call, _) = error.0
+            {
+                host::forget_cancel(call.id());
+                call.err("failed", "session command queue closed");
             }
         }
         Err(error) => {

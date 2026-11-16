@@ -492,10 +492,10 @@ impl Child {
 
 impl Drop for Child {
     fn drop(&mut self) {
-        if !self.context.hwnd.get().is_null() {
-            if let Err(error) = self.destroy() {
-                self.context.shared.report_error(error);
-            }
+        if !self.context.hwnd.get().is_null()
+            && let Err(error) = self.destroy()
+        {
+            self.context.shared.report_error(error);
         }
     }
 }
@@ -780,10 +780,10 @@ fn wheel_delta_unit(delta: i16, scroll_lines: u32) -> (f64, WheelUnit) {
 
 fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
     let entry_key = context.shared.key();
-    if message == WM_KILLFOCUS {
-        if let Err(error) = cancel_composition(context, hwnd) {
-            context.shared.report_error(error);
-        }
+    if message == WM_KILLFOCUS
+        && let Err(error) = cancel_composition(context, hwnd)
+    {
+        context.shared.report_error(error);
     }
     if matches!(
         message,
@@ -1128,35 +1128,35 @@ unsafe extern "system" fn window_proc(
             // SAFETY: the increment above transfers one strong count to this Rc.
             let context = unsafe { Rc::from_raw(pointer) };
             if message == WM_GETOBJECT && lparam as i32 == UiaRootObjectId {
-                if let Some(tree) = context.shared.ax_tree() {
-                    if let Some(id) = tree.snapshot.root_id.as_deref() {
-                        match Provider::new(context.shared.clone(), hwnd, id) {
-                            Ok(provider) => {
-                                let raw: RawSimple = provider.into();
-                                let provider: IRawElementProviderSimple = match raw.cast() {
-                                    Ok(value) => value,
-                                    Err(error) => {
-                                        context.shared.report_error(SurfaceError::Native(format!(
-                                            "query Preview UIA provider: {error}"
-                                        )));
-                                        return 0;
-                                    }
-                                };
-                                // SAFETY: UIA receives this live child HWND and a COM provider for its actual root.
-                                return unsafe {
-                                    UiaReturnRawElementProvider(
-                                        WinHwnd(hwnd),
-                                        WinWparam(wparam),
-                                        WinLparam(lparam),
-                                        &provider,
-                                    )
-                                    .0
-                                };
-                            }
-                            Err(error) => context.shared.report_error(SurfaceError::Native(
-                                format!("create Preview UIA provider: {error}"),
-                            )),
+                if let Some(tree) = context.shared.ax_tree()
+                    && let Some(id) = tree.snapshot.root_id.as_deref()
+                {
+                    match Provider::new(context.shared.clone(), hwnd, id) {
+                        Ok(provider) => {
+                            let raw: RawSimple = provider.into();
+                            let provider: IRawElementProviderSimple = match raw.cast() {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    context.shared.report_error(SurfaceError::Native(format!(
+                                        "query Preview UIA provider: {error}"
+                                    )));
+                                    return 0;
+                                }
+                            };
+                            // SAFETY: UIA receives this live child HWND and a COM provider for its actual root.
+                            return unsafe {
+                                UiaReturnRawElementProvider(
+                                    WinHwnd(hwnd),
+                                    WinWparam(wparam),
+                                    WinLparam(lparam),
+                                    &provider,
+                                )
+                                .0
+                            };
                         }
+                        Err(error) => context.shared.report_error(SurfaceError::Native(format!(
+                            "create Preview UIA provider: {error}"
+                        ))),
                     }
                 }
                 return 0;
@@ -2442,16 +2442,16 @@ impl TextRangeProvider {
     }
     fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID) -> windows::core::Result<VARIANT> {
         self.current()?;
-        if id == UIA_IsReadOnlyAttributeId {
-            if let Some(value) = self.provider.with_node(|node, _| {
+        if id == UIA_IsReadOnlyAttributeId
+            && let Some(value) = self.provider.with_node(|node, _| {
                 Ok(if node.children.is_empty() {
                     Some(node.read_only)
                 } else {
                     None
                 })
-            })? {
-                return Ok(VARIANT::from(value));
-            }
+            })?
+        {
+            return Ok(VARIANT::from(value));
         }
         // SAFETY: UI Automation returns the standard process-wide reserved COM value.
         unsafe { UiaGetReservedNotSupportedValue().map(VARIANT::from) }
@@ -2673,14 +2673,12 @@ impl TextRangeProvider {
                 if let TextReply::Range(Some(range)) = self
                     .provider
                     .query(TextQuery::RangeFromChild { child: target })?
+                    && range.start < selected.start + selected.length
+                    && selected.start < range.start + range.length
                 {
-                    if range.start < selected.start + selected.length
-                        && selected.start < range.start + range.length
-                    {
-                        let raw: RawSimple = self.provider.related(id)?.into();
-                        let provider: IRawElementProviderSimple = raw.cast()?;
-                        result.push(provider);
-                    }
+                    let raw: RawSimple = self.provider.related(id)?.into();
+                    let provider: IRawElementProviderSimple = raw.cast()?;
+                    result.push(provider);
                 }
             }
             Ok(result)

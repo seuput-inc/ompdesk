@@ -287,10 +287,11 @@ pub(super) async fn snapshot_frame(
                 converted.actions.push(AxActionKind::Decrement);
             }
         }
-        if converted.focused && converted.editable {
-            if let Some(id) = id {
-                converted.selected_text_range = selection(target, frame, id).await?;
-            }
+        if converted.focused
+            && converted.editable
+            && let Some(id) = id
+        {
+            converted.selected_text_range = selection(target, frame, id).await?;
         }
         nodes.push(converted);
     }

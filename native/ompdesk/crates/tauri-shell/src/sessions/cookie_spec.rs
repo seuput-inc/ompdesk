@@ -65,8 +65,8 @@ pub fn normalize(url: &Url, header: &str) -> Option<Cookie> {
             .is_some_and(|name| name.trim().eq_ignore_ascii_case("domain"))
     });
     if (secure && !secure_source(url))
-        || (same_site.as_deref() == Some("None") && !secure)
-        || (parsed.name().starts_with("__Secure-") && !secure)
+        || (!secure
+            && (same_site.as_deref() == Some("None") || parsed.name().starts_with("__Secure-")))
         || (parsed.name().starts_with("__Http-") && (!secure || !http_only))
         || (parsed.name().starts_with("__Host-")
             && (!secure || has_domain_attribute || parsed.path() != Some("/")))

@@ -278,16 +278,14 @@ pub async fn open(request: Request) -> Result<Response, String> {
             let response = answer.map_err(|e| e.message).and_then(|value| {
                 let stream_id = value["streamId"].as_u64();
                 let response = head(value);
-                if response.is_err() {
-                    if let Some(stream_id) = stream_id {
-                        if !STREAMS
-                            .lock()
-                            .expect("protocol streams")
-                            .contains_key(&stream_id)
-                        {
-                            host::event("protocol.cancel", json!({"streamId":stream_id}));
-                        }
-                    }
+                if response.is_err()
+                    && let Some(stream_id) = stream_id
+                    && !STREAMS
+                        .lock()
+                        .expect("protocol streams")
+                        .contains_key(&stream_id)
+                {
+                    host::event("protocol.cancel", json!({"streamId":stream_id}));
                 }
                 response
             });
