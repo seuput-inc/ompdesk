@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-use ompdesk_shell_preview::{AttachedPage, Browser, Error, PageInitializer, Partition, Viewport};
 use serde_json::{Value, json};
+use shell_preview::{AttachedPage, Browser, Error, PageInitializer, Partition, Viewport};
 use tokio::sync::oneshot;
 
 use super::native::Snapshot;
@@ -30,7 +30,7 @@ impl PageInitializer for Initializer {
     fn initialize(
         &self,
         page: AttachedPage,
-    ) -> Pin<Box<dyn Future<Output = ompdesk_shell_preview::Result<()>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = shell_preview::Result<()>> + Send>> {
         Box::pin(async move {
             let partition = super::with(|r| {
                 r.partitions
@@ -209,7 +209,7 @@ async fn live_pages(partition: &str) -> Result<Vec<AttachedPage>, String> {
 pub(super) async fn initialize_page(
     partition: &str,
     page: AttachedPage,
-) -> ompdesk_shell_preview::Result<()> {
+) -> shell_preview::Result<()> {
     loop {
         let current = super::policy(partition).map_err(|e| Error::new("failed", e))?;
         apply_page(partition, &page, &current).await?;
@@ -240,7 +240,7 @@ async fn apply_page(
     partition: &str,
     page: &AttachedPage,
     policy: &Policy,
-) -> ompdesk_shell_preview::Result<()> {
+) -> shell_preview::Result<()> {
     if let Some(ua) = &policy.user_agent {
         let mut params = json!({"userAgent":ua});
         if let Some(languages) = &policy.accept_languages {

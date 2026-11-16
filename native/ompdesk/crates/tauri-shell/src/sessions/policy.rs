@@ -65,7 +65,7 @@ impl Policy {
 
 pub enum Command {
     Request(crate::host::Call, tokio::sync::oneshot::Receiver<()>),
-    Context(tokio::sync::oneshot::Sender<Result<ompdesk_shell_preview::Partition, String>>),
+    Context(tokio::sync::oneshot::Sender<Result<shell_preview::Partition, String>>),
 }
 
 pub struct Session {
@@ -77,7 +77,7 @@ pub struct Session {
     pub snapshot_error: Option<String>,
     pub context: Option<String>,
     pub context_exposed: bool,
-    pub preview_pages: Vec<ompdesk_shell_preview::AttachedPage>,
+    pub preview_pages: Vec<shell_preview::AttachedPage>,
     pub script_ids: HashMap<String, Vec<String>>,
     pub cookie_arbiter: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub ready: std::sync::Arc<tokio::sync::Notify>,
@@ -131,5 +131,19 @@ impl Registry {
         self.partitions
             .get_mut(canonical(partition))
             .ok_or_else(|| format!("session {} does not exist", canonical(partition)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Storage, storage};
+
+    #[test]
+    fn partitions_keep_app_aliases_and_persistent_names_distinct() {
+        assert_eq!(storage("").unwrap(), Storage::App);
+        assert_eq!(storage("app").unwrap(), Storage::App);
+        assert_eq!(storage("preview").unwrap(), Storage::Memory);
+        assert_eq!(storage("persist:preview:one").unwrap(), Storage::Persistent("preview:one".into()));
+        assert!(storage("persist:").is_err());
     }
 }
