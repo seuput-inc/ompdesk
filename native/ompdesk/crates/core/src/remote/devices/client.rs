@@ -313,7 +313,8 @@ impl Client {
         });
     }
 
-    /// Stop reconnecting and drop the link.
+    /// Stop reconnecting and drop the link once what main already sent has gone out: the quit's `tab.close` is
+    /// queued a moment before this, and a destroyed link would drop it with the host's tab still running.
     pub fn close(&self) {
         let mut inner = self.inner();
         clear(&mut inner.stale);
@@ -322,7 +323,7 @@ impl Client {
         if let Some(link) = inner.link
             && let Some(handle) = super::super::state().links.get(&link)
         {
-            handle.command(Command::Destroy(Reason::Local));
+            handle.command(Command::Close);
         }
         self.set_state(&mut inner, LinkState::Offline);
     }

@@ -279,8 +279,8 @@ accelerator); `role` stays set only for those that need native handling: macOS `
 |---|---|---|---|
 | `screen.changed` (event) | shell→Node | `{displays: Display[], primaryDisplayId, reason: "added"\|"removed"\|"metrics"}` | mirrors `screen.*`; the first value is in `facts` |
 | `screen.cursorPoint` | Node | `{}` | `{x, y}` |
-| `theme.setSource` | Node | `{source: "system"\|"light"\|"dark"}` | `{dark, highContrast, inverted}` — pushed again as `theme.changed` if the effective scheme moved |
-| `theme.changed` (event) | shell→Node | `{dark, highContrast, inverted, reducedMotion}` | OS change or `setSource` effect; mirrors `nativeTheme.shouldUseDarkColors`, `systemPreferences.getAnimationSettings()` |
+| `theme.setSource` | Node | `{source: "system"\|"light"\|"dark"}` | `{dark, highContrast, inverted, system?}` — pushed again as `theme.changed` if the effective scheme moved |
+| `theme.changed` (event) | shell→Node | `{dark, highContrast, inverted, reducedMotion, system?}` | OS change or `setSource` effect; mirrors `nativeTheme.shouldUseDarkColors`, `systemPreferences.getAnimationSettings()`. `system?` is `{dark, highContrast, inverted}` as the OS itself reports (a forced source hides it from the effective facts): the shim answers `themeSource = "system"` from it at once. A shell that sends none is read as the OS's facts while the source is `system` |
 | `power.event` (event) | shell→Node | `{name: "suspend"\|"resume"\|"lock-screen"\|"unlock-screen"\|"on-ac"\|"on-battery"\|"shutdown", onBattery?: boolean}` | `on-ac`/`on-battery` update the mirrored `isOnBatteryPower()` |
 | `power.idleTime` | Node | `{}` | `{seconds}` — idle input time (`GetLastInputInfo` / `CGEventSourceSecondsSinceLastEventType`) |
 | `power.blockerStart` | Node | `{id, type: "prevent-app-suspension"\|"prevent-display-sleep"}` | `{}` — `id` is Node's (Electron's `start()` returns it at once) |

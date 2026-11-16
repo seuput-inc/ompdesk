@@ -1494,6 +1494,33 @@ describe("menus, dialogs and the small modules", () => {
 		expect(fired).toBe(1);
 	});
 
+	it("answers shouldUseDarkColors from the OS's own scheme the moment the source goes back to system", async () => {
+		const { nativeTheme } = electron;
+		const os = { dark: true, highContrast: false, inverted: false };
+		const answerWith = (effective: boolean, system?: typeof os) =>
+			fake.answers.set("theme.setSource", () => ({ ...os, dark: effective, ...(system ? { system } : {}) }));
+		const updated: boolean[] = [];
+		nativeTheme.on("updated", () => updated.push(nativeTheme.shouldUseDarkColors));
+		expect(nativeTheme.shouldUseDarkColors).toBe(true);
+
+		answerWith(false, os);
+		nativeTheme.themeSource = "light";
+		expect(nativeTheme.shouldUseDarkColors).toBe(false);
+		await settle();
+		nativeTheme.themeSource = "system";
+		expect(nativeTheme.shouldUseDarkColors).toBe(true);
+		expect(updated).toEqual([false, true]);
+
+		// The OS moves while a source forces light: the shell names it in `system`, the effective facts do not move.
+		answerWith(false, os);
+		nativeTheme.themeSource = "light";
+		await settle();
+		await shell.event("theme.changed", { ...os, dark: false, system: { ...os, dark: false } });
+		await settle();
+		nativeTheme.themeSource = "system";
+		expect(nativeTheme.shouldUseDarkColors).toBe(false);
+	});
+
 	it("shows a notification and routes its click back", async () => {
 		const { Notification } = electron;
 		const notification = new Notification({ title: "T", body: "B" });

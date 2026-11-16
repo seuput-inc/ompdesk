@@ -136,7 +136,25 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>, policy: &str) -> Response<V
     if !metadata.is_file() {
         return empty(StatusCode::NOT_FOUND);
     }
-    let size = metadata.len();
+    // The document's own `<meta>` policy narrows the header's (a page answers to both). Its connect, image and media
+    // sources are the Electron page's: they leave out the host's IPC endpoint and the app-media origins the header
+    // names, so the header alone speaks for those three.
+    let mut page = None;
+    let size = if mime(&relative) == "text/html" {
+        let mut raw = Vec::new();
+        if file.read_to_end(&mut raw).is_err() {
+            return empty(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        let raw = match String::from_utf8(raw) {
+            Ok(text) => without_meta_network_sources(&text).into_bytes(),
+            Err(error) => error.into_bytes(),
+        };
+        let size = raw.len() as u64;
+        page = Some(raw);
+        size
+    } else {
+        metadata.len()
+    };
     let selected = request
         .headers()
         .get(header::RANGE)
@@ -173,14 +191,48 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>, policy: &str) -> Response<V
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
     }
     let mut body = Vec::new();
-    if !head
-        && (file.seek(SeekFrom::Start(start)).is_err()
+    if !head {
+        if let Some(page) = &page {
+            body.extend_from_slice(&page[start as usize..(start + length) as usize]);
+        } else if file.seek(SeekFrom::Start(start)).is_err()
             || file.take(length).read_to_end(&mut body).is_err()
-            || body.len() as u64 != length)
-    {
-        return empty(StatusCode::INTERNAL_SERVER_ERROR);
+            || body.len() as u64 != length
+        {
+            return empty(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
     builder.body(body).expect("valid response")
+}
+
+/// The page with its `<meta http-equiv="Content-Security-Policy">` stripped of the `connect-src`, `img-src` and
+/// `media-src` directives. A page carrying no such meta comes back as it was.
+fn without_meta_network_sources(html: &str) -> String {
+    const MARK: &str = "http-equiv=\"Content-Security-Policy\"";
+    let Some(mark) = html.find(MARK) else {
+        return html.to_owned();
+    };
+    let tag_end = html[mark..].find('>').map_or(html.len(), |at| mark + at);
+    let Some(open) = html[mark..tag_end]
+        .find("content=\"")
+        .map(|at| mark + at + "content=\"".len())
+    else {
+        return html.to_owned();
+    };
+    let Some(close) = html[open..].find('"').map(|at| open + at) else {
+        return html.to_owned();
+    };
+    let kept: Vec<&str> = html[open..close]
+        .split(';')
+        .map(str::trim)
+        .filter(|directive| {
+            !directive.is_empty()
+                && !matches!(
+                    directive.split_ascii_whitespace().next(),
+                    Some("connect-src" | "img-src" | "media-src")
+                )
+        })
+        .collect();
+    format!("{}{}{}", &html[..open], kept.join("; "), &html[close..])
 }
 
 pub fn content_policy(media_origin: Option<&str>) -> Result<String, String> {
@@ -212,6 +264,44 @@ pub fn content_policy(media_origin: Option<&str>) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_documents_meta_policy_keeps_every_directive_but_the_three_the_header_widens() {
+        let page = "<head><meta charset=\"UTF-8\" />\n<meta\n http-equiv=\"Content-Security-Policy\"\n content=\"default-src 'self'; script-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: omp-media:; connect-src 'self'; worker-src 'self' blob:\"\n/>\n<title>x</title></head>";
+        let rewritten = without_meta_network_sources(page);
+        assert!(rewritten.contains(
+            "content=\"default-src 'self'; script-src 'self'; worker-src 'self' blob:\""
+        ));
+        assert!(rewritten.starts_with("<head><meta charset=\"UTF-8\" />\n<meta\n http-equiv="));
+        assert!(rewritten.ends_with("\n/>\n<title>x</title></head>"));
+        assert_eq!(
+            without_meta_network_sources("<p>no policy</p>"),
+            "<p>no policy</p>"
+        );
+    }
+    #[test]
+    fn a_served_page_loses_only_the_meta_sources_and_ranges_read_the_rewritten_bytes() {
+        let fixture = Fixture::new();
+        let page = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self'; connect-src 'self'\">";
+        fs::write(fixture.0.join("page.html"), page).unwrap();
+        let whole = fixture.get("app://ompdesk/page.html");
+        let expected =
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self'\">";
+        assert_eq!(whole.body(), expected.as_bytes());
+        assert_eq!(
+            whole.headers()[header::CONTENT_LENGTH],
+            expected.len().to_string()
+        );
+        let ranged = serve(
+            &fixture.0,
+            Request::builder()
+                .uri("app://ompdesk/page.html")
+                .header(header::RANGE, "bytes=1-4")
+                .body(Vec::new())
+                .unwrap(),
+            &content_policy(None).unwrap(),
+        );
+        assert_eq!(ranged.body(), &expected.as_bytes()[1..5]);
+    }
     #[test]
     fn media_gateway_permission_is_exact_and_does_not_allow_network_connections() {
         let origin = "http://127.0.0.1:49152";

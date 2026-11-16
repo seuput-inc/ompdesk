@@ -205,7 +205,9 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 	});
 
 	// --- nativeTheme and systemPreferences ---
-	let theme = { ...facts.theme };
+	type ThemeFacts = { dark: boolean; highContrast: boolean; inverted: boolean };
+	let theme: ThemeFacts = { ...facts.theme };
+	let osTheme: ThemeFacts = { ...facts.theme };
 	let reducedMotion = facts.system.reducedMotion;
 	let themeSource: "system" | "light" | "dark" = "system";
 	class NativeThemeImpl extends EventEmitter {
@@ -223,33 +225,36 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		}
 		set themeSource(source: "system" | "light" | "dark") {
 			themeSource = source;
-			const answered = client.call<{ dark: boolean; highContrast: boolean; inverted: boolean }>("theme.setSource", {
-				source,
-			});
+			const answered = client.call<ThemeFacts & { system?: ThemeFacts }>("theme.setSource", { source });
 			answered.then(
 				next => this.#apply(next),
 				(error: unknown) => host.warn(`theme.setSource: ${String(error)}`),
 			);
-			// The scheme the source forces is known now; `system` keeps what the OS last said until the shell answers.
-			if (source !== "system") theme = { ...theme, dark: source === "dark" };
-		}
-		#apply(next: { dark: boolean; highContrast: boolean; inverted: boolean }): void {
+			// What the source gives is known now, as Electron answers it: light and dark force the scheme, `system` is
+			// what the OS last said, whatever a forced source showed in between.
+			const next = source === "system" ? { ...osTheme } : { ...theme, dark: source === "dark" };
 			const changed = next.dark !== theme.dark || next.highContrast !== theme.highContrast;
-			theme = { ...next };
+			theme = next;
 			if (changed) this.emit("updated");
 		}
-		apply(next: { dark: boolean; highContrast: boolean; inverted: boolean }): void {
+		#apply(next: ThemeFacts & { system?: ThemeFacts }): void {
+			const { system, ...effective } = next;
+			// A shell that does not name the OS's own facts (the CEF one) reports them as `next` while the source is system.
+			if (system) osTheme = { ...system };
+			else if (themeSource === "system") osTheme = { ...effective };
+			const changed = effective.dark !== theme.dark || effective.highContrast !== theme.highContrast;
+			theme = effective;
+			if (changed) this.emit("updated");
+		}
+		apply(next: ThemeFacts & { system?: ThemeFacts }): void {
 			this.#apply(next);
 		}
 	}
 	const nativeTheme = new NativeThemeImpl();
-	client.on(
-		"theme.changed",
-		(data: { dark: boolean; highContrast: boolean; inverted: boolean; reducedMotion?: boolean }) => {
-			if (data.reducedMotion !== undefined) reducedMotion = data.reducedMotion;
-			nativeTheme.apply(data);
-		},
-	);
+	client.on("theme.changed", (data: ThemeFacts & { system?: ThemeFacts; reducedMotion?: boolean }) => {
+		if (data.reducedMotion !== undefined) reducedMotion = data.reducedMotion;
+		nativeTheme.apply(data);
+	});
 	const systemPreferences = {
 		getAnimationSettings: () => ({
 			shouldRenderRichAnimation: !reducedMotion,

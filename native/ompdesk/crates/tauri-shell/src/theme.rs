@@ -17,8 +17,16 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
+/// The effective facts under `source`, and as `system` what the OS itself says: Node answers `shouldUseDarkColors` for
+/// a source set back to `system` from it, before the shell's answer arrives, and a forced source hides it otherwise.
 fn snapshot(source: ThemeSource) -> Value {
-    let mut value = effective_theme(&system::theme(), source);
+    let os = system::theme();
+    let mut value = effective_theme(&os, source);
+    value["system"] = json!({
+        "dark": os["dark"].as_bool().unwrap_or(false),
+        "highContrast": os["highContrast"].as_bool().unwrap_or(false),
+        "inverted": os["inverted"].as_bool().unwrap_or(false),
+    });
     value["reducedMotion"] = json!(system::reduced_motion());
     value
 }
@@ -84,6 +92,6 @@ pub fn handle(call: Call) {
         }
         refresh();
         let now = snapshot(source);
-        call.ok(json!({"dark": now["dark"], "highContrast": now["highContrast"], "inverted": now["inverted"]}));
+        call.ok(json!({"dark": now["dark"], "highContrast": now["highContrast"], "inverted": now["inverted"], "system": now["system"]}));
     });
 }

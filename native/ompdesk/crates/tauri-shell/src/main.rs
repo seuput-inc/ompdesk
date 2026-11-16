@@ -3,6 +3,7 @@
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+mod gpu;
 mod native_chrome;
 mod native_services;
 mod network;
@@ -32,7 +33,7 @@ use registry::{Identity, Registry, trusted_url};
 use serde_json::{Value, json};
 use shell_core::wire::WireError;
 use shell_core::{conn, facts, startup};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -61,6 +62,8 @@ struct Runtime {
     migration: Mutex<Migration>,
     evaluations: Mutex<HashMap<u64, Evaluation>>,
     app_initializations: Mutex<HashMap<u64, AppInitialization>>,
+    navigation_watch: Mutex<HashSet<u64>>,
+    host_navigations: Mutex<HashMap<u64, String>>,
     next_evaluation: AtomicU64,
     preload: String,
     user_data: PathBuf,
@@ -240,11 +243,78 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
         }
     }
 }
+/// Records a navigation the host itself starts (`loadURL`, the profile gate's hand-over, `reload`): Electron raises no
+/// `will-navigate` for those, so `node_prevents_navigation` tells them from the page's own by their URL.
+fn expect_navigation(wc: u64, url: &str) -> Result<tauri::Url, String> {
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|error| format!("invalid navigation URL: {error}"))?;
+    runtime()
+        .host_navigations
+        .lock()
+        .expect("host navigations")
+        .insert(wc, parsed.as_str().to_owned());
+    Ok(parsed)
+}
+
+/// Whether Node's `will-navigate` listeners refuse a navigation the page started (not one inside its own document):
+/// asked only for a page whose Node side listens (`watchEvents`), held for the answer (2 s, then refused, as
+/// PROTOCOL.md `wc.navigate` says). The UI thread waits; Node answers from its own thread.
+fn node_prevents_navigation(wc: u64, url: &tauri::Url) -> bool {
+    {
+        let mut expected = runtime().host_navigations.lock().expect("host navigations");
+        if expected.get(&wc).is_some_and(|own| own == url.as_str()) {
+            expected.remove(&wc);
+            return false;
+        }
+    }
+    // A move inside the document (a fragment) is not a navigation Electron's `will-navigate` reports.
+    let without_fragment = |url: &str| url.split('#').next().unwrap_or(url).to_owned();
+    if runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .page(wc)
+        .is_some_and(|page| without_fragment(&page.url) == without_fragment(url.as_str()))
+    {
+        return false;
+    }
+    if !runtime()
+        .navigation_watch
+        .lock()
+        .expect("navigation watch")
+        .contains(&wc)
+    {
+        return false;
+    }
+    let shown = if cfg!(windows) {
+        url.as_str()
+            .replacen("http://app.localhost", "app://ompdesk", 1)
+    } else {
+        url.to_string()
+    };
+    let answer = host::request_blocking(
+        "wc.navigate",
+        json!({"wcId":wc,"kind":"will-navigate","url":shown,"isMainFrame":true,"isSameDocument":false,"isRedirect":false}),
+        Duration::from_secs(2),
+    );
+    answer.map_or(true, |answer| answer["prevent"] != false)
+}
 fn close_record(wc: u64) {
     runtime()
         .app_initializations
         .lock()
         .expect("app initialization")
+        .remove(&wc);
+    runtime()
+        .navigation_watch
+        .lock()
+        .expect("navigation watch")
+        .remove(&wc);
+    runtime()
+        .host_navigations
+        .lock()
+        .expect("host navigations")
         .remove(&wc);
     {
         let mut migration = runtime().migration.lock().expect("migration");
@@ -313,7 +383,9 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         if !allowed {
             log::log("navigation.denied", json!({"wcId":wc,"url":url.as_str()}));
         }
-        allowed
+        // Node's own handler (`will-navigate`) sees every navigation the page starts, as Electron's did, and may refuse it.
+        let prevented = url.as_str() != "about:blank" && node_prevents_navigation(wc, url);
+        allowed && !prevented
     })
     .on_new_window(|_, _| NewWindowResponse::Deny)
     .on_page_load(move |_, payload| page_load(wc, payload.url().as_str(), payload.event()))
@@ -345,8 +417,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
-    #[cfg(all(windows, feature = "test-automation"))]
-    if let Some(args) = automation::app_browser_args().map_err(failed)? {
+    #[cfg(windows)]
+    if let Some(args) = webview_args().map_err(failed)? {
         builder = builder.additional_browser_args(&args);
     }
     builder = match sessions::configure_app(builder, "app", wc) {
@@ -445,6 +517,23 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     });
     wc_state(wc);
     Ok(json!({"state":win_state(&window,win)?}))
+}
+/// wry 0.57.1 (src/webview2/mod.rs, `additional_browser_args` default): the flags it passes when none are given, which
+/// setting any replaces. The app's webviews set no proxy, and wry's `autoplay` defaults to true.
+#[cfg(windows)]
+const WRY_DEFAULT_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+
+/// The browser arguments of the app's WebView2s: none while wry's defaults serve, else those defaults and what the app
+/// asked of Chromium (the GPU off at `app.init`; in a test build also its DevTools port and fake media devices).
+#[cfg(windows)]
+fn webview_args() -> Result<Option<String>, String> {
+    let mut extra = Vec::new();
+    if gpu::disabled() {
+        extra.push("--disable-gpu".to_owned());
+    }
+    #[cfg(feature = "test-automation")]
+    extra.extend(automation::browser_args()?);
+    Ok((!extra.is_empty()).then(|| format!("{WRY_DEFAULT_ARGS} {}", extra.join(" "))))
 }
 fn win_op(params: &Value) -> Result<Value, WireError> {
     let win = number(params, "winId")?;
@@ -613,12 +702,19 @@ fn wc_op(call: host::Call) {
                     }
                 };
                 window
-                    .navigate(destination.parse().map_err(failed)?)
+                    .navigate(
+                        expect_navigation(wc, &destination)
+                            .map_err(|message| WireError::new("invalid", message))?,
+                    )
                     .map_err(failed)?;
             }
             "reload" | "reloadIgnoringCache" => {
                 if op == "reloadIgnoringCache" {
                     return Err(unsupported(op));
+                }
+                if let Ok(current) = window.url() {
+                    expect_navigation(wc, current.as_str())
+                        .map_err(|message| WireError::new("invalid", message))?;
                 }
                 window.eval("location.reload()").map_err(failed)?;
             }
@@ -635,7 +731,25 @@ fn wc_op(call: host::Call) {
             "openDevTools" => window.open_devtools(),
             "closeDevTools" => window.close_devtools(),
             "watchEvents" => {
-                return Err(unsupported("optional webContents event watches"));
+                let names = a["names"].as_array().map(Vec::as_slice).unwrap_or_default();
+                if names.iter().any(|name| name == "will-navigate") {
+                    runtime()
+                        .navigation_watch
+                        .lock()
+                        .expect("navigation watch")
+                        .insert(wc);
+                }
+                let unwatched: Vec<&str> = names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|name| *name != "will-navigate")
+                    .collect();
+                if !unwatched.is_empty() {
+                    return Err(unsupported(&format!(
+                        "webContents events {}",
+                        unwatched.join(", ")
+                    )));
+                }
             }
             "executeJavaScript" => return Ok(Some((wc, window, string(a, "code")?.to_owned()))),
             _ => return Err(unsupported(&format!("wc.op {op}"))),
@@ -746,6 +860,9 @@ fn dispatch_ui(call: host::Call) {
     }
     let result = match call.method.as_str() {
         "app.init" => {
+            gpu::init(&call.params);
+            #[cfg(feature = "test-automation")]
+            automation::remember_switches(&call.params);
             if let Err(error) = sessions::protocol::declare_schemes(&call.params) {
                 call.err("invalid", error);
                 return;
@@ -771,6 +888,7 @@ fn dispatch_ui(call: host::Call) {
             exit_after_preview(code);
             return;
         }
+        "app.getGPUInfo" => Ok(gpu::info()),
         "win.create" => create_window(&call.params),
         "win.op" => win_op(&call.params),
         _ => Err(unsupported(&call.method)),
@@ -898,7 +1016,7 @@ async fn profile_ipc(
                     return Ok(offer);
                 }
                 drop(migration);
-                webview.navigate(target.parse().map_err(|_| json!({"code":"invalid","message":"invalid app migration target"}))?)
+                webview.navigate(expect_navigation(identity.wc, &target).map_err(|message| json!({"code":"invalid","message":message}))?)
                     .map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
                 return Ok(json!({"complete":true,"generation":identity.generation}));
             }
@@ -912,7 +1030,7 @@ async fn profile_ipc(
                 migration.profile.acknowledge(id, count).map_err(|message| json!({"code":"failed","message":message}))?;
             }
             drop(migration);
-            webview.navigate(target.parse().map_err(|_| json!({"code":"invalid","message":"invalid app migration target"}))?)
+            webview.navigate(expect_navigation(identity.wc, &target).map_err(|message| json!({"code":"invalid","message":message}))?)
                 .map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
             Ok(json!({"complete":true}))
         })();
@@ -1250,6 +1368,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     }),
                     evaluations: Mutex::new(HashMap::new()),
                     app_initializations: Mutex::new(HashMap::new()),
+                    navigation_watch: Mutex::new(HashSet::new()),
+                    host_navigations: Mutex::new(HashMap::new()),
                     next_evaluation: AtomicU64::new(1),
                     preload,
                     user_data,

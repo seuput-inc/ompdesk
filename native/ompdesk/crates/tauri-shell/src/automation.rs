@@ -33,11 +33,6 @@ fn port(
 
 const DEBUG_PORT_ENV: &str = "OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT";
 
-/// wry 0.57.1 (src/webview2/mod.rs, `additional_browser_args` default): the flags it passes when none are given, which
-/// setting any replaces. The app's webviews set no proxy, and wry's `autoplay` defaults to true.
-#[cfg(windows)]
-const WRY_DEFAULT_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
-
 fn debug_port(requested: Option<&str>) -> Result<Option<u16>, String> {
     let Some(requested) = requested else {
         return Ok(None);
@@ -53,18 +48,48 @@ fn debug_port(requested: Option<&str>) -> Result<Option<u16>, String> {
         .ok_or_else(|| format!("{DEBUG_PORT_ENV} requires an explicit unprivileged TCP port"))
 }
 
-/// The browser arguments the app's webviews get when the test asked for a WebView2 DevTools port, else none.
+/// The Chromium switches a spec starts the app with that its WebView2 must honour too: fake media devices, which
+/// dictation needs on a runner with no microphone. The GPU switch reaches WebView2 as `app.init`'s
+/// `disableHardwareAcceleration`.
+const FORWARDED_SWITCHES: [&str; 2] = [
+    "use-fake-device-for-media-stream",
+    "use-fake-ui-for-media-stream",
+];
+
+static SWITCHES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn forwarded(init: &serde_json::Value) -> Vec<String> {
+    init["switches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|pair| {
+            let name = pair.get(0)?.as_str()?;
+            (pair.get(1).is_none_or(serde_json::Value::is_null)
+                && FORWARDED_SWITCHES.contains(&name))
+            .then(|| format!("--{name}"))
+        })
+        .collect()
+}
+
+/// Keeps the forwarded switches of `app.init` for the windows created after it.
+pub fn remember_switches(init: &serde_json::Value) {
+    *SWITCHES.lock().expect("switches") = forwarded(init);
+}
+
+/// The browser arguments a test build adds to the app's webviews: the DevTools port Playwright attaches to, when the
+/// test asked for one, and the forwarded switches.
 #[cfg(windows)]
-pub fn app_browser_args() -> Result<Option<String>, String> {
+pub fn browser_args() -> Result<Vec<String>, String> {
     let requested = std::env::var(DEBUG_PORT_ENV).ok();
-    let Some(port) = debug_port(requested.as_deref())? else {
-        return Ok(None);
-    };
-    static ANNOUNCED: std::sync::Once = std::sync::Once::new();
-    ANNOUNCED.call_once(|| eprintln!("[tauri-shell] test WebView2 debugging port {port}"));
-    Ok(Some(format!(
-        "{WRY_DEFAULT_ARGS} --remote-debugging-port={port}"
-    )))
+    let mut args = Vec::new();
+    if let Some(port) = debug_port(requested.as_deref())? {
+        static ANNOUNCED: std::sync::Once = std::sync::Once::new();
+        ANNOUNCED.call_once(|| eprintln!("[tauri-shell] test WebView2 debugging port {port}"));
+        args.push(format!("--remote-debugging-port={port}"));
+    }
+    args.extend(SWITCHES.lock().expect("switches").iter().cloned());
+    Ok(args)
 }
 
 pub fn install(
@@ -88,7 +113,27 @@ pub fn install(
 
 #[cfg(test)]
 mod tests {
-    use super::{debug_port, port};
+    use super::{debug_port, forwarded, port};
+
+    #[test]
+    fn only_the_fake_media_switches_without_a_value_reach_webview2() {
+        let init = serde_json::json!({"switches": [
+            ["disable-gpu", null],
+            ["use-fake-device-for-media-stream", null],
+            ["use-fake-ui-for-media-stream", null],
+            ["use-fake-ui-for-media-stream-x", null],
+            ["remote-debugging-port", "1"],
+            ["use-fake-device-for-media-stream", "path"],
+        ]});
+        assert_eq!(
+            forwarded(&init),
+            [
+                "--use-fake-device-for-media-stream",
+                "--use-fake-ui-for-media-stream"
+            ]
+        );
+        assert!(forwarded(&serde_json::json!({})).is_empty());
+    }
     use std::path::Path;
 
     #[test]
