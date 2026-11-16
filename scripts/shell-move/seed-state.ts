@@ -53,13 +53,6 @@ export function writeSeedSession(cwd: string): string {
 
 /** In-page: poll `window.omp.sessions.list` until the seeded conversation is listed; the row's id/title/count, or null. */
 export const FIND_SEED_SESSION = `(async()=>{for(let i=0;i<120;i++){const rows=await window.omp.sessions.list("global");const row=rows.find(r=>r.id===${JSON.stringify(SEED_SESSION_ID)});if(row)return{id:row.id,title:row.title,messageCount:row.messageCount};await new Promise(r=>setTimeout(r,500))}return null})()`;
-/** The page of a moved profile, as the Tauri app shows it: the stored token's source, the Local Storage keys, the setting and the conversation. */
-export const READ_PROFILE_PAGE = `(async()=>({href:location.href,auth:await window.omp.updater.authInfo(),draft:localStorage.getItem('ompdesk.seed.draft'),korean:localStorage.getItem('ompdesk.seed.korean'),large:(localStorage.getItem('ompdesk.seed.large')??'').length,replyLanguage:await window.omp.prefs.get('replyLanguage'),seedSession:await ${FIND_SEED_SESSION},afterMigration:localStorage.getItem('ompdesk.seed.afterMigration'),userAgent:navigator.userAgent}))()`;
-/** What the new app saves after the move, to find again after a restart. */
-export const WRITE_AFTER_MIGRATION =
-	"(localStorage.setItem('ompdesk.seed.afterMigration','Tauri 저장 후 다시 열기 ✓'),true)";
-/** Quit the app from its own page (a later tick, so the evaluation still answers). */
-export const QUIT_FROM_PAGE = "(setTimeout(()=>window.omp.app.quit(),0),true)";
 const J = JSON.stringify;
 /** In-page helper: poll `find()` until it returns something truthy (at most `ms`); null on timeout. Under the WebDriver script limit. */
 const UNTIL =

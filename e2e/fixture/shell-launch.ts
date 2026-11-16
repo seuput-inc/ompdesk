@@ -243,8 +243,8 @@ function mainError(details: NonNullable<InspectorResult["exceptionDetails"]>): E
 	return error;
 }
 
-/** A client of Node's inspector: `Runtime.evaluate` only (scripts/shell-move/release-profile.ts reuses it on a shipped app). */
-export class Inspector {
+/** A client of Node's inspector: `Runtime.evaluate` only. */
+class Inspector {
 	readonly #socket: WebSocket;
 	readonly #pending = new Map<number, PromiseWithResolvers<unknown>>();
 	#next = 1;

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { Driver, until } from "../tauri-native-smoke";
-import { PNG_MAGIC, QUIT_FROM_PAGE, READ_PROFILE_PAGE, takeSeedShots, WRITE_AFTER_MIGRATION } from "./seed-state";
+import { FIND_SEED_SESSION, PNG_MAGIC, takeSeedShots } from "./seed-state";
 
 const port = Number(process.argv[2]);
 const mode = process.argv[3] ?? "read";
@@ -51,13 +51,15 @@ if (mode === "shots") {
 	);
 	console.log(JSON.stringify({ shots: [conversation, language, token], taken }));
 } else if (mode === "quit") {
-	await driver.evaluate(QUIT_FROM_PAGE);
+	await driver.evaluate("(setTimeout(()=>window.omp.app.quit(),0),true)");
 	console.log(JSON.stringify({ quit: "requested", transport: "native-webdriver" }));
 } else {
 	if (mode === "write") {
-		await driver.evaluate(WRITE_AFTER_MIGRATION);
+		await driver.evaluate("(localStorage.setItem('ompdesk.seed.afterMigration','Tauri 저장 후 다시 열기 ✓'),true)");
 	}
-	const observed = await driver.evaluate(READ_PROFILE_PAGE);
+	const observed = await driver.evaluate(
+		`(async()=>({href:location.href,auth:await window.omp.updater.authInfo(),draft:localStorage.getItem('ompdesk.seed.draft'),korean:localStorage.getItem('ompdesk.seed.korean'),large:(localStorage.getItem('ompdesk.seed.large')??'').length,replyLanguage:await window.omp.prefs.get('replyLanguage'),seedSession:await ${FIND_SEED_SESSION},afterMigration:localStorage.getItem('ompdesk.seed.afterMigration'),userAgent:navigator.userAgent}))()`,
+	);
 	assert(observed !== null && typeof observed === "object");
 	assert(
 		"userAgent" in observed && typeof observed.userAgent === "string" && !observed.userAgent.includes("Electron/"),

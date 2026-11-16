@@ -41,9 +41,9 @@
 #                status and signer as evidence (release.yml signs and checks nothing of it; only a broken signature fails).
 #              release-update-mac (macos-15)  move-mac.sh with OMP_MOVE_REAL_FEED=<tag>: the released v0.131.0 app, as shipped, runs
 #                with no stand-in feed and no host-resolver mapping (the seed feed that stores its token is stopped first), its
-#                updater reads api.github.com's real /releases/latest, downloads the published DMG (size and SHA-512 equal the
-#                metadata), swaps, and the published Tauri app starts on the profile: token decrypted, setting kept, conversation
-#                listed, pages photographed (Node inspector + screencapture), swap.log installed/started, app-started.json for
+#                updater reads api.github.com's real /releases/latest, downloads the published DMG (the update log's download size and
+#                SHA-512 check against the metadata, the staged app is that version), swaps, and the published Tauri app starts on the profile: token decrypted, setting kept, conversation
+#                listed (read from disk: a release has no page to ask), window photographed (screencapture), swap.log installed/started, app-started.json for
 #                <tag>. S4 (a new shell that does not start) is skipped: it needs a broken DMG.
 #              There is no Windows real-feed update: move-win installs each old Electron as a setup REBUILT under a test GUID and folder
 #                (build-setups.ts), so the published setup, which installs under the real identity, would add a second copy instead of
@@ -728,7 +728,7 @@ jobs:
         with:
           bun-version: 1.4.4
       # Nothing is built: the scripts only need the repository's dependencies (Playwright's CDP client for the released Electron's
-      # page, the e2e fake omp, the inspector client); the apps are the published ones.
+      # page, the e2e fake omp); the apps are the published ones.
       - uses: ./.github/actions/install
         with:
           electron: "false"
@@ -758,6 +758,9 @@ jobs:
             ${{ runner.temp }}/kc/s1/ud/logs/gui-runtime.jsonl
             ${{ runner.temp }}/kc/s1/ud/updates/swap.log
             ${{ runner.temp }}/kc/s1/ud/app-started.json
+            ${{ runner.temp }}/kc/s1/ud/prefs.json
+            ${{ runner.temp }}/kc/s1/ud/tauri-local-storage-import.json
+            ${{ runner.temp }}/kc/s1/ud/tauri-shell.jsonl
           if-no-files-found: ignore
           retention-days: 14
       - if: failure()

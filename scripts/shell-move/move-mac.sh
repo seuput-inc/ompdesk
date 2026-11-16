@@ -28,14 +28,14 @@
 # feed. Nothing is built, nothing is re-signed (the released app keeps its own signature, so the keychain item it makes trusts
 # the requirement the published <tag> carries) and no stand-in feed or host-resolver mapping is in the update run: the released
 # updater reads api.github.com's /releases/latest, downloads the published DMG, verifies it, swaps, and the published Tauri app
-# starts on the seeded profile. A published app has no WebDriver, so its page is read through Node's inspector and photographed
-# with screencapture (release-profile.ts). S4 (a new shell that does not start) needs a broken DMG and is skipped.
+# starts on the seeded profile. A published app has no page to ask (no WebDriver, no inspector), so what it kept is read from
+# disk (real_retention_checks) and its window is photographed with screencapture. S4 (a new shell that does not start) needs a broken DMG and is skipped.
 # Evidence lines start with "EVIDENCE:". Exit 1 on any failed check.
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
 . "$HERE/mac-processes.sh"
 SHOTS=${RUNNER_TEMP:-/tmp}/move-shots; mkdir -p "$SHOTS"   # the job uploads this folder (shell-batch-checks.yml)
-SEED_TITLE='이사 검사 대화 ✓ (Electron에서 만듦)'; SEED_ID=move-seed-conversation; SEED_LANGUAGE=Japanese
+SEED_TITLE='이사 검사 대화 ✓ (Electron에서 만듦)'; SEED_ID=move-seed-conversation; SEED_LANGUAGE=Japanese; SEED_ASSISTANT='업데이트 뒤에도 이 대화가 남아야 합니다.'
 PORT=19230; FEEDPORT=18444; HTTPPORT=18445; SEEDPORT=18446
 NATIVEPORT=19231
 MOVE_ENGINE=${OMPDESK_SHELL_ENGINE:-tauri}
@@ -46,7 +46,7 @@ PACKAGE_ARGS=()
 # job's token, which the released app stores as its seeded update token (a name the app itself does not read, so the
 # stored token stays the source) and the checks read the release with.
 REAL_TAG=${OMP_MOVE_REAL_FEED:-}; REAL_VERSION=${REAL_TAG#v}; REAL_TOKEN=${OMP_MOVE_API_TOKEN:-}
-DOWNLOAD_WAIT_S=240; NEW_APP=; EXPECT_SHA512=; EXPECT_SIZE=
+DOWNLOAD_WAIT_S=240; EXPECT_SHA512=; EXPECT_SIZE=
 if [ -n "$REAL_TAG" ]; then
   [[ "$REAL_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "OMP_MOVE_REAL_FEED must be a release tag (vX.Y.Z), got: $REAL_TAG"; exit 1; }
   [ "$MOVE_ENGINE" = tauri ] || { echo "OMP_MOVE_REAL_FEED moves into the published Tauri app: OMPDESK_SHELL_ENGINE must be tauri"; exit 1; }
@@ -54,15 +54,13 @@ if [ -n "$REAL_TAG" ]; then
   DOWNLOAD_WAIT_S=900
 fi
 native_environment() {
-  [ "$MOVE_ENGINE" = tauri ] || return 0
+  # A published app honours neither (no WebDriver server, no inspector: scripts/tauri-release-automation-check.ts).
+  { [ "$MOVE_ENGINE" = tauri ] && [ -z "$REAL_TAG" ]; } || return 0
   launchctl setenv OMP_GUI_TEST_NODE_INSPECT 1
-  # A published app has no WebDriver server (scripts/tauri-release-automation-check.ts): its page is reached through Node's inspector.
-  [ -n "$REAL_TAG" ] || launchctl setenv OMP_GUI_TEST_WEBDRIVER_PORT "$NATIVEPORT"
+  launchctl setenv OMP_GUI_TEST_WEBDRIVER_PORT "$NATIVEPORT"
 }
 new_profile() {
-  if [ -n "$REAL_TAG" ]; then
-    (cd "$REPO" && limit 600 bun scripts/shell-move/release-profile.ts "$NEW_APP" "${1:-read}")
-  elif [ "$MOVE_ENGINE" = tauri ]; then
+  if [ "$MOVE_ENGINE" = tauri ]; then
     (cd "$REPO" && limit 120 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" "${1:-read}")
   else
     (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" "${1:-read}")
@@ -74,8 +72,7 @@ new_profile() {
 # (Settings > Updates shows the stored GitHub token row). A failed assertion leaves <file>.failed.png and fails the check.
 shots() {
   local n=$1 label=$2 files=("$SHOTS/$1-$2.png" "$SHOTS/$1b-$2-settings-reply-language.png" "$SHOTS/$1c-$2-settings-update-token.png") rc
-  if [ "$3" = new ] && [ -n "$REAL_TAG" ]; then (cd "$REPO" && limit 600 bun scripts/shell-move/release-profile.ts "$NEW_APP" shots "${files[@]}"); rc=$?
-  elif [ "$3" = new ]; then (cd "$REPO" && limit 240 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" shots "${files[@]}"); rc=$?
+  if [ "$3" = new ]; then (cd "$REPO" && limit 240 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" shots "${files[@]}"); rc=$?
   else (cd "$REPO" && limit 240 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" shots "${files[@]}"); rc=$?; fi
   check $rc "screenshots $n, ${n}b, ${n}c ($label): conversation open, reply language $SEED_LANGUAGE in Settings, stored update token in Settings"
 }
@@ -204,14 +201,18 @@ real_old_app_checks() {
   case "$argv" in *host-resolver-rules*|*ignore-certificate-errors*) check 1 "the released app runs with no host-resolver mapping and no certificate switch (the real api.github.com)" ;; *) check 0 "the released app runs with no host-resolver mapping and no certificate switch (the real api.github.com)" ;; esac
 }
 real_downloaded_checks() {
-  local ud=$1 staged size sha found
-  staged=$(ls "$ud"/updates/*.dmg 2>/dev/null | head -1)
-  [ -n "$staged" ]; check $? "the updater staged the downloaded DMG (${staged##*/})"
-  if [ -n "$staged" ]; then
-    size=$(stat -f %z "$staged"); sha=$(openssl dgst -sha512 -binary "$staged" | base64 | tr -d '\n')
-    [ "$size" = "$EXPECT_SIZE" ] && [ "$sha" = "$EXPECT_SHA512" ]; check $? "the DMG the $SOURCE_TAG updater downloaded from the real feed is the published one (size $size, sha512 equal to the release notes' metadata)"
-  fi
-  found=$(jq -r 'select(.source=="app-update" and .message=="check" and .details.event=="found") | .details.version' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | head -1)
+  local ud=$1 bytes verified found staged
+  # Relaunch mode: the updater checks the downloaded bytes' SHA-512 against the release's metadata (a mismatch is an error, not a
+  # `verified` line), copies the app out of the DMG into updates/<version>/OMPdesk.app and REMOVES the DMG (v0.131.0 updater.ts:
+  # startMacDownload). So the DMG is not there to hash; the log and the staged app are what v0.131.0 leaves.
+  bytes=$(jq -r 'select(.source == "app-update" and .message == "download" and .details.event == "started") | .details.bytes' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | head -1)
+  [ "$bytes" = "$EXPECT_SIZE" ]; check $? "the $SOURCE_TAG updater downloaded the published size (log: $bytes bytes, release notes: $EXPECT_SIZE)"
+  verified=$(jq -r 'select(.source == "app-update" and .message == "download" and .details.event == "verified") | .details.bytes' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | head -1)
+  [ "$verified" = "$EXPECT_SIZE" ]; check $? "its SHA-512 check of the downloaded bytes against the release notes' metadata passed (log: download verified, $verified bytes)"
+  staged=$ud/updates/$REAL_VERSION/OMPdesk.app
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$staged/Contents/Info.plist" 2>/dev/null)" = "$REAL_VERSION" ]; check $? "the app it staged from the DMG is OMPdesk $REAL_VERSION (updates/$REAL_VERSION/OMPdesk.app)"
+  evidence "the updates folder after the download: $(ls -A "$ud/updates" | tr '\n' ' ')"
+  found=$(jq -r 'select(.source == "app-update" and .message == "check" and .details.event == "found") | .details.version' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | head -1)
   [ "$found" = "$REAL_VERSION" ]; check $? "the update log's check found names $REAL_VERSION (found: ${found:-nothing})"
 }
 real_installed_checks() {
@@ -225,6 +226,78 @@ real_installed_checks() {
   [ "$(jq -r '.engine + " " + .platform' "$app/Contents/Resources/ompdesk-tauri.build.json" 2>/dev/null)" = "tauri darwin" ] && [ ! -e "$app/Contents/Frameworks/Chromium Embedded Framework.framework" ]; check $? "S1: the installed bundle is the Tauri app (build record engine tauri, no CEF)"
   started=$(jq -er .version "$ud/app-started.json" 2>/dev/null)
   [ "$started" = "$REAL_VERSION" ]; check $? "S1: app-started.json names $REAL_VERSION (the published app started on the user's profile)"
+}
+# A published app has no page to ask: no WebDriver server (scripts/tauri-release-automation-check.ts) and no inspector. What it kept
+# is read from what it keeps on disk, as its own main reads it. `<label>` says when ("after the update relaunch", "after a restart").
+app_checked() { jq -e --argjson pid "$2" 'select(.pid == $pid and .source == "app-update" and .message == "check" and .details.event == "no-update")' "$1/logs/gui-runtime.jsonl" >/dev/null 2>&1; }
+journal_done() { jq -e '.version == 1 and .destination == "app://ompdesk" and .source == "file://" and .state.status == "done"' "$1/tauri-local-storage-import.json" >/dev/null 2>&1; }
+started_pid_changed() { local now; now=$(jq -r .pid "$1/app-started.json" 2>/dev/null); [ -n "$now" ] && [ "$now" != "$2" ]; }
+started_version_is() { [ "$(jq -r .version "$1/app-started.json" 2>/dev/null)" = "$2" ]; }
+real_retention_checks() {
+  local app=$1/OMPdesk.app ud=$2 label=$3 verdict pid failures lines file listed rc tries
+  wait_for "started_version_is $ud $REAL_VERSION" 180
+  pid=$(jq -r .pid "$ud/app-started.json" 2>/dev/null)
+  step "S1 ($label): what the published app kept, read from disk (pid ${pid:-unknown})"
+  # The stored update token: decrypted offline with the key the host itself returns, never printed.
+  verdict=$(cd "$REPO" && limit 90 bun scripts/shell-move/release-token.ts "$app" "$ud" 2>&1 | tail -1)
+  evidence "S1 ($label) token against the host's key: $(jq -c . <<<"$verdict" 2>/dev/null || echo "$verdict" | cut -c1-200)"
+  [ "$(jq -r .equalsSeeded <<<"$verdict" 2>/dev/null)" = true ]; check $? "S1 ($label): update-token.bin decrypts, with the key \`ompdesk-shell --keychain-key\` answers, to the seeded token"
+  if [ "$(jq -r .equalsSeeded <<<"$verdict" 2>/dev/null)" != true ]; then keychain_diag "$1" "$ud"; fi
+  [ -f "$ud/update-token.bin" ] && [ ! -e "$ud/update-token.dropped" ]; check $? "S1 ($label): the token file is still in userData and no update-token.dropped marker says it was removed"
+  lines=$(jq -r --argjson pid "${pid:-0}" 'select(.pid == $pid) | .source' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+  failures=$(jq -r --argjson pid "${pid:-0}" 'select(.pid == $pid and .source == "app-update" and (.details.event == "stored-token-read" or ((.message // "") | startswith("The saved update token")))) | .message' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+  [ "${lines:-0}" -gt 0 ] && [ "$failures" = 0 ]; check $? "S1 ($label): the app's runtime log (pid ${pid:-unknown}, $lines lines) holds no stored-token-read failure and no removed-token line ($failures)"
+  wait_for "app_checked $ud ${pid:-0}" 180; check $? "S1 ($label): the app's own update check answered (check no-update, pid ${pid:-unknown})"
+  # The setting: the prefs file the app reads (electron-store `prefs`, key replyLanguage).
+  [ "$(jq -r .replyLanguage "$ud/prefs.json" 2>/dev/null)" = "$SEED_LANGUAGE" ]; check $? "S1 ($label): prefs.json in userData still holds replyLanguage $SEED_LANGUAGE"
+  # The conversation: the stock session file under the agent dir the apps list, still whole.
+  file=${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/sessions/move-seed-project/$SEED_ID.jsonl
+  [ -f "$file" ] && jq -e --arg id "$SEED_ID" 'select(.type == "session" and .id == $id)' "$file" >/dev/null 2>&1 && grep -qF "$SEED_TITLE" "$file" && grep -qF "$SEED_ASSISTANT" "$file"; check $? "S1 ($label): the seeded conversation file is intact (session header $SEED_ID, both messages)"
+  tries=0; rc=1
+  while [ "$tries" -lt 6 ]; do
+    listed=$(OMPDESK_CONTROL_DIR="$ud/control" limit 60 "$app/Contents/Resources/ompdesk-bin/ompdesk" sessions --scope stored 2>&1); rc=$?
+    [ "$rc" = 0 ] && break
+    tries=$((tries+1)); sleep 5
+  done
+  if [ "$rc" = 0 ]; then
+    printf '%s\n' "$listed" | grep -qF -e "$SEED_ID" -e "$SEED_TITLE"; check $? "S1 ($label): the running app's session index lists the seeded conversation (ompdesk sessions --scope stored)"
+  else
+    evidence "S1 ($label): the running app could not be asked for its sessions (ompdesk sessions exit $rc: $(printf '%s' "$listed" | head -c 200 | tr '\n' ' ')); the listing is not asserted, the conversation file above is"
+  fi
+  # Local Storage lives only in the page's store: it cannot be read offline. The Tauri host moves it from Electron's through a
+  # journal (tauri-local-storage-import.json): `done` is written only when the page wrote every exported key and read the count back.
+  wait_for "journal_done $ud" 120; check $? "S1 ($label): the Tauri page imported and verified every key of Electron's Local Storage (journal state done, file:// to app://ompdesk)"
+  evidence "S1 ($label) Local Storage journal: $(jq -c '{version, destination, source, status: .state.status, pendingKeys: ((.state.items // {}) | keys | length)}' "$ud/tauri-local-storage-import.json" 2>&1 | cut -c1-200)"
+}
+keychain_diag() {
+  local apps=$1 ud=$2 bounded=(perl -e 'alarm 20; exec @ARGV')
+  # Which key did the host get: Electron's item, or a second one it made because it found none? Attributes and the host's own
+  # non-interactive answer only: reading the item's secret with `security -w` asks for access (the item trusts the app's
+  # requirement, not /usr/bin/security) and hung the job until its timeout. Each call is bounded.
+  evidence "S1 keychain items: $("${bounded[@]}" security dump-keychain "$KC" 2>/dev/null | grep -B4 -A14 '"ompdesk Safe Storage"' | grep -E '"svce"|"acct"|"cdat"|"mdat"|"labl"' | tr -s ' ' | tr '\n' ' ' | cut -c1-900)"
+  evidence "S1 host keychain answer: $("${bounded[@]}" "$apps/OMPdesk.app/Contents/MacOS/ompdesk-shell" --keychain-key "$ud" 2>&1 | tail -1 | sed -E 's/"password":"[^"]*"/"password":"(redacted)"/' | cut -c1-200)"
+  evidence "S1 keychain items after that read (svce lines, as the single-item check counts): $("${bounded[@]}" security dump-keychain "$KC" 2>/dev/null | grep -c '"svce"<blob>="ompdesk Safe Storage"')"
+  evidence "S1 host signature: $(codesign -d -r- "$apps/OMPdesk.app/Contents/MacOS/ompdesk-shell" 2>&1 | grep -E 'designated|Identifier' | tr '\n' ' ')"
+}
+# The window as the window server shows it (evidence only: a published app has no page to photograph through; the whole display
+# when no window of OMPdesk is listed).
+real_shot() {
+  local file=$SHOTS/$1 id args=(-x) rc
+  id=$(limit 120 swift "$HERE/window-id.swift" 2>/dev/null | tail -1)
+  case "$id" in ''|0|*[!0-9]*) id= ;; esac
+  [ -z "$id" ] || args=(-x -o -l "$id")
+  limit 60 screencapture "${args[@]}" "$file" 2>"$W/screencapture.err"; rc=$?
+  evidence "screenshot $1: window ${id:-none (whole display)}, screencapture exit $rc, $(stat -f %z "$file" 2>/dev/null || echo 0) bytes $(head -c 200 "$W/screencapture.err" | tr '\n' ' ')"
+}
+# A quit and a start again: what the app keeps is read once more, and the new process is the one the log lines are read for.
+real_restart_checks() {
+  local apps=$1 ud=$2 before
+  before=$(jq -r .pid "$ud/app-started.json" 2>/dev/null)
+  stop_or_exit "$apps/OMPdesk.app"
+  open -n "$apps/OMPdesk.app" --args --user-data-dir="$ud"
+  wait_for "started_pid_changed $ud $before" 180; check $? "S1: the published app started again after the quit (a new pid in app-started.json)"
+  real_retention_checks "$apps" "$ud" "after a restart"
+  real_shot 03-tauri-reopened-retained.png
 }
 
 # The seed feed's own answers (a repository probe that succeeds, no release, no asset): seeding must not start a download.
@@ -293,7 +366,6 @@ scenario() {
   local APPS=$W/$name/Applications UD=$W/$name/ud
   mkdir -p "$APPS" "$UD"; ditto rel.app "$APPS/OMPdesk.app"
   launchctl setenv OMP_GUI_TEST_USER_DATA_DIR "$UD"
-  NEW_APP=$APPS/OMPdesk.app
   launchctl setenv OMP_GUI_OMP "$FAKE_OMP"
   native_environment
   local OLDENV=(); [ "$fail" = 3 ] && OLDENV=(OMPDESK_SWAP_START_WAIT_S=20)
@@ -417,30 +489,30 @@ scenario() {
     fi
     evidence "S1 shell command line: $(ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/" | grep -v grep | head -1 | cut -c1-260)"
     ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/" | grep -v grep | grep -q -- "--user-data-dir=$UD"; check $? "S1: the shell was started with Electron's argv (--user-data-dir)"
-    new_profile read | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the actual $MOVE_ENGINE page answered"
-    grep -q '"href":"app://ompdesk/' "$W/$name-read.json"; check $? "S1: the page loaded from app://ompdesk"
-    grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"korean":"한국어 초안 ✓"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
-    if [ "$MOVE_ENGINE" = tauri ]; then
-      grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-read.json"; check $? "S1: the setting changed in Electron (reply language $SEED_LANGUAGE) reads back on the Tauri page after the update relaunch"
-      grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-read.json" && grep -q "\"seedSessionTitle\":\"$SEED_TITLE\"" "$W/$name-read.json"; check $? "S1: the conversation made in Electron is in the Tauri session list after the update relaunch (id and title)"
-      shots 02 tauri-after-update-relaunch new
+    if [ -n "$REAL_TAG" ]; then
+      real_retention_checks "$APPS" "$UD" "after the update relaunch"
+      real_shot 02-tauri-after-update-relaunch.png
+    else
+      new_profile read | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the actual $MOVE_ENGINE page answered"
+      grep -q '"href":"app://ompdesk/' "$W/$name-read.json"; check $? "S1: the page loaded from app://ompdesk"
+      grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"korean":"한국어 초안 ✓"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
+      if [ "$MOVE_ENGINE" = tauri ]; then
+        grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-read.json"; check $? "S1: the setting changed in Electron (reply language $SEED_LANGUAGE) reads back on the Tauri page after the update relaunch"
+        grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-read.json" && grep -q "\"seedSessionTitle\":\"$SEED_TITLE\"" "$W/$name-read.json"; check $? "S1: the conversation made in Electron is in the Tauri session list after the update relaunch (id and title)"
+        shots 02 tauri-after-update-relaunch new
+      fi
     fi
     # The new app reads the item Electron made (service "ompdesk Safe Storage", account "ompdesk Key") instead of making
     # a second one: a second item is a new password, and every secret Electron saved is lost with it.
     [ "$(perl -e 'alarm 20; exec @ARGV' security dump-keychain "$KC" 2>/dev/null | grep -c '"svce"<blob>="ompdesk Safe Storage"')" = 1 ]; check $? "S1: the new app reused Electron's one keychain item (no second \"ompdesk Safe Storage\")"
-    if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
-      check 0 "S1: the seeded token was decrypted (source stored, none dropped)"
-    else
-      check 1 "S1: the seeded token was decrypted (source stored, none dropped)"
-      evidence "S1 token-read failure phases: $(grep -F '"event":"stored-token-read"' "$UD/logs/gui-runtime.jsonl" 2>/dev/null | tail -8 | cut -c1-500 | tr '\n' '|')"
-      # Which key did the host get: Electron's item, or a second one it made because it found none? Attributes and the
-      # host's own non-interactive answer only: reading the item's secret with `security -w` asks for access (the item
-      # trusts the app's requirement, not /usr/bin/security) and hung the job until its timeout. Each call is bounded.
-      local bounded=(perl -e 'alarm 20; exec @ARGV')
-      evidence "S1 keychain items: $("${bounded[@]}" security dump-keychain "$KC" 2>/dev/null | grep -B4 -A14 '"ompdesk Safe Storage"' | grep -E '"svce"|"acct"|"cdat"|"mdat"|"labl"' | tr -s ' ' | tr '\n' ' ' | cut -c1-900)"
-      evidence "S1 host keychain answer: $("${bounded[@]}" "$APPS/OMPdesk.app/Contents/MacOS/ompdesk-shell" --keychain-key "$UD" 2>&1 | tail -1 | sed -E 's/"password":"[^"]*"/"password":"(redacted)"/' | cut -c1-200)"
-      evidence "S1 keychain items after that read: $("${bounded[@]}" security dump-keychain "$KC" 2>/dev/null | grep -c '"ompdesk Safe Storage"')"
-      evidence "S1 host signature: $(codesign -d -r- "$APPS/OMPdesk.app/Contents/MacOS/ompdesk-shell" 2>&1 | grep -E 'designated|Identifier' | tr '\n' ' ')"
+    if [ -z "$REAL_TAG" ]; then
+      if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
+        check 0 "S1: the seeded token was decrypted (source stored, none dropped)"
+      else
+        check 1 "S1: the seeded token was decrypted (source stored, none dropped)"
+        evidence "S1 token-read failure phases: $(grep -F '"event":"stored-token-read"' "$UD/logs/gui-runtime.jsonl" 2>/dev/null | tail -8 | cut -c1-500 | tr '\n' '|')"
+        keychain_diag "$APPS" "$UD"
+      fi
     fi
     wait_for "has_line $UD 'swap result'" 60; update_lines "$UD" | grep -q '^swap result installed'; check $? "S1: swap result outcome installed"
     codesign --verify --deep --strict "$APPS/OMPdesk.app"; check $? "S1: the installed app verifies"
@@ -453,7 +525,9 @@ scenario() {
     fi
     evidence "S1 installed bundle: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APPS/OMPdesk.app/Contents/Info.plist") ($(codesign -d -r- "$APPS/OMPdesk.app" 2>&1 | sed -n 's/^designated => //p'))"
     [ -z "$REAL_TAG" ] || real_installed_checks "$APPS" "$UD"
-    if [ "$MOVE_ENGINE" = tauri ]; then
+    if [ -n "$REAL_TAG" ]; then
+      real_restart_checks "$APPS" "$UD"
+    elif [ "$MOVE_ENGINE" = tauri ]; then
       new_profile write | tee "$W/$name-native-write.json"; check ${PIPESTATUS[0]} "S1: the migrated native page saved new Korean data"
       new_profile quit | tee "$W/$name-native-quit.json"; local quit_rc=${PIPESTATUS[0]}
       if [ "$quit_rc" != 0 ] || ! wait_app "$APPS/OMPdesk.app"; then
