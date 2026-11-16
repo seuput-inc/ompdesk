@@ -12,6 +12,7 @@
 - 셸의 이벤트 연결이 바뀌거나 버퍼에서 이벤트가 빠지면 목록·대화·대기 요청을 다시 읽어요. 페이지를 새로고침하거나 초안·대기 메시지를 지우지 않아요.
 - 종료 중에는 새 core 실행을 막고 이미 시작한 프로세스의 종료를 기다려요. 중첩된 중지 요청도 같은 종료 결과를 기다려요.
 - 프로젝트 선택과 보조 질문 화면은 첫 화면 이후에 불러와요. 보조 질문을 불러오지 못해도 원문과 다시 시도·취소를 표시하며, Ask 전에는 실행하지 않고 Escape로 본 작업을 중단하지 않아요.
+- 세션마다 정한 프록시(업데이트 확인 등)와 서버·프록시의 로그인 요구(401·407)를 Windows에서도 Electron처럼 처리해요. 설정 화면의 도구 경로가 좁은 창에서 옆으로 넘치지 않고, 사이드 패널은 마지막 너비로 바로 열려요.
 
 <!-- en -->
 
@@ -25,6 +26,7 @@ The desktop window now runs on Rust (Tauri 2) and the operating system's web vie
 - A replaced shell event connection or an event-buffer gap triggers authoritative reads of lists, conversations and pending requests, without reloading the page or clearing drafts and queued messages.
 - Shutdown refuses new core launches and waits for processes already started. Overlapping stop requests wait for the same exit result.
 - Project selection and side questions load after the first screen. Failed side-question loads show the retained question with Retry and Cancel; nothing runs before Ask, and Escape does not stop the main turn.
+- A session's own proxy (update checks, for one) and a server's or proxy's login request (401, 407) work on Windows as they did in Electron. Tool paths in Settings no longer run sideways in a narrow window, and the side panel opens at its last width.
 
 ## [0.131.0] - 2026-11-15
 

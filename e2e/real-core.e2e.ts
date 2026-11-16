@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, test } from "@playwright/test";
+import { chromium, expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { RpcSessionState } from "../src/shared/rpc-types";
 import { exitApp, openDestination } from "./harness";
@@ -182,24 +182,25 @@ test("system omp persists settings and sessions and serves every stats route", a
 		expect(evidence.changes.data).toMatchObject({ isRepo: false });
 		await fs.writeFile("test-results/real-core-contract.json", JSON.stringify(evidence, null, 2));
 		expect(JSON.stringify(evidence.transcript.data)).toContain("arm audit ok");
-		const exportWindow = app.waitForEvent("window");
-		await app.evaluate(
-			({ BrowserWindow }, url) => {
-				// A never-shown window does not paint on Windows, so screenshots hang;
-				// show it inactive like every headless window (transparent, unfocusable).
-				const win = new BrowserWindow({ width: 1100, height: 800, show: false, focusable: false });
-				win.showInactive();
-				void win.loadURL(url);
-			},
-			pathToFileURL(path.join(profile, "audit-export.html")).href,
-		);
-		const exportPage = await exportWindow;
-		// Stock's export viewer loads marked and highlight.js from a CDN before it draws #messages
-		// (export/html/template.html.txt): on a hosted runner that fetch outlasted the default 10 s (v0.89.0's release run,
-		// the page still at "Loading session viewer…"), so it gets the 30 s the real-omp waits here have.
-		await expect(exportPage.locator("#messages")).toContainText("arm audit ok", { timeout: 30_000 });
-		await exportPage.screenshot({ path: "test-results/exported-session.png", scale: "css", animations: "disabled" });
-		await exportPage.close();
+		// The export is a standalone page for a browser. The app's own windows load only the app origin (the shell
+		// refuses a file: page: "app windows cannot load remote pages"), so the file opens in Playwright's Chromium, as
+		// a person opens it from the folder.
+		const browser = await chromium.launch();
+		try {
+			const exportPage = await browser.newPage();
+			// Stock's export viewer loads marked and highlight.js from a CDN before it draws #messages
+			// (export/html/template.html.txt): on a hosted runner that fetch outlasted the default 10 s (v0.89.0's release
+			// run, the page still at "Loading session viewer…"), so it gets the 30 s the real-omp waits here have.
+			await exportPage.goto(pathToFileURL(path.join(profile, "audit-export.html")).href);
+			await expect(exportPage.locator("#messages")).toContainText("arm audit ok", { timeout: 30_000 });
+			await exportPage.screenshot({
+				path: "test-results/exported-session.png",
+				scale: "css",
+				animations: "disabled",
+			});
+		} finally {
+			await browser.close();
+		}
 		await page.screenshot({ path: "test-results/04-real-core.png", scale: "css", animations: "disabled" });
 		await expect(page.getByRole("dialog")).toHaveCount(0);
 		const original = evidence.saved.data as RpcSessionState;
@@ -394,7 +395,9 @@ test("system omp persists settings and sessions and serves every stats route", a
 	} finally {
 		await fs.writeFile("test-results/main-process.log", mainOutput.join(""));
 		await exitApp(app);
-		await fs.rm(profile, { recursive: true, force: true });
+		// exitApp returned once every process the app started is gone; Windows can still refuse a folder a process
+		// just released for a few hundred ms.
+		await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
 

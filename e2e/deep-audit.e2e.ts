@@ -482,10 +482,14 @@ async function mutateEntry(
 			const selectControl = row.locator("select").first();
 			const textarea = row.locator("textarea").first();
 			if ((await textarea.count()) > 0) {
+				// An array of records takes records of its own shape (stock drops an item of the wrong shape and reads the
+				// default back): the approval rules are `{match, approval}`, the interceptor's are `{pattern, tool, message}`.
 				const changed =
 					entry.path === "bash.patterns"
 						? [{ match: "echo gui-audit-block", approval: "deny" }]
-						: ["__gui_audit__"];
+						: entry.path === "bashInterceptor.patterns"
+							? [{ pattern: "^gui-audit-block\\s", tool: "bash", message: "gui audit" }]
+							: ["__gui_audit__"];
 				await textarea.fill(JSON.stringify(changed, null, 2));
 				await row.getByRole("button", { name: /Apply/ }).click();
 				const readbackValue = await pollSetting(page, entry.path, changed);
