@@ -94,7 +94,7 @@ async function startOmp(url: string): Promise<Omp> {
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(
 		join(agentDir, "models.yml"),
-		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
+		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
 	);
 	const address = newBridgeAddress();
 	const env: Record<string, string | undefined> = {

@@ -153,6 +153,7 @@ async function run(loopback: Loopback, judge: "native" | "prompted", images = fa
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			`        reasoning: false`,
 			`        cost: ${cost}`,
 			...(judge === "native"
 				? [
@@ -164,6 +165,7 @@ async function run(loopback: Loopback, judge: "native" | "prompted", images = fa
 						"      - id: jev-latest",
 						"        name: jev-latest",
 						`        input: [${images ? "text, image" : "text"}]`,
+						`        reasoning: false`,
 						`        cost: ${cost}`,
 					]
 				: []),

@@ -48,7 +48,7 @@ describe.skipIf(!existsSync(omp))("an omp whose stdin closes, on stock omp", () 
 		// omp does not start without a model; nothing is asked of this one.
 		writeFileSync(
 			join(agentDir, "models.yml"),
-			"providers:\n  fake:\n    baseUrl: http://127.0.0.1:9/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n",
+			"providers:\n  fake:\n    baseUrl: http://127.0.0.1:9/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n",
 		);
 		const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-exit-drain-cwd-")));
 		cleanups.push(() => rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));

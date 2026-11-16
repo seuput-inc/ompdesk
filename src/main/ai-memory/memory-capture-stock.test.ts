@@ -92,7 +92,7 @@ async function makeRig(options: { agentWiring: boolean; disabled?: string[] }): 
 	const cost = "{ input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }";
 	writeFileSync(
 		join(agentDir, "models.yml"),
-		`providers:\n  fake:\n    baseUrl: http://127.0.0.1:1/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: ${cost}\n`,
+		`providers:\n  fake:\n    baseUrl: http://127.0.0.1:1/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: ${cost}\n`,
 	);
 	const disabled = options.disabled?.length
 		? `disabledExtensions:\n${options.disabled.map(id => `  - ${id}\n`).join("")}`
