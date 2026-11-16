@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { appLaunchOptions } from "../e2e/harness";
 import { appDirOfEntry } from "../e2e/fixture/shell-launch";
+import { appLaunchOptions } from "../e2e/harness";
 import { processesBelow, waitForProcessesToExit } from "../e2e/process-tree";
 
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
