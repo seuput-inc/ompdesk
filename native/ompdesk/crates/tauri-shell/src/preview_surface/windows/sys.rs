@@ -55,15 +55,16 @@ use windows_sys::Win32::UI::Input::Pointer::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
     GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, PT_TOUCH,
-    RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY,
-    WM_CUT, WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_PASTE, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN,
-    WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_UNDO, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    RegisterClassW, SPI_GETWHEELSCROLLLINES, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, TOUCH_MASK_CONTACTAREA,
+    TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY, WM_CUT, WM_GETOBJECT, WM_IME_COMPOSITION,
+    WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_PASTE,
+    WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDBLCLK,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_UNDO,
+    WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS,
 };
 
 const CLASS: &[u16] = &[
@@ -725,6 +726,18 @@ fn client_point_dip(point: POINT, scale: f64) -> (f64, f64) {
     (f64::from(point.x) / scale, f64::from(point.y) / scale)
 }
 
+fn wheel_delta_unit(delta: i16, scroll_lines: u32) -> (f64, WheelUnit) {
+    const WHEEL_PAGESCROLL: u32 = u32::MAX;
+    (
+        f64::from(delta) / 120.0,
+        if scroll_lines == WHEEL_PAGESCROLL {
+            WheelUnit::Page
+        } else {
+            WheelUnit::Line
+        },
+    )
+}
+
 fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
     let entry_key = context.shared.key();
     if message == WM_KILLFOCUS {
@@ -975,7 +988,25 @@ fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             }
         }
         WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-            let delta = f64::from((wparam >> 16) as u16 as i16) / 120.0;
+            let mut scroll_lines = 0u32;
+            if message == WM_MOUSEWHEEL {
+                // SAFETY: SPI_GETWHEELSCROLLLINES writes one u32 to this live stack value.
+                if unsafe {
+                    SystemParametersInfoW(
+                        SPI_GETWHEELSCROLLLINES,
+                        0,
+                        (&mut scroll_lines as *mut u32).cast(),
+                        0,
+                    )
+                } == 0
+                {
+                    context
+                        .shared
+                        .report_error(native_error("read Preview wheel scroll lines"));
+                    scroll_lines = 0;
+                }
+            }
+            let (delta, unit) = wheel_delta_unit((wparam >> 16) as u16 as i16, scroll_lines);
             Input::Wheel {
                 x,
                 y,
@@ -989,7 +1020,7 @@ fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 } else {
                     0.0
                 },
-                unit: WheelUnit::Line,
+                unit,
                 modifiers: modifiers(),
             }
         }
@@ -2641,6 +2672,18 @@ mod tests {
             (POINT { x: 330, y: -12 }, (220.0, -8.0)),
         ] {
             assert_eq!(client_point_dip(point, 1.5), expected);
+        }
+    }
+
+    #[test]
+    fn wheel_delta_keeps_its_sign_and_uses_page_units_only_for_page_scroll() {
+        for (delta, lines, expected) in [
+            (120, u32::MAX, (1.0, WheelUnit::Page)),
+            (-60, u32::MAX, (-0.5, WheelUnit::Page)),
+            (120, 3, (1.0, WheelUnit::Line)),
+            (-240, 0, (-2.0, WheelUnit::Line)),
+        ] {
+            assert_eq!(wheel_delta_unit(delta, lines), expected);
         }
     }
 
