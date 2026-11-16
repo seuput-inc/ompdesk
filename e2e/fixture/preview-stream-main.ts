@@ -75,7 +75,7 @@ document.getElementById('list').innerHTML = Array.from({ length: 400 }, (_, i) =
 addEventListener('click', e => send({ type: 'click', trusted: e.isTrusted, x: e.clientX, y: e.clientY, target: e.target.id, active: navigator.userActivation.isActive, vw: innerWidth, vh: innerHeight, dpr: devicePixelRatio }), true);
 addEventListener('keydown', e => send({ type: 'keydown', trusted: e.isTrusted, key: e.key, id: e.target.id }), true);
 addEventListener('input', e => send({ type: 'input', trusted: e.isTrusted, value: e.target.value, id: e.target.id }), true);
-addEventListener('wheel', e => send({ type: 'wheel', trusted: e.isTrusted, dy: e.deltaY }), true);
+addEventListener('wheel', e => send({ type: 'wheel', trusted: e.isTrusted, dy: e.deltaY, dx: e.deltaX, mode: e.deltaMode, x: e.clientX, y: e.clientY, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight }), true);
 addEventListener('scroll', () => send({ type: 'scroll', trusted: true, y: scrollY }), true);
 document.getElementById('btn').addEventListener('click', () => {
   if (q.get('dialog')) { const r = confirm('Delete everything?'); send({ type: 'confirm', trusted: true, result: r }); const p = prompt('Name?', 'dflt'); send({ type: 'prompt', trusted: true, result: p }); alert('done'); send({ type: 'alert-returned', trusted: true }); }

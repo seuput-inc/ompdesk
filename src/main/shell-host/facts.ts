@@ -85,6 +85,8 @@ export interface WcState {
 	canGoBack: boolean;
 	canGoForward: boolean;
 	zoomFactor: number;
+	/** Native pixels per window DIP, before the page's zoom. */
+	nativeScaleFactor?: number;
 	audioMuted: boolean;
 	devtoolsOpened: boolean;
 	crashed: boolean;

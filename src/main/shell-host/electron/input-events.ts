@@ -124,16 +124,18 @@ function pageZoom(zoom: number): number {
 }
 
 /**
- * The DevTools commands that deliver `event` to a page zoomed by `zoom`. Electron's mouse and wheel input is in the
- * window's DIPs, which the page's zoom turns into CSS px; the protocol takes CSS px of the viewport the shell
- * emulates (`Emulation.setDeviceMetricsOverride` with the window ÷ zoom), so positions and wheel deltas are divided
- * by `zoom` here. Keys and text have no position and pass as they are.
+ * The DevTools commands that deliver `event`. Positions are window DIPs divided by page zoom. Wheel magnitudes
+ * instead need native pixels: Blink divides DOM wheel deltas by devicePixelRatio, while CDP's input handler does
+ * not multiply them by the emulated device scale (wheel_event.cc and input_handler.cc in Chromium).
+ * Keys and text have no position and pass as they are.
  */
-export function inputCommands(event: InputEvent, zoom: number): CdpCommand[] {
+export function inputCommands(event: InputEvent, zoom: number, nativeScale: number | undefined): CdpCommand[] {
 	if (event.type === "mouseWheel") {
 		const factor = pageZoom(zoom);
+		if (nativeScale === undefined || !Number.isFinite(nativeScale) || nativeScale <= 0)
+			throw new RangeError("Wheel input requires the page's actual positive native scale factor");
 		// Electron's delta has the opposite sign of the protocol's (positive scrolls the content down there).
-		const delta = (dips: number | undefined) => (dips === undefined || dips === 0 ? 0 : -dips / factor);
+		const delta = (dips: number | undefined) => (dips === undefined || dips === 0 ? 0 : -dips * nativeScale);
 		return [
 			{
 				method: "Input.dispatchMouseEvent",

@@ -1195,6 +1195,10 @@ async fn create(
         page.command("Runtime.enable", json!({}))
             .await
             .map_err(wire)?;
+        host::event(
+            "wc.state",
+            json!({"wcId":wc,"nativeScaleFactor":viewport.device_scale_factor}),
+        );
         wc_state(wc);
         if method == "win.create" {
             offscreen_state(wc, viewport);
@@ -1369,6 +1373,10 @@ async fn offscreen_operation(pages: &Pages, wc: u64, params: &Value) -> Result<V
                 .await
                 .map_err(wire)?;
             entry.document.lock().expect("Preview document").viewport = viewport;
+            host::event(
+                "wc.state",
+                json!({"wcId":wc,"nativeScaleFactor":viewport.device_scale_factor}),
+            );
             offscreen_state(wc, viewport);
             if let Some(win) = pages.current(wc)?.win {
                 crate::win_event(win, "resize");

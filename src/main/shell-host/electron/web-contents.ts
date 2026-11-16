@@ -124,6 +124,8 @@ export class WebContents extends EventEmitter implements PageRecord {
 			canGoBack: false,
 			canGoForward: false,
 			zoomFactor: 1,
+			nativeScaleFactor: host.facts.displays.find(display => display.id === host.facts.primaryDisplayId)
+				?.scaleFactor,
 			audioMuted: false,
 			devtoolsOpened: false,
 			crashed: false,
@@ -503,7 +505,7 @@ export class WebContents extends EventEmitter implements PageRecord {
 	 * window's DIPs, as Electron takes them; a zoom factor that is not a finite number above 0 throws a RangeError.
 	 */
 	sendInputEvent(event: InputEvent): void {
-		for (const command of inputCommands(event, this.#state.zoomFactor)) {
+		for (const command of inputCommands(event, this.#state.zoomFactor, this.#state.nativeScaleFactor)) {
 			this.cdp(command.method, command.params).catch((error: unknown) =>
 				this.#host.warn(`sendInputEvent: ${String(error)}`),
 			);

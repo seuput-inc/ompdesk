@@ -100,6 +100,7 @@ async fn resize(
             .map_err(super::wire)?;
         check(key)?;
         entry.document.lock().expect("Preview document").viewport = viewport;
+        crate::host::event("wc.state", json!({"wcId":key.wc,"nativeScaleFactor":scale}));
     }
     Ok(scale)
 }

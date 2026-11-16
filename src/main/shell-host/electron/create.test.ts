@@ -10,6 +10,7 @@ import { NsisUpdater } from "electron-updater";
 import { ElectronAppAdapter } from "electron-updater/out/ElectronAppAdapter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IpcRegistry } from "../../web/ipc-registry";
+import { InputMapper } from "../../web/preview-input";
 import { Answered, HostError, ShellClient } from "../client";
 import { duplexPair } from "../duplex-pair";
 import type { HostFacts } from "../facts";
@@ -748,7 +749,7 @@ describe("webContents", () => {
 		});
 		expect(cdp.find(call => call.method === "Input.dispatchMouseEvent")?.params).toMatchObject({
 			type: "mouseWheel",
-			deltaY: -40,
+			deltaY: -60,
 		});
 		expect(cdp.find(call => call.method === "Input.dispatchKeyEvent")?.params).toMatchObject({
 			type: "rawKeyDown",
@@ -787,10 +788,12 @@ describe("webContents", () => {
 		]);
 	});
 
-	it("takes mouse positions and wheel deltas as the window's DIPs and sends the page's CSS px, at any zoom", async () => {
+	it("converts positions by page zoom and wheel magnitudes by actual native scale independently", async () => {
 		const { webContents } = new electron.BrowserWindow({});
 		fake.answers.set("wc.cdp.send", () => ({ result: {} }));
-		const sentAt = async (factor: number) => {
+		const sentAt = async (factor: number, nativeScaleFactor: number) => {
+			await shell.event("wc.state", { wcId: webContents.id, nativeScaleFactor });
+			await settle();
 			webContents.setZoomFactor(factor);
 			const before = fake.callsOf("wc.cdp.send").length;
 			webContents.sendInputEvent({ type: "mouseMove", x: 200, y: 116 });
@@ -805,14 +808,14 @@ describe("webContents", () => {
 				.map(call => call.params);
 		};
 		// A 1× host screen shows a phone frame at 2×: the window is twice the frame and the page is zoomed by 2.
-		expect(await sentAt(2)).toMatchObject([
+		expect(await sentAt(2, 1)).toMatchObject([
 			{ method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 100, y: 58 } },
 			{ method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 100, y: 58, button: "left" } },
 			{ method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: 100, y: 58, button: "left" } },
-			{ method: "Input.dispatchMouseEvent", params: { type: "mouseWheel", x: 100, y: 58, deltaX: 30, deltaY: 240 } },
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseWheel", x: 100, y: 58, deltaX: 60, deltaY: 480 } },
 			{ method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "a" } },
 		]);
-		expect(await sentAt(0.5)).toMatchObject([
+		expect(await sentAt(0.5, 2)).toMatchObject([
 			{ method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 400, y: 232 } },
 			{ method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 400, y: 232, button: "left" } },
 			{ method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: 400, y: 232, button: "left" } },
@@ -822,6 +825,33 @@ describe("webContents", () => {
 			},
 			{ method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "a" } },
 		]);
+	});
+
+	it("preserves a phone wheel gesture across 1x and 2x hosts through the actual mapper and shim", async () => {
+		const { webContents } = new electron.BrowserWindow({});
+		fake.answers.set("wc.cdp.send", () => ({ result: {} }));
+		for (const nativeScaleFactor of [1, 2]) {
+			const scale = 2 / nativeScaleFactor;
+			await shell.event("wc.state", { wcId: webContents.id, nativeScaleFactor });
+			await settle();
+			webContents.setZoomFactor(scale);
+			const mapper = new InputMapper();
+			for (const op of mapper.map(
+				{ t: "wheel", x: 0.5, y: 0.8, dx: 30, dy: 240 },
+				{
+					width: 390 * scale,
+					height: 700 * scale,
+					scale,
+				},
+			)) {
+				if (op.op === "event") webContents.sendInputEvent(op.event);
+			}
+			await settle();
+			expect(fake.callsOf("wc.cdp.send").at(-1)?.params).toMatchObject({
+				method: "Input.dispatchMouseEvent",
+				params: { type: "mouseWheel", deltaX: 60, deltaY: 480 },
+			});
+		}
 	});
 
 	it("refuses mouse and wheel input at a zoom factor that is not a finite number above 0, and still takes keys", async () => {
