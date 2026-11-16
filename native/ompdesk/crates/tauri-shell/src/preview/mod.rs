@@ -1,6 +1,7 @@
 mod accessibility;
 pub(crate) mod cleanup;
 mod commands;
+mod contexts;
 mod events;
 mod frame_scope;
 mod frames;
@@ -33,7 +34,7 @@ use tokio::sync::{mpsc, oneshot};
 struct Document {
     frame: Option<String>,
     loader: Option<String>,
-    context: Option<i64>,
+    main_world: contexts::MainWorld,
     watches: HashSet<String>,
     debugger: Option<String>,
     viewport: Viewport,
@@ -49,12 +50,7 @@ struct Document {
     marked: Option<native::TextRange>,
     selection: native::TextRange,
     text_target: Option<Arc<frame_scope::FocusedTarget>>,
-    native_contexts: HashMap<(String, i64), String>,
-}
-enum DocumentChange<'a> {
-    Frame(Option<&'a str>),
-    Detached(&'a str),
-    Restored,
+    native_contexts: contexts::BindingContexts,
 }
 struct ViewLayout {
     bounds: native::Rect,
@@ -214,6 +210,7 @@ struct Queued {
     call: host::Call,
     cancelled: oneshot::Receiver<()>,
     identity: Option<Identity>,
+    script: Option<ScriptDocument>,
 }
 struct PendingEvaluation(Option<host::Call>);
 impl Drop for PendingEvaluation {
@@ -221,6 +218,47 @@ impl Drop for PendingEvaluation {
         if let Some(call) = self.0.take() {
             host::forget_cancel(call.id());
             call.err("cancelled", "Preview evaluation ended before its reply");
+        }
+    }
+}
+
+struct ScriptDocument {
+    wc: u64,
+    entry: Arc<Entry>,
+    context: Arc<str>,
+}
+impl ScriptDocument {
+    fn capture(pages: &Pages, call: &host::Call) -> Option<Self> {
+        if call.method != "wc.op" || call.params["op"].as_str() != Some("executeJavaScript") {
+            return None;
+        }
+        let wc = call.params["wcId"].as_u64()?;
+        let entry = pages.entry(wc).ok()?;
+        let context = entry
+            .document
+            .lock()
+            .expect("Preview document")
+            .main_world
+            .capture()?;
+        Some(Self { wc, entry, context })
+    }
+    fn valid(&self, pages: &Pages) -> Result<(), WireError> {
+        pages.current(self.wc)?;
+        let entry = pages.entry(self.wc)?;
+        if Arc::ptr_eq(&self.entry, &entry)
+            && entry
+                .document
+                .lock()
+                .expect("Preview document")
+                .main_world
+                .owns(&self.context)
+        {
+            Ok(())
+        } else {
+            Err(WireError::new(
+                "gone",
+                "original Preview execution context ended",
+            ))
         }
     }
 }
@@ -237,6 +275,7 @@ fn awaits_cdp_script(params: &Value) -> bool {
 }
 pub struct Service {
     send: mpsc::UnboundedSender<Message>,
+    pages: Arc<Pages>,
     stop: Mutex<Option<oneshot::Sender<()>>>,
     joined: Mutex<Option<oneshot::Receiver<Result<(), String>>>>,
 }
@@ -265,6 +304,7 @@ impl Service {
         });
         Self {
             send,
+            pages,
             stop: Mutex::new(Some(stop)),
             joined: Mutex::new(Some(joined)),
         }
@@ -276,10 +316,12 @@ impl Service {
             let _ = cancel.send(());
         });
         let identity = request_identity(&call);
+        let script = ScriptDocument::capture(&self.pages, &call);
         if let Err(error) = self.send.send(Message::Node(Queued {
             call,
             cancelled,
             identity,
+            script,
         })) {
             host::forget_cancel(id);
             if let Message::Node(queued) = error.0 {
@@ -357,6 +399,7 @@ async fn serve(
             call,
             mut cancelled,
             identity,
+            script,
         } = match message {
             Message::Node(queued) => queued,
             Message::Native(task) => {
@@ -479,7 +522,16 @@ async fn serve(
             continue;
         }
         let browser = browser.as_ref().expect("launched Preview");
-        match execute(browser, &pages, &call.method, &call.params, identity).await {
+        match execute(
+            browser,
+            &pages,
+            &call.method,
+            &call.params,
+            identity,
+            script,
+        )
+        .await
+        {
             Ok(Execution::Awaiting(evaluation)) => {
                 let pages = Arc::clone(&pages);
                 let mut request = PendingEvaluation(Some(call));
@@ -487,7 +539,7 @@ async fn serve(
                     let result = tokio::select! {
                         biased;
                         _ = &mut cancelled => Err(WireError::new("cancelled", "Preview evaluation cancelled")),
-                        result = evaluation.receive() => result,
+                        result = evaluation.receive(&pages) => result,
                     };
                     answer_call(&pages, request.0.take().expect("owned evaluation"), result).await;
                 });
@@ -578,7 +630,7 @@ enum Execution {
     Awaiting(Evaluation),
 }
 enum EvaluationKind {
-    JavaScript,
+    JavaScript(ScriptDocument),
     Cdp(Arc<Entry>),
 }
 struct Evaluation {
@@ -587,22 +639,25 @@ struct Evaluation {
     kind: EvaluationKind,
 }
 impl Evaluation {
-    async fn receive(self) -> Result<Answer, WireError> {
+    async fn receive(self, pages: &Pages) -> Result<Answer, WireError> {
         let mut answer = self.reply.receive().await.map_err(wire)?;
         if let EvaluationKind::Cdp(entry) = &self.kind {
             unmap_urls(&entry.partition, &mut answer)
                 .await
                 .map_err(crate::failed)?;
         }
-        original(self.identity)?;
         let result = match self.kind {
-            EvaluationKind::JavaScript => {
+            EvaluationKind::JavaScript(document) => {
+                document.valid(pages)?;
                 if let Some(error) = answer.get("exceptionDetails") {
                     return Err(WireError::new("failed", error.to_string()));
                 }
                 json!({"result":answer.pointer("/result/value").cloned().unwrap_or(Value::Null)})
             }
-            EvaluationKind::Cdp(_) => json!({"result":answer}),
+            EvaluationKind::Cdp(_) => {
+                original(self.identity)?;
+                json!({"result":answer})
+            }
         };
         Ok(Answer::Json(result))
     }
@@ -648,6 +703,7 @@ async fn execute(
     method: &str,
     params: &Value,
     expected: Option<Identity>,
+    script: Option<ScriptDocument>,
 ) -> Result<Execution, WireError> {
     if method == "view.create" || method == "win.create" {
         return create(browser, pages, method, params)
@@ -697,10 +753,18 @@ async fn execute(
     let identity = pages.current(wc)?;
     let bound = document_bound(method, params);
     if bound {
-        original(
-            expected
-                .ok_or_else(|| WireError::new("gone", "original Preview request owner ended"))?,
-        )?;
+        if method == "wc.op" && params["op"].as_str() == Some("executeJavaScript") {
+            script
+                .as_ref()
+                .ok_or_else(|| WireError::new("gone", "original Preview execution context ended"))?
+                .valid(pages)?;
+        } else {
+            original(
+                expected.ok_or_else(|| {
+                    WireError::new("gone", "original Preview request owner ended")
+                })?,
+            )?;
+        }
     }
     // Input can commit navigation before its acknowledgement; its original document is checked before submission.
     let reply_bound = bound
@@ -970,20 +1034,15 @@ async fn execute(
                     json!({})
                 }
                 "executeJavaScript" => {
-                    let context = entry
-                        .document
-                        .lock()
-                        .expect("Preview document")
-                        .context
-                        .ok_or_else(|| {
-                            WireError::new("gone", "Preview document has no live default context")
-                        })?;
+                    let document = script.ok_or_else(|| {
+                        WireError::new("gone", "original Preview execution context ended")
+                    })?;
                     let reply = entry.page.submit_command("Runtime.evaluate",json!({"expression":crate::string(args,"code")?,
-                        "contextId":context,"returnByValue":true,"awaitPromise":true,"userGesture":args["userGesture"].as_bool().unwrap_or(false)})).map_err(wire)?;
+                        "uniqueContextId":document.context.as_ref(),"returnByValue":true,"awaitPromise":true,"userGesture":args["userGesture"].as_bool().unwrap_or(false)})).map_err(wire)?;
                     return Ok(Execution::Awaiting(Evaluation {
                         reply,
                         identity,
-                        kind: EvaluationKind::JavaScript,
+                        kind: EvaluationKind::JavaScript(document),
                     }));
                 }
                 op if commands::is_edit(op) => {
@@ -1076,7 +1135,7 @@ async fn create(
             document: Mutex::new(Document {
                 frame: None,
                 loader: None,
-                context: None,
+                main_world: contexts::MainWorld::default(),
                 watches: HashSet::new(),
                 debugger: None,
                 viewport,
@@ -1095,7 +1154,7 @@ async fn create(
                 marked: None,
                 selection: native::TextRange::default(),
                 text_target: None,
-                native_contexts: HashMap::new(),
+                native_contexts: contexts::BindingContexts::default(),
             }),
             publisher: Mutex::new(None),
             submitting: Mutex::new(()),
@@ -1477,7 +1536,7 @@ fn unmap_urls<'a>(
         Ok(())
     })
 }
-async fn invalidate_document(entry: &Entry, wc: u64, change: DocumentChange<'_>) {
+async fn invalidate_document(entry: &Entry, wc: u64) {
     {
         let _submitting = entry.submitting.lock().expect("native frame submission");
         {
@@ -1492,29 +1551,6 @@ async fn invalidate_document(entry: &Entry, wc: u64, change: DocumentChange<'_>)
         }
         {
             let mut document = entry.document.lock().expect("Preview document");
-            match change {
-                DocumentChange::Frame(Some(frame)) => {
-                    if document.frame.as_deref() == Some(frame) {
-                        document.context = None;
-                    }
-                    document
-                        .native_contexts
-                        .retain(|_, owner_frame| owner_frame != frame);
-                }
-                DocumentChange::Detached(session) => {
-                    if session == entry.page.session_id {
-                        document.context = None;
-                    }
-                    document
-                        .native_contexts
-                        .retain(|(owner, _), _| owner != session);
-                }
-                DocumentChange::Frame(None) => {
-                    document.context = None;
-                    document.native_contexts.clear();
-                }
-                DocumentChange::Restored => {}
-            }
             document.frame_pixels = None;
             document.marked = None;
             document.text_target = None;
@@ -1591,8 +1627,13 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                         );
                     }
                     if route.iframe && route.debugger.is_none() {
-                        invalidate_document(&entry, route.wc, DocumentChange::Detached(session))
-                            .await;
+                        entry
+                            .document
+                            .lock()
+                            .expect("Preview document")
+                            .native_contexts
+                            .detached(session);
+                        invalidate_document(&entry, route.wc).await;
                     }
                     if primary {
                         let _ = close(&pages, route.wc).await;
@@ -1697,10 +1738,6 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
         } else {
             events::decode(&event)
         };
-        let restored = matches!(
-            &update,
-            Some(events::Update::Navigation { restored: true, .. })
-        );
         if event.method == "Page.frameNavigated"
             || event.method == "Page.frameDetached"
             || (event.method == "Page.frameStartedLoading"
@@ -1712,104 +1749,49 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                         .frame
                         .as_deref())
         {
-            let frame = event
-                .params
-                .pointer("/frame/id")
-                .or_else(|| event.params.get("frameId"))
-                .and_then(Value::as_str);
-            let change = if restored {
-                DocumentChange::Restored
-            } else {
-                DocumentChange::Frame(frame)
-            };
-            invalidate_document(&entry, route.wc, change).await;
+            invalidate_document(&entry, route.wc).await;
         }
-        if event.method == "Runtime.executionContextCreated"
-            && event
-                .params
-                .pointer("/context/name")
-                .and_then(Value::as_str)
-                == Some(initialize::WORLD)
-            && let (Some(id), Some(frame)) = (
-                event.params.pointer("/context/id").and_then(Value::as_i64),
-                event
-                    .params
-                    .pointer("/context/auxData/frameId")
-                    .and_then(Value::as_str),
-            )
-        {
-            entry
-                .document
-                .lock()
-                .expect("Preview document")
-                .native_contexts
-                .insert((session.to_owned(), id), frame.to_owned());
-        }
-        if event.method == "Runtime.executionContextDestroyed"
-            && let Some(id) = event.params["executionContextId"].as_i64()
-        {
-            entry
-                .document
-                .lock()
-                .expect("Preview document")
-                .native_contexts
-                .remove(&(session.to_owned(), id));
-        }
-        if event.method == "Runtime.executionContextsCleared" {
-            entry
-                .document
-                .lock()
-                .expect("Preview document")
-                .native_contexts
-                .retain(|(owner, _), _| owner != session);
-        }
+        entry
+            .document
+            .lock()
+            .expect("Preview document")
+            .native_contexts
+            .observe(&event);
         if event.method == "Runtime.bindingCalled" {
-            if event.params["name"].as_str() != Some(initialize::BINDING) {
-                continue;
-            }
-            let (authorized, root) = {
+            let notification = {
                 let document = entry.document.lock().expect("Preview document");
-                let frame = event.params["executionContextId"]
-                    .as_i64()
-                    .and_then(|id| document.native_contexts.get(&(session.to_owned(), id)));
-                (
-                    frame.is_some(),
-                    session == entry.page.session_id
-                        && frame
-                            .is_some_and(|frame| Some(frame.as_str()) == document.frame.as_deref()),
+                document.native_contexts.notification(
+                    &event,
+                    &entry.page.session_id,
+                    document.frame.as_deref(),
                 )
             };
-            if !authorized {
-                continue;
-            }
-            match event.params["payload"].as_str() {
-                Some("text") => {
+            match notification {
+                Some(contexts::Notification::Text) => {
                     if let Ok(key) = surface::key(route.wc) {
                         request_refresh(&entry, key, TEXT);
                     }
                 }
-                Some("layout") => {
+                Some(contexts::Notification::Layout) => {
                     if let Ok(key) = surface::key(route.wc) {
                         request_refresh(&entry, key, TEXT | AX);
                     }
                 }
-                Some(payload) if root => {
-                    if let Some(title) = initialize::observed_title(payload) {
-                        let changed = {
-                            let mut registry = runtime().registry.lock().expect("registry");
-                            registry.current(identity)
-                                && registry.page_mut(route.wc).is_some_and(|page| {
-                                    if page.title == title {
-                                        return false;
-                                    }
-                                    page.title.clone_from(&title);
-                                    true
-                                })
-                        };
-                        if changed {
-                            wc_state(route.wc);
-                            wc_event(route.wc, "page-title-updated", json!([title, true]));
-                        }
+                Some(contexts::Notification::Title(title)) => {
+                    let changed = {
+                        let mut registry = runtime().registry.lock().expect("registry");
+                        registry.current(identity)
+                            && registry.page_mut(route.wc).is_some_and(|page| {
+                                if page.title == title {
+                                    return false;
+                                }
+                                page.title.clone_from(&title);
+                                true
+                            })
+                    };
+                    if changed {
+                        wc_state(route.wc);
+                        wc_event(route.wc, "page-title-updated", json!([title, true]));
                     }
                 }
                 _ => {}
@@ -1949,25 +1931,12 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
             }
             continue;
         }
-        if event.method == "Runtime.executionContextCreated"
-            && event
-                .params
-                .pointer("/context/auxData/isDefault")
-                .and_then(Value::as_bool)
-                == Some(true)
         {
             let mut document = entry.document.lock().expect("Preview document");
-            if event
-                .params
-                .pointer("/context/auxData/frameId")
-                .and_then(Value::as_str)
-                == document.frame.as_deref()
-            {
-                document.context = event.params.pointer("/context/id").and_then(Value::as_i64);
-            }
-        }
-        if event.method == "Runtime.executionContextsCleared" {
-            entry.document.lock().expect("Preview document").context = None;
+            let Document {
+                main_world, frame, ..
+            } = &mut *document;
+            main_world.observe(&event, frame.as_deref());
         }
         if event.method == "Page.lifecycleEvent" {
             lifecycle(&entry, route.wc, &event.params).await;
@@ -2009,9 +1978,6 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             }
             document.frame = Some(frame_id);
             if !same_document {
-                if !restored {
-                    document.context = None;
-                }
                 document.frame_pixels = None;
             }
             drop(document);
@@ -2213,7 +2179,12 @@ async fn refresh_state(entry: &Entry, wc: u64) {
             );
         }
     }
-    let context = entry.document.lock().expect("Preview document").context;
+    let context = entry
+        .document
+        .lock()
+        .expect("Preview document")
+        .main_world
+        .id();
     if let Some(context) = context
         && let Ok(title) = entry
             .page

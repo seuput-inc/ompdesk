@@ -45,13 +45,15 @@ impl PageInitializer for Initializer {
 /// The caller still owes the authorization: the payload names the page's title only when its execution context
 /// belongs to the current root frame.
 pub(super) fn observed_title(payload: &str) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    #[serde(tag = "kind", rename_all = "lowercase")]
-    enum Signal {
-        Title { title: String },
+    let mut signal: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(payload).ok()?;
+    if signal.get("kind")?.as_str()? != "title" {
+        return None;
     }
-    let Signal::Title { title } = serde_json::from_str::<Signal>(payload).ok()?;
-    Some(title)
+    match signal.remove("title")? {
+        serde_json::Value::String(title) => Some(title),
+        _ => None,
+    }
 }
 
 const OBSERVE: &str = r#"(()=>{
