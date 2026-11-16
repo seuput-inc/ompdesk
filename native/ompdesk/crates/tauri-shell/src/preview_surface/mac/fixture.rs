@@ -107,7 +107,8 @@ pub(crate) fn run_native_fixture(
             scroll_offset_x: 0.0,
             scroll_offset_y: 0.0,
         },
-    })?;
+    })
+    .map_err(|error| SurfaceError::Consumer(error.to_string()))?;
     surface.drain_frame()?;
     require(
         surface

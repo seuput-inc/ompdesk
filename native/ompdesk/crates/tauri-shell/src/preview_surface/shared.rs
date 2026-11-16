@@ -138,6 +138,35 @@ pub struct FramePublisher {
     key: SurfaceKey,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FrameSubmitError {
+    /// The surface never owned or acknowledged the submitted frame.
+    Rejected(SurfaceError),
+    /// The surface owns the submitted receipt, even if a consumer callback failed.
+    /// The caller must not acknowledge the submitted frame again.
+    Accepted { errors: Vec<SurfaceError> },
+}
+
+impl std::fmt::Display for FrameSubmitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Accepted { errors } => {
+                formatter.write_str("frame accepted; consumer failures: ")?;
+                for (index, error) in errors.iter().enumerate() {
+                    if index != 0 {
+                        formatter.write_str("; ")?;
+                    }
+                    std::fmt::Display::fmt(error, formatter)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for FrameSubmitError {}
+
 fn valid_bounds(bounds: Bounds) -> bool {
     let r = bounds.rect;
     [r.x, r.y, r.width, r.height, bounds.scale]
@@ -474,28 +503,31 @@ impl Shared {
 }
 
 impl FramePublisher {
-    pub fn submit(&self, frame: EncodedFrame) -> Result<(), SurfaceError> {
-        let shared = self.shared.upgrade().ok_or(SurfaceError::Disposed)?;
+    pub fn submit(&self, frame: EncodedFrame) -> Result<(), FrameSubmitError> {
+        let shared = self
+            .shared
+            .upgrade()
+            .ok_or(FrameSubmitError::Rejected(SurfaceError::Disposed))?;
         if frame.key != self.key {
-            return Err(SurfaceError::StaleGeneration);
+            return Err(FrameSubmitError::Rejected(SurfaceError::StaleGeneration));
         }
         if frame.pixel_width == 0
             || frame.pixel_height == 0
             || !frame.scale.is_finite()
             || frame.scale <= 0.0
         {
-            return Err(SurfaceError::Invalid(
+            return Err(FrameSubmitError::Rejected(SurfaceError::Invalid(
                 "invalid actual frame dimensions".into(),
-            ));
+            )));
         }
         let frame_ack = frame.ack;
         let (old, hidden, schedule) = {
             let mut s = shared.state.lock().unwrap();
             if s.disposed {
-                return Err(SurfaceError::Disposed);
+                return Err(FrameSubmitError::Rejected(SurfaceError::Disposed));
             }
             if s.key != self.key {
-                return Err(SurfaceError::StaleGeneration);
+                return Err(FrameSubmitError::Rejected(SurfaceError::StaleGeneration));
             }
             let hidden = !s.visible;
             let old = s.pending.replace(PendingFrame {
@@ -511,22 +543,24 @@ impl FramePublisher {
             };
             (old, hidden, schedule)
         };
-        let mut result = Ok(());
-        if let Some(old) = old {
-            result = shared.finish_frame(old, FrameDisposition::Superseded);
+        let mut errors = Vec::new();
+        if let Some(old) = old
+            && let Err(error) = shared.finish_frame(old, FrameDisposition::Superseded)
+        {
+            errors.push(error);
         }
-        if hidden {
-            let acknowledged =
+        if hidden
+            && let Err(error) =
                 shared
                     .consumer
-                    .presented(self.key, frame_ack, FrameDisposition::Hidden);
-            if result.is_ok() {
-                result = acknowledged;
-            }
+                    .presented(self.key, frame_ack, FrameDisposition::Hidden)
+        {
+            errors.push(error);
         }
         if let Some(ticket) = schedule
             && let Err(error) = shared.consumer.schedule_present(self.key)
         {
+            errors.push(error);
             let pending = {
                 let mut s = shared.state.lock().unwrap();
                 if s.schedule_ticket == ticket && s.key == self.key {
@@ -536,12 +570,17 @@ impl FramePublisher {
                     None
                 }
             };
-            if let Some(pending) = pending {
-                shared.finish_frame(pending, FrameDisposition::Disposed)?;
+            if let Some(pending) = pending
+                && let Err(error) = shared.finish_frame(pending, FrameDisposition::Disposed)
+            {
+                errors.push(error);
             }
-            return Err(error);
         }
-        result
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(FrameSubmitError::Accepted { errors })
+        }
     }
 }
 
