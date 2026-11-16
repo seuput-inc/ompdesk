@@ -10,7 +10,9 @@ use std::{
 };
 
 use base64::Engine;
-use ompdesk_shell_preview::{Browser, LaunchConfig, Navigation, NavigationHandler, Viewport};
+use ompdesk_shell_preview::{
+    AttachedPage, Browser, LaunchConfig, Navigation, NavigationHandler, PageInitializer, Viewport,
+};
 use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -31,6 +33,8 @@ const HTML: &str = r##"<!doctype html>
 </style>
 <input id="input"><button id="button">Click</button><div id="color"></div>
 <script>
+  window.initializedBeforePage = globalThis.previewInitialized === true;
+  window.initializationRuns = globalThis.previewInitializationRuns ?? 0;
   window.clicks = 0;
   window.trustedClick = false;
   window.trustedInput = false;
@@ -83,8 +87,18 @@ impl Fixture {
                     }
                     let line = request.split(|&byte| byte == b'\n').next().unwrap_or_default();
                     let path = std::str::from_utf8(line).unwrap_or("").split_whitespace().nth(1).unwrap_or("");
+                    let request_info = if path == "/headers" {
+                        let text = String::from_utf8_lossy(&request);
+                        let header = |name: &str| text.lines().filter_map(|line| line.split_once(':'))
+                            .find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.trim()).unwrap_or("");
+                        json!({"userAgent":header("user-agent"),"language":header("accept-language")}).to_string()
+                    } else {
+                        String::new()
+                    };
                     let (headers, body) = match path {
                         "/" => ("Content-Type: text/html; charset=utf-8\r\n", HTML),
+                        "/headers" => ("Content-Type: application/json\r\n", request_info.as_str()),
+                        "/frame" => ("Content-Type: text/html\r\n", "<!doctype html><script>parent.postMessage({frameInitialized: globalThis.previewInitialized === true, runs: globalThis.previewInitializationRuns ?? 0}, '*')</script>"),
                         "/popup" => {
                             popup.fetch_add(1, Ordering::SeqCst);
                             notify.notify_one();
@@ -151,6 +165,27 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .map_err(|e| format!("navigate: {e:?}"))?;
     let ready = page.evaluate("new Promise(resolve => { function poll() { if (document.readyState === 'complete' && document.querySelector('#button')) resolve(document.title); else requestAnimationFrame(poll); } poll(); })", false).await.map_err(|e| format!("wait for DOM: {e:?}"))?;
     check!(ready == json!("Preview fixture"), "unexpected DOM: {ready}");
+    let initialized = page.evaluate("({beforePage: initializedBeforePage, runs: initializationRuns, userAgent: navigator.userAgent})", false).await.map_err(|e| e.to_string())?;
+    check!(
+        initialized == json!({"beforePage":true,"runs":1,"userAgent":"OMPdesk-Preview-Proof"}),
+        "host initialization did not precede page scripts: {initialized}"
+    );
+    let headers = page
+        .evaluate("fetch('/headers').then(r => r.json())", false)
+        .await
+        .map_err(|e| e.to_string())?;
+    check!(
+        headers["userAgent"] == "OMPdesk-Preview-Proof"
+            && headers["language"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("ko-KR") && v.contains("en-US")),
+        "same-target request headers did not inherit host session policy: {headers}"
+    );
+    let frame = page.evaluate("new Promise(resolve => { window.addEventListener('message', e => { if (e.data && 'frameInitialized' in e.data) resolve(e.data); }); const iframe = document.createElement('iframe'); const url = new URL('/frame', location.href); url.hostname = 'localhost'; iframe.src = url.href; iframe.hidden = true; document.body.append(iframe); })", false).await.map_err(|e| format!("frame initialization: {e}"))?;
+    check!(
+        frame == json!({"frameInitialized":true,"runs":1}),
+        "frame initialization did not precede its scripts: {frame}"
+    );
     let info = page
         .command("Target.getTargetInfo", json!({"targetId": page.target_id}))
         .await
@@ -464,6 +499,23 @@ impl NavigationHandler for NavigationGate {
     }
 }
 
+impl PageInitializer for NavigationGate {
+    fn initialize(
+        &self,
+        page: AttachedPage,
+    ) -> Pin<Box<dyn Future<Output = ompdesk_shell_preview::Result<()>> + Send>> {
+        Box::pin(async move {
+            page.command(
+                "Network.setUserAgentOverride",
+                json!({"userAgent":"OMPdesk-Preview-Proof","acceptLanguage":"ko-KR,en-US"}),
+            )
+            .await?;
+            page.command("Page.addScriptToEvaluateOnNewDocument", json!({"source":"globalThis.previewInitialized = true; globalThis.previewInitializationRuns = (globalThis.previewInitializationRuns ?? 0) + 1;"})).await?;
+            Ok(())
+        })
+    }
+}
+
 async fn navigation_lifecycle(
     browser: &Browser,
     fixture: &Fixture,
@@ -555,12 +607,13 @@ async fn real_chromium_preview() {
         release: Arc::new(Notify::new()),
     });
     let browser = Arc::new(
-        Browser::launch_with_navigation(
+        Browser::launch_with_hooks(
             LaunchConfig {
                 executable,
                 profile_root,
                 command_timeout: Duration::from_secs(10),
             },
+            gate.clone(),
             gate.clone(),
         )
         .await

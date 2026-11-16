@@ -443,7 +443,7 @@ fn receive(shared: &Shared, bytes: &[u8]) -> Result<()> {
     };
     if matches!(
         event.method.as_str(),
-        "Target.attachedToTarget" | "Fetch.requestPaused"
+        "Target.attachedToTarget" | "Target.detachedFromTarget" | "Fetch.requestPaused"
     ) {
         let policy = shared
             .policy_events
