@@ -127,6 +127,34 @@ function bubblePictures(phone: Page): Promise<number> {
 		.evaluateAll(images => images.filter(image => (image as HTMLImageElement).naturalWidth > 0).length);
 }
 
+/** Each sent bubble as the page holds it: its pictures (source head, size, decode result) and unavailable chips. */
+function describeBubbles(phone: Page): Promise<string> {
+	return phone
+		.locator(".omp-user-bubble")
+		.evaluateAll(async bubbles =>
+			JSON.stringify(
+				await Promise.all(
+					bubbles.map(async bubble => ({
+						text: bubble.textContent?.slice(0, 60),
+						pictures: await Promise.all(
+							[...bubble.querySelectorAll("img")].map(async image => ({
+								src: image.src.slice(0, 40),
+								chars: image.src.length,
+								width: image.naturalWidth,
+								decode: await image.decode().then(
+									() => "ok",
+									(failure: Error) => failure.message,
+								),
+							})),
+						),
+						chips: [...bubble.querySelectorAll("[data-image-unavailable]")].map(chip => chip.textContent),
+					})),
+				),
+			),
+		)
+		.catch((failure: Error) => `unreadable: ${failure.message}`);
+}
+
 /**
  * What the phone's browser does with a picture, asked of the page: the engine under test is not always the phone it
  * stands in for. Safari on an iPhone draws a HEIC and has `OffscreenCanvas` (16.4 and later), which scales a photo
@@ -303,7 +331,14 @@ for (const engine of ENGINES)
 					});
 				// The bubble shows the picture omp journaled (the HEIC as the computer's JPEG, in every browser).
 				const shown = index + 1;
-				await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(shown);
+				await expect
+					.poll(() => bubblePictures(phone), { timeout: 30_000 })
+					.toBe(shown)
+					.catch(async (error: Error) => {
+						throw new Error(
+							`${error.message}\nthe bubbles: ${await describeBubbles(phone)}\nthe phone's wire: ${JSON.stringify(wire)}`,
+						);
+					});
 				await captureTo(CAPTURES, phone, `${engine.name}-${picture.name}-sent`);
 			}
 			// Two photos in one message: together well over what one frame may carry.
