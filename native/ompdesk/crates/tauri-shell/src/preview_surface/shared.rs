@@ -211,7 +211,6 @@ impl Shared {
     pub fn key(&self) -> SurfaceKey {
         self.state.lock().unwrap().key
     }
-    #[cfg(any(windows, test))]
     pub fn bounds(&self) -> Bounds {
         self.state.lock().unwrap().bounds
     }
