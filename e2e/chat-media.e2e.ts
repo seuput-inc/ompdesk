@@ -117,7 +117,7 @@ async function whyNotLoaded(player: Locator): Promise<string> {
 					return {
 						url: resource.name,
 						status: resource.responseStatus,
-						redirects: resource.redirectCount,
+						redirected: resource.redirectEnd > 0,
 						bytes: resource.transferSize,
 						ms: Math.round(resource.duration),
 					};
