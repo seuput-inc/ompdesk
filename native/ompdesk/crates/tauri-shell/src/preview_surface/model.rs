@@ -29,6 +29,7 @@ pub struct TextRange {
     pub length: u32,
 }
 
+/// CDP `Page.screencastFrame` metadata, unmodified.
 #[derive(Clone, Debug)]
 pub struct FrameMetadata {
     pub device_width: f64,
@@ -50,6 +51,176 @@ pub struct EncodedFrame {
     pub metadata: FrameMetadata,
 }
 
+/// Coordinate equations follow DevTools panels/screencast/{ScreencastView,InputModel}.ts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameGeometry {
+    screen_zoom: f64,
+    page_scale: f64,
+    offset_top: f64,
+    scroll: (f64, f64),
+    image: Rect,
+}
+
+impl FrameGeometry {
+    pub fn new(
+        metadata: &FrameMetadata,
+        view_dip_size: (f64, f64),
+        image_pixels: (u32, u32),
+    ) -> Result<Self, SurfaceError> {
+        let positive = [
+            metadata.device_width,
+            metadata.device_height,
+            metadata.page_scale_factor,
+            view_dip_size.0,
+            view_dip_size.1,
+        ];
+        if positive
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+            || image_pixels.0 == 0
+            || image_pixels.1 == 0
+            || !metadata.offset_top.is_finite()
+            || !metadata.scroll_offset_x.is_finite()
+            || !metadata.scroll_offset_y.is_finite()
+        {
+            return Err(SurfaceError::Invalid(
+                "invalid displayed frame geometry".into(),
+            ));
+        }
+        let screen_zoom =
+            (view_dip_size.0 / metadata.device_width).min(view_dip_size.1 / metadata.device_height);
+        let image_zoom = metadata.device_width * screen_zoom / f64::from(image_pixels.0);
+        let geometry = Self {
+            screen_zoom,
+            page_scale: metadata.page_scale_factor,
+            offset_top: metadata.offset_top,
+            scroll: (metadata.scroll_offset_x, metadata.scroll_offset_y),
+            image: Rect {
+                x: 0.0,
+                y: metadata.offset_top * screen_zoom,
+                width: f64::from(image_pixels.0) * image_zoom,
+                height: f64::from(image_pixels.1) * image_zoom,
+            },
+        };
+        if !geometry.image.y.is_finite()
+            || !geometry.image.width.is_finite()
+            || !geometry.image.height.is_finite()
+            || !screen_zoom.is_finite()
+            || screen_zoom <= 0.0
+        {
+            return Err(SurfaceError::Invalid(
+                "displayed frame geometry overflow".into(),
+            ));
+        }
+        Ok(geometry)
+    }
+
+    pub fn image_rect(self) -> Rect {
+        self.image
+    }
+
+    /// CDP trusted input is in visual-viewport coordinates, before pinch-scale removal.
+    pub fn to_input(self, point: (f64, f64)) -> (f64, f64) {
+        (
+            point.0 / self.screen_zoom,
+            point.1 / self.screen_zoom - self.offset_top,
+        )
+    }
+
+    pub fn input_delta(self, delta: (f64, f64)) -> (f64, f64) {
+        (delta.0 / self.screen_zoom, delta.1 / self.screen_zoom)
+    }
+
+    /// DOM/document CSS coordinates, including the scroll captured with this paint.
+    pub fn to_css(self, point: (f64, f64)) -> (f64, f64) {
+        let (x, y) = self.to_input(point);
+        (
+            x / self.page_scale + self.scroll.0,
+            y / self.page_scale + self.scroll.1,
+        )
+    }
+
+    pub fn css_rect_to_view(self, rect: Rect) -> Rect {
+        let scale = self.page_scale * self.screen_zoom;
+        Rect {
+            x: (rect.x - self.scroll.0) * scale,
+            y: ((rect.y - self.scroll.1) * self.page_scale + self.offset_top) * self.screen_zoom,
+            width: rect.width * scale,
+            height: rect.height * scale,
+        }
+    }
+
+    pub fn to_viewport_css(self, point: (f64, f64)) -> (f64, f64) {
+        let (x, y) = self.to_css(point);
+        (x - self.scroll.0, y - self.scroll.1)
+    }
+
+    /// DOM Range and composed iframe geometry are viewport-relative, not document-relative.
+    pub fn viewport_rect_to_view(self, rect: Rect) -> Rect {
+        self.css_rect_to_view(Rect {
+            x: rect.x + self.scroll.0,
+            y: rect.y + self.scroll.1,
+            ..rect
+        })
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn pinched_offset_frame_aligns_paint_input_text_and_accessibility() {
+        let geometry = FrameGeometry::new(
+            &FrameMetadata {
+                device_width: 400.0,
+                device_height: 300.0,
+                page_scale_factor: 2.0,
+                offset_top: 20.0,
+                scroll_offset_x: 70.0,
+                scroll_offset_y: 90.0,
+            },
+            (800.0, 600.0),
+            (800, 560),
+        )
+        .unwrap();
+        assert_eq!(
+            geometry.image_rect(),
+            Rect {
+                x: 0.0,
+                y: 40.0,
+                width: 800.0,
+                height: 560.0
+            }
+        );
+        assert_eq!(geometry.to_input((120.0, 200.0)), (60.0, 80.0));
+        assert_eq!(geometry.input_delta((40.0, 80.0)), (20.0, 40.0));
+        assert_eq!(geometry.to_css((120.0, 200.0)), (100.0, 130.0));
+        assert_eq!(geometry.to_viewport_css((120.0, 200.0)), (30.0, 40.0));
+        let document_rect = Rect {
+            x: 100.0,
+            y: 130.0,
+            width: 5.0,
+            height: 7.0,
+        };
+        let displayed = Rect {
+            x: 120.0,
+            y: 200.0,
+            width: 20.0,
+            height: 28.0,
+        };
+        assert_eq!(geometry.css_rect_to_view(document_rect), displayed);
+        assert_eq!(
+            geometry.viewport_rect_to_view(Rect {
+                x: 30.0,
+                y: 40.0,
+                ..document_rect
+            }),
+            displayed,
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameDisposition {
     Presented,
@@ -65,6 +236,7 @@ pub enum MouseKind {
     Down,
     Up,
     Enter,
+    #[cfg(target_os = "macos")]
     Leave,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +253,7 @@ pub enum KeyKind {
     Down,
     Up,
 }
+#[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TouchKind {
     Start,
@@ -89,13 +262,17 @@ pub enum TouchKind {
     Cancel,
 }
 
+/// `Dip` is macOS precise scrolling; `Page` is the Windows "one screen at a time" wheel setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WheelUnit {
+    #[cfg(target_os = "macos")]
     Dip,
     Line,
+    #[cfg(windows)]
     Page,
 }
 
+#[cfg(windows)]
 #[derive(Clone, Debug)]
 pub struct TouchPoint {
     pub id: u32,
@@ -135,6 +312,7 @@ pub enum Input {
         text: Option<String>,
         repeat: bool,
     },
+    #[cfg(windows)]
     Touch {
         kind: TouchKind,
         points: Vec<TouchPoint>,
@@ -160,10 +338,14 @@ pub enum EditCommand {
     Copy,
     Cut,
     Paste,
+    #[cfg(target_os = "macos")]
     SelectAll,
     Undo,
+    #[cfg(target_os = "macos")]
     Redo,
+    #[cfg(target_os = "macos")]
     DeleteBackward,
+    #[cfg(target_os = "macos")]
     DeleteForward,
 }
 
@@ -200,6 +382,7 @@ pub struct AxNode {
     pub editable: bool,
     pub read_only: bool,
     pub secure: bool,
+    #[cfg(target_os = "macos")]
     pub multiline: bool,
     pub required: bool,
     pub selected: bool,
@@ -217,6 +400,7 @@ pub enum AxActionKind {
     SetSelection,
     Increment,
     Decrement,
+    #[cfg(target_os = "macos")]
     ShowMenu,
 }
 
@@ -241,8 +425,11 @@ pub enum AxAction {
     Focus,
     SetValue(String),
     SetSelection(TextRange),
+    #[cfg(target_os = "macos")]
     Increment,
+    #[cfg(target_os = "macos")]
     Decrement,
+    #[cfg(target_os = "macos")]
     ShowMenu,
 }
 
@@ -258,6 +445,7 @@ pub struct TextInputState {
     pub key: SurfaceKey,
     pub generation: u64,
     pub backend_dom_node_id: Option<i64>,
+    #[cfg(target_os = "macos")]
     pub editable: bool,
     pub content: TextContent,
     pub selection: TextRange,
@@ -265,6 +453,7 @@ pub struct TextInputState {
     pub caret: Option<Rect>,
 }
 
+#[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextUnit {
     Character,
@@ -277,6 +466,8 @@ pub enum TextUnit {
 }
 
 /// All offsets are UTF-16 code units; rectangles and points are surface-local DIP.
+/// Only `RangeRects` and `OffsetAtPoint` have a macOS consumer; the other queries serve
+/// the Windows UI Automation text pattern.
 #[derive(Clone, Debug)]
 pub enum TextQuery {
     RangeRects {
@@ -286,26 +477,48 @@ pub enum TextQuery {
         x: f64,
         y: f64,
     },
+    #[cfg(windows)]
     VisibleRanges,
+    #[cfg(windows)]
     RangeFromChild {
         child: AxTarget,
     },
+    #[cfg(windows)]
     UnitBoundaries {
         unit: TextUnit,
     },
+    #[cfg(windows)]
     ScrollIntoView {
         range: TextRange,
         align_to_top: bool,
     },
 }
 
+impl TextQuery {
+    /// A query that moves the Page cannot be abandoned on a timeout.
+    pub fn mutates_page(&self) -> bool {
+        #[cfg(windows)]
+        {
+            matches!(self, Self::ScrollIntoView { .. })
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum TextReply {
     Rects(Vec<Rect>),
     Offset(Option<u32>),
+    #[cfg(windows)]
     Ranges(Vec<TextRange>),
+    #[cfg(windows)]
     Range(Option<TextRange>),
+    #[cfg(windows)]
     Boundaries(Vec<u32>),
+    #[cfg(windows)]
     Scrolled,
 }
 
