@@ -26,6 +26,8 @@ export interface TauriBuildRecord {
 function filesUnder(root: string, relative = "", files: string[] = []): string[] {
 	for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
 		if (["target", ".git"].includes(entry.name)) continue;
+		// tauri-build writes the capability schemas into the crate's own `gen/` while it compiles: output, not source.
+		if (relative === "" && entry.name === "gen") continue;
 		const name = path.join(relative, entry.name);
 		if (entry.isDirectory()) filesUnder(root, name, files);
 		else if (entry.isFile()) files.push(name);
@@ -37,19 +39,29 @@ function sha256(file: string): string {
 	return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-export function sourceSha256(): string {
-	const digest = createHash("sha256");
+/** Every source file the host is built from, by repository path, with its hash. */
+function sourceFiles(): Map<string, string> {
+	const files = new Map<string, string>();
 	for (const root of [TAURI_DIR, path.join(TAURI_DIR, "../shell"), path.join(TAURI_DIR, "../shell-preview")]) {
 		for (const name of filesUnder(root).sort()) {
-			digest.update(path.relative(REPO_ROOT, path.join(root, name)).replaceAll(path.sep, "/"));
-			digest.update("\0");
-			digest.update(fs.readFileSync(path.join(root, name)));
-			digest.update("\0");
+			const file = path.join(root, name);
+			files.set(path.relative(REPO_ROOT, file).replaceAll(path.sep, "/"), sha256(file));
 		}
 	}
+	return files;
+}
+
+export function sourceSha256(files = sourceFiles()): string {
+	const digest = createHash("sha256");
+	for (const [name, hash] of files) digest.update(`${name}\0${hash}\0`);
 	digest.update(fs.readFileSync(fileURLToPath(import.meta.url)));
 	digest.update(JSON.stringify(compatibility));
 	return digest.digest("hex");
+}
+
+function changedSources(before: Map<string, string>, after: Map<string, string>): string[] {
+	const names = new Set([...before.keys(), ...after.keys()]);
+	return [...names].filter(name => before.get(name) !== after.get(name)).sort();
 }
 
 export function stagedDir(): string {
@@ -99,7 +111,8 @@ export async function buildTauri(testAutomation = false): Promise<string> {
 	if (!cargo) throw new Error("Rust is required to build the Tauri host");
 	const targetDir = path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(TAURI_DIR, "target"));
 	const bins = ["ompdesk-tauri-shell", ...(process.platform === "darwin" ? ["ompdesk-launcher"] : [])];
-	const sourceBefore = sourceSha256();
+	const sourcesBefore = sourceFiles();
+	const sourceBefore = sourceSha256(sourcesBefore);
 	const env = {
 		...cargoEnv(cargo),
 		CARGO_TARGET_DIR: targetDir,
@@ -119,8 +132,9 @@ export async function buildTauri(testAutomation = false): Promise<string> {
 	fs.mkdirSync(target, { recursive: true });
 	const binary = process.platform === "win32" ? "ompdesk-shell.exe" : "ompdesk-shell";
 	const files: Record<string, string> = {};
-	if (sourceSha256() !== sourceBefore)
-		throw new Error("Tauri sources changed during compilation; no build was staged");
+	const changed = changedSources(sourcesBefore, sourceFiles());
+	if (changed.length > 0)
+		throw new Error(`Tauri sources changed during compilation; no build was staged: ${changed.join(", ")}`);
 	for (const name of bins) {
 		const built = path.join(targetDir, "release", `${name}${process.platform === "win32" ? ".exe" : ""}`);
 		const destination = name === "ompdesk-tauri-shell" ? binary : name;

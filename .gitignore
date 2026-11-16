@@ -34,5 +34,7 @@ resources/ompdesk-shell/
 resources/shell-licenses/
 # The Tauri host and launcher built from native/ompdesk/crates/tauri-shell: bun run build:tauri stages them here (never committed)
 resources/ompdesk-tauri/
+# tauri-build's generated capability schemas (written into the crate while it compiles)
+native/ompdesk/crates/tauri-shell/gen/
 # The pinned signed Preview browser (resources/preview-browser.json): scripts/stage-preview-browser.ts stages it here (never committed)
 resources/preview-browser/
