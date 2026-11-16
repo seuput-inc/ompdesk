@@ -1107,6 +1107,15 @@ fn main() {
 }
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let argv: Vec<String> = std::env::args().collect();
+    // WebView2's loader reads these for any app: a release host must not open DevTools or another profile on request.
+    #[cfg(all(windows, not(feature = "test-automation")))]
+    for name in [
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "WEBVIEW2_USER_DATA_FOLDER",
+    ] {
+        // SAFETY: the first statement after argv; no other thread exists yet to read the environment.
+        unsafe { std::env::remove_var(name) };
+    }
     #[cfg(target_os = "macos")]
     if let Some(code) = shell_core::sys_mac::keychain::cli(&argv[1..]) {
         std::process::exit(code);
