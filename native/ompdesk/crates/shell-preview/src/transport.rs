@@ -410,7 +410,9 @@ fn receive(shared: &Shared, bytes: &[u8]) -> Result<()> {
         };
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pending) = state.pending.remove(&id) {
-            if pending.session.as_deref() != session {
+            // Chromium reports an already-detached flat session's error at the browser level, without sessionId.
+            let browser_error = session.is_none() && object.contains_key("error");
+            if pending.session.as_deref() != session && !browser_error {
                 let error = Error::new("protocol", "Chromium response session mismatch");
                 let _ = pending.reply.send(Err(error.clone()));
                 return Err(error);
@@ -773,6 +775,33 @@ mod tests {
                 .code,
             "protocol"
         );
+    }
+
+    #[tokio::test]
+    async fn detached_session_error_does_not_end_other_requests() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let caller = transport.clone();
+        let stale = tokio::spawn(async move {
+            caller
+                .request("Runtime.evaluate", json!({}), Some("detached"))
+                .await
+        });
+        let id = command(&mut read).await["id"].as_u64().unwrap();
+        write.write_all(format!("{{\"id\":{id},\"error\":{{\"code\":-32001,\"message\":\"Session with given id not found.\"}}}}\0").as_bytes()).await.unwrap();
+        assert_eq!(stale.await.unwrap().unwrap_err().code, "cdp_error");
+        let caller = transport.clone();
+        let live =
+            tokio::spawn(
+                async move { caller.request("Browser.getVersion", json!({}), None).await },
+            );
+        let id = command(&mut read).await["id"].as_u64().unwrap();
+        write
+            .write_all(format!("{{\"id\":{id},\"result\":{{\"product\":\"live\"}}}}\0").as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(live.await.unwrap().unwrap(), json!({"product":"live"}));
     }
 
     #[cfg(unix)]

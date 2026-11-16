@@ -12,8 +12,9 @@ use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 
 use crate::initialization::Initializations;
+use crate::request::Requests;
 use crate::transport::Transport;
-use crate::{Error, Event, PageInitializer, Result};
+use crate::{Error, Event, PageInitializer, RequestDisposition, RequestHandler, Result};
 
 pub struct LaunchConfig {
     /// An absolute executable selected by trusted packaging, never a page-supplied path.
@@ -48,7 +49,7 @@ impl Viewport {
             || self.width > 16384
             || self.height > 16384
             || !self.device_scale_factor.is_finite()
-            || !(0.5..=8.0).contains(&self.device_scale_factor)
+            || !(0.25..=8.0).contains(&self.device_scale_factor)
         {
             return Err(Error::new("invalid", "Invalid Preview viewport"));
         }
@@ -68,7 +69,7 @@ pub struct Browser {
     policy: Mutex<Option<JoinHandle<()>>>,
     shutdown: Mutex<()>,
     cleaned: AtomicBool,
-    initializations: Option<Arc<Initializations>>,
+    initializations: Arc<Initializations>,
 }
 
 /// Owns one actual Chromium target. The caller owns native wc/view IDs and access checks.
@@ -84,14 +85,14 @@ static PROFILE_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Browser {
     pub async fn launch(config: LaunchConfig) -> Result<Self> {
-        Self::launch_inner(config, None, None).await
+        Self::launch_inner(config, None, None, None).await
     }
 
     pub async fn launch_with_navigation(
         config: LaunchConfig,
         handler: Arc<dyn NavigationHandler>,
     ) -> Result<Self> {
-        Self::launch_inner(config, Some(handler), None).await
+        Self::launch_inner(config, Some(handler), None, None).await
     }
 
     pub async fn launch_with_hooks(
@@ -99,13 +100,23 @@ impl Browser {
         navigation: Arc<dyn NavigationHandler>,
         initializer: Arc<dyn PageInitializer>,
     ) -> Result<Self> {
-        Self::launch_inner(config, Some(navigation), Some(initializer)).await
+        Self::launch_inner(config, Some(navigation), Some(initializer), None).await
+    }
+
+    pub async fn launch_with_request_handler(
+        config: LaunchConfig,
+        navigation: Arc<dyn NavigationHandler>,
+        initializer: Arc<dyn PageInitializer>,
+        requests: Arc<dyn RequestHandler>,
+    ) -> Result<Self> {
+        Self::launch_inner(config, Some(navigation), Some(initializer), Some(requests)).await
     }
 
     async fn launch_inner(
         config: LaunchConfig,
         handler: Option<Arc<dyn NavigationHandler>>,
         initializer: Option<Arc<dyn PageInitializer>>,
+        requests: Option<Arc<dyn RequestHandler>>,
     ) -> Result<Self> {
         if !config.executable.is_absolute()
             || !config.profile_root.is_absolute()
@@ -149,13 +160,15 @@ impl Browser {
             }
         };
         let events = transport.subscribe_policy();
-        let initializations = initializer
-            .map(|initializer| Arc::new(Initializations::new(initializer, config.command_timeout)));
+        let initializations = Arc::new(Initializations::new(initializer, config.command_timeout));
+        let requests =
+            requests.map(|handler| Arc::new(Requests::new(handler, config.command_timeout)));
         let policy = tokio::spawn(enforce_policy(
             transport.clone(),
             events,
             handler,
             initializations.clone(),
+            requests,
         ));
         let browser = Self {
             transport,
@@ -241,32 +254,16 @@ impl Browser {
         let target = self.command("Target.createTarget", json!({"url":"about:blank",
             "browserContextId":partition.context_id,"width":viewport.width,"height":viewport.height}), None).await?;
         let target_id = string_field(&target, "targetId")?;
-        let attached = self
-            .command(
-                "Target.attachToTarget",
-                json!({"targetId":target_id,"flatten":true}),
-                None,
-            )
-            .await?;
-        let session_id = string_field(&attached, "sessionId")?;
+        let attached = self.initializations.wait(&target_id).await?;
         let page = Page {
             target_id,
-            session_id,
-            transport: self.transport.clone(),
+            session_id: attached.session_id,
+            transport: attached.transport,
             closed: AtomicBool::new(false),
             closing: Mutex::new(()),
         };
-        page.command("Page.enable", json!({})).await?;
-        page.command("Runtime.enable", json!({})).await?;
-        page.command("Network.enable", json!({})).await?;
-        page.command("Fetch.enable", document_interception())
-            .await?;
-        page.command("Target.setAutoAttach", auto_attach()).await?;
         page.command("Emulation.setDeviceMetricsOverride", metrics)
             .await?;
-        if let Some(initializations) = &self.initializations {
-            initializations.wait(&page.target_id).await?;
-        }
         transaction.commit();
         Ok(page)
     }
@@ -472,8 +469,12 @@ fn web_url(url: &str) -> bool {
     })
 }
 
-fn document_interception() -> Value {
-    json!({"patterns":[{"urlPattern":"*","resourceType":"Document","requestStage":"Request"}]})
+fn interception(all_resources: bool) -> Value {
+    if all_resources {
+        json!({"patterns":[{"urlPattern":"*","requestStage":"Request"}]})
+    } else {
+        json!({"patterns":[{"urlPattern":"*","resourceType":"Document","requestStage":"Request"}]})
+    }
 }
 
 fn auto_attach() -> Value {
@@ -485,7 +486,8 @@ async fn enforce_policy(
     transport: Transport,
     mut events: broadcast::Receiver<Event>,
     handler: Option<Arc<dyn NavigationHandler>>,
-    initializations: Option<Arc<Initializations>>,
+    initializations: Arc<Initializations>,
+    requests: Option<Arc<Requests>>,
 ) {
     let mut operations = tokio::task::JoinSet::new();
     loop {
@@ -514,8 +516,9 @@ async fn enforce_policy(
                 let transport = transport.clone();
                 let handler = handler.clone();
                 let initializations = initializations.clone();
+                let requests = requests.clone();
                 operations.spawn(async move {
-                    policy_event(&transport, &event, handler.as_deref(), initializations.as_deref()).await
+                    policy_event(&transport, &event, handler.as_deref(), &initializations, requests.as_deref()).await
                 });
             }
         }
@@ -526,7 +529,8 @@ async fn policy_event(
     transport: &Transport,
     event: &Event,
     handler: Option<&dyn NavigationHandler>,
-    initializations: Option<&Initializations>,
+    initializations: &Initializations,
+    requests: Option<&Requests>,
 ) -> Result<()> {
     match event.method.as_str() {
         "Target.attachedToTarget" => {
@@ -546,7 +550,11 @@ async fn policy_event(
             let session = string_field(&event.params, "sessionId")?;
             if target.get("openerId").is_some() {
                 transport
-                    .request("Fetch.enable", document_interception(), Some(&session))
+                    .request(
+                        "Fetch.enable",
+                        interception(requests.is_some()),
+                        Some(&session),
+                    )
                     .await?;
                 // A paused popup can hold window.open and the opener's input reply. Close first, then release that pause.
                 let (closed, resumed) = tokio::join!(
@@ -561,48 +569,51 @@ async fn policy_event(
                     }
                 }
             } else {
-                let completion = if waiting && let Some(initializations) = initializations {
-                    Some(initializations.begin(&id, &session).await)
-                } else {
-                    None
-                };
-                let result: Result<()> = async {
-                    transport
-                        .request("Fetch.enable", document_interception(), Some(&session))
-                        .await?;
-                    transport
-                        .request("Target.setAutoAttach", auto_attach(), Some(&session))
-                        .await?;
-                    if let Some(initializations) = initializations
-                        && let Some((_, owner)) = &completion
-                    {
-                        if *owner {
-                            initializations
-                                .initialize(transport, target, &session)
-                                .await?;
-                        } else {
-                            initializations.wait(&id).await?;
-                        }
-                    }
+                let (completion, owner) = initializations.begin(&id, &session).await;
+                let result: Result<_> = async {
+                    let attached = if owner {
+                        transport
+                            .request("Page.enable", json!({}), Some(&session))
+                            .await?;
+                        transport
+                            .request("Runtime.enable", json!({}), Some(&session))
+                            .await?;
+                        transport
+                            .request("Network.enable", json!({}), Some(&session))
+                            .await?;
+                        transport
+                            .request(
+                                "Fetch.enable",
+                                interception(requests.is_some()),
+                                Some(&session),
+                            )
+                            .await?;
+                        transport
+                            .request("Target.setAutoAttach", auto_attach(), Some(&session))
+                            .await?;
+                        initializations
+                            .initialize(transport, target, &session)
+                            .await?
+                    } else {
+                        initializations.wait(&id).await?
+                    };
                     transport
                         .request("Runtime.runIfWaitingForDebugger", json!({}), Some(&session))
                         .await?;
-                    Ok(())
+                    Ok(attached)
                 }
                 .await;
-                if let Some((completion, true)) = completion {
+                if owner {
                     completion.send_replace(Some(result.clone()));
                 }
                 result?;
             }
         }
         "Target.detachedFromTarget" => {
-            if let Some(initializations) = initializations
-                && let (Some(target), Some(session)) = (
-                    event.params.get("targetId").and_then(Value::as_str),
-                    event.params.get("sessionId").and_then(Value::as_str),
-                )
-            {
+            if let (Some(target), Some(session)) = (
+                event.params.get("targetId").and_then(Value::as_str),
+                event.params.get("sessionId").and_then(Value::as_str),
+            ) {
                 initializations.detached(target, session).await;
             }
         }
@@ -626,8 +637,36 @@ async fn policy_event(
                 Err(error) => return Err(error),
             };
             let popup = target.pointer("/targetInfo/openerId").is_some();
-            let mut allowed = !popup && web_url(url);
-            if allowed && let Some(handler) = handler {
+            if !popup && let Some(requests) = requests {
+                let target = target
+                    .get("targetInfo")
+                    .ok_or_else(|| Error::new("cdp", "Paused request has no target"))?;
+                match requests.handle(transport, target, event).await {
+                    Ok(RequestDisposition::Handled) => return Ok(()),
+                    Ok(RequestDisposition::Unhandled) => {}
+                    Err(_) => {
+                        if let Err(error) = transport
+                            .request(
+                                "Fetch.failRequest",
+                                json!({"requestId":id,"errorReason":"Failed"}),
+                                event.session_id.as_deref(),
+                            )
+                            .await
+                            && error.code != "cdp_error"
+                        {
+                            return Err(error);
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+            let document =
+                event.params.get("resourceType").and_then(Value::as_str) == Some("Document");
+            let mut allowed = !popup && (!document || web_url(url));
+            if allowed
+                && document
+                && let Some(handler) = handler
+            {
                 let navigation = Navigation {
                     session_id: event
                         .session_id
@@ -717,7 +756,7 @@ mod tests {
 
     #[test]
     fn rejects_nonfinite_or_unbounded_capture_geometry() {
-        for scale in [f64::NAN, f64::INFINITY, 0.0, 9.0] {
+        for scale in [f64::NAN, f64::INFINITY, 0.0, 0.249, 9.0] {
             assert!(
                 Viewport {
                     width: 100,

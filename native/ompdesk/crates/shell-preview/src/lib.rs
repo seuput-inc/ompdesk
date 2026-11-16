@@ -2,6 +2,7 @@
 
 mod browser;
 mod initialization;
+mod request;
 mod sys;
 mod transport;
 
@@ -9,6 +10,7 @@ pub use browser::{
     Browser, LaunchConfig, Navigation, NavigationHandler, Page, Partition, Viewport,
 };
 pub use initialization::{AttachedPage, PageInitializer};
+pub use request::{PausedRequest, RequestDisposition, RequestHandler};
 
 use std::fmt;
 use std::sync::Arc;
