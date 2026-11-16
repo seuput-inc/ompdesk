@@ -227,7 +227,13 @@ pub(crate) fn arguments(profile: &Path) -> Vec<std::ffi::OsString> {
         "--disable-extensions",
         "--disable-sync",
         "--disable-features=MediaRouter,OptimizationHints,AutofillServerCommunication",
+        // WebRTC over UDP (STUN, TURN) would leave a page beside the context's proxy. Each runtime reads its own
+        // spelling and ignores the other: Chromium's `headless/` library and content_shell read `--force-webrtc-...`
+        // (HeadlessWebContentsImpl), while Chrome's browser layer, which Brave's `--headless=new` runs, reads only
+        // `--webrtc-ip-handling-policy` (ChromeCommandLinePrefStore into the `webrtc.ip_handling_policy` pref, which
+        // the DevTools off-the-record contexts keep: PrefServiceSyncable::CreateIncognitoPrefService).
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        "--webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--disable-background-timer-throttling",
         // Security #3, as the Electron main did (src/main/index.ts): no page resolves a name it only hints at
         // (`<link rel=dns-prefetch>`), so a visited page cannot spell what it read into a lookup the proxy never sees.
