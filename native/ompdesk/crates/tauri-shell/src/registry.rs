@@ -2,12 +2,27 @@ use std::collections::{HashMap, VecDeque};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity {
-    pub win: u64,
+    pub win: Option<u64>,
     pub wc: u64,
     pub generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    App,
+    PreviewView { view: u64, parent: Option<u64> },
+    PreviewOffscreen,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageState {
+    Live,
+    Closing,
+}
+
 pub struct Page {
+    pub state: PageState,
+    pub kind: Kind,
     pub identity: Identity,
     pub label: String,
     pub url: String,
@@ -23,10 +38,17 @@ pub struct Registry {
     pages: HashMap<u64, Page>,
     last_win: u64,
     last_wc: u64,
+    last_view: u64,
 }
 
 impl Registry {
     pub fn create(&mut self, win: u64, wc: u64) -> Result<String, &'static str> {
+        self.create_window(win, wc, Kind::App)
+    }
+    pub fn create_offscreen(&mut self, win: u64, wc: u64) -> Result<String, &'static str> {
+        self.create_window(win, wc, Kind::PreviewOffscreen)
+    }
+    fn create_window(&mut self, win: u64, wc: u64, kind: Kind) -> Result<String, &'static str> {
         if win == 0 || wc == 0 || win <= self.last_win || wc <= self.last_wc {
             return Err("Node window and webContents IDs must increase and never be reused");
         }
@@ -36,8 +58,10 @@ impl Registry {
         self.pages.insert(
             wc,
             Page {
+                state: PageState::Live,
+                kind,
                 identity: Identity {
-                    win,
+                    win: Some(win),
                     wc,
                     generation: 0,
                 },
@@ -53,6 +77,42 @@ impl Registry {
         Ok(label)
     }
 
+    pub fn create_view(&mut self, view: u64, wc: u64) -> Result<String, &'static str> {
+        if view == 0 || wc == 0 || view <= self.last_view || wc <= self.last_wc {
+            return Err("Node view and webContents IDs must increase and never be reused");
+        }
+        self.last_view = view;
+        self.last_wc = wc;
+        let label = format!("node-view-{view}-page-{wc}");
+        self.pages.insert(
+            wc,
+            Page {
+                state: PageState::Live,
+                kind: Kind::PreviewView { view, parent: None },
+                identity: Identity {
+                    win: None,
+                    wc,
+                    generation: 0,
+                },
+                label: label.clone(),
+                url: "about:blank".into(),
+                title: String::new(),
+                loading: false,
+                zoom: 1.0,
+                ready: false,
+                pushes: VecDeque::new(),
+            },
+        );
+        Ok(label)
+    }
+    pub fn by_view(&self, view: u64) -> Option<&Page> {
+        self.pages
+            .values()
+            .find(|page| matches!(page.kind, Kind::PreviewView { view: id, .. } if id == view))
+    }
+    pub fn is_preview(&self, wc: u64) -> bool {
+        self.page(wc).is_some_and(|page| page.kind != Kind::App)
+    }
     pub fn page(&self, wc: u64) -> Option<&Page> {
         self.pages.get(&wc)
     }
@@ -60,21 +120,65 @@ impl Registry {
         self.pages.get_mut(&wc)
     }
     pub fn by_window(&self, win: u64) -> Option<&Page> {
-        self.pages.values().find(|p| p.identity.win == win)
+        self.pages.values().find(|p| p.identity.win == Some(win))
     }
     pub fn by_label(&self, label: &str) -> Option<&Page> {
-        self.pages.values().find(|p| p.label == label)
+        self.pages
+            .values()
+            .find(|p| p.state == PageState::Live && p.kind == Kind::App && p.label == label)
     }
     pub fn current(&self, id: Identity) -> bool {
-        self.page(id.wc).is_some_and(|p| p.identity == id)
+        self.page(id.wc)
+            .is_some_and(|p| p.state == PageState::Live && p.identity == id)
     }
     pub fn navigate(&mut self, wc: u64, url: String) -> Option<Identity> {
+        let identity = self.invalidate(wc)?;
         let page = self.pages.get_mut(&wc)?;
-        page.identity.generation = page.identity.generation.checked_add(1)?;
         page.url = url;
         page.loading = true;
+        Some(identity)
+    }
+    pub fn invalidate(&mut self, wc: u64) -> Option<Identity> {
+        let page = self
+            .pages
+            .get_mut(&wc)
+            .filter(|page| page.state == PageState::Live)?;
+        page.identity.generation = page.identity.generation.checked_add(1)?;
         page.ready = false;
         page.pushes.clear();
+        Some(page.identity)
+    }
+    pub fn set_parent(&mut self, wc: u64, parent: Option<u64>) -> Result<(), &'static str> {
+        if parent.is_some_and(|win| {
+            !self
+                .by_window(win)
+                .is_some_and(|page| page.kind == Kind::App && page.state == PageState::Live)
+        }) {
+            return Err("native Preview parent must be a live app window");
+        }
+        let page = self
+            .pages
+            .get_mut(&wc)
+            .filter(|page| page.state == PageState::Live)
+            .ok_or("Preview view ended")?;
+        let Kind::PreviewView { parent: owner, .. } = &mut page.kind else {
+            return Err("page is not a native view");
+        };
+        *owner = parent;
+        Ok(())
+    }
+    pub fn children(&self, win: u64) -> Vec<u64> {
+        self.pages
+            .values()
+            .filter(
+                |page| matches!(page.kind,Kind::PreviewView{parent:Some(parent),..}if parent==win),
+            )
+            .map(|page| page.identity.wc)
+            .collect()
+    }
+    pub fn begin_close(&mut self, wc: u64) -> Option<Identity> {
+        let page = self.pages.get_mut(&wc)?;
+        page.state = PageState::Closing;
         Some(page.identity)
     }
     pub fn remove(&mut self, wc: u64) -> Option<Page> {
@@ -117,6 +221,26 @@ mod tests {
         assert!(registry.current(new));
         registry.remove(1);
         assert!(!registry.current(new));
+    }
+    #[test]
+    fn preview_and_app_share_non_reused_contents_ids_without_fake_window_owners() {
+        let mut registry = Registry::default();
+        registry.create(1, 1).unwrap();
+        let label = registry.create_view(1, 2).unwrap();
+        assert_eq!(registry.page(2).unwrap().identity.win, None);
+        assert!(registry.by_label(&label).is_none());
+        assert_eq!(registry.by_view(1).unwrap().identity.wc, 2);
+        assert!(registry.create_offscreen(2, 2).is_err());
+        registry.create_offscreen(2, 3).unwrap();
+        assert_eq!(registry.by_window(2).unwrap().kind, Kind::PreviewOffscreen);
+        let identity = registry
+            .navigate(2, "https://example.invalid".into())
+            .unwrap();
+        registry.remove(2);
+        assert!(!registry.current(identity));
+        assert!(registry.create_view(1, 4).is_err());
+        assert!(registry.create(3, 3).is_err());
+        registry.create(3, 4).unwrap();
     }
     #[test]
     fn app_origin_lookalikes_are_denied() {
