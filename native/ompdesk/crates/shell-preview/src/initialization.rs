@@ -15,7 +15,7 @@ pub struct AttachedPage {
     pub target_id: String,
     pub session_id: String,
     pub context_id: String,
-    transport: Transport,
+    pub(crate) transport: Transport,
 }
 
 impl AttachedPage {
@@ -24,15 +24,42 @@ impl AttachedPage {
             .request(method, params, Some(&self.session_id))
             .await
     }
+
+    pub(crate) fn from_target(
+        transport: &Transport,
+        target: &Value,
+        session: &str,
+    ) -> Result<Self> {
+        let field = |name| {
+            target
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    Error::new(
+                        "cdp",
+                        "Attached Preview target has no context or target identity",
+                    )
+                })
+        };
+        Ok(Self {
+            target_id: field("targetId")?,
+            session_id: session.to_owned(),
+            context_id: field("browserContextId")?,
+            transport: transport.clone(),
+        })
+    }
 }
 
 pub trait PageInitializer: Send + Sync {
     fn initialize(&self, page: AttachedPage) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 }
 
+type Ready = Option<Result<AttachedPage>>;
+
 struct Pending {
     session: Option<String>,
-    completion: watch::Sender<Option<Result<()>>>,
+    completion: watch::Sender<Ready>,
 }
 
 impl Pending {
@@ -45,13 +72,13 @@ impl Pending {
 }
 
 pub(crate) struct Initializations {
-    initializer: Arc<dyn PageInitializer>,
+    initializer: Option<Arc<dyn PageInitializer>>,
     targets: Mutex<HashMap<String, Pending>>,
     timeout: Duration,
 }
 
 impl Initializations {
-    pub(crate) fn new(initializer: Arc<dyn PageInitializer>, timeout: Duration) -> Self {
+    pub(crate) fn new(initializer: Option<Arc<dyn PageInitializer>>, timeout: Duration) -> Self {
         Self {
             initializer,
             targets: Mutex::new(HashMap::new()),
@@ -59,11 +86,7 @@ impl Initializations {
         }
     }
 
-    pub(crate) async fn begin(
-        &self,
-        target: &str,
-        session: &str,
-    ) -> (watch::Sender<Option<Result<()>>>, bool) {
+    pub(crate) async fn begin(&self, target: &str, session: &str) -> (watch::Sender<Ready>, bool) {
         let mut targets = self.targets.lock().await;
         let state = targets
             .entry(target.to_owned())
@@ -80,31 +103,17 @@ impl Initializations {
         transport: &Transport,
         target: &Value,
         session: &str,
-    ) -> Result<()> {
-        let field = |name| {
-            target
-                .get(name)
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    Error::new(
-                        "cdp",
-                        "Attached Preview target has no context or target identity",
-                    )
-                })
-        };
-        let page = AttachedPage {
-            target_id: field("targetId")?,
-            session_id: session.to_owned(),
-            context_id: field("browserContextId")?,
-            transport: transport.clone(),
-        };
-        tokio::time::timeout(self.timeout, self.initializer.initialize(page))
-            .await
-            .map_err(|_| Error::new("timeout", "Preview session initialization timed out"))?
+    ) -> Result<AttachedPage> {
+        let page = AttachedPage::from_target(transport, target, session)?;
+        if let Some(initializer) = &self.initializer {
+            tokio::time::timeout(self.timeout, initializer.initialize(page.clone()))
+                .await
+                .map_err(|_| Error::new("timeout", "Preview session initialization timed out"))??;
+        }
+        Ok(page)
     }
 
-    pub(crate) async fn wait(&self, target: &str) -> Result<()> {
+    pub(crate) async fn wait(&self, target: &str) -> Result<AttachedPage> {
         let mut completion = {
             let mut targets = self.targets.lock().await;
             targets
