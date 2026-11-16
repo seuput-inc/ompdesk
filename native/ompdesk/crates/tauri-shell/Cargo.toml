@@ -31,6 +31,7 @@ tray-icon = "0.21"
 shell_preview = { package = "ompdesk-shell-preview", path = "../shell-preview" }
 cookie_store = { version = "=0.22.1", default-features = false }
 psl = "=2.1.251"
+base64 = "=0.23.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
