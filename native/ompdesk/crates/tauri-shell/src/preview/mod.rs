@@ -210,6 +210,24 @@ struct Queued {
     cancelled: oneshot::Receiver<()>,
     identity: Option<Identity>,
 }
+struct PendingEvaluation(Option<host::Call>);
+impl Drop for PendingEvaluation {
+    fn drop(&mut self) {
+        if let Some(call) = self.0.take() {
+            host::forget_cancel(call.id());
+            call.err("cancelled", "Preview evaluation ended before its reply");
+        }
+    }
+}
+
+fn awaits_script(method: &str, params: &Value) -> bool {
+    (method == "wc.op" && params["op"].as_str() == Some("executeJavaScript"))
+        || (method == "wc.cdp.send"
+            && (params["method"].as_str() == Some("Runtime.awaitPromise")
+                || (matches!(params["method"].as_str(),
+                    Some("Runtime.evaluate" | "Runtime.callFunctionOn" | "Runtime.runScript"))
+                    && params.pointer("/params/awaitPromise").and_then(Value::as_bool) == Some(true))))
+}
 pub struct Service {
     send: mpsc::UnboundedSender<Message>,
     stop: Mutex<Option<oneshot::Sender<()>>>,
@@ -315,9 +333,17 @@ async fn serve(
     let mut browser: Option<Arc<Browser>> = None;
     let mut observer = None;
     let mut failure = None;
+    let mut evaluations = tokio::task::JoinSet::new();
     loop {
         let message = tokio::select! {
             _ = &mut stopped => break,
+            finished = evaluations.join_next(), if !evaluations.is_empty() => {
+                if let Some(Err(error)) = finished {
+                    failure = Some(format!("Preview evaluation task: {error}"));
+                    break;
+                }
+                continue;
+            },
             call = receive.recv() => match call { Some(call) => call, None => break },
         };
         let Queued {
@@ -446,42 +472,27 @@ async fn serve(
             }
             continue;
         }
+        if awaits_script(&call.method, &call.params) {
+            let browser = Arc::clone(browser.as_ref().expect("launched Preview"));
+            let pages = Arc::clone(&pages);
+            let mut request = PendingEvaluation(Some(call));
+            evaluations.spawn(async move {
+                let call = request.0.as_ref().expect("owned evaluation");
+                let result = tokio::select! {
+                    biased;
+                    _ = &mut cancelled => Err(WireError::new("cancelled", "Preview evaluation cancelled")),
+                    result = execute(&browser, &pages, &call.method, &call.params, identity) => result,
+                };
+                answer_call(&pages, request.0.take().expect("owned evaluation"), result).await;
+            });
+            continue;
+        }
         let browser = browser.as_ref().expect("launched Preview");
         let result = execute(browser, &pages, &call.method, &call.params, identity).await;
-        host::forget_cancel(id);
-        match result {
-            Ok(Answer::Json(value)) => call.ok(value),
-            Ok(Answer::Binary(value, bytes, page, ack)) => {
-                call.ok_bin(value, &bytes);
-                if let Some(ack) = ack
-                    && let Err(error) = page.ack_frame(ack).await
-                {
-                    crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
-                }
-            }
-            Err(mut error) => {
-                if matches!(call.method.as_str(), "view.create" | "win.create")
-                    && let Some(wc) = call.params["wcId"].as_u64()
-                {
-                    if pages.entry(wc).is_ok() {
-                        if let Err(cleanup) = close(&pages, wc).await {
-                            error.message =
-                                format!("{}; cleanup: {}", error.message, cleanup.message);
-                        }
-                    } else {
-                        crate::close_record(wc);
-                    }
-                }
-                if call.method == "wc.op"
-                    && call.params["op"].as_str() == Some("loadURL")
-                    && let Some(wc) = call.params["wcId"].as_u64()
-                {
-                    reject_load(&pages, wc, &call.params["args"], &error).await;
-                }
-                call.err(&error.code, error.message);
-            }
-        }
+        answer_call(&pages, call, result).await;
     }
+    evaluations.abort_all();
+    while evaluations.join_next().await.is_some() {}
     receive.close();
     while let Ok(message) = receive.try_recv() {
         let Queued { call, .. } = match message {
@@ -555,6 +566,41 @@ async fn serve(
 enum Answer {
     Json(Value),
     Binary(Value, Arc<Vec<u8>>, Arc<Page>, Option<i64>),
+}
+
+async fn answer_call(pages: &Pages, call: host::Call, result: Result<Answer, WireError>) {
+    host::forget_cancel(call.id());
+    match result {
+        Ok(Answer::Json(value)) => call.ok(value),
+        Ok(Answer::Binary(value, bytes, page, ack)) => {
+            call.ok_bin(value, &bytes);
+            if let Some(ack) = ack
+                && let Err(error) = page.ack_frame(ack).await
+            {
+                crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
+            }
+        }
+        Err(mut error) => {
+            if matches!(call.method.as_str(), "view.create" | "win.create")
+                && let Some(wc) = call.params["wcId"].as_u64()
+            {
+                if pages.entry(wc).is_ok() {
+                    if let Err(cleanup) = close(pages, wc).await {
+                        error.message = format!("{}; cleanup: {}", error.message, cleanup.message);
+                    }
+                } else {
+                    crate::close_record(wc);
+                }
+            }
+            if call.method == "wc.op"
+                && call.params["op"].as_str() == Some("loadURL")
+                && let Some(wc) = call.params["wcId"].as_u64()
+            {
+                reject_load(pages, wc, &call.params["args"], &error).await;
+            }
+            call.err(&error.code, error.message);
+        }
+    }
 }
 async fn execute(
     browser: &Arc<Browser>,
@@ -1280,7 +1326,7 @@ async fn ack_retained(entry: &Entry) {
         crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
     }
 }
-async fn resynchronize(browser: &Browser, pages: &Pages) {
+async fn resynchronize(browser: &Browser, pages: &Pages, skipped: u64, last_event: &str) {
     let entries: Vec<_> = pages
         .entries
         .lock()
@@ -1307,6 +1353,10 @@ async fn resynchronize(browser: &Browser, pages: &Pages) {
             .expect("Preview routes")
             .retain(|session, route| route.wc != wc || *session == entry.page.session_id);
         if let Some(debugger) = debugger {
+            crate::log::log("preview.debugger.detach", json!({
+                "wcId":wc,"reason":"event-stream-lag","skipped":skipped,
+                "lastEvent":last_event,"sessionId":debugger
+            }));
             if browser
                 .command(
                     "Target.detachFromTarget",
@@ -1441,12 +1491,13 @@ async fn observe(
     pages: Arc<Pages>,
     mut receive: tokio::sync::broadcast::Receiver<shell_preview::Event>,
 ) {
+    let mut last_event = String::new();
     loop {
         let mut event = match receive.recv().await {
             Ok(event) => event,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                crate::log::log("preview.events.lagged", json!({"skipped":skipped}));
-                resynchronize(&browser, &pages).await;
+                crate::log::log("preview.events.lagged", json!({"skipped":skipped,"lastEvent":last_event}));
+                resynchronize(&browser, &pages, skipped, &last_event).await;
                 continue;
             }
             Err(error) => {
@@ -1464,6 +1515,7 @@ async fn observe(
                 return;
             }
         };
+        last_event.clone_from(&event.method);
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 let detached = pages.routes.lock().expect("Preview routes").remove(session);
@@ -1472,6 +1524,11 @@ async fn observe(
                 {
                     let primary = entry.page.session_id == session;
                     let root = route.debugger.as_deref() == Some(session);
+                    crate::log::log("preview.target.detached", json!({
+                        "wcId":route.wc,"sessionId":session,"event":event.method,
+                        "primary":primary,"debuggerRoot":root,"iframe":route.iframe,
+                        "reason":event.params.get("reason")
+                    }));
                     if root {
                         entry.document.lock().expect("Preview document").debugger = None;
                         pages
@@ -1899,15 +1956,17 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             }
         }
         events::Update::Loading { frame_id, loading } => {
-            if !loading
-                || frame_id.as_deref()
-                    != entry
+            if frame_id.as_deref() != entry
                         .document
                         .lock()
                         .expect("Preview document")
                         .frame
                         .as_deref()
             {
+                return;
+            }
+            if !loading {
+                stop_loading(wc);
                 return;
             }
             if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
@@ -1977,6 +2036,21 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
         }
     }
 }
+fn stop_loading(wc: u64) {
+    let changed = {
+        let mut registry = runtime().registry.lock().expect("registry");
+        registry.page_mut(wc).is_some_and(|page| {
+            let was_loading = page.loading;
+            page.loading = false;
+            was_loading
+        })
+    };
+    if changed {
+        wc_state(wc);
+        wc_event(wc, "did-stop-loading", json!([]));
+    }
+}
+
 async fn lifecycle(entry: &Entry, wc: u64, params: &Value) {
     let matching = {
         let mut document = entry.document.lock().expect("Preview document");
@@ -1994,12 +2068,16 @@ async fn lifecycle(entry: &Entry, wc: u64, params: &Value) {
     match params["name"].as_str() {
         Some("DOMContentLoaded") => wc_event(wc, "dom-ready", json!([])),
         Some("load") => {
+            let identity = {
+                runtime().registry.lock().expect("registry").page(wc).map(|page| page.identity)
+            };
             refresh_state(entry, wc).await;
-            if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
-                page.loading = false;
+            if !identity.is_some_and(|identity| {
+                runtime().registry.lock().expect("registry").current(identity)
+            }) {
+                return;
             }
-            wc_state(wc);
-            wc_event(wc, "did-stop-loading", json!([]));
+            stop_loading(wc);
             wc_event(wc, "did-finish-load", json!([]));
             if let Some(win) = runtime()
                 .registry

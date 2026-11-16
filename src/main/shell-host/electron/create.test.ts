@@ -10,7 +10,7 @@ import { NsisUpdater } from "electron-updater";
 import { ElectronAppAdapter } from "electron-updater/out/ElectronAppAdapter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IpcRegistry } from "../../web/ipc-registry";
-import { Answered, ShellClient } from "../client";
+import { Answered, HostError, ShellClient } from "../client";
 import { duplexPair } from "../duplex-pair";
 import type { HostFacts } from "../facts";
 import { createElectron, type ElectronShim } from "./create";
@@ -756,6 +756,64 @@ describe("webContents", () => {
 			windowsVirtualKeyCode: 37,
 		});
 		expect(cdp.at(-1)).toMatchObject({ method: "Input.insertText", params: { text: "한" } });
+	});
+
+	it("delivers a click's move, press and release, then typed text, in the order they were sent however late the shell answers", async () => {
+		const { webContents } = new electron.BrowserWindow({});
+		const lateFirstAnswer = Promise.withResolvers<void>();
+		let arrived = 0;
+		fake.answers.set("wc.cdp.send", () => {
+			arrived += 1;
+			return arrived === 1 ? lateFirstAnswer.promise.then(() => ({ result: {} })) : { result: {} };
+		});
+		webContents.sendInputEvent({ type: "mouseMove", x: 40, y: 12 });
+		webContents.sendInputEvent({ type: "mouseDown", x: 40, y: 12, button: "left", clickCount: 1 });
+		webContents.sendInputEvent({ type: "mouseUp", x: 40, y: 12, button: "left", clickCount: 1 });
+		const typed = webContents.insertText("한");
+		await settle();
+		lateFirstAnswer.resolve();
+		await typed;
+		expect(fake.callsOf("wc.cdp.send").map(call => call.params)).toMatchObject([
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 40, y: 12 } },
+			{
+				method: "Input.dispatchMouseEvent",
+				params: { type: "mousePressed", x: 40, y: 12, button: "left", clickCount: 1 },
+			},
+			{
+				method: "Input.dispatchMouseEvent",
+				params: { type: "mouseReleased", x: 40, y: 12, button: "left", clickCount: 1 },
+			},
+			{ method: "Input.insertText", params: { text: "한" } },
+		]);
+	});
+
+	it("logs an input event the page refused and still delivers the ones after it", async () => {
+		const { webContents } = new electron.BrowserWindow({});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		try {
+			fake.answers.set("wc.cdp.send", ({ params: command }) => {
+				if (
+					typeof command === "object" &&
+					command !== null &&
+					"type" in command &&
+					command.type === "mousePressed"
+				)
+					throw new HostError("cdp", "Target closed");
+				return { result: {} };
+			});
+			webContents.sendInputEvent({ type: "mouseDown", x: 1, y: 2, button: "left", clickCount: 1 });
+			webContents.sendInputEvent({ type: "mouseUp", x: 1, y: 2, button: "left", clickCount: 1 });
+			await webContents.insertText("a");
+			await settle();
+			expect(warn).toHaveBeenCalledWith(expect.stringMatching(/sendInputEvent: .*Target closed/));
+			expect(fake.callsOf("wc.cdp.send").map(call => call.params.method)).toEqual([
+				"Input.dispatchMouseEvent",
+				"Input.dispatchMouseEvent",
+				"Input.insertText",
+			]);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it("BrowserWindow.capturePage is the page's capture", async () => {

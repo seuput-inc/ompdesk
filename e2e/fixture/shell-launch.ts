@@ -21,6 +21,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
 import * as path from "node:path";
+import { type TestInfo, test } from "@playwright/test";
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from "playwright-core";
 
 /** How long a running main process gets to act on a quit before it is killed. */
@@ -33,6 +34,32 @@ const LAUNCH_TIMEOUT_MS = 60_000;
  */
 const processTree = () => import("../process-tree");
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+const diagnostics = new WeakMap<ChildProcess, { userData: string; output: string }>();
+
+export function copyShellDiagnostics(userData: string, output: string): string[] {
+	const copied: string[] = [];
+	for (const name of ["tauri-shell.jsonl", "gui-runtime.jsonl"]) {
+		try {
+			fs.mkdirSync(output, { recursive: true });
+			fs.copyFileSync(path.join(userData, name), path.join(output, name));
+			copied.push(name);
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		}
+	}
+	return copied;
+}
+
+function retainDiagnostics(child: ChildProcess): void {
+	const capture = diagnostics.get(child);
+	if (!capture) return;
+	diagnostics.delete(child);
+	try {
+		copyShellDiagnostics(capture.userData, capture.output);
+	} catch (error) {
+		console.warn(`[shell diagnostics] ${String(error)}`);
+	}
+}
 
 /** `resources/ompdesk-tauri/<platform>-<arch>/ompdesk-shell(.exe)`, where `bun run build:tauri` stages the host. */
 export function stagedShell(platform = process.platform, arch = process.arch, root = REPO_ROOT): string {
@@ -457,41 +484,46 @@ export async function exitShellApp(app: Pick<ShellApplication, "process" | "eval
 	} catch {
 		return;
 	}
-	if (!child || child.exitCode !== null || child.signalCode !== null) return;
-	const { processesBelow, waitForProcessesToExit } = await processTree();
-	const owned = child.pid === undefined ? [] : processesBelow(child.pid);
-	const exited = Promise.withResolvers<void>();
-	child.once("exit", () => exited.resolve());
-	const quit = app.evaluate(({ app }: { app: { exit(code: number): void } }) => {
-		setImmediate(() => app.exit(0));
-	});
-	const stuck = Promise.withResolvers<"stuck">();
-	const timer = setTimeout(() => stuck.resolve("stuck"), EXIT_GRACE_MS);
 	try {
-		if ((await Promise.race([quit, stuck.promise])) === "stuck") {
-			quit.catch(() => undefined);
-			child.kill("SIGKILL");
+		if (!child || child.exitCode !== null || child.signalCode !== null) return;
+		const { processesBelow, waitForProcessesToExit } = await processTree();
+		const owned = child.pid === undefined ? [] : processesBelow(child.pid);
+		const exited = Promise.withResolvers<void>();
+		child.once("exit", () => exited.resolve());
+		const quit = app.evaluate(({ app }: { app: { exit(code: number): void } }) => {
+			setImmediate(() => app.exit(0));
+		});
+		const stuck = Promise.withResolvers<"stuck">();
+		const timer = setTimeout(() => stuck.resolve("stuck"), EXIT_GRACE_MS);
+		try {
+			if ((await Promise.race([quit, stuck.promise])) === "stuck") {
+				quit.catch(() => undefined);
+				child.kill("SIGKILL");
+			}
+		} catch (error) {
+			// A spec that killed the app (SIGKILL) and then failed ends here with the app gone: wait for the launcher below
+			// rather than let "Target closed" replace the spec's own failure in the report.
+			if (!String(error).includes("has been closed")) throw error;
+		} finally {
+			clearTimeout(timer);
 		}
-	} catch (error) {
-		// A spec that killed the app (SIGKILL) and then failed ends here with the app gone: wait for the launcher below
-		// rather than let "Target closed" replace the spec's own failure in the report.
-		if (!String(error).includes("has been closed")) throw error;
+		await app.disconnect();
+		// `app.exit(0)` was asked and answered, yet the app can stay: nightly 41931516185's judge-preview-check finished every
+		// assertion in 2.3 s and then waited here until the 90 s test timeout (its trace ends at exitApp's evaluate). The wait
+		// is bounded like the ask above: a late app is killed and the spec goes on, with a line saying so.
+		const late = Promise.withResolvers<"late">();
+		const lateTimer = setTimeout(() => late.resolve("late"), EXIT_GRACE_MS);
+		if ((await Promise.race([exited.promise.then(() => "exited" as const), late.promise])) === "late") {
+			console.warn(`[exitApp] the app did not exit ${EXIT_GRACE_MS} ms after app.exit(0); killed it`);
+			child.kill("SIGKILL");
+			await exited.promise;
+		}
+		clearTimeout(lateTimer);
+		await waitForProcessesToExit(owned, EXIT_GRACE_MS);
 	} finally {
-		clearTimeout(timer);
+		// Specs remove profiles before the runner marks a thrown assertion failed.
+		retainDiagnostics(child);
 	}
-	await app.disconnect();
-	// `app.exit(0)` was asked and answered, yet the app can stay: nightly 41931516185's judge-preview-check finished every
-	// assertion in 2.3 s and then waited here until the 90 s test timeout (its trace ends at exitApp's evaluate). The wait
-	// is bounded like the ask above: a late app is killed and the spec goes on, with a line saying so.
-	const late = Promise.withResolvers<"late">();
-	const lateTimer = setTimeout(() => late.resolve("late"), EXIT_GRACE_MS);
-	if ((await Promise.race([exited.promise.then(() => "exited" as const), late.promise])) === "late") {
-		console.warn(`[exitApp] the app did not exit ${EXIT_GRACE_MS} ms after app.exit(0); killed it`);
-		child.kill("SIGKILL");
-		await exited.promise;
-	}
-	clearTimeout(lateTimer);
-	await waitForProcessesToExit(owned, EXIT_GRACE_MS);
 }
 
 /** With `OMP_GUI_E2E_SHELL_LOG=1`: every page that opens, crashes or closes, so a "Target closed" has a cause on record. */
@@ -557,6 +589,13 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	env.OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT = String(debugPort);
 
 	const child = spawn(executable, args, { env, cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] });
+	let info: TestInfo | undefined;
+	try {
+		info = test.info();
+	} catch {
+		// The launcher is also imported by plain-Node lifetime probes.
+	}
+	if (info) diagnostics.set(child, { userData, output: info.outputPath("shell-logs", String(child.pid ?? "launch")) });
 	let tail = "";
 	let stderr = "";
 	let inspector: Inspector | undefined;
@@ -617,6 +656,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		const owned = child.pid === undefined ? [] : processesBelow(child.pid);
 		child.kill("SIGKILL");
 		await waitForProcessesToExit(owned, EXIT_GRACE_MS);
+		retainDiagnostics(child);
 		throw error;
 	}
 }
