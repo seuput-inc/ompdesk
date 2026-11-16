@@ -213,6 +213,18 @@ impl Browser {
         self.transport.request(method, params, session).await
     }
 
+    /// Host mutations settle on the actual CDP answer or connection loss, not the read deadline.
+    pub async fn command_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value> {
+        self.transport
+            .request_settled(method, params, session)
+            .await
+    }
+
     pub async fn create_partition(&self) -> Result<Partition> {
         let mut transaction = Creation::new(&self.transport);
         let context = self
@@ -346,6 +358,15 @@ impl Page {
             .await
     }
 
+    pub async fn command_settled(&self, method: &str, params: Value) -> Result<Value> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .request_settled(method, params, Some(&self.session_id))
+            .await
+    }
+
     pub async fn navigate(&self, url: &str) -> Result<Value> {
         if !web_url(url) {
             return Err(Error::new(
@@ -353,7 +374,9 @@ impl Page {
                 "Preview navigation requires HTTP or HTTPS",
             ));
         }
-        let result = self.command("Page.navigate", json!({"url":url})).await?;
+        let result = self
+            .command_settled("Page.navigate", json!({"url":url}))
+            .await?;
         if let Some(error) = result.get("errorText").and_then(Value::as_str) {
             return Err(Error::new("navigation", error));
         }
@@ -396,7 +419,7 @@ impl Page {
     }
 
     pub async fn resize(&self, viewport: Viewport) -> Result<()> {
-        self.command("Emulation.setDeviceMetricsOverride", viewport.params()?)
+        self.command_settled("Emulation.setDeviceMetricsOverride", viewport.params()?)
             .await?;
         Ok(())
     }
@@ -421,19 +444,21 @@ impl Page {
     }
 
     pub async fn start_screencast(&self, options: Value) -> Result<()> {
-        self.command("Page.startScreencast", options).await?;
+        self.command_settled("Page.startScreencast", options)
+            .await?;
         Ok(())
     }
 
     /// ACK only after the compositor or phone stream consumed this frame. Never ACK an unrelated page's frame.
     pub async fn ack_frame(&self, session_id: i64) -> Result<()> {
-        self.command("Page.screencastFrameAck", json!({"sessionId":session_id}))
+        self.command_settled("Page.screencastFrameAck", json!({"sessionId":session_id}))
             .await?;
         Ok(())
     }
 
     pub async fn stop_screencast(&self) -> Result<()> {
-        self.command("Page.stopScreencast", json!({})).await?;
+        self.command_settled("Page.stopScreencast", json!({}))
+            .await?;
         Ok(())
     }
 
@@ -444,7 +469,7 @@ impl Page {
         }
         if let Err(error) = self
             .transport
-            .request(
+            .request_settled(
                 "Target.closeTarget",
                 json!({"targetId":self.target_id}),
                 None,

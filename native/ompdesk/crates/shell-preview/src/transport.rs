@@ -41,9 +41,17 @@ impl std::io::Write for Frame {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingLifetime {
+    Timed,
+    SettledQueued,
+    SettledWriting,
+}
+
 struct Pending {
     session: Option<String>,
     reply: Reply,
+    lifetime: PendingLifetime,
 }
 
 struct State {
@@ -107,12 +115,14 @@ struct PendingGuard {
 
 impl Drop for PendingGuard {
     fn drop(&mut self) {
-        self.shared
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state
             .pending
-            .remove(&self.id);
+            .get(&self.id)
+            .is_some_and(|pending| pending.lifetime != PendingLifetime::SettledWriting)
+        {
+            state.pending.remove(&self.id);
+        }
     }
 }
 
@@ -184,6 +194,27 @@ impl Transport {
         params: Value,
         session: Option<&str>,
     ) -> Result<Value> {
+        self.request_with_lifetime(method, params, session, PendingLifetime::Timed)
+            .await
+    }
+
+    pub async fn request_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value> {
+        self.request_with_lifetime(method, params, session, PendingLifetime::SettledQueued)
+            .await
+    }
+
+    async fn request_with_lifetime(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+        lifetime: PendingLifetime,
+    ) -> Result<Value> {
         let shared = &self.owner.shared;
         let (reply, receiver) = oneshot::channel();
         let id = {
@@ -207,6 +238,7 @@ impl Transport {
                 Pending {
                     session: session.map(str::to_owned),
                     reply,
+                    lifetime,
                 },
             );
             id
@@ -235,6 +267,11 @@ impl Transport {
                 _permit: Some(permit),
             })
             .map_err(|_| Error::new("capacity", "Chromium request queue is full or closed"))?;
+        if lifetime != PendingLifetime::Timed {
+            return receiver
+                .await
+                .unwrap_or_else(|_| Err(Error::new("closed", "Chromium connection closed")));
+        }
         match tokio::time::timeout(self.owner.timeout, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(Error::new("closed", "Chromium connection closed")),
@@ -325,10 +362,14 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             _ = done.changed() => return,
             item = queue.recv() => match item {
                 Some(item) => {
-                    if let Some(id) = item.id
-                        && !shared.state.lock().unwrap_or_else(|e| e.into_inner()).pending.contains_key(&id)
-                    {
-                        continue;
+                    if let Some(id) = item.id {
+                        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                        let Some(pending) = state.pending.get_mut(&id) else {
+                            continue;
+                        };
+                        if pending.lifetime == PendingLifetime::SettledQueued {
+                            pending.lifetime = PendingLifetime::SettledWriting;
+                        }
                     }
                     let result = tokio::select! {
                         _ = done.changed() => return,
@@ -606,63 +647,66 @@ mod tests {
 
     #[tokio::test]
     async fn writer_skips_cancelled_queued_commands() {
-        let (outgoing, queue) = mpsc::channel(MAX_PENDING);
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let (stop, _) = watch::channel(false);
-        let (done, _) = watch::channel(false);
-        let (reply, _receiver) = oneshot::channel();
-        let mut pending = HashMap::new();
-        pending.insert(
-            1,
-            Pending {
-                session: None,
-                reply,
-            },
-        );
-        let shared = Arc::new(Shared {
-            state: Mutex::new(State {
-                next_id: 2,
-                pending,
-                failure: None,
-            }),
-            outgoing,
-            events: Mutex::new(Some(events)),
-            policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
-            stop,
-            done,
-            bytes: Arc::new(Semaphore::new(MAX_QUEUED_BYTES)),
-        });
-        assert!(
-            shared
-                .outgoing
-                .try_send(Outgoing {
-                    id: Some(1),
-                    bytes: b"{\"id\":1}\0".to_vec(),
-                    _permit: None
-                })
-                .is_ok()
-        );
-        let guard = PendingGuard {
-            shared: Arc::clone(&shared),
-            id: 1,
-        };
-        drop(guard);
-        assert!(
-            shared
-                .outgoing
-                .try_send(Outgoing {
-                    id: None,
-                    bytes: b"{\"method\":\"Browser.close\"}\0".to_vec(),
-                    _permit: None
-                })
-                .is_ok()
-        );
-        let (writer, peer) = tokio::io::duplex(128);
-        tokio::spawn(write_loop(writer, queue, shared));
-        let mut peer = BufReader::new(peer);
-        let mut frame = Vec::new();
-        peer.read_until(0, &mut frame).await.unwrap();
-        assert_eq!(frame, b"{\"method\":\"Browser.close\"}\0");
+        for lifetime in [PendingLifetime::Timed, PendingLifetime::SettledQueued] {
+            let (outgoing, queue) = mpsc::channel(MAX_PENDING);
+            let (events, _) = broadcast::channel(EVENT_CAPACITY);
+            let (stop, _) = watch::channel(false);
+            let (done, _) = watch::channel(false);
+            let (reply, _receiver) = oneshot::channel();
+            let mut pending = HashMap::new();
+            pending.insert(
+                1,
+                Pending {
+                    session: None,
+                    reply,
+                    lifetime,
+                },
+            );
+            let shared = Arc::new(Shared {
+                state: Mutex::new(State {
+                    next_id: 2,
+                    pending,
+                    failure: None,
+                }),
+                outgoing,
+                events: Mutex::new(Some(events)),
+                policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
+                stop,
+                done,
+                bytes: Arc::new(Semaphore::new(MAX_QUEUED_BYTES)),
+            });
+            assert!(
+                shared
+                    .outgoing
+                    .try_send(Outgoing {
+                        id: Some(1),
+                        bytes: b"{\"id\":1}\0".to_vec(),
+                        _permit: None
+                    })
+                    .is_ok()
+            );
+            let guard = PendingGuard {
+                shared: Arc::clone(&shared),
+                id: 1,
+            };
+            drop(guard);
+            assert!(
+                shared
+                    .outgoing
+                    .try_send(Outgoing {
+                        id: None,
+                        bytes: b"{\"method\":\"Browser.close\"}\0".to_vec(),
+                        _permit: None
+                    })
+                    .is_ok()
+            );
+            let (writer, peer) = tokio::io::duplex(128);
+            tokio::spawn(write_loop(writer, queue, shared));
+            let mut peer = BufReader::new(peer);
+            let mut frame = Vec::new();
+            peer.read_until(0, &mut frame).await.unwrap();
+            assert_eq!(frame, b"{\"method\":\"Browser.close\"}\0");
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -674,7 +718,7 @@ mod tests {
             let transport = transport.clone();
             tokio::spawn(async move {
                 transport
-                    .request("Input.insertText", json!({"text":"한"}), Some("original"))
+                    .request_settled("Input.insertText", json!({"text":"한"}), Some("original"))
                     .await
             })
         };
@@ -699,7 +743,7 @@ mod tests {
             let transport = transport.clone();
             tokio::spawn(async move {
                 transport
-                    .request("DOM.focus", json!({"nodeId":7}), Some("original"))
+                    .request_settled("DOM.focus", json!({"nodeId":7}), Some("original"))
                     .await
             })
         };
@@ -710,6 +754,53 @@ mod tests {
         drop(read);
         drop(write);
         assert_eq!(mutation.await.unwrap().unwrap_err().code, "pipe");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn abandoned_sent_mutations_keep_capacity_until_actual_settlement() {
+        let (transport, peer) = connected(Duration::from_millis(10));
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let live = {
+            let transport = transport.clone();
+            tokio::spawn(async move {
+                transport
+                    .request_settled("DOM.focus", json!({"nodeId":1}), Some("original"))
+                    .await
+            })
+        };
+        let live_id = command(&mut read).await["id"].as_u64().unwrap();
+        for node in 1..MAX_PENDING {
+            let task = {
+                let transport = transport.clone();
+                tokio::spawn(async move {
+                    transport
+                        .request_settled("DOM.focus", json!({"nodeId":node + 1}), Some("original"))
+                        .await
+                })
+            };
+            command(&mut read).await;
+            task.abort();
+            let _ = task.await;
+        }
+        let error = transport
+            .request("DOM.getDocument", json!({}), Some("original"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "capacity");
+        write.write_all(format!("{{\"id\":{live_id},\"result\":{{\"settled\":true}},\"sessionId\":\"original\"}}\0").as_bytes()).await.unwrap();
+        assert_eq!(live.await.unwrap().unwrap(), json!({"settled":true}));
+        let following = {
+            let transport = transport.clone();
+            tokio::spawn(async move {
+                transport
+                    .request_settled("DOM.focus", json!({"nodeId":999}), Some("original"))
+                    .await
+            })
+        };
+        let following_id = command(&mut read).await["id"].as_u64().unwrap();
+        write.write_all(format!("{{\"id\":{following_id},\"result\":{{\"settled\":true}},\"sessionId\":\"original\"}}\0").as_bytes()).await.unwrap();
+        assert_eq!(following.await.unwrap().unwrap(), json!({"settled":true}));
     }
 
     #[tokio::test(start_paused = true)]
@@ -904,59 +995,67 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn failure_and_cancellation_race_releases_every_request() {
-        let (outgoing, _queue) = mpsc::channel(MAX_PENDING);
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let (stop, _) = watch::channel(false);
-        let (done, _) = watch::channel(false);
-        let (first, _first_rx) = oneshot::channel();
-        let (second, second_rx) = oneshot::channel();
-        let mut pending = HashMap::new();
-        pending.insert(
-            1,
-            Pending {
-                session: None,
-                reply: first,
-            },
-        );
-        pending.insert(
-            2,
-            Pending {
-                session: None,
-                reply: second,
-            },
-        );
-        let shared = Arc::new(Shared {
-            state: Mutex::new(State {
-                next_id: 3,
-                pending,
-                failure: None,
-            }),
-            outgoing,
-            events: Mutex::new(Some(events)),
-            policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
-            stop,
-            done,
-            bytes: Arc::new(Semaphore::new(MAX_QUEUED_BYTES)),
-        });
-        let guard = PendingGuard {
-            shared: Arc::clone(&shared),
-            id: 1,
-        };
-        let barrier = Arc::new(tokio::sync::Barrier::new(2));
-        let failing = {
-            let shared = Arc::clone(&shared);
-            let barrier = Arc::clone(&barrier);
-            tokio::spawn(async move {
-                barrier.wait().await;
-                shared.fail(Error::new("pipe", "pipe failed"));
-            })
-        };
-        barrier.wait().await;
-        drop(guard);
-        failing.await.unwrap();
-        assert_eq!(second_rx.await.unwrap().unwrap_err().code, "pipe");
-        assert!(shared.state.lock().unwrap().pending.is_empty());
-        assert!(*shared.stop.borrow());
+        for first_lifetime in [
+            PendingLifetime::Timed,
+            PendingLifetime::SettledQueued,
+            PendingLifetime::SettledWriting,
+        ] {
+            let (outgoing, _queue) = mpsc::channel(MAX_PENDING);
+            let (events, _) = broadcast::channel(EVENT_CAPACITY);
+            let (stop, _) = watch::channel(false);
+            let (done, _) = watch::channel(false);
+            let (first, _first_rx) = oneshot::channel();
+            let (second, second_rx) = oneshot::channel();
+            let mut pending = HashMap::new();
+            pending.insert(
+                1,
+                Pending {
+                    session: None,
+                    reply: first,
+                    lifetime: first_lifetime,
+                },
+            );
+            pending.insert(
+                2,
+                Pending {
+                    session: None,
+                    reply: second,
+                    lifetime: PendingLifetime::Timed,
+                },
+            );
+            let shared = Arc::new(Shared {
+                state: Mutex::new(State {
+                    next_id: 3,
+                    pending,
+                    failure: None,
+                }),
+                outgoing,
+                events: Mutex::new(Some(events)),
+                policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
+                stop,
+                done,
+                bytes: Arc::new(Semaphore::new(MAX_QUEUED_BYTES)),
+            });
+            let guard = PendingGuard {
+                shared: Arc::clone(&shared),
+                id: 1,
+            };
+            let barrier = Arc::new(tokio::sync::Barrier::new(2));
+            let failing = {
+                let shared = Arc::clone(&shared);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    shared.fail(Error::new("pipe", "pipe failed"));
+                })
+            };
+            barrier.wait().await;
+            drop(guard);
+            failing.await.unwrap();
+            assert_eq!(second_rx.await.unwrap().unwrap_err().code, "pipe");
+            assert!(shared.state.lock().unwrap().pending.is_empty());
+            assert!(*shared.stop.borrow());
+        }
     }
 
     #[cfg(unix)]
