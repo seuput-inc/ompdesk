@@ -34,6 +34,17 @@ pub enum Update {
     },
 }
 
+pub(super) fn target_title<'a>(event: &'a shell_preview::Event, target: &str) -> Option<&'a str> {
+    if event.method != "Target.targetInfoChanged" || event.session_id.is_some() {
+        return None;
+    }
+    let info = event.params.get("targetInfo")?;
+    if info["targetId"].as_str()? != target || info["type"].as_str()? != "page" {
+        return None;
+    }
+    info["title"].as_str()
+}
+
 pub fn decode(event: &shell_preview::Event) -> Option<Update> {
     let params = &event.params;
     let string = |value: &Value, key: &str| value.get(key)?.as_str().map(str::to_owned);
@@ -129,6 +140,29 @@ mod tests {
             params: Arc::new(params),
             session_id: None,
         }
+    }
+
+    #[test]
+    fn only_the_actual_browser_page_target_can_update_its_title() {
+        let mut changed = event(
+            "Target.targetInfoChanged",
+            json!({
+                "targetInfo":{"targetId":"owned","type":"page","title":"w=459"}
+            }),
+        );
+        assert_eq!(target_title(&changed, "owned"), Some("w=459"));
+        assert_eq!(target_title(&changed, "other"), None);
+        changed.params =
+            Arc::new(json!({"targetInfo":{"targetId":"owned","type":"iframe","title":"child"}}));
+        assert_eq!(target_title(&changed, "owned"), None);
+        changed.params =
+            Arc::new(json!({"targetInfo":{"targetId":"owned","type":"page","title":7}}));
+        assert_eq!(target_title(&changed, "owned"), None);
+        changed.params =
+            Arc::new(json!({"targetInfo":{"targetId":"owned","type":"page","title":""}}));
+        assert_eq!(target_title(&changed, "owned"), Some(""));
+        changed.session_id = Some("debugger-or-child".into());
+        assert_eq!(target_title(&changed, "owned"), None);
     }
 
     #[test]
