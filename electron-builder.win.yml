@@ -6,19 +6,13 @@ directories:
   buildResources: resources
   output: dist
 
-# The app is the Rust CEF shell (native/ompdesk/crates/shell), not Electron. electron-builder still does what it did
-# for the Electron app (the NSIS one-click per-user installer with the same identity: appId → uninstall key
-# e6f1f351-4346-5a64-a104-9a02672ef1bc, `InstallLocation`, shortcuts, the `omp` protocol, resources/installer.nsh,
-# the exe's icon and version info) over a custom `electronDist`: the folder `bun run build:shell` stages, holding
-# `ompdesk-shell.exe`, CEF's runtime files and its two locales. Nothing of Electron is downloaded. `afterExtract`
-# (scripts/after-pack.cjs) names the exe `electron.exe` as electron-builder expects, and electron-builder renames it
-# OMPdesk.exe: a framework named anything but "electron" would lay the app out beside the exe, not under resources/.
-# A package that comes out other than the shell's layout fails `afterPack` (the same file).
-electronDist: resources/ompdesk-shell/win32-x64
+# Tauri 2 hosts the existing React page; Node still serves the main-process feature graph.
+# electron-builder retains the NSIS install/update identity and resources/ layout. afterExtract
+# names the staged executable electron.exe only while the packager renames it OMPdesk.exe.
+electronDist: resources/ompdesk-tauri/win32-x64
 afterExtract: scripts/after-pack.cjs
-# electron-builder wants a version to look up and to hash into its signing cache; the engine is the CEF release
-# native/ompdesk/crates/shell/cef-pin.json pins.
-electronVersion: 156.0.26
+# Custom electronDist supplies the engine; this version labels the packager's runtime cache.
+electronVersion: 2.12.5
 # No native add-on is rebuilt: the app's dependencies are bundled into out/ and node_modules is not packed.
 npmRebuild: false
 # The shell starts <resources>/node/node.exe on <resources>/app/out/main/index.js: a plain folder, not an archive
@@ -59,8 +53,7 @@ extraResources:
     to: app-icon.png
   # OMPdesk's own Apache-2.0 license and NOTICE, the generated third-party notices (bun run
   # gen:licenses; they carry the attribution of the vendored code), the license texts of
-  # vendored code (LICENSES/) and CEF's: Chromium's notices (CEF's CREDITS.html, as LICENSES.chromium.html) and
-  # CEF's own licence, which bun run stage:cef-licenses takes out of the CEF archive.
+  # vendored code (LICENSES/). The OS supplies WebView2; Preview's separate runtime carries its own notices.
   - from: LICENSE
     to: LICENSE
   - from: NOTICE
@@ -69,10 +62,6 @@ extraResources:
     to: THIRD_PARTY_NOTICES.txt
   - from: LICENSES
     to: LICENSES
-  - from: resources/shell-licenses/win32-x64/LICENSES.chromium.html
-    to: LICENSES.chromium.html
-  - from: resources/shell-licenses/win32-x64/LICENSE.cef.txt
-    to: LICENSE.cef.txt
 protocols:
   - name: omp
     schemes:
@@ -114,11 +103,3 @@ publish:
   owner: seuput-inc
   repo: ompdesk
 
-# CEF's locale files: only en-US (Chromium's hard fallback; without `en-US.pak` the renderer aborts at startup and
-# the window stays blank, issue #12) and ko, the UI's other language. The shell build already stages only these two;
-# electron-builder keeps a pak whose name equals a listed language, and scripts/after-pack.cjs fails the package
-# unless exactly en-US.pak and ko.pak survive. Chromium's locale is then en-US for other system languages; the
-# spellchecker and the Preview's Accept-Language follow the system's languages instead (src/main/system-languages.ts).
-electronLanguages:
-  - en-US
-  - ko

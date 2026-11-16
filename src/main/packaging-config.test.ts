@@ -1,5 +1,5 @@
 /**
- * Packaging contract of the CEF shell (native-rust › S). Windows is electron-builder's NSIS one-click installer over a
+ * Packaging contract of the Tauri shell and historical CEF migration fixtures. Windows retains the NSIS installer;
  * custom `electronDist` (electron-builder.win.yml); macOS is `scripts/package-mac.ts`, which assembles OMPdesk.app
  * itself and uses electron-builder (electron-builder.yml) for the DMG only. Both end in `scripts/after-pack.cjs`.
  * A key the finished bundle depends on can exist in one place and be missing in another — which is how `omp://` deep
@@ -542,17 +542,8 @@ describe("mac bundle configs", () => {
 				expect(resources, platform).toContainEqual({ from: name, to: name });
 				expect(fs.existsSync(path.join(PACKAGE_ROOT, name)), `${platform}: ${name} is missing`).toBe(true);
 			}
-			// Chromium's third-party licences (CEF's CREDITS.html) and CEF's own travel with the app, taken out of the
-			// CEF archive by `bun run stage:cef-licenses`; Node's LICENSE ships inside `node/`.
+			expect(resources, platform).not.toContainEqual(expect.objectContaining({ to: "LICENSE.cef.txt" }));
 			const key = platform === "darwin" ? "darwin-arm64" : "win32-x64";
-			expect(resources, platform).toContainEqual({
-				from: `resources/shell-licenses/${key}/LICENSES.chromium.html`,
-				to: "LICENSES.chromium.html",
-			});
-			expect(resources, platform).toContainEqual({
-				from: `resources/shell-licenses/${key}/LICENSE.cef.txt`,
-				to: "LICENSE.cef.txt",
-			});
 			expect(resources, platform).toContainEqual({ from: `resources/node/${key}`, to: "node" });
 		}
 		// No installer license page: the license ships as a file, not a click-through.
@@ -687,11 +678,9 @@ describe("mac bundle configs", () => {
 		}
 	});
 
-	it("keeps only CEF's en-US and ko locales on both platforms, and the package fails otherwise", async () => {
+	it("validates historical CEF locale fixtures without imposing them on the system WebView package", async () => {
 		const win = parse(fs.readFileSync(path.join(PACKAGE_ROOT, "electron-builder.win.yml"), "utf8")) as BuilderConfig;
-		// electron-builder keeps a file whose name equals a listed language or prefixes it: `en` alone matches
-		// no `en-US.pak` and deleted all of them once (issue #12, a blank window on Windows).
-		expect(win.electronLanguages).toEqual(["en-US", "ko"]);
+		expect(win.electronLanguages).toBeUndefined();
 		expect(win.afterPack).toBe("scripts/after-pack.cjs");
 		const afterPack = require(AFTER_PACK).afterPack as AfterPackHook;
 		const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ompdesk-locales-"));
@@ -885,7 +874,7 @@ describe("mac bundle configs", () => {
 	});
 
 	describe("the macOS bundle script", () => {
-		it("assembles OMPdesk.app from the staged inputs, with the helpers CEF names, and the packaging check accepts it", async () => {
+		it.each(["tauri", "cef"] as const)("%s bundle keeps the launcher and Node", async runtime => {
 			const repo = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ompdesk-mac-assemble-"));
 			const out = path.join(repo, "dist", "mac-arm64");
 			try {
@@ -898,27 +887,29 @@ describe("mac bundle configs", () => {
 					JSON.stringify({ name: "ompdesk", version: "9.9.9", main: "./out/main/index.js" }),
 				);
 				await put("out/main/index.js");
-				await put("out/preload/shell.js");
+				await put(`out/preload/${runtime === "tauri" ? "tauri" : "shell"}.js`);
 				await put("out/renderer/index.html");
 				await put("out/.build-stamp.json");
 				await put("out/.used");
-				const staged = "resources/ompdesk-shell/darwin-arm64";
+				const staged = `resources/${runtime === "tauri" ? "ompdesk-tauri" : "ompdesk-shell"}/darwin-arm64`;
 				const files: Record<string, string> = {
 					"ompdesk-shell": sha256(FAKE_SHELL),
 					"ompdesk-launcher": sha256(FAKE_LAUNCHER),
 				};
 				await put(`${staged}/ompdesk-shell`, FAKE_SHELL);
 				await put(`${staged}/ompdesk-launcher`, FAKE_LAUNCHER);
-				for (const name of [
-					`${bundleInfo.FRAMEWORK}/Versions/A/Chromium Embedded Framework`,
-					`${bundleInfo.FRAMEWORK}/Versions/A/Resources/en.lproj/locale.pak`,
-					`${bundleInfo.FRAMEWORK}/Versions/A/Resources/ko.lproj/locale.pak`,
-				]) {
+				for (const name of runtime === "cef"
+					? [
+							`${bundleInfo.FRAMEWORK}/Versions/A/Chromium Embedded Framework`,
+							`${bundleInfo.FRAMEWORK}/Versions/A/Resources/en.lproj/locale.pak`,
+							`${bundleInfo.FRAMEWORK}/Versions/A/Resources/ko.lproj/locale.pak`,
+						]
+					: []) {
 					await put(`${staged}/${name}`, name);
 					files[name] = sha256(Buffer.from(name));
 				}
 				await put(
-					`${staged}/ompdesk-shell.build.json`,
+					`${staged}/${runtime === "tauri" ? "ompdesk-tauri" : "ompdesk-shell"}.build.json`,
 					JSON.stringify({
 						version: "0.1.0",
 						platform: "darwin",
@@ -926,7 +917,8 @@ describe("mac bundle configs", () => {
 						binary: "ompdesk-shell",
 						launcher: "ompdesk-launcher",
 						files,
-						cef: { version: "156.0.26", archiveSha256: "a".repeat(64) },
+						...(runtime === "tauri" ? { engine: "tauri" } : {}),
+						...(runtime === "cef" ? { cef: { version: "156.0.26", archiveSha256: "a".repeat(64) } } : {}),
 					}),
 				);
 				for (const [from] of RESOURCE_COPIES) {
@@ -941,14 +933,22 @@ describe("mac bundle configs", () => {
 								: from,
 						);
 				}
-				const app = assembleBundle(repo, out);
+				if (runtime === "cef") {
+					await put("resources/shell-licenses/darwin-arm64/LICENSES.chromium.html");
+					await put("resources/shell-licenses/darwin-arm64/LICENSE.cef.txt");
+				}
+				const app = assembleBundle(repo, out, undefined, runtime);
 				const resources = path.join(app, "Contents", "Resources");
 				// The launcher is the app's executable; the shell sits beside it (and in each helper app).
 				expect(fs.readFileSync(path.join(app, "Contents", "MacOS", "OMPdesk"))).toEqual(FAKE_LAUNCHER);
 				expect(fs.readFileSync(path.join(app, "Contents", "MacOS", "ompdesk-shell"))).toEqual(FAKE_SHELL);
 				expect(fs.existsSync(path.join(resources, "app", "out", ".build-stamp.json"))).toBe(false);
 				expect(fs.existsSync(path.join(resources, "app", "out", ".used"))).toBe(false);
-				expect(fs.existsSync(path.join(resources, "app", "out", "preload", "shell.js"))).toBe(true);
+				expect(
+					fs.existsSync(
+						path.join(resources, "app", "out", "preload", `${runtime === "tauri" ? "tauri" : "shell"}.js`),
+					),
+				).toBe(true);
 				const info = await parsePlistFile(path.join(app, "Contents", "Info.plist"));
 				expect(info).toMatchObject({
 					CFBundleIdentifier: "com.seuput.ompdesk",
@@ -957,7 +957,7 @@ describe("mac bundle configs", () => {
 				});
 				// Both helper sets: CEF names its helpers after the shell (the process) or the launcher (the bundle).
 				expect(bundleInfo.HELPER_PREFIXES).toEqual(["OMPdesk", "ompdesk-shell"]);
-				for (const prefix of bundleInfo.HELPER_PREFIXES) {
+				for (const prefix of runtime === "cef" ? bundleInfo.HELPER_PREFIXES : []) {
 					for (const helper of bundleInfo.HELPERS) {
 						const name = bundleInfo.helperName(prefix, helper);
 						const helperPlist = await parsePlistFile(
@@ -969,6 +969,11 @@ describe("mac bundle configs", () => {
 							LSUIElement: true,
 						});
 					}
+				}
+				if (runtime === "tauri") {
+					expect(fs.readdirSync(path.join(app, "Contents", "Frameworks"))).toEqual([]);
+					expect(fs.existsSync(path.join(resources, "LICENSE.cef.txt"))).toBe(false);
+					expect(fs.existsSync(path.join(resources, "ompdesk-tauri.build.json"))).toBe(true);
 				}
 				// The pack's own check passes on what the script assembled, once the binaries it does not stage are faked.
 				await fakeAiMemory(out, "darwin");
@@ -1261,14 +1266,66 @@ describe("Windows package config", () => {
 		expect(config.win?.target).toEqual([{ target: "nsis", arch: ["x64"] }]);
 	});
 
-	it("packs the CEF shell as a custom electronDist: its exe becomes OMPdesk.exe, the app is a plain folder under resources/, nothing is rebuilt", () => {
+	it("validates the Windows Tauri executable after extraction and refuses missing runtime inputs", async () => {
+		const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ompdesk-tauri-pack-"));
+		const context = {
+			electronPlatformName: "win32",
+			appOutDir: directory,
+			packager: { appInfo: { productFilename: "OMPdesk" } },
+		};
+		const hooks = require(AFTER_PACK) as {
+			afterExtract: AfterPackHook;
+			afterPack: AfterPackHook;
+		};
+		try {
+			await fs.promises.writeFile(path.join(directory, "ompdesk-shell.exe"), FAKE_SHELL);
+			await fs.promises.writeFile(
+				path.join(directory, "ompdesk-tauri.build.json"),
+				JSON.stringify({
+					engine: "tauri",
+					platform: "win32",
+					arch: "x64",
+					binary: "ompdesk-shell.exe",
+					files: { "ompdesk-shell.exe": sha256(FAKE_SHELL) },
+				}),
+			);
+			await hooks.afterExtract(context);
+			const executable = path.join(directory, "OMPdesk.exe");
+			await fs.promises.rename(path.join(directory, "electron.exe"), executable);
+			await fakeAppFiles(directory, "win32");
+			const resources = path.join(directory, "resources");
+			const preload = path.join(resources, "app/out/preload/tauri.js");
+			await fs.promises.rename(path.join(resources, "app/out/preload/shell.js"), preload);
+			for (const name of ["LICENSE.cef.txt", "LICENSES.chromium.html"]) {
+				await fs.promises.rm(path.join(resources, name));
+			}
+			await fakeNode(directory, "win32");
+			await fakeAiMemory(directory, "win32");
+			await fakeAgentDesktop(directory, "win32");
+			await fakeNative(directory, "win32");
+			await expect(hooks.afterPack(context)).resolves.toBeUndefined();
+			await fs.promises.writeFile(executable, "different host");
+			await expect(hooks.afterPack(context)).rejects.toThrow(/not the recorded Tauri runtime/);
+			await fs.promises.writeFile(executable, FAKE_SHELL);
+			await fs.promises.rm(path.join(resources, "node"), { recursive: true });
+			await expect(hooks.afterPack(context)).rejects.toThrow(/no Node build record or LICENSE/);
+			await fakeNode(directory, "win32");
+			await fs.promises.rm(preload);
+			await expect(hooks.afterPack(context)).rejects.toThrow(/the shell starts the main from a plain/);
+			await fs.promises.writeFile(preload, "preload");
+			await fs.promises.writeFile(path.join(resources, "app.asar"), "");
+			await expect(hooks.afterPack(context)).rejects.toThrow(/does not read asar archives/);
+		} finally {
+			await fs.promises.rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("packs the Tauri shell under the existing NSIS executable and Node resource layout", () => {
 		const config = parse(
 			fs.readFileSync(path.join(PACKAGE_ROOT, "electron-builder.win.yml"), "utf8"),
 		) as BuilderConfig;
-		// The folder `bun run build:shell` stages; `afterExtract` names its exe `electron.exe` and electron-builder
-		// renames that to <productName>.exe. A projectName other than "electron" (`electronBranding`) makes
-		// electron-builder lay the app out beside the exe instead of under resources/ (isElectronBased).
-		expect(config.electronDist).toBe("resources/ompdesk-shell/win32-x64");
+		// afterExtract temporarily names the staged executable electron.exe for electron-builder's standard layout.
+		expect(config.electronDist).toBe("resources/ompdesk-tauri/win32-x64");
 		expect(config.afterExtract).toBe("scripts/after-pack.cjs");
 		expect(config.electronBranding).toBeUndefined();
 		// The shell starts <resources>/node/node.exe on <resources>/app/out/main/index.js: no archive to read.
@@ -1282,12 +1339,7 @@ describe("Windows package config", () => {
 		expect(fs.readFileSync(path.join(PACKAGE_ROOT, ".gitignore"), "utf8").split("\n")).toEqual(
 			expect.arrayContaining(["resources/node/", "resources/ompdesk-shell/", "resources/shell-licenses/"]),
 		);
-		const pin = JSON.parse(
-			fs.readFileSync(path.join(PACKAGE_ROOT, "native/ompdesk/crates/shell/cef-pin.json"), "utf8"),
-		) as {
-			cefVersion: string;
-		};
-		expect(String((config as { electronVersion?: unknown }).electronVersion)).toBe(pin.cefVersion);
+		expect(String((config as { electronVersion?: unknown }).electronVersion)).toBe("2.12.5");
 	});
 
 	it("keeps the identity v0.127.0's NSIS update installs over: the same app id, no custom uninstall GUID, no per-machine install", () => {

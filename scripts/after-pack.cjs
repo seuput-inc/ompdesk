@@ -5,8 +5,8 @@ const plist = require("plist");
 const bundle = require("./mac-bundle-info.cjs");
 
 /**
- * The packaged app of the CEF shell (native-rust › S). electron-builder's Windows pack (`electron-builder.win.yml`,
- * a custom `electronDist`) and `scripts/package-mac.ts` (the bundle it assembles itself) both end here, before
+ * The packaged Tauri shell and retained historical CEF migration fixtures. electron-builder's Windows pack,
+ * using a custom `electronDist`, and `scripts/package-mac.ts` both end here, before
  * signing: every check below throws and so fails the package.
  */
 
@@ -141,6 +141,58 @@ async function checkShell(context) {
 	}
 }
 
+async function tauriRecord(context) {
+	const where = layout(context);
+	const file = path.join(
+		context.electronPlatformName === "darwin" ? where.resources : where.contents,
+		"ompdesk-tauri.build.json",
+	);
+	try {
+		const record = JSON.parse(await fs.readFile(file, "utf8"));
+		if (!record || typeof record !== "object" || Array.isArray(record)) {
+			throw new Error(`${file} is not a Tauri build record`);
+		}
+		return record;
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
+}
+
+async function checkTauri(context, record) {
+	const platform = context.electronPlatformName;
+	const where = layout(context);
+	const binary = SHELL_BINARIES[platform];
+	const expected = [binary, ...(platform === "darwin" ? [bundle.LAUNCHER] : [])].sort();
+	if (
+		record.engine !== "tauri" ||
+		record.platform !== platform ||
+		record.binary !== binary ||
+		(platform === "darwin" && record.launcher !== bundle.LAUNCHER) ||
+		!record.files ||
+		JSON.stringify(Object.keys(record.files).sort()) !== JSON.stringify(expected)
+	) {
+		throw new Error("The package does not contain the recorded Tauri runtime and rollback launcher");
+	}
+	for (const name of expected) {
+		const file =
+			platform === "darwin" && name === binary ? path.join(where.contents, "MacOS", name) : where.executable;
+		if (!(await fs.lstat(file)).isFile() || (await sha256File(file)) !== record.files[name]) {
+			throw new Error(`${file} is not the recorded Tauri runtime`);
+		}
+		await requireExecutable(platform, file);
+	}
+	for (const file of [path.join(where.frameworks, bundle.FRAMEWORK), path.join(where.contents, "libcef.dll")]) {
+		if (
+			await fs.access(file).then(
+				() => true,
+				() => false,
+			)
+		)
+			throw new Error(`${file} remains in a Tauri package`);
+	}
+}
+
 /** The Node runtime the shell starts the main with, and the pin that decides which one. */
 const NODE_PIN = path.join(__dirname, "node-runtime-pin.json");
 const NODE_TARGETS = { darwin: "darwin-arm64", win32: "win32-x64" };
@@ -187,9 +239,14 @@ async function checkNode(context) {
  * every page (`out/preload/shell.js`), the renderer it serves as `app://ompdesk/`, and the `package.json` the main
  * reads its version from. A plain folder: an `app.asar` would be an app the shell cannot start.
  */
-async function checkApp(context) {
+async function checkApp(context, tauri = false) {
 	const app = path.join(layout(context).resources, "app");
-	for (const name of ["package.json", "out/main/index.js", "out/preload/shell.js", "out/renderer/index.html"]) {
+	for (const name of [
+		"package.json",
+		"out/main/index.js",
+		`out/preload/${tauri ? "tauri" : "shell"}.js`,
+		"out/renderer/index.html",
+	]) {
 		await fs.access(path.join(app, name)).catch(() => {
 			throw new Error(
 				`${path.join(app, name)} is missing: the shell starts the main from a plain <resources>/app folder`,
@@ -208,9 +265,11 @@ async function checkApp(context) {
 }
 
 /** The notices that must travel with the binary: Chromium's and CEF's (bun run stage:cef-licenses) and Node's. */
-async function checkLicenses(context) {
+async function checkLicenses(context, tauri = false) {
 	const resources = layout(context).resources;
-	for (const name of ["LICENSES.chromium.html", "LICENSE.cef.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"]) {
+	const required = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"];
+	if (!tauri) required.push("LICENSES.chromium.html", "LICENSE.cef.txt");
+	for (const name of required) {
 		await fs.access(path.join(resources, name)).catch(() => {
 			throw new Error(
 				`${path.join(resources, name)} is missing; run \`bun run stage:cef-licenses\` before packaging`,
@@ -392,11 +451,16 @@ async function afterExtract(context) {
 
 /** electron-builder's `afterPack` hook (Windows) and `scripts/package-mac.ts`'s last step before signing. */
 async function afterPack(context) {
-	await checkLocales(context);
-	await checkShell(context);
+	const tauri = await tauriRecord(context);
+	if (tauri) {
+		await checkTauri(context, tauri);
+	} else {
+		await checkLocales(context);
+		await checkShell(context);
+	}
 	await checkNode(context);
-	await checkApp(context);
-	await checkLicenses(context);
+	await checkApp(context, !!tauri);
+	await checkLicenses(context, !!tauri);
 	await checkInfoPlist(context);
 	await checkAiMemory(context);
 	await checkAgentDesktop(context);

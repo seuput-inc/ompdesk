@@ -1,43 +1,25 @@
 /**
- * Package OMPdesk for macOS (Apple silicon) from the CEF shell:
+ * Package OMPdesk for macOS (Apple silicon) from the Tauri 2 shell.
  *
  *   bun run package:mac [-- --no-dmg] [-- --legacy-zip] [-- --version <v>] [-- --sign-with <identity> --keychain <file>]
  *
- * electron-builder cannot lay out a CEF app (its macOS pack is Electron's: the `Electron Framework`, its helper names
- * and Info.plists), so this assembles `dist/mac-arm64/OMPdesk.app` itself, holds it to `scripts/after-pack.cjs`, signs
- * it, and hands the finished bundle to electron-builder only for the DMG (`--prepackaged`: electron-builder neither
- * packs nor signs then, it lays out `dmg:` of electron-builder.yml, the window picture and the /Applications link,
- * and writes `dist/ompdesk-<version>-arm64.dmg`).
+ * Assemble `dist/mac-arm64/OMPdesk.app`, validate it with `scripts/after-pack.cjs`, sign with the existing app
+ * identity, then hand the finished bundle to electron-builder for the DMG only (`--prepackaged`).
  *
  * Inputs, all gitignored and built beforehand (CI's `mac` job does it in this order): `out/` (`bun run build`),
- * `resources/ompdesk-shell/darwin-arm64/` (`bun run build:shell`), `resources/node/darwin-arm64/` (`bun run
- * build:node`), `resources/ompdesk-bin/`, `resources/ai-memory-bin/`, `resources/agent-desktop-bin/` (each for
- * darwin-arm64) and `resources/shell-licenses/darwin-arm64/` (`bun run stage:cef-licenses`).
+ * `resources/ompdesk-tauri/darwin-arm64/` (`bun scripts/build-tauri.ts`), `resources/node/darwin-arm64/`
+ * (`bun run build:node`), `resources/ompdesk-bin/`, `resources/ai-memory-bin/` and `resources/agent-desktop-bin/`
+ * (each for darwin-arm64). Historical CEF assembly is retained only for the migration regression fixture.
  *
  * Signing (scripts/mac-sign.cjs): OMPdesk's own pinned certificate, so the designated requirement is `identifier
  * "com.seuput.ompdesk" and certificate root = H"…"` in every release and macOS keeps its privacy grants; ad-hoc without
  * it (an error with `OMPDESK_MAC_SIGNING_REQUIRED=1`). Every Mach-O is signed inside out with hardened runtime and
- * `resources/entitlements.mac.plist` (V8's JIT needs it in the helpers and Node), no secure timestamp (nothing is
- * notarized), then the helper apps and the app, which `stageBundleFromDmg` (src/main/updater-state.ts) verifies with
+ * `resources/entitlements.mac.plist` (Node's V8 needs JIT), no secure timestamp (nothing is notarized), then the app,
+ * which `stageBundleFromDmg` (src/main/updater-state.ts) verifies with
  * `codesign --verify --deep --strict` after the update.
  *
- * Written without a Mac; nothing here has run on one. What a Mac must show (each one is a way the update from the
- * released v0.127.0 would fail, and where a failure of the first four cannot be mended on the new side, the handoff
- * release the rule describes is needed):
- *  1. `codesign --verify --deep --strict --verbose=2 dist/mac-arm64/OMPdesk.app` passes: CEF's framework seals with its
- *     symlinks (`Versions/Current`, the root links) kept and nothing unsealed at the framework's root.
- *  2. `codesign -d -r- OMPdesk.app` reads `identifier "com.seuput.ompdesk" and certificate root = H"<mac-signing.json's
- *     sha1>"`, the same line as v0.127.0's app (privacy grants survive), with the pinned certificate (release run on main).
- *  3. The DMG passes `stageBundleFromDmg` (hdiutil attach, ditto, the check above, bundle id, version) and the relaunch
- *     swap (`SWAP_SCRIPT`) replaces /Applications/OMPdesk.app and reopens it, with its rollback when it fails.
- *  4. The app starts from the staged copy: CEF finds its five helper apps by name, Node (`Resources/node/node`, signed
- *     here with the entitlements file) runs `Resources/app/out/main/index.js` under the hardened runtime, the window
- *     and the traffic lights show, `omp://` reaches the app as an Apple Event after the swap.
- *  5. Electron's keychain item "ompdesk Safe Storage" is read by the shell (silently or with one prompt), or each stored
- *     secret is asked for again with the reason shown.
- *  6. `bun scripts/shell-move/feed.ts --platform mac` + the released app launched with `--host-resolver-rules` and
- *     `--ignore-certificate-errors` (`open -n OMPdesk.app --args …`) walks the whole update on the Mac: `check found` …
- *     `swap helper relaunch`, then `swap result installed`; with the swap made to fail, `swap result rolled back`.
+ * Release acceptance covers the actual signed bundle, the released app's automatic update and rollback,
+ * existing encrypted credentials without a permission prompt, and persisted page/user data across restart.
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -98,6 +80,9 @@ export const RESOURCE_COPIES: [string, string][] = [
 	["NOTICE", "NOTICE"],
 	["THIRD_PARTY_NOTICES.txt", "THIRD_PARTY_NOTICES.txt"],
 	["LICENSES", "LICENSES"],
+];
+
+const LEGACY_LICENSE_COPIES: [string, string][] = [
 	["resources/shell-licenses/darwin-arm64/LICENSES.chromium.html", "LICENSES.chromium.html"],
 	["resources/shell-licenses/darwin-arm64/LICENSE.cef.txt", "LICENSE.cef.txt"],
 ];
@@ -109,26 +94,36 @@ const copy = (from: string, to: string) => {
 };
 
 /**
- * Assemble `<out>/OMPdesk.app` from the staged inputs under `repo`; returns its path. The launcher (`ompdesk-launcher`) is
- * the app's executable (CFBundleExecutable `OMPdesk`), the shell (`ompdesk-shell`) sits beside it in `Contents/MacOS` and
- * is copied into each helper app, as CEF starts its helper processes from `Contents/Frameworks/<product> Helper*.app`.
+ * Assemble `<out>/OMPdesk.app` from staged inputs under `repo`. The launcher keeps the original app identity;
+ * `ompdesk-shell` hosts the page and starts the existing Node services.
  */
-export function assembleBundle(repo: string, out: string, version?: string): string {
+export function assembleBundle(
+	repo: string,
+	out: string,
+	version?: string,
+	runtime: "tauri" | "cef" = "tauri",
+): string {
 	const manifest = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")) as { version: string };
 	if (version) manifest.version = version;
-	const staged = path.join(repo, "resources", "ompdesk-shell", KEY);
-	const recordFile = path.join(staged, "ompdesk-shell.build.json");
-	if (!fs.existsSync(recordFile)) fail(`${recordFile} is missing; run \`bun run build:shell\``);
+	const staged = path.join(repo, "resources", runtime === "tauri" ? "ompdesk-tauri" : "ompdesk-shell", KEY);
+	const recordFile = path.join(staged, runtime === "tauri" ? "ompdesk-tauri.build.json" : "ompdesk-shell.build.json");
+	if (!fs.existsSync(recordFile)) fail(`${recordFile} is missing; stage the ${runtime} runtime before packaging`);
 	const record = JSON.parse(fs.readFileSync(recordFile, "utf8")) as {
 		binary: string;
 		launcher: string;
 		files: Record<string, string>;
+		engine?: string;
 	};
 	if (record.binary !== bundle.SHELL || record.launcher !== bundle.LAUNCHER) {
 		fail(`${recordFile} names ${record.binary} and ${record.launcher}, not ${bundle.SHELL} and ${bundle.LAUNCHER}`);
 	}
+	if (runtime === "tauri" && record.engine !== "tauri") fail(`${recordFile} is not a Tauri runtime`);
 	for (const name of Object.keys(record.files)) {
-		if (name !== record.binary && name !== record.launcher && !name.startsWith(`${bundle.FRAMEWORK}/`)) {
+		if (
+			name !== record.binary &&
+			name !== record.launcher &&
+			!(runtime === "cef" && name.startsWith(`${bundle.FRAMEWORK}/`))
+		) {
 			fail(`${recordFile} lists ${name}; the bundle holds the shell, the launcher and ${bundle.FRAMEWORK} only`);
 		}
 	}
@@ -146,9 +141,9 @@ export function assembleBundle(repo: string, out: string, version?: string): str
 		fs.copyFileSync(path.join(staged, from), path.join(contents, "MacOS", to));
 		fs.chmodSync(path.join(contents, "MacOS", to), 0o755);
 	}
-	copy(path.join(staged, bundle.FRAMEWORK), path.join(frameworks, bundle.FRAMEWORK));
+	if (runtime === "cef") copy(path.join(staged, bundle.FRAMEWORK), path.join(frameworks, bundle.FRAMEWORK));
 	fs.writeFileSync(path.join(contents, "Info.plist"), plist.build(bundle.appInfo(manifest.version)));
-	for (const prefix of bundle.HELPER_PREFIXES) {
+	for (const prefix of runtime === "cef" ? bundle.HELPER_PREFIXES : []) {
 		for (const helper of bundle.HELPERS) {
 			const name = bundle.helperName(prefix, helper);
 			const helperApp = path.join(frameworks, `${name}.app`, "Contents");
@@ -161,9 +156,13 @@ export function assembleBundle(repo: string, out: string, version?: string): str
 			);
 		}
 	}
-	fs.copyFileSync(recordFile, path.join(resources, "ompdesk-shell.build.json"));
+	fs.copyFileSync(
+		recordFile,
+		path.join(resources, runtime === "tauri" ? "ompdesk-tauri.build.json" : "ompdesk-shell.build.json"),
+	);
 
-	for (const [from, to] of RESOURCE_COPIES) {
+	const copies = runtime === "cef" ? [...RESOURCE_COPIES, ...LEGACY_LICENSE_COPIES] : RESOURCE_COPIES;
+	for (const [from, to] of copies) {
 		const source = path.join(repo, from);
 		if (!fs.existsSync(source))
 			fail(`${source} is missing (see the header of scripts/package-mac.ts for what builds it)`);
@@ -224,13 +223,15 @@ export function signBundle(app: string, identity: string, keychain: string | nul
 	const framework = path.join(contents, "Frameworks", bundle.FRAMEWORK);
 	// Loose Mach-O files first (Node, the Rust binaries, agent-desktop, CEF's libraries), then the framework as a
 	// bundle, the helper apps and the app. The framework's own executable is sealed by signing the framework.
-	const frameworkFiles = bundle.frameworkRoot(framework);
-	const frameworkExecutable = path.join(frameworkFiles, "Chromium Embedded Framework");
-	for (const dir of [path.join(contents, "Resources"), frameworkFiles]) {
+	const hasCef = fs.existsSync(framework);
+	const frameworkExecutable = hasCef
+		? path.join(bundle.frameworkRoot(framework), "Chromium Embedded Framework")
+		: null;
+	for (const dir of [path.join(contents, "Resources"), ...(hasCef ? [bundle.frameworkRoot(framework)] : [])]) {
 		for (const file of machOFiles(dir)) if (file !== frameworkExecutable) codesign([...options, file]);
 	}
-	codesign([...options, framework]);
-	for (const prefix of bundle.HELPER_PREFIXES) {
+	if (hasCef) codesign([...options, framework]);
+	for (const prefix of hasCef ? bundle.HELPER_PREFIXES : []) {
 		for (const helper of bundle.HELPERS) {
 			codesign([...options, path.join(contents, "Frameworks", `${bundle.helperName(prefix, helper)}.app`)]);
 		}

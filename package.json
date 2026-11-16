@@ -20,6 +20,7 @@
     "build:memory": "bun scripts/build-memory.ts",
     "build:native": "bun scripts/build-native.ts",
     "build:shell": "bun scripts/build-shell.ts",
+    "build:tauri": "bun scripts/build-tauri.ts",
     "build:node": "bun scripts/build-node.ts",
     "stage:cef-licenses": "bun scripts/stage-cef-licenses.ts",
     "build:agent-desktop": "bun scripts/build-agent-desktop.ts",

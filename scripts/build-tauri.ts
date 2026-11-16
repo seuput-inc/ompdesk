@@ -35,7 +35,7 @@ function sha256(file: string): string {
 
 export function sourceSha256(): string {
 	const digest = createHash("sha256");
-	for (const root of [TAURI_DIR, path.join(TAURI_DIR, "../shell")]) {
+	for (const root of [TAURI_DIR, path.join(TAURI_DIR, "../shell"), path.join(TAURI_DIR, "../shell-preview")]) {
 		for (const name of filesUnder(root).sort()) {
 			digest.update(path.relative(REPO_ROOT, path.join(root, name)).replaceAll(path.sep, "/"));
 			digest.update("\0");
