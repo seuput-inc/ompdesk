@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type BrowserType, chromium, devices, expect, type Page, test, webkit } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
+import sharp from "sharp";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, recordPhoneLoads, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { captureTo, exitApp, fixtureOmp } from "./harness";
@@ -77,32 +78,30 @@ async function makeProfile(): Promise<Profile> {
 }
 
 /**
- * A camera-like JPEG made by the app's own encoder: a 4032×3024 gradient with sensor-like noise of `noise` levels,
- * which keeps it about as large as a phone's photo of a real scene (and as large after scaling down).
+ * A camera-like JPEG: a 4032×3024 gradient with sensor-like noise of `noise` levels, which keeps it about as large
+ * as a phone's photo of a real scene (and as large after scaling down). The test encodes it (the host has no bitmap
+ * codec in main), 4:2:0 and with plain Huffman tables as Chromium's encoder wrote it, so the sizes the asserts below
+ * bound stay what they were.
  */
-function cameraJpeg(app: ElectronApplication, noise: number, quality: number): Promise<Buffer> {
-	return app
-		.evaluate(
-			({ nativeImage }, { noise, quality }) => {
-				const width = 4032;
-				const height = 3024;
-				const pixels = Buffer.alloc(width * height * 4);
-				let seed = 1;
-				for (let y = 0; y < height; y++)
-					for (let x = 0; x < width; x++) {
-						const at = (y * width + x) * 4;
-						for (let channel = 0; channel < 3; channel++) {
-							seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-							const base = channel === 0 ? (x * 255) / width : channel === 1 ? (y * 255) / height : 128;
-							pixels[at + channel] = Math.max(0, Math.min(255, base + (seed % (2 * noise + 1)) - noise));
-						}
-						pixels[at + 3] = 255;
-					}
-				return nativeImage.createFromBuffer(pixels, { width, height }).toJPEG(quality).toString("base64");
-			},
-			{ noise, quality },
-		)
-		.then(base64 => Buffer.from(base64, "base64"));
+function cameraJpeg(noise: number, quality: number): Promise<Buffer> {
+	const width = 4032;
+	const height = 3024;
+	const pixels = Buffer.alloc(width * height * 4);
+	let seed = 1;
+	for (let y = 0; y < height; y++)
+		for (let x = 0; x < width; x++) {
+			const at = (y * width + x) * 4;
+			for (let channel = 0; channel < 3; channel++) {
+				seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+				const base = channel === 0 ? (x * 255) / width : channel === 1 ? (y * 255) / height : 128;
+				pixels[at + channel] = Math.max(0, Math.min(255, base + (seed % (2 * noise + 1)) - noise));
+			}
+			pixels[at + 3] = 255;
+		}
+	return sharp(pixels, { raw: { width, height, channels: 4 } })
+		.removeAlpha()
+		.jpeg({ quality, chromaSubsampling: "4:2:0", optimiseCoding: false })
+		.toBuffer();
 }
 
 interface Received {
@@ -218,8 +217,8 @@ for (const engine of ENGINES)
 
 			const heic = await fs.readFile("e2e/media/photo.heic");
 			const pictures: Picture[] = [
-				{ name: "camera.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(app, 24, 92) },
-				{ name: "big.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(app, 40, 100) },
+				{ name: "camera.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(24, 92) },
+				{ name: "big.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(40, 100) },
 				{ name: "photo.heic", mimeType: "image/heic", buffer: heic },
 			];
 			const [camera, big] = pictures;

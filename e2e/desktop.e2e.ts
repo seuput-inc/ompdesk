@@ -381,10 +381,9 @@ test("narrow windows and 200 percent zoom keep settings and primary actions reac
 		const toggle = settings.locator("#setting-gui-compactDensity").getByRole("switch");
 		await toggle.scrollIntoViewIfNeeded();
 		await toggle.click();
-		const captured = await app.evaluate(async ({ BrowserWindow }) =>
-			(await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString("base64"),
-		);
-		await fs.writeFile(`test-results/layout-${width}-${zoom}.png`, Buffer.from(captured, "base64"));
+		// The capture is an artifact for a failed run, not an assertion; the system WebView has no main-process
+		// `capturePage` (no DevTools session of the shell's own), so the page's own screenshot stands in for it.
+		await page.screenshot({ path: `test-results/layout-${width}-${zoom}.png` });
 		await page.keyboard.press("Escape");
 		await expect(settings).toHaveCount(0);
 		const input = page.locator("textarea").first();

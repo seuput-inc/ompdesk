@@ -9,6 +9,7 @@ import {
 	evaluateExpression,
 	inspectorUrl,
 	isAppPageUrl,
+	leavesTheApp,
 	shellExecutable,
 	stagedShell,
 	userDataFromArgs,
@@ -59,6 +60,17 @@ describe("the shell launcher's pure parts", () => {
 		expect(isAppPageUrl("http://app.localhost.evil.test/")).toBe(false);
 		expect(isAppPageUrl("about:blank")).toBe(false);
 		expect(isAppPageUrl("https://example.com/")).toBe(false);
+	});
+
+	it("counts a network request except to the app's own WebView2 origins", () => {
+		expect(leavesTheApp("http://app.localhost/assets/main.js")).toBe(false);
+		expect(leavesTheApp("http://ipc.localhost/omp_ipc")).toBe(false);
+		expect(leavesTheApp("app://ompdesk/index.html")).toBe(false);
+		expect(leavesTheApp("data:image/svg+xml;charset=utf-8,%3Csvg%3E")).toBe(false);
+		expect(leavesTheApp("https://app.localhost/")).toBe(true);
+		expect(leavesTheApp("http://app.localhost.evil.test/")).toBe(true);
+		expect(leavesTheApp("http://127.0.0.1:9229/json")).toBe(true);
+		expect(leavesTheApp("wss://example.com/socket")).toBe(true);
 	});
 
 	it("drives pages on Windows only, and says why macOS cannot", () => {

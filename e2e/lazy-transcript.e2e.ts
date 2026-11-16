@@ -164,9 +164,12 @@ test("renders only the tail, anchors older pages, reaches the first turn and app
 	const firstTurn = nav.getByRole("button", { name: /Jump to turn .*Long session turn 000/ });
 	for (let index = 0; index < 12 && (await firstTurn.count()) === 0; index++) {
 		const count = await nav.locator("button").count();
-		await scroll.focus();
-		await page.keyboard.press("Home");
-		await expect.poll(async () => await nav.locator("button").count()).toBeGreaterThan(count);
+		// As above: a Home sent while the renderer still settles from the last page is lost, so it is sent again.
+		await expect(async () => {
+			await scroll.focus();
+			await page.keyboard.press("Home");
+			await expect.poll(async () => await nav.locator("button").count(), { timeout: 3_000 }).toBeGreaterThan(count);
+		}).toPass({ timeout: 30_000 });
 	}
 	await firstTurn.click();
 	await expect(scroll.getByText("Long session turn 000", { exact: true })).toBeVisible();

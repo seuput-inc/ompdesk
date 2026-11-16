@@ -56,7 +56,9 @@ test.describe("on this computer", () => {
 	let errors: string[];
 
 	test.beforeEach(async () => {
-		profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-agent-across-"));
+		// Canonical, as the folder a reopened session records: a runner's TEMP is an 8.3 short path (RUNNER~1) that
+		// `realpath` expands, and the session file keeps the path its child was started with.
+		profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-agent-across-")));
 		const project = path.join(profile, "project");
 		const desktop = path.join(profile, "desktop");
 		const agent = path.join(profile, "agent");

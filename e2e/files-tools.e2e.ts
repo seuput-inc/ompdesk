@@ -73,7 +73,9 @@ for (const [language, theme] of variants([
 		test.setTimeout(120_000);
 		const label = LABELS[language];
 		const captures = process.env.OMP_GUI_FILES_TOOLS_CAPTURES;
-		const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-files-tools-"));
+		// git reports the long spelling of %TEMP% (C:\Users\runneradmin), the tab keeps the 8.3 one the folder was
+		// opened by (C:\Users\RUNNER~1): the tree's marks are matched on the checkout's root, so the long one it is.
+		const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-files-tools-")));
 		const desktop = path.join(profile, "desktop");
 		const project = path.join(profile, "project");
 		const agent = path.join(profile, "agent");

@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
+import { leavesTheApp } from "./fixture/shell-launch";
 import { capture, exitApp, launchApp, pressShortcutUntilVisible, variants } from "./harness";
 
 // Figures in the built app on the fake omp: a .mmd file in the Files drawer
@@ -29,7 +30,7 @@ test("mermaid files and svg replies render as figures", async () => {
 		page.on("pageerror", error => errors.push(error.message));
 		const network: string[] = [];
 		page.on("request", request => {
-			if (/^(https?|wss?):/i.test(request.url())) network.push(request.url());
+			if (leavesTheApp(request.url())) network.push(request.url());
 		});
 		await page.waitForFunction(() => window.omp?.rpc != null);
 		await expect

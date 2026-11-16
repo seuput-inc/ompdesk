@@ -96,17 +96,33 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		await page.getByRole("textbox", { name: "Preview URL" }).fill(`${url}edit`);
 		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
 		await expect(page.locator("[data-preview-status]")).toHaveText("Edit fixture");
-		await expect.poll(() => app.windows().some(candidate => candidate.url() === `${url}edit`)).toBe(true);
-		const editPage = app.windows().find(candidate => candidate.url() === `${url}edit`);
-		if (!editPage) throw new Error("No Preview page target");
-		const field = editPage.getByRole("textbox", { name: "Field" });
-		await field.fill("abc");
+		// The Preview page is the shell's own Chromium page, not one of the app WebView's targets: Playwright cannot
+		// hold it, so the page is driven through its webContents in main (typed text and keys as the page receives them).
+		const onEditPage = (action: { run: "eval"; code: string } | { run: "text"; text: string } | { run: "shift" }) =>
+			app.evaluate(
+				async ({ webContents }, source) => {
+					const contents = webContents.getAllWebContents().find(item => item.getURL() === source.address);
+					if (!contents) throw new Error("No Preview page target");
+					if (source.action.run === "text") return contents.insertText(source.action.text);
+					if (source.action.run === "shift") {
+						contents.sendInputEvent({ type: "keyDown", keyCode: "Shift" });
+						contents.sendInputEvent({ type: "keyUp", keyCode: "Shift" });
+						return undefined;
+					}
+					return contents.executeJavaScript(source.action.code, true);
+				},
+				{ address: `${url}edit`, action },
+			);
+		const fieldValue = () => onEditPage({ run: "eval", code: "document.getElementById('field').value" });
+		await onEditPage({ run: "eval", code: "document.getElementById('field').focus()" });
+		await onEditPage({ run: "text", text: "abc" });
+		await expect.poll(fieldValue).toBe("abc");
 		// A key the page leaves alone reaches the shell from that page: the window's focus is the Preview page now.
-		await field.press("Shift");
+		await onEditPage({ run: "shift" });
 		// What the menu's Select All runs: the window's page is told to select all.
 		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.selectAll());
-		await field.pressSequentially("x");
-		await expect(field).toHaveValue("x");
+		await onEditPage({ run: "text", text: "x" });
+		await expect.poll(fieldValue).toBe("x");
 		await page.getByRole("textbox", { name: "Preview URL" }).fill(url);
 		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
 		await expect(page.locator("[data-preview-status]")).toHaveText("Local preview fixture");

@@ -21,7 +21,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
 import * as path from "node:path";
-import { type Browser, type BrowserContext, chromium, type Page } from "playwright-core";
+import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from "playwright-core";
 
 /** How long a running main process gets to act on a quit before it is killed. */
 export const EXIT_GRACE_MS = 10_000;
@@ -125,6 +125,22 @@ export function inspectorUrl(text: string): string | undefined {
 /** The app's own pages: the custom-protocol origin of macOS, and the `http://app.localhost` WebView2 loads it from. */
 export function isAppPageUrl(url: string): boolean {
 	return url.startsWith("app://ompdesk/") || url.startsWith("http://app.localhost/");
+}
+
+/**
+ * A request a page makes to the network: http(s) or ws(s) to anything but the app's own two WebView2 origins, the
+ * page (`http://app.localhost`) and the host's IPC endpoint (`http://ipc.localhost`), which the host serves itself.
+ * An `app://` page (macOS) makes none.
+ */
+export function leavesTheApp(url: string): boolean {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return false;
+	}
+	if (!/^(https?|wss?):$/.test(parsed.protocol)) return false;
+	return !(parsed.protocol === "http:" && (parsed.host === "app.localhost" || parsed.host === "ipc.localhost"));
 }
 
 /** A TCP port nothing listens on now: the OS picks it, it is released at once and handed to WebView2. */
@@ -283,6 +299,33 @@ export interface ShellLaunchOptions {
 	executablePath?: string;
 	cwd?: string;
 	timeout?: number;
+	/**
+	 * `null`, as `electron.launch` took it: no `prefers-color-scheme` emulation, so the pages report the scheme the
+	 * host's native theme gives them. Without it Playwright's CDP attach pins every page to `light`.
+	 */
+	colorScheme?: null;
+}
+
+/**
+ * `connectOverCDP`'s `noDefaults` (the way to leave the color scheme alone) also leaves out Playwright's focus
+ * emulation, which keeps the page of a window that never takes focus focused: sent here, page by page. Playwright keeps
+ * the emulation with the session that set it, so the sessions stay open for the app's life.
+ */
+function keepFocusEmulation(browser: Browser): void {
+	const sessions: CDPSession[] = [];
+	const emulate = (context: BrowserContext, page: Page) => {
+		void context
+			.newCDPSession(page)
+			.then(async session => {
+				sessions.push(session);
+				await session.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+			})
+			.catch(() => undefined);
+	};
+	for (const context of browser.contexts()) {
+		for (const page of context.pages()) emulate(context, page);
+		context.on("page", page => emulate(context, page));
+	}
 }
 
 /** Process, inspector and CDP connection of one running shell: the stand-in for Playwright's `ElectronApplication`. */
@@ -320,12 +363,23 @@ export class ShellApplication extends EventEmitter {
 		return [...pages.filter(isAppPage), ...pages.filter(page => !isAppPage(page))];
 	}
 
+	/**
+	 * The app's first window once its page is the app's own and its preload has run (`window.omp` exists), as
+	 * Electron's `firstWindow` handed back a window whose preload had run. The host creates a window at `about:blank`
+	 * and navigates it to the app a moment later (`wc_op loadURL`); on that blank page the preload has no Tauri IPC and
+	 * defines no `window.omp`, and the navigation destroys the page's execution context, so a spec's first
+	 * `page.evaluate(() => window.omp…)` on a page returned too early read `undefined` or lost its context.
+	 */
 	async firstWindow(options: { timeout?: number } = {}): Promise<Page> {
 		const timeout = options.timeout ?? 30_000;
 		const deadline = Date.now() + timeout;
 		for (;;) {
-			const [first] = this.windows();
-			if (first) return first;
+			const first = this.windows().find(isAppPage);
+			if (first) {
+				const remaining = timeout > 0 ? Math.max(1, deadline - Date.now()) : 0;
+				await first.waitForFunction(() => "omp" in window, undefined, { timeout: remaining });
+				return first;
+			}
 			if (this.#inspector.closed && this.#child.exitCode !== null)
 				throw new Error("app.firstWindow: the app has exited");
 			if (timeout > 0 && Date.now() > deadline) throw new Error(`app.firstWindow: Timeout ${timeout}ms exceeded.`);
@@ -545,6 +599,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 			try {
 				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
 					timeout: Math.max(1_000, deadline - Date.now()),
+					noDefaults: options.colorScheme === null,
 				});
 				break;
 			} catch (error) {
@@ -552,6 +607,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 				await Promise.race([sleep(100), exitedEarly.promise]);
 			}
 		}
+		if (options.colorScheme === null) keepFocusEmulation(browser);
 		if (env.OMP_GUI_E2E_SHELL_LOG === "1") traceTargets(browser, child.pid);
 		return new ShellApplication(child, inspector, browser);
 	} catch (error) {

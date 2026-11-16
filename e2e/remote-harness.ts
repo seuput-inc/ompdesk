@@ -16,7 +16,7 @@ import { _electron as electron } from "playwright";
 import { assertAppBuilt } from "../scripts/e2e-app-entry";
 import { freePortRun } from "../src/main/remote/test-ports";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
-import { fixtureOmp, walkRemotePicker } from "./harness";
+import { E2E_GIT_IDENTITY, fixtureOmp, walkRemotePicker } from "./harness";
 
 export type Language = "en" | "ko";
 export type Theme = "light" | "dark";
@@ -198,7 +198,7 @@ export async function makeRemoteProfile(
 	await fs.symlink(natives, path.join(path.dirname(bin), "node_modules/@oh-my-pi/pi-natives"), "junction");
 	const tailscale = await remoteTailscale(root, name, options.devices, options.hostAddress);
 	const port = options.port ?? (await freePort());
-	const env: Record<string, string> = {};
+	const env: Record<string, string> = { ...E2E_GIT_IDENTITY };
 	for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
 	Object.assign(env, {
 		PI_CODING_AGENT_DIR: agent,

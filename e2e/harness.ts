@@ -100,6 +100,18 @@ export interface LaunchOptions {
 }
 
 /**
+ * The commit identity of the app's own git (the merge `ompdesk_merge` makes). A hosted Windows runner has no global
+ * `user.name`/`user.email`, so a merge there fails with "Committer identity unknown"; a developer's machine had one.
+ * An identity the environment already sets wins.
+ */
+export const E2E_GIT_IDENTITY = {
+	GIT_AUTHOR_NAME: "OMPdesk E2E",
+	GIT_AUTHOR_EMAIL: "e2e@example.invalid",
+	GIT_COMMITTER_NAME: "OMPdesk E2E",
+	GIT_COMMITTER_EMAIL: "e2e@example.invalid",
+} as const;
+
+/**
  * What `launchApp` hands the shell's launcher (`electron.launch`'s options; `fixture/shell-launch.ts`): the built app (`out/main/index.js`) on `project` with its own userData, omp
  * agent and config dirs, no omp profile, and the fake omp (`fixtureOmp`) unless `env` names `OMP_GUI_OMP`.
  * `ELECTRON_RUN_AS_NODE`, which an Electron-hosted runner exports, never reaches the app.
@@ -109,6 +121,7 @@ export async function appLaunchOptions(
 ): Promise<{ args: string[]; env: Record<string, string> }> {
 	const extra = options.env ?? {};
 	const env: Record<string, string | undefined> = {
+		...E2E_GIT_IDENTITY,
 		// The app must never inherit a leaked GIT_DIR or its kin (src/shared/git-env.ts).
 		...withoutGitSelectors(process.env),
 		PI_CODING_AGENT_DIR: options.agent,
