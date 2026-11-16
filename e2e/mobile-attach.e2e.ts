@@ -278,7 +278,13 @@ for (const engine of ENGINES)
 					if (support.scales) expect(sent).toBeLessThan(picture.buffer.length);
 					else expect(sent).toBe(picture.buffer.length);
 				}
-				await expect(thumbnails).toHaveCount(0);
+				// A send that fails after omp has the prompt puts the picture back in the composer: say what the page told.
+				await expect(thumbnails)
+					.toHaveCount(0)
+					.catch(async (error: Error) => {
+						const notices = await phone.locator('[role="status"], [role="alert"]').allInnerTexts();
+						throw new Error(`${error.message}\nthe page's notices: ${JSON.stringify(notices)}`);
+					});
 				// The bubble shows the picture omp journaled (the HEIC as the computer's JPEG, in every browser).
 				const shown = index + 1;
 				await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(shown);

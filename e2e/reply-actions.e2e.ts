@@ -152,10 +152,14 @@ for (const language of variants(["en", "ko"] as const))
 				// Run in terminal: the fence reaches the tab's shell and the Terminal panel opens.
 				await reply.locator(".omp-code-block").hover();
 				await reply.getByRole("button", { name: text.run }).click();
-				// The command wraps at the panel's width after a long Windows prompt ("…\project>echo", then the word).
+				// The panel is about 58 columns wide and a Windows prompt is a long path, so the typed command wraps anywhere
+				// ("…\project>echo o" / "mpdesk-run-in-terminal"): read the rows without whitespace. The typed command, then
+				// its output, must follow each other.
 				await expect
-					.poll(() => aside.locator(".xterm-rows").innerText(), { timeout: 30_000 })
-					.toMatch(/echo\s+ompdesk-run-in-terminal[\s\S]*\nompdesk-run-in-terminal/);
+					.poll(async () => (await aside.locator(".xterm-rows").innerText()).replace(/\s+/g, ""), {
+						timeout: 30_000,
+					})
+					.toContain("echoompdesk-run-in-terminalompdesk-run-in-terminal");
 				await capture(page, `${language}-${theme}-run-in-terminal`);
 
 				// `$` offers the fixture's skill anywhere and inserts stock's token.

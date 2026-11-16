@@ -277,15 +277,18 @@ for (const language of variants(["en", "ko"] as const))
 					await expect(block.locator("[data-in-use]")).toHaveCount(1);
 					await expect(accounts.first()).toHaveAttribute("data-in-use", "true");
 					await expect(accounts.first()).toContainText(language === "en" ? "In use" : "사용 중");
-					// The address is whole (it wraps, never an ellipsis); the full label, parenthetical too, is the tooltip.
+					// A row names its account in four letters and its place ("me·1", shortAccountNames); the whole label,
+					// parenthetical too, is the tooltip.
 					const label = accounts.first().locator("[data-account-label]");
-					await expect(label).toHaveText("me@example.com");
+					await expect(label).toHaveText("me·1");
 					await expect(label).toHaveAttribute("title", "me@example.com (me…)");
 					if (count >= 2) {
 						// Both Claude accounts, in a fixed order by address, neither marked.
 						const claude = block.locator('[data-provider-row="anthropic"]');
 						const emails = claude.locator("[data-usage-account] [data-account-label]");
-						await expect(emails).toHaveText(["side@example.com", "work@example.com"]);
+						await expect(emails).toHaveText(["side·1", "work·2"]);
+						await expect(emails.nth(0)).toHaveAttribute("title", "side@example.com");
+						await expect(emails.nth(1)).toHaveAttribute("title", "work@example.com");
 						await expect(claude.locator("[data-in-use]")).toHaveCount(0);
 					}
 					const cut = await block.locator("[data-usage-account] [data-account-label]").evaluateAll(

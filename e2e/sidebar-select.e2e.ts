@@ -576,15 +576,22 @@ async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
 	const workspace = await page.locator(".omp-split-workspace").boundingBox();
 	if (!workspace) throw new Error("expected the workspace box");
 	const ghost = page.locator("[data-split-ghost]");
-	// Which drag events the page saw (a failed drag names them: a drag that never started differs from one whose
-	// dragover never reached the workspace).
+	// Which drag events the page saw, as `type@x,y` (a failed drag names them), and the ghost's presence at each
+	// dragover where it changed: a drag that never started differs from one whose dragover never reached the pane or
+	// whose dragleave took the ghost away again.
 	await page.evaluate(() => {
 		const seen: string[] = [];
-		for (const type of ["dragstart", "dragenter", "dragover", "drop", "dragend"])
+		let ghosts = -1;
+		for (const type of ["dragstart", "dragenter", "dragover", "dragleave", "drop", "dragend"])
 			window.addEventListener(
 				type,
 				event => {
-					if (seen.length < 24 && event instanceof DragEvent) seen.push(`${type}@${Math.round(event.clientX)}`);
+					if (!(event instanceof DragEvent) || seen.length >= 40) return;
+					const now = document.querySelectorAll("[data-split-ghost]").length;
+					if (type === "dragover" && now === ghosts) return;
+					if (type === "dragover") ghosts = now;
+					const at = `${Math.round(event.clientX)},${Math.round(event.clientY)}`;
+					seen.push(`${type}@${at}${type === "dragover" ? `:ghost${now}` : ""}`);
 					document.documentElement.dataset.dragSeen = seen.join(" ");
 				},
 				true,

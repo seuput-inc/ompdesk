@@ -63,7 +63,10 @@ test("a paired device's view of a run's work board shows the run's follow-ups an
 					"5": { followups: ["Split the store", "Fix the flaky login test"] },
 					"6": { resolved: ["Speed up the board", "Cache the icons"] },
 					"7": { followups: ["Rename the board"] },
-					"8": { holdUntil: gate, children: 1 },
+					// The child's branch appears 3 s into this cycle, not 0.1 s: the run audits each cycle's refs when its end
+					// is processed, and on a Windows runner (slow git) cycle 7's audit ran after cycle 8 had made the branch,
+					// pausing the run on "refs/heads/autopilot/…-c8-tests created" before the child was registered.
+					"8": { holdUntil: gate, children: 1, ms: 10_000 },
 				},
 			}),
 			OMP_WORKTREE_DIR: worktrees,

@@ -72,6 +72,34 @@ function playerState(player: Locator): Promise<PlayerState> {
 /** A player's stream: `omp-media://stream/<token>`, which WebView2 loads from `http://omp-media.localhost/stream/<token>`. */
 const MEDIA_STREAM_URL = /^(omp-media:\/\/|http:\/\/omp-media\.localhost\/)stream\//;
 
+/**
+ * What the page makes of a clip that got no player (its card is a chip): the stream the host answers, whether a
+ * `<video>` loads it and what a ranged fetch of it gets, and the reply's own text.
+ */
+function whyNoPlayer(page: Page, file: string, reply: Locator): Promise<string> {
+	return page
+		.evaluate(async path => {
+			const tab = (await window.omp.tabs.list()).find(entry => entry.active);
+			const stream = await window.omp.fs.mediaStream(path, tab?.tabId);
+			if (!stream.ok) return JSON.stringify({ stream });
+			const video = document.createElement("video");
+			video.muted = true;
+			video.preload = "metadata";
+			const { promise: loaded, resolve } = Promise.withResolvers<string>();
+			video.onloadedmetadata = () => resolve("loaded");
+			video.onerror = () => resolve(`error ${video.error?.code} ${video.error?.message}`);
+			setTimeout(() => resolve("no event in 10 s"), 10_000);
+			video.src = stream.url;
+			const ranged = await fetch(stream.url, { headers: { Range: "bytes=0-1" } }).then(
+				response => `${response.status} ${response.headers.get("content-type")}`,
+				error => String(error),
+			);
+			return JSON.stringify({ url: stream.url, mime: stream.mime, loaded: await loaded, ranged });
+		}, file)
+		.then(async probe => `${probe}\nreply: ${await reply.innerText().catch(() => "(gone)")}`)
+		.catch((error: Error) => `probe failed: ${error.message}`);
+}
+
 /** Metadata loads (duration known) through main's stream, and the player sits paused at the start. */
 async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Promise<PlayerState> {
 	await expect
@@ -105,7 +133,13 @@ for (const language of variants(["en", "ko"] as const))
 				const playerNamed = (name: string) => reply.locator(".omp-chat-media").filter({ hasText: name });
 				const replyVideo = playerNamed("clip.webm").locator("video");
 				// Players mount near the viewport, and the cards under them push the first ones up: bring each in.
-				await playerNamed("clip.webm").scrollIntoViewIfNeeded();
+				await playerNamed("clip.webm")
+					.scrollIntoViewIfNeeded()
+					.catch(async (error: Error) => {
+						throw new Error(
+							`${error.message}\nwhy the clip has no player: ${await whyNoPlayer(page, path.join(project, "out", "clip.webm"), reply)}`,
+						);
+					});
 				await expectLoadedAndIdle(replyVideo, "video");
 				await playerNamed("tone.mp3").scrollIntoViewIfNeeded();
 				await expectLoadedAndIdle(playerNamed("tone.mp3").locator("audio"), "audio");
