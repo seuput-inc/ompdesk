@@ -28,6 +28,8 @@
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
 . "$HERE/mac-processes.sh"
+SHOTS=${RUNNER_TEMP:-/tmp}/move-shots; mkdir -p "$SHOTS"   # the job uploads this folder (shell-batch-checks.yml)
+SEED_TITLE='이사 검사 대화 ✓ (Electron에서 만듦)'; SEED_ID=move-seed-conversation; SEED_LANGUAGE=Japanese
 PORT=19230; FEEDPORT=18444; HTTPPORT=18445; SEEDPORT=18446
 NATIVEPORT=19231
 MOVE_ENGINE=${OMPDESK_SHELL_ENGINE:-tauri}
@@ -45,6 +47,14 @@ new_profile() {
   else
     (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" "${1:-read}")
   fi
+}
+# A screenshot is evidence, never a gate on the move itself unless asked: $1 file name, $2 engine (old|new), $3 "required".
+shot() {
+  local file=$SHOTS/$1 rc
+  if [ "$2" = new ]; then (cd "$REPO" && limit 90 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" shot "$file"); rc=$?
+  else (cd "$REPO" && limit 90 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" shot "$file"); rc=$?; fi
+  if [ "$3" = required ]; then check $rc "screenshot $1"; else evidence "screenshot $1: exit $rc"; fi
+  return 0
 }
 LAST_ELECTRON_TAG=$(jq -er .tag "$REPO/native/ompdesk/crates/shell/last-electron.json") || exit 1
 SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-$LAST_ELECTRON_TAG}
@@ -193,7 +203,9 @@ scenario() {
     restore
     exit 1
   fi
-  check 0 "$name: seed validated and stored a token in the test profile"
+  check 0 "$name: seed validated and stored a token, set the reply language ($SEED_LANGUAGE) and listed the seeded conversation"
+  grep -q "\"id\":\"$SEED_ID\"" "$W/$name-seed.json" && grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-seed.json"; check $? "$name: the released app's own page reported the seeded setting and conversation id"
+  if [ "$name" = s1 ]; then shot 01-old-electron-signed-in-with-data.png old required; fi
   (cd "$REPO" && limit 90 bun scripts/shell-move/cdp-seed-mac.ts $PORT quit) | tee "$W/$name-quit.json"; seed_rc=${PIPESTATUS[0]}
   if [ "$seed_rc" != 0 ] || ! wait_app "$APPS/OMPdesk.app" "$seed_pid"; then
     check 1 "$name: the seeded released app quit normally before its profile was read again"
@@ -226,6 +238,7 @@ scenario() {
     exit 1
   fi
   check 0 "$name: the restarted released app retained the original token and Local Storage before migration"
+  grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-persisted.json" && grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-persisted.json"; check $? "$name: the restarted released app kept the setting and the seeded conversation before migration"
   if wait_for "has_line $UD 'download verified'" 240; then
     check 0 "$name: check found, download verified"
   else
@@ -274,6 +287,8 @@ scenario() {
     wait_for "has_line $UD 'swap result'" 120; update_lines "$UD" | sed 's/^/EVIDENCE: S4 update log: /'
     update_lines "$UD" | grep -Eq '^swap result (rolled back|changed)'; check $? "S4: the restored Electron logged swap result (rolled back/changed)"
     ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" | grep -v grep | grep -q .; check $? "S4: the Electron app is running"
+    # Best effort: the relaunched old app has a CDP port only when the swap script passed the original argv through.
+    shot 04-rollback-old-app.png old optional
     ls "$APPS" | grep -q 'updating\|previous'; [ $? != 0 ]; check $? "S4: no .updating or .previous leftovers"
   elif [ "$fail" = 0 ]; then
     wait_for "grep -q '^installed' $UD/updates/swap.log" 120; check $? "S1: swap.log says installed"
@@ -289,6 +304,11 @@ scenario() {
     new_profile read | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the actual $MOVE_ENGINE page answered"
     grep -q '"href":"app://ompdesk/' "$W/$name-read.json"; check $? "S1: the page loaded from app://ompdesk"
     grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"korean":"한국어 초안 ✓"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
+    if [ "$MOVE_ENGINE" = tauri ]; then
+      grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-read.json"; check $? "S1: the setting changed in Electron (reply language $SEED_LANGUAGE) reads back on the Tauri page after the update relaunch"
+      grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-read.json" && grep -q "\"seedSessionTitle\":\"$SEED_TITLE\"" "$W/$name-read.json"; check $? "S1: the conversation made in Electron is in the Tauri session list after the update relaunch (id and title)"
+      shot 02-tauri-after-update-relaunch.png new required
+    fi
     if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
       check 0 "S1: the seeded token was decrypted (source stored, none dropped)"
     else
@@ -324,6 +344,9 @@ scenario() {
       else
         check 0 "S1: the restarted native app retained old and new data plus encrypted auth"
       fi
+      grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-native-reopened.json"; check $? "S1: the reopened Tauri app still has the reply language setting ($SEED_LANGUAGE)"
+      grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-native-reopened.json" && grep -q "\"seedSessionTitle\":\"$SEED_TITLE\"" "$W/$name-native-reopened.json"; check $? "S1: the reopened Tauri app still lists the seeded conversation (id and title)"
+      shot 03-tauri-reopened-retained.png new required
     fi
   else
     wait_for "grep -q 'copy failed\|install failed\|cannot move' $UD/updates/swap.log 2>/dev/null" 120; check $? "S2: the swap failed (swap.log)"

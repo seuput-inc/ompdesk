@@ -317,11 +317,14 @@ jobs:
         shell: bash
         run: |
           { echo "### update move from ${{ matrix.released-tag }}, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac-release1.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "Screenshots (artifact move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}, folder move-shots):"; ls "${{ runner.temp }}/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}
-          path: move-mac-release1.log
+          path: |
+            move-mac-release1.log
+            ${{ runner.temp }}/move-shots/*.png
           if-no-files-found: ignore
           retention-days: 7
       - if: failure()
@@ -412,6 +415,13 @@ jobs:
           set -euo pipefail
           bun native/ompdesk/crates/tauri-shell/tests/preload.ts
           bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
+      - name: Test and lint the test-only WebDriver build
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --features test-automation automation::
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets --features test-automation -- -D warnings
       - name: Test the original Local Storage exporter without CEF
         shell: bash
         if: inputs.only == 'tauri-native'
