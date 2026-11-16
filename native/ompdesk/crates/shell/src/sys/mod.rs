@@ -9,6 +9,7 @@ pub mod comthread;
 mod crypt;
 pub mod desk;
 pub mod dialogs;
+pub mod file;
 pub mod menu;
 mod pipe;
 pub mod shellops;
