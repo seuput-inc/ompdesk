@@ -167,6 +167,11 @@ describe.runIf(process.platform !== "win32")("release workflow metadata step", (
 			fs.writeFileSync(path.join(dir, "dist", UPDATE_ASSETS.mac), "fake dmg bytes");
 			fs.writeFileSync(path.join(dir, "dist", UPDATE_ASSETS.windows), "fake setup bytes, longer");
 			fs.writeFileSync(path.join(dir, "notes", "notes.md"), `${NOTES}\n`);
+			// The publish job runs in the checkout and reads the release's real compatibility floor.
+			const compatibility = path.join(__dirname, "..", "shared", "app-compatibility.json");
+			fs.mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+			fs.copyFileSync(compatibility, path.join(dir, "src", "shared", "app-compatibility.json"));
+			const { minimumDarwin } = JSON.parse(fs.readFileSync(compatibility, "utf8")) as { minimumDarwin: string };
 
 			const result = spawnSync("bash", ["-c", script ?? ""], {
 				cwd: dir,
@@ -182,7 +187,12 @@ describe.runIf(process.platform !== "win32")("release workflow metadata step", (
 				version: "0.18.0",
 				releaseDate: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/),
 				files: {
-					mac: { name: UPDATE_ASSETS.mac, size: 14, sha512: sha512("fake dmg bytes") },
+					mac: {
+						name: UPDATE_ASSETS.mac,
+						size: 14,
+						sha512: sha512("fake dmg bytes"),
+						minimumSystemVersion: minimumDarwin,
+					},
 					windows: { name: UPDATE_ASSETS.windows, size: 24, sha512: sha512("fake setup bytes, longer") },
 				},
 			});
