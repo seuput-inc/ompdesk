@@ -46,7 +46,7 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "std", "block2", "objc2-core-foundation", "NSAccessibility", "NSAccessibilityConstants",
-  "NSAccessibilityElement", "NSAccessibilityProtocols", "NSApplication", "NSBitmapImageRep",
+  "NSAccessibilityElement", "NSAccessibilityProtocols", "NSApplication", "NSBitmapImageRep", "NSColor",
   "NSCell", "NSControl", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep",
   "NSImageView", "NSResponder", "NSScreen", "NSTextInputClient", "NSTextInputContext",
   "NSTrackingArea", "NSView", "NSWindow",
