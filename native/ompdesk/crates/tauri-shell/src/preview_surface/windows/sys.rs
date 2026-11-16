@@ -548,7 +548,8 @@ fn ime_text(
     imc: windows_sys::Win32::UI::Input::Ime::HIMC,
     kind: u32,
 ) -> Result<Vec<u16>, SurfaceError> {
-    // SAFETY: imc is acquired for the duration of this callback; a null buffer requests the byte count.    let bytes = unsafe { ImmGetCompositionStringW(imc, kind, null_mut(), 0) };
+    // SAFETY: imc is acquired for the duration of this callback; a null buffer requests the byte count.
+    let bytes = unsafe { ImmGetCompositionStringW(imc, kind, null_mut(), 0) };
     if bytes < 0 || bytes % 2 != 0 {
         return Err(native_error("read Preview IME text length"));
     }
