@@ -475,12 +475,28 @@ impl Page {
                 None,
             )
             .await
-            && error.code != "cdp_error"
         {
-            return Err(error);
+            // Chromium rejects closing a target that is already gone, but the same code covers other refusals.
+            if error.code != "cdp_error" || self.target_exists().await? {
+                return Err(error);
+            }
         }
         self.closed.store(true, Ordering::Release);
         Ok(())
+    }
+
+    async fn target_exists(&self) -> Result<bool> {
+        let targets = self
+            .transport
+            .request("Target.getTargets", json!({}), None)
+            .await?;
+        let infos = targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new("cdp", "Chromium returned no target list"))?;
+        Ok(infos.iter().any(|info| {
+            info.get("targetId").and_then(Value::as_str) == Some(self.target_id.as_str())
+        }))
     }
 }
 
@@ -784,6 +800,61 @@ impl Drop for Creation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::test_support::{command, connected};
+    use tokio::io::{AsyncWriteExt, BufReader};
+
+    async fn closing(targets: Value) -> (Result<()>, bool, Vec<String>) {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Arc::new(Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+        });
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let task = {
+            let page = Arc::clone(&page);
+            tokio::spawn(async move { page.close().await })
+        };
+        let mut methods = Vec::new();
+        let close = command(&mut read).await;
+        methods.push(close["method"].as_str().unwrap().to_owned());
+        let id = close["id"].as_u64().unwrap();
+        write
+            .write_all(
+                format!("{{\"id\":{id},\"error\":{{\"code\":-32602,\"message\":\"No target with given id found\"}}}}\0")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let list = command(&mut read).await;
+        methods.push(list["method"].as_str().unwrap().to_owned());
+        let id = list["id"].as_u64().unwrap();
+        write
+            .write_all(format!("{{\"id\":{id},\"result\":{targets}}}\0").as_bytes())
+            .await
+            .unwrap();
+        let result = task.await.unwrap();
+        (result, page.closed.load(Ordering::Acquire), methods)
+    }
+
+    #[tokio::test]
+    async fn rejected_close_succeeds_only_when_the_target_is_actually_gone() {
+        let (gone, closed, methods) = closing(json!({"targetInfos":[{"targetId":"other"}]})).await;
+        assert!(gone.is_ok());
+        assert!(closed);
+        assert_eq!(methods, ["Target.closeTarget", "Target.getTargets"]);
+
+        let (refused, closed, _) = closing(json!({"targetInfos":[{"targetId":"page-1"}]})).await;
+        assert_eq!(refused.unwrap_err().code, "cdp_error");
+        assert!(!closed);
+
+        let (malformed, closed, _) = closing(json!({})).await;
+        assert_eq!(malformed.unwrap_err().code, "cdp");
+        assert!(!closed);
+    }
 
     #[test]
     fn navigation_never_accepts_files_or_script_schemes() {

@@ -475,7 +475,7 @@ jobs:
       - uses: ./.github/actions/native-toolchain
         with:
           workspaces: native/ompdesk/crates/shell-preview
-      - run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib transport::tests
+      - run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
 
   tauri-package-inputs:
     name: tauri-package-inputs (ubuntu)

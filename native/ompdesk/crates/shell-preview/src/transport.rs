@@ -521,26 +521,11 @@ fn receive(shared: &Shared, bytes: &[u8]) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
+    use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream};
 
-    #[tokio::test]
-    async fn process_pipe_end_closes_event_subscribers() {
-        let (transport, peer) = connected(Duration::from_secs(10));
-        let mut events = transport.subscribe();
-        drop(peer);
-        assert!(matches!(
-            events.recv().await,
-            Err(broadcast::error::RecvError::Closed)
-        ));
-        assert!(matches!(
-            transport.subscribe().recv().await,
-            Err(broadcast::error::RecvError::Closed)
-        ));
-    }
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
-
-    fn connected(timeout: Duration) -> (Transport, DuplexStream) {
+    pub(crate) fn connected(timeout: Duration) -> (Transport, DuplexStream) {
         let (client, peer) = tokio::io::duplex(65536);
         let (read, write) = tokio::io::split(client);
         let (outgoing, queue) = mpsc::channel(MAX_PENDING);
@@ -576,12 +561,35 @@ mod tests {
         )
     }
 
-    async fn command(read: &mut BufReader<tokio::io::ReadHalf<DuplexStream>>) -> Value {
+    pub(crate) async fn command(read: &mut BufReader<tokio::io::ReadHalf<DuplexStream>>) -> Value {
         let mut frame = Vec::new();
         read.read_until(0, &mut frame).await.unwrap();
         assert_eq!(frame.pop(), Some(0));
         serde_json::from_slice(&frame).unwrap()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{command, connected};
+    use super::*;
+
+    #[tokio::test]
+    async fn process_pipe_end_closes_event_subscribers() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let mut events = transport.subscribe();
+        drop(peer);
+        assert!(matches!(
+            events.recv().await,
+            Err(broadcast::error::RecvError::Closed)
+        ));
+        assert!(matches!(
+            transport.subscribe().recv().await,
+            Err(broadcast::error::RecvError::Closed)
+        ));
+    }
+
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     #[tokio::test]
     async fn fragmented_out_of_order_responses_and_session_events() {
