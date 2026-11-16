@@ -6,12 +6,82 @@ use native::{
 use shell_core::wire::WireError;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use tauri::Manager;
 use tokio::sync::oneshot;
 
 thread_local! {
     static VIEWS: RefCell<HashMap<u64,Surface>>=RefCell::new(HashMap::new());
+}
+
+/// The Preview view that holds each app window's native keyboard focus (its surface took the OS focus, or was
+/// told to): the page an application-menu edit command acts on, as Electron's menu roles act on the focused webContents.
+#[derive(Default)]
+struct FocusOwners(HashMap<u64, u64>);
+impl FocusOwners {
+    fn gain(&mut self, win: u64, view: u64) {
+        self.0.insert(win, view);
+    }
+    fn lose(&mut self, win: u64, view: u64) {
+        if self.0.get(&win) == Some(&view) {
+            self.0.remove(&win);
+        }
+    }
+    fn owner(&self, win: u64) -> Option<u64> {
+        self.0.get(&win).copied()
+    }
+    fn forget(&mut self, view: u64) {
+        self.0.retain(|_, owner| *owner != view);
+    }
+}
+static FOCUS: LazyLock<Mutex<FocusOwners>> = LazyLock::new(Mutex::default);
+
+fn note_focus(key: SurfaceKey, focused: bool) {
+    let parent = {
+        let registry = runtime().registry.lock().expect("registry");
+        match registry.page(key.wc).map(|page| page.kind) {
+            Some(Kind::PreviewView {
+                parent: Some(win), ..
+            }) => win,
+            _ => return,
+        }
+    };
+    let mut owners = FOCUS.lock().expect("native focus owners");
+    if focused {
+        owners.gain(parent, key.view);
+    } else {
+        owners.lose(parent, key.view);
+    }
+}
+/// The Preview page holding the native keyboard focus of the window that app page `wc` belongs to.
+pub(super) fn edit_owner(wc: u64) -> Option<u64> {
+    let win = {
+        let registry = runtime().registry.lock().expect("registry");
+        registry
+            .page(wc)
+            .filter(|page| {
+                page.kind == Kind::App && page.state == crate::registry::PageState::Live
+            })?
+            .identity
+            .win?
+    };
+    let view = FOCUS.lock().expect("native focus owners").owner(win)?;
+    let registry = runtime().registry.lock().expect("registry");
+    let page = registry
+        .by_view(view)
+        .filter(|page| page.state == crate::registry::PageState::Live)?;
+    matches!(page.kind, Kind::PreviewView { parent: Some(parent), .. } if parent == win)
+        .then_some(page.identity.wc)
+}
+/// Whether app page `wc` has Preview views attached to its window, so that an edit command sent to it is ordered
+/// with those views' own requests and resolved to the focused one when its turn comes.
+pub(super) fn hosts_preview(wc: u64) -> bool {
+    let registry = runtime().registry.lock().expect("registry");
+    registry
+        .page(wc)
+        .filter(|page| page.kind == Kind::App && page.state == crate::registry::PageState::Live)
+        .and_then(|page| page.identity.win)
+        .is_some_and(|win| !registry.children(win).is_empty())
 }
 pub(super) fn key(wc: u64) -> Result<SurfaceKey, SurfaceError> {
     let registry = runtime().registry.lock().expect("registry");
@@ -124,6 +194,9 @@ impl Consumer for Effects {
     }
     fn input(&self, key: SurfaceKey, input: native::Input) -> Result<(), SurfaceError> {
         current(key)?;
+        if let native::Input::Focus(focused) = &input {
+            note_focus(key, *focused);
+        }
         let entry = self.entry.upgrade().ok_or(SurfaceError::Disposed)?;
         let focus = entry
             .document
@@ -358,7 +431,9 @@ pub(super) async fn focus(key: SurfaceKey) -> Result<(), WireError> {
                 return Err(SurfaceError::StaleGeneration);
             }
             surface.focus()
-        })
+        })?;
+        note_focus(key, true);
+        Ok(())
     })
     .await
 }
@@ -431,6 +506,7 @@ pub(super) async fn dispose(key: SurfaceKey) -> Result<(), WireError> {
             }
             Ok(views.remove(&key.view))
         })?;
+        FOCUS.lock().expect("native focus owners").forget(key.view);
         let disposed = if let Some(mut surface) = result {
             surface.dispose()
         } else {
@@ -450,4 +526,30 @@ pub(super) async fn dispose(key: SurfaceKey) -> Result<(), WireError> {
         disposed
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FocusOwners;
+
+    #[test]
+    fn a_window_keeps_the_view_that_took_its_focus_until_that_view_lets_go() {
+        let mut owners = FocusOwners::default();
+        owners.gain(1, 10);
+        owners.gain(1, 11);
+        owners.lose(1, 10);
+        assert_eq!(owners.owner(1), Some(11));
+        owners.lose(1, 11);
+        assert_eq!(owners.owner(1), None);
+    }
+
+    #[test]
+    fn a_disposed_view_is_no_window_focus_owner() {
+        let mut owners = FocusOwners::default();
+        owners.gain(1, 10);
+        owners.gain(2, 20);
+        owners.forget(10);
+        assert_eq!(owners.owner(1), None);
+        assert_eq!(owners.owner(2), Some(20));
+    }
 }

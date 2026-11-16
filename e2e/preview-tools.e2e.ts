@@ -137,13 +137,13 @@ for (const [language, theme] of variants([
 				},
 				{ host, op },
 			);
-		const innerWidth = () =>
+		const pageLayout = () =>
 			app.evaluate(async ({ webContents }, source) => {
 				const contents = webContents
 					.getAllWebContents()
 					.find(candidate => candidate.getURL().startsWith(`http://${source}/`));
 				if (!contents) throw new Error("No preview page");
-				return contents.executeJavaScript("innerWidth");
+				return contents.executeJavaScript("({width:innerWidth,title:document.title})");
 			}, host);
 		const page = await app.firstWindow();
 		try {
@@ -194,21 +194,21 @@ for (const [language, theme] of variants([
 			await addressBar.fill(`${host}/width`);
 			await addressBar.press("Enter");
 			await expect(status).toHaveText("w=390");
-			await expect.poll(innerWidth).toBe(390);
+			await expect.poll(pageLayout).toEqual({ width: 390, title: "w=390" });
 			await capture("preview-phone");
 			await options.click();
 			await page.getByRole("menuitemcheckbox", { name: label.fill, exact: true }).click();
 			const surface = aside.locator("[data-preview-surface]");
 			const fillWidth = await surface.evaluate(element => Math.round(element.getBoundingClientRect().width));
 			expect(fillWidth).not.toBe(390);
-			await expect.poll(innerWidth).toBe(fillWidth);
+			await expect.poll(pageLayout).toEqual({ width: fillWidth, title: `w=${fillWidth}` });
 			await expect(status).toHaveText(`w=${fillWidth}`);
 			const resize = aside.getByRole("separator");
 			await resize.press("Home");
 			await expect(resize).toHaveAttribute("aria-valuenow", "360");
 			const resizedWidth = await surface.evaluate(element => Math.round(element.getBoundingClientRect().width));
 			expect(resizedWidth).not.toBe(fillWidth);
-			await expect.poll(innerWidth).toBe(resizedWidth);
+			await expect.poll(pageLayout).toEqual({ width: resizedWidth, title: `w=${resizedWidth}` });
 			await expect(status).toHaveText(`w=${resizedWidth}`);
 
 			// C126: a download is refused with a notice that offers the system browser.

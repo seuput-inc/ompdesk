@@ -91,22 +91,21 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		});
 		expect(security).toEqual({ title: "Local preview fixture", node: "undefined", ipc: "undefined" });
 		expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false);
-		// The application menu's edit commands (Cmd/Ctrl+A, C, V, X, Z) act on the page holding the keyboard focus, as
-		// Electron's menu roles do: a Preview page the person typed in, not the window's own page.
+		// The application menu's edit commands (Cmd/Ctrl+A, C, V, X, Z) act on the Preview view that holds the window's
+		// native keyboard focus, as Electron's menu roles act on the focused webContents, not on the window's own page.
 		await page.getByRole("textbox", { name: "Preview URL" }).fill(`${url}edit`);
 		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
 		await expect(page.locator("[data-preview-status]")).toHaveText("Edit fixture");
 		// The Preview page is the shell's own Chromium page, not one of the app WebView's targets: Playwright cannot
-		// hold it, so the page is driven through its webContents in main (typed text and keys as the page receives them).
-		const onEditPage = (action: { run: "eval"; code: string } | { run: "text"; text: string } | { run: "shift" }) =>
+		// hold it, so the page is driven through its webContents in main (typed text and focus as the page receives them).
+		const onEditPage = (action: { run: "eval"; code: string } | { run: "text"; text: string } | { run: "focus" }) =>
 			app.evaluate(
 				async ({ webContents }, source) => {
 					const contents = webContents.getAllWebContents().find(item => item.getURL() === source.address);
 					if (!contents) throw new Error("No Preview page target");
 					if (source.action.run === "text") return contents.insertText(source.action.text);
-					if (source.action.run === "shift") {
-						contents.sendInputEvent({ type: "keyDown", keyCode: "Shift" });
-						contents.sendInputEvent({ type: "keyUp", keyCode: "Shift" });
+					if (source.action.run === "focus") {
+						contents.focus();
 						return undefined;
 					}
 					return contents.executeJavaScript(source.action.code, true);
@@ -117,8 +116,8 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		await onEditPage({ run: "eval", code: "document.getElementById('field').focus()" });
 		await onEditPage({ run: "text", text: "abc" });
 		await expect.poll(fieldValue).toBe("abc");
-		// A key the page leaves alone reaches the shell from that page: the window's focus is the Preview page now.
-		await onEditPage({ run: "shift" });
+		// The native view takes the keyboard focus: the window's focused page is the Preview page now.
+		await onEditPage({ run: "focus" });
 		// What the menu's Select All runs: the window's page is told to select all.
 		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.selectAll());
 		await onEditPage({ run: "text", text: "x" });

@@ -15,6 +15,8 @@ const MAX_PENDING: usize = 256;
 const EVENT_CAPACITY: usize = 32;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
+/// Fixed per-event accounting added to the frame bytes: the parsed `Event` owns allocations beyond the wire JSON.
+const EVENT_OVERHEAD: usize = 256;
 const MAX_ID: u64 = (1 << 53) - 1;
 
 type Reply = oneshot::Sender<Result<Value>>;
@@ -63,7 +65,9 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     outgoing: mpsc::Sender<Outgoing>,
-    events: Mutex<Option<broadcast::Sender<Event>>>,
+    events: Mutex<Option<Vec<EventSubscriber>>>,
+    /// Wire-byte budget granted to each event subscriber's queue.
+    event_budget: usize,
     policy_events: Mutex<Option<broadcast::Sender<Event>>>,
     stop: watch::Sender<bool>,
     done: watch::Sender<bool>,
@@ -87,6 +91,43 @@ impl Shared {
             .unwrap_or_else(|e| e.into_inner())
             .take();
         self.stop.send_replace(true);
+    }
+}
+
+struct QueuedEvent {
+    event: Event,
+    _permit: OwnedSemaphorePermit,
+}
+
+struct EventSubscriber {
+    sender: mpsc::UnboundedSender<QueuedEvent>,
+    budget: Arc<Semaphore>,
+}
+
+/// Reliable, ordered stream of every Chromium event received after `subscribe`. The queue is unbounded in count but
+/// bounded by a wire-byte budget; a consumer that exhausts it fails the whole connection with `event_overflow`
+/// instead of silently losing events. Queue credit returns when `recv` removes an event; dropping the receiver
+/// unsubscribes. Receiving is transport-only and confers no authority.
+pub struct EventReceiver {
+    queue: mpsc::UnboundedReceiver<QueuedEvent>,
+    shared: Arc<Shared>,
+}
+
+impl EventReceiver {
+    /// Next event in wire order. After the stream ends (queued events are delivered first) returns the connection's
+    /// actual failure, or `closed`.
+    pub async fn recv(&mut self) -> Result<Event> {
+        match self.queue.recv().await {
+            Some(QueuedEvent { event, _permit }) => Ok(event),
+            None => Err(self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .failure
+                .clone()
+                .unwrap_or_else(|| Error::new("closed", "Chromium event stream closed"))),
+        }
     }
 }
 
@@ -209,7 +250,7 @@ impl Transport {
             .id()
             .ok_or_else(|| Error::new("launch", "Chromium has no process ID"))?;
         let (outgoing, outgoing_rx) = mpsc::channel(MAX_PENDING);
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+
         let (stop, stop_rx) = watch::channel(false);
         let (status_tx, status) = watch::channel(None);
         let (done, _) = watch::channel(false);
@@ -220,7 +261,8 @@ impl Transport {
                 failure: None,
             }),
             outgoing,
-            events: Mutex::new(Some(events)),
+            events: Mutex::new(Some(Vec::new())),
+            event_budget: MAX_QUEUED_BYTES,
             policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
             stop,
             done,
@@ -351,8 +393,24 @@ impl Transport {
         })
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        Self::subscribe_to(&self.owner.shared.events)
+    pub fn subscribe(&self) -> EventReceiver {
+        let shared = &self.owner.shared;
+        let (sender, queue) = mpsc::unbounded_channel();
+        if let Some(subscribers) = shared
+            .events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            subscribers.push(EventSubscriber {
+                sender,
+                budget: Arc::new(Semaphore::new(shared.event_budget)),
+            });
+        }
+        EventReceiver {
+            queue,
+            shared: Arc::clone(shared),
+        }
     }
 
     pub(crate) fn subscribe_policy(&self) -> broadcast::Receiver<Event> {
@@ -581,13 +639,46 @@ fn receive(shared: &Shared, bytes: &[u8]) -> Result<()> {
             .send(event.clone())
             .map_err(|_| Error::new("event_unobserved", "Chromium policy event has no consumer"))?;
     }
-    if let Some(events) = shared
+    let charge = bytes.len() + EVENT_OVERHEAD;
+    if let Some(subscribers) = shared
         .events
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
+        .as_mut()
     {
-        let _ = events.send(event);
+        let mut overflow = false;
+        let mut remaining = subscribers.len();
+        let mut event = Some(event);
+        // Never awaits: a stalled observer only grows its own byte-budgeted queue, never blocks reply demux.
+        subscribers.retain(|subscriber| {
+            remaining -= 1;
+            let Ok(permit) = Arc::clone(&subscriber.budget)
+                .try_acquire_many_owned(u32::try_from(charge).unwrap_or(u32::MAX))
+            else {
+                if !subscriber.sender.is_closed() {
+                    overflow = true;
+                }
+                return !subscriber.sender.is_closed();
+            };
+            let event = if remaining == 0 {
+                event.take().expect("last event subscriber")
+            } else {
+                event.as_ref().expect("event fanout").clone()
+            };
+            subscriber
+                .sender
+                .send(QueuedEvent {
+                    event,
+                    _permit: permit,
+                })
+                .is_ok()
+        });
+        if overflow {
+            return Err(Error::new(
+                "event_overflow",
+                "Chromium event consumer fell behind",
+            ));
+        }
     }
     Ok(())
 }
@@ -598,10 +689,17 @@ pub(crate) mod test_support {
     use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream};
 
     pub(crate) fn connected(timeout: Duration) -> (Transport, DuplexStream) {
+        connected_with_event_budget(timeout, MAX_QUEUED_BYTES)
+    }
+
+    pub(crate) fn connected_with_event_budget(
+        timeout: Duration,
+        event_budget: usize,
+    ) -> (Transport, DuplexStream) {
         let (client, peer) = tokio::io::duplex(65536);
         let (read, write) = tokio::io::split(client);
         let (outgoing, queue) = mpsc::channel(MAX_PENDING);
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+
         let (stop, _) = watch::channel(false);
         let (done, _) = watch::channel(false);
         let (_status_tx, status) = watch::channel(None);
@@ -612,7 +710,8 @@ pub(crate) mod test_support {
                 failure: None,
             }),
             outgoing,
-            events: Mutex::new(Some(events)),
+            events: Mutex::new(Some(Vec::new())),
+            event_budget,
             policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
             stop,
             done,
@@ -643,7 +742,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{command, connected};
+    use super::test_support::{command, connected, connected_with_event_budget};
     use super::*;
 
     #[test]
@@ -661,14 +760,80 @@ mod tests {
         let (transport, peer) = connected(Duration::from_secs(10));
         let mut events = transport.subscribe();
         drop(peer);
-        assert!(matches!(
-            events.recv().await,
-            Err(broadcast::error::RecvError::Closed)
+        assert_eq!(events.recv().await.unwrap_err().code, "pipe");
+        assert_eq!(transport.subscribe().recv().await.unwrap_err().code, "pipe");
+    }
+
+    #[tokio::test]
+    async fn event_burst_never_blocks_reply_demux_and_keeps_order() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let mut events = transport.subscribe();
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        // The observer is stalled on a real command; it does not read the event queue meanwhile.
+        let observer = {
+            let t = transport.clone();
+            tokio::spawn(async move { t.request("Page.observe", json!({}), Some("s")).await })
+        };
+        let id = command(&mut read).await["id"].as_u64().unwrap();
+        let mut wire = String::new();
+        for i in 0..(EVENT_CAPACITY * 3) {
+            wire.push_str(&format!(
+                "{{\"method\":\"Page.e{i}\",\"params\":{{\"i\":{i}}},\"sessionId\":\"s{}\"}}\0",
+                i % 2
+            ));
+        }
+        wire.push_str(&format!(
+            "{{\"id\":{id},\"result\":{{\"ok\":true}},\"sessionId\":\"s\"}}\0"
         ));
-        assert!(matches!(
-            transport.subscribe().recv().await,
-            Err(broadcast::error::RecvError::Closed)
-        ));
+        write.write_all(wire.as_bytes()).await.unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), observer)
+            .await
+            .expect("reply demux deadlocked behind the event burst")
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        for i in 0..(EVENT_CAPACITY * 3) {
+            let event = events.recv().await.unwrap();
+            assert_eq!(event.method, format!("Page.e{i}"));
+            assert_eq!(*event.params, json!({"i": i}));
+            assert_eq!(event.session_id, Some(format!("s{}", i % 2)));
+        }
+    }
+
+    #[tokio::test]
+    async fn event_budget_overflow_fails_explicitly_and_consumed_events_return_credit() {
+        use tokio::io::AsyncWriteExt;
+        let frame = |i: u8| format!("{{\"method\":\"Page.e{i}\",\"params\":{{}}}}\0");
+        let charge = frame(0).len() - 1 + EVENT_OVERHEAD;
+        let (transport, mut peer) =
+            connected_with_event_budget(Duration::from_secs(10), charge * 2);
+        let mut events = transport.subscribe();
+        // Credit returns on recv: two events, drained, then two more fit again.
+        peer.write_all(frame(0).as_bytes()).await.unwrap();
+        peer.write_all(frame(1).as_bytes()).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().method, "Page.e0");
+        assert_eq!(events.recv().await.unwrap().method, "Page.e1");
+        peer.write_all(frame(2).as_bytes()).await.unwrap();
+        peer.write_all(frame(3).as_bytes()).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().method, "Page.e2");
+        assert_eq!(events.recv().await.unwrap().method, "Page.e3");
+        // Two unconsumed events exhaust the budget; the third fails the connection, never silently dropped.
+        let failed = transport
+            .submit("Page.getFrameTree", json!({}), None)
+            .unwrap();
+        for i in 4..7 {
+            peer.write_all(frame(i).as_bytes()).await.unwrap();
+        }
+        assert_eq!(failed.receive().await.unwrap_err().code, "event_overflow");
+        assert_eq!(events.recv().await.unwrap().method, "Page.e4");
+        assert_eq!(events.recv().await.unwrap().method, "Page.e5");
+        assert_eq!(events.recv().await.unwrap_err().code, "event_overflow");
+        assert_eq!(
+            transport.subscribe().recv().await.unwrap_err().code,
+            "event_overflow"
+        );
     }
 
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -830,7 +995,7 @@ mod tests {
     async fn writer_skips_cancelled_queued_commands() {
         for lifetime in [PendingLifetime::Timed, PendingLifetime::SettledQueued] {
             let (outgoing, queue) = mpsc::channel(MAX_PENDING);
-            let (events, _) = broadcast::channel(EVENT_CAPACITY);
+
             let (stop, _) = watch::channel(false);
             let (done, _) = watch::channel(false);
             let (reply, _receiver) = oneshot::channel();
@@ -850,7 +1015,8 @@ mod tests {
                     failure: None,
                 }),
                 outgoing,
-                events: Mutex::new(Some(events)),
+                events: Mutex::new(Some(Vec::new())),
+                event_budget: MAX_QUEUED_BYTES,
                 policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
                 stop,
                 done,
@@ -1182,7 +1348,7 @@ mod lifecycle_tests {
             PendingLifetime::SettledWriting,
         ] {
             let (outgoing, _queue) = mpsc::channel(MAX_PENDING);
-            let (events, _) = broadcast::channel(EVENT_CAPACITY);
+
             let (stop, _) = watch::channel(false);
             let (done, _) = watch::channel(false);
             let (first, _first_rx) = oneshot::channel();
@@ -1211,7 +1377,8 @@ mod lifecycle_tests {
                     failure: None,
                 }),
                 outgoing,
-                events: Mutex::new(Some(events)),
+                events: Mutex::new(Some(Vec::new())),
+                event_budget: MAX_QUEUED_BYTES,
                 policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
                 stop,
                 done,
@@ -1254,7 +1421,7 @@ mod lifecycle_tests {
         let child = crate::sys::test_child(process);
         let pid = child.id().unwrap();
         let (outgoing, _queue) = mpsc::channel(MAX_PENDING);
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+
         let (stop, stop_rx) = watch::channel(false);
         let (done, _) = watch::channel(false);
         let (status_tx, status) = watch::channel(None);
@@ -1265,7 +1432,8 @@ mod lifecycle_tests {
                 failure: None,
             }),
             outgoing,
-            events: Mutex::new(Some(events)),
+            events: Mutex::new(Some(Vec::new())),
+            event_budget: MAX_QUEUED_BYTES,
             policy_events: Mutex::new(Some(broadcast::channel(EVENT_CAPACITY).0)),
             stop,
             done,

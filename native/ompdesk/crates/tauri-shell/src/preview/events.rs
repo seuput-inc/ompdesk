@@ -7,6 +7,9 @@ pub enum Update {
         url: String,
         main_frame: Option<bool>,
         same_document: bool,
+        /// The root document came back from the back/forward cache. Only fully loaded pages are cached and a restore
+        /// fires no lifecycle `load`, so this event is the document's completion.
+        restored: bool,
     },
     Loading {
         frame_id: Option<String>,
@@ -37,11 +40,15 @@ pub fn decode(event: &shell_preview::Event) -> Option<Update> {
     match event.method.as_str() {
         "Page.frameNavigated" => {
             let frame = params.get("frame")?;
+            let main_frame = frame.get("parentId").is_none();
             Some(Update::Navigation {
                 frame_id: string(frame, "id")?,
                 url: string(frame, "url")?,
-                main_frame: Some(frame.get("parentId").is_none()),
+                main_frame: Some(main_frame),
                 same_document: false,
+                restored: main_frame
+                    && params.get("type").and_then(Value::as_str)
+                        == Some("BackForwardCacheRestore"),
             })
         }
         "Page.navigatedWithinDocument" => Some(Update::Navigation {
@@ -49,6 +56,7 @@ pub fn decode(event: &shell_preview::Event) -> Option<Update> {
             url: string(params, "url")?,
             main_frame: None,
             same_document: true,
+            restored: false,
         }),
         "Page.frameStartedLoading" | "Page.frameStoppedLoading" => Some(Update::Loading {
             frame_id: Some(string(params, "frameId")?),
@@ -134,7 +142,8 @@ mod tests {
                 frame_id: "child".into(),
                 url: "https://child/".into(),
                 main_frame: Some(false),
-                same_document: false
+                same_document: false,
+                restored: false
             })
         );
         assert_eq!(
@@ -146,7 +155,53 @@ mod tests {
                 frame_id: "child".into(),
                 url: "https://child/#x".into(),
                 main_frame: None,
-                same_document: true
+                same_document: true,
+                restored: false
+            })
+        );
+    }
+
+    fn root_navigation(restored: bool) -> Option<Update> {
+        Some(Update::Navigation {
+            frame_id: "root".into(),
+            url: "https://site/".into(),
+            main_frame: Some(true),
+            same_document: false,
+            restored,
+        })
+    }
+
+    #[test]
+    fn only_a_root_back_forward_cache_restore_is_a_restored_document() {
+        let root = json!({"id":"root","loaderId":"loader","url":"https://site/"});
+        let child =
+            json!({"id":"child","parentId":"root","loaderId":"loader","url":"https://child/"});
+        let navigated = |frame: &Value, kind: Option<&str>| {
+            let mut params = json!({"frame": frame});
+            if let Some(kind) = kind {
+                params["type"] = json!(kind);
+            }
+            decode(&event("Page.frameNavigated", params))
+        };
+
+        assert_eq!(
+            navigated(&root, Some("BackForwardCacheRestore")),
+            root_navigation(true)
+        );
+        assert_eq!(navigated(&root, Some("Navigation")), root_navigation(false));
+        assert_eq!(navigated(&root, None), root_navigation(false));
+        assert_eq!(navigated(&root, Some("Prerender")), root_navigation(false));
+
+        let restored_child = navigated(&child, Some("BackForwardCacheRestore"));
+        assert_eq!(restored_child, navigated(&child, Some("Navigation")));
+        assert_eq!(
+            restored_child,
+            Some(Update::Navigation {
+                frame_id: "child".into(),
+                url: "https://child/".into(),
+                main_frame: Some(false),
+                same_document: false,
+                restored: false
             })
         );
     }

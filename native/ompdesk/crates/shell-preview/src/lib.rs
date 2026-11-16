@@ -11,7 +11,7 @@ pub use browser::{
 };
 pub use initialization::{AttachedPage, PageInitializer};
 pub use request::{PausedRequest, RequestDisposition, RequestHandler};
-pub use transport::CommandReply;
+pub use transport::{CommandReply, EventReceiver};
 
 use std::fmt;
 use std::sync::Arc;

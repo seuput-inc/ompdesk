@@ -12,7 +12,7 @@ Viewport dimensions are applied through `Emulation.setDeviceMetricsOverride`, no
 
 | API | Result or effect |
 | --- | --- |
-| `Browser::subscribe()` | `broadcast::Receiver<Event>` with `method`, shared `Arc<Value>` `params`, and optional actual CDP `session_id` |
+| `Browser::subscribe()` | `EventReceiver`: `recv()` yields every later CDP `Event` (`method`, shared `Arc<Value>` `params`, optional actual `session_id`) in wire order from a reliable queue bounded by 32 MiB of wire bytes per subscriber; exhausting it fails the connection with `event_overflow` (never silent loss), and the reader never waits on the consumer |
 | `Browser::command(method, params, session)` | Raw CDP result on the browser or a trusted actual session; fails with `timeout` after `command_timeout` |
 | `Browser::command_settled(method, params, session)` | Same, for host mutations: waits for Chromium's actual answer or connection loss, never the read deadline |
 | `Page::command(method, params)` | Raw CDP result on this page's session, including Input, Accessibility, DOM, Network, and nested target attach |

@@ -51,6 +51,11 @@ struct Document {
     text_target: Option<Arc<frame_scope::FocusedTarget>>,
     native_contexts: HashMap<(String, i64), String>,
 }
+enum DocumentChange<'a> {
+    Frame(Option<&'a str>),
+    Detached(&'a str),
+    Restored,
+}
 struct ViewLayout {
     bounds: native::Rect,
     visible: bool,
@@ -419,7 +424,6 @@ async fn serve(
                     let _ = pages.browser.set(Arc::clone(&value));
                     let events = value.subscribe();
                     observer = Some(tauri::async_runtime::spawn(observe(
-                        Arc::clone(&value),
                         Arc::clone(&pages),
                         events,
                     )));
@@ -651,6 +655,30 @@ async fn execute(
             .map(Answer::Json)
             .map(Execution::Complete);
     }
+    if method == "wc.op"
+        && let Some(op) = params["op"].as_str().filter(|op| commands::is_edit(op))
+        && let Some(app) = params["wcId"].as_u64()
+        && surface::hosts_preview(app)
+    {
+        let app_identity =
+            expected.ok_or_else(|| WireError::new("gone", "original app edit owner ended"))?;
+        original(app_identity)?;
+        let wc = surface::edit_owner(app)
+            .ok_or_else(|| crate::unsupported(&format!("wc.op {op}: no focused Preview")))?;
+        let entry = pages.entry(wc)?;
+        let key = surface::key(wc)
+            .map_err(|error| WireError::new("native-surface", error.to_string()))?;
+        commands::edit(
+            browser,
+            &entry.page.session_id,
+            &iframe_sessions(pages, wc),
+            Some(key),
+            op,
+        )
+        .await?;
+        original(app_identity)?;
+        return Ok(Execution::Complete(Answer::Json(json!({}))));
+    }
     let wc = {
         let registry = runtime().registry.lock().expect("registry");
         if method == "view.op" {
@@ -674,6 +702,12 @@ async fn execute(
                 .ok_or_else(|| WireError::new("gone", "original Preview request owner ended"))?,
         )?;
     }
+    // Input can commit navigation before its acknowledgement; its original document is checked before submission.
+    let reply_bound = bound
+        && !(method == "wc.cdp.send"
+            && params["method"]
+                .as_str()
+                .is_some_and(|method| method.starts_with("Input.")));
     let entry = pages.entry(wc)?;
     let result = match method {
         "view.op" => {
@@ -803,8 +837,13 @@ async fn execute(
             unmap_urls(&entry.partition, &mut answer)
                 .await
                 .map_err(crate::failed)?;
-            if bound {
+            if reply_bound {
                 original(identity)?;
+            } else {
+                pages.current(wc)?;
+                if !Arc::ptr_eq(&entry, &pages.entry(wc)?) {
+                    return Err(WireError::new("gone", "original Preview owner ended"));
+                }
             }
             if matches!(
                 method,
@@ -820,7 +859,7 @@ async fn execute(
                     wc_event(wc, "input-event", json!([{"type":kind}]));
                 }
             }
-            json!({"result":answer})
+            return Ok(Execution::Complete(Answer::Json(json!({"result":answer}))));
         }
         "wc.frame" => {
             let frame = entry
@@ -947,12 +986,39 @@ async fn execute(
                         kind: EvaluationKind::JavaScript,
                     }));
                 }
+                op if commands::is_edit(op) => {
+                    let key = match surface::key(wc) {
+                        Ok(key) => Some(key),
+                        Err(_)
+                            if runtime()
+                                .registry
+                                .lock()
+                                .expect("registry")
+                                .page(wc)
+                                .is_some_and(|page| page.kind == Kind::PreviewOffscreen) =>
+                        {
+                            None
+                        }
+                        Err(error) => {
+                            return Err(WireError::new("native-surface", error.to_string()));
+                        }
+                    };
+                    commands::edit(
+                        browser,
+                        &entry.page.session_id,
+                        &iframe_sessions(pages, wc),
+                        key,
+                        op,
+                    )
+                    .await?;
+                    Value::Null
+                }
                 _ => commands::operation(&entry.page, op, args).await?,
             }
         }
         _ => return Err(crate::unsupported(method)),
     };
-    if bound {
+    if reply_bound {
         original(identity)?;
     } else {
         pages.current(wc)?;
@@ -1376,73 +1442,6 @@ async fn ack_retained(entry: &Entry) {
         crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
     }
 }
-async fn resynchronize(browser: &Browser, pages: &Pages, skipped: u64, last_event: &str) {
-    let entries: Vec<_> = pages
-        .entries
-        .lock()
-        .expect("Preview pages")
-        .iter()
-        .map(|(wc, entry)| (*wc, Arc::clone(entry)))
-        .collect();
-    for (wc, entry) in entries {
-        if pages.current(wc).is_err() {
-            continue;
-        }
-        invalidate_document(&entry, wc, None, None).await;
-        ack_retained(&entry).await;
-        let debugger = {
-            let mut document = entry.document.lock().expect("Preview document");
-            document.context = None;
-            document.frame_pixels = None;
-            document.native_geometry = None;
-            document.debugger.take()
-        };
-        pages
-            .routes
-            .lock()
-            .expect("Preview routes")
-            .retain(|session, route| route.wc != wc || *session == entry.page.session_id);
-        if let Some(debugger) = debugger {
-            crate::log::log(
-                "preview.debugger.detach",
-                json!({
-                    "wcId":wc,"reason":"event-stream-lag","skipped":skipped,
-                    "lastEvent":last_event,"sessionId":debugger
-                }),
-            );
-            if browser
-                .command(
-                    "Target.detachFromTarget",
-                    json!({"sessionId":debugger}),
-                    None,
-                )
-                .await
-                .is_err()
-            {
-                let _ = close(pages, wc).await;
-                continue;
-            }
-            host::event(
-                "wc.cdp.detached",
-                json!({"wcId":wc,"reason":"host event stream lost"}),
-            );
-        }
-        let result = async {
-            let tree = entry.page.command("Page.getFrameTree", json!({})).await?;
-            entry.document.lock().expect("Preview document").frame = tree
-                .pointer("/frameTree/frame/id")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            entry.page.command("Runtime.disable", json!({})).await?;
-            entry.page.command("Runtime.enable", json!({})).await?;
-            Ok::<(), shell_preview::Error>(())
-        }
-        .await;
-        if result.is_err() {
-            let _ = close(pages, wc).await;
-        }
-    }
-}
 fn unmap_urls<'a>(
     partition: &'a str,
     value: &'a mut Value,
@@ -1478,7 +1477,7 @@ fn unmap_urls<'a>(
         Ok(())
     })
 }
-async fn invalidate_document(entry: &Entry, wc: u64, frame: Option<&str>, session: Option<&str>) {
+async fn invalidate_document(entry: &Entry, wc: u64, change: DocumentChange<'_>) {
     {
         let _submitting = entry.submitting.lock().expect("native frame submission");
         {
@@ -1493,23 +1492,28 @@ async fn invalidate_document(entry: &Entry, wc: u64, frame: Option<&str>, sessio
         }
         {
             let mut document = entry.document.lock().expect("Preview document");
-            if let Some(frame) = frame {
-                if document.frame.as_deref() == Some(frame) {
-                    document.context = None;
+            match change {
+                DocumentChange::Frame(Some(frame)) => {
+                    if document.frame.as_deref() == Some(frame) {
+                        document.context = None;
+                    }
+                    document
+                        .native_contexts
+                        .retain(|_, owner_frame| owner_frame != frame);
                 }
-                document
-                    .native_contexts
-                    .retain(|_, owner_frame| owner_frame != frame);
-            } else if let Some(session) = session {
-                if session == entry.page.session_id {
-                    document.context = None;
+                DocumentChange::Detached(session) => {
+                    if session == entry.page.session_id {
+                        document.context = None;
+                    }
+                    document
+                        .native_contexts
+                        .retain(|(owner, _), _| owner != session);
                 }
-                document
-                    .native_contexts
-                    .retain(|(owner, _), _| owner != session);
-            } else {
-                document.context = None;
-                document.native_contexts.clear();
+                DocumentChange::Frame(None) => {
+                    document.context = None;
+                    document.native_contexts.clear();
+                }
+                DocumentChange::Restored => {}
             }
             document.frame_pixels = None;
             document.marked = None;
@@ -1539,23 +1543,10 @@ async fn invalidate_document(entry: &Entry, wc: u64, frame: Option<&str>, sessio
         }
     }
 }
-async fn observe(
-    browser: Arc<Browser>,
-    pages: Arc<Pages>,
-    mut receive: tokio::sync::broadcast::Receiver<shell_preview::Event>,
-) {
-    let mut last_event = String::new();
+async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
     loop {
         let mut event = match receive.recv().await {
             Ok(event) => event,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                crate::log::log(
-                    "preview.events.lagged",
-                    json!({"skipped":skipped,"lastEvent":last_event}),
-                );
-                resynchronize(&browser, &pages, skipped, &last_event).await;
-                continue;
-            }
             Err(error) => {
                 crate::log::log("preview.events.ended", json!({"error":error.to_string()}));
                 let ids: Vec<_> = pages
@@ -1571,7 +1562,6 @@ async fn observe(
                 return;
             }
         };
-        last_event.clone_from(&event.method);
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 let detached = pages.routes.lock().expect("Preview routes").remove(session);
@@ -1601,7 +1591,8 @@ async fn observe(
                         );
                     }
                     if route.iframe && route.debugger.is_none() {
-                        invalidate_document(&entry, route.wc, None, Some(session)).await;
+                        invalidate_document(&entry, route.wc, DocumentChange::Detached(session))
+                            .await;
                     }
                     if primary {
                         let _ = close(&pages, route.wc).await;
@@ -1689,25 +1680,6 @@ async fn observe(
             host::event("wc.cdp.message", message);
             continue;
         }
-        if event.method == "Target.targetInfoChanged" {
-            if let Some(title) = event
-                .params
-                .pointer("/targetInfo/title")
-                .and_then(Value::as_str)
-            {
-                if let Some(page) = runtime()
-                    .registry
-                    .lock()
-                    .expect("registry")
-                    .page_mut(route.wc)
-                {
-                    page.title = title.to_owned();
-                }
-                wc_state(route.wc);
-                wc_event(route.wc, "page-title-updated", json!([title, true]));
-            }
-            continue;
-        }
         if event.method == "Target.targetCrashed" {
             if let Some(update) = events::decode(&event) {
                 update_page(&entry, route.wc, update);
@@ -1720,6 +1692,15 @@ async fn observe(
         if session != entry.page.session_id && !route.iframe {
             continue;
         }
+        let update = if route.iframe {
+            None
+        } else {
+            events::decode(&event)
+        };
+        let restored = matches!(
+            &update,
+            Some(events::Update::Navigation { restored: true, .. })
+        );
         if event.method == "Page.frameNavigated"
             || event.method == "Page.frameDetached"
             || (event.method == "Page.frameStartedLoading"
@@ -1736,7 +1717,12 @@ async fn observe(
                 .pointer("/frame/id")
                 .or_else(|| event.params.get("frameId"))
                 .and_then(Value::as_str);
-            invalidate_document(&entry, route.wc, frame, None).await;
+            let change = if restored {
+                DocumentChange::Restored
+            } else {
+                DocumentChange::Frame(frame)
+            };
+            invalidate_document(&entry, route.wc, change).await;
         }
         if event.method == "Runtime.executionContextCreated"
             && event
@@ -1778,25 +1764,55 @@ async fn observe(
                 .retain(|(owner, _), _| owner != session);
         }
         if event.method == "Runtime.bindingCalled" {
-            let id = event.params["executionContextId"].as_i64();
-            let authorized = id.is_some_and(|id| {
-                entry
-                    .document
-                    .lock()
-                    .expect("Preview document")
-                    .native_contexts
-                    .contains_key(&(session.to_owned(), id))
-            });
-            if authorized
-                && event.params["name"].as_str() == Some(initialize::BINDING)
-                && let Ok(key) = surface::key(route.wc)
-            {
-                let flags = if event.params["payload"].as_str() == Some("text") {
-                    TEXT
-                } else {
-                    TEXT | AX
-                };
-                request_refresh(&entry, key, flags);
+            if event.params["name"].as_str() != Some(initialize::BINDING) {
+                continue;
+            }
+            let (authorized, root) = {
+                let document = entry.document.lock().expect("Preview document");
+                let frame = event.params["executionContextId"]
+                    .as_i64()
+                    .and_then(|id| document.native_contexts.get(&(session.to_owned(), id)));
+                (
+                    frame.is_some(),
+                    session == entry.page.session_id
+                        && frame
+                            .is_some_and(|frame| Some(frame.as_str()) == document.frame.as_deref()),
+                )
+            };
+            if !authorized {
+                continue;
+            }
+            match event.params["payload"].as_str() {
+                Some("text") => {
+                    if let Ok(key) = surface::key(route.wc) {
+                        request_refresh(&entry, key, TEXT);
+                    }
+                }
+                Some("layout") => {
+                    if let Ok(key) = surface::key(route.wc) {
+                        request_refresh(&entry, key, TEXT | AX);
+                    }
+                }
+                Some(payload) if root => {
+                    if let Some(title) = initialize::observed_title(payload) {
+                        let changed = {
+                            let mut registry = runtime().registry.lock().expect("registry");
+                            registry.current(identity)
+                                && registry.page_mut(route.wc).is_some_and(|page| {
+                                    if page.title == title {
+                                        return false;
+                                    }
+                                    page.title.clone_from(&title);
+                                    true
+                                })
+                        };
+                        if changed {
+                            wc_state(route.wc);
+                            wc_event(route.wc, "page-title-updated", json!([title, true]));
+                        }
+                    }
+                }
+                _ => {}
             }
             continue;
         }
@@ -1966,7 +1982,7 @@ async fn observe(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
         }
-        if let Some(update) = events::decode(&event) {
+        if let Some(update) = update {
             update_page(&entry, route.wc, update);
         }
         if matches!(
@@ -1984,6 +2000,7 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             url,
             main_frame,
             same_document,
+            restored,
         } => {
             let mut document = entry.document.lock().expect("Preview document");
             let main = main_frame.unwrap_or(document.frame.as_deref() == Some(&frame_id));
@@ -1992,7 +2009,9 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             }
             document.frame = Some(frame_id);
             if !same_document {
-                document.context = None;
+                if !restored {
+                    document.context = None;
+                }
                 document.frame_pixels = None;
             }
             drop(document);
@@ -2003,7 +2022,9 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             } else {
                 if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
                     page.url = url.clone();
-                    page.loading = true;
+                    if !restored {
+                        page.loading = true;
+                    }
                 }
             }
             wc_state(wc);
@@ -2012,6 +2033,9 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             } else {
                 host::event("wc.state", json!({"wcId":wc,"crashed":false}));
                 wc_event(wc, "did-navigate", json!([url]));
+                if restored {
+                    stop_loading(wc);
+                }
             }
         }
         events::Update::Loading { frame_id, loading } => {
@@ -2238,7 +2262,12 @@ fn request_identity(call: &host::Call) -> Option<Identity> {
     Some(page.identity)
 }
 pub fn dispatch(call: host::Call) -> Option<host::Call> {
-    let preview = {
+    let app_edit = call.method == "wc.op"
+        && call.params["op"].as_str().is_some_and(commands::is_edit)
+        && call.params["wcId"]
+            .as_u64()
+            .is_some_and(surface::hosts_preview);
+    let preview = app_edit || {
         let registry = runtime().registry.lock().expect("registry");
         match call.method.as_str() {
             "view.create" | "view.op" => true,

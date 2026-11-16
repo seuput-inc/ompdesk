@@ -199,7 +199,7 @@ impl Browser {
         self.transport.pid()
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+    pub fn subscribe(&self) -> crate::EventReceiver {
         self.transport.subscribe()
     }
 

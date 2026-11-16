@@ -39,6 +39,21 @@ impl PageInitializer for Initializer {
         })
     }
 }
+
+/// The title a document announced through the binding as `{kind:'title',title}`, sent once per actual
+/// `document.title` change and again when the page returns from the back/forward cache. Any other payload is `None`.
+/// The caller still owes the authorization: the payload names the page's title only when its execution context
+/// belongs to the current root frame.
+pub(super) fn observed_title(payload: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "lowercase")]
+    enum Signal {
+        Title { title: String },
+    }
+    let Signal::Title { title } = serde_json::from_str::<Signal>(payload).ok()?;
+    Some(title)
+}
+
 const OBSERVE: &str = r#"(()=>{
     if(Object.hasOwn(globalThis,'__ompdeskNativeComposition'))return;
     const internal=new WeakSet();
@@ -48,7 +63,12 @@ const OBSERVE: &str = r#"(()=>{
         try{return fn(node)}finally{try{changes(observer.takeRecords())}finally{internal.delete(node)}}
     }};
     Object.defineProperty(globalThis,'__ompdeskNativeComposition',{value:state});
-    const notify=kind=>globalThis.__ompdeskNativeState(kind);
+    const notify=payload=>globalThis.__ompdeskNativeState(payload);
+    let reported='';
+    const title=force=>{
+        const current=document.title;
+        if(force||current!==reported){reported=current;notify(JSON.stringify({kind:'title',title:current}));}
+    };
     const start=()=>{
         const element=document.activeElement;
         if(element&&typeof element.selectionStart==='number')return element.selectionStart;
@@ -63,7 +83,9 @@ const OBSERVE: &str = r#"(()=>{
     document.addEventListener('focusout',()=>{state.marked=null;state.target=null;},true);
     for(const name of ['input','select','selectionchange','focusin','focusout'])document.addEventListener(name,()=>notify('text'),true);
     document.addEventListener('scroll',()=>notify('layout'),true);
+    globalThis.addEventListener('pageshow',event=>{if(event.persisted)title(true);},true);
     const changes=records=>{
+        title();
         if(records.some(record=>record.type!=='childList'||(!record.addedNodes.length&&!record.removedNodes.length)||
             [...record.addedNodes,...record.removedNodes].some(node=>!internal.has(node))))notify('layout');
     };
@@ -74,11 +96,15 @@ const OBSERVE: &str = r#"(()=>{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::preview::events;
     use crate::preview::{input, target::Target};
     use crate::preview_surface::SurfaceKey;
+    use serde_json::Value;
     use shell_preview::{Browser, LaunchConfig, Page, Viewport};
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn evaluate(page: &Page, context: i64, expression: &str) -> serde_json::Value {
         let result = page
@@ -90,6 +116,270 @@ mod tests {
             .unwrap();
         assert!(result.get("exceptionDetails").is_none(), "{result}");
         result["result"]["value"].clone()
+    }
+
+    /// What the observed page announced on the wire, read the way the Preview owner reads it.
+    struct Announcements {
+        events: shell_preview::EventReceiver,
+        session: String,
+        /// Isolated-world contexts announced since the session's last `executionContextsCleared`, with their frame.
+        worlds: HashMap<i64, String>,
+        /// The frame of the last root `Page.frameNavigated` that decoded as a back/forward cache restore.
+        restored: Option<String>,
+        log: Vec<String>,
+    }
+
+    impl Announcements {
+        fn new(browser: &Browser, page: &Page) -> Self {
+            Self {
+                events: browser.subscribe(),
+                session: page.session_id.clone(),
+                worlds: HashMap::new(),
+                restored: None,
+                log: Vec::new(),
+            }
+        }
+
+        /// Consumes one event of the page's session. A title announced through the binding is returned with the
+        /// frame its execution context belongs to: that context-to-frame map is the authority the Preview owner
+        /// checks before it accepts a title.
+        async fn observe(&mut self) -> Option<(String, String)> {
+            let event = self.events.recv().await.expect("actual browser event");
+            if event.session_id.as_deref() != Some(self.session.as_str()) {
+                return None;
+            }
+            let params = &event.params;
+            match event.method.as_str() {
+                "Runtime.executionContextsCleared" => {
+                    self.worlds.clear();
+                    self.log.push(event.method.clone());
+                }
+                "Runtime.executionContextCreated"
+                    if params.pointer("/context/name").and_then(Value::as_str) == Some(WORLD) =>
+                {
+                    if let (Some(id), Some(frame)) = (
+                        params.pointer("/context/id").and_then(Value::as_i64),
+                        params
+                            .pointer("/context/auxData/frameId")
+                            .and_then(Value::as_str),
+                    ) {
+                        self.worlds.insert(id, frame.to_owned());
+                        self.log.push(format!("{} {id} {frame}", event.method));
+                    }
+                }
+                "Runtime.executionContextDestroyed" => {
+                    if let Some(id) = params["executionContextId"].as_i64() {
+                        self.worlds.remove(&id);
+                        self.log.push(format!("{} {id}", event.method));
+                    }
+                }
+                "Page.frameStartedLoading" | "Page.frameStoppedLoading" => {
+                    self.log
+                        .push(format!("{} {}", event.method, params["frameId"]));
+                }
+                "Page.frameNavigated" => {
+                    self.log.push(format!(
+                        "{} {} {}",
+                        event.method, params["frame"]["id"], params["type"]
+                    ));
+                    if let Some(events::Update::Navigation {
+                        frame_id,
+                        restored: true,
+                        ..
+                    }) = events::decode(&event)
+                    {
+                        self.restored = Some(frame_id);
+                    }
+                }
+                "Runtime.bindingCalled" if params["name"] == BINDING => {
+                    let payload = params["payload"].as_str().unwrap_or_default();
+                    let id = params["executionContextId"]
+                        .as_i64()
+                        .expect("binding call names its execution context");
+                    self.log.push(format!("{} {id} {payload}", event.method));
+                    if let Some(title) = observed_title(payload) {
+                        let Some(frame) = self.worlds.get(&id).cloned() else {
+                            panic!(
+                                "title {title:?} came from unannounced context {id}; saw {:#?}",
+                                self.log
+                            );
+                        };
+                        return Some((title, frame));
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+
+        async fn title(&mut self) -> (String, String) {
+            let waited = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(announced) = self.observe().await {
+                        return announced;
+                    }
+                }
+            })
+            .await;
+            waited.unwrap_or_else(|_| {
+                panic!("no title reached the actual binding; saw {:#?}", self.log)
+            })
+        }
+
+        /// The title announced after a back/forward cache restore, with the frame of the restoring navigation.
+        async fn restored_title(&mut self) -> ((String, String), String) {
+            let waited = tokio::time::timeout(Duration::from_secs(10), async {
+                let mut title = None;
+                loop {
+                    if let Some(announced) = self.observe().await {
+                        title = Some(announced);
+                    }
+                    if let (Some(title), Some(frame)) = (&title, &self.restored) {
+                        return (title.clone(), frame.clone());
+                    }
+                }
+            })
+            .await;
+            waited.unwrap_or_else(|_| {
+                panic!(
+                    "the page was not restored with its title; saw {:#?}",
+                    self.log
+                )
+            })
+        }
+    }
+
+    const TITLE_DOCUMENT: &str = "<!doctype html><title>Initial</title><body>title fixture</body>";
+    const OTHER_DOCUMENT: &str = "<!doctype html><title>Other</title><body>other site</body>";
+
+    async fn serve_title_documents(listener: tokio::net::TcpListener) {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    }
+                }
+                let document = if request.starts_with(b"GET /other ") {
+                    OTHER_DOCUMENT
+                } else {
+                    TITLE_DOCUMENT
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{document}",
+                    document.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    }
+
+    async fn root_frame(page: &Page) -> String {
+        let tree = page.command("Page.getFrameTree", json!({})).await.unwrap();
+        tree.pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned()
+    }
+
+    /// Installs the observer the way `Initializer` does and loads real documents, so titles travel the real binding:
+    /// the initial title, a later dynamic title, no repeat of an unchanged title, and a back/forward cache restore.
+    /// A restore creates no new document, so the observer does not rerun; the restored document announces its own
+    /// title on `pageshow` from a world the restore itself announced.
+    async fn titles_reach_the_actual_binding(browser: &Browser, page: &Page) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve_title_documents(listener));
+        page.command(
+            "Runtime.addBinding",
+            json!({"name":BINDING,"executionContextName":WORLD}),
+        )
+        .await
+        .unwrap();
+        page.command(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({"worldName":WORLD,"source":OBSERVE}),
+        )
+        .await
+        .unwrap();
+        let mut announced = Announcements::new(browser, page);
+        page.navigate(&format!("http://127.0.0.1:{port}/"))
+            .await
+            .unwrap();
+        let root = root_frame(page).await;
+        let from_root = |title: &str| (title.to_owned(), root.clone());
+
+        assert_eq!(announced.title().await, from_root("Initial"));
+        page.evaluate("document.title='Later'", false)
+            .await
+            .unwrap();
+        assert_eq!(announced.title().await, from_root("Later"));
+        page.evaluate("document.title='Later'", false)
+            .await
+            .unwrap();
+        page.evaluate("document.title='After'", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            announced.title().await,
+            from_root("After"),
+            "an unchanged title was announced again"
+        );
+
+        // A different site, so the page above leaves in the back/forward cache instead of being discarded.
+        page.navigate(&format!("http://localhost:{port}/other"))
+            .await
+            .unwrap();
+        let other = root_frame(page).await;
+        assert_eq!(announced.title().await, ("Other".to_owned(), other));
+        let history = page
+            .command("Page.getNavigationHistory", json!({}))
+            .await
+            .unwrap();
+        let current = history["currentIndex"].as_u64().unwrap() as usize;
+        let entry = history["entries"][current - 1]["id"].as_i64().unwrap();
+        page.command("Page.navigateToHistoryEntry", json!({"entryId":entry}))
+            .await
+            .unwrap();
+        let ((title, frame), restored) = announced.restored_title().await;
+        assert_eq!(title, "After", "the restored document's own title");
+        assert_eq!(
+            frame, restored,
+            "the title came from a world of the restored root frame"
+        );
+    }
+
+    #[test]
+    fn only_a_title_payload_names_a_title() {
+        assert_eq!(
+            observed_title(r#"{"kind":"title","title":"한글 \"quoted\" title"}"#).as_deref(),
+            Some("한글 \"quoted\" title")
+        );
+        assert_eq!(
+            observed_title(r#"{"kind":"title","title":""}"#).as_deref(),
+            Some("")
+        );
+        for payload in [
+            "text",
+            "layout",
+            "",
+            "{}",
+            r#"{"kind":"layout"}"#,
+            r#"{"kind":"title"}"#,
+            r#"{"kind":"title","title":7}"#,
+            r#"["title","x"]"#,
+        ] {
+            assert_eq!(observed_title(payload), None, "{payload:?}");
+        }
     }
 
     #[tokio::test]
@@ -342,6 +632,7 @@ mod tests {
             evaluate(&page, context, "redirectedActivations").await,
             json!(0)
         );
+        titles_reach_the_actual_binding(&browser, &page).await;
         browser.shutdown().await.unwrap();
     }
 }
