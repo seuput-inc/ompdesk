@@ -666,6 +666,53 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn native_mutation_waits_for_actual_late_response_or_pipe_loss() {
+        let (transport, peer) = connected(Duration::from_millis(10));
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let mutation = {
+            let transport = transport.clone();
+            tokio::spawn(async move {
+                transport
+                    .request("Input.insertText", json!({"text":"한"}), Some("original"))
+                    .await
+            })
+        };
+        let id = command(&mut read).await["id"].as_u64().unwrap();
+        tokio::time::advance(Duration::from_millis(11)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !mutation.is_finished(),
+            "Sent native mutation reported failure before its actual response"
+        );
+        write
+            .write_all(
+                format!(
+                    "{{\"id\":{id},\"result\":{{\"applied\":true}},\"sessionId\":\"original\"}}\0"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mutation.await.unwrap().unwrap(), json!({"applied":true}));
+        let mutation = {
+            let transport = transport.clone();
+            tokio::spawn(async move {
+                transport
+                    .request("DOM.focus", json!({"nodeId":7}), Some("original"))
+                    .await
+            })
+        };
+        command(&mut read).await;
+        tokio::time::advance(Duration::from_millis(11)).await;
+        tokio::task::yield_now().await;
+        assert!(!mutation.is_finished());
+        drop(read);
+        drop(write);
+        assert_eq!(mutation.await.unwrap().unwrap_err().code, "pipe");
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn timeout_and_pipe_failure_release_all_pending() {
         let (transport, peer) = connected(Duration::from_millis(10));
         let (read, write) = tokio::io::split(peer);
