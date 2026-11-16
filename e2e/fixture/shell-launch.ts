@@ -422,7 +422,14 @@ export class ShellApplication extends EventEmitter {
 			}
 			if (this.#inspector.closed && this.#child.exitCode !== null)
 				throw new Error("app.firstWindow: the app has exited");
-			if (timeout > 0 && Date.now() > deadline) throw new Error(`app.firstWindow: Timeout ${timeout}ms exceeded.`);
+			if (timeout > 0 && Date.now() > deadline) {
+				// Which targets the shell had open: none (the host never created a window), `about:blank` (the navigation to
+				// the app never came) or something else.
+				const pages = this.windows().map(page => page.url());
+				throw new Error(
+					`app.firstWindow: Timeout ${timeout}ms exceeded; open pages: ${JSON.stringify(pages)}; host exit code: ${this.#child.exitCode}`,
+				);
+			}
 			await sleep(50);
 		}
 	}

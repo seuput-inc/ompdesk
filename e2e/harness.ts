@@ -477,7 +477,28 @@ export async function dragRowToRightEdge(page: Page, row: Locator): Promise<void
 		} catch (error) {
 			await page.mouse.up();
 			const seen = await page.evaluate(() => document.documentElement.dataset.dragSeen ?? "no drag event");
-			throw new Error(`${String(error)}\ndrag events seen: ${seen}`);
+			// The dragged row as the sidebar drew it (an open tab found for it is what arms a split: `data-current` off and a
+			// tab id on the row) and the tabs main lists, so a drag that armed nothing names the row or the tab at fault.
+			const attributes = await row
+				.evaluate(el =>
+					[...el.attributes].map(attribute => `${attribute.name}=${attribute.value.slice(0, 60)}`).join(" "),
+				)
+				.catch((failure: unknown) => String(failure));
+			const tabs = await page
+				.evaluate(async () =>
+					(await window.omp.tabs.list()).map(tab =>
+						[
+							tab.tabId,
+							tab.status,
+							tab.active ? "active" : "",
+							tab.sessionPath?.split(/[\\/]/).at(-1) ?? "-",
+						].join(" "),
+					),
+				)
+				.catch((failure: unknown) => String(failure));
+			throw new Error(
+				`${String(error)}\ndrag events seen: ${seen}\nthe row: ${attributes}\ntabs: ${JSON.stringify(tabs)}`,
+			);
 		}
 	}).toPass({ timeout: 30_000 });
 }
