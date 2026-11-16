@@ -170,6 +170,15 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .create_page(&partition, viewport)
         .await
         .map_err(|e| format!("create page: {e:?}"))?;
+    let navigation_failure = page
+        .navigate("http://127.0.0.1:1/")
+        .await
+        .expect_err("Chromium must reject the unsafe port before network access");
+    check!(
+        navigation_failure.code == "navigation"
+            && navigation_failure.message == "net::ERR_UNSAFE_PORT",
+        "actual navigation failure was lost: {navigation_failure}"
+    );
     page.navigate(&fixture.url)
         .await
         .map_err(|e| format!("navigate: {e:?}"))?;
