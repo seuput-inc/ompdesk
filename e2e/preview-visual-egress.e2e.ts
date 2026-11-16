@@ -234,6 +234,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		const address = shell.getByRole("textbox", { name: "Preview URL" });
 		await address.fill(`http://control.${DNS_SUFFIX}/`);
 		await address.press("Enter");
+		await expect(aside.getByRole("alert")).toContainText("ERR_NAME_NOT_RESOLVED");
 		const composer = shell.locator("textarea").first();
 		await composer.fill(
 			`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "egress.html" })}`,
