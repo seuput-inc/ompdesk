@@ -2830,7 +2830,7 @@ mod tests {
             assert_eq!(
                 (Interface::vtable(&document).FindText)(
                     document.as_raw(),
-                    missing.as_wide().as_ptr().cast_mut().cast(),
+                    missing.as_ptr().cast_mut().cast(),
                     BOOL(0),
                     BOOL(0),
                     &mut found
@@ -2842,7 +2842,7 @@ mod tests {
             assert_eq!(
                 (Interface::vtable(&document).FindText)(
                     document.as_raw(),
-                    needle.as_wide().as_ptr().cast_mut().cast(),
+                    needle.as_ptr().cast_mut().cast(),
                     BOOL(0),
                     BOOL(1),
                     &mut found
