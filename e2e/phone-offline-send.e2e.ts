@@ -113,6 +113,11 @@ for (const engine of ENGINES)
 			const context = await browser.newContext({ ...engine.device, colorScheme: "light" });
 			const phone = await context.newPage();
 			const loads = recordPhoneLoads(phone);
+			const t0 = Date.now();
+			const workerEvents: string[] = [];
+			context.on("serviceworker", worker =>
+				workerEvents.push(`+${Date.now() - t0}ms serviceworker ${worker.url()}`),
+			);
 			const pending = new Set<string>();
 			phone.on("request", request => pending.add(request.url()));
 			phone.on("requestfinished", request => pending.delete(request.url()));
@@ -141,7 +146,10 @@ for (const engine of ENGINES)
 					.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
 					.toBe(true);
 			} catch (error) {
-				// What the worker did: a registration that never came, one stuck installing, or one active that did not claim.
+				// Where the worker and the page parted: the registration's states, what the worker sees as its clients
+				// (windows it could claim), whether a claim made now takes the page, and the page's own loads and
+				// worker log (phone-loads attachment). A claim that takes the page now means the activation's claim ran
+				// before this document existed; one that does not means the page is not claimable.
 				const worker = await phone
 					.evaluate(async () => {
 						const registration = await navigator.serviceWorker?.getRegistration();
@@ -151,11 +159,32 @@ for (const engine of ENGINES)
 							waiting: registration?.waiting?.state ?? null,
 							active: registration?.active?.state ?? null,
 							scope: registration?.scope ?? null,
+							url: location.href,
 						};
 					})
 					.catch(failure => String(failure));
+				const [serviceWorker] = context.serviceWorkers();
+				const clients = await serviceWorker
+					?.evaluate(
+						"self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => list.map(c => [c.url, c.frameType, c.visibilityState, c.focused].join(' ')))",
+					)
+					.catch((failure: unknown) => String(failure));
+				const claimed = await serviceWorker
+					?.evaluate("self.clients.claim().then(() => 'claimed')")
+					.catch((failure: unknown) => String(failure));
+				const controlledAfter = await phone
+					.evaluate(() => navigator.serviceWorker?.controller != null)
+					.catch(failure => String(failure));
+				await loads.attach("phone-loads");
 				throw new Error(
-					`${String(error)}\nservice worker: ${JSON.stringify(worker)}\nopen requests: ${[...pending].join(" ")}`,
+					[
+						String(error),
+						`service worker: ${JSON.stringify(worker)}`,
+						`worker events: ${JSON.stringify(workerEvents)} workers now: ${context.serviceWorkers().length}`,
+						`worker's clients: ${JSON.stringify(clients)}`,
+						`claim now: ${JSON.stringify(claimed)}, page controlled after: ${JSON.stringify(controlledAfter)}`,
+						`open requests: ${[...pending].join(" ")}`,
+					].join("\n"),
 				);
 			}
 			// The tab strip and transcript snapshots are written after a quiet moment.
