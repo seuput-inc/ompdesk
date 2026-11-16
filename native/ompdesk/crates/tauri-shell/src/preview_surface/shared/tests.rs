@@ -4,11 +4,17 @@ use super::*;
 struct Sink {
     receipts: Mutex<Vec<(SurfaceKey, i64, FrameDisposition)>>,
     schedules: Mutex<Vec<SurfaceKey>>,
+    fail_schedule: Mutex<bool>,
+    failed_receipts: Mutex<Vec<i64>>,
 }
 impl Consumer for Sink {
     fn schedule_present(&self, key: SurfaceKey) -> Result<(), SurfaceError> {
         self.schedules.lock().unwrap().push(key);
-        Ok(())
+        if *self.fail_schedule.lock().unwrap() {
+            Err(SurfaceError::Consumer("schedule failed".into()))
+        } else {
+            Ok(())
+        }
     }
     fn presented(
         &self,
@@ -17,7 +23,11 @@ impl Consumer for Sink {
         disposition: FrameDisposition,
     ) -> Result<(), SurfaceError> {
         self.receipts.lock().unwrap().push((key, ack, disposition));
-        Ok(())
+        if self.failed_receipts.lock().unwrap().contains(&ack) {
+            Err(SurfaceError::Consumer(format!("receipt {ack} failed")))
+        } else {
+            Ok(())
+        }
     }
     fn input(&self, _: SurfaceKey, _: Input) -> Result<(), SurfaceError> {
         Ok(())
@@ -137,7 +147,7 @@ fn old_document_publisher_cannot_replace_or_ack_new_document_frame() {
     shared.set_document(key(2)).unwrap();
     assert_eq!(
         old.submit(frame(key(1), 41)),
-        Err(SurfaceError::StaleGeneration)
+        Err(FrameSubmitError::Rejected(SurfaceError::StaleGeneration))
     );
     shared.publisher().submit(frame(key(2), 42)).unwrap();
     let pending = shared.take_frame().unwrap().unwrap();
@@ -164,7 +174,7 @@ fn disposal_releases_pending_original_frame_once_and_rejects_later_publish() {
     shared.close().unwrap();
     assert_eq!(
         publisher.submit(frame(key(1), 91)),
-        Err(SurfaceError::Disposed)
+        Err(FrameSubmitError::Rejected(SurfaceError::Disposed))
     );
     assert_eq!(
         *sink.receipts.lock().unwrap(),
@@ -249,4 +259,82 @@ fn hiding_pending_visible_frame_releases_receipt_before_any_show_or_replacement(
         *sink.receipts.lock().unwrap(),
         vec![(key(1), 55, FrameDisposition::Hidden)]
     );
+}
+
+#[test]
+fn superseded_receipt_failure_leaves_new_frame_owned_by_surface() {
+    let (shared, sink) = shared();
+    let publisher = shared.publisher();
+    publisher.submit(frame(key(1), 11)).unwrap();
+    sink.failed_receipts.lock().unwrap().push(11);
+
+    assert_eq!(
+        publisher.submit(frame(key(1), 12)),
+        Err(FrameSubmitError::Accepted {
+            errors: vec![SurfaceError::Consumer("receipt 11 failed".into())],
+        })
+    );
+    let pending = shared.take_frame().unwrap().unwrap();
+    assert_eq!((pending.frame.key, pending.frame.ack), (key(1), 12));
+    shared
+        .finish_frame(pending, FrameDisposition::Presented)
+        .unwrap();
+    shared.close().unwrap();
+    assert_eq!(
+        *sink.receipts.lock().unwrap(),
+        vec![
+            (key(1), 11, FrameDisposition::Superseded),
+            (key(1), 12, FrameDisposition::Presented),
+        ]
+    );
+}
+
+#[test]
+fn schedule_failure_keeps_receipt_ownership_and_preserves_cleanup_failure() {
+    for fail_receipt in [false, true] {
+        let (shared, sink) = shared();
+        let publisher = shared.publisher();
+        *sink.fail_schedule.lock().unwrap() = true;
+        let mut errors = vec![SurfaceError::Consumer("schedule failed".into())];
+        if fail_receipt {
+            sink.failed_receipts.lock().unwrap().push(61);
+            errors.push(SurfaceError::Consumer("receipt 61 failed".into()));
+        }
+        assert_eq!(
+            publisher.submit(frame(key(1), 61)),
+            Err(FrameSubmitError::Accepted { errors })
+        );
+        assert!(shared.take_frame().unwrap().is_none());
+        shared.close().unwrap();
+        assert_eq!(
+            *sink.receipts.lock().unwrap(),
+            vec![(key(1), 61, FrameDisposition::Disposed)]
+        );
+        assert_eq!(*sink.schedules.lock().unwrap(), vec![key(1)]);
+    }
+}
+
+#[test]
+fn hidden_receipt_failure_is_not_retried_by_show_or_disposal() {
+    let (shared, sink) = shared();
+    shared.set_visible(false).unwrap();
+    sink.failed_receipts.lock().unwrap().push(71);
+    assert_eq!(
+        shared.publisher().submit(frame(key(1), 71)),
+        Err(FrameSubmitError::Accepted {
+            errors: vec![SurfaceError::Consumer("receipt 71 failed".into())],
+        })
+    );
+    shared.set_visible(true).unwrap();
+    let pending = shared.take_frame().unwrap().unwrap();
+    assert_eq!((pending.frame.key, pending.frame.ack), (key(1), 71));
+    shared
+        .finish_frame(pending, FrameDisposition::Presented)
+        .unwrap();
+    shared.close().unwrap();
+    assert_eq!(
+        *sink.receipts.lock().unwrap(),
+        vec![(key(1), 71, FrameDisposition::Hidden)]
+    );
+    assert!(sink.schedules.lock().unwrap().is_empty());
 }
