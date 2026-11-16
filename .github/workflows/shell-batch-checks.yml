@@ -484,7 +484,7 @@ jobs:
             native/ompdesk/crates/shell-preview
       - name: Resolve only the newly declared Tauri dependencies
         if: inputs.only == 'tauri-inputs'
-        run: cargo metadata --format-version 1 --no-deps --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml > tauri-input-metadata.json
+        run: cargo metadata --format-version 1 --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml > tauri-input-metadata.json
       - name: Check the changed TypeScript consumers
         if: inputs.only == 'tauri-inputs'
         run: |
