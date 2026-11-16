@@ -65,7 +65,7 @@ impl Policy {
 
 pub enum Command {
     Request(crate::host::Call, tokio::sync::oneshot::Receiver<()>),
-    Context(tokio::sync::oneshot::Sender<Result<ompdesk_shell_preview::Partition, String>>),
+    Context(tokio::sync::oneshot::Sender<Result<shell_preview::Partition, String>>),
 }
 
 pub struct Session {
@@ -77,7 +77,7 @@ pub struct Session {
     pub snapshot_error: Option<String>,
     pub context: Option<String>,
     pub context_exposed: bool,
-    pub preview_pages: Vec<ompdesk_shell_preview::AttachedPage>,
+    pub preview_pages: Vec<shell_preview::AttachedPage>,
     pub script_ids: HashMap<String, Vec<String>>,
     pub cookie_arbiter: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub ready: std::sync::Arc<tokio::sync::Notify>,
