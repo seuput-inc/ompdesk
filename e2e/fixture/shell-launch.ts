@@ -3,9 +3,9 @@
  *
  * The app is `ompdesk-shell` (packaged: `OMPdesk.exe`), which starts Node on `out/main/index.js` (the shim
  * `src/main/shell-host/electron` speaks to the host). A test reaches it through two doors:
- *  - the pages: only where the WebView has a DevTools endpoint. On Windows WebView2 reads
- *    `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<free port>` from its environment, set for this
- *    child alone, and `chromium.connectOverCDP` attaches to that port. macOS's WKWebView has no such endpoint and
+ *  - the pages: only where the WebView has a DevTools endpoint. On Windows the test-automation host
+ *    (`OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT=<free port>`, set for this child alone) passes `--remote-debugging-port` to its
+ *    app webviews, and `chromium.connectOverCDP` attaches to that port. macOS's WKWebView has no such endpoint and
  *    Playwright cannot drive it, so {@link launchShell} refuses there ({@link assertPageAutomation}); the macOS check
  *    is `scripts/tauri-native-smoke.ts`, through the host's own WebDriver;
  *  - main: Node's inspector (`OMP_GUI_TEST_NODE_INSPECT=1` makes the host start Node with `--inspect=127.0.0.1:0`
@@ -79,8 +79,8 @@ export function assertPageAutomation(platform: NodeJS.Platform = process.platfor
 const BUILD_RECORD = "ompdesk-tauri.build.json";
 
 /**
- * Throws unless the host's build record lists the `test-automation` feature. A released host removes the WEBVIEW2_*
- * variables before it creates its WebView, so no DevTools port would ever open and a launch would wait out its timeout
+ * Throws unless the host's build record lists the `test-automation` feature. A released host has no code that reads
+ * OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT, so no DevTools port would ever open and a launch would wait out its timeout
  * for it: the e2e jobs stage the host with `./.github/actions/tauri-shell` `test-automation: "true"`
  * (`bun run build:tauri -- --test-automation` locally).
  */
@@ -97,7 +97,7 @@ export function assertTestAutomationHost(executable: string): void {
 	const { features } = record;
 	if (!Array.isArray(features) || !features.includes("test-automation")) {
 		throw new Error(
-			`launchShell: ${executable} was built without the test-automation feature (features: ${JSON.stringify(features ?? "unrecorded")}), so it removes the WEBVIEW2_* variables and opens no DevTools port for Playwright. Stage a test host: bun run build:tauri -- --test-automation`,
+			`launchShell: ${executable} was built without the test-automation feature (features: ${JSON.stringify(features ?? "unrecorded")}), so it never opens a DevTools port for Playwright. Stage a test host: bun run build:tauri -- --test-automation`,
 		);
 	}
 }
@@ -120,22 +120,6 @@ export function appDirOfEntry(entry: string): string {
 /** The URL of Node's inspector from the shell's stderr (`Debugger listening on ws://127.0.0.1:9229/<id>`). */
 export function inspectorUrl(text: string): string | undefined {
 	return /Debugger listening on (ws:\/\/\S+)/.exec(text)?.[1];
-}
-
-/**
- * What WebView2 reads from its environment before any app code runs: a DevTools port, and a user-data folder of the
- * test's own so concurrent or sequential apps never share the machine's one WebView2 profile (an environment whose
- * browser arguments differ from a running browser's on the same folder is refused). The caller sets these on the test
- * child alone. An argument the parent environment already carries is kept, except its own debugging port.
- */
-export function webView2Env(env: NodeJS.ProcessEnv, port: number, userData: string): Record<string, string> {
-	const kept = (env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ?? "")
-		.split(/\s+/)
-		.filter(arg => arg && !arg.startsWith("--remote-debugging-port"));
-	return {
-		WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: [...kept, `--remote-debugging-port=${port}`].join(" "),
-		WEBVIEW2_USER_DATA_FOLDER: env.WEBVIEW2_USER_DATA_FOLDER || path.join(userData, "webview2"),
-	};
 }
 
 /** The app's own pages: the custom-protocol origin of macOS, and the `http://app.localhost` WebView2 loads it from. */
@@ -511,9 +495,12 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	if (!userData)
 		throw new Error("launchShell: pass --user-data-dir=<private dir>; the shell would use the real profile");
 	env.OMP_GUI_TEST_NODE_INSPECT = "1";
-	// WebView2 opens its DevTools port from this child's environment, which no other process on the machine shares.
 	const debugPort = await freePort();
-	Object.assign(env, webView2Env(env, debugPort, userData));
+	// The host opens WebView2's DevTools port for its app webviews from this variable, in this child's environment only.
+	// WebView2's own loader variables are not used: a host's explicit data directory and arguments override them.
+	Reflect.deleteProperty(env, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+	Reflect.deleteProperty(env, "WEBVIEW2_USER_DATA_FOLDER");
+	env.OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT = String(debugPort);
 
 	const child = spawn(executable, args, { env, cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] });
 	let tail = "";

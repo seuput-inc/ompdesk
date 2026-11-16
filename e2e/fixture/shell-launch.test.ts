@@ -12,7 +12,6 @@ import {
 	shellExecutable,
 	stagedShell,
 	userDataFromArgs,
-	webView2Env,
 } from "./shell-launch";
 
 const dirs: string[] = [];
@@ -52,29 +51,6 @@ describe("the shell launcher's pure parts", () => {
 		expect(inspectorUrl(stderr)).toBe("ws://127.0.0.1:51234/0a1b-2c");
 		expect(inspectorUrl("Debugger listening on ws://127.0.0.1:5")).toBe("ws://127.0.0.1:5");
 		expect(inspectorUrl("nothing yet")).toBeUndefined();
-	});
-
-	it("gives WebView2 a DevTools port and a profile folder of the test's own", () => {
-		expect(webView2Env({}, 9333, path.join("/p", "desktop"))).toEqual({
-			WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9333",
-			WEBVIEW2_USER_DATA_FOLDER: path.join("/p", "desktop", "webview2"),
-		});
-	});
-
-	it("keeps the parent's WebView2 arguments and folder, but never its debugging port", () => {
-		expect(
-			webView2Env(
-				{
-					WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--disable-gpu  --remote-debugging-port=9222",
-					WEBVIEW2_USER_DATA_FOLDER: "/own",
-				},
-				9333,
-				"/p",
-			),
-		).toEqual({
-			WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--disable-gpu --remote-debugging-port=9333",
-			WEBVIEW2_USER_DATA_FOLDER: "/own",
-		});
 	});
 
 	it("recognises the app's pages on both engines' origins", () => {

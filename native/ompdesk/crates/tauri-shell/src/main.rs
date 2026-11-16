@@ -345,6 +345,10 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
+    #[cfg(all(windows, feature = "test-automation"))]
+    if let Some(args) = automation::app_browser_args().map_err(failed)? {
+        builder = builder.additional_browser_args(&args);
+    }
     builder = match sessions::configure_app(builder, "app", wc) {
         Ok(builder) => builder,
         Err(error) => {

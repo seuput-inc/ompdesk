@@ -74,30 +74,40 @@ async function checkRelease(): Promise<void> {
 	);
 	console.log(`release host ${binary} (${bytes.byteLength} bytes) holds none of ${AUTOMATION_STRINGS.join(", ")}`);
 
-	// On Windows the WebView2 loader would open a DevTools port from this variable in any host: the released one must
-	// remove it before the WebView is created, so nothing may listen on that port either.
-	const devToolsPort = process.platform === "win32" ? await freePort() : undefined;
+	// On Windows two routes would open a WebView2 DevTools port: the loader's own variable (read in any host) and the test
+	// host's OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT. The released host must honour neither, so nothing may listen on either port.
+	const loaderPort = process.platform === "win32" ? await freePort() : undefined;
+	const hostPort = process.platform === "win32" ? await freePort() : undefined;
 	let app: NativeApp;
 	try {
-		if (devToolsPort !== undefined)
-			process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${devToolsPort}`;
+		if (loaderPort !== undefined)
+			process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${loaderPort}`;
+		if (hostPort !== undefined) process.env.OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT = String(hostPort);
 		app = await launchNative("release-automation-");
 	} finally {
 		Reflect.deleteProperty(process.env, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+		Reflect.deleteProperty(process.env, "OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT");
 	}
 	try {
 		await until("Released app start", async () => existsSync(path.join(app.desktop, "app-started.json")), app.exited);
 		const probed = [
 			{
 				port: app.port,
+				name: "OMP_GUI_TEST_WEBDRIVER_PORT",
 				what: "the test WebDriver environment (a WebDriver server is running, or another process took the port)",
 			},
-			...(devToolsPort === undefined
+			...(loaderPort === undefined || hostPort === undefined
 				? []
 				: [
 						{
-							port: devToolsPort,
+							port: loaderPort,
+							name: "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port",
 							what: "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (WebView2 opened a DevTools port, or another process took the port)",
+						},
+						{
+							port: hostPort,
+							name: "OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT",
+							what: "OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT (the host opened a DevTools port, or another process took the port)",
 						},
 					]),
 		];
@@ -113,7 +123,7 @@ async function checkRelease(): Promise<void> {
 			await Promise.race([delay(300), app.exited]);
 		}
 		console.log(
-			`released app started with OMP_GUI_TEST_WEBDRIVER_PORT=${app.port}${devToolsPort === undefined ? "" : ` and WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=${devToolsPort}`} and the test profile; nothing listens on 127.0.0.1 or [::1] at ${probed.map(({ port }) => port).join(" or ")}`,
+			`released app started with the test profile and ${probed.map(({ name, port }) => `${name}=${port}`).join(", ")}; nothing listens on 127.0.0.1 or [::1] at ${probed.map(({ port }) => port).join(", ")}`,
 		);
 	} finally {
 		await stopNative(app);

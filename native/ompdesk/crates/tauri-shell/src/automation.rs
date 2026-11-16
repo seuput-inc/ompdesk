@@ -31,10 +31,47 @@ fn port(
     Ok(Some(port))
 }
 
+const DEBUG_PORT_ENV: &str = "OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT";
+
+/// wry 0.57.1 (src/webview2/mod.rs, `additional_browser_args` default): the flags it passes when none are given, which
+/// setting any replaces. The app's webviews set no proxy, and wry's `autoplay` defaults to true.
+#[cfg(windows)]
+const WRY_DEFAULT_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+
+fn debug_port(requested: Option<&str>) -> Result<Option<u16>, String> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    if !cfg!(windows) {
+        return Err("The WebView2 debugging port exists on Windows only".into());
+    }
+    requested
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port >= 1024)
+        .map(Some)
+        .ok_or_else(|| format!("{DEBUG_PORT_ENV} requires an explicit unprivileged TCP port"))
+}
+
+/// The browser arguments the app's webviews get when the test asked for a WebView2 DevTools port, else none.
+#[cfg(windows)]
+pub fn app_browser_args() -> Result<Option<String>, String> {
+    let requested = std::env::var(DEBUG_PORT_ENV).ok();
+    let Some(port) = debug_port(requested.as_deref())? else {
+        return Ok(None);
+    };
+    static ANNOUNCED: std::sync::Once = std::sync::Once::new();
+    ANNOUNCED.call_once(|| eprintln!("[tauri-shell] test WebView2 debugging port {port}"));
+    Ok(Some(format!(
+        "{WRY_DEFAULT_ARGS} --remote-debugging-port={port}"
+    )))
+}
+
 pub fn install(
     builder: tauri::Builder<tauri::Wry>,
     user_data: &Path,
 ) -> Result<tauri::Builder<tauri::Wry>, String> {
+    debug_port(std::env::var(DEBUG_PORT_ENV).ok().as_deref())?;
     let requested = std::env::var("OMP_GUI_TEST_WEBDRIVER_PORT").ok();
     let inspect = std::env::var("OMP_GUI_TEST_NODE_INSPECT").ok();
     let profile = std::env::var_os("OMP_GUI_TEST_USER_DATA_DIR");
@@ -51,8 +88,21 @@ pub fn install(
 
 #[cfg(test)]
 mod tests {
-    use super::port;
+    use super::{debug_port, port};
     use std::path::Path;
+
+    #[test]
+    fn debugging_port_is_an_explicit_unprivileged_port_on_windows_only() {
+        assert_eq!(debug_port(None).unwrap(), None);
+        if cfg!(windows) {
+            assert_eq!(debug_port(Some("9333")).unwrap(), Some(9333));
+            for invalid in ["0", "80", "65536", "localhost:9333", ""] {
+                assert!(debug_port(Some(invalid)).is_err());
+            }
+        } else {
+            assert!(debug_port(Some("9333")).is_err());
+        }
+    }
 
     #[test]
     fn ordinary_launch_does_not_open_a_driver_even_without_a_profile() {
