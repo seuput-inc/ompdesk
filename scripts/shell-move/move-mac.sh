@@ -63,7 +63,7 @@ shot_old() { (cd "$REPO" && limit 90 bun scripts/shell-move/cdp-seed-mac.ts "$PO
 LAST_ELECTRON_TAG=$(jq -er .tag "$REPO/native/ompdesk/crates/shell/last-electron.json") || exit 1
 SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-$LAST_ELECTRON_TAG}
 case "$SOURCE_TAG" in v0.127.0|v0.128.0|"$LAST_ELECTRON_TAG") ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
-cleanup() { for v in OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_NODE_INSPECT OMP_GUI_TEST_WEBDRIVER_PORT OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" 2>/dev/null; }
+cleanup() { for v in OMP_GUI_OMP OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_NODE_INSPECT OMP_GUI_TEST_WEBDRIVER_PORT OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" "${FAKE_OMP_HOLDER:-}" 2>/dev/null; }
 trap cleanup EXIT
 stop_or_exit() { stop_app "$@" || { check 1 "app processes did not exit"; restore; exit 1; }; }
 
@@ -152,6 +152,21 @@ update_lines() { jq -r 'select(.source=="app-update") | "\(.message) \(.details.
 has_line() { update_lines "$1" | grep -q "^$2"; }
 wait_for() { local n=0; while [ $n -lt $2 ]; do eval "$1" && return 0; sleep 3; n=$((n+3)); done; return 1; }
 
+# A working omp for every app of the move. The runner has no omp a stored session's transcript can be read through: the
+# apps resolved some Bun omp that exited 1 ("omp unavailable"), so no conversation opened. OMP_GUI_OMP names the e2e suite's fake
+# omp (e2e/sidecar-fixture.ts), which serves stored transcripts from the session file as the e2e suite's session tests do. The
+# fake lives only while the process that installed it does (fake-omp.ts), so it runs until cleanup. Exported for the apps
+# started from this script and set in launchd's environment for the swap script's `open -n` relaunches, as OMP_GUI_TEST_*.
+evidence "omp candidates before the fake: $(ls -l "$HOME/.bun/bin/omp" /opt/homebrew/bin/omp /usr/local/bin/omp 2>&1 | cut -c1-160 | tr '\n' '|')"
+FAKE_OMP_DIR=$W/fake-omp-home
+(cd "$REPO" && exec bun scripts/shell-move/fake-omp.ts "$FAKE_OMP_DIR") >"$W/fake-omp.out" 2>&1 &
+FAKE_OMP_HOLDER=$!
+wait_for "test -s $FAKE_OMP_DIR/bin.txt" 60; check $? "the fake omp is installed (fake-omp.ts)"
+FAKE_OMP=$(cat "$FAKE_OMP_DIR/bin.txt" 2>/dev/null)
+if [ ! -x "$FAKE_OMP" ]; then evidence "fake omp output: $(tail -n 8 "$W/fake-omp.out" | cut -c1-200 | tr '\n' '|')"; check 1 "the fake omp is an executable file ($FAKE_OMP)"; exit 1; fi
+FAKE_OMP_VERSION=$("$FAKE_OMP" --version 2>&1); check $? "the fake omp answers --version ($FAKE_OMP_VERSION)"
+export OMP_GUI_OMP="$FAKE_OMP"
+
 # What the relaunch left when the new shell did not come up: what runs, what the shell wrote, the system's word on the
 # process and crash reports; then the same bundle started directly (not through `open`), to tell a broken bundle from a
 # broken launch context.
@@ -186,6 +201,7 @@ scenario() {
   local APPS=$W/$name/Applications UD=$W/$name/ud
   mkdir -p "$APPS" "$UD"; ditto rel.app "$APPS/OMPdesk.app"
   launchctl setenv OMP_GUI_TEST_USER_DATA_DIR "$UD"
+  launchctl setenv OMP_GUI_OMP "$FAKE_OMP"
   native_environment
   local OLDENV=(); [ "$fail" = 3 ] && OLDENV=(OMPDESK_SWAP_START_WAIT_S=20)
   if [ "$fail" = 2 ] || [ "$fail" = 3 ]; then
