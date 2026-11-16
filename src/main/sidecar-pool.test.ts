@@ -2795,6 +2795,31 @@ describe("SidecarPool background tabs", () => {
 			expect(fw.sentTo(IPC_EVENTS.TAB_STATUS).at(-1)?.data).not.toHaveProperty("awaitingConnection");
 		});
 
+		it("hands the resume rules one outcome object per finished run, however often the facts are read", () => {
+			const { pool, sidecars } = fakePool();
+			const fw = fakeWindow(1);
+			pool.acquire("/a", fw.win, "tab-a", "/sessions/a.jsonl");
+			const a = sidecars[0];
+			a?.emitStatus("ready");
+			const outcome = () => pool.resumeFacts().find(fact => fact.tabId === "tab-a")?.lastRun;
+			const failed = [
+				{ role: "assistant", content: [], stopReason: "error", errorMessage: "fetch failed: other side closed" },
+			];
+
+			a?.emitEvents([{ type: "agent_start" }]);
+			a?.emitEvents([{ type: "agent_end", messages: failed }]);
+			const first = outcome();
+			expect(first).toEqual({ stopReason: "error", errorMessage: "fetch failed: other side closed" });
+			// The rules judge an outcome once and end a hold when another one shows: a fresh parse must not read as another run.
+			expect(outcome()).toBe(first);
+
+			// The same words after a new run are another outcome.
+			a?.emitEvents([{ type: "agent_start" }]);
+			expect(outcome()).toBeUndefined();
+			a?.emitEvents([{ type: "agent_end", messages: failed }]);
+			expect(outcome()).not.toBe(first);
+		});
+
 		it("gives the summary builder a facts source per window tab with a session file, and follows each tab's omp", async () => {
 			const { pool, sidecars } = fakePool();
 			const track = vi.fn();

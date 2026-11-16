@@ -221,6 +221,9 @@ pub(crate) struct Tracking {
     pub run: RunState,
     /// How the last finished run ended; cleared when the next run starts.
     pub last_run: Option<Value>,
+    /// One per outcome set in `last_run` (the TypeScript's one object each): the resume rules judge an outcome once and
+    /// hold work for the failure they saw, so main hands them the same identity for as long as this serial stands.
+    pub last_run_serial: u64,
     /// The user pressed Stop since the run began. Cleared by the next agent_start.
     pub stopped: bool,
     /// Stock's auto-retry waiting for its next attempt: `errorMessage`, and the serial of its `auto_retry_start`.
@@ -255,6 +258,8 @@ impl Tracking {
             Some("agent_end")
                 if ended && event.get("isTerminal").and_then(Value::as_bool) != Some(false) =>
             {
+                *serial += 1;
+                self.last_run_serial = *serial;
                 self.last_run = Some(run_outcome(event.get("messages")));
             }
             Some("auto_retry_end") => {
@@ -265,6 +270,8 @@ impl Tracking {
                     if let Some(error) = event.get("finalError") {
                         outcome.insert("errorMessage".into(), error.clone());
                     }
+                    *serial += 1;
+                    self.last_run_serial = *serial;
                     self.last_run = Some(Value::Object(outcome));
                 }
             }
@@ -417,5 +424,27 @@ mod tests {
         let first = tracking.retry.as_ref().map(|retry| retry.serial);
         tracking.track(&start, 2, &mut serial);
         assert_ne!(first, tracking.retry.as_ref().map(|retry| retry.serial));
+    }
+
+    #[test]
+    fn an_outcome_keeps_its_serial_until_the_next_run_ends() {
+        let mut serial = 0;
+        let mut tracking = Tracking::default();
+        let failed = json!({
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "x"}]
+        });
+        tracking.track(&json!({"type": "agent_start"}), 1, &mut serial);
+        assert!(tracking.track(&failed, 2, &mut serial));
+        let first = tracking.last_run_serial;
+        assert_ne!(first, 0);
+        // Events that are not the run's end leave the outcome and its serial as they are.
+        tracking.track(&json!({"type": "auto_compaction_end"}), 3, &mut serial);
+        assert_eq!(tracking.last_run_serial, first);
+        // The same words after a new run are another outcome.
+        tracking.track(&json!({"type": "agent_start"}), 4, &mut serial);
+        assert!(tracking.last_run.is_none());
+        assert!(tracking.track(&failed, 5, &mut serial));
+        assert_ne!(tracking.last_run_serial, first);
     }
 }

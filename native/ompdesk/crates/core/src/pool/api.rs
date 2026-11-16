@@ -503,7 +503,13 @@ impl Ctx {
                         fact.insert("sessionFile".into(), Value::from(file.clone()));
                     }
                     if let Some(last) = &entry.tracking.last_run {
-                        fact.insert("lastRun".into(), last.clone());
+                        // The outcome's identity: main hands the resume rules one object while this id stands.
+                        let mut last = last.clone();
+                        if let Some(outcome) = last.as_object_mut() {
+                            outcome
+                                .insert("id".into(), Value::from(entry.tracking.last_run_serial));
+                        }
+                        fact.insert("lastRun".into(), last);
                     }
                     if let Some(retry) = &entry.tracking.retry {
                         // One object per `auto_retry_start`: main hands the same object out while this id stands.

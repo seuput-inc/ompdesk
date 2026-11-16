@@ -407,6 +407,8 @@ export class SidecarPool {
 	#nextView = 0;
 	/** The one retry object per `auto_retry_start` the resume rules compare by identity: tab → the object handed out. */
 	readonly #retries = new Map<string, { id: number; retry: { errorMessage: string } }>();
+	/** The one outcome object per finished run the resume rules judge by identity: tab → the object handed out. */
+	readonly #outcomes = new Map<string, { id: number; outcome: IpcTabRunOutcome }>();
 	readonly #activityObservers = new Set<(activity: TabActivity) => void>();
 	/**
 	 * GUI host tools run against Electron in ipc.ts, which the pool cannot import without a cycle. Set once at startup;
@@ -1704,20 +1706,44 @@ export class SidecarPool {
 	 */
 	resumeFacts(): ResumeFact[] {
 		const facts =
-			this.#call<Array<Omit<ResumeFact, "retry"> & { retry?: { errorMessage: string; id: number } }>>("resumeFacts");
-		const seen = new Set<string>();
-		const out = facts.map(({ retry, ...fact }): ResumeFact => {
-			if (!retry) return fact;
-			seen.add(fact.tabId);
-			// One object per `auto_retry_start`: the resume rules count the retries they took over by identity.
-			let kept = this.#retries.get(fact.tabId);
-			if (kept?.id !== retry.id) {
-				kept = { id: retry.id, retry: { errorMessage: retry.errorMessage } };
-				this.#retries.set(fact.tabId, kept);
+			this.#call<
+				Array<
+					Omit<ResumeFact, "retry" | "lastRun"> & {
+						retry?: { errorMessage: string; id: number };
+						lastRun?: IpcTabRunOutcome & { id: number };
+					}
+				>
+			>("resumeFacts");
+		const retrying = new Set<string>();
+		const ended = new Set<string>();
+		const out = facts.map(({ retry, lastRun, ...fact }): ResumeFact => {
+			const wired: ResumeFact = fact;
+			if (retry) {
+				retrying.add(fact.tabId);
+				// One object per `auto_retry_start`: the resume rules count the retries they took over by identity.
+				let kept = this.#retries.get(fact.tabId);
+				if (kept?.id !== retry.id) {
+					kept = { id: retry.id, retry: { errorMessage: retry.errorMessage } };
+					this.#retries.set(fact.tabId, kept);
+				}
+				wired.retry = kept.retry;
 			}
-			return { ...fact, retry: kept.retry };
+			if (lastRun) {
+				ended.add(fact.tabId);
+				// One object per finished run: the rules judge an outcome once and hold work for the failure they saw,
+				// by identity, so a fresh parse of the same outcome must read as the same one.
+				let kept = this.#outcomes.get(fact.tabId);
+				if (kept?.id !== lastRun.id) {
+					const { id, ...outcome } = lastRun;
+					kept = { id, outcome };
+					this.#outcomes.set(fact.tabId, kept);
+				}
+				wired.lastRun = kept.outcome;
+			}
+			return wired;
 		});
-		for (const tab of [...this.#retries.keys()]) if (!seen.has(tab)) this.#retries.delete(tab);
+		for (const tab of [...this.#retries.keys()]) if (!retrying.has(tab)) this.#retries.delete(tab);
+		for (const tab of [...this.#outcomes.keys()]) if (!ended.has(tab)) this.#outcomes.delete(tab);
 		return out;
 	}
 
