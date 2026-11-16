@@ -1,12 +1,14 @@
 //! A supervised Chromium Preview target over private CDP pipes, independent of the application webview.
 
 mod browser;
+mod initialization;
 mod sys;
 mod transport;
 
 pub use browser::{
     Browser, LaunchConfig, Navigation, NavigationHandler, Page, Partition, Viewport,
 };
+pub use initialization::{AttachedPage, PageInitializer};
 
 use std::fmt;
 use std::sync::Arc;

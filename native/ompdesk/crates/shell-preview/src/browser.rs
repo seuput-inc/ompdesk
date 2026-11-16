@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 
+use crate::initialization::Initializations;
 use crate::transport::Transport;
-use crate::{Error, Event, Result};
+use crate::{Error, Event, PageInitializer, Result};
 
 pub struct LaunchConfig {
     /// An absolute executable selected by trusted packaging, never a page-supplied path.
@@ -67,6 +68,7 @@ pub struct Browser {
     policy: Mutex<Option<JoinHandle<()>>>,
     shutdown: Mutex<()>,
     cleaned: AtomicBool,
+    initializations: Option<Arc<Initializations>>,
 }
 
 /// Owns one actual Chromium target. The caller owns native wc/view IDs and access checks.
@@ -82,19 +84,28 @@ static PROFILE_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Browser {
     pub async fn launch(config: LaunchConfig) -> Result<Self> {
-        Self::launch_inner(config, None).await
+        Self::launch_inner(config, None, None).await
     }
 
     pub async fn launch_with_navigation(
         config: LaunchConfig,
         handler: Arc<dyn NavigationHandler>,
     ) -> Result<Self> {
-        Self::launch_inner(config, Some(handler)).await
+        Self::launch_inner(config, Some(handler), None).await
+    }
+
+    pub async fn launch_with_hooks(
+        config: LaunchConfig,
+        navigation: Arc<dyn NavigationHandler>,
+        initializer: Arc<dyn PageInitializer>,
+    ) -> Result<Self> {
+        Self::launch_inner(config, Some(navigation), Some(initializer)).await
     }
 
     async fn launch_inner(
         config: LaunchConfig,
         handler: Option<Arc<dyn NavigationHandler>>,
+        initializer: Option<Arc<dyn PageInitializer>>,
     ) -> Result<Self> {
         if !config.executable.is_absolute()
             || !config.profile_root.is_absolute()
@@ -138,13 +149,21 @@ impl Browser {
             }
         };
         let events = transport.subscribe_policy();
-        let policy = tokio::spawn(enforce_policy(transport.clone(), events, handler));
+        let initializations = initializer
+            .map(|initializer| Arc::new(Initializations::new(initializer, config.command_timeout)));
+        let policy = tokio::spawn(enforce_policy(
+            transport.clone(),
+            events,
+            handler,
+            initializations.clone(),
+        ));
         let browser = Self {
             transport,
             profile,
             policy: Mutex::new(Some(policy)),
             shutdown: Mutex::new(()),
             cleaned: AtomicBool::new(false),
+            initializations,
         };
         let initialized = browser.command("Browser.getVersion", json!({}), None).await;
         if let Err(error) = initialized {
@@ -245,6 +264,9 @@ impl Browser {
         page.command("Target.setAutoAttach", auto_attach()).await?;
         page.command("Emulation.setDeviceMetricsOverride", metrics)
             .await?;
+        if let Some(initializations) = &self.initializations {
+            initializations.wait(&page.target_id).await?;
+        }
         transaction.commit();
         Ok(page)
     }
@@ -463,6 +485,7 @@ async fn enforce_policy(
     transport: Transport,
     mut events: broadcast::Receiver<Event>,
     handler: Option<Arc<dyn NavigationHandler>>,
+    initializations: Option<Arc<Initializations>>,
 ) {
     let mut operations = tokio::task::JoinSet::new();
     loop {
@@ -481,7 +504,7 @@ async fn enforce_policy(
                         return;
                     }
                 };
-                if !matches!(event.method.as_str(), "Target.attachedToTarget" | "Fetch.requestPaused") {
+                if !matches!(event.method.as_str(), "Target.attachedToTarget" | "Target.detachedFromTarget" | "Fetch.requestPaused") {
                     continue;
                 }
                 if operations.len() >= 256 {
@@ -490,8 +513,9 @@ async fn enforce_policy(
                 }
                 let transport = transport.clone();
                 let handler = handler.clone();
+                let initializations = initializations.clone();
                 operations.spawn(async move {
-                    policy_event(&transport, &event, handler.as_deref()).await
+                    policy_event(&transport, &event, handler.as_deref(), initializations.as_deref()).await
                 });
             }
         }
@@ -502,9 +526,18 @@ async fn policy_event(
     transport: &Transport,
     event: &Event,
     handler: Option<&dyn NavigationHandler>,
+    initializations: Option<&Initializations>,
 ) -> Result<()> {
     match event.method.as_str() {
         "Target.attachedToTarget" => {
+            let waiting = event
+                .params
+                .get("waitingForDebugger")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !waiting {
+                return Ok(());
+            }
             let target = event
                 .params
                 .get("targetInfo")
@@ -528,15 +561,49 @@ async fn policy_event(
                     }
                 }
             } else {
-                transport
-                    .request("Fetch.enable", document_interception(), Some(&session))
-                    .await?;
-                transport
-                    .request("Target.setAutoAttach", auto_attach(), Some(&session))
-                    .await?;
-                transport
-                    .request("Runtime.runIfWaitingForDebugger", json!({}), Some(&session))
-                    .await?;
+                let completion = if waiting && let Some(initializations) = initializations {
+                    Some(initializations.begin(&id, &session).await)
+                } else {
+                    None
+                };
+                let result: Result<()> = async {
+                    transport
+                        .request("Fetch.enable", document_interception(), Some(&session))
+                        .await?;
+                    transport
+                        .request("Target.setAutoAttach", auto_attach(), Some(&session))
+                        .await?;
+                    if let Some(initializations) = initializations
+                        && let Some((_, owner)) = &completion
+                    {
+                        if *owner {
+                            initializations
+                                .initialize(transport, target, &session)
+                                .await?;
+                        } else {
+                            initializations.wait(&id).await?;
+                        }
+                    }
+                    transport
+                        .request("Runtime.runIfWaitingForDebugger", json!({}), Some(&session))
+                        .await?;
+                    Ok(())
+                }
+                .await;
+                if let Some((completion, true)) = completion {
+                    completion.send_replace(Some(result.clone()));
+                }
+                result?;
+            }
+        }
+        "Target.detachedFromTarget" => {
+            if let Some(initializations) = initializations
+                && let (Some(target), Some(session)) = (
+                    event.params.get("targetId").and_then(Value::as_str),
+                    event.params.get("sessionId").and_then(Value::as_str),
+                )
+            {
+                initializations.detached(target, session).await;
             }
         }
         "Fetch.requestPaused" => {
