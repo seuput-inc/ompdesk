@@ -1,7 +1,10 @@
 #![windows_subsystem = "windows"]
 
 mod assets;
+mod native_chrome;
 mod native_services;
+pub use native_chrome::menu;
+mod profile;
 mod registry;
 mod theme;
 mod ui;
@@ -34,9 +37,16 @@ struct Evaluation {
     identity: Identity,
     call: host::Call,
 }
+struct Migration {
+    profile: profile::Profile,
+    targets: HashMap<u64, String>,
+    offers: HashMap<u64, (Identity, String, usize)>,
+}
+
 struct Runtime {
     app: tauri::AppHandle,
     registry: Mutex<Registry>,
+    migration: Mutex<Migration>,
     evaluations: Mutex<HashMap<u64, Evaluation>>,
     next_evaluation: AtomicU64,
     preload: String,
@@ -154,11 +164,33 @@ fn invalidate_evaluations(wc: u64) {
         evaluation.call.err("gone", "original document ended");
     }
 }
+fn profile_bootstrap(url: &str) -> bool {
+    let base = url.split(['?', '#']).next().unwrap_or(url);
+    base == "app://ompdesk/__profile/migrate"
+        || (cfg!(windows) && base == "http://app.localhost/__profile/migrate")
+}
+
 fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
     if url == "about:blank" {
         return;
     }
+    if profile_bootstrap(url) {
+        if event == PageLoadEvent::Started {
+            invalidate_evaluations(wc);
+            runtime()
+                .registry
+                .lock()
+                .expect("registry")
+                .navigate(wc, url.into());
+        }
+        return;
+    }
     if event == PageLoadEvent::Started {
+        {
+            let mut migration = runtime().migration.lock().expect("migration");
+            migration.targets.remove(&wc);
+            migration.offers.remove(&wc);
+        }
         invalidate_evaluations(wc);
         let changed = runtime()
             .registry
@@ -192,6 +224,11 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
     }
 }
 fn close_record(wc: u64) {
+    {
+        let mut migration = runtime().migration.lock().expect("migration");
+        migration.targets.remove(&wc);
+        migration.offers.remove(&wc);
+    }
     invalidate_evaluations(wc);
     let page = runtime().registry.lock().expect("registry").remove(wc);
     if let Some(page) = page {
@@ -252,7 +289,15 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     .theme(theme::for_new_window())
     .initialization_script(&runtime().preload)
     .on_navigation(move |url| {
-        let allowed = trusted_url(url.as_str()) || url.as_str() == "about:blank";
+        let allowed = url.as_str() == "about:blank"
+            || (trusted_url(url.as_str())
+                && (!runtime()
+                    .migration
+                    .lock()
+                    .expect("migration")
+                    .profile
+                    .pending()
+                    || profile_bootstrap(url.as_str())));
         if !allowed {
             log::log("navigation.denied", json!({"wcId":wc,"url":url.as_str()}));
         }
@@ -260,7 +305,13 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     })
     .on_new_window(|_, _| NewWindowResponse::Deny)
     .on_page_load(move |_, payload| page_load(wc, payload.url().as_str(), payload.event()))
-    .on_document_title_changed(move |_, title| {
+    .on_document_title_changed(move |window, title| {
+        if window
+            .url()
+            .is_ok_and(|url| profile_bootstrap(url.as_str()))
+        {
+            return;
+        }
         if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
             page.title = title.clone();
         }
@@ -485,8 +536,22 @@ fn wc_op(call: host::Call) {
                 }
                 #[cfg(windows)]
                 let url = url.replacen("app://ompdesk", "http://app.localhost", 1);
+                let destination = {
+                    let mut migration = runtime().migration.lock().expect("migration");
+                    if migration.profile.pending() {
+                        migration.targets.insert(wc, url.to_string());
+                        migration.offers.remove(&wc);
+                        if cfg!(windows) {
+                            "http://app.localhost/__profile/migrate".to_owned()
+                        } else {
+                            "app://ompdesk/__profile/migrate".to_owned()
+                        }
+                    } else {
+                        url.to_string()
+                    }
+                };
                 window
-                    .navigate(url.parse().map_err(failed)?)
+                    .navigate(destination.parse().map_err(failed)?)
                     .map_err(failed)?;
             }
             "reload" | "reloadIgnoringCache" => {
@@ -584,6 +649,9 @@ fn dispatch(call: host::Call) {
 }
 fn dispatch_ui(call: host::Call) {
     let Some(call) = native_services::dispatch(call) else {
+        return;
+    };
+    let Some(call) = native_chrome::dispatch(call) else {
         return;
     };
     if call.method == "wc.op" {
@@ -689,6 +757,58 @@ fn node_gone(code: Option<i32>) {
         runtime().app.exit(code.filter(|c| *c != 0).unwrap_or(1));
     }
 }
+async fn profile_ipc(
+    webview: tauri::Webview,
+    identity: Identity,
+    kind: String,
+    value: Value,
+) -> Result<Value, Value> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    runtime().app.run_on_main_thread(move || {
+        let result = (|| -> Result<Value, Value> {
+            let original = runtime().registry.lock().expect("registry").current(identity);
+            let native_url = webview.url().map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
+            if !original || !profile_bootstrap(native_url.as_str()) {
+                return Err(json!({"code":"denied","message":"migration caller is not the original bootstrap document"}));
+            }
+            let mut migration = runtime().migration.lock().expect("migration");
+            let target = migration.targets.get(&identity.wc).cloned()
+                .ok_or_else(|| json!({"code":"gone","message":"migration app navigation ended"}))?;
+            if kind == "profileRead" {
+                if migration.profile.pending() {
+                    let mut offer = migration.profile.offer().map_err(|message| json!({"code":"failed","message":message}))?;
+                    let id = offer["id"].as_str().ok_or_else(|| json!({"code":"failed","message":"invalid native migration identity"}))?.to_owned();
+                    let count = offer["items"].as_object().ok_or_else(|| json!({"code":"failed","message":"invalid native migration snapshot"}))?.len();
+                    migration.offers.insert(identity.wc, (identity, id, count));
+                    offer["generation"] = json!(identity.generation);
+                    return Ok(offer);
+                }
+                drop(migration);
+                webview.navigate(target.parse().map_err(|_| json!({"code":"invalid","message":"invalid app migration target"}))?)
+                    .map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
+                return Ok(json!({"complete":true,"generation":identity.generation}));
+            }
+            let id = value["id"].as_str().ok_or_else(|| json!({"code":"invalid","message":"missing migration identity"}))?;
+            let count = value["verifiedKeys"].as_u64().and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| json!({"code":"invalid","message":"invalid verified migration count"}))?;
+            if !migration.offers.get(&identity.wc).is_some_and(|(offered, offered_id, offered_count)| *offered == identity && offered_id == id && *offered_count == count) {
+                return Err(json!({"code":"denied","message":"migration acknowledgment does not match its offered document"}));
+            }
+            if migration.profile.pending() {
+                migration.profile.acknowledge(id, count).map_err(|message| json!({"code":"failed","message":message}))?;
+            }
+            drop(migration);
+            webview.navigate(target.parse().map_err(|_| json!({"code":"invalid","message":"invalid app migration target"}))?)
+                .map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
+            Ok(json!({"complete":true}))
+        })();
+        let _ = send.send(result);
+    }).map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
+    receive
+        .await
+        .map_err(|error| json!({"code":"failed","message":error.to_string()}))?
+}
+
 #[tauri::command]
 async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Result<Value, Value> {
     let url = webview
@@ -708,10 +828,27 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
     let value: Value = serde_json::from_str(&payload)
         .map_err(|e| json!({"code":"invalid","message":e.to_string()}))?;
     if kind != "ready"
+        && kind != "profileRead"
         && kind != "preloadError"
         && value["generation"].as_u64() != Some(identity.generation)
     {
         return Err(json!({"code":"gone","message":"original document ended"}));
+    }
+    if kind == "profileRead" || kind == "profileAck" {
+        return profile_ipc(webview, identity, kind, value).await;
+    }
+    if kind != "preloadError"
+        && (profile_bootstrap(url.as_str())
+            || runtime()
+                .migration
+                .lock()
+                .expect("migration")
+                .profile
+                .pending())
+    {
+        return Err(
+            json!({"code":"denied","message":"profile migration has not released the app page"}),
+        );
     }
     match kind.as_str() {
         "ready" => {
@@ -757,6 +894,10 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 .map_err(|e| json!({"code":"failed","message":e.to_string()}))?
         }
         "preloadError" => {
+            if profile_bootstrap(url.as_str()) {
+                // Reveal the recovery page without settling Node's original app load promise.
+                win_event(identity.win, "ready-to-show");
+            }
             wc_event(identity.wc, "preload-error", json!(["tauri.js", value]));
             Ok(json!({}))
         }
@@ -914,6 +1055,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .to_string();
     let listener = conn::Listener::bind(&socket)?;
     let program = node::node_program(packaged, &resources);
+    let profile = profile::Profile::open(&user_data).map_err(std::io::Error::other)?;
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![omp_ipc])
         .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
@@ -927,6 +1069,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 .set(Runtime {
                     app: app.handle().clone(),
                     registry: Mutex::new(Registry::default()),
+                    migration: Mutex::new(Migration {
+                        profile,
+                        targets: HashMap::new(),
+                        offers: HashMap::new(),
+                    }),
                     evaluations: Mutex::new(HashMap::new()),
                     next_evaluation: AtomicU64::new(1),
                     preload,
