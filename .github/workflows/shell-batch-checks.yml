@@ -415,12 +415,24 @@ jobs:
       - name: Test the Preview pipe and lifecycle unit
         shell: bash
         run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
+      - name: Exercise the actual Preview browser consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx --no-install playwright install chromium
+          browser=$(bun -e 'import { chromium } from "@playwright/test"; console.log(chromium.executablePath())')
+          mkdir -p "$RUNNER_TEMP/preview-browser-fixture"
+          OMPDESK_PREVIEW_TEST_BROWSER="$browser" \
+          OMPDESK_PREVIEW_TEST_SCRATCH="$RUNNER_TEMP/preview-browser-fixture" \
+            cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --test browser -- --ignored --exact real_chromium_preview
       - name: Check the changed native host
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml -- --check
           cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --all-targets -- -D warnings
       - name: Refuse an active CEF dependency
         shell: bash
         run: |
@@ -439,4 +451,41 @@ jobs:
             native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell
             native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell.exe
           if-no-files-found: ignore
+          retention-days: 7
+
+  tauri-package-inputs:
+    name: tauri-package-inputs (ubuntu)
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'tauri-native'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - uses: ./.github/actions/native-toolchain
+        with:
+          workspaces: |
+            native/ompdesk/crates/tauri-shell
+            native/ompdesk/crates/shell-preview
+      - name: Generate the actual linked-crate notices
+        run: |
+          bun scripts/gen-crate-notices.ts tauri preview
+          bun run gen:licenses
+          bun run licenses:check
+      - name: Check the packaging consumers
+        run: bunx vitest run src/main/packaging-config.test.ts
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tauri-generated-notices
+          path: |
+            LICENSES/ompdesk-tauri-dependencies.txt
+            LICENSES/ompdesk-preview-dependencies.txt
+            THIRD_PARTY_NOTICES.txt
+          if-no-files-found: error
           retention-days: 7
