@@ -254,6 +254,31 @@ for (const engine of ENGINES)
 			expect(big?.buffer.length).toBeGreaterThan(12 * 1024 * 1024);
 
 			const context = await browser.newContext({ ...engine.device });
+			// The page's own view of each socket: its close code and any frame over 100 KB, in either direction.
+			await context.addInitScript(() => {
+				const Native = window.WebSocket;
+				const began = performance.now();
+				const say = (what: string) =>
+					console.warn(`[ws ${((performance.now() - began) / 1000).toFixed(1)}s] ${what}`);
+				window.WebSocket = new Proxy(Native, {
+					construct(target, args: ConstructorParameters<typeof WebSocket>) {
+						const socket = new target(...args);
+						socket.addEventListener("close", event =>
+							say(`close ${event.code} ${event.reason} clean=${event.wasClean}`),
+						);
+						socket.addEventListener("message", event => {
+							const size = typeof event.data === "string" ? event.data.length : 0;
+							if (size > 100_000) say(`received ${size} chars`);
+						});
+						const send = socket.send.bind(socket);
+						socket.send = (data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
+							if (typeof data === "string" && data.length > 100_000) say(`sent ${data.length} chars`);
+							send(data);
+						};
+						return socket;
+					},
+				});
+			});
 			const phone = await context.newPage();
 			const uploads: string[] = [];
 			// What the phone's page saw on its socket and console, to say why a send that omp received still failed.
@@ -266,8 +291,9 @@ for (const engine of ENGINES)
 				socket.on("socketerror", failure => note(`socket error ${failure}`));
 			});
 			phone.on("console", message => {
-				if (message.type() === "error" || message.type() === "warning")
-					note(`${message.type()}: ${message.text()}`);
+				const text = message.text();
+				if ((message.type() === "error" || message.type() === "warning") && !text.startsWith("Viewport argument"))
+					note(`${message.type()}: ${text}`);
 			});
 			phone.on("requestfailed", request => note(`request failed ${request.url()} ${request.failure()?.errorText}`));
 			phone.on("response", response => {
@@ -326,7 +352,7 @@ for (const engine of ENGINES)
 					.catch(async (error: Error) => {
 						const notices = await phone.locator('[role="status"], [role="alert"]').allInnerTexts();
 						throw new Error(
-							`${error.message}\nthe page's notices: ${JSON.stringify(notices)}\nthe phone's wire: ${JSON.stringify(wire)}`,
+							`${error.message}\nthe page's notices: ${JSON.stringify(notices)}\nthe phone's wire:\n${wire.join("\n")}`,
 						);
 					});
 				// The bubble shows the picture omp journaled (the HEIC as the computer's JPEG, in every browser).
@@ -336,7 +362,7 @@ for (const engine of ENGINES)
 					.toBe(shown)
 					.catch(async (error: Error) => {
 						throw new Error(
-							`${error.message}\nthe bubbles: ${await describeBubbles(phone)}\nthe phone's wire: ${JSON.stringify(wire)}`,
+							`${error.message}\nthe bubbles: ${await describeBubbles(phone)}\nthe phone's wire:\n${wire.join("\n")}`,
 						);
 					});
 				await captureTo(CAPTURES, phone, `${engine.name}-${picture.name}-sent`);
