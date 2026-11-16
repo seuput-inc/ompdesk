@@ -96,6 +96,7 @@ pub(super) fn convert(
             .is_some_and(|v| v != "false"),
         read_only: flag(node, "readonly"),
         secure,
+        #[cfg(target_os = "macos")]
         multiline: flag(node, "multiline"),
         required: flag(node, "required"),
         selected: flag(node, "selected"),
@@ -177,6 +178,7 @@ fn bounds(snapshot: &Value, frame: &str, zoom: f64) -> Result<HashMap<i64, Rect>
     Ok(result)
 }
 
+#[cfg(test)]
 pub async fn snapshot(
     target: &Target<'_>,
     key: SurfaceKey,
@@ -393,6 +395,7 @@ pub async fn action(
     action: AxAction,
 ) -> Result<(), WireError> {
     validate_target(snapshot, &target)?;
+    #[cfg(target_os = "macos")]
     if matches!(action, AxAction::ShowMenu) {
         return Err(error(
             "unsupported",
@@ -404,8 +407,11 @@ pub async fn action(
         AxAction::Focus => AxActionKind::Focus,
         AxAction::SetValue(_) => AxActionKind::SetValue,
         AxAction::SetSelection(_) => AxActionKind::SetSelection,
+        #[cfg(target_os = "macos")]
         AxAction::Increment => AxActionKind::Increment,
+        #[cfg(target_os = "macos")]
         AxAction::Decrement => AxActionKind::Decrement,
+        #[cfg(target_os = "macos")]
         AxAction::ShowMenu => AxActionKind::ShowMenu,
     };
     let node = snapshot
@@ -436,10 +442,13 @@ pub async fn action(
         .await?;
         return Ok(());
     }
-    if matches!(
-        &action,
-        AxAction::Default | AxAction::SetValue(_) | AxAction::Increment | AxAction::Decrement
-    ) {
+    let needs_focus = match &action {
+        AxAction::Default | AxAction::SetValue(_) => true,
+        #[cfg(target_os = "macos")]
+        AxAction::Increment | AxAction::Decrement => true,
+        _ => false,
+    };
+    if needs_focus {
         page.mutation(
             "DOM.focus",
             json!({"backendNodeId":target.backend_dom_node_id}),
@@ -474,11 +483,14 @@ pub async fn action(
             "function(s,l){let e=s+l;if(typeof this.setSelectionRange==='function'){this.setSelectionRange(s,e);return true} if(!this.isContentEditable)return false;let w=document.createTreeWalker(this,NodeFilter.SHOW_TEXT),n,start=null,end=null,pos=0;while(n=w.nextNode()){let next=pos+n.length;if(start===null&&s<=next)start=[n,s-pos];if(e<=next){end=[n,e-pos];break}pos=next}if(!start||!end)return false;let r=document.createRange();r.setStart(...start);r.setEnd(...end);let sel=this.ownerDocument.getSelection();sel.removeAllRanges();sel.addRange(r);return true}",
             vec![json!({"value":range.start}), json!({"value":range.length})],
         ),
+        #[cfg(target_os = "macos")]
         AxAction::Increment | AxAction::Decrement => (
             "function(){return this.ownerDocument.activeElement===this && this instanceof HTMLInputElement && (this.type==='number'||this.type==='range') && !this.disabled && !this.readOnly}",
             vec![],
         ),
-        AxAction::Focus | AxAction::ShowMenu => unreachable!(),
+        AxAction::Focus => unreachable!(),
+        #[cfg(target_os = "macos")]
+        AxAction::ShowMenu => unreachable!(),
     };
     let response = page.mutation("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":function,"arguments":args,"returnByValue":true,"userGesture":true})).await;
     let response = match response {
@@ -532,6 +544,7 @@ pub async fn action(
             page.mutation("Input.insertText", json!({"text":value}))
                 .await?;
         }
+        #[cfg(target_os = "macos")]
         AxAction::Increment | AxAction::Decrement => {
             let up = matches!(action, AxAction::Increment);
             let (key, code) = if up {

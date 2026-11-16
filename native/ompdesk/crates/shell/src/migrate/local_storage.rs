@@ -44,12 +44,14 @@ impl ExportCopy {
                 write!(name, "{byte:02x}").expect("writing to String");
             }
             let path = parent.join(name);
-            let mut builder = std::fs::DirBuilder::new();
+            let builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
-            {
+            let builder = {
                 use std::os::unix::fs::DirBuilderExt;
+                let mut builder = builder;
                 builder.mode(0o700);
-            }
+                builder
+            };
             match builder.create(&path) {
                 Ok(()) => return Ok(Self(Some(path))),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

@@ -13,8 +13,8 @@ pub enum Operation {
     SetUserAgent(String),
     SetPreloads(Vec<(String, String)>),
     ClearHttpCache,
-    SetSpellLanguages(Vec<String>),
-    LearnWord(String),
+    SetSpellLanguages,
+    LearnWord(#[cfg(target_os = "macos")] String),
 }
 
 #[cfg(target_os = "macos")]

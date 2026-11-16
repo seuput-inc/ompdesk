@@ -368,11 +368,8 @@ pub(super) async fn snapshot(
     primary_session: &str,
     iframe_sessions: &[String],
     key: SurfaceKey,
-    zoom: f64,
+    paint: crate::preview_surface::FrameGeometry,
 ) -> Result<AxSnapshot, WireError> {
-    if !zoom.is_finite() || zoom <= 0.0 {
-        return Err(WireError::new("invalid", "Invalid accessibility zoom"));
-    }
     let (root, frames) = frames(browser, primary_session, iframe_sessions, Some(key)).await?;
     let geometry = geometry(browser, &root, &frames, key).await?;
     let mut result = AxSnapshot {
@@ -396,7 +393,8 @@ pub(super) async fn snapshot(
         }
         for node in &mut tree.nodes {
             if let Some(bounds) = node.bounds {
-                node.bounds = Some(geometry.transform.rect(bounds, zoom));
+                node.bounds =
+                    Some(paint.viewport_rect_to_view(geometry.transform.rect(bounds, 1.0)));
             }
         }
         result.nodes.extend(tree.nodes);
@@ -437,11 +435,8 @@ pub(super) async fn text_query(
     snapshot: &AxSnapshot,
     node: AxTarget,
     query: TextQuery,
-    zoom: f64,
+    paint: crate::preview_surface::FrameGeometry,
 ) -> Result<TextReply, WireError> {
-    if !zoom.is_finite() || zoom <= 0.0 {
-        return Err(WireError::new("invalid", "Invalid text zoom"));
-    }
     if snapshot.generation != snapshot.key.generation {
         return Err(WireError::new(
             "stale",
@@ -461,6 +456,7 @@ pub(super) async fn text_query(
             "Text target does not belong to snapshot",
         ));
     }
+    #[cfg(windows)]
     if let TextQuery::RangeFromChild { child } = &query {
         if !belongs(child) {
             return Err(WireError::new(
@@ -510,7 +506,8 @@ pub(super) async fn text_query(
             if !x.is_finite() || !y.is_finite() {
                 return Err(WireError::new("invalid", "Invalid text point"));
             }
-            let (x, y) = transform.inverse_point(x / zoom, y / zoom)?;
+            let (x, y) = paint.to_viewport_css((x, y));
+            let (x, y) = transform.inverse_point(x, y)?;
             TextQuery::OffsetAtPoint { x, y }
         }
         other => other,
@@ -547,7 +544,7 @@ pub(super) async fn text_query(
         TextReply::Rects(rects) => Ok(TextReply::Rects(
             rects
                 .into_iter()
-                .map(|rect| transform.rect(rect, zoom))
+                .map(|rect| paint.viewport_rect_to_view(transform.rect(rect, 1.0)))
                 .collect(),
         )),
         other => Ok(other),
@@ -704,12 +701,9 @@ pub(super) async fn text_state(
     primary: &str,
     iframe_sessions: &[String],
     key: SurfaceKey,
-    zoom: f64,
+    paint: crate::preview_surface::FrameGeometry,
     marked: Option<TextRange>,
 ) -> Result<TextSnapshot, WireError> {
-    if !zoom.is_finite() || zoom <= 0.0 {
-        return Err(WireError::new("invalid", "Invalid text zoom"));
-    }
     let (root, graph) = frames(browser, primary, iframe_sessions, Some(key)).await?;
     let Some((frame_id, backend)) = focused_frame(browser, &root, &graph, key).await? else {
         return Ok(TextSnapshot {
@@ -717,6 +711,7 @@ pub(super) async fn text_state(
                 key,
                 generation: key.generation,
                 backend_dom_node_id: None,
+                #[cfg(target_os = "macos")]
                 editable: false,
                 content: TextContent::Plain(String::new()),
                 selection: TextRange {
@@ -748,7 +743,7 @@ pub(super) async fn text_state(
             .find(|(id, _)| id == &frame_id)
             .map(|(_, frame)| frame.transform)
             .ok_or_else(|| error("Focused frame geometry unavailable"))?;
-        state.caret = Some(transform.rect(caret, zoom));
+        state.caret = Some(paint.viewport_rect_to_view(transform.rect(caret, 1.0)));
         Some(transform)
     } else {
         None

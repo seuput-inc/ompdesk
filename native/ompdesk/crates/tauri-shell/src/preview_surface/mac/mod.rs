@@ -1,10 +1,4 @@
-#[cfg(test)]
-mod fixture;
 mod sys;
-#[cfg(test)]
-pub(crate) use fixture::run_native_fixture;
-#[cfg(test)]
-pub(crate) use fixture::run_native_input_fixture;
 
 use std::{marker::PhantomData, rc::Rc, sync::Arc};
 
@@ -21,16 +15,6 @@ pub struct NativeParent(sys::Parent);
 impl NativeParent {
     pub fn from_tauri_window(window: &tauri::WebviewWindow) -> Result<Self, SurfaceError> {
         sys::Parent::from_tauri_window(window).map(Self)
-    }
-
-    #[cfg(test)]
-    pub fn from_window(window: &objc2_app_kit::NSWindow) -> Result<Self, SurfaceError> {
-        sys::Parent::from_window(window).map(Self)
-    }
-
-    #[cfg(test)]
-    pub fn hidden_fixture() -> Result<Self, SurfaceError> {
-        sys::Parent::hidden_window().map(Self)
     }
 }
 
@@ -118,7 +102,16 @@ impl Surface {
         if !self.shared.is_visible() {
             return self.shared.finish_frame(pending, FrameDisposition::Hidden);
         }
-        match sys::decode_frame(&pending.frame).and_then(|image| self.view.install_image(&image)) {
+        let bounds = self.shared.bounds().rect;
+        let decoded = sys::decode_frame(&pending.frame).and_then(|image| {
+            let geometry = super::model::FrameGeometry::new(
+                &pending.frame.metadata,
+                (bounds.width, bounds.height),
+                (pending.frame.pixel_width, pending.frame.pixel_height),
+            )?;
+            self.view.install_image(&image, geometry)
+        });
+        match decoded {
             Ok(()) => self
                 .shared
                 .finish_frame(pending, FrameDisposition::Presented),
@@ -128,55 +121,6 @@ impl Surface {
                 Err(error)
             }
         }
-    }
-
-    #[cfg(test)]
-    pub fn fixture_bounds(&self) -> objc2_foundation::NSRect {
-        self.view.fixture_bounds()
-    }
-
-    #[cfg(test)]
-    pub fn fixture_image_size(&self) -> Option<objc2_foundation::NSSize> {
-        self.view.fixture_image_size()
-    }
-
-    #[cfg(test)]
-    pub fn fixture_focused(&self) -> bool {
-        self.parent.0.fixture_focused(&self.view)
-    }
-
-    #[cfg(test)]
-    pub fn fixture_key_down(&self, event: &objc2_app_kit::NSEvent) {
-        self.view.fixture_key_down(event);
-    }
-
-    #[cfg(test)]
-    pub fn fixture_set_marked_text(
-        &self,
-        text: &str,
-        selection: objc2_foundation::NSRange,
-        replacement: objc2_foundation::NSRange,
-    ) {
-        self.view
-            .fixture_set_marked_text(text, selection, replacement);
-    }
-
-    #[cfg(test)]
-    pub fn fixture_insert_text(&self, text: &str, replacement: objc2_foundation::NSRange) {
-        self.view.fixture_insert_text(text, replacement);
-    }
-
-    #[cfg(test)]
-    pub fn fixture_ax_element(
-        &self,
-        id: &str,
-    ) -> Option<Retained<objc2_app_kit::NSAccessibilityElement>> {
-        self.view.fixture_ax_element(id)
-    }
-
-    #[cfg(test)]
-    pub fn fixture_ax_press(element: &objc2_app_kit::NSAccessibilityElement) -> bool {
-        sys::PreviewView::fixture_ax_press(element)
     }
 
     pub fn dispose(&mut self) -> Result<(), SurfaceError> {

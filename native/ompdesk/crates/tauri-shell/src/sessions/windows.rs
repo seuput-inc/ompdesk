@@ -238,10 +238,10 @@ pub fn apply(view: tauri::webview::PlatformWebview, op: Operation, done: Done<()
                 }
             }
         }
-        Operation::SetSpellLanguages(_) => done(Err(
+        Operation::SetSpellLanguages => done(Err(
             "WebView2 has no public spellchecking language setter".into(),
         )),
-        Operation::LearnWord(_) => done(Err(
+        Operation::LearnWord(..) => done(Err(
             "WebView2 does not expose its spellchecking dictionary or a public API to add a word"
                 .into(),
         )),

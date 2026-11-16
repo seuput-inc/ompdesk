@@ -148,7 +148,7 @@ mod tests {
             "http://omp-media.localhost.attacker/stream/token",
             "http://omp-media.localhost:8080/stream/token",
             "omp-media://attacker/token",
-            "file:///stream/token",
+            "file://omp-media.localhost/stream/token",
         ] {
             assert!(from_request(&uri.parse().unwrap()).is_err());
         }

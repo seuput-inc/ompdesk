@@ -7,9 +7,13 @@ use super::model::*;
 enum ReplyKind {
     Rects,
     Offset,
+    #[cfg(windows)]
     Ranges,
+    #[cfg(windows)]
     Range,
+    #[cfg(windows)]
     Boundaries,
+    #[cfg(windows)]
     Scrolled,
 }
 
@@ -94,6 +98,7 @@ impl AxTree {
         })
     }
 
+    #[cfg(windows)]
     pub fn node(&self, id: &str) -> Option<&AxNode> {
         self.indexes
             .get(id)
@@ -123,6 +128,7 @@ struct State {
     scheduled: bool,
     schedule_ticket: u64,
     pending: Option<PendingFrame>,
+    displayed: Option<(FrameMetadata, (u32, u32))>,
     text: Option<Arc<TextInputState>>,
     ax: Option<Arc<AxTree>>,
 }
@@ -195,6 +201,7 @@ impl Shared {
                 scheduled: false,
                 schedule_ticket: 0,
                 pending: None,
+                displayed: None,
                 text: None,
                 ax: None,
             }),
@@ -207,6 +214,7 @@ impl Shared {
     pub fn bounds(&self) -> Bounds {
         self.state.lock().unwrap().bounds
     }
+    #[cfg(target_os = "macos")]
     pub fn is_visible(&self) -> bool {
         let s = self.state.lock().unwrap();
         s.visible && !s.disposed
@@ -253,8 +261,11 @@ impl Shared {
             AxAction::Focus => AxActionKind::Focus,
             AxAction::SetValue(_) => AxActionKind::SetValue,
             AxAction::SetSelection(_) => AxActionKind::SetSelection,
+            #[cfg(target_os = "macos")]
             AxAction::Increment => AxActionKind::Increment,
+            #[cfg(target_os = "macos")]
             AxAction::Decrement => AxActionKind::Decrement,
+            #[cfg(target_os = "macos")]
             AxAction::ShowMenu => AxActionKind::ShowMenu,
         };
         if node.disabled
@@ -307,6 +318,7 @@ impl Shared {
                 "protected accessibility text is not exposed".into(),
             ));
         }
+        #[cfg(windows)]
         if let TextQuery::RangeFromChild { child } = &query {
             self.target(generation, child)?;
         }
@@ -318,9 +330,13 @@ impl Shared {
                 }
                 ReplyKind::Offset
             }
+            #[cfg(windows)]
             TextQuery::VisibleRanges => ReplyKind::Ranges,
+            #[cfg(windows)]
             TextQuery::RangeFromChild { .. } => ReplyKind::Range,
+            #[cfg(windows)]
             TextQuery::UnitBoundaries { .. } => ReplyKind::Boundaries,
+            #[cfg(windows)]
             TextQuery::ScrollIntoView { .. } => ReplyKind::Scrolled,
         };
         let reply = self.consumer.text_query(key, generation, target, query)?;
@@ -341,8 +357,11 @@ impl Shared {
                 ReplyKind::Rects
             }
             TextReply::Offset(_) => ReplyKind::Offset,
+            #[cfg(windows)]
             TextReply::Ranges(_) => ReplyKind::Ranges,
+            #[cfg(windows)]
             TextReply::Range(_) => ReplyKind::Range,
+            #[cfg(windows)]
             TextReply::Boundaries(values) => {
                 if values.first() != Some(&0) || values.windows(2).any(|pair| pair[0] >= pair[1]) {
                     return Err(SurfaceError::Invalid(
@@ -351,6 +370,7 @@ impl Shared {
                 }
                 ReplyKind::Boundaries
             }
+            #[cfg(windows)]
             TextReply::Scrolled => ReplyKind::Scrolled,
         };
         if expected != actual {
@@ -370,6 +390,7 @@ impl Shared {
                 return Err(SurfaceError::StaleGeneration);
             }
             s.key = key;
+            s.displayed = None;
             s.ax = None;
             s.text = None;
             s.scheduled = false;
@@ -388,6 +409,10 @@ impl Shared {
         let mut s = self.state.lock().unwrap();
         if s.disposed {
             return Err(SurfaceError::Disposed);
+        }
+        if s.bounds != bounds {
+            s.ax = None;
+            s.text = None;
         }
         s.bounds = bounds;
         Ok(())
@@ -477,6 +502,20 @@ impl Shared {
         pending: PendingFrame,
         disposition: FrameDisposition,
     ) -> Result<(), SurfaceError> {
+        if disposition == FrameDisposition::Presented {
+            let mut state = self.state.lock().unwrap();
+            if !state.disposed && state.key == pending.frame.key {
+                let next = (
+                    pending.frame.metadata.clone(),
+                    (pending.frame.pixel_width, pending.frame.pixel_height),
+                );
+                if state.displayed.as_ref() != Some(&next) {
+                    state.ax = None;
+                    state.text = None;
+                }
+                state.displayed = Some(next);
+            }
+        }
         if pending.receipt_pending {
             self.consumer
                 .presented(pending.frame.key, pending.frame.ack, disposition)?;
@@ -490,6 +529,7 @@ impl Shared {
                 return Ok(());
             }
             s.disposed = true;
+            s.displayed = None;
             s.scheduled = false;
             s.ax = None;
             s.text = None;
@@ -503,6 +543,28 @@ impl Shared {
 }
 
 impl FramePublisher {
+    pub fn geometry(&self) -> Result<Option<FrameGeometry>, SurfaceError> {
+        let shared = self.shared.upgrade().ok_or(SurfaceError::Disposed)?;
+        let state = shared.state.lock().unwrap();
+        if state.disposed {
+            return Err(SurfaceError::Disposed);
+        }
+        if state.key != self.key {
+            return Err(SurfaceError::StaleGeneration);
+        }
+        state
+            .displayed
+            .as_ref()
+            .map(|(metadata, pixels)| {
+                FrameGeometry::new(
+                    metadata,
+                    (state.bounds.rect.width, state.bounds.rect.height),
+                    *pixels,
+                )
+            })
+            .transpose()
+    }
+
     pub fn submit(&self, frame: EncodedFrame) -> Result<(), FrameSubmitError> {
         let shared = self
             .shared

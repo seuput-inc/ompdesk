@@ -30,7 +30,7 @@ pub struct TextRange {
 }
 
 /// CDP `Page.screencastFrame` metadata, unmodified.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FrameMetadata {
     pub device_width: f64,
     pub device_height: f64,
@@ -107,6 +107,8 @@ impl FrameGeometry {
             || !geometry.image.height.is_finite()
             || !screen_zoom.is_finite()
             || screen_zoom <= 0.0
+            || !(screen_zoom * geometry.page_scale).is_finite()
+            || screen_zoom * geometry.page_scale <= 0.0
         {
             return Err(SurfaceError::Invalid(
                 "displayed frame geometry overflow".into(),

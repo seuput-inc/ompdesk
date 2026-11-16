@@ -75,9 +75,6 @@ impl<'a> Target<'a> {
             focused_backend: Some(focus.backend),
         }
     }
-    pub(super) fn frame_id(&self) -> Option<&str> {
-        self.frame
-    }
     fn valid(&self) -> Result<(), WireError> {
         if let Some(key) = self.key {
             if super::surface::key(key.wc).ok() != Some(key) {

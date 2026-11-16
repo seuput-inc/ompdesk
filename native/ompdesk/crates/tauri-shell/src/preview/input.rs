@@ -1,7 +1,9 @@
 use super::target::Target;
+#[cfg(windows)]
+use crate::preview_surface::TouchKind;
 use crate::preview_surface::{
     EditCommand, Input, KeyKind, MouseButton, MouseKind, Rect, SurfaceKey, TextContent,
-    TextInputState, TextRange, TouchKind, WheelUnit,
+    TextInputState, TextRange, WheelUnit,
 };
 use serde_json::{Value, json};
 use shell_core::{hotkey::Mods, wire::WireError};
@@ -113,6 +115,74 @@ async fn select_replacement(page: &Target<'_>, range: TextRange) -> Result<(), W
     }
 }
 
+async fn wheel_unit_delta(
+    page: &Target<'_>,
+    expression: &str,
+    delta_x: f64,
+    delta_y: f64,
+) -> Result<(f64, f64), WireError> {
+    let v = isolated(page, expression, true).await?;
+    let size = v
+        .pointer("/result/value")
+        .and_then(Value::as_array)
+        .ok_or_else(|| unsupported("actual wheel unit size is unavailable"))?;
+    let w = size
+        .first()
+        .and_then(Value::as_f64)
+        .ok_or_else(|| unsupported("actual wheel unit size is unavailable"))?;
+    let h = size
+        .get(1)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| unsupported("actual wheel unit size is unavailable"))?;
+    Ok((delta_x * w, delta_y * h))
+}
+
+pub(super) fn from_surface(
+    mut input: Input,
+    geometry: Option<crate::preview_surface::FrameGeometry>,
+) -> Result<Input, WireError> {
+    let required = || {
+        geometry.ok_or_else(|| {
+            WireError::new("paint-unavailable", "Native pointer has no displayed frame")
+        })
+    };
+    match &mut input {
+        Input::Mouse { x, y, .. } => {
+            (*x, *y) = required()?.to_input((*x, *y));
+        }
+        #[cfg(target_os = "macos")]
+        Input::Wheel {
+            x,
+            y,
+            delta_x,
+            delta_y,
+            unit,
+            ..
+        } => {
+            let geometry = required()?;
+            (*x, *y) = geometry.to_input((*x, *y));
+            if *unit == WheelUnit::Dip {
+                (*delta_x, *delta_y) = geometry.input_delta((*delta_x, *delta_y));
+            }
+        }
+        #[cfg(windows)]
+        Input::Wheel { x, y, .. } => {
+            (*x, *y) = required()?.to_input((*x, *y));
+        }
+        #[cfg(windows)]
+        Input::Touch { points, .. } => {
+            let geometry = required()?;
+            for point in points {
+                (point.x, point.y) = geometry.to_input((point.x, point.y));
+                (point.radius_x, point.radius_y) =
+                    geometry.input_delta((point.radius_x, point.radius_y));
+            }
+        }
+        _ => {}
+    }
+    Ok(input)
+}
+
 pub async fn apply(page: &Target<'_>, input: Input, zoom: f64) -> Result<(), WireError> {
     match input {
         Input::Mouse {
@@ -124,12 +194,10 @@ pub async fn apply(page: &Target<'_>, input: Input, zoom: f64) -> Result<(), Wir
             click_count,
             modifiers,
         } => {
-            #[cfg(windows)]
-            if matches!(kind, MouseKind::Leave) {
-                return Err(unsupported("native mouse leave position is unavailable"));
-            }
             let kind = match kind {
-                MouseKind::Move | MouseKind::Enter | MouseKind::Leave => "mouseMoved",
+                MouseKind::Move | MouseKind::Enter => "mouseMoved",
+                #[cfg(target_os = "macos")]
+                MouseKind::Leave => "mouseMoved",
                 MouseKind::Down => "mousePressed",
                 MouseKind::Up => "mouseReleased",
             };
@@ -152,27 +220,20 @@ pub async fn apply(page: &Target<'_>, input: Input, zoom: f64) -> Result<(), Wir
             modifiers,
         } => {
             let (dx, dy) = match unit {
+                #[cfg(target_os = "macos")]
                 WheelUnit::Dip => (scale(delta_x, zoom)?, scale(delta_y, zoom)?),
-                WheelUnit::Line | WheelUnit::Page => {
-                    let expression = if unit == WheelUnit::Line {
-                        "(()=>{const e=document.activeElement;if(!e)return null;const n=parseFloat(getComputedStyle(e).lineHeight);return Number.isFinite(n)?[n,n]:null})()"
-                    } else {
-                        "[innerWidth,innerHeight]"
-                    };
-                    let v = isolated(page, expression, true).await?;
-                    let a = v
-                        .pointer("/result/value")
-                        .and_then(Value::as_array)
-                        .ok_or_else(|| unsupported("actual wheel unit size is unavailable"))?;
-                    let w = a
-                        .first()
-                        .and_then(Value::as_f64)
-                        .ok_or_else(|| unsupported("actual wheel unit size is unavailable"))?;
-                    let h = a
-                        .get(1)
-                        .and_then(Value::as_f64)
-                        .ok_or_else(|| unsupported("actual wheel unit size is unavailable"))?;
-                    (delta_x * w, delta_y * h)
+                WheelUnit::Line => {
+                    wheel_unit_delta(
+                        page,
+                        "(()=>{const e=document.activeElement;if(!e)return null;const n=parseFloat(getComputedStyle(e).lineHeight);return Number.isFinite(n)?[n,n]:null})()",
+                        delta_x,
+                        delta_y,
+                    )
+                    .await?
+                }
+                #[cfg(windows)]
+                WheelUnit::Page => {
+                    wheel_unit_delta(page, "[innerWidth,innerHeight]", delta_x, delta_y).await?
                 }
             };
             if !dx.is_finite() || !dy.is_finite() {
@@ -198,6 +259,7 @@ pub async fn apply(page: &Target<'_>, input: Input, zoom: f64) -> Result<(), Wir
             }
             mutation(page, "Input.dispatchKeyEvent", p).await?;
         }
+        #[cfg(windows)]
         Input::Touch {
             kind,
             points,
@@ -251,25 +313,21 @@ pub async fn apply(page: &Target<'_>, input: Input, zoom: f64) -> Result<(), Wir
             mutation(page, "Input.insertText", json!({"text":text})).await?;
         }
         Input::Edit(edit) => {
-            let (key, code, vk, shift) = match edit {
-                EditCommand::Copy => ("c", "KeyC", 67, false),
-                EditCommand::Cut => ("x", "KeyX", 88, false),
-                EditCommand::Paste => ("v", "KeyV", 86, false),
-                EditCommand::SelectAll => ("a", "KeyA", 65, false),
-                EditCommand::Undo => ("z", "KeyZ", 90, false),
-                EditCommand::Redo => ("z", "KeyZ", 90, true),
-                EditCommand::DeleteBackward => ("Backspace", "Backspace", 8, false),
-                EditCommand::DeleteForward => ("Delete", "Delete", 46, false),
+            let primary = if cfg!(target_os = "macos") { 4 } else { 2 };
+            let (key, code, vk, m) = match edit {
+                EditCommand::Copy => ("c", "KeyC", 67, primary),
+                EditCommand::Cut => ("x", "KeyX", 88, primary),
+                EditCommand::Paste => ("v", "KeyV", 86, primary),
+                #[cfg(target_os = "macos")]
+                EditCommand::SelectAll => ("a", "KeyA", 65, primary),
+                EditCommand::Undo => ("z", "KeyZ", 90, primary),
+                #[cfg(target_os = "macos")]
+                EditCommand::Redo => ("z", "KeyZ", 90, primary | 8),
+                #[cfg(target_os = "macos")]
+                EditCommand::DeleteBackward => ("Backspace", "Backspace", 8, 0),
+                #[cfg(target_os = "macos")]
+                EditCommand::DeleteForward => ("Delete", "Delete", 46, 0),
             };
-            let shortcut = !matches!(
-                edit,
-                EditCommand::DeleteBackward | EditCommand::DeleteForward
-            );
-            let m = if shortcut {
-                if cfg!(target_os = "macos") { 4 } else { 2 }
-            } else {
-                0
-            } | if shift { 8 } else { 0 };
             for kind in ["rawKeyDown", "keyUp"] {
                 mutation(page,"Input.dispatchKeyEvent",json!({"type":kind,"key":key,"code":code,"windowsVirtualKeyCode":vk,"modifiers":m})).await?;
             }
@@ -360,6 +418,7 @@ pub async fn text_state(
         key,
         generation: key.generation,
         backend_dom_node_id,
+        #[cfg(target_os = "macos")]
         editable: v.get("editable").and_then(Value::as_bool).unwrap_or(false),
         content,
         selection: TextRange {
@@ -376,6 +435,40 @@ pub async fn text_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trusted_pointer_uses_displayed_visual_viewport_not_document_scroll() {
+        use crate::preview_surface::{FrameGeometry, FrameMetadata};
+        let geometry = FrameGeometry::new(
+            &FrameMetadata {
+                device_width: 400.0,
+                device_height: 300.0,
+                page_scale_factor: 2.0,
+                offset_top: 20.0,
+                scroll_offset_x: 70.0,
+                scroll_offset_y: 90.0,
+            },
+            (800.0, 600.0),
+            (800, 560),
+        )
+        .unwrap();
+        let pointer = || Input::Mouse {
+            kind: MouseKind::Down,
+            x: 120.0,
+            y: 200.0,
+            button: MouseButton::Left,
+            buttons: 1,
+            click_count: 1,
+            modifiers: Mods::default(),
+        };
+        let Input::Mouse { x, y, .. } = from_surface(pointer(), Some(geometry)).unwrap() else {
+            panic!("pointer kind changed");
+        };
+        assert_eq!((x, y), (60.0, 80.0));
+        assert_eq!(
+            from_surface(pointer(), None).unwrap_err().code,
+            "paint-unavailable"
+        );
+    }
     #[test]
     fn modifiers_match_cdp() {
         assert_eq!(

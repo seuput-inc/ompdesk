@@ -205,6 +205,7 @@ fn protected_value_is_not_cached_and_navigation_invalidates_accessibility() {
             editable: true,
             read_only: false,
             secure: true,
+            #[cfg(target_os = "macos")]
             multiline: false,
             required: false,
             selected: false,
@@ -223,7 +224,7 @@ fn protected_value_is_not_cached_and_navigation_invalidates_accessibility() {
     shared.set_accessibility(Arc::clone(&snapshot)).unwrap();
     let tree = shared.ax_tree().unwrap();
     assert!(Arc::ptr_eq(&tree.snapshot, &snapshot));
-    assert_eq!(tree.node("password").unwrap().value, AxValue::Protected);
+    assert_eq!(tree.node_ref("password").unwrap().value, AxValue::Protected);
     shared.set_document(key(2)).unwrap();
     assert!(shared.ax_tree().is_none());
     assert_eq!(
@@ -337,4 +338,62 @@ fn hidden_receipt_failure_is_not_retried_by_show_or_disposal() {
         vec![(key(1), 71, FrameDisposition::Hidden)]
     );
     assert!(sink.schedules.lock().unwrap().is_empty());
+}
+
+#[test]
+fn coordinates_follow_only_successfully_presented_frames_and_resize() {
+    let (shared, _) = shared();
+    let publisher = shared.publisher();
+    assert_eq!(publisher.geometry().unwrap(), None);
+    publisher.submit(frame(key(1), 1)).unwrap();
+    assert_eq!(publisher.geometry().unwrap(), None);
+    let first = shared.take_frame().unwrap().unwrap();
+    shared
+        .finish_frame(first, FrameDisposition::Presented)
+        .unwrap();
+    let first = publisher.geometry().unwrap().unwrap();
+    assert_eq!(first.to_input((12.0, 8.0)), (12.0, 8.0));
+    let mut pinched = frame(key(1), 2);
+    pinched.metadata.page_scale_factor = 2.0;
+    pinched.metadata.offset_top = 3.0;
+    publisher.submit(pinched.clone()).unwrap();
+    let failed = shared.take_frame().unwrap().unwrap();
+    shared
+        .finish_frame(failed, FrameDisposition::DecodeFailed)
+        .unwrap();
+    assert_eq!(publisher.geometry().unwrap(), Some(first));
+    publisher.submit(pinched).unwrap();
+    let painted = shared.take_frame().unwrap().unwrap();
+    shared
+        .finish_frame(painted, FrameDisposition::Presented)
+        .unwrap();
+    assert_eq!(
+        publisher
+            .geometry()
+            .unwrap()
+            .unwrap()
+            .to_viewport_css((12.0, 8.0)),
+        (6.0, 2.5)
+    );
+    shared
+        .set_bounds(Bounds {
+            rect: Rect {
+                width: 60.0,
+                height: 40.0,
+                ..shared.bounds().rect
+            },
+            scale: 2.0,
+        })
+        .unwrap();
+    assert_eq!(
+        publisher
+            .geometry()
+            .unwrap()
+            .unwrap()
+            .to_viewport_css((24.0, 16.0)),
+        (6.0, 2.5)
+    );
+    shared.set_document(key(2)).unwrap();
+    assert_eq!(publisher.geometry(), Err(SurfaceError::StaleGeneration));
+    assert_eq!(shared.publisher().geometry().unwrap(), None);
 }

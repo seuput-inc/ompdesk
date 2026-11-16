@@ -20,6 +20,3 @@ pub use model::*;
 pub use shared::{FramePublisher, FrameSubmitError};
 #[cfg(windows)]
 pub use windows::{NativeParent, Surface};
-
-#[cfg(all(test, target_os = "macos"))]
-pub(crate) use mac::run_native_input_fixture;
