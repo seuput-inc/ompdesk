@@ -116,7 +116,7 @@ bun run dev
 
 개발·검사·배포 규칙은 [AGENTS.md](AGENTS.md), 버전별 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있어요. 위 미디어를 다시 녹화하려면 `bun run readme:media`를 실행하세요.
 
-데스크톱 창은 Rust/CEF 셸을 사용해요. 이번 첫 셸 교체판은 기존 Node 메인 프로세스와 서비스를 유지하며, React 화면과 순정 omp 확장은 TypeScript로 남아요.
+데스크톱 창은 Rust(Tauri 2)와 운영체제 기본 웹뷰(macOS의 WebKit, Windows의 WebView2)로 동작해요. 기존 Node 메인 프로세스와 서비스는 그대로 쓰며, React 화면과 순정 omp 확장은 TypeScript로 남아요.
 
 ## 기여 · 보안 · 라이선스
 

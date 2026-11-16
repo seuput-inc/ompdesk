@@ -116,7 +116,7 @@ bun run dev
 
 Development, checks and release rules are in [AGENTS.md](AGENTS.md); changes per version in [CHANGELOG.md](CHANGELOG.md). To re-record the media above: `bun run readme:media`.
 
-The Rust/CEF desktop shell still runs the Node main process and services. The React page and stock omp extension remain TypeScript.
+The desktop window runs on Rust (Tauri 2) and the operating system's web view (WebKit on macOS, WebView2 on Windows). It still runs the Node main process and services; the React page and stock omp extension remain TypeScript.
 
 ## Contributing · Security · License
 
