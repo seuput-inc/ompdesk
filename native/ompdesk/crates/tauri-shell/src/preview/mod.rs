@@ -973,6 +973,7 @@ async fn execute(
                     .lock()
                     .expect("Preview document")
                     .last_failure = None;
+                log_navigation("preview.navigation.start", wc, "loadURL", None);
             }
             match op {
                 "close" => {
@@ -1257,27 +1258,51 @@ async fn create(
     }
     .await
 }
-fn load_failure(entry: &Entry, wc: u64, code: i32, message: &str, url: &str) {
+fn log_navigation(event: &str, wc: u64, cause: &str, code: Option<i32>) {
+    let state = runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .page(wc)
+        .map(|page| (page.identity.generation, page.loading));
+    crate::log::log(
+        event,
+        json!({
+            "wcId":wc,"cause":cause,"code":code,
+            "generation":state.map(|(generation, _)| generation),
+            "loading":state.map(|(_, loading)| loading),
+        }),
+    );
+}
+fn load_failure(entry: &Entry, wc: u64, code: i32, message: &str, url: &str, cause: &str) {
     let generation = runtime()
         .registry
         .lock()
         .expect("registry")
         .page(wc)
-        .map(|page| page.identity.generation);
-    let Some(generation) = generation else {
+        .map(|page| (page.identity.generation, page.loading));
+    let Some((generation, loading)) = generation else {
         return;
     };
-    {
+    let duplicate = {
         let mut document = entry.document.lock().expect("Preview document");
-        if document
-            .last_failure
-            .as_ref()
-            .is_some_and(|(epoch, error)| *epoch == generation && error == message)
-        {
-            return;
+        // The host clears a reported error when the page starts loading again. Only a page that is still stopped
+        // has the earlier report in force; one that started loading since needs the failure again.
+        let duplicate = !loading
+            && document
+                .last_failure
+                .as_ref()
+                .is_some_and(|(epoch, error)| *epoch == generation && error == message);
+        if !duplicate {
+            document.last_failure = Some((generation, message.to_owned()));
         }
-        document.last_failure = Some((generation, message.to_owned()));
+        duplicate
+    };
+    if duplicate {
+        log_navigation("preview.navigation.deduplicated", wc, cause, Some(code));
+        return;
     }
+    log_navigation("preview.navigation.failure", wc, cause, Some(code));
     if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
         page.loading = false;
     }
@@ -1300,7 +1325,7 @@ async fn reject_load(pages: &Pages, wc: u64, args: &Value, error: &WireError) {
     if error.code == "navigation"
         && let Some(code) = shell_core::netmap::error_code(&error.message)
     {
-        load_failure(&entry, wc, code, &error.message, &url);
+        load_failure(&entry, wc, code, &error.message, &url, "reply");
     }
 }
 async fn close(pages: &Pages, wc: u64) -> Result<(), WireError> {
@@ -1995,7 +2020,14 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
         };
         if let Some(failure) = failure {
             if let Some(code) = shell_core::netmap::error_code(&failure.error) {
-                load_failure(&entry, route.wc, code, &failure.error, &failure.url);
+                load_failure(
+                    &entry,
+                    route.wc,
+                    code,
+                    &failure.error,
+                    &failure.url,
+                    "event",
+                );
             } else {
                 crate::log::log(
                     "preview.navigation.unknown-error",
@@ -2097,6 +2129,7 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             }
             wc_state(wc);
             wc_event(wc, "did-start-loading", json!([]));
+            log_navigation("preview.navigation.start", wc, "frameStartedLoading", None);
         }
         events::Update::Console {
             level,
