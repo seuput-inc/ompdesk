@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
-import { appDirOfEntry, assertShellBuilt, usePinnedNode } from "./fixture/shell-launch";
+import { appDirOfEntry, assertShellBuilt, copyShellDiagnostics, usePinnedNode } from "./fixture/shell-launch";
 import { processesBelow, processKey, waitForProcessesToExit } from "./process-tree";
 
 /**
@@ -56,14 +56,15 @@ interface Numbers {
 /** Everything the host and its children wrote while the fixture ran, and the processes it left below it. */
 async function runFixture(work: string, bundle: string): Promise<{ output: string; code: number | null }> {
 	const host = assertShellBuilt();
-	const env: NodeJS.ProcessEnv = { ...process.env, OMP_PREVIEW_E2E_USERDATA: path.join(work, "userData") };
+	const userData = path.join(work, "userData");
+	const env: NodeJS.ProcessEnv = { ...process.env, OMP_PREVIEW_E2E_USERDATA: userData };
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	// The host starts its Node child on the bundle as its main script, from the built `out/` beside it (the host
 	// reads the renderer and preload next to `main/`); nothing opens a window, the fixture drives the preview alone.
 	env.OMPDESK_APP_DIR = appDirOfEntry(bundle);
 	env.OMPDESK_APP_ENTRY = bundle;
 	usePinnedNode(env);
-	const child = spawn(host, [`--user-data-dir=${path.join(work, "userData")}`], {
+	const child = spawn(host, [`--user-data-dir=${userData}`], {
 		env,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
@@ -88,6 +89,12 @@ async function runFixture(work: string, bundle: string): Promise<{ output: strin
 		clearTimeout(timer);
 		clearInterval(watch);
 		await waitForProcessesToExit(below, 10_000);
+		// The test's own `finally` removes `work` next, and with it the host's native log.
+		try {
+			copyShellDiagnostics(userData, test.info().outputPath("shell-logs", String(child.pid ?? "fixture")), output);
+		} catch (error) {
+			console.warn(`[shell diagnostics] ${String(error)}`);
+		}
 	}
 }
 

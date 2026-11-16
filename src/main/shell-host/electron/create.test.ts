@@ -787,6 +787,56 @@ describe("webContents", () => {
 		]);
 	});
 
+	it("takes mouse positions and wheel deltas as the window's DIPs and sends the page's CSS px, at any zoom", async () => {
+		const { webContents } = new electron.BrowserWindow({});
+		fake.answers.set("wc.cdp.send", () => ({ result: {} }));
+		const sentAt = async (factor: number) => {
+			webContents.setZoomFactor(factor);
+			const before = fake.callsOf("wc.cdp.send").length;
+			webContents.sendInputEvent({ type: "mouseMove", x: 200, y: 116 });
+			webContents.sendInputEvent({ type: "mouseDown", x: 200, y: 116, button: "left", clickCount: 1 });
+			webContents.sendInputEvent({ type: "mouseUp", x: 200, y: 116, button: "left", clickCount: 1 });
+			webContents.sendInputEvent({ type: "mouseWheel", x: 200, y: 116, deltaX: -60, deltaY: -480 });
+			webContents.sendInputEvent({ type: "keyDown", keyCode: "a" });
+			await settle();
+			return fake
+				.callsOf("wc.cdp.send")
+				.slice(before)
+				.map(call => call.params);
+		};
+		// A 1× host screen shows a phone frame at 2×: the window is twice the frame and the page is zoomed by 2.
+		expect(await sentAt(2)).toMatchObject([
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 100, y: 58 } },
+			{ method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 100, y: 58, button: "left" } },
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: 100, y: 58, button: "left" } },
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseWheel", x: 100, y: 58, deltaX: 30, deltaY: 240 } },
+			{ method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "a" } },
+		]);
+		expect(await sentAt(0.5)).toMatchObject([
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 400, y: 232 } },
+			{ method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 400, y: 232, button: "left" } },
+			{ method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: 400, y: 232, button: "left" } },
+			{
+				method: "Input.dispatchMouseEvent",
+				params: { type: "mouseWheel", x: 400, y: 232, deltaX: 120, deltaY: 960 },
+			},
+			{ method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "a" } },
+		]);
+	});
+
+	it("refuses mouse and wheel input at a zoom factor that is not a finite number above 0, and still takes keys", async () => {
+		const { webContents } = new electron.BrowserWindow({});
+		fake.answers.set("wc.cdp.send", () => ({ result: {} }));
+		for (const factor of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			webContents.setZoomFactor(factor);
+			expect(() => webContents.sendInputEvent({ type: "mouseDown", x: 1, y: 2, button: "left" })).toThrow(RangeError);
+			expect(() => webContents.sendInputEvent({ type: "mouseWheel", x: 1, y: 2, deltaY: 3 })).toThrow(RangeError);
+		}
+		webContents.sendInputEvent({ type: "keyDown", keyCode: "a" });
+		await settle();
+		expect(fake.callsOf("wc.cdp.send").map(call => call.params.method)).toEqual(["Input.dispatchKeyEvent"]);
+	});
+
 	it("logs an input event the page refused and still delivers the ones after it", async () => {
 		const { webContents } = new electron.BrowserWindow({});
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

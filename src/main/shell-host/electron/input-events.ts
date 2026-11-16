@@ -114,19 +114,35 @@ function keyInfo(keyCode: string): KeyInfo {
 	return { key: keyCode, code: "", vk: 0 };
 }
 
-/** The DevTools commands that deliver `event`. */
-export function inputCommands(event: InputEvent): CdpCommand[] {
+/**
+ * `zoom` as a divisor, or a RangeError: a coordinate sent as if the page were unzoomed would land on another element.
+ */
+function pageZoom(zoom: number): number {
+	if (!Number.isFinite(zoom) || zoom <= 0)
+		throw new RangeError(`The page's zoom factor must be a finite number above 0, not ${zoom}`);
+	return zoom;
+}
+
+/**
+ * The DevTools commands that deliver `event` to a page zoomed by `zoom`. Electron's mouse and wheel input is in the
+ * window's DIPs, which the page's zoom turns into CSS px; the protocol takes CSS px of the viewport the shell
+ * emulates (`Emulation.setDeviceMetricsOverride` with the window ÷ zoom), so positions and wheel deltas are divided
+ * by `zoom` here. Keys and text have no position and pass as they are.
+ */
+export function inputCommands(event: InputEvent, zoom: number): CdpCommand[] {
 	if (event.type === "mouseWheel") {
+		const factor = pageZoom(zoom);
 		// Electron's delta has the opposite sign of the protocol's (positive scrolls the content down there).
+		const delta = (dips: number | undefined) => (dips === undefined || dips === 0 ? 0 : -dips / factor);
 		return [
 			{
 				method: "Input.dispatchMouseEvent",
 				params: {
 					type: "mouseWheel",
-					x: event.x,
-					y: event.y,
-					deltaX: event.deltaX === undefined || event.deltaX === 0 ? 0 : -event.deltaX,
-					deltaY: event.deltaY === undefined || event.deltaY === 0 ? 0 : -event.deltaY,
+					x: event.x / factor,
+					y: event.y / factor,
+					deltaX: delta(event.deltaX),
+					deltaY: delta(event.deltaY),
 					modifiers: modifierBits(event.modifiers),
 				},
 			},
@@ -160,9 +176,10 @@ export function inputCommands(event: InputEvent): CdpCommand[] {
 	}
 	if ("keyCode" in event) return [];
 	const button = event.button ?? "left";
+	const factor = pageZoom(zoom);
 	const base = {
-		x: event.x,
-		y: event.y,
+		x: event.x / factor,
+		y: event.y / factor,
 		modifiers: modifierBits(event.modifiers),
 		button: "none" as string,
 		buttons: heldButtons(event.modifiers),

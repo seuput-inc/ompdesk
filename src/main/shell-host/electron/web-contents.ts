@@ -498,9 +498,12 @@ export class WebContents extends EventEmitter implements PageRecord {
 		return Buffer.from(pdf.data, "base64");
 	}
 
-	/** Browser-process input through the DevTools protocol: it reaches the page as real input does. */
+	/**
+	 * Browser-process input through the DevTools protocol: it reaches the page as real input does. Positions are the
+	 * window's DIPs, as Electron takes them; a zoom factor that is not a finite number above 0 throws a RangeError.
+	 */
 	sendInputEvent(event: InputEvent): void {
-		for (const command of inputCommands(event)) {
+		for (const command of inputCommands(event, this.#state.zoomFactor)) {
 			this.cdp(command.method, command.params).catch((error: unknown) =>
 				this.#host.warn(`sendInputEvent: ${String(error)}`),
 			);

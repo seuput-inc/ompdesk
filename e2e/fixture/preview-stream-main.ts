@@ -72,7 +72,7 @@ const q = new URLSearchParams(location.search);
 let n = 0;
 const send = entry => fetch('/log', { method: 'POST', body: JSON.stringify({ ...entry, n: n++ }) }).catch(() => {});
 document.getElementById('list').innerHTML = Array.from({ length: 400 }, (_, i) => '<div class=row>row ' + i + ' the quick brown fox ' + (i * 7919 % 1000) + '</div>').join('');
-addEventListener('click', e => send({ type: 'click', trusted: e.isTrusted, x: e.clientX, y: e.clientY, target: e.target.id, active: navigator.userActivation.isActive }), true);
+addEventListener('click', e => send({ type: 'click', trusted: e.isTrusted, x: e.clientX, y: e.clientY, target: e.target.id, active: navigator.userActivation.isActive, vw: innerWidth, vh: innerHeight, dpr: devicePixelRatio }), true);
 addEventListener('keydown', e => send({ type: 'keydown', trusted: e.isTrusted, key: e.key, id: e.target.id }), true);
 addEventListener('input', e => send({ type: 'input', trusted: e.isTrusted, value: e.target.value, id: e.target.id }), true);
 addEventListener('wheel', e => send({ type: 'wheel', trusted: e.isTrusted, dy: e.deltaY }), true);
@@ -228,7 +228,8 @@ async function main() {
 	const waitFor = async (what: string, ready: () => boolean, timeoutMs = 8000) => {
 		const started = Date.now();
 		while (!ready()) {
-			if (Date.now() - started > timeoutMs) throw new Error(`Timed out waiting for ${what}`);
+			if (Date.now() - started > timeoutMs)
+				throw new Error(`Timed out waiting for ${what}; the page's last events: ${JSON.stringify(log.slice(-20))}`);
 			await sleep(25);
 		}
 	};
@@ -263,8 +264,8 @@ async function main() {
 	// 2. A tap on the button is a trusted click with user activation.
 	log.length = 0;
 	input({ t: "tap", x: 100 / 390, y: 58 / 700 });
-	await waitFor("the click", () => log.some(entry => entry.type === "click"));
-	const click = log.find(entry => entry.type === "click");
+	await waitFor("the tap on the button", () => log.some(entry => entry.type === "click" && entry.target === "btn"));
+	const click = log.find(entry => entry.type === "click" && entry.target === "btn");
 	result.click = { trusted: click?.trusted, target: click?.target, active: click?.active, x: click?.x, y: click?.y };
 
 	// 3. Keys and committed text reach a focused field as trusted input.
