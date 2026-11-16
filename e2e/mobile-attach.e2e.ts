@@ -228,6 +228,20 @@ for (const engine of ENGINES)
 			const context = await browser.newContext({ ...engine.device });
 			const phone = await context.newPage();
 			const uploads: string[] = [];
+			// What the phone's page saw on its socket and console, to say why a send that omp received still failed.
+			const wire: string[] = [];
+			const began = Date.now();
+			const note = (what: string) => wire.push(`${((Date.now() - began) / 1000).toFixed(1)}s ${what}`);
+			phone.on("websocket", socket => {
+				note(`socket open ${new URL(socket.url()).pathname}`);
+				socket.on("close", () => note("socket close"));
+				socket.on("socketerror", failure => note(`socket error ${failure}`));
+			});
+			phone.on("console", message => {
+				if (message.type() === "error" || message.type() === "warning")
+					note(`${message.type()}: ${message.text()}`);
+			});
+			phone.on("requestfailed", request => note(`request failed ${request.url()} ${request.failure()?.errorText}`));
 			phone.on("response", response => {
 				const url = new URL(response.url());
 				if (url.pathname === "/upload") uploads.push(`${response.request().method()} ${response.status()}`);
@@ -283,7 +297,9 @@ for (const engine of ENGINES)
 					.toHaveCount(0)
 					.catch(async (error: Error) => {
 						const notices = await phone.locator('[role="status"], [role="alert"]').allInnerTexts();
-						throw new Error(`${error.message}\nthe page's notices: ${JSON.stringify(notices)}`);
+						throw new Error(
+							`${error.message}\nthe page's notices: ${JSON.stringify(notices)}\nthe phone's wire: ${JSON.stringify(wire)}`,
+						);
 					});
 				// The bubble shows the picture omp journaled (the HEIC as the computer's JPEG, in every browser).
 				const shown = index + 1;

@@ -100,6 +100,42 @@ function whyNoPlayer(page: Page, file: string, reply: Locator): Promise<string> 
 		.catch((error: Error) => `probe failed: ${error.message}`);
 }
 
+/**
+ * Why a player that mounted never loaded its metadata: the element's own error and states, the CSP violations the
+ * page reported since `watchViolations`, and the page's resource timing for the media request (status, redirects).
+ */
+async function whyNotLoaded(player: Locator): Promise<string> {
+	const detail = await player
+		.evaluate(element => {
+			const media = element as HTMLMediaElement;
+			const timing = performance
+				.getEntriesByType("resource")
+				.filter(entry => (entry as PerformanceResourceTiming).initiatorType !== "script")
+				.filter(entry => /omp-media|127\.0\.0\.1/.test(entry.name))
+				.map(entry => {
+					const resource = entry as PerformanceResourceTiming;
+					return {
+						url: resource.name,
+						status: resource.responseStatus,
+						redirects: resource.redirectCount,
+						bytes: resource.transferSize,
+						ms: Math.round(resource.duration),
+					};
+				});
+			return {
+				error: media.error && { code: media.error.code, message: media.error.message },
+				networkState: media.networkState,
+				readyState: media.readyState,
+				duration: media.duration,
+				src: media.currentSrc,
+				violations: Reflect.get(window, "mediaViolations"),
+				timing,
+			};
+		})
+		.catch((error: Error) => ({ probeFailed: error.message }));
+	return JSON.stringify(detail);
+}
+
 /** Metadata loads (duration known) through main's stream, and the player sits paused at the start. */
 async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Promise<PlayerState> {
 	await expect
@@ -107,7 +143,10 @@ async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Pr
 			const state = await playerState(player);
 			return state.readyState >= 1 && Number.isFinite(state.duration) && state.duration > 0;
 		})
-		.toBe(true);
+		.toBe(true)
+		.catch(async (error: Error) => {
+			throw new Error(`${error.message}\nthe player: ${await whyNotLoaded(player)}`);
+		});
 	const state = await playerState(player);
 	expect(state.src).toMatch(MEDIA_STREAM_URL);
 	expect(state).toMatchObject({ paused: true, autoplay: false, loop: false, currentTime: 0 });
@@ -123,6 +162,13 @@ for (const language of variants(["en", "ko"] as const))
 			try {
 				const errors: string[] = [];
 				page.on("pageerror", error => errors.push(error.message));
+				await page.evaluate(() => {
+					const seen: string[] = [];
+					Reflect.set(window, "mediaViolations", seen);
+					document.addEventListener("securitypolicyviolation", event =>
+						seen.push(`${event.violatedDirective} ${event.blockedURI}`),
+					);
+				});
 				const input = page.locator("textarea").first();
 				await input.fill("fixture media");
 				await input.press("Enter");
