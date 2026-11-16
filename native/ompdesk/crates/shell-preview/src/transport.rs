@@ -1211,27 +1211,26 @@ mod tests {
         assert_eq!(error.code, "event_overflow");
     }
 
-    #[tokio::test]
-    async fn lagging_observer_does_not_end_other_requests() {
+    #[tokio::test(start_paused = true)]
+    async fn observer_keeps_up_while_another_request_waits() {
         let (transport, peer) = connected(Duration::from_secs(10));
         let mut observer = transport.subscribe();
-        for _ in 0..=EVENT_CAPACITY {
-            receive(
-                &transport.owner.shared,
-                br#"{"method":"Runtime.consoleAPICalled"}"#,
-            )
-            .unwrap();
-        }
-        assert!(matches!(
-            observer.recv().await,
-            Err(broadcast::error::RecvError::Lagged(_))
-        ));
         let (read, mut write) = tokio::io::split(peer);
         let mut read = BufReader::new(read);
         let caller = transport.clone();
         let request =
             tokio::spawn(async move { caller.request("Runtime.evaluate", json!({}), None).await });
         let id = command(&mut read).await["id"].as_u64().unwrap();
+        for sequence in 0..=EVENT_CAPACITY {
+            write.write_all(format!("{{\"method\":\"Runtime.consoleAPICalled\",\"params\":{{\"sequence\":{sequence}}},\"sessionId\":\"observed\"}}\0").as_bytes()).await.unwrap();
+            let event = tokio::time::timeout(Duration::from_secs(1), observer.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(event.method, "Runtime.consoleAPICalled");
+            assert_eq!(event.session_id.as_deref(), Some("observed"));
+            assert_eq!(event.params.as_ref(), &json!({"sequence":sequence}));
+        }
         write
             .write_all(format!("{{\"id\":{id},\"result\":{{\"value\":42}}}}\0").as_bytes())
             .await
