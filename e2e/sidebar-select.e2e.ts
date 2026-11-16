@@ -635,7 +635,18 @@ test("a split's rows read selected only where the window shows the split: a desk
 						(await tabs()).some(tab => tab.sessionPath?.endsWith(`${id}.jsonl`) && tab.status === "ready"),
 					{ timeout: 60_000 },
 				)
-				.toBe(true);
+				.toBe(true)
+				.catch(async (error: Error) => {
+					const list = (await tabs()).map(tab =>
+						[
+							tab.tabId,
+							tab.status,
+							tab.active ? "active" : "",
+							tab.sessionPath?.split(/[\\/]/).at(-1) ?? "-",
+						].join(" "),
+					);
+					throw new Error(`${error.message}\nafter clicking ${id}, the tabs: ${JSON.stringify(list)}`);
+				});
 		}
 		await dragRowToRightEdge(page, row("s-3"));
 		await page.mouse.up();
