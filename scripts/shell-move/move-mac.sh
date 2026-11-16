@@ -24,6 +24,12 @@
 # `<app>.previous` until the new app writes app-started.json for the offered version: S1 then says `started`, and S4
 # (the new shell does not start) has the script restore `.previous` (`start failed; previous app restored`) and reopen
 # the old app, which logs `swap result … rolled back`; the launcher only notes that the swap restores.
+# OMP_MOVE_REAL_FEED=<tag> (shell-batch-checks.yml only=release-verify, release-update-mac): the same S1 move against GitHub's REAL
+# feed. Nothing is built, nothing is re-signed (the released app keeps its own signature, so the keychain item it makes trusts
+# the requirement the published <tag> carries) and no stand-in feed or host-resolver mapping is in the update run: the released
+# updater reads api.github.com's /releases/latest, downloads the published DMG, verifies it, swaps, and the published Tauri app
+# starts on the seeded profile. A published app has no WebDriver, so its page is read through Node's inspector and photographed
+# with screencapture (release-profile.ts). S4 (a new shell that does not start) needs a broken DMG and is skipped.
 # Evidence lines start with "EVIDENCE:". Exit 1 on any failed check.
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
@@ -36,13 +42,27 @@ MOVE_ENGINE=${OMPDESK_SHELL_ENGINE:-tauri}
 case "$MOVE_ENGINE" in tauri|cef) ;; *) echo "unsupported move engine: $MOVE_ENGINE"; exit 1 ;; esac
 PACKAGE_ARGS=()
 [ "$MOVE_ENGINE" = cef ] && PACKAGE_ARGS=(--historical-cef)
+# OMP_MOVE_REAL_FEED=<tag> runs the update against GitHub's real feed (see real_prepare below); it needs OMP_MOVE_API_TOKEN, the
+# job's token, which the released app stores as its seeded update token (a name the app itself does not read, so the
+# stored token stays the source) and the checks read the release with.
+REAL_TAG=${OMP_MOVE_REAL_FEED:-}; REAL_VERSION=${REAL_TAG#v}; REAL_TOKEN=${OMP_MOVE_API_TOKEN:-}
+DOWNLOAD_WAIT_S=240; NEW_APP=; EXPECT_SHA512=; EXPECT_SIZE=
+if [ -n "$REAL_TAG" ]; then
+  [[ "$REAL_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "OMP_MOVE_REAL_FEED must be a release tag (vX.Y.Z), got: $REAL_TAG"; exit 1; }
+  [ "$MOVE_ENGINE" = tauri ] || { echo "OMP_MOVE_REAL_FEED moves into the published Tauri app: OMPDESK_SHELL_ENGINE must be tauri"; exit 1; }
+  [ -n "$REAL_TOKEN" ] || { echo "OMP_MOVE_REAL_FEED needs OMP_MOVE_API_TOKEN: a stand-in token is answered 401 by the real API and dropped by the updater"; exit 1; }
+  DOWNLOAD_WAIT_S=900
+fi
 native_environment() {
   [ "$MOVE_ENGINE" = tauri ] || return 0
   launchctl setenv OMP_GUI_TEST_NODE_INSPECT 1
-  launchctl setenv OMP_GUI_TEST_WEBDRIVER_PORT "$NATIVEPORT"
+  # A published app has no WebDriver server (scripts/tauri-release-automation-check.ts): its page is reached through Node's inspector.
+  [ -n "$REAL_TAG" ] || launchctl setenv OMP_GUI_TEST_WEBDRIVER_PORT "$NATIVEPORT"
 }
 new_profile() {
-  if [ "$MOVE_ENGINE" = tauri ]; then
+  if [ -n "$REAL_TAG" ]; then
+    (cd "$REPO" && limit 600 bun scripts/shell-move/release-profile.ts "$NEW_APP" "${1:-read}")
+  elif [ "$MOVE_ENGINE" = tauri ]; then
     (cd "$REPO" && limit 120 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" "${1:-read}")
   else
     (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" "${1:-read}")
@@ -54,7 +74,8 @@ new_profile() {
 # (Settings > Updates shows the stored GitHub token row). A failed assertion leaves <file>.failed.png and fails the check.
 shots() {
   local n=$1 label=$2 files=("$SHOTS/$1-$2.png" "$SHOTS/$1b-$2-settings-reply-language.png" "$SHOTS/$1c-$2-settings-update-token.png") rc
-  if [ "$3" = new ]; then (cd "$REPO" && limit 240 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" shots "${files[@]}"); rc=$?
+  if [ "$3" = new ] && [ -n "$REAL_TAG" ]; then (cd "$REPO" && limit 600 bun scripts/shell-move/release-profile.ts "$NEW_APP" shots "${files[@]}"); rc=$?
+  elif [ "$3" = new ]; then (cd "$REPO" && limit 240 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" shots "${files[@]}"); rc=$?
   else (cd "$REPO" && limit 240 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" shots "${files[@]}"); rc=$?; fi
   check $rc "screenshots $n, ${n}b, ${n}c ($label): conversation open, reply language $SEED_LANGUAGE in Settings, stored update token in Settings"
 }
@@ -71,12 +92,15 @@ stop_or_exit() { stop_app "$@" || { check 1 "app processes did not exit"; restor
 step "control: a prompt-free keychain read"
 control_chatter
 
-step "the new shell bundle and its DMG (scripts/package-mac.ts, signed with the throwaway identity)"
-(cd "$REPO" && bun scripts/package-mac.ts ${PACKAGE_ARGS[@]+"${PACKAGE_ARGS[@]}"} --version 0.200.0 --sign-with "$ID" --keychain "$KC0"); check $? "package-mac built the signed bundle and the DMG"
-DMG=$(ls "$REPO"/dist/ompdesk-0.200.0-arm64.dmg 2>/dev/null | head -1); test -f "$DMG"; check $? "dist/ompdesk-0.200.0-arm64.dmg exists ($(stat -f %z "$DMG" 2>/dev/null) bytes)"
-cp "$DMG" "$W/new.dmg"
+stand_in_candidate() {
+  step "the new shell bundle and its DMG (scripts/package-mac.ts, signed with the throwaway identity)"
+  (cd "$REPO" && bun scripts/package-mac.ts ${PACKAGE_ARGS[@]+"${PACKAGE_ARGS[@]}"} --version 0.200.0 --sign-with "$ID" --keychain "$KC0"); check $? "package-mac built the signed bundle and the DMG"
+  DMG=$(ls "$REPO"/dist/ompdesk-0.200.0-arm64.dmg 2>/dev/null | head -1); test -f "$DMG"; check $? "dist/ompdesk-0.200.0-arm64.dmg exists ($(stat -f %z "$DMG" 2>/dev/null) bytes)"
+  cp "$DMG" "$W/new.dmg"
+}
+[ -n "$REAL_TAG" ] || stand_in_candidate
 
-# The released app is downloaded as shipped; the only change is the throwaway certificate.
+# The released app is downloaded as shipped; the stand-in feed's run re-signs it with the throwaway certificate, the real feed's does not.
 download_app() {
   local tag=$1 destination=$2 mount="$W/mnt-$1"
   curl -fsSL -o "$W/$tag.dmg" "https://github.com/seuput-inc/ompdesk/releases/download/$tag/ompdesk-mac-arm64.dmg" || return 1
@@ -86,11 +110,13 @@ download_app() {
   hdiutil detach "$mount" >/dev/null || return 1
   return "$copied"
 }
-step "the released app $SOURCE_TAG, re-signed (release-form designated requirement)"
+step "the released app $SOURCE_TAG"
 download_app "$SOURCE_TAG" "$W/rel.app" || exit 1
 OLD_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' rel.app/Contents/Info.plist)
 [ "$OLD_VERSION" = "${SOURCE_TAG#v}" ] || exit 1
 evidence "the app that updates: the real $SOURCE_TAG DMG ($OLD_VERSION)"
+# What the stand-in feed's run needs besides the released app: re-signed apps, the candidate bundle, the rollback DMG, the stand-in feed.
+stand_in_prepare() {
 bash "$HERE/resign-mac.sh" rel.app "$KC0" "$ID" | tail -1
 evidence "released app requirement: $(codesign -d -r- rel.app 2>&1 | sed -n 's/^designated => //p')"
 # Compare the actual user relaunch (`open -n` from the released swap script), with no Gatekeeper rule: the re-signed
@@ -138,6 +164,71 @@ test -s "$W/rollback.dmg"; check $? "the re-signed last Electron release $LAST_E
 test -s "$W/rollback.dmg" || exit 1
 start_feed $FEEDPORT "$W/new.dmg" --rollback-dmg "$W/rollback.dmg" --rollback-tag "$LAST_ELECTRON_TAG" --http-port $HTTPPORT --seed-port $SEEDPORT
 curl -s "http://127.0.0.1:$HTTPPORT/repos/SeuPut0705/ompdesk/releases/tags/$LAST_ELECTRON_TAG" | grep -q ompdesk-update; check $? "the stand-in serves the last Electron release's tag route on :$HTTPPORT"
+  check_seed_feed
+  SWITCHES=(--host-resolver-rules="MAP api.github.com 127.0.0.1:$FEEDPORT" --ignore-certificate-errors)
+}
+
+# OMP_MOVE_REAL_FEED=<tag>: the released app, as shipped (its own signature, nothing re-signed), updates through the REAL
+# GitHub feed into the published <tag>. Only the seeding is local: the seed feed validates the token the released app stores
+# and offers nothing; it is stopped before the update run, which then has no host-resolver mapping and no certificate switch.
+github_api() { curl -fsS -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $REAL_TOKEN" "https://api.github.com/repos/seuput-inc/ompdesk/$1"; }
+real_prepare() {
+  local pin requirement latest meta
+  pin=$(jq -er .certificateSha1 "$REPO/scripts/mac-signing.json") || exit 1
+  requirement=$(codesign -d -r- rel.app 2>&1 | sed -n 's/^designated => //p')
+  evidence "the released $SOURCE_TAG, as shipped (not re-signed): designated requirement $requirement"
+  [ "$requirement" = "identifier \"com.seuput.ompdesk\" and certificate root = H\"$pin\"" ]; check $? "the released $SOURCE_TAG is signed with the pinned certificate (scripts/mac-signing.json, $pin)"
+  codesign --verify --deep --strict rel.app; check $? "the released $SOURCE_TAG verifies as shipped"
+  latest=$(github_api releases/latest | jq -er .tag_name) || { check 1 "the real feed answers /releases/latest"; exit 1; }
+  [ "$latest" = "$REAL_TAG" ] || { check 1 "the real feed's latest release is $REAL_TAG (it is $latest): the $SOURCE_TAG updater would be offered another version"; exit 1; }
+  check 0 "the real feed's latest release is $REAL_TAG: the $SOURCE_TAG updater is offered it"
+  meta=$(github_api "releases/tags/$REAL_TAG" | jq -r .body | sed -n 's/.*<!-- ompdesk-update \(.*\) -->.*/\1/p')
+  [ "$(jq -r .version <<<"$meta")" = "$REAL_VERSION" ]; check $? "the release notes carry the ompdesk-update metadata for $REAL_VERSION"
+  EXPECT_SHA512=$(jq -er .files.mac.sha512 <<<"$meta"); EXPECT_SIZE=$(jq -er .files.mac.size <<<"$meta") || exit 1
+  evidence "published metadata: mac size $EXPECT_SIZE, sha512 $(echo "$EXPECT_SHA512" | cut -c1-24)..."
+  (cd "$REPO" && bun scripts/shell-move/feed.ts --seed-only --cert-dir "$W/cert" --seed-port $SEEDPORT >"$W/feed.log" 2>&1) &
+  FEED=$!
+  sleep 4
+  check_seed_feed
+  # The seeded token is the job's own: a stand-in token would be answered 401 by the real API and dropped by the updater.
+  export STAND_IN_TOKEN=$REAL_TOKEN
+  SWITCHES=()
+}
+stop_seed_feed() {
+  pkill -f 'shell-move/feed.ts' 2>/dev/null; sleep 2
+  nc -z 127.0.0.1 $SEEDPORT 2>/dev/null; [ $? != 0 ]; check $? "the seed feed is stopped: nothing local answers for api.github.com during the update run"
+}
+real_old_app_checks() {
+  local argv; argv=$(ps -axo command | grep "$1/OMPdesk.app/Contents/MacOS/OMPdesk" | grep -v grep | head -1)
+  evidence "the released app's command line for the update run: $(echo "$argv" | cut -c1-300)"
+  case "$argv" in *host-resolver-rules*|*ignore-certificate-errors*) check 1 "the released app runs with no host-resolver mapping and no certificate switch (the real api.github.com)" ;; *) check 0 "the released app runs with no host-resolver mapping and no certificate switch (the real api.github.com)" ;; esac
+}
+real_downloaded_checks() {
+  local ud=$1 staged size sha found
+  staged=$(ls "$ud"/updates/*.dmg 2>/dev/null | head -1)
+  [ -n "$staged" ]; check $? "the updater staged the downloaded DMG (${staged##*/})"
+  if [ -n "$staged" ]; then
+    size=$(stat -f %z "$staged"); sha=$(openssl dgst -sha512 -binary "$staged" | base64 | tr -d '\n')
+    [ "$size" = "$EXPECT_SIZE" ] && [ "$sha" = "$EXPECT_SHA512" ]; check $? "the DMG the $SOURCE_TAG updater downloaded from the real feed is the published one (size $size, sha512 equal to the release notes' metadata)"
+  fi
+  found=$(jq -r 'select(.source=="app-update" and .message=="check" and .details.event=="found") | .details.version' "$ud/logs/gui-runtime.jsonl" 2>/dev/null | head -1)
+  [ "$found" = "$REAL_VERSION" ]; check $? "the update log's check found names $REAL_VERSION (found: ${found:-nothing})"
+}
+real_installed_checks() {
+  local app=$1/OMPdesk.app ud=$2 pin requirement minos started
+  pin=$(jq -er .certificateSha1 "$REPO/scripts/mac-signing.json") || exit 1
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$REAL_VERSION" ]; check $? "S1: the installed bundle is $REAL_VERSION"
+  requirement=$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')
+  [ "$requirement" = "identifier \"com.seuput.ompdesk\" and certificate root = H\"$pin\"" ]; check $? "S1: the installed $REAL_VERSION keeps the pinned designated requirement (the keychain item Electron made trusts it)"
+  minos=$(plutil -extract LSMinimumSystemVersion raw -o - "$app/Contents/Info.plist" 2>/dev/null)
+  [[ "$minos" == 14.* ]]; check $? "S1: the installed bundle's LSMinimumSystemVersion is $minos (14)"
+  [ "$(jq -r '.engine + " " + .platform' "$app/Contents/Resources/ompdesk-tauri.build.json" 2>/dev/null)" = "tauri darwin" ] && [ ! -e "$app/Contents/Frameworks/Chromium Embedded Framework.framework" ]; check $? "S1: the installed bundle is the Tauri app (build record engine tauri, no CEF)"
+  started=$(jq -er .version "$ud/app-started.json" 2>/dev/null)
+  [ "$started" = "$REAL_VERSION" ]; check $? "S1: app-started.json names $REAL_VERSION (the published app started on the user's profile)"
+}
+
+# The seed feed's own answers (a repository probe that succeeds, no release, no asset): seeding must not start a download.
+check_seed_feed() {
 seed_repo=$(curl -sk -o /dev/null -w '%{http_code}' --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk")
 seed_latest=$(curl -sk -o /dev/null -w '%{http_code}' --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk/releases/latest")
 seed_list=$(curl -sk --resolve "api.github.com:$SEEDPORT:127.0.0.1" "https://api.github.com:$SEEDPORT/repos/SeuPut0705/ompdesk/releases")
@@ -147,7 +238,8 @@ if [ "$seed_repo" != 200 ] || [ "$seed_latest" != 404 ] || [ "$seed_list" != "[]
   check 1 "seed feed validates repository access but offers no update or asset"
   exit 1
 fi
-SWITCHES=(--host-resolver-rules="MAP api.github.com 127.0.0.1:$FEEDPORT" --ignore-certificate-errors)
+}
+if [ -n "$REAL_TAG" ]; then real_prepare; else stand_in_prepare; fi
 update_lines() { jq -r 'select(.source=="app-update") | "\(.message) \(.details.event // "") \(.details.outcome // "") \(.details.mode // "") \(.details.reason // "")"' "$1/logs/gui-runtime.jsonl" 2>/dev/null; }
 has_line() { update_lines "$1" | grep -q "^$2"; }
 wait_for() { local n=0; while [ $n -lt $2 ]; do eval "$1" && return 0; sleep 3; n=$((n+3)); done; return 1; }
@@ -201,6 +293,7 @@ scenario() {
   local APPS=$W/$name/Applications UD=$W/$name/ud
   mkdir -p "$APPS" "$UD"; ditto rel.app "$APPS/OMPdesk.app"
   launchctl setenv OMP_GUI_TEST_USER_DATA_DIR "$UD"
+  NEW_APP=$APPS/OMPdesk.app
   launchctl setenv OMP_GUI_OMP "$FAKE_OMP"
   native_environment
   local OLDENV=(); [ "$fail" = 3 ] && OLDENV=(OMPDESK_SWAP_START_WAIT_S=20)
@@ -241,8 +334,9 @@ scenario() {
     exit 1
   fi
   rm -rf "$UD/logs" "$UD/updates"
+  [ -z "$REAL_TAG" ] || stop_seed_feed
   step "$name: the released app, left alone with its updater"
-  env ${OLDENV[@]+"${OLDENV[@]}"} OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT "${SWITCHES[@]}" >"$W/$name-old.out" 2>&1 &
+  env -u GH_TOKEN -u GITHUB_TOKEN ${OLDENV[@]+"${OLDENV[@]}"} OMP_GUI_TEST_USER_DATA_DIR=$UD "$APPS/OMPdesk.app/Contents/MacOS/OMPdesk" --user-data-dir="$UD" --remote-debugging-port=$PORT ${SWITCHES[@]+"${SWITCHES[@]}"} >"$W/$name-old.out" 2>&1 &
   local old_pid=$! old_state=running
   (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT read) | tee "$W/$name-persisted.json"
   local persisted_rc=${PIPESTATUS[0]}
@@ -259,7 +353,8 @@ scenario() {
   fi
   check 0 "$name: the restarted released app retained the original token and Local Storage before migration"
   grep -q "\"replyLanguage\":\"$SEED_LANGUAGE\"" "$W/$name-persisted.json" && grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-persisted.json"; check $? "$name: the restarted released app kept the setting and the seeded conversation before migration"
-  if wait_for "has_line $UD 'download verified'" 240; then
+  [ -z "$REAL_TAG" ] || real_old_app_checks "$APPS"
+  if wait_for "has_line $UD 'download verified'" "$DOWNLOAD_WAIT_S"; then
     check 0 "$name: check found, download verified"
   else
     if ! kill -0 "$old_pid" 2>/dev/null; then
@@ -272,6 +367,7 @@ scenario() {
     restore
     exit 1
   fi
+  [ -z "$REAL_TAG" ] || real_downloaded_checks "$UD"
   if [ "$fail" = 1 ]; then
     chmod -R a-w "$APPS"; evidence "S2 the apps folder is read-only before the countdown ends ($(stat -f %Sp "$APPS"))"
   fi
@@ -356,6 +452,7 @@ scenario() {
       ls "$APPS" | grep -q 'previous'; [ $? != 0 ]; check $? "S1: .previous is gone once the new app proved it started"
     fi
     evidence "S1 installed bundle: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APPS/OMPdesk.app/Contents/Info.plist") ($(codesign -d -r- "$APPS/OMPdesk.app" 2>&1 | sed -n 's/^designated => //p'))"
+    [ -z "$REAL_TAG" ] || real_installed_checks "$APPS" "$UD"
     if [ "$MOVE_ENGINE" = tauri ]; then
       new_profile write | tee "$W/$name-native-write.json"; check ${PIPESTATUS[0]} "S1: the migrated native page saved new Korean data"
       new_profile quit | tee "$W/$name-native-quit.json"; local quit_rc=${PIPESTATUS[0]}
@@ -398,7 +495,9 @@ scenario() {
   restore
 }
 scenario s1 0
-if [ "$SOURCE_TAG" != v0.127.0 ]; then
+if [ -n "$REAL_TAG" ]; then
+  evidence "S4 (a new shell that does not start) is not run against the real feed: it needs a broken DMG, and the published one is not ours to break"
+elif [ "$SOURCE_TAG" != v0.127.0 ]; then
   scenario s4 3
 else
   scenario s3 2

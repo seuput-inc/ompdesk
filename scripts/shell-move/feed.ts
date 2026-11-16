@@ -14,6 +14,9 @@
  * plain HTTP, the same routes and comment format as above.
  * `--seed-port <n>` also serves an isolated HTTPS seed feed: repository access succeeds, no release is offered, and no
  * asset is available. The released app can validate and store a test token without starting an update while it seeds.
+ * `--seed-only` (with `--seed-port`, no `--setup`) serves only that seed feed: the real-feed update check
+ * (move-mac.sh OMP_MOVE_REAL_FEED) seeds the released app against it and then stops it, so the update itself reaches
+ * GitHub with nothing of ours in between.
  *
  * The self-signed certificate for api.github.com is made in `--cert-dir` (never the repository). One JSON line per
  * request on stdout; the first line says it is listening.
@@ -31,6 +34,7 @@ const { values } = parseArgs({
 		platform: { type: "string", default: "windows" },
 		port: { type: "string", default: "8443" },
 		"seed-port": { type: "string" },
+		"seed-only": { type: "boolean", default: false },
 		"rollback-dmg": { type: "string" },
 		"rollback-tag": { type: "string" },
 		"http-port": { type: "string" },
@@ -39,8 +43,12 @@ const { values } = parseArgs({
 const setup = values.setup ?? "";
 const version = values.version ?? "0.200.0";
 const certDir = values["cert-dir"] ?? "";
-if (!setup || !certDir) throw new Error("usage: bun feed.ts --setup <file> --version <v> --cert-dir <dir> [--port n]");
-const bytes = new Uint8Array(await Bun.file(setup).arrayBuffer());
+const seedOnly = values["seed-only"] === true;
+if (!certDir || (!setup && !seedOnly))
+	throw new Error(
+		"usage: bun feed.ts --setup <file> --version <v> --cert-dir <dir> [--port n] | --seed-only --seed-port <n> --cert-dir <dir>",
+	);
+const bytes = seedOnly ? new Uint8Array() : new Uint8Array(await Bun.file(setup).arrayBuffer());
 const sha512 = createHash("sha512").update(bytes).digest("base64");
 const platform = values.platform === "mac" ? "mac" : "windows";
 const name = platform === "mac" ? "ompdesk-mac-arm64.dmg" : "ompdesk-windows-setup.exe";
@@ -85,27 +93,32 @@ function repoPath(pathname: string): string {
 	return pathname.replace(/^\/repos\/seuput-inc\/ompdesk(?=\/|$)/i, "/repos/SeuPut0705/ompdesk");
 }
 
-const server = Bun.serve({
-	port: Number(values.port),
-	hostname: "127.0.0.1",
-	tls: { key: Bun.file(key), cert: Bun.file(cert) },
-	fetch(request) {
-		const url = new URL(request.url);
-		console.log(JSON.stringify({ at: Date.now(), method: request.method, path: url.pathname }));
-		const path = repoPath(url.pathname);
-		// The token probe (update-auth.ts checkRepoAccess): a public repository answers 200.
-		if (path === "/repos/SeuPut0705/ompdesk")
-			return Response.json({ full_name: url.pathname.slice("/repos/".length), private: false });
-		if (path === "/repos/SeuPut0705/ompdesk/releases/latest") return Response.json(release);
-		if (path === "/repos/SeuPut0705/ompdesk/releases") return Response.json([release]);
-		// macOS reads the asset as GitHub serves it: a 302 from the API to the storage host (updater.ts signedAssetUrl).
-		if (platform === "mac" && path === "/repos/SeuPut0705/ompdesk/releases/assets/1")
-			return new Response(null, { status: 302, headers: { location: `https://api.github.com/download/${name}` } });
-		if (path === "/repos/SeuPut0705/ompdesk/releases/assets/1" || path === `/download/${name}`)
-			return new Response(bytes, { headers: { "content-type": "application/octet-stream" } });
-		return new Response("not here", { status: 404 });
-	},
-});
+const server = seedOnly
+	? undefined
+	: Bun.serve({
+			port: Number(values.port),
+			hostname: "127.0.0.1",
+			tls: { key: Bun.file(key), cert: Bun.file(cert) },
+			fetch(request) {
+				const url = new URL(request.url);
+				console.log(JSON.stringify({ at: Date.now(), method: request.method, path: url.pathname }));
+				const path = repoPath(url.pathname);
+				// The token probe (update-auth.ts checkRepoAccess): a public repository answers 200.
+				if (path === "/repos/SeuPut0705/ompdesk")
+					return Response.json({ full_name: url.pathname.slice("/repos/".length), private: false });
+				if (path === "/repos/SeuPut0705/ompdesk/releases/latest") return Response.json(release);
+				if (path === "/repos/SeuPut0705/ompdesk/releases") return Response.json([release]);
+				// macOS reads the asset as GitHub serves it: a 302 from the API to the storage host (updater.ts signedAssetUrl).
+				if (platform === "mac" && path === "/repos/SeuPut0705/ompdesk/releases/assets/1")
+					return new Response(null, {
+						status: 302,
+						headers: { location: `https://api.github.com/download/${name}` },
+					});
+				if (path === "/repos/SeuPut0705/ompdesk/releases/assets/1" || path === `/download/${name}`)
+					return new Response(bytes, { headers: { "content-type": "application/octet-stream" } });
+				return new Response("not here", { status: 404 });
+			},
+		});
 if (values["seed-port"]) {
 	const seed = Bun.serve({
 		port: Number(values["seed-port"]),
@@ -170,4 +183,6 @@ if (values["rollback-dmg"]) {
 	});
 	console.log(JSON.stringify({ rollbackListening: http.port, tag, size: previous.length }));
 }
-console.log(JSON.stringify({ listening: server.port, version, size: bytes.length, sha512: sha512.slice(0, 12) }));
+console.log(
+	JSON.stringify({ listening: server?.port ?? null, version, size: bytes.length, sha512: sha512.slice(0, 12) }),
+);

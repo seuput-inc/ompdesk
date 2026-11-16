@@ -5,10 +5,8 @@
 # that `restore` gives back to the runner's own. Runner only: never a person's Mac.
 set -u
 W=${RUNNER_TEMP:-/tmp}/kc; rm -rf "$W"; mkdir -p "$W"; cd "$W"
-PW=move; FAILED=0
-step() { echo; echo "=== $*"; }
-check() { if [ "$1" = 0 ]; then echo "ok: $2"; else echo "FAILED: $2"; FAILED=1; fi; }
-evidence() { echo "EVIDENCE: $*"; }
+PW=move
+. "$HERE/check-lib.sh"
 limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 OS=$(sw_vers -productVersion)
 ORIG_DEFAULT=$(security default-keychain -d user | sed 's/^[ ]*"//; s/"$//'); ORIG_LIST=$(security list-keychains -d user | sed 's/^[ ]*"//; s/"$//' | tr '\n' ' ')

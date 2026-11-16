@@ -59,3 +59,37 @@ test("the seed feed validates repository access without offering an update or as
 		await rm(folder, { recursive: true, force: true });
 	}
 });
+
+test("--seed-only serves the seed feed and nothing else, with no setup to offer", async () => {
+	const folder = await mkdtemp(join(tmpdir(), "shell-seed-only-feed-"));
+	const child = spawn("bun", ["scripts/shell-move/feed.ts", "--seed-only", "--cert-dir", folder, "--seed-port", "0"], {
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	const ended = once(child, "close");
+	let errors = "";
+	child.stderr.on("data", chunk => {
+		errors += String(chunk);
+	});
+	try {
+		const listened = await new Promise<{ seed: number; update: number | null }>((resolve, reject) => {
+			let seed: number | undefined;
+			const lines = createInterface({ input: child.stdout });
+			child.once("error", reject);
+			child.once("close", code => reject(new Error(`feed exited ${code}: ${errors}`)));
+			lines.on("line", line => {
+				const value = JSON.parse(line) as { seedListening?: number; listening?: number | null };
+				if (value.seedListening !== undefined) seed = value.seedListening;
+				if (seed !== undefined && value.listening !== undefined) resolve({ seed, update: value.listening });
+			});
+		});
+		expect(listened.update).toBeNull();
+		const base = "/repos/SeuPut0705/ompdesk";
+		expect((await read(listened.seed, base)).status).toBe(200);
+		expect(await read(listened.seed, `${base}/releases`)).toEqual({ status: 200, body: "[]" });
+		expect((await read(listened.seed, `${base}/releases/latest`)).status).toBe(404);
+	} finally {
+		child.kill();
+		await ended;
+		await rm(folder, { recursive: true, force: true });
+	}
+});

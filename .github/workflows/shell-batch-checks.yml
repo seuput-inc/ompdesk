@@ -28,6 +28,28 @@
 #              desktop side is the test-automation host driven through its native WebDriver (Playwright cannot attach to
 #              WKWebView), the phone side is the spec unchanged. Uploads test-results/ (the host's logs, the phone's wire and
 #              close codes in a failure's message) and the run's output as `phone-webkit-mac`.
+#  release-verify  only=release-verify, `tag` (default v0.132.0): what is PUBLISHED, on GitHub's runners (nothing built, nothing here
+#              runs on a person's Mac).
+#              release-assets-mac (macos-15)  the DMG from `gh release download`: size and SHA-512 equal the release notes'
+#                ompdesk-update metadata (and GitHub's size and digest); mounted read-only, the app copied out with `ditto
+#                --noextattr --norsrc --noqtn`; `codesign --verify --deep --strict`; the designated requirement and the leaf
+#                certificate (SHA-1, common name) equal scripts/mac-signing.json; nested binaries verify; LSMinimumSystemVersion 14.x
+#                and the metadata's minimumSystemVersion equal app-compatibility.json at the tag; the Tauri build record
+#                (no WebDriver, no CEF). `spctl --assess`, `xcrun stapler validate` and the quarantine state are EVIDENCE lines, not
+#                assertions: the certificate is OMPdesk's own, self-signed (AGENTS.md › Signing: "nothing is notarized").
+#              release-assets-win (windows-latest)  the setup: size, SHA-512, GitHub's digest, PE header, and Get-AuthenticodeSignature
+#                status and signer as evidence (release.yml signs and checks nothing of it; only a broken signature fails).
+#              release-update-mac (macos-15)  move-mac.sh with OMP_MOVE_REAL_FEED=<tag>: the released v0.131.0 app, as shipped, runs
+#                with no stand-in feed and no host-resolver mapping (the seed feed that stores its token is stopped first), its
+#                updater reads api.github.com's real /releases/latest, downloads the published DMG (size and SHA-512 equal the
+#                metadata), swaps, and the published Tauri app starts on the profile: token decrypted, setting kept, conversation
+#                listed, pages photographed (Node inspector + screencapture), swap.log installed/started, app-started.json for
+#                <tag>. S4 (a new shell that does not start) is skipped: it needs a broken DMG.
+#              There is no Windows real-feed update: move-win installs each old Electron as a setup REBUILT under a test GUID and folder
+#                (build-setups.ts), so the published setup, which installs under the real identity, would add a second copy instead of
+#                updating it; the test setups' launcher and move-test.nsh carry the profile into the app the setup starts through
+#                Explorer, which the published setup has none of; and run-move.ts asserts the CEF era (libcef.dll, cef.ready,
+#                migrate.token) where 0.132.0 is the Tauri app. That is a harness of its own, not a switch on move-win.
 # macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
 # windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`) the gate admits: main, or a branch named in
 # the repository variable MAC_REFS; any other ref fails closed at the gate and no macOS job starts. They share the
@@ -36,7 +58,7 @@
 # Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
 name: shell-batch-checks
 # The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}]', inputs.only) || '' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || '') || '' }}
 
 on:
   workflow_dispatch:
@@ -44,8 +66,12 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac]
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify]
         default: all
+      tag:
+        description: "release-verify: the published release to check (assets, signatures, and the real update path into it)"
+        type: string
+        default: v0.132.0
   push:
     branches: [omp/agent/rust-batch-shell]
     paths:
@@ -596,3 +622,146 @@ jobs:
             tauri-input-metadata.json
           if-no-files-found: error
           retention-days: 7
+
+  # only=release-verify, `tag` (default v0.132.0): the PUBLISHED release, on GitHub's runners (never a person's Mac). Four jobs; the two
+  # macOS ones run one after the other in the mac-dispatch lane.
+  release-assets-mac:
+    name: release-assets-mac (macos-15, ${{ inputs.tag }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'release-verify'"
+    concurrency:
+      group: mac-dispatch
+      cancel-in-progress: false
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: The published DMG (size, SHA-512, signature, requirement, leaf certificate, Gatekeeper and notarization evidence)
+        shell: bash
+        run: set -o pipefail; bash scripts/shell-move/release-assets.sh mac "$RELEASE_TAG" 2>&1 | tee release-assets-mac.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### published $RELEASE_TAG DMG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-assets-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets-mac-${{ inputs.tag }}
+          path: |
+            release-assets-mac.log
+            ${{ runner.temp }}/release-verify-mac/release.json
+            ${{ runner.temp }}/release-verify-mac/update-metadata.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+
+  release-assets-win:
+    name: release-assets-win (windows-latest, ${{ inputs.tag }})
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'release-verify'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: The published setup (size and SHA-512 against the metadata, GitHub's digest, PE header)
+        shell: bash
+        run: set -o pipefail; bash scripts/shell-move/release-assets.sh win "$RELEASE_TAG" 2>&1 | tee release-assets-win.log
+      - name: Authenticode signature and signer (evidence; a broken signature fails)
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'release-verify-win\ompdesk-windows-setup.exe'
+          & ./scripts/shell-move/release-authenticode.ps1 -Path $setup 2>&1 | Tee-Object -FilePath release-authenticode.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### published $RELEASE_TAG setup, windows-latest"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED)' release-assets-win.log release-authenticode.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets-win-${{ inputs.tag }}
+          path: |
+            release-assets-win.log
+            release-authenticode.log
+            ${{ runner.temp }}/release-verify-win/release.json
+            ${{ runner.temp }}/release-verify-win/update-metadata.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+
+  # The released app (scripts/shell-move/move-mac.sh, OMP_MOVE_RELEASED_TAG) updates through the REAL GitHub feed into the published tag.
+  # No Windows counterpart: see the release-verify note in this file's header (move-win's setups are rebuilt under a test identity).
+  release-update-mac:
+    name: release-update-mac (macos-15, v0.131.0 to ${{ inputs.tag }})
+    needs: [gate, release-assets-mac]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'release-verify'"
+    concurrency:
+      group: mac-dispatch
+      cancel-in-progress: false
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      # Nothing is built: the scripts only need the repository's dependencies (Playwright's CDP client for the released Electron's
+      # page, the e2e fake omp, the inspector client); the apps are the published ones.
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      # OMP_MOVE_API_TOKEN, not GH_TOKEN: the released app reads GH_TOKEN/GITHUB_TOKEN before its stored token, and the move check
+      # asserts the stored one is decrypted. The script seeds this token as the app's own update token.
+      - name: The update move from the released v0.131.0 through the real feed
+        shell: bash
+        env:
+          OMP_MOVE_API_TOKEN: ${{ github.token }}
+        run: set -o pipefail; OMPDESK_SHELL_ENGINE=tauri OMP_MOVE_RELEASED_TAG=v0.131.0 OMP_MOVE_REAL_FEED="$RELEASE_TAG" bash scripts/shell-move/move-mac.sh 2>&1 | tee release-update-mac.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### real-feed update v0.131.0 to $RELEASE_TAG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-update-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "Screenshots (artifact release-update-mac-$RELEASE_TAG, folder move-shots):"; ls "$RUNNER_TEMP/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-update-mac-${{ inputs.tag }}
+          path: |
+            release-update-mac.log
+            ${{ runner.temp }}/move-shots/*.png
+            ${{ runner.temp }}/kc/*.json
+            ${{ runner.temp }}/kc/feed.log
+            ${{ runner.temp }}/kc/s1/ud/logs/gui-runtime.jsonl
+            ${{ runner.temp }}/kc/s1/ud/updates/swap.log
+            ${{ runner.temp }}/kc/s1/ud/app-started.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
