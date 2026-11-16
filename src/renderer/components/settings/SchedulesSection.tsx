@@ -155,11 +155,9 @@ export function SchedulesSection() {
 
 	return (
 		<>
-			<SettingsSection
-				actions={state.schedules.length > 0 ? newButton : undefined}
-				id="settings-schedules-list"
-				title={t("settings.section.schedules")}
-			>
+			{/* No title of its own: the page's heading already reads "Schedules", and a second region of that name beside the
+			    page's would break the landmarks' unique names (axe landmark-unique). */}
+			<SettingsSection actions={state.schedules.length > 0 ? newButton : undefined} id="settings-schedules-list">
 				{/* The "only while OMPdesk is open" rule sits behind the master row's info glyph, not as a paragraph. */}
 				<SettingsRow
 					compactControl
