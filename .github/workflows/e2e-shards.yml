@@ -48,7 +48,8 @@ jobs:
   e2e:
     name: e2e (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: windows-latest
-    timeout-minutes: 40
+    # Windows setup (install, the Tauri test host) takes about 20 minutes before Playwright's 35-minute global timeout.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
