@@ -35,6 +35,16 @@ fn current(key: SurfaceKey) -> Result<(), SurfaceError> {
         Err(SurfaceError::StaleGeneration)
     }
 }
+pub(super) fn geometry(entry: &Entry) -> Result<Option<native::FrameGeometry>, SurfaceError> {
+    entry
+        .publisher
+        .lock()
+        .expect("native publisher")
+        .as_ref()
+        .map(FramePublisher::geometry)
+        .transpose()
+        .map(Option::flatten)
+}
 fn wire(error: SurfaceError) -> WireError {
     WireError::new("native-surface", error.to_string())
 }
@@ -91,13 +101,25 @@ impl Consumer for Effects {
         if !owned {
             return Err(SurfaceError::StaleGeneration);
         }
+        super::schedule_frame_ack(&entry, ack);
+        if disposition == FrameDisposition::Presented {
+            current(key)?;
+            if let Some(geometry) = geometry(&entry)? {
+                let changed = {
+                    let mut document = entry.document.lock().expect("Preview document");
+                    document.native_geometry.replace(geometry) != Some(geometry)
+                };
+                if changed {
+                    super::request_refresh(&entry, key, super::TEXT | super::AX);
+                }
+            }
+        }
         if disposition == FrameDisposition::DecodeFailed {
             failed(
                 key,
                 SurfaceError::Native("native Preview PNG decode failed".into()),
             );
         }
-        super::schedule_frame_ack(&entry, ack);
         Ok(())
     }
     fn input(&self, key: SurfaceKey, input: native::Input) -> Result<(), SurfaceError> {
@@ -109,9 +131,13 @@ impl Consumer for Effects {
             .expect("Preview document")
             .text_target
             .clone();
-        runtime()
-            .preview
-            .native(NativeTask::Input { key, input, focus })
+        let geometry = geometry(&entry)?;
+        runtime().preview.native(NativeTask::Input {
+            key,
+            input,
+            focus,
+            geometry,
+        })
     }
     fn accessibility(
         &self,
@@ -153,14 +179,9 @@ impl Consumer for Effects {
             .ok_or(SurfaceError::StaleGeneration)?;
         let browser = pages.browser.get().cloned().ok_or(SurfaceError::Disposed)?;
         let sessions = super::iframe_sessions(&pages, key.wc);
-        let zoom = runtime()
-            .registry
-            .lock()
-            .expect("registry")
-            .page(key.wc)
-            .map(|page| page.zoom)
-            .ok_or(SurfaceError::Disposed)?;
-        let mutating = matches!(&query, native::TextQuery::ScrollIntoView { .. });
+        let geometry = geometry(&entry)?
+            .ok_or_else(|| SurfaceError::Invalid("No displayed native frame".into()))?;
+        let mutating = query.mutates_page();
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         let job = tauri::async_runtime::spawn(async move {
             let result = async {
@@ -172,13 +193,16 @@ impl Consumer for Effects {
                     &snapshot,
                     node,
                     query,
-                    zoom,
+                    geometry,
                 )
                 .await
                 .map_err(|error| {
                     SurfaceError::Consumer(format!("{}: {}", error.code, error.message))
                 })?;
                 current(key)?;
+                if self::geometry(&entry)? != Some(geometry) {
+                    return Err(SurfaceError::StaleGeneration);
+                }
                 Ok(reply)
             }
             .await;
@@ -341,10 +365,14 @@ pub(super) async fn focus(key: SurfaceKey) -> Result<(), WireError> {
 pub(super) async fn text(
     entry: Arc<Entry>,
     snapshot: super::frame_scope::TextSnapshot,
+    geometry: native::FrameGeometry,
 ) -> Result<(), WireError> {
     ui(move || {
         let key = snapshot.state.key;
         current(key)?;
+        if self::geometry(&entry)? != Some(geometry) {
+            return Err(SurfaceError::StaleGeneration);
+        }
         VIEWS.with(|views| {
             let mut views = views.borrow_mut();
             let surface = views.get_mut(&key.view).ok_or(SurfaceError::Disposed)?;
@@ -362,10 +390,17 @@ pub(super) async fn text(
     })
     .await
 }
-pub(super) async fn accessibility(snapshot: Arc<native::AxSnapshot>) -> Result<(), WireError> {
+pub(super) async fn accessibility(
+    entry: Arc<Entry>,
+    snapshot: Arc<native::AxSnapshot>,
+    geometry: native::FrameGeometry,
+) -> Result<(), WireError> {
     ui(move || {
         let key = snapshot.key;
         current(key)?;
+        if self::geometry(&entry)? != Some(geometry) {
+            return Err(SurfaceError::StaleGeneration);
+        }
         VIEWS.with(|views| {
             let mut views = views.borrow_mut();
             let surface = views.get_mut(&key.view).ok_or(SurfaceError::Disposed)?;

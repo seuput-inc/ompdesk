@@ -77,6 +77,7 @@ impl AppMedia {
         Ok(mac)
     }
 
+    #[cfg(any(windows, test))]
     pub fn map(&self, origin: &str, source: &str) -> Result<String, String> {
         validate_media(source)?;
         let capability = hex(&self.mac(source)?.finalize().into_bytes());

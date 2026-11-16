@@ -50,6 +50,7 @@ fn view(partition: &str) -> Result<Webview, String> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn wait<T: Send + 'static>(
     view: &Webview,
     work: impl FnOnce(tauri::webview::PlatformWebview, Done<T>) + Send + 'static,

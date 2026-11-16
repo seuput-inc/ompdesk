@@ -40,6 +40,7 @@ struct Document {
     painting: bool,
     fps: u32,
     frame_pixels: Option<frames::Frame>,
+    native_geometry: Option<native::FrameGeometry>,
     last_paint: Option<Instant>,
     pending_ack: Option<i64>,
     navigation: navigation::Pending,
@@ -179,6 +180,7 @@ enum NativeTask {
     Input {
         key: native::SurfaceKey,
         input: native::Input,
+        geometry: Option<native::FrameGeometry>,
         focus: Option<Arc<frame_scope::FocusedTarget>>,
     },
     Accessibility {
@@ -918,6 +920,7 @@ async fn create(
                 painting: false,
                 fps: 60,
                 frame_pixels: None,
+                native_geometry: None,
                 last_paint: None,
                 pending_ack: None,
                 navigation: navigation::Pending::default(),
@@ -1295,6 +1298,7 @@ async fn resynchronize(browser: &Browser, pages: &Pages) {
             let mut document = entry.document.lock().expect("Preview document");
             document.context = None;
             document.frame_pixels = None;
+            document.native_geometry = None;
             document.debugger.take()
         };
         pages
@@ -2191,15 +2195,14 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
         return;
     };
     let result = async {
-        let zoom = runtime()
-            .registry
-            .lock()
-            .expect("registry")
-            .page(key.wc)
-            .map(|page| page.zoom)
-            .ok_or_else(|| WireError::new("gone", "native Preview owner ended"))?;
         match task {
-            NativeTask::Input { input, focus, .. } => {
+            NativeTask::Input {
+                input,
+                focus,
+                geometry,
+                ..
+            } => {
+                let input = input::from_surface(input, geometry)?;
                 let released = match &input {
                     native::Input::Mouse {
                         kind: native::MouseKind::Up,
@@ -2248,10 +2251,10 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                         }
                     };
                     let target = target::Target::focused(browser, focused, key);
-                    input::apply(&target, input, zoom).await?;
+                    input::apply(&target, input, 1.0).await?;
                 } else {
                     let target = target::Target::guarded(browser, &entry.page.session_id, key);
-                    input::apply(&target, input, zoom).await?;
+                    input::apply(&target, input, 1.0).await?;
                 }
                 if let Some(kind) = released {
                     wc_event(key.wc, "input-event", json!([{"type":kind}]));
@@ -2292,6 +2295,13 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
             }
             NativeTask::Refresh { .. } => {
                 let flags = entry.refresh_flags.swap(0, Ordering::SeqCst);
+                let Some(geometry) = surface::geometry(&entry)
+                    .map_err(|error| WireError::new("native-surface", error.to_string()))?
+                else {
+                    entry.refresh_flags.fetch_or(flags, Ordering::SeqCst);
+                    entry.refresh_queued.store(false, Ordering::SeqCst);
+                    return Ok(());
+                };
                 let sessions = iframe_sessions(pages, key.wc);
                 if flags & AX != 0 {
                     let snapshot = Arc::new(
@@ -2300,7 +2310,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                             &entry.page.session_id,
                             &sessions,
                             key,
-                            zoom,
+                            geometry,
                         )
                         .await?,
                     );
@@ -2309,7 +2319,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                     }
                     *entry.ax_snapshot.lock().expect("native AX snapshot") =
                         Some(Arc::clone(&snapshot));
-                    surface::accessibility(snapshot).await?;
+                    surface::accessibility(Arc::clone(&entry), snapshot, geometry).await?;
                 }
                 if flags & TEXT != 0 {
                     let marked = entry.document.lock().expect("Preview document").marked;
@@ -2318,7 +2328,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                         &entry.page.session_id,
                         &sessions,
                         key,
-                        zoom,
+                        geometry,
                         marked,
                     )
                     .await?;
@@ -2330,7 +2340,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                         document.selection = snapshot.state.selection;
                         document.marked = snapshot.state.marked;
                     }
-                    surface::text(Arc::clone(&entry), snapshot).await?;
+                    surface::text(Arc::clone(&entry), snapshot, geometry).await?;
                 }
                 entry.refresh_queued.store(false, Ordering::SeqCst);
                 if entry.refresh_flags.load(Ordering::SeqCst) != 0 {

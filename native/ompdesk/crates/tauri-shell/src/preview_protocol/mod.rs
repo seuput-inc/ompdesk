@@ -25,7 +25,6 @@ const MAX_MAPPED_URL: usize = mapping::MAX_SOURCE_URL * 3 + 512;
 struct Live {
     app_media: Option<Arc<Origin>>,
     preview: HashMap<String, Arc<Origin>>,
-    retiring: Vec<Arc<Origin>>,
     consumer: Option<GatewayConsumer>,
 }
 
@@ -68,7 +67,6 @@ impl Gateway {
             state: Mutex::new(State::Live(Live {
                 app_media: None,
                 preview: HashMap::new(),
-                retiring: Vec::new(),
                 consumer: None,
             })),
             slots: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
@@ -113,7 +111,7 @@ impl Gateway {
             ensure_alive(origin)?;
             return preview_transport(origin);
         }
-        if live.preview.len() + live.retiring.len() >= MAX_PARTITIONS {
+        if live.preview.len() >= MAX_PARTITIONS {
             return Err("Too many live Preview resource partitions".into());
         }
         let routes = PreviewOrigins::new(partition, self.origin_slots.clone())?;
@@ -194,6 +192,7 @@ impl Gateway {
         }
     }
 
+    #[cfg(any(windows, test))]
     pub async fn app_media_url(&self, partition: &str, original: &str) -> Result<String, String> {
         let mut state = self.state.lock().await;
         let live = active(&mut state)?;
@@ -283,34 +282,6 @@ impl Gateway {
         }
     }
 
-    /// Preview contexts release their own listeners. The fixed shared app media origin lasts until shutdown.
-    pub async fn close_partition(&self, partition: &str) -> Result<(), String> {
-        let partition = sessions::canonical(partition);
-        let origins = {
-            let mut state = self.state.lock().await;
-            let live = running(&mut state)?;
-            if let Some(origin) = live.preview.remove(partition) {
-                live.retiring.push(origin);
-            }
-            let origins: Vec<_> = live
-                .retiring
-                .iter()
-                .filter(|origin| origin.config.route.partition() == partition)
-                .cloned()
-                .collect();
-            for origin in &origins {
-                origin.cancel();
-            }
-            origins
-        };
-        let result = join_all(&origins).await;
-        if let State::Live(live) = &mut *self.state.lock().await {
-            live.retiring
-                .retain(|candidate| !origins.iter().any(|origin| Arc::ptr_eq(candidate, origin)));
-        }
-        result
-    }
-
     pub async fn shutdown(&self) -> Result<(), String> {
         let _shutdown = self.shutdown.lock().await;
         let origins = {
@@ -326,7 +297,6 @@ impl Gateway {
                         .app_media
                         .into_iter()
                         .chain(live.preview.into_values())
-                        .chain(live.retiring)
                         .collect();
                     for origin in &origins {
                         origin.cancel();

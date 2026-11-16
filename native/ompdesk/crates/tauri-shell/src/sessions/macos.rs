@@ -143,7 +143,7 @@ pub fn apply(view: tauri::webview::PlatformWebview, op: Operation, done: Done<()
                 let _: () = msg_send![webview, setCustomUserAgent: &*NSString::from_str(&agent)];
                 done(Ok(()));
             }
-            Operation::SetSpellLanguages(_) => done(Err(
+            Operation::SetSpellLanguages => done(Err(
                 "WKWebView has no public per-webview spellchecker language setter".into(),
             )),
             Operation::LearnWord(word) => {

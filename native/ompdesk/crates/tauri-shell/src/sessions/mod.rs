@@ -251,7 +251,7 @@ async fn native_apply(partition: &str, op: native::Operation) -> Result<(), Stri
     }
     if matches!(
         op,
-        native::Operation::ClearHttpCache | native::Operation::LearnWord(_)
+        native::Operation::ClearHttpCache | native::Operation::LearnWord(..)
     ) {
         views.truncate(1);
     }
@@ -495,8 +495,8 @@ async fn execute(call: &Call) -> Result<Value, Failure> {
                 })
                 .unwrap_or_default();
             let normalized = shell_core::spell::normalize(&requested);
-            updated.spell_languages = Some(normalized.clone());
-            Some(native::Operation::SetSpellLanguages(normalized))
+            updated.spell_languages = Some(normalized);
+            Some(native::Operation::SetSpellLanguages)
         }
         "addWordToSpellCheckerDictionary" => {
             let word = args["word"].as_str().unwrap_or("").trim().to_string();
@@ -506,7 +506,11 @@ async fn execute(call: &Call) -> Result<Value, Failure> {
                     message: "no word to add".into(),
                 });
             }
-            Some(native::Operation::LearnWord(word))
+            #[cfg(target_os = "macos")]
+            let operation = native::Operation::LearnWord(word);
+            #[cfg(windows)]
+            let operation = native::Operation::LearnWord();
+            Some(operation)
         }
         other => {
             return Err(Failure {

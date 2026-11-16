@@ -280,8 +280,8 @@ async fn real_node_gateway_loopback_and_credit() {
             None
         }
     };
-    let shutdown = gateway.shutdown().await;
     let browser_shutdown = browser.shutdown().await;
+    let shutdown = gateway.shutdown().await;
     let success = matches!(&outcome, Some(Ok(())));
     let quit = if success {
         stdin.lock().await.write_all(b"\"quit\"\n").await
@@ -716,6 +716,7 @@ async fn exercise(
     assert!(writing.join_next().await.unwrap().unwrap().is_err());
     fixture.event("cancel", Some("/credit")).await;
 
+    browser.shutdown().await.unwrap();
     let closing_origin = {
         let state = gateway.state.lock().await;
         let super::State::Live(live) = &*state else {
@@ -726,26 +727,26 @@ async fn exercise(
     let closed_port = closing_origin.port;
     let released_config = Arc::downgrade(&closing_origin.config);
     let join_barrier = closing_origin.hold_join().await;
-    let mut first_close = Box::pin(gateway.close_partition("visual-a"));
+    let mut first_close = Box::pin(gateway.shutdown());
     std::future::poll_fn(|cx| {
         assert!(first_close.as_mut().poll(cx).is_pending());
         std::task::Poll::Ready(())
     })
     .await;
     drop(first_close);
-    let mut retry_close = Box::pin(gateway.close_partition("visual-a"));
-    let mut concurrent_close = Box::pin(gateway.close_partition("visual-a"));
+    let mut retry_close = Box::pin(gateway.shutdown());
+    let mut concurrent_close = Box::pin(gateway.shutdown());
     std::future::poll_fn(|cx| {
         assert!(retry_close.as_mut().poll(cx).is_pending());
         assert!(concurrent_close.as_mut().poll(cx).is_pending());
         std::task::Poll::Ready(())
     })
     .await;
-    gateway.close_partition("visual-system").await.unwrap();
     assert!(
-        visual_b.is_live(),
-        "another partition must remain independent"
+        !visual_a.is_live(),
+        "shutdown cancels every partition before joining"
     );
+    assert!(!visual_b.is_live(), "shutdown includes the other partition");
     drop(join_barrier);
     let (retry, concurrent) = tokio::join!(retry_close, concurrent_close);
     retry.unwrap();
@@ -753,7 +754,7 @@ async fn exercise(
     drop(closing_origin);
     assert!(
         released_config.upgrade().is_none(),
-        "retirement retained origin resources"
+        "shutdown retained origin resources"
     );
     assert!(gateway.original_url("visual-a", &mapped).await.is_err());
     assert!(gateway.map_url("visual-a", &mapped).await.is_err());
@@ -763,10 +764,7 @@ async fn exercise(
     let ordinary = format!("http://127.0.0.1:{closed_port}/dev");
     assert!(!gateway.is_gateway_origin(&ordinary).await);
     assert_eq!(gateway.map_url("visual-a", &ordinary).await.unwrap(), None);
-    assert_eq!(
-        gateway.original_url("visual-a", &ordinary).await.unwrap(),
-        None
-    );
+    assert!(gateway.original_url("visual-a", &ordinary).await.is_err());
     let mut dev_server = tokio::task::JoinSet::new();
     dev_server.spawn(async move {
         let (mut socket, _) = reused.accept().await.unwrap();
@@ -782,10 +780,9 @@ async fn exercise(
     assert!(headers.starts_with("http/1.1 200"));
     assert_eq!(body, b"OK");
     dev_server.join_next().await.unwrap().unwrap();
-    // The context still exists; this checks stale receipt rejection, not context disposal.
     assert!(sessions::preview::protected_transport("visual-a").is_err());
     assert!(!visual_a.is_live());
-    assert!(visual_b.is_live());
+    assert!(!visual_b.is_live());
     assert!(
         TcpStream::connect(("127.0.0.1", Url::parse(&mapped).unwrap().port().unwrap()))
             .await

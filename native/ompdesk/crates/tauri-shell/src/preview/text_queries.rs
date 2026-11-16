@@ -1,6 +1,6 @@
-use crate::preview_surface::{
-    AxSnapshot, AxTarget, AxValue, Rect, TextQuery, TextRange, TextReply, TextUnit,
-};
+use crate::preview_surface::{AxSnapshot, AxTarget, AxValue, Rect, TextQuery, TextReply};
+#[cfg(windows)]
+use crate::preview_surface::{TextRange, TextUnit};
 use serde_json::{Value, json};
 use shell_core::wire::WireError;
 
@@ -64,6 +64,7 @@ fn contains_frame(tree: &Value, id: &str) -> bool {
             .is_some_and(|children| children.iter().any(|child| contains_frame(child, id)))
 }
 
+#[cfg(windows)]
 fn range(value: &Value) -> Result<TextRange, WireError> {
     let start = offset(&value[0])?;
     let end = offset(&value[1])?;
@@ -89,8 +90,8 @@ pub(super) async fn query(
     if ax.secure || matches!(ax.value, AxValue::Protected) {
         return Err(error("protected", "Protected text cannot be queried"));
     }
-    let mutates = matches!(&query, TextQuery::ScrollIntoView { .. });
-    let (request, child) = match query {
+    let mutates = query.mutates_page();
+    let (request, child): (Value, Option<AxTarget>) = match query {
         TextQuery::RangeRects { range } => (
             json!({"op":"rects","start":range.start,"length":range.length}),
             None,
@@ -105,7 +106,9 @@ pub(super) async fn query(
             }
             (json!({"op":"point","x":x / zoom,"y":y / zoom}), None)
         }
+        #[cfg(windows)]
         TextQuery::VisibleRanges => (json!({"op":"visible"}), None),
+        #[cfg(windows)]
         TextQuery::RangeFromChild { child } => {
             let child_ax = validate_target(snapshot, &child)?;
             if child_ax.secure || matches!(child_ax.value, AxValue::Protected) {
@@ -116,6 +119,7 @@ pub(super) async fn query(
             }
             (json!({"op":"child"}), Some(child))
         }
+        #[cfg(windows)]
         TextQuery::UnitBoundaries { unit } => (
             json!({"op":"unit","unit":match unit {
                 TextUnit::Character => "character", TextUnit::Word => "word", TextUnit::Line => "line",
@@ -123,6 +127,7 @@ pub(super) async fn query(
             }}),
             None,
         ),
+        #[cfg(windows)]
         TextQuery::ScrollIntoView {
             range,
             align_to_top,
@@ -229,6 +234,7 @@ pub(super) async fn query(
         } else {
             Some(offset(data)?)
         })),
+        #[cfg(windows)]
         Some("visible") => Ok(TextReply::Ranges(
             data.as_array()
                 .ok_or_else(|| error("cdp", "Invalid visible ranges"))?
@@ -236,11 +242,13 @@ pub(super) async fn query(
                 .map(range)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        #[cfg(windows)]
         Some("child") => Ok(TextReply::Range(if data.is_null() {
             None
         } else {
             Some(range(data)?)
         })),
+        #[cfg(windows)]
         Some("unit") => Ok(TextReply::Boundaries(
             data.as_array()
                 .ok_or_else(|| error("cdp", "Invalid text boundaries"))?
@@ -248,6 +256,7 @@ pub(super) async fn query(
                 .map(offset)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        #[cfg(windows)]
         Some("scroll") if data.as_bool() == Some(true) => Ok(TextReply::Scrolled),
         _ => Err(error("cdp", "Invalid text query result")),
     }
@@ -444,6 +453,7 @@ const QUERY_JS: &str = r#"function(q, child) {
 }"#;
 
 #[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use super::*;
 

@@ -49,35 +49,6 @@ impl Parent {
         Self::from_retained(window)
     }
 
-    #[cfg(test)]
-    pub(super) fn from_window(window: &NSWindow) -> Result<Self, SurfaceError> {
-        MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
-        // SAFETY: the borrowed NSWindow remains valid for the retain operation.
-        let window = unsafe { Retained::retain(std::ptr::from_ref(window).cast_mut()) }
-            .ok_or_else(|| SurfaceError::Native("null NSWindow".into()))?;
-        Self::from_retained(window)
-    }
-
-    #[cfg(test)]
-    pub(super) fn hidden_window() -> Result<Self, SurfaceError> {
-        use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindowStyleMask};
-        let mtm = MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
-        let _app = NSApplication::sharedApplication(mtm);
-        // SAFETY: this is an owned, hidden fixture window. Auto-release on close is disabled.
-        let window = unsafe {
-            let window = NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm),
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(640.0, 480.0)),
-                NSWindowStyleMask::Borderless,
-                NSBackingStoreType::Buffered,
-                false,
-            );
-            window.setReleasedWhenClosed(false);
-            window
-        };
-        Self::from_retained(window)
-    }
-
     fn from_retained(window: Retained<NSWindow>) -> Result<Self, SurfaceError> {
         let content = window
             .contentView()
@@ -147,13 +118,6 @@ impl Parent {
                 "NSWindow refused Preview focus".into(),
             ))
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_focused(&self, view: &PreviewView) -> bool {
-        self.window.firstResponder().is_some_and(|responder| {
-            std::ptr::from_ref(&*responder).cast::<()>() == std::ptr::from_ref(view).cast::<()>()
-        })
     }
 }
 
@@ -1031,60 +995,6 @@ impl PreviewView {
         self.setImage(None);
         self.removeFromSuperview();
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_bounds(&self) -> NSRect {
-        self.frame()
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_image_size(&self) -> Option<NSSize> {
-        self.image().map(|image| image.size())
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_key_down(&self, event: &NSEvent) {
-        self.keyDown(event);
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_set_marked_text(
-        &self,
-        text: &str,
-        selection: NSRange,
-        replacement: NSRange,
-    ) {
-        let text = NSString::from_str(text);
-        // SAFETY: the receiver implements this public NSTextInputClient selector.
-        unsafe {
-            let _: () = msg_send![self, setMarkedText: &*text, selectedRange: selection, replacementRange: replacement];
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_insert_text(&self, text: &str, replacement: NSRange) {
-        let text = NSString::from_str(text);
-        // SAFETY: the receiver implements this public NSTextInputClient selector.
-        unsafe {
-            let _: () = msg_send![self, insertText: &*text, replacementRange: replacement];
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_ax_element(&self, id: &str) -> Option<Retained<NSAccessibilityElement>> {
-        self.ivars()
-            .elements
-            .borrow()
-            .get(id)
-            .cloned()
-            .map(Retained::into_super)
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture_ax_press(element: &NSAccessibilityElement) -> bool {
-        // SAFETY: fixture elements are created as AxElement and implement this selector.
-        unsafe { msg_send![element, accessibilityPerformPress] }
     }
 
     fn forward(&self, input: Input) {
