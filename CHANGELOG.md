@@ -2,10 +2,12 @@
 
 ## [0.132.0] - 2026-11-16
 
-데스크톱 창을 Rust/CEF 셸로 교체하고, 기존 세션과 계정·원격 기능을 이어서 사용해요.
+데스크톱 창을 Electron 대신 Rust(Tauri 2)와 운영체제 기본 웹뷰로 바꿨어요. 기존 세션, 계정, 원격 기능과 설정은 그대로 이어서 써요.
 
 ### 바뀐 것
-- 창·메뉴·트레이 등 데스크톱 기능은 Rust/CEF 셸이 맡아요. 이번 첫 교체판은 기존 Node 서비스를 함께 사용하며, 나머지 Rust 전환은 이어서 진행해요.
+- 창·메뉴·트레이 등 데스크톱 기능은 Rust(Tauri 2.12)가 맡고, 화면은 macOS의 WebKit과 Windows의 WebView2로 그려요. 이번 첫 교체판은 기존 Node 서비스를 함께 사용하며, 나머지 Rust 전환은 이어서 진행해요.
+- 이제 macOS 14 이상이 필요해요.
+- Preview 패널은 앱에 함께 들어 있는 서명된 Chromium 계열 브라우저(Brave)를 별도 프로필로 실행해서 보여 줘요.
 - 기존 앱의 자동 업데이트와 사용자 데이터 경로를 유지해요. 시작에 실패한 교체판은 이전 앱으로 되돌려요.
 - 셸의 이벤트 연결이 바뀌거나 버퍼에서 이벤트가 빠지면 목록·대화·대기 요청을 다시 읽어요. 페이지를 새로고침하거나 초안·대기 메시지를 지우지 않아요.
 - 종료 중에는 새 core 실행을 막고 이미 시작한 프로세스의 종료를 기다려요. 중첩된 중지 요청도 같은 종료 결과를 기다려요.
@@ -13,10 +15,12 @@
 
 <!-- en -->
 
-The desktop window now uses a Rust/CEF shell while keeping existing sessions, accounts and remote features.
+The desktop window now runs on Rust (Tauri 2) and the operating system's web view instead of Electron. Existing sessions, accounts, remote features and settings carry over.
 
 ### Changed
-- Rust/CEF handles desktop windows, menus and the tray. This first replacement still uses the existing Node services; the remaining Rust migration continues separately.
+- Rust (Tauri 2.12) handles desktop windows, menus and the tray; the page is drawn by WebKit on macOS and WebView2 on Windows. This first replacement still uses the existing Node services; the remaining Rust migration continues separately.
+- macOS 14 or newer is now required.
+- The Preview panel runs a bundled, signed Chromium-based browser (Brave) in a separate profile.
 - Existing automatic updates and user-data paths are retained. A replacement that fails to start rolls back to the previous app.
 - A replaced shell event connection or an event-buffer gap triggers authoritative reads of lists, conversations and pending requests, without reloading the page or clearing drafts and queued messages.
 - Shutdown refuses new core launches and waits for processes already started. Overlapping stop requests wait for the same exit result.

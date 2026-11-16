@@ -107,7 +107,7 @@ impl Parent {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         view.setFrame(self.frame(bounds));
         view.ivars().image_geometry.set(None);
-        view.setNeedsDisplay(true);
+        NSView::setNeedsDisplay(&view, true);
         if bounds.rect.width > 0.0 && bounds.rect.height > 0.0 {
             let geometry = view.ivars().shared.publisher().geometry()?;
             view.ivars().image_geometry.set(geometry);
@@ -916,7 +916,7 @@ impl PreviewView {
         self.ivars().elements.borrow_mut().clear();
         self.ivars().image_geometry.set(None);
         self.setImage(None);
-        self.setNeedsDisplay(true);
+        NSView::setNeedsDisplay(self, true);
     }
 
     pub(super) fn update_text_input(&self) {
@@ -1023,7 +1023,7 @@ impl PreviewView {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         self.ivars().image_geometry.set(Some(geometry));
         self.setImage(Some(image));
-        self.setNeedsDisplay(true);
+        NSView::setNeedsDisplay(self, true);
         self.displayIfNeeded();
         Ok(())
     }

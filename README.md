@@ -105,7 +105,7 @@ OMPdesk, omp, the CLIs of your connected accounts, and omp's plugins, skills and
 
 ## Build from source
 
-Needs Bun, Git and omp 18.18.9 or newer.
+Needs Bun, Git, Rust 1.95 (selected by `native/ompdesk/rust-toolchain.toml`), and omp 18.18.9 or newer.
 
 ```bash
 git clone https://github.com/seuput-inc/ompdesk.git
@@ -115,6 +115,8 @@ bun run dev
 ```
 
 Development, checks and release rules are in [AGENTS.md](AGENTS.md); changes per version in [CHANGELOG.md](CHANGELOG.md). To re-record the media above: `bun run readme:media`.
+
+The Rust/CEF desktop shell still runs the Node main process and services. The React page and stock omp extension remain TypeScript.
 
 ## Contributing · Security · License
 

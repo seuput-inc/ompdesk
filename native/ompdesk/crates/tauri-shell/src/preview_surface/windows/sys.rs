@@ -1217,7 +1217,7 @@ mod raw_interfaces {
     use windows::Win32::System::Com::SAFEARRAY;
     use windows::Win32::System::Variant::VARIANT;
     use windows::Win32::UI::Accessibility::*;
-    use windows::core::{BOOL, BSTR, HRESULT, IUnknown};
+    use windows::core::{BOOL, BSTR, HRESULT, IUnknown, IUnknown_Vtbl};
 
     #[windows::core::interface("d6dd68d1-86fd-4332-8666-9abedea2d24c")]
     pub(super) unsafe trait RawSimple: IUnknown {

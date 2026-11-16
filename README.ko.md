@@ -105,7 +105,7 @@ OMPdesk, omp, 연결한 계정의 도구 CLI, omp의 플러그인·스킬·MCP �
 
 ## 소스에서 실행하기
 
-Bun, Git, omp 18.18.9 이상이 필요해요.
+Bun, Git, Rust 1.95(`native/ompdesk/rust-toolchain.toml`에서 선택), omp 18.18.9 이상이 필요해요.
 
 ```bash
 git clone https://github.com/seuput-inc/ompdesk.git
@@ -115,6 +115,8 @@ bun run dev
 ```
 
 개발·검사·배포 규칙은 [AGENTS.md](AGENTS.md), 버전별 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있어요. 위 미디어를 다시 녹화하려면 `bun run readme:media`를 실행하세요.
+
+데스크톱 창은 Rust/CEF 셸을 사용해요. 이번 첫 셸 교체판은 기존 Node 메인 프로세스와 서비스를 유지하며, React 화면과 순정 omp 확장은 TypeScript로 남아요.
 
 ## 기여 · 보안 · 라이선스
 
