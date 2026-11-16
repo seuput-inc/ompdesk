@@ -38,7 +38,7 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native, preview-browser]
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs]
         default: all
   push:
     branches: [omp/agent/rust-batch-shell]
@@ -74,7 +74,7 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: shell-batch-checks.yml
-      mac: true
+      mac: ${{ inputs.only != 'tauri-inputs' }}
       mac-refs: ${{ vars.MAC_REFS }}
 
   shell-mac:
@@ -465,7 +465,7 @@ jobs:
 
   tauri-package-inputs:
     name: tauri-package-inputs (ubuntu)
-    if: github.event_name == 'workflow_dispatch' && inputs.only == 'tauri-native'
+    if: github.event_name == 'workflow_dispatch' && (inputs.only == 'tauri-native' || inputs.only == 'tauri-inputs')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -482,6 +482,14 @@ jobs:
           workspaces: |
             native/ompdesk/crates/tauri-shell
             native/ompdesk/crates/shell-preview
+      - name: Resolve only the newly declared Tauri dependencies
+        if: inputs.only == 'tauri-inputs'
+        run: cargo metadata --format-version 1 --no-deps --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml > tauri-input-metadata.json
+      - name: Check the changed TypeScript consumers
+        if: inputs.only == 'tauri-inputs'
+        run: |
+          bunx biome check scripts/tauri-native-smoke.ts
+          bun run check:types
       - name: Generate the actual linked-crate notices
         run: |
           bun scripts/gen-crate-notices.ts tauri preview
@@ -497,5 +505,7 @@ jobs:
             LICENSES/ompdesk-tauri-dependencies.txt
             LICENSES/ompdesk-preview-dependencies.txt
             THIRD_PARTY_NOTICES.txt
+            native/ompdesk/crates/tauri-shell/Cargo.lock
+            tauri-input-metadata.json
           if-no-files-found: error
           retention-days: 7
