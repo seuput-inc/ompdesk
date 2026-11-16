@@ -1,10 +1,11 @@
-/** Stage the unmodified public Brave release; --check admits an existing cache without downloading or launching it. */
+/** Stage the unmodified public Brave release; --check admits an existing cache without downloading it; nothing is ever launched. */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
+import zlib from "node:zlib";
 import pin from "../resources/preview-browser.json";
 
 const ROOT = path.resolve(import.meta.dir, "..", "resources", "preview-browser");
@@ -12,10 +13,11 @@ const RECORD = "provenance.json";
 const NOTICES = "notices";
 const MPL_FILE = `${NOTICES}/LICENSE.MPL-2.0.txt`;
 const CREDITS_FILE = `${NOTICES}/brave-credits.html`;
-// Chromium's credits page lists one <div class="product"> per bundled component; the pinned 157 build
-// is expected to carry well over a hundred. Lower bound is set from the local darwin-arm64 run (see MIN_CREDIT_SECTIONS use).
-const MIN_CREDIT_SECTIONS = 50;
-const MIN_CREDITS_BYTES = 256 * 1024;
+// Lower bounds for the credits page, from the observed pinned build: Brave 1.99.57 win32-x64 resources.pak
+// (resource id 31071, brotli) inflates to 8,307,485 bytes with 784 <div class="product"> license sections.
+// Set well under that so a platform build may drop components, yet far above a stub or wrong resource.
+const MIN_CREDIT_SECTIONS = 700;
+const MIN_CREDITS_BYTES = 4 * 1024 * 1024;
 type TargetKey = keyof typeof pin.targets;
 type Target = (typeof pin.targets)[TargetKey];
 interface Signature {
@@ -152,8 +154,9 @@ async function extractMac(archive: string, vendor: string, workspace: string): P
 		mounted = true;
 		const source = path.join(mount, "Brave Browser.app");
 		if (!(await fsp.lstat(source)).isDirectory()) throw new Error("Official DMG does not contain Brave Browser.app");
-		run("/usr/bin/codesign", ["--verify", "--deep", "--strict", source]);
-		run("/usr/bin/ditto", ["--rsrc", "--extattr", source, path.join(vendor, "Brave Browser.app")]);
+		// The mounted DMG's app carries Finder xattrs/resource forks that codesign rejects as detritus; the vendor
+		// signature does not cover them. Copy without them, then signature() verifies the copy (--deep --strict, Team ID).
+		run("/usr/bin/ditto", ["--noextattr", "--norsrc", "--noqtn", source, path.join(vendor, "Brave Browser.app")]);
 	} catch (error) {
 		failures.push(error);
 	}
@@ -274,42 +277,66 @@ async function fetchMpl(): Promise<string> {
 	return text;
 }
 
-/** Validates the rendered brave://credits document; returns its license section count. */
+/** Validates the credits document; returns its license section count. */
 function creditsSections(html: string): number {
-	if (Buffer.byteLength(html) < MIN_CREDITS_BYTES) throw new Error("Rendered brave://credits is implausibly small");
-	if (!/brave/i.test(html)) throw new Error("Rendered brave://credits does not mention Brave");
+	if (Buffer.byteLength(html) < MIN_CREDITS_BYTES) throw new Error("Brave credits page is implausibly small");
+	if (!/brave/i.test(html)) throw new Error("Brave credits page does not mention Brave");
 	const sections = (html.match(/class="product"/g) ?? []).length;
 	if (sections < MIN_CREDIT_SECTIONS)
-		throw new Error(
-			`Rendered brave://credits has ${sections} license sections, expected at least ${MIN_CREDIT_SECTIONS}`,
-		);
+		throw new Error(`Brave credits page has ${sections} license sections, expected at least ${MIN_CREDIT_SECTIONS}`);
 	return sections;
 }
 
-/** Renders brave://credits from the verified staged binary: headless, throwaway profile, offline. */
-function renderCredits(stage: string, target: Target, workspace: string): string {
-	const profile = path.join(workspace, "credits-profile");
-	fs.mkdirSync(profile, { recursive: true });
-	const out = spawnSync(
-		path.join(stage, target.binary),
-		[
-			"--headless=new",
-			`--user-data-dir=${profile}`,
-			"--no-first-run",
-			"--no-default-browser-check",
-			"--disable-gpu",
-			"--disable-background-networking",
-			"--disable-component-update",
-			"--disable-sync",
-			"--virtual-time-budget=15000",
-			"--dump-dom",
-			"brave://credits",
-		],
-		{ encoding: "utf8", timeout: 120_000, maxBuffer: 128 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
-	);
-	if (out.error || out.status !== 0)
-		throw new Error(`Rendering brave://credits failed: ${out.error ?? `exit ${out.status}`}`);
-	return out.stdout;
+/** Resources of a Chromium .pak (version 5): header, (id,offset) table with a closing sentinel, then aliases. */
+function* pakResources(pak: Buffer): Generator<Buffer> {
+	if (pak.length < 12 || pak.readUInt32LE(0) !== 5) throw new Error("Unsupported Chromium resource pack version");
+	const count = pak.readUInt16LE(8);
+	const tableEnd = 12 + (count + 1) * 6;
+	if (tableEnd > pak.length) throw new Error("Truncated Chromium resource pack table");
+	for (let i = 0; i < count; i++) {
+		const start = pak.readUInt32LE(14 + i * 6);
+		const end = pak.readUInt32LE(14 + (i + 1) * 6);
+		if (start < tableEnd || start > end || end > pak.length) throw new Error("Corrupt Chromium resource pack entry");
+		yield pak.subarray(start, end);
+	}
+}
+
+/** Chromium stores resources raw, gzip (1f 8b), or brotli (1e 9b + uint48 LE decompressed size + stream). */
+function pakInflate(data: Buffer): Buffer {
+	if (data[0] === 0x1f && data[1] === 0x8b) return zlib.gunzipSync(data);
+	if (data[0] === 0x1e && data[1] === 0x9b && data.length > 8) {
+		const inflated = zlib.brotliDecompressSync(data.subarray(8));
+		if (inflated.length !== data.readUIntLE(2, 6)) throw new Error("Brotli resource size differs from its header");
+		return inflated;
+	}
+	return data;
+}
+
+/** The credits HTML (about_credits.html) embedded in the staged build's own resources.pak; nothing is launched. */
+async function extractCredits(vendor: string): Promise<string> {
+	const paks: string[] = [];
+	async function walk(folder: string): Promise<void> {
+		for (const entry of await fsp.readdir(folder, { withFileTypes: true })) {
+			const file = path.join(folder, entry.name);
+			if (entry.isDirectory()) await walk(file);
+			else if (entry.isFile() && entry.name === "resources.pak") paks.push(file);
+		}
+	}
+	await walk(vendor);
+	const found: string[] = [];
+	for (const pak of paks) {
+		for (const resource of pakResources(await fsp.readFile(pak))) {
+			const text = pakInflate(resource).toString("utf8");
+			if (
+				/^(?:<!--[^>]*-->)?\s*<!doctype html>/i.test(text) &&
+				text.includes('class="product"') &&
+				/brave/i.test(text)
+			)
+				found.push(text);
+		}
+	}
+	if (found.length !== 1) throw new Error(`Expected exactly one credits page in resources.pak, found ${found.length}`);
+	return found[0];
 }
 
 function sourceOffer(payload: Payload, notices: string[]): string {
@@ -409,10 +436,8 @@ export async function stagePreviewBrowser(): Promise<void> {
 		let creditsSha256: string | undefined;
 		if (!payload.licenses.length || !payload.thirdPartyNotices.length) {
 			// Official archives carry no loose notice files: ship Brave's MPL text and the binary's own credits page.
-			const html = renderCredits(stage, target, workspace);
+			const html = await extractCredits(path.join(stage, "vendor"));
 			const sections = creditsSections(html);
-			if ((await inspect(stage, target)).treeSha256 !== payload.treeSha256)
-				throw new Error("Launching the browser modified the vendor payload");
 			await fsp.mkdir(path.join(stage, NOTICES));
 			await fsp.writeFile(path.join(stage, MPL_FILE), await fetchMpl(), { flag: "wx" });
 			await fsp.writeFile(path.join(stage, CREDITS_FILE), html, { flag: "wx" });
