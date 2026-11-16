@@ -829,7 +829,9 @@ describe("webContents", () => {
 		fake.answers.set("wc.cdp.send", () => ({ result: {} }));
 		for (const factor of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
 			webContents.setZoomFactor(factor);
-			expect(() => webContents.sendInputEvent({ type: "mouseDown", x: 1, y: 2, button: "left" })).toThrow(RangeError);
+			expect(() => webContents.sendInputEvent({ type: "mouseDown", x: 1, y: 2, button: "left" })).toThrow(
+				RangeError,
+			);
 			expect(() => webContents.sendInputEvent({ type: "mouseWheel", x: 1, y: 2, deltaY: 3 })).toThrow(RangeError);
 		}
 		webContents.sendInputEvent({ type: "keyDown", keyCode: "a" });
