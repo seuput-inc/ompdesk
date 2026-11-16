@@ -109,17 +109,6 @@ impl PageInitializer for Initializer {
     }
 }
 
-pub async fn context_for(partition: &str) -> Result<Partition, String> {
-    let (tx, rx) = oneshot::channel();
-    super::queue(partition, true)?
-        .send(Command::Context(tx))
-        .map_err(|_| "session queue closed")?;
-    let context = rx
-        .await
-        .map_err(|_| "session context creation was dropped".to_string())??;
-    Ok(context)
-}
-
 pub(super) async fn ensure_context(partition: &str) -> Result<Partition, String> {
     if !super::with(|r| Ok(r.get(partition)?.storage == Storage::Memory))? {
         return Err("an app WebView partition is not a Preview BrowserContext".into());
@@ -266,7 +255,7 @@ pub(super) async fn ensure_page_context(partition: &str) -> Result<Partition, St
     Ok(Partition { context_id })
 }
 
-/// The context for one actual Preview page; see `ensure_page_context`. `context_for` stays the shared one.
+/// The context for one actual Preview page; see `ensure_page_context`.
 pub async fn page_context(partition: &str) -> Result<Partition, String> {
     let (tx, rx) = oneshot::channel();
     super::queue(partition, true)?

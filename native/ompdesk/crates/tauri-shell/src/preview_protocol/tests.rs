@@ -460,7 +460,7 @@ async fn exercise(
         .await
         .unwrap()
         .unwrap();
-    let context = sessions::preview::context_for("visual-a").await.unwrap();
+    let context = sessions::preview::page_context("visual-a").await.unwrap();
     let page = browser
         .create_page(
             &context,
@@ -537,6 +537,9 @@ async fn exercise(
         }
     }
     page.close().await.unwrap();
+    sessions::preview::release_page_context("visual-a", &context)
+        .await
+        .unwrap();
     assert!(
         navigation
             .approved
