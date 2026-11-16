@@ -125,9 +125,16 @@ pub(crate) fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<t
             }
             .await;
             responder.respond(result.unwrap_or_else(|error| {
+                // Which check refused it, and the request's scheme and host (the path holds a capability token).
                 crate::log::log(
                     "media.native.denied",
-                    serde_json::json!({"code":error.code}),
+                    serde_json::json!({
+                        "code": error.code,
+                        "message": error.message,
+                        "scheme": request.uri().scheme_str(),
+                        "host": request.uri().authority().map(|authority| authority.as_str()),
+                        "webview": label,
+                    }),
                 );
                 tauri::http::Response::builder()
                     .status(tauri::http::StatusCode::FORBIDDEN)
