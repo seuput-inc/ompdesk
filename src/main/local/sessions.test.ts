@@ -77,6 +77,27 @@ describe("get_transcript_page", () => {
 		);
 	});
 
+	it("reads a fresh tail again when a live commit lands between its metadata and its page, up to four reads", async () => {
+		const page = handlers.get_transcript_page as (
+			command: Record<string, unknown>,
+			ctx: LocalCommandContext,
+		) => Promise<MessagesPage>;
+		// The leaf moves between the first read's two bridge requests only.
+		let moves = 2;
+		const { ctx, requested } = pagedBridge(chain(10), () => (moves-- > 0 ? `moved${moves}` : "u9"));
+		const tail = await page({ type: "get_transcript_page", fromEnd: true, limit: 200 }, ctx);
+		expect(tail.messages.at(-1)?.entryId).toBe("u9");
+		expect(requested).toHaveLength(4);
+
+		// A transcript that moves under every read still ends in the stale answer, after four reads.
+		let leaf = 0;
+		const { ctx: busy, requested: busyRequests } = pagedBridge(chain(10), () => `leaf${leaf++}`);
+		await expect(page({ type: "get_transcript_page", fromEnd: true, limit: 200 }, busy)).rejects.toMatchObject({
+			code: "stale_cursor",
+		});
+		expect(busyRequests).toHaveLength(8);
+	});
+
 	it("loads the tail then preceding pages with snapshot-bound cursors", async () => {
 		let leaf = "u1499";
 		const { ctx, requested } = pagedBridge(chain(1500), () => leaf);
