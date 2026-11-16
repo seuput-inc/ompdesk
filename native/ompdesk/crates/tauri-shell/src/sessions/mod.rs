@@ -47,9 +47,10 @@ pub fn init(user_data: PathBuf) -> Result<(), String> {
 }
 
 fn with<R>(f: impl FnOnce(&mut Registry) -> Result<R, String>) -> Result<R, String> {
-    f(&mut registry()?
+    let mut registry = registry()?
         .lock()
-        .map_err(|_| "session registry poisoned")?)
+        .map_err(|_| "session registry poisoned".to_string())?;
+    f(&mut registry)
 }
 
 pub fn policy(partition: &str) -> Result<Policy, String> {

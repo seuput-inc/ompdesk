@@ -252,7 +252,7 @@ fn apply(id: u64, frame: Frame) -> bool {
             let response = NSHTTPURLResponse::initWithURL_statusCode_HTTPVersion_headerFields(
                 NSHTTPURLResponse::alloc(),
                 &url,
-                status.into(),
+                status as isize,
                 Some(&NSString::from_str("HTTP/1.1")),
                 Some(&fields),
             );
