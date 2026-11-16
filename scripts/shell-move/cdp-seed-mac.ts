@@ -1,10 +1,19 @@
-// bun cdp-seed-mac.ts <port> [read|quit|shot <file>]: in the released app's own page, save a stand-in update token through its
+// bun cdp-seed-mac.ts <port> [read|quit|shot <file>|shots <conversation> <language> <token>]: in the released app's own page, save a stand-in update token through its
 // own IPC (main encrypts it with safeStorage), write file:// Local Storage keys, set a Settings preference through
 // `prefs.set` and add a stock session file the app lists as a conversation. Prints one JSON line.
-// `shot <file>` saves a PNG of the page (Page.captureScreenshot) with the seeded conversation opened when the page shows it.
+// `shot <file>` saves a PNG of the page (Page.captureScreenshot), the seeded conversation opened when the page shows it (best effort).
+// `shots <conversation> <language> <token>` saves three, each asserted on the page first (seed-state.ts `takeSeedShots`): the seeded
+// conversation open, Settings on the reply language, Settings on the stored update token.
 import { writeFileSync } from "node:fs";
 import { type Browser, chromium, type Page } from "playwright";
-import { FIND_SEED_SESSION, OPEN_SEED_SESSION, PNG_MAGIC, SEED_REPLY_LANGUAGE, writeSeedSession } from "./seed-state";
+import {
+	FIND_SEED_SESSION,
+	PNG_MAGIC,
+	SEED_REPLY_LANGUAGE,
+	SHOW_SEED_CONVERSATION,
+	takeSeedShots,
+	writeSeedSession,
+} from "./seed-state";
 
 const mode = process.argv[3] ?? "seed";
 const port = process.argv[2];
@@ -65,15 +74,27 @@ if (mode === "quit") {
 	console.log(JSON.stringify({ quit: "requested", transport: "disconnected" }));
 	process.exit(0);
 }
-if (mode === "shot") {
-	const file = process.argv[4];
-	if (!file) throw new Error("shot needs a file");
-	await page.evaluate(OPEN_SEED_SESSION).catch(() => false);
-	await new Promise(r => setTimeout(r, 2_000));
+const screenshot = async (file: string): Promise<void> => {
 	const png = await page.screenshot({ type: "png" });
 	if (!png.subarray(0, 8).equals(PNG_MAGIC)) throw new Error("the old app's screenshot was not a PNG");
 	writeFileSync(file, png);
-	console.log(JSON.stringify({ shot: file, bytes: png.length, href: page.url() }));
+};
+if (mode === "shot") {
+	const file = process.argv[4];
+	if (!file) throw new Error("shot needs a file");
+	const shown = await page.evaluate(SHOW_SEED_CONVERSATION).catch(error => ({ ok: false, why: String(error) }));
+	await screenshot(file);
+	console.log(JSON.stringify({ shot: file, shown, href: page.url() }));
+	process.exit(0);
+}
+if (mode === "shots") {
+	const [conversation, language, token] = process.argv.slice(4);
+	if (!conversation || !language || !token) throw new Error("shots needs three files");
+	const taken = await takeSeedShots(
+		{ evaluate: expression => page.evaluate(expression), screenshot },
+		{ conversation, language, token },
+	);
+	console.log(JSON.stringify({ shots: [conversation, language, token], taken, href: page.url() }));
 	process.exit(0);
 }
 if (mode === "read") {
