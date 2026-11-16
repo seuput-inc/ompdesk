@@ -181,9 +181,13 @@ export function assembleBundle(
 		fail("out/ has no main/index.js; run `bun run build`");
 	fs.mkdirSync(appDir, { recursive: true });
 	fs.writeFileSync(path.join(appDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+	// The CEF shell's preload (out/preload/shell.js) is not part of a Tauri bundle; the host injects out/preload/tauri.js.
+	const cefPreload = path.join(repo, "out", "preload", "shell.js");
 	fs.cpSync(path.join(repo, "out"), path.join(appDir, "out"), {
 		recursive: true,
-		filter: source => ![".build-stamp.json", ".used"].includes(path.basename(source)),
+		filter: source =>
+			![".build-stamp.json", ".used"].includes(path.basename(source)) &&
+			!(runtime === "tauri" && source === cefPreload),
 	});
 	return app;
 }

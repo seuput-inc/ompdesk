@@ -25,6 +25,8 @@ files:
   - "!out/.build-stamp.json"
   # scripts/out-snapshot.ts's marker of the build a Playwright run last used; the app never reads it.
   - "!out/.used"
+  # The CEF shell's preload; the Tauri host injects out/preload/tauri.js (release.yml checks shell.js is absent).
+  - "!out/preload/shell.js"
 extraResources:
   - from: resources/gui-bridge
     to: gui-bridge

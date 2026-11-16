@@ -109,8 +109,14 @@ $ErrorActionPreference = 'Stop'
 `;
 
 function powershell(script: string, env: Record<string, string>): string {
+	// A PSModulePath inherited from PowerShell 7 (a pwsh step, or a pwsh parent) points Windows PowerShell 5.1 at
+	// PowerShell 7's Microsoft.PowerShell.Security, which it cannot load ("Get-AuthenticodeSignature ... could not be
+	// loaded"); without the variable it uses its own module path.
+	const inherited = Object.fromEntries(
+		Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"),
+	);
 	return run("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_PREFIX + script], {
-		...process.env,
+		...inherited,
 		...env,
 	});
 }
