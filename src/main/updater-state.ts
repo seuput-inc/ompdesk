@@ -213,29 +213,28 @@ export async function stageBundleFromDmg(options: StageBundleOptions): Promise<s
 		} catch (error) {
 			operationFailed = true;
 			operationError = error;
-		} finally {
-			const detachErrors: unknown[] = [];
-			for (const args of [
-				["detach", mountPoint],
-				["detach", "-force", mountPoint],
-			]) {
-				try {
-					const result = await run("/usr/bin/hdiutil", args);
-					if (result.ok) {
-						detached = true;
-						break;
-					}
-					detachErrors.push(new StageBundleError("mount", `hdiutil ${args.join(" ")} failed`));
-				} catch (error) {
-					detachErrors.push(error);
+		}
+		const detachErrors: unknown[] = [];
+		for (const args of [
+			["detach", mountPoint],
+			["detach", "-force", mountPoint],
+		]) {
+			try {
+				const result = await run("/usr/bin/hdiutil", args);
+				if (result.ok) {
+					detached = true;
+					break;
 				}
+				detachErrors.push(new StageBundleError("mount", `hdiutil ${args.join(" ")} failed`));
+			} catch (error) {
+				detachErrors.push(error);
 			}
-			if (!detached) {
-				throw new AggregateError(
-					operationFailed ? [operationError, ...detachErrors] : detachErrors,
-					"Could not detach the update disk image",
-				);
-			}
+		}
+		if (!detached) {
+			throw new AggregateError(
+				operationFailed ? [operationError, ...detachErrors] : detachErrors,
+				"Could not detach the update disk image",
+			);
 		}
 		if (operationFailed) throw operationError;
 	} catch (error) {

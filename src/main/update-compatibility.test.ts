@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor";
 import { describe, expect, it } from "vitest";
-import { releaseUpdateProvider as frozenProvider } from "./update-release.fixtures/v0.131.0/update-provider";
-import { parseUpdateMetadata as parseFrozenMetadata } from "./update-release.fixtures/v0.131.0/update-release";
 import { type ReleaseFeed, releaseUpdateProvider } from "./update-provider";
 import { UPDATE_COMPATIBILITY_ERROR, UPDATE_METADATA_ERROR } from "./update-release";
+import { releaseUpdateProvider as frozenProvider } from "./update-release.fixtures/v0.131.0/update-provider";
+import { parseUpdateMetadata as parseFrozenMetadata } from "./update-release.fixtures/v0.131.0/update-release";
 
 const API = "https://api.github.com/repos/seuput-inc/ompdesk";
 const digest = (value: string) => createHash("sha512").update(value).digest("base64");
