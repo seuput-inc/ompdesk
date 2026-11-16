@@ -846,11 +846,9 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
 }
 fn exit_after_preview(code: i32) {
     tauri::async_runtime::spawn(async move {
-        let settled = async {
-            runtime().preview.shutdown().await?;
-            runtime().gateway.shutdown().await
-        }
-        .await;
+        let settled =
+            preview::cleanup::settle(runtime().preview.shutdown(), runtime().gateway.shutdown())
+                .await;
         let code = match settled {
             Ok(()) => code,
             Err(error) => {

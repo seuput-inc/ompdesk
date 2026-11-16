@@ -97,32 +97,21 @@ impl Consumer for Effects {
                 SurfaceError::Native("native Preview PNG decode failed".into()),
             );
         }
-        let page = Arc::clone(&entry.page);
-        let (done, finished) = oneshot::channel();
-        {
-            let mut tasks = entry
-                .surface_ack_tasks
-                .lock()
-                .expect("native frame ACK tasks");
-            tasks.retain_mut(|task| {
-                matches!(task.try_recv(), Err(oneshot::error::TryRecvError::Empty))
-            });
-            tasks.push(finished);
-        }
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = page.ack_frame(ack).await {
-                crate::log::log(
-                    "preview.frame.ack",
-                    serde_json::json!({"error":error.to_string()}),
-                );
-            }
-            let _ = done.send(());
-        });
+        super::schedule_frame_ack(&entry, ack);
         Ok(())
     }
     fn input(&self, key: SurfaceKey, input: native::Input) -> Result<(), SurfaceError> {
         current(key)?;
-        runtime().preview.native(NativeTask::Input { key, input })
+        let entry = self.entry.upgrade().ok_or(SurfaceError::Disposed)?;
+        let focus = entry
+            .document
+            .lock()
+            .expect("Preview document")
+            .text_target
+            .clone();
+        runtime()
+            .preview
+            .native(NativeTask::Input { key, input, focus })
     }
     fn accessibility(
         &self,
@@ -186,7 +175,9 @@ impl Consumer for Effects {
                     zoom,
                 )
                 .await
-                .map_err(|error| SurfaceError::Consumer(error.to_string()))?;
+                .map_err(|error| {
+                    SurfaceError::Consumer(format!("{}: {}", error.code, error.message))
+                })?;
                 current(key)?;
                 Ok(reply)
             }
@@ -347,9 +338,12 @@ pub(super) async fn focus(key: SurfaceKey) -> Result<(), WireError> {
     })
     .await
 }
-pub(super) async fn text(state: native::TextInputState) -> Result<(), WireError> {
+pub(super) async fn text(
+    entry: Arc<Entry>,
+    snapshot: super::frame_scope::TextSnapshot,
+) -> Result<(), WireError> {
     ui(move || {
-        let key = state.key;
+        let key = snapshot.state.key;
         current(key)?;
         VIEWS.with(|views| {
             let mut views = views.borrow_mut();
@@ -357,7 +351,13 @@ pub(super) async fn text(state: native::TextInputState) -> Result<(), WireError>
             if surface.key() != key {
                 return Err(SurfaceError::StaleGeneration);
             }
-            surface.set_text_input_state(state)
+            entry.document.lock().expect("Preview document").text_target =
+                snapshot.target.map(Arc::new);
+            let result = surface.set_text_input_state(snapshot.state);
+            if result.is_err() {
+                entry.document.lock().expect("Preview document").text_target = None;
+            }
+            result
         })
     })
     .await
@@ -381,11 +381,18 @@ pub(super) async fn dispose(key: SurfaceKey) -> Result<(), WireError> {
     ui(move || {
         let result = VIEWS.with(|views| {
             let mut views = views.borrow_mut();
-            if views
-                .get(&key.view)
-                .is_some_and(|surface| surface.key() != key)
+            if let Some(surface) = views.get(&key.view)
+                && surface.key() != key
             {
-                return Err(SurfaceError::StaleGeneration);
+                let registry = runtime().registry.lock().expect("registry");
+                let closing_owner = registry.page(key.wc).is_some_and(|page| {
+                    page.state == crate::registry::PageState::Closing
+                        && matches!(page.kind, Kind::PreviewView { view, .. } if view == key.view)
+                        && surface.key().wc == key.wc
+                });
+                if !closing_owner {
+                    return Err(SurfaceError::StaleGeneration);
+                }
             }
             Ok(views.remove(&key.view))
         })?;

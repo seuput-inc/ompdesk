@@ -89,6 +89,7 @@ pub(super) async fn query(
     if ax.secure || matches!(ax.value, AxValue::Protected) {
         return Err(error("protected", "Protected text cannot be queried"));
     }
+    let mutates = matches!(&query, TextQuery::ScrollIntoView { .. });
     let (request, child) = match query {
         TextQuery::RangeRects { range } => (
             json!({"op":"rects","start":range.start,"length":range.length}),
@@ -170,7 +171,12 @@ pub(super) async fn query(
             args.push(json!({"objectId":id}));
             child_object = Some(id);
         }
-        target.command("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":QUERY_JS,"arguments":args,"returnByValue":true})).await
+        let params = json!({"objectId":object,"functionDeclaration":QUERY_JS,"arguments":args,"returnByValue":true});
+        if mutates {
+            target.mutation("Runtime.callFunctionOn", params).await
+        } else {
+            target.command("Runtime.callFunctionOn", params).await
+        }
     }.await;
     let child_release = if let Some(id) = child_object {
         target
