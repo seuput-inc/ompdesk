@@ -126,10 +126,23 @@ impl Drop for PendingGuard {
     }
 }
 
+/// Names the net-log file of a test-automation build (`OMP_GUI_TEST_PREVIEW_NET_LOG=<file>`): Chromium writes every
+/// network event of the Preview's browser process there. A build without the feature never reads the variable.
+#[cfg(feature = "test-automation")]
+const NET_LOG_ENV: &str = "OMP_GUI_TEST_PREVIEW_NET_LOG";
+
+#[cfg(feature = "test-automation")]
+fn net_log_argument(file: Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
+    let file = file.filter(|file| !file.is_empty())?;
+    let mut argument = std::ffi::OsString::from("--log-net-log=");
+    argument.push(file);
+    Some(argument)
+}
+
 pub(crate) fn arguments(profile: &Path) -> Vec<std::ffi::OsString> {
     let mut profile_arg = std::ffi::OsString::from("--user-data-dir=");
     profile_arg.push(profile);
-    [
+    let mut arguments: Vec<std::ffi::OsString> = [
         "--headless=new",
         "--no-startup-window",
         "--remote-debugging-pipe",
@@ -149,8 +162,12 @@ pub(crate) fn arguments(profile: &Path) -> Vec<std::ffi::OsString> {
     ]
     .into_iter()
     .map(Into::into)
-    .chain([profile_arg])
-    .collect()
+    .collect();
+    #[cfg(feature = "test-automation")]
+    arguments.extend(net_log_argument(std::env::var_os(NET_LOG_ENV)));
+    // The Windows launcher inserts its pipe arguments before the last one.
+    arguments.push(profile_arg);
+    arguments
 }
 
 impl Transport {
@@ -1123,5 +1140,44 @@ mod lifecycle_tests {
         let (first, second) = tokio::join!(transport.shutdown(), transport.shutdown());
         assert_eq!(first.unwrap().code(), Some(42));
         assert_eq!(second.unwrap().code(), Some(42));
+    }
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    use super::arguments;
+
+    #[test]
+    fn the_profile_stays_the_last_argument() {
+        assert_eq!(
+            arguments(Path::new("profile")).last(),
+            Some(&OsString::from("--user-data-dir=profile"))
+        );
+    }
+
+    #[cfg(not(feature = "test-automation"))]
+    #[test]
+    fn a_build_without_test_automation_ignores_the_net_log_variable() {
+        assert!(
+            !arguments(Path::new("profile"))
+                .iter()
+                .any(|argument| argument.to_string_lossy().contains("net-log"))
+        );
+    }
+
+    #[cfg(feature = "test-automation")]
+    #[test]
+    fn the_net_log_variable_becomes_chromiums_net_log_argument() {
+        use super::net_log_argument;
+
+        assert_eq!(
+            net_log_argument(Some(OsString::from("c:/profile/net-log.json"))),
+            Some(OsString::from("--log-net-log=c:/profile/net-log.json"))
+        );
+        assert_eq!(net_log_argument(Some(OsString::new())), None);
+        assert_eq!(net_log_argument(None), None);
     }
 }

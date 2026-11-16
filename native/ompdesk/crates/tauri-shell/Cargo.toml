@@ -42,7 +42,7 @@ tauri-plugin-wdio-webdriver = { version = "=1.5.1", optional = true }
 [features]
 # A test build only: the embedded WebDriver server scripts/tauri-native-smoke.ts drives (bun scripts/build-tauri.ts --test-automation).
 # Released binaries never compile it (scripts/tauri-release-automation-check.ts proves that on the packaged app).
-test-automation = ["dep:tauri-plugin-wdio-webdriver"]
+test-automation = ["dep:tauri-plugin-wdio-webdriver", "shell_preview/test-automation"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"] }

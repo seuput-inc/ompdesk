@@ -25,3 +25,7 @@ libc = "=0.2.191"
 
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["test-util"] }
+
+[features]
+# A test build only: OMP_GUI_TEST_PREVIEW_NET_LOG=<file> makes the Preview's Chromium write its net-log there (transport.rs).
+test-automation = []

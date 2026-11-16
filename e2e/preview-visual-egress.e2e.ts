@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
-import { exitApp, fixtureOmp } from "./harness";
+import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
 
 // Security #3: a visual's page (C135) reads what its folder serves and must not
 // carry it anywhere. A sentinel on 127.0.0.1 (TCP and UDP on one port) records
@@ -18,11 +18,37 @@ import { exitApp, fixtureOmp } from "./harness";
 // hears nothing, while the page still shows its own image and stylesheet. DNS
 // prefetch (static, dynamic, in srcdoc and about:blank frames, with
 // x-dns-prefetch-control on) must not ask the resolver for any of its names: the
-// visual session's net-log shows no host resolution for them. A link the user
+// net-log of the Preview's own Chromium (OMP_GUI_TEST_PREVIEW_NET_LOG, a
+// test-automation host only) holds a resolution for a control name the Preview
+// tab itself opens, and for none of the visual's. A link the user
 // clicks is offered in full and opens only when they choose to.
 
 /** Names the page spells for a DNS prefetch; none may reach a resolver (`.invalid` never leaves the machine). */
 const DNS_SUFFIX = "egress.invalid";
+const NAME = new RegExp(`[a-z0-9-]+\\.${DNS_SUFFIX.replaceAll(".", "\\.")}`, "g");
+
+function record(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Chromium names event IDs in constants.logEventTypes; only resolver requests count as resolutions. */
+function egressNames(log: string): { all: Set<string>; resolved: Set<string> } {
+	const document: unknown = JSON.parse(log);
+	if (!record(document) || !record(document.constants) || !record(document.constants.logEventTypes)) {
+		throw new Error("Preview net-log has no event type dictionary");
+	}
+	const resolver = document.constants.logEventTypes.HOST_RESOLVER_MANAGER_REQUEST;
+	if (typeof resolver !== "number" || !Array.isArray(document.events)) {
+		throw new Error("Preview net-log has no resolver request contract");
+	}
+	const resolved = new Set<string>();
+	for (const event of document.events) {
+		if (!record(event) || event.type !== resolver || !record(event.params)) continue;
+		if (typeof event.params.host !== "string") continue;
+		for (const name of event.params.host.match(NAME) ?? []) resolved.add(name);
+	}
+	return { all: new Set(log.match(NAME)), resolved };
+}
 
 interface Hit {
 	kind: "tcp" | "udp";
@@ -157,6 +183,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 	const project = path.join(profile, "project");
 	const agent = path.join(profile, "agent");
 	const record = path.join(profile, "record.jsonl");
+	const netLog = path.join(profile, "preview-net-log.json");
 	await Promise.all([fs.mkdir(desktop), fs.mkdir(project), fs.mkdir(agent)]);
 	await fs.writeFile(
 		path.join(desktop, "prefs.json"),
@@ -175,6 +202,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		PI_CODING_AGENT_DIR: agent,
 		OMP_GUI_OMP: await fixtureOmp(profile),
 		OMP_GUI_TEST_RECORD: record,
+		OMP_GUI_TEST_PREVIEW_NET_LOG: netLog,
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	const app = await electron.launch({
@@ -198,19 +226,19 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		await expect
 			.poll(async () => (await shell.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 			.toBe("ready");
-		// The visual session's network log, from before the page loads: every host name it is asked to resolve.
-		const netLog = path.join(profile, "visual-net-log.json");
-		await app.evaluate(async ({ BrowserWindow, session }, file) => {
-			const [win] = BrowserWindow.getAllWindows();
-			if (!win) throw new Error("No window");
-			await session.fromPartition(`preview-visual-${win.id}`).netLog.startLogging(file);
-		}, netLog);
+		// The control: the Preview tab itself opens a name nothing else asks for, so the net-log of the Preview's
+		// Chromium must hold its resolution, or an empty or unwritten log would pass for "nothing was resolved".
+		const aside = shell.locator("aside[data-docked]");
+		await pressShortcutUntilVisible(shell, "ControlOrMeta+j", aside);
+		await aside.getByRole("button", { name: "Preview", exact: true }).click();
+		const address = shell.getByRole("textbox", { name: "Preview URL" });
+		await address.fill(`http://control.${DNS_SUFFIX}/`);
+		await address.press("Enter");
 		const composer = shell.locator("textarea").first();
 		await composer.fill(
 			`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "egress.html" })}`,
 		);
 		await composer.press("Enter");
-		const aside = shell.locator("aside[data-docked]");
 		await expect(shell.locator("[data-preview-status]")).toHaveText("Egress");
 		// The page reads what its folder serves; that is what it would try to send.
 		expect(await inPage("fetch('secrets.json').then(response => response.text())")).toBe('{"token":"secret"}');
@@ -219,16 +247,6 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		// Long enough for the meta refresh (1 s), ICE gathering and every retry.
 		await sleep(5000);
 		expect(listener.hits).toEqual([]);
-		// No DNS prefetch asked for a name; a resolution main itself asks for is in the log, so the log would show one.
-		await app.evaluate(async ({ BrowserWindow, session }, suffix) => {
-			const [win] = BrowserWindow.getAllWindows();
-			const visual = session.fromPartition(`preview-visual-${win?.id}`);
-			await visual.resolveHost(`control.${suffix}`).catch(() => {});
-			await visual.netLog.stopLogging();
-		}, DNS_SUFFIX);
-		const resolved = new Set((await fs.readFile(netLog, "utf8")).match(/[a-z-]+\.egress\.invalid/g));
-		expect([...resolved]).toEqual([`control.${DNS_SUFFIX}`]);
-
 		// The visual is still there, with its own assets.
 		const urls = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map(item => item.getURL()));
 		expect(urls.filter(url => url.startsWith("omp-visual://"))).toHaveLength(1);
@@ -265,6 +283,17 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 			.toContain("GET /link?d=secret HTTP/1.1");
 		await expect(offer).toHaveCount(0);
 		expect(await inPage("location.href")).toMatch(/egress\.html$/);
+
+		// Chromium finalizes its net-log when it quits: read it from the app that has exited.
+		await exitApp(app);
+		const log = await fs.readFile(netLog, "utf8").catch(() => {
+			throw new Error(
+				`No Preview net-log at ${netLog}: the host must be a test-automation build (bun run build:tauri -- --test-automation)`,
+			);
+		});
+		const { all, resolved } = egressNames(log);
+		expect([...resolved]).toEqual([`control.${DNS_SUFFIX}`]);
+		expect([...all]).toEqual([`control.${DNS_SUFFIX}`]);
 	} finally {
 		await exitApp(app);
 		await listener.close();
