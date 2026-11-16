@@ -146,6 +146,8 @@ export type PreviewRequest =
 	/** Take the page back: the agent's connection closes and its debugger detaches. */
 	| { action: "agentStop" }
 	| { action: "zoom"; zoom: number }
+	/** Apply a step to the host's current zoom, not the renderer's last received snapshot. */
+	| { action: "zoomIn" | "zoomOut" }
 	| { action: "viewport"; viewport: PreviewViewport }
 	/** Open a tab (an empty one without `url`) and show it. */
 	| { action: "newTab"; url?: string }

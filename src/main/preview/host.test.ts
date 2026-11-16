@@ -242,6 +242,19 @@ beforeEach(() => {
 });
 
 describe("preview host", () => {
+	it("applies consecutive zoom steps to the host's latest level before a renderer receives state", async () => {
+		register();
+		const { ask } = openWindow();
+		const first = ask({ action: "zoomIn" });
+		const second = ask({ action: "zoomIn" });
+		expect((await first).zoom).toBe(1.1);
+		expect((await second).zoom).toBe(1.2);
+		expect((await ask({ action: "zoomOut" })).zoom).toBe(1.1);
+		expect((await ask({ action: "zoom", zoom: 1 })).zoom).toBe(1);
+		await ask({ action: "zoom", zoom: 2 });
+		expect((await ask({ action: "zoomIn" })).zoom).toBe(2);
+	});
+
 	it("keeps one pair of sessions per window across hosts and forgets what the last host browsed", async () => {
 		register();
 		const first = openWindow();

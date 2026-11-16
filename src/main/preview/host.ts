@@ -891,8 +891,10 @@ export function registerPreviewHost(
 			const dpr = Number.isFinite(request.dpr) ? Math.min(4, Math.max(0.5, request.dpr ?? 1)) : 1;
 			current.layout = { bounds: request.bounds, visible: request.visible, dpr };
 			place(current);
-		} else if (request.action === "zoom") {
-			page.state = { ...page.state, zoom: clampPreviewZoom(request.zoom) };
+		} else if (request.action === "zoom" || request.action === "zoomIn" || request.action === "zoomOut") {
+			const zoom =
+				request.action === "zoom" ? request.zoom : page.state.zoom + (request.action === "zoomIn" ? 0.1 : -0.1);
+			page.state = { ...page.state, zoom: clampPreviewZoom(zoom) };
 			place(current);
 			publish(current, page);
 		} else if (request.action === "viewport") {

@@ -254,14 +254,14 @@ export function PreviewPanel() {
 			icon: ZoomIn,
 			disabled: !pageReady || state.zoom >= PREVIEW_ZOOM_MAX,
 			separatorBefore: true,
-			onSelect: () => zoomTo(state.zoom + 0.1),
+			onSelect: () => command({ action: "zoomIn" }),
 		},
 		{
 			id: "zoom-out",
 			label: t("panel.preview.zoomOut"),
 			icon: ZoomOut,
 			disabled: !pageReady || state.zoom <= PREVIEW_ZOOM_MIN,
-			onSelect: () => zoomTo(state.zoom - 0.1),
+			onSelect: () => command({ action: "zoomOut" }),
 		},
 		{
 			id: "zoom-reset",
