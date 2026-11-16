@@ -275,6 +275,13 @@ async function main(): Promise<void> {
 		);
 		const settings = object(await driver.evaluate("window.omp.rpc.getSettings(['compaction.enabled'])"));
 		assert.equal(settings.success, true, "The actual Node/stock bridge did not answer");
+		// The window's omp can answer before the page has mounted the composer: on the packaged app's first launch the
+		// runner logged renderer-mounted 2.4 s after sidecar-ready (dry run 43890507100).
+		await until(
+			"Composer mounted",
+			async () => driver.evaluate("document.querySelector('textarea')!==null").then(value => value === true),
+			exited,
+		);
 		const textarea = await driver.element("textarea");
 		const firstTab = await driver.evaluate("window.omp.tabs.list().then(t=>t[0]?.tabId)");
 		await driver.chord("t");
