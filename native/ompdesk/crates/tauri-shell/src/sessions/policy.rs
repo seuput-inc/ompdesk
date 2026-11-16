@@ -66,6 +66,7 @@ impl Policy {
 pub enum Command {
     Request(crate::host::Call, tokio::sync::oneshot::Receiver<()>),
     Context(tokio::sync::oneshot::Sender<Result<shell_preview::Partition, String>>),
+    PageContext(tokio::sync::oneshot::Sender<Result<shell_preview::Partition, String>>),
 }
 
 pub struct Session {
@@ -82,6 +83,9 @@ pub struct Session {
     pub gateway_proxy_applied: bool,
     pub preview_pages: Vec<shell_preview::AttachedPage>,
     pub script_ids: HashMap<String, Vec<String>>,
+    /// Per-page BrowserContexts of an `omp-visual` partition. Owned by this canonical Session until
+    /// Chromium answers their disposal; the shared `context` stays the canonical one.
+    pub page_contexts: HashSet<String>,
     pub cookie_arbiter: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub ready: std::sync::Arc<tokio::sync::Notify>,
     pub queue: tokio::sync::mpsc::UnboundedSender<Command>,
@@ -105,6 +109,7 @@ impl Session {
             gateway_proxy_applied: false,
             preview_pages: Vec::new(),
             script_ids: HashMap::new(),
+            page_contexts: HashSet::new(),
             cookie_arbiter: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             ready: std::sync::Arc::new(tokio::sync::Notify::new()),
             queue,

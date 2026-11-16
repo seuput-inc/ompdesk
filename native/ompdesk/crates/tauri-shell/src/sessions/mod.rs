@@ -368,6 +368,17 @@ async fn drain(partition: String, mut receiver: tokio::sync::mpsc::UnboundedRece
                     });
                 let _ = reply.send(result);
             }
+            Command::PageContext(reply) => {
+                let result = preview::ensure_page_context(&partition).await;
+                if let Err(Ok(context)) = reply.send(result)
+                    && let Err(error) = preview::release_page_context(&partition, &context).await
+                {
+                    eprintln!(
+                        "Preview page context {} of {partition} stays owned by its Session: {error}",
+                        context.context_id
+                    );
+                }
+            }
         }
     }
 }
