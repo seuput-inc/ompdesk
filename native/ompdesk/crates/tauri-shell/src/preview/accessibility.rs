@@ -376,6 +376,16 @@ fn validate_target(snapshot: &AxSnapshot, target: &AxTarget) -> Result<(), WireE
     Ok(())
 }
 
+async fn ensure_focused(page: &Target<'_>, object: &str) -> Result<(), WireError> {
+    let response = page.command("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":"function(){return this.isConnected && this.ownerDocument.hasFocus() && this.ownerDocument.activeElement===this}","returnByValue":true})).await?;
+    if response.get("exceptionDetails").is_some()
+        || response.pointer("/result/value").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(error("stale", "Accessibility target lost focus"));
+    }
+    Ok(())
+}
+
 pub async fn action(
     page: &Target<'_>,
     snapshot: &AxSnapshot,
@@ -419,34 +429,18 @@ pub async fn action(
         ));
     }
     if matches!(action, AxAction::Focus) {
-        page.command(
+        page.mutation(
             "DOM.focus",
             json!({"backendNodeId":target.backend_dom_node_id}),
         )
         .await?;
-        return Ok(());
-    }
-    if matches!(action, AxAction::Default) {
-        page.command(
-            "DOM.focus",
-            json!({"backendNodeId":target.backend_dom_node_id}),
-        )
-        .await?;
-        let (key, code, number) = if matches!(node.role.as_str(), "checkbox" | "radio" | "switch") {
-            (" ", "Space", 32)
-        } else {
-            ("Enter", "Enter", 13)
-        };
-        for kind in ["rawKeyDown", "keyUp"] {
-            page.command("Input.dispatchKeyEvent", json!({"type":kind,"key":key,"code":code,"windowsVirtualKeyCode":number,"nativeVirtualKeyCode":number})).await?;
-        }
         return Ok(());
     }
     if matches!(
         &action,
-        AxAction::SetValue(_) | AxAction::Increment | AxAction::Decrement
+        AxAction::Default | AxAction::SetValue(_) | AxAction::Increment | AxAction::Decrement
     ) {
-        page.command(
+        page.mutation(
             "DOM.focus",
             json!({"backendNodeId":target.backend_dom_node_id}),
         )
@@ -468,7 +462,10 @@ pub async fn action(
         .and_then(Value::as_str)
         .ok_or_else(|| error("cdp", "Chromium could not resolve accessibility target"))?;
     let (function, args) = match &action {
-        AxAction::Default => unreachable!(),
+        AxAction::Default => (
+            "function(){return this.ownerDocument.activeElement===this}",
+            vec![],
+        ),
         AxAction::SetValue(_) => (
             "function(){if(this.ownerDocument.activeElement!==this)return false;if((this instanceof HTMLInputElement || this instanceof HTMLTextAreaElement)&&!this.readOnly&&!this.disabled&&typeof this.selectionStart==='number'){this.setSelectionRange(0,this.value.length);return true}if(!this.isContentEditable)return false;let r=this.ownerDocument.createRange();r.selectNodeContents(this);let s=this.ownerDocument.getSelection();s.removeAllRanges();s.addRange(r);return true}",
             vec![],
@@ -483,31 +480,56 @@ pub async fn action(
         ),
         AxAction::Focus | AxAction::ShowMenu => unreachable!(),
     };
-    let response = page.command("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":function,"arguments":args,"returnByValue":true,"userGesture":true})).await;
-    let _ = page
-        .command("Runtime.releaseObject", json!({"objectId":object}))
-        .await;
-    let response = response?;
+    let response = page.mutation("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":function,"arguments":args,"returnByValue":true,"userGesture":true})).await;
+    let response = match response {
+        Ok(response) => response,
+        Err(err) => {
+            let _ = page
+                .command("Runtime.releaseObject", json!({"objectId":object}))
+                .await;
+            return Err(err);
+        }
+    };
     if response.get("exceptionDetails").is_some() {
+        let _ = page
+            .command("Runtime.releaseObject", json!({"objectId":object}))
+            .await;
         return Err(error(
             "unsupported",
             "Accessibility action failed on this element",
         ));
     }
     if response.pointer("/result/value").and_then(Value::as_bool) != Some(true) {
+        let _ = page
+            .command("Runtime.releaseObject", json!({"objectId":object}))
+            .await;
         return Err(error(
             "unsupported",
             "Accessibility action is not supported by this element",
         ));
     }
+    let result: Result<(), WireError> = async {
     match action {
+        AxAction::Default => {
+            let (key, code, number) = if matches!(node.role.as_str(), "checkbox" | "radio" | "switch") {
+                (" ", "Space", 32)
+            } else {
+                ("Enter", "Enter", 13)
+            };
+            for kind in ["rawKeyDown", "keyUp"] {
+                ensure_focused(page, object).await?;
+                page.mutation("Input.dispatchKeyEvent", json!({"type":kind,"key":key,"code":code,"windowsVirtualKeyCode":number,"nativeVirtualKeyCode":number})).await?;
+            }
+        }
         AxAction::SetValue(value) if value.is_empty() => {
             for kind in ["rawKeyDown", "keyUp"] {
-                page.command("Input.dispatchKeyEvent", json!({"type":kind,"key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8,"nativeVirtualKeyCode":8})).await?;
+                ensure_focused(page, object).await?;
+                page.mutation("Input.dispatchKeyEvent", json!({"type":kind,"key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8,"nativeVirtualKeyCode":8})).await?;
             }
         }
         AxAction::SetValue(value) => {
-            page.command("Input.insertText", json!({"text":value}))
+            ensure_focused(page, object).await?;
+            page.mutation("Input.insertText", json!({"text":value}))
                 .await?;
         }
         AxAction::Increment | AxAction::Decrement => {
@@ -518,12 +540,18 @@ pub async fn action(
                 ("ArrowDown", 40)
             };
             for kind in ["rawKeyDown", "keyUp"] {
-                page.command("Input.dispatchKeyEvent", json!({"type":kind,"key":key,"code":key,"windowsVirtualKeyCode":code,"nativeVirtualKeyCode":code})).await?;
+                ensure_focused(page, object).await?;
+                page.mutation("Input.dispatchKeyEvent", json!({"type":kind,"key":key,"code":key,"windowsVirtualKeyCode":code,"nativeVirtualKeyCode":code})).await?;
             }
         }
         _ => {}
     }
     Ok(())
+    }.await;
+    let _ = page
+        .command("Runtime.releaseObject", json!({"objectId":object}))
+        .await;
+    result
 }
 
 #[cfg(test)]

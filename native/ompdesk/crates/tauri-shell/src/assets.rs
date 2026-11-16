@@ -206,7 +206,7 @@ pub fn content_policy(media_origin: Option<&str>) -> Result<String, String> {
         ""
     };
     Ok(format!(
-        "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media: {registered_media} {media_origin}; media-src 'self' blob: omp-media: {media_origin}; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'"
+        "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media: {registered_media} {media_origin}; media-src 'self' blob: omp-media: {registered_media} {media_origin}; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'"
     ))
 }
 #[cfg(test)]
@@ -248,6 +248,52 @@ mod tests {
             &policy,
         );
         assert_eq!(response.headers()[header::CONTENT_SECURITY_POLICY], policy);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_player_response_permits_initial_media_request_and_exact_redirect() {
+        let initial =
+            crate::preview::media::for_webview("omp-media://stream/native-player").unwrap();
+        let initial = url::Url::parse(&initial)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        let redirect = "http://127.0.0.1:49152";
+        let fixture = Fixture::new();
+        let response = serve(
+            &fixture.0,
+            Request::builder()
+                .uri("http://app.localhost/index.html")
+                .body(Vec::new())
+                .unwrap(),
+            &content_policy(Some(redirect)).unwrap(),
+        );
+        let header = response.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        let sources = |name| {
+            header
+                .split(';')
+                .find_map(|directive| {
+                    let mut fields = directive.split_ascii_whitespace();
+                    (fields.next() == Some(name)).then(|| fields.collect::<Vec<_>>())
+                })
+                .unwrap()
+        };
+        let media = sources("media-src");
+        assert!(
+            media.contains(&initial.as_str()),
+            "audio/video must reach the native 302 handler"
+        );
+        assert!(
+            media.contains(&redirect),
+            "audio/video must follow the allocated stream redirect"
+        );
+        assert!(!media.contains(&"http://127.0.0.1:*"));
+        assert!(!media.contains(&"http://127.0.0.1:49153"));
+        let connections = sources("connect-src");
+        assert!(!connections.contains(&initial.as_str()));
+        assert!(!connections.contains(&redirect));
     }
     #[test]
     fn media_policy_rejects_wildcards_and_unrelated_or_injected_origins() {

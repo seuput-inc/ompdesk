@@ -664,6 +664,41 @@ async fn focused_frame(
     Ok(selected)
 }
 
+pub(super) struct FocusedTarget {
+    pub session: String,
+    pub frame: String,
+    pub backend: i64,
+}
+
+pub(super) struct TextSnapshot {
+    pub state: TextInputState,
+    pub target: Option<FocusedTarget>,
+}
+
+pub(super) async fn focused_target(
+    browser: &Browser,
+    primary: &str,
+    iframe_sessions: &[String],
+    key: SurfaceKey,
+) -> Result<FocusedTarget, WireError> {
+    let (root, graph) = frames(browser, primary, iframe_sessions, Some(key)).await?;
+    let (frame, backend) = focused_frame(browser, &root, &graph, key)
+        .await?
+        .ok_or_else(|| {
+            WireError::new("focus-unavailable", "Preview has no focused frame target")
+        })?;
+    let session = graph
+        .get(&frame)
+        .ok_or_else(|| error("Focused frame disappeared"))?
+        .session
+        .to_owned();
+    Ok(FocusedTarget {
+        session,
+        frame,
+        backend,
+    })
+}
+
 pub(super) async fn text_state(
     browser: &Browser,
     primary: &str,
@@ -671,24 +706,27 @@ pub(super) async fn text_state(
     key: SurfaceKey,
     zoom: f64,
     marked: Option<TextRange>,
-) -> Result<TextInputState, WireError> {
+) -> Result<TextSnapshot, WireError> {
     if !zoom.is_finite() || zoom <= 0.0 {
         return Err(WireError::new("invalid", "Invalid text zoom"));
     }
     let (root, graph) = frames(browser, primary, iframe_sessions, Some(key)).await?;
     let Some((frame_id, backend)) = focused_frame(browser, &root, &graph, key).await? else {
-        return Ok(TextInputState {
-            key,
-            generation: key.generation,
-            backend_dom_node_id: None,
-            editable: false,
-            content: TextContent::Plain(String::new()),
-            selection: TextRange {
-                start: 0,
-                length: 0,
+        return Ok(TextSnapshot {
+            state: TextInputState {
+                key,
+                generation: key.generation,
+                backend_dom_node_id: None,
+                editable: false,
+                content: TextContent::Plain(String::new()),
+                selection: TextRange {
+                    start: 0,
+                    length: 0,
+                },
+                marked: None,
+                caret: None,
             },
-            marked: None,
-            caret: None,
+            target: None,
         });
     };
     let frame = graph
@@ -744,7 +782,14 @@ pub(super) async fn text_state(
             ));
         }
     }
-    Ok(state)
+    Ok(TextSnapshot {
+        state,
+        target: Some(FocusedTarget {
+            session: session.to_owned(),
+            frame: frame_id,
+            backend,
+        }),
+    })
 }
 
 #[cfg(test)]

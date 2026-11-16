@@ -7,6 +7,7 @@ pub(super) struct Target<'a> {
     session: &'a str,
     key: Option<crate::preview_surface::SurfaceKey>,
     frame: Option<&'a str>,
+    focused_backend: Option<i64>,
 }
 impl<'a> Target<'a> {
     pub(super) fn new(browser: &'a Browser, session: &'a str) -> Self {
@@ -15,6 +16,7 @@ impl<'a> Target<'a> {
             session,
             key: None,
             frame: None,
+            focused_backend: None,
         }
     }
     pub(super) fn guarded(
@@ -27,6 +29,7 @@ impl<'a> Target<'a> {
             session,
             key: Some(key),
             frame: None,
+            focused_backend: None,
         }
     }
     pub(super) fn frame(
@@ -40,6 +43,36 @@ impl<'a> Target<'a> {
             session,
             key: Some(key),
             frame: Some(frame),
+            focused_backend: None,
+        }
+    }
+    pub(super) fn focused(
+        browser: &'a Browser,
+        focus: &'a super::frame_scope::FocusedTarget,
+        key: crate::preview_surface::SurfaceKey,
+    ) -> Self {
+        Self {
+            browser,
+            session: &focus.session,
+            key: Some(key),
+            frame: Some(&focus.frame),
+            focused_backend: Some(focus.backend),
+        }
+    }
+    pub(super) fn focused_backend(&self) -> Option<i64> {
+        self.focused_backend
+    }
+    #[cfg(test)]
+    pub(super) fn fixture_focused(
+        browser: &'a Browser,
+        focus: &'a super::frame_scope::FocusedTarget,
+    ) -> Self {
+        Self {
+            browser,
+            session: &focus.session,
+            frame: Some(&focus.frame),
+            key: None,
+            focused_backend: Some(focus.backend),
         }
     }
     pub(super) fn frame_id(&self) -> Option<&str> {
@@ -61,6 +94,46 @@ impl<'a> Target<'a> {
         let result = self
             .browser
             .command(method, params, Some(self.session))
+            .await
+            .map_err(|error| WireError::new(error.code, error.message))?;
+        self.valid()?;
+        Ok(result)
+    }
+    pub(super) async fn mutation(&self, method: &str, params: Value) -> Result<Value, WireError> {
+        self.valid()?;
+        if let Some(backend) = self.focused_backend {
+            let context = self.isolated_world("ompdesk-native-input").await?;
+            let focused = self.command("Runtime.evaluate", json!({
+                "contextId":context, "expression":"document.hasFocus() ? document.activeElement : null"
+            })).await?;
+            let object = focused
+                .pointer("/result/objectId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    WireError::new("focus-changed", "Original native text target lost focus")
+                })?;
+            let described = self
+                .command("DOM.describeNode", json!({"objectId":object}))
+                .await;
+            let released = self
+                .command("Runtime.releaseObject", json!({"objectId":object}))
+                .await;
+            let described = described?;
+            released?;
+            if described
+                .pointer("/node/backendNodeId")
+                .and_then(Value::as_i64)
+                != Some(backend)
+            {
+                return Err(WireError::new(
+                    "focus-changed",
+                    "Original native text target lost focus",
+                ));
+            }
+        }
+        let result = self
+            .browser
+            .command_settled(method, params, Some(self.session))
             .await
             .map_err(|error| WireError::new(error.code, error.message))?;
         self.valid()?;

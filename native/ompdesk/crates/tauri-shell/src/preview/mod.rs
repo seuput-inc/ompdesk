@@ -1,4 +1,5 @@
 mod accessibility;
+pub(crate) mod cleanup;
 mod commands;
 mod events;
 mod frame_scope;
@@ -46,6 +47,7 @@ struct Document {
     layout: Option<ViewLayout>,
     marked: Option<native::TextRange>,
     selection: native::TextRange,
+    text_target: Option<Arc<frame_scope::FocusedTarget>>,
     native_contexts: HashMap<(String, i64), String>,
 }
 struct ViewLayout {
@@ -61,7 +63,8 @@ struct Entry {
     publisher: Mutex<Option<native::FramePublisher>>,
     submitting: Mutex<()>,
     surface_acks: Mutex<HashSet<(u64, i64)>>,
-    surface_ack_tasks: Mutex<Vec<oneshot::Receiver<()>>>,
+    surface_ack_tasks: Mutex<Vec<oneshot::Receiver<Result<(), String>>>>,
+    surface_ack_errors: Mutex<Vec<String>>,
     ax_snapshot: Mutex<Option<Arc<native::AxSnapshot>>>,
     refresh_flags: AtomicU8,
     refresh_queued: AtomicBool,
@@ -172,10 +175,11 @@ impl NavigationHandler for NavigationGate {
 
 const TEXT: u8 = 1;
 const AX: u8 = 2;
-pub(super) enum NativeTask {
+enum NativeTask {
     Input {
         key: native::SurfaceKey,
         input: native::Input,
+        focus: Option<Arc<frame_scope::FocusedTarget>>,
     },
     Accessibility {
         key: native::SurfaceKey,
@@ -256,7 +260,7 @@ impl Service {
             }
         }
     }
-    pub(super) fn native(&self, task: NativeTask) -> Result<(), native::SurfaceError> {
+    fn native(&self, task: NativeTask) -> Result<(), native::SurfaceError> {
         self.send
             .send(Message::Native(task))
             .map_err(|_| native::SurfaceError::Disposed)
@@ -308,6 +312,7 @@ async fn serve(
 ) -> Result<(), String> {
     let mut browser: Option<Arc<Browser>> = None;
     let mut observer = None;
+    let mut failure = None;
     loop {
         let message = tokio::select! {
             _ = &mut stopped => break,
@@ -325,12 +330,17 @@ async fn serve(
             }
             Message::CloseParent { win, done } => {
                 let children = runtime().registry.lock().expect("registry").children(win);
-                let mut result = Ok(());
+                let mut errors = Vec::new();
                 for wc in children {
                     if let Err(error) = close(&pages, wc).await {
-                        result = Err(error);
+                        errors.push(format!("page {wc}: {}", error.message));
                     }
                 }
+                let result = if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(WireError::new("cleanup", errors.join("; ")))
+                };
                 let _ = done.send(result);
                 continue;
             }
@@ -366,14 +376,15 @@ async fn serve(
             match launched {
                 Ok(value) => {
                     let value = Arc::new(value);
+                    browser = Some(Arc::clone(&value));
                     if let Err(error) = crate::sessions::preview::install(
                         Arc::clone(&value),
                         Arc::clone(&runtime().gateway),
                     ) {
-                        call.err("failed", error.to_string());
+                        call.err("failed", error.clone());
                         host::forget_cancel(id);
-                        let _ = value.shutdown().await;
-                        return Err(error.to_string());
+                        failure = Some(error);
+                        break;
                     }
                     let _ = pages.browser.set(Arc::clone(&value));
                     let events = value.subscribe();
@@ -386,12 +397,14 @@ async fn serve(
                         .command("Target.setDiscoverTargets", json!({"discover":true}), None)
                         .await
                     {
-                        let _ = value.shutdown().await;
                         host::forget_cancel(id);
+                        failure = Some(format!(
+                            "target discovery: {}: {}",
+                            error.code, error.message
+                        ));
                         call.err(error.code, error.message);
-                        return Err("Preview target discovery failed".into());
+                        break;
                     }
-                    browser = Some(value);
                 }
                 Err(error) => {
                     host::forget_cancel(id);
@@ -444,11 +457,14 @@ async fn serve(
                     }
                 }
             }
-            Err(error) => {
+            Err(mut error) => {
                 if matches!(call.method.as_str(), "view.create" | "win.create") {
                     if let Some(wc) = call.params["wcId"].as_u64() {
                         if pages.entry(wc).is_ok() {
-                            let _ = close(&pages, wc).await;
+                            if let Err(cleanup) = close(&pages, wc).await {
+                                error.message =
+                                    format!("{}; cleanup: {}", error.message, cleanup.message);
+                            }
                         } else {
                             crate::close_record(wc);
                         }
@@ -488,22 +504,47 @@ async fn serve(
         .keys()
         .copied()
         .collect();
-    let mut result = Ok(());
-    for wc in contents {
-        if let Err(error) = close(&pages, wc).await {
-            result = Err(error.message);
-        }
-    }
-    if result.is_ok() {
-        if let Some(browser) = browser {
-            if let Err(error) = browser.shutdown().await {
-                result = Err(error.to_string());
+    let pages_cleanup = async {
+        let mut errors = Vec::new();
+        for wc in contents {
+            if let Err(error) = close(&pages, wc).await {
+                errors.push(format!("page {wc}: {}", error.message));
             }
         }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    };
+    let browser_cleanup = async {
+        if let Some(browser) = browser {
+            let status = browser
+                .shutdown()
+                .await
+                .map_err(|error| format!("browser: {error}"))?;
+            if !status.success() {
+                return Err(format!("browser exited unsuccessfully: {status}"));
+            }
+        }
+        Ok(())
+    };
+    let mut result = cleanup::settle(pages_cleanup, browser_cleanup).await;
+    if let Some(failure) = failure {
+        result = cleanup::settle(async { Err(failure) }, async { result }).await;
     }
     if let Some(observer) = observer {
         observer.abort();
-        let _ = observer.await;
+        match observer.await {
+            Ok(()) => {}
+            Err(tauri::Error::JoinError(error)) if error.is_cancelled() => {}
+            Err(error) => {
+                result = cleanup::settle(async { result }, async {
+                    Err(format!("observer: {error}"))
+                })
+                .await;
+            }
+        }
     }
     result
 }
@@ -887,12 +928,14 @@ async fn create(
                 }),
                 marked: None,
                 selection: native::TextRange::default(),
+                text_target: None,
                 native_contexts: HashMap::new(),
             }),
             publisher: Mutex::new(None),
             submitting: Mutex::new(()),
             surface_acks: Mutex::new(HashSet::new()),
             surface_ack_tasks: Mutex::new(Vec::new()),
+            surface_ack_errors: Mutex::new(Vec::new()),
             ax_snapshot: Mutex::new(None),
             refresh_flags: AtomicU8::new(0),
             refresh_queued: AtomicBool::new(false),
@@ -986,65 +1029,82 @@ async fn close(pages: &Pages, wc: u64) -> Result<(), WireError> {
     let entry = pages.entry(wc)?;
     let _surface_change = entry.surface_change.lock().await;
     let _closing = entry.closing.lock().await;
-    loop {
-        let (key, live) = {
-            let registry = runtime().registry.lock().expect("registry");
-            let Some(page) = registry.page(wc) else {
-                return Ok(());
-            };
-            let key = match page.kind {
-                Kind::PreviewView { view, .. } => Some(native::SurfaceKey {
-                    view,
-                    wc,
-                    generation: page.identity.generation,
-                }),
-                _ => None,
-            };
-            (key, page.state == crate::registry::PageState::Live)
-        };
-        if live {
-            if let Some(key) = key {
-                surface::synchronize(key).await?;
-            }
-        }
+    let key = {
+        let _submitting = entry.submitting.lock().expect("native frame submission");
+        let mut registry = runtime().registry.lock().expect("registry");
+        let key = registry.page(wc).and_then(|page| match page.kind {
+            Kind::PreviewView { view, .. } => Some(native::SurfaceKey {
+                view,
+                wc,
+                generation: page.identity.generation,
+            }),
+            _ => None,
+        });
+        registry.begin_close(wc);
+        entry.publisher.lock().expect("native publisher").take();
+        key
+    };
+    let native_cleanup = async {
+        let mut errors = Vec::new();
+        if let Some(key) = key
+            && let Err(error) = surface::dispose(key).await
         {
-            let _submitting = entry.submitting.lock().expect("native frame submission");
-            if live {
-                let mut registry = runtime().registry.lock().expect("registry");
-                if registry.page(wc).is_none_or(|page| {
-                    key.is_some_and(|key| page.identity.generation != key.generation)
-                }) {
-                    continue;
-                }
-                registry
-                    .begin_close(wc)
-                    .ok_or_else(|| WireError::new("gone", "Preview page closed"))?;
-            }
-            entry.publisher.lock().expect("native publisher").take();
+            errors.push(format!("surface: {}", error.message));
         }
-        if let Some(key) = key {
-            surface::dispose(key).await?;
-        }
-        break;
-    }
-    let acknowledgements = std::mem::take(
-        &mut *entry
-            .surface_ack_tasks
+        let retained = entry
+            .document
             .lock()
-            .expect("native frame acknowledgement tasks"),
-    );
-    for acknowledgement in acknowledgements {
-        let _ = acknowledgement.await;
-    }
-    entry.page.close().await.map_err(wire)?;
-    pages
-        .routes
-        .lock()
-        .expect("Preview routes")
-        .retain(|_, route| route.wc != wc);
-    pages.entries.lock().expect("Preview pages").remove(&wc);
-    crate::close_record(wc);
-    Ok(())
+            .expect("Preview document")
+            .pending_ack
+            .take();
+        if let Some(ack) = retained
+            && let Err(error) = entry.page.ack_frame(ack).await
+        {
+            errors.push(format!("retained frame: {error}"));
+        }
+        let acknowledgements = std::mem::take(
+            &mut *entry
+                .surface_ack_tasks
+                .lock()
+                .expect("native frame acknowledgement tasks"),
+        );
+        for acknowledgement in acknowledgements {
+            match acknowledgement.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(error),
+                Err(error) => errors.push(format!("frame acknowledgement receipt: {error}")),
+            }
+        }
+        errors.append(
+            &mut *entry
+                .surface_ack_errors
+                .lock()
+                .expect("native frame errors"),
+        );
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    };
+    let page_cleanup = async {
+        entry
+            .page
+            .close()
+            .await
+            .map_err(|error| format!("target: {error}"))?;
+        pages
+            .routes
+            .lock()
+            .expect("Preview routes")
+            .retain(|_, route| route.wc != wc);
+        pages.entries.lock().expect("Preview pages").remove(&wc);
+        crate::close_record(wc);
+        Ok(())
+    };
+    cleanup::settle(native_cleanup, page_cleanup)
+        .await
+        .map_err(|message| WireError::new("cleanup", message))
 }
 async fn offscreen_operation(pages: &Pages, wc: u64, params: &Value) -> Result<Value, WireError> {
     let entry = pages.entry(wc)?;
@@ -1170,16 +1230,38 @@ fn schedule_frame_ack(entry: &Entry, ack: i64) {
             .surface_ack_tasks
             .lock()
             .expect("native frame acknowledgement tasks");
-        tasks
-            .retain_mut(|task| matches!(task.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        tasks.retain_mut(|task| match task.try_recv() {
+            Err(oneshot::error::TryRecvError::Empty) => true,
+            Ok(Ok(())) => false,
+            Ok(Err(error)) => {
+                entry
+                    .surface_ack_errors
+                    .lock()
+                    .expect("native frame errors")
+                    .push(error);
+                false
+            }
+            Err(error) => {
+                entry
+                    .surface_ack_errors
+                    .lock()
+                    .expect("native frame errors")
+                    .push(format!("frame acknowledgement receipt: {error}"));
+                false
+            }
+        });
         tasks.push(finished);
     }
     let page = Arc::clone(&entry.page);
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = page.ack_frame(ack).await {
-            crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
+        let result = page
+            .ack_frame(ack)
+            .await
+            .map_err(|error| format!("frame: {error}"));
+        if let Err(error) = &result {
+            crate::log::log("preview.frame.ack", json!({"error":error}));
         }
-        let _ = done.send(());
+        let _ = done.send(result);
     });
 }
 async fn ack_retained(entry: &Entry) {
@@ -1326,6 +1408,7 @@ async fn invalidate_document(entry: &Entry, wc: u64, frame: Option<&str>, sessio
             }
             document.frame_pixels = None;
             document.marked = None;
+            document.text_target = None;
             document.selection = native::TextRange::default();
         }
         *entry.ax_snapshot.lock().expect("native AX snapshot") = None;
@@ -1681,10 +1764,18 @@ async fn observe(
                                     }
                                 }
                                 _ => {
-                                    let offscreen = runtime().registry.lock().expect("registry")
-                                        .page(route.wc).is_some_and(|page| page.kind == Kind::PreviewOffscreen);
+                                    let offscreen = runtime()
+                                        .registry
+                                        .lock()
+                                        .expect("registry")
+                                        .page(route.wc)
+                                        .is_some_and(|page| page.kind == Kind::PreviewOffscreen);
                                     if offscreen {
-                                        entry.document.lock().expect("Preview document").pending_ack = Some(frame.ack());
+                                        entry
+                                            .document
+                                            .lock()
+                                            .expect("Preview document")
+                                            .pending_ack = Some(frame.ack());
                                     } else {
                                         schedule_frame_ack(&entry, frame.ack());
                                     }
@@ -2108,7 +2199,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
             .map(|page| page.zoom)
             .ok_or_else(|| WireError::new("gone", "native Preview owner ended"))?;
         match task {
-            NativeTask::Input { input, .. } => {
+            NativeTask::Input { input, focus, .. } => {
                 let released = match &input {
                     native::Input::Mouse {
                         kind: native::MouseKind::Up,
@@ -2120,8 +2211,48 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                     } => Some("keyUp"),
                     _ => None,
                 };
-                let target = target::Target::guarded(browser, &entry.page.session_id, key);
-                input::apply(&target, input, zoom).await?;
+                if matches!(
+                    &input,
+                    native::Input::Ime { .. }
+                        | native::Input::CancelIme
+                        | native::Input::CommitText { .. }
+                ) {
+                    let fresh;
+                    let focused = match focus.as_deref() {
+                        Some(focused) => focused,
+                        None => {
+                            if matches!(
+                                &input,
+                                native::Input::Ime {
+                                    replacement: Some(_),
+                                    ..
+                                } | native::Input::CommitText {
+                                    replacement: Some(_),
+                                    ..
+                                }
+                            ) {
+                                return Err(WireError::new(
+                                    "focus-unavailable",
+                                    "Native replacement has no original text snapshot",
+                                ));
+                            }
+                            let sessions = iframe_sessions(pages, key.wc);
+                            fresh = frame_scope::focused_target(
+                                browser,
+                                &entry.page.session_id,
+                                &sessions,
+                                key,
+                            )
+                            .await?;
+                            &fresh
+                        }
+                    };
+                    let target = target::Target::focused(browser, focused, key);
+                    input::apply(&target, input, zoom).await?;
+                } else {
+                    let target = target::Target::guarded(browser, &entry.page.session_id, key);
+                    input::apply(&target, input, zoom).await?;
+                }
                 if let Some(kind) = released {
                     wc_event(key.wc, "input-event", json!([{"type":kind}]));
                 }
@@ -2146,12 +2277,16 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                 let sessions = iframe_sessions(pages, key.wc);
                 let frame = node
                     .frame_id
-                    .as_deref()
+                    .clone()
                     .ok_or_else(|| WireError::new("invalid", "native AX frame missing"))?;
-                let session =
-                    frame_scope::resolve_session(browser, &entry.page.session_id, &sessions, frame)
-                        .await?;
-                let target = target::Target::frame(browser, session, frame, key);
+                let session = frame_scope::resolve_session(
+                    browser,
+                    &entry.page.session_id,
+                    &sessions,
+                    &frame,
+                )
+                .await?;
+                let target = target::Target::frame(browser, session, &frame, key);
                 accessibility::action(&target, &snapshot, node, action).await?;
                 request_refresh(&entry, key, TEXT | AX);
             }
@@ -2178,7 +2313,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                 }
                 if flags & TEXT != 0 {
                     let marked = entry.document.lock().expect("Preview document").marked;
-                    let state = frame_scope::text_state(
+                    let snapshot = frame_scope::text_state(
                         browser,
                         &entry.page.session_id,
                         &sessions,
@@ -2192,10 +2327,10 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                     }
                     {
                         let mut document = entry.document.lock().expect("Preview document");
-                        document.selection = state.selection;
-                        document.marked = state.marked;
+                        document.selection = snapshot.state.selection;
+                        document.marked = snapshot.state.marked;
                     }
-                    surface::text(state).await?;
+                    surface::text(Arc::clone(&entry), snapshot).await?;
                 }
                 entry.refresh_queued.store(false, Ordering::SeqCst);
                 if entry.refresh_flags.load(Ordering::SeqCst) != 0 {
@@ -2225,22 +2360,11 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
                 "preview.native.failed",
                 json!({"wcId":key.wc,"code":error.code}),
             );
-            if let Some(code) = shell_core::netmap::error_code("ERR_FAILED") {
-                let url = runtime()
-                    .registry
-                    .lock()
-                    .expect("registry")
-                    .page(key.wc)
-                    .map(|page| page.url.clone())
-                    .unwrap_or_default();
-                load_failure(
-                    &entry,
-                    key.wc,
-                    code,
-                    &format!("Native Preview: {}", error.message),
-                    &url,
-                );
-            }
+            wc_event(
+                key.wc,
+                "native-error",
+                json!([{"code":error.code,"message":error.message}]),
+            );
         }
     }
 }
