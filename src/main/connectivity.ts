@@ -1,5 +1,6 @@
 import { connect } from "node:net";
 import { type HubItem, hub } from "./core/hub";
+import { isCoreShutdown } from "./core/process";
 
 /**
  * Whether this computer can reach the internet right now, as far as a waiting
@@ -115,6 +116,8 @@ export interface ConnectivityDeps {
 export class ConnectivityMonitor {
 	readonly #deps: ConnectivityDeps;
 	#id: number | null = null;
+	/** `stop()` ran (the quit): nothing reaches the core any more, and the answers are the plain link's. */
+	#stopped = false;
 	readonly #timers = new Map<number, () => void>();
 	/** The promises `verify` handed out, by the core's token. */
 	readonly #tokens = new Map<number, (reachable: boolean) => void>();
@@ -149,6 +152,37 @@ export class ConnectivityMonitor {
 		return hub().callOnce<T>(() => this.#instance(), method, params);
 	}
 
+	/**
+	 * The quit: the core ends next, so the timers and the window's and the OS's events that still arrive must not open
+	 * an instance on a core that refuses (an uncaught `core_unavailable` from `poll` ended Node with code 1). What waits
+	 * for a probe's answer is told unreachable, as when the core is lost.
+	 */
+	stop(): void {
+		if (this.#stopped) return;
+		this.#stopped = true;
+		const id = this.#id;
+		this.#id = null;
+		for (const cancel of this.#timers.values()) cancel();
+		this.#timers.clear();
+		const tokens = [...this.#tokens.values()];
+		this.#tokens.clear();
+		for (const settle of tokens) settle(false);
+		if (id !== null) hub().close(id);
+	}
+
+	/**
+	 * An event the monitor does not own the moment of (a timer, `poll`, a window's report): ignored once stopped, and
+	 * ignored when the core refuses it because the quit already ended it.
+	 */
+	#event(run: () => void): void {
+		if (this.#stopped) return;
+		try {
+			run();
+		} catch (error) {
+			if (!isCoreShutdown(error)) throw error;
+		}
+	}
+
 	#lost(): void {
 		this.#id = null;
 		for (const cancel of this.#timers.values()) cancel();
@@ -166,7 +200,8 @@ export class ConnectivityMonitor {
 			case "schedule": {
 				const timer = item.timer as number;
 				const cancel = this.#deps.schedule(() => {
-					if (this.#id !== null) this.#call("timer", { timer, isOnline: this.#deps.isOnline() });
+					if (this.#id !== null)
+						this.#event(() => this.#call("timer", { timer, isOnline: this.#deps.isOnline() }));
 				}, item.ms as number);
 				this.#timers.set(timer, cancel);
 				break;
@@ -199,32 +234,32 @@ export class ConnectivityMonitor {
 	}
 
 	get online(): boolean {
-		return this.#call<boolean>("online");
+		return this.#stopped ? this.#deps.isOnline() : this.#call<boolean>("online");
 	}
 
 	/** Offline, or inside the window after a wake: a network-class turn error means "wait", not "failed". */
 	shouldWait(): boolean {
-		return this.#call<boolean>("shouldWait", { now: this.#deps.now() });
+		return !this.#stopped && this.#call<boolean>("shouldWait", { now: this.#deps.now() });
 	}
 
 	/** An `online`/`offline` event from a window. */
 	report(online: boolean): void {
-		this.#call("report", { online, isOnline: this.#deps.isOnline() });
+		this.#event(() => this.#call("report", { online, isOnline: this.#deps.isOnline() }));
 	}
 
 	/** Edge-triggered `net.isOnline()` sampling: only a real change reports, so a window's event is not overruled. */
 	poll(): void {
-		this.#call("poll", { isOnline: this.#deps.isOnline() });
+		this.#event(() => this.#call("poll", { isOnline: this.#deps.isOnline() }));
 	}
 
 	/** `powerMonitor` `suspend`: nothing is reachable until the wake is confirmed. */
 	suspend(): void {
-		this.#call("suspend");
+		this.#event(() => this.#call("suspend"));
 	}
 
 	/** `powerMonitor` `resume`: offline until the probe answers. */
 	resume(): void {
-		this.#call("resume", { now: this.#deps.now(), isOnline: this.#deps.isOnline() });
+		this.#event(() => this.#call("resume", { now: this.#deps.now(), isOnline: this.#deps.isOnline() }));
 	}
 
 	/**
@@ -235,6 +270,7 @@ export class ConnectivityMonitor {
 	 * every concurrent ask.
 	 */
 	verify(host?: string): Promise<boolean> {
+		if (this.#stopped) return Promise.resolve(false);
 		const token = this.#call<number>("verify", { host: host ?? null, isOnline: this.#deps.isOnline() });
 		const early = this.#settled.get(token);
 		if (early !== undefined) {

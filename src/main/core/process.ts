@@ -365,6 +365,11 @@ export class CoreProcess {
 			throw new CoreError("core_exited", "git processes it started may still run");
 	}
 
+	/** Whether {@link shutdown} was called: the core is not started again, every request is refused. */
+	get shuttingDown(): boolean {
+		return this.#shuttingDown;
+	}
+
 	/** Refuses new work and joins every core. A lost shell ends their groups without the normal quit grace. */
 	shutdown(force = false): Promise<void> {
 		this.#shuttingDown = true;
@@ -533,6 +538,14 @@ let instance: CoreProcess | null = null;
 export function core(): CoreProcess {
 	instance ??= new CoreProcess({ binary: () => nativeBinPath("ompdesk-core") });
 	return instance;
+}
+
+/**
+ * Whether `error` is the core's refusal of work after the quit began (`shutdown` ran). A timer, a window event or a
+ * status listener that reaches the core while the app quits has nothing left to do: its caller drops the error.
+ */
+export function isCoreShutdown(error: unknown): boolean {
+	return error instanceof CoreError && error.code === "core_unavailable" && instance?.shuttingDown === true;
 }
 
 /** Ends the app's core (quit); a later request starts it again. */

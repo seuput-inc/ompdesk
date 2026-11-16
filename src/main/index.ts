@@ -598,6 +598,10 @@ let workAwakePolicy: KeepAwakePolicy | null = null;
 let lidAwake: LidAwake | null = null;
 /** Disk care at launch and daily (src/main/disk/care.ts). */
 let diskCare: DiskCare | null = null;
+/** The link-state monitor (src/main/connectivity.ts): stopped at the quit, before the core it runs in ends. */
+let connectivityMonitor: ConnectivityMonitor | null = null;
+/** The 3 s link sampling of `connectivityMonitor`. */
+let connectivityPoll: ReturnType<typeof setInterval> | null = null;
 
 function errorMessage(value: unknown): { message: string; stack?: string } {
 	if (value instanceof Error) return { message: value.message, stack: value.stack };
@@ -2149,6 +2153,7 @@ app.whenReady().then(async () => {
 			if (online) devices.wake("online");
 		},
 	});
+	connectivityMonitor = connectivity;
 	const interruptedTurns = new InterruptedTurnStore(join(app.getPath("userData"), "interrupted-turns.json"), error =>
 		writeRuntimeLog({
 			source: "turn-resume",
@@ -2249,7 +2254,8 @@ app.whenReady().then(async () => {
 	powerMonitor.on("unlock-screen", () => devices.wake("unlock"));
 	app.on("browser-window-focus", () => devices.wake("focus"));
 	// Chromium's own link state, sampled for changes the windows' events missed (a window may not exist).
-	setInterval(() => connectivity.poll(), 3000).unref();
+	connectivityPoll = setInterval(() => connectivity.poll(), 3000);
+	connectivityPoll.unref();
 	sidecarPool.onRunningChange = () => {
 		syncWorkAwake();
 		turnResume.sync();
@@ -2600,6 +2606,15 @@ installQuitGuard(
 	() => {
 		// Each step is named to the hang watchdog first: a stalled quit then names the step that never returned.
 		const steps: Array<[string, () => void]> = [
+			[
+				"connectivity",
+				() => {
+					// Before the core ends: its timers, the link sampling and the OS's events reach the core's hub.
+					if (connectivityPoll) clearInterval(connectivityPoll);
+					connectivityPoll = null;
+					connectivityMonitor?.stop();
+				},
+			],
 			["stats-server", () => void statsServer?.kill()],
 			["mcp-hub", () => void mcpHub?.kill()],
 			["omp-updater", () => ompUpdater?.dispose()],

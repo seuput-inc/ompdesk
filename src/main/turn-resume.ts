@@ -41,7 +41,7 @@ import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { canonicalCwd } from "./canonical-cwd";
 import { type HubItem, hub, sharedInstance } from "./core/hub";
-import type { CoreError } from "./core/process";
+import { type CoreError, isCoreShutdown } from "./core/process";
 import { deletedSessions } from "./deleted-sessions";
 import { RpcTimeoutError } from "./rpc-client";
 import type { SidecarLike } from "./sidecar-types";
@@ -531,6 +531,18 @@ export class TurnResume {
 		this.#deps = deps;
 	}
 
+	/**
+	 * A call the core's own timers, the sidecars' status events and the pool's run-state changes make: once the quit has
+	 * ended the core there is nothing to decide, so its refusal is dropped (anything else still throws).
+	 */
+	#atQuit(run: () => void): void {
+		try {
+			run();
+		} catch (error) {
+			if (!isCoreShutdown(error)) throw error;
+		}
+	}
+
 	/** The instance, opened (or opened again after a loss) with what can be read again. */
 	#instance(): number {
 		if (this.#id !== null) return this.#id;
@@ -670,7 +682,7 @@ export class TurnResume {
 			case "schedule": {
 				const timer = item.timer as number;
 				const cancel = deps.scheduledRetry.schedule(() => {
-					if (this.#id !== null) this.#call("timer", { timer });
+					if (this.#id !== null) this.#atQuit(() => this.#call("timer", { timer }));
 				}, item.ms as number);
 				this.#timers.set(timer, cancel);
 				break;
@@ -710,7 +722,9 @@ export class TurnResume {
 		if (!sidecar) return;
 		const listener = (payload: SidecarStatus) => {
 			if (this.#id === null) return;
-			this.#call("status", { listener: id, status: payload.status, sessionHeld: payload.sessionHeld === true });
+			this.#atQuit(() =>
+				this.#call("status", { listener: id, status: payload.status, sessionHeld: payload.sessionHeld === true }),
+			);
 		};
 		this.#listeners.set(id, { sidecar, listener });
 		sidecar.on("status", listener);
@@ -816,14 +830,23 @@ export class TurnResume {
 	 * A tab whose turn waits for a provider's limit keeps a `limit` marker, so a relaunch takes the turn up again.
 	 */
 	sync(): void {
-		this.#call("sync", {
-			env: this.#env(["facts", "network", "enabled", "now"]),
-		});
+		this.#atQuit(() =>
+			this.#call("sync", {
+				env: this.#env(["facts", "network", "enabled", "now"]),
+			}),
+		);
 	}
 
 	/** The network is back (or already was): run every held continuation. */
 	async flush(): Promise<void> {
-		await this.#promise(this.#call<number | null>("flush", { env: this.#env(["facts", "online"]) }));
+		let token: number | null;
+		try {
+			token = this.#call<number | null>("flush", { env: this.#env(["facts", "online"]) });
+		} catch (error) {
+			if (isCoreShutdown(error)) return;
+			throw error;
+		}
+		await this.#promise(token);
 	}
 
 	/** The connectivity state changed. */

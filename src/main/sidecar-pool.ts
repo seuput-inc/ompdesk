@@ -82,7 +82,7 @@ import { TargetAnswer } from "./agent-control/target-answer";
 import type { BackgroundWorkMember } from "./background-work";
 import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
-import { CoreError } from "./core/process";
+import { CoreError, isCoreShutdown } from "./core/process";
 import { deletedSessions } from "./deleted-sessions";
 import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "./extension-reload";
 import { createMessageUpdateSlimmer } from "./message-update-slim";
@@ -888,7 +888,12 @@ export class SidecarPool {
 
 	/** The window's one "closed" listener (registered at the core's word): every tab it owned or viewed goes. */
 	#windowClosed(id: number): void {
-		this.#call("windowClosed", { win: id });
+		try {
+			this.#call("windowClosed", { win: id });
+		} catch (error) {
+			// The quit closes every window after it ended the core, whose pool (and this window's tabs) went with it.
+			if (!isCoreShutdown(error)) throw error;
+		}
 	}
 
 	// ---- the sidecar's listeners ----------------------------------------------------------------------------------
@@ -896,7 +901,12 @@ export class SidecarPool {
 	/** Per-tab light wiring, attached for the entry's whole life: each event is fed to the core as the sidecar emits it. */
 	#wireLight(tab: string, sidecar: SidecarLike): void {
 		const feed = (event: string, payload: unknown = null): void => {
-			this.#call("feed", { tab, event, payload: payload ?? null, fromLink: sidecar.statusFromLink === true });
+			try {
+				this.#call("feed", { tab, event, payload: payload ?? null, fromLink: sidecar.statusFromLink === true });
+			} catch (error) {
+				// An omp's last words (its exit) arrive after the quit ended the core: nothing is left to tell.
+				if (!isCoreShutdown(error)) throw error;
+			}
 		};
 		sidecar.on("status", (payload: SidecarStatusPayload) => {
 			feed("status", {

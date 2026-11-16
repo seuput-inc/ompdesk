@@ -11,6 +11,8 @@ import {
 	reaches,
 	tcpConnects,
 } from "./connectivity";
+import { hub } from "./core/hub";
+import { CoreError, core } from "./core/process";
 
 function harness(initialOnline = true) {
 	const state = { online: initialOnline, reachable: true, now: 1_000_000 };
@@ -343,6 +345,51 @@ describe("ConnectivityMonitor", () => {
 		timers.shift()?.();
 		for (let i = 0; i < 5; i++) await Promise.resolve();
 		expect(monitor.online).toBe(true);
+	});
+});
+
+describe("ConnectivityMonitor at the quit", () => {
+	it("stopped, sends the core nothing: its sampling, events and timers end, and a probe's waiter hears unreachable", async () => {
+		const { monitor, state, fireTimer, timers } = harness();
+		monitor.report(false);
+		state.online = false;
+		monitor.suspend();
+		const call = vi.spyOn(hub(), "callOnce");
+		const waiting = monitor.verify();
+		call.mockClear();
+		monitor.stop();
+		expect(await waiting).toBe(false);
+		monitor.poll();
+		monitor.report(true);
+		monitor.suspend();
+		monitor.resume();
+		expect(call).not.toHaveBeenCalled();
+		expect(await monitor.verify()).toBe(false);
+		expect(monitor.shouldWait()).toBe(false);
+		// The link's own word once the state machine is gone.
+		expect(monitor.online).toBe(false);
+		expect(timers.every(timer => !timer.live)).toBe(true);
+		await expect(fireTimer()).rejects.toThrow("no live timer");
+		call.mockRestore();
+	});
+
+	it("drops the core's refusal of a call made after the quit began, and still throws any other failure", () => {
+		const { monitor } = harness();
+		const call = vi.spyOn(hub(), "callOnce");
+		call.mockImplementation(() => {
+			throw new CoreError("core_unavailable", "ompdesk-core is shutting down");
+		});
+		// A refusal for another reason (a core that kept failing to start) is not the quit's: it stays an error.
+		expect(() => monitor.poll()).toThrow("shutting down");
+		const shuttingDown = vi.spyOn(core(), "shuttingDown", "get").mockReturnValue(true);
+		expect(() => monitor.poll()).not.toThrow();
+		expect(() => monitor.report(false)).not.toThrow();
+		call.mockImplementation(() => {
+			throw new CoreError("core_exited", "the core ended");
+		});
+		expect(() => monitor.poll()).toThrow("the core ended");
+		shuttingDown.mockRestore();
+		call.mockRestore();
 	});
 });
 
