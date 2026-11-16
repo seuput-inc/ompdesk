@@ -6,21 +6,70 @@ use serde_json::{Value, json};
 use shell_preview::{AttachedPage, Browser, Error, PageInitializer, Partition, Viewport};
 use tokio::sync::oneshot;
 
+use crate::preview_protocol::{Gateway, PreviewTransport};
+
 use super::native::Snapshot;
 use super::policy::{Command, Policy, Storage};
 
-static BROWSER: OnceLock<Arc<Browser>> = OnceLock::new();
-
-pub(super) fn browser() -> Result<&'static Arc<Browser>, String> {
-    BROWSER
-        .get()
-        .ok_or_else(|| "Preview browser is not installed".to_string())
+struct Backend {
+    browser: Arc<Browser>,
+    gateway: Arc<Gateway>,
 }
 
-pub fn install(browser: Arc<Browser>) -> Result<(), String> {
-    BROWSER
-        .set(browser)
-        .map_err(|_| "Preview browser already installed".to_string())
+static BACKEND: OnceLock<Backend> = OnceLock::new();
+
+fn backend() -> Result<&'static Backend, String> {
+    BACKEND
+        .get()
+        .ok_or_else(|| "Preview backend is not installed".into())
+}
+
+pub(super) fn browser() -> Result<&'static Arc<Browser>, String> {
+    Ok(&backend()?.browser)
+}
+
+pub fn install(browser: Arc<Browser>, gateway: Arc<Gateway>) -> Result<(), String> {
+    BACKEND
+        .set(Backend { browser, gateway })
+        .map_err(|_| "Preview backend already installed".into())
+}
+
+async fn transport_for(partition: &str) -> Result<PreviewTransport, String> {
+    if let Some(transport) = super::with(|r| Ok(r.get(partition)?.preview_transport.clone()))? {
+        if !transport.is_live() {
+            return Err("Preview transport closed before its BrowserContext was disposed".into());
+        }
+        return Ok(transport);
+    }
+    let transport = backend()?
+        .gateway
+        .reserve_preview_partition(super::canonical(partition))
+        .await?;
+    if !transport.is_live() {
+        return Err("Preview transport closed during reservation".into());
+    }
+    super::with(|r| {
+        r.get_mut(partition)?.preview_transport = Some(transport.clone());
+        Ok(())
+    })?;
+    Ok(transport)
+}
+
+pub fn protected_transport(partition: &str) -> Result<PreviewTransport, String> {
+    super::with(|r| {
+        let session = r.get(partition)?;
+        if session.context.is_none() || !session.gateway_proxy_applied {
+            return Err(
+                "Preview gateway requires a successfully configured explicit proxy bypass".into(),
+            );
+        }
+        session
+            .preview_transport
+            .as_ref()
+            .filter(|transport| transport.is_live())
+            .cloned()
+            .ok_or_else(|| "Preview gateway transport is not live".into())
+    })
 }
 
 /// Construct before launch_with_hooks; it stores no Browser and cannot form a shutdown ownership cycle.
@@ -32,6 +81,18 @@ impl PageInitializer for Initializer {
         page: AttachedPage,
     ) -> Pin<Box<dyn Future<Output = shell_preview::Result<()>> + Send>> {
         Box::pin(async move {
+            let target = page
+                .command("Target.getTargetInfo", json!({"targetId":page.target_id}))
+                .await?;
+            if !matches!(
+                target["targetInfo"]["type"].as_str(),
+                Some("page" | "iframe")
+            ) {
+                return Err(Error::new(
+                    "unsupported",
+                    "session frame initialization requires an actual page or iframe",
+                ));
+            }
             let partition = super::with(|r| {
                 r.partitions
                     .iter()
@@ -59,21 +120,26 @@ pub async fn context_for(partition: &str) -> Result<Partition, String> {
 }
 
 pub(super) async fn ensure_context(partition: &str) -> Result<Partition, String> {
-    let (storage, context, policy) = super::with(|r| {
-        let s = r.get(partition)?;
-        Ok((s.storage.clone(), s.context.clone(), s.policy.clone()))
-    })?;
-    if storage != Storage::Memory {
+    if !super::with(|r| Ok(r.get(partition)?.storage == Storage::Memory))? {
         return Err("an app WebView partition is not a Preview BrowserContext".into());
     }
-    if let Some(context_id) = context {
+    let transport = transport_for(partition).await?;
+    if let Some(context_id) = super::with(|r| Ok(r.get(partition)?.context.clone()))? {
         return Ok(Partition { context_id });
     }
-    create_context(partition, &policy).await
+    let policy = super::policy(partition)?;
+    create_context(partition, &policy, &transport).await
 }
 
-async fn create_context(partition: &str, policy: &Policy) -> Result<Partition, String> {
+async fn create_context(
+    partition: &str,
+    policy: &Policy,
+    transport: &PreviewTransport,
+) -> Result<Partition, String> {
     let browser = browser()?;
+    if !transport.is_live() {
+        return Err("Preview transport is not live".into());
+    }
     let mut params = json!({"disposeOnDetach":true});
     if let Some(proxy) = &policy.proxy {
         match proxy["mode"].as_str().unwrap_or("system") {
@@ -93,6 +159,17 @@ async fn create_context(partition: &str, policy: &Policy) -> Result<Partition, S
             _ => return Err("Preview BrowserContext does not expose a PAC script setter".into()),
         }
     }
+    // CDP ignores proxyBypassList without proxyServer. Preserve system mode without claiming protection.
+    let protected = params.get("proxyServer").is_some();
+    if protected {
+        let mut bypass = params["proxyBypassList"].as_str().unwrap_or("").to_string();
+        if !bypass.is_empty() {
+            bypass.push(';');
+        }
+        bypass.push_str("<-loopback>;");
+        bypass.push_str(&transport.proxy_bypass_rule);
+        params["proxyBypassList"] = bypass.into();
+    }
     let result = browser
         .command("Target.createBrowserContext", params, None)
         .await
@@ -102,6 +179,12 @@ async fn create_context(partition: &str, policy: &Policy) -> Result<Partition, S
         .ok_or("BrowserContext id is missing")?
         .to_string();
     let setup = async {
+        if !transport.is_live() {
+            return Err(Error::new(
+                "gone",
+                "Preview transport closed during context creation",
+            ));
+        }
         browser
             .command(
                 "Browser.grantPermissions",
@@ -130,7 +213,9 @@ async fn create_context(partition: &str, policy: &Policy) -> Result<Partition, S
         return Err(error.to_string());
     }
     super::with(|r| {
-        r.get_mut(partition)?.context = Some(context_id.clone());
+        let session = r.get_mut(partition)?;
+        session.context = Some(context_id.clone());
+        session.gateway_proxy_applied = protected;
         Ok(())
     })?;
     Ok(Partition { context_id })
@@ -303,13 +388,16 @@ pub(super) async fn set_proxy(partition: &str, args: &Value) -> Result<(), Strin
             .await
             .map_err(|e| e.to_string())?;
         super::with(|r| {
-            r.get_mut(partition)?.context = None;
+            let session = r.get_mut(partition)?;
+            session.context = None;
+            session.gateway_proxy_applied = false;
             Ok(())
         })?;
     }
     let mut policy = super::policy(partition)?;
     policy.proxy = Some(args.clone());
-    create_context(partition, &policy).await?;
+    let transport = transport_for(partition).await?;
+    create_context(partition, &policy, &transport).await?;
     Ok(())
 }
 
