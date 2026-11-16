@@ -148,8 +148,9 @@ describe("macOS DMG download name", () => {
 describe.runIf(process.platform !== "win32")("macOS DMG staging", () => {
 	let dir: string;
 	let calls: string[][];
-	/** Bundle id and short version each fake bundle reports through `plutil`. */
-	let plists: Map<string, Record<string, string>>;
+	let systemVersion: string;
+	let bundlePlist: Record<string, string>;
+	let ownPlist: Record<string, string>;
 	let failures: Set<string>;
 
 	const OWN = "/Applications/OMPdesk.app";
@@ -178,10 +179,15 @@ describe.runIf(process.platform !== "win32")("macOS DMG staging", () => {
 				for (const entry of fs.readdirSync(mountPoint))
 					fs.rmSync(path.join(mountPoint, entry), { recursive: true });
 			}
+			if (tool === "sw_vers") return { ok: true, stdout: `${systemVersion}\n` };
 			if (tool === "ditto") fs.cpSync(args[0] ?? "", args[1] ?? "", { recursive: true });
 			if (tool === "plutil") {
 				const plist = args[args.length - 1] ?? "";
-				const value = plists.get(path.dirname(path.dirname(plist)))?.[args[1] ?? ""];
+				const values: Record<string, string> =
+					plist === path.join(OWN, "Contents", "Info.plist")
+						? ownPlist
+						: JSON.parse(fs.readFileSync(plist, "utf8"));
+				const value = values[args[1] ?? ""];
 				return value === undefined ? { ok: false, stdout: "" } : { ok: true, stdout: `${value}\n` };
 			}
 			return { ok: true, stdout: "" };
@@ -190,6 +196,7 @@ describe.runIf(process.platform !== "win32")("macOS DMG staging", () => {
 	const releaseDmg = (mountPoint: string) => {
 		fs.mkdirSync(path.join(mountPoint, "OMPdesk.app", "Contents"), { recursive: true });
 		fs.writeFileSync(path.join(mountPoint, "OMPdesk.app", "Contents", "marker"), "new");
+		fs.writeFileSync(path.join(mountPoint, "OMPdesk.app", "Contents", "Info.plist"), JSON.stringify(bundlePlist));
 		fs.symlinkSync("/Applications", path.join(mountPoint, "Applications"));
 	};
 
@@ -197,13 +204,118 @@ describe.runIf(process.platform !== "win32")("macOS DMG staging", () => {
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-stage-"));
 		calls = [];
 		failures = new Set();
-		plists = new Map([[OWN, { CFBundleIdentifier: "com.seuput.ompdesk", CFBundleShortVersionString: "0.17.4" }]]);
-		plists.set(path.join(dir, "updates", "0.18.0", "OMPdesk.app"), {
+		systemVersion = "14.0.0";
+		ownPlist = { CFBundleIdentifier: "com.seuput.ompdesk", CFBundleShortVersionString: "0.17.4" };
+		bundlePlist = {
 			CFBundleIdentifier: "com.seuput.ompdesk",
 			CFBundleShortVersionString: "0.18.0",
-		});
+			LSMinimumSystemVersion: "14.0.0",
+		};
 	});
 	afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+	it.each(["12.7.6", "13.6.9", "", "14.beta", "14.0.0.0", "999999999999999999999.0"])(
+		"rejects unsupported or invalid running macOS %j before changing staging",
+		async value => {
+			systemVersion = value;
+			const stagingDir = options(fakeTools(releaseDmg)).stagingDir;
+			fs.mkdirSync(stagingDir, { recursive: true });
+			fs.writeFileSync(path.join(stagingDir, "sentinel"), "old");
+
+			await expect(stageBundleFromDmg(options(fakeTools(releaseDmg)))).rejects.toMatchObject({
+				reason: "compatibility",
+			});
+			expect(fs.readFileSync(path.join(stagingDir, "sentinel"), "utf8")).toBe("old");
+			expect(calls.some(call => call[0] === "ditto" || call[0] === "hdiutil")).toBe(false);
+			expect(fs.existsSync(path.join(dir, "mnt"))).toBe(false);
+		},
+	);
+
+	it("fails closed when sw_vers fails", async () => {
+		failures.add("sw_vers");
+		await expect(stageBundleFromDmg(options(fakeTools(releaseDmg)))).rejects.toMatchObject({
+			reason: "compatibility",
+		});
+		expect(fs.existsSync(path.join(dir, "updates"))).toBe(false);
+	});
+
+	it.each(["15.0", "", "14.beta", "14.0.0.0", "999999999999999999999.0", undefined])(
+		"rejects mounted bundle minimum %j before changing staging and detaches",
+		async minimum => {
+			if (minimum === undefined) delete bundlePlist.LSMinimumSystemVersion;
+			else bundlePlist.LSMinimumSystemVersion = minimum;
+			const stagingDir = options(fakeTools(releaseDmg)).stagingDir;
+			fs.mkdirSync(stagingDir, { recursive: true });
+			fs.writeFileSync(path.join(stagingDir, "sentinel"), "old");
+
+			await expect(stageBundleFromDmg(options(fakeTools(releaseDmg)))).rejects.toMatchObject({
+				reason: "compatibility",
+			});
+			expect(fs.readFileSync(path.join(stagingDir, "sentinel"), "utf8")).toBe("old");
+			expect(calls.some(call => call[0] === "ditto")).toBe(false);
+			expect(calls.some(call => call[0] === "hdiutil" && call[1] === "detach")).toBe(true);
+			expect(fs.readdirSync(path.join(dir, "mnt"))).toEqual([]);
+		},
+	);
+
+	it("fails closed when the mounted plist cannot be read", async () => {
+		failures.add("plutil");
+		await expect(stageBundleFromDmg(options(fakeTools(releaseDmg)))).rejects.toMatchObject({
+			reason: "compatibility",
+		});
+		expect(calls.some(call => call[0] === "ditto")).toBe(false);
+		expect(calls.some(call => call[0] === "hdiutil" && call[1] === "detach")).toBe(true);
+	});
+
+	it("reports mount cleanup failure without losing the compatibility rejection", async () => {
+		bundlePlist.LSMinimumSystemVersion = "15.0";
+		const cleanupError = new Error("mount directory cleanup refused");
+		const configured = options(fakeTools(releaseDmg));
+		const error = await stageBundleFromDmg({
+			...configured,
+			fs: {
+				...configured.fs,
+				rmdir: async () => {
+					throw cleanupError;
+				},
+			},
+		}).catch((failure: unknown) => failure);
+		expect(error).toBeInstanceOf(AggregateError);
+		if (!(error instanceof AggregateError)) throw error;
+		expect(error.errors).toEqual([expect.objectContaining({ reason: "compatibility" }), cleanupError]);
+		expect(calls.some(call => call[0] === "ditto")).toBe(false);
+	});
+
+	it("preserves compatibility and both detach errors without removing a mounted image", async () => {
+		bundlePlist.LSMinimumSystemVersion = "15.0";
+		failures.add("hdiutil detach");
+		failures.add("hdiutil detach -force");
+		const error = await stageBundleFromDmg(options(fakeTools(releaseDmg))).catch((failure: unknown) => failure);
+		expect(error).toBeInstanceOf(AggregateError);
+		if (!(error instanceof AggregateError)) throw error;
+		expect(error.errors).toHaveLength(3);
+		expect(error.errors[0]).toMatchObject({ reason: "compatibility" });
+		expect(error.errors.slice(1)).toEqual([
+			expect.objectContaining({ reason: "mount" }),
+			expect.objectContaining({ reason: "mount" }),
+		]);
+		const mountPoint = calls.find(call => call[0] === "hdiutil" && call[1] === "detach")?.at(-1);
+		expect(mountPoint).toBeDefined();
+		expect(fs.readFileSync(path.join(mountPoint ?? "", "OMPdesk.app", "Contents", "marker"), "utf8")).toBe("new");
+		expect(calls.some(call => call[0] === "ditto")).toBe(false);
+	});
+
+	it("fails when neither detach attempt succeeds after copying", async () => {
+		failures.add("hdiutil detach");
+		failures.add("hdiutil detach -force");
+		const error = await stageBundleFromDmg(options(fakeTools(releaseDmg))).catch((failure: unknown) => failure);
+		expect(error).toBeInstanceOf(AggregateError);
+		if (!(error instanceof AggregateError)) throw error;
+		expect(error.errors).toHaveLength(2);
+		const mountPoint = calls.find(call => call[0] === "hdiutil" && call[1] === "detach")?.at(-1);
+		expect(mountPoint).toBeDefined();
+		expect(fs.existsSync(path.join(mountPoint ?? "", "OMPdesk.app", "Contents", "Info.plist"))).toBe(true);
+	});
 
 	it("mounts read-only without Finder, copies the app out, detaches, then verifies it", async () => {
 		const staged = await stageBundleFromDmg(options(fakeTools(releaseDmg)));
@@ -212,12 +324,12 @@ describe.runIf(process.platform !== "win32")("macOS DMG staging", () => {
 		expect(fs.readFileSync(path.join(staged, "Contents", "marker"), "utf8")).toBe("new");
 		// The /Applications symlink in the image is never mistaken for the bundle.
 		expect(fs.readdirSync(path.dirname(staged))).toEqual(["OMPdesk.app"]);
-		const [attach, copy, detach, verify] = calls;
+		const attach = calls.find(call => call[0] === "hdiutil" && call[1] === "attach");
 		expect(attach?.slice(0, 5)).toEqual(["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen"]);
 		expect(attach?.at(-1)).toBe(path.join(dir, "ompdesk-0.18.0-arm64.dmg"));
-		expect(copy?.[0]).toBe("ditto");
-		expect(detach?.slice(0, 2)).toEqual(["hdiutil", "detach"]);
-		expect(verify).toEqual(["codesign", "--verify", "--deep", "--strict", staged]);
+		expect(calls.some(call => call[0] === "ditto")).toBe(true);
+		expect(calls.some(call => call[0] === "hdiutil" && call[1] === "detach")).toBe(true);
+		expect(calls).toContainEqual(["codesign", "--verify", "--deep", "--strict", staged]);
 		// The temporary mount point is gone once the image is detached.
 		expect(fs.readdirSync(path.join(dir, "mnt"))).toEqual([]);
 	});
@@ -236,17 +348,14 @@ describe.runIf(process.platform !== "win32")("macOS DMG staging", () => {
 	});
 
 	it("rejects a bundle with another bundle id", async () => {
-		plists.set(path.join(dir, "updates", "0.18.0", "OMPdesk.app"), {
-			CFBundleIdentifier: "com.example.other",
-			CFBundleShortVersionString: "0.18.0",
-		});
+		bundlePlist.CFBundleIdentifier = "com.example.other";
 		await expect(stageBundleFromDmg(options(fakeTools(releaseDmg)))).rejects.toMatchObject({ reason: "verify" });
 	});
 
 	it("fails as a mount error when hdiutil cannot attach, and copies nothing", async () => {
 		failures.add("hdiutil attach");
 		await expect(stageBundleFromDmg(options(fakeTools(releaseDmg)))).rejects.toMatchObject({ reason: "mount" });
-		expect(calls.map(call => call[0])).toEqual(["hdiutil"]);
+		expect(calls.some(call => call[0] === "ditto")).toBe(false);
 		expect(fs.readdirSync(path.join(dir, "mnt"))).toEqual([]);
 	});
 

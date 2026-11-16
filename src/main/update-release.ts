@@ -11,6 +11,8 @@
  * No Electron imports, so tests exercise it directly.
  */
 import { z } from "zod";
+import appCompatibility from "../shared/app-compatibility.json";
+import { compareVersions } from "../shared/version";
 
 /** The only release assets; version-free, so `/releases/latest/download/<name>` stays stable. */
 export const UPDATE_ASSETS = {
@@ -24,6 +26,8 @@ export type UpdatePlatform = keyof typeof UPDATE_ASSETS;
 export const UPDATE_METADATA_ERROR = "ERR_OMPDESK_UPDATE_METADATA";
 /** The release is valid but ships nothing for this platform. */
 export const UPDATE_PLATFORM_ERROR = "ERR_OMPDESK_UPDATE_PLATFORM";
+/** The selected update cannot run on this OS; no download or resolved callback may follow. */
+export const UPDATE_COMPATIBILITY_ERROR = "ERR_OMPDESK_UPDATE_COMPATIBILITY";
 /** electron-updater's code for "no release yet"; settleFailedUpdateCheck reads it as "up to date". */
 export const NO_RELEASE_ERROR = "ERR_UPDATER_LATEST_VERSION_NOT_FOUND";
 /** GitHub answered the release lookup with an unexpected status or payload. */
@@ -32,6 +36,7 @@ export const RELEASE_LOOKUP_ERROR = "ERR_OMPDESK_RELEASE_LOOKUP";
 export type ReleaseFeedErrorCode =
 	| typeof UPDATE_METADATA_ERROR
 	| typeof UPDATE_PLATFORM_ERROR
+	| typeof UPDATE_COMPATIBILITY_ERROR
 	| typeof NO_RELEASE_ERROR
 	| typeof RELEASE_LOOKUP_ERROR;
 
@@ -50,12 +55,20 @@ const COMMENT_PATTERN = /<!--\s*ompdesk-update\s+([\s\S]*?)\s*-->/g;
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 /** 64 bytes in padded base64, as electron-updater and `openssl … | base64` write it. */
 const SHA512_BASE64 = /^[A-Za-z0-9+/]{86}==$/;
+const SystemVersionSchema = z
+	.string()
+	.regex(/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/, "minimumSystemVersion must be a numeric OS version")
+	.refine(
+		version => version.split(".").every(part => Number.isSafeInteger(Number(part))),
+		"OS version parts must be safe integers",
+	);
 
 const updateFile = <Name extends string>(name: Name) =>
 	z.object({
 		name: z.literal(name),
 		size: z.number().int().positive(),
 		sha512: z.string().regex(SHA512_BASE64, "sha512 must be a base64 SHA-512 digest"),
+		minimumSystemVersion: SystemVersionSchema.optional(),
 	});
 
 const UpdateMetadataSchema = z.object({
@@ -165,6 +178,8 @@ export interface PlatformRelease {
 	file: UpdateFile;
 	/** API asset endpoint of `file`; downloads need the token and `application/octet-stream`. */
 	assetUrl: string;
+	/** Darwin release, not the macOS product version; absent for the unchanged Windows path. */
+	minimumSystemVersion?: string;
 }
 
 /**
@@ -197,6 +212,17 @@ export function resolvePlatformRelease(release: GitHubRelease, platform: UpdateP
 			`${file.name} is ${asset.size} bytes, but the ompdesk-update comment says ${file.size}`,
 		);
 	}
+	const minimumSystemVersion =
+		platform === "mac" ? (file.minimumSystemVersion ?? appCompatibility.minimumDarwin) : undefined;
+	if (minimumSystemVersion !== undefined) {
+		const order = compareVersions(minimumSystemVersion, appCompatibility.minimumDarwin);
+		if (order === null || order < 0) {
+			throw new ReleaseFeedError(
+				UPDATE_METADATA_ERROR,
+				`A macOS update requires a Darwin minimum of ${appCompatibility.minimumDarwin} or newer`,
+			);
+		}
+	}
 	return {
 		version: metadata.version,
 		releaseDate: metadata.releaseDate,
@@ -204,5 +230,19 @@ export function resolvePlatformRelease(release: GitHubRelease, platform: UpdateP
 		notes: stripUpdateMetadata(release.body),
 		file,
 		assetUrl: asset.url,
+		...(minimumSystemVersion === undefined ? {} : { minimumSystemVersion }),
 	};
+}
+
+/** Fail before onResolved: electron-updater's later OS check catches malformed versions and allows them. */
+export function assertUpdateSupported(release: PlatformRelease, systemVersion: string): void {
+	const minimum = release.minimumSystemVersion;
+	if (minimum === undefined) return;
+	const order = SystemVersionSchema.safeParse(systemVersion).success ? compareVersions(systemVersion, minimum) : null;
+	if (order === null || order < 0) {
+		throw new ReleaseFeedError(
+			UPDATE_COMPATIBILITY_ERROR,
+			`Update ${release.version} requires Darwin ${minimum}; this system reports ${systemVersion}`,
+		);
+	}
 }

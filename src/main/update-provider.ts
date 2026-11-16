@@ -8,10 +8,12 @@
  * No blockmaps are published, so the updater must run with
  * `disableDifferentialDownload`.
  */
+import { release as osRelease } from "node:os";
 import type { ResolvedUpdateFileInfo, UpdateInfo } from "electron-updater";
 import pkg from "electron-updater";
 import type { ProviderRuntimeOptions } from "electron-updater/out/providers/Provider";
 import {
+	assertUpdateSupported,
 	NO_RELEASE_ERROR,
 	type PlatformRelease,
 	pickRelease,
@@ -30,6 +32,8 @@ export interface ReleaseFeed {
 	apiRepo: string;
 	platform: UpdatePlatform;
 	allowPrerelease: boolean;
+	/** Actual node:os.release() by default; injected only to exercise OS admission without changing the host. */
+	systemVersion?: string;
 	/** JSON headers for the release lookup (an Authorization header only when a token is configured). */
 	apiHeaders: Record<string, string>;
 	/** `application/octet-stream` headers for the asset download (same rule). */
@@ -47,6 +51,7 @@ export function releaseUpdateInfo(release: PlatformRelease): UpdateInfo {
 		releaseDate: release.releaseDate,
 		releaseName: release.releaseName,
 		releaseNotes: release.notes,
+		...(release.minimumSystemVersion === undefined ? {} : { minimumSystemVersion: release.minimumSystemVersion }),
 		files: [{ url: name, sha512, size }],
 		path: name,
 		sha512,
@@ -101,10 +106,12 @@ export function releaseUpdateProvider(feed: ReleaseFeed) {
 		}
 
 		async getLatestVersion(): Promise<UpdateInfo> {
+			this.#release = undefined;
 			const release = resolvePlatformRelease(
 				pickRelease(await fetchRelease(feed), feed.allowPrerelease),
 				feed.platform,
 			);
+			assertUpdateSupported(release, feed.systemVersion ?? osRelease());
 			this.#release = release;
 			feed.onResolved(release);
 			return releaseUpdateInfo(release);
@@ -115,6 +122,7 @@ export function releaseUpdateProvider(feed: ReleaseFeed) {
 			if (!release || release.version !== info.version) {
 				throw new ReleaseFeedError(UPDATE_METADATA_ERROR, `No resolved release for ${info.version}`);
 			}
+			assertUpdateSupported(release, feed.systemVersion ?? osRelease());
 			return info.files.map(file => ({ url: new URL(release.assetUrl), info: file }));
 		}
 	};

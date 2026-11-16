@@ -98,6 +98,7 @@ describe("platform release resolution", () => {
 			notes: NOTES,
 			file: METADATA.files.mac,
 			assetUrl: "https://api.github.com/repos/o/r/releases/assets/1",
+			minimumSystemVersion: "23.0.0",
 		});
 		expect(resolvePlatformRelease(release(), "windows").assetUrl).toBe(
 			"https://api.github.com/repos/o/r/releases/assets/2",

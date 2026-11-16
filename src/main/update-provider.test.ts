@@ -44,6 +44,7 @@ function feedFor(response: () => Response, overrides: Partial<ReleaseFeed> = {})
 		apiRepo: API,
 		platform: "windows",
 		allowPrerelease: false,
+		systemVersion: "23.0.0",
 		apiHeaders: { accept: "application/vnd.github+json", authorization: "Bearer t" },
 		downloadHeaders: { accept: "application/octet-stream", authorization: "Bearer t" },
 		fetch: async (url, init) => {
@@ -141,6 +142,7 @@ describe("release-notes update provider", () => {
 		const info = await provider.getLatestVersion();
 
 		expect(info.files).toEqual([{ url: UPDATE_ASSETS.mac, sha512: sha512("mac"), size: 120 }]);
+		expect(info.minimumSystemVersion).toBe("23.0.0");
 		expect(resolved[0]?.assetUrl).toBe(`${API}/releases/assets/11`);
 	});
 
@@ -153,6 +155,19 @@ describe("release-notes update provider", () => {
 
 		expect((await provider.getLatestVersion()).version).toBe("99.0.0-test.1");
 		expect(requests[0]?.url).toBe(`${API}/releases?per_page=30`);
+	});
+
+	it("keeps the released prerelease preference even when a newer stable appears first", async () => {
+		const stable = releasePayload(
+			"v100.0.0",
+			`<!-- ompdesk-update ${JSON.stringify({ ...metadata, version: "100.0.0" })} -->`,
+		);
+		const pre = releasePayload(
+			"v99.0.0-test.1",
+			`<!-- ompdesk-update ${JSON.stringify({ ...metadata, version: "99.0.0-test.1" })} -->`,
+		);
+		const { provider } = feedFor(() => json([stable, pre]), { allowPrerelease: true });
+		expect((await provider.getLatestVersion()).version).toBe("99.0.0-test.1");
 	});
 
 	it("fails a release without metadata instead of offering an update", async () => {

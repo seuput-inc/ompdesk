@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import type * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import compatibility from "../shared/app-compatibility.json";
 import type { UpdateAccess, UpdateStatus, UpdateTokenSource } from "../shared/ipc-types";
+import { compareVersions } from "../shared/version";
 
 /** The macOS update download: the release's DMG, saved under a versioned local name. */
 export interface MacInstallerAsset {
@@ -110,7 +112,7 @@ else
 fi
 `;
 
-/** Outcome of one external tool run (hdiutil, ditto, codesign, plutil). */
+/** Outcome of one external tool run (sw_vers, hdiutil, ditto, codesign, plutil). */
 export interface ToolResult {
 	ok: boolean;
 	stdout: string;
@@ -120,7 +122,7 @@ export type ToolRunner = (command: string, args: readonly string[]) => Promise<T
 
 /** Why a DMG could not be staged; updater.ts maps it to user-facing copy. */
 export class StageBundleError extends Error {
-	readonly reason: "mount" | "missing" | "copy" | "verify";
+	readonly reason: "mount" | "missing" | "copy" | "verify" | "compatibility";
 
 	constructor(reason: StageBundleError["reason"], message: string) {
 		super(message);
@@ -144,47 +146,24 @@ export interface StageBundleOptions {
 }
 
 /**
- * Copy the app out of the release DMG and prove it is this app at `version`,
- * intact: mount read-only without Finder, `ditto` the bundle out, always
- * detach, then check `codesign --verify --deep --strict`, the bundle id and
- * the short version. Returns the staged `.app` path.
+ * Check the running macOS version and the mounted bundle's minimum before
+ * replacing the staging directory, then copy, detach and verify the bundle.
  */
 export async function stageBundleFromDmg(options: StageBundleOptions): Promise<string> {
 	const { dmgPath, stagingDir, mountRoot, version, ownBundle, run, fs: files } = options;
-	await files.rm(stagingDir, { recursive: true, force: true });
-	await files.mkdir(stagingDir, { recursive: true });
-	await files.mkdir(mountRoot, { recursive: true });
-	const mountPoint = await files.mkdtemp(path.join(mountRoot, "ompdesk-update-"));
-
-	let staged: string;
-	try {
-		const attach = await run("/usr/bin/hdiutil", [
-			"attach",
-			"-nobrowse",
-			"-readonly",
-			"-noautoopen",
-			"-mountpoint",
-			mountPoint,
-			dmgPath,
-		]);
-		if (!attach.ok) throw new StageBundleError("mount", `hdiutil could not attach ${dmgPath}`);
-		try {
-			const entries = await files.readdir(mountPoint, { withFileTypes: true });
-			// The DMG also holds the /Applications symlink; only a real directory is the app.
-			const bundle = entries.find(entry => entry.isDirectory() && entry.name.endsWith(".app"));
-			if (!bundle) throw new StageBundleError("missing", `${dmgPath} contains no .app bundle`);
-			staged = path.join(stagingDir, bundle.name);
-			const copy = await run("/usr/bin/ditto", [path.join(mountPoint, bundle.name), staged]);
-			if (!copy.ok) throw new StageBundleError("copy", `ditto could not copy ${bundle.name} out of the DMG`);
-		} finally {
-			const detach = await run("/usr/bin/hdiutil", ["detach", mountPoint]);
-			if (!detach.ok) await run("/usr/bin/hdiutil", ["detach", "-force", mountPoint]);
-		}
-	} finally {
-		// rmdir, never a recursive rm: a mount that refused to detach must keep its contents.
-		await files.rmdir(mountPoint).catch(() => {});
+	const system = await run("/usr/bin/sw_vers", ["-productVersion"]);
+	const currentMacOS = system.stdout.trim();
+	const numericVersion = (value: string) =>
+		/^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$/.test(value) &&
+		value.split(".").every(part => Number.isSafeInteger(Number(part)));
+	if (
+		!system.ok ||
+		!numericVersion(currentMacOS) ||
+		!numericVersion(compatibility.minimumMacOS) ||
+		(compareVersions(currentMacOS, compatibility.minimumMacOS) ?? -1) < 0
+	) {
+		throw new StageBundleError("compatibility", "The running macOS version is unsupported or unavailable");
 	}
-
 	const plistValue = async (appPath: string, key: string) => {
 		const result = await run("/usr/bin/plutil", [
 			"-extract",
@@ -196,6 +175,85 @@ export async function stageBundleFromDmg(options: StageBundleOptions): Promise<s
 		]);
 		return result.ok ? result.stdout.trim() : undefined;
 	};
+	await files.mkdir(mountRoot, { recursive: true });
+	const mountPoint = await files.mkdtemp(path.join(mountRoot, "ompdesk-update-"));
+
+	let staged = "";
+	let detached = true;
+	const stagingErrors: unknown[] = [];
+	try {
+		const attach = await run("/usr/bin/hdiutil", [
+			"attach",
+			"-nobrowse",
+			"-readonly",
+			"-noautoopen",
+			"-mountpoint",
+			mountPoint,
+			dmgPath,
+		]);
+		if (!attach.ok) throw new StageBundleError("mount", `hdiutil could not attach ${dmgPath}`);
+		detached = false;
+		let operationError: unknown;
+		let operationFailed = false;
+		try {
+			const entries = await files.readdir(mountPoint, { withFileTypes: true });
+			// The DMG also holds the /Applications symlink; only a real directory is the app.
+			const bundle = entries.find(entry => entry.isDirectory() && entry.name.endsWith(".app"));
+			if (!bundle) throw new StageBundleError("missing", `${dmgPath} contains no .app bundle`);
+			const mountedBundle = path.join(mountPoint, bundle.name);
+			const minimum = await plistValue(mountedBundle, "LSMinimumSystemVersion");
+			if (!minimum || !numericVersion(minimum) || (compareVersions(currentMacOS, minimum) ?? -1) < 0) {
+				throw new StageBundleError("compatibility", "The mounted bundle requires an unsupported macOS version");
+			}
+			await files.rm(stagingDir, { recursive: true, force: true });
+			await files.mkdir(stagingDir, { recursive: true });
+			staged = path.join(stagingDir, bundle.name);
+			const copy = await run("/usr/bin/ditto", [mountedBundle, staged]);
+			if (!copy.ok) throw new StageBundleError("copy", `ditto could not copy ${bundle.name} out of the DMG`);
+		} catch (error) {
+			operationFailed = true;
+			operationError = error;
+		} finally {
+			const detachErrors: unknown[] = [];
+			for (const args of [
+				["detach", mountPoint],
+				["detach", "-force", mountPoint],
+			]) {
+				try {
+					const result = await run("/usr/bin/hdiutil", args);
+					if (result.ok) {
+						detached = true;
+						break;
+					}
+					detachErrors.push(new StageBundleError("mount", `hdiutil ${args.join(" ")} failed`));
+				} catch (error) {
+					detachErrors.push(error);
+				}
+			}
+			if (!detached) {
+				throw new AggregateError(
+					operationFailed ? [operationError, ...detachErrors] : detachErrors,
+					"Could not detach the update disk image",
+				);
+			}
+		}
+		if (operationFailed) throw operationError;
+	} catch (error) {
+		stagingErrors.push(error);
+	} finally {
+		if (detached) {
+			try {
+				await files.rmdir(mountPoint);
+			} catch (error) {
+				stagingErrors.push(error);
+			}
+		}
+	}
+	if (stagingErrors.length === 1) throw stagingErrors[0];
+	if (stagingErrors.length > 1) {
+		throw new AggregateError(stagingErrors, "Update staging and mount cleanup failed");
+	}
+
 	const signature = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged]);
 	const bundleId = await plistValue(staged, "CFBundleIdentifier");
 	const verified =
