@@ -3,7 +3,7 @@
  *
  *   bun scripts/e2e-shard-costs.ts <run-id>
  *
- * Sums each spec file's test times over every `e2e (shard …)` job of the run (the hosted macOS runner, one worker)
+ * Sums each spec file's test times over every `e2e (shard …)` job of the run (the Windows runner, one worker)
  * and keeps the files of `MIN_SECONDS` or more. A file the run did not reach keeps the cost it had while its spec
  * still exists. Run it on a nightly when its shards drift apart (their Playwright steps differ by minutes).
  */
@@ -18,14 +18,16 @@ const UNIT_SECONDS: Readonly<Record<string, number>> = { ms: 0.001, s: 1, m: 60 
 
 /**
  * Each spec file's summed test seconds in a shard's log, whose list reporter prints one line per test that ran:
- * `  ✓  12 e2e/smoke.e2e.ts:59:1 › title (13.4s)`, a failed one with `✘`, with colour codes between the parts.
+ * `  ✓  12 e2e/smoke.e2e.ts:59:1 › title (13.4s)`, a failed one with `✘`, with colour codes between the parts. On a
+ * Windows runner (the suite's only one) the reporter writes `ok` and `x` for the marks and `e2e\smoke.e2e.ts` for the
+ * path.
  */
 export function parseSpecSeconds(log: string): Map<string, number> {
 	const seconds = new Map<string, number>();
 	// gh prints the escape character of a colour code either raw or as the two characters `^[`.
 	const plain = log.replace(/(?:\x1b|\^\[)\[[0-9;]*m/g, "");
 	for (const match of plain.matchAll(
-		/[✓✘]\s+\d+ e2e\/(\S+\.e2e\.ts):\d+:\d+ › .* \((\d+(?:\.\d+)?)(ms|s|m)\)\s*$/gm,
+		/(?:[✓✘]|\bok\b|\bx\b)\s+\d+ e2e[\\/](\S+\.e2e\.ts):\d+:\d+ › .* \((\d+(?:\.\d+)?)(ms|s|m)\)\s*$/gm,
 	)) {
 		const file = match[1] ?? "";
 		seconds.set(file, (seconds.get(file) ?? 0) + Number(match[2]) * (UNIT_SECONDS[match[3] ?? "s"] ?? 1));

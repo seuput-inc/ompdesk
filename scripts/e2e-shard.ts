@@ -11,9 +11,10 @@
  * real work. Here whole files are dealt, heaviest first, to the lightest shard
  * (LPT), by an estimated cost per file: its tests that are not annotated skipped, a `captures:` test counting a tenth,
  * at `TEST_SECONDS` each, but never below the file's time in `scripts/e2e-shard-costs.json`: each spec file's summed
- * test time on the hosted macOS runner with one worker (nightly 42609763294, 9 Nov 2026, every shard; deep-audit read
- * 608 s there, 596 and 702 s in two earlier runs). Measured on a 15-core Mac with 4 workers instead, deep-audit read
- * 184 s. Most tests of an unmeasured file skip inside their body, so `TEST_SECONDS` is the mean of the rest, not of
+ * test time on the hosted Windows runner with one worker (e2e-nightly run 43861396559, 16 Nov 2026, every shard;
+ * deep-audit read 1297 s there against 608 s on the hosted macOS runner the suite used to run on, and its shard hit
+ * the 35-minute `--global-timeout` before the last 21 tests of preview.e2e.ts and what follows). Measured on a
+ * 15-core Mac with 4 workers instead, deep-audit read 184 s. Most tests of an unmeasured file skip inside their body, so `TEST_SECONDS` is the mean of the rest, not of
  * all tests: at 8 s the estimate was ~1546 s a shard against 907 to 1494 s measured, and the split put the heaviest
  * shard past the timeout.
  * The costs only steer the split; every file lands in exactly one shard, so a wrong estimate costs wall time, never
