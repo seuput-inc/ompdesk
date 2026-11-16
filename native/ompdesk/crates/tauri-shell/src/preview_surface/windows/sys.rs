@@ -1141,6 +1141,7 @@ fn uia_unsupported() -> windows::core::Error {
     windows::core::Error::from(HRESULT(0x80004001u32 as i32))
 }
 
+#[allow(non_snake_case)]
 #[windows::core::interface("d6dd68d1-86fd-4332-8666-9abedea2d24c")]
 unsafe trait RawSimple: IUnknown {
     fn ProviderOptions(&self, result: *mut ProviderOptions) -> HRESULT;
@@ -1149,6 +1150,7 @@ unsafe trait RawSimple: IUnknown {
     fn HostRawElementProvider(&self, result: *mut *mut c_void) -> HRESULT;
 }
 
+#[allow(non_snake_case)]
 #[windows::core::interface("f7063da8-8359-439c-9297-bbc5299a7d87")]
 unsafe trait RawFragment: IUnknown {
     fn Navigate(&self, direction: NavigateDirection, result: *mut *mut c_void) -> HRESULT;
@@ -1159,6 +1161,7 @@ unsafe trait RawFragment: IUnknown {
     fn FragmentRoot(&self, result: *mut *mut c_void) -> HRESULT;
 }
 
+#[allow(non_snake_case)]
 #[windows::core::interface("620ce2a5-ab8f-40a9-86cb-de3c75599b58")]
 unsafe trait RawRoot: IUnknown {
     fn ElementProviderFromPoint(&self, x: f64, y: f64, result: *mut *mut c_void) -> HRESULT;
@@ -1206,6 +1209,7 @@ unsafe fn write_value<T>(output: *mut T, value: windows::core::Result<T>) -> HRE
     }
 }
 
+#[allow(non_snake_case)]
 impl RawSimple_Impl for Provider_Impl {
     unsafe fn ProviderOptions(&self, result: *mut ProviderOptions) -> HRESULT {
         // SAFETY: the COM caller provides the output pointer.
@@ -1251,6 +1255,7 @@ impl RawSimple_Impl for Provider_Impl {
     }
 }
 
+#[allow(non_snake_case)]
 impl RawFragment_Impl for Provider_Impl {
     unsafe fn Navigate(&self, direction: NavigateDirection, result: *mut *mut c_void) -> HRESULT {
         // SAFETY: the COM caller provides the output pointer.
@@ -1299,6 +1304,7 @@ impl RawFragment_Impl for Provider_Impl {
     }
 }
 
+#[allow(non_snake_case)]
 impl RawRoot_Impl for Provider_Impl {
     unsafe fn ElementProviderFromPoint(&self, x: f64, y: f64, result: *mut *mut c_void) -> HRESULT {
         // SAFETY: the COM caller provides the output pointer.
@@ -1886,6 +1892,7 @@ impl Provider {
     }
 }
 
+#[allow(non_snake_case)]
 #[windows::core::interface("3589c92c-63f3-4367-99bb-ada653b77cf2")]
 unsafe trait RawTextProvider: IUnknown {
     fn GetSelection(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
@@ -1896,6 +1903,7 @@ unsafe trait RawTextProvider: IUnknown {
     fn SupportedTextSelection(&self, result: *mut SupportedTextSelection) -> HRESULT;
 }
 
+#[allow(non_snake_case)]
 impl RawTextProvider_Impl for Provider_Impl {
     unsafe fn GetSelection(&self, out: *mut *mut SAFEARRAY) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
@@ -1927,6 +1935,7 @@ impl RawTextProvider_Impl for Provider_Impl {
         unsafe { write_value(out, self.text_supported_selection()) }
     }
 }
+#[allow(non_snake_case)]
 #[windows::core::interface("5347ad7b-c355-46f8-aff5-909033582f63")]
 unsafe trait RawTextRange: IUnknown {
     fn Clone(&self, result: *mut *mut c_void) -> HRESULT;
@@ -2001,6 +2010,7 @@ unsafe fn write_optional_interface<T: Interface>(
         Err(error) => error.into(),
     }
 }
+#[allow(non_snake_case)]
 impl RawTextRange_Impl for TextRangeProvider_Impl {
     unsafe fn Clone(&self, out: *mut *mut c_void) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
@@ -2147,15 +2157,22 @@ impl TextRangeProvider {
     }
 
     fn boundaries(&self, unit: TextUnit) -> windows::core::Result<Vec<u32>> {
-        let unit = match unit {
-            TextUnit_Character => ModelTextUnit::Character,
-            TextUnit_Format => ModelTextUnit::Format,
-            TextUnit_Word => ModelTextUnit::Word,
-            TextUnit_Line => ModelTextUnit::Line,
-            TextUnit_Paragraph => ModelTextUnit::Paragraph,
-            TextUnit_Page => ModelTextUnit::Page,
-            TextUnit_Document => ModelTextUnit::Document,
-            _ => return Err(windows::core::Error::from(HRESULT(0x80070057u32 as i32))),
+        let unit = if unit == TextUnit_Character {
+            ModelTextUnit::Character
+        } else if unit == TextUnit_Format {
+            ModelTextUnit::Format
+        } else if unit == TextUnit_Word {
+            ModelTextUnit::Word
+        } else if unit == TextUnit_Line {
+            ModelTextUnit::Line
+        } else if unit == TextUnit_Paragraph {
+            ModelTextUnit::Paragraph
+        } else if unit == TextUnit_Page {
+            ModelTextUnit::Page
+        } else if unit == TextUnit_Document {
+            ModelTextUnit::Document
+        } else {
+            return Err(windows::core::Error::from(HRESULT(0x80070057u32 as i32)));
         };
         match self.provider.query(TextQuery::UnitBoundaries { unit })? {
             TextReply::Boundaries(boundaries) => {
