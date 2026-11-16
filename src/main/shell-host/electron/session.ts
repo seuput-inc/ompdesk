@@ -251,11 +251,54 @@ export function serveDownloads(host: Host, sessions: (partition: string) => Sess
 	});
 }
 
-/** Serves `protocol.request`: runs the partition's handler for the scheme, answers with the head and streams the body. */
+interface ProtocolWindow {
+	bytes: number;
+	chunks: number;
+	chunkBytes: number;
+}
+
+interface ProtocolStream {
+	controller: AbortController;
+	window: ProtocolWindow;
+	sent: number;
+	acked: number;
+	sentChunks: number;
+	ackedChunks: number;
+	wake: (() => void) | null;
+	error?: string;
+}
+
+/** Serves the head first; only bytes the native consumer took release the producer's receive window. */
 export function serveProtocolRequests(host: Host, sessions: (partition: string) => Session): void {
-	const streams = new Map<number, AbortController>();
+	const streams = new Map<number, ProtocolStream>();
 	let nextStream = 1;
-	host.client.on("protocol.cancel", ({ streamId }: { streamId: number }) => streams.get(streamId)?.abort());
+	host.client.on("protocol.cancel", ({ streamId }: { streamId: number }) => streams.get(streamId)?.controller.abort());
+	host.client.on(
+		"protocol.ack",
+		({ streamId, bytes, chunks }: { streamId: number; bytes: number; chunks: number }) => {
+			const state = streams.get(streamId);
+			if (!state) return;
+			if (
+				!Number.isSafeInteger(bytes) ||
+				bytes <= 0 ||
+				bytes > state.sent - state.acked ||
+				!Number.isSafeInteger(chunks) ||
+				chunks < 0 ||
+				chunks > state.sentChunks - state.ackedChunks
+			) {
+				state.error = "invalid protocol consumption credit";
+				state.controller.abort();
+				return;
+			}
+			state.acked += bytes;
+			state.ackedChunks += chunks;
+			state.wake?.();
+		},
+	);
+	host.client.onClose(() => {
+		for (const state of streams.values()) state.controller.abort();
+		streams.clear();
+	});
 	host.client.handle(
 		"protocol.request",
 		async (
@@ -266,9 +309,23 @@ export function serveProtocolRequests(host: Host, sessions: (partition: string) 
 				method: string;
 				headers: Array<[string, string]>;
 				hasBody?: boolean;
+				window: ProtocolWindow;
 			},
 			{ bin, signal },
 		) => {
+			const window = params.window;
+			if (
+				!window ||
+				!Number.isSafeInteger(window.bytes) ||
+				window.bytes <= 0 ||
+				!Number.isSafeInteger(window.chunks) ||
+				window.chunks <= 0 ||
+				!Number.isSafeInteger(window.chunkBytes) ||
+				window.chunkBytes <= 0 ||
+				window.chunkBytes > window.bytes
+			) {
+				throw new Error("invalid protocol receive window");
+			}
 			const handler = sessions(params.partition).protocol.handlerFor(params.scheme);
 			if (!handler) throw new Error(`No handler for ${params.scheme}`);
 			const hasBody = params.hasBody === true && params.method !== "GET" && params.method !== "HEAD";
@@ -279,11 +336,31 @@ export function serveProtocolRequests(host: Host, sessions: (partition: string) 
 				signal,
 			} as RequestInit);
 			const response = await handler(request);
+			if (signal.aborted || host.client.closed) {
+				await response.body?.cancel();
+				throw new Error("protocol request was cancelled");
+			}
 			const streamId = nextStream++;
 			const controller = new AbortController();
-			streams.set(streamId, controller);
-			signal.addEventListener("abort", () => controller.abort(), { once: true });
-			setImmediate(() => void pump(host, streamId, response, controller, streams));
+			const state: ProtocolStream = {
+				controller,
+				window,
+				sent: 0,
+				acked: 0,
+				sentChunks: 0,
+				ackedChunks: 0,
+				wake: null,
+			};
+			controller.signal.addEventListener("abort", () => state.wake?.(), { once: true });
+			streams.set(streamId, state);
+			const abort = () => controller.abort();
+			signal.addEventListener("abort", abort, { once: true });
+			setImmediate(
+				() =>
+					void pump(host, streamId, response, state, streams).finally(() =>
+						signal.removeEventListener("abort", abort),
+					),
+			);
 			return {
 				status: response.status,
 				statusText: response.statusText,
@@ -298,26 +375,50 @@ async function pump(
 	host: Host,
 	streamId: number,
 	response: Response,
-	controller: AbortController,
-	streams: Map<number, AbortController>,
+	state: ProtocolStream,
+	streams: Map<number, ProtocolStream>,
 ): Promise<void> {
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+	const { signal } = state.controller;
+	const cancel = () => void reader?.cancel().catch(() => undefined);
+	signal.addEventListener("abort", cancel, { once: true });
 	try {
-		const reader = response.body?.getReader();
-		if (reader) {
-			controller.signal.addEventListener("abort", () => void reader.cancel().catch(() => undefined), { once: true });
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done || controller.signal.aborted) break;
-				if (value.byteLength > 0) await host.client.event("protocol.chunk", { streamId }, value);
+		reader = response.body?.getReader();
+		while (reader && !signal.aborted) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			for (let offset = 0; offset < value.byteLength && !signal.aborted; ) {
+				const size = Math.min(state.window.chunkBytes, value.byteLength - offset);
+				while (
+					!signal.aborted &&
+					(state.sent - state.acked + size > state.window.bytes ||
+						state.sentChunks - state.ackedChunks >= state.window.chunks)
+				) {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					state.wake = resolve;
+					await promise;
+					state.wake = null;
+				}
+				if (signal.aborted) break;
+				state.sent += size;
+				state.sentChunks += 1;
+				await host.client.event("protocol.chunk", { streamId }, value.subarray(offset, offset + size));
+				offset += size;
 			}
 		}
-		if (!controller.signal.aborted) await host.client.event("protocol.end", { streamId });
+		if (state.error) throw new Error(state.error);
+		if (!signal.aborted) await host.client.event("protocol.end", { streamId });
 	} catch (error) {
-		await host.client.event("protocol.end", {
-			streamId,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		if (!host.client.closed)
+			await host.client
+				.event("protocol.end", {
+					streamId,
+					error: error instanceof Error ? error.message : String(error),
+				})
+				.catch(() => state.controller.abort());
 	} finally {
+		signal.removeEventListener("abort", cancel);
+		await reader?.cancel().catch(() => undefined);
 		streams.delete(streamId);
 	}
 }

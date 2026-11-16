@@ -4,6 +4,7 @@
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { NsisUpdater } from "electron-updater";
 import { ElectronAppAdapter } from "electron-updater/out/ElectronAppAdapter";
@@ -949,6 +950,8 @@ describe("session and protocol", () => {
 			"preview-visual-1",
 			"handleScheme",
 		]);
+		const ended = Promise.withResolvers<void>();
+		shell.on("protocol.end", () => ended.resolve());
 		const head = await shell.call<{ status: number; headers: Array<[string, string]>; streamId: number }>(
 			"protocol.request",
 			{
@@ -957,11 +960,12 @@ describe("session and protocol", () => {
 				url: "omp-visual://v/1",
 				method: "GET",
 				headers: [["range", "bytes=0-3"]],
+				window: { bytes: 4, chunks: 2, chunkBytes: 2 },
 			},
 		);
 		expect(head).toMatchObject({ status: 206, streamId: 1 });
 		expect(head.headers).toContainEqual(["content-range", "bytes 0-3/10"]);
-		await vi.waitUntil(() => fake.eventsOf("protocol.end").length === 1);
+		await ended.promise;
 		expect(Buffer.concat(fake.eventsOf("protocol.chunk").map(event => event.bin ?? Buffer.alloc(0))).toString()).toBe(
 			"abcd",
 		);
@@ -973,8 +977,117 @@ describe("session and protocol", () => {
 				url: "omp-visual://v/1",
 				method: "GET",
 				headers: [],
+				window: { bytes: 4, chunks: 2, chunkBytes: 2 },
 			}),
 		).rejects.toThrow(/No handler/);
+	});
+
+	it("waits for actual consumption credit, including partial native reads, before sending beyond the window", async () => {
+		const chunks: Buffer[] = [];
+		const full = Promise.withResolvers<void>();
+		const resumed = Promise.withResolvers<void>();
+		const ended = Promise.withResolvers<void>();
+		electron.session.fromPartition("credit").protocol.handle("omp-media", request => {
+			expect(request.headers.get("range")).toBe("bytes=2-7");
+			return new Response(Uint8Array.from([2, 3, 4, 5, 6, 7]), {
+				status: 206,
+				headers: { "content-range": "bytes 2-7/10" },
+			});
+		});
+		shell.on("protocol.chunk", (_data, bin) => {
+			if (bin) chunks.push(bin);
+			if (chunks.length === 2) full.resolve();
+			if (chunks.length === 3) resumed.resolve();
+		});
+		shell.on("protocol.end", () => ended.resolve());
+		const head = await shell.call<{ streamId: number; status: number }>("protocol.request", {
+			partition: "credit",
+			scheme: "omp-media",
+			url: "omp-media://stream/range",
+			method: "GET",
+			headers: [["Range", "bytes=2-7"]],
+			window: { bytes: 4, chunks: 2, chunkBytes: 2 },
+		});
+		await full.promise;
+		await nextTurn();
+		expect(chunks.map(chunk => [...chunk])).toEqual([
+			[2, 3],
+			[4, 5],
+		]);
+		await shell.event("protocol.ack", { streamId: head.streamId, bytes: 1, chunks: 0 });
+		await nextTurn();
+		expect(chunks).toHaveLength(2);
+		await shell.event("protocol.ack", { streamId: head.streamId, bytes: 1, chunks: 1 });
+		await resumed.promise;
+		await ended.promise;
+		expect(head.status).toBe(206);
+		expect([...Buffer.concat(chunks)]).toEqual([2, 3, 4, 5, 6, 7]);
+	});
+
+	it.each(["cancel", "disconnect"] as const)("releases a producer waiting for credit on %s", async how => {
+		const full = Promise.withResolvers<void>();
+		const cancelled = Promise.withResolvers<void>();
+		let chunks = 0;
+		let ends = 0;
+		electron.session.fromPartition("blocked").protocol.handle(
+			"omp-media",
+			() =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new Uint8Array(8));
+						},
+						cancel() {
+							cancelled.resolve();
+						},
+					}),
+				),
+		);
+		shell.on("protocol.chunk", () => {
+			if (++chunks === 2) full.resolve();
+		});
+		shell.on("protocol.end", () => {
+			ends += 1;
+		});
+		const head = await shell.call<{ streamId: number }>("protocol.request", {
+			partition: "blocked",
+			scheme: "omp-media",
+			url: "omp-media://stream/blocked",
+			method: "GET",
+			headers: [],
+			window: { bytes: 4, chunks: 2, chunkBytes: 2 },
+		});
+		await full.promise;
+		if (how === "cancel") await shell.event("protocol.cancel", { streamId: head.streamId });
+		else node.close();
+		await cancelled.promise;
+		await nextTurn();
+		expect(chunks).toBe(2);
+		expect(ends).toBe(0);
+	});
+
+	it("fails rather than silently ending when a consumer acknowledges bytes never sent", async () => {
+		const full = Promise.withResolvers<void>();
+		const ended = Promise.withResolvers<{ error?: string }>();
+		let chunks = 0;
+		electron.session
+			.fromPartition("invalid-credit")
+			.protocol.handle("omp-media", () => new Response(new Uint8Array(8)));
+		shell.on("protocol.chunk", () => {
+			if (++chunks === 2) full.resolve();
+		});
+		shell.on("protocol.end", (data: { error?: string }) => ended.resolve(data));
+		const head = await shell.call<{ streamId: number }>("protocol.request", {
+			partition: "invalid-credit",
+			scheme: "omp-media",
+			url: "omp-media://stream/invalid",
+			method: "GET",
+			headers: [],
+			window: { bytes: 4, chunks: 2, chunkBytes: 2 },
+		});
+		await full.promise;
+		await shell.event("protocol.ack", { streamId: head.streamId, bytes: 5, chunks: 1 });
+		expect((await ended.promise).error).toBe("invalid protocol consumption credit");
 	});
 
 	it("probes a permission handler: deny-all is a policy, anything that grants is refused", async () => {

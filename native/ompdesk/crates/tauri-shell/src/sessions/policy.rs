@@ -73,6 +73,7 @@ pub struct Session {
     pub policy: Policy,
     pub cache: bool,
     pub app_views: Vec<tauri::Webview>,
+    pub native_stream: bool,
     pub snapshot: Option<super::native::Snapshot>,
     pub snapshot_error: Option<String>,
     pub context: Option<String>,
@@ -93,6 +94,7 @@ impl Session {
             policy: Policy::default(),
             cache,
             app_views: Vec::new(),
+            native_stream: false,
             snapshot: None,
             snapshot_error: None,
             context: None,
@@ -131,5 +133,22 @@ impl Registry {
         self.partitions
             .get_mut(canonical(partition))
             .ok_or_else(|| format!("session {} does not exist", canonical(partition)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Storage, storage};
+
+    #[test]
+    fn partitions_keep_app_aliases_and_persistent_names_distinct() {
+        assert_eq!(storage("").unwrap(), Storage::App);
+        assert_eq!(storage("app").unwrap(), Storage::App);
+        assert_eq!(storage("preview").unwrap(), Storage::Memory);
+        assert_eq!(
+            storage("persist:preview:one").unwrap(),
+            Storage::Persistent("preview:one".into())
+        );
+        assert!(storage("persist:").is_err());
     }
 }

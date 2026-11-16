@@ -14,6 +14,9 @@ use shell_core::handshake::Handshake;
 
 use crate::host;
 
+#[path = "../../tauri-shell/src/sessions/protocol_credit.rs"]
+mod credit;
+
 /// A CEF callback used from the reader thread (documented callable from any thread).
 struct AnyThread<T>(T);
 // SAFETY: only `cont` is called through it.
@@ -21,6 +24,8 @@ unsafe impl<T> Send for AnyThread<T> {}
 
 #[derive(Default)]
 struct Body {
+    stream_id: u64,
+    credit: credit::Credit,
     queue: VecDeque<Vec<u8>>,
     ended: bool,
     error: Option<String>,
@@ -39,7 +44,10 @@ fn body_of(stream_id: u64) -> Option<Arc<Mutex<Body>>> {
 }
 
 fn register(stream_id: u64) -> Arc<Mutex<Body>> {
-    let body = Arc::new(Mutex::new(Body::default()));
+    let body = Arc::new(Mutex::new(Body {
+        stream_id,
+        ..Body::default()
+    }));
     BODIES
         .lock()
         .unwrap()
@@ -52,6 +60,24 @@ fn forget(stream_id: u64) {
     if let Some(map) = BODIES.lock().unwrap().as_mut() {
         map.remove(&stream_id);
     }
+}
+
+fn fill_body(body: &mut Body, out: &mut [u8]) -> usize {
+    let chunks = body.queue.len();
+    let n = fill(&mut body.queue, out);
+    if n > 0 {
+        let chunks = chunks - body.queue.len();
+        body.credit
+            .consumed(n, chunks)
+            .expect("CEF copied queued bytes once");
+        if !body.ended {
+            host::event(
+                "protocol.ack",
+                json!({"streamId":body.stream_id,"bytes":n,"chunks":chunks}),
+            );
+        }
+    }
+    n
 }
 
 /// Completes a parked read with what is queued (or the end of the body).
@@ -67,14 +93,30 @@ fn wake(body: &Arc<Mutex<Body>>) {
     // SAFETY: the buffer CEF handed to `read` stays ours until `cont` is called; `cancel` clears `parked` under this
     // same lock first.
     let out = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, max) };
-    let n = fill(&mut b.queue, out);
-    callback.0.cont(n as i32);
+    let n = fill_body(&mut b, out);
+    callback.0.cont(if n == 0 && b.error.is_some() {
+        sys::cef_errorcode_t::ERR_FAILED as i32
+    } else {
+        n as i32
+    });
 }
 
 /// `protocol.chunk {streamId}` + bin.
 pub fn on_chunk(stream_id: u64, bytes: Vec<u8>) {
     if let Some(body) = body_of(stream_id) {
-        body.lock().unwrap().queue.push_back(bytes);
+        let mut b = body.lock().unwrap();
+        if b.ended {
+            return;
+        }
+        if let Err(error) = b.credit.receive(bytes.len()) {
+            b.ended = true;
+            b.error = Some(error.into());
+            b.queue.clear();
+            host::event("protocol.cancel", json!({"streamId":stream_id}));
+        } else {
+            b.queue.push_back(bytes);
+        }
+        drop(b);
         wake(&body);
     }
 }
@@ -84,8 +126,23 @@ pub fn on_end(stream_id: u64, error: Option<String>) {
     if let Some(body) = body_of(stream_id) {
         {
             let mut b = body.lock().unwrap();
+            if b.ended {
+                return;
+            }
             b.ended = true;
             b.error = error;
+        }
+        wake(&body);
+    }
+}
+
+pub fn disconnected() {
+    let bodies = BODIES.lock().unwrap().take().unwrap_or_default();
+    for (_, body) in bodies {
+        {
+            let mut b = body.lock().unwrap();
+            b.ended = true;
+            b.error = Some("Node protocol connection ended".into());
         }
         wake(&body);
     }
@@ -99,6 +156,8 @@ struct Head {
     stream_id: u64,
     failed: Option<String>,
     ready: bool,
+    pending_id: Option<u64>,
+    cancelled: bool,
 }
 
 wrap_resource_handler! {
@@ -132,11 +191,21 @@ wrap_resource_handler! {
             let params = json!({
                 "scheme": self.scheme, "partition": self.partition, "url": url, "method": method,
                 "headers": headers, "hasBody": has_body,
+                "window":{"bytes":credit::WINDOW_BYTES,"chunks":credit::WINDOW_CHUNKS,"chunkBytes":credit::CHUNK_BYTES},
             });
             let (head, slot, callback, handshake) = (self.head.clone(), self.body.clone(), AnyThread(callback), self.handshake.clone());
-            host::request("protocol.request", params, has_body.then_some(body.as_slice()), move |result, _| {
+            let request_id = host::request("protocol.request", params, has_body.then_some(body.as_slice()), move |result, _| {
                 {
                     let mut h = head.lock().unwrap();
+                    h.pending_id = None;
+                    if h.cancelled {
+                        if let Ok(value) = result {
+                            if let Some(id) = value["streamId"].as_u64() {
+                                host::event("protocol.cancel", json!({"streamId":id}));
+                            }
+                        }
+                        return;
+                    }
                     match result {
                         Ok(v) => {
                             h.status = v.get("status").and_then(Value::as_i64).unwrap_or(200) as i32;
@@ -158,6 +227,15 @@ wrap_resource_handler! {
                     callback.0.cont();
                 }
             });
+            {
+                let mut head = self.head.lock().unwrap();
+                if head.cancelled {
+                    drop(head);
+                    host::cancel_request(request_id);
+                } else if !head.ready {
+                    head.pending_id = Some(request_id);
+                }
+            }
             // A reply that came before this point is stored already: handle the request now, call no callback.
             let waiting = self.handshake.lock().unwrap().open_returns();
             if let Some(h) = handle_request {
@@ -210,7 +288,7 @@ wrap_resource_handler! {
             if b.queue.is_empty() {
                 if b.ended {
                     if let Some(n) = bytes_read {
-                        *n = 0;
+                        *n = if b.error.is_some() { sys::cef_errorcode_t::ERR_FAILED as i32 } else { 0 };
                     }
                     return 0;
                 }
@@ -223,7 +301,7 @@ wrap_resource_handler! {
             }
             // SAFETY: CEF gives a buffer of `bytes_to_read` bytes, valid for this call.
             let out = unsafe { std::slice::from_raw_parts_mut(data_out, want) };
-            let n = fill(&mut b.queue, out);
+            let n = fill_body(&mut b, out);
             if let Some(r) = bytes_read {
                 *r = n as i32;
             }
@@ -231,7 +309,12 @@ wrap_resource_handler! {
         }
 
         fn cancel(&self) {
-            let stream_id = self.head.lock().unwrap().stream_id;
+            let (stream_id, pending_id) = {
+                let mut head = self.head.lock().unwrap();
+                head.cancelled = true;
+                (head.stream_id, head.pending_id.take())
+            };
+            if let Some(id) = pending_id { host::cancel_request(id); }
             if let Some(body) = self.body.lock().unwrap().take() {
                 body.lock().unwrap().parked = None;
             }
