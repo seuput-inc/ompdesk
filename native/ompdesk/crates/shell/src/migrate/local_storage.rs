@@ -30,25 +30,99 @@ pub fn decode(bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// Every item of `origin` in the LevelDB folder `dir`.
-pub fn export(dir: &Path, origin: &str) -> Result<Map<String, Value>, String> {
-    if !dir.is_dir() {
-        return Ok(Map::new());
+struct ExportCopy(Option<std::path::PathBuf>);
+
+impl ExportCopy {
+    fn create(parent: &Path) -> Result<Self, String> {
+        for _ in 0..16 {
+            let mut entropy = [0u8; 16];
+            getrandom::fill(&mut entropy)
+                .map_err(|error| format!("Local Storage copy entropy: {error}"))?;
+            let mut name = String::from("shell-migrate-ls-");
+            for byte in entropy {
+                use std::fmt::Write;
+                write!(name, "{byte:02x}").expect("writing to String");
+            }
+            let path = parent.join(name);
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
+                Ok(()) => return Ok(Self(Some(path))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(format!("create Local Storage copy: {error}")),
+            }
+        }
+        Err("could not allocate a unique Local Storage copy".into())
     }
-    let copy = std::env::temp_dir().join(format!(
-        "shell-migrate-ls-{}-{}",
-        std::process::id(),
-        origin.len()
-    ));
-    let _ = std::fs::remove_dir_all(&copy);
-    std::fs::create_dir_all(&copy).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
-        if entry.file_name() != "LOCK" {
-            std::fs::copy(entry.path(), copy.join(entry.file_name())).map_err(|e| e.to_string())?;
+
+    fn path(&self) -> &Path {
+        self.0.as_deref().expect("copy owned until removal")
+    }
+
+    fn remove(mut self) -> Result<(), String> {
+        std::fs::remove_dir_all(self.path())
+            .map_err(|error| format!("remove Local Storage copy: {error}"))?;
+        self.0.take();
+        Ok(())
+    }
+}
+
+impl Drop for ExportCopy {
+    fn drop(&mut self) {
+        // Cleanup also covers a failed copy or parse; this path belongs only to this invocation.
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_dir_all(path);
         }
     }
-    let result = read_copy(&copy, origin);
-    let _ = std::fs::remove_dir_all(&copy);
+}
+
+/// Every item of `origin` in the LevelDB folder `dir`, read from a private per-invocation copy.
+pub fn export(dir: &Path, origin: &str) -> Result<Map<String, Value>, String> {
+    export_in(dir, origin, &std::env::temp_dir())
+}
+
+fn export_in(dir: &Path, origin: &str, parent: &Path) -> Result<Map<String, Value>, String> {
+    match std::fs::metadata(dir) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err("Local Storage LevelDB path is not a directory".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(error) => return Err(format!("read Local Storage directory: {error}")),
+    }
+    let copy = ExportCopy::create(parent)?;
+    let result = (|| {
+        for entry in std::fs::read_dir(dir).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if entry.file_name() == "LOCK" {
+                continue;
+            }
+            if !entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_file()
+            {
+                return Err("Local Storage LevelDB entry is not a regular file".into());
+            }
+            let mut source =
+                std::fs::File::open(entry.path()).map_err(|error| error.to_string())?;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut destination = options
+                .open(copy.path().join(entry.file_name()))
+                .map_err(|error| error.to_string())?;
+            std::io::copy(&mut source, &mut destination).map_err(|error| error.to_string())?;
+        }
+        read_copy(copy.path(), origin)
+    })();
+    copy.remove()?;
     result
 }
 
@@ -171,6 +245,76 @@ mod tests {
         );
         assert!(export(&root.join("missing"), "file://").unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn simultaneous_exports_keep_their_own_copies_and_original_bytes() {
+        let root = ExportCopy::create(&std::env::temp_dir()).unwrap();
+        let source = root.path().join("source");
+        let copies = root.path().join("copies");
+        std::fs::create_dir(&copies).unwrap();
+        {
+            let mut db = rusty_leveldb::DB::open(
+                &source,
+                rusty_leveldb::Options {
+                    create_if_missing: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let key = [key_prefix("file://"), b"draft".to_vec()].concat();
+            db.put(&key, &utf16("원본 초안".repeat(20000).as_str()))
+                .unwrap();
+            db.flush().unwrap();
+        }
+        let bytes = |dir: &Path| -> std::collections::BTreeMap<std::ffi::OsString, Vec<u8>> {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), std::fs::read(entry.path()).unwrap())
+                })
+                .collect()
+        };
+        let before = bytes(&source);
+        let barrier = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            let run = || {
+                barrier.wait();
+                export_in(&source, "file://", &copies).unwrap()
+            };
+            let first = scope.spawn(run);
+            let second = scope.spawn(run);
+            barrier.wait();
+            assert_eq!(first.join().unwrap(), second.join().unwrap());
+        });
+        assert_eq!(bytes(&source), before);
+        assert_eq!(std::fs::read_dir(copies).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_copy_failure_removes_only_its_own_directory() {
+        let root = ExportCopy::create(&std::env::temp_dir()).unwrap();
+        let source = root.path().join("source");
+        let copies = root.path().join("copies");
+        std::fs::create_dir_all(source.join("unexpected-directory")).unwrap();
+        std::fs::create_dir(&copies).unwrap();
+        std::fs::write(copies.join("unrelated"), b"keep").unwrap();
+        assert!(export_in(&source, "file://", &copies).is_err());
+        assert!(source.join("unexpected-directory").is_dir());
+        assert_eq!(std::fs::read(copies.join("unrelated")).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(copies).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_directory_is_private_at_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let copy = ExportCopy::create(&std::env::temp_dir()).unwrap();
+        assert_eq!(
+            std::fs::metadata(copy.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]
