@@ -223,6 +223,17 @@ impl Browser {
         self.transport.submit(method, params, session)
     }
 
+    /// `submit_command` for a host mutation: the reply waits for Chromium's answer or connection loss, never the read
+    /// deadline.
+    pub fn submit_command_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<crate::CommandReply> {
+        self.transport.submit_settled(method, params, session)
+    }
+
     /// Host mutations settle on the actual CDP answer or connection loss, not the read deadline.
     pub async fn command_settled(
         &self,
@@ -386,16 +397,24 @@ impl Page {
             .await
     }
 
-    pub async fn navigate(&self, url: &str) -> Result<Value> {
+    /// Queues `Page.navigate` and returns its reply unawaited. Chromium answers only once the navigation commits or
+    /// fails, so a host that keeps serving `Page.stopLoading` and later loads must not wait for it in line.
+    pub fn submit_navigation(&self, url: &str) -> Result<crate::CommandReply> {
         if !web_url(url) {
             return Err(Error::new(
                 "denied",
                 "Preview navigation requires HTTP or HTTPS",
             ));
         }
-        let result = self
-            .command_settled("Page.navigate", json!({"url":url}))
-            .await?;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .submit_settled("Page.navigate", json!({"url":url}), Some(&self.session_id))
+    }
+
+    pub async fn navigate(&self, url: &str) -> Result<Value> {
+        let result = self.submit_navigation(url)?.receive().await?;
         if let Some(error) = result.get("errorText").and_then(Value::as_str) {
             return Err(Error::new("navigation", error));
         }
@@ -920,6 +939,50 @@ mod tests {
                 .unwrap()
                 .code,
             "gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_submitted_navigation_is_queued_ahead_of_a_later_stop_and_answers_after_it() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+        };
+        assert_eq!(
+            page.submit_navigation("file:///secret").err().unwrap().code,
+            "denied"
+        );
+        let navigation = page.submit_navigation("http://127.0.0.1:1/slow").unwrap();
+        let stop = page.submit_command("Page.stopLoading", json!({})).unwrap();
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let first = command(&mut read).await;
+        let second = command(&mut read).await;
+        assert_eq!(first["method"], "Page.navigate");
+        assert_eq!(first["params"]["url"], "http://127.0.0.1:1/slow");
+        assert_eq!(first["sessionId"], "session-1");
+        assert_eq!(second["method"], "Page.stopLoading");
+        for (value, result) in [
+            (&second, "{}"),
+            (&first, "{\"errorText\":\"net::ERR_ABORTED\"}"),
+        ] {
+            let id = value["id"].as_u64().unwrap();
+            write
+                .write_all(
+                    format!("{{\"id\":{id},\"sessionId\":\"session-1\",\"result\":{result}}}\0")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+        stop.receive().await.unwrap();
+        assert_eq!(
+            navigation.receive().await.unwrap()["errorText"],
+            "net::ERR_ABORTED"
         );
     }
 
