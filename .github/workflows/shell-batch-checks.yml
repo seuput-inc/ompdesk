@@ -30,7 +30,8 @@
 # chain, `max-parallel: 1` on the two-OS matrices): a lane group seen by sibling jobs of one run would cancel the waiting one.
 # Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
 name: shell-batch-checks
-run-name: ${{ github.event_name == 'workflow_dispatch' && 'shell-batch-checks [mac]' || '' }}
+# The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}]', inputs.only) || '' }}
 
 on:
   workflow_dispatch:
