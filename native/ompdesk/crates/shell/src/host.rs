@@ -67,6 +67,14 @@ pub fn request(
     id
 }
 
+/// Stops waiting for a request and tells Node to cancel its work, including a late answer.
+pub fn cancel_request(id: u64) {
+    if let Some(h) = host() {
+        h.pending.lock().unwrap().remove(&id);
+    }
+    send_bytes(wire::cancel(id));
+}
+
 /// A request that waits for its answer on this thread, at most `timeout`; `Err(timeout)` then. Never call it from the
 /// reader thread (it would wait for itself).
 pub fn request_blocking(
@@ -81,10 +89,7 @@ pub fn request_blocking(
     match rx.recv_timeout(timeout) {
         Ok(result) => result,
         Err(_) => {
-            if let Some(h) = host() {
-                h.pending.lock().unwrap().remove(&id);
-            }
-            send_bytes(wire::cancel(id));
+            cancel_request(id);
             Err(WireError::new(
                 "timeout",
                 format!("{method} was not answered in {} ms", timeout.as_millis()),
