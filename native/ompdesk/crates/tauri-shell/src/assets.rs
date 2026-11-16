@@ -94,7 +94,7 @@ fn mime(path: &Path) -> &'static str {
 }
 
 /// Serves renderer files. The caller must run this function off the UI thread.
-pub fn serve(root: &Path, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+pub fn serve(root: &Path, request: Request<Vec<u8>>, policy: &str) -> Response<Vec<u8>> {
     let head = request.method() == Method::HEAD;
     if request.method() != Method::GET && !head {
         return Response::builder()
@@ -167,7 +167,7 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "no-cache");
     if mime(&relative) == "text/html" {
-        builder = builder.header(header::CONTENT_SECURITY_POLICY, "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media:; media-src 'self' blob: omp-media:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'");
+        builder = builder.header(header::CONTENT_SECURITY_POLICY, policy);
     }
     if let Some((start, end)) = selected {
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
@@ -183,9 +183,86 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     builder.body(body).expect("valid response")
 }
 
+pub fn content_policy(media_origin: Option<&str>) -> Result<String, String> {
+    if let Some(origin) = media_origin {
+        let parsed = url::Url::parse(origin).map_err(|_| "Invalid native media origin")?;
+        if parsed.scheme() != "http"
+            || parsed.host_str() != Some("127.0.0.1")
+            || parsed.port().is_none_or(|port| port == 0)
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || parsed.origin().ascii_serialization() != origin
+        {
+            return Err("Native media CSP requires the exact allocated loopback origin".into());
+        }
+    }
+    let media_origin = media_origin.unwrap_or("");
+    let registered_media = if cfg!(windows) {
+        "http://omp-media.localhost"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media: {registered_media} {media_origin}; media-src 'self' blob: omp-media: {media_origin}; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'"
+    ))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_gateway_permission_is_exact_and_does_not_allow_network_connections() {
+        let origin = "http://127.0.0.1:49152";
+        let policy = content_policy(Some(origin)).unwrap();
+        let permitted: Vec<_> = policy
+            .split(';')
+            .filter(|directive| directive.contains(origin))
+            .collect();
+        assert_eq!(permitted.len(), 2);
+        assert!(
+            permitted
+                .iter()
+                .any(|directive| directive.trim_start().starts_with("img-src "))
+        );
+        assert!(
+            permitted
+                .iter()
+                .any(|directive| directive.trim_start().starts_with("media-src "))
+        );
+        assert!(
+            !policy
+                .split(';')
+                .find(|directive| directive.trim_start().starts_with("connect-src "))
+                .unwrap()
+                .contains(origin)
+        );
+        let fixture = Fixture::new();
+        let response = serve(
+            &fixture.0,
+            Request::builder()
+                .uri("app://ompdesk/index.html")
+                .body(Vec::new())
+                .unwrap(),
+            &policy,
+        );
+        assert_eq!(response.headers()[header::CONTENT_SECURITY_POLICY], policy);
+    }
+    #[test]
+    fn media_policy_rejects_wildcards_and_unrelated_or_injected_origins() {
+        for origin in [
+            "http://127.0.0.1:*",
+            "http://localhost:49152",
+            "https://127.0.0.1:49152",
+            "http://127.0.0.1:49152/path",
+            "http://name@127.0.0.1:49152",
+            "http://127.0.0.1:49152#fragment",
+            "http://127.0.0.1:49152; connect-src *",
+        ] {
+            assert!(content_policy(Some(origin)).is_err(), "{origin}");
+        }
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -207,6 +284,7 @@ mod tests {
             serve(
                 &self.0,
                 Request::builder().uri(uri).body(Vec::new()).unwrap(),
+                &content_policy(None).unwrap(),
             )
         }
     }
@@ -273,7 +351,11 @@ mod tests {
             if let Some(value) = range_value {
                 builder = builder.header(header::RANGE, value);
             }
-            serve(&f.0, builder.body(Vec::new()).unwrap())
+            serve(
+                &f.0,
+                builder.body(Vec::new()).unwrap(),
+                &content_policy(None).unwrap(),
+            )
         };
         let partial = request(Method::GET, Some("bytes=1-3"));
         assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);

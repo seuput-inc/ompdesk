@@ -12,6 +12,9 @@
   },
   "bundle": {
     "active": false,
+    "macOS": {
+      "minimumSystemVersion": "14.0.0"
+    },
     "icon": ["../../../../resources/icon.png", "../../../../resources/icon.ico", "../../../../resources/icon.icns"]
   }
 }

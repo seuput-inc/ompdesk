@@ -1,12 +1,18 @@
 #![windows_subsystem = "windows"]
 
 mod assets;
+mod automation;
 mod native_chrome;
 mod native_services;
 mod network;
+mod preview_protocol;
 pub use native_chrome::menu;
+mod preview;
+mod preview_surface;
 mod profile;
 mod registry;
+mod runtime_inputs;
+mod sessions;
 mod theme;
 mod ui;
 use native_services::{power, screen, shortcut, system};
@@ -23,13 +29,12 @@ pub mod lifecycle {
 
 use registry::{Identity, Registry, trusted_url};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use shell_core::wire::WireError;
 use shell_core::{conn, facts, startup};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
@@ -46,9 +51,14 @@ struct Migration {
 
 struct Runtime {
     app: tauri::AppHandle,
+    preview: preview::Service,
+    gateway: Arc<preview_protocol::Gateway>,
+    content_policy: String,
     registry: Mutex<Registry>,
     migration: Mutex<Migration>,
     evaluations: Mutex<HashMap<u64, Evaluation>>,
+    app_initializations:
+        Mutex<HashMap<u64, tokio::sync::watch::Receiver<Option<Result<(), String>>>>>,
     next_evaluation: AtomicU64,
     preload: String,
     user_data: PathBuf,
@@ -109,7 +119,9 @@ fn wc_state(wc: u64) {
     if let Some(page) = registry.page(wc) {
         let mut state = json!({"wcId":wc,"url":page.url,"title":page.title,
             "loading":page.loading,"zoomFactor":page.zoom});
-        if let Some(agent) = r.user_agent.lock().expect("user agent").as_deref() {
+        if page.kind == registry::Kind::App
+            && let Some(agent) = r.user_agent.lock().expect("user agent").as_deref()
+        {
             state["userAgent"] = json!(agent);
         }
         host::event("wc.state", state);
@@ -221,10 +233,17 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
         wc_event(wc, "did-navigate", json!([url]));
         wc_event(wc, "did-stop-loading", json!([]));
         wc_event(wc, "did-finish-load", json!([]));
-        win_event(win, "ready-to-show");
+        if let Some(win) = win {
+            win_event(win, "ready-to-show");
+        }
     }
 }
 fn close_record(wc: u64) {
+    runtime()
+        .app_initializations
+        .lock()
+        .expect("app initialization")
+        .remove(&wc);
     {
         let mut migration = runtime().migration.lock().expect("migration");
         migration.targets.remove(&wc);
@@ -233,27 +252,22 @@ fn close_record(wc: u64) {
     invalidate_evaluations(wc);
     let page = runtime().registry.lock().expect("registry").remove(wc);
     if let Some(page) = page {
-        host::event(
-            "win.state",
-            json!({"winId":page.identity.win,"visible":false,"focused":false}),
-        );
+        if let Some(win) = page.identity.win {
+            host::event(
+                "win.state",
+                json!({"winId":win,"visible":false,"focused":false}),
+            );
+        }
         wc_event(wc, "destroyed", json!([]));
-        win_event(page.identity.win, "closed");
+        if let Some(win) = page.identity.win {
+            win_event(win, "closed");
+        }
     }
 }
 fn create_window(params: &Value) -> Result<Value, WireError> {
     let win = number(params, "winId")?;
     let wc = number(params, "wcId")?;
     let options = &params["options"];
-    if options
-        .pointer("/webPreferences/offscreen")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return Err(unsupported(
-            "offscreen windows require the separately owned Preview runtime",
-        ));
-    }
     if options
         .pointer("/webPreferences/session")
         .and_then(Value::as_str)
@@ -270,9 +284,6 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         .expect("registry")
         .create(win, wc)
         .map_err(|e| WireError::new("invalid", e))?;
-    let profile: [u8; 16] = Sha256::digest(runtime().user_data.to_string_lossy().as_bytes())[..16]
-        .try_into()
-        .expect("digest size");
     let mut builder = WebviewWindowBuilder::new(
         &runtime().app,
         &label,
@@ -284,8 +295,6 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         options["height"].as_f64().unwrap_or(800.0),
     )
     .visible(options["show"].as_bool().unwrap_or(true))
-    .data_directory(runtime().user_data.join("tauri-webview"))
-    .data_store_identifier(profile)
     .disable_drag_drop_handler()
     .theme(theme::for_new_window())
     .initialization_script(&runtime().preload)
@@ -334,6 +343,13 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
+    builder = match sessions::configure_app(builder, "app", wc) {
+        Ok(builder) => builder,
+        Err(error) => {
+            runtime().registry.lock().expect("registry").remove(wc);
+            return Err(failed(error));
+        }
+    };
     let window = match builder.build() {
         Ok(window) => window,
         Err(error) => {
@@ -349,6 +365,31 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             false,
         )?;
     }
+    let webview = runtime()
+        .app
+        .get_webview(&label)
+        .ok_or_else(|| WireError::new("gone", "created app WebView missing"))?;
+    let (initialized, ready) = tokio::sync::watch::channel(None);
+    runtime()
+        .app_initializations
+        .lock()
+        .expect("app initialization")
+        .insert(wc, ready);
+    tauri::async_runtime::spawn(async move {
+        let result = sessions::attach_app("app", webview.clone()).await;
+        initialized.send_replace(Some(result.clone()));
+        if let Err(error) = result {
+            let app = runtime().app.clone();
+            let _ = app.run_on_main_thread(move || {
+                wc_event(
+                    wc,
+                    "preload-error",
+                    json!(["native session",{"message":error}]),
+                );
+                destroy_app(wc, None);
+            });
+        }
+    });
     let observer = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
@@ -363,13 +404,25 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
                     let app = runtime().app.clone();
                     let _ = app.run_on_main_thread(move || {
                         if let Ok(w) = window_for_wc(wc) {
-                            let _ = w.destroy();
+                            drop(w);
+                            destroy_app(wc, None);
                         }
                     });
                 }
             });
         }
-        WindowEvent::Destroyed => close_record(wc),
+        WindowEvent::Destroyed => {
+            runtime().registry.lock().expect("registry").begin_close(wc);
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = runtime().preview.close_parent(win).await {
+                    log::log(
+                        "window.children.close_failed",
+                        json!({"wcId":wc,"code":error.code}),
+                    );
+                }
+                close_record(wc);
+            });
+        }
         WindowEvent::Focused(focus) => {
             let _ = win_state(&observer, win);
             win_event(win, if *focus { "focus" } else { "blur" });
@@ -407,7 +460,6 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
         "maximize" => window.maximize(),
         "unmaximize" => window.unmaximize(),
         "restore" => window.unminimize(),
-        "close" | "destroy" => window.destroy(),
         "center" => window.center(),
         "setTitle" => window.set_title(string(a, "title")?),
         "setFullScreen" => window.set_fullscreen(
@@ -521,6 +573,9 @@ fn dimension(v: &Value, key: &str) -> Result<f64, WireError> {
     })
 }
 fn wc_op(call: host::Call) {
+    let Some(call) = defer_app_load(call) else {
+        return;
+    };
     let result = (|| {
         let wc = number(&call.params, "wcId")?;
         let window = window_for_wc(wc)?;
@@ -571,7 +626,6 @@ fn wc_op(call: host::Call) {
                 wc_state(wc);
             }
             "focus" => window.set_focus().map_err(failed)?,
-            "close" => window.destroy().map_err(failed)?,
             "openDevTools" => window.open_devtools(),
             "closeDevTools" => window.close_devtools(),
             "watchEvents" => {
@@ -648,18 +702,48 @@ fn dispatch(call: host::Call) {
     }
 }
 fn dispatch_ui(call: host::Call) {
-    let Some(call)=network::dispatch(call) else {return;};
+    let Some(call) = network::dispatch(call) else {
+        return;
+    };
     let Some(call) = native_services::dispatch(call) else {
         return;
     };
     let Some(call) = native_chrome::dispatch(call) else {
         return;
     };
+    let Some(call) = preview::dispatch(call) else {
+        return;
+    };
+    let Some(call) = sessions::dispatch(call) else {
+        return;
+    };
+    let closing = match call.method.as_str() {
+        "win.op" if matches!(call.params["op"].as_str(), Some("close" | "destroy")) => {
+            call.params["winId"].as_u64().and_then(|win| {
+                runtime()
+                    .registry
+                    .lock()
+                    .expect("registry")
+                    .by_window(win)
+                    .map(|page| page.identity.wc)
+            })
+        }
+        "wc.op" if call.params["op"].as_str() == Some("close") => call.params["wcId"].as_u64(),
+        _ => None,
+    };
+    if let Some(wc) = closing {
+        destroy_app(wc, Some(call));
+        return;
+    }
     if call.method == "wc.op" {
         return wc_op(call);
     }
     let result = match call.method.as_str() {
         "app.init" => {
+            if let Err(error) = sessions::protocol::declare_schemes(&call.params) {
+                call.err("invalid", error);
+                return;
+            }
             call.ok(json!({}));
             host::event("app.ready", json!({}));
             return;
@@ -672,10 +756,13 @@ fn dispatch_ui(call: host::Call) {
                 call.err("invalid", "invalid exit code");
                 return;
             };
-            lifecycle::EXITING.store(true, Ordering::SeqCst);
+            if lifecycle::EXITING.swap(true, Ordering::SeqCst) {
+                call.err("exiting", "application exit already requested");
+                return;
+            }
             call.ok(json!({}));
             // The writer remains alive during node::stop, so Node receives this receipt before teardown.
-            runtime().app.exit(code);
+            exit_after_preview(code);
             return;
         }
         "win.create" => create_window(&call.params),
@@ -687,9 +774,12 @@ fn dispatch_ui(call: host::Call) {
         Err(error) => call.err(&error.code, error.message),
     }
 }
-fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
+fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
+    if sessions::protocol::event(name, &data, bin) {
+        return;
+    }
     match name {
-        "net.cancel"=>network::cancel(data),
+        "net.cancel" => network::cancel(data),
         "app.relaunch" => {
             let args = if data["args"].is_null() {
                 std::env::args().skip(1).collect()
@@ -713,6 +803,7 @@ fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
                 .lock()
                 .expect("registry")
                 .page(wc)
+                .filter(|page| page.kind == registry::Kind::App)
                 .map(|page| page.identity);
             let Some(identity) = identity else {
                 return;
@@ -753,9 +844,27 @@ fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
         _ => log::log("event.unsupported", json!({"name":name})),
     }
 }
+fn exit_after_preview(code: i32) {
+    tauri::async_runtime::spawn(async move {
+        let settled = async {
+            runtime().preview.shutdown().await?;
+            runtime().gateway.shutdown().await
+        }
+        .await;
+        let code = match settled {
+            Ok(()) => code,
+            Err(error) => {
+                log::log("preview.shutdown.failed", json!({"error":error}));
+                if code == 0 { 1 } else { code }
+            }
+        };
+        runtime().app.exit(code);
+    });
+}
 fn node_gone(code: Option<i32>) {
+    sessions::protocol::disconnected();
     if !lifecycle::EXITING.swap(true, Ordering::SeqCst) {
-        runtime().app.exit(code.filter(|c| *c != 0).unwrap_or(1));
+        exit_after_preview(code.filter(|c| *c != 0).unwrap_or(1));
     }
 }
 async fn profile_ipc(
@@ -897,7 +1006,9 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
         "preloadError" => {
             if profile_bootstrap(url.as_str()) {
                 // Reveal the recovery page without settling Node's original app load promise.
-                win_event(identity.win, "ready-to-show");
+                if let Some(win) = identity.win {
+                    win_event(win, "ready-to-show");
+                }
             }
             wc_event(identity.wc, "preload-error", json!(["tauri.js", value]));
             Ok(json!({}))
@@ -930,7 +1041,23 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
             if !value["args"].is_array() {
                 return Err(json!({"code":"invalid","message":"args must be an array"}));
             }
-            let params = json!({"wcId":identity.wc,"frameUrl":url.as_str(),"channel":channel,"args":value["args"]});
+            #[cfg(windows)]
+            let args = {
+                let mut args = value["args"].clone();
+                if channel == "fs:media-release"
+                    && let Some(mapped) = args[0].as_str()
+                {
+                    args[0] = json!(
+                        preview::media::original(mapped)
+                            .map_err(|error| json!({"code":error.code,"message":error.message}))?
+                    );
+                }
+                args
+            };
+            #[cfg(not(windows))]
+            let args = value["args"].clone();
+            let params =
+                json!({"wcId":identity.wc,"frameUrl":url.as_str(),"channel":channel,"args":args});
             if kind == "send" {
                 host::event("ipc.send", params);
                 return Ok(json!({}));
@@ -948,7 +1075,22 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
             {
                 return Err(json!({"code":"gone","message":"original document ended"}));
             }
-            answer.map_err(|e| json!({"code":e.code,"message":e.message}))
+            let answer = answer.map_err(|e| json!({"code":e.code,"message":e.message}))?;
+            #[cfg(windows)]
+            let answer = {
+                let mut answer = answer;
+                if channel == "fs:media-stream" && answer["ok"] == true {
+                    let original = answer["url"].as_str().ok_or_else(
+                        || json!({"code":"invalid","message":"native media result has no URL"}),
+                    )?;
+                    answer["url"] = json!(
+                        preview::media::for_webview(original)
+                            .map_err(|error| json!({"code":error.code,"message":error.message}))?
+                    );
+                }
+                answer
+            };
+            Ok(answer)
         }
         _ => Err(json!({"code":"invalid","message":"unknown native bridge operation"})),
     }
@@ -972,6 +1114,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    #[cfg(target_os = "macos")]
+    if !objc2::available!(macos = 14.0) {
+        return Err("OMPdesk requires macOS 14 or newer".into());
+    }
     let app_data = if cfg!(windows) {
         PathBuf::from(std::env::var("APPDATA")?)
     } else {
@@ -1057,18 +1203,30 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let listener = conn::Listener::bind(&socket)?;
     let program = node::node_program(packaged, &resources);
     let profile = profile::Profile::open(&user_data).map_err(std::io::Error::other)?;
-    let app = tauri::Builder::default()
+    let gateway = Arc::new(preview_protocol::Gateway::new());
+    let media_origin = tauri::async_runtime::block_on(gateway.reserve_app_media("app"))
+        .map_err(std::io::Error::other)?;
+    let content_policy =
+        assets::content_policy(Some(&media_origin)).map_err(std::io::Error::other)?;
+    let builder = tauri::Builder::default();
+    let builder = automation::install(builder, &user_data).map_err(std::io::Error::other)?;
+    #[cfg(windows)]
+    let builder = preview::media::configure(builder);
+    let app = builder
         .invoke_handler(tauri::generate_handler![omp_ipc])
         .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
             let _app = context.app_handle();
             std::thread::spawn(move || {
-                responder.respond(assets::serve(&runtime().renderer, request))
+                responder.respond(assets::serve(&runtime().renderer, request,&runtime().content_policy))
             });
         })
         .setup(move |app| {
             RUNTIME
                 .set(Runtime {
                     app: app.handle().clone(),
+                    gateway,
+                    content_policy,
+                    preview: preview::Service::new(resources.clone(),packaged,user_data.join("preview-browser")),
                     registry: Mutex::new(Registry::default()),
                     migration: Mutex::new(Migration {
                         profile,
@@ -1076,6 +1234,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                         offers: HashMap::new(),
                     }),
                     evaluations: Mutex::new(HashMap::new()),
+                    app_initializations: Mutex::new(HashMap::new()),
                     next_evaluation: AtomicU64::new(1),
                     preload,
                     user_data,
@@ -1087,6 +1246,27 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 })
                 .map_err(|_| "runtime already initialized")?;
             system::init();
+            sessions::init(runtime().user_data.clone()).map_err(std::io::Error::other)?;
+            if std::env::var("OMP_GUI_TEST_SHELL_FAIL_START").as_deref() == Ok("1") {
+                let test_profile = std::env::var_os(startup::USER_DATA_ENV)
+                    .filter(|value| !value.is_empty())
+                    .ok_or("startup failure injection requires an explicit test profile")?;
+                let selected = runtime().user_data.canonicalize()?;
+                let test_profile = PathBuf::from(test_profile).canonicalize()?;
+                let default_profile = startup::default_user_data(&app_data);
+                if test_profile != selected
+                    || default_profile.canonicalize().ok().as_ref() == Some(&selected)
+                {
+                    return Err("startup failure injection requires the selected isolated test profile".into());
+                }
+                log::log(
+                    "start.failed_on_purpose",
+                    json!({"env":"OMP_GUI_TEST_SHELL_FAIL_START","phase":"native-initialized-before-node"}),
+                );
+                return Err("OMP_GUI_TEST_SHELL_FAIL_START: native-initialized-before-node".into());
+            }
+            let consumer=sessions::protocol::install_gateway_consumer().map_err(std::io::Error::other)?;
+            tauri::async_runtime::block_on(runtime().gateway.activate(consumer)).map_err(std::io::Error::other)?;
             let instance_thread = std::thread::spawn(move || {
                 while let Ok(mut connection) = instance.accept() {
                     if runtime().stop_instance.load(Ordering::SeqCst) {
@@ -1141,4 +1321,164 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         std::process::Command::new(exe).args(args).spawn()?;
     }
     Ok(code)
+}
+
+fn defer_app_load(call: host::Call) -> Option<host::Call> {
+    if call.params["op"].as_str() != Some("loadURL") {
+        return Some(call);
+    }
+    let Some(wc) = call.params["wcId"].as_u64() else {
+        return Some(call);
+    };
+    let ready = runtime()
+        .app_initializations
+        .lock()
+        .expect("app initialization")
+        .get(&wc)
+        .cloned();
+    let Some(mut ready) = ready else {
+        call.err("gone", "app WebView initialization ended");
+        return None;
+    };
+    let initialized = ready.borrow().clone();
+    match initialized.as_ref() {
+        Some(Ok(())) => return Some(call),
+        Some(Err(error)) => {
+            call.err("preload", error.clone());
+            return None;
+        }
+        None => {}
+    }
+    let identity = runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .page(wc)
+        .map(|page| page.identity);
+    let Some(identity) = identity else {
+        call.err("gone", "app WebView ended");
+        return None;
+    };
+    let id = call.id();
+    let (cancel, mut cancelled) = tokio::sync::oneshot::channel();
+    host::on_cancel(id, move || {
+        let _ = cancel.send(());
+    });
+    tauri::async_runtime::spawn(async move {
+        let result = loop {
+            let current = ready.borrow_and_update().clone();
+            if let Some(result) = current {
+                break result;
+            }
+            tokio::select! {
+                _=&mut cancelled=>{
+                    host::forget_cancel(id);call.err("cancelled","app navigation cancelled before native attachment");return;
+                }
+                changed=ready.changed()=>{
+                    if changed.is_err(){host::forget_cancel(id);call.err("gone","app initialization ended");return;}
+                }
+            }
+        };
+        if let Err(error) = result {
+            host::forget_cancel(id);
+            call.err("preload", error);
+            return;
+        }
+        if let Err(error) = runtime().app.run_on_main_thread(move || {
+            let cancelled = cancelled.try_recv().is_ok();
+            host::forget_cancel(id);
+            if cancelled {
+                call.err("cancelled", "app navigation cancelled before admission");
+                return;
+            }
+            if !runtime()
+                .registry
+                .lock()
+                .expect("registry")
+                .current(identity)
+            {
+                call.err("gone", "original app WebView ended");
+                return;
+            }
+            wc_op(call);
+        }) {
+            host::forget_cancel(id);
+            log::log(
+                "app.attach.dispatch_failed",
+                json!({"error":error.to_string()}),
+            );
+        }
+    });
+    None
+}
+
+fn detach_app_window(window: &WebviewWindow) -> Result<(), WireError> {
+    let webview = runtime()
+        .app
+        .get_webview(window.label())
+        .ok_or_else(|| WireError::new("gone", "native app WebView ended"))?;
+    sessions::detach_app(&webview).map_err(failed)
+}
+
+fn destroy_app(wc: u64, call: Option<host::Call>) {
+    let selected = (|| {
+        let mut registry = runtime().registry.lock().expect("registry");
+        let page = registry
+            .page(wc)
+            .filter(|page| page.kind == registry::Kind::App)
+            .ok_or_else(|| WireError::new("gone", "native app window ended"))?;
+        if page.state == registry::PageState::Closing {
+            return Err(WireError::new(
+                "closing",
+                "native app window is already closing",
+            ));
+        }
+        let win = page
+            .identity
+            .win
+            .ok_or_else(|| WireError::new("gone", "native app window has no owner"))?;
+        registry
+            .begin_close(wc)
+            .ok_or_else(|| WireError::new("gone", "native app window ended"))?;
+        Ok(win)
+    })();
+    let win = match selected {
+        Ok(win) => win,
+        Err(error) => {
+            if let Some(call) = call {
+                call.err(&error.code, error.message);
+            }
+            return;
+        }
+    };
+    invalidate_evaluations(wc);
+    tauri::async_runtime::spawn(async move {
+        let result = async {
+            runtime().preview.close_parent(win).await?;
+            let (send, receive) = tokio::sync::oneshot::channel();
+            runtime()
+                .app
+                .run_on_main_thread(move || {
+                    let result = (|| {
+                        let window = window_for_wc(wc)?;
+                        detach_app_window(&window)?;
+                        window.destroy().map_err(failed)
+                    })();
+                    let _ = send.send(result);
+                })
+                .map_err(failed)?;
+            receive.await.map_err(failed)?
+        }
+        .await;
+        match (result, call) {
+            (Ok(()), Some(call)) => call.ok(json!({})),
+            (Err(error), Some(call)) => call.err(&error.code, error.message),
+            (Err(error), None) => wc_event(
+                wc,
+                "preload-error",
+                json!(["native close",{"message":error.message}]),
+            ),
+            (Ok(()), None) => {}
+        }
+    });
 }
