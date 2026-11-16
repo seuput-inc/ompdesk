@@ -11,6 +11,7 @@ import { type ElectronApplication, expect, type Locator, type Page, test } from 
 import type { AutopilotStatus } from "../resources/gui-bridge/modes/autopilot-contracts";
 import { writeShellGh } from "./fixture/shell-gh";
 import { launchApp, readRecords } from "./harness";
+import { processesBelow, waitForProcessesToExit } from "./process-tree";
 
 export type Language = "en" | "ko";
 export type Theme = "light" | "dark";
@@ -150,8 +151,14 @@ export async function layoutSessions(desktop: string): Promise<number> {
 	}
 }
 
-/** SIGKILL of the app's main process: no quit hook, no teardown. */
+/**
+ * SIGKILL of the app's main process: no quit hook, no teardown. Returns once the shell host that carried it has ended
+ * too, with the WebView2 processes below it: the host ends on its own when its main is gone, but a relaunch on the
+ * same profile before that finds the instance still running and exits at once, printing nothing.
+ */
 export async function crash(app: ElectronApplication): Promise<void> {
+	const host = app.process();
+	const below = host.pid === undefined ? [] : processesBelow(host.pid);
 	const pid = await app.evaluate(() => process.pid);
 	process.kill(pid, "SIGKILL");
 	await expect
@@ -167,6 +174,13 @@ export async function crash(app: ElectronApplication): Promise<void> {
 			{ timeout: 20_000, message: "the killed app must be gone" },
 		)
 		.toBe(false);
+	await expect
+		.poll(() => host.exitCode !== null || host.signalCode !== null, {
+			timeout: 20_000,
+			message: "the shell host must end with its killed main",
+		})
+		.toBe(true);
+	await waitForProcessesToExit(below, 20_000);
 }
 
 /** The run's tab: a tab bound to a worktree on an `autopilot/` branch. */

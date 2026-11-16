@@ -42,10 +42,10 @@ async function seed(agent: string, id: string, cwd: string, title: string, minut
 const order = (page: Page) =>
 	page
 		.locator("[data-session-group] [data-session-path]")
-		.evaluateAll(rows => rows.map(row => row.getAttribute("data-session-path")?.split("/").at(-1)));
+		.evaluateAll(rows => rows.map(row => row.getAttribute("data-session-path")?.split(/[\\/]/).at(-1)));
 
 async function rowMenu(page: Page, id: string, item: string): Promise<void> {
-	await page.locator(`[data-session-group] [data-session-path$="/${id}.jsonl"]`).first().click({ button: "right" });
+	await page.locator(`[data-session-group] [data-session-path$="${id}.jsonl"]`).first().click({ button: "right" });
 	await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
@@ -85,7 +85,7 @@ test("an order one window sets survives what another window, which read the side
 	expect(
 		Object.values((await stored()).sessionOrder ?? {})
 			.flat()
-			.map(file => file.split("/").at(-1)),
+			.map(file => file.split(/[\\/]/).at(-1)),
 	).toEqual(["s-3.jsonl", "s-1.jsonl", "s-2.jsonl"]);
 	// Both windows show both changes now, and a relaunch draws them from the stored file.
 	for (const page of [first, second]) await expect.poll(() => order(page)).toEqual(["s-3.jsonl", "s-1.jsonl"]);

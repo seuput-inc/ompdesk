@@ -296,11 +296,10 @@ for (const engine of ENGINES)
 			await expect
 				.poll(async () => (await receivedPrompt(profile.record, both))?.images?.length, { timeout: 60_000 })
 				.toBe(2);
-			// The three bubbles above showed 3 pictures, now 2 more.
-			const decoded = 3 + 2;
-			await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(decoded);
+			// The bubbles above showed one picture per message sent, now 2 more.
+			await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(pictures.length + 2);
 			await captureTo(CAPTURES, phone, `${engine.name}-two-photos-sent`);
-			expect(uploads).toEqual(Array(5).fill("POST 200"));
+			expect(uploads).toEqual(Array(pictures.length + 2).fill("POST 200"));
 		} finally {
 			await browser.close();
 			await proxy?.close();

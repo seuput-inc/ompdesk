@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import { createServer } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
 import { exitApp, launchApp, readClipboardText, recordsOfType } from "./harness";
@@ -429,8 +429,17 @@ test("settings search opens advanced controls", async () => {
 });
 
 test("workspace navigation cannot replace the trusted desktop with an untrusted document", async () => {
-	const documentPath = path.join(profile, "untrusted.html");
-	await fs.writeFile(documentPath, "<!doctype html><title>Untrusted document</title><h1>Untrusted document</h1>");
+	// A document from another origin. The system WebView refuses a `file:` link from the app's own `http://app.localhost`
+	// page before any navigation starts (so `will-navigate` has nothing to report), whereas a web page is a navigation
+	// it does start: the one this protection exists for.
+	const untrusted = createServer((_request, response) => {
+		response.setHeader("content-type", "text/html");
+		response.end("<!doctype html><title>Untrusted document</title><h1>Untrusted document</h1>");
+	});
+	await new Promise<void>(resolve => untrusted.listen(0, "127.0.0.1", resolve));
+	const address = untrusted.address();
+	if (!address || typeof address === "string") throw new Error("the untrusted document's server has no port");
+	const documentUrl = `http://127.0.0.1:${address.port}/untrusted.html`;
 	const trustedUrl = page.url();
 	await app.evaluate(({ BrowserWindow }) => {
 		BrowserWindow.getAllWindows()[0].webContents.once("will-navigate", event => {
@@ -444,7 +453,7 @@ test("workspace navigation cannot replace the trusted desktop with an untrusted 
 		document.body.append(link);
 		link.click();
 		link.remove();
-	}, pathToFileURL(documentPath).href);
+	}, documentUrl);
 	await expect.poll(() => app.evaluate(() => Reflect.get(globalThis, "auditNavigationPrevented"))).toBe(true);
 	// Read the live document directly: Playwright's locator waits for a native
 	// navigation which Electron has already cancelled outside the browser stack.
@@ -452,6 +461,7 @@ test("workspace navigation cannot replace the trusted desktop with an untrusted 
 	expect(page.url()).toBe(trustedUrl);
 	await page.reload();
 	await expect(page.locator("textarea").first()).toBeEditable();
+	await new Promise<void>(resolve => untrusted.close(() => resolve()));
 });
 
 test("failed preference writes retain edits and never allow a premature restart", async () => {

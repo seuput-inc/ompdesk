@@ -1,12 +1,13 @@
 /**
- * Electron main for e2e/preview-stream.e2e.ts: the real preview host (src/main/preview/host.ts) with a paired
- * viewer's virtual window behind the real WsRouter, driven by a fake WebSocket client, against a local test
- * page. Run by Electron itself (the spec bundles this file with bun), prints `RESULT <json>` and exits.
+ * The Node main of e2e/preview-stream.e2e.ts, run by the Tauri host as its main script: the real preview host
+ * (src/main/preview/host.ts) with a paired viewer's virtual window behind the real WsRouter, driven by a fake
+ * WebSocket client, against a local test page. The spec bundles this file with bun, `electron` mapped to the shim
+ * (`preview-stream.tsconfig.json`), prints `RESULT <json>` and exits.
  *
  * What it proves, on real offscreen pages: frames arrive as JPEGs of the size the viewer's surface asks for,
  * none before the acknowledgement and at most 12 a second, a still page sends nothing, a tap reaches the page
  * as a trusted click (and keys and text as trusted input), a pinch zooms, a page's `confirm` waits for the
- * viewer's answer. It also measures: fps, bytes a frame, CPU of every Electron process while streaming and idle.
+ * viewer's answer. It also measures: fps, bytes a frame, and this process's CPU while streaming and idle.
  */
 import { mkdirSync } from "node:fs";
 import http from "node:http";
@@ -126,9 +127,10 @@ interface Reply {
 	e?: { message: string };
 }
 
-/** CPU seconds spent so far by every Electron process (browser, GPU, renderers, utilities). */
+/** CPU seconds this main process has spent (the page's own Chromium runs in the host's Preview browser, not here). */
 function cpuSeconds(): number {
-	return app.getAppMetrics().reduce((sum, metric) => sum + (metric.cpu.cumulativeCPUUsage ?? 0), 0);
+	const { user, system } = process.cpuUsage();
+	return (user + system) / 1e6;
 }
 
 async function main() {

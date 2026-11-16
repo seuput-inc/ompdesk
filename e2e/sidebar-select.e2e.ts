@@ -576,6 +576,20 @@ async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
 	const workspace = await page.locator(".omp-split-workspace").boundingBox();
 	if (!workspace) throw new Error("expected the workspace box");
 	const ghost = page.locator("[data-split-ghost]");
+	// Which drag events the page saw (a failed drag names them: a drag that never started differs from one whose
+	// dragover never reached the workspace).
+	await page.evaluate(() => {
+		const seen: string[] = [];
+		for (const type of ["dragstart", "dragenter", "dragover", "drop", "dragend"])
+			window.addEventListener(
+				type,
+				event => {
+					if (seen.length < 24 && event instanceof DragEvent) seen.push(`${type}@${Math.round(event.clientX)}`);
+					document.documentElement.dataset.dragSeen = seen.join(" ");
+				},
+				true,
+			);
+	});
 	// A row replaced between the press and the first move starts no drag: a drag that shows no ghost is released
 	// over the workspace and begun again.
 	await expect(async () => {
@@ -592,7 +606,8 @@ async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
 			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
 		} catch (error) {
 			await page.mouse.up();
-			throw error;
+			const seen = await page.evaluate(() => document.documentElement.dataset.dragSeen ?? "no drag event");
+			throw new Error(`${String(error)}\ndrag events seen: ${seen}`);
 		}
 	}).toPass({ timeout: 30_000 });
 	await page.mouse.up();

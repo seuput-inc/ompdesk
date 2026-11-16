@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,20 +22,26 @@ afterEach(() => {
 });
 
 describe("the shell launcher's pure parts", () => {
-	it("retains both native and Node logs before the profile goes, and tolerates a missing early-start log", () => {
+	it("retains the native log, the runtime log and the host's output before the profile goes, and tolerates a missing early-start log", () => {
 		const dir = mkdtempSync(path.join(os.tmpdir(), "shell-diagnostics-"));
 		dirs.push(dir);
 		const output = path.join(dir, "output", "app-1");
 		writeFileSync(path.join(dir, "tauri-shell.jsonl"), '{"event":"preview.events.lagged","skipped":40}\n');
 		expect(copyShellDiagnostics(dir, output)).toEqual(["tauri-shell.jsonl"]);
-		writeFileSync(path.join(dir, "gui-runtime.jsonl"), '{"event":"preview-state"}\n');
-		expect(copyShellDiagnostics(dir, output)).toEqual(["tauri-shell.jsonl", "gui-runtime.jsonl"]);
+		mkdirSync(path.join(dir, "logs"));
+		writeFileSync(path.join(dir, "logs", "gui-runtime.jsonl"), '{"event":"preview-state"}\n');
+		expect(copyShellDiagnostics(dir, output, "[autopilot] ban violation in t1: refs/heads/x created\n")).toEqual([
+			"tauri-shell.jsonl",
+			"gui-runtime.jsonl",
+			"host-output.txt",
+		]);
 		rmSync(path.join(dir, "tauri-shell.jsonl"));
-		rmSync(path.join(dir, "gui-runtime.jsonl"));
+		rmSync(path.join(dir, "logs"), { recursive: true });
 		expect(readFileSync(path.join(output, "tauri-shell.jsonl"), "utf8")).toBe(
 			'{"event":"preview.events.lagged","skipped":40}\n',
 		);
 		expect(readFileSync(path.join(output, "gui-runtime.jsonl"), "utf8")).toBe('{"event":"preview-state"}\n');
+		expect(readFileSync(path.join(output, "host-output.txt"), "utf8")).toContain("ban violation in t1");
 	});
 	it("stages the Tauri host per platform and arch", () => {
 		expect(stagedShell("win32", "x64", "/r")).toBe(

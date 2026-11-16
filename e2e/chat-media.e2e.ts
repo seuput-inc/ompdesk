@@ -69,6 +69,9 @@ function playerState(player: Locator): Promise<PlayerState> {
 	});
 }
 
+/** A player's stream: `omp-media://stream/<token>`, which WebView2 loads from `http://omp-media.localhost/stream/<token>`. */
+const MEDIA_STREAM_URL = /^(omp-media:\/\/|http:\/\/omp-media\.localhost\/)stream\//;
+
 /** Metadata loads (duration known) through main's stream, and the player sits paused at the start. */
 async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Promise<PlayerState> {
 	await expect
@@ -78,7 +81,7 @@ async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Pr
 		})
 		.toBe(true);
 	const state = await playerState(player);
-	expect(state.src).toMatch(/^omp-media:\/\/stream\//);
+	expect(state.src).toMatch(MEDIA_STREAM_URL);
 	expect(state).toMatchObject({ paused: true, autoplay: false, loop: false, currentTime: 0 });
 	if (kind === "video") expect(state.muted).toBe(true);
 	return state;
@@ -202,7 +205,9 @@ for (const language of variants(["en", "ko"] as const))
 				await expect
 					.poll(() => viewer.evaluate(element => (element as HTMLVideoElement).readyState))
 					.toBeGreaterThanOrEqual(1);
-				expect(await viewer.evaluate(element => (element as HTMLVideoElement).currentSrc)).toMatch(/^omp-media:/);
+				expect(await viewer.evaluate(element => (element as HTMLVideoElement).currentSrc)).toMatch(
+					MEDIA_STREAM_URL,
+				);
 				await capture(page, `${language}-${theme}-files-viewer`);
 
 				if (language === "en" && theme === "dark") {

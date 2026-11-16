@@ -73,9 +73,11 @@ test("a host's tab shows a streamed reply, live and finished, as a local tab doe
 			.getByRole("region", { name: "This device" })
 			.getByRole("button", { name: "New agent session here" })
 			.click();
-		const localTab =
+		const activeLocal = async () =>
 			(await a.evaluate(() => window.omp.tabs.list())).find(tab => tab.active && !tab.device)?.tabId ?? "";
-		expect(localTab).not.toBe("");
+		// The click opens the tab asynchronously: a list read right after it still has the host's tab in front.
+		await expect.poll(activeLocal, { timeout: 30_000 }).not.toBe("");
+		const localTab = await activeLocal();
 		// A draft keeps this empty tab when the other one comes to the front (an empty one left is closed, `unstarted`).
 		await a.locator(`.omp-session-pane[data-tab-id="${localTab}"] .omp-composer-input`).fill("a draft");
 

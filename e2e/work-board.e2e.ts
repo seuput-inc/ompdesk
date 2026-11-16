@@ -267,9 +267,12 @@ for (const language of variants(["en", "ko"] as const))
 					await expect(groups).toHaveCount(count);
 					await expect(accounts).toHaveCount(accountsOf[count] ?? 0);
 					await expect(groups.first()).toHaveAttribute("data-provider-row", "fixture");
-					await expect(accounts.first().locator('[data-window="5h"] .omp-usage-gauge-text')).toContainText("5H");
-					await expect(accounts.first().locator('[data-window="7d"] .omp-usage-gauge-text')).toContainText("7D");
-					await expect(accounts.first().locator(".omp-usage-gauge-reset").first()).toContainText("↻");
+					// The window names are the provider's one shared heading row (1ec1b7c54); a gauge holds its percent.
+					await expect(block.locator(".omp-sidebar-usage-columns").first()).toContainText("5H");
+					await expect(block.locator(".omp-sidebar-usage-columns").first()).toContainText("7D");
+					await expect(accounts.first().locator('[data-window="5h"] .omp-usage-gauge-text')).toContainText(/\d+%/);
+					await expect(accounts.first().locator('[data-window="7d"] .omp-usage-gauge-text')).toContainText(/\d+%/);
+					await expect(accounts.first().locator(".omp-usage-gauge-reset").first()).toContainText(/^\d/);
 					// The session's own account is marked, and only it.
 					await expect(block.locator("[data-in-use]")).toHaveCount(1);
 					await expect(accounts.first()).toHaveAttribute("data-in-use", "true");

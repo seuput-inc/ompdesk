@@ -34,18 +34,31 @@ const LAUNCH_TIMEOUT_MS = 60_000;
  */
 const processTree = () => import("../process-tree");
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
-const diagnostics = new WeakMap<ChildProcess, { userData: string; output: string }>();
+const diagnostics = new WeakMap<ChildProcess, { userData: string; output: string; hostOutput: () => string }>();
 
-export function copyShellDiagnostics(userData: string, output: string): string[] {
+/**
+ * What a failed test keeps of a launch: the host's native log (`<userData>/tauri-shell.jsonl`), the app's runtime log
+ * (`<userData>/logs/gui-runtime.jsonl`) and what the host and its Node main wrote (`host-output.txt`: main's own
+ * `console.warn` lines, the Autopilot cycle's "ban violation in …" among them).
+ */
+export function copyShellDiagnostics(userData: string, output: string, hostOutput = ""): string[] {
 	const copied: string[] = [];
-	for (const name of ["tauri-shell.jsonl", "gui-runtime.jsonl"]) {
+	for (const [source, name] of [
+		["tauri-shell.jsonl", "tauri-shell.jsonl"],
+		[path.join("logs", "gui-runtime.jsonl"), "gui-runtime.jsonl"],
+	]) {
 		try {
 			fs.mkdirSync(output, { recursive: true });
-			fs.copyFileSync(path.join(userData, name), path.join(output, name));
+			fs.copyFileSync(path.join(userData, source), path.join(output, name));
 			copied.push(name);
 		} catch (error) {
 			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 		}
+	}
+	if (hostOutput !== "") {
+		fs.mkdirSync(output, { recursive: true });
+		fs.writeFileSync(path.join(output, "host-output.txt"), hostOutput);
+		copied.push("host-output.txt");
 	}
 	return copied;
 }
@@ -55,7 +68,7 @@ function retainDiagnostics(child: ChildProcess): void {
 	if (!capture) return;
 	diagnostics.delete(child);
 	try {
-		copyShellDiagnostics(capture.userData, capture.output);
+		copyShellDiagnostics(capture.userData, capture.output, capture.hostOutput());
 	} catch (error) {
 		console.warn(`[shell diagnostics] ${String(error)}`);
 	}
@@ -543,6 +556,18 @@ function traceTargets(browser: Browser, pid: number | undefined): void {
 /** The last bytes of what the shell wrote, for the message of a launch that failed. */
 const TAIL_BYTES = 16 * 1024;
 
+/** The pinned Node the packaged app runs (`bun run build:node`) for the host's child, else `node` on PATH. */
+export function usePinnedNode(env: NodeJS.ProcessEnv): void {
+	const pinnedNode = path.join(
+		REPO_ROOT,
+		"resources",
+		"node",
+		`${process.platform}-${process.arch}`,
+		process.platform === "win32" ? "node.exe" : "node",
+	);
+	if (!env.OMPDESK_NODE && fs.existsSync(pinnedNode)) env.OMPDESK_NODE = pinnedNode;
+}
+
 /**
  * Start the shell and connect to it, as `electron.launch` did for Electron. `args[0]` is the built app's entry
  * (`<checkout>/out(-<hash>)/main/index.js`) unless `executablePath` names a packaged app. The userData folder
@@ -568,15 +593,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		env.OMPDESK_APP_ENTRY = path.resolve(entry);
 	}
 	assertTestAutomationHost(executable);
-	// The pinned Node the packaged app runs (`bun run build:node`), else `node` on PATH.
-	const pinnedNode = path.join(
-		REPO_ROOT,
-		"resources",
-		"node",
-		`${process.platform}-${process.arch}`,
-		process.platform === "win32" ? "node.exe" : "node",
-	);
-	if (!env.OMPDESK_NODE && fs.existsSync(pinnedNode)) env.OMPDESK_NODE = pinnedNode;
+	usePinnedNode(env);
 	const userData = userDataFromArgs(args) ?? env.OMP_GUI_TEST_USER_DATA_DIR;
 	if (!userData)
 		throw new Error("launchShell: pass --user-data-dir=<private dir>; the shell would use the real profile");
@@ -595,8 +612,13 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	} catch {
 		// The launcher is also imported by plain-Node lifetime probes.
 	}
-	if (info) diagnostics.set(child, { userData, output: info.outputPath("shell-logs", String(child.pid ?? "launch")) });
 	let tail = "";
+	if (info)
+		diagnostics.set(child, {
+			userData,
+			output: info.outputPath("shell-logs", String(child.pid ?? "launch")),
+			hostOutput: () => tail,
+		});
 	let stderr = "";
 	let inspector: Inspector | undefined;
 	const remember = (chunk: Buffer, isStderr: boolean) => {

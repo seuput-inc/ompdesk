@@ -12,7 +12,8 @@ import * as fs from "node:fs/promises";
 import { createServer as createServer0 } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { chromium, _electron as electron, expect, type Page, test } from "@playwright/test";
+import { chromium, expect, type Page, test } from "@playwright/test";
+import { _electron as electron } from "playwright";
 import { createServer } from "vite";
 import { exitApp } from "./harness";
 import {
