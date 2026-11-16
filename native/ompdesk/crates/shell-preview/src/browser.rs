@@ -885,8 +885,12 @@ mod tests {
             closed: AtomicBool::new(false),
             closing: Mutex::new(()),
         };
-        let first = page.submit_command("Runtime.evaluate", json!({"n": 1})).unwrap();
-        let second = page.submit_command("Input.insertText", json!({"n": 2})).unwrap();
+        let first = page
+            .submit_command("Runtime.evaluate", json!({"n": 1}))
+            .unwrap();
+        let second = page
+            .submit_command("Input.insertText", json!({"n": 2}))
+            .unwrap();
         let (read, mut write) = tokio::io::split(peer);
         let mut read = BufReader::new(read);
         let a = command(&mut read).await;
@@ -897,7 +901,12 @@ mod tests {
         for value in [&b, &a] {
             let id = value["id"].as_u64().unwrap();
             write
-                .write_all(format!("{{\"id\":{id},\"sessionId\":\"session-1\",\"result\":{{\"id\":{id}}}}}\0").as_bytes())
+                .write_all(
+                    format!(
+                        "{{\"id\":{id},\"sessionId\":\"session-1\",\"result\":{{\"id\":{id}}}}}\0"
+                    )
+                    .as_bytes(),
+                )
                 .await
                 .unwrap();
         }
@@ -906,7 +915,10 @@ mod tests {
 
         page.closed.store(true, Ordering::Release);
         assert_eq!(
-            page.submit_command("Runtime.evaluate", json!({})).err().unwrap().code,
+            page.submit_command("Runtime.evaluate", json!({}))
+                .err()
+                .unwrap()
+                .code,
             "gone"
         );
     }

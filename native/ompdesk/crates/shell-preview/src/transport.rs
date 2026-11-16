@@ -342,8 +342,8 @@ impl Transport {
                 _permit: Some(permit),
             })
             .map_err(|_| Error::new("capacity", "Chromium request queue is full or closed"))?;
-        let deadline =
-            (lifetime == PendingLifetime::Timed).then(|| tokio::time::Instant::now() + self.owner.timeout);
+        let deadline = (lifetime == PendingLifetime::Timed)
+            .then(|| tokio::time::Instant::now() + self.owner.timeout);
         Ok(CommandReply {
             _guard: guard,
             receiver,
@@ -736,7 +736,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submitted_awaited_command_does_not_delay_later_input_and_replies_settle_out_of_order() {
+    async fn submitted_awaited_command_does_not_delay_later_input_and_replies_settle_out_of_order()
+    {
         let (transport, peer) = connected(Duration::from_secs(10));
         let (read, mut write) = tokio::io::split(peer);
         let mut read = BufReader::new(read);
@@ -762,7 +763,10 @@ mod tests {
         assert_eq!(second["method"], "Input.dispatchMouseEvent");
         assert_eq!(first["sessionId"], "s");
         assert_eq!(second["sessionId"], "s");
-        let (evaluation_id, input_id) = (first["id"].as_u64().unwrap(), second["id"].as_u64().unwrap());
+        let (evaluation_id, input_id) = (
+            first["id"].as_u64().unwrap(),
+            second["id"].as_u64().unwrap(),
+        );
         assert!(input_id > evaluation_id);
         // The later input reply settles first; the awaited evaluation replies afterwards.
         write
@@ -775,8 +779,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(input.receive().await.unwrap(), json!({"v":"input"}));
-        assert_eq!(evaluation.receive().await.unwrap(), json!({"v":"evaluation"}));
-        assert!(transport.owner.shared.state.lock().unwrap().pending.is_empty());
+        assert_eq!(
+            evaluation.receive().await.unwrap(),
+            json!({"v":"evaluation"})
+        );
+        assert!(
+            transport
+                .owner
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .pending
+                .is_empty()
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -785,7 +801,9 @@ mod tests {
         let mut events = transport.subscribe();
         let (read, mut write) = tokio::io::split(peer);
         let mut read = BufReader::new(read);
-        let reply = transport.submit("Runtime.evaluate", json!({}), None).unwrap();
+        let reply = transport
+            .submit("Runtime.evaluate", json!({}), None)
+            .unwrap();
         let id = command(&mut read).await["id"].as_u64().unwrap();
         tokio::time::advance(Duration::from_secs(10)).await;
         write.write_all(
@@ -796,7 +814,16 @@ mod tests {
         let error = reply.receive().await.unwrap_err();
         assert_eq!(error.code, "timeout");
         assert_eq!(tokio::time::Instant::now(), started);
-        assert!(transport.owner.shared.state.lock().unwrap().pending.is_empty());
+        assert!(
+            transport
+                .owner
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .pending
+                .is_empty()
+        );
     }
 
     #[tokio::test]

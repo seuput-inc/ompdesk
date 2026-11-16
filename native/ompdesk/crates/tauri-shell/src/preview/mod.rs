@@ -225,7 +225,10 @@ fn awaits_cdp_script(params: &Value) -> bool {
         || (matches!(
             params["method"].as_str(),
             Some("Runtime.evaluate" | "Runtime.callFunctionOn" | "Runtime.runScript")
-        ) && params.pointer("/params/awaitPromise").and_then(Value::as_bool) == Some(true))
+        ) && params
+            .pointer("/params/awaitPromise")
+            .and_then(Value::as_bool)
+            == Some(true))
 }
 pub struct Service {
     send: mpsc::UnboundedSender<Message>,
@@ -583,7 +586,9 @@ impl Evaluation {
     async fn receive(self) -> Result<Answer, WireError> {
         let mut answer = self.reply.receive().await.map_err(wire)?;
         if let EvaluationKind::Cdp(entry) = &self.kind {
-            unmap_urls(&entry.partition, &mut answer).await.map_err(crate::failed)?;
+            unmap_urls(&entry.partition, &mut answer)
+                .await
+                .map_err(crate::failed)?;
         }
         original(self.identity)?;
         let result = match self.kind {
@@ -1398,10 +1403,13 @@ async fn resynchronize(browser: &Browser, pages: &Pages, skipped: u64, last_even
             .expect("Preview routes")
             .retain(|session, route| route.wc != wc || *session == entry.page.session_id);
         if let Some(debugger) = debugger {
-            crate::log::log("preview.debugger.detach", json!({
-                "wcId":wc,"reason":"event-stream-lag","skipped":skipped,
-                "lastEvent":last_event,"sessionId":debugger
-            }));
+            crate::log::log(
+                "preview.debugger.detach",
+                json!({
+                    "wcId":wc,"reason":"event-stream-lag","skipped":skipped,
+                    "lastEvent":last_event,"sessionId":debugger
+                }),
+            );
             if browser
                 .command(
                     "Target.detachFromTarget",
@@ -1541,7 +1549,10 @@ async fn observe(
         let mut event = match receive.recv().await {
             Ok(event) => event,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                crate::log::log("preview.events.lagged", json!({"skipped":skipped,"lastEvent":last_event}));
+                crate::log::log(
+                    "preview.events.lagged",
+                    json!({"skipped":skipped,"lastEvent":last_event}),
+                );
                 resynchronize(&browser, &pages, skipped, &last_event).await;
                 continue;
             }
@@ -1569,11 +1580,14 @@ async fn observe(
                 {
                     let primary = entry.page.session_id == session;
                     let root = route.debugger.as_deref() == Some(session);
-                    crate::log::log("preview.target.detached", json!({
-                        "wcId":route.wc,"sessionId":session,"event":event.method,
-                        "primary":primary,"debuggerRoot":root,"iframe":route.iframe,
-                        "reason":event.params.get("reason")
-                    }));
+                    crate::log::log(
+                        "preview.target.detached",
+                        json!({
+                            "wcId":route.wc,"sessionId":session,"event":event.method,
+                            "primary":primary,"debuggerRoot":root,"iframe":route.iframe,
+                            "reason":event.params.get("reason")
+                        }),
+                    );
                     if root {
                         entry.document.lock().expect("Preview document").debugger = None;
                         pages
@@ -2001,12 +2015,13 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             }
         }
         events::Update::Loading { frame_id, loading } => {
-            if frame_id.as_deref() != entry
-                        .document
-                        .lock()
-                        .expect("Preview document")
-                        .frame
-                        .as_deref()
+            if frame_id.as_deref()
+                != entry
+                    .document
+                    .lock()
+                    .expect("Preview document")
+                    .frame
+                    .as_deref()
             {
                 return;
             }
@@ -2114,11 +2129,20 @@ async fn lifecycle(entry: &Entry, wc: u64, params: &Value) {
         Some("DOMContentLoaded") => wc_event(wc, "dom-ready", json!([])),
         Some("load") => {
             let identity = {
-                runtime().registry.lock().expect("registry").page(wc).map(|page| page.identity)
+                runtime()
+                    .registry
+                    .lock()
+                    .expect("registry")
+                    .page(wc)
+                    .map(|page| page.identity)
             };
             refresh_state(entry, wc).await;
             if !identity.is_some_and(|identity| {
-                runtime().registry.lock().expect("registry").current(identity)
+                runtime()
+                    .registry
+                    .lock()
+                    .expect("registry")
+                    .current(identity)
             }) {
                 return;
             }

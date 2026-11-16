@@ -792,12 +792,7 @@ describe("webContents", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 		try {
 			fake.answers.set("wc.cdp.send", ({ params: command }) => {
-				if (
-					typeof command === "object" &&
-					command !== null &&
-					"type" in command &&
-					command.type === "mousePressed"
-				)
+				if (typeof command === "object" && command !== null && "type" in command && command.type === "mousePressed")
 					throw new HostError("cdp", "Target closed");
 				return { result: {} };
 			});
