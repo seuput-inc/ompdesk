@@ -310,7 +310,10 @@ fn browser(argv: Vec<String>) -> i32 {
         host::Handlers {
             request: dispatch::request,
             event: dispatch::event,
-            closed: || lifecycle::node_gone(None),
+            closed: || {
+                protocol::disconnected();
+                lifecycle::node_gone(None);
+            },
         },
     );
     let program = node::node_program(located.packaged, &located.resources);

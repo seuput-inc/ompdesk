@@ -10,6 +10,8 @@ mod native;
 mod policy;
 pub mod preview;
 pub mod protocol;
+#[cfg(target_os = "macos")]
+mod protocol_macos;
 #[cfg(windows)]
 mod windows;
 
@@ -61,16 +63,27 @@ pub struct NetworkPolicy {
 }
 
 pub fn network_policy(partition: &str) -> Result<NetworkPolicy, String> {
-    let policy = policy(partition)?;
-    Ok(NetworkPolicy {
-        deny_network: policy.deny_network(),
-        user_agent: policy.user_agent,
-        accept_languages: policy.accept_languages,
+    with(|r| {
+        let policy = &r.get(partition)?.policy;
+        Ok(NetworkPolicy {
+            deny_network: policy.deny_network(),
+            user_agent: policy.user_agent.clone(),
+            accept_languages: policy.accept_languages.clone(),
+        })
     })
 }
 
 pub fn handles_scheme(partition: &str, scheme: &str) -> bool {
-    policy(partition).is_ok_and(|p| p.schemes.contains(&scheme.to_ascii_lowercase()))
+    with(|r| {
+        let session = r.get(partition)?;
+        Ok(session
+            .policy
+            .schemes
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(scheme))
+            && protocol::can_handle(session, scheme)?)
+    })
+    .unwrap_or(false)
 }
 
 /// Main passes the same builder and wcId it owns; this module allocates no window or page identity.
@@ -108,6 +121,12 @@ pub fn configure_app<'a, M: Manager<Wry>>(
     builder = builder
         .data_directory(directory)
         .data_store_identifier(identifier);
+    #[cfg(target_os = "macos")]
+    {
+        let configuration =
+            protocol_macos::configuration(&partition, identifier, protocol::declared_schemes()?)?;
+        builder = builder.with_webview_configuration(configuration);
+    }
     if let Some(ua) = &current_policy.user_agent {
         builder = builder.user_agent(ua);
     }
@@ -166,13 +185,21 @@ pub async fn attach_app(partition: &str, webview: Webview) -> Result<(), String>
     .await;
     with(|r| {
         let s = r.get_mut(&partition)?;
-        if !s.app_views.iter().any(|attached| attached.label() == webview.label()) {
+        if !s
+            .app_views
+            .iter()
+            .any(|attached| attached.label() == webview.label())
+        {
             return Err("app WebView detached before session attachment completed".into());
         }
         match &result {
             Ok(snapshot) => {
                 s.snapshot = Some(snapshot.clone());
                 s.snapshot_error = None;
+                #[cfg(target_os = "macos")]
+                {
+                    s.native_stream = true;
+                }
             }
             Err(error) => {
                 s.snapshot_error = Some(error.clone());
@@ -192,6 +219,9 @@ pub fn detach_app(webview: &Webview) -> Result<(), String> {
     with(|r| {
         for session in r.partitions.values_mut() {
             session.app_views.retain(|v| v.label() != webview.label());
+            if session.app_views.is_empty() {
+                session.native_stream = false;
+            }
         }
         Ok(())
     })
@@ -442,10 +472,13 @@ async fn execute(call: &Call) -> Result<Value, Failure> {
         }
         "handleScheme" | "unhandleScheme" => {
             let scheme = args["scheme"].as_str().unwrap_or("").to_ascii_lowercase();
-            if storage != Storage::Memory {
+            if op == "handleScheme" && !with(|r| protocol::can_handle(r.get(&partition)?, &scheme))?
+            {
                 return Err(Failure {
                     code: "unsupported",
-                    message: "the native streamed custom-scheme consumer is not installed".into(),
+                    message:
+                        "this declared scheme has no installed native or gateway stream consumer"
+                            .into(),
                 });
             }
             if op == "handleScheme" {
@@ -506,10 +539,11 @@ async fn execute(call: &Call) -> Result<Value, Failure> {
         return Ok(json!({}));
     }
     if matches!(op, "handleScheme" | "unhandleScheme") {
-        return Err(Failure {
-            code: "unsupported",
-            message: "the streamed custom-scheme consumer is not installed".into(),
-        });
+        with(|r| {
+            r.get_mut(&partition)?.policy = updated;
+            Ok(())
+        })?;
+        return Ok(json!({}));
     }
     with(|r| {
         r.get_mut(&partition)?.policy = updated.clone();

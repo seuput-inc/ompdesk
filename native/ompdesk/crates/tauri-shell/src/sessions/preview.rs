@@ -352,9 +352,6 @@ pub(super) async fn apply(
             let context = ensure_context(partition).await?;
             browser()?.command("Browser.setDownloadBehavior", json!({"browserContextId":context.context_id,"behavior":"deny","eventsEnabled":true}), None).await.map_err(|e|e.to_string())?;
         }
-        "handleScheme" | "unhandleScheme" => {
-            return Err("the Preview streamed custom-scheme consumer is not installed".into());
-        }
         "setSpellCheckerLanguages" | "addWordToSpellCheckerDictionary" => {
             return Err(
                 "Chromium CDP has no public spellchecker language or dictionary API".into(),

@@ -27,6 +27,10 @@ export interface CreateOptions {
 function gated(client: HostClient, ready: Promise<void>): HostClient {
 	const isEarly = (method: string): boolean => method === "hello" || method.startsWith("app.");
 	return {
+		get closed() {
+			return client.closed;
+		},
+		onClose: listener => client.onClose(listener),
 		request: async (method, params, options) => {
 			if (!isEarly(method)) await ready;
 			return client.request(method, params, options);

@@ -9,6 +9,8 @@ import type { HostFacts } from "../facts";
 
 /** The part of `ShellClient` the shim uses; tests give it a fake. */
 export interface HostClient {
+	readonly closed: boolean;
+	onClose(listener: (reason: Error | undefined) => void): void;
 	request<T = unknown>(method: string, params?: unknown, options?: RequestOptions): Promise<Answer<T>>;
 	call<T = unknown>(method: string, params?: unknown, options?: RequestOptions): Promise<T>;
 	event(name: string, data?: unknown, bin?: Uint8Array): Promise<void>;
