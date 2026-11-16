@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.132.0] - 2026-11-16
+## [0.132.0] - 2026-11-17
 
 데스크톱 창을 Electron 대신 Rust(Tauri 2)와 운영체제 기본 웹뷰로 바꿨어요. 기존 세션, 계정, 원격 기능과 설정은 그대로 이어서 써요.
 
@@ -13,6 +13,14 @@
 - 종료 중에는 새 core 실행을 막고 이미 시작한 프로세스의 종료를 기다려요. 중첩된 중지 요청도 같은 종료 결과를 기다려요.
 - 프로젝트 선택과 보조 질문 화면은 첫 화면 이후에 불러와요. 보조 질문을 불러오지 못해도 원문과 다시 시도·취소를 표시하며, Ask 전에는 실행하지 않고 Escape로 본 작업을 중단하지 않아요.
 - 세션마다 정한 프록시(업데이트 확인 등)와 서버·프록시의 로그인 요구(401·407)를 Windows에서도 Electron처럼 처리해요. 설정 화면의 도구 경로가 좁은 창에서 옆으로 넘치지 않고, 사이드 패널은 마지막 너비로 바로 열려요.
+- 중단된 작업의 예약 재시도가 같은 실패를 매번 새 실패로 읽어 걸리지 않던 문제와, 취소한 뒤에도 대기가 남던 문제를 고쳤어요.
+- 스톡 omp 18.21.0을 지원해요. 새 설정의 한국어 설명과 Modal 공급자 표식을 넣었고, 18.21.0에서 빠지던 다이어그램(Mermaid·SVG) 안내를 다시 넣어요.
+
+### 알려진 한계
+- 작성 창에 첨부한 파일은 원래 경로 대신 앱이 받아 둔 사본 경로로 전달돼요. 원래 경로 유지는 다음 판에서 돌아와요.
+- Preview 패널의 브라우저는 WebRTC의 직접 UDP 연결을 쓰지 않아요(주소 유출 방지).
+- 휴대폰에서 보는 Preview 화면은 1배 해상도로 보내요.
+- Windows에서 HEIC 사진을 읽으려면 Microsoft Store의 HEIF 이미지 확장이 필요해요.
 
 <!-- en -->
 
@@ -27,6 +35,14 @@ The desktop window now runs on Rust (Tauri 2) and the operating system's web vie
 - Shutdown refuses new core launches and waits for processes already started. Overlapping stop requests wait for the same exit result.
 - Project selection and side questions load after the first screen. Failed side-question loads show the retained question with Retry and Cancel; nothing runs before Ask, and Escape does not stop the main turn.
 - A session's own proxy (update checks, for one) and a server's or proxy's login request (401, 407) work on Windows as they did in Electron. Tool paths in Settings no longer run sideways in a narrow window, and the side panel opens at its last width.
+- A scheduled retry of interrupted work read the same failure as a new one on every look and never armed, and a cancelled wait stayed on screen; both are fixed.
+- Stock omp 18.21.0 is supported: Korean text for its new settings, a mark for the Modal provider, and the diagram (Mermaid, SVG) guidance that went missing on 18.21.0.
+
+### Known limits
+- Files attached in the composer reach omp by the path of the app's received copy, not their original path. Original paths return in a later release.
+- The Preview panel's browser makes no direct UDP WebRTC connections (so a page cannot learn local addresses).
+- The phone's view of Preview is streamed at 1x resolution.
+- Reading HEIC photos on Windows needs Microsoft's HEIF Image Extensions from the Store.
 
 ## [0.131.0] - 2026-11-15
 
