@@ -344,7 +344,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // transcript is the phone's first screen though its CSS hides the rail there): about 1,730 bytes more than the budget
 // above measured (2,203,581 against 2,201,852 on the branch before the usage grouping moved out). Run 43497845095 on the
 // branch merged with main passed `build` under the budget below.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_203_000;
+// The input history's hydrate stops logging a paired host's `remote_offline` as a failed read (16 Nov 2026, 1326c4dc0;
+// `stores/input-history.ts` is on the phone's first screen): measured 2,203,024 by the runner's build (branch run
+// 43849653388), 24 bytes over. The budget is that measure plus 76 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_203_100;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
