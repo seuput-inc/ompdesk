@@ -9,6 +9,13 @@ import pin from "../resources/preview-browser.json";
 
 const ROOT = path.resolve(import.meta.dir, "..", "resources", "preview-browser");
 const RECORD = "provenance.json";
+const NOTICES = "notices";
+const MPL_FILE = `${NOTICES}/LICENSE.MPL-2.0.txt`;
+const CREDITS_FILE = `${NOTICES}/brave-credits.html`;
+// Chromium's credits page lists one <div class="product"> per bundled component; the pinned 157 build
+// is expected to carry well over a hundred. Lower bound is set from the local darwin-arm64 run (see MIN_CREDIT_SECTIONS use).
+const MIN_CREDIT_SECTIONS = 50;
+const MIN_CREDITS_BYTES = 256 * 1024;
 type TargetKey = keyof typeof pin.targets;
 type Target = (typeof pin.targets)[TargetKey];
 interface Signature {
@@ -250,14 +257,62 @@ async function inspect(dir: string, target: Target): Promise<Payload> {
 	}
 	await walk(vendor);
 	if (!binaryHash) throw new Error("Executable is not an inventoried regular file within the vendor payload");
-	if (!licenses.length || !thirdPartyNotices.length)
-		throw new Error(
-			"Official payload license/third-party credits layout is unverified: require actual nonempty MPL 2.0 and third-party notices files. Packed brave://credits is not presumed inspected; no runtime manifest is admitted.",
-		);
 	return { sha256: binaryHash, treeSha256: tree.digest("hex"), licenses, thirdPartyNotices };
 }
 
-function sourceOffer(payload: Payload): string {
+async function fetchMpl(): Promise<string> {
+	const { url, size, sha256 } = pin.licenseText;
+	const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+	if (!response.ok || new URL(response.url).protocol !== "https:")
+		throw new Error(`MPL license download failed: ${response.status}`);
+	const bytes = Buffer.from(await response.arrayBuffer());
+	if (bytes.length !== size || createHash("sha256").update(bytes).digest("hex") !== sha256)
+		throw new Error("MPL-2.0 license text size/SHA-256 differs from its pin");
+	const text = bytes.toString("utf8");
+	if (!text.includes("Mozilla Public License") || !/Version\s+2\.0/.test(text))
+		throw new Error("Pinned license text is not MPL 2.0");
+	return text;
+}
+
+/** Validates the rendered brave://credits document; returns its license section count. */
+function creditsSections(html: string): number {
+	if (Buffer.byteLength(html) < MIN_CREDITS_BYTES) throw new Error("Rendered brave://credits is implausibly small");
+	if (!/brave/i.test(html)) throw new Error("Rendered brave://credits does not mention Brave");
+	const sections = (html.match(/class="product"/g) ?? []).length;
+	if (sections < MIN_CREDIT_SECTIONS)
+		throw new Error(
+			`Rendered brave://credits has ${sections} license sections, expected at least ${MIN_CREDIT_SECTIONS}`,
+		);
+	return sections;
+}
+
+/** Renders brave://credits from the verified staged binary: headless, throwaway profile, offline. */
+function renderCredits(stage: string, target: Target, workspace: string): string {
+	const profile = path.join(workspace, "credits-profile");
+	fs.mkdirSync(profile, { recursive: true });
+	const out = spawnSync(
+		path.join(stage, target.binary),
+		[
+			"--headless=new",
+			`--user-data-dir=${profile}`,
+			"--no-first-run",
+			"--no-default-browser-check",
+			"--disable-gpu",
+			"--disable-background-networking",
+			"--disable-component-update",
+			"--disable-sync",
+			"--virtual-time-budget=15000",
+			"--dump-dom",
+			"brave://credits",
+		],
+		{ encoding: "utf8", timeout: 120_000, maxBuffer: 128 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
+	);
+	if (out.error || out.status !== 0)
+		throw new Error(`Rendering brave://credits failed: ${out.error ?? `exit ${out.status}`}`);
+	return out.stdout;
+}
+
+function sourceOffer(payload: Payload, notices: string[]): string {
 	return [
 		`${pin.vendor} ${pin.vendorVersion} (Chromium ${pin.chromiumVersion})`,
 		`Unmodified official package: ${pin.release}`,
@@ -269,11 +324,15 @@ function sourceOffer(payload: Payload): string {
 		"OMPdesk retains its own license; this offer does not replace any upstream license or notice.",
 		"Original vendor marks, signatures, helpers, resources, and notices are retained in vendor/.",
 		"Included MPL license files:",
-		...payload.licenses.map(file => `vendor/${file}`),
+		...[...payload.licenses.map(file => `vendor/${file}`), ...notices.filter(file => file === MPL_FILE)],
 		"Included third-party notices:",
-		...payload.thirdPartyNotices.map(file => `vendor/${file}`),
+		...[...payload.thirdPartyNotices.map(file => `vendor/${file}`), ...notices.filter(file => file === CREDITS_FILE)],
 		"",
 	].join("\n");
+}
+
+async function presentNotices(dir: string): Promise<string[]> {
+	return [MPL_FILE, CREDITS_FILE].filter(file => fs.existsSync(path.join(dir, file)));
 }
 
 function runtime(target: Target, sha256: string) {
@@ -301,6 +360,16 @@ export async function checkPreviewBrowser(): Promise<void> {
 		throw new Error("Preview browser cache does not match the pinned producer/archive");
 	const verifiedSignature = await signature(dir, target);
 	const payload = await inspect(dir, target);
+	const notices = await presentNotices(dir);
+	const generated = notices.length > 0;
+	if (generated) {
+		const mpl = await fileHash(path.join(dir, MPL_FILE));
+		const credits = await fileHash(path.join(dir, CREDITS_FILE));
+		if (notices.length !== 2 || mpl !== pin.licenseText.sha256 || credits !== provenance.creditsSha256)
+			throw new Error("Preview browser generated notices changed");
+		creditsSections(await fsp.readFile(path.join(dir, CREDITS_FILE), "utf8"));
+	} else if (!payload.licenses.length || !payload.thirdPartyNotices.length)
+		throw new Error("Preview browser has neither loose nor generated license notices");
 	if (payload.treeSha256 !== provenance.vendorTreeSha256 || verifiedSignature.identity !== provenance.signer)
 		throw new Error("Preview browser cache payload or signer changed");
 	const actual = await readJson(path.join(dir, "runtime.json"));
@@ -311,7 +380,7 @@ export async function checkPreviewBrowser(): Promise<void> {
 		Object.entries(expected).some(([field, value]) => actual[field] !== value)
 	)
 		throw new Error("Preview browser runtime.json differs from the strict five-key consumer contract");
-	if ((await fsp.readFile(path.join(dir, "SOURCE-OFFER.txt"), "utf8")) !== sourceOffer(payload))
+	if ((await fsp.readFile(path.join(dir, "SOURCE-OFFER.txt"), "utf8")) !== sourceOffer(payload, notices))
 		throw new Error("Preview browser source offer is missing or changed");
 	console.log(`[preview-browser] verified ${pin.vendorVersion} / Chromium ${pin.chromiumVersion} (${key})`);
 }
@@ -336,7 +405,22 @@ export async function stagePreviewBrowser(): Promise<void> {
 		else extractWindows(archive, vendor);
 		const verifiedSignature = await signature(stage, target);
 		const payload = await inspect(stage, target);
-		await fsp.writeFile(path.join(stage, "SOURCE-OFFER.txt"), sourceOffer(payload), { flag: "wx" });
+		const notices: string[] = [];
+		let creditsSha256: string | undefined;
+		if (!payload.licenses.length || !payload.thirdPartyNotices.length) {
+			// Official archives carry no loose notice files: ship Brave's MPL text and the binary's own credits page.
+			const html = renderCredits(stage, target, workspace);
+			const sections = creditsSections(html);
+			if ((await inspect(stage, target)).treeSha256 !== payload.treeSha256)
+				throw new Error("Launching the browser modified the vendor payload");
+			await fsp.mkdir(path.join(stage, NOTICES));
+			await fsp.writeFile(path.join(stage, MPL_FILE), await fetchMpl(), { flag: "wx" });
+			await fsp.writeFile(path.join(stage, CREDITS_FILE), html, { flag: "wx" });
+			creditsSha256 = createHash("sha256").update(html).digest("hex");
+			notices.push(MPL_FILE, CREDITS_FILE);
+			console.log(`[preview-browser] credits: ${Buffer.byteLength(html)} bytes, ${sections} sections`);
+		}
+		await fsp.writeFile(path.join(stage, "SOURCE-OFFER.txt"), sourceOffer(payload, notices), { flag: "wx" });
 		await fsp.writeFile(
 			path.join(stage, RECORD),
 			`${JSON.stringify(
@@ -354,6 +438,8 @@ export async function stagePreviewBrowser(): Promise<void> {
 					signature: verifiedSignature,
 					licenses: payload.licenses,
 					thirdPartyNotices: payload.thirdPartyNotices,
+					generatedNotices: notices,
+					creditsSha256,
 				},
 				null,
 				"\t",

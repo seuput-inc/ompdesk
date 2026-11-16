@@ -33,6 +33,11 @@ runs:
         # The move checks drive the updated page through the embedded WebDriver, which only a test build carries.
         with:
           test-automation: "true"
+      # The pinned, signed Brave runtime Preview browses with (resources/preview-browser.json); the Tauri bundle carries it.
+      - if: inputs.runtime == 'tauri'
+        name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
+        shell: bash
       - run: bun run build
         shell: bash
       # What the bundle packages besides the shell, as release.yml's mac job: the memory binary (cached), agent-desktop.
