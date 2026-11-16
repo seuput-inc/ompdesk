@@ -40,7 +40,6 @@ impl PageInitializer for Initializer {
     }
 }
 
-
 const OBSERVE: &str = r#"(()=>{
     if(Object.hasOwn(globalThis,'__ompdeskNativeComposition'))return;
     const internal=new WeakSet();
@@ -295,7 +294,6 @@ mod tests {
             "the original root document returned from BFCache"
         );
     }
-
 
     #[tokio::test]
     #[ignore = "requires OMPDESK_PREVIEW_TEST_BROWSER and OMPDESK_PREVIEW_TEST_SCRATCH"]
