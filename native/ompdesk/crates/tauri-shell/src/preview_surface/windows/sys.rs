@@ -56,7 +56,8 @@ use windows_sys::Win32::UI::Input::Pointer::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-    GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, PT_TOUCH, RegisterClassW,
+    GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, PT_TOUCH,
+    RegisterClassW,
     SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY, WM_CUT, WM_GETOBJECT,
     WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
@@ -722,6 +723,10 @@ fn cancel_composition(context: &Context, hwnd: HWND) -> Result<(), SurfaceError>
     context.shared.input(Input::CancelIme)
 }
 
+fn client_point_dip(point: POINT, scale: f64) -> (f64, f64) {
+    (f64::from(point.x) / scale, f64::from(point.y) / scale)
+}
+
 fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
     let entry_key = context.shared.key();
     if message == WM_KILLFOCUS {
@@ -781,31 +786,46 @@ fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam:
     }
     let scale = context.shared.bounds().scale;
     if message == WM_MOUSELEAVE {
-        if let Some((x, y)) = context.mouse_position.take() {
-            // SAFETY: GetKeyState reads this UI thread's actual mouse button state.
-            let buttons = unsafe {
-                u32::from(GetKeyState(i32::from(VK_LBUTTON)) < 0)
-                    | (u32::from(GetKeyState(i32::from(VK_RBUTTON)) < 0) << 1)
-                    | (u32::from(GetKeyState(i32::from(VK_MBUTTON)) < 0) << 2)
-                    | (u32::from(GetKeyState(i32::from(VK_XBUTTON1)) < 0) << 3)
-                    | (u32::from(GetKeyState(i32::from(VK_XBUTTON2)) < 0) << 4)
-            };
-            let event = Input::Mouse {
-                kind: MouseKind::Leave,
-                x,
-                y,
-                button: MouseButton::None,
-                buttons,
-                click_count: 0,
-                modifiers: modifiers(),
-            };
-            if let Err(error) = context
+        context.mouse_position.set(None);
+        let mut point = POINT { x: 0, y: 0 };
+        // SAFETY: point is writable storage and hwnd is the live child handling this message.
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            context
                 .shared
-                .check_key(entry_key)
-                .and_then(|()| context.shared.input(event))
-            {
-                context.shared.report_error(error);
-            }
+                .report_error(native_error("read Preview leave cursor position"));
+            return true;
+        }
+        // SAFETY: point holds actual screen coordinates and hwnd is this same live child.
+        if unsafe { ScreenToClient(hwnd, &mut point) } == 0 {
+            context
+                .shared
+                .report_error(native_error("convert Preview leave coordinates"));
+            return true;
+        }
+        let (x, y) = client_point_dip(point, scale);
+        // SAFETY: GetKeyState reads this UI thread's actual mouse button state.
+        let buttons = unsafe {
+            u32::from(GetKeyState(i32::from(VK_LBUTTON)) < 0)
+                | (u32::from(GetKeyState(i32::from(VK_RBUTTON)) < 0) << 1)
+                | (u32::from(GetKeyState(i32::from(VK_MBUTTON)) < 0) << 2)
+                | (u32::from(GetKeyState(i32::from(VK_XBUTTON1)) < 0) << 3)
+                | (u32::from(GetKeyState(i32::from(VK_XBUTTON2)) < 0) << 4)
+        };
+        let event = Input::Mouse {
+            kind: MouseKind::Move,
+            x,
+            y,
+            button: MouseButton::None,
+            buttons,
+            click_count: 0,
+            modifiers: modifiers(),
+        };
+        if let Err(error) = context
+            .shared
+            .check_key(entry_key)
+            .and_then(|()| context.shared.input(event))
+        {
+            context.shared.report_error(error);
         }
         return true;
     }
@@ -822,8 +842,7 @@ fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             return true;
         }
     }
-    let x = f64::from(point.x) / scale;
-    let y = f64::from(point.y) / scale;
+    let (x, y) = client_point_dip(point, scale);
     if message == WM_MOUSEMOVE {
         let entering = context.mouse_position.replace(Some((x, y))).is_none();
         if entering {
@@ -2593,6 +2612,16 @@ mod tests {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SendMessageW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
+
+    #[test]
+    fn outside_client_points_keep_signed_coordinates_at_the_view_scale() {
+        for (point, expected) in [
+            (POINT { x: -27, y: 210 }, (-18.0, 140.0)),
+            (POINT { x: 330, y: -12 }, (220.0, -8.0)),
+        ] {
+            assert_eq!(client_point_dip(point, 1.5), expected);
+        }
+    }
 
     #[derive(Default)]
     struct ConsumerLog {
