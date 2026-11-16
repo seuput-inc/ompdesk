@@ -2537,7 +2537,7 @@ async fn native_task(pages: &Arc<Pages>, task: NativeTask) {
         if surface::key(key.wc).ok() == Some(key) {
             crate::log::log(
                 "preview.native.failed",
-                json!({"wcId":key.wc,"code":error.code}),
+                json!({"wcId":key.wc,"code":error.code,"message":error.message}),
             );
             wc_event(
                 key.wc,
