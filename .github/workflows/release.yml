@@ -954,7 +954,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          sparse-checkout: scripts/ci-failure.sh
+          # ci-failure.sh for failure reports; app-compatibility.json for the update metadata's minimum macOS.
+          sparse-checkout: |
+            scripts/ci-failure.sh
+            src/shared/app-compatibility.json
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
