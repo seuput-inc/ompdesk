@@ -90,8 +90,13 @@ fn snapshot(hwnd: isize) -> Value {
 /// Puts the subclass on a window of this thread, once, as it is created.
 pub(crate) fn watch(hwnd: isize, win: u64) -> Result<(), String> {
     // SAFETY: GWLP_WNDPROC of a window of this thread takes a window procedure and returns the one it replaces.
-    let previous =
-        unsafe { SetWindowLongPtrW(hwnd as HWND, GWLP_WNDPROC, window_proc as usize as isize) };
+    let previous = unsafe {
+        SetWindowLongPtrW(
+            hwnd as HWND,
+            GWLP_WNDPROC,
+            window_proc as *const () as usize as isize,
+        )
+    };
     if previous == 0 {
         return Err(format!(
             "subclass the window: {}",
