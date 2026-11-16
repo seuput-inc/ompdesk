@@ -326,8 +326,8 @@ impl Page {
             ));
         }
         let result = self.command("Page.navigate", json!({"url":url})).await?;
-        if result.get("errorText").is_some() {
-            return Err(Error::new("failed", "Preview navigation failed"));
+        if let Some(error) = result.get("errorText").and_then(Value::as_str) {
+            return Err(Error::new("navigation", error));
         }
         Ok(result)
     }
