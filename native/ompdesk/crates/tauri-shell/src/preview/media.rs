@@ -46,6 +46,18 @@ pub(super) fn from_request(uri: &tauri::http::Uri) -> Result<String, WireError> 
     {
         return Ok(uri.to_string());
     }
+    // wry hands a WebView2 handler `http://omp-media.localhost/<path>` rewritten as `omp-media://localhost/<path>`.
+    if uri.scheme_str() == Some("omp-media")
+        && uri
+            .authority()
+            .is_some_and(|host| host.as_str() == "localhost")
+        && let Some(token) = uri
+            .path_and_query()
+            .and_then(|path| path.as_str().strip_prefix("/stream/"))
+            .filter(|token| !token.is_empty())
+    {
+        return Ok(format!("{ORIGINAL}{token}"));
+    }
     if uri.scheme_str() == Some("http")
         && uri
             .authority()
@@ -183,6 +195,16 @@ mod tests {
             request,
             "omp-media://stream/actual_registered_token?range=original"
         );
+        let wry_form = from_request(
+            &"omp-media://localhost/stream/actual_registered_token?range=original"
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            wry_form,
+            "omp-media://stream/actual_registered_token?range=original"
+        );
     }
     #[test]
     fn media_translation_does_not_accept_origin_lookalikes() {
@@ -190,6 +212,9 @@ mod tests {
             "http://omp-media.localhost.attacker/stream/token",
             "http://omp-media.localhost:8080/stream/token",
             "omp-media://attacker/token",
+            "omp-media://localhost/other/token",
+            "omp-media://localhost/stream/",
+            "omp-media://localhost:8080/stream/token",
             "file://omp-media.localhost/stream/token",
         ] {
             assert!(from_request(&uri.parse().unwrap()).is_err());
