@@ -60,6 +60,9 @@ struct ViewLayout {
 struct Entry {
     page: Arc<Page>,
     partition: String,
+    /// The actual BrowserContext this page lives in: a per-page one for an `omp-visual` partition,
+    /// otherwise the partition's shared canonical context.
+    context: shell_preview::Partition,
     closing: tokio::sync::Mutex<()>,
     surface_change: tokio::sync::Mutex<()>,
     document: Mutex<Document>,
@@ -1118,31 +1121,50 @@ async fn create(
         ));
     }
     async {
-        let context = crate::sessions::preview::context_for(partition)
+        let context = crate::sessions::preview::page_context(partition)
             .await
             .map_err(crate::failed)?;
-        let viewport = Viewport {
-            width: params
-                .pointer("/options/width")
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(800),
-            height: params
-                .pointer("/options/height")
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(600),
-            device_scale_factor: native_scale(None).await?,
-        };
-        let page = Arc::new(
-            browser
+        let created = async {
+            let viewport = Viewport {
+                width: params
+                    .pointer("/options/width")
+                    .and_then(Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .unwrap_or(800),
+                height: params
+                    .pointer("/options/height")
+                    .and_then(Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .unwrap_or(600),
+                device_scale_factor: native_scale(None).await?,
+            };
+            let page = browser
                 .create_page(&context, viewport)
                 .await
-                .map_err(wire)?,
-        );
+                .map_err(wire)?;
+            Ok::<_, WireError>((viewport, page))
+        }
+        .await;
+        let (viewport, page) = match created {
+            Ok(created) => created,
+            Err(error) => {
+                return Err(
+                    match crate::sessions::preview::release_page_context(partition, &context).await
+                    {
+                        Ok(()) => error,
+                        Err(release) => WireError::new(
+                            &error.code,
+                            format!("{}; context disposal: {release}", error.message),
+                        ),
+                    },
+                );
+            }
+        };
+        let page = Arc::new(page);
         let entry = Arc::new(Entry {
             page: Arc::clone(&page),
             partition: partition.to_owned(),
+            context,
             closing: tokio::sync::Mutex::new(()),
             surface_change: tokio::sync::Mutex::new(()),
             document: Mutex::new(Document {
@@ -1191,23 +1213,38 @@ async fn create(
             .lock()
             .expect("Preview pages")
             .insert(wc, Arc::clone(&entry));
-        let tree = page
-            .command("Page.getFrameTree", json!({}))
-            .await
-            .map_err(wire)?;
-        entry.document.lock().expect("Preview document").frame = tree
-            .pointer("/frameTree/frame/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        page.command("Page.setLifecycleEventsEnabled", json!({"enabled":true}))
-            .await
-            .map_err(wire)?;
-        page.command("Runtime.disable", json!({}))
-            .await
-            .map_err(wire)?;
-        page.command("Runtime.enable", json!({}))
-            .await
-            .map_err(wire)?;
+        let setup = async {
+            let tree = page
+                .command("Page.getFrameTree", json!({}))
+                .await
+                .map_err(wire)?;
+            entry.document.lock().expect("Preview document").frame = tree
+                .pointer("/frameTree/frame/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            page.command("Page.setLifecycleEventsEnabled", json!({"enabled":true}))
+                .await
+                .map_err(wire)?;
+            page.command("Runtime.disable", json!({}))
+                .await
+                .map_err(wire)?;
+            page.command("Runtime.enable", json!({}))
+                .await
+                .map_err(wire)?;
+            Ok::<(), WireError>(())
+        }
+        .await;
+        if let Err(error) = setup {
+            // The page and its per-page context are owned by the Entry; close disposes both and keeps
+            // the Entry for a retry if Chromium does not answer.
+            return Err(match close(pages, wc).await {
+                Ok(()) => error,
+                Err(cleanup) => WireError::new(
+                    &error.code,
+                    format!("{}; cleanup: {}", error.message, cleanup.message),
+                ),
+            });
+        }
         host::event(
             "wc.state",
             json!({"wcId":wc,"nativeScaleFactor":viewport.device_scale_factor}),
@@ -1335,6 +1372,9 @@ async fn close(pages: &Pages, wc: u64) -> Result<(), WireError> {
             .close()
             .await
             .map_err(|error| format!("target: {error}"))?;
+        crate::sessions::preview::release_page_context(&entry.partition, &entry.context)
+            .await
+            .map_err(|error| format!("context: {error}"))?;
         pages
             .routes
             .lock()

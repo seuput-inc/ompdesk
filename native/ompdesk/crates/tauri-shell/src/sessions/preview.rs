@@ -97,8 +97,9 @@ impl PageInitializer for Initializer {
                 r.partitions
                     .iter()
                     .find_map(|(name, s)| {
-                        (s.context.as_deref() == Some(page.context_id.as_str()))
-                            .then(|| name.clone())
+                        (s.context.as_deref() == Some(page.context_id.as_str())
+                            || s.page_contexts.contains(page.context_id.as_str()))
+                        .then(|| name.clone())
                     })
                     .ok_or_else(|| "Preview target has no canonical partition".to_string())
             })
@@ -136,6 +137,21 @@ async fn create_context(
     policy: &Policy,
     transport: &PreviewTransport,
 ) -> Result<Partition, String> {
+    let (context_id, protected) = new_context(policy, transport).await?;
+    super::with(|r| {
+        let session = r.get_mut(partition)?;
+        session.context = Some(context_id.clone());
+        session.gateway_proxy_applied = protected;
+        Ok(())
+    })?;
+    Ok(Partition { context_id })
+}
+
+/// Creates one actual BrowserContext with the captured policy, proxy and reserved gateway transport.
+async fn new_context(
+    policy: &Policy,
+    transport: &PreviewTransport,
+) -> Result<(String, bool), String> {
     let browser = browser()?;
     if !transport.is_live() {
         return Err("Preview transport is not live".into());
@@ -212,13 +228,78 @@ async fn create_context(
             .await;
         return Err(error.to_string());
     }
-    super::with(|r| {
-        let session = r.get_mut(partition)?;
-        session.context = Some(context_id.clone());
-        session.gateway_proxy_applied = protected;
+    Ok((context_id, protected))
+}
+
+fn is_visual(policy: &Policy) -> bool {
+    policy
+        .schemes
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("omp-visual"))
+}
+
+/// Runs in the canonical session queue. A registered `omp-visual` partition gets one isolated actual
+/// BrowserContext per page (separate cookie jar, CookieStore and service workers); every other
+/// partition keeps its shared canonical context.
+pub(super) async fn ensure_page_context(partition: &str) -> Result<Partition, String> {
+    let shared = ensure_context(partition).await?;
+    let policy = super::policy(partition)?;
+    if !is_visual(&policy) {
+        super::with(|r| {
+            r.get_mut(partition)?.context_exposed = true;
+            Ok(())
+        })?;
+        return Ok(shared);
+    }
+    let transport = transport_for(partition).await?;
+    let (context_id, _) = new_context(&policy, &transport).await?;
+    let registered = super::with(|r| {
+        r.get_mut(partition)?
+            .page_contexts
+            .insert(context_id.clone());
         Ok(())
-    })?;
+    });
+    if let Err(error) = registered {
+        let _ = browser()?.close_partition(&Partition { context_id }).await;
+        return Err(error);
+    }
     Ok(Partition { context_id })
+}
+
+/// The context for one actual Preview page; see `ensure_page_context`. `context_for` stays the shared one.
+pub async fn page_context(partition: &str) -> Result<Partition, String> {
+    let (tx, rx) = oneshot::channel();
+    super::queue(partition, true)?
+        .send(Command::PageContext(tx))
+        .map_err(|_| "session queue closed")?;
+    rx.await
+        .map_err(|_| "session page context creation was dropped".to_string())?
+}
+
+/// Disposes a per-page context after its page closed. Ownership stays with the canonical Session until
+/// Chromium answers, so a failed disposal can be retried. A shared context is never disposed here.
+pub async fn release_page_context(partition: &str, context: &Partition) -> Result<(), String> {
+    if !super::with(|r| {
+        Ok(r.get(partition)?
+            .page_contexts
+            .contains(&context.context_id))
+    })? {
+        return Ok(());
+    }
+    browser()?
+        .command_settled(
+            "Target.disposeBrowserContext",
+            json!({"browserContextId":context.context_id}),
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    super::with(|r| {
+        r.get_mut(partition)?
+            .page_contexts
+            .remove(&context.context_id);
+        Ok(())
+    })
 }
 
 pub async fn snapshot(partition: &str) -> Result<Snapshot, String> {
@@ -376,6 +457,9 @@ pub(super) async fn set_proxy(partition: &str, args: &Value) -> Result<(), Strin
     if super::with(|r| Ok(r.get(partition)?.context_exposed))? {
         return Err("changing the proxy would discard an exposed Preview BrowserContext".into());
     }
+    if !super::with(|r| Ok(r.get(partition)?.page_contexts.is_empty()))? {
+        return Err("the proxy cannot change while per-page Preview contexts are live".into());
+    }
     if !live_pages(partition).await?.is_empty() {
         return Err(
             "the proxy cannot change while Preview pages of this partition are live".into(),
@@ -454,11 +538,15 @@ pub(super) async fn apply(
 pub(super) async fn clear(partition: &str, cookies: bool) -> Result<(), String> {
     let context = ensure_context(partition).await?;
     let pages = live_pages(partition).await?;
-    if let Some(page) = pages.first() {
-        page.command("Network.clearBrowserCache", json!({}))
-            .await
-            .map_err(|e| e.to_string())?;
-    } else {
+    let mut cleared_contexts = HashSet::new();
+    for page in &pages {
+        if cleared_contexts.insert(page.context_id.clone()) {
+            page.command("Network.clearBrowserCache", json!({}))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    if !cleared_contexts.contains(&context.context_id) {
         let page = browser()?
             .create_page(
                 &context,
@@ -477,6 +565,17 @@ pub(super) async fn clear(partition: &str, cookies: bool) -> Result<(), String> 
     }
     if cookies {
         super::clear_cookies(partition).await?;
+        let aliases = super::with(|r| Ok(r.get(partition)?.page_contexts.clone()))?;
+        for context_id in aliases {
+            browser()?
+                .command(
+                    "Storage.clearCookies",
+                    json!({"browserContextId":context_id}),
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
