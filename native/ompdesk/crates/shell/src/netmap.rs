@@ -303,6 +303,13 @@ pub fn error_text(code: i32) -> String {
     }
 }
 
+pub fn error_code(name: &str) -> Option<i32> {
+    let name = name.strip_prefix("net::").unwrap_or(name);
+    ERROR_NAMES
+        .iter()
+        .find_map(|(code, candidate)| (*candidate == name).then_some(*code))
+}
+
 /// The URL `RequestContext::resolve_host` takes for a bare host name (an IPv6 literal gets its brackets).
 pub fn resolve_origin(host: &str) -> String {
     let host = host.trim();
@@ -691,6 +698,15 @@ const ERROR_NAMES: &[(i32, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_errors_keep_their_known_code_without_inventing_unknown_codes() {
+        assert_eq!(error_code("net::ERR_NAME_NOT_RESOLVED"), Some(-105));
+        assert_eq!(error_code("ERR_ABORTED"), Some(-3));
+        assert_eq!(error_code("net::ERR_NEW_UNKNOWN_ERROR"), None);
+        assert_eq!(error_code("net::net::ERR_ABORTED"), None);
+        assert_eq!(error_code(""), None);
+    }
 
     fn params() -> Value {
         json!({
