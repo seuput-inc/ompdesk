@@ -8,7 +8,6 @@ const built = await Bun.build({ entrypoints: [source], target: "browser", format
 assert.equal(built.success, true, String(built.logs));
 const frames: Array<{ kind: string; payload: Record<string, unknown> }> = [];
 const ready = Promise.withResolvers<{ generation: number }>();
-const replies: unknown[] = [];
 const uploads: Array<{ name: string; data: { $bin: string } }> = [];
 const events = new EventTarget();
 const context: Record<string, unknown> = {
@@ -38,10 +37,6 @@ context.__TAURI_INTERNALS__ = {
 		frames.push({ kind: args.kind, payload });
 		if (args.kind === "ready") return ready.promise;
 		assert.equal(payload.generation, 7);
-		if (args.kind === "evaluateResult") {
-			replies.push(payload);
-			return {};
-		}
 		if (payload.channel === IPC_COMMANDS.FS_UPLOAD_TO_HOST) {
 			const upload = payload.args[0];
 			uploads.push(upload);
@@ -55,7 +50,6 @@ const page = context as unknown as {
 	omp: OmpApi;
 	__ompTauriPush(generation: number, message: unknown): Promise<void>;
 	__ompTauriDropFiles?: (files: unknown) => void;
-	__ompTauriEvaluate(id: number, generation: number, run: () => unknown): Promise<void>;
 	__ompShellStream: { pending(): object | null; acknowledge(token: object): void };
 };
 const pending = page.omp.prefs.get("before-ready");
@@ -115,14 +109,6 @@ const pasted = await intakeComposerFiles([clipboard], options);
 assert.deepEqual(pasted.texts, [{ name: "report.txt", content: "clipboard text" }]);
 assert.deepEqual(pasted.rejected, []);
 assert.equal(uploads.length, 2);
-await page.__ompTauriEvaluate(11, 7, () => Promise.resolve({ preserved: true }));
-assert.deepEqual(replies, [{ id: 11, ok: true, value: { preserved: true }, generation: 7 }]);
-let staleRan = false;
-await page.__ompTauriEvaluate(12, 6, () => {
-	staleRan = true;
-});
-assert.equal(staleRan, false);
-assert.equal(replies.length, 1);
 console.log(
-	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback and asynchronous evaluation result",
+	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback",
 );

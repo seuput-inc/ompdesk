@@ -204,8 +204,9 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>, policy: &str) -> Response<V
     builder.body(body).expect("valid response")
 }
 
-/// The page with its `<meta http-equiv="Content-Security-Policy">` stripped of the `connect-src`, `img-src` and
-/// `media-src` directives. A page carrying no such meta comes back as it was.
+/// The page with its `<meta http-equiv="Content-Security-Policy">` stripped of `default-src` and the `connect-src`,
+/// `img-src` and `media-src` directives (without those three, `default-src` would govern them again: the header
+/// carries its own full `default-src`). A page carrying no such meta comes back as it was.
 fn without_meta_network_sources(html: &str) -> String {
     const MARK: &str = "http-equiv=\"Content-Security-Policy\"";
     let Some(mark) = html.find(MARK) else {
@@ -228,7 +229,7 @@ fn without_meta_network_sources(html: &str) -> String {
             !directive.is_empty()
                 && !matches!(
                     directive.split_ascii_whitespace().next(),
-                    Some("connect-src" | "img-src" | "media-src")
+                    Some("default-src" | "connect-src" | "img-src" | "media-src")
                 )
         })
         .collect();
@@ -258,7 +259,7 @@ pub fn content_policy(media_origin: Option<&str>) -> Result<String, String> {
         ""
     };
     Ok(format!(
-        "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media: {registered_media} {media_origin}; media-src 'self' blob: omp-media: {registered_media} {media_origin}; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'"
+        "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media: {registered_media} {media_origin}; media-src 'self' blob: omp-media: {registered_media} {media_origin}; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'"
     ))
 }
 #[cfg(test)]
@@ -268,9 +269,9 @@ mod tests {
     fn the_documents_meta_policy_keeps_every_directive_but_the_three_the_header_widens() {
         let page = "<head><meta charset=\"UTF-8\" />\n<meta\n http-equiv=\"Content-Security-Policy\"\n content=\"default-src 'self'; script-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: omp-media:; connect-src 'self'; worker-src 'self' blob:\"\n/>\n<title>x</title></head>";
         let rewritten = without_meta_network_sources(page);
-        assert!(rewritten.contains(
-            "content=\"default-src 'self'; script-src 'self'; worker-src 'self' blob:\""
-        ));
+        assert!(!rewritten.contains("unsafe-eval"));
+        assert!(!content_policy(None).unwrap().contains("unsafe-eval"));
+        assert!(rewritten.contains("content=\"script-src 'self'; worker-src 'self' blob:\""));
         assert!(rewritten.starts_with("<head><meta charset=\"UTF-8\" />\n<meta\n http-equiv="));
         assert!(rewritten.ends_with("\n/>\n<title>x</title></head>"));
         assert_eq!(

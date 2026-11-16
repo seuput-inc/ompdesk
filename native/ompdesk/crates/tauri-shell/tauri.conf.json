@@ -7,7 +7,7 @@
     "windows": [],
     "security": {
       "capabilities": [],
-      "csp": "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media:; media-src 'self' blob: omp-media:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self' app: http://app.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: omp-media:; media-src 'self' blob: omp-media:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {

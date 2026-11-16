@@ -2,7 +2,7 @@ import type { OmpApi } from "../shared/ipc-types";
 import { createOmpApi, type OmpTransport } from "../shared/omp-api";
 import { describePreloadFailure } from "../shared/preload-failure";
 
-type Kind = "invoke" | "send" | "ready" | "evaluateResult" | "preloadError" | "profileRead" | "profileAck";
+type Kind = "invoke" | "send" | "ready" | "preloadError" | "profileRead" | "profileAck" | "windowControl";
 type NativeInvoke = (command: string, args: { kind: Kind; payload: string }) => Promise<unknown>;
 
 const nativeWindow = window as unknown as { __TAURI_INTERNALS__?: { invoke?: NativeInvoke }; omp: OmpApi };
@@ -139,20 +139,6 @@ const transport: OmpTransport = {
 	},
 };
 
-async function evaluate(id: unknown, expectedGeneration: number, run: () => unknown): Promise<void> {
-	if ((await ready.promise) !== expectedGeneration) return;
-	let result: object;
-	try {
-		const value: unknown = await run();
-		result = { id, ok: true, value };
-		// Serialization can fail for values such as cyclic objects or BigInt.
-		encode(result);
-	} catch (error) {
-		result = { id, ok: false, error: { message: describePreloadFailure(error).message } };
-	}
-	await call("evaluateResult", result);
-}
-
 async function migrateProfile(): Promise<void> {
 	try {
 		const answer = await nativeCall("profileRead", "{}");
@@ -199,6 +185,59 @@ async function migrateProfile(): Promise<void> {
 	}
 }
 
+/**
+ * Windows: the host's windows have no OS caption (`decorations` off, as Electron's `titleBarStyle: "hidden"` with a
+ * `titleBarOverlay`), so the three caption buttons are drawn here, over the top-right corner, in the colors main last
+ * set (`__ompTauriCaption`, from `setTitleBarOverlay`; the theme's own until then). Their room is the Window Controls
+ * Overlay's `env(titlebar-area-*)` that WebView2 does not have, so the stylesheet's two variables are set to it.
+ */
+const CAPTION_BUTTON_WIDTH = 46;
+function installCaptionButtons(): void {
+	const build = () => {
+		const style = document.createElement("style");
+		style.textContent = `html[data-platform="win32"]:root{--sc-caption-buttons:${CAPTION_BUTTON_WIDTH * 3}px!important;--sc-caption-band:48px!important}
+[data-caption-buttons]{position:fixed;top:0;right:0;height:48px;z-index:2147483647;display:flex;-webkit-app-region:no-drag;app-region:no-drag;background:var(--omp-caption-bg,var(--sc-bg,#fff));color:var(--omp-caption-fg,var(--sc-text,#1b1b1f));font:10px "Segoe MDL2 Assets","Segoe Fluent Icons",system-ui}
+[data-caption-buttons] button{all:unset;box-sizing:border-box;width:${CAPTION_BUTTON_WIDTH}px;height:100%;display:grid;place-items:center;cursor:default;-webkit-app-region:no-drag;app-region:no-drag}
+[data-caption-buttons] button:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
+[data-caption-buttons] button[data-caption="close"]:hover{background:#c42b1c;color:#fff}`;
+		document.head.appendChild(style);
+		const bar = document.createElement("div");
+		bar.dataset.captionButtons = "";
+		const maximize = document.createElement("button");
+		const glyphs: Array<[string, string, string]> = [
+			["minimize", "\uE921", "Minimize"],
+			["maximize", "\uE922", "Maximize"],
+			["close", "\uE8BB", "Close"],
+		];
+		for (const [action, glyph, label] of glyphs) {
+			const button = action === "maximize" ? maximize : document.createElement("button");
+			button.dataset.caption = action;
+			button.type = "button";
+			button.tabIndex = -1;
+			button.setAttribute("aria-label", label);
+			button.textContent = glyph;
+			button.addEventListener("click", () => void call("windowControl", { action }).catch(() => undefined));
+			bar.appendChild(button);
+		}
+		const sync = () => {
+			const filled = window.outerWidth >= screen.availWidth && window.outerHeight >= screen.availHeight;
+			maximize.textContent = filled ? "\uE923" : "\uE922";
+			maximize.setAttribute("aria-label", filled ? "Restore" : "Maximize");
+		};
+		window.addEventListener("resize", sync);
+		sync();
+		document.body.appendChild(bar);
+		Object.defineProperty(window, "__ompTauriCaption", {
+			value: (colors: { color?: string; symbolColor?: string }) => {
+				if (colors.color) bar.style.setProperty("--omp-caption-bg", colors.color);
+				if (colors.symbolColor) bar.style.setProperty("--omp-caption-fg", colors.symbolColor);
+			},
+		});
+	};
+	if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build, { once: true });
+	else build();
+}
+
 const location = window.location;
 const profileBootstrap =
 	location?.pathname === "/__profile/migrate" &&
@@ -220,13 +259,6 @@ if (profileBootstrap) {
 					.catch(() => undefined);
 			},
 		});
-		Object.defineProperty(window, "__ompTauriEvaluate", {
-			value: (id: unknown, expectedGeneration: number, run: () => unknown) => {
-				return evaluate(id, expectedGeneration, run).catch(error =>
-					console.error("Tauri evaluation response failed", error),
-				);
-			},
-		});
 		const shared = createOmpApi(transport);
 		const api: OmpApi = {
 			...shared,
@@ -237,6 +269,11 @@ if (profileBootstrap) {
 			},
 		};
 		nativeWindow.omp = api;
+		try {
+			if (navigator.platform.toLowerCase().startsWith("win")) installCaptionButtons();
+		} catch (error) {
+			console.error("Tauri caption buttons failed", error);
+		}
 		void nativeCall("ready", encode({ userAgent: navigator.userAgent }))
 			.then(answer => {
 				if (

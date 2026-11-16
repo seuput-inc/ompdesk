@@ -3,6 +3,7 @@
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+mod evaluate;
 mod gpu;
 mod native_chrome;
 mod native_services;
@@ -35,16 +36,12 @@ use shell_core::wire::WireError;
 use shell_core::{conn, facts, startup};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
-struct Evaluation {
-    identity: Identity,
-    call: host::Call,
-}
 struct Migration {
     profile: profile::Profile,
     targets: HashMap<u64, String>,
@@ -60,11 +57,9 @@ struct Runtime {
     content_policy: String,
     registry: Mutex<Registry>,
     migration: Mutex<Migration>,
-    evaluations: Mutex<HashMap<u64, Evaluation>>,
     app_initializations: Mutex<HashMap<u64, AppInitialization>>,
     navigation_watch: Mutex<HashSet<u64>>,
     host_navigations: Mutex<HashMap<u64, String>>,
-    next_evaluation: AtomicU64,
     preload: String,
     user_data: PathBuf,
     renderer: PathBuf,
@@ -165,23 +160,6 @@ fn win_state(window: &WebviewWindow, win: u64) -> Result<Value, WireError> {
     host::event("win.state", state.clone());
     Ok(state)
 }
-fn invalidate_evaluations(wc: u64) {
-    let removed: Vec<_> = {
-        let mut pending = runtime().evaluations.lock().expect("evaluations");
-        let ids: Vec<_> = pending
-            .iter()
-            .filter(|(_, e)| e.identity.wc == wc)
-            .map(|(id, _)| *id)
-            .collect();
-        ids.into_iter()
-            .filter_map(|id| pending.remove(&id))
-            .collect()
-    };
-    for evaluation in removed {
-        host::forget_cancel(evaluation.call.id());
-        evaluation.call.err("gone", "original document ended");
-    }
-}
 fn profile_bootstrap(url: &str) -> bool {
     let base = url.split(['?', '#']).next().unwrap_or(url);
     base == "app://ompdesk/__profile/migrate"
@@ -194,7 +172,6 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
     }
     if profile_bootstrap(url) {
         if event == PageLoadEvent::Started {
-            invalidate_evaluations(wc);
             runtime()
                 .registry
                 .lock()
@@ -209,7 +186,6 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
             migration.targets.remove(&wc);
             migration.offers.remove(&wc);
         }
-        invalidate_evaluations(wc);
         let changed = runtime()
             .registry
             .lock()
@@ -321,7 +297,6 @@ fn close_record(wc: u64) {
         migration.targets.remove(&wc);
         migration.offers.remove(&wc);
     }
-    invalidate_evaluations(wc);
     let page = runtime().registry.lock().expect("registry").remove(wc);
     if let Some(page) = page {
         if let Some(win) = page.identity.win {
@@ -416,6 +391,22 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
+    }
+    // Electron's `titleBarStyle: "hidden"` + `titleBarOverlay`: no OS caption; the page draws the caption buttons and its
+    // own top bar is the drag area (`-webkit-app-region`, which WebView2 serves as a non-client region).
+    #[cfg(windows)]
+    if options["titleBarStyle"].as_str() == Some("hidden") {
+        builder = builder.decorations(false);
+    }
+    // `backgroundMaterial: "mica"` (a window that first shows restored on Windows 11): the backdrop shows through the
+    // page where it is transparent (`?mica=1`).
+    #[cfg(windows)]
+    if options["backgroundMaterial"].as_str() == Some("mica") {
+        builder = builder.transparent(true).effects(
+            tauri::window::EffectsBuilder::new()
+                .effect(tauri::window::Effect::Mica)
+                .build(),
+        );
     }
     #[cfg(windows)]
     if let Some(args) = webview_args().map_err(failed)? {
@@ -586,6 +577,11 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
             )?;
             Ok(())
         }
+        "setTitleBarOverlay" => {
+            // The page draws the caption buttons (src/preload/tauri.ts): their colors are its to repaint.
+            let colors = json!({"color":a["color"],"symbolColor":a["symbolColor"]});
+            window.eval(format!("window.__ompTauriCaption?.({colors});"))
+        }
         "setPosition" => window.set_position(tauri::LogicalPosition::new(
             coordinate(a, "x")?,
             coordinate(a, "y")?,
@@ -679,6 +675,12 @@ fn wc_op(call: host::Call) {
         match op {
             "loadURL" => {
                 let url = string(a, "url")?;
+                // The host draws no Mica backdrop: a page told to let it through (`mica=1`) would show a bare canvas.
+                #[cfg(windows)]
+                let url = &url
+                    .replacen("mica=1&", "", 1)
+                    .replacen("&mica=1", "", 1)
+                    .replacen("?mica=1", "", 1);
                 if !trusted_url(url) {
                     return Err(WireError::new(
                         "denied",
@@ -751,7 +753,7 @@ fn wc_op(call: host::Call) {
                     )));
                 }
             }
-            "executeJavaScript" => return Ok(Some((wc, window, string(a, "code")?.to_owned()))),
+            "executeJavaScript" => return Ok(Some((window, string(a, "code")?.to_owned()))),
             _ => return Err(unsupported(&format!("wc.op {op}"))),
         }
         Ok(None)
@@ -759,59 +761,9 @@ fn wc_op(call: host::Call) {
     match result {
         Err(error) => call.err(&error.code, error.message),
         Ok(None) => call.ok(json!({})),
-        Ok(Some((wc, window, code))) => {
-            let identity = runtime()
-                .registry
-                .lock()
-                .expect("registry")
-                .page(wc)
-                .map(|p| p.identity);
-            let Some(identity) = identity else {
-                call.err("gone", "page closed");
-                return;
-            };
-            let id = runtime().next_evaluation.fetch_add(1, Ordering::Relaxed);
-            let script = format!(
-                "window.__ompTauriEvaluate({id},{},()=>{{return (0,eval)({});}});",
-                identity.generation,
-                json!(code)
-            );
-            let request_id = call.id();
-            runtime()
-                .evaluations
-                .lock()
-                .expect("evaluations")
-                .insert(id, Evaluation { identity, call });
-            host::on_cancel(request_id, move || {
-                runtime()
-                    .evaluations
-                    .lock()
-                    .expect("evaluations")
-                    .remove(&id);
-            });
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(180)).await;
-                if let Some(e) = runtime()
-                    .evaluations
-                    .lock()
-                    .expect("evaluations")
-                    .remove(&id)
-                {
-                    host::forget_cancel(e.call.id());
-                    e.call
-                        .err("timeout", "JavaScript evaluation exceeded 180 seconds");
-                }
-            });
-            if let Err(error) = window.eval(script)
-                && let Some(e) = runtime()
-                    .evaluations
-                    .lock()
-                    .expect("evaluations")
-                    .remove(&id)
-            {
-                host::forget_cancel(e.call.id());
-                e.call.err("failed", error.to_string());
-            }
+        Ok(Some((window, code))) => {
+            // The engine's own evaluation, outside the page's CSP (evaluate.rs).
+            evaluate::run(&window, call, code);
         }
     }
 }
@@ -1125,6 +1077,28 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 .await
                 .map_err(|e| json!({"code":"failed","message":e.to_string()}))?
         }
+        "windowControl" => {
+            let action = value["action"].as_str().unwrap_or_default().to_owned();
+            let wc = identity.wc;
+            runtime()
+                .app
+                .run_on_main_thread(move || {
+                    let Ok(window) = window_for_wc(wc) else {
+                        return;
+                    };
+                    let _ = match action.as_str() {
+                        "minimize" => window.minimize(),
+                        "maximize" => match window.is_maximized() {
+                            Ok(true) => window.unmaximize(),
+                            _ => window.maximize(),
+                        },
+                        "close" => window.close(),
+                        _ => Ok(()),
+                    };
+                })
+                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+            Ok(json!({}))
+        }
         "preloadError" => {
             if profile_bootstrap(url.as_str()) {
                 // Reveal the recovery page without settling Node's original app load promise.
@@ -1133,27 +1107,6 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 }
             }
             wc_event(identity.wc, "preload-error", json!(["tauri.js", value]));
-            Ok(json!({}))
-        }
-        "evaluateResult" => {
-            let id = value["id"]
-                .as_u64()
-                .ok_or_else(|| json!({"code":"invalid","message":"missing evaluation ID"}))?;
-            let mut pending = runtime().evaluations.lock().expect("evaluations");
-            if pending.get(&id).is_some_and(|e| e.identity == identity) {
-                let evaluation = pending.remove(&id).expect("checked evaluation");
-                host::forget_cancel(evaluation.call.id());
-                if value["ok"] == true {
-                    evaluation.call.ok(json!({"result":value["value"]}));
-                } else {
-                    evaluation.call.err(
-                        "failed",
-                        value["error"]["message"]
-                            .as_str()
-                            .unwrap_or("evaluation failed"),
-                    );
-                }
-            }
             Ok(json!({}))
         }
         "invoke" | "send" => {
@@ -1366,11 +1319,9 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                         targets: HashMap::new(),
                         offers: HashMap::new(),
                     }),
-                    evaluations: Mutex::new(HashMap::new()),
                     app_initializations: Mutex::new(HashMap::new()),
                     navigation_watch: Mutex::new(HashSet::new()),
                     host_navigations: Mutex::new(HashMap::new()),
-                    next_evaluation: AtomicU64::new(1),
                     preload,
                     user_data,
                     renderer,
@@ -1593,7 +1544,6 @@ fn destroy_app(wc: u64, call: Option<host::Call>) {
             return;
         }
     };
-    invalidate_evaluations(wc);
     tauri::async_runtime::spawn(async move {
         let result = async {
             runtime().preview.close_parent(win).await?;
