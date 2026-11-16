@@ -26,6 +26,7 @@ import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
 /** Names the page spells for a DNS prefetch; none may reach a resolver (`.invalid` never leaves the machine). */
 const DNS_SUFFIX = "egress.invalid";
 const NAME = new RegExp(`[a-z0-9-]+\\.${DNS_SUFFIX.replaceAll(".", "\\.")}`, "g");
+const MAPPED_VISUAL_HOST = /^(?:[0-9a-f]{32}\.){4}localhost$/;
 
 function record(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -215,12 +216,17 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 	});
 	const shell = await app.firstWindow();
 	/** Run in the visual's page (its main world), found by its omp-visual address. */
-	const inPage = (code: string) =>
-		app.evaluate(async ({ webContents }, source) => {
-			const contents = webContents.getAllWebContents().find(item => item.getURL().startsWith("omp-visual://"));
-			if (!contents) throw new Error("No visual page");
-			return contents.executeJavaScript(source, true);
-		}, code);
+	const inPage = (code: string, address?: string) =>
+		app.evaluate(
+			async ({ webContents }, { source, address }) => {
+				const contents = webContents
+					.getAllWebContents()
+					.find(item => (address ? item.getURL() === address : item.getURL().startsWith("omp-visual://")));
+				if (!contents) throw new Error("No visual page");
+				return contents.executeJavaScript(source, true);
+			},
+			{ source: code, address },
+		);
 	try {
 		await shell.waitForFunction(() => window.omp?.rpc != null);
 		await expect
@@ -241,6 +247,16 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		);
 		await composer.press("Enter");
 		await expect(shell.locator("[data-preview-status]")).toHaveText("Egress");
+		// The page sees its real private HTTP origin; only host metadata is unmapped to omp-visual.
+		// Keep that exact document across denied navigation, rather than accepting any loopback page.
+		const firstHref = await inPage("location.href");
+		if (typeof firstHref !== "string") throw new Error("Visual page reported no document URL");
+		const firstAddress = new URL(firstHref);
+		expect(firstAddress.protocol).toBe("http:");
+		expect(firstAddress.hostname).toMatch(MAPPED_VISUAL_HOST);
+		expect(firstAddress.port).not.toBe("");
+		expect(firstAddress.pathname).toBe("/egress.html");
+		expect(await inPage("location.origin")).toBe(firstAddress.origin);
 		// The page reads what its folder serves; that is what it would try to send.
 		expect(await inPage("fetch('secrets.json').then(response => response.text())")).toBe('{"token":"secret"}');
 
@@ -255,7 +271,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 			`actual live URLs after denied navigation: ${JSON.stringify(urls)}`,
 		).toHaveLength(1);
 		expect(urls.some(url => url.startsWith(origin))).toBe(false);
-		expect(await inPage("location.href")).toMatch(/^omp-visual:\/\/v1-[0-9a-f]{16}\/egress\.html$/);
+		expect(await inPage("location.href")).toBe(firstHref);
 		expect(await inPage("document.getElementById('logo').naturalWidth")).toBe(40);
 		expect(await inPage("getComputedStyle(document.getElementById('title')).color")).toBe("rgb(51, 102, 255)");
 
@@ -287,6 +303,67 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 			.toContain("GET /link?d=secret HTTP/1.1");
 		await expect(offer).toHaveCount(0);
 		expect(await inPage("location.href")).toMatch(/egress\.html$/);
+
+		// Distinct origins must isolate browser storage even inside the same visual session.
+		const originalVisual = urls.find(url => url.startsWith("omp-visual://"));
+		if (!originalVisual) throw new Error("No canonical visual URL");
+		expect(originalVisual).toMatch(/^omp-visual:\/\/v1-[0-9a-f]{16}\/egress\.html$/);
+		await fs.writeFile(path.join(project, "isolation.html"), "<!doctype html><title>Peer visual</title>");
+		await composer.fill(
+			`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "isolation.html" })}`,
+		);
+		await composer.press("Enter");
+		await expect(shell.locator("[data-preview-status]")).toHaveText("Peer visual");
+		const peer = await app.evaluate(({ webContents }, canonical) => {
+			const pages = webContents.getAllWebContents();
+			const first = pages.find(item => item.getURL() === canonical);
+			const second = pages.find(item => item.getURL().startsWith("omp-visual://") && item.getURL() !== canonical);
+			if (!first || !second) throw new Error("The two visual pages are not live together");
+			return { canonical: second.getURL(), sameSession: second.session === first.session };
+		}, originalVisual);
+		expect(peer.sameSession).toBe(true);
+		const peerHref = await inPage("location.href", peer.canonical);
+		if (typeof peerHref !== "string") throw new Error("Peer visual reported no document URL");
+		const peerAddress = new URL(peerHref);
+		expect(peerAddress.protocol).toBe("http:");
+		expect(peerAddress.hostname).toMatch(MAPPED_VISUAL_HOST);
+		expect(peerAddress.port).toBe(firstAddress.port);
+		expect(peerAddress.pathname).toBe("/isolation.html");
+		expect(peerAddress.hostname).not.toBe(firstAddress.hostname);
+		expect(peerAddress.origin).not.toBe(firstAddress.origin);
+		expect(peerAddress.hostname.split(".").slice(2)).toEqual(firstAddress.hostname.split(".").slice(2));
+		expect(await inPage("location.origin", peer.canonical)).toBe(peerAddress.origin);
+		// Test the same running browser context, including cookies scoped above the capability host.
+		await inPage(
+			`(() => {
+				localStorage.setItem("visual-origin-isolation", "first");
+				sessionStorage.setItem("visual-origin-isolation", "first");
+				document.cookie = "visual_host=first; Path=/; SameSite=Strict";
+				document.cookie = "visual_domain=first; Domain=" + location.hostname.split(".").slice(2).join(".") + "; Path=/; SameSite=Strict";
+				return true;
+			})()`,
+			originalVisual,
+		);
+		const isolated = await inPage(
+			`({local: localStorage.getItem("visual-origin-isolation"),
+				session: sessionStorage.getItem("visual-origin-isolation"), cookies: document.cookie})`,
+			peer.canonical,
+		);
+		expect(isolated).toEqual({ local: null, session: null, cookies: "" });
+		expect(
+			await inPage(
+				`(() => { localStorage.setItem("visual-origin-isolation", "peer");
+				sessionStorage.setItem("visual-origin-isolation", "peer"); return true; })()`,
+				peer.canonical,
+			),
+		).toBe(true);
+		expect(
+			await inPage(
+				`({local: localStorage.getItem("visual-origin-isolation"),
+				session: sessionStorage.getItem("visual-origin-isolation")})`,
+				originalVisual,
+			),
+		).toEqual({ local: "first", session: "first" });
 
 		// Chromium finalizes its net-log when it quits: read it from the app that has exited.
 		await exitApp(app);
