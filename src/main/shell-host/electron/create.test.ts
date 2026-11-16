@@ -963,13 +963,13 @@ describe("session and protocol", () => {
 				window: { bytes: 4, chunks: 2, chunkBytes: 2 },
 			},
 		);
-		expect(head).toMatchObject({ status: 206, streamId: 1 });
+		expect(head.status).toBe(206);
 		expect(head.headers).toContainEqual(["content-range", "bytes 0-3/10"]);
 		await ended.promise;
 		expect(Buffer.concat(fake.eventsOf("protocol.chunk").map(event => event.bin ?? Buffer.alloc(0))).toString()).toBe(
 			"abcd",
 		);
-		expect(fake.eventsOf("protocol.end")[0].data).toEqual({ streamId: 1 });
+		expect(fake.eventsOf("protocol.end")[0].data).toEqual({ streamId: head.streamId });
 		await expect(
 			shell.call("protocol.request", {
 				scheme: "omp-visual",

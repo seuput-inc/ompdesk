@@ -46,6 +46,8 @@ export interface RequestOptions {
 }
 
 export interface HandlerContext {
+	/** The peer's original wire request ID, scoped to this connection. */
+	readonly requestId: number;
 	/** The request's own `bin` tail. */
 	bin?: Buffer;
 	/** Aborted when the other side sent `{cancel: id}` or the connection ended. */
@@ -193,22 +195,32 @@ export class ShellClient {
 	}
 
 	#dispatch(head: Record<string, unknown>, bin: Buffer | undefined): void {
-		if (typeof head.method === "string" && typeof head.id === "number") {
+		if (
+			typeof head.method === "string" &&
+			typeof head.id === "number" &&
+			Number.isSafeInteger(head.id) &&
+			head.id > 0
+		) {
 			this.#serve(head.id, head.method, head.params, bin);
 		} else if (typeof head.event === "string") {
-			for (const listener of [...(this.#listeners.get(head.event) ?? [])]) {
-				try {
-					listener(head.data as never, bin);
-				} catch (error) {
-					console.warn(
-						`[shell-host] event ${head.event}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-					);
-				}
-			}
+			this.#emit(head.event, head.data, bin);
 		} else if (typeof head.id === "number" && typeof head.ok === "boolean") {
 			this.#answer(head.id, head.ok, head.ok ? head.result : head.error, bin);
-		} else if (typeof head.cancel === "number") {
+		} else if (typeof head.cancel === "number" && Number.isSafeInteger(head.cancel) && head.cancel > 0) {
 			this.#running.get(head.cancel)?.abort();
+			this.#emit("host.cancelRequest", { requestId: head.cancel });
+		}
+	}
+
+	#emit(name: string, data: unknown, bin?: Buffer): void {
+		for (const listener of [...(this.#listeners.get(name) ?? [])]) {
+			try {
+				listener(data as never, bin);
+			} catch (error) {
+				console.warn(
+					`[shell-host] event ${name}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+				);
+			}
 		}
 	}
 
@@ -240,7 +252,7 @@ export class ShellClient {
 		this.#running.set(id, controller);
 		void (async () => {
 			try {
-				const value = await handler((params ?? null) as never, { bin, signal: controller.signal });
+				const value = await handler((params ?? null) as never, { requestId: id, bin, signal: controller.signal });
 				if (value instanceof Answered) this.#write({ id, ok: true, result: value.result ?? null }, value.bin);
 				else this.#write({ id, ok: true, result: value ?? null });
 			} catch (error) {

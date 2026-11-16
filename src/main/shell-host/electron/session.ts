@@ -271,8 +271,11 @@ interface ProtocolStream {
 /** Serves the head first; only bytes the native consumer took release the producer's receive window. */
 export function serveProtocolRequests(host: Host, sessions: (partition: string) => Session): void {
 	const streams = new Map<number, ProtocolStream>();
-	let nextStream = 1;
 	host.client.on("protocol.cancel", ({ streamId }: { streamId: number }) => streams.get(streamId)?.controller.abort());
+	// A cancelled request can outlive its head handler while the native reader has not received the stream ID.
+	host.client.on("host.cancelRequest", ({ requestId }: { requestId: number }) =>
+		streams.get(requestId)?.controller.abort(),
+	);
 	host.client.on(
 		"protocol.ack",
 		({ streamId, bytes, chunks }: { streamId: number; bytes: number; chunks: number }) => {
@@ -311,7 +314,7 @@ export function serveProtocolRequests(host: Host, sessions: (partition: string) 
 				hasBody?: boolean;
 				window: ProtocolWindow;
 			},
-			{ bin, signal },
+			{ requestId, bin, signal },
 		) => {
 			const window = params.window;
 			if (
@@ -340,7 +343,8 @@ export function serveProtocolRequests(host: Host, sessions: (partition: string) 
 				await response.body?.cancel();
 				throw new Error("protocol request was cancelled");
 			}
-			const streamId = nextStream++;
+			// Keep the original request's cancellation authority after ShellClient releases the head handler.
+			const streamId = requestId;
 			const controller = new AbortController();
 			const state: ProtocolStream = {
 				controller,
