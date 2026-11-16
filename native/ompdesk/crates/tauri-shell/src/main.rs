@@ -248,6 +248,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     .visible(options["show"].as_bool().unwrap_or(true))
     .data_directory(runtime().user_data.join("tauri-webview"))
     .data_store_identifier(profile)
+    .disable_drag_drop_handler()
     .theme(theme::for_new_window())
     .initialization_script(&runtime().preload)
     .on_navigation(move |url| {
@@ -330,23 +331,6 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             win_event(win, "move");
         }
         _ => {}
-    });
-    let drops = window.clone();
-    window.on_webview_event(move |event| {
-        if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. }) = event {
-            let files: Vec<_> = paths
-                .iter()
-                .filter_map(|path| {
-                    path.file_name().map(
-                        |name| json!({"name":name.to_string_lossy(),"path":path.to_string_lossy()}),
-                    )
-                })
-                .collect();
-            if let Err(error) = drops.eval(format!("window.__ompTauriDropFiles({});", json!(files)))
-            {
-                log::log("drop.failed", json!({"error":error.to_string()}));
-            }
-        }
     });
     wc_state(wc);
     Ok(json!({"state":win_state(&window,win)?}))

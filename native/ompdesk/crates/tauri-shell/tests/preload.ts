@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
-import { IPC_EVENTS } from "../../../../../src/shared/ipc-types";
+import { IPC_COMMANDS, IPC_EVENTS, type OmpApi } from "../../../../../src/shared/ipc-types";
+import { intakeComposerFiles } from "../../../../../src/renderer/components/layout/composer/composer-files";
 const source = fileURLToPath(new URL("../../../../../src/preload/tauri.ts", import.meta.url));
 const built = await Bun.build({ entrypoints: [source], target: "browser", format: "iife" });
 assert.equal(built.success, true, String(built.logs));
 const frames: Array<{ kind: string; payload: Record<string, unknown> }> = [];
 const ready = Promise.withResolvers<{ generation: number }>();
 const replies: unknown[] = [];
+const uploads: Array<{ name: string; data: { $bin: string } }> = [];
+const events = new EventTarget();
 const context: Record<string, unknown> = {
 	console,
 	Uint8Array,
@@ -25,6 +28,9 @@ const context: Record<string, unknown> = {
 	navigator: { userAgent: "probe-agent" },
 };
 context.window = context;
+context.addEventListener = events.addEventListener.bind(events);
+context.removeEventListener = events.removeEventListener.bind(events);
+context.dispatchEvent = events.dispatchEvent.bind(events);
 context.__TAURI_INTERNALS__ = {
 	invoke: async (command: string, args: { kind: string; payload: string }) => {
 		assert.equal(command, "omp_ipc");
@@ -36,17 +42,19 @@ context.__TAURI_INTERNALS__ = {
 			replies.push(payload);
 			return {};
 		}
+		if (payload.channel === IPC_COMMANDS.FS_UPLOAD_TO_HOST) {
+			const upload = payload.args[0];
+			uploads.push(upload);
+			return { value: { ok: true, path: `/uploads/${uploads.length}/${upload.name}` } };
+		}
 		return { value: { $bin: "AQID" } };
 	},
 };
 vm.runInNewContext(await built.outputs[0].text(), context);
 const page = context as unknown as {
-	omp: {
-		prefs: { get(key: string): Promise<Uint8Array>; onChanged(callback: (data: unknown) => void): () => void };
-		fs: { pathForFile(file: { name: string }): string };
-	};
+	omp: OmpApi;
 	__ompTauriPush(generation: number, message: unknown): Promise<void>;
-	__ompTauriDropFiles(files: unknown): void;
+	__ompTauriDropFiles?: (files: unknown) => void;
 	__ompTauriEvaluate(id: number, generation: number, run: () => unknown): Promise<void>;
 	__ompShellStream: { pending(): object | null; acknowledge(token: object): void };
 };
@@ -56,7 +64,7 @@ assert.deepEqual(
 	["ready"],
 );
 ready.resolve({ generation: 7 });
-assert.deepEqual(Array.from(await pending), [1, 2, 3]);
+assert.deepEqual(Array.from((await pending) as Uint8Array), [1, 2, 3]);
 let pushed: unknown;
 const off = page.omp.prefs.onChanged((data: unknown) => {
 	pushed = data;
@@ -71,8 +79,42 @@ const reset = page.__ompShellStream.pending();
 assert.ok(reset);
 page.__ompShellStream.acknowledge(reset);
 assert.equal(page.__ompShellStream.pending(), null);
-page.__ompTauriDropFiles([{ name: "example.txt", path: "/safe/example.txt" }]);
-assert.equal(page.omp.fs.pathForFile({ name: "example.txt" }), "/safe/example.txt");
+// A cancelled native drag must not lend its path to a later picker file with the same name.
+page.__ompTauriDropFiles?.([{ name: "report.pdf", path: "/private/report.pdf" }]);
+events.dispatchEvent(new Event("dragend"));
+events.dispatchEvent(new Event("blur"));
+const picked = new File(["public picker bytes"], "report.pdf", { type: "application/pdf" });
+assert.equal(page.omp.fs.pathForFile(picked), "");
+const options = {
+	cwd: "/workspace",
+	remote: false,
+	pathFor: (file: File) => page.omp.fs.pathForFile(file),
+	sendToHost: async (file: File): Promise<string> => {
+		const result = await page.omp.fs.uploadToHost("tab-1", file);
+		assert.equal(result.ok, true);
+		assert.ok(result.path);
+		return result.path;
+	},
+};
+const selected = await intakeComposerFiles([picked], options);
+assert.deepEqual(selected.mentions, ["@/uploads/1/report.pdf"]);
+assert.deepEqual(selected.rejected, []);
+assert.equal(atob(uploads[0].data.$bin), "public picker bytes");
+// With native interception disabled, DOM drop File objects reach this same real composer intake.
+const dropped = new File([new Uint8Array([37, 80, 68, 70, 0, 42])], "report.pdf", { type: "application/pdf" });
+const drop = await intakeComposerFiles([dropped], options);
+assert.deepEqual(drop.mentions, ["@/uploads/2/report.pdf"]);
+assert.deepEqual(drop.rejected, []);
+assert.deepEqual(
+	Array.from(Uint8Array.from(atob(uploads[1].data.$bin), byte => byte.charCodeAt(0))),
+	[37, 80, 68, 70, 0, 42],
+);
+const clipboard = new File(["clipboard text"], "report.txt", { type: "text/plain" });
+assert.equal(page.omp.fs.pathForFile(clipboard), "");
+const pasted = await intakeComposerFiles([clipboard], options);
+assert.deepEqual(pasted.texts, [{ name: "report.txt", content: "clipboard text" }]);
+assert.deepEqual(pasted.rejected, []);
+assert.equal(uploads.length, 2);
 await page.__ompTauriEvaluate(11, 7, () => Promise.resolve({ preserved: true }));
 assert.deepEqual(replies, [{ id: 11, ok: true, value: { preserved: true }, generation: 7 }]);
 let staleRan = false;
@@ -82,5 +124,5 @@ await page.__ompTauriEvaluate(12, 6, () => {
 assert.equal(staleRan, false);
 assert.equal(replies.length, 1);
 console.log(
-	"PASS preload readiness fencing, binary decode, shared API push, stream reset, dropped-file mapping and asynchronous evaluation result",
+	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback and asynchronous evaluation result",
 );

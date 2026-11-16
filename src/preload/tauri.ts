@@ -63,26 +63,6 @@ function call(kind: Exclude<Kind, "ready">, payload: object): Promise<unknown> {
 }
 
 const listeners = new Map<string, Set<(data: unknown) => void>>();
-const droppedFiles = new Map<string, string>();
-
-function dropFiles(entries: unknown): void {
-	droppedFiles.clear();
-	if (!Array.isArray(entries)) return;
-	for (const entry of entries) {
-		if (
-			!entry ||
-			typeof entry !== "object" ||
-			typeof entry.name !== "string" ||
-			typeof entry.path !== "string" ||
-			!entry.name ||
-			!entry.path
-		) {
-			droppedFiles.clear();
-			return;
-		}
-		droppedFiles.set(entry.name, entry.path);
-	}
-}
 let pendingReset: object | null = null;
 const resetListeners = new Set<() => void>();
 const shellStream = {
@@ -185,7 +165,6 @@ try {
 				.catch(() => undefined);
 		},
 	});
-	Object.defineProperty(window, "__ompTauriDropFiles", { value: dropFiles });
 	Object.defineProperty(window, "__ompTauriEvaluate", {
 		value: (id: unknown, expectedGeneration: number, run: () => unknown) => {
 			return evaluate(id, expectedGeneration, run).catch(error =>
@@ -198,11 +177,8 @@ try {
 		...shared,
 		fs: {
 			...shared.fs,
-			pathForFile: file => {
-				const path = droppedFiles.get(file.name);
-				if (!path) throw new Error("Native dropped-file path is unavailable");
-				return path;
-			},
+			// WKWebView/WebView2 File objects expose bytes, not an authenticated local path.
+			pathForFile: () => "",
 		},
 	};
 	nativeWindow.omp = api;
