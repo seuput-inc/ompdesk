@@ -28,6 +28,10 @@ This standalone crate controls one real Chromium target per Preview page over pr
 
 Use `launch_with_navigation(config, Arc<dyn NavigationHandler>)` to adapt Main's existing `wc.navigate` policy. `allow(Navigation { session_id, frame_id, url })` returns a boxed `Future<Output = bool>`. Document requests stay paused until the host answers. The driver denies on a two-second timeout, before continuing the request. It also applies the HTTP(S) and empty-document restriction. The host maps the actual session and frame back to its existing checked owner. It must install this adapter for remote-tab and visual navigation rules.
 
+`launch_with_hooks(config, navigation, initializer)` adds the host's `PageInitializer`. Its `initialize(AttachedPage)` returns `Pin<Box<dyn Future<Output = Result<()>> + Send>>`. The capability has actual `target_id`, `session_id`, and `context_id` strings plus `command(method, params)` on that actual session. It needs no reference back to `Browser` while launch is in progress. Store `Arc<Browser>` externally rather than cloning its shutdown ownership or introducing a strong callback cycle.
+
+The callback applies the canonical host registry's UA, Accept-Language, and pre-document scripts while a page or iframe is paused. `create_page` waits for target initialization before returning. Competing CDP attachments join one actual-target completion rather than injecting the preload twice. The completion map contains only actual target/session lifecycle facts and is removed on detach; partition names, proxy rules, cookies, native IDs, and permission authority stay with the host.
+
 Popups attach paused, arm document interception, and request closure before releasing the debugger pause so the opener's input cannot deadlock. Any popup document request is denied using the actual target's opener metadata. Downloads and permission checks are denied at context creation, not after a page asks. Raw CDP is a trusted-host interface, not a renderer, phone, or unauthenticated socket API. A host granting raw Browser/Target/Fetch commands must preserve its existing command authorization.
 
 ## Frames, coordinates, and ordering
