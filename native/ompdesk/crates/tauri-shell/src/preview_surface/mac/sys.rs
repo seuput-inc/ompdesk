@@ -16,8 +16,9 @@ use objc2::{
     runtime::{AnyObject, AnyProtocol, Sel},
 };
 use objc2_app_kit::{
-    NSAccessibilityElement, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSImage,
-    NSImageScaling, NSImageView, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
+    NSAccessibilityElement, NSBitmapImageRep, NSColor, NSCompositingOperation, NSEvent,
+    NSEventModifierFlags, NSImage, NSImageView, NSRectFill, NSTrackingArea, NSTrackingAreaOptions,
+    NSView, NSWindow,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSData, NSNumber, NSPoint, NSRange, NSRect, NSSize, NSString,
@@ -26,8 +27,8 @@ use shell_core::hotkey::Mods;
 
 use super::super::model::{
     AxAction, AxActionKind, AxNode, AxTarget, AxValue, Bounds, Checked, EditCommand, EncodedFrame,
-    Input, KeyKind, MouseButton, MouseKind, SurfaceError, SurfaceKey, TextContent, TextQuery,
-    TextRange, TextReply, WheelUnit,
+    FrameGeometry, Input, KeyKind, MouseButton, MouseKind, SurfaceError, SurfaceKey, TextContent,
+    TextQuery, TextRange, TextReply, WheelUnit,
 };
 use super::super::shared::{AxNodeRef, Shared};
 
@@ -77,7 +78,6 @@ impl Parent {
         let mtm = MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         let view = PreviewView::new(mtm, self.frame(bounds), shared)?;
         view.setClipsToBounds(true);
-        view.setImageScaling(NSImageScaling::ScaleAxesIndependently);
         let owner = retain_any(&*view);
         // SAFETY: the tracking owner is the live view and AppKit retains the area.
         let tracking = unsafe {
@@ -106,6 +106,16 @@ impl Parent {
     ) -> Result<(), SurfaceError> {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         view.setFrame(self.frame(bounds));
+        view.ivars().image_geometry.set(None);
+        view.setNeedsDisplay(true);
+        if bounds.rect.width > 0.0 && bounds.rect.height > 0.0 {
+            let geometry = view.ivars().shared.publisher().geometry()?;
+            view.ivars().image_geometry.set(geometry);
+            if geometry.is_none() {
+                view.setImage(None);
+            }
+        }
+        view.displayIfNeeded();
         Ok(())
     }
 
@@ -126,6 +136,7 @@ pub(super) struct ViewState {
     composition: Cell<Option<SurfaceKey>>,
     interpreting_physical_key: Cell<bool>,
     elements: RefCell<HashMap<String, Retained<AxElement>>>,
+    image_geometry: Cell<Option<FrameGeometry>>,
 }
 
 define_class!(
@@ -141,6 +152,28 @@ define_class!(
 
         #[unsafe(method(isFlipped))]
         fn is_flipped(&self) -> bool { true }
+
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            let bounds = self.bounds();
+            self.window()
+                .map_or_else(NSColor::windowBackgroundColor, |window| window.backgroundColor())
+                .setFill();
+            NSRectFill(bounds);
+            if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
+                return;
+            }
+            if let (Some(image), Some(geometry)) = (self.image(), self.ivars().image_geometry.get()) {
+                let (_, destination) = paint_rects(geometry, bounds, self.isFlipped());
+                // SAFETY: AppKit owns the active draw context; no untyped drawing hints are supplied.
+                unsafe {
+                    image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+                        destination, NSRect::ZERO, NSCompositingOperation::SourceOver,
+                        1.0, true, None,
+                    );
+                }
+            }
+        }
         #[unsafe(method(isAccessibilityElement))]
         fn is_accessibility_element(&self) -> bool { false }
 
@@ -834,6 +867,7 @@ impl PreviewView {
             composition: Cell::new(None),
             interpreting_physical_key: Cell::new(false),
             elements: RefCell::new(HashMap::new()),
+            image_geometry: Cell::new(None),
         });
         // SAFETY: NSImageView implements initWithFrame:, and the ivars are initialized.
         Ok(unsafe { msg_send![super(this), initWithFrame: rect] })
@@ -880,6 +914,9 @@ impl PreviewView {
             context.discardMarkedText();
         }
         self.ivars().elements.borrow_mut().clear();
+        self.ivars().image_geometry.set(None);
+        self.setImage(None);
+        self.setNeedsDisplay(true);
     }
 
     pub(super) fn update_text_input(&self) {
@@ -978,9 +1015,16 @@ impl PreviewView {
         });
     }
 
-    pub(super) fn install_image(&self, image: &NSImage) -> Result<(), SurfaceError> {
+    pub(super) fn install_image(
+        &self,
+        image: &NSImage,
+        geometry: FrameGeometry,
+    ) -> Result<(), SurfaceError> {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
+        self.ivars().image_geometry.set(Some(geometry));
         self.setImage(Some(image));
+        self.setNeedsDisplay(true);
+        self.displayIfNeeded();
         Ok(())
     }
 
@@ -993,6 +1037,7 @@ impl PreviewView {
     pub(super) fn detach(&self) -> Result<(), SurfaceError> {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         self.setImage(None);
+        self.ivars().image_geometry.set(None);
         self.removeFromSuperview();
         Ok(())
     }
@@ -1030,6 +1075,22 @@ impl PreviewView {
             modifiers: modifiers(event.modifierFlags()),
         });
     }
+}
+
+fn paint_rects(geometry: FrameGeometry, bounds: NSRect, flipped: bool) -> (NSRect, NSRect) {
+    let image = geometry.image_rect();
+    let y = if flipped {
+        image.y
+    } else {
+        bounds.size.height - image.y - image.height
+    };
+    (
+        bounds,
+        NSRect::new(
+            NSPoint::new(bounds.origin.x + image.x, bounds.origin.y + y),
+            NSSize::new(image.width, image.height),
+        ),
+    )
 }
 
 pub(super) fn decode_frame(frame: &EncodedFrame) -> Result<Retained<NSImage>, SurfaceError> {
@@ -1070,4 +1131,42 @@ pub(super) fn decode_frame(frame: &EncodedFrame) -> Result<Retained<NSImage>, Su
     );
     image.addRepresentation(&bitmap);
     Ok(image)
+}
+
+#[cfg(test)]
+mod paint_tests {
+    use super::super::super::model::FrameMetadata;
+    use super::*;
+
+    #[test]
+    fn offset_image_keeps_its_size_and_leaves_the_rest_as_background() {
+        let geometry = FrameGeometry::new(
+            &FrameMetadata {
+                device_width: 400.0,
+                device_height: 300.0,
+                page_scale_factor: 2.0,
+                offset_top: 20.0,
+                scroll_offset_x: 70.0,
+                scroll_offset_y: 90.0,
+            },
+            (800.0, 600.0),
+            (800, 480),
+        )
+        .unwrap();
+        let bounds = NSRect::new(NSPoint::new(5.0, 7.0), NSSize::new(800.0, 600.0));
+        let (background, image) = paint_rects(geometry, bounds, true);
+        assert_eq!(background, bounds);
+        assert_eq!(
+            image,
+            NSRect::new(NSPoint::new(5.0, 47.0), NSSize::new(800.0, 480.0))
+        );
+        assert_eq!(
+            background.size.width * background.size.height - image.size.width * image.size.height,
+            96_000.0,
+        );
+        assert_eq!(
+            paint_rects(geometry, bounds, false).1,
+            NSRect::new(NSPoint::new(5.0, 87.0), NSSize::new(800.0, 480.0)),
+        );
+    }
 }

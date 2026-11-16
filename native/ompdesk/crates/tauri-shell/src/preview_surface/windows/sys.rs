@@ -8,10 +8,10 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use super::super::model::{
-    AxAction, AxActionKind, AxNode, AxTarget, AxValue, Bounds, EditCommand, EncodedFrame, Input,
-    KeyKind, MouseButton, MouseKind, SurfaceError, SurfaceKey, TextContent, TextInputState,
-    TextQuery, TextRange as ModelTextRange, TextReply, TextUnit as ModelTextUnit, TouchKind,
-    TouchPoint, WheelUnit,
+    AxAction, AxActionKind, AxNode, AxTarget, AxValue, Bounds, EditCommand, EncodedFrame,
+    FrameGeometry, FrameMetadata, Input, KeyKind, MouseButton, MouseKind, SurfaceError, SurfaceKey,
+    TextContent, TextInputState, TextQuery, TextRange as ModelTextRange, TextReply,
+    TextUnit as ModelTextUnit, TouchKind, TouchPoint, WheelUnit,
 };
 use super::super::shared::Shared;
 use shell_core::hotkey::Mods;
@@ -25,7 +25,7 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
 use windows::Win32::System::Variant::{VARIANT, VT_I4, VT_R8, VT_UNKNOWN};
 use windows::Win32::UI::Accessibility::*;
-use windows::core::{BOOL, BSTR, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR, implement};
+use windows::core::{BOOL, BSTR, HRESULT, IUnknown, Interface, PCWSTR, implement};
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -34,8 +34,9 @@ use windows_sys::Win32::Globalization::{
 };
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, DIB_RGB_COLORS, EndPaint, GetDC, PAINTSTRUCT,
-    ReleaseDC, SRCCOPY, StretchDIBits,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, COLOR_WINDOW, DIB_RGB_COLORS, EndPaint,
+    FillRect, GetDC, GetSysColorBrush, InvalidateRect, PAINTSTRUCT, ReleaseDC, SRCCOPY,
+    StretchDIBits,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -112,6 +113,7 @@ struct Pixels {
     width: u32,
     height: u32,
     data: Vec<u8>,
+    metadata: FrameMetadata,
 }
 
 fn native_error(message: &str) -> SurfaceError {
@@ -163,6 +165,7 @@ fn decode(frame: &EncodedFrame) -> Result<Pixels, SurfaceError> {
                 width,
                 height,
                 data,
+                metadata: frame.metadata.clone(),
             })
         }
     })();
@@ -172,12 +175,45 @@ fn decode(frame: &EncodedFrame) -> Result<Pixels, SurfaceError> {
 fn draw(
     hwnd: HWND,
     dc: windows_sys::Win32::Graphics::Gdi::HDC,
-    pixels: &Pixels,
+    pixels: Option<&Pixels>,
+    bounds: Bounds,
 ) -> Result<(), SurfaceError> {
     let mut rect = RECT::default();
     // SAFETY: rect is writable and hwnd is live while the surface owns its window.
     if unsafe { GetClientRect(hwnd, &mut rect) } == 0 {
         return Err(native_error("read Preview client bounds"));
+    }
+    // SAFETY: dc and rect belong to the live child; the system owns its background brush.
+    if unsafe { FillRect(dc, &rect, GetSysColorBrush(COLOR_WINDOW)) } == 0 {
+        return Err(native_error("clear Preview frame background"));
+    }
+    let Some(pixels) = pixels else {
+        return Ok(());
+    };
+    if rect.right <= rect.left
+        || rect.bottom <= rect.top
+        || bounds.rect.width <= 0.0
+        || bounds.rect.height <= 0.0
+    {
+        return Ok(());
+    }
+    let geometry = FrameGeometry::new(
+        &pixels.metadata,
+        (bounds.rect.width, bounds.rect.height),
+        (pixels.width, pixels.height),
+    )?;
+    let (x, y, width, height) = physical_bounds(Bounds {
+        rect: geometry.image_rect(),
+        scale: bounds.scale,
+    })?;
+    if width == 0
+        || height == 0
+        || i64::from(x) + i64::from(width) <= i64::from(rect.left)
+        || i64::from(y) + i64::from(height) <= i64::from(rect.top)
+        || x >= rect.right
+        || y >= rect.bottom
+    {
+        return Ok(());
     }
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -195,10 +231,10 @@ fn draw(
     let copied = unsafe {
         StretchDIBits(
             dc,
-            0,
-            0,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
+            x,
+            y,
+            width,
+            height,
             0,
             0,
             pixels.width as i32,
@@ -331,7 +367,7 @@ impl Child {
         if dc.is_null() {
             return Err(native_error("acquire Preview paint context"));
         }
-        let result = draw(hwnd, dc, &pixels);
+        let result = draw(hwnd, dc, Some(&pixels), self.context.shared.bounds());
         // SAFETY: dc was acquired from this window above.
         unsafe {
             ReleaseDC(hwnd, dc);
@@ -360,6 +396,10 @@ impl Child {
         } == 0
         {
             return Err(native_error("move Preview child window"));
+        }
+        // SAFETY: invalidation schedules repaint of this live child's retained frame at its new bounds.
+        if unsafe { InvalidateRect(hwnd, null(), 0) } == 0 {
+            return Err(native_error("invalidate resized Preview frame"));
         }
         Ok(())
     }
@@ -1138,9 +1178,7 @@ unsafe extern "system" fn window_proc(
                     Err(native_error("begin Preview paint"))
                 } else {
                     let pixels = context.pixels.borrow();
-                    pixels
-                        .as_ref()
-                        .map_or(Ok(()), |pixels| draw(hwnd, dc, pixels))
+                    draw(hwnd, dc, pixels.as_ref(), context.shared.bounds())
                 };
                 // SAFETY: paint was initialized by BeginPaint above.
                 unsafe {
@@ -1172,32 +1210,105 @@ fn uia_unsupported() -> windows::core::Error {
     windows::core::Error::from(HRESULT(0x80004001u32 as i32))
 }
 
-#[allow(non_snake_case)]
-#[windows::core::interface("d6dd68d1-86fd-4332-8666-9abedea2d24c")]
-unsafe trait RawSimple: IUnknown {
-    fn ProviderOptions(&self, result: *mut ProviderOptions) -> HRESULT;
-    fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID, result: *mut *mut c_void) -> HRESULT;
-    fn GetPropertyValue(&self, property: UIA_PROPERTY_ID, result: *mut VARIANT) -> HRESULT;
-    fn HostRawElementProvider(&self, result: *mut *mut c_void) -> HRESULT;
+mod raw_interfaces {
+    #![allow(non_snake_case)]
+
+    use std::ffi::c_void;
+    use windows::Win32::System::Com::SAFEARRAY;
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Accessibility::*;
+    use windows::core::{BOOL, BSTR, HRESULT, IUnknown};
+
+    #[windows::core::interface("d6dd68d1-86fd-4332-8666-9abedea2d24c")]
+    pub(super) unsafe trait RawSimple: IUnknown {
+        fn ProviderOptions(&self, result: *mut ProviderOptions) -> HRESULT;
+        fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID, result: *mut *mut c_void) -> HRESULT;
+        fn GetPropertyValue(&self, property: UIA_PROPERTY_ID, result: *mut VARIANT) -> HRESULT;
+        fn HostRawElementProvider(&self, result: *mut *mut c_void) -> HRESULT;
+    }
+
+    #[windows::core::interface("f7063da8-8359-439c-9297-bbc5299a7d87")]
+    pub(super) unsafe trait RawFragment: IUnknown {
+        fn Navigate(&self, direction: NavigateDirection, result: *mut *mut c_void) -> HRESULT;
+        fn GetRuntimeId(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
+        fn BoundingRectangle(&self, result: *mut UiaRect) -> HRESULT;
+        fn GetEmbeddedFragmentRoots(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
+        fn SetFocus(&self) -> HRESULT;
+        fn FragmentRoot(&self, result: *mut *mut c_void) -> HRESULT;
+    }
+
+    #[windows::core::interface("620ce2a5-ab8f-40a9-86cb-de3c75599b58")]
+    pub(super) unsafe trait RawRoot: IUnknown {
+        fn ElementProviderFromPoint(&self, x: f64, y: f64, result: *mut *mut c_void) -> HRESULT;
+        fn GetFocus(&self, result: *mut *mut c_void) -> HRESULT;
+    }
+
+    #[windows::core::interface("3589c92c-63f3-4367-99bb-ada653b77cf2")]
+    pub(super) unsafe trait RawTextProvider: IUnknown {
+        fn GetSelection(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
+        fn GetVisibleRanges(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
+        fn RangeFromChild(&self, child: *mut c_void, result: *mut *mut c_void) -> HRESULT;
+        fn RangeFromPoint(&self, point: UiaPoint, result: *mut *mut c_void) -> HRESULT;
+        fn DocumentRange(&self, result: *mut *mut c_void) -> HRESULT;
+        fn SupportedTextSelection(&self, result: *mut SupportedTextSelection) -> HRESULT;
+    }
+
+    #[windows::core::interface("5347ad7b-c355-46f8-aff5-909033582f63")]
+    pub(super) unsafe trait RawTextRange: IUnknown {
+        fn Clone(&self, result: *mut *mut c_void) -> HRESULT;
+        fn Compare(&self, range: *mut c_void, result: *mut BOOL) -> HRESULT;
+        fn CompareEndpoints(
+            &self,
+            endpoint: TextPatternRangeEndpoint,
+            range: *mut c_void,
+            target: TextPatternRangeEndpoint,
+            result: *mut i32,
+        ) -> HRESULT;
+        fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> HRESULT;
+        fn FindAttribute(
+            &self,
+            id: UIA_TEXTATTRIBUTE_ID,
+            value: std::mem::MaybeUninit<VARIANT>,
+            backward: BOOL,
+            result: *mut *mut c_void,
+        ) -> HRESULT;
+        fn FindText(
+            &self,
+            text: std::mem::MaybeUninit<BSTR>,
+            backward: BOOL,
+            ignorecase: BOOL,
+            result: *mut *mut c_void,
+        ) -> HRESULT;
+        fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID, result: *mut VARIANT) -> HRESULT;
+        fn GetBoundingRectangles(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
+        fn GetEnclosingElement(&self, result: *mut *mut c_void) -> HRESULT;
+        fn GetText(&self, maxlength: i32, result: *mut BSTR) -> HRESULT;
+        fn Move(&self, unit: TextUnit, count: i32, result: *mut i32) -> HRESULT;
+        fn MoveEndpointByUnit(
+            &self,
+            endpoint: TextPatternRangeEndpoint,
+            unit: TextUnit,
+            count: i32,
+            result: *mut i32,
+        ) -> HRESULT;
+        fn MoveEndpointByRange(
+            &self,
+            endpoint: TextPatternRangeEndpoint,
+            range: *mut c_void,
+            target: TextPatternRangeEndpoint,
+        ) -> HRESULT;
+        fn Select(&self) -> HRESULT;
+        fn AddToSelection(&self) -> HRESULT;
+        fn RemoveFromSelection(&self) -> HRESULT;
+        fn ScrollIntoView(&self, align: BOOL) -> HRESULT;
+        fn GetChildren(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
+    }
 }
 
-#[allow(non_snake_case)]
-#[windows::core::interface("f7063da8-8359-439c-9297-bbc5299a7d87")]
-unsafe trait RawFragment: IUnknown {
-    fn Navigate(&self, direction: NavigateDirection, result: *mut *mut c_void) -> HRESULT;
-    fn GetRuntimeId(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
-    fn BoundingRectangle(&self, result: *mut UiaRect) -> HRESULT;
-    fn GetEmbeddedFragmentRoots(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
-    fn SetFocus(&self) -> HRESULT;
-    fn FragmentRoot(&self, result: *mut *mut c_void) -> HRESULT;
-}
-
-#[allow(non_snake_case)]
-#[windows::core::interface("620ce2a5-ab8f-40a9-86cb-de3c75599b58")]
-unsafe trait RawRoot: IUnknown {
-    fn ElementProviderFromPoint(&self, x: f64, y: f64, result: *mut *mut c_void) -> HRESULT;
-    fn GetFocus(&self, result: *mut *mut c_void) -> HRESULT;
-}
+use raw_interfaces::{
+    RawFragment, RawFragment_Impl, RawRoot, RawRoot_Impl, RawSimple, RawSimple_Impl,
+    RawTextProvider, RawTextProvider_Impl, RawTextRange, RawTextRange_Impl,
+};
 
 unsafe fn write_interface<T: Interface>(
     output: *mut *mut c_void,
@@ -1924,17 +2035,6 @@ impl Provider {
 }
 
 #[allow(non_snake_case)]
-#[windows::core::interface("3589c92c-63f3-4367-99bb-ada653b77cf2")]
-unsafe trait RawTextProvider: IUnknown {
-    fn GetSelection(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
-    fn GetVisibleRanges(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
-    fn RangeFromChild(&self, child: *mut c_void, result: *mut *mut c_void) -> HRESULT;
-    fn RangeFromPoint(&self, point: UiaPoint, result: *mut *mut c_void) -> HRESULT;
-    fn DocumentRange(&self, result: *mut *mut c_void) -> HRESULT;
-    fn SupportedTextSelection(&self, result: *mut SupportedTextSelection) -> HRESULT;
-}
-
-#[allow(non_snake_case)]
 impl RawTextProvider_Impl for Provider_Impl {
     unsafe fn GetSelection(&self, out: *mut *mut SAFEARRAY) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
@@ -1965,57 +2065,6 @@ impl RawTextProvider_Impl for Provider_Impl {
         // SAFETY: out is supplied by the COM caller.
         unsafe { write_value(out, self.text_supported_selection()) }
     }
-}
-#[allow(non_snake_case)]
-#[windows::core::interface("5347ad7b-c355-46f8-aff5-909033582f63")]
-unsafe trait RawTextRange: IUnknown {
-    fn Clone(&self, result: *mut *mut c_void) -> HRESULT;
-    fn Compare(&self, range: *mut c_void, result: *mut BOOL) -> HRESULT;
-    fn CompareEndpoints(
-        &self,
-        endpoint: TextPatternRangeEndpoint,
-        range: *mut c_void,
-        target: TextPatternRangeEndpoint,
-        result: *mut i32,
-    ) -> HRESULT;
-    fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> HRESULT;
-    fn FindAttribute(
-        &self,
-        id: UIA_TEXTATTRIBUTE_ID,
-        value: std::mem::MaybeUninit<VARIANT>,
-        backward: BOOL,
-        result: *mut *mut c_void,
-    ) -> HRESULT;
-    fn FindText(
-        &self,
-        text: std::mem::MaybeUninit<BSTR>,
-        backward: BOOL,
-        ignorecase: BOOL,
-        result: *mut *mut c_void,
-    ) -> HRESULT;
-    fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID, result: *mut VARIANT) -> HRESULT;
-    fn GetBoundingRectangles(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
-    fn GetEnclosingElement(&self, result: *mut *mut c_void) -> HRESULT;
-    fn GetText(&self, maxlength: i32, result: *mut BSTR) -> HRESULT;
-    fn Move(&self, unit: TextUnit, count: i32, result: *mut i32) -> HRESULT;
-    fn MoveEndpointByUnit(
-        &self,
-        endpoint: TextPatternRangeEndpoint,
-        unit: TextUnit,
-        count: i32,
-        result: *mut i32,
-    ) -> HRESULT;
-    fn MoveEndpointByRange(
-        &self,
-        endpoint: TextPatternRangeEndpoint,
-        range: *mut c_void,
-        target: TextPatternRangeEndpoint,
-    ) -> HRESULT;
-    fn Select(&self) -> HRESULT;
-    fn AddToSelection(&self) -> HRESULT;
-    fn RemoveFromSelection(&self) -> HRESULT;
-    fn ScrollIntoView(&self, align: BOOL) -> HRESULT;
-    fn GetChildren(&self, result: *mut *mut SAFEARRAY) -> HRESULT;
 }
 
 unsafe fn write_optional_interface<T: Interface>(
@@ -2808,7 +2857,54 @@ mod tests {
             let dc = GetDC(hwnd);
             assert!(!dc.is_null());
             assert_ne!(GetPixel(dc, 1, 1), u32::MAX);
+            let background = windows_sys::Win32::Graphics::Gdi::GetSysColor(COLOR_WINDOW);
+            let color = background ^ 0x00ff_ffff;
+            let mut data = Vec::with_capacity(8);
+            for _ in 0..2 {
+                data.extend_from_slice(&[
+                    ((color >> 16) & 0xff) as u8,
+                    ((color >> 8) & 0xff) as u8,
+                    (color & 0xff) as u8,
+                    0xff,
+                ]);
+            }
+            let pixels = Pixels {
+                width: 2,
+                height: 1,
+                data,
+                metadata: FrameMetadata {
+                    device_width: 200.0,
+                    device_height: 160.0,
+                    page_scale_factor: 2.0,
+                    offset_top: 20.0,
+                    scroll_offset_x: 7.0,
+                    scroll_offset_y: 9.0,
+                },
+            };
+            draw(hwnd, dc, Some(&pixels), surface.shared.bounds()).unwrap();
+            assert_eq!(GetPixel(dc, 1, 1), background);
+            assert_eq!(GetPixel(dc, 20, 20), color);
+            assert_eq!(GetPixel(dc, 20, 70), background);
             ReleaseDC(hwnd, dc);
+            *surface.child.context.pixels.borrow_mut() = Some(pixels);
+            surface
+                .set_bounds(Bounds {
+                    rect: Rect {
+                        width: 50.0,
+                        height: 80.0,
+                        ..rect
+                    },
+                    scale: 1.0,
+                })
+                .unwrap();
+            SendMessageW(hwnd, WM_PAINT, 0, 0);
+            let dc = GetDC(hwnd);
+            assert!(!dc.is_null());
+            assert_eq!(GetPixel(dc, 1, 1), background);
+            assert_eq!(GetPixel(dc, 20, 15), color);
+            assert_eq!(GetPixel(dc, 20, 40), background);
+            ReleaseDC(hwnd, dc);
+            surface.set_bounds(Bounds { rect, scale: 1.0 }).unwrap();
             let mut actual = RECT::default();
             assert_ne!(GetClientRect(hwnd, &mut actual), 0);
             assert_eq!((actual.right, actual.bottom), (100, 80));
@@ -2851,7 +2947,6 @@ mod tests {
                 editable: true,
                 read_only: false,
                 secure: false,
-                multiline: false,
                 required: false,
                 selected: false,
                 expanded: None,
