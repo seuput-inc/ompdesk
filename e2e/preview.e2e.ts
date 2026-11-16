@@ -191,12 +191,9 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 					return captured.painted;
 				})
 				.toBe(true);
-			// Shell capture does not composite native child views; keep the observed painted child frame separately.
-			const shellCapture = await app.evaluate(async ({ BrowserWindow }) =>
-				(await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true }))
-					.toPNG()
-					.toString("base64"),
-			);
+			// Capture the actual app WebView through its test driver, not the separate Preview CDP service.
+			// Native child pixels are checked and retained independently above.
+			const shellCapture = (await page.screenshot({ animations: "disabled" })).toString("base64");
 			await fs.mkdir(screenshotDir, { recursive: true });
 			await fs.writeFile(path.join(screenshotDir, `preview-${theme}.png`), Buffer.from(shellCapture, "base64"));
 			await fs.writeFile(
