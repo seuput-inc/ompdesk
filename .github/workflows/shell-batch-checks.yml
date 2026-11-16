@@ -23,6 +23,11 @@
 #  keychain    S's landing gate for the macOS keychain (scripts/shell-move/keychain-ci.sh): a release-signed item read by the
 #              shell, an ad-hoc item never asked about, a profile without ciphertext never reading; no SecurityAgent or
 #              coreauthd line. macOS 27 has no hosted runner: the owner's Mac covers it.
+#  phone-webkit-mac  only=phone-webkit-mac: e2e/mobile-attach.e2e.ts's WebKit photo test (a camera JPEG, a 12 MB JPEG, a HEIC)
+#              on macos-15, where the phone's browser is Playwright's WebKit (closer to iOS Safari than the Windows build). The
+#              desktop side is the test-automation host driven through its native WebDriver (Playwright cannot attach to
+#              WKWebView), the phone side is the spec unchanged. Uploads test-results/ (the host's logs, the phone's wire and
+#              close codes in a failure's message) and the run's output as `phone-webkit-mac`.
 # macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
 # windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`) the gate admits: main, or a branch named in
 # the repository variable MAC_REFS; any other ref fails closed at the gate and no macOS job starts. They share the
@@ -39,7 +44,7 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport]
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac]
         default: all
   push:
     branches: [omp/agent/rust-batch-shell]
@@ -475,6 +480,63 @@ jobs:
             native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell.exe
           if-no-files-found: ignore
           retention-days: 7
+
+  phone-webkit-mac:
+    name: phone-webkit-mac (macos-15)
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'phone-webkit-mac'"
+    concurrency:
+      group: mac-dispatch
+      cancel-in-progress: false
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+      # The host the spec starts: the Tauri shell (WKWebView) built with the test-automation feature, which brings the embedded
+      # WebDriver the spec's desktop side talks to (as mac-checks.yml's mac-smoke), and the pinned Node.
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      - run: bun run build
+      - name: Playwright's WebKit (the phone's browser)
+        run: bunx playwright install webkit
+      - name: The WebKit photo test on the phone
+        shell: bash
+        env:
+          OMP_GUI_MOBILE_ATTACH: ${{ runner.temp }}/phone-webkit-mac-captures
+        run: |
+          set -euo pipefail
+          export OMPDESK_TAURI_TEST_BINARY="$PWD/resources/ompdesk-tauri/darwin-arm64/ompdesk-shell"
+          bunx playwright test e2e/mobile-attach.e2e.ts --grep 'A photo attached on the phone \(webkit\)' --global-timeout=1200000 2>&1 | tee phone-webkit-mac.log
+      - name: Host crash reports
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p test-results/crash-reports
+          find "$HOME/Library/Logs/DiagnosticReports" -name '*.ips' -mmin -90 -exec cp {} test-results/crash-reports/ \; 2>/dev/null || true
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phone-webkit-mac
+          path: |
+            phone-webkit-mac.log
+            test-results/
+            playwright-report/
+            ${{ runner.temp }}/phone-webkit-mac-captures/
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   preview-transport:
     name: preview-transport (ubuntu)

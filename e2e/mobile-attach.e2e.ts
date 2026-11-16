@@ -16,15 +16,24 @@
  * 25 MB is refused with a message.
  *
  * OMP_GUI_MOBILE_ATTACH=<dir> also writes the composer and the bubble per picture.
+ *
+ * On macOS Playwright cannot attach to the host's WKWebView, so the desktop page is driven through the host's native
+ * WebDriver (`launchNative`, scripts/tauri-native-smoke.ts) for the three things the phone side needs of it (wait for
+ * the preload, turn Mobile web on, read its phase); the phone's browser is Playwright's WebKit there as everywhere.
+ * Needs OMPDESK_TAURI_TEST_BINARY (a test-automation host, `bun run build:tauri -- --test-automation`) and the pinned Node
+ * (`bun run build:node`); the host's logs and a failed launch's page diagnosis land in the test's output folder.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { type BrowserType, chromium, devices, expect, type Page, test, webkit } from "@playwright/test";
-import { type ElectronApplication, _electron as electron } from "playwright";
+import { _electron as electron } from "playwright";
 import sharp from "sharp";
+import { Driver, launchNative, saveFailure, stopNative, until } from "../scripts/tauri-native-smoke";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, recordPhoneLoads, ServeProxy, serveSites } from "./fixture/phone-serve";
+import { copyShellDiagnostics } from "./fixture/shell-launch";
 import { captureTo, exitApp, fixtureOmp } from "./harness";
 
 const CAPTURES = process.env.OMP_GUI_MOBILE_ATTACH;
@@ -45,6 +54,7 @@ interface Profile {
 	root: string;
 	desktop: string;
 	project: string;
+	agent: string;
 	env: Record<string, string>;
 	tailscale: FixtureTailscale;
 	record: string;
@@ -74,7 +84,7 @@ async function makeProfile(): Promise<Profile> {
 		...tailscale.env,
 	});
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
-	return { root, desktop, project, env, tailscale, record };
+	return { root, desktop, project, agent, env, tailscale, record };
 }
 
 /**
@@ -172,15 +182,22 @@ function pictureSupport(phone: Page, heic: Buffer): Promise<{ drawsHeic: boolean
 	}, heic.toString("base64"));
 }
 
+/** The desktop window's page, as far as this spec reaches it. */
+interface Desktop {
+	/** `expression` run in the page (a promise is awaited): its value. */
+	evaluate(expression: string): Promise<unknown>;
+	stop(): Promise<void>;
+}
+
 interface Host {
-	app: ElectronApplication;
+	desktop: Desktop;
 	proxy: ServeProxy;
 }
 
 type Engine = (typeof ENGINES)[number];
 
-/** The app with Mobile web ready and the fake serve in front of it. */
-async function startHost(engine: Engine, profile: Profile): Promise<Host> {
+/** Windows: Playwright attaches to the host's WebView2 page. */
+async function launchWebView2Desktop(profile: Profile): Promise<Desktop> {
 	const app = await electron.launch({
 		args: [path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${profile.desktop}`],
 		env: profile.env,
@@ -188,9 +205,55 @@ async function startHost(engine: Engine, profile: Profile): Promise<Host> {
 	try {
 		const desk = await app.firstWindow();
 		await desk.waitForFunction(() => window.omp?.rpc != null);
-		await desk.evaluate(() => window.omp.mobileWeb.command({ action: "enable" }));
+		return { evaluate: expression => desk.evaluate(expression), stop: () => exitApp(app) };
+	} catch (error) {
+		await exitApp(app).catch(() => undefined);
+		throw error;
+	}
+}
+
+/** macOS: the host's own WebDriver, the way scripts/tauri-native-smoke.ts drives the packaged app. */
+async function launchNativeDesktop(profile: Profile): Promise<Desktop> {
+	const app = await launchNative("mobile-attach-", {
+		profile: { root: profile.root, desktop: profile.desktop, project: profile.project, agent: profile.agent },
+		// Without OMP_GUI_HEADLESS, the setup scripts/tauri-native-smoke.ts runs this host in on the runner: the transparent
+		// windows it asks for have not been tried under a driven WKWebView.
+		env: { ...profile.env, OMP_GUI_HEADLESS: undefined },
+		output: test.info().outputPath("native-host"),
+	});
+	const driver = new Driver(app.port);
+	const stop = async () => {
+		await driver.evaluate("(setTimeout(() => window.omp.app.quit(), 0), true)").catch(() => undefined);
+		await Promise.race([app.code.catch(() => undefined), delay(15_000)]);
+		await stopNative(app);
+		copyShellDiagnostics(app.desktop, app.profile);
+	};
+	try {
+		await driver.attach(app.exited);
+		await until(
+			"The desktop page's preload",
+			async () => (await driver.evaluate("window.omp?.rpc != null")) === true,
+			app.exited,
+		);
+	} catch (error) {
+		await saveFailure(driver, app.profile, error);
+		await stop().catch(() => undefined);
+		throw error;
+	}
+	return { evaluate: expression => driver.evaluate(expression), stop };
+}
+
+/** The app with Mobile web ready and the fake serve in front of it. */
+async function startHost(engine: Engine, profile: Profile): Promise<Host> {
+	const desktop = await (process.platform === "darwin"
+		? launchNativeDesktop(profile)
+		: launchWebView2Desktop(profile));
+	try {
+		await desktop.evaluate(`window.omp.mobileWeb.command({ action: "enable" })`);
 		await expect
-			.poll(() => desk.evaluate(async () => (await window.omp.mobileWeb.getState()).phase), { timeout: 60_000 })
+			.poll(() => desktop.evaluate("window.omp.mobileWeb.getState().then(state => state.phase)"), {
+				timeout: 60_000,
+			})
 			.toBe("ready");
 		await expect.poll(() => serveSites(profile.tailscale).length, { timeout: 30_000 }).toBeGreaterThan(0);
 		const site = serveSites(profile.tailscale).at(-1);
@@ -198,9 +261,9 @@ async function startHost(engine: Engine, profile: Profile): Promise<Host> {
 		const proxy = await ServeProxy.start(site, "seuput@example.com", undefined, {
 			plainCookie: engine.name === "webkit",
 		});
-		return { app, proxy };
+		return { desktop, proxy };
 	} catch (error) {
-		await exitApp(app).catch(() => undefined);
+		await desktop.stop().catch(() => undefined);
 		throw error;
 	}
 }
@@ -238,10 +301,10 @@ for (const engine of ENGINES)
 		test.setTimeout(240_000);
 		const profile = await makeProfile();
 		const browser = await engine.type.launch();
-		let app: ElectronApplication | null = null;
-		let proxy: ServeProxy | null = null;
+		let host: Host | null = null;
 		try {
-			({ app, proxy } = await startHost(engine, profile));
+			host = await startHost(engine, profile);
+			const { proxy } = host;
 
 			const heic = await fs.readFile("e2e/media/photo.heic");
 			const pictures: Picture[] = [
@@ -385,8 +448,8 @@ for (const engine of ENGINES)
 			expect(uploads).toEqual(Array(pictures.length + 2).fill("POST 200"));
 		} finally {
 			await browser.close();
-			await proxy?.close();
-			if (app) await exitApp(app).catch(() => undefined);
+			await host?.proxy.close();
+			if (host) await host.desktop.stop().catch(() => undefined);
 			await fs.rm(profile.root, { recursive: true, force: true }).catch(() => undefined);
 		}
 	});
@@ -547,7 +610,7 @@ for (const engine of ENGINES)
 		} finally {
 			await browser.close();
 			await host?.proxy.close();
-			if (host) await exitApp(host.app).catch(() => undefined);
+			if (host) await host.desktop.stop().catch(() => undefined);
 			await fs.rm(profile.root, { recursive: true, force: true }).catch(() => undefined);
 		}
 	});

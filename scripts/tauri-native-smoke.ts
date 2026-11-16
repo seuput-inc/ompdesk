@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import * as path from "node:path";
+import type { Readable, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { appDirOfEntry } from "../e2e/fixture/shell-launch";
 import { appLaunchOptions } from "../e2e/harness";
@@ -39,6 +43,37 @@ export class Driver {
 		assert.equal(typeof result.sessionId, "string");
 		this.#session = String(result.sessionId);
 		await this.command("POST", "/timeouts", { implicit: 60_000, script: 60_000, pageLoad: 60_000 });
+	}
+
+	/** Waits for the host's WebDriver server (`/status` ready), then opens the session. */
+	async attach(exited: Promise<never>): Promise<void> {
+		await until(
+			"Native WebDriver startup",
+			async () => {
+				try {
+					return object(await this.request("GET", "/status")).ready === true;
+				} catch (error) {
+					if (
+						error instanceof Error &&
+						"code" in error &&
+						["ECONNREFUSED", "ConnectionRefused"].includes(String(error.code))
+					)
+						return false;
+					if (
+						error instanceof TypeError &&
+						error.message === "fetch failed" &&
+						"cause" in error &&
+						error.cause instanceof Error &&
+						"code" in error.cause &&
+						error.cause.code === "ECONNREFUSED"
+					)
+						return false;
+					throw error;
+				}
+			},
+			exited,
+		);
+		await this.connect();
 	}
 
 	command(method: string, endpoint: string, data?: unknown): Promise<unknown> {
@@ -112,31 +147,63 @@ export async function until(label: string, probe: () => Promise<boolean>, exited
 }
 
 export interface NativeApp {
-	child: Bun.Subprocess<"pipe", "pipe", "pipe">;
+	child: ChildProcessByStdio<Writable, Readable, Readable>;
 	binary: string;
+	/** The evidence folder: the app's stdout and stderr, and what a failed step saved. */
 	profile: string;
+	/** The app's userData (`--user-data-dir`). */
 	desktop: string;
 	port: number;
 	logs: Promise<unknown>;
+	/** The app's exit code (null: a signal ended it). */
+	code: Promise<number | null>;
 	exited: Promise<never>;
 }
 
-/** Starts the host on a private profile with the test inspector, that profile and a free port named, as every native check does. */
-export async function launchNative(prefix = "native-smoke-"): Promise<NativeApp> {
+/** The folders of one run of the app, as a caller that already made them hands them in. */
+export interface NativeProfile {
+	/** The private root: `PI_CONFIG_DIR` and the fake omp's folder (`appLaunchOptions`' `profile`). */
+	root: string;
+	desktop: string;
+	project: string;
+	agent: string;
+}
+
+export interface NativeLaunch {
+	/** Folders the caller made (and wrote `prefs.json` into); default: a fresh profile inside the evidence folder. */
+	profile?: NativeProfile;
+	/** Added to the app's environment over `appLaunchOptions`' defaults; `undefined` removes a variable. */
+	env?: Record<string, string | undefined>;
+	/** Where the evidence folder is made; default OMPDESK_TAURI_TEST_OUTPUT. */
+	output?: string;
+}
+
+/**
+ * Starts the host on a private profile with the test inspector, that profile and a free port named, as every native check
+ * does. Plain Node APIs only: a Playwright worker (e2e/mobile-attach.e2e.ts on macOS) runs it as well as bun.
+ */
+export async function launchNative(prefix = "native-smoke-", launch: NativeLaunch = {}): Promise<NativeApp> {
 	assert(["darwin", "win32"].includes(process.platform), "Native smoke requires the actual shipping OS");
 	const binary = process.env.OMPDESK_TAURI_TEST_BINARY;
-	const output = process.env.OMPDESK_TAURI_TEST_OUTPUT;
+	const output = launch.output ?? process.env.OMPDESK_TAURI_TEST_OUTPUT;
 	assert(binary && path.isAbsolute(binary), "OMPDESK_TAURI_TEST_BINARY must name the built Tauri executable");
 	assert(output && path.isAbsolute(output), "OMPDESK_TAURI_TEST_OUTPUT must name the caller's private evidence root");
 	await mkdir(output, { recursive: true });
 	const profile = await mkdtemp(path.join(output, prefix));
-	const desktop = path.join(profile, "desktop");
-	const project = path.join(profile, "project");
-	const agent = path.join(profile, "agent");
-	await Promise.all([desktop, project, agent].map(directory => mkdir(directory)));
-	await writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
+	let own = launch.profile;
+	if (!own) {
+		own = {
+			root: profile,
+			desktop: path.join(profile, "desktop"),
+			project: path.join(profile, "project"),
+			agent: path.join(profile, "agent"),
+		};
+		await Promise.all([own.desktop, own.project, own.agent].map(directory => mkdir(directory)));
+		await writeFile(path.join(own.desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
+	}
+	const { desktop, project, agent, root } = own;
 	const port = await availablePort();
-	const options = await appLaunchOptions({ project, desktop, agent, profile });
+	const options = await appLaunchOptions({ project, desktop, agent, profile: root, env: launch.env });
 	const entry = options.args.shift();
 	assert(entry);
 	const env: Record<string, string> = {
@@ -155,25 +222,38 @@ export async function launchNative(prefix = "native-smoke-"): Promise<NativeApp>
 				`${process.platform}-${process.arch}`,
 				process.platform === "win32" ? "node.exe" : "node",
 			);
-	assert(await Bun.file(pinnedNode).exists(), "The original pinned Node runtime must be staged");
+	assert(
+		await access(pinnedNode).then(
+			() => true,
+			() => false,
+		),
+		"The original pinned Node runtime must be staged",
+	);
 	env.OMPDESK_NODE = pinnedNode;
-	const child = Bun.spawn([binary, ...options.args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-	const stdout = Bun.write(path.join(profile, "stdout.log"), child.stdout);
-	const stderr = Bun.write(path.join(profile, "stderr.log"), child.stderr);
-	const exited = child.exited.then(code => {
-		throw new Error(`Native app exited during smoke (${code})`);
+	const child = spawn(binary, options.args, { env, stdio: ["pipe", "pipe", "pipe"] });
+	// Ending the app's stdin after it died must not be an uncaught EPIPE.
+	child.stdin.on("error", () => undefined);
+	const stdout = pipeline(child.stdout, createWriteStream(path.join(profile, "stdout.log")));
+	const stderr = pipeline(child.stderr, createWriteStream(path.join(profile, "stderr.log")));
+	const closed = Promise.withResolvers<number | null>();
+	child.once("error", closed.reject);
+	child.once("exit", exitCode => closed.resolve(exitCode));
+	const code = closed.promise;
+	const exited = code.then(exitCode => {
+		throw new Error(`Native app exited during smoke (${exitCode})`);
 	});
 	void exited.catch(() => undefined);
-	return { child, binary, profile, desktop, port, logs: Promise.all([stdout, stderr]), exited };
+	return { child, binary, profile, desktop, port, logs: Promise.all([stdout, stderr]), code, exited };
 }
 
 /** Ends what `launchNative` started: the app and every process below it, then its logs. */
-export async function stopNative({ child, logs }: NativeApp): Promise<void> {
-	if (child.exitCode === null) {
+export async function stopNative({ child, code, logs }: NativeApp): Promise<void> {
+	if (child.exitCode === null && child.signalCode === null) {
+		assert(child.pid !== undefined, "The native app has no process id");
 		const owned = processesBelow(child.pid);
 		child.stdin.end();
 		child.kill();
-		await child.exited;
+		await code;
 		await waitForProcessesToExit(owned, 10_000);
 	}
 	await logs;
@@ -242,40 +322,24 @@ export const PAGE_DIAGNOSIS = `(async () => {
 	};
 })()`;
 
+/** What the page showed when a step failed (`PAGE_DIAGNOSIS`), the step's error and a screenshot, beside the output. */
+export async function saveFailure(driver: Driver, profile: string, error: unknown): Promise<void> {
+	const diagnosis = await driver.evaluate(PAGE_DIAGNOSIS).catch((reason: unknown) => ({ unreadable: String(reason) }));
+	const state = { error: error instanceof Error ? error.message : String(error), ...object(diagnosis) };
+	await writeFile(path.join(profile, "failure.json"), `${JSON.stringify(state, null, 2)}\n`).catch(() => undefined);
+	const png = await driver.command("GET", "/screenshot").catch(() => undefined);
+	if (typeof png === "string")
+		await writeFile(path.join(profile, "failure.png"), Buffer.from(png, "base64")).catch(() => undefined);
+}
+
 async function main(): Promise<void> {
 	console.log("test build: release bytes + feature test-automation (tauri-plugin-wdio-webdriver)");
 	const app = await launchNative();
-	const { child, binary, profile, port, exited } = app;
+	const { binary, profile, port, exited, code } = app;
 	const driver = new Driver(port);
 	let quitRequested = false;
 	try {
-		await until(
-			"Native WebDriver startup",
-			async () => {
-				try {
-					return object(await driver.request("GET", "/status")).ready === true;
-				} catch (error) {
-					if (
-						error instanceof Error &&
-						"code" in error &&
-						["ECONNREFUSED", "ConnectionRefused"].includes(String(error.code))
-					)
-						return false;
-					if (
-						error instanceof TypeError &&
-						error.message === "fetch failed" &&
-						"cause" in error &&
-						error.cause instanceof Error &&
-						"code" in error.cause &&
-						error.cause.code === "ECONNREFUSED"
-					)
-						return false;
-					throw error;
-				}
-			},
-			exited,
-		);
-		await driver.connect();
+		await driver.attach(exited);
 		await until(
 			"Native preload and sidecar",
 			async () =>
@@ -348,21 +412,13 @@ async function main(): Promise<void> {
 		await driver.evaluate("(setTimeout(()=>window.omp.app.quit(),0),true)");
 		quitRequested = true;
 		assert.equal(
-			await Promise.race([child.exited, delay(15_000).then(() => "timeout")]),
+			await Promise.race([code, delay(15_000).then(() => "timeout")]),
 			0,
 			"The actual native app did not quit cleanly",
 		);
 		console.log(`Actual native smoke passed; evidence: ${profile}`);
 	} catch (error) {
-		// What the page showed when a step failed (`PAGE_DIAGNOSIS`), the step's error and a screenshot, beside the output.
-		const diagnosis = await driver
-			.evaluate(PAGE_DIAGNOSIS)
-			.catch((reason: unknown) => ({ unreadable: String(reason) }));
-		const state = { error: error instanceof Error ? error.message : String(error), ...object(diagnosis) };
-		await writeFile(path.join(profile, "failure.json"), `${JSON.stringify(state, null, 2)}\n`).catch(() => undefined);
-		const png = await driver.command("GET", "/screenshot").catch(() => undefined);
-		if (typeof png === "string")
-			await writeFile(path.join(profile, "failure.png"), Buffer.from(png, "base64")).catch(() => undefined);
+		await saveFailure(driver, profile, error);
 		throw error;
 	} finally {
 		await stopNative(app);
