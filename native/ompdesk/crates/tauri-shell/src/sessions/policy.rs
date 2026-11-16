@@ -65,7 +65,6 @@ impl Policy {
 
 pub enum Command {
     Request(crate::host::Call, tokio::sync::oneshot::Receiver<()>),
-    Context(tokio::sync::oneshot::Sender<Result<shell_preview::Partition, String>>),
     PageContext(tokio::sync::oneshot::Sender<Result<shell_preview::Partition, String>>),
 }
 

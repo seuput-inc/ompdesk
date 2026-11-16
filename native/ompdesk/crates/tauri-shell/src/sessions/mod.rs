@@ -357,17 +357,6 @@ async fn drain(partition: String, mut receiver: tokio::sync::mpsc::UnboundedRece
                     Err(error) => call.err(error.code, error.message),
                 }
             }
-            Command::Context(reply) => {
-                let result = preview::ensure_context(&partition)
-                    .await
-                    .and_then(|context| {
-                        with(|r| {
-                            r.get_mut(&partition)?.context_exposed = true;
-                            Ok(context)
-                        })
-                    });
-                let _ = reply.send(result);
-            }
             Command::PageContext(reply) => {
                 let result = preview::ensure_page_context(&partition).await;
                 if let Err(Ok(context)) = reply.send(result)
