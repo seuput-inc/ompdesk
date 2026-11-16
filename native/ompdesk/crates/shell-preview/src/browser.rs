@@ -772,7 +772,7 @@ async fn policy_event(
             } else {
                 (
                     "Fetch.failRequest",
-                    json!({"requestId":id,"errorReason":"BlockedByClient"}),
+                    json!({"requestId":id,"errorReason":if document { "Aborted" } else { "BlockedByClient" }}),
                 )
             };
             if let Err(error) = transport

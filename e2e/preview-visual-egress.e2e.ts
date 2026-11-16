@@ -250,7 +250,10 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		expect(listener.hits).toEqual([]);
 		// The visual is still there, with its own assets.
 		const urls = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map(item => item.getURL()));
-		expect(urls.filter(url => url.startsWith("omp-visual://"))).toHaveLength(1);
+		expect(
+			urls.filter(url => url.startsWith("omp-visual://")),
+			`actual live URLs after denied navigation: ${JSON.stringify(urls)}`,
+		).toHaveLength(1);
 		expect(urls.some(url => url.startsWith(origin))).toBe(false);
 		expect(await inPage("location.href")).toMatch(/^omp-visual:\/\/v1-[0-9a-f]{16}\/egress\.html$/);
 		expect(await inPage("document.getElementById('logo').naturalWidth")).toBe(40);

@@ -170,13 +170,29 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .create_page(&partition, viewport)
         .await
         .map_err(|e| format!("create denied-navigation page: {e:?}"))?;
+    denied_page
+        .navigate(&fixture.url)
+        .await
+        .map_err(|e| e.to_string())?;
+    denied_page.evaluate("new Promise(resolve=>{function ready(){if(document.readyState==='complete'&&document.querySelector('#button')){globalThis.retainedDocument='alive';resolve(true)}else requestAnimationFrame(ready)}ready()})", false).await.map_err(|e| e.to_string())?;
     let denied = denied_page
         .navigate(&format!("{}/denied-handled", fixture.url))
         .await
         .expect_err("host fulfillment must not bypass denied document navigation");
     check!(
-        denied.code == "navigation" && denied.message == "net::ERR_BLOCKED_BY_CLIENT",
+        denied.code == "navigation" && denied.message == "net::ERR_ABORTED",
         "denied document did not preserve the actual policy failure: {denied}"
+    );
+    let retained = denied_page
+        .evaluate(
+            "({url:location.href, marker:globalThis.retainedDocument})",
+            false,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    check!(
+        retained == json!({"url":format!("{}/",fixture.url),"marker":"alive"}),
+        "denied navigation replaced the original live document: {retained}"
     );
     let sibling = browser
         .create_page(&partition, viewport)
