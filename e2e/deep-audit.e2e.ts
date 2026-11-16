@@ -375,26 +375,47 @@ async function mutateEntry(
 			for (const candidate of candidates) {
 				await input.fill(String(candidate));
 				await input.press("Enter");
-				const outcome = async () =>
-					(await input.getAttribute("aria-invalid")) === "true"
-						? "refused"
-						: equalJson(await readSetting(page, entry.path), candidate)
-							? "written"
-							: "pending";
-				await expect.poll(outcome, { timeout: 8_000 }).not.toBe("pending");
-				if ((await outcome()) === "written") {
+				// One read decides: the row's refusal and its message come from the same DOM snapshot, and a written value
+				// is the one the poll saw. A second evaluation after the poll could see the row or the value a moment
+				// later (windows run 43915678103: the poll saw 0 written, the re-read saw -1 and no message).
+				const decide = async (): Promise<{ state: "pending" | "written" | "refused"; message: string }> => {
+					const refusal = await input.evaluate(element => ({
+						invalid: element.getAttribute("aria-invalid") === "true",
+						message: (element.getAttribute("aria-describedby") ?? "")
+							.split(/\s+/)
+							.map(id => element.ownerDocument.getElementById(id)?.textContent ?? "")
+							.join(" ")
+							.trim(),
+					}));
+					// A row's error and its note render together; an invalid row without a note is not settled yet.
+					if (refusal.invalid)
+						return { state: refusal.message === "" ? "pending" : "refused", message: refusal.message };
+					return {
+						state: equalJson(await readSetting(page, entry.path), candidate) ? "written" : "pending",
+						message: "",
+					};
+				};
+				let decided: { state: "pending" | "written" | "refused"; message: string } = {
+					state: "pending",
+					message: "",
+				};
+				await expect
+					.poll(
+						async () => {
+							decided = await decide();
+							return decided.state;
+						},
+						{
+							timeout: 8_000,
+							message: `${entry.path}: ${candidate} was neither written nor refused with a message`,
+						},
+					)
+					.not.toBe("pending");
+				if (decided.state === "written") {
 					next = candidate;
 					break;
 				}
-				const message = await input.evaluate(element =>
-					(element.getAttribute("aria-describedby") ?? "")
-						.split(/\s+/)
-						.map(id => element.ownerDocument.getElementById(id)?.textContent ?? "")
-						.join(" ")
-						.trim(),
-				);
-				expect(message, `${entry.path} refused ${candidate} without saying why`).not.toBe("");
-				notes.push(`refused ${candidate}: ${message}`);
+				notes.push(`refused ${candidate}: ${decided.message}`);
 			}
 			if (next === undefined) throw new Error(`${entry.path} refused every candidate: ${notes.join("; ")}`);
 			const readbackValue = await readSetting(page, entry.path);
