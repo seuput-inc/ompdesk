@@ -23,7 +23,7 @@ step "control: a prompt-free keychain read"
 control_chatter
 
 step "the shell bundle (scripts/package-mac.ts, signed with the throwaway identity)"
-(cd "$REPO" && bun scripts/package-mac.ts --no-dmg --version 0.200.0 --sign-with "$ID" --keychain "$KC0"); check $? "package-mac built and signed OMPdesk.app"
+(cd "$REPO" && bun scripts/package-mac.ts --historical-cef --no-dmg --version 0.200.0 --sign-with "$ID" --keychain "$KC0"); check $? "package-mac built and signed OMPdesk.app"
 SHELL_APP=$REPO/dist/mac-arm64/OMPdesk.app
 codesign --verify --deep --strict "$SHELL_APP"; check $? "codesign --verify --deep --strict on the shell bundle"
 evidence "shell bundle designated requirement: $(codesign -d -r- "$SHELL_APP" 2>&1 | sed -n 's/^designated => //p')"

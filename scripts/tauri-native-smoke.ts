@@ -15,7 +15,7 @@ function object(value: unknown): Record<string, unknown> {
 	return value as Record<string, unknown>;
 }
 
-class Driver {
+export class Driver {
 	#session = "";
 	constructor(readonly port: number) {}
 
@@ -92,7 +92,7 @@ async function availablePort(): Promise<number> {
 	return address.port;
 }
 
-async function until(label: string, probe: () => Promise<boolean>, exited: Promise<never>): Promise<void> {
+export async function until(label: string, probe: () => Promise<boolean>, exited: Promise<never>): Promise<void> {
 	const deadline = Date.now() + 60_000;
 	while (!(await Promise.race([probe(), exited]))) {
 		assert(Date.now() < deadline, `${label} did not complete in 60 seconds`);

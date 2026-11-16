@@ -29,10 +29,27 @@ HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/mac-common.sh"
 . "$HERE/mac-processes.sh"
 PORT=19230; FEEDPORT=18444; HTTPPORT=18445; SEEDPORT=18446
+NATIVEPORT=19231
+MOVE_ENGINE=${OMPDESK_SHELL_ENGINE:-tauri}
+case "$MOVE_ENGINE" in tauri|cef) ;; *) echo "unsupported move engine: $MOVE_ENGINE"; exit 1 ;; esac
+PACKAGE_ARGS=()
+[ "$MOVE_ENGINE" = cef ] && PACKAGE_ARGS=(--historical-cef)
+native_environment() {
+  [ "$MOVE_ENGINE" = tauri ] || return 0
+  launchctl setenv OMP_GUI_TEST_NODE_INSPECT 1
+  launchctl setenv OMP_GUI_TEST_WEBDRIVER_PORT "$NATIVEPORT"
+}
+new_profile() {
+  if [ "$MOVE_ENGINE" = tauri ]; then
+    (cd "$REPO" && limit 120 bun scripts/shell-move/native-profile.ts "$NATIVEPORT" "${1:-read}")
+  else
+    (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts "$PORT" "${1:-read}")
+  fi
+}
 LAST_ELECTRON_TAG=$(jq -er .tag "$REPO/native/ompdesk/crates/shell/last-electron.json") || exit 1
 SOURCE_TAG=${OMP_MOVE_RELEASED_TAG:-$LAST_ELECTRON_TAG}
 case "$SOURCE_TAG" in v0.127.0|v0.128.0|"$LAST_ELECTRON_TAG") ;; *) echo "unsupported released tag: $SOURCE_TAG"; exit 1 ;; esac
-cleanup() { for v in OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" 2>/dev/null; }
+cleanup() { for v in OMP_GUI_TEST_USER_DATA_DIR OMP_GUI_TEST_NODE_INSPECT OMP_GUI_TEST_WEBDRIVER_PORT OMP_GUI_TEST_SHELL_FAIL_START OMPDESK_LAUNCHER_RELEASE_URL OMPDESK_LAUNCHER_START_WAIT_S; do launchctl unsetenv $v; done; chmod -R u+w "$W" 2>/dev/null; kill "${WATCH:-}" "${FEED:-}" 2>/dev/null; }
 trap cleanup EXIT
 stop_or_exit() { stop_app "$@" || { check 1 "app processes did not exit"; restore; exit 1; }; }
 
@@ -41,7 +58,7 @@ step "control: a prompt-free keychain read"
 control_chatter
 
 step "the new shell bundle and its DMG (scripts/package-mac.ts, signed with the throwaway identity)"
-(cd "$REPO" && bun scripts/package-mac.ts --version 0.200.0 --sign-with "$ID" --keychain "$KC0"); check $? "package-mac built the signed bundle and the DMG"
+(cd "$REPO" && bun scripts/package-mac.ts ${PACKAGE_ARGS[@]+"${PACKAGE_ARGS[@]}"} --version 0.200.0 --sign-with "$ID" --keychain "$KC0"); check $? "package-mac built the signed bundle and the DMG"
 DMG=$(ls "$REPO"/dist/ompdesk-0.200.0-arm64.dmg 2>/dev/null | head -1); test -f "$DMG"; check $? "dist/ompdesk-0.200.0-arm64.dmg exists ($(stat -f %z "$DMG" 2>/dev/null) bytes)"
 cp "$DMG" "$W/new.dmg"
 
@@ -73,6 +90,7 @@ open_probe() {
   evidence "probe $label: spctl --assess: $(spctl --assess -vv --type execute "$app" 2>&1 | tr '\n' ' ')"
   local t0; t0=$(date '+%Y-%m-%d %H:%M:%S')
   launchctl setenv OMP_GUI_TEST_USER_DATA_DIR "$ud"
+  native_environment
   open -n "$app" --args --user-data-dir="$ud" --remote-debugging-port=$PORT --host-resolver-rules="MAP api.github.com 127.0.0.1:1" >"$W/probe-$label.out" 2>&1; local rc=$?
   sleep 25
   local running; running=$(ps -axo command | grep "$app/Contents/MacOS/" | grep -v grep | head -1 | cut -c1-140)
@@ -154,6 +172,7 @@ scenario() {
   local APPS=$W/$name/Applications UD=$W/$name/ud
   mkdir -p "$APPS" "$UD"; ditto rel.app "$APPS/OMPdesk.app"
   launchctl setenv OMP_GUI_TEST_USER_DATA_DIR "$UD"
+  native_environment
   local OLDENV=(); [ "$fail" = 3 ] && OLDENV=(OMPDESK_SWAP_START_WAIT_S=20)
   if [ "$fail" = 2 ] || [ "$fail" = 3 ]; then
     # The swap script relaunches with `open -n`, which hands the new shell launchd's environment, not the old app's.
@@ -259,13 +278,15 @@ scenario() {
   elif [ "$fail" = 0 ]; then
     wait_for "grep -q '^installed' $UD/updates/swap.log" 120; check $? "S1: swap.log says installed"
     evidence "S1 swap.log: $(tr '\n' '|' < "$UD/updates/swap.log" | cut -c1-300)"
-    wait_for "grep -q window.created $UD/shell-webview/shell.log.jsonl 2>/dev/null" 180; check $? "S1: the new shell started (window.created)"
-    if ! grep -q window.created "$UD/shell-webview/shell.log.jsonl" 2>/dev/null; then relaunch_diag "$APPS" "$UD" "$name"; fi
+    if [ "$MOVE_ENGINE" = cef ]; then
+      wait_for "grep -q window.created $UD/shell-webview/shell.log.jsonl 2>/dev/null" 180; check $? "S1: the new shell started (window.created)"
+      if ! grep -q window.created "$UD/shell-webview/shell.log.jsonl" 2>/dev/null; then relaunch_diag "$APPS" "$UD" "$name"; fi
+      grep -q '"migrate.localStorage"' "$UD/shell-webview/shell.log.jsonl"; check $? "S1: migrate.localStorage in the shell log"
+      evidence "S1 shell log: $(grep -E 'migrate|cef.ready|window.created' "$UD/shell-webview/shell.log.jsonl" | cut -c1-200 | tr '\n' '|')"
+    fi
     evidence "S1 shell command line: $(ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/" | grep -v grep | head -1 | cut -c1-260)"
     ps -axo command | grep "$APPS/OMPdesk.app/Contents/MacOS/" | grep -v grep | grep -q -- "--user-data-dir=$UD"; check $? "S1: the shell was started with Electron's argv (--user-data-dir)"
-    grep -q '"migrate.localStorage"' "$UD/shell-webview/shell.log.jsonl"; check $? "S1: migrate.localStorage in the shell log"
-    evidence "S1 shell log: $(grep -E 'migrate|cef.ready|window.created' "$UD/shell-webview/shell.log.jsonl" | cut -c1-200 | tr '\n' '|')"
-    (cd "$REPO" && limit 120 bun scripts/shell-move/cdp-seed-mac.ts $PORT read) | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the shell's page answered"
+    new_profile read | tee "$W/$name-read.json"; check ${PIPESTATUS[0]} "S1: the actual $MOVE_ENGINE page answered"
     grep -q '"href":"app://ompdesk/' "$W/$name-read.json"; check $? "S1: the page loaded from app://ompdesk"
     grep -q '"draft":"a draft typed in Electron"' "$W/$name-read.json" && grep -q '"korean":"한국어 초안 ✓"' "$W/$name-read.json" && grep -q '"large":200000' "$W/$name-read.json"; check $? "S1: Local Storage reached the page"
     if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
@@ -284,6 +305,26 @@ scenario() {
       ls "$APPS" | grep -q 'previous'; [ $? != 0 ]; check $? "S1: .previous is gone once the new app proved it started"
     fi
     evidence "S1 installed bundle: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APPS/OMPdesk.app/Contents/Info.plist") ($(codesign -d -r- "$APPS/OMPdesk.app" 2>&1 | sed -n 's/^designated => //p'))"
+    if [ "$MOVE_ENGINE" = tauri ]; then
+      new_profile write | tee "$W/$name-native-write.json"; check ${PIPESTATUS[0]} "S1: the migrated native page saved new Korean data"
+      new_profile quit | tee "$W/$name-native-quit.json"; local quit_rc=${PIPESTATUS[0]}
+      if [ "$quit_rc" != 0 ] || ! wait_app "$APPS/OMPdesk.app"; then
+        check 1 "S1: the native app quit normally before its profile was reopened"
+        stop_or_exit "$APPS/OMPdesk.app"; restore; exit 1
+      fi
+      open -n "$APPS/OMPdesk.app" --args --user-data-dir="$UD"
+      new_profile read | tee "$W/$name-native-reopened.json"; local reopened_rc=${PIPESTATUS[0]}
+      if [ "$reopened_rc" != 0 ] ||
+         ! grep -q '"afterMigration":"Tauri 저장 후 다시 열기 ✓"' "$W/$name-native-reopened.json" ||
+         ! grep -q '"draft":"a draft typed in Electron"' "$W/$name-native-reopened.json" ||
+         ! grep -q '"korean":"한국어 초안 ✓"' "$W/$name-native-reopened.json" ||
+         ! grep -q '"large":200000' "$W/$name-native-reopened.json" ||
+         ! grep -q '"source":"stored"' "$W/$name-native-reopened.json"; then
+        check 1 "S1: the restarted native app retained old and new data plus encrypted auth"
+      else
+        check 0 "S1: the restarted native app retained old and new data plus encrypted auth"
+      fi
+    fi
   else
     wait_for "grep -q 'copy failed\|install failed\|cannot move' $UD/updates/swap.log 2>/dev/null" 120; check $? "S2: the swap failed (swap.log)"
     evidence "S2 swap.log: $(tr '\n' '|' < "$UD/updates/swap.log" | cut -c1-300)"
