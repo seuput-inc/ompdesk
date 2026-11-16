@@ -2,7 +2,7 @@ import type { OmpApi } from "../shared/ipc-types";
 import { createOmpApi, type OmpTransport } from "../shared/omp-api";
 import { describePreloadFailure } from "../shared/preload-failure";
 
-type Kind = "invoke" | "send" | "ready" | "evaluateResult" | "preloadError";
+type Kind = "invoke" | "send" | "ready" | "evaluateResult" | "preloadError" | "profileRead" | "profileAck";
 type NativeInvoke = (command: string, args: { kind: Kind; payload: string }) => Promise<unknown>;
 
 const nativeWindow = window as unknown as { __TAURI_INTERNALS__?: { invoke?: NativeInvoke }; omp: OmpApi };
@@ -153,55 +153,110 @@ async function evaluate(id: unknown, expectedGeneration: number, run: () => unkn
 	await call("evaluateResult", result);
 }
 
-try {
-	if (!invoke) throw new Error("Tauri invoke is unavailable");
-	Object.defineProperty(window, "__ompShellStream", { value: shellStream });
-	Object.defineProperty(window, "__ompTauriPush", {
-		value: (expectedGeneration: number, raw: unknown) => {
-			return ready.promise
-				.then(current => {
-					if (current === expectedGeneration) push(raw);
-				})
-				.catch(() => undefined);
-		},
-	});
-	Object.defineProperty(window, "__ompTauriEvaluate", {
-		value: (id: unknown, expectedGeneration: number, run: () => unknown) => {
-			return evaluate(id, expectedGeneration, run).catch(error =>
-				console.error("Tauri evaluation response failed", error),
-			);
-		},
-	});
-	const shared = createOmpApi(transport);
-	const api: OmpApi = {
-		...shared,
-		fs: {
-			...shared.fs,
-			// WKWebView/WebView2 File objects expose bytes, not an authenticated local path.
-			pathForFile: () => "",
-		},
-	};
-	nativeWindow.omp = api;
-	void nativeCall("ready", encode({ userAgent: navigator.userAgent }))
-		.then(answer => {
-			if (
-				!answer ||
-				typeof answer !== "object" ||
-				!("generation" in answer) ||
-				typeof answer.generation !== "number" ||
-				!Number.isSafeInteger(answer.generation)
-			)
-				throw new Error("Tauri ready returned an invalid generation");
-			generation = answer.generation;
-			ready.resolve(answer.generation);
-		})
-		.catch(error => {
-			ready.reject(error);
-			reportFailure(error);
-			console.error("Tauri preload readiness failed", error);
-		});
-} catch (error) {
-	ready.reject(error);
-	reportFailure(error);
-	throw error;
+async function migrateProfile(): Promise<void> {
+	try {
+		const answer = await nativeCall("profileRead", "{}");
+		if (
+			!answer ||
+			typeof answer !== "object" ||
+			!("generation" in answer) ||
+			typeof answer.generation !== "number" ||
+			!Number.isSafeInteger(answer.generation) ||
+			answer.generation <= 0
+		)
+			throw new Error("Invalid profile snapshot");
+		if ("complete" in answer && answer.complete === true) return;
+		if (
+			!("id" in answer) ||
+			typeof answer.id !== "string" ||
+			!("items" in answer) ||
+			!answer.items ||
+			typeof answer.items !== "object" ||
+			Array.isArray(answer.items)
+		)
+			throw new Error("Invalid profile snapshot");
+		const entries = Object.entries(answer.items);
+		if (entries.some(([, value]) => typeof value !== "string")) throw new Error("Invalid profile snapshot");
+		generation = answer.generation;
+		for (const [key, source] of entries) {
+			const existing = localStorage.getItem(key);
+			if (existing === null) localStorage.setItem(key, source as string);
+			if (localStorage.getItem(key) !== (existing === null ? source : existing))
+				throw new Error("Profile storage verification failed");
+		}
+		await nativeCall("profileAck", encode({ id: answer.id, verifiedKeys: entries.length, generation }));
+	} catch {
+		const failure = new Error("Local storage migration failed. Your existing data has not been overwritten.");
+		reportFailure(failure);
+		const showError = () => {
+			const element = document.getElementById("omp-profile-error");
+			if (element) element.textContent = failure.message;
+			const retry = document.getElementById("omp-profile-retry");
+			if (retry) retry.hidden = false;
+		};
+		if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", showError, { once: true });
+		else showError();
+	}
 }
+
+const location = window.location;
+const profileBootstrap =
+	location?.pathname === "/__profile/migrate" &&
+	((location.protocol === "app:" && location.host === "ompdesk") ||
+		(location.protocol === "http:" && location.host === "app.localhost"));
+
+if (profileBootstrap) {
+	void migrateProfile();
+} else
+	try {
+		if (!invoke) throw new Error("Tauri invoke is unavailable");
+		Object.defineProperty(window, "__ompShellStream", { value: shellStream });
+		Object.defineProperty(window, "__ompTauriPush", {
+			value: (expectedGeneration: number, raw: unknown) => {
+				return ready.promise
+					.then(current => {
+						if (current === expectedGeneration) push(raw);
+					})
+					.catch(() => undefined);
+			},
+		});
+		Object.defineProperty(window, "__ompTauriEvaluate", {
+			value: (id: unknown, expectedGeneration: number, run: () => unknown) => {
+				return evaluate(id, expectedGeneration, run).catch(error =>
+					console.error("Tauri evaluation response failed", error),
+				);
+			},
+		});
+		const shared = createOmpApi(transport);
+		const api: OmpApi = {
+			...shared,
+			fs: {
+				...shared.fs,
+				// WKWebView/WebView2 File objects expose bytes, not an authenticated local path.
+				pathForFile: () => "",
+			},
+		};
+		nativeWindow.omp = api;
+		void nativeCall("ready", encode({ userAgent: navigator.userAgent }))
+			.then(answer => {
+				if (
+					!answer ||
+					typeof answer !== "object" ||
+					!("generation" in answer) ||
+					typeof answer.generation !== "number" ||
+					!Number.isSafeInteger(answer.generation)
+				)
+					throw new Error("Tauri ready returned an invalid generation");
+				generation = answer.generation;
+				ready.resolve(answer.generation);
+			})
+			.catch(error => {
+				ready.reject(error);
+				reportFailure(error);
+				console.error("Tauri preload readiness failed", error);
+			});
+	} catch (error) {
+		ready.reject(error);
+		reportFailure(error);
+		throw error;
+	}

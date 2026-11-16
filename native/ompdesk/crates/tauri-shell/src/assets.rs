@@ -106,6 +106,18 @@ pub fn serve(root: &Path, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let Some(relative) = path_from_uri(request.uri()) else {
         return empty(StatusCode::NOT_FOUND);
     };
+    if relative == Path::new("__profile/migrate") {
+        let body = if head {
+            Vec::new()
+        } else {
+            b"<!doctype html><html><head><meta charset=\"utf-8\"><title>OMPdesk</title></head><body><p id=\"omp-profile-error\" role=\"alert\"></p><button id=\"omp-profile-retry\" hidden onclick=\"location.reload()\">Retry / \xeb\x8b\xa4\xec\x8b\x9c \xec\x8b\x9c\xeb\x8f\x84</button></body></html>".to_vec()
+        };
+        return Response::builder().status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'; script-src 'unsafe-inline'; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'")
+            .body(body).expect("bootstrap response");
+    }
     let Ok(root) = root.canonicalize() else {
         return empty(StatusCode::NOT_FOUND);
     };
