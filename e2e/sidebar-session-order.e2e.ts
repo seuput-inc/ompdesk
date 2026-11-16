@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Locator, Page } from "playwright";
-import { captureTo, exitApp, launchApp } from "./harness";
+import { captureTo, dragRowToRightEdge, exitApp, launchApp } from "./harness";
 
 const SHOTS = process.env.OMP_GUI_SESSION_ORDER;
 
@@ -114,28 +114,7 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await expect.poll(async () => (await tabs()).some(tab => tab.sessionPath?.endsWith("s-3.jsonl"))).toBe(true);
 	const order = await titles(page);
 	const charlie = rows().filter({ hasText: "Charlie plan" });
-	const workspace = await page.locator(".omp-split-workspace").boundingBox();
-	if (!workspace) throw new Error("expected the workspace box");
-	const ghost = page.locator("[data-split-ghost]");
-	// The sidebar redraws its rows while the opened sessions settle, and a row replaced between the press and the
-	// first move starts no drag: a drag that shows no ghost is released over the workspace and begun again.
-	await expect(async () => {
-		const rowBox = await charlie.boundingBox();
-		if (!rowBox) throw new Error("expected the row's box");
-		await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(rowBox.x + rowBox.width / 2 + 20, rowBox.y + rowBox.height / 2, { steps: 4 });
-		await page.mouse.move(workspace.x + workspace.width * 0.92 + 2, workspace.y + workspace.height * 0.5, {
-			steps: 10,
-		});
-		await page.mouse.move(workspace.x + workspace.width * 0.92, workspace.y + workspace.height * 0.5, { steps: 2 });
-		try {
-			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
-		} catch (error) {
-			await page.mouse.up();
-			throw error;
-		}
-	}).toPass({ timeout: 30_000 });
+	await dragRowToRightEdge(page, charlie);
 	await page.mouse.up();
 	await expect(page.locator(".omp-session-pane")).toHaveCount(2);
 	await expect(page.locator('.omp-sidebar-session-row[data-active="true"]')).toHaveCount(2);

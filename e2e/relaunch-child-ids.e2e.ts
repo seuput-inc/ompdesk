@@ -265,7 +265,19 @@ test("a follow-up queued in a busy child survives a relaunch, its done report re
 					message.details.dispatch === "d2",
 			);
 		};
-		await expect.poll(async () => (await doneMails()).length, { timeout: 60_000 }).toBe(1);
+		try {
+			await expect.poll(async () => (await doneMails()).length, { timeout: 60_000 }).toBe(1);
+		} catch (error) {
+			// Where the report stopped: sent by main to an omp (a `agent_control.mail` frame the fake recorded), in the
+			// opener's transcript under another shape, or never made (the tabs and their states say whose turn is where).
+			const mail = (await readRecords(profile.record))
+				.filter(frame => frame.type === "agent_control.mail")
+				.map(frame => JSON.stringify(frame.details ?? {}).slice(0, 160));
+			const states = (await tabs(second.page)).map(
+				tab => `${tab.tabId === boss ? "boss" : tab.tabId === kid ? "kid" : "?"}:${tab.status}`,
+			);
+			throw new Error(`${String(error)}\nmail frames: ${JSON.stringify(mail)}\ntabs: ${states.join(" ")}`);
+		}
 
 		// Several more passes later, neither was handed over again.
 		await second.page.waitForTimeout(3_000);

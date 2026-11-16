@@ -136,9 +136,28 @@ for (const engine of ENGINES)
 			await expect
 				.poll(() => received(record, ["hello before the outage"]), { timeout: 30_000 })
 				.toEqual(["hello before the outage"]);
-			await expect
-				.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
-				.toBe(true);
+			try {
+				await expect
+					.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
+					.toBe(true);
+			} catch (error) {
+				// What the worker did: a registration that never came, one stuck installing, or one active that did not claim.
+				const worker = await phone
+					.evaluate(async () => {
+						const registration = await navigator.serviceWorker?.getRegistration();
+						return {
+							secure: isSecureContext,
+							installing: registration?.installing?.state ?? null,
+							waiting: registration?.waiting?.state ?? null,
+							active: registration?.active?.state ?? null,
+							scope: registration?.scope ?? null,
+						};
+					})
+					.catch(failure => String(failure));
+				throw new Error(
+					`${String(error)}\nservice worker: ${JSON.stringify(worker)}\nopen requests: ${[...pending].join(" ")}`,
+				);
+			}
 			// The tab strip and transcript snapshots are written after a quiet moment.
 			await phone.waitForTimeout(1500);
 

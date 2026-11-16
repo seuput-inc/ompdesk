@@ -16,7 +16,7 @@ import type { ElectronApplication, Page } from "playwright";
 import { wrapAgentMessage } from "../src/shared/agent-control";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { cssString, exitApp, fixtureOmp, launchApp } from "./harness";
+import { cssString, dragRowToRightEdge, exitApp, fixtureOmp, launchApp } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, type RemoteInstance } from "./remote-harness";
 
 let app: ElectronApplication | undefined;
@@ -571,55 +571,6 @@ test("a phone's drawer: selecting a row selects it and moves no row, archived an
 	]);
 });
 
-/** A real mouse drag of a session row onto the right edge of the workspace: its open tab joins the split there. */
-async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
-	const workspace = await page.locator(".omp-split-workspace").boundingBox();
-	if (!workspace) throw new Error("expected the workspace box");
-	const ghost = page.locator("[data-split-ghost]");
-	// Which drag events the page saw, as `type@x,y` (a failed drag names them), and the ghost's presence at each
-	// dragover where it changed: a drag that never started differs from one whose dragover never reached the pane or
-	// whose dragleave took the ghost away again.
-	await page.evaluate(() => {
-		const seen: string[] = [];
-		let ghosts = -1;
-		for (const type of ["dragstart", "dragenter", "dragover", "dragleave", "drop", "dragend"])
-			window.addEventListener(
-				type,
-				event => {
-					if (!(event instanceof DragEvent) || seen.length >= 40) return;
-					const now = document.querySelectorAll("[data-split-ghost]").length;
-					if (type === "dragover" && now === ghosts) return;
-					if (type === "dragover") ghosts = now;
-					const at = `${Math.round(event.clientX)},${Math.round(event.clientY)}`;
-					seen.push(`${type}@${at}${type === "dragover" ? `:ghost${now}` : ""}`);
-					document.documentElement.dataset.dragSeen = seen.join(" ");
-				},
-				true,
-			);
-	});
-	// A row replaced between the press and the first move starts no drag: a drag that shows no ghost is released
-	// over the workspace and begun again.
-	await expect(async () => {
-		const rowBox = await row.boundingBox();
-		if (!rowBox) throw new Error("expected the row's box");
-		await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(rowBox.x + rowBox.width / 2 + 20, rowBox.y + rowBox.height / 2, { steps: 4 });
-		await page.mouse.move(workspace.x + workspace.width * 0.92 + 2, workspace.y + workspace.height * 0.5, {
-			steps: 10,
-		});
-		await page.mouse.move(workspace.x + workspace.width * 0.92, workspace.y + workspace.height * 0.5, { steps: 2 });
-		try {
-			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
-		} catch (error) {
-			await page.mouse.up();
-			const seen = await page.evaluate(() => document.documentElement.dataset.dragSeen ?? "no drag event");
-			throw new Error(`${String(error)}\ndrag events seen: ${seen}`);
-		}
-	}).toPass({ timeout: 30_000 });
-	await page.mouse.up();
-}
-
 test("a split's rows read selected only where the window shows the split: a desktop window and a phone page, narrowed and widened", async () => {
 	test.setTimeout(300_000);
 	root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-sidebar-select-split-")));
@@ -687,6 +638,7 @@ test("a split's rows read selected only where the window shows the split: a desk
 				.toBe(true);
 		}
 		await dragRowToRightEdge(page, row("s-3"));
+		await page.mouse.up();
 		await expect(page.locator(".omp-session-pane")).toHaveCount(2);
 		await expect(selected, "both panes of the split").toHaveCount(2);
 		await expect(row("s-2")).toHaveAttribute("data-active", "true");

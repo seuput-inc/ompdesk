@@ -415,6 +415,74 @@ export function cssString(value: string): string {
 }
 
 /**
+ * A real mouse drag of a session row onto the right edge of the split workspace, until the split's ghost
+ * (`[data-split-ghost]`) shows there; the caller then releases the mouse. A row replaced between the press and the first
+ * move starts no drag, so a drag that shows no ghost is released over the workspace and begun again. A drag that never
+ * shows it fails with what the page saw: the drag events as `type@x,y` (a dragover only where the ghost count changed,
+ * with whether the pane's handler took it, `prevented`), the `omp:tab-drag` events that arm the pane's drop, and any
+ * error the page raised.
+ */
+export async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
+	const workspace = await page.locator(".omp-split-workspace").boundingBox();
+	if (!workspace) throw new Error("expected the workspace box");
+	const ghost = page.locator("[data-split-ghost]");
+	await page.evaluate(() => {
+		const seen: string[] = [];
+		const note = (entry: string) => {
+			if (seen.length >= 40) return;
+			seen.push(entry);
+			document.documentElement.dataset.dragSeen = seen.join(" ");
+		};
+		let ghosts = -1;
+		const at = (event: DragEvent) => `${Math.round(event.clientX)},${Math.round(event.clientY)}`;
+		for (const type of ["dragstart", "dragenter", "dragover", "dragleave", "drop", "dragend"])
+			window.addEventListener(
+				type,
+				event => {
+					if (!(event instanceof DragEvent)) return;
+					const now = document.querySelectorAll("[data-split-ghost]").length;
+					if (type === "dragover") {
+						if (now === ghosts) return;
+						ghosts = now;
+					}
+					note(`${type}@${at(event)}${type === "dragover" ? `:ghost${now}` : ""}`);
+				},
+				true,
+			);
+		// The bubbling phase: the pane's handler has run by then, and `preventDefault` says it took the drag.
+		let prevented: boolean | undefined;
+		window.addEventListener("dragover", event => {
+			if (event.defaultPrevented !== prevented) {
+				prevented = event.defaultPrevented;
+				note(`dragover-prevented=${prevented}`);
+			}
+		});
+		window.addEventListener("omp:tab-drag", event =>
+			note(`omp:tab-drag=${JSON.stringify(event instanceof CustomEvent ? event.detail : null)}`),
+		);
+		window.addEventListener("error", event => note(`error=${event.message}`));
+	});
+	await expect(async () => {
+		const rowBox = await row.boundingBox();
+		if (!rowBox) throw new Error("expected the row's box");
+		await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(rowBox.x + rowBox.width / 2 + 20, rowBox.y + rowBox.height / 2, { steps: 4 });
+		await page.mouse.move(workspace.x + workspace.width * 0.92 + 2, workspace.y + workspace.height * 0.5, {
+			steps: 10,
+		});
+		await page.mouse.move(workspace.x + workspace.width * 0.92, workspace.y + workspace.height * 0.5, { steps: 2 });
+		try {
+			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
+		} catch (error) {
+			await page.mouse.up();
+			const seen = await page.evaluate(() => document.documentElement.dataset.dragSeen ?? "no drag event");
+			throw new Error(`${String(error)}\ndrag events seen: ${seen}`);
+		}
+	}).toPass({ timeout: 30_000 });
+}
+
+/**
  * Walk a paired host's folder picker to `folder`: up to its root, then down one
  * level at a time. Each level is found by name through the filter, since the
  * host lists a bounded number of folders per level and a crowded temp folder

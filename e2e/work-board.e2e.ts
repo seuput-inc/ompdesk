@@ -291,14 +291,12 @@ for (const language of variants(["en", "ko"] as const))
 						await expect(emails.nth(1)).toHaveAttribute("title", "work@example.com");
 						await expect(claude.locator("[data-in-use]")).toHaveCount(0);
 					}
-					const cut = await block.locator("[data-usage-account] [data-account-label]").evaluateAll(
-						labels =>
-							labels.filter(entry => {
-								const style = getComputedStyle(entry);
-								return style.textOverflow === "ellipsis" || entry.scrollWidth > entry.clientWidth + 1;
-							}).length,
-					);
-					expect(cut, "no address is cut").toBe(0);
+					// Every row's name is `truncate`-styled (so its computed `text-overflow` is always ellipsis); what must hold is
+					// that the four-letter short name fits its line, i.e. nothing is actually clipped.
+					const cut = await block
+						.locator("[data-usage-account] [data-account-label]")
+						.evaluateAll(labels => labels.filter(entry => entry.scrollWidth > entry.clientWidth + 1).length);
+					expect(cut, "no account name is cut").toBe(0);
 					// The accounts scroll, but the whole block (header and explanation too) stays inside its cap.
 					const scroller = await block.evaluate(block => {
 						const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
