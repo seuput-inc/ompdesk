@@ -167,9 +167,19 @@ test("streaming with 50k history preserves the reading anchor, supports five tas
 			await profiler.send("Profiler.enable");
 			await profiler.send("Profiler.start");
 		}
-		for (let index = 0; index < 20; index++) {
+		// ⇧⌘] steps the strip order (⌃⇥ is the most-recent-first switcher, which only flips between the last two tabs):
+		// 21 steps over 5 tabs, from the last one, end on the first. Each step waits until main routes the tab it should
+		// land on: a key press returns once it is dispatched, not once the page handled it, and the page of a streaming
+		// 50k-row session handles them late (a Windows run clicked Send while the queued steps were still switching
+		// tabs, so the button it found was that of one tab and then another, and the last step left it on an idle one).
+		const activeTab = async () => (await page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId;
+		const strip = (await page.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId);
+		expect(strip).toHaveLength(5);
+		for (let step = 1; step <= 21; step++) {
 			const started = performance.now();
 			await page.keyboard.press("ControlOrMeta+Shift+BracketRight");
+			const lands = strip[(strip.length - 1 + step) % strip.length];
+			await expect.poll(activeTab, { message: `step ${step} lands on its tab`, timeout: 60_000 }).toBe(lands);
 			await expect(input).toBeEditable();
 			switchMs.push(performance.now() - started);
 		}
@@ -178,10 +188,6 @@ test("streaming with 50k history preserves the reading anchor, supports five tas
 			await fs.writeFile(test.info().outputPath("switch.cpuprofile"), JSON.stringify(captured.profile));
 			await profiler.detach();
 		}
-		// ⇧⌘] steps the strip order (⌃⇥ is the most-recent-first switcher, which only
-		// flips between the last two tabs): 20 cycles over 5 tabs land back on the last
-		// one; one more reaches the first.
-		await page.keyboard.press("ControlOrMeta+Shift+BracketRight");
 		await expect(input).toHaveValue("retained stream draft");
 		// With a draft the one action button is Send: its right click offers the Stop that keeps the draft.
 		const send = page.locator('[data-slot="send"] button');
