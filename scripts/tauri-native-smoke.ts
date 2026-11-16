@@ -57,7 +57,18 @@ export class Driver {
 		return reply.value;
 	}
 
+	/**
+	 * Finds the element, waiting up to 60 s as WebDriver's implicit wait would (the Tauri plugin answers `no such element`
+	 * at once): the packaged app's first launch mounts the composer 2.4 s after its omp answers, and Settings' page loads
+	 * its own chunk after the click (dry runs 43890507100, 43914587785).
+	 */
 	async element(selector: string): Promise<string> {
+		const deadline = Date.now() + 60_000;
+		while (
+			(await this.evaluate(`document.querySelector(${JSON.stringify(selector)}) !== null`)) !== true &&
+			Date.now() < deadline
+		)
+			await delay(100);
 		const element = object(await this.command("POST", "/element", { using: "css selector", value: selector }));
 		assert.equal(typeof element[ELEMENT], "string");
 		return `/element/${encodeURIComponent(String(element[ELEMENT]))}`;
@@ -275,13 +286,6 @@ async function main(): Promise<void> {
 		);
 		const settings = object(await driver.evaluate("window.omp.rpc.getSettings(['compaction.enabled'])"));
 		assert.equal(settings.success, true, "The actual Node/stock bridge did not answer");
-		// The window's omp can answer before the page has mounted the composer: on the packaged app's first launch the
-		// runner logged renderer-mounted 2.4 s after sidecar-ready (dry run 43890507100).
-		await until(
-			"Composer mounted",
-			async () => driver.evaluate("document.querySelector('textarea')!==null").then(value => value === true),
-			exited,
-		);
 		const textarea = await driver.element("textarea");
 		const firstTab = await driver.evaluate("window.omp.tabs.list().then(t=>t[0]?.tabId)");
 		await driver.chord("t");
