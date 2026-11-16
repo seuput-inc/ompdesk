@@ -88,6 +88,9 @@ const LEGACY_LICENSE_COPIES: [string, string][] = [
 	["resources/shell-licenses/darwin-arm64/LICENSE.cef.txt", "LICENSE.cef.txt"],
 ];
 
+/** The Tauri host's Preview browser, staged by scripts/stage-preview-browser.ts; the host reads `Resources/preview-browser/runtime.json`. */
+export const TAURI_COPIES: [string, string][] = [["resources/preview-browser/darwin-arm64", "preview-browser"]];
+
 const copy = (from: string, to: string) => {
 	fs.mkdirSync(path.dirname(to), { recursive: true });
 	// Symlinks stay links: CEF's framework is `Versions/A` with `Current` and top-level links into it.
@@ -164,7 +167,8 @@ export function assembleBundle(
 		path.join(resources, runtime === "tauri" ? "ompdesk-tauri.build.json" : "ompdesk-shell.build.json"),
 	);
 
-	const copies = runtime === "cef" ? [...RESOURCE_COPIES, ...LEGACY_LICENSE_COPIES] : RESOURCE_COPIES;
+	const copies =
+		runtime === "cef" ? [...RESOURCE_COPIES, ...LEGACY_LICENSE_COPIES] : [...RESOURCE_COPIES, ...TAURI_COPIES];
 	for (const [from, to] of copies) {
 		const source = path.join(repo, from);
 		if (!fs.existsSync(source))
@@ -230,8 +234,13 @@ export function signBundle(app: string, identity: string, keychain: string | nul
 	const frameworkExecutable = hasCef
 		? path.join(bundle.frameworkRoot(framework), "Chromium Embedded Framework")
 		: null;
+	// The Preview browser keeps its vendor signature (scripts/stage-preview-browser.ts verified it); the app seal
+	// hashes it as a resource, so it is never re-signed with OMPdesk's identity.
+	const vendor = path.join(contents, "Resources", "preview-browser");
 	for (const dir of [path.join(contents, "Resources"), ...(hasCef ? [bundle.frameworkRoot(framework)] : [])]) {
-		for (const file of machOFiles(dir)) if (file !== frameworkExecutable) codesign([...options, file]);
+		for (const file of machOFiles(dir)) {
+			if (file !== frameworkExecutable && !file.startsWith(`${vendor}${path.sep}`)) codesign([...options, file]);
+		}
 	}
 	if (hasCef) codesign([...options, framework]);
 	for (const prefix of hasCef ? bundle.HELPER_PREFIXES : []) {

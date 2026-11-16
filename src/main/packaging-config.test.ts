@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { REA_HUB_ENTRY } from "../../resources/gui-bridge/mcp-hub-contracts";
 import { AGENT_DESKTOP_SERVER } from "../../resources/gui-bridge/modes/computer-use-contracts";
-import { assembleBundle, RESOURCE_COPIES } from "../../scripts/package-mac";
+import { assembleBundle, RESOURCE_COPIES, TAURI_COPIES } from "../../scripts/package-mac";
 import { REA_VERSION } from "../shared/builtin-mcp";
 import { UPDATE_ASSETS } from "./update-release";
 
@@ -936,6 +936,8 @@ describe("mac bundle configs", () => {
 				if (runtime === "cef") {
 					await put("resources/shell-licenses/darwin-arm64/LICENSES.chromium.html");
 					await put("resources/shell-licenses/darwin-arm64/LICENSE.cef.txt");
+				} else {
+					for (const [from] of TAURI_COPIES) await put(`${from}/runtime.json`);
 				}
 				const app = assembleBundle(repo, out, undefined, runtime);
 				const resources = path.join(app, "Contents", "Resources");
@@ -1490,11 +1492,15 @@ describe("workflows", () => {
 		expect(publishRuns).not.toContain("rebase");
 	});
 
-	it("runs the @smoke e2e on every Windows release, and offers it by hand with captures and the omp update lock check", () => {
+	it("smokes the packaged app on every release, and offers the @smoke e2e by hand with captures and the omp update lock check", () => {
 		const release = parse(workflows.find(entry => entry.name === "release.yml")?.text ?? "") as ReleaseWorkflow;
 		const runs = (job: string) => release.jobs[job]?.steps.map(step => step.run ?? "") ?? [];
-		// Every @smoke spec runs against the job's packaged out/.
-		expect(runs("win")).toContain('bunx playwright test --grep "@smoke"');
+		// Playwright cannot drive WKWebView: both packaged apps run the native WebDriver smoke.
+		for (const job of ["mac", "win"])
+			expect(
+				runs(job).some(run => run.includes("bun scripts/tauri-native-smoke.ts")),
+				job,
+			).toBe(true);
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "scripts/omp-update-lock-check.ts"))).toBe(true);
 
 		const ci = parse(workflows.find(entry => entry.name === "ci.yml")?.text ?? "") as {

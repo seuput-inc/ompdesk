@@ -32,3 +32,7 @@ resources/node/
 resources/ompdesk-shell/
 # CEF's CREDITS.html and LICENSE.txt out of its archive: bun run stage:cef-licenses (never committed)
 resources/shell-licenses/
+# The Tauri host and launcher built from native/ompdesk/crates/tauri-shell: bun run build:tauri stages them here (never committed)
+resources/ompdesk-tauri/
+# The pinned signed Preview browser (resources/preview-browser.json): scripts/stage-preview-browser.ts stages it here (never committed)
+resources/preview-browser/

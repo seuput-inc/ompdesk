@@ -62,6 +62,10 @@ extraResources:
     to: THIRD_PARTY_NOTICES.txt
   - from: LICENSES
     to: LICENSES
+  # The Preview browser with its vendor signature and notices, staged by scripts/stage-preview-browser.ts; the Tauri
+  # host reads resources/preview-browser/runtime.json and checks the executable against it.
+  - from: resources/preview-browser/win32-x64
+    to: preview-browser
 protocols:
   - name: omp
     schemes:
