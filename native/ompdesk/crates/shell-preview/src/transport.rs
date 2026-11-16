@@ -143,6 +143,9 @@ pub(crate) fn arguments(profile: &Path) -> Vec<std::ffi::OsString> {
         "--disable-features=MediaRouter,OptimizationHints,AutofillServerCommunication",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--disable-background-timer-throttling",
+        // Security #3, as the Electron main did (src/main/index.ts): no page resolves a name it only hints at
+        // (`<link rel=dns-prefetch>`), so a visited page cannot spell what it read into a lookup the proxy never sees.
+        "--blink-settings=dnsPrefetchingEnabled=false",
     ]
     .into_iter()
     .map(Into::into)
@@ -573,6 +576,16 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::{command, connected};
     use super::*;
+
+    #[test]
+    fn preview_pages_never_prefetch_dns() {
+        let arguments = arguments(Path::new("profile"));
+        assert!(
+            arguments
+                .iter()
+                .any(|argument| argument == "--blink-settings=dnsPrefetchingEnabled=false")
+        );
+    }
 
     #[tokio::test]
     async fn process_pipe_end_closes_event_subscribers() {
