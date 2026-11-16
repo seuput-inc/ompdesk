@@ -32,7 +32,7 @@ describe("gui-bridge diagram instructions", () => {
 			"t",
 			{ renderMermaid: true, renderSvg: false },
 		);
-		expect(seen).toEqual([{ renderMermaid: true, renderSvg: false, autoGraph: false }]);
+		expect(seen).toEqual([{ renderMermaid: true, renderSvg: false, autoGraph: false, renderEmbeds: false }]);
 	});
 });
 
@@ -56,7 +56,7 @@ for (const [name, flags] of Object.entries({
 	none: { renderMermaid: false, renderSvg: false },
 })) {
 	const instruction = visualsInstruction(render, section, flags);
-	out[name] = { instruction: instruction ?? null, inStock: instruction ? render(full, { ...flags, autoGraph: false }).includes(instruction) : null };
+	out[name] = { instruction: instruction ?? null, inStock: instruction ? render(full, { ...flags, autoGraph: false, renderEmbeds: false }).includes(instruction) : null };
 }
 console.log(JSON.stringify(out));
 `,
@@ -76,6 +76,7 @@ console.log(JSON.stringify(out));
 				expect(result[name]?.inStock).toBe(true);
 			}
 			expect(result.none.instruction).toBeNull();
+			for (const name of ["both", "mermaid", "svg"]) expect(result[name]?.instruction).not.toContain("<iframe");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

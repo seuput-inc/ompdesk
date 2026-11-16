@@ -5,12 +5,13 @@
  * installed omp both exercise it (src/main/bridge-visuals.test.ts).
  */
 
-const SECTION_OPEN = "{{#ifAny renderMermaid renderSvg autoGraph}}";
+/** The block's opening tag: stock lists the settings it reads (`renderEmbeds` joined them in omp 18.21), so only its first two are matched. */
+const SECTION_OPEN = /\{\{#ifAny renderMermaid renderSvg[^}]*\}\}/;
 const SECTION_CLOSE = "{{/ifAny}}";
 
 /** Stock's Visuals section (its `{{#ifAny …}}` block) cut out of the system prompt template. */
 export function visualsTemplate(systemPromptTemplate: string): string {
-	const start = systemPromptTemplate.indexOf(SECTION_OPEN);
+	const start = systemPromptTemplate.search(SECTION_OPEN);
 	const end = start === -1 ? -1 : systemPromptTemplate.indexOf(SECTION_CLOSE, start);
 	if (end === -1) throw new Error("system/system-prompt.md has no Visuals section");
 	return systemPromptTemplate.slice(start, end + SECTION_CLOSE.length);
@@ -28,10 +29,11 @@ export type PromptRender = (template: string, context: Record<string, unknown>) 
 /**
  * The section for `flags`; undefined when it renders empty. `autoGraph` stays
  * off: OMPdesk draws no chart under numeric tables, and the section would tell
- * the model the UI does.
+ * the model the UI does. `renderEmbeds` (omp 18.21's `<img>`/`<iframe>` invitation) stays off too: the reply renderer
+ * strips `<iframe>` (src/renderer/lib/markdown.tsx), so the section would invite a page the person never sees.
  */
 export function visualsInstruction(render: PromptRender, template: string, flags: VisualsFlags): string | undefined {
-	const text = render(template, { ...flags, autoGraph: false }).trim();
+	const text = render(template, { ...flags, autoGraph: false, renderEmbeds: false }).trim();
 	return text || undefined;
 }
 
