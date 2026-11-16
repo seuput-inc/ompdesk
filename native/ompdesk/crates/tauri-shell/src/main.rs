@@ -526,6 +526,17 @@ fn webview_args() -> Result<Option<String>, String> {
     extra.extend(automation::browser_args()?);
     Ok((!extra.is_empty()).then(|| format!("{WRY_DEFAULT_ARGS} {}", extra.join(" "))))
 }
+/// Electron's `showInactive`: the window appears without taking the keyboard focus or the foreground. Windows keeps a
+/// window from being activated by its `WS_EX_NOACTIVATE` style, which tao applies from its own focusable flag (a style
+/// set behind tao's back would be dropped at its next flag change): held off for the show, then put back as it was.
+#[cfg(windows)]
+fn show_inactive(window: &WebviewWindow) -> tauri::Result<()> {
+    let was = shell_core::sys::winops::is_focusable(window.hwnd()?.0 as isize);
+    window.set_focusable(false)?;
+    let shown = window.show();
+    window.set_focusable(was)?;
+    shown
+}
 fn win_op(params: &Value) -> Result<Value, WireError> {
     let win = number(params, "winId")?;
     let wc = runtime()
@@ -540,6 +551,13 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
     let a = &params["args"];
     match op {
         "show" => window.show(),
+        "setFocusable" => window.set_focusable(
+            a["focusable"]
+                .as_bool()
+                .ok_or_else(|| WireError::new("invalid", "missing focusable"))?,
+        ),
+        #[cfg(windows)]
+        "showInactive" => show_inactive(&window),
         "hide" => window.hide(),
         "focus" => window.set_focus(),
         "minimize" => window.minimize(),
@@ -609,9 +627,9 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
         win_state(&window, win)?;
         if matches!(
             op,
-            "show" | "hide" | "minimize" | "maximize" | "unmaximize" | "restore"
+            "show" | "showInactive" | "hide" | "minimize" | "maximize" | "unmaximize" | "restore"
         ) {
-            win_event(win, op);
+            win_event(win, if op == "showInactive" { "show" } else { op });
         }
     }
     Ok(json!({}))
