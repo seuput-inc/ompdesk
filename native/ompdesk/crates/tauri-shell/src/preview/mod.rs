@@ -66,6 +66,9 @@ struct Entry {
     closing: tokio::sync::Mutex<()>,
     surface_change: tokio::sync::Mutex<()>,
     document: Mutex<Document>,
+    /// Taken before `document` and before the registry, never after either: a navigation's submission and its
+    /// load number move together, and a failure's admission holds it through the UI's publication.
+    loads: Mutex<navigation::Loads>,
     publisher: Mutex<Option<native::FramePublisher>>,
     submitting: Mutex<()>,
     surface_acks: Mutex<HashSet<(u64, i64)>>,
@@ -316,6 +319,12 @@ impl Service {
     }
     pub fn submit(&self, call: host::Call) {
         let id = call.id();
+        if call.method == "wc.op"
+            && let (Some(wc), Some(op @ ("loadURL" | "stop"))) =
+                (call.params["wcId"].as_u64(), call.params["op"].as_str())
+        {
+            log_navigation("preview.navigation.queued", wc, op, None);
+        }
         let (cancel, cancelled) = oneshot::channel();
         host::on_cancel(id, move || {
             let _ = cancel.send(());
@@ -374,6 +383,14 @@ fn original(identity: Identity) -> Result<(), WireError> {
         Ok(())
     } else {
         Err(WireError::new("gone", "original Preview document ended"))
+    }
+}
+fn owns(pages: &Pages, wc: u64, entry: &Arc<Entry>) -> Result<(), WireError> {
+    pages.current(wc)?;
+    if Arc::ptr_eq(entry, &pages.entry(wc)?) {
+        Ok(())
+    } else {
+        Err(WireError::new("gone", "original Preview owner ended"))
     }
 }
 async fn serve(
@@ -641,6 +658,12 @@ enum EvaluationKind {
     JavaScript(ScriptDocument),
     Cdp(Arc<Entry>),
     Input(Arc<Entry>, Option<&'static str>),
+    Navigate(Arc<Entry>),
+    Load {
+        entry: Arc<Entry>,
+        load: u64,
+        url: String,
+    },
 }
 struct Evaluation {
     reply: shell_preview::CommandReply,
@@ -650,7 +673,7 @@ struct Evaluation {
 impl Evaluation {
     async fn receive(self, pages: &Pages) -> Result<Answer, WireError> {
         let mut answer = self.reply.receive().await.map_err(wire)?;
-        if let EvaluationKind::Cdp(entry) = &self.kind {
+        if let EvaluationKind::Cdp(entry) | EvaluationKind::Navigate(entry) = &self.kind {
             unmap_urls(&entry.partition, &mut answer)
                 .await
                 .map_err(crate::failed)?;
@@ -669,14 +692,38 @@ impl Evaluation {
             }
             EvaluationKind::Input(entry, release) => {
                 let wc = self.identity.wc;
-                pages.current(wc)?;
-                if !Arc::ptr_eq(&entry, &pages.entry(wc)?) {
-                    return Err(WireError::new("gone", "original Preview owner ended"));
-                }
+                owns(pages, wc, &entry)?;
                 if let Some(kind) = release {
                     wc_event(wc, "input-event", json!([{"type":kind}]));
                 }
                 json!({"result":answer})
+            }
+            EvaluationKind::Navigate(entry) => {
+                owns(pages, self.identity.wc, &entry)?;
+                json!({"result":answer})
+            }
+            EvaluationKind::Load { entry, load, url } => {
+                let wc = self.identity.wc;
+                owns(pages, wc, &entry)?;
+                let Some(error) = answer["errorText"].as_str() else {
+                    log_navigation("preview.navigation.reply", wc, "committed", None);
+                    return Ok(Answer::Json(Value::Null));
+                };
+                let code = shell_core::netmap::error_code(error);
+                log_navigation("preview.navigation.reply", wc, "failed", code);
+                if let Some(code) = code {
+                    let original = runtime().gateway.original_url(&entry.partition, &url).await;
+                    let shown = match original {
+                        Ok(Some(shown)) => Some(shown),
+                        Ok(None) => Some(url),
+                        Err(_) => None,
+                    };
+                    if let Some(shown) = shown {
+                        owns(pages, wc, &entry)?;
+                        load_failure(&entry, wc, code, error, &shown, "reply", Some(load));
+                    }
+                }
+                return Err(WireError::new("navigation", error));
             }
         };
         Ok(Answer::Json(result))
@@ -706,12 +753,6 @@ async fn answer_call(pages: &Pages, call: host::Call, result: Result<Answer, Wir
                 } else {
                     crate::close_record(wc);
                 }
-            }
-            if call.method == "wc.op"
-                && call.params["op"].as_str() == Some("loadURL")
-                && let Some(wc) = call.params["wcId"].as_u64()
-            {
-                reject_load(pages, wc, &call.params["args"], &error).await;
             }
             call.err(&error.code, error.message);
         }
@@ -901,6 +942,32 @@ async fn execute(
                     command_params["url"] = json!(mapped);
                 }
             }
+            if method == "Page.navigate" {
+                // Chromium answers a navigation only when it commits or fails. The submission keeps its place in the
+                // FIFO and begins the page's next load; the wait does not, so Stop and later commands still run.
+                let (root, debugger) = {
+                    let document = entry.document.lock().expect("Preview document");
+                    (document.frame.clone(), document.debugger.clone())
+                };
+                let replaces = (session == entry.page.session_id
+                    || debugger.as_deref() == Some(session.as_str()))
+                    && navigation::replaces_main_load(&command_params, root.as_deref());
+                let reply = {
+                    let mut loads = entry.loads.lock().expect("Preview loads");
+                    let reply = browser
+                        .submit_command_settled(method, command_params, Some(&session))
+                        .map_err(wire)?;
+                    if replaces {
+                        loads.begin();
+                    }
+                    reply
+                };
+                return Ok(Execution::Awaiting(Evaluation {
+                    reply,
+                    identity,
+                    kind: EvaluationKind::Navigate(entry),
+                }));
+            }
             let reply = browser
                 .submit_command(method, command_params, Some(&session))
                 .map_err(wire)?;
@@ -975,6 +1042,9 @@ async fn execute(
                     .last_failure = None;
                 log_navigation("preview.navigation.start", wc, "loadURL", None);
             }
+            if op == "stop" {
+                log_navigation("preview.navigation.stop", wc, "stop", None);
+            }
             match op {
                 "close" => {
                     close(pages, wc).await?;
@@ -997,7 +1067,22 @@ async fn execute(
                     {
                         mapped["url"] = json!(url);
                     }
-                    commands::operation(&entry.page, op, &mapped).await?
+                    // Chromium answers a navigation only when it commits or fails. The submission keeps its place in
+                    // the FIFO; the wait does not, so Stop and the next load still run while this one is pending.
+                    let (reply, load) = {
+                        let mut loads = entry.loads.lock().expect("Preview loads");
+                        let reply = commands::submit_load(&entry.page, &mapped)?;
+                        (reply, loads.begin())
+                    };
+                    return Ok(Execution::Awaiting(Evaluation {
+                        reply,
+                        identity,
+                        kind: EvaluationKind::Load {
+                            entry,
+                            load,
+                            url: url.to_owned(),
+                        },
+                    }));
                 }
                 "watchEvents" => {
                     let names: Vec<String> =
@@ -1168,6 +1253,7 @@ async fn create(
             context,
             closing: tokio::sync::Mutex::new(()),
             surface_change: tokio::sync::Mutex::new(()),
+            loads: Mutex::new(navigation::Loads::default()),
             document: Mutex::new(Document {
                 frame: None,
                 loader: None,
@@ -1274,33 +1360,48 @@ fn log_navigation(event: &str, wc: u64, cause: &str, code: Option<i32>) {
         }),
     );
 }
-fn load_failure(entry: &Entry, wc: u64, code: i32, message: &str, url: &str, cause: &str) {
-    let generation = runtime()
+fn load_failure(
+    entry: &Entry,
+    wc: u64,
+    code: i32,
+    message: &str,
+    url: &str,
+    cause: &str,
+    load: Option<u64>,
+) {
+    // Held from the admission through the UI's publication: no newer load begins between them, so an older load's
+    // failure cannot reach the page after the load that replaced it.
+    let loads = entry.loads.lock().expect("Preview loads");
+    let page = runtime()
         .registry
         .lock()
         .expect("registry")
         .page(wc)
         .map(|page| (page.identity.generation, page.loading));
-    let Some((generation, loading)) = generation else {
+    let Some((generation, loading)) = page else {
         return;
     };
-    let duplicate = {
+    let admission = {
         let mut document = entry.document.lock().expect("Preview document");
-        // The host clears a reported error when the page starts loading again. Only a page that is still stopped
-        // has the earlier report in force; one that started loading since needs the failure again.
-        let duplicate = !loading
-            && document
-                .last_failure
-                .as_ref()
-                .is_some_and(|(epoch, error)| *epoch == generation && error == message);
-        if !duplicate {
-            document.last_failure = Some((generation, message.to_owned()));
-        }
-        duplicate
+        navigation::admit(
+            &loads,
+            &mut document.last_failure,
+            generation,
+            loading,
+            message,
+            load,
+        )
     };
-    if duplicate {
-        log_navigation("preview.navigation.deduplicated", wc, cause, Some(code));
-        return;
+    match admission {
+        navigation::Admission::Report => {}
+        navigation::Admission::Duplicate => {
+            log_navigation("preview.navigation.deduplicated", wc, cause, Some(code));
+            return;
+        }
+        navigation::Admission::Superseded => {
+            log_navigation("preview.navigation.superseded", wc, cause, Some(code));
+            return;
+        }
     }
     log_navigation("preview.navigation.failure", wc, cause, Some(code));
     if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
@@ -1309,24 +1410,6 @@ fn load_failure(entry: &Entry, wc: u64, code: i32, message: &str, url: &str, cau
     wc_state(wc);
     wc_event(wc, "did-fail-load", json!([code, message, url, true]));
     wc_event(wc, "did-stop-loading", json!([]));
-}
-async fn reject_load(pages: &Pages, wc: u64, args: &Value, error: &WireError) {
-    let Ok(entry) = pages.entry(wc) else {
-        return;
-    };
-    let Some(raw) = args["url"].as_str() else {
-        return;
-    };
-    let url = match runtime().gateway.original_url(&entry.partition, raw).await {
-        Ok(Some(url)) => url,
-        Ok(None) => raw.to_owned(),
-        Err(_) => return,
-    };
-    if error.code == "navigation"
-        && let Some(code) = shell_core::netmap::error_code(&error.message)
-    {
-        load_failure(&entry, wc, code, &error.message, &url, "reply");
-    }
 }
 async fn close(pages: &Pages, wc: u64) -> Result<(), WireError> {
     let entry = pages.entry(wc)?;
@@ -2027,6 +2110,7 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                     &failure.error,
                     &failure.url,
                     "event",
+                    None,
                 );
             } else {
                 crate::log::log(
