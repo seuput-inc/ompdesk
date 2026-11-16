@@ -367,24 +367,28 @@ if (external.size > 0) {
 	process.exit(1);
 }
 
-// out/preload/shell.js is a classic script the shell injects into every page before its own scripts: no module syntax
-// (no import, no require, no exports) and wrapped, so none of its names joins the page's global scope.
-const PRELOAD = fileURLToPath(new URL("../out/preload/shell.js", import.meta.url));
-const preload = await fs.readFile(PRELOAD, "utf8");
-const preloadImports = new Bun.Transpiler({ loader: "js" }).scanImports(preload).map(entry => entry.path);
-const preloadProblems = [
-	...(preloadImports.length > 0 ? [`imports ${preloadImports.join(", ")}`] : []),
-	...(/\brequire\s*\(/.test(preload) ? ["calls require()"] : []),
-	...(/\b(?:module\.exports|exports\.[A-Za-z_$]|Object\.defineProperty\(exports)/.test(preload)
-		? ["exports something"]
-		: []),
-	...(/^\(\(\)\s*=>\s*\{/.test(preload.trimStart()) && preload.trimEnd().endsWith("})();")
-		? []
-		: ["is not wrapped in an IIFE"]),
-];
-if (preloadProblems.length > 0) {
-	console.error(`out/preload/shell.js ${preloadProblems.join(", ")}: it must be one self-contained classic script.`);
-	process.exit(1);
+// out/preload/shell.js (CEF) and tauri.js (Tauri) are classic scripts the host injects into every page before its own
+// scripts: no module syntax (no import, no require, no exports) and wrapped, so none of their names joins the page's
+// global scope, and no shared chunk next to them.
+for (const name of ["shell", "tauri"]) {
+	const preload = await fs.readFile(fileURLToPath(new URL(`../out/preload/${name}.js`, import.meta.url)), "utf8");
+	const preloadImports = new Bun.Transpiler({ loader: "js" }).scanImports(preload).map(entry => entry.path);
+	const preloadProblems = [
+		...(preloadImports.length > 0 ? [`imports ${preloadImports.join(", ")}`] : []),
+		...(/\brequire\s*\(/.test(preload) ? ["calls require()"] : []),
+		...(/\b(?:module\.exports|exports\.[A-Za-z_$]|Object\.defineProperty\(exports)/.test(preload)
+			? ["exports something"]
+			: []),
+		...(/^\(\(\)\s*=>\s*\{/.test(preload.trimStart()) && preload.trimEnd().endsWith("})();")
+			? []
+			: ["is not wrapped in an IIFE"]),
+	];
+	if (preloadProblems.length > 0) {
+		console.error(
+			`out/preload/${name}.js ${preloadProblems.join(", ")}: it must be one self-contained classic script.`,
+		);
+		process.exit(1);
+	}
 }
 
 // The bundled ws, built the way out/main is (electron-vite under Node, as scripts/build-cache.ts runs it),

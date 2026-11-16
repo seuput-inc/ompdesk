@@ -30,6 +30,42 @@ function bundleElectronShim(): Plugin {
 	};
 }
 
+/** The classic-script wrapper every preload gets: an IIFE, so its top-level names never join the page's scope. */
+const PRELOAD_OUTPUT = { format: "cjs", banner: "(() => {", footer: "})();" } as const;
+
+/**
+ * Builds `src/preload/<name>.ts` into `out/preload/<name>.js` as a second, single-entry bundle once the main preload
+ * build is written. Rollup splits modules two entries share (`createOmpApi`, `describePreloadFailure`) into a chunk
+ * either entry would `require()`, and a page script cannot; one entry per bundle inlines everything.
+ */
+function separatePreload(name: string): Plugin {
+	let outDir = "";
+	return {
+		name: `ompdesk:separate-preload-${name}`,
+		apply: "build",
+		configResolved(config) {
+			outDir = config.build.outDir;
+		},
+		async closeBundle() {
+			const { build } = await import("vite");
+			await build({
+				configFile: false,
+				logLevel: "warn",
+				esbuild: KEEP_NAMES,
+				build: {
+					outDir,
+					emptyOutDir: false,
+					minify: "esbuild",
+					rollupOptions: {
+						input: { [name]: resolve(__dirname, `src/preload/${name}.ts`) },
+						output: { ...PRELOAD_OUTPUT, entryFileNames: "[name].js", inlineDynamicImports: true },
+					},
+				},
+			});
+		},
+	};
+}
+
 /**
  * Main-process packages bundled into out/main/index.js so packaged apps need no node_modules.
  * Anything the main entry imports that is NOT listed here stays a bare `import` in the
@@ -321,20 +357,19 @@ export default defineConfig({
 			},
 		},
 	},
-	// `window.omp` for the shell's pages: one classic script the shell injects before any page script
-	// (src/preload/shell.ts), named `shell.js`. electron-vite accepts only `cjs` and `es` for a preload; a `cjs`
-	// bundle with no imports and no exports is a plain script, and the banner and footer make it an IIFE so its
-	// top-level names never join the page's global scope (scripts/check-main-bundle.ts checks all of it).
+	// `window.omp` for the shell's pages: one classic script the shell injects before any page script, `shell.js`
+	// (src/preload/shell.ts) for the CEF shell and `tauri.js` (src/preload/tauri.ts) for the Tauri host. electron-vite
+	// accepts only `cjs` and `es` for a preload; a `cjs` bundle with no imports and no exports is a plain script, and
+	// the banner and footer make it an IIFE so its top-level names never join the page's global scope
+	// (scripts/check-main-bundle.ts checks both). One entry per bundle (separatePreload) keeps each self-contained.
 	preload: {
 		esbuild: KEEP_NAMES,
+		plugins: [separatePreload("tauri")],
 		build: {
 			minify: "esbuild",
 			rollupOptions: {
-				input: {
-					shell: resolve(__dirname, "src/preload/shell.ts"),
-					tauri: resolve(__dirname, "src/preload/tauri.ts"),
-				},
-				output: { format: "cjs", entryFileNames: "[name].js", banner: "(() => {", footer: "})();" },
+				input: { shell: resolve(__dirname, "src/preload/shell.ts") },
+				output: { ...PRELOAD_OUTPUT, entryFileNames: "[name].js", inlineDynamicImports: true },
 			},
 		},
 	},
