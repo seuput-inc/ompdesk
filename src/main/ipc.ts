@@ -216,7 +216,6 @@ import { appVersion } from "./updater";
 import { type ClientWindow, isWebWindow } from "./web/client-window";
 import { type FileEditReports, parseFileEditReport } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
-import { writeDialogPreload } from "./web/preview-dialog";
 import { attachHere, type UploadStore } from "./web/uploads";
 import type { SpawnWindow, WindowManager } from "./window";
 import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
@@ -493,7 +492,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	registerTerminalIpc(ipc, deps.sidecarPool, deps.remoteDevices);
 	registerSshToolsIpc(ipc);
 	const visuals = new VisualStore(path.join(app.getPath("userData"), "visuals"));
-	let dialogPreload: string | null = null;
 	const visualPages = registerPreviewHost(
 		ipc,
 		(senderId, tabId) => {
@@ -510,7 +508,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				return tabId ? !target || Boolean(target.device) : Boolean(target?.device);
 			},
 			hostScale: () => screen.getPrimaryDisplay().scaleFactor,
-			preloadPath: () => (dialogPreload ??= writeDialogPreload(app.getPath("userData"))),
 		},
 		// Agent browsing on a paired host's tab: its relay is on the host's loopback, so the frames cross the link.
 		(win, tabId) => {

@@ -293,19 +293,28 @@ export class PageStream {
 		// `blocked` and `idle`: the viewer's ack or the page's next paint arms again.
 	}
 
-	/** The page opened a dialog and is blocked until `answer` (never twice, never after `dispose`). */
-	openDialog(request: DialogRequest): Promise<DialogAnswer> {
+	/**
+	 * The page opened a dialog and is blocked until `answer` (never twice, never after `dispose`). `signal` aborting
+	 * means the dialog ended without the viewer: it is dismissed and, unless a poll already carried it, never shown.
+	 */
+	openDialog(request: DialogRequest, signal?: AbortSignal): Promise<DialogAnswer> {
 		const dismissed: DialogAnswer = { accept: false, text: null };
 		const now = this.#now();
 		while (this.#dialogTimes.length > 0 && now - (this.#dialogTimes[0] ?? now) > DIALOG_FLOOD.windowMs)
 			this.#dialogTimes.shift();
-		if (this.#disposed || this.#dialogTimes.length >= DIALOG_FLOOD.count) return Promise.resolve(dismissed);
+		if (this.#disposed || signal?.aborted || this.#dialogTimes.length >= DIALOG_FLOOD.count)
+			return Promise.resolve(dismissed);
 		this.#dialogTimes.push(now);
 		const id = ++this.#dialogSeq;
 		const { promise, resolve } = Promise.withResolvers<DialogAnswer>();
 		const timer = setTimeout(() => this.answerDialog(id, dismissed), DIALOG_TIMEOUT_MS);
 		this.#pending.set(id, { resolve, timer });
 		this.#dialogs.push({ id, request });
+		if (signal) {
+			const withdraw = () => this.answerDialog(id, dismissed);
+			signal.addEventListener("abort", withdraw, { once: true });
+			void promise.then(() => signal.removeEventListener("abort", withdraw));
+		}
 		this.#arm();
 		return promise;
 	}
@@ -316,6 +325,9 @@ export class PageStream {
 		if (!pending) return;
 		this.#pending.delete(id);
 		clearTimeout(pending.timer);
+		// An answered dialog no poll carried yet is not shown to the viewer any more.
+		const queued = this.#dialogs.findIndex(dialog => dialog.id === id);
+		if (queued >= 0) this.#dialogs.splice(queued, 1);
 		pending.resolve(answer);
 		// The page continues and repaints; the viewer's frame must not wait for the interval.
 		this.#pacer.markUrgent();

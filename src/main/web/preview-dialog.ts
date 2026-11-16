@@ -1,22 +1,19 @@
 /**
- * JS dialogs of a viewer's offscreen page. A page without a window to show `alert`, `confirm` and `prompt` on stays
- * blocked in them for good, and CDP's `Page.javascriptDialogOpening` needs a debugger on the page, which would turn
- * the `choose` gate off (C143). So the viewers' two sessions carry one fixed script that does nothing but replace
- * those three functions in the page's main world, before any page script runs, with calls that ask main
- * synchronously (`__ompdeskSendSync`, which the shell gives a registered preload script and which the script takes
- * and removes, so the page never sees it) and so block the page exactly as a real dialog does, until the viewer
- * answers on its phone (`PageStream.openDialog`).
+ * JS dialogs of a viewer's offscreen page. The page's own `alert`, `confirm` and `prompt` open in the Preview
+ * browser, which reports each as CDP's `Page.javascriptDialogOpening` and keeps the page blocked until
+ * `Page.handleJavaScriptDialog`. The shell's Preview owner (`tauri-shell/src/preview/dialogs.rs`) turns that into
+ * one `ipc.sendSync` request on `DIALOG_CHANNEL`, which is answered here when the viewer answers on its phone
+ * (`PageStream.openDialog`), however much later, and answers the dialog with it. Nothing is injected into the page and
+ * no debugger is attached, so the `choose` gate (C143) stays as it is.
  *
- * It is the one exception to the preview's "no preload": nothing else is exposed to the page, only the three
- * replaced functions, which can say no more than the text of a dialog. `beforeunload` is not a dialog here: main
- * lets the page leave (`will-prevent-unload`). Main answers the channel only for a page it streams, and always answers.
+ * `beforeunload` is never sent: the shell lets the page go. Main answers the channel only for a page it streams;
+ * any other page, an invalid request, a request the shell withdraws (the dialog ended meanwhile) and a stream that
+ * ends all dismiss the dialog, so a page is never left blocked on a viewer that is not there.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { z } from "zod";
-import type { DialogRequest } from "./preview-stream";
+import type { DialogAnswer, DialogRequest } from "./preview-stream";
 
-/** The channel the preload asks on (Electron's own `ipcMain`, never the web registry: a page is no caller). */
+/** The channel the shell asks on (`ipcMain.on`, never the web registry: a page is no caller). */
 export const DIALOG_CHANNEL = "preview-web:dialog";
 
 const MESSAGE_MAX = 2000;
@@ -27,7 +24,7 @@ export const dialogRequestSchema: z.ZodType<DialogRequest> = z.object({
 	initial: z.string().max(MESSAGE_MAX).nullable(),
 });
 
-/** What `sendSync` returns to the replaced function: null for `alert` (a reply is always set), a boolean, a string or null. */
+/** What the shell hands the page's function: null for `alert`, a boolean for `confirm`, a string or null for `prompt`. */
 export function dialogReturnValue(
 	request: DialogRequest,
 	answer: { accept: boolean; text: string | null },
@@ -37,30 +34,33 @@ export function dialogReturnValue(
 	return answer.accept ? (answer.text ?? request.initial ?? "") : null;
 }
 
-export const DIALOG_PRELOAD_SOURCE = `(() => {
-	"use strict";
-	const send = globalThis.__ompdeskSendSync;
-	delete globalThis.__ompdeskSendSync;
-	if (typeof send !== "function") return;
-	const clip = value => String(value === undefined || value === null ? "" : value).slice(0, ${MESSAGE_MAX});
-	const ask = (kind, message, initial) =>
-		send(${JSON.stringify(DIALOG_CHANNEL)}, { kind, message: clip(message), initial: initial === null ? null : clip(initial) });
-	window.alert = message => {
-		ask("alert", message, null);
-	};
-	window.confirm = message => ask("confirm", message, null) === true;
-	window.prompt = (message, initial) => {
-		const answer = ask("prompt", message, initial === undefined ? "" : initial);
-		return typeof answer === "string" ? answer : null;
-	};
-})();
-`;
+/** The slice of the shim's `ipc.sendSync` event the channel uses. */
+export interface DialogChannelEvent {
+	sender: { id: number };
+	/** The first value set answers the shell; it may be set long after the handler returned. */
+	returnValue?: unknown;
+	/** Aborts when the shell stops waiting (the dialog ended or the page went). */
+	signal?: AbortSignal;
+}
 
-/** Write the preload under `<userData>/web-preview/` (a session loads it from a real file) and return its path. */
-export function writeDialogPreload(userData: string): string {
-	const directory = path.join(userData, "web-preview");
-	mkdirSync(directory, { recursive: true, mode: 0o700 });
-	const file = path.join(directory, "dialog-preload.js");
-	writeFileSync(file, DIALOG_PRELOAD_SOURCE, { mode: 0o600 });
-	return file;
+/** The slice of a `PageStream` the channel uses. */
+export interface DialogStream {
+	openDialog(request: DialogRequest, signal?: AbortSignal): Promise<DialogAnswer>;
+}
+
+/** The `ipcMain.on(DIALOG_CHANNEL)` listener over the streamed pages by their `webContents.id`. */
+export function dialogChannel(
+	streams: ReadonlyMap<number, DialogStream>,
+): (event: DialogChannelEvent, raw: unknown) => void {
+	return (event, raw) => {
+		const request = dialogRequestSchema.safeParse(raw);
+		const stream = streams.get(event.sender.id);
+		if (!request.success || !stream) {
+			event.returnValue = null;
+			return;
+		}
+		void stream.openDialog(request.data, event.signal).then(answer => {
+			event.returnValue = dialogReturnValue(request.data, answer);
+		});
+	};
 }

@@ -19,7 +19,6 @@ import type { VisualStore } from "../../src/main/preview/visuals";
 import { BlobStore } from "../../src/main/web/blobs";
 import type { WebDevice } from "../../src/main/web/devices-store";
 import { IpcRegistry } from "../../src/main/web/ipc-registry";
-import { writeDialogPreload } from "../../src/main/web/preview-dialog";
 import { WebWindows } from "../../src/main/web/web-client-window";
 import type { WsRouter } from "../../src/main/web/ws-router";
 import { TestRouterHost } from "../../src/main/web/ws-router-test-rig";
@@ -155,7 +154,6 @@ async function main() {
 	registerPreviewHost(ipc, () => false, visuals, {
 		isRemote: () => false,
 		hostScale: () => screen.getPrimaryDisplay().scaleFactor,
-		preloadPath: () => writeDialogPreload(userData as string),
 	});
 
 	const device: WebDevice = {
@@ -413,7 +411,10 @@ async function main() {
 		let opened: PreviewStreamPoll | null = null;
 		const waitedFrom = Date.now();
 		while (!opened?.dialogs.length) {
-			if (Date.now() - waitedFrom > 8000) throw new Error("No dialog arrived");
+			if (Date.now() - waitedFrom > 8000)
+				throw new Error(
+					`No dialog arrived (answered ${dialogs.length} of ${answers.length}, taps ${dialogTaps}, page log ${JSON.stringify(log.map(entry => `${entry.type}${entry.target ? `:${entry.target}` : ""}`))})`,
+				);
 			const lost = dialogs.length === 0 && !log.some(entry => entry.type === "click" && entry.target === "btn");
 			if (lost && Date.now() - tappedAt > 2500 && dialogTaps < 3) {
 				input({ t: "tap", x: 100 / 390, y: 58 / 700 });

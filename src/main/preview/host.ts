@@ -44,7 +44,7 @@ import { encodeImage, fitImage } from "../shell-host/image";
 import { applyAcceptLanguages, seedSpellchecker } from "../system-languages";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
 import type { IpcCaller, IpcRegistry } from "../web/ipc-registry";
-import { DIALOG_CHANNEL, dialogRequestSchema, dialogReturnValue } from "../web/preview-dialog";
+import { DIALOG_CHANNEL, dialogChannel } from "../web/preview-dialog";
 import { InputMapper, InputSequence, previewStreamBatchSchema } from "../web/preview-input";
 import { streamProfile } from "../web/preview-pacer";
 import { type OsrPage, PageStream, type PaintImage, POLL_MAX_WAIT_MS } from "../web/preview-stream";
@@ -271,8 +271,6 @@ export interface PreviewWebSupport {
 	isRemote(win: ClientWindow, tabId?: string): boolean;
 	/** Device pixels per DIP of the screen the offscreen windows paint on (a frame is the window's size times this). */
 	hostScale(): number;
-	/** The dialog shim's preload on disk (preview-dialog.ts), written once. */
-	preloadPath(): string;
 }
 
 /**
@@ -297,8 +295,8 @@ const DEFAULT_STREAM_GEOMETRY = {
  * `isRemote(senderId, tabId?)`: the window's active tab (or `tabId`) runs on a paired host.
  *
  * A paired phone's preview (`web`) is the same host with the same rules, its pages offscreen windows instead of
- * views, in sessions of their own (`preview-web-<n>`, `preview-visual-web-<n>`); `web` also gives those sessions
- * the one dialog-shim preload (preview-dialog.ts), the single exception to "no preload".
+ * views, in sessions of their own (`preview-web-<n>`, `preview-visual-web-<n>`); their pages' JS dialogs wait for the
+ * viewer (preview-dialog.ts).
  * Agent browsing on a paired host's tab runs over `tunnel` (the relay is on the host's loopback); without one it is refused.
  * Returns what the agent's `gui_visualize` reads and waits on.
  */
@@ -694,9 +692,6 @@ export function registerPreviewHost(
 		for (const partition of [web, visual]) {
 			partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
 			partition.setPermissionCheckHandler(() => false);
-			// A viewer's pages get the dialog shim and nothing else (preview-dialog.ts).
-			if (owner.viewer && viewers)
-				partition.registerPreloadScript({ type: "frame", filePath: viewers.preloadPath() });
 		}
 		// Pages see the user's languages, not the en-US the packaged locales leave Chromium (system-languages.ts).
 		const languages = app.getPreferredSystemLanguages();
@@ -1041,20 +1036,10 @@ export function registerPreviewHost(
 		return { name: `${pdfName(page.contents.getTitle())}.pdf`, base64: pdf.toString("base64") };
 	});
 	if (viewers) {
-		// A viewer's page asks `alert`, `confirm` and `prompt` through its session's preload (preview-dialog.ts): the
-		// page stays blocked until the viewer answers, a dismissal (or the page's end) answers it, and a sender that
-		// is no streamed page gets nothing to show.
-		ipcMain.on(DIALOG_CHANNEL, (event, raw: unknown) => {
-			const request = dialogRequestSchema.safeParse(raw);
-			const stream = dialogStreams.get(event.sender.id);
-			if (!request.success || !stream) {
-				event.returnValue = null;
-				return;
-			}
-			void stream.openDialog(request.data).then(answer => {
-				event.returnValue = dialogReturnValue(request.data, answer);
-			});
-		});
+		// A viewer's page opens `alert`, `confirm` and `prompt` in the Preview browser, which blocks the page; its
+		// shell owner asks here (preview-dialog.ts) and answers the dialog with the viewer's answer. A sender that
+		// is no streamed page gets a dismissal.
+		ipcMain.on(DIALOG_CHANNEL, dialogChannel(dialogStreams));
 	}
 
 	/** The first page showing `visualId` (a window's shown page first), or null. */
