@@ -104,6 +104,7 @@ describe("every macOS job of a dispatchable workflow", () => {
 			"shell-batch-checks.yml:move-mac",
 			"shell-batch-checks.yml:move-mac-release1",
 			"shell-batch-checks.yml:shell-mac",
+			"shell-batch-checks.yml:tauri-native",
 			"shell-batch-checks.yml:title-bar-mac",
 		]);
 	});
