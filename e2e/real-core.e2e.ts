@@ -499,6 +499,8 @@ test("system omp's browser sign-in: loopback callback, default browser, cancel t
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);
-		await fs.rm(profile, { recursive: true, force: true });
+		// As above: exitApp waited for every process the app started, and Windows can still refuse the project folder
+		// (the omp's working directory) for a few hundred ms after the last of them ended.
+		await fs.rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 	}
 });

@@ -186,6 +186,23 @@ test("streaming with 50k history preserves the reading anchor, supports five tas
 		// With a draft the one action button is Send: its right click offers the Stop that keeps the draft.
 		const send = page.locator('[data-slot="send"] button');
 		await expect(page.locator("[data-send-stop-hint]")).toHaveCount(1);
+		// A Send disabled with a draft in the field is one of: no tab route, a tab status that is not ready or starting, a
+		// send still waiting for its answer, or a delivery the composer holds as unknown (a banner). Say which one.
+		try {
+			await expect(send).toBeEnabled({ timeout: 15_000 });
+		} catch (cause) {
+			const state = await page.evaluate(async () => ({
+				tabs: (await window.omp.tabs.list()).map(
+					tab => `${tab.tabId.slice(0, 6)}:${tab.status}${tab.active ? "*" : ""}`,
+				),
+				sidecar: await window.omp.sidecar.getStatus(),
+				deliveryUnknownBanner: document.body.innerText.includes("delivery"),
+				connectingToast: document.body.innerText.includes("still connecting"),
+				draft: document.querySelector<HTMLTextAreaElement>("textarea")?.value ?? null,
+				sendLabel: document.querySelector('[data-slot="send"] button')?.getAttribute("aria-label") ?? null,
+			}));
+			throw new Error(`Send stayed disabled with a draft in the field: ${JSON.stringify(state)}`, { cause });
+		}
 		// What the page heard of the right click, for the failure message: no `contextmenu` event at all (the host's input
 		// path) reads differently from one the menu did not answer.
 		await page.evaluate(() => {
