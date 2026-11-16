@@ -10,6 +10,22 @@ pub(crate) fn for_webview(original: &str) -> Result<String, WireError> {
         .ok_or_else(|| WireError::new("invalid", "native media result has an unexpected origin"))?;
     Ok(format!("{WINDOWS}{token}"))
 }
+/// Points a page's `fs:media-stream` answer at the origin WebView2 serves the scheme from. `ipc.invoke` answers
+/// `{"value": <handler result>}`; a result other than `{ok: true, url}` passes unchanged.
+#[cfg(any(windows, test))]
+pub(crate) fn map_stream_answer(answer: &mut serde_json::Value) -> Result<(), WireError> {
+    let Some(result) = answer
+        .get_mut("value")
+        .filter(|result| result["ok"] == true)
+    else {
+        return Ok(());
+    };
+    let original = result["url"]
+        .as_str()
+        .ok_or_else(|| WireError::new("invalid", "native media result has no URL"))?;
+    result["url"] = serde_json::Value::String(for_webview(original)?);
+    Ok(())
+}
 pub(crate) fn original(mapped: &str) -> Result<String, WireError> {
     let token = mapped
         .strip_prefix(WINDOWS)
@@ -126,6 +142,25 @@ pub(crate) fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<t
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_stream_answer_in_its_invoke_envelope_gets_the_windows_origin() {
+        let mut answer = serde_json::json!({"value": {"ok": true, "url": "omp-media://stream/tok", "mime": "video/webm"}});
+        map_stream_answer(&mut answer).unwrap();
+        assert_eq!(
+            answer,
+            serde_json::json!({"value": {"ok": true, "url": "http://omp-media.localhost/stream/tok", "mime": "video/webm"}})
+        );
+        let mut refused =
+            serde_json::json!({"value": {"ok": false, "error": "missing", "code": "not_found"}});
+        let before = refused.clone();
+        map_stream_answer(&mut refused).unwrap();
+        assert_eq!(refused, before);
+        let mut without_url = serde_json::json!({"value": {"ok": true}});
+        assert_eq!(
+            map_stream_answer(&mut without_url).unwrap_err().code,
+            "invalid"
+        );
+    }
     #[test]
     fn windows_player_and_release_preserve_the_original_capability() {
         let source = "omp-media://stream/actual_registered_token?range=original#t=4";

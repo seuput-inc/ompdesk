@@ -1166,14 +1166,9 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
             #[cfg(windows)]
             let answer = {
                 let mut answer = answer;
-                if channel == "fs:media-stream" && answer["ok"] == true {
-                    let original = answer["url"].as_str().ok_or_else(
-                        || json!({"code":"invalid","message":"native media result has no URL"}),
-                    )?;
-                    answer["url"] = json!(
-                        preview::media::for_webview(original)
-                            .map_err(|error| json!({"code":error.code,"message":error.message}))?
-                    );
+                if channel == "fs:media-stream" {
+                    preview::media::map_stream_answer(&mut answer)
+                        .map_err(|error| json!({"code":error.code,"message":error.message}))?;
                 }
                 answer
             };
