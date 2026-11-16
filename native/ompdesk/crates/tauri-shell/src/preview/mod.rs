@@ -1729,6 +1729,10 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
             host::event("wc.cdp.message", message);
             continue;
         }
+        if let Some(title) = events::target_title(&event, &entry.page.target_id) {
+            update_title(route.wc, title);
+            continue;
+        }
         if event.method == "Target.targetCrashed" {
             if let Some(update) = events::decode(&event) {
                 update_page(&entry, route.wc, update);
@@ -1768,11 +1772,7 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
         if event.method == "Runtime.bindingCalled" {
             let notification = {
                 let document = entry.document.lock().expect("Preview document");
-                document.native_contexts.notification(
-                    &event,
-                    &entry.page.session_id,
-                    document.frame.as_deref(),
-                )
+                document.native_contexts.notification(&event)
             };
             match notification {
                 Some(contexts::Notification::Text) => {
@@ -1783,23 +1783,6 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                 Some(contexts::Notification::Layout) => {
                     if let Ok(key) = surface::key(route.wc) {
                         request_refresh(&entry, key, TEXT | AX);
-                    }
-                }
-                Some(contexts::Notification::Title(title)) => {
-                    let changed = {
-                        let mut registry = runtime().registry.lock().expect("registry");
-                        registry.current(identity)
-                            && registry.page_mut(route.wc).is_some_and(|page| {
-                                if page.title == title {
-                                    return false;
-                                }
-                                page.title.clone_from(&title);
-                                true
-                            })
-                    };
-                    if changed {
-                        wc_state(route.wc);
-                        wc_event(route.wc, "page-title-updated", json!([title, true]));
                     }
                 }
                 _ => {}
@@ -1968,6 +1951,24 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
         ) {
             refresh_state(&entry, route.wc).await;
         }
+    }
+}
+fn update_title(wc: u64, title: &str) {
+    let changed = runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .page_mut(wc)
+        .is_some_and(|page| {
+            if page.title == title {
+                return false;
+            }
+            page.title = title.to_owned();
+            true
+        });
+    if changed {
+        wc_state(wc);
+        wc_event(wc, "page-title-updated", json!([title, true]));
     }
 }
 fn update_page(entry: &Entry, wc: u64, update: events::Update) {
@@ -2185,32 +2186,6 @@ async fn refresh_state(entry: &Entry, wc: u64) {
                 "wc.state",
                 json!({"wcId":wc,"canGoBack":index>0,"canGoForward":index+1<entries.len() as u64}),
             );
-        }
-    }
-    let context = entry
-        .document
-        .lock()
-        .expect("Preview document")
-        .main_world
-        .id();
-    if let Some(context) = context
-        && let Ok(title) = entry
-            .page
-            .command(
-                "Runtime.evaluate",
-                json!({"expression":"document.title","contextId":context,"returnByValue":true}),
-            )
-            .await
-    {
-        if original(identity).is_err() {
-            return;
-        }
-        if let Some(title) = title.pointer("/result/value").and_then(Value::as_str) {
-            if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
-                page.title = title.to_owned();
-            }
-            wc_state(wc);
-            wc_event(wc, "page-title-updated", json!([title, true]));
         }
     }
 }
