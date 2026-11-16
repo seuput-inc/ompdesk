@@ -591,7 +591,7 @@ mod tests {
         dialogs.closed(3, "another-session");
         assert_eq!(
             fake.cancelled(),
-            vec![],
+            Vec::<u64>::new(),
             "a session that did not report it cannot close it"
         );
         dialogs.closed(3, "page");
