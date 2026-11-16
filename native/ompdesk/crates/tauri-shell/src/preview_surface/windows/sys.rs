@@ -15,9 +15,7 @@ use super::super::model::{
 };
 use super::super::shared::Shared;
 use shell_core::hotkey::Mods;
-// Keep this UIA COM ABI separate from the app's WebView2 windows binding.
-use windows_surface as windows;
-use windows::Win32::Foundation::{BOOL, HWND as WinHwnd, LPARAM as WinLparam, WPARAM as WinWparam};
+use windows::Win32::Foundation::{HWND as WinHwnd, LPARAM as WinLparam, WPARAM as WinWparam};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory, IWICPalette,
     WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnLoad,
@@ -25,9 +23,9 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
-use windows::Win32::System::Variant::{VT_I4, VT_R8, VT_UNKNOWN};
+use windows::Win32::System::Variant::{VARIANT, VT_I4, VT_R8, VT_UNKNOWN};
 use windows::Win32::UI::Accessibility::*;
-use windows::core::{BSTR, HRESULT, IUnknown, Interface, PCWSTR, VARIANT, implement};
+use windows::core::{BOOL, BSTR, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR, implement};
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -56,16 +54,16 @@ use windows_sys::Win32::UI::Input::Pointer::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-    GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, PT_TOUCH, RegisterClassW,
-    SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY, WM_CUT, WM_GETOBJECT,
-    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
-    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_PASTE, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE,
-    WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_UNDO, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS,
+    GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, PT_TOUCH,
+    RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY,
+    WM_CUT, WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_PASTE, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN,
+    WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_UNDO, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
 };
 
 const CLASS: &[u16] = &[
@@ -549,7 +547,8 @@ fn ime_text(
     imc: windows_sys::Win32::UI::Input::Ime::HIMC,
     kind: u32,
 ) -> Result<Vec<u16>, SurfaceError> {
-    // SAFETY: imc is acquired for the duration of this callback; a null buffer requests the byte count.    let bytes = unsafe { ImmGetCompositionStringW(imc, kind, null_mut(), 0) };
+    // SAFETY: imc is acquired for the duration of this callback; a null buffer requests the byte count.
+    let bytes = unsafe { ImmGetCompositionStringW(imc, kind, null_mut(), 0) };
     if bytes < 0 || bytes % 2 != 0 {
         return Err(native_error("read Preview IME text length"));
     }
@@ -722,6 +721,10 @@ fn cancel_composition(context: &Context, hwnd: HWND) -> Result<(), SurfaceError>
     context.shared.input(Input::CancelIme)
 }
 
+fn client_point_dip(point: POINT, scale: f64) -> (f64, f64) {
+    (f64::from(point.x) / scale, f64::from(point.y) / scale)
+}
+
 fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
     let entry_key = context.shared.key();
     if message == WM_KILLFOCUS {
@@ -781,31 +784,46 @@ fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam:
     }
     let scale = context.shared.bounds().scale;
     if message == WM_MOUSELEAVE {
-        if let Some((x, y)) = context.mouse_position.take() {
-            // SAFETY: GetKeyState reads this UI thread's actual mouse button state.
-            let buttons = unsafe {
-                u32::from(GetKeyState(i32::from(VK_LBUTTON)) < 0)
-                    | (u32::from(GetKeyState(i32::from(VK_RBUTTON)) < 0) << 1)
-                    | (u32::from(GetKeyState(i32::from(VK_MBUTTON)) < 0) << 2)
-                    | (u32::from(GetKeyState(i32::from(VK_XBUTTON1)) < 0) << 3)
-                    | (u32::from(GetKeyState(i32::from(VK_XBUTTON2)) < 0) << 4)
-            };
-            let event = Input::Mouse {
-                kind: MouseKind::Leave,
-                x,
-                y,
-                button: MouseButton::None,
-                buttons,
-                click_count: 0,
-                modifiers: modifiers(),
-            };
-            if let Err(error) = context
+        context.mouse_position.set(None);
+        let mut point = POINT { x: 0, y: 0 };
+        // SAFETY: point is writable storage and hwnd is the live child handling this message.
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            context
                 .shared
-                .check_key(entry_key)
-                .and_then(|()| context.shared.input(event))
-            {
-                context.shared.report_error(error);
-            }
+                .report_error(native_error("read Preview leave cursor position"));
+            return true;
+        }
+        // SAFETY: point holds actual screen coordinates and hwnd is this same live child.
+        if unsafe { ScreenToClient(hwnd, &mut point) } == 0 {
+            context
+                .shared
+                .report_error(native_error("convert Preview leave coordinates"));
+            return true;
+        }
+        let (x, y) = client_point_dip(point, scale);
+        // SAFETY: GetKeyState reads this UI thread's actual mouse button state.
+        let buttons = unsafe {
+            u32::from(GetKeyState(i32::from(VK_LBUTTON)) < 0)
+                | (u32::from(GetKeyState(i32::from(VK_RBUTTON)) < 0) << 1)
+                | (u32::from(GetKeyState(i32::from(VK_MBUTTON)) < 0) << 2)
+                | (u32::from(GetKeyState(i32::from(VK_XBUTTON1)) < 0) << 3)
+                | (u32::from(GetKeyState(i32::from(VK_XBUTTON2)) < 0) << 4)
+        };
+        let event = Input::Mouse {
+            kind: MouseKind::Move,
+            x,
+            y,
+            button: MouseButton::None,
+            buttons,
+            click_count: 0,
+            modifiers: modifiers(),
+        };
+        if let Err(error) = context
+            .shared
+            .check_key(entry_key)
+            .and_then(|()| context.shared.input(event))
+        {
+            context.shared.report_error(error);
         }
         return true;
     }
@@ -822,8 +840,7 @@ fn dispatch(context: &Context, hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             return true;
         }
     }
-    let x = f64::from(point.x) / scale;
-    let y = f64::from(point.y) / scale;
+    let (x, y) = client_point_dip(point, scale);
     if message == WM_MOUSEMOVE {
         let entering = context.mouse_position.replace(Some((x, y))).is_none();
         if entering {
@@ -1057,7 +1074,7 @@ unsafe extern "system" fn window_proc(
                                 // SAFETY: UIA receives this live child HWND and a COM provider for its actual root.
                                 return unsafe {
                                     UiaReturnRawElementProvider(
-                                        WinHwnd(hwnd as isize),
+                                        WinHwnd(hwnd),
                                         WinWparam(wparam),
                                         WinLparam(lparam),
                                         &provider,
@@ -1189,7 +1206,7 @@ unsafe fn write_value<T>(output: *mut T, value: windows::core::Result<T>) -> HRE
     }
 }
 
-impl RawSimple_Impl for Provider {
+impl RawSimple_Impl for Provider_Impl {
     unsafe fn ProviderOptions(&self, result: *mut ProviderOptions) -> HRESULT {
         // SAFETY: the COM caller provides the output pointer.
         unsafe {
@@ -1234,7 +1251,7 @@ impl RawSimple_Impl for Provider {
     }
 }
 
-impl RawFragment_Impl for Provider {
+impl RawFragment_Impl for Provider_Impl {
     unsafe fn Navigate(&self, direction: NavigateDirection, result: *mut *mut c_void) -> HRESULT {
         // SAFETY: the COM caller provides the output pointer.
         unsafe {
@@ -1282,7 +1299,7 @@ impl RawFragment_Impl for Provider {
     }
 }
 
-impl RawRoot_Impl for Provider {
+impl RawRoot_Impl for Provider_Impl {
     unsafe fn ElementProviderFromPoint(&self, x: f64, y: f64, result: *mut *mut c_void) -> HRESULT {
         // SAFETY: the COM caller provides the output pointer.
         unsafe {
@@ -1440,7 +1457,7 @@ impl Provider {
     }
 }
 
-impl IRawElementProviderSimple_Impl for Provider {
+impl IRawElementProviderSimple_Impl for Provider_Impl {
     fn ProviderOptions(&self) -> windows::core::Result<ProviderOptions> {
         self.with_node(|_, _| Ok(ProviderOptions_ServerSideProvider))
     }
@@ -1541,18 +1558,18 @@ impl IRawElementProviderSimple_Impl for Provider {
                 return Err(uia_unsupported());
             }
             // SAFETY: the HWND is the live window captured by the provider and checked through Shared.
-            unsafe { UiaHostProviderFromHwnd(WinHwnd(self.hwnd)) }
+            unsafe { UiaHostProviderFromHwnd(WinHwnd(self.hwnd as *mut c_void)) }
         })
     }
 }
 
-impl IInvokeProvider_Impl for Provider {
+impl IInvokeProvider_Impl for Provider_Impl {
     fn Invoke(&self) -> windows::core::Result<()> {
         self.action(AxAction::Default)
     }
 }
 
-impl IValueProvider_Impl for Provider {
+impl IValueProvider_Impl for Provider_Impl {
     fn SetValue(&self, value: &PCWSTR) -> windows::core::Result<()> {
         // SAFETY: UI Automation supplies a valid NUL-terminated string for this COM call.
         let value = unsafe { value.to_string() }.map_err(|_| uia_unsupported())?;
@@ -1573,7 +1590,7 @@ impl IValueProvider_Impl for Provider {
     }
 }
 
-impl IRawElementProviderFragment_Impl for Provider {
+impl IRawElementProviderFragment_Impl for Provider_Impl {
     fn Navigate(
         &self,
         direction: NavigateDirection,
@@ -1673,7 +1690,7 @@ impl IRawElementProviderFragment_Impl for Provider {
     }
 }
 
-impl IRawElementProviderFragmentRoot_Impl for Provider {
+impl IRawElementProviderFragmentRoot_Impl for Provider_Impl {
     fn ElementProviderFromPoint(
         &self,
         x: f64,
@@ -1879,7 +1896,7 @@ unsafe trait RawTextProvider: IUnknown {
     fn SupportedTextSelection(&self, result: *mut SupportedTextSelection) -> HRESULT;
 }
 
-impl RawTextProvider_Impl for Provider {
+impl RawTextProvider_Impl for Provider_Impl {
     unsafe fn GetSelection(&self, out: *mut *mut SAFEARRAY) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
         unsafe { write_value(out, self.text_selection()) }
@@ -1984,17 +2001,17 @@ unsafe fn write_optional_interface<T: Interface>(
         Err(error) => error.into(),
     }
 }
-impl RawTextRange_Impl for TextRangeProvider {
+impl RawTextRange_Impl for TextRangeProvider_Impl {
     unsafe fn Clone(&self, out: *mut *mut c_void) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_interface(out, self.Clone(), false) }
+        unsafe { write_interface(out, TextRangeProvider::Clone(self), false) }
     }
     unsafe fn Compare(&self, target: *mut c_void, out: *mut BOOL) -> HRESULT {
         // SAFETY: COM supplies an optional borrowed ITextRangeProvider and a valid out pointer.
         unsafe {
             write_value(
                 out,
-                self.Compare(ITextRangeProvider::from_raw_borrowed(&target)),
+                TextRangeProvider::Compare(self, ITextRangeProvider::from_raw_borrowed(&target)),
             )
         }
     }
@@ -2009,7 +2026,8 @@ impl RawTextRange_Impl for TextRangeProvider {
         unsafe {
             write_value(
                 out,
-                self.CompareEndpoints(
+                TextRangeProvider::CompareEndpoints(
+                    self,
                     endpoint,
                     ITextRangeProvider::from_raw_borrowed(&target),
                     other,
@@ -2018,7 +2036,7 @@ impl RawTextRange_Impl for TextRangeProvider {
         }
     }
     unsafe fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> HRESULT {
-        self.ExpandToEnclosingUnit(unit).into()
+        TextRangeProvider::ExpandToEnclosingUnit(self, unit).into()
     }
     unsafe fn FindAttribute(
         &self,
@@ -2046,23 +2064,23 @@ impl RawTextRange_Impl for TextRangeProvider {
     }
     unsafe fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID, out: *mut VARIANT) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_value(out, self.GetAttributeValue(id)) }
+        unsafe { write_value(out, TextRangeProvider::GetAttributeValue(self, id)) }
     }
     unsafe fn GetBoundingRectangles(&self, out: *mut *mut SAFEARRAY) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_value(out, self.GetBoundingRectangles()) }
+        unsafe { write_value(out, TextRangeProvider::GetBoundingRectangles(self)) }
     }
     unsafe fn GetEnclosingElement(&self, out: *mut *mut c_void) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_interface(out, self.GetEnclosingElement(), false) }
+        unsafe { write_interface(out, TextRangeProvider::GetEnclosingElement(self), false) }
     }
     unsafe fn GetText(&self, max: i32, out: *mut BSTR) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_value(out, self.GetText(max)) }
+        unsafe { write_value(out, TextRangeProvider::GetText(self, max)) }
     }
     unsafe fn Move(&self, unit: TextUnit, count: i32, out: *mut i32) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_value(out, self.Move(unit, count)) }
+        unsafe { write_value(out, TextRangeProvider::Move(self, unit, count)) }
     }
     unsafe fn MoveEndpointByUnit(
         &self,
@@ -2072,7 +2090,12 @@ impl RawTextRange_Impl for TextRangeProvider {
         out: *mut i32,
     ) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_value(out, self.MoveEndpointByUnit(endpoint, unit, count)) }
+        unsafe {
+            write_value(
+                out,
+                TextRangeProvider::MoveEndpointByUnit(self, endpoint, unit, count),
+            )
+        }
     }
     unsafe fn MoveEndpointByRange(
         &self,
@@ -2081,7 +2104,8 @@ impl RawTextRange_Impl for TextRangeProvider {
         other: TextPatternRangeEndpoint,
     ) -> HRESULT {
         // SAFETY: COM supplies an optional borrowed ITextRangeProvider.
-        self.MoveEndpointByRange(
+        TextRangeProvider::MoveEndpointByRange(
+            self,
             endpoint,
             unsafe { ITextRangeProvider::from_raw_borrowed(&target) },
             other,
@@ -2089,20 +2113,20 @@ impl RawTextRange_Impl for TextRangeProvider {
         .into()
     }
     unsafe fn Select(&self) -> HRESULT {
-        self.Select().into()
+        TextRangeProvider::Select(self).into()
     }
     unsafe fn AddToSelection(&self) -> HRESULT {
-        self.AddToSelection().into()
+        TextRangeProvider::AddToSelection(self).into()
     }
     unsafe fn RemoveFromSelection(&self) -> HRESULT {
-        self.RemoveFromSelection().into()
+        TextRangeProvider::RemoveFromSelection(self).into()
     }
     unsafe fn ScrollIntoView(&self, align: BOOL) -> HRESULT {
-        self.ScrollIntoView(align).into()
+        TextRangeProvider::ScrollIntoView(self, align).into()
     }
     unsafe fn GetChildren(&self, out: *mut *mut SAFEARRAY) -> HRESULT {
         // SAFETY: out is supplied by the COM caller.
-        unsafe { write_value(out, self.GetChildren()) }
+        unsafe { write_value(out, TextRangeProvider::GetChildren(self)) }
     }
 }
 
@@ -2210,7 +2234,7 @@ impl TextRangeProvider {
         let (text, _, _) = self.provider.text_data()?;
         let text = text.ok_or_else(uia_unsupported)?;
         let source = &text[range.start as usize..(range.start + range.length) as usize];
-        let needle = needle.as_wide();
+        let needle: &[u16] = needle;
         let found = if needle.is_empty() {
             Some((if backward.as_bool() { source.len() } else { 0 }, 0))
         } else if source.is_empty() {
@@ -2408,7 +2432,7 @@ impl TextRangeProvider {
             range.length.min(maxlength as u32)
         };
         let start = range.start as usize;
-        BSTR::from_wide(&text[start..start + length as usize])
+        Ok(BSTR::from_wide(&text[start..start + length as usize]))
     }
     fn Move(&self, unit: TextUnit, count: i32) -> windows::core::Result<i32> {
         let current = self.current()?;
@@ -2587,12 +2611,21 @@ mod tests {
     use super::super::super::model::{AxSnapshot, Consumer, FrameDisposition, FrameMetadata, Rect};
     use super::super::{NativeParent, Surface};
     use super::*;
-    use windows_surface as windows;
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
     use windows_sys::Win32::Graphics::Gdi::GetPixel;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SendMessageW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
+
+    #[test]
+    fn outside_client_points_keep_signed_coordinates_at_the_view_scale() {
+        for (point, expected) in [
+            (POINT { x: -27, y: 210 }, (-18.0, 140.0)),
+            (POINT { x: 330, y: -12 }, (220.0, -8.0)),
+        ] {
+            assert_eq!(client_point_dip(point, 1.5), expected);
+        }
+    }
 
     #[derive(Default)]
     struct ConsumerLog {
@@ -2794,11 +2827,10 @@ mod tests {
             let document = text.DocumentRange().unwrap();
             let missing = BSTR::from("absent");
             let mut found = null_mut();
-            let missing_arg: std::mem::MaybeUninit<BSTR> = std::mem::transmute_copy(&missing);
             assert_eq!(
                 (Interface::vtable(&document).FindText)(
                     document.as_raw(),
-                    missing_arg,
+                    missing.as_wide().as_ptr().cast_mut().cast(),
                     BOOL(0),
                     BOOL(0),
                     &mut found
@@ -2807,11 +2839,10 @@ mod tests {
             );
             assert!(found.is_null());
             let needle = BSTR::from("ELL");
-            let needle_arg: std::mem::MaybeUninit<BSTR> = std::mem::transmute_copy(&needle);
             assert_eq!(
                 (Interface::vtable(&document).FindText)(
                     document.as_raw(),
-                    needle_arg,
+                    needle.as_wide().as_ptr().cast_mut().cast(),
                     BOOL(0),
                     BOOL(1),
                     &mut found

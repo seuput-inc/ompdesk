@@ -39,12 +39,17 @@ impl Configuration {
     }
 }
 
+enum Completion {
+    Running(JoinHandle<Result<(), String>>),
+    Finished(Result<(), String>),
+}
+
 pub(super) struct Origin {
     pub base: String,
     pub port: u16,
     pub config: Arc<Configuration>,
     stop: watch::Sender<bool>,
-    task: Mutex<Option<JoinHandle<Result<(), String>>>>,
+    task: Mutex<Completion>,
 }
 
 impl Origin {
@@ -79,7 +84,7 @@ impl Origin {
             port,
             config,
             stop,
-            task: Mutex::new(Some(task)),
+            task: Mutex::new(Completion::Running(task)),
         }))
     }
 
@@ -94,14 +99,22 @@ impl Origin {
     pub async fn join(&self) -> Result<(), String> {
         self.cancel();
         let mut task = self.task.lock().await;
-        if let Some(worker) = task.as_mut() {
+        if let Completion::Running(worker) = &mut *task {
             let result = worker
                 .await
-                .map_err(|_| "Private resource listener task failed".to_string());
-            task.take();
-            result??;
+                .map_err(|_| "Private resource listener task failed".to_string())
+                .and_then(|result| result);
+            *task = Completion::Finished(result);
         }
-        Ok(())
+        match &*task {
+            Completion::Finished(result) => result.clone(),
+            Completion::Running(_) => unreachable!(),
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn hold_join(&self) -> impl Drop + Send + '_ {
+        self.task.lock().await
     }
 }
 

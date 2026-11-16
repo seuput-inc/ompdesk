@@ -213,6 +213,18 @@ impl Browser {
         self.transport.request(method, params, session).await
     }
 
+    /// Host mutations settle on the actual CDP answer or connection loss, not the read deadline.
+    pub async fn command_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value> {
+        self.transport
+            .request_settled(method, params, session)
+            .await
+    }
+
     pub async fn create_partition(&self) -> Result<Partition> {
         let mut transaction = Creation::new(&self.transport);
         let context = self
@@ -346,6 +358,15 @@ impl Page {
             .await
     }
 
+    pub async fn command_settled(&self, method: &str, params: Value) -> Result<Value> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .request_settled(method, params, Some(&self.session_id))
+            .await
+    }
+
     pub async fn navigate(&self, url: &str) -> Result<Value> {
         if !web_url(url) {
             return Err(Error::new(
@@ -353,7 +374,9 @@ impl Page {
                 "Preview navigation requires HTTP or HTTPS",
             ));
         }
-        let result = self.command("Page.navigate", json!({"url":url})).await?;
+        let result = self
+            .command_settled("Page.navigate", json!({"url":url}))
+            .await?;
         if let Some(error) = result.get("errorText").and_then(Value::as_str) {
             return Err(Error::new("navigation", error));
         }
@@ -396,7 +419,7 @@ impl Page {
     }
 
     pub async fn resize(&self, viewport: Viewport) -> Result<()> {
-        self.command("Emulation.setDeviceMetricsOverride", viewport.params()?)
+        self.command_settled("Emulation.setDeviceMetricsOverride", viewport.params()?)
             .await?;
         Ok(())
     }
@@ -421,19 +444,21 @@ impl Page {
     }
 
     pub async fn start_screencast(&self, options: Value) -> Result<()> {
-        self.command("Page.startScreencast", options).await?;
+        self.command_settled("Page.startScreencast", options)
+            .await?;
         Ok(())
     }
 
     /// ACK only after the compositor or phone stream consumed this frame. Never ACK an unrelated page's frame.
     pub async fn ack_frame(&self, session_id: i64) -> Result<()> {
-        self.command("Page.screencastFrameAck", json!({"sessionId":session_id}))
+        self.command_settled("Page.screencastFrameAck", json!({"sessionId":session_id}))
             .await?;
         Ok(())
     }
 
     pub async fn stop_screencast(&self) -> Result<()> {
-        self.command("Page.stopScreencast", json!({})).await?;
+        self.command_settled("Page.stopScreencast", json!({}))
+            .await?;
         Ok(())
     }
 
@@ -444,18 +469,34 @@ impl Page {
         }
         if let Err(error) = self
             .transport
-            .request(
+            .request_settled(
                 "Target.closeTarget",
                 json!({"targetId":self.target_id}),
                 None,
             )
             .await
-            && error.code != "cdp_error"
         {
-            return Err(error);
+            // Chromium rejects closing a target that is already gone, but the same code covers other refusals.
+            if error.code != "cdp_error" || self.target_exists().await? {
+                return Err(error);
+            }
         }
         self.closed.store(true, Ordering::Release);
         Ok(())
+    }
+
+    async fn target_exists(&self) -> Result<bool> {
+        let targets = self
+            .transport
+            .request("Target.getTargets", json!({}), None)
+            .await?;
+        let infos = targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new("cdp", "Chromium returned no target list"))?;
+        Ok(infos.iter().any(|info| {
+            info.get("targetId").and_then(Value::as_str) == Some(self.target_id.as_str())
+        }))
     }
 }
 
@@ -759,6 +800,61 @@ impl Drop for Creation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::test_support::{command, connected};
+    use tokio::io::{AsyncWriteExt, BufReader};
+
+    async fn closing(targets: Value) -> (Result<()>, bool, Vec<String>) {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Arc::new(Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+        });
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let task = {
+            let page = Arc::clone(&page);
+            tokio::spawn(async move { page.close().await })
+        };
+        let mut methods = Vec::new();
+        let close = command(&mut read).await;
+        methods.push(close["method"].as_str().unwrap().to_owned());
+        let id = close["id"].as_u64().unwrap();
+        write
+            .write_all(
+                format!("{{\"id\":{id},\"error\":{{\"code\":-32602,\"message\":\"No target with given id found\"}}}}\0")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let list = command(&mut read).await;
+        methods.push(list["method"].as_str().unwrap().to_owned());
+        let id = list["id"].as_u64().unwrap();
+        write
+            .write_all(format!("{{\"id\":{id},\"result\":{targets}}}\0").as_bytes())
+            .await
+            .unwrap();
+        let result = task.await.unwrap();
+        (result, page.closed.load(Ordering::Acquire), methods)
+    }
+
+    #[tokio::test]
+    async fn rejected_close_succeeds_only_when_the_target_is_actually_gone() {
+        let (gone, closed, methods) = closing(json!({"targetInfos":[{"targetId":"other"}]})).await;
+        assert!(gone.is_ok());
+        assert!(closed);
+        assert_eq!(methods, ["Target.closeTarget", "Target.getTargets"]);
+
+        let (refused, closed, _) = closing(json!({"targetInfos":[{"targetId":"page-1"}]})).await;
+        assert_eq!(refused.unwrap_err().code, "cdp_error");
+        assert!(!closed);
+
+        let (malformed, closed, _) = closing(json!({})).await;
+        assert_eq!(malformed.unwrap_err().code, "cdp");
+        assert!(!closed);
+    }
 
     #[test]
     fn navigation_never_accepts_files_or_script_schemes() {

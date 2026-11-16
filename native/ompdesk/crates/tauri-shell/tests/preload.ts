@@ -124,5 +124,5 @@ await page.__ompTauriEvaluate(12, 6, () => {
 assert.equal(staleRan, false);
 assert.equal(replies.length, 1);
 console.log(
-	"PASS preload generation fences, push/reset, cancelled-drag same-name picker, DOM-file/clipboard bytes and asynchronous evaluation",
+	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback and asynchronous evaluation result",
 );

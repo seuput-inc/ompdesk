@@ -13,8 +13,10 @@ Viewport dimensions are applied through `Emulation.setDeviceMetricsOverride`, no
 | API | Result or effect |
 | --- | --- |
 | `Browser::subscribe()` | `broadcast::Receiver<Event>` with `method`, shared `Arc<Value>` `params`, and optional actual CDP `session_id` |
-| `Browser::command(method, params, session)` | Raw CDP result on the browser or a trusted actual session |
+| `Browser::command(method, params, session)` | Raw CDP result on the browser or a trusted actual session; fails with `timeout` after `command_timeout` |
+| `Browser::command_settled(method, params, session)` | Same, for host mutations: waits for Chromium's actual answer or connection loss, never the read deadline |
 | `Page::command(method, params)` | Raw CDP result on this page's session, including Input, Accessibility, DOM, Network, and nested target attach |
+| `Page::command_settled(method, params)` | Same session, settled like `Browser::command_settled`; navigation, viewport, screencast, frame ACK and close use it |
 | `Page::navigate(url)` | HTTP(S) or empty-document navigation, rejects `Page.navigate.errorText` |
 | `Page::evaluate(expression, user_gesture)` | Awaited by-value result; script exceptions fail the call |
 | `Page::isolated_world(name)` | Actual isolated execution context ID, without universal access |
@@ -52,7 +54,7 @@ The compositor decodes the image and retains `offsetTop`, `pageScaleFactor`, `de
 
 CDP input coordinates are CSS pixels. The host subtracts its compositor or panel offset and accounts for displayed-image scaling once. `device_scale_factor` changes image pixels, not mouse coordinates. `capture.clip.scale` is passed through, so a half-scale clip at device scale two has one image pixel per CSS pixel. The single pipe writer preserves enqueue order, while response IDs route out-of-order completion. An awaited JavaScript promise does not hold input behind it. Callers await dependent operations such as resize then capture.
 
-Explicitly call `shutdown()` before ending the Tokio runtime. Dropping a browser schedules cleanup when a runtime is alive, but is not a joined shutdown receipt. A cancelled context or target creation ends the browser because its CDP side effect may already have happened. A sent CDP operation cannot in general be rolled back after cancellation. Request IDs are not reused and late replies cannot satisfy another caller.
+Explicitly call `shutdown()` before ending the Tokio runtime. Dropping a browser schedules cleanup when a runtime is alive, but is not a joined shutdown receipt. A cancelled context or target creation ends the browser because its CDP side effect may already have happened. A sent CDP operation cannot in general be rolled back after cancellation. A timed command that times out or is dropped loses its pending slot at once; one not yet written is never sent, and a late answer to one already written is ignored. A settled command dropped before its frame is written is likewise never sent. Once a settled command is being written, its pending slot stays until Chromium answers or the pipe fails, so an abandoned mutation keeps its capacity and the transport never reports it as finished early. Request IDs are not reused and late replies cannot satisfy another caller.
 
 Transport bounds are 16 MiB per CDP JSON frame, 32 MiB of queued outgoing bytes, 256 pending commands, and 32 retained observer events. Oversized capture or PDF results fail rather than being truncated. Policy intake is separate; a lost critical event fails closed. These are explicit driver limits, not an unbounded large-document claim.
 

@@ -10,7 +10,6 @@ use super::shared::{FramePublisher, Shared};
 pub struct NativeParent(sys::Parent);
 
 impl NativeParent {
-    #[cfg(not(test))]
     pub fn from_tauri_window(window: &tauri::WebviewWindow) -> Result<Self, SurfaceError> {
         let hwnd = window
             .hwnd()

@@ -10,6 +10,8 @@ Node assigns window and webContents IDs. The registry never reuses them. Tauri l
 
 The host implements app initialization, authenticated Node startup, app exit receipt, relaunch, ordinary app windows, native geometry/focus/visibility changes, app-page load, JavaScript evaluation, zoom and native Web Inspector. State updates precede their corresponding events. Exit keeps the host writer and Node stdin alive while Node receives its receipt, then joins the Node child and releases the single-instance listener before relaunch. Fatal Node loss exits instead of asking the disconnected backend to quit. Windows uses Tauri's local `http://app.localhost` custom-protocol origin. Saved outer-window sizes account for measured native frame insets.
 
+The official embedded WebDriver is installed only with `OMP_GUI_TEST_NODE_INSPECT=1`, an existing `OMP_GUI_TEST_USER_DATA_DIR` equal to this launch's canonical profile, and an explicit unprivileged `OMP_GUI_TEST_WEBDRIVER_PORT`. Ordinary launches do not install its loopback listener. `scripts/tauri-native-smoke.ts` drives the actual system WebView through W3C commands. The automatic-update fixture reads the migrated profile through the same transport, then writes and reopens it; the old Electron producer continues to use its original CDP endpoint. These consumers still require an actual built-host run.
+
 ## Incomplete runtime paths
 
 This source is not a released application or a claim of parity. A real isolated-profile run with the actual Node bundle, handler invoke, push, second-window close and exit receipt is still required. A local cold Tauri build is intentionally not run by this worker. Main owns the hosted native compile and final artifact run.

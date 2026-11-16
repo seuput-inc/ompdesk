@@ -15,14 +15,32 @@ use url::{Position, Url};
 use super::Gateway;
 use crate::{host, sessions};
 
-struct LocalNavigation;
+const BROWSER_DOCUMENT: &str = "omp-visual://browser-fixture/browser/index.html";
+
+struct LocalNavigation {
+    gateway: Arc<Gateway>,
+    approved: Arc<std::sync::Mutex<Vec<String>>>,
+}
 
 impl shell_preview::NavigationHandler for LocalNavigation {
     fn allow(
         &self,
         navigation: shell_preview::Navigation,
     ) -> Pin<Box<dyn Future<Output = bool> + Send>> {
-        Box::pin(async move { navigation.url == "about:blank" })
+        let gateway = self.gateway.clone();
+        let approved = self.approved.clone();
+        Box::pin(async move {
+            if navigation.url == "about:blank" {
+                return true;
+            }
+            match gateway.original_url("visual-a", &navigation.url).await {
+                Ok(Some(original)) if original == BROWSER_DOCUMENT => {
+                    approved.lock().unwrap().push(original);
+                    true
+                }
+                _ => false,
+            }
+        })
     }
 }
 
@@ -181,13 +199,17 @@ async fn real_node_gateway_loopback_and_credit() {
     }
     #[cfg(windows)]
     let _ = &mut scratch_guard;
+    let navigation = Arc::new(LocalNavigation {
+        gateway: gateway.clone(),
+        approved: Arc::new(std::sync::Mutex::new(Vec::new())),
+    });
     let browser = match shell_preview::Browser::launch_with_hooks(
         shell_preview::LaunchConfig {
             executable,
             profile_root: dir.join("browser"),
             command_timeout: Duration::from_secs(15),
         },
-        Arc::new(LocalNavigation),
+        navigation.clone(),
         Arc::new(sessions::preview::Initializer),
     )
     .await
@@ -243,6 +265,8 @@ async fn real_node_gateway_loopback_and_credit() {
     };
     let mut scenario = tokio::spawn(exercise(
         gateway.clone(),
+        browser.clone(),
+        navigation,
         app_base,
         visual_a,
         visual_b,
@@ -303,6 +327,8 @@ async fn real_node_gateway_loopback_and_credit() {
 
 async fn exercise(
     gateway: Arc<Gateway>,
+    browser: Arc<shell_preview::Browser>,
+    navigation: Arc<LocalNavigation>,
     app_base: String,
     visual_a: super::PreviewTransport,
     visual_b: super::PreviewTransport,
@@ -428,6 +454,98 @@ async fn exercise(
         Some(original)
     );
     assert!(gateway.original_url("visual-b", &mapped).await.is_err());
+
+    let browser_mapped = gateway
+        .map_url("visual-a", BROWSER_DOCUMENT)
+        .await
+        .unwrap()
+        .unwrap();
+    let context = sessions::preview::context_for("visual-a").await.unwrap();
+    let page = browser
+        .create_page(
+            &context,
+            shell_preview::Viewport {
+                width: 320,
+                height: 240,
+                device_scale_factor: 1.0,
+            },
+        )
+        .await
+        .unwrap();
+    page.command("Page.setLifecycleEventsEnabled", json!({"enabled":true}))
+        .await
+        .unwrap();
+    let mut events = browser.subscribe();
+    let navigated = page.navigate(&browser_mapped).await.unwrap();
+    let loader = navigated["loaderId"].as_str().expect("document loader");
+    loop {
+        let event = events.recv().await.expect("actual browser lifecycle event");
+        if event.session_id.as_deref() == Some(page.session_id.as_str())
+            && event.method == "Page.lifecycleEvent"
+            && event.params["name"] == "load"
+            && event.params["loaderId"] == loader
+        {
+            break;
+        }
+    }
+    let rendered = page
+        .evaluate(
+            r##"(async () => {
+                const image = document.querySelector("#pixel");
+                await image.decode();
+                const data = await fetch("./assets/data.json").then(response => {
+                    if (!response.ok) throw new Error(`fixture fetch ${response.status}`);
+                    return response.json();
+                });
+                const bounds = image.getBoundingClientRect();
+                return {
+                    url: location.href,
+                    text: document.querySelector("#fixture").textContent,
+                    color: getComputedStyle(document.querySelector("#fixture")).color,
+                    image: [image.naturalWidth, image.naturalHeight, bounds.width, bounds.height],
+                    inlineRan: document.documentElement.dataset.inlineRan === "yes",
+                    data
+                };
+            })()"##,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rendered["url"], browser_mapped);
+    assert_eq!(rendered["text"], "browser-route-ready");
+    assert_eq!(rendered["color"], "rgb(17, 34, 51)");
+    assert_eq!(rendered["image"], json!([2, 3, 6, 9]));
+    assert_eq!(rendered["inlineRan"], false, "CSP must block inline script");
+    assert_eq!(rendered["data"], json!({"route":"actual-browser-network"}));
+    let mut expected: std::collections::HashSet<&str> = [
+        BROWSER_DOCUMENT,
+        "omp-visual://browser-fixture/browser/assets/fixture.js",
+        "omp-visual://browser-fixture/browser/assets/fixture.css",
+        "omp-visual://browser-fixture/assets/pixel.svg",
+        "omp-visual://browser-fixture/browser/assets/data.json",
+    ]
+    .into_iter()
+    .collect();
+    while !expected.is_empty() {
+        let requested = fixture.event("request", None).await;
+        if requested["url"]
+            .as_str()
+            .is_some_and(|url| expected.remove(url))
+        {
+            assert_eq!(requested["partition"], "visual-a");
+            assert_eq!(requested["method"], "GET");
+        }
+    }
+    page.close().await.unwrap();
+    assert!(
+        navigation
+            .approved
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|url| url == BROWSER_DOCUMENT)
+    );
+
     assert!(gateway.is_gateway_origin(&mapped).await);
     let mapped_url = Url::parse(&mapped).unwrap();
     let mut wrong_host = TcpStream::connect(("127.0.0.1", mapped_url.port().unwrap()))
@@ -508,6 +626,56 @@ async fn exercise(
     assert_eq!(&chunk, b"4\r\n\x00\xffA\x80\r\n");
     drop(cancelled);
     fixture.event("cancel", Some("/cancel")).await;
+    let control_url = gateway
+        .map_url("visual-a", "omp-visual://example/control")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut control = connect(&control_url, "GET", "").await;
+    assert!(head(&mut control).await.starts_with("http/1.1 201"));
+    let mut control_first = [0; 9];
+    control.read_exact(&mut control_first).await.unwrap();
+    assert_eq!(&control_first, b"4\r\n\x00\xffA\x80\r\n");
+    let late_url = gateway
+        .map_url("visual-a", "omp-visual://example/late-head")
+        .await
+        .unwrap()
+        .unwrap();
+    let late_socket = connect(&late_url, "GET", "").await;
+    let held = fixture.event("head-held", None).await;
+    assert_eq!(held["requestId"], held["streamId"]);
+    assert!(held["requestId"].as_u64().is_some_and(|id| id > 0));
+    drop(late_socket);
+    let cancelled_head = fixture.event("cancel", Some("/late-head")).await;
+    assert_eq!(cancelled_head["count"], 1);
+    assert_eq!(cancelled_head["released"], false);
+    let cancelled_wire = fixture.event("wire-cancel", Some("/late-head")).await;
+    assert_eq!(cancelled_wire["requestId"], held["requestId"]);
+    fixture.command("replay-cancels").await;
+    let replayed = fixture.event("cancels-replayed", None).await;
+    assert_eq!(replayed["cancels"], 1);
+    assert_eq!(replayed["wireCancels"], 3);
+    assert_eq!(replayed["released"], false);
+    fixture.command("release-head").await;
+    let released = fixture.event("head-released", None).await;
+    assert_eq!(released["cancels"], 1);
+    assert!(
+        released["heldBytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes <= 96 * 1024)
+    );
+    assert!(
+        complete(&mapped_media, "HEAD", "")
+            .await
+            .0
+            .starts_with("http/1.1 404")
+    );
+    fixture.command("release-control").await;
+    fixture.event("end", Some("/control")).await;
+    let mut control_rest = Vec::new();
+    control.read_to_end(&mut control_rest).await.unwrap();
+    assert_eq!(control_rest, b"3\r\nB\x00\xfe\r\n0\r\n\r\n");
+
     let response = sessions::protocol::open(sessions::protocol::Request {
         partition: "visual-a".into(),
         scheme: "omp-visual".into(),
@@ -548,7 +716,72 @@ async fn exercise(
     assert!(writing.join_next().await.unwrap().unwrap().is_err());
     fixture.event("cancel", Some("/credit")).await;
 
-    gateway.close_partition("visual-a").await.unwrap();
+    let closing_origin = {
+        let state = gateway.state.lock().await;
+        let super::State::Live(live) = &*state else {
+            panic!("gateway stopped");
+        };
+        live.preview.get("visual-a").unwrap().clone()
+    };
+    let closed_port = closing_origin.port;
+    let released_config = Arc::downgrade(&closing_origin.config);
+    let join_barrier = closing_origin.hold_join().await;
+    let mut first_close = Box::pin(gateway.close_partition("visual-a"));
+    std::future::poll_fn(|cx| {
+        assert!(first_close.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(first_close);
+    let mut retry_close = Box::pin(gateway.close_partition("visual-a"));
+    let mut concurrent_close = Box::pin(gateway.close_partition("visual-a"));
+    std::future::poll_fn(|cx| {
+        assert!(retry_close.as_mut().poll(cx).is_pending());
+        assert!(concurrent_close.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    gateway.close_partition("visual-system").await.unwrap();
+    assert!(
+        visual_b.is_live(),
+        "another partition must remain independent"
+    );
+    drop(join_barrier);
+    let (retry, concurrent) = tokio::join!(retry_close, concurrent_close);
+    retry.unwrap();
+    concurrent.unwrap();
+    drop(closing_origin);
+    assert!(
+        released_config.upgrade().is_none(),
+        "retirement retained origin resources"
+    );
+    assert!(gateway.original_url("visual-a", &mapped).await.is_err());
+    assert!(gateway.map_url("visual-a", &mapped).await.is_err());
+    let reused = tokio::net::TcpListener::bind(("127.0.0.1", closed_port))
+        .await
+        .unwrap();
+    let ordinary = format!("http://127.0.0.1:{closed_port}/dev");
+    assert!(!gateway.is_gateway_origin(&ordinary).await);
+    assert_eq!(gateway.map_url("visual-a", &ordinary).await.unwrap(), None);
+    assert_eq!(
+        gateway.original_url("visual-a", &ordinary).await.unwrap(),
+        None
+    );
+    let mut dev_server = tokio::task::JoinSet::new();
+    dev_server.spawn(async move {
+        let (mut socket, _) = reused.accept().await.unwrap();
+        let mut request = [0; 1024];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+    });
+    let (headers, body) = complete(&ordinary, "GET", "").await;
+    assert!(headers.starts_with("http/1.1 200"));
+    assert_eq!(body, b"OK");
+    dev_server.join_next().await.unwrap().unwrap();
     // The context still exists; this checks stale receipt rejection, not context disposal.
     assert!(sessions::preview::protected_transport("visual-a").is_err());
     assert!(!visual_a.is_live());

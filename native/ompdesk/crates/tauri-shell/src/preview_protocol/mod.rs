@@ -6,7 +6,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -25,7 +25,6 @@ const MAX_MAPPED_URL: usize = mapping::MAX_SOURCE_URL * 3 + 512;
 struct Live {
     app_media: Option<Arc<Origin>>,
     preview: HashMap<String, Arc<Origin>>,
-    retired_ports: HashSet<u16>,
     retiring: Vec<Arc<Origin>>,
     consumer: Option<GatewayConsumer>,
 }
@@ -69,7 +68,6 @@ impl Gateway {
             state: Mutex::new(State::Live(Live {
                 app_media: None,
                 preview: HashMap::new(),
-                retired_ports: HashSet::new(),
                 retiring: Vec::new(),
                 consumer: None,
             })),
@@ -291,12 +289,18 @@ impl Gateway {
         let origins = {
             let mut state = self.state.lock().await;
             let live = running(&mut state)?;
-            let origins: Vec<_> = live.preview.remove(partition).into_iter().collect();
+            if let Some(origin) = live.preview.remove(partition) {
+                live.retiring.push(origin);
+            }
+            let origins: Vec<_> = live
+                .retiring
+                .iter()
+                .filter(|origin| origin.config.route.partition() == partition)
+                .cloned()
+                .collect();
             for origin in &origins {
-                live.retired_ports.insert(origin.port);
                 origin.cancel();
             }
-            live.retiring.extend(origins.iter().cloned());
             origins
         };
         let result = join_all(&origins).await;
@@ -388,12 +392,10 @@ fn internal_endpoint(url: &Url, live: &Live) -> bool {
     url.host_str().is_some_and(reserved_hostname)
         || (url.host_str() == Some("127.0.0.1")
             && url.port().is_some_and(|port| {
-                live.retired_ports.contains(&port)
-                    || live
-                        .app_media
-                        .iter()
-                        .chain(live.preview.values())
-                        .any(|origin| origin.port == port)
+                live.app_media
+                    .iter()
+                    .chain(live.preview.values())
+                    .any(|origin| origin.port == port)
             }))
 }
 

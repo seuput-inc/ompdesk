@@ -187,7 +187,7 @@ impl CookieAuthority for Authority {
         #[cfg(windows)]
         {
             let cookies = view
-                .cookies_for_url(target.to_string())
+                .cookies_for_url(target)
                 .map_err(|_| "WebView2 cookie read failed")?;
             Ok(if cookies.is_empty() {
                 None
