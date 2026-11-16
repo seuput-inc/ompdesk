@@ -62,7 +62,7 @@ import {
 } from "../../../../shared/sidebar-rows";
 import { splitTabIds } from "../../../../shared/split-layout";
 import { useSessionList } from "../../../hooks/use-session-list";
-import { requestSessionSwitch } from "../../../hooks/use-session-switch";
+import { requestSessionSwitch, sessionSwitchInFlight } from "../../../hooks/use-session-switch";
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useTabListRows } from "../../../hooks/use-tab-list-rows";
 import { ATTENTION_LABEL_KEY, type AttentionKind, isAsk } from "../../../lib/attention";
@@ -198,6 +198,8 @@ function activeTabUntouched(): boolean {
 	const tab = tabs.tabs.find(entry => entry.id === tabs.activeTabId);
 	// A remote tab runs on its host: it can never be re-rooted to this device's sessions or folders.
 	if (!tab || tab.device !== undefined || tab.worktree || tab.status === "running" || tab.compacting) return false;
+	// A pick still loading has not reached the stores below: the tab is not empty, whatever they read yet.
+	if (sessionSwitchInFlight()) return false;
 	const session = useSessionStore.getState();
 	const composer = useComposerStore.getState();
 	const queue = useQueueStore.getState();

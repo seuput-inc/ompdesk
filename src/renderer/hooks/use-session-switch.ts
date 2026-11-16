@@ -142,6 +142,17 @@ export function opensInOwnTab(session: SessionInfo): boolean {
 	return trim(tabCwd) !== trim(session.cwd);
 }
 
+let switchesInFlight = 0;
+
+/**
+ * A switch is running: its session file is committed (or about to be) but the replacement runtime is not hydrated, so
+ * the tab's stores still read like the empty tab it was. Nothing may re-root that tab again until it settles: the
+ * second switch would start from the retired runtime, which refuses it ("the originating session was replaced").
+ */
+export function sessionSwitchInFlight(): boolean {
+	return switchesInFlight > 0;
+}
+
 /**
  * Run the switch immediately. The server aborts any in-flight turn
  * (`switchSession` → `abort({goalReason:"internal"})`) — this is NOT a
@@ -158,6 +169,15 @@ export function opensInOwnTab(session: SessionInfo): boolean {
  * pre-check is safe to ignore.
  */
 export async function switchSessionNow(session: SessionInfo, model?: SessionModelOverride): Promise<boolean> {
+	switchesInFlight++;
+	try {
+		return await switchSession(session, model);
+	} finally {
+		switchesInFlight--;
+	}
+}
+
+async function switchSession(session: SessionInfo, model?: SessionModelOverride): Promise<boolean> {
 	const runtime = focusedSessionRuntime();
 	const originStore = runtime ? sessionRuntimeStore<SessionStore>(runtime.tabId, "session")! : useSessionStore;
 	const originSessionId = originStore.getState().sessionId;

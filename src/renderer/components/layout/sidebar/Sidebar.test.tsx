@@ -713,6 +713,33 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(omp.rpc.switchSession).toHaveBeenCalledWith("/work/alpha/one.jsonl");
 	});
 
+	it("opens a second pick beside the first while the first still loads, not over it", async () => {
+		const omp = installMockOmp(LIST);
+		useSessionStore.setState({ sessionId: "empty", cwd: "/work/alpha", isStreaming: false, messageCount: 0 });
+		useTabsStore.setState({
+			tabs: [{ id: "t0", cwd: "/work/alpha", status: "ready", kind: "agent", unreadDone: false }],
+			activeTabId: "t0",
+			bundles: new Map(),
+		});
+		// The first switch is committed by main but not yet answered: the stores still read like the empty tab.
+		let answer: (response: unknown) => void = () => {};
+		omp.rpc.switchSession.mockImplementationOnce(
+			() => new Promise(resolve => (answer = resolve)) as ReturnType<typeof omp.rpc.switchSession>,
+		);
+		await mount(<Sidebar />);
+
+		await fire(rowButton("Session /work/alpha/one"), "onClick");
+		await flush();
+		expect(omp.rpc.switchSession).toHaveBeenCalledTimes(1);
+
+		await fire(rowButton("Session /work/alpha/two"), "onClick");
+		await flush();
+		expect(omp.rpc.switchSession).toHaveBeenCalledTimes(1);
+		expect(omp.tabs.spawn).toHaveBeenCalled();
+
+		await act(async () => answer({ type: "response", command: "switch_session", success: true, data: {} }));
+	});
+
 	it("keeps sessions and projects in place when one is opened", async () => {
 		installMockOmp(LIST);
 		useSessionStore.setState({ sessionId: "", cwd: "/neutral", isStreaming: false });
