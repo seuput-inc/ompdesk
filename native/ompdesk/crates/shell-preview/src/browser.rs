@@ -637,7 +637,26 @@ async fn policy_event(
                 Err(error) => return Err(error),
             };
             let popup = target.pointer("/targetInfo/openerId").is_some();
-            if !popup && let Some(requests) = requests {
+            let document =
+                event.params.get("resourceType").and_then(Value::as_str) == Some("Document");
+            let mut allowed = !popup && (!document || web_url(url));
+            if allowed
+                && document
+                && let Some(handler) = handler
+            {
+                let navigation = Navigation {
+                    session_id: event
+                        .session_id
+                        .clone()
+                        .ok_or_else(|| Error::new("cdp", "Missing navigation session"))?,
+                    frame_id: string_field(&event.params, "frameId")?,
+                    url: url.to_owned(),
+                };
+                allowed = tokio::time::timeout(Duration::from_secs(2), handler.allow(navigation))
+                    .await
+                    .unwrap_or(false);
+            }
+            if allowed && let Some(requests) = requests {
                 let target = target
                     .get("targetInfo")
                     .ok_or_else(|| Error::new("cdp", "Paused request has no target"))?;
@@ -659,25 +678,6 @@ async fn policy_event(
                         return Ok(());
                     }
                 }
-            }
-            let document =
-                event.params.get("resourceType").and_then(Value::as_str) == Some("Document");
-            let mut allowed = !popup && (!document || web_url(url));
-            if allowed
-                && document
-                && let Some(handler) = handler
-            {
-                let navigation = Navigation {
-                    session_id: event
-                        .session_id
-                        .clone()
-                        .ok_or_else(|| Error::new("cdp", "Missing navigation session"))?,
-                    frame_id: string_field(&event.params, "frameId")?,
-                    url: url.to_owned(),
-                };
-                allowed = tokio::time::timeout(Duration::from_secs(2), handler.allow(navigation))
-                    .await
-                    .unwrap_or(false);
             }
             let (method, params) = if allowed {
                 ("Fetch.continueRequest", json!({"requestId":id}))
