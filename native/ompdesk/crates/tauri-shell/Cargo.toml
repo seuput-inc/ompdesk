@@ -9,6 +9,15 @@ rust-version = "1.95"
 license = "Apache-2.0"
 publish = false
 
+[[bin]]
+name = "ompdesk-tauri-shell"
+path = "src/main.rs"
+
+[[bin]]
+name = "ompdesk-launcher"
+path = "../shell/src/launcher_main.rs"
+test = false
+
 [dependencies]
 tauri = { version = "=2.12.5", features = ["unstable", "devtools"] }
 serde = { version = "1", features = ["derive"] }
@@ -17,6 +26,16 @@ getrandom = "0.3"
 tokio = { version = "1", features = ["time", "sync"] }
 sha2 = "0.10"
 shell_core = { package = "ompdesk-shell", path = "../shell", default-features = false }
+url = "2"
+tray-icon = "0.21"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", features = ["block2"] }
+block2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }
 
 [build-dependencies]
 tauri-build = "2"
