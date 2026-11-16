@@ -309,6 +309,9 @@ scenario() {
       grep -q "\"seedSessionId\":\"$SEED_ID\"" "$W/$name-read.json" && grep -q "\"seedSessionTitle\":\"$SEED_TITLE\"" "$W/$name-read.json"; check $? "S1: the conversation made in Electron is in the Tauri session list after the update relaunch (id and title)"
       shot 02-tauri-after-update-relaunch.png new required
     fi
+    # The new app reads the item Electron made (service "ompdesk Safe Storage", account "ompdesk Key") instead of making
+    # a second one: a second item is a new password, and every secret Electron saved is lost with it.
+    [ "$(perl -e 'alarm 20; exec @ARGV' security dump-keychain "$KC" 2>/dev/null | grep -c '"svce"<blob>="ompdesk Safe Storage"')" = 1 ]; check $? "S1: the new app reused Electron's one keychain item (no second \"ompdesk Safe Storage\")"
     if grep -q '"source":"stored"' "$W/$name-read.json" && grep -q '"droppedReason":null' "$W/$name-read.json"; then
       check 0 "S1: the seeded token was decrypted (source stored, none dropped)"
     else

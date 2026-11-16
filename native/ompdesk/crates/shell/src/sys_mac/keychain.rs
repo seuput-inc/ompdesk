@@ -1,13 +1,12 @@
-// UNVERIFIED on macOS: written on Windows without a compiler for this target.
+// Verified on macOS 15 and 26 runners by the update move (scripts/shell-move/move-mac.sh, shell-batch-checks tauri-move).
 //! Electron's `safeStorage` key on macOS: the login keychain's generic password the app's Chromium (OSCrypt) made.
 //! Reading it can prompt the person and fails on a locked or denied keychain, so the shell never reads it at launch:
 //! Node's shim runs the shell once as `--keychain-key <userData>` when a secret is first needed (`cli`).
 //!
-//! Service and account, from the sources (not guessed):
-//! - Electron v36.0.0 `shell/browser/electron_browser_main_parts.cc`, `PostCreateMainMessageLoop` (lines 545-546):
-//!   `KeychainPassword::GetServiceName() = app_name + " Safe Storage"; KeychainPassword::GetAccountName() = app_name;`
-//!   with `app_name = electron::Browser::Get()->GetName()` (line 504): service `ompdesk Safe Storage`, account `ompdesk`
-//!   for the app named `ompdesk`.
+//! Service and account, as the released Electron app (v0.131.0, Electron 36) writes them: service `ompdesk Safe
+//! Storage`, account `ompdesk Key` (`app_name + " Key"`). Observed in the item the released app made on the macOS move
+//! check (16 Nov 2026, run 43853143147): reading account `ompdesk` instead found nothing, so a second item with a new
+//! password was made and the stored token no longer decrypted.
 //! - Chromium `components/os_crypt/sync/keychain_password_mac.mm`: `KeychainPassword::GetPassword` calls
 //!   `FindGenericPassword(GetServiceName(), GetAccountName())` and returns the item's data bytes as they are (a base64
 //!   string of 16 random bytes, made by `AddRandomPasswordToKeychain` when the item is missing); `os_crypt_mac.mm`
@@ -22,7 +21,7 @@ use security_framework::passwords::{get_generic_password, set_generic_password};
 use serde_json::{Value, json};
 
 const SERVICE: &str = "ompdesk Safe Storage";
-const ACCOUNT: &str = "ompdesk";
+const ACCOUNT: &str = "ompdesk Key";
 
 // OSStatus codes worth naming to the person.
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
