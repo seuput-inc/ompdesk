@@ -766,7 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_burst_never_blocks_reply_demux_and_keeps_order() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::io::{AsyncWriteExt, BufReader};
         let (transport, peer) = connected(Duration::from_secs(10));
         let mut events = transport.subscribe();
         let (read, mut write) = tokio::io::split(peer);
