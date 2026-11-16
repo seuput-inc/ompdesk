@@ -102,8 +102,15 @@ impl Surface {
         if !self.shared.is_visible() {
             return self.shared.finish_frame(pending, FrameDisposition::Hidden);
         }
-        let decoded = sys::decode_frame(&pending.frame)
-            .and_then(|image| self.view.install_image(&image, &pending.frame));
+        let bounds = self.shared.bounds().rect;
+        let decoded = sys::decode_frame(&pending.frame).and_then(|image| {
+            let geometry = super::model::FrameGeometry::new(
+                &pending.frame.metadata,
+                (bounds.width, bounds.height),
+                (pending.frame.pixel_width, pending.frame.pixel_height),
+            )?;
+            self.view.install_image(&image, geometry)
+        });
         match decoded {
             Ok(()) => self
                 .shared
