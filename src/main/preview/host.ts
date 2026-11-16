@@ -642,14 +642,19 @@ export function registerPreviewHost(
 	 * `show`), else in a new tab; at the tab limit it replaces the shown page when `show` and is skipped otherwise.
 	 * A tab already on that version keeps its page (and the user's tweaks). A file or inline visual needs a page of
 	 * the visual session and a web visual one of the web session: a tab of the other kind is replaced, never
-	 * reused, so no page ever holds both.
+	 * reused, so no page ever holds both. Nor does a file or inline visual ever take over a page another one showed:
+	 * each such page has its own cookie jar (the native host gives every visual page its own browser context), and a
+	 * reused page would hand the old visual's cookies to the new one.
 	 */
 	function showVisual(host: PreviewHost, visualId: string, version: number | undefined, show: boolean): void {
 		const wanted = visuals.view(visualId, version)?.version;
 		const url = wanted === undefined ? null : visuals.url(visualId, wanted);
 		if (wanted === undefined || !url) return;
 		const kind = visuals.parse(url) ? "visual" : "web";
-		const inSession = (page: PreviewPage) => (page.state.session === kind ? page : replacePage(host, page, kind));
+		const inSession = (page: PreviewPage) =>
+			page.state.session === kind && !(kind === "visual" && page.visual && page.visual.id !== visualId)
+				? page
+				: replacePage(host, page, kind);
 		const shown = host.pages.find(candidate => candidate.visual?.id === visualId);
 		let target: PreviewPage;
 		if (shown) target = inSession(shown);
