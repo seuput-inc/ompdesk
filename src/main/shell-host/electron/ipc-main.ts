@@ -1,9 +1,8 @@
 /**
- * `ipcMain`: the shell forwards what a page's `window.omp` calls (`ipc.invoke`, `ipc.send`, and `ipc.sendSync` for the
- * Preview's dialog preload) and this dispatches it to the handlers main registered, with the page's `WebContents` as
- * `event.sender` — so `IpcRegistry`, `BrowserWindow.fromWebContents` and the core routing work as under Electron.
- * Only a page that belongs to an app window may invoke or send; a Preview page (a view or an offscreen browser) has
- * no `window.omp`, and its one synchronous channel is its registered preload's.
+ * `ipcMain`: the shell forwards an app page's `ipc.invoke`/`ipc.send` and its Preview dialog owner's `ipc.sendSync`
+ * request to main's handlers, with the canonical `WebContents` as `event.sender`.
+ * Only an app window page may invoke or send. A Preview page has no `window.omp`; its native dialog owner uses
+ * the existing synchronous dialog channel and waits asynchronously for main's answer.
  */
 import { EventEmitter } from "node:events";
 import { decodeBin, encodeBin } from "./binary-json";
@@ -16,10 +15,12 @@ export interface IpcMainEvent {
 	frameId: number;
 	processId: number;
 	returnValue?: unknown;
+	/** `ipc.sendSync` only: aborts when the shell stops waiting (the page navigated, closed, or its dialog ended). */
+	signal?: AbortSignal;
 	reply(channel: string, ...args: unknown[]): void;
 }
 
-export type IpcMainInvokeEvent = Omit<IpcMainEvent, "returnValue" | "reply">;
+export type IpcMainInvokeEvent = Omit<IpcMainEvent, "returnValue" | "reply" | "signal">;
 
 type InvokeListener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
@@ -102,6 +103,7 @@ export function serveIpc(host: Host, ipcMain: IpcMain): void {
 					resolve({ value: encodeBin(next) ?? null });
 				},
 			});
+			Object.defineProperty(event, "signal", { value: signal });
 			signal.addEventListener("abort", () => resolve({ value: null }), { once: true });
 			if (!ipcMain.emit(params.channel, event, ...(decodeBin(params.args ?? []) as unknown[])))
 				resolve({ value: null });

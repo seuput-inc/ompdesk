@@ -85,7 +85,7 @@ WebRTC over UDP is closed by two launch switches because the two runtimes read d
 
 The driver exposes real CDP Accessibility trees, `Input.imeSetComposition`, `Input.insertText`, key and pointer dispatch, drag dispatch, runtime bindings, and dialog events through `command` and `subscribe`. It does not bridge these to native accessibility APIs, native IME candidate positioning, the operating system clipboard, native drag-and-drop, context menus, spellchecking UI, or an audio output/phone audio stream. Those are real host integration requirements, not parity supplied by a canvas.
 
-`Page.javascriptDialogOpening` requires the host's existing dialog UI and a `Page.handleJavaScriptDialog` response. Chromium's pipe does not implement the previous synchronous `__ompdeskSendSync` preload. `omp-visual:` and `omp-media:` protocol streaming are not automatically registered in standalone Chromium. Main must preserve their checked request and response semantics through its actual host transport. This crate alone is not a whole-app or Preview-parity completion claim.
+`Page.javascriptDialogOpening` requires the host's existing dialog UI and a `Page.handleJavaScriptDialog` response; this crate only passes the event and the command. The tauri-shell host's `preview/dialogs.rs` is that consumer, answering over the host wire's `ipc.sendSync` (Chromium's pipe does not implement the previous synchronous `__ompdeskSendSync` preload). `omp-visual:` and `omp-media:` protocol streaming are not automatically registered in standalone Chromium. Main must preserve their checked request and response semantics through its actual host transport. This crate alone is not a whole-app or Preview-parity completion claim.
 
 ## Narrow proof
 

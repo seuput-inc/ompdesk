@@ -368,6 +368,41 @@ describe("PageStream dialogs", () => {
 		});
 	});
 
+	it("withdraws a dialog the page's browser ended before any poll carried it", async () => {
+		const { stream } = setup();
+		const ended = new AbortController();
+		const answer = stream.openDialog({ kind: "confirm", message: "Sure?", initial: null }, ended.signal);
+		ended.abort();
+		expect(await answer).toEqual({ accept: false, text: null });
+		const poll = stream.poll({ ack: null, wait: 50 });
+		await vi.advanceTimersByTimeAsync(60);
+		expect((await poll).dialogs).toEqual([]);
+	});
+
+	it("dismisses a dialog whose request was already withdrawn without showing it", async () => {
+		const { stream } = setup();
+		const answer = stream.openDialog({ kind: "alert", message: "Hi", initial: null }, AbortSignal.abort());
+		expect(await answer).toEqual({ accept: false, text: null });
+		const poll = stream.poll({ ack: null, wait: 50 });
+		await vi.advanceTimersByTimeAsync(60);
+		expect((await poll).dialogs).toEqual([]);
+	});
+
+	it("a viewer's answer ends the wait for the withdrawal, and a later withdrawal changes nothing", async () => {
+		const { stream } = setup();
+		const ended = new AbortController();
+		const answer = stream.openDialog({ kind: "confirm", message: "Sure?", initial: null }, ended.signal);
+		const { dialogs } = await stream.poll({ ack: null });
+		stream.answerDialog(dialogs[0]?.id ?? 0, { accept: true, text: null });
+		expect(await answer).toEqual({ accept: true, text: null });
+		ended.abort();
+		const next = stream.openDialog({ kind: "alert", message: "Next", initial: null });
+		const polled = await stream.poll({ ack: null });
+		expect(polled.dialogs.map(dialog => dialog.message)).toEqual(["Next"]);
+		stream.answerDialog(polled.dialogs[0]?.id ?? 0, { accept: true, text: null });
+		expect(await next).toEqual({ accept: true, text: null });
+	});
+
 	it("dismisses the rest of a flood unseen", async () => {
 		const { stream } = setup();
 		const answers = Array.from({ length: DIALOG_FLOOD.count + 3 }, (_, index) =>

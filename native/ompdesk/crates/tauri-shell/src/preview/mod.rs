@@ -2,6 +2,7 @@ mod accessibility;
 pub(crate) mod cleanup;
 mod commands;
 mod contexts;
+mod dialogs;
 mod events;
 mod frame_scope;
 mod frames;
@@ -82,6 +83,7 @@ struct Pages {
     entries: Mutex<HashMap<u64, Arc<Entry>>>,
     routes: Mutex<HashMap<String, Route>>,
     browser: OnceLock<Arc<Browser>>,
+    dialogs: dialogs::Dialogs,
 }
 impl Pages {
     fn entry(&self, wc: u64) -> Result<Arc<Entry>, WireError> {
@@ -465,6 +467,9 @@ async fn serve(
                         break;
                     }
                     let _ = pages.browser.set(Arc::clone(&value));
+                    pages
+                        .dialogs
+                        .install(Arc::new(dialogs::Live::new(Arc::clone(&value))));
                     let events = value.subscribe();
                     observer = Some(tauri::async_runtime::spawn(observe(
                         Arc::clone(&pages),
@@ -632,6 +637,7 @@ enum Execution {
 enum EvaluationKind {
     JavaScript(ScriptDocument),
     Cdp(Arc<Entry>),
+    Input(Arc<Entry>, Option<&'static str>),
 }
 struct Evaluation {
     reply: shell_preview::CommandReply,
@@ -656,6 +662,17 @@ impl Evaluation {
             }
             EvaluationKind::Cdp(_) => {
                 original(self.identity)?;
+                json!({"result":answer})
+            }
+            EvaluationKind::Input(entry, release) => {
+                let wc = self.identity.wc;
+                pages.current(wc)?;
+                if !Arc::ptr_eq(&entry, &pages.entry(wc)?) {
+                    return Err(WireError::new("gone", "original Preview owner ended"));
+                }
+                if let Some(kind) = release {
+                    wc_event(wc, "input-event", json!([{"type":kind}]));
+                }
                 json!({"result":answer})
             }
         };
@@ -766,12 +783,6 @@ async fn execute(
             )?;
         }
     }
-    // Input can commit navigation before its acknowledgement; its original document is checked before submission.
-    let reply_bound = bound
-        && !(method == "wc.cdp.send"
-            && params["method"]
-                .as_str()
-                .is_some_and(|method| method.starts_with("Input.")));
     let entry = pages.entry(wc)?;
     let result = match method {
         "view.op" => {
@@ -897,30 +908,32 @@ async fn execute(
                     kind: EvaluationKind::Cdp(entry),
                 }));
             }
+            if method.starts_with("Input.") {
+                let release = match (
+                    method,
+                    params.pointer("/params/type").and_then(Value::as_str),
+                ) {
+                    ("Input.dispatchMouseEvent", Some("mouseReleased")) => Some("mouseUp"),
+                    ("Input.dispatchKeyEvent", Some("keyUp")) => Some("keyUp"),
+                    _ => None,
+                };
+                // Submission stays in the FIFO; Chromium may hold this reply until its dialog is answered.
+                return Ok(Execution::Awaiting(Evaluation {
+                    reply,
+                    identity,
+                    kind: EvaluationKind::Input(entry, release),
+                }));
+            }
             let mut answer = reply.receive().await.map_err(wire)?;
             unmap_urls(&entry.partition, &mut answer)
                 .await
                 .map_err(crate::failed)?;
-            if reply_bound {
+            if bound {
                 original(identity)?;
             } else {
                 pages.current(wc)?;
                 if !Arc::ptr_eq(&entry, &pages.entry(wc)?) {
                     return Err(WireError::new("gone", "original Preview owner ended"));
-                }
-            }
-            if matches!(
-                method,
-                "Input.dispatchMouseEvent" | "Input.dispatchKeyEvent"
-            ) {
-                let kind = params.pointer("/params/type").and_then(Value::as_str);
-                let release = match kind {
-                    Some("mouseReleased") => Some("mouseUp"),
-                    Some("keyUp") => Some("keyUp"),
-                    _ => None,
-                };
-                if let Some(kind) = release {
-                    wc_event(wc, "input-event", json!([{"type":kind}]));
                 }
             }
             return Ok(Execution::Complete(Answer::Json(json!({"result":answer}))));
@@ -1257,6 +1270,7 @@ async fn close(pages: &Pages, wc: u64) -> Result<(), WireError> {
     let entry = pages.entry(wc)?;
     let _surface_change = entry.surface_change.lock().await;
     let _closing = entry.closing.lock().await;
+    pages.dialogs.end(wc);
     let key = {
         let _submitting = entry.submitting.lock().expect("native frame submission");
         let mut registry = runtime().registry.lock().expect("registry");
@@ -1744,6 +1758,17 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
         };
         if session != entry.page.session_id && !route.iframe {
             continue;
+        }
+        match dialogs::decode(&event) {
+            Some(dialogs::Event::Opening(opening)) => {
+                tauri::async_runtime::spawn(pages.dialogs.opened(route.wc, session, &opening));
+                continue;
+            }
+            Some(dialogs::Event::Closed) => {
+                pages.dialogs.closed(route.wc, session);
+                continue;
+            }
+            None => {}
         }
         let update = if route.iframe {
             None
