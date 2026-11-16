@@ -143,7 +143,10 @@ mod tests {
         assert_eq!(storage("").unwrap(), Storage::App);
         assert_eq!(storage("app").unwrap(), Storage::App);
         assert_eq!(storage("preview").unwrap(), Storage::Memory);
-        assert_eq!(storage("persist:preview:one").unwrap(), Storage::Persistent("preview:one".into()));
+        assert_eq!(
+            storage("persist:preview:one").unwrap(),
+            Storage::Persistent("preview:one".into())
+        );
         assert!(storage("persist:").is_err());
     }
 }

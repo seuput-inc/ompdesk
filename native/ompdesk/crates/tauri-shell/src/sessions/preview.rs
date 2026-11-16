@@ -356,7 +356,9 @@ pub(super) async fn apply(
             return Err("the Preview streamed custom-scheme consumer is not installed".into());
         }
         "setSpellCheckerLanguages" | "addWordToSpellCheckerDictionary" => {
-            return Err("Chromium CDP has no public spellchecker language or dictionary API".into());
+            return Err(
+                "Chromium CDP has no public spellchecker language or dictionary API".into(),
+            );
         }
         "setProxy" => {}
         other => return Err(format!("session.op {other} has no Preview consumer")),
