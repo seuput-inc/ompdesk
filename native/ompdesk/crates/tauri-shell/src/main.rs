@@ -576,28 +576,8 @@ fn show(window: &WebviewWindow) -> tauri::Result<()> {
     if shell_core::sys::winops::is_focusable(window.hwnd()?.0 as isize) {
         window.show()
     } else {
-        window_activation::without_activation(window, "show", || window.show())
+        window_activation::show_inactive(window, "show")
     }
-}
-/// Electron's `showInactive`: the window appears without taking the keyboard focus or the foreground. tao shows a
-/// window with `SW_SHOW` (Microsoft: "Activates the window and displays it"), and `WS_EX_NOACTIVATE` is documented
-/// for clicks, so the show is made without activation (`window_activation`); the focusable flag is not touched, as
-/// putting it back after the show would show the window again, now activatable.
-#[cfg(windows)]
-fn show_inactive(window: &WebviewWindow) -> tauri::Result<()> {
-    window_activation::without_activation(window, "showInactive", || window.show())
-}
-/// Electron's `setFocusable`. tao shows a visible window again at every flag change, which would activate it, so on
-/// Windows the change is made without activation.
-#[cfg(windows)]
-fn set_focusable(window: &WebviewWindow, focusable: bool) -> tauri::Result<()> {
-    window_activation::without_activation(window, "setFocusable", || {
-        window.set_focusable(focusable)
-    })
-}
-#[cfg(not(windows))]
-fn set_focusable(window: &WebviewWindow, focusable: bool) -> tauri::Result<()> {
-    window.set_focusable(focusable)
 }
 fn win_op(params: &Value) -> Result<Value, WireError> {
     let win = number(params, "winId")?;
@@ -609,14 +589,13 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
         "show" => show(&window),
         #[cfg(not(windows))]
         "show" => window.show(),
-        "setFocusable" => set_focusable(
-            &window,
+        "setFocusable" => window.set_focusable(
             a["focusable"]
                 .as_bool()
                 .ok_or_else(|| WireError::new("invalid", "missing focusable"))?,
         ),
         #[cfg(windows)]
-        "showInactive" => show_inactive(&window),
+        "showInactive" => window_activation::show_inactive(&window, "showInactive"),
         "hide" => window.hide(),
         "focus" => window.set_focus(),
         "minimize" => window.minimize(),

@@ -7,8 +7,8 @@
 //! is hidden or inactive. This module takes the window's activation from the system instead: a subclass sees
 //! `WM_ACTIVATE`, and Node hears `focus`/`blur` only when `GetActiveWindow` flips.
 //!
-//! tao's flag changes can show a window with `SW_SHOW`. For an explicitly inactive operation, the subclass adds
-//! `SWP_NOACTIVATE` to that operation's window-position change. It never changes another application's foreground.
+//! tao shows a window with `SW_SHOW`, which activates it. `show_inactive` shows a window natively instead and never
+//! changes another application's foreground.
 #![allow(unsafe_code)]
 
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -19,9 +19,9 @@ use tauri::WebviewWindow;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, DefWindowProcW, GWLP_WNDPROC, GetClassNameW, GetForegroundWindow,
-    IsWindowVisible, PostMessageW, SWP_NOACTIVATE, SetWindowLongPtrW, WINDOWPOS, WM_ACTIVATE,
-    WM_APP, WM_NCDESTROY, WM_WINDOWPOSCHANGING, WNDPROC,
+    CallWindowProcW, DefWindowProcW, GWL_STYLE, GWLP_WNDPROC, GetClassNameW, GetForegroundWindow,
+    IsWindowVisible, PostMessageW, STYLESTRUCT, SetWindowLongPtrW, WM_ACTIVATE, WM_APP,
+    WM_NCDESTROY, WM_STYLECHANGING, WNDPROC, WS_VISIBLE,
 };
 
 /// Posted by the subclass to its own window on every `WM_ACTIVATE`: the report runs once the activation that raised
@@ -36,15 +36,8 @@ struct Hook {
 }
 
 static HOOKS: Mutex<Vec<(isize, Hook)>> = Mutex::new(Vec::new());
-/// The window inside `without_activation` (0 for none).
-static SCOPE: AtomicIsize = AtomicIsize::new(0);
-
-struct InactiveScope(isize);
-impl Drop for InactiveScope {
-    fn drop(&mut self) {
-        SCOPE.store(self.0, Ordering::Relaxed);
-    }
-}
+/// The window whose `show_inactive` is setting tao's visibility flag (0 for none).
+static RECONCILING: AtomicIsize = AtomicIsize::new(0);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -138,9 +131,16 @@ unsafe extern "system" fn window_proc(
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     };
     match message {
-        WM_WINDOWPOSCHANGING if lparam != 0 && SCOPE.load(Ordering::Relaxed) == hwnd as isize => {
-            // SAFETY: for this message lparam points to the WINDOWPOS the system is about to apply.
-            unsafe { (*(lparam as *mut WINDOWPOS)).flags |= SWP_NOACTIVATE };
+        WM_STYLECHANGING
+            if wparam as i32 == GWL_STYLE
+                && lparam != 0
+                && RECONCILING.load(Ordering::Relaxed) == hwnd as isize =>
+        {
+            // SAFETY: for this message lparam points to the STYLESTRUCT of the change the system is about to apply.
+            let style = unsafe { &mut *(lparam as *mut STYLESTRUCT) };
+            // tao writes the style from its own visibility flag and clears `WS_VISIBLE` of a window it has not
+            // shown: keep the bit, so the `SW_SHOW` that follows is not a second, activating show.
+            style.styleNew = (style.styleNew & !WS_VISIBLE) | (style.styleOld & WS_VISIBLE);
         }
         WM_ACTIVATE => {
             // SAFETY: the procedure this one replaced, with the message it was given.
@@ -207,16 +207,26 @@ pub(crate) fn webview_focus(window: &WebviewWindow, win: u64, focused: bool) {
     }
 }
 
-/// Preserve the window's native inactive-show contract through tao's window-flag application.
-pub(crate) fn without_activation(
-    window: &WebviewWindow,
-    op: &'static str,
-    call: impl FnOnce() -> tauri::Result<()>,
-) -> tauri::Result<()> {
+/// Electron's `showInactive`: the window appears without becoming the active window or taking the foreground.
+///
+/// tao 0.37.2 has no inactive show. Its `set_visible(true)` ends in `ShowWindow(SW_SHOW)` ("Activates the window and
+/// displays it"; its `SW_SHOWNOACTIVATE` branch needs `MARKER_DONT_FOCUS`, which it removes once creation is over), and
+/// it learns a window's visibility only from its own `set_visible`: no handler reads `WM_SHOWWINDOW`, and
+/// `WM_WINDOWPOSCHANGED` only reports a move. Its other flag changes (maximize, minimize, `setFocusable`) hide a window
+/// whose flag says hidden and skip `SW_MAXIMIZE`, so the flag cannot stay false while the window is visible.
+///
+/// So the window is shown natively with `SW_SHOWNOACTIVATE`, then tao's flag is set with `window.show()`. That call
+/// clears `WS_VISIBLE` through `SetWindowLong` before its `ShowWindow(SW_SHOW)`; `window_proc` keeps the bit while
+/// `RECONCILING` names this window, so `SW_SHOW` finds a visible window, on which Wine `ShowWindow`
+/// (`case SW_SHOW: if (was_visible) goto done`) and ReactOS `co_WinPosShowWindow` ("Nothing to do!") do nothing.
+/// Microsoft's page for `ShowWindow` states no such exception; the Windows gate must observe `active:false` in the
+/// `window.inactive` log. The focusable flag stays tao's, so it survives later flag changes.
+pub(crate) fn show_inactive(window: &WebviewWindow, op: &'static str) -> tauri::Result<()> {
     let hwnd = window.hwnd()?.0 as isize;
-    let scope = InactiveScope(SCOPE.swap(hwnd, Ordering::Relaxed));
-    let result = call();
-    drop(scope);
+    shell_core::sys::winops::show_no_activate(hwnd);
+    RECONCILING.store(hwnd, Ordering::Relaxed);
+    let result = window.show();
+    RECONCILING.store(0, Ordering::Relaxed);
     crate::log::log(
         "window.inactive",
         json!({
