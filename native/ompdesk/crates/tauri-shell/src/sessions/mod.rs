@@ -166,6 +166,9 @@ pub async fn attach_app(partition: &str, webview: Webview) -> Result<(), String>
     .await;
     with(|r| {
         let s = r.get_mut(&partition)?;
+        if !s.app_views.iter().any(|attached| attached.label() == webview.label()) {
+            return Err("app WebView detached before session attachment completed".into());
+        }
         match &result {
             Ok(snapshot) => {
                 s.snapshot = Some(snapshot.clone());
