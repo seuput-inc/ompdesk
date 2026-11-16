@@ -850,8 +850,9 @@ jobs:
               --arg sha512 "$(openssl dgst -sha512 -binary "dist/$1" | base64 | tr -d '\n')" \
               '{name: $name, size: $size, sha512: $sha512}'
           }
+          minimumDarwin=$(jq -er .minimumDarwin src/shared/app-compatibility.json)
           META=$(jq -cn --arg version "$VERSION" --arg releaseDate "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
-            --argjson mac "$(entry ompdesk-mac-arm64.dmg)" \
+            --argjson mac "$(entry ompdesk-mac-arm64.dmg | jq --arg minimum "$minimumDarwin" '. + {minimumSystemVersion: $minimum}')" \
             --argjson windows "$(entry ompdesk-windows-setup.exe)" \
             '{version: $version, releaseDate: $releaseDate, files: {mac: $mac, windows: $windows}}')
           printf '\n<!-- ompdesk-update %s -->\n' "$META" >> notes/notes.md

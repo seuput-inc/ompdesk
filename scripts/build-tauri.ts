@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import compatibility from "../src/shared/app-compatibility.json";
 import { cargoEnv, cargoPath, rustcPath } from "./cargo";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,6 +45,7 @@ export function sourceSha256(): string {
 		}
 	}
 	digest.update(fs.readFileSync(fileURLToPath(import.meta.url)));
+	digest.update(JSON.stringify(compatibility));
 	return digest.digest("hex");
 }
 
@@ -89,7 +91,11 @@ export async function buildTauri(): Promise<string> {
 	const targetDir = path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(TAURI_DIR, "target"));
 	const bins = ["ompdesk-tauri-shell", ...(process.platform === "darwin" ? ["ompdesk-launcher"] : [])];
 	const sourceBefore = sourceSha256();
-	const env = { ...cargoEnv(cargo), CARGO_TARGET_DIR: targetDir };
+	const env = {
+		...cargoEnv(cargo),
+		CARGO_TARGET_DIR: targetDir,
+		...(process.platform === "darwin" ? { MACOSX_DEPLOYMENT_TARGET: compatibility.minimumMacOS } : {}),
+	};
 	const child = Bun.spawn([cargo, "build", "--locked", "--release", ...bins.flatMap(name => ["--bin", name])], {
 		cwd: TAURI_DIR,
 		env,

@@ -26,6 +26,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import compatibility from "../src/shared/app-compatibility.json";
 
 // CommonJS modules shared with the packaging check.
 const require = createRequire(import.meta.url);
@@ -142,7 +143,9 @@ export function assembleBundle(
 		fs.chmodSync(path.join(contents, "MacOS", to), 0o755);
 	}
 	if (runtime === "cef") copy(path.join(staged, bundle.FRAMEWORK), path.join(frameworks, bundle.FRAMEWORK));
-	fs.writeFileSync(path.join(contents, "Info.plist"), plist.build(bundle.appInfo(manifest.version)));
+	const info = bundle.appInfo(manifest.version);
+	if (runtime === "tauri") info.LSMinimumSystemVersion = compatibility.minimumMacOS;
+	fs.writeFileSync(path.join(contents, "Info.plist"), plist.build(info));
 	for (const prefix of runtime === "cef" ? bundle.HELPER_PREFIXES : []) {
 		for (const helper of bundle.HELPERS) {
 			const name = bundle.helperName(prefix, helper);
@@ -252,7 +255,8 @@ async function main(): Promise<void> {
 	// `--version <v>`: another version than package.json's (the update dry run offers 0.200.0 from a released 0.127.0).
 	const versionAt = args.indexOf("--version");
 	const version = versionAt >= 0 ? args[versionAt + 1] : undefined;
-	const app = assembleBundle(REPO_ROOT, out, version);
+	const runtime = args.includes("--historical-cef") ? "cef" : "tauri";
+	const app = assembleBundle(REPO_ROOT, out, version, runtime);
 	await afterPack({
 		electronPlatformName: "darwin",
 		appOutDir: out,

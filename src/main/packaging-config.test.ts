@@ -954,6 +954,7 @@ describe("mac bundle configs", () => {
 					CFBundleIdentifier: "com.seuput.ompdesk",
 					CFBundleExecutable: "OMPdesk",
 					CFBundleShortVersionString: "9.9.9",
+					LSMinimumSystemVersion: runtime === "tauri" ? "14.0.0" : "12.0",
 				});
 				// Both helper sets: CEF names its helpers after the shell (the process) or the launcher (the bundle).
 				expect(bundleInfo.HELPER_PREFIXES).toEqual(["OMPdesk", "ompdesk-shell"]);

@@ -1,0 +1,33 @@
+name: OMPdesk's Tauri shell and Node
+description: Stage the actual system-WebView host, original rollback launcher and pinned Node services.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore the staged Tauri shell
+      id: shell-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: resources/ompdesk-tauri
+        key: ompdesk-tauri-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/crates/tauri-shell/**', '!native/ompdesk/crates/tauri-shell/target/**', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'native/ompdesk/crates/shell-preview/**', '!native/ompdesk/crates/shell-preview/target/**', 'scripts/build-tauri.ts', 'scripts/cargo.ts', 'src/shared/app-compatibility.json') }}
+    - if: steps.shell-cache.outputs.cache-hit != 'true'
+      uses: ./.github/actions/native-toolchain
+      with:
+        workspaces: |
+          native/ompdesk/crates/tauri-shell
+          native/ompdesk/crates/shell-preview
+    - name: Build the Tauri shell and rollback launcher
+      if: steps.shell-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: bun run build:tauri
+    - if: steps.shell-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: resources/ompdesk-tauri
+        key: ${{ steps.shell-cache.outputs.cache-primary-key }}
+    - name: Verify staged host inputs and bytes
+      shell: bash
+      run: bun run build:tauri -- --check
+    - name: Fetch the pinned Node
+      shell: bash
+      run: bun run build:node
