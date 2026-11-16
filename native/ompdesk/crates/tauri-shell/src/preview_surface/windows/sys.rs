@@ -15,6 +15,8 @@ use super::super::model::{
 };
 use super::super::shared::Shared;
 use shell_core::hotkey::Mods;
+// Keep this UIA COM ABI separate from the app's WebView2 windows binding.
+use windows_surface as windows;
 use windows::Win32::Foundation::{BOOL, HWND as WinHwnd, LPARAM as WinLparam, WPARAM as WinWparam};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory, IWICPalette,
@@ -2585,6 +2587,7 @@ mod tests {
     use super::super::super::model::{AxSnapshot, Consumer, FrameDisposition, FrameMetadata, Rect};
     use super::super::{NativeParent, Surface};
     use super::*;
+    use windows_surface as windows;
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
     use windows_sys::Win32::Graphics::Gdi::GetPixel;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
