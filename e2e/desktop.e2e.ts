@@ -461,7 +461,12 @@ test("workspace navigation cannot replace the trusted desktop with an untrusted 
 	expect(page.url()).toBe(trustedUrl);
 	await page.reload();
 	await expect(page.locator("textarea").first()).toBeEditable();
-	await new Promise<void>(resolve => untrusted.close(() => resolve()));
+	// The system WebView may hold a connection to the document's server open (a preconnect, a kept-alive request) that
+	// the refused navigation never used: `close` alone waits for it until the test times out.
+	untrusted.closeAllConnections();
+	const closed = Promise.withResolvers<void>();
+	untrusted.close(() => closed.resolve());
+	await closed.promise;
 });
 
 test("failed preference writes retain edits and never allow a premature restart", async () => {

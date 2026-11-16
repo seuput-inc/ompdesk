@@ -162,13 +162,24 @@ test("renders only the tail, anchors older pages, reaches the first turn and app
 		.toBeLessThan(5);
 	await capture("anchored-prepend");
 	const firstTurn = nav.getByRole("button", { name: /Jump to turn .*Long session turn 000/ });
+	// The rail draws only 20 ticks and an "earlier" item, so its button count stops growing once it is full; every
+	// tick names the turns loaded so far ("Jump to turn 3 of 53: …"), which does grow with each page.
+	const loadedTurns = async () =>
+		Number(
+			/ of (\d+):/.exec(
+				(await nav
+					.getByRole("button", { name: /^Jump to turn / })
+					.first()
+					.getAttribute("aria-label")) ?? "",
+			)?.[1],
+		);
 	for (let index = 0; index < 12 && (await firstTurn.count()) === 0; index++) {
-		const count = await nav.locator("button").count();
+		const loaded = await loadedTurns();
 		// As above: a Home sent while the renderer still settles from the last page is lost, so it is sent again.
 		await expect(async () => {
 			await scroll.focus();
 			await page.keyboard.press("Home");
-			await expect.poll(async () => await nav.locator("button").count(), { timeout: 3_000 }).toBeGreaterThan(count);
+			await expect.poll(loadedTurns, { timeout: 3_000 }).toBeGreaterThan(loaded);
 		}).toPass({ timeout: 30_000 });
 	}
 	await firstTurn.click();

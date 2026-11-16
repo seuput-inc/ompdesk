@@ -184,8 +184,33 @@ test("streaming with 50k history preserves the reading anchor, supports five tas
 		await page.keyboard.press("ControlOrMeta+Shift+BracketRight");
 		await expect(input).toHaveValue("retained stream draft");
 		// With a draft the one action button is Send: its right click offers the Stop that keeps the draft.
-		await page.locator('[data-slot="send"] button').click({ button: "right" });
-		await page.locator("[data-menu-item]").filter({ hasText: "Stop" }).click();
+		const send = page.locator('[data-slot="send"] button');
+		await expect(page.locator("[data-send-stop-hint]")).toHaveCount(1);
+		// What the page heard of the right click, for the failure message: no `contextmenu` event at all (the host's input
+		// path) reads differently from one the menu did not answer.
+		await page.evaluate(() => {
+			const heard: string[] = [];
+			(window as unknown as { __contextMenus: string[] }).__contextMenus = heard;
+			document.addEventListener(
+				"contextmenu",
+				event =>
+					heard.push(
+						`trusted=${event.isTrusted} prevented=${event.defaultPrevented} target=${(event.target as Element).tagName} at ${Math.round(event.clientX)},${Math.round(event.clientY)}`,
+					),
+				true,
+			);
+		});
+		await send.click({ button: "right" });
+		const stopItem = page.locator("[data-menu-item]").filter({ hasText: "Stop" });
+		try {
+			await stopItem.waitFor({ timeout: 10_000 });
+		} catch (cause) {
+			const heard = await page.evaluate(() => (window as unknown as { __contextMenus: string[] }).__contextMenus);
+			throw new Error(`no Stop menu after the right click; contextmenu events heard: ${JSON.stringify(heard)}`, {
+				cause,
+			});
+		}
+		await stopItem.click();
 		await expect(page.locator("[data-send-stop-hint]")).toHaveCount(0);
 		await page.evaluate(() => window.omp.sidecar.restart());
 		await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
