@@ -24,10 +24,10 @@ async function shown(page: Page, tabId: string): Promise<Shown> {
 	return page.locator(`.omp-session-pane[data-tab-id="${tabId}"]`).evaluate(pane => {
 		const rows = [...pane.querySelectorAll<HTMLElement>("[data-transcript-kind][data-row-key]")];
 		const structure: Record<string, number> = {};
+		// A clock that repeats the one above it moves to the action row (`repeatedClockRows`): which rows share a
+		// minute depends on where the wall-clock minute turns during each tab's run, not on how it renders
+		// (ChatStream.clocks.test.ts pins the rule).
 		for (const row of rows)
-			// A clock that repeats the one above it moves to the action row (`repeatedClockRows`): which rows share a
-			// minute depends on where the wall-clock minute turns during each tab's run, not on how it renders
-			// (ChatStream.clocks.test.ts pins the rule).
 			for (const element of [row, ...row.querySelectorAll("*")])
 				for (const name of element.getAttributeNames())
 					if (name.startsWith("data-") && name !== "data-clock-repeats")
