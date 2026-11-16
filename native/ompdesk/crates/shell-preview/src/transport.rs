@@ -108,6 +108,38 @@ pub struct Transport {
     owner: Arc<Owner>,
 }
 
+/// A command already queued for Chromium. Owns the pending-reply guard: dropping it before `receive` completes
+/// cancels the request exactly like dropping an in-flight `request`.
+pub struct CommandReply {
+    _guard: PendingGuard,
+    receiver: oneshot::Receiver<Result<Value>>,
+    /// Absolute timeout from successful submission; `None` for settled commands, which wait for their reply.
+    deadline: Option<tokio::time::Instant>,
+}
+
+impl CommandReply {
+    pub async fn receive(self) -> Result<Value> {
+        let Self {
+            _guard,
+            receiver,
+            deadline,
+        } = self;
+        let Some(deadline) = deadline else {
+            return receiver
+                .await
+                .unwrap_or_else(|_| Err(Error::new("closed", "Chromium connection closed")));
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Error::new("timeout", "Chromium request timed out"));
+        }
+        match tokio::time::timeout_at(deadline, receiver).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(Error::new("closed", "Chromium connection closed")),
+            Err(_) => Err(Error::new("timeout", "Chromium request timed out")),
+        }
+    }
+}
+
 struct PendingGuard {
     shared: Arc<Shared>,
     id: u64,
@@ -235,6 +267,29 @@ impl Transport {
         session: Option<&str>,
         lifetime: PendingLifetime,
     ) -> Result<Value> {
+        self.submit_with_lifetime(method, params, session, lifetime)?
+            .receive()
+            .await
+    }
+
+    /// Allocates the ID, registers the pending reply and queues the frame before returning, so submissions keep
+    /// call order on the wire; only `CommandReply::receive` waits. Dropping the reply cancels like a dropped request.
+    pub fn submit(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<CommandReply> {
+        self.submit_with_lifetime(method, params, session, PendingLifetime::Timed)
+    }
+
+    fn submit_with_lifetime(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+        lifetime: PendingLifetime,
+    ) -> Result<CommandReply> {
         let shared = &self.owner.shared;
         let (reply, receiver) = oneshot::channel();
         let id = {
@@ -263,7 +318,7 @@ impl Transport {
             );
             id
         };
-        let _guard = PendingGuard {
+        let guard = PendingGuard {
             shared: Arc::clone(shared),
             id,
         };
@@ -287,16 +342,13 @@ impl Transport {
                 _permit: Some(permit),
             })
             .map_err(|_| Error::new("capacity", "Chromium request queue is full or closed"))?;
-        if lifetime != PendingLifetime::Timed {
-            return receiver
-                .await
-                .unwrap_or_else(|_| Err(Error::new("closed", "Chromium connection closed")));
-        }
-        match tokio::time::timeout(self.owner.timeout, receiver).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(Error::new("closed", "Chromium connection closed")),
-            Err(_) => Err(Error::new("timeout", "Chromium request timed out")),
-        }
+        let deadline =
+            (lifetime == PendingLifetime::Timed).then(|| tokio::time::Instant::now() + self.owner.timeout);
+        Ok(CommandReply {
+            _guard: guard,
+            receiver,
+            deadline,
+        })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -681,6 +733,70 @@ mod tests {
         assert!(id > old_id);
         write.write_all(format!("{{\"id\":{old_id},\"result\":{{\"v\":\"late\"}}}}\0{{\"id\":{id},\"result\":{{\"v\":\"current\"}}}}\0").as_bytes()).await.unwrap();
         assert_eq!(task.await.unwrap().unwrap(), json!({"v":"current"}));
+    }
+
+    #[tokio::test]
+    async fn submitted_awaited_command_does_not_delay_later_input_and_replies_settle_out_of_order() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        // Submission is synchronous: both commands are on the wire in call order although the first reply is never
+        // polled before the second command is submitted.
+        let evaluation = transport
+            .submit(
+                "Runtime.evaluate",
+                json!({"expression":"listener","awaitPromise":true}),
+                Some("s"),
+            )
+            .unwrap();
+        let input = transport
+            .submit(
+                "Input.dispatchMouseEvent",
+                json!({"type":"mousePressed"}),
+                Some("s"),
+            )
+            .unwrap();
+        let first = command(&mut read).await;
+        let second = command(&mut read).await;
+        assert_eq!(first["method"], "Runtime.evaluate");
+        assert_eq!(second["method"], "Input.dispatchMouseEvent");
+        assert_eq!(first["sessionId"], "s");
+        assert_eq!(second["sessionId"], "s");
+        let (evaluation_id, input_id) = (first["id"].as_u64().unwrap(), second["id"].as_u64().unwrap());
+        assert!(input_id > evaluation_id);
+        // The later input reply settles first; the awaited evaluation replies afterwards.
+        write
+            .write_all(
+                format!(
+                    "{{\"id\":{input_id},\"result\":{{\"v\":\"input\"}},\"sessionId\":\"s\"}}\0{{\"id\":{evaluation_id},\"result\":{{\"v\":\"evaluation\"}},\"sessionId\":\"s\"}}\0"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(input.receive().await.unwrap(), json!({"v":"input"}));
+        assert_eq!(evaluation.receive().await.unwrap(), json!({"v":"evaluation"}));
+        assert!(transport.owner.shared.state.lock().unwrap().pending.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn command_reply_timeout_counts_from_submission() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let mut events = transport.subscribe();
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let reply = transport.submit("Runtime.evaluate", json!({}), None).unwrap();
+        let id = command(&mut read).await["id"].as_u64().unwrap();
+        tokio::time::advance(Duration::from_secs(10)).await;
+        write.write_all(
+            format!("{{\"id\":{id},\"result\":{{\"late\":true}}}}\0{{\"method\":\"Test.replyDelivered\",\"params\":{{}}}}\0").as_bytes()
+        ).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().method, "Test.replyDelivered");
+        let started = tokio::time::Instant::now();
+        let error = reply.receive().await.unwrap_err();
+        assert_eq!(error.code, "timeout");
+        assert_eq!(tokio::time::Instant::now(), started);
+        assert!(transport.owner.shared.state.lock().unwrap().pending.is_empty());
     }
 
     #[tokio::test]

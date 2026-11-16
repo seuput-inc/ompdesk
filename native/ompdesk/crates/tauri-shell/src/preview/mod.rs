@@ -220,13 +220,12 @@ impl Drop for PendingEvaluation {
     }
 }
 
-fn awaits_script(method: &str, params: &Value) -> bool {
-    (method == "wc.op" && params["op"].as_str() == Some("executeJavaScript"))
-        || (method == "wc.cdp.send"
-            && (params["method"].as_str() == Some("Runtime.awaitPromise")
-                || (matches!(params["method"].as_str(),
-                    Some("Runtime.evaluate" | "Runtime.callFunctionOn" | "Runtime.runScript"))
-                    && params.pointer("/params/awaitPromise").and_then(Value::as_bool) == Some(true))))
+fn awaits_cdp_script(params: &Value) -> bool {
+    params["method"].as_str() == Some("Runtime.awaitPromise")
+        || (matches!(
+            params["method"].as_str(),
+            Some("Runtime.evaluate" | "Runtime.callFunctionOn" | "Runtime.runScript")
+        ) && params.pointer("/params/awaitPromise").and_then(Value::as_bool) == Some(true))
 }
 pub struct Service {
     send: mpsc::UnboundedSender<Message>,
@@ -472,24 +471,23 @@ async fn serve(
             }
             continue;
         }
-        if awaits_script(&call.method, &call.params) {
-            let browser = Arc::clone(browser.as_ref().expect("launched Preview"));
-            let pages = Arc::clone(&pages);
-            let mut request = PendingEvaluation(Some(call));
-            evaluations.spawn(async move {
-                let call = request.0.as_ref().expect("owned evaluation");
-                let result = tokio::select! {
-                    biased;
-                    _ = &mut cancelled => Err(WireError::new("cancelled", "Preview evaluation cancelled")),
-                    result = execute(&browser, &pages, &call.method, &call.params, identity) => result,
-                };
-                answer_call(&pages, request.0.take().expect("owned evaluation"), result).await;
-            });
-            continue;
-        }
         let browser = browser.as_ref().expect("launched Preview");
-        let result = execute(browser, &pages, &call.method, &call.params, identity).await;
-        answer_call(&pages, call, result).await;
+        match execute(browser, &pages, &call.method, &call.params, identity).await {
+            Ok(Execution::Awaiting(evaluation)) => {
+                let pages = Arc::clone(&pages);
+                let mut request = PendingEvaluation(Some(call));
+                evaluations.spawn(async move {
+                    let result = tokio::select! {
+                        biased;
+                        _ = &mut cancelled => Err(WireError::new("cancelled", "Preview evaluation cancelled")),
+                        result = evaluation.receive() => result,
+                    };
+                    answer_call(&pages, request.0.take().expect("owned evaluation"), result).await;
+                });
+            }
+            Ok(Execution::Complete(answer)) => answer_call(&pages, call, Ok(answer)).await,
+            Err(error) => answer_call(&pages, call, Err(error)).await,
+        }
     }
     evaluations.abort_all();
     while evaluations.join_next().await.is_some() {}
@@ -568,6 +566,39 @@ enum Answer {
     Binary(Value, Arc<Vec<u8>>, Arc<Page>, Option<i64>),
 }
 
+enum Execution {
+    Complete(Answer),
+    Awaiting(Evaluation),
+}
+enum EvaluationKind {
+    JavaScript,
+    Cdp(Arc<Entry>),
+}
+struct Evaluation {
+    reply: shell_preview::CommandReply,
+    identity: Identity,
+    kind: EvaluationKind,
+}
+impl Evaluation {
+    async fn receive(self) -> Result<Answer, WireError> {
+        let mut answer = self.reply.receive().await.map_err(wire)?;
+        if let EvaluationKind::Cdp(entry) = &self.kind {
+            unmap_urls(&entry.partition, &mut answer).await.map_err(crate::failed)?;
+        }
+        original(self.identity)?;
+        let result = match self.kind {
+            EvaluationKind::JavaScript => {
+                if let Some(error) = answer.get("exceptionDetails") {
+                    return Err(WireError::new("failed", error.to_string()));
+                }
+                json!({"result":answer.pointer("/result/value").cloned().unwrap_or(Value::Null)})
+            }
+            EvaluationKind::Cdp(_) => json!({"result":answer}),
+        };
+        Ok(Answer::Json(result))
+    }
+}
+
 async fn answer_call(pages: &Pages, call: host::Call, result: Result<Answer, WireError>) {
     host::forget_cancel(call.id());
     match result {
@@ -608,11 +639,12 @@ async fn execute(
     method: &str,
     params: &Value,
     expected: Option<Identity>,
-) -> Result<Answer, WireError> {
+) -> Result<Execution, WireError> {
     if method == "view.create" || method == "win.create" {
         return create(browser, pages, method, params)
             .await
-            .map(Answer::Json);
+            .map(Answer::Json)
+            .map(Execution::Complete);
     }
     let wc = {
         let registry = runtime().registry.lock().expect("registry");
@@ -639,11 +671,17 @@ async fn execute(
     }
     let entry = pages.entry(wc)?;
     let result = match method {
-        "view.op" => return view::operation(pages, wc, params).await.map(Answer::Json),
+        "view.op" => {
+            return view::operation(pages, wc, params)
+                .await
+                .map(Answer::Json)
+                .map(Execution::Complete);
+        }
         "win.op" => {
             return offscreen_operation(pages, wc, params)
                 .await
-                .map(Answer::Json);
+                .map(Answer::Json)
+                .map(Execution::Complete);
         }
         "wc.cdp.attach" => {
             if entry
@@ -746,10 +784,17 @@ async fn execute(
                     command_params["url"] = json!(mapped);
                 }
             }
-            let mut answer = browser
-                .command(method, command_params, Some(&session))
-                .await
+            let reply = browser
+                .submit_command(method, command_params, Some(&session))
                 .map_err(wire)?;
+            if awaits_cdp_script(params) {
+                return Ok(Execution::Awaiting(Evaluation {
+                    reply,
+                    identity,
+                    kind: EvaluationKind::Cdp(entry),
+                }));
+            }
+            let mut answer = reply.receive().await.map_err(wire)?;
             unmap_urls(&entry.partition, &mut answer)
                 .await
                 .map_err(crate::failed)?;
@@ -788,12 +833,12 @@ async fn execute(
                 .expect("Preview document")
                 .pending_ack
                 .take_if(|ack| *ack == frame.ack());
-            return Ok(Answer::Binary(
+            return Ok(Execution::Complete(Answer::Binary(
                 json!({"width":width,"height":height}),
                 bytes,
                 Arc::clone(&entry.page),
                 ack,
-            ));
+            )));
         }
         "wc.op" => {
             let op = crate::string(params, "op")?;
@@ -808,7 +853,7 @@ async fn execute(
             match op {
                 "close" => {
                     close(pages, wc).await?;
-                    return Ok(Answer::Json(json!({})));
+                    return Ok(Execution::Complete(Answer::Json(json!({}))));
                 }
                 "focus" if surface::key(wc).is_ok() => {
                     let key = surface::key(wc)
@@ -889,13 +934,13 @@ async fn execute(
                         .ok_or_else(|| {
                             WireError::new("gone", "Preview document has no live default context")
                         })?;
-                    let answer = entry.page.command("Runtime.evaluate",json!({"expression":crate::string(args,"code")?,
-                        "contextId":context,"returnByValue":true,"awaitPromise":true,"userGesture":args["userGesture"].as_bool().unwrap_or(false)})).await.map_err(wire)?;
-                    original(identity)?;
-                    if let Some(error) = answer.get("exceptionDetails") {
-                        return Err(WireError::new("failed", error.to_string()));
-                    }
-                    json!({"result":answer.pointer("/result/value").cloned().unwrap_or(Value::Null)})
+                    let reply = entry.page.submit_command("Runtime.evaluate",json!({"expression":crate::string(args,"code")?,
+                        "contextId":context,"returnByValue":true,"awaitPromise":true,"userGesture":args["userGesture"].as_bool().unwrap_or(false)})).map_err(wire)?;
+                    return Ok(Execution::Awaiting(Evaluation {
+                        reply,
+                        identity,
+                        kind: EvaluationKind::JavaScript,
+                    }));
                 }
                 _ => commands::operation(&entry.page, op, args).await?,
             }
@@ -907,7 +952,7 @@ async fn execute(
     } else {
         pages.current(wc)?;
     }
-    Ok(Answer::Json(result))
+    Ok(Execution::Complete(Answer::Json(result)))
 }
 
 async fn create(

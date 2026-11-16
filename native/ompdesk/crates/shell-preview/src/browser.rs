@@ -213,6 +213,16 @@ impl Browser {
         self.transport.request(method, params, session).await
     }
 
+    /// Queues a trusted command before returning; only the reply is awaited afterwards.
+    pub fn submit_command(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<crate::CommandReply> {
+        self.transport.submit(method, params, session)
+    }
+
     /// Host mutations settle on the actual CDP answer or connection loss, not the read deadline.
     pub async fn command_settled(
         &self,
@@ -356,6 +366,15 @@ impl Page {
         self.transport
             .request(method, params, Some(&self.session_id))
             .await
+    }
+
+    /// Queues a trusted command now; the returned reply is awaited later without reordering later submissions.
+    pub fn submit_command(&self, method: &str, params: Value) -> Result<crate::CommandReply> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .submit(method, params, Some(&self.session_id))
     }
 
     pub async fn command_settled(&self, method: &str, params: Value) -> Result<Value> {
@@ -854,6 +873,42 @@ mod tests {
         let (malformed, closed, _) = closing(json!({})).await;
         assert_eq!(malformed.unwrap_err().code, "cdp");
         assert!(!closed);
+    }
+
+    #[tokio::test]
+    async fn submitted_page_commands_are_queued_before_their_replies_are_awaited() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+        };
+        let first = page.submit_command("Runtime.evaluate", json!({"n": 1})).unwrap();
+        let second = page.submit_command("Input.insertText", json!({"n": 2})).unwrap();
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let a = command(&mut read).await;
+        let b = command(&mut read).await;
+        assert_eq!(a["method"], "Runtime.evaluate");
+        assert_eq!(b["method"], "Input.insertText");
+        assert_eq!(a["sessionId"], "session-1");
+        for value in [&b, &a] {
+            let id = value["id"].as_u64().unwrap();
+            write
+                .write_all(format!("{{\"id\":{id},\"sessionId\":\"session-1\",\"result\":{{\"id\":{id}}}}}\0").as_bytes())
+                .await
+                .unwrap();
+        }
+        assert_eq!(second.receive().await.unwrap()["id"], b["id"]);
+        assert_eq!(first.receive().await.unwrap()["id"], a["id"]);
+
+        page.closed.store(true, Ordering::Release);
+        assert_eq!(
+            page.submit_command("Runtime.evaluate", json!({})).err().unwrap().code,
+            "gone"
+        );
     }
 
     #[test]

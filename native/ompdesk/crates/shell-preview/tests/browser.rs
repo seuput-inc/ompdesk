@@ -288,15 +288,39 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .map_err(|e| format!("PDF: {e:?}"))?;
     check!(pdf.starts_with(b"%PDF-"), "capture is not a PDF");
 
-    for (x, y) in [(50, 95), (50, 35)] {
-        for kind in ["mousePressed", "mouseReleased"] {
-            page.command(
-                "Input.dispatchMouseEvent",
-                json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}),
-            )
-            .await
-            .map_err(|e| format!("mouse input: {e:?}"))?;
-        }
+    let listener = page
+        .submit_command(
+            "Runtime.evaluate",
+            json!({
+                "expression": "new Promise(resolve => document.querySelector('#button').addEventListener('click', e => resolve({trusted: e.isTrusted}), {once: true}))",
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        )
+        .map_err(|e| format!("submit click listener: {e:?}"))?;
+    for kind in ["mousePressed", "mouseReleased"] {
+        page.command(
+            "Input.dispatchMouseEvent",
+            json!({"type": kind, "x": 50, "y": 95, "button": "left", "clickCount": 1}),
+        )
+        .await
+        .map_err(|e| format!("ordered mouse input: {e:?}"))?;
+    }
+    let clicked = listener
+        .receive()
+        .await
+        .map_err(|e| format!("click listener result: {e:?}"))?;
+    check!(
+        clicked["result"]["value"] == json!({"trusted": true}),
+        "submitted listener missed the later trusted click: {clicked}"
+    );
+    for kind in ["mousePressed", "mouseReleased"] {
+        page.command(
+            "Input.dispatchMouseEvent",
+            json!({"type": kind, "x": 50, "y": 35, "button": "left", "clickCount": 1}),
+        )
+        .await
+        .map_err(|e| format!("mouse input: {e:?}"))?;
     }
     page.command("Input.insertText", json!({"text": "hello preview"}))
         .await
