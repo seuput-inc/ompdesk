@@ -166,6 +166,19 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         height: 240,
         device_scale_factor: 2.0,
     };
+    let denied_page = browser
+        .create_page(&partition, viewport)
+        .await
+        .map_err(|e| format!("create denied-navigation page: {e:?}"))?;
+    let denied = denied_page
+        .navigate(&format!("{}/denied-handled", fixture.url))
+        .await
+        .expect_err("host fulfillment must not bypass denied document navigation");
+    check!(
+        denied.code == "navigation" && denied.message == "net::ERR_BLOCKED_BY_CLIENT",
+        "denied document did not preserve the actual policy failure: {denied}"
+    );
+    denied_page.close().await.map_err(|e| e.to_string())?;
     let page = browser
         .create_page(&partition, viewport)
         .await
@@ -553,6 +566,7 @@ struct NavigationGate {
 impl NavigationHandler for NavigationGate {
     fn allow(&self, navigation: Navigation) -> Pin<Box<dyn Future<Output = bool> + Send>> {
         let hold = navigation.url.ends_with("/hold");
+        let denied = navigation.url.ends_with("/denied-handled");
         let entered = self.entered.clone();
         let release = self.release.clone();
         Box::pin(async move {
@@ -561,7 +575,7 @@ impl NavigationHandler for NavigationGate {
                 entered.notify_one();
                 resumed.await;
             }
-            true
+            !denied
         })
     }
 }
@@ -578,6 +592,13 @@ impl RequestHandler for NavigationGate {
                 .pointer("/request/url")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
+            if url.ends_with("/denied-handled") {
+                let body = base64::engine::general_purpose::STANDARD
+                    .encode(b"<p>Unauthorized document</p>");
+                request.page.command("Fetch.fulfillRequest", json!({"requestId":request.request_id,
+                    "responseCode":200,"responseHeaders":[{"name":"Content-Type","value":"text/html"}],"body":body})).await?;
+                return Ok(RequestDisposition::Handled);
+            }
             if url.ends_with("/handler-error") {
                 return Err(ompdesk_shell_preview::Error::new(
                     "failed",
