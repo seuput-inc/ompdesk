@@ -314,6 +314,14 @@ scenario() {
     else
       check 1 "S1: the seeded token was decrypted (source stored, none dropped)"
       evidence "S1 token-read failure phases: $(grep -F '"event":"stored-token-read"' "$UD/logs/gui-runtime.jsonl" 2>/dev/null | tail -8 | cut -c1-500 | tr '\n' '|')"
+      # Which key did the host get: Electron's item, a second item it made, or none? Hashes only, never the secret.
+      local items host_key keychain_key
+      items=$(security dump-keychain "$KC" 2>/dev/null | grep -c '"ompdesk Safe Storage"')
+      keychain_key=$(printf '%s' "$(security find-generic-password -s "ompdesk Safe Storage" -a ompdesk -w "$KC" 2>/dev/null)" | shasum -a 256 | cut -c1-12)
+      host_key=$("$APPS/OMPdesk.app/Contents/MacOS/ompdesk-shell" --keychain-key "$UD" 2>&1 | tail -1)
+      evidence "S1 keychain: $items item(s) named 'ompdesk Safe Storage' in $KC; item password sha256 $keychain_key; host password sha256 $(printf '%s' "$host_key" | sed -nE 's/.*"password":"([^"]*)".*/\1/p' | base64 -D 2>/dev/null | shasum -a 256 | cut -c1-12); host answer kind: $(printf '%s' "$host_key" | sed -E 's/"password":"[^"]*"/"password":"(redacted)"/' | cut -c1-200)"
+      evidence "S1 host signature: $(codesign -d -r- "$APPS/OMPdesk.app/Contents/MacOS/ompdesk-shell" 2>&1 | grep -E 'designated|Identifier' | tr '\n' ' ')"
+      evidence "S1 item access: $(security dump-keychain -a "$KC" 2>/dev/null | grep -A30 '"ompdesk Safe Storage"' | grep -E 'description|applications|requirement|partition|entry' | head -12 | tr '\n' ' ' | cut -c1-900)"
     fi
     wait_for "has_line $UD 'swap result'" 60; update_lines "$UD" | grep -q '^swap result installed'; check $? "S1: swap result outcome installed"
     codesign --verify --deep --strict "$APPS/OMPdesk.app"; check $? "S1: the installed app verifies"
