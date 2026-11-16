@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use shell_core::netmap::{self, Credentials, FetchParams, LoginAnswer, Redirect};
 
 use crate::host::{self, Call};
+use session::ProxyMode;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -37,6 +38,8 @@ struct State {
 
 pub(super) struct Transfer {
     pub params: FetchParams,
+    /// The partition's proxy, as it was when the request started.
+    pub proxy: ProxyMode,
     cancelled: AtomicBool,
     state: Mutex<State>,
 }
@@ -83,6 +86,10 @@ fn fetch(mut call: Call) {
     if policy.deny_network {
         return call.err("denied", "network requests are disabled for this partition");
     }
+    let proxy = match policy.proxy {
+        Ok(proxy) => proxy,
+        Err(error) => return call.err("failed", error),
+    };
     for (name, value) in [
         ("User-Agent", policy.user_agent),
         ("Accept-Language", policy.accept_languages),
@@ -105,6 +112,7 @@ fn fetch(mut call: Call) {
     };
     let transfer = Arc::new(Transfer {
         params,
+        proxy,
         cancelled: AtomicBool::new(false),
         state: Mutex::new(State {
             phase: Phase::AwaitingHead(call),

@@ -9,6 +9,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use shell_core::netmap::{self, CacheMode, Challenge, LoginAnswer, Redirect};
+use shell_core::netproxy::ProxyMode;
 use url::Url;
 use windows_sys::Win32::Foundation::GlobalFree;
 use windows_sys::Win32::Networking::WinHttp::*;
@@ -396,21 +397,6 @@ fn run(
     let mut method = params.method.clone();
     let mut body = body;
     let mut headers = params.headers.clone();
-    // SAFETY: null-terminated agent and null proxy pointers are valid for automatic proxy.
-    let session = unsafe {
-        WinHttpOpen(
-            wide("OMPdesk").as_ptr(),
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-            null(),
-            null(),
-            WINHTTP_FLAG_ASYNC,
-        )
-    };
-    if session.is_null() {
-        return Err(failure("open session"));
-    }
-    let session = OwnedHandle(session);
-    option(session.0, WINHTTP_OPTION_DISABLE_GLOBAL_POOLING, 1)?;
     let mut redirects = 0;
     loop {
         if transfer.is_cancelled() {
@@ -423,7 +409,37 @@ fn run(
         let port = url
             .port_or_known_default()
             .ok_or_else(|| netmap::error_text(-300))?;
-        // SAFETY: session remains live until the worker exits and host is null terminated.
+        // The session carries the route (WinHTTP applies a proxy per session), so each hop opens its own: a redirect
+        // to another host is routed again, and a session's own proxy (`session.setProxy`) and its bypass list apply.
+        let server = match &transfer.proxy {
+            ProxyMode::Fixed(rules) => rules.route(url.scheme(), host, port).cloned(),
+            ProxyMode::System | ProxyMode::Direct => None,
+        };
+        let (access, proxy_name) = match (&transfer.proxy, &server) {
+            (ProxyMode::System, _) => (WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, None),
+            (_, Some(server)) => (
+                WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                Some(wide(&server.authority())),
+            ),
+            _ => (WINHTTP_ACCESS_TYPE_NO_PROXY, None),
+        };
+        // SAFETY: the agent and the optional proxy name are null-terminated and live through the call; WinHTTP
+        // reads no bypass list for these access types.
+        let session = unsafe {
+            WinHttpOpen(
+                wide("OMPdesk").as_ptr(),
+                access,
+                proxy_name.as_ref().map_or(null(), |name| name.as_ptr()),
+                null(),
+                WINHTTP_FLAG_ASYNC,
+            )
+        };
+        if session.is_null() {
+            return Err(failure("open session"));
+        }
+        let session = OwnedHandle(session);
+        option(session.0, WINHTTP_OPTION_DISABLE_GLOBAL_POOLING, 1)?;
+        // SAFETY: session remains live until this hop ends and host is null terminated.
         let connection = unsafe { WinHttpConnect(session.0, wide(host).as_ptr(), port, 0) };
         if connection.is_null() {
             return Err(failure("connect"));
@@ -455,10 +471,14 @@ fn run(
             return Err(failure("open request"));
         }
         let mut owned_request = Request::new(request, sender, receiver)?;
+        // Authentication stays enabled: with WINHTTP_DISABLE_AUTHENTICATION WinHTTP reads no challenge, so
+        // WinHttpQueryAuthSchemes finds no scheme and a 401 or 407 could never reach the `login` event. The
+        // autologon policy HIGH keeps it from sending the user's Windows credentials on its own: only the ones the
+        // `login` listener answered with go out (WinHttpSetCredentials below).
         option(
             request,
             WINHTTP_OPTION_DISABLE_FEATURE,
-            WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_AUTHENTICATION,
+            WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS,
         )?;
         option(
             request,
@@ -610,7 +630,10 @@ fn run(
                 break (code, response_headers);
             }
             let (auth_host, auth_port) = if code == 407 {
-                proxy_endpoint(request)?
+                match &server {
+                    Some(server) => (server.host.clone(), i32::from(server.port)),
+                    None => proxy_endpoint(request)?,
+                }
             } else {
                 (url.host_str().unwrap_or("").to_string(), i32::from(port))
             };

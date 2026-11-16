@@ -3,6 +3,8 @@
 
 use std::sync::{Arc, OnceLock};
 
+pub use shell_core::netproxy::ProxyMode;
+
 /// Called off the UI and host-reader threads. Each operation waits for the actual browser store.
 /// `store_response` must apply all Set-Cookie values with the response URL as their origin.
 /// No method may answer success before the native/browser operation has completed.
@@ -25,11 +27,13 @@ pub fn install_cookie_authority(authority: Arc<dyn CookieAuthority>) -> Result<(
         .map_err(|_| "partition cookie authority is already installed".into())
 }
 
-#[derive(Default)]
 pub struct NetworkPolicy {
     pub user_agent: Option<String>,
     pub accept_languages: Option<String>,
     pub deny_network: bool,
+    /// The partition's own `session.setProxy`; the OS settings when nobody set one. An error is a proxy this
+    /// transport cannot apply: it fails the requests that need it, not a host lookup.
+    pub proxy: Result<ProxyMode, String>,
 }
 
 type PolicySource = dyn Fn(&str) -> Result<NetworkPolicy, String> + Send + Sync;

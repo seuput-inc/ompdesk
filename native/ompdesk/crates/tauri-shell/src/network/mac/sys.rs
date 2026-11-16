@@ -3,6 +3,7 @@
 
 use super::super::Transfer;
 use shell_core::netmap::{self, CacheMode, Challenge, LoginAnswer, Redirect};
+use shell_core::netproxy::ProxyMode;
 use std::{
     ffi::{c_char, c_void},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -466,6 +467,22 @@ fn proxy_list(
     Ok(())
 }
 fn proxies(target: CF, loop_: &Loop, transfer: &Transfer) -> Result<Vec<Proxy>, String> {
+    // The session's own proxy (`session.setProxy`) replaces the system settings and PAC.
+    match &transfer.proxy {
+        ProxyMode::Direct => return Ok(vec![Proxy::Direct]),
+        ProxyMode::Fixed(rules) => {
+            let (scheme, host, port) = origin(target)?;
+            let port = u16::try_from(port).map_err(|_| "Invalid URL port".to_string())?;
+            return Ok(vec![match rules.route(&scheme, &host, port) {
+                Some(server) => Proxy::Http {
+                    host: server.host.clone(),
+                    port: i32::from(server.port),
+                },
+                None => Proxy::Direct,
+            }]);
+        }
+        ProxyMode::System => {}
+    }
     // SAFETY: target is a live URL. A null system settings result is ambiguous between no settings and failure.
     unsafe {
         let settings = Owned::new(CFNetworkCopySystemProxySettings(), "System proxy settings")?;

@@ -61,10 +61,17 @@ pub fn policy(partition: &str) -> Result<Policy, String> {
 pub fn network_policy(partition: &str) -> Result<crate::network::session::NetworkPolicy, String> {
     with(|r| {
         let policy = &r.get(partition)?.policy;
+        let deny_network = policy.deny_network();
         Ok(crate::network::session::NetworkPolicy {
-            deny_network: policy.deny_network(),
+            deny_network,
             user_agent: policy.user_agent.clone(),
             accept_languages: policy.accept_languages.clone(),
+            // A denied partition never reaches a transport, so its stand-in proxy is not parsed.
+            proxy: if deny_network {
+                Ok(Default::default())
+            } else {
+                shell_core::netproxy::parse_proxy(policy.proxy.as_ref())
+            },
         })
     })
 }
