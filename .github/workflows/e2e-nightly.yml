@@ -12,11 +12,11 @@
 #   gh run download <run-id> -n parity   # <dir>/<surface>/{local,remote,phone,sheet}.png and parity.json
 #   gh workflow run e2e-nightly.yml --ref <branch> -f parity="--both-orders"   # the order check: <dir>/forward and <dir>/reverse
 #
-# Every job here is macOS. A dispatch (not the nightly) needs the queue gate's admission, which only main and the
-# branches in the repository variable MAC_REFS get, and runs in the account-wide `mac-dispatch` lane (one holder, one
-# waiting request; a newer request replaces the waiting one); the nightly has a lane of its own. A dispatch whose commit
-# already has a green run with the same inputs cancels itself (queue-gate.yml) unless it passes `-f force=true`.
-# See .omp/rules/e2e-ci-windows.md › CI › The check queue.
+# Every job here is a Windows runner (the suite builds on Linux): Playwright drives the Tauri host's page through
+# WebView2's DevTools port and cannot attach to macOS's WKWebView (e2e/fixture/shell-launch.ts; macOS is checked by
+# the native smoke in mac-checks.yml and release.yml), so no job here takes a macOS runner or the `mac-dispatch` lane.
+# A dispatch whose commit already has a green run with the same inputs cancels itself (queue-gate.yml) unless it passes
+# `-f force=true`. See .omp/rules/e2e-ci-windows.md › CI › The check queue.
 name: e2e-nightly
 run-name: ${{ github.event_name == 'schedule' && 'e2e-nightly' || inputs.parity && format('parity [{0}] {1}', inputs.parity, inputs.fake-env) || inputs.specs && format('e2e [{0}]', inputs.specs) || 'e2e-nightly [full]' }}
 
@@ -59,13 +59,11 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: e2e-nightly.yml
-      mac: true
-      mac-refs: ${{ vars.MAC_REFS }}
       force: ${{ inputs.force }}
 
   build-out:
     needs: gate
-    if: ${{ !cancelled() && (github.event_name == 'schedule' || needs.gate.outputs.mac_ok == 'true') }}
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || needs.gate.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -87,9 +85,6 @@ jobs:
   e2e:
     if: ${{ inputs.parity == '' }}
     needs: build-out
-    concurrency:
-      group: ${{ github.event_name == 'schedule' && 'mac-nightly' || 'mac-dispatch' }}
-      cancel-in-progress: false
     permissions:
       contents: read
     uses: ./.github/workflows/e2e-shards.yml
@@ -97,16 +92,16 @@ jobs:
       specs: ${{ inputs.specs || '' }}
 
   # The parity sheet (e2e/parity.e2e.ts, what `bun run parity` runs after its own build) of the named surfaces on a
-  # macOS runner, against the bundle build-out made. Uploaded whether it passed or not: the e2e shards keep their
+  # Windows runner, against the bundle build-out made. Uploaded whether it passed or not: the e2e shards keep their
   # captures of a failed run only.
   parity:
     if: ${{ inputs.parity != '' }}
     needs: build-out
-    concurrency:
-      group: ${{ github.event_name == 'schedule' && 'mac-nightly' || 'mac-dispatch' }}
-      cancel-in-progress: false
-    runs-on: macos-latest
+    runs-on: windows-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
     env:
       SURFACES: ${{ inputs.parity }}
       FAKE_ENV: ${{ inputs.fake-env }}
@@ -115,14 +110,25 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
+      # See release.yml's win job: bun's cache on the workspace volume.
+      - name: Put bun's cache on the workspace volume
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
+      # The Tauri host (WebView2) and the pinned Node the parity capture launches (the tauri-shell action: a cached build),
+      # built with test-automation: only that build leaves WebView2's DevTools port open for Playwright.
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      # The unpackaged host finds Preview's browser under resources/preview-browser/<platform>-<arch>.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       # The fake omp's terminals and search run stock's natives from the installed omp (e2e/remote-harness.ts).
       - name: Install omp
         run: |
           # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
           bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+          bun pm bin -g >> "$GITHUB_PATH"
+          "$(bun pm bin -g)/omp" --version
       # The phone's page runs in Playwright's own Chromium, which a fresh runner lacks.
       - name: Playwright browsers
         run: bunx playwright install chromium webkit
@@ -133,10 +139,12 @@ jobs:
       - name: Capture
         run: |
           set -euo pipefail
+          # A Windows path for the Windows bun: Git Bash would hand it a /d/a/... one.
+          PARITY_OUT=$(cygpath -m "$PWD/parity-out")
           if [ "$SURFACES" = "--both-orders" ]; then
             # The order check (scripts/parity.ts --both-orders): every surface forward and reversed, into
             # parity-out/forward and parity-out/reverse.
-            OMP_GUI_PARITY="$PWD/parity-out" OMP_GUI_PARITY_ORDERS=both \
+            OMP_GUI_PARITY="$PARITY_OUT" OMP_GUI_PARITY_ORDERS=both \
               bunx playwright test e2e/parity.e2e.ts --trace off --reporter line --output parity-out/results
             exit 0
           fi
@@ -150,7 +158,7 @@ jobs:
             [[ "$pair" =~ ^OMP_GUI_[A-Z0-9_]+=[A-Za-z0-9_.,-]*$ ]] || { echo "::error::not an OMP_GUI_ variable: $pair"; exit 1; }
             export "$pair"
           done
-          OMP_GUI_PARITY="$PWD/parity-out" OMP_GUI_PARITY_ONLY="$ONLY" \
+          OMP_GUI_PARITY="$PARITY_OUT" OMP_GUI_PARITY_ONLY="$ONLY" \
             bunx playwright test e2e/parity.e2e.ts --trace off --reporter line --output parity-out/results
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

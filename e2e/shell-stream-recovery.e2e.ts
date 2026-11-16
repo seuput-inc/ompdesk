@@ -7,8 +7,12 @@ import type { RpcCommand, RpcGetQueueResult } from "../src/shared/rpc-types";
 import { exitApp, launchApp, recordsOfType } from "./harness";
 
 // The preload and renderer reset state machines have unit coverage in shell-stream.test.ts and shell-resync.test.ts.
-// This exercises their consumer across the CEF scheme handler and the real Node IPC host.
+// This exercised their consumer across the CEF scheme handler (`app://ompdesk/__ipc/events` and `__ipc/invoke`).
 test("a replaced CEF event reader catches up without losing a draft, queue, or approvals", async () => {
+	test.skip(
+		true,
+		"CEF-only transport: the Tauri host pushes through native invoke and __ompTauriPush (src/preload/tauri.ts), whose generation and reset path native/ompdesk/crates/tauri-shell/tests/preload.ts runs",
+	);
 	test.setTimeout(180_000);
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shell-recovery-"));
 	const project = path.join(root, "project");

@@ -95,10 +95,7 @@ describe("every macOS job of a dispatchable workflow", () => {
 	it("is found where it is expected, so this test cannot pass by finding none", () => {
 		const found = macJobs.map(({ name, id }) => `${name}:${id}`).sort();
 		expect(found).toEqual([
-			"ci.yml:e2e",
 			"ci.yml:mac",
-			"e2e-nightly.yml:e2e",
-			"e2e-nightly.yml:parity",
 			"flake-probe.yml:probe",
 			"shell-batch-checks.yml:keychain",
 			"shell-batch-checks.yml:move-mac",
@@ -188,8 +185,8 @@ describe("the macOS checks of a push to main", () => {
 	const mac = workflows.get("mac-checks.yml") as Workflow;
 	const main = workflows.get("mac-main.yml") as Workflow & { on: { push: { branches: string[] } } };
 
-	it("are the five macOS checks, each on a macOS runner and none reading the caller's flags", () => {
-		expect(Object.keys(mac.jobs).sort()).toEqual(["mac-native", "mac-smoke", "memory", "native", "shell"]);
+	it("are the four macOS checks, each on a macOS runner and none reading the caller's flags", () => {
+		expect(Object.keys(mac.jobs).sort()).toEqual(["mac-native", "mac-smoke", "memory", "native"]);
 		for (const [id, job] of Object.entries(mac.jobs)) {
 			expect(job["runs-on"], id).toBe("macos-latest");
 			// In a called workflow `inputs` is its own, not the dispatch's: admission is the caller's `if`.

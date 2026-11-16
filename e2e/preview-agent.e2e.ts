@@ -198,6 +198,10 @@ function launchProbeApp(dir: string) {
 // ["Files"]). A bare window is probed here, not the relay (which refuses the command). If a future CEF stops
 // honouring it, this fails; the relay's refusal can stay regardless.
 test("the shell's per-page debugger turns Input.dispatchDragEvent files into a dropped local File", async () => {
+	test.skip(
+		true,
+		"CEF debugger probe: the Tauri host opens no bare BrowserWindow (app windows deny remote pages) and Preview's Chromium is crates/shell-preview's own, exercised by its tests/browser.rs real_chromium_preview",
+	);
 	test.setTimeout(60_000);
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-drag-probe-"));
 	const secret = path.join(dir, "secret.txt");
@@ -244,6 +248,10 @@ test("the shell's per-page debugger turns Input.dispatchDragEvent files into a d
 // http(s)-only rule for the method is defence in depth. A bare window on an http page is probed here, not the relay.
 // If a future CEF reads the file, this fails.
 test("the shell's per-page debugger refuses a file: URL in Network.loadNetworkResource", async () => {
+	test.skip(
+		true,
+		"CEF debugger probe: the Tauri host opens no bare BrowserWindow (app windows deny remote pages) and Preview's Chromium is crates/shell-preview's own, exercised by its tests/browser.rs real_chromium_preview",
+	);
 	test.setTimeout(60_000);
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-load-probe-"));
 	const secret = path.join(dir, "secret.txt");

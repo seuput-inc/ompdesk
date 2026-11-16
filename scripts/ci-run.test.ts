@@ -34,10 +34,13 @@ describe("ci-run arguments", () => {
 	it("knows which dispatches ask for a macOS runner", () => {
 		expect(asksForMac("ci", { batch: "true" })).toBe(false);
 		expect(asksForMac("ci", { mac: "true" })).toBe(true);
-		expect(asksForMac("ci", { e2e: "true" })).toBe(true);
-		expect(asksForMac("e2e-nightly", {})).toBe(true);
+		expect(asksForMac("ci", { e2e: "true" })).toBe(false);
+		expect(asksForMac("e2e-nightly", {})).toBe(false);
 		expect(asksForMac("flake-probe", { os: "windows" })).toBe(false);
 		expect(asksForMac("flake-probe", {})).toBe(true);
+		expect(asksForMac("flake-probe", { spec: "src/a.test.ts", os: "all" })).toBe(true);
+		expect(asksForMac("flake-probe", { spec: "e2e/a.e2e.ts", os: "all" })).toBe(false);
+		expect(asksForMac("flake-probe", { spec: "e2e/a.e2e.ts", os: "macos" })).toBe(true);
 		expect(asksForMac("formal", {})).toBe(false);
 	});
 });

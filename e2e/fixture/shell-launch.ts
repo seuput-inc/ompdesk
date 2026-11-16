@@ -1,11 +1,14 @@
 /**
- * Playwright's launcher for the Rust shell (`crates/shell`, CEF), standing in for `_electron.launch`.
+ * Playwright's launcher for the Tauri host (`crates/tauri-shell`: the OS WebView), standing in for `_electron.launch`.
  *
- * The app is `ompdesk-shell` (packaged: `OMPdesk(.exe)`), which starts Node on `out/main/index.js` (the shim
- * `src/main/shell-host/electron` speaks to the shell). A test reaches it through two doors:
- *  - the pages: `chromium.connectOverCDP` on the shell's `--remote-debugging-port`, whose port CEF's context writes
- *    to `<userData>/shell-webview/DevToolsActivePort`;
- *  - main: Node's inspector (`OMP_GUI_TEST_NODE_INSPECT=1` makes the shell start Node with `--inspect=127.0.0.1:0`
+ * The app is `ompdesk-shell` (packaged: `OMPdesk.exe`), which starts Node on `out/main/index.js` (the shim
+ * `src/main/shell-host/electron` speaks to the host). A test reaches it through two doors:
+ *  - the pages: only where the WebView has a DevTools endpoint. On Windows WebView2 reads
+ *    `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<free port>` from its environment, set for this
+ *    child alone, and `chromium.connectOverCDP` attaches to that port. macOS's WKWebView has no such endpoint and
+ *    Playwright cannot drive it, so {@link launchShell} refuses there ({@link assertPageAutomation}); the macOS check
+ *    is `scripts/tauri-native-smoke.ts`, through the host's own WebDriver;
+ *  - main: Node's inspector (`OMP_GUI_TEST_NODE_INSPECT=1` makes the host start Node with `--inspect=127.0.0.1:0`
  *    and pass its stderr `Debugger listening on ws://…` line through), where `evaluate(fn, arg)` runs
  *    `fn(globalThis.__ompdeskElectron, arg)`: the shim's module, as Playwright runs `fn(require("electron"), arg)`
  *    in Electron's main.
@@ -16,12 +19,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
+import { createServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright-core";
 
 /** How long a running main process gets to act on a quit before it is killed. */
 export const EXIT_GRACE_MS = 10_000;
-/** Default bound on a launch: the shell, CEF's context, Node's inspector and the CDP connection. */
+/** Default bound on a launch: the host, WebView2's DevTools port, Node's inspector and the CDP connection. */
 const LAUNCH_TIMEOUT_MS = 60_000;
 /**
  * The process-tree helpers, loaded where they are used: `launch-then-die.ts` runs this file under plain Node, which
@@ -30,51 +34,72 @@ const LAUNCH_TIMEOUT_MS = 60_000;
 const processTree = () => import("../process-tree");
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
-/** `resources/ompdesk-shell/<platform>-<arch>/ompdesk-shell(.exe)`, where `bun run build:shell` stages it. */
+/** `resources/ompdesk-tauri/<platform>-<arch>/ompdesk-shell(.exe)`, where `bun run build:tauri` stages the host. */
 export function stagedShell(platform = process.platform, arch = process.arch, root = REPO_ROOT): string {
 	return path.join(
 		root,
 		"resources",
-		"ompdesk-shell",
+		"ompdesk-tauri",
 		`${platform}-${arch}`,
 		platform === "win32" ? "ompdesk-shell.exe" : "ompdesk-shell",
 	);
 }
 
-/**
- * The macOS dev bundle (`shell-bundle.ts`): the staged shell only runs from an `.app`, which `e2e/global-setup.ts`
- * assembles under the checkout's `node_modules/.cache`. Its product name is `scripts/mac-bundle-info.cjs`'s.
- */
-export const DEV_BUNDLE_PRODUCT = "OMPdesk";
-
-export function devBundleApp(root = REPO_ROOT, arch = process.arch): string {
-	return path.join(root, "node_modules", ".cache", "ompdesk-e2e", `darwin-${arch}`, `${DEV_BUNDLE_PRODUCT}.app`);
+/** The host a test runs: `OMP_GUI_E2E_SHELL` (a packaged `OMPdesk.exe`), else the staged build. */
+export function shellExecutable(env: NodeJS.ProcessEnv = process.env): string {
+	return env.OMP_GUI_E2E_SHELL ? path.resolve(env.OMP_GUI_E2E_SHELL) : stagedShell();
 }
 
-export function devBundleExecutable(root = REPO_ROOT, arch = process.arch): string {
-	return path.join(devBundleApp(root, arch), "Contents", "MacOS", DEV_BUNDLE_PRODUCT);
-}
-
-/**
- * The shell a test runs: `OMP_GUI_E2E_SHELL` (a packaged `OMPdesk(.exe)`, or on macOS the executable inside a
- * bundle), else the staged build (Windows) or the dev bundle made from it (macOS).
- */
-export function shellExecutable(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string {
-	if (env.OMP_GUI_E2E_SHELL) return path.resolve(env.OMP_GUI_E2E_SHELL);
-	return platform === "darwin" ? devBundleExecutable() : stagedShell();
-}
-
-/** Throws, naming the missing file and how to build it, when the shell is not there. Returns its path. */
+/** Throws, naming the missing file and how to build it, when the host is not there. Returns its path. */
 export function assertShellBuilt(env: NodeJS.ProcessEnv = process.env): string {
 	const exe = shellExecutable(env);
 	if (!fs.existsSync(exe)) {
 		throw new Error(
-			process.platform === "darwin" && !env.OMP_GUI_E2E_SHELL
-				? `No shell bundle: ${exe} does not exist. Run \`bun run build:shell\`; Playwright's global setup (e2e/global-setup.ts) assembles the bundle from it (or point OMP_GUI_E2E_SHELL at an OMPdesk.app's Contents/MacOS/OMPdesk).`
-				: `No shell: ${exe} does not exist. Run \`bun run build:shell\` (or point OMP_GUI_E2E_SHELL at a built ompdesk-shell).`,
+			`No Tauri host: ${exe} does not exist. Run \`bun run build:tauri\` (or point OMP_GUI_E2E_SHELL at a built host).`,
 		);
 	}
 	return exe;
+}
+
+/**
+ * Throws unless the platform's WebView can be driven by Playwright. WebView2 (Windows) takes a DevTools port from its
+ * environment; WKWebView (macOS) has no CDP endpoint, so a macOS run uses `scripts/tauri-native-smoke.ts` instead and
+ * nothing here stands a browser of another engine in for the page.
+ */
+export function assertPageAutomation(platform: NodeJS.Platform = process.platform): void {
+	if (platform === "win32") return;
+	throw new Error(
+		platform === "darwin"
+			? "Playwright cannot attach to the macOS host: its page is a WKWebView, which exposes no CDP endpoint (WebView2 on Windows does). Run the native WebDriver smoke instead: OMPDESK_TAURI_TEST_BINARY=<resources/ompdesk-tauri/darwin-arm64/ompdesk-shell> OMPDESK_TAURI_TEST_OUTPUT=<private dir> bun scripts/tauri-native-smoke.ts"
+			: `OMPdesk's host ships on macOS and Windows only; Playwright drives its page through WebView2 on Windows, not on ${platform}.`,
+	);
+}
+
+/** What `bun run build:tauri` writes beside the host it stages; a package keeps it next to `OMPdesk.exe`. */
+const BUILD_RECORD = "ompdesk-tauri.build.json";
+
+/**
+ * Throws unless the host's build record lists the `test-automation` feature. A released host removes the WEBVIEW2_*
+ * variables before it creates its WebView, so no DevTools port would ever open and a launch would wait out its timeout
+ * for it: the e2e jobs stage the host with `./.github/actions/tauri-shell` `test-automation: "true"`
+ * (`bun run build:tauri -- --test-automation` locally).
+ */
+export function assertTestAutomationHost(executable: string): void {
+	const recordFile = path.join(path.dirname(executable), BUILD_RECORD);
+	let record: { features?: unknown };
+	try {
+		record = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+	} catch (error) {
+		throw new Error(
+			`launchShell: cannot read ${recordFile} (${error instanceof Error ? error.message : String(error)}); only a host built with the test-automation feature leaves WebView2's DevTools port open`,
+		);
+	}
+	const { features } = record;
+	if (!Array.isArray(features) || !features.includes("test-automation")) {
+		throw new Error(
+			`launchShell: ${executable} was built without the test-automation feature (features: ${JSON.stringify(features ?? "unrecorded")}), so it removes the WEBVIEW2_* variables and opens no DevTools port for Playwright. Stage a test host: bun run build:tauri -- --test-automation`,
+		);
+	}
 }
 
 /** The `--user-data-dir` of `args` (`--user-data-dir=<dir>` or `--user-data-dir <dir>`). */
@@ -97,17 +122,50 @@ export function inspectorUrl(text: string): string | undefined {
 	return /Debugger listening on (ws:\/\/\S+)/.exec(text)?.[1];
 }
 
-/** The port line of a Chromium `DevToolsActivePort` file; undefined while it is empty or half written. */
-export function devToolsPort(file: string): number | undefined {
-	let text: string;
+/**
+ * What WebView2 reads from its environment before any app code runs: a DevTools port, and a user-data folder of the
+ * test's own so concurrent or sequential apps never share the machine's one WebView2 profile (an environment whose
+ * browser arguments differ from a running browser's on the same folder is refused). The caller sets these on the test
+ * child alone. An argument the parent environment already carries is kept, except its own debugging port.
+ */
+export function webView2Env(env: NodeJS.ProcessEnv, port: number, userData: string): Record<string, string> {
+	const kept = (env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ?? "")
+		.split(/\s+/)
+		.filter(arg => arg && !arg.startsWith("--remote-debugging-port"));
+	return {
+		WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: [...kept, `--remote-debugging-port=${port}`].join(" "),
+		WEBVIEW2_USER_DATA_FOLDER: env.WEBVIEW2_USER_DATA_FOLDER || path.join(userData, "webview2"),
+	};
+}
+
+/** The app's own pages: the custom-protocol origin of macOS, and the `http://app.localhost` WebView2 loads it from. */
+export function isAppPageUrl(url: string): boolean {
+	return url.startsWith("app://ompdesk/") || url.startsWith("http://app.localhost/");
+}
+
+/** A TCP port nothing listens on now: the OS picks it, it is released at once and handed to WebView2. */
+async function freePort(): Promise<number> {
+	const server = createServer();
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await listening.promise;
+	const address = server.address();
+	const closed = Promise.withResolvers<void>();
+	server.close(() => closed.resolve());
+	await closed.promise;
+	if (!address || typeof address === "string") throw new Error("launchShell: the OS gave no TCP port");
+	return address.port;
+}
+
+/** `true` once the DevTools endpoint on `port` answers, `undefined` while nothing listens (or it is not up yet). */
+async function devToolsAnswers(port: number): Promise<true | undefined> {
 	try {
-		text = fs.readFileSync(file, "utf8");
+		const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1_000) });
+		return response.ok ? true : undefined;
 	} catch {
 		return undefined;
 	}
-	const [line, rest] = text.split(/\r?\n/);
-	const port = Number(line);
-	return Number.isInteger(port) && port > 0 && rest !== undefined ? port : undefined;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -333,20 +391,20 @@ export class ShellApplication extends EventEmitter {
 	}
 }
 
-const isAppPage = (page: Page) => page.url().startsWith("app://ompdesk/");
+const isAppPage = (page: Page) => isAppPageUrl(page.url());
 
 /**
  * Exit the app, bypassing the production quit confirmation, and wait until the
- * process is gone so Chromium stops writing the profile before it is removed.
+ * process is gone so WebView2 stops writing its profile before it is removed.
  * The exit is scheduled after `evaluate` returns: exiting inside it races the
  * reply ("Resulting promise was garbage collected") and can mask a test's error.
- * It is main's own `app.exit` (Node tears down and tells the shell), never CDP `Browser.close`, which quits CEF
- * without main's teardown. A main process whose thread is stuck never runs the evaluate; it is killed
+ * It is main's own `app.exit` (Node tears down and tells the host), never CDP `Browser.close`, which closes WebView2's
+ * browser without main's teardown. A main process whose thread is stuck never runs the evaluate; it is killed
  * after a grace period, so the test reports its own failure instead of the
  * worker teardown timing out.
  *
  * On Windows a process keeps the folder it works in from being removed, and the launcher exits before the app
- * under it has: main, Chromium's helpers, the omp it started, that omp's MCP servers and the git it ran wind
+ * under it has: main, WebView2's browser and helpers, the omp it started, that omp's MCP servers and the git it ran wind
  * down for another ~0.1 s (measured: the omp and its `npx` chain were alive when `exitApp` returned, and the
  * spec's `fs.rm(profile)` failed `EBUSY` on `project`, 5 of 24 runs of `real-core.e2e.ts`). So the processes
  * below the launcher are listed before the exit and waited for after it; one still running after the grace
@@ -422,11 +480,12 @@ const TAIL_BYTES = 16 * 1024;
  * person's real profile.
  */
 export async function launchShell(options: ShellLaunchOptions = {}): Promise<ShellApplication> {
+	assertPageAutomation();
 	const timeout = options.timeout || LAUNCH_TIMEOUT_MS;
 	const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
 	// An Electron-hosted runner exports it; it would make a Node-based child run as plain Node.
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
-	let args = [...(options.args ?? [])];
+	const args = [...(options.args ?? [])];
 	let executable: string;
 	if (options.executablePath) {
 		executable = options.executablePath;
@@ -438,6 +497,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		env.OMPDESK_APP_DIR = appDirOfEntry(entry);
 		env.OMPDESK_APP_ENTRY = path.resolve(entry);
 	}
+	assertTestAutomationHost(executable);
 	// The pinned Node the packaged app runs (`bun run build:node`), else `node` on PATH.
 	const pinnedNode = path.join(
 		REPO_ROOT,
@@ -450,12 +510,10 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	const userData = userDataFromArgs(args) ?? env.OMP_GUI_TEST_USER_DATA_DIR;
 	if (!userData)
 		throw new Error("launchShell: pass --user-data-dir=<private dir>; the shell would use the real profile");
-	args = ["--remote-debugging-port=0", ...args];
 	env.OMP_GUI_TEST_NODE_INSPECT = "1";
-
-	// A relaunch on the same userData must not read the previous run's port.
-	const portFile = path.join(userData, "shell-webview", "DevToolsActivePort");
-	fs.rmSync(portFile, { force: true });
+	// WebView2 opens its DevTools port from this child's environment, which no other process on the machine shares.
+	const debugPort = await freePort();
+	Object.assign(env, webView2Env(env, debugPort, userData));
 
 	const child = spawn(executable, args, { env, cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] });
 	let tail = "";
@@ -482,9 +540,9 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	spawnFailed.promise.catch(() => undefined);
 
 	const deadline = Date.now() + timeout;
-	const until = async <T>(what: string, probe: () => T | undefined): Promise<T> => {
+	const until = async <T>(what: string, probe: () => T | undefined | Promise<T | undefined>): Promise<T> => {
 		for (;;) {
-			const value = probe();
+			const value = await probe();
 			if (value !== undefined) return value;
 			if (Date.now() > deadline) throw new Error(`launchShell: ${what} within ${timeout} ms; output:\n${tail}`);
 			await Promise.race([sleep(50), spawnFailed.promise, exitedEarly.promise]);
@@ -495,10 +553,10 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	try {
 		const url = await until("Node's inspector did not report its URL", () => inspectorUrl(stderr));
 		inspector = await Inspector.connect(url, Math.max(1_000, deadline - Date.now()));
-		const port = await until("CEF wrote no DevToolsActivePort", () => devToolsPort(portFile));
+		await until(`WebView2 opened no DevTools port ${debugPort}`, () => devToolsAnswers(debugPort));
 		for (let attempt = 0; ; attempt++) {
 			try {
-				browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
+				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
 					timeout: Math.max(1_000, deadline - Date.now()),
 				});
 				break;

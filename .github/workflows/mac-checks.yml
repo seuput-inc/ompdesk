@@ -1,7 +1,7 @@
 # The macOS checks of a push to main and of a dispatched landing gate (`ci.yml -f mac=true`), one unit with two callers:
 # mac-main.yml (every push to main, a queue of its own: one run going, the newest waiting) and ci.yml's `mac` job (a
 # dispatch the queue gate admitted, in the account-wide `mac-dispatch` lane, one holder and one waiting request; see
-# queue-gate.yml). Five runners at once: release.yml's `mac`, `mac-native`, `native` and the memory build, plus the shell's Rust. Whether
+# queue-gate.yml). Four runners at once: mac-smoke (the staged Tauri host), mac-native, native and the memory build. Whether
 # a run may have them is the caller's: nothing here reads `inputs`, which in a called workflow are this workflow's own.
 # `github` is the caller's.
 name: mac-checks
@@ -13,10 +13,11 @@ permissions:
   contents: read
 
 jobs:
-  # release.yml's `mac` pre-flight half: the @smoke specs on the fake omp, on the built app (out/), on macOS.
+  # release.yml's `mac` pre-flight half: the staged Tauri host (WKWebView) on the fake omp, driven through its native
+  # WebDriver (scripts/tauri-native-smoke.ts; Playwright cannot attach to WKWebView), on the built app (out/), on macOS.
   mac-smoke:
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
@@ -27,20 +28,28 @@ jobs:
           bun-version: 1.4.4
       # See release.yml's mac job: a plain install may leave no Electron binary; the shared install fetches it.
       - uses: ./.github/actions/install
-      # The CEF shell and the pinned Node, which every e2e launches (the shell action: a cached build).
-      - uses: ./.github/actions/shell
+      # The Tauri host (system WebView), the rollback launcher and the pinned Node (the tauri-shell action: a cached build),
+      # built with the test-automation feature: the embedded WebDriver server the smoke drives (a released host has none).
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
       - run: bun run build
-      # The real terminal smoke runs stock omp's PTY natives, as release.yml's mac does.
-      - name: Install omp
+      # The same driver release.yml's `mac` runs on the packaged app, here on the staged host: bridge, new tab, a prompt
+      # round trip on the fake omp, settings, a clean quit.
+      - name: Smoke the staged Tauri host
         run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
-      # pwa-install and device-prefs drive a phone page in Playwright's own Chromium.
-      - name: Playwright browsers
-        run: bunx playwright install chromium
-      - run: bunx playwright test --grep "@smoke"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_BINARY="$PWD/resources/ompdesk-tauri/darwin-arm64/ompdesk-shell"
+          export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
+          bun scripts/tauri-native-smoke.ts
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tauri-smoke-macos-staged
+          path: ${{ runner.temp }}/tauri-smoke/
+          if-no-files-found: ignore
+          retention-days: 3
       - if: failure()
         run: bash scripts/ci-failure.sh
         env:
@@ -84,26 +93,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: ./.github/actions/native-check
-      - if: failure()
-        shell: bash
-        run: bash scripts/ci-failure.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  # The CEF shell's own Rust on macOS (ci.yml's `shell` runs the Windows leg).
-  shell:
-    name: shell (macos arm64)
-    runs-on: macos-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: read # the failure report reads this run's jobs
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.4
-      - uses: ./.github/actions/shell-check
       - if: failure()
         shell: bash
         run: bash scripts/ci-failure.sh

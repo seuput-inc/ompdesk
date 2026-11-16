@@ -4,7 +4,7 @@
  *   bun scripts/ci-run.ts ci --ref omp/agent/foo -f batch=true
  *   bun scripts/ci-run.ts ci --ref omp/agent/foo -f batch=true -f mac=true      the landing gate
  *   bun scripts/ci-run.ts e2e-nightly --ref omp/agent/foo -f specs="e2e/a.e2e.ts"
- *   bun scripts/ci-run.ts flake-probe --ref omp/agent/foo -f spec=e2e/a.e2e.ts -f os=macos
+ *   bun scripts/ci-run.ts flake-probe --ref omp/agent/foo -f spec=e2e/a.e2e.ts -f os=windows
  *   options: --ref <branch> (default: the current branch), -f key=value (any number), --wait, --replace, --dry-run
  *
  * The workflows hold the queue themselves (queue-gate.yml: macOS only for main and MAC_REFS branches, a commit's second
@@ -24,11 +24,17 @@
  */
 import { spawnSync } from "node:child_process";
 
-/** The workflows a session dispatches, and what each asks of the macOS runners from its inputs. */
+/**
+ * The workflows a session dispatches, and what each asks of the macOS runners from its inputs. The Playwright suite
+ * (ci's `e2e`, e2e-nightly, an e2e spec in flake-probe) runs on Windows: Playwright cannot attach to macOS's WKWebView.
+ */
 const WORKFLOWS: Record<string, (inputs: Record<string, string>) => boolean> = {
-	ci: inputs => inputs.mac === "true" || inputs.e2e === "true",
-	"e2e-nightly": () => true,
-	"flake-probe": inputs => (inputs.os ?? "all") === "macos" || (inputs.os ?? "all") === "all",
+	ci: inputs => inputs.mac === "true",
+	"e2e-nightly": () => false,
+	"flake-probe": inputs => {
+		const os = inputs.os ?? "all";
+		return os === "macos" || (os === "all" && !(inputs.spec ?? "").endsWith(".e2e.ts"));
+	},
 	"shell-batch-checks": () => true,
 	formal: () => false,
 };

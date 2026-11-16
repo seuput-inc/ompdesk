@@ -1,7 +1,7 @@
 # Pre-flight on every push to main (the blocking checks release.yml runs:
 # types, biome, surface policy, vitest, the build, Windows `test:platform`,
 # OMPdesk's Rust on Linux and Windows, all in parallel; the macOS checks
-# (@smoke, Rust on macOS, the parity vitest, the memory build) are mac-main.yml
+# (the native smoke, Rust on macOS, the parity vitest, the memory build) are mac-main.yml
 # beside it), so a release finds nothing red that a push did not already
 # show; a pull request (and a manual run) runs the Linux jobs
 # alone, `native`'s Linux leg among them. Windows packaging, the real-omp e2e
@@ -18,7 +18,8 @@
 # is a manual dispatch.
 #
 # The full Playwright suite is manual here (`gh workflow run ci.yml -f e2e=true`):
-# it builds out/ on Linux and runs the five macOS shards of e2e-shards.yml,
+# it builds out/ on Linux and runs the five Windows shards of e2e-shards.yml (Playwright
+# drives the Tauri host's page through WebView2; macOS's WKWebView has no DevTools port),
 # which e2e-nightly.yml also runs every night (a release does not).
 #
 # The real Windows install of the app's automatic setup is manual too
@@ -62,7 +63,7 @@ on:
         type: boolean
         default: false
       e2e:
-        description: "Also run the full Playwright e2e suite on macOS"
+        description: "Also run the full Playwright e2e suite on Windows"
         type: boolean
         default: false
       install_check:
@@ -108,7 +109,7 @@ permissions:
   contents: read
 
 jobs:
-  # The queue's admission point (queue-gate.yml). A dispatch asking for macOS (`mac` or `e2e`) must come from main or a
+  # The queue's admission point (queue-gate.yml). A dispatch asking for macOS (`mac`) must come from main or a
   # MAC_REFS branch, and a dispatch whose commit already has a green run with the same inputs cancels itself. Skipped on
   # a push (nothing to admit), where the jobs below start at once. The jobs depend on it so a duplicate starts none.
   gate:
@@ -119,7 +120,7 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: ci.yml
-      mac: ${{ inputs.mac || inputs.e2e }}
+      mac: ${{ inputs.mac }}
       mac-refs: ${{ vars.MAC_REFS }}
       force: ${{ inputs.force }}
 
@@ -272,31 +273,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # The CEF shell's own Rust (native/ompdesk/crates/shell, a workspace of its own so the core's `native` job never
-  # needs CEF): fmt, clippy with warnings denied and `cargo test`, with CEF's archive and the shell workspace's cargo
-  # build cached (.github/actions/shell-check). Windows here on a push to main and a batch run; the macOS leg is in
-  # mac-checks.yml with the other macOS jobs.
-  shell:
-    name: shell (windows)
-    needs: gate
-    if: "!cancelled() && ((github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && inputs.batch))"
-    runs-on: windows-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: read # the failure report reads this run's jobs
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.4
-      - uses: ./.github/actions/shell-check
-      - if: failure()
-        shell: bash
-        run: bash scripts/ci-failure.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-
   # release.yml's `win` pre-flight half: the tests outside src/renderer on
   # Windows (paths, PATH lookup, cmd.exe shims, spawn, named pipes, file modes),
   # in three shards as release.yml's `win-platform`.
@@ -366,7 +342,7 @@ jobs:
   # uploaded first, on Linux (the bundle is byte-identical on every OS).
   build-out:
     needs: gate
-    if: "!cancelled() && inputs.e2e && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && inputs.e2e && needs.gate.result == 'success'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -385,13 +361,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Launches the built app: the full suite, against the latest published omp
+  # Launches the built app on Windows (the Tauri host, WebView2): the full suite, against the latest published omp
   # (no provider credentials, each suite uses an isolated agent dir).
   e2e:
     needs: build-out
-    concurrency:
-      group: mac-dispatch
-      cancel-in-progress: false
     permissions:
       contents: read
     uses: ./.github/workflows/e2e-shards.yml
@@ -443,10 +416,11 @@ jobs:
       - uses: ./.github/actions/install
         with:
           builder: "true"
-      # The CEF shell, Node and CEF's licence files for the package (the shell action: a cached build, the pinned Node).
-      - uses: ./.github/actions/shell
-        with:
-          licenses: "true"
+      # The Tauri host (system WebView) and the pinned Node for the package (the tauri-shell action: a cached build).
+      - uses: ./.github/actions/tauri-shell
+      # The pinned, signed Brave runtime Preview browses with (resources/preview-browser.json); packaging verifies it.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       - run: bun run build
       # The memory binary, built or restored from its cache and checked, as in release.yml's win job.
       - id: memory-cache
@@ -541,10 +515,17 @@ jobs:
       - uses: ./.github/actions/install
         with:
           builder: "true"
-      # The CEF shell, Node and CEF's licence files for the package (the shell action: a cached build, the pinned Node).
-      - uses: ./.github/actions/shell
+      # The Tauri host (system WebView) and the pinned Node: the packaged app and every e2e launch them (the tauri-shell
+      # action: a cached build). Built with test-automation: Playwright attaches to WebView2's DevTools port, which only
+      # that build leaves open (a released host removes the WEBVIEW2_* variables). installer-check above stays on the
+      # release host: it installs and launches the app, attaching nothing.
+      - uses: ./.github/actions/tauri-shell
         with:
-          licenses: "true"
+          test-automation: "true"
+      # The pinned, signed Brave runtime Preview browses with; packaging verifies it, and the unpackaged host the e2e
+      # launches finds it under resources/preview-browser/<platform>-<arch>.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       - run: bun run build
       # The memory binary, built or restored from its cache and checked, as in release.yml's win job.
       - id: memory-cache

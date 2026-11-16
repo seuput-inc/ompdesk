@@ -4,11 +4,15 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	appDirOfEntry,
-	devToolsPort,
+	assertPageAutomation,
+	assertTestAutomationHost,
 	evaluateExpression,
 	inspectorUrl,
+	isAppPageUrl,
+	shellExecutable,
 	stagedShell,
 	userDataFromArgs,
+	webView2Env,
 } from "./shell-launch";
 
 const dirs: string[] = [];
@@ -17,13 +21,18 @@ afterEach(() => {
 });
 
 describe("the shell launcher's pure parts", () => {
-	it("stages the shell per platform and arch", () => {
+	it("stages the Tauri host per platform and arch", () => {
 		expect(stagedShell("win32", "x64", "/r")).toBe(
-			path.join("/r", "resources", "ompdesk-shell", "win32-x64", "ompdesk-shell.exe"),
+			path.join("/r", "resources", "ompdesk-tauri", "win32-x64", "ompdesk-shell.exe"),
 		);
 		expect(stagedShell("darwin", "arm64", "/r")).toBe(
-			path.join("/r", "resources", "ompdesk-shell", "darwin-arm64", "ompdesk-shell"),
+			path.join("/r", "resources", "ompdesk-tauri", "darwin-arm64", "ompdesk-shell"),
 		);
+	});
+
+	it("runs a packaged host when OMP_GUI_E2E_SHELL names one, else the staged build", () => {
+		expect(shellExecutable({ OMP_GUI_E2E_SHELL: "/x/OMPdesk.exe" })).toBe(path.resolve("/x/OMPdesk.exe"));
+		expect(shellExecutable({})).toBe(stagedShell());
 	});
 
 	it("finds the user-data dir in both switch spellings", () => {
@@ -37,7 +46,7 @@ describe("the shell launcher's pure parts", () => {
 		expect(appDirOfEntry(path.join("/repo", "out", "main", "index.js"))).toBe(path.resolve("/repo"));
 	});
 
-	it("reads Node's inspector url from the shell's stderr", () => {
+	it("reads Node's inspector url from the host's stderr", () => {
 		const stderr =
 			"Debugger listening on ws://127.0.0.1:51234/0a1b-2c\nFor help, see: https://nodejs.org/en/docs/inspector\n";
 		expect(inspectorUrl(stderr)).toBe("ws://127.0.0.1:51234/0a1b-2c");
@@ -45,17 +54,54 @@ describe("the shell launcher's pure parts", () => {
 		expect(inspectorUrl("nothing yet")).toBeUndefined();
 	});
 
-	it("reads DevToolsActivePort only once it holds a port and its path line", () => {
-		const dir = mkdtempSync(path.join(os.tmpdir(), "omp-devtools-port-"));
+	it("gives WebView2 a DevTools port and a profile folder of the test's own", () => {
+		expect(webView2Env({}, 9333, path.join("/p", "desktop"))).toEqual({
+			WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9333",
+			WEBVIEW2_USER_DATA_FOLDER: path.join("/p", "desktop", "webview2"),
+		});
+	});
+
+	it("keeps the parent's WebView2 arguments and folder, but never its debugging port", () => {
+		expect(
+			webView2Env(
+				{
+					WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--disable-gpu  --remote-debugging-port=9222",
+					WEBVIEW2_USER_DATA_FOLDER: "/own",
+				},
+				9333,
+				"/p",
+			),
+		).toEqual({
+			WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--disable-gpu --remote-debugging-port=9333",
+			WEBVIEW2_USER_DATA_FOLDER: "/own",
+		});
+	});
+
+	it("recognises the app's pages on both engines' origins", () => {
+		expect(isAppPageUrl("app://ompdesk/index.html")).toBe(true);
+		expect(isAppPageUrl("http://app.localhost/?window=1")).toBe(true);
+		expect(isAppPageUrl("http://app.localhost.evil.test/")).toBe(false);
+		expect(isAppPageUrl("about:blank")).toBe(false);
+		expect(isAppPageUrl("https://example.com/")).toBe(false);
+	});
+
+	it("drives pages on Windows only, and says why macOS cannot", () => {
+		expect(() => assertPageAutomation("win32")).not.toThrow();
+		expect(() => assertPageAutomation("darwin")).toThrow(/WKWebView.*tauri-native-smoke\.ts/);
+		expect(() => assertPageAutomation("linux")).toThrow("ships on macOS and Windows only");
+	});
+
+	it("refuses a host whose build record lacks test-automation, since it would open no DevTools port", () => {
+		const dir = mkdtempSync(path.join(os.tmpdir(), "omp-host-record-"));
 		dirs.push(dir);
-		const file = path.join(dir, "DevToolsActivePort");
-		expect(devToolsPort(file)).toBeUndefined();
-		writeFileSync(file, "9333");
-		expect(devToolsPort(file)).toBeUndefined();
-		writeFileSync(file, "9333\n/devtools/browser/abc");
-		expect(devToolsPort(file)).toBe(9333);
-		writeFileSync(file, "0\n/x");
-		expect(devToolsPort(file)).toBeUndefined();
+		const exe = path.join(dir, "ompdesk-shell.exe");
+		expect(() => assertTestAutomationHost(exe)).toThrow("cannot read");
+		writeFileSync(path.join(dir, "ompdesk-tauri.build.json"), JSON.stringify({ features: [] }));
+		expect(() => assertTestAutomationHost(exe)).toThrow("without the test-automation feature");
+		writeFileSync(path.join(dir, "ompdesk-tauri.build.json"), JSON.stringify({ engine: "tauri" }));
+		expect(() => assertTestAutomationHost(exe)).toThrow('"unrecorded"');
+		writeFileSync(path.join(dir, "ompdesk-tauri.build.json"), JSON.stringify({ features: ["test-automation"] }));
+		expect(() => assertTestAutomationHost(exe)).not.toThrow();
 	});
 
 	it("evaluates fn(electron, arg) with an undefined arg spelled as undefined", async () => {

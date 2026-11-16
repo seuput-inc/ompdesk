@@ -138,7 +138,7 @@ export async function appLaunchOptions(
 }
 
 /**
- * Launch the built app as {@link appLaunchOptions} describes: `ompdesk-shell` (CEF) running `out/main/index.js` under Node,
+ * Launch the built app as {@link appLaunchOptions} describes: the Tauri host (`ompdesk-shell`, WebView2) running `out/main/index.js` under Node,
  * connected to as `fixture/shell-launch.ts` says. The result has the surface the specs use of `ElectronApplication`.
  */
 export async function launchApp(options: LaunchOptions): Promise<ElectronApplication> {

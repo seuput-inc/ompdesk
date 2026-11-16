@@ -11,11 +11,12 @@
  * Takes the environment tauri-native-smoke.ts does (OMPDESK_TAURI_TEST_BINARY, _OUTPUT, _NODE, OMP_GUI_E2E_OUT).
  */
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { launchNative, stopNative, until } from "./tauri-native-smoke";
+import { launchNative, type NativeApp, stopNative, until } from "./tauri-native-smoke";
 
 /** What `tauri-plugin-wdio-webdriver` leaves in a host that compiled it: its crate name, in panic paths and as the plugin's name. */
 export const AUTOMATION_STRINGS = [
@@ -41,6 +42,18 @@ function listening(host: string, port: number): Promise<boolean> {
 	return promise;
 }
 
+async function freePort(): Promise<number> {
+	const server = createServer();
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	assert(address && typeof address !== "string");
+	const closed = Promise.withResolvers<void>();
+	server.close(() => closed.resolve());
+	await closed.promise;
+	return address.port;
+}
+
 function expectAutomation(binary: string): void {
 	const found = automationStringsIn(readFileSync(binary));
 	assert(
@@ -61,20 +74,46 @@ async function checkRelease(): Promise<void> {
 	);
 	console.log(`release host ${binary} (${bytes.byteLength} bytes) holds none of ${AUTOMATION_STRINGS.join(", ")}`);
 
-	const app = await launchNative("release-automation-");
+	// On Windows the WebView2 loader would open a DevTools port from this variable in any host: the released one must
+	// remove it before the WebView is created, so nothing may listen on that port either.
+	const devToolsPort = process.platform === "win32" ? await freePort() : undefined;
+	let app: NativeApp;
+	try {
+		if (devToolsPort !== undefined)
+			process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${devToolsPort}`;
+		app = await launchNative("release-automation-");
+	} finally {
+		Reflect.deleteProperty(process.env, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+	}
 	try {
 		await until("Released app start", async () => existsSync(path.join(app.desktop, "app-started.json")), app.exited);
+		const probed = [
+			{
+				port: app.port,
+				what: "the test WebDriver environment (a WebDriver server is running, or another process took the port)",
+			},
+			...(devToolsPort === undefined
+				? []
+				: [
+						{
+							port: devToolsPort,
+							what: "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (WebView2 opened a DevTools port, or another process took the port)",
+						},
+					]),
+		];
 		for (let probe = 0; probe < 3; probe++) {
-			for (const host of ["127.0.0.1", "::1"]) {
-				assert(
-					!(await Promise.race([listening(host, app.port), app.exited])),
-					`${host}:${app.port} accepts connections although the released host got the test WebDriver environment (a WebDriver server is running, or another process took the port)`,
-				);
+			for (const { port, what } of probed) {
+				for (const host of ["127.0.0.1", "::1"]) {
+					assert(
+						!(await Promise.race([listening(host, port), app.exited])),
+						`${host}:${port} accepts connections although the released host got ${what}`,
+					);
+				}
 			}
 			await Promise.race([delay(300), app.exited]);
 		}
 		console.log(
-			`released app started with OMP_GUI_TEST_WEBDRIVER_PORT=${app.port} and the test profile; nothing listens on 127.0.0.1:${app.port} or [::1]:${app.port}`,
+			`released app started with OMP_GUI_TEST_WEBDRIVER_PORT=${app.port}${devToolsPort === undefined ? "" : ` and WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=${devToolsPort}`} and the test profile; nothing listens on 127.0.0.1 or [::1] at ${probed.map(({ port }) => port).join(" or ")}`,
 		);
 	} finally {
 		await stopNative(app);

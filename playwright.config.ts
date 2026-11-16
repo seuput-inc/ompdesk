@@ -5,7 +5,7 @@ import { pinSnapshot } from "./scripts/out-snapshot";
 import { claimRunTemp } from "./scripts/run-temp";
 import { dropGitSelectors } from "./src/shared/git-env";
 
-// Every suite launches the app (the Rust shell, `e2e/fixture/shell-launch.ts`) with `...process.env`; keep its
+// Every suite launches the app (the Tauri host, `e2e/fixture/shell-launch.ts`) with `...process.env`; keep its
 // windows off the user's screen (see OMP_GUI_HEADLESS in src/main/index.ts). Set to 0 to watch.
 process.env.OMP_GUI_HEADLESS ??= "1";
 // Every launched app ends with the process that launched it, even one that crashed (src/main/test-launcher-exit.ts):

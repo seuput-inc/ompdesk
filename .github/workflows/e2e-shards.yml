@@ -1,27 +1,29 @@
-# The full Playwright suite on GitHub's macOS runners, split over a matrix of
+# The full Playwright suite on GitHub's Windows runners, split over a matrix of
 # shards and run against the `out/` bundle another job of the same run uploaded.
 # Called by e2e-nightly.yml and by ci.yml's manual `e2e=true`, each after its
 # own `build-out` job; release.yml no longer calls it. It never runs on its own.
 #
-# The callers hold the account-wide macOS lane for the whole call (a concurrency group on the calling job: `mac-dispatch`
-# for a dispatch, `mac-nightly` for the nightly); this workflow sets no group of its own.
+# Windows because that is where Playwright can drive the app: the Tauri host's page is WebView2, which opens a
+# DevTools port for the test child (e2e/fixture/shell-launch.ts). macOS's WKWebView has no CDP endpoint, so no
+# Playwright spec can launch the app there; macOS is checked by `scripts/tauri-native-smoke.ts` (mac-checks.yml's
+# `mac-smoke`, release.yml's `mac`). The staged host (resources/ompdesk-tauri/win32-x64) runs the built `out/` as an
+# unpackaged app, as the harness always did; Preview's own browser is staged beside it.
 #
 # Sharding is scripts/e2e-shard.ts (whole spec files, dealt by estimated cost),
 # not `playwright test --shard`, which counts tests that skip inside their body
 # and so leaves one shard nearly empty. Every shard runs against the real latest
 # omp (real-core and deep-audit) and the fake omp (everything else); playwright
-# runs one worker per shard (3-core runner; playwright.config.ts).
+# runs one worker per shard (2-core runner; playwright.config.ts).
 #
-# At most 5 macOS jobs run at once on a public repo's free tier, so the suite runs in five shards: with six the sixth
-# queued behind the first to finish and the run took two rounds (nightly 42609763294: shard 6 started 994 s in, the
-# run ended after 38 min of which the shards themselves were 933 to 1158 s). The suite sums ~6200 s of test time on
-# the runner, ~1250 s a shard dealt from that run's per-file times (`bun scripts/e2e-shard-costs.ts <run-id>`), so
-# Playwright's `--global-timeout` is 35 minutes under the job's 40: at 25 under 30, five shards of ~1350 s stopped
-# with tests not run (9 in 41916393486; 36 in 41817431850, with four shards). `fail-fast: false`: one run reports
-# every failing shard, and `gh run rerun <id> --failed` reruns only those.
+# Five shards, as when the suite ran on macOS (where a public repo runs at most 5 jobs at once; Windows has no such
+# cap, so more is possible). `scripts/e2e-shard-costs.json` was measured on macOS runners, so the deal is an estimate
+# until `bun scripts/e2e-shard-costs.ts <run-id>` rewrites it from a Windows run. Playwright's `--global-timeout` is 35
+# minutes under the job's 40, so a shard that runs long still prints its failures and uploads `test-results/` (the
+# upload also runs on a cancel), though the tests left do not run. `fail-fast: false`: one run reports every failing
+# shard, and `gh run rerun <id> --failed` reruns only those.
 #
-# One worker per shard: with two (run 42693732758) the shards summed 3856 s instead of 6376 s, but four tests that
-# pass with one failed, `preview-stream`'s frame pacing every time (3.9 frames a second where it asserts 5).
+# One worker per shard: on macOS, two workers failed load-sensitive tests that pass with one (run 42693732758:
+# `preview-stream`'s frame pacing, every time). Two workers need those made independent of load first.
 #
 # `specs` (space-separated e2e/*.e2e.ts paths) runs those files alone in one shard instead of the whole suite: the
 # check after a fix, at the cost of the files plus ~1 min of setup, not ~25 min (e2e-nightly.yml's dispatch input).
@@ -45,12 +47,15 @@ permissions:
 jobs:
   e2e:
     name: e2e (shard ${{ matrix.shard }}/${{ strategy.job-total }})
-    runs-on: macos-latest
+    runs-on: windows-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.specs != '' && '[1]' || '[1, 2, 3, 4, 5]') }}
+    defaults:
+      run:
+        shell: bash
     env:
       SHARD: ${{ matrix.shard }}
       SHARDS: ${{ strategy.job-total }}
@@ -60,16 +65,25 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
+      # See release.yml's win job: bun's cache on the workspace volume.
+      - name: Put bun's cache on the workspace volume
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
-      # The CEF shell and the pinned Node, which every e2e launches (the shell action: a cached build).
-      - uses: ./.github/actions/shell
+      # The Tauri host (WebView2) and the pinned Node, which every e2e launches (the tauri-shell action: a cached build),
+      # built with test-automation: only that build leaves WebView2's DevTools port open for Playwright.
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      # The unpackaged host finds Preview's browser under resources/preview-browser/<platform>-<arch>.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       # The runner is ephemeral: real-core and deep-audit run the real omp.
       - name: Install omp
         run: |
           # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
           bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+          bun pm bin -g >> "$GITHUB_PATH"
+          "$(bun pm bin -g)/omp" --version
       # mobile-*.e2e.ts drive the web build in Playwright's own browsers, which a fresh runner lacks.
       - name: Playwright browsers
         run: bunx playwright install chromium webkit
@@ -99,7 +113,7 @@ jobs:
       - if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: e2e-macos-shard-${{ matrix.shard }}
+          name: e2e-windows-shard-${{ matrix.shard }}
           path: |
             test-results/
             playwright-report/
