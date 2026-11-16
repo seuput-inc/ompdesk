@@ -245,7 +245,13 @@ const profileBootstrap =
 	((location.protocol === "app:" && location.host === "ompdesk") ||
 		(location.protocol === "http:" && location.host === "app.localhost"));
 
-if (profileBootstrap) {
+// Tauri adds an initialization script to every subframe on Windows (its docs: "scripts are always added to subframes"),
+// and Electron's preload ran in the top frame only. A frame inside the page (a document viewer, a sandboxed reply
+// frame) gets no `window.omp`, no caption buttons and no readiness handshake: it would throw "Tauri invoke is
+// unavailable" there, as a page error of the window that holds it.
+if (window.top !== window) {
+	// Subframe: nothing to install.
+} else if (profileBootstrap) {
 	void migrateProfile();
 } else
 	try {

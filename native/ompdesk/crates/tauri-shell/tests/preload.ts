@@ -27,6 +27,7 @@ const context: Record<string, unknown> = {
 	navigator: { userAgent: "probe-agent" },
 };
 context.window = context;
+context.top = context;
 context.addEventListener = events.addEventListener.bind(events);
 context.removeEventListener = events.removeEventListener.bind(events);
 context.dispatchEvent = events.dispatchEvent.bind(events);
@@ -109,6 +110,20 @@ const pasted = await intakeComposerFiles([clipboard], options);
 assert.deepEqual(pasted.texts, [{ name: "report.txt", content: "clipboard text" }]);
 assert.deepEqual(pasted.rejected, []);
 assert.equal(uploads.length, 2);
+// A subframe (Tauri injects the script into every frame on Windows) installs nothing and invokes nothing.
+const subframe: Record<string, unknown> = { ...context, top: {}, omp: undefined, __ompTauriPush: undefined };
+subframe.window = subframe;
+const subframeCalls: string[] = [];
+subframe.__TAURI_INTERNALS__ = {
+	invoke: async (_command: string, args: { kind: string }) => {
+		subframeCalls.push(args.kind);
+		throw new Error("Tauri invoke is unavailable");
+	},
+};
+vm.runInNewContext(await built.outputs[0].text(), subframe);
+assert.equal(subframe.omp, undefined);
+assert.equal(subframe.__ompTauriPush, undefined);
+assert.deepEqual(subframeCalls, []);
 console.log(
-	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback",
+	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback, subframes untouched",
 );

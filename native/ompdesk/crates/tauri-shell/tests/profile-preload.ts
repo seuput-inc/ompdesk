@@ -77,6 +77,7 @@ async function run(options: Options = {}) {
 		},
 	};
 	context.window = context;
+	context.top = context;
 	vm.runInNewContext(preload, context);
 	options.afterStart?.(context);
 	await terminal.promise;
