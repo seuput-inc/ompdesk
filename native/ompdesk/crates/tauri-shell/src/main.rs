@@ -3,6 +3,7 @@
 mod assets;
 mod native_chrome;
 mod native_services;
+mod network;
 pub use native_chrome::menu;
 mod profile;
 mod registry;
@@ -627,16 +628,15 @@ fn wc_op(call: host::Call) {
                         .err("timeout", "JavaScript evaluation exceeded 180 seconds");
                 }
             });
-            if let Err(error) = window.eval(script) {
-                if let Some(e) = runtime()
+            if let Err(error) = window.eval(script)
+                && let Some(e) = runtime()
                     .evaluations
                     .lock()
                     .expect("evaluations")
                     .remove(&id)
-                {
-                    host::forget_cancel(e.call.id());
-                    e.call.err("failed", error.to_string());
-                }
+            {
+                host::forget_cancel(e.call.id());
+                e.call.err("failed", error.to_string());
             }
         }
     }
@@ -648,6 +648,7 @@ fn dispatch(call: host::Call) {
     }
 }
 fn dispatch_ui(call: host::Call) {
+    let Some(call)=network::dispatch(call) else {return;};
     let Some(call) = native_services::dispatch(call) else {
         return;
     };
@@ -688,6 +689,7 @@ fn dispatch_ui(call: host::Call) {
 }
 fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
     match name {
+        "net.cancel"=>network::cancel(data),
         "app.relaunch" => {
             let args = if data["args"].is_null() {
                 std::env::args().skip(1).collect()
@@ -737,15 +739,14 @@ fn node_event(name: &str, data: Value, _bin: Option<Vec<u8>>) {
                         false
                     }
                 };
-                if deliver {
-                    if let Ok(window) = window_for_wc(wc) {
-                        if let Err(error) = window.eval(format!(
-                            "window.__ompTauriPush({}, {message});",
-                            identity.generation
-                        )) {
-                            log::log("push.failed", json!({"wcId":wc,"error":error.to_string()}));
-                        }
-                    }
+                if deliver
+                    && let Ok(window) = window_for_wc(wc)
+                    && let Err(error) = window.eval(format!(
+                        "window.__ompTauriPush({}, {message});",
+                        identity.generation
+                    ))
+                {
+                    log::log("push.failed", json!({"wcId":wc,"error":error.to_string()}));
                 }
             });
         }
@@ -1113,11 +1114,9 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         })
         .build(tauri::generate_context!())?;
     let code = app.run_return(|_, event| match event {
-        RunEvent::ExitRequested { api, .. } => {
-            if !lifecycle::EXITING.load(Ordering::SeqCst) {
-                api.prevent_exit();
-                host::event("app.quitRequested", json!({}));
-            }
+        RunEvent::ExitRequested { api, .. } if !lifecycle::EXITING.load(Ordering::SeqCst) => {
+            api.prevent_exit();
+            host::event("app.quitRequested", json!({}));
         }
         RunEvent::Exit => node::stop(Duration::from_secs(5)),
         #[cfg(target_os = "macos")]
