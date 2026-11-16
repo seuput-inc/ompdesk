@@ -15,14 +15,32 @@ use url::{Position, Url};
 use super::Gateway;
 use crate::{host, sessions};
 
-struct LocalNavigation;
+const BROWSER_DOCUMENT: &str = "omp-visual://browser-fixture/browser/index.html";
+
+struct LocalNavigation {
+    gateway: Arc<Gateway>,
+    approved: Arc<std::sync::Mutex<Vec<String>>>,
+}
 
 impl shell_preview::NavigationHandler for LocalNavigation {
     fn allow(
         &self,
         navigation: shell_preview::Navigation,
     ) -> Pin<Box<dyn Future<Output = bool> + Send>> {
-        Box::pin(async move { navigation.url == "about:blank" })
+        let gateway = self.gateway.clone();
+        let approved = self.approved.clone();
+        Box::pin(async move {
+            if navigation.url == "about:blank" {
+                return true;
+            }
+            match gateway.original_url("visual-a", &navigation.url).await {
+                Ok(Some(original)) if original == BROWSER_DOCUMENT => {
+                    approved.lock().unwrap().push(original);
+                    true
+                }
+                _ => false,
+            }
+        })
     }
 }
 
@@ -181,13 +199,17 @@ async fn real_node_gateway_loopback_and_credit() {
     }
     #[cfg(windows)]
     let _ = &mut scratch_guard;
+    let navigation = Arc::new(LocalNavigation {
+        gateway: gateway.clone(),
+        approved: Arc::new(std::sync::Mutex::new(Vec::new())),
+    });
     let browser = match shell_preview::Browser::launch_with_hooks(
         shell_preview::LaunchConfig {
             executable,
             profile_root: dir.join("browser"),
             command_timeout: Duration::from_secs(15),
         },
-        Arc::new(LocalNavigation),
+        navigation.clone(),
         Arc::new(sessions::preview::Initializer),
     )
     .await
@@ -243,6 +265,8 @@ async fn real_node_gateway_loopback_and_credit() {
     };
     let mut scenario = tokio::spawn(exercise(
         gateway.clone(),
+        browser.clone(),
+        navigation,
         app_base,
         visual_a,
         visual_b,
@@ -303,6 +327,8 @@ async fn real_node_gateway_loopback_and_credit() {
 
 async fn exercise(
     gateway: Arc<Gateway>,
+    browser: Arc<shell_preview::Browser>,
+    navigation: Arc<LocalNavigation>,
     app_base: String,
     visual_a: super::PreviewTransport,
     visual_b: super::PreviewTransport,
@@ -428,6 +454,86 @@ async fn exercise(
         Some(original)
     );
     assert!(gateway.original_url("visual-b", &mapped).await.is_err());
+
+    let browser_mapped = gateway
+        .map_url("visual-a", BROWSER_DOCUMENT)
+        .await
+        .unwrap()
+        .unwrap();
+    let context = sessions::preview::context_for("visual-a").await.unwrap();
+    let page = browser
+        .create_page(
+            &context,
+            shell_preview::Viewport {
+                width: 320,
+                height: 240,
+                device_scale_factor: 1.0,
+            },
+        )
+        .await
+        .unwrap();
+    page.command("Page.setLifecycleEventsEnabled", json!({"enabled":true}))
+        .await
+        .unwrap();
+    let mut events = browser.subscribe();
+    let navigated = page.navigate(&browser_mapped).await.unwrap();
+    let loader = navigated["loaderId"].as_str().expect("document loader");
+    loop {
+        let event = events.recv().await.expect("actual browser lifecycle event");
+        if event.session_id.as_deref() == Some(page.session_id.as_str())
+            && event.method == "Page.lifecycleEvent"
+            && event.params["name"] == "load"
+            && event.params["loaderId"] == loader
+        {
+            break;
+        }
+    }
+    let rendered = page
+        .evaluate(
+            r##"(async () => {
+                const image = document.querySelector("#pixel");
+                await image.decode();
+                const data = await fetch("./assets/data.json").then(response => {
+                    if (!response.ok) throw new Error(`fixture fetch ${response.status}`);
+                    return response.json();
+                });
+                const bounds = image.getBoundingClientRect();
+                return {
+                    url: location.href,
+                    text: document.querySelector("#fixture").textContent,
+                    color: getComputedStyle(document.querySelector("#fixture")).color,
+                    image: [image.naturalWidth, image.naturalHeight, bounds.width, bounds.height],
+                    inlineRan: document.documentElement.dataset.inlineRan === "yes",
+                    data
+                };
+            })()"##,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rendered["url"], browser_mapped);
+    assert_eq!(rendered["text"], "browser-route-ready");
+    assert_eq!(rendered["color"], "rgb(17, 34, 51)");
+    assert_eq!(rendered["image"], json!([2, 3, 6, 9]));
+    assert_eq!(rendered["inlineRan"], false, "CSP must block inline script");
+    assert_eq!(rendered["data"], json!({"route":"actual-browser-network"}));
+    let mut expected: std::collections::HashSet<&str> = [
+        BROWSER_DOCUMENT,
+        "omp-visual://browser-fixture/browser/assets/fixture.js",
+        "omp-visual://browser-fixture/browser/assets/fixture.css",
+        "omp-visual://browser-fixture/assets/pixel.svg",
+        "omp-visual://browser-fixture/browser/assets/data.json",
+    ].into_iter().collect();
+    while !expected.is_empty() {
+        let requested = fixture.event("request", None).await;
+        if requested["url"].as_str().is_some_and(|url| expected.remove(url)) {
+            assert_eq!(requested["partition"], "visual-a");
+            assert_eq!(requested["method"], "GET");
+        }
+    }
+    page.close().await.unwrap();
+    assert!(navigation.approved.lock().unwrap().iter().any(|url| url == BROWSER_DOCUMENT));
+
     assert!(gateway.is_gateway_origin(&mapped).await);
     let mapped_url = Url::parse(&mapped).unwrap();
     let mut wrong_host = TcpStream::connect(("127.0.0.1", mapped_url.port().unwrap()))

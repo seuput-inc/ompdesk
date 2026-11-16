@@ -27,10 +27,30 @@ let release;
 const gate = new Promise(resolve => { release = resolve; });
 const never = new Promise(() => {});
 let creditPulls = 0;
+const browserAssets = new Map([
+  ["/browser/index.html", ["text/html", `<!doctype html><html><head>
+    <link rel="stylesheet" href="./assets/fixture.css">
+    <script defer src="./assets/fixture.js"></script>
+    <script>document.documentElement.dataset.inlineRan = "yes"</script>
+    </head><body><strong id="fixture">waiting</strong><img id="pixel" src="/assets/pixel.svg"></body></html>`]],
+  ["/browser/assets/fixture.js", ["text/javascript", `document.querySelector("#fixture").textContent = "browser-route-ready";`]],
+  ["/browser/assets/fixture.css", ["text/css", `#fixture { color: rgb(17, 34, 51); } #pixel { width: 6px; height: 9px; }`]],
+  ["/assets/pixel.svg", ["image/svg+xml", `<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"><rect width="2" height="3" fill="green"/></svg>`]],
+  ["/browser/assets/data.json", ["application/json", JSON.stringify({ route: "actual-browser-network" })]],
+]);
 function visualHandler(partition) {
   return request => {
     send({ event: "request", partition, url: request.url, method: request.method, headers: [...request.headers] });
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
+    if (url.protocol === "omp-visual:" && url.hostname === "browser-fixture") {
+      const asset = browserAssets.get(path);
+      if (!asset) return new Response("missing fixture asset", { status: 404 });
+      return new Response(asset[1], { headers: {
+        "Content-Type": asset[0],
+        "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'",
+      } });
+    }
     if (path === "/credit") {
       return new Response(new ReadableStream({
         pull(controller) {
