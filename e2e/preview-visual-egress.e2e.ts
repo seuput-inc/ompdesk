@@ -27,6 +27,9 @@ import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
 const DNS_SUFFIX = "egress.invalid";
 const NAME = new RegExp(`[a-z0-9-]+\\.${DNS_SUFFIX.replaceAll(".", "\\.")}`, "g");
 const MAPPED_VISUAL_HOST = /^(?:[0-9a-f]{32}\.){4}localhost$/;
+/** The address the visual's link points at; the user opens it in a web tab that must show this page. */
+const APPROVED_LINK_PATH = "/link?d=secret";
+const APPROVED_LINK_TITLE = "Approved link";
 
 function record(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -56,7 +59,11 @@ interface Hit {
 	head: string;
 }
 
-/** Records every TCP connection (and its first bytes) and UDP packet on one loopback port; answers HTTP with 204. */
+/**
+ * Records every TCP connection (and its first bytes) and UDP packet on one loopback port. It answers the approved
+ * link with a real page, so the web tab the user opens commits a document and holds its address; everything else
+ * gets 204, which Chromium treats as "no navigation" and so would leave such a tab with no URL.
+ */
 async function sentinel() {
 	const hits: Hit[] = [];
 	const tcp = net.createServer(socket => {
@@ -65,7 +72,12 @@ async function sentinel() {
 		hits.push(hit);
 		socket.once("data", data => {
 			hit.head = data.subarray(0, 120).toString("latin1");
-			socket.end("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+			if (hit.head.startsWith(`GET ${APPROVED_LINK_PATH} `)) {
+				const body = `<!doctype html><title>${APPROVED_LINK_TITLE}</title><p>${APPROVED_LINK_TITLE}</p>`;
+				socket.end(
+					`HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+				);
+			} else socket.end("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
 		});
 		socket.on("error", () => {});
 		socket.setTimeout(2000, () => socket.destroy());
@@ -296,12 +308,30 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		expect(listener.hits).toEqual([]);
 		expect(await inPage("location.href")).toMatch(/egress\.html$/);
 
-		// The user chooses to open it: a new web tab fetches exactly that address.
+		// The user chooses to open it: a new web tab fetches exactly that address and shows its page.
+		const approvedLink = `${origin}${APPROVED_LINK_PATH}`;
 		await aside.getByRole("button", { name: "Open in new tab", exact: true }).click();
 		await expect
 			.poll(() => listener.hits.map(hit => hit.head.split("\r\n")[0]))
-			.toContain("GET /link?d=secret HTTP/1.1");
+			.toContain(`GET ${APPROVED_LINK_PATH} HTTP/1.1`);
 		await expect(offer).toHaveCount(0);
+		// The tab the user just opened is the one on screen: its address, its title, no spinner.
+		await expect(address).toHaveValue(approvedLink);
+		await expect(shell.locator("[data-preview-status]")).toHaveText(APPROVED_LINK_TITLE);
+		// Its live web contents hold that address, finished loading, before any cookie is set through it.
+		await expect
+			.poll(
+				() =>
+					app.evaluate(
+						({ webContents }, link) =>
+							webContents
+								.getAllWebContents()
+								.some(item => !item.isDestroyed() && item.getURL() === link && !item.isLoading()),
+						approvedLink,
+					),
+				{ message: "live web tab on the approved link, loaded" },
+			)
+			.toBe(true);
 		expect(await inPage("location.href")).toMatch(/egress\.html$/);
 
 		// Distinct origins must isolate browser storage even inside the same visual session.
@@ -335,8 +365,13 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		expect(await inPage("location.origin", peer.canonical)).toBe(peerAddress.origin);
 		const webCookies = await app.evaluate(
 			async ({ webContents }, { webUrl, visualUrl }) => {
-				const web = webContents.getAllWebContents().find(contents => contents.getURL() === webUrl);
-				if (!web) throw new Error("No approved web tab in the visual's window");
+				const web = webContents
+					.getAllWebContents()
+					.find(contents => !contents.isDestroyed() && contents.getURL() === webUrl && !contents.isLoading());
+				if (!web)
+					throw new Error(
+						`No approved web tab in the visual's window; live URLs: ${JSON.stringify(webContents.getAllWebContents().map(contents => contents.getURL()))}`,
+					);
 				web.debugger.attach("1.3");
 				try {
 					await web.debugger.sendCommand("Network.setCookie", {
@@ -350,7 +385,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 					web.debugger.detach();
 				}
 			},
-			{ webUrl: `${origin}/link?d=secret`, visualUrl: firstHref },
+			{ webUrl: approvedLink, visualUrl: firstHref },
 		);
 		expect(webCookies).toMatchObject({
 			cookies: expect.arrayContaining([expect.objectContaining({ name: "web_partition", value: "web" })]),
