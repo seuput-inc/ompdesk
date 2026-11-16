@@ -87,7 +87,7 @@ for (const [language, theme] of variants([
 		await Promise.all([fs.mkdir(desktop), fs.mkdir(project), fs.mkdir(agent)]);
 		await fs.writeFile(
 			path.join(desktop, "prefs.json"),
-			JSON.stringify({ language, themeName: theme, firstRunComplete: true }),
+			JSON.stringify({ language, themeName: theme, firstRunComplete: true, gui: { panelWidth: 460 } }),
 		);
 		const env = {
 			...process.env,
@@ -137,6 +137,14 @@ for (const [language, theme] of variants([
 				},
 				{ host, op },
 			);
+		const innerWidth = () =>
+			app.evaluate(async ({ webContents }, source) => {
+				const contents = webContents
+					.getAllWebContents()
+					.find(candidate => candidate.getURL().startsWith(`http://${source}/`));
+				if (!contents) throw new Error("No preview page");
+				return contents.executeJavaScript("innerWidth");
+			}, host);
 		const page = await app.firstWindow();
 		try {
 			await page.waitForFunction(() => window.omp?.rpc != null);
@@ -186,10 +194,22 @@ for (const [language, theme] of variants([
 			await addressBar.fill(`${host}/width`);
 			await addressBar.press("Enter");
 			await expect(status).toHaveText("w=390");
+			await expect.poll(innerWidth).toBe(390);
 			await capture("preview-phone");
 			await options.click();
 			await page.getByRole("menuitemcheckbox", { name: label.fill, exact: true }).click();
-			await expect(status).not.toHaveText("w=390");
+			const surface = aside.locator("[data-preview-surface]");
+			const fillWidth = await surface.evaluate(element => Math.round(element.getBoundingClientRect().width));
+			expect(fillWidth).not.toBe(390);
+			await expect.poll(innerWidth).toBe(fillWidth);
+			await expect(status).toHaveText(`w=${fillWidth}`);
+			const resize = aside.getByRole("separator");
+			await resize.press("Home");
+			await expect(resize).toHaveAttribute("aria-valuenow", "360");
+			const resizedWidth = await surface.evaluate(element => Math.round(element.getBoundingClientRect().width));
+			expect(resizedWidth).not.toBe(fillWidth);
+			await expect.poll(innerWidth).toBe(resizedWidth);
+			await expect(status).toHaveText(`w=${resizedWidth}`);
 
 			// C126: a download is refused with a notice that offers the system browser.
 			await child("download");
