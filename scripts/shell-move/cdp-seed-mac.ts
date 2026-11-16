@@ -42,7 +42,15 @@ if (mode === "quit") {
 	await page.waitForFunction(() => typeof (window as unknown as SeedWindow).omp?.app?.quit === "function", null, {
 		timeout: 30_000,
 	});
-	const disconnected = browser.waitForEvent("disconnected", { timeout: 60_000 });
+	const connected = browser;
+	// Playwright's Browser has no waitForEvent: listen for its one "disconnected" event, bounded by the quit's minute.
+	const disconnected = new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error("the released app did not quit within 60 s")), 60_000);
+		connected.once("disconnected", () => {
+			clearTimeout(timer);
+			resolve();
+		});
+	});
 	const requested = page.evaluate(() => {
 		const app = (window as unknown as SeedWindow).omp?.app;
 		if (!app) throw new Error("the released app has no quit API");
