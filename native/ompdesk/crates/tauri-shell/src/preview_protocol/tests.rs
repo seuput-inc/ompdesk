@@ -614,6 +614,42 @@ async fn exercise(
     assert_eq!(&chunk, b"4\r\n\x00\xffA\x80\r\n");
     drop(cancelled);
     fixture.event("cancel", Some("/cancel")).await;
+    let control_url = gateway.map_url("visual-a", "omp-visual://example/control")
+        .await.unwrap().unwrap();
+    let mut control = connect(&control_url, "GET", "").await;
+    assert!(head(&mut control).await.starts_with("http/1.1 201"));
+    let mut control_first = [0; 9];
+    control.read_exact(&mut control_first).await.unwrap();
+    assert_eq!(&control_first, b"4\r\n\x00\xffA\x80\r\n");
+    let late_url = gateway
+        .map_url("visual-a", "omp-visual://example/late-head")
+        .await.unwrap().unwrap();
+    let late_socket = connect(&late_url, "GET", "").await;
+    let held = fixture.event("head-held", None).await;
+    assert_eq!(held["requestId"], held["streamId"]);
+    assert!(held["requestId"].as_u64().is_some_and(|id| id > 0));
+    drop(late_socket);
+    let cancelled_head = fixture.event("cancel", Some("/late-head")).await;
+    assert_eq!(cancelled_head["count"], 1);
+    assert_eq!(cancelled_head["released"], false);
+    let cancelled_wire = fixture.event("wire-cancel", Some("/late-head")).await;
+    assert_eq!(cancelled_wire["requestId"], held["requestId"]);
+    fixture.command("replay-cancels").await;
+    let replayed = fixture.event("cancels-replayed", None).await;
+    assert_eq!(replayed["cancels"], 1);
+    assert_eq!(replayed["wireCancels"], 3);
+    assert_eq!(replayed["released"], false);
+    fixture.command("release-head").await;
+    let released = fixture.event("head-released", None).await;
+    assert_eq!(released["cancels"], 1);
+    assert!(released["heldBytes"].as_u64().is_some_and(|bytes| bytes <= 96 * 1024));
+    assert!(complete(&mapped_media, "HEAD", "").await.0.starts_with("http/1.1 404"));
+    fixture.command("release-control").await;
+    fixture.event("end", Some("/control")).await;
+    let mut control_rest = Vec::new();
+    control.read_to_end(&mut control_rest).await.unwrap();
+    assert_eq!(control_rest, b"3\r\nB\x00\xfe\r\n0\r\n\r\n");
+
     let response = sessions::protocol::open(sessions::protocol::Request {
         partition: "visual-a".into(),
         scheme: "omp-visual".into(),
@@ -654,7 +690,54 @@ async fn exercise(
     assert!(writing.join_next().await.unwrap().unwrap().is_err());
     fixture.event("cancel", Some("/credit")).await;
 
-    gateway.close_partition("visual-a").await.unwrap();
+    let closing_origin = {
+        let state = gateway.state.lock().await;
+        let super::State::Live(live) = &*state else { panic!("gateway stopped"); };
+        live.preview.get("visual-a").unwrap().clone()
+    };
+    let closed_port = closing_origin.port;
+    let released_config = Arc::downgrade(&closing_origin.config);
+    let join_barrier = closing_origin.hold_join().await;
+    let mut first_close = Box::pin(gateway.close_partition("visual-a"));
+    std::future::poll_fn(|cx| {
+        assert!(first_close.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    }).await;
+    drop(first_close);
+    let mut retry_close = Box::pin(gateway.close_partition("visual-a"));
+    let mut concurrent_close = Box::pin(gateway.close_partition("visual-a"));
+    std::future::poll_fn(|cx| {
+        assert!(retry_close.as_mut().poll(cx).is_pending());
+        assert!(concurrent_close.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    }).await;
+    gateway.close_partition("visual-system").await.unwrap();
+    assert!(visual_b.is_live(), "another partition must remain independent");
+    drop(join_barrier);
+    let (retry, concurrent) = tokio::join!(retry_close, concurrent_close);
+    retry.unwrap();
+    concurrent.unwrap();
+    drop(closing_origin);
+    assert!(released_config.upgrade().is_none(), "retirement retained origin resources");
+    assert!(gateway.original_url("visual-a", &mapped).await.is_err());
+    assert!(gateway.map_url("visual-a", &mapped).await.is_err());
+    let reused = tokio::net::TcpListener::bind(("127.0.0.1", closed_port)).await.unwrap();
+    let ordinary = format!("http://127.0.0.1:{closed_port}/dev");
+    assert!(!gateway.is_gateway_origin(&ordinary).await);
+    assert_eq!(gateway.map_url("visual-a", &ordinary).await.unwrap(), None);
+    assert_eq!(gateway.original_url("visual-a", &ordinary).await.unwrap(), None);
+    let mut dev_server = tokio::task::JoinSet::new();
+    dev_server.spawn(async move {
+        let (mut socket, _) = reused.accept().await.unwrap();
+        let mut request = [0; 1024];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK").await.unwrap();
+        socket.flush().await.unwrap();
+    });
+    let (headers, body) = complete(&ordinary, "GET", "").await;
+    assert!(headers.starts_with("http/1.1 200"));
+    assert_eq!(body, b"OK");
+    dev_server.join_next().await.unwrap().unwrap();
     // The context still exists; this checks stale receipt rejection, not context disposal.
     assert!(sessions::preview::protected_transport("visual-a").is_err());
     assert!(!visual_a.is_live());
