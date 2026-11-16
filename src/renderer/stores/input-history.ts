@@ -136,7 +136,9 @@ export const useInputHistoryStore = create<InputHistoryStore>()((set, get) => ({
 			}));
 		} catch (error) {
 			// Background: loading recall entries is never something the user asked for, so a
-			// failure must not interrupt with "Command failed"; the next ready/send retries it.
+			// failure must not interrupt with "Command failed"; the next ready/send retries it. A paired
+			// device that went offline reconnects on its own, so its refusal is no fault of the read.
+			if (ipcErrorCode(error) === "remote_offline") return;
 			reportRuntimeError("background-task", error, { details: { task: "history_recent" } });
 		}
 	},

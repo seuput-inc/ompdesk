@@ -150,6 +150,26 @@ describe("stock prompt history adapter", () => {
 		await useInputHistoryStore.getState().hydrate(failing, "host");
 		expect(report).toHaveBeenCalledTimes(1);
 	});
+	it("logs no failure for a read the paired device could not take while offline, and still logs a real one", async () => {
+		const { prefs } = installHistory();
+		const report = vi.fn();
+		(globalThis as Record<string, unknown>).window = {
+			omp: { rpc: { commandForTab: vi.fn() }, prefs, runtime: { report } },
+		};
+		const refuse = (error: string) =>
+			createSessionRpcClient(async () => ({
+				type: "response" as const,
+				command: "history_recent",
+				success: false as const,
+				error,
+			}));
+		await useInputHistoryStore
+			.getState()
+			.hydrate(refuse("[remote_offline] The device running this tab is offline"), "host");
+		expect(report).not.toHaveBeenCalled();
+		await useInputHistoryStore.getState().hydrate(refuse("history store unreadable"), "host");
+		expect(report).toHaveBeenCalledTimes(1);
+	});
 	it("logs no failure for a write the paired device could not take while offline, and still logs a real one", async () => {
 		const { rpc, command, prefs } = installHistory();
 		const report = vi.fn();
