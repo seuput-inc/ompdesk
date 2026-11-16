@@ -8,6 +8,8 @@ This standalone crate controls one real Chromium target per Preview page over pr
 
 `create_page(&partition, Viewport { width, height, device_scale_factor })` returns a `Page` with actual `target_id` and flattened `session_id`. Native `wcId`, `viewId`, frame sequence counters, viewer ownership, and authorization remain in Main and the Tauri host. This crate creates no second authorization registry.
 
+Viewport dimensions are applied through `Emulation.setDeviceMetricsOverride`, not `Target.createTarget` window bounds: Chromium rejects window bounds when it reuses an existing browser window for a second tab in that context.
+
 | API | Result or effect |
 | --- | --- |
 | `Browser::subscribe()` | `broadcast::Receiver<Event>` with `method`, shared `Arc<Value>` `params`, and optional actual CDP `session_id` |

@@ -178,6 +178,15 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         denied.code == "navigation" && denied.message == "net::ERR_BLOCKED_BY_CLIENT",
         "denied document did not preserve the actual policy failure: {denied}"
     );
+    let sibling = browser
+        .create_page(&partition, viewport)
+        .await
+        .map_err(|e| format!("create page beside a live same-partition target: {e:?}"))?;
+    check!(
+        sibling.target_id != denied_page.target_id,
+        "same-partition page creation reused the live target"
+    );
+    sibling.close().await.map_err(|e| e.to_string())?;
     denied_page.close().await.map_err(|e| e.to_string())?;
     let page = browser
         .create_page(&partition, viewport)
