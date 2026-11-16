@@ -270,13 +270,19 @@ test("a follow-up queued in a busy child survives a relaunch, its done report re
 		} catch (error) {
 			// Where the report stopped: sent by main to an omp (a `agent_control.mail` frame the fake recorded), in the
 			// opener's transcript under another shape, or never made (the tabs and their states say whose turn is where).
-			const mail = (await readRecords(profile.record))
+			const frames = await readRecords(profile.record);
+			const mail = frames
 				.filter(frame => frame.type === "agent_control.mail")
 				.map(frame => JSON.stringify(frame.details ?? {}).slice(0, 160));
 			const states = (await tabs(second.page)).map(
 				tab => `${tab.tabId === boss ? "boss" : tab.tabId === kid ? "kid" : "?"}:${tab.status}`,
 			);
-			throw new Error(`${String(error)}\nmail frames: ${JSON.stringify(mail)}\ntabs: ${states.join(" ")}`);
+			// The last frames the fake omps recorded, one short line each: what the kid ran after the relaunch, what was
+			// asked of main (host tool calls) and what reached the boss's omp.
+			const trail = frames.slice(-40).map(frame => JSON.stringify(frame).slice(0, 140));
+			throw new Error(
+				`${String(error)}\nmail frames: ${JSON.stringify(mail)}\ntabs: ${states.join(" ")}\nlast frames:\n${trail.join("\n")}`,
+			);
 		}
 
 		// Several more passes later, neither was handed over again.
