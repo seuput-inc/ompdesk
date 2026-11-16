@@ -1090,7 +1090,7 @@ async fn execute(
         }
         _ => return Err(crate::unsupported(method)),
     };
-    if reply_bound {
+    if bound {
         original(identity)?;
     } else {
         pages.current(wc)?;
