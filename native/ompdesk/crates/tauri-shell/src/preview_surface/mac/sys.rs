@@ -37,7 +37,6 @@ pub(super) struct Parent {
 }
 
 impl Parent {
-    #[cfg(not(test))]
     pub(super) fn from_tauri_window(window: &tauri::WebviewWindow) -> Result<Self, SurfaceError> {
         MainThreadMarker::new().ok_or(SurfaceError::WrongThread)?;
         let ptr = window

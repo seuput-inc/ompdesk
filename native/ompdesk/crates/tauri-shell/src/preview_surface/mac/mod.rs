@@ -19,7 +19,6 @@ use objc2::{MainThreadMarker, rc::Retained};
 pub struct NativeParent(sys::Parent);
 
 impl NativeParent {
-    #[cfg(not(test))]
     pub fn from_tauri_window(window: &tauri::WebviewWindow) -> Result<Self, SurfaceError> {
         sys::Parent::from_tauri_window(window).map(Self)
     }

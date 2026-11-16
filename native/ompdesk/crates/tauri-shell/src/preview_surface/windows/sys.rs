@@ -2234,7 +2234,7 @@ impl TextRangeProvider {
         let (text, _, _) = self.provider.text_data()?;
         let text = text.ok_or_else(uia_unsupported)?;
         let source = &text[range.start as usize..(range.start + range.length) as usize];
-        let needle = needle.as_wide();
+        let needle: &[u16] = needle;
         let found = if needle.is_empty() {
             Some((if backward.as_bool() { source.len() } else { 0 }, 0))
         } else if source.is_empty() {
@@ -2432,7 +2432,7 @@ impl TextRangeProvider {
             range.length.min(maxlength as u32)
         };
         let start = range.start as usize;
-        BSTR::from_wide(&text[start..start + length as usize])
+        Ok(BSTR::from_wide(&text[start..start + length as usize]))
     }
     fn Move(&self, unit: TextUnit, count: i32) -> windows::core::Result<i32> {
         let current = self.current()?;
