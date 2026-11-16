@@ -675,12 +675,6 @@ fn wc_op(call: host::Call) {
         match op {
             "loadURL" => {
                 let url = string(a, "url")?;
-                // The host draws no Mica backdrop: a page told to let it through (`mica=1`) would show a bare canvas.
-                #[cfg(windows)]
-                let url = &url
-                    .replacen("mica=1&", "", 1)
-                    .replacen("&mica=1", "", 1)
-                    .replacen("?mica=1", "", 1);
                 if !trusted_url(url) {
                     return Err(WireError::new(
                         "denied",

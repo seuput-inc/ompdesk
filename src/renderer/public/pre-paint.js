@@ -54,7 +54,7 @@
 		/* the sidebar shows */
 	}
 	try {
-		if (navigator.userAgent.indexOf("Electron/") >= 0) {
+		if (navigator.userAgent.indexOf("Electron/") >= 0 || window.__TAURI_INTERNALS__) {
 			var platform = navigator.platform.toLowerCase();
 			document.documentElement.dataset.platform =
 				platform.indexOf("mac") === 0 ? "darwin" : platform.indexOf("win") === 0 ? "win32" : "other";
