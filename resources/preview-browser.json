@@ -1,0 +1,43 @@
+{
+	"vendor": "Brave Browser",
+	"vendorVersion": "1.99.57",
+	"chromiumVersion": "157.0.8103.79",
+	"release": "https://github.com/brave/brave-browser/releases/tag/v1.99.57",
+	"sources": [
+		"https://github.com/brave/brave-browser/tree/v1.99.57",
+		"https://github.com/brave/brave-core/tree/v1.99.57",
+		"https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/"
+	],
+	"license": "MPL-2.0",
+	"licenseTerms": "https://www.mozilla.org/en-US/MPL/2.0/",
+	"repackaging": "https://github.com/brave/brave-browser/wiki/%28Re%29packaging",
+	"signingPolicy": "https://brave.com/signing-keys/",
+	"targets": {
+		"darwin-arm64": {
+			"platform": "darwin",
+			"arch": "arm64",
+			"assetId": 738870345,
+			"archive": "Brave-Browser-arm64.dmg",
+			"url": "https://github.com/brave/brave-browser/releases/download/v1.99.57/Brave-Browser-arm64.dmg",
+			"size": 232798314,
+			"sha256": "922934b233ddecfa49a9dc5629d40469fdb0b2d59c49547697eea0eec4087711",
+			"binary": "vendor/Brave Browser.app/Contents/MacOS/Brave Browser",
+			"bundleId": "com.brave.Browser",
+			"teamId": "KL8N8XSYF4"
+		},
+		"win32-x64": {
+			"platform": "win32",
+			"arch": "x64",
+			"assetId": 738268167,
+			"archive": "brave-v1.99.57-win32-x64.zip",
+			"url": "https://github.com/brave/brave-browser/releases/download/v1.99.57/brave-v1.99.57-win32-x64.zip",
+			"size": 254461948,
+			"sha256": "42ba3a5445f717b429fb3fe457e7e531cd1c208f06a2dc9315b1fa31c09bc8b9",
+			"binary": "vendor/brave.exe",
+			"authenticodeThumbprints": [
+				"8903F2BD47465A4F0F080AA7CEEC31A31B74DE42",
+				"F8AC5F11DE7E26383B7A389FC19A2613835799D7"
+			]
+		}
+	}
+}
