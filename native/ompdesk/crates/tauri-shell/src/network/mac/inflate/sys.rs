@@ -164,7 +164,8 @@ impl Decoder {
                 31
             } else {
                 let count = (2 - self.prefix_len).min(bytes.len());
-                self.prefix[self.prefix_len..self.prefix_len + count].copy_from_slice(&bytes[..count]);
+                self.prefix[self.prefix_len..self.prefix_len + count]
+                    .copy_from_slice(&bytes[..count]);
                 self.prefix_len += count;
                 bytes = &bytes[count..];
                 if self.prefix_len < 2 {

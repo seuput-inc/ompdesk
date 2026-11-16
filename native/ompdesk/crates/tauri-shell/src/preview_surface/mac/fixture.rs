@@ -92,23 +92,25 @@ pub(crate) fn run_native_fixture(
         bounds,
         recorder.clone(),
     )?;
-    surface.publisher().submit(EncodedFrame {
-        key,
-        ack: 42,
-        png,
-        pixel_width: width,
-        pixel_height: height,
-        scale: 1.0,
-        metadata: FrameMetadata {
-            device_width: width.into(),
-            device_height: height.into(),
-            page_scale_factor: 1.0,
-            offset_top: 0.0,
-            scroll_offset_x: 0.0,
-            scroll_offset_y: 0.0,
-        },
-    })
-    .map_err(|error| SurfaceError::Consumer(error.to_string()))?;
+    surface
+        .publisher()
+        .submit(EncodedFrame {
+            key,
+            ack: 42,
+            png,
+            pixel_width: width,
+            pixel_height: height,
+            scale: 1.0,
+            metadata: FrameMetadata {
+                device_width: width.into(),
+                device_height: height.into(),
+                page_scale_factor: 1.0,
+                offset_top: 0.0,
+                scroll_offset_x: 0.0,
+                scroll_offset_y: 0.0,
+            },
+        })
+        .map_err(|error| SurfaceError::Consumer(error.to_string()))?;
     surface.drain_frame()?;
     require(
         surface

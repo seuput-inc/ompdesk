@@ -14,10 +14,10 @@ mod mac;
 #[cfg(windows)]
 mod windows;
 
-pub use model::*;
-pub use shared::{FramePublisher, FrameSubmitError};
 #[cfg(target_os = "macos")]
 pub use mac::{NativeParent, Surface};
+pub use model::*;
+pub use shared::{FramePublisher, FrameSubmitError};
 #[cfg(windows)]
 pub use windows::{NativeParent, Surface};
 

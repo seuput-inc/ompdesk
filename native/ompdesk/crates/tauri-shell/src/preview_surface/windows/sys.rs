@@ -15,8 +15,6 @@ use super::super::model::{
 };
 use super::super::shared::Shared;
 use shell_core::hotkey::Mods;
-// Keep this UIA COM ABI separate from the app's WebView2 windows binding.
-use windows_surface as windows;
 use windows::Win32::Foundation::{BOOL, HWND as WinHwnd, LPARAM as WinLparam, WPARAM as WinWparam};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory, IWICPalette,
@@ -28,6 +26,7 @@ use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeA
 use windows::Win32::System::Variant::{VT_I4, VT_R8, VT_UNKNOWN};
 use windows::Win32::UI::Accessibility::*;
 use windows::core::{BSTR, HRESULT, IUnknown, Interface, PCWSTR, VARIANT, implement};
+use windows_surface as windows; // The UIA COM ABI stays separate from the app's WebView2 `windows` binding.
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -57,16 +56,15 @@ use windows_sys::Win32::UI::Input::Pointer::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
     GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, PT_TOUCH,
-    RegisterClassW,
-    SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY, WM_CUT, WM_GETOBJECT,
-    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
-    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_PASTE, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERUP, WM_POINTERUPDATE,
-    WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_UNDO, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS,
+    RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WM_CHAR, WM_COPY,
+    WM_CUT, WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_PASTE, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN,
+    WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_UNDO, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
 };
 
 const CLASS: &[u16] = &[
@@ -2606,8 +2604,8 @@ mod tests {
     use super::super::super::model::{AxSnapshot, Consumer, FrameDisposition, FrameMetadata, Rect};
     use super::super::{NativeParent, Surface};
     use super::*;
-    use windows_surface as windows;
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows_surface as windows;
     use windows_sys::Win32::Graphics::Gdi::GetPixel;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SendMessageW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
