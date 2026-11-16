@@ -1,6 +1,8 @@
 //! CFNetwork HTTP streams preserve first-byte delivery and OS proxy/PAC and TLS policy.
 //! The callable public HTTP stream API is deprecated by Apple; no private API is used.
+//! System zlib decodes gzip/deflate incrementally; CFReadStream itself delivers encoded bytes.
 
+mod inflate;
 mod sys;
 
 use std::sync::Arc;

@@ -465,6 +465,11 @@ fn run(
             WINHTTP_OPTION_AUTOLOGON_POLICY,
             WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH,
         )?;
+        option(
+            request,
+            WINHTTP_OPTION_DECOMPRESSION,
+            WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE,
+        )?;
         let bytes = body.as_deref().unwrap_or_default();
         let length =
             u32::try_from(bytes.len()).map_err(|_| "WinHTTP upload exceeds 4 GiB".to_string())?;

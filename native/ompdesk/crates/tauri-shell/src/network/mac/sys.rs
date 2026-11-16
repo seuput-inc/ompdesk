@@ -807,6 +807,7 @@ fn run(transfer: &Arc<Transfer>, mut body: Option<Vec<u8>>) -> Result<(), String
                 continue;
             }
             let mut sent_head = false;
+            let mut decoder = None;
             loop {
                 if transfer.is_cancelled() {
                     return Err(netmap::error_text(-3));
@@ -885,6 +886,11 @@ fn run(transfer: &Arc<Transfer>, mut body: Option<Vec<u8>>) -> Result<(), String
                         return Ok(());
                     }
                     sent_head = true;
+                    decoder = Some(super::inflate::sys::Decoder::new(
+                        &fields,
+                        !method.eq_ignore_ascii_case("HEAD")
+                            && !matches!(status, 101 | 204 | 205 | 304),
+                    ));
                 }
                 if flags & (2 | 16) != 0 && !method.eq_ignore_ascii_case("HEAD") {
                     let mut bytes = [0u8; 65536];
@@ -900,7 +906,10 @@ fn run(transfer: &Arc<Transfer>, mut body: Option<Vec<u8>>) -> Result<(), String
                         if count == 0 {
                             break;
                         }
-                        transfer.chunk(&bytes[..count as usize]);
+                        decoder
+                            .as_mut()
+                            .ok_or("HTTP body arrived without a response head")?
+                            .push(&bytes[..count as usize], |bytes| transfer.chunk(bytes))?;
                     }
                 }
                 if flags & 8 != 0 {
@@ -915,6 +924,9 @@ fn run(transfer: &Arc<Transfer>, mut body: Option<Vec<u8>>) -> Result<(), String
                     break;
                 }
                 if flags & 16 != 0 {
+                    if let Some(decoder) = decoder {
+                        decoder.finish()?;
+                    }
                     return Ok(());
                 }
             }
