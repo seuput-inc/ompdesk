@@ -122,8 +122,62 @@ for (const engine of ENGINES)
 			phone.on("request", request => pending.add(request.url()));
 			phone.on("requestfinished", request => pending.delete(request.url()));
 			phone.on("requestfailed", request => pending.delete(request.url()));
+			const expectControlled = async () => {
+				try {
+					await expect
+						.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
+						.toBe(true);
+				} catch (error) {
+					// Where the worker and the page parted: the registration's states, what the worker sees as its clients
+					// (windows it could claim), whether a claim made now takes the page, and the page's own loads and
+					// worker log (phone-loads attachment). A claim that takes the page now means the activation's claim ran
+					// before this document existed; one that does not means the page is not claimable.
+					const worker = await phone
+						.evaluate(async () => {
+							const registration = await navigator.serviceWorker?.getRegistration();
+							return {
+								secure: isSecureContext,
+								installing: registration?.installing?.state ?? null,
+								waiting: registration?.waiting?.state ?? null,
+								active: registration?.active?.state ?? null,
+								scope: registration?.scope ?? null,
+								url: location.href,
+							};
+						})
+						.catch(failure => String(failure));
+					const [serviceWorker] = context.serviceWorkers();
+					const clients = await serviceWorker
+						?.evaluate(
+							"self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => list.map(c => [c.url, c.frameType, c.visibilityState, c.focused].join(' ')))",
+						)
+						.catch((failure: unknown) => String(failure));
+					const claimed = await serviceWorker
+						?.evaluate("self.clients.claim().then(() => 'claimed')")
+						.catch((failure: unknown) => String(failure));
+					const controlledAfter = await phone
+						.evaluate(() => navigator.serviceWorker?.controller != null)
+						.catch(failure => String(failure));
+					await loads.attach("phone-loads");
+					throw new Error(
+						[
+							String(error),
+							`service worker: ${JSON.stringify(worker)}`,
+							`worker events: ${JSON.stringify(workerEvents)} workers now: ${context.serviceWorkers().length}`,
+							`worker's clients: ${JSON.stringify(clients)}`,
+							`claim now: ${JSON.stringify(claimed)}, page controlled after: ${JSON.stringify(controlledAfter)}`,
+							`open requests: ${[...pending].join(" ")}`,
+						].join("\n"),
+					);
+				}
+			};
 			await phone.goto(`${link.url}/`, { timeout: 60_000 });
 			await phonePaired(phone);
+			// The first load's own worker takes the page (it registers once the app has loaded and claims on activation).
+			// That is checked here, before the reload below: a document that is created while the worker is still installing
+			// and activating can miss the activation's claim (Chromium on a hosted Windows runner: the reload landed between
+			// the worker's install and its activation, the worker listed the page as a client and a claim made 30 s later
+			// took it at once), and no page the person reloads that early is the point of this test.
+			await expectControlled();
 			const tabId = (await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), project))?.tabId;
 			if (!tabId) throw new Error("no tab on the phone");
 			await phone.reload({ timeout: 60_000 });
@@ -141,52 +195,7 @@ for (const engine of ENGINES)
 			await expect
 				.poll(() => received(record, ["hello before the outage"]), { timeout: 30_000 })
 				.toEqual(["hello before the outage"]);
-			try {
-				await expect
-					.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
-					.toBe(true);
-			} catch (error) {
-				// Where the worker and the page parted: the registration's states, what the worker sees as its clients
-				// (windows it could claim), whether a claim made now takes the page, and the page's own loads and
-				// worker log (phone-loads attachment). A claim that takes the page now means the activation's claim ran
-				// before this document existed; one that does not means the page is not claimable.
-				const worker = await phone
-					.evaluate(async () => {
-						const registration = await navigator.serviceWorker?.getRegistration();
-						return {
-							secure: isSecureContext,
-							installing: registration?.installing?.state ?? null,
-							waiting: registration?.waiting?.state ?? null,
-							active: registration?.active?.state ?? null,
-							scope: registration?.scope ?? null,
-							url: location.href,
-						};
-					})
-					.catch(failure => String(failure));
-				const [serviceWorker] = context.serviceWorkers();
-				const clients = await serviceWorker
-					?.evaluate(
-						"self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => list.map(c => [c.url, c.frameType, c.visibilityState, c.focused].join(' ')))",
-					)
-					.catch((failure: unknown) => String(failure));
-				const claimed = await serviceWorker
-					?.evaluate("self.clients.claim().then(() => 'claimed')")
-					.catch((failure: unknown) => String(failure));
-				const controlledAfter = await phone
-					.evaluate(() => navigator.serviceWorker?.controller != null)
-					.catch(failure => String(failure));
-				await loads.attach("phone-loads");
-				throw new Error(
-					[
-						String(error),
-						`service worker: ${JSON.stringify(worker)}`,
-						`worker events: ${JSON.stringify(workerEvents)} workers now: ${context.serviceWorkers().length}`,
-						`worker's clients: ${JSON.stringify(clients)}`,
-						`claim now: ${JSON.stringify(claimed)}, page controlled after: ${JSON.stringify(controlledAfter)}`,
-						`open requests: ${[...pending].join(" ")}`,
-					].join("\n"),
-				);
-			}
+			await expectControlled();
 			// The tab strip and transcript snapshots are written after a quiet moment.
 			await phone.waitForTimeout(1500);
 
