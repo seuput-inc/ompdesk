@@ -485,7 +485,10 @@ jobs:
           ditto "$RELEASE_APP" "$APP"
           BINARY=$(jq -er .binary "$APP/Contents/Resources/ompdesk-tauri.build.json")
           cp "resources/ompdesk-tauri/darwin-arm64/$BINARY" "$APP/Contents/MacOS/$BINARY"
-          codesign --force --deep -s - "$APP"
+          # Only the swapped host and the app's seal: --deep would re-sign the nested binaries too, and the app checks
+          # those (ai-memory, ompdesk-core) against their build records.
+          codesign --force -s - --identifier com.seuput.ompdesk --options runtime --entitlements resources/entitlements.mac.plist "$APP/Contents/MacOS/$BINARY"
+          codesign --force -s - --options runtime --entitlements resources/entitlements.mac.plist "$APP"
           codesign --verify --strict "$APP"
           export OMPDESK_TAURI_TEST_BINARY="$APP/Contents/MacOS/$BINARY"
           export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"

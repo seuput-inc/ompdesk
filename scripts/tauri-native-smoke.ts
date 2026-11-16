@@ -279,6 +279,18 @@ async function main(): Promise<void> {
 			"The actual native app did not quit cleanly",
 		);
 		console.log(`Actual native smoke passed; evidence: ${profile}`);
+	} catch (error) {
+		// What the page showed when a step failed: the URL, the visible text and a screenshot, beside the output.
+		const state = await driver
+			.evaluate(
+				"({href:location.href,title:document.title,textareas:document.querySelectorAll('textarea').length,text:(document.body?.innerText??'').slice(0,4000)})",
+			)
+			.catch((reason: unknown) => ({ unreadable: String(reason) }));
+		await writeFile(path.join(profile, "failure.json"), `${JSON.stringify(state, null, 2)}\n`).catch(() => undefined);
+		const png = await driver.command("GET", "/screenshot").catch(() => undefined);
+		if (typeof png === "string")
+			await writeFile(path.join(profile, "failure.png"), Buffer.from(png, "base64")).catch(() => undefined);
+		throw error;
 	} finally {
 		await stopNative(app);
 		if (!quitRequested) console.error(`Native smoke failed; original output preserved in ${profile}`);
