@@ -138,12 +138,14 @@ impl Browser {
             let path = config
                 .profile_root
                 .join(format!("preview-{}-{id}", std::process::id()));
-            let mut directory = std::fs::DirBuilder::new();
+            let directory = std::fs::DirBuilder::new();
             #[cfg(unix)]
-            {
+            let directory = {
                 use std::os::unix::fs::DirBuilderExt;
+                let mut directory = directory;
                 directory.mode(0o700);
-            }
+                directory
+            };
             // Creation cannot yield before ownership is recorded, and the profile is private from its first inode.
             match directory.create(&path) {
                 Ok(()) => break path,
@@ -251,10 +253,19 @@ impl Browser {
     pub async fn create_page(&self, partition: &Partition, viewport: Viewport) -> Result<Page> {
         let metrics = viewport.params()?;
         let mut transaction = Creation::new(&self.transport);
-        let target = self.command("Target.createTarget", json!({"url":"about:blank",
-            "browserContextId":partition.context_id,"width":viewport.width,"height":viewport.height}), None)
+        let target = self
+            .command(
+                "Target.createTarget",
+                json!({"url":"about:blank","browserContextId":partition.context_id}),
+                None,
+            )
             .await
-            .map_err(|error| Error::new(error.code, format!("Page target creation: {}", error.message)))?;
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("Page target creation: {}", error.message),
+                )
+            })?;
         let target_id = string_field(&target, "targetId")?;
         let attached = self
             .initializations
