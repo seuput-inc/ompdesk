@@ -292,7 +292,9 @@ impl Gateway {
             if let Some(origin) = live.preview.remove(partition) {
                 live.retiring.push(origin);
             }
-            let origins: Vec<_> = live.retiring.iter()
+            let origins: Vec<_> = live
+                .retiring
+                .iter()
                 .filter(|origin| origin.config.route.partition() == partition)
                 .cloned()
                 .collect();

@@ -100,7 +100,8 @@ impl Origin {
         self.cancel();
         let mut task = self.task.lock().await;
         if let Completion::Running(worker) = &mut *task {
-            let result = worker.await
+            let result = worker
+                .await
                 .map_err(|_| "Private resource listener task failed".to_string())
                 .and_then(|result| result);
             *task = Completion::Finished(result);
