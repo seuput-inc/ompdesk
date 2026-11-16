@@ -139,10 +139,10 @@ impl Journal {
         {
             return Err("Invalid local storage migration journal".to_string());
         }
-        if let State::Pending { items } = &self.state {
-            if identity(items, namespace)? != self.id {
-                return Err("Invalid local storage migration journal identity".to_string());
-            }
+        if let State::Pending { items } = &self.state
+            && identity(items, namespace)? != self.id
+        {
+            return Err("Invalid local storage migration journal identity".to_string());
         }
         Ok(())
     }
@@ -228,7 +228,7 @@ mod tests {
             let mut random = [0_u8; 16];
             getrandom::fill(&mut random).unwrap();
             let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-            let path = PathBuf::from(root).join(format!("profile-{suffix}"));
+            let path = root.join(format!("profile-{suffix}"));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
