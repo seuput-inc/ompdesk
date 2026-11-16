@@ -418,7 +418,11 @@ fn receive(shared: &Shared, bytes: &[u8]) -> Result<()> {
                 return Err(error);
             }
             let result = if object.contains_key("error") {
-                Err(Error::new("cdp_error", "Chromium rejected the request"))
+                let message = match object["error"]["code"].as_i64() {
+                    Some(code) => format!("Chromium rejected the request (code {code})"),
+                    None => "Chromium rejected the request".to_owned(),
+                };
+                Err(Error::new("cdp_error", message))
             } else {
                 Ok(object
                     .remove("result")
@@ -789,8 +793,10 @@ mod tests {
                 .await
         });
         let id = command(&mut read).await["id"].as_u64().unwrap();
-        write.write_all(format!("{{\"id\":{id},\"error\":{{\"code\":-32001,\"message\":\"Session with given id not found.\"}}}}\0").as_bytes()).await.unwrap();
-        assert_eq!(stale.await.unwrap().unwrap_err().code, "cdp_error");
+        write.write_all(format!("{{\"id\":{id},\"error\":{{\"code\":-32001,\"message\":\"Session sample-private-target not found.\"}}}}\0").as_bytes()).await.unwrap();
+        let error = stale.await.unwrap().unwrap_err();
+        assert_eq!(error.code, "cdp_error");
+        assert_eq!(error.message, "Chromium rejected the request (code -32001)");
         let caller = transport.clone();
         let live =
             tokio::spawn(

@@ -252,9 +252,20 @@ impl Browser {
         let metrics = viewport.params()?;
         let mut transaction = Creation::new(&self.transport);
         let target = self.command("Target.createTarget", json!({"url":"about:blank",
-            "browserContextId":partition.context_id,"width":viewport.width,"height":viewport.height}), None).await?;
+            "browserContextId":partition.context_id,"width":viewport.width,"height":viewport.height}), None)
+            .await
+            .map_err(|error| Error::new(error.code, format!("Page target creation: {}", error.message)))?;
         let target_id = string_field(&target, "targetId")?;
-        let attached = self.initializations.wait(&target_id).await?;
+        let attached = self
+            .initializations
+            .wait(&target_id)
+            .await
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("Page initialization: {}", error.message),
+                )
+            })?;
         let page = Page {
             target_id,
             session_id: attached.session_id,
@@ -263,7 +274,13 @@ impl Browser {
             closing: Mutex::new(()),
         };
         page.command("Emulation.setDeviceMetricsOverride", metrics)
-            .await?;
+            .await
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("Page viewport setup: {}", error.message),
+                )
+            })?;
         transaction.commit();
         Ok(page)
     }
