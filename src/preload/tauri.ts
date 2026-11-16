@@ -8,6 +8,22 @@ type NativeInvoke = (command: string, args: { kind: Kind; payload: string }) => 
 const nativeWindow = window as unknown as { __TAURI_INTERNALS__?: { invoke?: NativeInvoke }; omp: OmpApi };
 const invoke = nativeWindow.__TAURI_INTERNALS__?.invoke;
 
+/**
+ * What went wrong in this page before anything else could say so, for a failed native check to read back
+ * (scripts/tauri-native-smoke.ts): scripts and styles that failed to load, errors nothing caught, CSP refusals and
+ * every IPC call the host refused. The renderer's console never reaches main on this host. Capped; the app never reads it.
+ */
+const diagnostics = {
+	events: [] as string[],
+	calls: { invokes: 0, answered: 0, failed: 0, sends: 0, delivered: 0, pushed: 0, pushesDropped: 0 },
+};
+const startedAt = Date.now();
+function note(kind: string, detail: unknown): void {
+	if (diagnostics.events.length >= 60) return;
+	const text = detail instanceof Error ? detail.message : String(detail);
+	diagnostics.events.push(`+${Date.now() - startedAt}ms ${kind}: ${text.slice(0, 300)}`);
+}
+
 function encode(value: unknown): string {
 	return JSON.stringify(value, (_key, item) => {
 		if (item instanceof ArrayBuffer) item = new Uint8Array(item);
@@ -114,15 +130,30 @@ function push(raw: unknown): void {
 let sends: Promise<unknown> = Promise.resolve();
 const transport: OmpTransport = {
 	async invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
-		const answer = decode(await call("invoke", { channel, args })) as { value?: T; error?: { message: string } };
-		if (answer.error) throw new Error(answer.error.message);
+		diagnostics.calls.invokes++;
+		const answer = decode(
+			await call("invoke", { channel, args }).catch(error => {
+				diagnostics.calls.failed++;
+				note(`invoke ${channel} failed`, error);
+				throw error;
+			}),
+		) as { value?: T; error?: { message: string } };
+		if (answer.error) {
+			diagnostics.calls.failed++;
+			note(`invoke ${channel} answered with an error`, answer.error.message);
+			throw new Error(answer.error.message);
+		}
+		diagnostics.calls.answered++;
 		return answer.value as T;
 	},
 	send(channel: string, ...args: unknown[]): void {
+		diagnostics.calls.sends++;
 		const payload = encode({ channel, args });
 		sends = sends
-			.then(() => call("send", JSON.parse(payload)))
+			.then(() => call("send", JSON.parse(payload)).then(() => void diagnostics.calls.delivered++))
 			.catch(error => {
+				diagnostics.calls.failed++;
+				note(`send ${channel} failed`, error);
 				console.error("Tauri IPC send failed", error);
 			});
 	},
@@ -256,12 +287,35 @@ if (window.top !== window) {
 } else
 	try {
 		if (!invoke) throw new Error("Tauri invoke is unavailable");
+		Object.defineProperty(window, "__ompDiagnostics", { value: diagnostics });
+		if (typeof window.addEventListener === "function") {
+			// Capture phase: a `<script>` or `<link>` that fails to load fires `error` on the element and never bubbles.
+			window.addEventListener(
+				"error",
+				event => {
+					const target = event.target as { tagName?: string; src?: string; href?: string } | null;
+					if (target?.tagName) note(`${target.tagName.toLowerCase()} did not load`, target.src || target.href);
+					else note("uncaught error", event.error ?? event.message);
+				},
+				true,
+			);
+			window.addEventListener("unhandledrejection", event => note("unhandled rejection", event.reason));
+			window.addEventListener("securitypolicyviolation", event =>
+				note("CSP refused", `${event.violatedDirective} ${event.blockedURI}`),
+			);
+		}
 		Object.defineProperty(window, "__ompShellStream", { value: shellStream });
 		Object.defineProperty(window, "__ompTauriPush", {
 			value: (expectedGeneration: number, raw: unknown) => {
 				return ready.promise
 					.then(current => {
-						if (current === expectedGeneration) push(raw);
+						if (current === expectedGeneration) {
+							diagnostics.calls.pushed++;
+							push(raw);
+						} else {
+							diagnostics.calls.pushesDropped++;
+							note("push dropped", `for document ${expectedGeneration}, this is ${current}`);
+						}
 					})
 					.catch(() => undefined);
 			},

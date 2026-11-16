@@ -168,6 +168,69 @@ export async function stopNative({ child, logs }: NativeApp): Promise<void> {
 	await logs;
 }
 
+/**
+ * Read in the page when a step failed, into failure.json: why a pane is blank. The page's own early errors and refused
+ * IPC calls (`window.__ompDiagnostics`, src/preload/tauri.ts), the scripts and styles that failed or never loaded, the
+ * shape of the main column, and what main answers to the calls the first screen makes (each bounded, so a call that
+ * never answers is a finding, not a hang). Plain JavaScript in a string: it runs in the WebView, not here.
+ */
+export const PAGE_DIAGNOSIS = `(async () => {
+	const within = (promise, ms) =>
+		Promise.race([Promise.resolve(promise), new Promise(resolve => setTimeout(() => resolve("no answer in " + ms + " ms"), ms))]).catch(
+			error => "rejected: " + String(error),
+		);
+	const entries = performance.getEntriesByType("resource");
+	const resources = entries.map(entry => ({
+		name: entry.name.replace(location.origin, ""),
+		type: entry.initiatorType,
+		status: entry.responseStatus,
+		size: entry.transferSize,
+		ms: Math.round(entry.duration),
+	}));
+	const loadable = 'script[src],link[rel="stylesheet"],link[rel="modulepreload"]';
+	const label = el =>
+		el.tagName.toLowerCase() +
+		(typeof el.className === "string" && el.className ? "." + el.className.split(" ").slice(0, 3).join(".") : "") +
+		(el.dataset && el.dataset.tabId ? "[tab " + el.dataset.tabId + "]" : "") +
+		(el.hidden || (el.className && String(el.className).split(" ").includes("hidden")) ? " (hidden)" : "");
+	const tree = (el, depth) => (!el || depth < 0 ? [] : [...el.children].slice(0, 12).map(child => ({ el: label(child), children: tree(child, depth - 1) })));
+	const navigation = performance.getEntriesByType("navigation")[0];
+	const main = document.querySelector("main");
+	const root = document.getElementById("root");
+	const tabs = await within(
+		window.omp.tabs.list().then(list => list.map(tab => ({ id: tab.tabId, status: tab.status, active: tab.active === true, visible: tab.visible === true, cwd: tab.cwd }))),
+		5000,
+	);
+	const sessions = await within(window.omp.sessions.list("global").then(list => list.length), 5000);
+	const sidecar = await within(window.omp.sidecar.getStatus(), 5000);
+	const log = await within(window.omp.runtime.logTail(40), 5000);
+	return {
+		href: location.href,
+		title: document.title,
+		page: {
+			readyState: document.readyState,
+			visibility: document.visibilityState,
+			focused: document.hasFocus(),
+			size: innerWidth + "x" + innerHeight,
+			sinceNavigationMs: Math.round(performance.now()),
+			navigation: navigation ? { type: navigation.type, responseEndMs: Math.round(navigation.responseEnd), domInteractiveMs: Math.round(navigation.domInteractive), loadEventEndMs: Math.round(navigation.loadEventEnd) } : null,
+		},
+		diagnostics: window.__ompDiagnostics ?? "the preload installed none",
+		resources: { total: resources.length, failed: resources.filter(r => r.status >= 400 || (r.size === 0 && ["script", "link", "css"].includes(r.type))), withoutEntry: [...document.querySelectorAll(loadable)].map(el => el.src || el.href).filter(url => !entries.some(entry => entry.name === url)) },
+		dom: {
+			rootChildren: root ? root.children.length : null,
+			bootShell: document.querySelector(".boot-shell") !== null,
+			textareas: document.querySelectorAll("textarea").length,
+			sessionPanes: document.querySelectorAll(".omp-session-pane").length,
+			paneTabIds: [...document.querySelectorAll("[data-tab-id]")].map(el => el.dataset.tabId),
+			alerts: [...document.querySelectorAll('[role="alert"],[data-app-stale]')].map(el => (el.textContent || "").slice(0, 300)),
+			main: tree(main, 3),
+			text: (document.body ? document.body.innerText : "").slice(0, 4000),
+		},
+		main: { tabs, sessions, sidecar, log },
+	};
+})()`;
+
 async function main(): Promise<void> {
 	console.log("test build: release bytes + feature test-automation (tauri-plugin-wdio-webdriver)");
 	const app = await launchNative();
@@ -280,12 +343,11 @@ async function main(): Promise<void> {
 		);
 		console.log(`Actual native smoke passed; evidence: ${profile}`);
 	} catch (error) {
-		// What the page showed when a step failed: the URL, the visible text and a screenshot, beside the output.
-		const state = await driver
-			.evaluate(
-				"({href:location.href,title:document.title,textareas:document.querySelectorAll('textarea').length,text:(document.body?.innerText??'').slice(0,4000)})",
-			)
+		// What the page showed when a step failed (`PAGE_DIAGNOSIS`), the step's error and a screenshot, beside the output.
+		const diagnosis = await driver
+			.evaluate(PAGE_DIAGNOSIS)
 			.catch((reason: unknown) => ({ unreadable: String(reason) }));
+		const state = { error: error instanceof Error ? error.message : String(error), ...object(diagnosis) };
 		await writeFile(path.join(profile, "failure.json"), `${JSON.stringify(state, null, 2)}\n`).catch(() => undefined);
 		const png = await driver.command("GET", "/screenshot").catch(() => undefined);
 		if (typeof png === "string")
