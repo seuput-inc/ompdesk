@@ -390,13 +390,37 @@ jobs:
           native: "false"
       - uses: ./.github/actions/native-toolchain
         with:
-          workspaces: native/ompdesk/crates/tauri-shell
+          workspaces: |
+            native/ompdesk/crates/tauri-shell
+            native/ompdesk/crates/shell-preview
       - name: Compile the actual system-WebView host
         shell: bash
-        run: cargo build --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml
+        run: cargo build --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --bin ompdesk-tauri-shell
       - name: Test the host identity and page boundaries
         shell: bash
         run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml
+        env:
+          OMPDESK_PROFILE_TEST_ROOT: ${{ runner.temp }}/ompdesk-profile
+      - name: Exercise the real preload attachment and migration consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun native/ompdesk/crates/tauri-shell/tests/preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
+      - name: Test the original Local Storage exporter without CEF
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/native/ompdesk/crates/tauri-shell/target
+        run: cargo test --locked --manifest-path native/ompdesk/crates/shell/Cargo.toml --no-default-features --lib migrate::local_storage::tests
+      - name: Test the Preview pipe and lifecycle unit
+        shell: bash
+        run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
+      - name: Check the changed native host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets -- -D warnings
       - name: Refuse an active CEF dependency
         shell: bash
         run: |
