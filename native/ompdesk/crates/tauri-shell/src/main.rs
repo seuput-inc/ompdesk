@@ -1109,6 +1109,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let argv: Vec<String> = std::env::args().collect();
     // WebView2's loader reads these for any app: a release host must not open DevTools or another profile on request.
     #[cfg(all(windows, not(feature = "test-automation")))]
+    #[allow(unsafe_code)]
     for name in [
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
         "WEBVIEW2_USER_DATA_FOLDER",

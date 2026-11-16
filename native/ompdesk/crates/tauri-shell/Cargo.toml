@@ -27,7 +27,8 @@ tokio = { version = "1", features = ["time", "sync", "net", "io-util", "rt", "ma
 sha2 = "0.10"
 shell_core = { package = "ompdesk-shell", path = "../shell", default-features = false }
 url = "2"
-tray-icon = "0.21"
+# Tauri's own tray-icon: a second muda would define its Objective-C classes twice (fat LTO refuses to link that on macOS).
+tray-icon = "0.25"
 shell_preview = { package = "ompdesk-shell-preview", path = "../shell-preview" }
 cookie_store = { version = "=0.22.1", default-features = false }
 psl = "=2.1.251"

@@ -14,7 +14,7 @@ publish = false
 
 [features]
 default = ["cef-host"]
-cef-host = ["dep:cef"]
+cef-host = ["dep:cef", "dep:tray-icon"]
 
 # The pure parts (framing, ranges, paths, safeStorage, Local Storage) are the library, so `cargo test` runs them in a
 # test executable that never imports libcef.dll; the binary links CEF and has no tests of its own.
@@ -59,7 +59,8 @@ pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 sha1 = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
-tray-icon = "0.21"
+# Only the CEF binary's tray uses it; the library the Tauri host links stays free of a second muda.
+tray-icon = { version = "0.21", optional = true }
 # wc.frame: the latest painted frame of an offscreen page as JPEG or PNG.
 jpeg-encoder = "0.6"
 png = "0.17"
