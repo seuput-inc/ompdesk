@@ -125,11 +125,14 @@ async function main(): Promise<void> {
 		OMP_GUI_TEST_USER_DATA_DIR: desktop,
 		OMP_GUI_TEST_WEBDRIVER_PORT: String(port),
 	};
-	const pinnedNode = path.resolve(
-		"resources/node",
-		`${process.platform}-${process.arch}`,
-		process.platform === "win32" ? "node.exe" : "node",
-	);
+	// A packaged app brings its own pinned Node (OMPDESK_TAURI_TEST_NODE: <Resources>/node/node); otherwise the staged one.
+	const pinnedNode = process.env.OMPDESK_TAURI_TEST_NODE
+		? path.resolve(process.env.OMPDESK_TAURI_TEST_NODE)
+		: path.resolve(
+				"resources/node",
+				`${process.platform}-${process.arch}`,
+				process.platform === "win32" ? "node.exe" : "node",
+			);
 	assert(await Bun.file(pinnedNode).exists(), "The original pinned Node runtime must be staged");
 	env.OMPDESK_NODE = pinnedNode;
 	const child = Bun.spawn([binary, ...options.args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
