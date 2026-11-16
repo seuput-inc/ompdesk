@@ -18,6 +18,8 @@ mod runtime_inputs;
 mod sessions;
 mod theme;
 mod ui;
+#[cfg(windows)]
+mod window_activation;
 use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
@@ -113,6 +115,29 @@ fn window_for_wc(wc: u64) -> Result<WebviewWindow, WireError> {
         .get_webview_window(&label)
         .ok_or_else(|| WireError::new("gone", "page closed"))
 }
+fn window_for_win(win: u64) -> Result<WebviewWindow, WireError> {
+    let wc = runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .by_window(win)
+        .map(|p| p.identity.wc)
+        .ok_or_else(|| WireError::new("gone", "unknown window"))?;
+    window_for_wc(wc)
+}
+/// Electron's `isFocused`: the window's own activation, not the keyboard focus of its page (`Widget::IsActive`,
+/// `-[NSWindow isKeyWindow]`). tao's `is_focused` on Windows also wants `WM_SETFOCUS` on the window itself (tao 0.37.2
+/// `has_active_focus`), which a window whose WebView holds the focus does not get.
+#[cfg(windows)]
+fn window_focused(window: &WebviewWindow) -> Result<bool, WireError> {
+    Ok(window_activation::is_active(
+        window.hwnd().map_err(failed)?.0 as isize,
+    ))
+}
+#[cfg(not(windows))]
+fn window_focused(window: &WebviewWindow) -> Result<bool, WireError> {
+    window.is_focused().map_err(failed)
+}
 fn wc_state(wc: u64) {
     let r = runtime();
     let registry = r.registry.lock().expect("registry");
@@ -151,7 +176,7 @@ fn win_state(window: &WebviewWindow, win: u64) -> Result<Value, WireError> {
     let fullscreen = window.is_fullscreen().map_err(failed)?;
     let mut state = json!({"winId":win,"bounds":bounds,
         "contentBounds":{"x":inner_position.x,"y":inner_position.y,"width":inner_size.width,"height":inner_size.height},
-        "visible":window.is_visible().map_err(failed)?,"focused":window.is_focused().map_err(failed)?,
+        "visible":window.is_visible().map_err(failed)?,"focused":window_focused(window)?,
         "minimized":minimized,"maximized":maximized,
         "fullscreen":fullscreen,"title":window.title().map_err(failed)?,"opacity":1.0});
     if !maximized && !minimized && !fullscreen {
@@ -342,6 +367,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         options["height"].as_f64().unwrap_or(800.0),
     )
     .visible(options["show"].as_bool().unwrap_or(true))
+    .focused(options["show"].as_bool().unwrap_or(true))
     .disable_drag_drop_handler()
     .theme(theme::for_new_window())
     .initialization_script(&runtime().preload)
@@ -426,6 +452,16 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             return Err(failed(error));
         }
     };
+    #[cfg(windows)]
+    if let Err(error) = window
+        .hwnd()
+        .map_err(|error| error.to_string())
+        .and_then(|hwnd| window_activation::watch(hwnd.0 as isize, win))
+    {
+        let _ = window.destroy();
+        runtime().registry.lock().expect("registry").remove(wc);
+        return Err(failed(error));
+    }
     if !options["useContentSize"].as_bool().unwrap_or(false) {
         apply_size(
             &window,
@@ -493,8 +529,15 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             });
         }
         WindowEvent::Focused(focus) => {
-            let _ = win_state(&observer, win);
-            win_event(win, if *focus { "focus" } else { "blur" });
+            // Windows: the window's activation reaches Node through `window_activation`; this event is the focus of
+            // the window's WebView, which can come while the window is hidden or inactive.
+            #[cfg(windows)]
+            window_activation::webview_focus(&observer, win, *focus);
+            #[cfg(not(windows))]
+            {
+                let _ = win_state(&observer, win);
+                win_event(win, if *focus { "focus" } else { "blur" });
+            }
         }
         WindowEvent::Resized(_) => {
             let _ = win_state(&observer, win);
@@ -526,32 +569,48 @@ fn webview_args() -> Result<Option<String>, String> {
     extra.extend(automation::browser_args()?);
     Ok((!extra.is_empty()).then(|| format!("{WRY_DEFAULT_ARGS} {}", extra.join(" "))))
 }
-/// Electron's `showInactive`: the window appears without taking the keyboard focus or the foreground. Windows keeps a
-/// window from being activated by its `WS_EX_NOACTIVATE` style, which tao applies from its own focusable flag (a style
-/// set behind tao's back would be dropped at its next flag change): held off for the show, then put back as it was.
+/// Electron's `show` on a window that cannot take focus (`setFocusable(false)`, the e2e harness's windows): it appears
+/// without activation, as PROTOCOL.md says; one that can takes the focus.
+#[cfg(windows)]
+fn show(window: &WebviewWindow) -> tauri::Result<()> {
+    if shell_core::sys::winops::is_focusable(window.hwnd()?.0 as isize) {
+        window.show()
+    } else {
+        window_activation::without_activation(window, "show", || window.show())
+    }
+}
+/// Electron's `showInactive`: the window appears without taking the keyboard focus or the foreground. tao shows a
+/// window with `SW_SHOW` (Microsoft: "Activates the window and displays it"), and `WS_EX_NOACTIVATE` is documented
+/// for clicks, so the show is made without activation (`window_activation`); the focusable flag is not touched, as
+/// putting it back after the show would show the window again, now activatable.
 #[cfg(windows)]
 fn show_inactive(window: &WebviewWindow) -> tauri::Result<()> {
-    let was = shell_core::sys::winops::is_focusable(window.hwnd()?.0 as isize);
-    window.set_focusable(false)?;
-    let shown = window.show();
-    window.set_focusable(was)?;
-    shown
+    window_activation::without_activation(window, "showInactive", || window.show())
+}
+/// Electron's `setFocusable`. tao shows a visible window again at every flag change, which would activate it, so on
+/// Windows the change is made without activation.
+#[cfg(windows)]
+fn set_focusable(window: &WebviewWindow, focusable: bool) -> tauri::Result<()> {
+    window_activation::without_activation(window, "setFocusable", || {
+        window.set_focusable(focusable)
+    })
+}
+#[cfg(not(windows))]
+fn set_focusable(window: &WebviewWindow, focusable: bool) -> tauri::Result<()> {
+    window.set_focusable(focusable)
 }
 fn win_op(params: &Value) -> Result<Value, WireError> {
     let win = number(params, "winId")?;
-    let wc = runtime()
-        .registry
-        .lock()
-        .expect("registry")
-        .by_window(win)
-        .map(|p| p.identity.wc)
-        .ok_or_else(|| WireError::new("gone", "unknown window"))?;
-    let window = window_for_wc(wc)?;
+    let window = window_for_win(win)?;
     let op = string(params, "op")?;
     let a = &params["args"];
     match op {
+        #[cfg(windows)]
+        "show" => show(&window),
+        #[cfg(not(windows))]
         "show" => window.show(),
-        "setFocusable" => window.set_focusable(
+        "setFocusable" => set_focusable(
+            &window,
             a["focusable"]
                 .as_bool()
                 .ok_or_else(|| WireError::new("invalid", "missing focusable"))?,

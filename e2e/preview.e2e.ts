@@ -92,7 +92,10 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		expect(security).toEqual({ title: "Local preview fixture", node: "undefined", ipc: "undefined" });
 		// Electron's isFocused is the window's own activation, not its focused webContents (`Widget::IsActive`,
 		// `-[NSWindow isKeyWindow]`): a test window (OMP_GUI_HEADLESS) is setFocusable(false) and shown inactive.
-		expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false);
+		expect(
+			await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused()),
+			"the window was activated: the shell log's window.activation, window.inactive and window.webview_focus lines say by what",
+		).toBe(false);
 		// The application menu's edit commands (Cmd/Ctrl+A, C, V, X, Z) act on the Preview view that holds the window's
 		// native keyboard focus, as Electron's menu roles act on the focused webContents, not on the window's own page.
 		await page.getByRole("textbox", { name: "Preview URL" }).fill(`${url}edit`);
