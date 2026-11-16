@@ -11,7 +11,8 @@ use std::{
 
 use base64::Engine;
 use ompdesk_shell_preview::{
-    AttachedPage, Browser, LaunchConfig, Navigation, NavigationHandler, PageInitializer, Viewport,
+    AttachedPage, Browser, LaunchConfig, Navigation, NavigationHandler, PageInitializer,
+    PausedRequest, RequestDisposition, RequestHandler, Viewport,
 };
 use serde_json::json;
 use tokio::{
@@ -49,6 +50,7 @@ struct Fixture {
     url: String,
     popup_requests: Arc<AtomicUsize>,
     download_requests: Arc<AtomicUsize>,
+    handled_requests: Arc<AtomicUsize>,
     request_notify: Arc<Notify>,
     task: JoinHandle<()>,
 }
@@ -65,15 +67,18 @@ impl Fixture {
         let url = format!("http://{}", listener.local_addr()?);
         let popup_requests = Arc::new(AtomicUsize::new(0));
         let download_requests = Arc::new(AtomicUsize::new(0));
+        let handled_requests = Arc::new(AtomicUsize::new(0));
         let request_notify = Arc::new(Notify::new());
         let popup = Arc::clone(&popup_requests);
         let download = Arc::clone(&download_requests);
+        let handled = handled_requests.clone();
         let notify = Arc::clone(&request_notify);
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
             while let Ok((mut stream, _)) = listener.accept().await {
                 let popup = Arc::clone(&popup);
                 let download = Arc::clone(&download);
+                let handled = handled.clone();
                 let notify = Arc::clone(&notify);
                 connections.spawn(async move {
                     let mut request = Vec::new();
@@ -109,6 +114,10 @@ impl Fixture {
                             notify.notify_one();
                             ("Content-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=preview-test.bin\r\n", "download fixture")
                         }
+                        "/handled" | "/handler-error" => {
+                            handled.fetch_add(1, Ordering::SeqCst);
+                            ("Content-Type: application/json\r\n", "{\"source\":\"server\"}")
+                        }
                         _ => ("Content-Type: text/plain\r\n", ""),
                     };
                     let response = format!("HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
@@ -120,6 +129,7 @@ impl Fixture {
             url,
             popup_requests,
             download_requests,
+            handled_requests,
             request_notify,
             task,
         })
@@ -169,6 +179,26 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
     check!(
         initialized == json!({"beforePage":true,"runs":1,"userAgent":"OMPdesk-Preview-Proof"}),
         "host initialization did not precede page scripts: {initialized}"
+    );
+    let handled = page.evaluate("fetch('/handled', {method:'POST', headers:{'X-Preview-Proof':'present'}, body:'preview body'}).then(r => r.json())", false).await.map_err(|e| format!("host interception: {e}"))?;
+    check!(
+        handled == json!({"source":"host"}),
+        "host interception did not supply the actual response: {handled}"
+    );
+    let failed = page
+        .evaluate(
+            "fetch('/handler-error').then(() => false, () => true)",
+            false,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    check!(
+        failed == json!(true),
+        "host handler failure did not fail the actual request"
+    );
+    check!(
+        fixture.handled_requests.load(Ordering::SeqCst) == 0,
+        "a host-handled request leaked to the network"
     );
     let headers = page
         .evaluate("fetch('/headers').then(r => r.json())", false)
@@ -308,6 +338,34 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
     check!(
         original == json!({"cookie": "preview=first", "storage": "first"}),
         "original partition data missing: {original}"
+    );
+
+    page.resize(Viewport {
+        width: 960,
+        height: 640,
+        device_scale_factor: 0.25,
+    })
+    .await
+    .map_err(|e| format!("quarter-scale layout resize: {e:?}"))?;
+    let layout = page
+        .evaluate(
+            "({width: innerWidth, height: innerHeight, dpr: devicePixelRatio})",
+            false,
+        )
+        .await
+        .map_err(|e| format!("quarter-scale layout metrics: {e:?}"))?;
+    check!(
+        layout == json!({"width": 960, "height": 640, "dpr": 0.25}),
+        "quarter-scale layout metrics mismatch: {layout}"
+    );
+    let quarter = page
+        .capture(json!({}))
+        .await
+        .map_err(|e| format!("capture quarter-scale page: {e:?}"))?;
+    check!(
+        png_size(&quarter) == Some((240, 160)),
+        "quarter-scale screenshot dimensions: {:?}",
+        png_size(&quarter)
     );
 
     page.resize(Viewport {
@@ -499,6 +557,58 @@ impl NavigationHandler for NavigationGate {
     }
 }
 
+impl RequestHandler for NavigationGate {
+    fn handle(
+        &self,
+        request: PausedRequest,
+    ) -> Pin<Box<dyn Future<Output = ompdesk_shell_preview::Result<RequestDisposition>> + Send>>
+    {
+        Box::pin(async move {
+            let url = request
+                .params
+                .pointer("/request/url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if url.ends_with("/handler-error") {
+                return Err(ompdesk_shell_preview::Error::new(
+                    "failed",
+                    "Fixture host failure",
+                ));
+            }
+            if !url.ends_with("/handled") {
+                return Ok(RequestDisposition::Unhandled);
+            }
+            let method = request
+                .params
+                .pointer("/request/method")
+                .and_then(serde_json::Value::as_str);
+            let body = request
+                .params
+                .pointer("/request/postData")
+                .and_then(serde_json::Value::as_str);
+            let header = request
+                .params
+                .pointer("/request/headers")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|headers| {
+                    headers.iter().any(|(name, value)| {
+                        name.eq_ignore_ascii_case("x-preview-proof") && value == "present"
+                    })
+                });
+            if method != Some("POST") || body != Some("preview body") || !header {
+                return Err(ompdesk_shell_preview::Error::new(
+                    "invalid",
+                    "Actual paused request metadata changed",
+                ));
+            }
+            let body = base64::engine::general_purpose::STANDARD.encode(br#"{"source":"host"}"#);
+            request.page.command("Fetch.fulfillRequest", json!({"requestId":request.request_id,"responseCode":200,
+                "responseHeaders":[{"name":"Content-Type","value":"application/json"}],"body":body})).await?;
+            Ok(RequestDisposition::Handled)
+        })
+    }
+}
+
 impl PageInitializer for NavigationGate {
     fn initialize(
         &self,
@@ -607,12 +717,13 @@ async fn real_chromium_preview() {
         release: Arc::new(Notify::new()),
     });
     let browser = Arc::new(
-        Browser::launch_with_hooks(
+        Browser::launch_with_request_handler(
             LaunchConfig {
                 executable,
                 profile_root,
                 command_timeout: Duration::from_secs(10),
             },
+            gate.clone(),
             gate.clone(),
             gate.clone(),
         )
