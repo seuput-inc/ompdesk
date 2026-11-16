@@ -333,7 +333,38 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		expect(peerAddress.origin).not.toBe(firstAddress.origin);
 		expect(peerAddress.hostname.split(".").slice(2)).toEqual(firstAddress.hostname.split(".").slice(2));
 		expect(await inPage("location.origin", peer.canonical)).toBe(peerAddress.origin);
-		// Test the same running browser context, including cookies scoped above the capability host.
+		const webCookies = await app.evaluate(
+			async ({ webContents }, { webUrl, visualUrl }) => {
+				const web = webContents.getAllWebContents().find(contents => contents.getURL() === webUrl);
+				if (!web) throw new Error("No approved web tab in the visual's window");
+				web.debugger.attach("1.3");
+				try {
+					await web.debugger.sendCommand("Network.setCookie", {
+						name: "web_partition",
+						value: "web",
+						url: visualUrl,
+						path: "/",
+					});
+					return await web.debugger.sendCommand("Network.getCookies", { urls: [visualUrl] });
+				} finally {
+					web.debugger.detach();
+				}
+			},
+			{ webUrl: `${origin}/link?d=secret`, visualUrl: firstHref },
+		);
+		expect(webCookies).toMatchObject({
+			cookies: expect.arrayContaining([expect.objectContaining({ name: "web_partition", value: "web" })]),
+		});
+		expect(
+			await inPage(
+				`(async () => ({
+				document: document.cookie.includes("web_partition="),
+				store: await cookieStore.get("web_partition"),
+			}))()`,
+				originalVisual,
+			),
+		).toEqual({ document: false, store: null });
+		// Exercise the same canonical Session, including cookies scoped above the capability host.
 		await inPage(
 			`(() => {
 				localStorage.setItem("visual-origin-isolation", "first");
@@ -344,6 +375,21 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 			})()`,
 			originalVisual,
 		);
+		// CookieStore bypasses Blink's document.cookie toggle; it must use the isolated browser jar too.
+		expect(await inPage("typeof cookieStore", originalVisual)).toBe("object");
+		expect(
+			await inPage(
+				`(async () => {
+					await cookieStore.set({name:"visual_store", value:"first",
+						domain:location.hostname.split(".").slice(2).join("."), path:"/"});
+					return (await cookieStore.get("visual_store"))?.value;
+				})()`,
+				originalVisual,
+			),
+		).toBe("first");
+		expect(
+			await inPage("cookieStore.getAll().then(cookies => cookies.map(cookie => cookie.name))", peer.canonical),
+		).toEqual([]);
 		const isolated = await inPage(
 			`({local: localStorage.getItem("visual-origin-isolation"),
 				session: sessionStorage.getItem("visual-origin-isolation"), cookies: document.cookie})`,
