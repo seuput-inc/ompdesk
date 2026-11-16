@@ -38,7 +38,7 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native]
+        options: [all, move-current-mac, tauri-native, preview-browser]
         default: all
   push:
     branches: [omp/agent/rust-batch-shell]
@@ -369,7 +369,7 @@ jobs:
   tauri-native:
     name: tauri-native (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'tauri-native'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && (inputs.only == 'tauri-native' || inputs.only == 'preview-browser')"
     concurrency:
       group: ${{ matrix.os == 'macos-15' && 'mac-dispatch' || format('tauri-native-{0}', github.ref) }}
       cancel-in-progress: false
@@ -395,20 +395,24 @@ jobs:
             native/ompdesk/crates/shell-preview
       - name: Compile the actual system-WebView host
         shell: bash
+        if: inputs.only == 'tauri-native'
         run: cargo build --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --bin ompdesk-tauri-shell
       - name: Test the host identity and page boundaries
         shell: bash
+        if: inputs.only == 'tauri-native'
         run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml
         env:
           OMPDESK_PROFILE_TEST_ROOT: ${{ runner.temp }}/ompdesk-profile
       - name: Exercise the real preload attachment and migration consumers
         shell: bash
+        if: inputs.only == 'tauri-native'
         run: |
           set -euo pipefail
           bun native/ompdesk/crates/tauri-shell/tests/preload.ts
           bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
       - name: Test the original Local Storage exporter without CEF
         shell: bash
+        if: inputs.only == 'tauri-native'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/native/ompdesk/crates/tauri-shell/target
         run: cargo test --locked --manifest-path native/ompdesk/crates/shell/Cargo.toml --no-default-features --lib migrate::local_storage::tests
@@ -426,15 +430,21 @@ jobs:
           OMPDESK_PREVIEW_TEST_SCRATCH="$RUNNER_TEMP/preview-browser-fixture" \
             cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --test browser -- --ignored --exact real_chromium_preview
       - name: Check the changed native host
+        if: inputs.only == 'tauri-native'
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml -- --check
           cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets -- -D warnings
+      - name: Check the changed Preview consumer
+        shell: bash
+        run: |
+          set -euo pipefail
           cargo fmt --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml -- --check
           cargo clippy --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --all-targets -- -D warnings
       - name: Refuse an active CEF dependency
         shell: bash
+        if: inputs.only == 'tauri-native'
         run: |
           set -euo pipefail
           cargo tree --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --edges normal --prefix none --format '{p}' > tauri-dependencies.txt

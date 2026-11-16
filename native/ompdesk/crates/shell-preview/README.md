@@ -54,6 +54,8 @@ Explicitly call `shutdown()` before ending the Tokio runtime. Dropping a browser
 
 Transport bounds are 16 MiB per CDP JSON frame, 32 MiB of queued outgoing bytes, 256 pending commands, and 32 retained observer events. Oversized capture or PDF results fail rather than being truncated. Policy intake is separate; a lost critical event fails closed. These are explicit driver limits, not an unbounded large-document claim.
 
+Page creation errors identify target creation, initialization, or viewport setup. Rejected CDP replies retain only the numeric protocol error code; Chromium's message and data are not exposed because they can contain page URLs or credentials.
+
 On POSIX, Chromium's blocking child endpoint is mapped to fd3 and fd4 of a private `socketpair`; only the parent endpoint is nonblocking. There is no listening socket or TCP debugging port. Named FIFOs are not used: on Darwin, a large blocking write can wait for a reader while the reader waits for the vnode notification posted only after that write completes. The actual PDF regression exposed this deadlock.
 
 The host must also prevent unrelated child launches from inheriting unlisted descriptors. [Rust 1.95's macOS `Socket::new_pair`](https://github.com/rust-lang/rust/blob/1.95.0/library/std/src/sys/net/connection/socket/unix.rs#L111-L138) sets CLOEXEC after `socketpair`, rather than atomically. A concurrent inheriting spawn can race that interval. Main's process-launch boundary must use close-unlisted-fd semantics or a shared spawn fence. This is a confirmed standard-library interval, not a measured leak in the integrated host. This crate cannot impose a fence on spawns its host performs elsewhere.
