@@ -242,6 +242,7 @@ export const FALLBACK_PROVIDER_IDS: readonly string[] = [
 	"litellm",
 	"llama.cpp",
 	"local",
+	"modal",
 	"modular",
 	"muse-code",
 	"nace",

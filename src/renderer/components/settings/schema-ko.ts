@@ -124,11 +124,12 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"providers.anthropic.slowMode": { label: "Anthropic 저속 모드" },
 	"tts.localSpeed": {
 		label: "로컬 TTS 속도",
-		description: "로컬 TTS 백엔드의 말하기 속도예요 (tts 도구, omp say). 1은 보통 속도이며 0.5–2.5 범위로 제한돼요.",
+		description:
+			"로컬 TTS 백엔드의 말하기 속도예요 (tts 도구, omp say). 1은 보통 속도이며 백엔드가 지원하는 범위로 제한돼요.",
 	},
 	"speech.speed": {
 		label: "응답 읽기 속도",
-		description: "어시스턴트 출력을 소리 내어 읽는 속도예요. 1은 보통 속도이며 0.5–2.5 범위로 제한돼요.",
+		description: "어시스턴트 출력을 소리 내어 읽는 속도예요. 1은 보통 속도이며 백엔드가 지원하는 범위로 제한돼요.",
 	},
 	"contextFiles.extra": {
 		label: "추가 컨텍스트 파일",
@@ -996,7 +997,7 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	},
 	"speechgen.enabled": {
 		label: "음성 생성",
-		description: "온디바이스(Kokoro) 또는 xAI Grok Voice로 음성 파일을 합성하는 tts 도구를 사용해요",
+		description: "온디바이스 또는 xAI Grok Voice로 음성 파일을 합성하는 tts 도구를 사용해요",
 	},
 	"generate_image.enabled": {
 		label: "이미지 생성",
@@ -1323,7 +1324,7 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"live.voice": { label: "실시간 음성 목소리", description: "Codex 기반 실시간 음성 세션에서 쓸 목소리예요" },
 	"tts.localVoice": {
 		label: "로컬 TTS 목소리",
-		description: "로컬 TTS 백엔드가 쓰는 Kokoro 목소리예요(미국/영국식, 여성/남성)",
+		description: "로컬 TTS 백엔드가 쓰는 목소리예요(미국/영국식, 여성/남성)",
 	},
 	"speech.enabled": { label: "음성 읽기", description: "어시스턴트 출력이 스트리밍되는 대로 스피커로 읽어 줘요" },
 	"speech.mode": {
@@ -1335,7 +1336,7 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		description:
 			"합성 전에 tiny/smol 모델로 어시스턴트 출력을 자연스러운 구어체로 바꿔요(코드를 설명하고 링크와 markdown을 제거). 실패하면 기계적 정리로 대체해요",
 	},
-	"speech.voice": { label: "음성 읽기 목소리", description: "어시스턴트 출력을 읽을 때 쓸 Kokoro 목소리예요" },
+	"speech.voice": { label: "음성 읽기 목소리", description: "어시스턴트 출력을 읽을 때 쓸 목소리예요" },
 	"providers.tinyModelDevice": {
 		label: "Tiny 모델 디바이스",
 		description:
@@ -1576,6 +1577,10 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"task.agentPrewalk": {
 		label: "서브에이전트별 사전 탐색 덮어쓰기",
 		description: "서브에이전트 이름과 prewalk 켜짐 상태의 매핑이에요(/agents 패널에서 P로 전환)",
+	},
+	"task.agentPrewalkAuto": {
+		label: "서브에이전트별 자동 사전 탐색 덮어쓰기",
+		description: "서브에이전트 이름과 자동 prewalk 설정(on/off 또는 모델 패턴)의 매핑이에요",
 	},
 	// 스킬
 	"skills.enabled": { label: "스킬 활성화", description: "스킬 검색과 로딩의 전체 스위치예요" },
@@ -2026,6 +2031,11 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "SVG 그림 렌더링",
 		description:
 			"에이전트가 다이어그램과 차트를 SVG로 그리게 하고, 그래픽을 표시하는 터미널에서는 이미지로 바로 보여 줘요",
+	},
+	"tui.renderEmbeds": {
+		label: "이미지와 웹 페이지 삽입 렌더링",
+		description:
+			"에이전트가 <img>로 그림을, <iframe>으로 웹 페이지를 보여 주게 해요. 원격 주소를 포함해 불러온 뒤, 그래픽을 표시하는 터미널에서는 바로 그려요",
 	},
 	"tui.autoGraph": {
 		label: "표 자동 차트",
