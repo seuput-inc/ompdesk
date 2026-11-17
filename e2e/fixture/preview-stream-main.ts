@@ -18,7 +18,7 @@ import { parseVisualUrl } from "../../src/main/preview/visual-navigation";
 import type { VisualStore } from "../../src/main/preview/visuals";
 import { BlobStore } from "../../src/main/web/blobs";
 import type { WebDevice } from "../../src/main/web/devices-store";
-import { type IpcCaller, IpcRegistry } from "../../src/main/web/ipc-registry";
+import { IpcRegistry } from "../../src/main/web/ipc-registry";
 import { WebWindows } from "../../src/main/web/web-client-window";
 import type { WsRouter } from "../../src/main/web/ws-router";
 import { TestRouterHost } from "../../src/main/web/ws-router-test-rig";
@@ -142,26 +142,6 @@ async function main() {
 	const origin = `http://127.0.0.1:${port}`;
 
 	const ipc = new IpcRegistry({ handle: () => {}, on: () => {} });
-	// When each poll the host's handler took started, while it runs: the tick says whether a poll that never came
-	// back is still in the handler or left it and was lost on its way to the client.
-	const pollsInHandler = new Map<number, number>();
-	let pollsHandled = 0;
-	const handle = ipc.handle.bind(ipc);
-	ipc.handle = ((channel: string, handler: (caller: IpcCaller, ...args: unknown[]) => unknown) =>
-		handle(
-			channel,
-			channel !== PREVIEW_STREAM_POLL
-				? handler
-				: async (caller: IpcCaller, ...args: unknown[]) => {
-						const id = ++pollsHandled;
-						pollsInHandler.set(id, Date.now());
-						try {
-							return await handler(caller, ...args);
-						} finally {
-							pollsInHandler.delete(id);
-						}
-					},
-		)) as typeof ipc.handle;
 	const visuals = {
 		parse: parseVisualUrl,
 		view: () => null,
@@ -262,25 +242,11 @@ async function main() {
 	};
 
 	// Each step's numbers print as they land, so a run the spec kills at its deadline still says where it stopped.
-	const step = (name: string, value?: unknown) => console.log(`STEP ${name} ${JSON.stringify(value ?? null)}`);
-	// A tick a second: whether this process still runs (how late its timers fire), the client's calls still unanswered
-	// and how long each poll still in the host's handler has been there.
-	let ticked = Date.now();
-	setInterval(() => {
-		const now = Date.now();
-		step("tick", {
-			lag: now - ticked - 1000,
-			unanswered: pending.size,
-			inHandler: [...pollsInHandler.values()].map(started => now - started),
-			handled: pollsHandled,
-		});
-		ticked = now;
-	}, 1000).unref();
 	const result = new Proxy<Record<string, unknown>>(
 		{},
 		{
 			set(target, key, value) {
-				step(String(key), value);
+				console.log(`STEP ${String(key)} ${JSON.stringify(value)}`);
 				return Reflect.set(target, key, value);
 			},
 		},
@@ -397,9 +363,7 @@ async function main() {
 
 	// 7. A busy page (every pixel changing each frame), acknowledged at once: at most 12 frames a second.
 	await loaded(`${origin}/?busy=1`);
-	step("busy-loaded");
 	const drain = await poll(null, 3000);
-	step("busy-drained", drain.frame ? { seq: drain.frame.seq, ...decode(drain.frame) } : null);
 	if (drain.frame) seq = drain.frame.seq;
 	const seconds = 6;
 	const cpuStart = cpuSeconds();
@@ -410,7 +374,6 @@ async function main() {
 	const sizes = new Set<string>();
 	while (Date.now() - started < seconds * 1000) {
 		const reply = await poll(seq, 2000);
-		step("busy-poll", { at: Date.now() - started, seq: reply.frame?.seq ?? null });
 		if (!reply.frame) continue;
 		seq = reply.frame.seq;
 		const decoded = decode(reply.frame);
