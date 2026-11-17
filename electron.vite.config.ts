@@ -50,7 +50,8 @@ function separatePreload(name: string): Plugin {
 		buildStart() {
 			this.addWatchFile(resolve(__dirname, `src/preload/${name}.ts`));
 		},
-		async closeBundle() {
+		async closeBundle(error) {
+			if (error) return;
 			const { build } = await import("vite");
 			await build({
 				configFile: false,
