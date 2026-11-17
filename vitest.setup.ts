@@ -14,6 +14,12 @@ dropGitSelectors();
 // MCP server waited 10 s for it at its first prompt and built a different system prompt (src/main/omp-launch.ts).
 for (const key of SESSION_OWNED_ENV) delete process.env[key];
 
+// omp's service broker (a `wait` starts it, and on Windows the bridge before a session's first bash) inherits the
+// session's folder as its working folder and stays 3 s after its last omp leaves (stock launch/broker.ts
+// DEFAULT_IDLE_GRACE_MS); on Windows a stock test's cleanup then cannot remove that folder (EBUSY). The broker inherits
+// omp's environment, and with no grace it ends as soon as the test's omp does.
+process.env.OMP_DAEMON_IDLE_GRACE_MS = "0";
+
 // A worker whose run was killed ends itself instead of running on as an orphan (scripts/vitest-orphan-guard.ts).
 exitWhenParentGone();
 

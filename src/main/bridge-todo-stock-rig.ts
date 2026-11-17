@@ -171,7 +171,8 @@ export async function startOmp(options: {
 }): Promise<Omp> {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-todo-stock-repo-")));
 	execFileSync("git", ["init", "--quiet"], { cwd: root });
-	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs.
+	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs; omp's service broker
+	// is one, and ends with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`).
 	cleanups.push(() => rmSync(root, RM_TEMP));
 	const address = newBridgeAddress();
 	const env: Record<string, string | undefined> = {
@@ -182,11 +183,6 @@ export async function startOmp(options: {
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
 		OMP_GUI_BRIDGE: address,
-		// omp's service broker (started by a `wait`, and on Windows by the bridge before the first bash) inherits this
-		// folder as its working folder and stays 3 s after its last client leaves (stock launch/broker.ts
-		// DEFAULT_IDLE_GRACE_MS): past RM_TEMP's retries, so the cleanup failed with EBUSY. It inherits omp's environment,
-		// so it ends as soon as omp does.
-		OMP_DAEMON_IDLE_GRACE_MS: "0",
 	};
 	for (const key of ["ELECTRON_RUN_AS_NODE", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
 		Reflect.deleteProperty(env, key);
