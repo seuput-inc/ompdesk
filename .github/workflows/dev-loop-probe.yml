@@ -1,0 +1,114 @@
+# Throwaway, branch omp/agent/tauri-dev-loop-20261117 only, deleted before it lands: does `bun run dev` start a working
+# development window on Windows, and survive a broken edit? Starts it, waits for main's start mark (`app-started.json`:
+# the first window's page loaded), edits a renderer file and waits for Vite's HMR line; then breaks main and the Tauri
+# preload in turn (the app must keep running, no restart) and fixes each (the app must restart and load its page again).
+# Photographs the screen and uploads the logs.
+name: dev-loop-probe
+
+on:
+  push:
+    branches: [omp/agent/tauri-dev-loop-20261117]
+
+jobs:
+  dev:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: Put bun's cache on the workspace volume
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install
+      # The release host and the pinned Node, cached; `bun run dev` then finds them current and builds nothing.
+      - uses: ./.github/actions/tauri-shell
+      - uses: ./.github/actions/install-omp
+      - name: bun run dev
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:RUNNER_TEMP "dev-probe"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $log = Join-Path $out "dev.out.log"
+          $err = Join-Path $out "dev.err.log"
+          $mark = "$env:APPDATA\ompdesk-dev\app-started.json"
+          Remove-Item -Force -ErrorAction SilentlyContinue $mark
+          $dev = Start-Process -FilePath bun -ArgumentList "run", "dev" -RedirectStandardOutput $log -RedirectStandardError $err -PassThru -NoNewWindow
+          $failures = @()
+          function Shot($name) {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bitmap.Save((Join-Path $out "$name.png"))
+          }
+          function Seen($pattern) { [bool](Select-String -Path $log, $err -Pattern $pattern -Quiet) }
+          function Restarts { @(Select-String -Path $log -Pattern "restarting the app").Count }
+          function Shell { Get-Process ompdesk-shell -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          function WaitMark($minutes) {
+            $until = (Get-Date).AddMinutes($minutes)
+            while ((Get-Date) -lt $until -and -not $dev.HasExited) {
+              if (Test-Path $mark) { return Get-Content $mark }
+              Start-Sleep -Seconds 2
+            }
+            return $null
+          }
+          # A broken edit leaves the running app alone; the fix restarts it and its page loads again.
+          function BreakThenFix($file, $label) {
+            $shellBefore = (Shell).Id
+            $restartsBefore = Restarts
+            Add-Content $file "`nexport const = ;"
+            Start-Sleep -Seconds 25
+            $shellDuring = (Shell).Id
+            "$label broken: dev exited=$($dev.HasExited) shell $shellBefore -> $shellDuring restarts $restartsBefore -> $(Restarts)"
+            if ($dev.HasExited -or $shellDuring -ne $shellBefore -or (Restarts) -ne $restartsBefore) {
+              $script:failures += "$label broken edit restarted or ended the app"
+            }
+            Remove-Item -Force -ErrorAction SilentlyContinue $mark
+            git checkout -- $file
+            $started = WaitMark 4
+            $shellAfter = (Shell).Id
+            "$label fixed: mark $started shell $shellDuring -> $shellAfter restarts $(Restarts)"
+            if (-not $started -or $shellAfter -eq $shellDuring -or -not (Seen "${label} rebuilt: restarting the app")) {
+              $script:failures += "$label fix did not restart the app and load its page"
+            }
+          }
+          $started = WaitMark 15
+          if ($started) {
+            "START MARK $started"
+            Start-Sleep -Seconds 10
+            Shot "loaded"
+            Add-Content src/renderer/styles/global.css "`n/* dev-loop-probe */"
+            $until = (Get-Date).AddMinutes(2)
+            while ((Get-Date) -lt $until -and -not (Seen "hmr update|page reload")) { Start-Sleep -Seconds 2 }
+            if (-not (Seen "hmr update|page reload")) { $failures += "no HMR line" }
+            git checkout -- src/renderer/styles/global.css
+            BreakThenFix "src/main/index.ts" "main"
+            BreakThenFix "src/preload/tauri.ts" "preload"
+            Start-Sleep -Seconds 10
+            Shot "after-fixes"
+          } else {
+            $failures += "no start mark (dev exited: $($dev.HasExited))"
+            Shot "no-start"
+          }
+          Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object Id, ProcessName, MainWindowTitle | Format-Table -AutoSize | Out-String -Width 300
+          if (-not $dev.HasExited) { taskkill /T /F /PID $dev.Id | Out-Null }
+          Start-Sleep -Seconds 3
+          $dir = "$env:APPDATA\ompdesk-dev"
+          if (Test-Path $dir) {
+            Get-ChildItem $dir -Filter *.json* -File | Copy-Item -Destination (New-Item -ItemType Directory -Force (Join-Path $out "ompdesk-dev"))
+          }
+          "----- dev stdout"; Get-Content $log -Tail 200
+          "----- dev stderr"; Get-Content $err -Tail 200
+          "FAILURES: $($failures -join '; ')"
+          if ($failures.Count -gt 0) { exit 1 }
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dev-loop-probe
+          path: ${{ runner.temp }}/dev-probe
+          retention-days: 7
