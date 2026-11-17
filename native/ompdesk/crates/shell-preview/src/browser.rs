@@ -485,7 +485,7 @@ impl Page {
     /// compositor viewport, never from the emulated `deviceScaleFactor`), and `Emulation.setDeviceMetricsOverride`
     /// alone sets the view to the layout size: a page laid out at 390 CSS px with `deviceScaleFactor` 2 on a 1× view
     /// streams 390 px frames. This is `Page.captureScreenshot`'s own recipe for a resolution above the view's: the
-    /// view is sized apart from the layout (`dontSetVisibleSize`, then `Emulation.setVisibleSize`), and the emulated
+    /// view is sized apart from the layout (`Emulation.setVisibleSize`, then metrics with `dontSetVisibleSize`), and the emulated
     /// page is scaled by `deviceScaleFactor` over the view's scale so it fills the larger view. Chromium takes input
     /// in that scaled space, so a CSS point is sent at `emulation_scale` times its coordinates.
     pub async fn resize_framed(&self, layout: Viewport, frame: (u32, u32)) -> Result<()> {
@@ -494,13 +494,14 @@ impl Page {
         let mut metrics = layout.params()?;
         metrics["dontSetVisibleSize"] = json!(true);
         metrics["scale"] = json!(scale);
-        self.command_settled("Emulation.setDeviceMetricsOverride", metrics)
-            .await?;
+        // Chromium's SetVisibleSize replies in the browser; put it before the renderer's metrics acknowledgement.
         self.command_settled(
             "Emulation.setVisibleSize",
             json!({"width":width,"height":height}),
         )
         .await?;
+        self.command_settled("Emulation.setDeviceMetricsOverride", metrics)
+            .await?;
         self.emulation_scale
             .store(scale.to_bits(), Ordering::Release);
         Ok(())
