@@ -55,7 +55,7 @@
 ; `customCheckAppRunning` (the step right before the old uninstaller; it keeps electron-builder's own check) first sets
 ; the old folder aside as `<install>.move-backup` (a rename: instant and atomic; a copy when a handle keeps the folder
 ; from being renamed), and `customInstall` (the step after the files, registry entries and shortcuts) checks that the
-; new folder holds what the app needs: the shell, CEF, Node and the main. Complete: the backup is deleted. Not: the
+; new folder holds what the app needs: the shell, Node and the main. Complete: the backup is deleted. Not: the
 ; partial folder is deleted, the old one comes back with its uninstall entry's values, the setup fails (exit code 2) and,
 ; for an automatic update, starts the old app again. A setup cut off before it could check leaves the backup beside a
 ; partial folder; the next run of the setup puts the backup back first and starts from the old app.
@@ -323,10 +323,11 @@ Var pid
   !endif
 !macroend
 
-; A version that already failed to start on this machine is not tried again by an automatic update: the record
-; `update-start-failed.json` ({"version","count","at"}, one line; release 1's main writes the same file) names the version
-; this setup installs, so the setup leaves the old app where it is, starts it and exits 2 (`start-failed-before:
-; skipped`). A person's own run of the setup installs anyway. A record of another version is stale and goes.
+; A version that already failed on this machine (its start, or an unpack that came out incomplete) is not tried again by
+; an automatic update: the record `update-start-failed.json` ({"version","count","at"}, one line; release 1's main writes
+; the same file) names the version this setup installs, so the setup leaves the old app where it is, starts it and exits 2
+; (`start-failed-before: skipped`). A person's own run of the setup installs anyway. A record of another version is stale
+; and goes.
 !macro ompSkipRepeatedFailure
   !ifndef BUILD_UNINSTALLER
     ${if} ${isUpdated}
@@ -377,7 +378,13 @@ Var pid
   !endif
 !macroend
 
-; What the app needs from the new folder: the shell (OMPdesk.exe), CEF, Node and the main it runs.
+; What the app needs from the new folder: the shell (OMPdesk.exe), Node, the main it runs, and the page and preload the shell
+; loads from <resources>\app\out (it fails to start without either: crates/tauri-shell main.rs reads preload/tauri.js and
+; renderer/index.html). The Tauri shell draws with the system's WebView2, so the package holds no CEF file (release.yml
+; asserts libcef.dll is absent); requiring one would roll back every update.
+; An incomplete unpack is written down like a start that failed (ompRecordFailure): the old app's updater reads the same
+; file and holds that version, and an automatic setup of it is skipped (ompSkipRepeatedFailure), so it is not retried at
+; every safe point.
 !macro ompCheckNewFolder
   !ifndef BUILD_UNINSTALLER
     !ifdef OMP_MOVE_TEST
@@ -385,11 +392,14 @@ Var pid
       !insertmacro ompMoveTestAfterInstall
     !endif
     ${if} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-    ${andIf} ${FileExists} "$INSTDIR\libcef.dll"
     ${andIf} ${FileExists} "$INSTDIR\resources\node\node.exe"
     ${andIf} ${FileExists} "$INSTDIR\resources\app\out\main\index.js"
+    ${andIf} ${FileExists} "$INSTDIR\resources\app\out\preload\tauri.js"
+    ${andIf} ${FileExists} "$INSTDIR\resources\app\out\renderer\index.html"
       !insertmacro ompStartAndVerify
     ${else}
+      !insertmacro ompUserDataDir
+      !insertmacro ompRecordFailure
       !insertmacro ompRestoreOldFolder "incomplete"
     ${endIf}
   !endif
