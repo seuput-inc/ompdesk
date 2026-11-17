@@ -301,6 +301,9 @@ async fn handle(relay: &Relay, request: Request<Incoming>) -> Response<Full<Byte
             relay.close();
             answer(409, Some("text/plain; charset=utf-8"), String::new())
         }
+        // The relay ended between the check above and the ask: main released its asker on the end, so the ask reached
+        // nobody and nothing was forwarded. The same answer as a relay closed before the callback came.
+        None if relay.is_closed() => answer(409, Some("text/plain; charset=utf-8"), String::new()),
         Some(Forwarded {
             page: Some(page), ..
         }) => {
