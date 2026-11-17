@@ -1141,7 +1141,8 @@ export class LocalHostServices implements HostServices {
 	/**
 	 * After a crash or quit: the tab a marker names, again, not yet started and waiting for its
 	 * device like a dropped connection's (grace period). The device's `tab.open` re-attaches it.
-	 * Null when the marker's id is not a tab of `peer`'s.
+	 * A session a window's tab here (restored by the same relaunch) or another device's tab already holds is viewed,
+	 * as the device's own open would: the turn continues in that omp. Null when the marker's id is not a tab of `peer`'s.
 	 */
 	reviveTab(peer: PeerInfo, marker: Pick<ResumeMarker, "tab" | "cwd" | "kind" | "sessionPath">): string | null {
 		const prefix = resumeId(peer.deviceId, "");
@@ -1149,7 +1150,10 @@ export class LocalHostServices implements HostServices {
 		if (!Rtab.safeParse(rtab).success) return null;
 		const existing = this.#tabs.get(this.#key(peer.deviceId, rtab));
 		if (existing) return existing.resumeId;
-		const tab = this.#createTab(peer, rtab, marker.cwd, marker.kind, false, marker.sessionPath, null);
+		const holder = marker.sessionPath ? this.#holderView(peer, marker.sessionPath) : null;
+		const tab = holder
+			? this.#createTab(peer, rtab, holder.sidecar.cwd, holder.sidecar.kind, false, marker.sessionPath, null, holder)
+			: this.#createTab(peer, rtab, marker.cwd, marker.kind, false, marker.sessionPath, null);
 		this.#startGrace(tab);
 		return tab.resumeId;
 	}
@@ -1783,28 +1787,16 @@ export class LocalHostServices implements HostServices {
 			}
 			return { cwd: existing.sidecar.cwd, kind: existing.sidecar.kind, attached };
 		}
-		// A window of this computer runs the session, or another device's tab here does: the device views that omp,
-		// never a second one on the file.
-		const windowView = params.sessionPath
-			? this.#deps.localTabs.viewForDevice(
-					params.sessionPath,
-					{ deviceId: peer.deviceId, name: peer.name },
-					this.#deps.hostName(),
-				)
-			: null;
-		const runner = params.sessionPath && !windowView ? this.#runner(params.sessionPath) : undefined;
-		const view = windowView ?? (runner ? this.#viewTab(runner, peer) : null);
-		if (view && params.sessionPath) {
+		const holder = params.sessionPath ? this.#holderView(peer, params.sessionPath) : null;
+		if (holder && params.sessionPath) {
+			const view = holder.sidecar;
 			try {
 				this.#checkOpenSession(params.sessionPath);
 			} catch (error) {
 				view.dispose();
 				throw error;
 			}
-			const tab = this.#createTab(peer, params.rtab, view.cwd, view.kind, false, params.sessionPath, conn, {
-				sidecar: view,
-				of: runner ?? "window",
-			});
+			const tab = this.#createTab(peer, params.rtab, view.cwd, view.kind, false, params.sessionPath, conn, holder);
 			this.#emit(tab, "run", runReading(tab.run));
 			// A tab this computer revived after a restart is still asleep: the device opening it wants it live.
 			if (view.status === "asleep") view.start();
@@ -1926,6 +1918,23 @@ export class LocalHostServices implements HostServices {
 	#runner(sessionPath: string): HostTab | undefined {
 		for (const tab of this.#tabs.values()) if (tab.sessionFile === sessionPath && !tab.viewing) return tab;
 		return undefined;
+	}
+
+	/**
+	 * The omp that already runs `sessionPath` here, as `peer`'s tab's sidecar: a window's tab (`viewForDevice`), else
+	 * another device's tab here. Null when none does. A session has one omp: a second on the file would wait for the
+	 * first one's lease for good (stock moves a session another omp owns), so every way a device's tab comes to a
+	 * session here (its open, a relaunch reviving its turn) asks this first.
+	 */
+	#holderView(peer: PeerInfo, sessionPath: string): { sidecar: SidecarLike; of: HostTab | "window" } | null {
+		const window = this.#deps.localTabs.viewForDevice(
+			sessionPath,
+			{ deviceId: peer.deviceId, name: peer.name },
+			this.#deps.hostName(),
+		);
+		if (window) return { sidecar: window, of: "window" };
+		const runner = this.#runner(sessionPath);
+		return runner ? { sidecar: this.#viewTab(runner, peer), of: runner } : null;
 	}
 
 	/**
