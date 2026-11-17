@@ -27,7 +27,7 @@ import type {
 	RpcOrphanWorktreeRemoval,
 	RpcOrphanWorktrees,
 } from "../shared/rpc-types";
-import type { WorktreeRemoval } from "./agent-control/branches";
+import { REMOTE_COPY_MS, REMOTE_COPY_ROUNDS, type WorktreeRemoval } from "./agent-control/branches";
 import { KeepWorktree } from "./disk/saved-worktrees";
 import { fs } from "./fenced-fs";
 import { primaryRoot, repoRoot } from "./local/git/changes";
@@ -70,8 +70,8 @@ export function sessionOpenFolders(): readonly string[] {
  * `git worktree list`; reading one worktree's state is the landing judgement (`branches.ts`) with its counts.
  */
 const INSPECT_ROUNDS = 28;
-/** A removal: the landing judgement, the worktree list, `worktree remove` and `update-ref`. */
-const REMOVE_ROUNDS = 32;
+/** A removal: the landing judgement, the worktree list, `worktree remove`, the branch's copy on origin and `update-ref`. */
+const REMOVE_ROUNDS = 32 + REMOTE_COPY_ROUNDS;
 
 interface Candidate {
 	path: string;
@@ -155,7 +155,7 @@ export type BeforeRemove = (worktree: RpcOrphanWorktree) => Promise<(removed: bo
  * Remove one orphaned worktree whose work is landed (or never begun), after reading it again: a path that is not in
  * the fresh listing is `not_orphan`, one that is not `landed` or `untouched` is `not_removable`. The core then checks
  * landed and clean once more and deletes the branch at the tip it judged (`branch-kept` when `keepBranch` asks or the
- * branch moved meanwhile).
+ * branch moved meanwhile), and its copy on origin once it landed in `origin/<base>`, `keepBranch` or not.
  */
 export async function removeOrphanWorktree(
 	cwd: string,
@@ -198,6 +198,7 @@ export async function removeOrphanWorktree(
 				"git.removeOrphanWorktree",
 				{ primary, path: entry.path, branch: entry.branch, keepBranch: options.keepBranch === true },
 				REMOVE_ROUNDS,
+				REMOTE_COPY_MS,
 			);
 			await settle(result !== null);
 			return result;

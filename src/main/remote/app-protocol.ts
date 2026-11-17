@@ -58,7 +58,9 @@
  *   own checkout; `worktree` = `{path, branch, baseCwd}` of the tab's binding): `host.git.facts {worktree}` →
  *   BranchFacts, `host.git.evidence {worktree, diffChars}` → BranchEvidence (the child's diff cut to `diffChars`
  *   and a `merge-tree` prediction of its merge), `host.git.landing {worktree}` → LandingFacts, `host.git.merge
- *   {worktree, label}` → MergeOutcome (never pushed), `host.git.removeWorktree {worktree}` → WorktreeRemoval,
+ *   {worktree, label}` → MergeOutcome (never pushed; `remote` says what became of the branch's copy on origin),
+ *   `host.git.removeWorktree {worktree}` → WorktreeRemoval (the bare removal; the host cleans up the landed copy on
+ *   origin itself),
  *   `host.git.discardWorktree {worktree}` → WorktreeRemoval (a failed open's unused worktree and branch),
  *   `host.git.worktreeCreate {baseCwd, name, branchPrefix?, baseRef}` → RpcWorktreeCreateResult. Free: no model
  *   call, no quota.

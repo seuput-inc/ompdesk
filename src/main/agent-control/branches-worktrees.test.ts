@@ -304,7 +304,7 @@ describe("a branch squash-merged into the parent's main", () => {
 		const wt = await agentWorktree("sq6");
 		await commitIn(wt.path, "a.ts", "a\n");
 		squashMerge(wt);
-		expect(await removeSafeWorktree(wt)).toBe("removed");
+		expect(await removeSafeWorktree(wt)).toEqual({ removal: "removed" });
 		await expect(fs.stat(wt.path)).rejects.toThrow();
 		expect(gitSync(repo, "branch", "--list", wt.branch)).toBe("");
 
