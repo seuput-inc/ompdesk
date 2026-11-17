@@ -1,0 +1,86 @@
+# Throwaway, branch omp/agent/tauri-dev-loop-20261117 only, deleted before it lands: does `bun run dev` start a working
+# development window on Windows? Starts it, waits for main's start mark (`app-started.json`: the first window's page
+# loaded), edits a renderer file and waits for Vite's HMR line, photographs the screen and uploads the logs.
+name: dev-loop-probe
+
+on:
+  push:
+    branches: [omp/agent/tauri-dev-loop-20261117]
+
+jobs:
+  dev:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: Put bun's cache on the workspace volume
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/install-omp
+      - name: bun run dev
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:RUNNER_TEMP "dev-probe"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $log = Join-Path $out "dev.out.log"
+          $err = Join-Path $out "dev.err.log"
+          $marks = @("$env:APPDATA\ompdesk-dev\app-started.json", "$env:APPDATA\ompdesk\app-started.json")
+          $marks | ForEach-Object { Remove-Item -Force -ErrorAction SilentlyContinue $_ }
+          $dev = Start-Process -FilePath bun -ArgumentList "run", "dev" -RedirectStandardOutput $log -RedirectStandardError $err -PassThru -NoNewWindow
+          function Shot($name) {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bitmap.Save((Join-Path $out "$name.png"))
+          }
+          $deadline = (Get-Date).AddMinutes(15)
+          $mark = $null
+          while ((Get-Date) -lt $deadline -and -not $dev.HasExited) {
+            $mark = $marks | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($mark) { break }
+            Start-Sleep -Seconds 2
+          }
+          $hmr = $false
+          if ($mark) {
+            "START MARK $mark $(Get-Content $mark)"
+            Start-Sleep -Seconds 10
+            Shot "loaded"
+            Add-Content src/renderer/styles/global.css "`n/* dev-loop-probe */"
+            $until = (Get-Date).AddMinutes(2)
+            while ((Get-Date) -lt $until -and -not $hmr) {
+              $hmr = Select-String -Path $log, $err -Pattern "hmr update|page reload" -Quiet
+              Start-Sleep -Seconds 2
+            }
+            Start-Sleep -Seconds 5
+            Shot "after-edit"
+          } else {
+            "NO START MARK (dev exited: $($dev.HasExited), code: $(if ($dev.HasExited) { $dev.ExitCode }))"
+            Shot "no-start"
+          }
+          Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object Id, ProcessName, MainWindowTitle | Format-Table -AutoSize | Out-String -Width 300
+          if (-not $dev.HasExited) { taskkill /T /F /PID $dev.Id | Out-Null }
+          Start-Sleep -Seconds 3
+          foreach ($profile in @("ompdesk-dev", "ompdesk")) {
+            $dir = Join-Path $env:APPDATA $profile
+            if (Test-Path $dir) {
+              Get-ChildItem $dir -Filter *.json* -File | Copy-Item -Destination (New-Item -ItemType Directory -Force (Join-Path $out $profile))
+            }
+          }
+          "----- dev stdout"; Get-Content $log -Tail 200
+          "----- dev stderr"; Get-Content $err -Tail 200
+          "HMR line seen: $hmr"
+          if (-not $mark -or -not $hmr) { exit 1 }
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dev-loop-probe
+          path: ${{ runner.temp }}/dev-probe
+          retention-days: 7
