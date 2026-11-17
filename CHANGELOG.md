@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.133.0] - 2026-11-17
+
+이미지 생성은 이제 ChatGPT 구독으로만 하고, 이미지 카드 아래에 어떤 모델이 어떤 크기·품질로 만들었는지 보여 줘요.
+
+### 바뀐 것
+- 이미지 생성(generate_image)은 ChatGPT(Codex) 구독의 이미지 모델로만 해요. 구독이 없거나 요청이 실패하면 오류를 보여 주고, API 키처럼 요금이 따로 나가는 다른 공급자로 조용히 넘어가지 않아요. 품질 값이나 프롬프트를 덧붙이지 않아요.
+- 생성한 이미지 아래에 `공급자 · 모델 · 크기 · 품질` 한 줄이 나와요. 품질은 요청한 값이 아니라 결과가 알려 준 값이에요.
+
+### 고친 것
+- 휴대폰(연결된 웹 페이지)에서 큰 이미지가 있는 대화가 계속 다시 연결되던 문제를 고쳤어요. 큰 이미지는 소켓 메시지에 싣지 않고 HTTP로 따로 받아요.
+- 끝 신호를 못 받은 도구 호출이 실행이 끝난 뒤에도 계속 도는 것처럼 보이던 문제를 고쳤어요.
+- 사이드바에서 세션을 빠르게 연달아 고르면 두 번째 세션이 열리지 않던 문제를 고쳤어요.
+- Preview에서 페이지 이동이 응답을 기다리는 동안 멈춤이나 다른 이동이 처리되지 않던 문제를 고쳤어요.
+- 앱을 다시 켠 뒤 이어 받은 연결된 기기의 턴이, 이미 그 세션을 연 omp에 붙지 않고 omp를 하나 더 띄워 세션이 멈추던 문제를 고쳤어요.
+- 로그인 중계가 묻는 도중 끝나면 로그인 콜백에 응답하지 않던 문제를 고쳤어요(이제 409로 응답해요).
+- Windows: 설치 프로그램이 남긴 임시 배너 폴더를 다음 설치 때 지워요. `OMPdesk.exe`의 파일 버전 정보가 앱 버전과 같아졌어요.
+
+<!-- en -->
+
+Image generation now runs on the ChatGPT subscription only, and each generated image says which model made it, at what size and quality.
+
+### Changed
+- Image generation (generate_image) uses the ChatGPT (Codex) subscription's image model only. Without the subscription, or when its request fails, you see the error; it never switches quietly to another provider that bills separately, such as an API key. No quality value or prompt text is added.
+- Under a generated image, one line reads `provider · model · size · quality`. Quality is what the result reported, not what was asked for.
+
+### Fixed
+- A conversation holding a large picture kept reconnecting on a paired phone. Large pictures now load over HTTP instead of riding in a socket message.
+- A tool call whose end signal never arrived kept looking busy after its run had finished.
+- Picking two sessions in the sidebar in quick succession could leave the second one unopened.
+- In Preview, Stop and a new navigation waited while a page navigation awaited its reply.
+- After a relaunch, a paired device's turn that came back started a second omp instead of joining the one already holding its session, and the session stalled.
+- A sign-in callback that arrived while its relay was closing got no answer; it now gets 409.
+- Windows: the next setup removes the temporary banner folder the last one left, and `OMPdesk.exe`'s file version is the app's version.
+
 ## [0.132.1] - 2026-11-17
 
 Windows에서 0.131.0의 업데이트가 0.132.0을 설치한 뒤 0.131.0으로 되돌아가던 문제를 고쳤어요.
