@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
 
@@ -19,12 +19,25 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  *   (each one loaded, none stale), and no feature is refused for a copy.
  */
 
+/**
+ * Every adapter under resources/gui-bridge/omp as `[specifier, direct import, adapter import]`, both literal so omp
+ * rewrites them as it rewrites the bridge's: the adapter must reach the very module a direct import does.
+ */
+const ADAPTERS = readdirSync(resolve("resources/gui-bridge/omp"), { recursive: true, encoding: "utf8" })
+	.filter(entry => entry.endsWith(".ts"))
+	.map(entry => entry.split(sep).join("/").slice(0, -".ts".length))
+	.map(sub => `["@oh-my-pi/${sub}", () => import("@oh-my-pi/${sub}"), () => import("./omp/${sub}")]`)
+	.join(",\n ");
+
 const PROBE = `
 import { methods as autoMode } from "./modes/auto-mode";
 import { methods as goal } from "./modes/goal";
 import { methods as security } from "./security";
 import { probe, stockCopies } from "./health";
 import { COPY_SAFE } from "./capabilities";
+const ADAPTERS = [
+ ${ADAPTERS}
+];
 export default function (pi) {
  pi.on("session_start", async () => {
   const out = {};
@@ -47,6 +60,15 @@ export default function (pi) {
    out.copies = stockCopies().sort();
    out.copySafe = Object.keys(COPY_SAFE).sort();
    out.refusedForCopy = (await probe(env)).filter(entry => entry.missing.some(label => label.includes("separate copy")));
+   // Last: a direct import of a copy no bridge module loads evaluates it here.
+   out.adapterMismatch = [];
+   for (const [specifier, direct, adapter] of ADAPTERS) {
+    const [a, b] = await Promise.allSettled([direct(), adapter()]);
+    if (a.status !== b.status) out.adapterMismatch.push(specifier + " (one side failed)");
+    if (a.status !== "fulfilled" || b.status !== "fulfilled") continue;
+    const differs = Object.keys(a.value).filter(key => key !== "default" && a.value[key] !== b.value[key]);
+    if (differs.length > 0) out.adapterMismatch.push(specifier + "#" + differs[0]);
+   }
   } catch (err) {
    out.error = String(err && err.stack || err);
   }
@@ -63,6 +85,7 @@ interface Probe {
 	copies?: string[];
 	copySafe?: string[];
 	refusedForCopy?: unknown[];
+	adapterMismatch?: string[];
 	error?: string;
 }
 
@@ -118,5 +141,6 @@ describe.skipIf(!existsSync(omp))("stock settings the bridge reads", () => {
 		expect(probe.security).toMatch(/Security is disabled/);
 		expect(probe.copies).toEqual(probe.copySafe);
 		expect(probe.refusedForCopy).toEqual([]);
+		expect(probe.adapterMismatch).toEqual([]);
 	}, 130_000);
 });

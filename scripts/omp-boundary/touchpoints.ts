@@ -368,10 +368,27 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Compatibility probe and import rewriting: reads each LOADERS function's source for `omp-legacy-pi-bundled:` targets, and COPY_SAFE, HEAVY_COPIES and PRESENCE_ONLY decide which separate module copies are acceptable.",
-		files: ["resources/gui-bridge/health.ts", "resources/gui-bridge/capabilities.ts", "src/main/bridge-health.ts"],
-		stock: ["omp-legacy-pi-bundled:", "LOADERS literal specifiers", "COPY_SAFE", "HEAVY_COPIES", "PRESENCE_ONLY"],
-		tests: ["src/main/bridge-capabilities.test.ts", "src/main/bridge-health.test.ts"],
+			"Compatibility probe and import rewriting: reads each LOADERS function's source for `omp-legacy-pi-bundled:` targets, and COPY_SAFE, HEAVY_COPIES and PRESENCE_ONLY decide which separate module copies are acceptable. Every in-omp stock import goes through a one-line `export * from` adapter under resources/gui-bridge/omp/, which omp rewrites like a direct import.",
+		files: [
+			"resources/gui-bridge/health.ts",
+			"resources/gui-bridge/capabilities.ts",
+			"src/main/bridge-health.ts",
+			"scripts/lint-omp-imports.mjs",
+		],
+		stock: [
+			"omp-legacy-pi-bundled:",
+			"LOADERS literal specifiers",
+			"COPY_SAFE",
+			"HEAVY_COPIES",
+			"PRESENCE_ONLY",
+			"legacy-pi-compat rewrite of export * from in extension files",
+		],
+		tests: [
+			"src/main/bridge-capabilities.test.ts",
+			"src/main/bridge-health.test.ts",
+			"src/main/bridge-stock-settings-stock.test.ts",
+			"scripts/lint-omp-imports.test.mjs",
+		],
 	},
 	{
 		id: "B03",

@@ -22,6 +22,14 @@ import { en } from "../renderer/locales/en";
 
 const BRIDGE_DIR = path.join(__dirname, "..", "..", "resources", "gui-bridge");
 
+/** The stock specifier of every adapter under resources/gui-bridge/omp (`omp/pi-ai.ts` → `@oh-my-pi/pi-ai`). */
+function adapterSpecifiers(): string[] {
+	return fs
+		.readdirSync(path.join(BRIDGE_DIR, "omp"), { recursive: true, encoding: "utf8" })
+		.filter(entry => entry.endsWith(".ts"))
+		.map(entry => `@oh-my-pi/${entry.split(path.sep).join("/").slice(0, -".ts".length)}`);
+}
+
 class FakeStore {
 	static open() {}
 	upsert() {}
@@ -215,64 +223,53 @@ describe("health.ts loaders", () => {
 	});
 
 	it("covers every stock module the extension imports, so the copy check sees them all", () => {
-		// The stock helper, stats host and boot model run in their own Bun processes over omp's package files.
-		const outside = new Set(["stock-helper", "stats-host.ts", "boot-model.ts", "health.ts"]);
+		// Bridge code inside omp reaches stock only through resources/gui-bridge/omp/<subpath>.ts adapters
+		// (scripts/lint-omp-imports.mjs); the stock helper, stats host and boot model use omp-package.ts in their own
+		// Bun processes.
 		const required = new Set([
 			...Object.values(REQUIREMENTS).flatMap(requirement => Object.keys(requirement.modules ?? {})),
 			// thinking-default.ts feature-detects the natives addon (a package root omp bundles) instead of requiring it.
 			"@oh-my-pi/pi-natives",
 		]);
-		const unlisted: string[] = [];
-		for (const entry of fs.readdirSync(BRIDGE_DIR, { recursive: true, encoding: "utf8" })) {
-			if (!entry.endsWith(".ts") || entry.endsWith(".test.ts") || outside.has(entry.split(path.sep)[0] ?? ""))
-				continue;
-			const source = fs.readFileSync(path.join(BRIDGE_DIR, entry), "utf8");
-			const specifiers = [
-				...source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(@oh-my-pi\/[^"]+)"/gms),
-				...source.matchAll(/import\(\s*"(@oh-my-pi\/[^"]+)"\s*\)/g),
-			].map(match => match[1] ?? "");
-			for (const specifier of specifiers) if (!required.has(specifier)) unlisted.push(`${entry}: ${specifier}`);
-		}
-		expect(unlisted).toEqual([]);
+		const adapters = adapterSpecifiers();
+		expect(adapters.length).toBeGreaterThan(0);
+		expect(adapters.filter(specifier => !required.has(specifier))).toEqual([]);
 	});
 
 	it("keeps the stock source copies that pull a large module graph off the startup path", () => {
 		// Measured on Windows (omp 18.12.3, bun 1.4.3, warm): the first static import of any of these makes bun
 		// transpile omp's source tree inside the omp process, ~540 ms of its only thread before `ready`; with a cold
 		// transpiler cache the same load takes seconds. Every area module loads at startup, so these load on use.
-		const heavy = [
-			"@oh-my-pi/pi-coding-agent/config",
-			"@oh-my-pi/pi-coding-agent/tts/models",
-			"@oh-my-pi/pi-coding-agent/tts/tts-client",
-			"@oh-my-pi/pi-coding-agent/tts/wav",
-		];
-		const outside = new Set(["stock-helper", "stats-host.ts", "boot-model.ts", "health.ts"]);
+		const heavy = new Set(
+			[
+				"@oh-my-pi/pi-coding-agent/config",
+				"@oh-my-pi/pi-coding-agent/tts/models",
+				"@oh-my-pi/pi-coding-agent/tts/tts-client",
+				"@oh-my-pi/pi-coding-agent/tts/wav",
+			].map(specifier => `omp/${specifier.slice("@oh-my-pi/".length)}`),
+		);
+		const outside = new Set(["stock-helper", "stats-host.ts", "boot-model.ts", "health.ts", "omp"]);
 		const eager: string[] = [];
 		for (const entry of fs.readdirSync(BRIDGE_DIR, { recursive: true, encoding: "utf8" })) {
-			if (!entry.endsWith(".ts") || outside.has(entry.split(path.sep)[0] ?? "")) continue;
+			const file = entry.split(path.sep).join("/");
+			if (!file.endsWith(".ts") || outside.has(file.split("/")[0] ?? "")) continue;
 			const source = fs.readFileSync(path.join(BRIDGE_DIR, entry), "utf8");
-			for (const match of source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(@oh-my-pi\/[^"]+)"/gms)) {
-				if (heavy.includes(match[1] ?? "")) eager.push(`${entry}: ${match[1]}`);
+			for (const match of source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(\.[^"]+)"/gms)) {
+				const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1] ?? ""));
+				if (heavy.has(target)) eager.push(`${file}: ${target}`);
 			}
 		}
 		expect(eager).toEqual([]);
 	});
 
-	it("evaluates a presence-only copy in no omp: no bridge module imports one, and each is a heavy copy", () => {
+	it("evaluates a presence-only copy in no omp: no bridge adapter re-exports one, and each is a heavy copy", () => {
 		// guard never evaluates these (health.ts probe): `sdk` on `providers`' first call held omp's thread ~1.1 s
-		// right after a tab's ready. Only the stock helper, in its own process, may load them.
-		const presenceOnly = Object.keys(PRESENCE_ONLY);
-		for (const specifier of presenceOnly) expect(HEAVY_COPIES, specifier).toHaveProperty([specifier]);
-		const outside = new Set(["stock-helper", "health.ts", "capabilities.ts"]);
-		const imported: string[] = [];
-		for (const entry of fs.readdirSync(BRIDGE_DIR, { recursive: true, encoding: "utf8" })) {
-			if (!entry.endsWith(".ts") || entry.endsWith(".test.ts") || outside.has(entry.split(path.sep)[0] ?? ""))
-				continue;
-			const source = fs.readFileSync(path.join(BRIDGE_DIR, entry), "utf8");
-			for (const specifier of presenceOnly)
-				if (source.includes(`"${specifier}"`)) imported.push(`${entry}: ${specifier}`);
+		// right after a tab's ready. Only the stock helper, in its own process, may load them (omp-package.ts).
+		const adapters = new Set(adapterSpecifiers());
+		for (const specifier of Object.keys(PRESENCE_ONLY)) {
+			expect(HEAVY_COPIES, specifier).toHaveProperty([specifier]);
+			expect(adapters.has(specifier), specifier).toBe(false);
 		}
-		expect(imported).toEqual([]);
 	});
 });
 

@@ -63,7 +63,7 @@ async function setForcedTool(session: Session, tool: string): Promise<{ tool: st
 	requireFn(session, "toolChoiceQueue.pushSequence", "composer");
 	const queue = session.toolChoiceQueue;
 	if (!session.getActiveToolNames().includes(tool)) throw new Error(`Tool "${tool}" is not currently active.`);
-	const toolChoice = await import("@oh-my-pi/pi-coding-agent/utils/tool-choice");
+	const toolChoice = await import("./omp/pi-coding-agent/utils/tool-choice");
 	requireFn(toolChoice, "buildNamedToolChoice", "composer", "utils/tool-choice");
 	const forced = toolChoice.buildNamedToolChoice(tool, session.model);
 	if (!forced || typeof forced === "string")
@@ -100,9 +100,9 @@ function clearForcedTool(session: Session): { tool: null } {
 
 // ── Share ────────────────────────────────────────────────────────────────────
 async function shareContext(session: Session) {
-	const share = await import("@oh-my-pi/pi-coding-agent/export/share");
+	const share = await import("./omp/pi-coding-agent/export/share");
 	const { cfgShareServerUrl, cfgShareStore, cfgShareRedactSecrets } = await import(
-		"@oh-my-pi/pi-coding-agent/commands/settings"
+		"./omp/pi-coding-agent/commands/settings"
 	);
 	const redactionEnabled = cfgShareRedactSecrets.get(session.settings) === true;
 	const options = {
@@ -158,7 +158,7 @@ async function closeSubagent(
 	onFailure: (id: string, error: unknown) => void,
 ): Promise<void> {
 	try {
-		const { SessionManager } = await import("@oh-my-pi/pi-coding-agent/session/session-manager");
+		const { SessionManager } = await import("./omp/pi-coding-agent/session/session-manager");
 		requireFn(SessionManager, "open", "composer", "session/session-manager");
 		const writer = await SessionManager.open(file, undefined, undefined, { throwIfMissing: true });
 		try {
@@ -203,9 +203,9 @@ async function closeShutdownSubagents(
 	const doing = new Map<string, string>();
 	if (!sessionFile?.endsWith(".jsonl") || !session.asyncJobManager) return { appended: [], doing };
 	// Late imports isolate a moved stock internal from the other composer adapters.
-	const { collectSubSessions } = await import("@oh-my-pi/pi-coding-agent/session/sub-sessions");
-	const diagnostics = await import("@oh-my-pi/pi-coding-agent/session/exit-diagnostics");
-	const { SessionManager, extractSessionInit } = await import("@oh-my-pi/pi-coding-agent/session/session-manager");
+	const { collectSubSessions } = await import("./omp/pi-coding-agent/session/sub-sessions");
+	const diagnostics = await import("./omp/pi-coding-agent/session/exit-diagnostics");
+	const { SessionManager, extractSessionInit } = await import("./omp/pi-coding-agent/session/session-manager");
 	requireFn(diagnostics, "hasRestorableTurn", "composer", "session/exit-diagnostics");
 	requireFn(diagnostics, "createInterruptedToolResults", "composer", "session/exit-diagnostics");
 	requireFn(SessionManager, "open", "composer", "session/session-manager");
@@ -269,8 +269,8 @@ export const methods: BridgeMethods = {
 		"composer.state": async (_params, env) => {
 			const session = env.session() as Session;
 			const [{ agentPauseGate }, { serviceTierFamily, shouldSendServiceTier }] = await Promise.all([
-				import("@oh-my-pi/pi-agent-core"),
-				import("@oh-my-pi/pi-ai"),
+				import("./omp/pi-agent-core"),
+				import("./omp/pi-ai"),
 			]);
 			const model = session.model;
 			return {
@@ -421,7 +421,7 @@ export const methods: BridgeMethods = {
 			requireFn(session, "getAsyncJobTree", "composer");
 			requireFn(session, "inspectAsyncJob", "composer");
 			// A late import isolates a moved stock internal from the other composer adapters.
-			const { buildJobTree } = await import("@oh-my-pi/pi-tui/overlays/job-tree");
+			const { buildJobTree } = await import("./omp/pi-tui/overlays/job-tree");
 			const tree = session.getAsyncJobTree();
 			return tree ? jobRows(tree, buildJobTree, id => session.inspectAsyncJob(id)) : [];
 		},
@@ -475,9 +475,9 @@ export const methods: BridgeMethods = {
 			requireFn(session, "agent.setSystemPrompt", "composer");
 			requireFn(session, "extensionRunner.createContext", "composer");
 			requireFn(session, "subscribe", "composer");
-			const restore = await import("@oh-my-pi/pi-coding-agent/task/restore");
+			const restore = await import("./omp/pi-coding-agent/task/restore");
 			requireFn(restore, "restoreSession", "composer", "task/restore");
-			const diagnostics = await import("@oh-my-pi/pi-coding-agent/session/exit-diagnostics");
+			const diagnostics = await import("./omp/pi-coding-agent/session/exit-diagnostics");
 			requireFn(diagnostics, "createInterruptedTurnAbortMessage", "composer", "session/exit-diagnostics");
 			const entries = session.sessionManager.getBranch();
 			const branch = entries as readonly JournalEntry[];
@@ -606,7 +606,7 @@ export const methods: BridgeMethods = {
 	...guard(["composer", "sessionTree"], {
 		"composer.copy_targets": async (_params, env) => {
 			// Late imports isolate moved stock internals from the other composer adapters.
-			const stock = await import("@oh-my-pi/pi-tui/overlays/copy-targets");
+			const stock = await import("./omp/pi-tui/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
 			const messages = buildTranscript(env.session().sessionManager).messages as unknown as AgentMessage[];
 			return {
@@ -620,7 +620,7 @@ export const methods: BridgeMethods = {
 		/** `/open`: stock's TUI command opens the newest http(s) link of an assistant message.
 		 * Late imports for the same reason as `composer.copy_targets`. */
 		"composer.last_link": async (_params, env) => {
-			const stock = await import("@oh-my-pi/pi-tui/overlays/copy-targets");
+			const stock = await import("./omp/pi-tui/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
 			const messages = buildTranscript(env.session().sessionManager).messages as unknown as Parameters<
 				typeof stock.extractLastLink

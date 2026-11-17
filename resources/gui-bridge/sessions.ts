@@ -5,11 +5,11 @@
  */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { BlobStore } from "@oh-my-pi/pi-coding-agent/session/blob-store";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getBlobsDir } from "@oh-my-pi/pi-utils";
 import { guard } from "./health";
 import { withImageRefs } from "./image-refs";
+import { BlobStore } from "./omp/pi-coding-agent/session/blob-store";
+import { SessionManager } from "./omp/pi-coding-agent/session/session-manager";
+import { getBlobsDir } from "./omp/pi-utils";
 import { promptOrigin } from "./prompt-origin";
 import { labelPromptOrigins } from "./prompt-origin-contracts";
 import { attachEntryIds, buildTranscript, flattenSessionTree } from "./session-display";

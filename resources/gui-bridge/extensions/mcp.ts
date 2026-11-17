@@ -10,40 +10,40 @@
  * `mcp/oauth-reauth`.
  */
 import * as path from "node:path";
+import type { MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
+import type { MCPServerConfig, MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { guard } from "../health";
 import {
 	isForeignUserProvider,
 	isProviderEnabled,
 	isUserSourceEnabled,
 	loadCapability,
-} from "@oh-my-pi/pi-coding-agent/capability";
-import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import type { MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
-import { connectToServer, disconnectServer, listTools } from "@oh-my-pi/pi-coding-agent/mcp/client";
-import { loadAllMCPConfigs, validateServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/config";
+} from "../omp/pi-coding-agent/capability";
+import { clearCache as clearFsCache } from "../omp/pi-coding-agent/capability/fs";
+import { connectToServer, disconnectServer, listTools } from "../omp/pi-coding-agent/mcp/client";
+import { loadAllMCPConfigs, validateServerConfig } from "../omp/pi-coding-agent/mcp/config";
 import {
 	addMCPServer,
 	readMCPConfigFile,
 	removeMCPServer,
 	setMcpServerEnabled,
-} from "@oh-my-pi/pi-coding-agent/mcp/config-writer";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import { hasMcpAuthorizationHeader, lookupMcpOAuthCredential } from "@oh-my-pi/pi-coding-agent/mcp/oauth-credentials";
-import { analyzeAuthError } from "@oh-my-pi/pi-coding-agent/mcp/oauth-discovery";
+} from "../omp/pi-coding-agent/mcp/config-writer";
+import { MCPManager } from "../omp/pi-coding-agent/mcp/manager";
+import { hasMcpAuthorizationHeader, lookupMcpOAuthCredential } from "../omp/pi-coding-agent/mcp/oauth-credentials";
+import { analyzeAuthError } from "../omp/pi-coding-agent/mcp/oauth-discovery";
 import {
 	findMcpServerForAuth,
 	MCPOAuthCancelledError,
 	reauthorizeMcpServer,
-} from "@oh-my-pi/pi-coding-agent/mcp/oauth-reauth";
-import { cfgMcpEnableProjectConfig } from "@oh-my-pi/pi-coding-agent/mcp/settings";
-import type { MCPServerConfig, MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
-import { applyMcpToggleRuntime } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/mcp-runtime";
-import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { inferMcpTransport } from "@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime";
-import { getMCPConfigPath, Snowflake } from "@oh-my-pi/pi-utils";
-import { guard } from "../health";
+} from "../omp/pi-coding-agent/mcp/oauth-reauth";
+import { cfgMcpEnableProjectConfig } from "../omp/pi-coding-agent/mcp/settings";
+import { applyMcpToggleRuntime } from "../omp/pi-coding-agent/modes/components/extensions/mcp-runtime";
+import { MCPCommandController } from "../omp/pi-coding-agent/modes/controllers/mcp-command-controller";
+import { inferMcpTransport } from "../omp/pi-tui/overlays/extensions/mcp-runtime";
+import { getMCPConfigPath, Snowflake } from "../omp/pi-utils";
 import type { BridgeEnv, BridgeMethods } from "../types";
 import type { McpSyncResult } from "./mcp-contracts";
 import { adoptedEntry, authStateOf, offReasonOf } from "./mcp-core";

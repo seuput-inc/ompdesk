@@ -1,8 +1,8 @@
 /** Stock owns transcript replay; this module only associates GUI entry ids and flattens its indexed tree. */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { SessionEntry, SessionManager, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { sameMessageContent, sessionMessagePersistenceKey } from "@oh-my-pi/pi-coding-agent/session/turn-persistence";
+import { buildSessionContext } from "./omp/pi-coding-agent/session/session-context";
+import { sameMessageContent, sessionMessagePersistenceKey } from "./omp/pi-coding-agent/session/turn-persistence";
 
 type DisplayMessage = AgentMessage & { entryId?: string };
 

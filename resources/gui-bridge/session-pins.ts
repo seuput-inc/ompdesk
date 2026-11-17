@@ -9,9 +9,9 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { loadPinnedSessionIds } from "@oh-my-pi/pi-coding-agent/session/session-pins";
-import { replaceFileAtomically } from "@oh-my-pi/pi-coding-agent/utils/atomic-file";
-import { getAgentDir, withFileLock } from "@oh-my-pi/pi-utils";
+import { loadPinnedSessionIds } from "./omp/pi-coding-agent/session/session-pins";
+import { replaceFileAtomically } from "./omp/pi-coding-agent/utils/atomic-file";
+import { getAgentDir, withFileLock } from "./omp/pi-utils";
 
 /** omp's pins file: a JSON array of session ids. */
 const PINS_FILENAME = "session-pins.json";

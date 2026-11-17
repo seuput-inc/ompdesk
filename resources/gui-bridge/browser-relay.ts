@@ -12,11 +12,11 @@
  * binds 127.0.0.1 only and refuses browser Origins on its CDP socket.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { findFreeCdpPort } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
-import { type RelayServer, startRelayServer } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/server";
 import { guard } from "./health";
 import { previewRelayStarted, previewRelayStopped } from "./modes/default-browser";
 import { attach } from "./modes/shared";
+import { findFreeCdpPort } from "./omp/pi-coding-agent/tools/browser/attach";
+import { type RelayServer, startRelayServer } from "./omp/pi-coding-agent/tools/browser/relay/server";
 import { overridable } from "./settings-override";
 import type { BridgeMethods } from "./types";
 

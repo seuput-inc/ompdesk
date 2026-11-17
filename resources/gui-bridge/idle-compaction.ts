@@ -19,9 +19,9 @@ import type { BridgeMethods } from "./types";
 const timer = new IdleCompactionTimer<AgentSession>(async session => {
 	// Deferred like compaction-limits.ts: stock internals load only after `guard` checked the feature.
 	const [{ cfgCompaction }, { getCacheWarmingDelayMs }, { isPromptCachePersistent }] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent/session/context-settings"),
-		import("@oh-my-pi/pi-coding-agent/session/cache-warmer"),
-		import("@oh-my-pi/pi-catalog/compat/prompt-cache-persistent"),
+		import("./omp/pi-coding-agent/session/context-settings"),
+		import("./omp/pi-coding-agent/session/cache-warmer"),
+		import("./omp/pi-catalog/compat/prompt-cache-persistent"),
 	]);
 	return {
 		...cfgCompaction.get(session.settings),

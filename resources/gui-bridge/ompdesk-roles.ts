@@ -28,9 +28,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
-import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { lookup } from "./omp/pi-coding-agent/config/registry";
+import { getBundledAgent } from "./omp/pi-coding-agent/task/agents";
+import { discoverAgents, getAgent } from "./omp/pi-coding-agent/task/discovery";
 import { AGENT_TIERS, heldRoleValue, OMPDESK_ROLES, OMPDESK_ROLES_ENV, parseRolePicks } from "./ompdesk-role-contracts";
 
 export const methods = {};

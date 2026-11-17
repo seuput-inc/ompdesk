@@ -16,9 +16,9 @@
  * Beside it, `reply-presentation` (visuals-core.ts): how a reply shows a visual result, for the main agent only.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { cfgTuiRenderMermaid, cfgTuiRenderSvg } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { prompt } from "@oh-my-pi/pi-utils";
 import { guard } from "../health";
+import { cfgTuiRenderMermaid, cfgTuiRenderSvg } from "../omp/pi-coding-agent/modes/settings";
+import { prompt } from "../omp/pi-utils";
 import { registerPromptSection } from "../prompt-sections";
 import { errorMessage, ompPrompt } from "./shared";
 import {

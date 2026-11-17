@@ -28,6 +28,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("sessions.attach_entry_ids on a recor
 		try {
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			fs.copyFileSync("resources/gui-bridge/session-display.ts", path.join(dir, "session-display.ts"));
+			fs.cpSync("resources/gui-bridge/omp", path.join(dir, "omp"), { recursive: true });
 			fs.copyFileSync("e2e/fixtures/real-advisor-frames.json", path.join(dir, "recording.json"));
 			fs.writeFileSync(
 				path.join(dir, "check.ts"),

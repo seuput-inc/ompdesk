@@ -5,10 +5,11 @@
  * (`extension_update.reconnect`, `/mcp reconnect` for several names). Main sends them only to an idle, ready
  * tab; commands and skills reach a running session this way, extensions/tools/hooks need a restart instead.
  */
-import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import { cfgMcpEnableProjectConfig } from "@oh-my-pi/pi-coding-agent/mcp/settings";
+
 import { guard } from "../health";
+import { loadAllMCPConfigs } from "../omp/pi-coding-agent/mcp/config";
+import { MCPManager } from "../omp/pi-coding-agent/mcp/manager";
+import { cfgMcpEnableProjectConfig } from "../omp/pi-coding-agent/mcp/settings";
 import type { BridgeMethods } from "../types";
 import { serializeMcpReload } from "./mcp";
 import { paramsOf, reloadPluginState } from "./shared";

@@ -14,9 +14,9 @@
  *   `set_goal pause`, journals the state through `set_state`, and settles/audits/ships.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "../health";
+import { lookup } from "../omp/pi-coding-agent/config/registry";
 import { registerPromptSection } from "../prompt-sections";
 import type { BridgeMethods } from "../types";
 import {

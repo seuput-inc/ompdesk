@@ -12,10 +12,10 @@
  * Feature-detected: an omp without either method keeps stock's reminder (`todoWait` in capabilities.ts).
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import * as trackerModule from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { MAIL_CUSTOM_TYPE } from "./agent-control-contracts";
 import { hasPath } from "./capabilities";
 import { guard } from "./health";
+import * as trackerModule from "./omp/pi-coding-agent/session/todo-tracker";
 import { type Arrival, controlCall, type PhaseLike, WaitBook, waitReason } from "./todo-wait-core";
 
 const ORIGINAL = Symbol.for("ompdesk.todo-wait.original");

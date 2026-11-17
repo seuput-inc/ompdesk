@@ -15,6 +15,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("stock session display adapter", () =
 		try {
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			fs.copyFileSync("resources/gui-bridge/session-display.ts", path.join(dir, "session-display.ts"));
+			fs.cpSync("resources/gui-bridge/omp", path.join(dir, "omp"), { recursive: true });
 			const script = `
 import assert from "node:assert/strict";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";

@@ -2,16 +2,17 @@
  * Voice over the live session: dictation (stock STT) and read-aloud (stock TTS).
  * Wire shapes match `src/shared/rpc-types.ts`.
  */
-import { resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { sttClient } from "@oh-my-pi/pi-coding-agent/stt/asr-client";
-import { downloadSttModel, isSttModelCached } from "@oh-my-pi/pi-coding-agent/stt/downloader";
-import { resolveSttModelSpec } from "@oh-my-pi/pi-coding-agent/stt/models";
-import { resolveSpeechCandidates } from "@oh-my-pi/pi-coding-agent/tools/tts";
 import { guard } from "./health";
 import { currentReplyLanguage } from "./modes/reply-language";
+import { resolveRoleChain } from "./omp/pi-coding-agent/config/model-resolver";
+import { roleCandidatePool } from "./omp/pi-coding-agent/config/model-roles";
+import { lookup } from "./omp/pi-coding-agent/config/registry";
+import { sttClient } from "./omp/pi-coding-agent/stt/asr-client";
+import { downloadSttModel, isSttModelCached } from "./omp/pi-coding-agent/stt/downloader";
+import { resolveSttModelSpec } from "./omp/pi-coding-agent/stt/models";
+import { resolveSpeechCandidates } from "./omp/pi-coding-agent/tools/tts";
 import { asRecord, requiredString } from "./params";
 import { SttDictation, type SttSetup, speechLanguageOfName } from "./stt-language-core";
 import type { BridgeMethods } from "./types";
@@ -88,9 +89,9 @@ async function synthesize(session: AgentSession, rawText: string) {
 	if (!text) return { audioBase64: "", mimeType: "audio/wav" };
 	// Dynamic: `tts/*` is a source copy whose first import transpiles omp's source tree (~540 ms of omp's only thread), so it loads on use, not at startup.
 	const [{ DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS }, { ttsClient }, { encodeWav }] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent/tts/models"),
-		import("@oh-my-pi/pi-coding-agent/tts/tts-client"),
-		import("@oh-my-pi/pi-coding-agent/tts/wav"),
+		import("./omp/pi-coding-agent/tts/models"),
+		import("./omp/pi-coding-agent/tts/tts-client"),
+		import("./omp/pi-coding-agent/tts/wav"),
 	]);
 	const voice = (lookup("speech.voice")?.get(session.settings) as string | undefined) || DEFAULT_TTS_VOICE;
 	const modelKey = localSpeechModelId(session, TTS_LOCAL_MODELS[0]);

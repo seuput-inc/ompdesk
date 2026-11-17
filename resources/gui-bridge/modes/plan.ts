@@ -84,7 +84,7 @@ function localOptions(session: AgentSession) {
 }
 
 async function readPlan(session: AgentSession, planFilePath: string): Promise<string | null> {
-	const { readPlanFile } = await import("@oh-my-pi/pi-coding-agent/plan-mode/plan-files");
+	const { readPlanFile } = await import("../omp/pi-coding-agent/plan-mode/plan-files");
 	return readPlanFile(planFilePath, {
 		localProtocolOptions: localOptions(session),
 		cwd: session.sessionManager.getCwd(),
@@ -155,8 +155,8 @@ async function onProposalWritten(event: AgentSessionEvent, session: AgentSession
 	if (event.type !== "tool_execution_end" || event.isError) return;
 	const proposal = pending;
 	if (!proposal) return;
-	const { writeDeviceDispatch } = await import("@oh-my-pi/pi-coding-agent/tools/resolve");
-	const { PROPOSE_DEVICE_NAME } = await import("@oh-my-pi/pi-tui/tools/resolve");
+	const { writeDeviceDispatch } = await import("../omp/pi-coding-agent/tools/resolve");
+	const { PROPOSE_DEVICE_NAME } = await import("../omp/pi-tui/tools/resolve");
 	const dispatch = writeDeviceDispatch(event.toolName, event.result);
 	if (dispatch?.tool !== PROPOSE_DEVICE_NAME || dispatch.mode !== "execute") return;
 	// A plan the automatic mode choice entered for one request is approved here, as the card's Approve would with
@@ -252,12 +252,12 @@ async function approve(session: AgentSession, params: Record<string, unknown>): 
 	}
 
 	await exitPlanMode(session);
-	const { prompt } = await import("@oh-my-pi/pi-utils");
+	const { prompt } = await import("../omp/pi-utils");
 
 	if (option === "execute") {
 		// Fresh session carrying the session-local artifacts forward (TUI #approvePlan);
 		// local:// is session-scoped, so the plan is rewritten into the new local root.
-		const { copyLocalArtifacts, resolveLocalUrlToPath } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+		const { copyLocalArtifacts, resolveLocalUrlToPath } = await import("../omp/pi-coding-agent/internal-urls");
 		const oldLocalRoot = resolveLocalUrlToPath("local://", localOptions(session));
 		await session.newSession();
 		const newLocalRoot = resolveLocalUrlToPath("local://", localOptions(session));
@@ -278,7 +278,7 @@ async function approve(session: AgentSession, params: Record<string, unknown>): 
 
 	session.setPlanReferencePath(planFilePath);
 	session.markPlanReferenceSent();
-	const { humanizePlanTitle } = await import("@oh-my-pi/pi-coding-agent/plan-mode/approved-plan");
+	const { humanizePlanTitle } = await import("../omp/pi-coding-agent/plan-mode/approved-plan");
 	const seededName = humanizePlanTitle(proposal.title);
 	if (seededName && !session.sessionManager.getSessionName()) await session.setSessionName(seededName, "auto");
 	// Stock's own render (interactive-mode #approvePlan) inlines the plan: the prompt says never to re-read the file.

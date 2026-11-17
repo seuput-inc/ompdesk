@@ -29,7 +29,7 @@ import {
 	fieldQuestions,
 	type HtmlFormData,
 	textValue,
-} from "@oh-my-pi/pi-tui/html-form/data";
+} from "./omp/pi-tui/html-form/data";
 import {
 	type FormBlock,
 	type FormField,
@@ -37,8 +37,8 @@ import {
 	type HtmlForm,
 	parseHtmlForm,
 	spansText,
-} from "@oh-my-pi/pi-tui/html-form/parse";
-import { disambiguateDisplayLabels } from "@oh-my-pi/pi-tui/render/render-utils";
+} from "./omp/pi-tui/html-form/parse";
+import { disambiguateDisplayLabels } from "./omp/pi-tui/render/render-utils";
 import type { BridgeMethods } from "./types";
 
 export const methods: BridgeMethods = {};

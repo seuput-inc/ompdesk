@@ -93,10 +93,10 @@ interface Answer {
  */
 export function install(pi: BridgeEnv["pi"]): void {
 	void Promise.allSettled([
-		import("@oh-my-pi/pi-coding-agent/judgment"),
-		import("@oh-my-pi/pi-coding-agent/tiny/message-preproc"),
-		import("@oh-my-pi/pi-coding-agent/plan-mode/settings"),
-		import("@oh-my-pi/pi-coding-agent/config/registry"),
+		import("../omp/pi-coding-agent/judgment"),
+		import("../omp/pi-coding-agent/tiny/message-preproc"),
+		import("../omp/pi-coding-agent/plan-mode/settings"),
+		import("../omp/pi-coding-agent/config/registry"),
 	]);
 	pi.on("session_start", (_event, ctx) => {
 		const env = boundEnv();
@@ -107,17 +107,15 @@ export function install(pi: BridgeEnv["pi"]): void {
 /** `goal.enabled` comes through stock's registry: omp's bundle has no `goals/settings` (an import is a copy). */
 async function enabledByStock(session: AgentSession): Promise<{ plan: boolean; goal: boolean }> {
 	const [{ cfgPlanEnabled }, { lookup }] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent/plan-mode/settings"),
-		import("@oh-my-pi/pi-coding-agent/config/registry"),
+		import("../omp/pi-coding-agent/plan-mode/settings"),
+		import("../omp/pi-coding-agent/config/registry"),
 	]);
 	return { plan: cfgPlanEnabled.get(session.settings), goal: lookup("goal.enabled")?.get(session.settings) === true };
 }
 
 /** Stock's judge for this session, on the `judge` role chain. `billed` journals usage and uses the answer cache. */
 async function judgeFor(session: AgentSession, billed: boolean) {
-	const { resolveJudge, sharedJudgmentCache, journalJudgmentUsage } = await import(
-		"@oh-my-pi/pi-coding-agent/judgment"
-	);
+	const { resolveJudge, sharedJudgmentCache, journalJudgmentUsage } = await import("../omp/pi-coding-agent/judgment");
 	return resolveJudge({
 		settings: session.settings,
 		registry: session.modelRegistry,
@@ -140,7 +138,7 @@ async function ask(
 ): Promise<Asked> {
 	const [judge, { preprocessTinyMessage }] = await Promise.all([
 		judgeFor(session, true),
-		import("@oh-my-pi/pi-coding-agent/tiny/message-preproc"),
+		import("../omp/pi-coding-agent/tiny/message-preproc"),
 	]);
 	const mode = {
 		type: "choice" as const,
@@ -217,7 +215,7 @@ export function warmJudge(env: BridgeEnv): Promise<boolean> {
 	warming ??= (async () => {
 		try {
 			const session = attach(env);
-			const { hasNativeJudge } = await import("@oh-my-pi/pi-coding-agent/judgment");
+			const { hasNativeJudge } = await import("../omp/pi-coding-agent/judgment");
 			if (!hasNativeJudge(session.settings, session.modelRegistry)) return false;
 			const judge = await judgeFor(session, false);
 			await judge.judge(

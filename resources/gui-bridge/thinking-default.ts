@@ -27,7 +27,7 @@
  * initTelemetryExport), `display.showTurnTime` and `read.toolResultPreview` (TUI renderers).
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import { lookup } from "./omp/pi-coding-agent/config/registry";
 import {
 	applyThinkingDefault,
 	asThinkingDefaultSetting,
@@ -79,7 +79,7 @@ function persistedIn(layers: PersistedLayers, setting: ThinkingDefaultSetting): 
 /** Feature-detect the native addon behind a held default: a vanished export keeps stock's value. */
 async function detectNatives(pi: ExtensionAPI): Promise<void> {
 	// Dynamic on purpose: the addon is a per-platform package, and a failed load must degrade to stock's value.
-	const natives: Record<string, unknown> | undefined = await import("@oh-my-pi/pi-natives").catch(() => undefined);
+	const natives: Record<string, unknown> | undefined = await import("./omp/pi-natives").catch(() => undefined);
 	for (const [id, member] of Object.entries(NATIVE_DEFAULTS)) {
 		if (typeof natives?.[member] === "function") continue;
 		unavailable[id] = "native";

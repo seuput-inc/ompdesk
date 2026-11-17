@@ -6,36 +6,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveUsedFraction, type UsageLimit, type UsageReport } from "@oh-my-pi/pi-ai";
-import { usageResetAtMs } from "@oh-my-pi/pi-ai/auth/usage-report";
-import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { modelKind } from "@oh-my-pi/pi-catalog/types";
-import { orderedSettings } from "@oh-my-pi/pi-coding-agent/config/all-settings";
-import {
-	disabledProviderIds,
-	extractExplicitThinkingSelector,
-	resolveModelOverride,
-	resolveRoleChain,
-	resolveRoleSelection,
-	rolePriorityDefaults,
-} from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import {
-	CHAT_MODEL_ROLE_IDS,
-	getKnownRoleIds,
-	getRoleInfo,
-	MODEL_ROLE_IDS,
-	roleCandidatePool,
-} from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { isManagedMCPOAuthCredentialId } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import {
-	formatActiveAccountLabel,
-	reportMatchesActiveAccount,
-} from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/active-oauth-account";
-import { listLogoutAccounts, logoutCredential } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/logout";
-import { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "@oh-my-pi/pi-tui/overlays/settings-defs";
-import { getAgentDir, MAIN_CONFIG_FILENAMES } from "@oh-my-pi/pi-utils";
 import { accountCredits, creditKind, creditsInRaw } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
 import { guard, probe } from "./health";
@@ -43,6 +14,35 @@ import { idleSettingChanged } from "./idle-compaction";
 import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
 import { releaseDelegationForWrite } from "./modes/delegation";
+import { resolveUsedFraction, type UsageLimit, type UsageReport } from "./omp/pi-ai";
+import { usageResetAtMs } from "./omp/pi-ai/auth/usage-report";
+import { getOAuthCredentialProvider, getOAuthProviders } from "./omp/pi-ai/oauth";
+import { modelKind } from "./omp/pi-catalog/types";
+import { orderedSettings } from "./omp/pi-coding-agent/config/all-settings";
+import {
+	disabledProviderIds,
+	extractExplicitThinkingSelector,
+	resolveModelOverride,
+	resolveRoleChain,
+	resolveRoleSelection,
+	rolePriorityDefaults,
+} from "./omp/pi-coding-agent/config/model-resolver";
+import {
+	CHAT_MODEL_ROLE_IDS,
+	getKnownRoleIds,
+	getRoleInfo,
+	MODEL_ROLE_IDS,
+	roleCandidatePool,
+} from "./omp/pi-coding-agent/config/model-roles";
+import { lookup } from "./omp/pi-coding-agent/config/registry";
+import { isManagedMCPOAuthCredentialId } from "./omp/pi-coding-agent/mcp/oauth-flow";
+import {
+	formatActiveAccountLabel,
+	reportMatchesActiveAccount,
+} from "./omp/pi-coding-agent/slash-commands/helpers/active-oauth-account";
+import { listLogoutAccounts, logoutCredential } from "./omp/pi-coding-agent/slash-commands/helpers/logout";
+import { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "./omp/pi-tui/overlays/settings-defs";
+import { getAgentDir, MAIN_CONFIG_FILENAMES } from "./omp/pi-utils";
 import { OMPDESK_ROLES } from "./ompdesk-role-contracts";
 import { type RoleSettings, readRolePicks, roleConfigured, settleOmpdeskRoles, writeRolePick } from "./ompdesk-roles";
 import { asRecord, requiredString } from "./params";
@@ -486,7 +486,7 @@ async function resetProjector(
 	env: BridgeEnv,
 ): Promise<((report: UsageReport, account: StoredAccount | undefined) => ResetPasses | undefined) | undefined> {
 	if ((await probe(env, ["resetPasses"])).length > 0) return undefined;
-	const { toResetUsageAccounts } = await import("@oh-my-pi/pi-coding-agent/slash-commands/helpers/reset-usage");
+	const { toResetUsageAccounts } = await import("./omp/pi-coding-agent/slash-commands/helpers/reset-usage");
 	return (report, account) => {
 		if (!report.resetCredits) return undefined;
 		const [selected] = toResetUsageAccounts([
@@ -683,7 +683,7 @@ type IdentityKeyResolver = (provider: string, credential: { type: string }) => s
 async function identityKeyResolver(env: BridgeEnv): Promise<IdentityKeyResolver | undefined> {
 	if ((await probe(env, ["accountPools"])).length > 0) return undefined;
 	// The package root: omp's bundle does not export `pi-ai/auth-storage`, whose import would be a second copy.
-	const auth: Rec = await import("@oh-my-pi/pi-ai");
+	const auth: Rec = await import("./omp/pi-ai");
 	const resolve = auth.resolveCredentialIdentityKey;
 	return typeof resolve === "function"
 		? (provider, credential) => {

@@ -3,24 +3,25 @@
  * plugins, marketplaces, agents, themes). Ports of the omp-gui fork's
  * rpc-domains/rpc-actions plumbing onto stock omp internals.
  */
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { lookup } from "../omp/pi-coding-agent/config/registry";
 import {
 	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
-} from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+} from "../omp/pi-coding-agent/discovery/helpers";
 import {
 	resolvePluginManifestEntries,
 	type ScopedInstalledPlugin,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+} from "../omp/pi-coding-agent/extensibility/plugins/loader";
 import {
 	getInstalledPluginsRegistryPath,
 	getMarketplacesCacheDir,
 	getMarketplacesRegistryPath,
 	getPluginsCacheDir,
 	MarketplaceManager,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+} from "../omp/pi-coding-agent/extensibility/plugins/marketplace";
 import { classifyActivation, type PluginActivation, pluginRequiresRestart } from "./activation-core";
 
 /** The GUI's params object; anything else reads as empty. */

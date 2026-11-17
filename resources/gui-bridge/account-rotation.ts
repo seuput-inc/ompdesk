@@ -22,24 +22,7 @@
  * `credentialSourceSessionId`), so they already have an account and never re-rank.
  */
 import * as fs from "node:fs";
-import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai";
-import {
-	ACCOUNT_POLICY_BLOCK_SCOPE,
-	AUTH_BLOCK_SCOPE,
-	credentialBlockScopesForRequest,
-	providerTypeKey,
-} from "@oh-my-pi/pi-ai/auth/blocks";
-import { orderUsageRankedCandidates, planPriority, type RankedOAuthCandidate } from "@oh-my-pi/pi-ai/auth/rank";
-import {
-	isUsageLimitExhausted,
-	normalizeUsageFraction,
-	remainingUsageFraction,
-	scopedUsageLimits,
-	windowRequiredDrain,
-} from "@oh-my-pi/pi-ai/auth/usage-report";
-import { defaultRankingStrategy } from "@oh-my-pi/pi-ai/usage/registry";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { credentialPinHash } from "@oh-my-pi/pi-coding-agent/session/credential-pin";
 import {
 	type AccountFacts,
 	lastDecision,
@@ -63,6 +46,23 @@ import {
 	withDrainMargin,
 } from "./account-rotation-core";
 import { guard } from "./health";
+import { resolveUsedFraction, type UsageReport } from "./omp/pi-ai";
+import {
+	ACCOUNT_POLICY_BLOCK_SCOPE,
+	AUTH_BLOCK_SCOPE,
+	credentialBlockScopesForRequest,
+	providerTypeKey,
+} from "./omp/pi-ai/auth/blocks";
+import { orderUsageRankedCandidates, planPriority, type RankedOAuthCandidate } from "./omp/pi-ai/auth/rank";
+import {
+	isUsageLimitExhausted,
+	normalizeUsageFraction,
+	remainingUsageFraction,
+	scopedUsageLimits,
+	windowRequiredDrain,
+} from "./omp/pi-ai/auth/usage-report";
+import { defaultRankingStrategy } from "./omp/pi-ai/usage/registry";
+import { credentialPinHash } from "./omp/pi-coding-agent/session/credential-pin";
 
 const STOCK: RotationStock = {
 	providerKey: provider => providerTypeKey(provider, "oauth"),

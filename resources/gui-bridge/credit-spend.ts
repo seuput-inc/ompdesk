@@ -22,7 +22,6 @@
  * On: the override is removed (`usage.removeProvider`), the check passes every key, and nothing is remembered.
  */
 import type { AuthStorage, UsageFetchContext, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai";
-import { appendRetryAfterHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	type CreditProvider,
@@ -36,6 +35,7 @@ import {
 	withoutCredits,
 } from "./credit-spend-core";
 import { guard } from "./health";
+import { appendRetryAfterHint } from "./omp/pi-ai/utils/retry-after";
 
 /** Stock `UsageService.report` (one stored credential); not on the `UsageApi` interface (settings.ts reads it the same way). */
 interface CredentialUsageReporter {

@@ -15,8 +15,8 @@ const TAN_DISPATCHED = "Dispatched background tan ";
 
 /** Run stock's `/tan` engine with the slice of the TUI context it reads; its status line carries the job id. */
 async function startTan(session: AgentSession, work: string): Promise<{ jobId: string }> {
-	const { TanCommandController } = await import("@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller");
-	const { MCPManager } = await import("@oh-my-pi/pi-coding-agent/mcp/manager");
+	const { TanCommandController } = await import("../omp/pi-coding-agent/modes/controllers/tan-command-controller");
+	const { MCPManager } = await import("../omp/pi-coding-agent/mcp/manager");
 	let status = "Unable to dispatch background tan.";
 	const context = {
 		session,
@@ -62,10 +62,10 @@ async function runOmfg(
 	if (!trimmed) throw new Error("Usage: /omfg <complaint>");
 	if (!session.model) throw new Error("No active model available for /omfg.");
 	const ui = env.context().ui;
-	const { prompt, CONFIG_DIR_NAME } = await import("@oh-my-pi/pi-utils");
-	const rules = await import("@oh-my-pi/pi-coding-agent/modes/controllers/omfg-rule");
-	const { TtsrToolInspector } = await import("@oh-my-pi/pi-coding-agent/session/ttsr-outputs");
-	const { invalidate } = await import("@oh-my-pi/pi-coding-agent/capability");
+	const { prompt, CONFIG_DIR_NAME } = await import("../omp/pi-utils");
+	const rules = await import("../omp/pi-coding-agent/modes/controllers/omfg-rule");
+	const { TtsrToolInspector } = await import("../omp/pi-coding-agent/session/ttsr-outputs");
+	const { invalidate } = await import("../omp/pi-coding-agent/capability");
 	const template = ompPrompt("system/omfg-user.md");
 	const inspector = new TtsrToolInspector(
 		() => session.agent.state.tools,
@@ -170,7 +170,7 @@ export const methods: BridgeMethods = {
 	}),
 	...guard("agentPause", {
 		"modes.set_agents_paused": async (params, _env) => {
-			const { agentPauseGate } = await import("@oh-my-pi/pi-agent-core");
+			const { agentPauseGate } = await import("../omp/pi-agent-core");
 			if (record(params).enabled === true) {
 				agentPauseGate.pause();
 				return { paused: true, pausedAt: agentPauseGate.pausedAt };

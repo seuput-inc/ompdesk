@@ -20,9 +20,7 @@ import type { BridgeMethods } from "./types";
  * was 62 KB a read, sent to a paired device on each tab hydration.
  */
 async function compactionPoints(session: AgentSession, selector?: string) {
-	const { describeModelCompactionPoint } = await import(
-		"@oh-my-pi/pi-coding-agent/session/model-compaction-threshold"
-	);
+	const { describeModelCompactionPoint } = await import("./omp/pi-coding-agent/session/model-compaction-threshold");
 
 	/** Wire shape: `src/shared/rpc-types.ts` CompactionPoint. */
 	const point = (model: Model) => {
@@ -46,8 +44,8 @@ async function compactionPoints(session: AgentSession, selector?: string) {
 	}
 
 	const [{ createModelBrowserSource }, { resolveRoleAssignments }] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent/modes/model-browser-source"),
-		import("@oh-my-pi/pi-tui/overlays/model-browser"),
+		import("./omp/pi-coding-agent/modes/model-browser-source"),
+		import("./omp/pi-tui/overlays/model-browser"),
 	]);
 	// The models the hub's Roles view shows: configured values over the whole
 	// catalog, auto picks over the usable models.
@@ -97,7 +95,7 @@ export const methods: BridgeMethods = {
 		compaction_limits: async params => {
 			// Defer internals until guard succeeds so missing modules cannot break bridge startup.
 			const { parseCompactionPointInput, validateModelCompactionThresholds, formatCompactionPointInput } =
-				await import("@oh-my-pi/pi-coding-agent/config/compaction-threshold");
+				await import("./omp/pi-coding-agent/config/compaction-threshold");
 			const input = params as { values?: unknown; key?: string; input?: string };
 			if (input.input !== undefined) {
 				let value: number | string | null;

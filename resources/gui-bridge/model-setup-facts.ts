@@ -8,13 +8,7 @@
  * error reading stock's data leaves that provider `metered` with basis `unknown`.
  */
 import * as path from "node:path";
-import { getEnvApiKey, getProviderDefinition } from "@oh-my-pi/pi-ai";
-import { type Model, modelKind } from "@oh-my-pi/pi-catalog/types";
-import { resolveModelOverride, rolePriorityDefaults } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { ModelsConfigFile } from "@oh-my-pi/pi-coding-agent/config/models-config";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { guard } from "./health";
 import {
 	type AuthSourceKind,
@@ -26,6 +20,12 @@ import {
 	UNKNOWN_BILLING,
 } from "./model-setup-billing-core";
 import type { ModelSetupFacts, ProviderBilling, SessionSpend, SetupModelFacts } from "./model-setup-contracts";
+import { getEnvApiKey, getProviderDefinition } from "./omp/pi-ai";
+import { type Model, modelKind } from "./omp/pi-catalog/types";
+import { resolveModelOverride, rolePriorityDefaults } from "./omp/pi-coding-agent/config/model-resolver";
+import { roleCandidatePool } from "./omp/pi-coding-agent/config/model-roles";
+import { ModelsConfigFile } from "./omp/pi-coding-agent/config/models-config";
+import { getAgentDir } from "./omp/pi-utils";
 import { dayStart, spendByProvider } from "./session-spend-core";
 import { roleMetadata } from "./settings";
 import type { BridgeMethods } from "./types";

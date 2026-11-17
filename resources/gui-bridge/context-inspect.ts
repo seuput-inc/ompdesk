@@ -11,10 +11,7 @@
  * figures; per-entry counts are estimates. Rules in context-inspect-core.ts.
  */
 
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { claimPromptSources, estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import {
 	type ContextCategory,
 	capPreview,
@@ -27,6 +24,9 @@ import {
 	type ToolSource,
 } from "./context-inspect-core";
 import { guard } from "./health";
+import { toolWireSchema } from "./omp/pi-ai/utils/schema";
+import { convertToLlm } from "./omp/pi-coding-agent/session/messages";
+import { claimPromptSources, estimateToolSchemaTokens } from "./omp/pi-tui/status-line/context-usage";
 import { sectionContext, withTurnSections } from "./prompt-sections";
 import type { BridgeMethods } from "./types";
 

@@ -46,7 +46,7 @@ interface RecapAnchors {
 }
 
 async function readRecapSettings(session: AgentSession): Promise<RecapSettings> {
-	const { lookup } = await import("@oh-my-pi/pi-coding-agent/config/registry");
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
 	const enabled = lookup("recap.enabled") as SettingHandle | undefined;
 	const idleSeconds = lookup("recap.idleSeconds") as SettingHandle | undefined;
 	return {
@@ -59,9 +59,9 @@ async function readRecapSettings(session: AgentSession): Promise<RecapSettings> 
 export async function generateRecap(session: AgentSession, signal: AbortSignal): Promise<Recap | undefined> {
 	if (!session.model || session.messages.length === 0) return undefined;
 	// Deferred like idle-compaction.ts: stock internals load only after `guard` checked the feature.
-	const { prompt } = await import("@oh-my-pi/pi-utils");
-	const { nextActionableTask } = await import("@oh-my-pi/pi-coding-agent/tools/todo");
-	const { previewLine, TRUNCATE_LENGTHS } = await import("@oh-my-pi/pi-tui/render/render-utils");
+	const { prompt } = await import("./omp/pi-utils");
+	const { nextActionableTask } = await import("./omp/pi-coding-agent/tools/todo");
+	const { previewLine, TRUNCATE_LENGTHS } = await import("./omp/pi-tui/render/render-utils");
 	const anchors = session as unknown as RecapAnchors;
 	const goal =
 		anchors.getGoalModeState?.()?.goal?.objective?.trim() || anchors.sessionManager.getSessionName()?.trim();

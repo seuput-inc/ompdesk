@@ -13,8 +13,8 @@
  * the blob and writes nothing while it is there. Nothing is changed in place: the replay snapshot's objects are
  * shared with every other reader.
  */
-import { type BlobStore, externalizeImageDataSync, isBlobRef } from "@oh-my-pi/pi-coding-agent/session/blob-store";
-import { isExternalizableImagePosition } from "@oh-my-pi/pi-coding-agent/session/session-persistence";
+import { type BlobStore, externalizeImageDataSync, isBlobRef } from "./omp/pi-coding-agent/session/blob-store";
+import { isExternalizableImagePosition } from "./omp/pi-coding-agent/session/session-persistence";
 
 /** Stock's `BLOB_EXTERNALIZE_THRESHOLD` (session-persistence.ts): shorter base64 is never in the store. */
 const INLINE_BELOW = 1024;

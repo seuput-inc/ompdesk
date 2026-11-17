@@ -13,8 +13,8 @@
  *   `createSubagentSettings`.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { guard } from "../health";
+import { lookup } from "../omp/pi-coding-agent/config/registry";
 import type { BridgeMethods } from "../types";
 import { isDelegationMode } from "./delegation-contracts";
 import {

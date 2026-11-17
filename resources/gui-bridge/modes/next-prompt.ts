@@ -12,10 +12,10 @@ export { install };
 
 setNextPromptStockLoader(async () => {
 	const [ai, roles, resolver, input] = await Promise.all([
-		import("@oh-my-pi/pi-ai"),
-		import("@oh-my-pi/pi-coding-agent/config/model-roles"),
-		import("@oh-my-pi/pi-coding-agent/config/model-resolver"),
-		import("@oh-my-pi/pi-coding-agent/modes/controllers/input-controller"),
+		import("../omp/pi-ai"),
+		import("../omp/pi-coding-agent/config/model-roles"),
+		import("../omp/pi-coding-agent/config/model-resolver"),
+		import("../omp/pi-coding-agent/modes/controllers/input-controller"),
 	]);
 	return {
 		completeSimple: ai.completeSimple as unknown as NextPromptStock["completeSimple"],

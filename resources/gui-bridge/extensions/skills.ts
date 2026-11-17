@@ -3,16 +3,16 @@
  * pages. Ported from the omp-gui fork's rpc-domains / rpc-skills / rpc-actions.
  */
 
-import { MANAGED_SKILLS_PROVIDER_ID, sanitizeSkillName } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
-import { loadCapability, reset as resetCapabilities } from "@oh-my-pi/pi-coding-agent/capability";
-import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-agent/capability/context-file";
-import { type Hook, hookCapability } from "@oh-my-pi/pi-coding-agent/capability/hook";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
-import { templateUsesInlineArgPlaceholders } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { ManageSkillTool } from "@oh-my-pi/pi-coding-agent/tools/manage-skill";
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { guard } from "../health";
+import { MANAGED_SKILLS_PROVIDER_ID, sanitizeSkillName } from "../omp/pi-coding-agent/autolearn/managed-skills";
+import { loadCapability, reset as resetCapabilities } from "../omp/pi-coding-agent/capability";
+import { type ContextFile, contextFileCapability } from "../omp/pi-coding-agent/capability/context-file";
+import { type Hook, hookCapability } from "../omp/pi-coding-agent/capability/hook";
+import { templateUsesInlineArgPlaceholders } from "../omp/pi-coding-agent/config/prompt-templates";
+import { ManageSkillTool } from "../omp/pi-coding-agent/tools/manage-skill";
+import { parseFrontmatter } from "../omp/pi-utils";
 import type { BridgeMethods } from "../types";
 import { optString, paramsOf, readSetting, requireString, setExtensionDisabled } from "./shared";
 

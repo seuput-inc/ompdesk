@@ -201,7 +201,7 @@ export function install(pi: ExtensionAPI): void {
 async function readTask(session: { sessionManager: { getBranch(): unknown[] } }): Promise<string | undefined> {
 	try {
 		// Late and literal on purpose (health.ts LOADERS): an omp without this reader must not take the guard down at link time.
-		const { getLatestTodoPhasesFromEntries: read } = await import("@oh-my-pi/pi-coding-agent/tools/todo");
+		const { getLatestTodoPhasesFromEntries: read } = await import("../omp/pi-coding-agent/tools/todo");
 		if (typeof read !== "function") return undefined;
 		const phases = read(session.sessionManager.getBranch() as Parameters<typeof read>[0]);
 		return Array.isArray(phases) ? currentTask(phases) : undefined;

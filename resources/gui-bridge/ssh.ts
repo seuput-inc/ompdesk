@@ -3,26 +3,27 @@
  * writer and connection manager. Ported from the fork's rpc-operations.ts.
  * Wire shapes match `src/shared/rpc-types.ts`.
  */
-import { type SSHHost, sshCapability } from "@oh-my-pi/pi-coding-agent/capability/ssh";
-import { loadCapability, reset as resetCapabilities } from "@oh-my-pi/pi-coding-agent/discovery";
+
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { guard } from "./health";
+import { type SSHHost, sshCapability } from "./omp/pi-coding-agent/capability/ssh";
+import { loadCapability, reset as resetCapabilities } from "./omp/pi-coding-agent/discovery";
 import {
 	readSSHConfigFile,
 	removeSSHHost,
 	type SSHHostConfig,
 	updateSSHHost,
 	validateHostName,
-} from "@oh-my-pi/pi-coding-agent/ssh/config-writer";
+} from "./omp/pi-coding-agent/ssh/config-writer";
 import {
 	ensureConnection,
 	ensureHostInfo,
 	getHostInfoForHost,
 	invalidateHostMetadata,
 	type SSHConnectionTarget,
-} from "@oh-my-pi/pi-coding-agent/ssh/connection-manager";
-import { buildSshTarget } from "@oh-my-pi/pi-coding-agent/ssh/utils";
-import { $which, getSSHConfigPath, ptree } from "@oh-my-pi/pi-utils";
-import { guard } from "./health";
+} from "./omp/pi-coding-agent/ssh/connection-manager";
+import { buildSshTarget } from "./omp/pi-coding-agent/ssh/utils";
+import { $which, getSSHConfigPath, ptree } from "./omp/pi-utils";
 import { asRecord, requiredString } from "./params";
 import type { BridgeMethods } from "./types";
 

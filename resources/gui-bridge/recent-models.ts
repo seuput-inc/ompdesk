@@ -12,7 +12,7 @@ import type { BridgeMethods } from "./types";
 export const methods: BridgeMethods = {
 	...guard("recentModels", {
 		recent_models: async (_params, env) => {
-			const { createModelBrowserSource } = await import("@oh-my-pi/pi-coding-agent/modes/model-browser-source");
+			const { createModelBrowserSource } = await import("./omp/pi-coding-agent/modes/model-browser-source");
 			return { selectors: [...createModelBrowserSource(env.session().settings).mruOrder] };
 		},
 	}),

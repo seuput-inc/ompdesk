@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { REQUIREMENTS } from "../../resources/gui-bridge/capabilities";
 import { OMP_PACKAGE_MODULES } from "../../resources/gui-bridge/omp-package";
-import { OMP_PACKAGE_FILE, ompReferences, ompSpecifiers, productionFiles } from "../lint-omp-imports.mjs";
+import {
+	adapterSpecifier,
+	OMP_PACKAGE_FILE,
+	ompReferences,
+	ompSpecifiers,
+	productionFiles,
+} from "../lint-omp-imports.mjs";
 import { scanOmpReferences } from "./scan";
 import { TOUCHPOINTS, type Touchpoint, type TouchpointArea } from "./touchpoints";
 
@@ -116,6 +122,22 @@ describe("omp touchpoint registry", () => {
 		const listed = new Set<string>(OMP_PACKAGE_MODULES);
 		expect(keys.filter(key => key === null || !listed.has(key))).toEqual([]);
 		expect([...listed].filter(key => !keys.includes(key))).toEqual([]);
+	});
+
+	it("has no adapter that no production file imports", () => {
+		const files = productionFiles(ROOT);
+		const imported = new Set(
+			files.flatMap(file =>
+				ompReferences(file, readFileSync(path.join(ROOT, file), "utf8"))
+					.filter(ref => ref.via === "adapter")
+					.map(ref => ref.specifier),
+			),
+		);
+		const adapters = files
+			.map(file => adapterSpecifier(file))
+			.filter((specifier): specifier is string => specifier !== undefined);
+		expect(adapters.length).toBeGreaterThan(0);
+		expect(adapters.filter(specifier => !imported.has(specifier))).toEqual([]);
 	});
 });
 

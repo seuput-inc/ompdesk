@@ -7,18 +7,19 @@
  * that subpath, so a bridge import of it loads a second copy whose setting handles (`security.enabled`, the task
  * agent overrides) read other settings' slots, and whose operations live apart from the session's own.
  */
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+
 import type { SecurityFinding, SecurityScanBundle } from "@oh-my-pi/pi-coding-agent/security/contracts";
 import type { SecurityOperationSnapshot } from "@oh-my-pi/pi-coding-agent/security/coordinator";
 import type { SecurityTargetRequest } from "@oh-my-pi/pi-coding-agent/security/preflight";
-import { SecurityStore } from "@oh-my-pi/pi-coding-agent/security/store";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { SecurityScanTool } from "@oh-my-pi/pi-coding-agent/tools/security-scan";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
 import { guard } from "./health";
 import { ompPrompt } from "./modes/shared";
+import { lookup } from "./omp/pi-coding-agent/config/registry";
+import { SecurityStore } from "./omp/pi-coding-agent/security/store";
+import { SecurityScanTool } from "./omp/pi-coding-agent/tools/security-scan";
+import * as vcs from "./omp/pi-natives/vcs";
+import { prompt } from "./omp/pi-utils";
 import { asRecord, requiredString } from "./params";
 import type { BridgeMethods } from "./types";
 

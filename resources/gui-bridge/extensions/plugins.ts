@@ -10,13 +10,13 @@
  * every successful mutation ends in the same reload `/reload-plugins` runs.
  */
 import * as path from "node:path";
-import { clearPluginRootsAndCaches } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { getEnabledPlugins } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
-import { PluginManager, validateSetting } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
-import { classifySource, parsePluginId } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { InstalledPlugin } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/types";
-import { pathIsWithin } from "@oh-my-pi/pi-utils";
 import { guard } from "../health";
+import { clearPluginRootsAndCaches } from "../omp/pi-coding-agent/discovery/helpers";
+import { getEnabledPlugins } from "../omp/pi-coding-agent/extensibility/plugins/loader";
+import { PluginManager, validateSetting } from "../omp/pi-coding-agent/extensibility/plugins/manager";
+import { classifySource, parsePluginId } from "../omp/pi-coding-agent/extensibility/plugins/marketplace";
+import { pathIsWithin } from "../omp/pi-utils";
 import type { BridgeMethods } from "../types";
 import {
 	classifyPluginActivation,

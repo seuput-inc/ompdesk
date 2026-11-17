@@ -5,20 +5,17 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { resolveLocalRoot, resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import {
-	createForeignSessionStore,
-	persistForeignSession,
-} from "@oh-my-pi/pi-coding-agent/session/foreign-session-import";
 import type { ForeignSessionInfo, ForeignSessionSource } from "@oh-my-pi/pi-coding-agent/session/foreign-session-store";
-import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { buildMcpArgumentCompletions } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-completions";
-import { BUILTIN_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
-import { directoryExists, getProjectDir, isEexist, withFileLock } from "@oh-my-pi/pi-utils";
 import { guard } from "./health";
+import { resolveLocalRoot, resolveLocalUrlToPath } from "./omp/pi-coding-agent/internal-urls/local-protocol";
+import { MCPManager } from "./omp/pi-coding-agent/mcp/manager";
+import { createForeignSessionStore, persistForeignSession } from "./omp/pi-coding-agent/session/foreign-session-import";
+import { loadSessionFile } from "./omp/pi-coding-agent/session/session-loader";
+import { SessionManager } from "./omp/pi-coding-agent/session/session-manager";
+import { buildMcpArgumentCompletions } from "./omp/pi-coding-agent/slash-commands/builtin-completions";
+import { BUILTIN_SLASH_COMMANDS } from "./omp/pi-coding-agent/slash-commands/builtin-registry";
+import { directoryExists, getProjectDir, isEexist, withFileLock } from "./omp/pi-utils";
 import type { BridgeEnv, BridgeMethods } from "./types";
 
 /** One field of the GUI's untyped params object. */

@@ -4,27 +4,27 @@
  * rpc-mode theme cases onto stock omp internals.
  */
 import path from "node:path";
-import { formatModelString } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { type ParsedAgentFields, parseAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { createAgentsHubDeps } from "@oh-my-pi/pi-coding-agent/modes/agents-hub-deps";
-import { readRpcSubagentTranscript } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { BlobStore, parseBlobRef } from "@oh-my-pi/pi-coding-agent/session/blob-store";
-import { AgentParsingError } from "@oh-my-pi/pi-coding-agent/task/agents";
-import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
-import { getResolvedThemeColors } from "@oh-my-pi/pi-tui/theme";
-import { getBlobsDir, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { guard } from "../health";
+import { formatModelString } from "../omp/pi-coding-agent/config/model-resolver";
+import { type ParsedAgentFields, parseAgentFields } from "../omp/pi-coding-agent/discovery/helpers";
+import { createAgentsHubDeps } from "../omp/pi-coding-agent/modes/agents-hub-deps";
+import { readRpcSubagentTranscript } from "../omp/pi-coding-agent/modes/rpc/rpc-subagents";
+import { AgentLifecycleManager } from "../omp/pi-coding-agent/registry/agent-lifecycle";
+import { AgentRegistry, MAIN_AGENT_ID } from "../omp/pi-coding-agent/registry/agent-registry";
+import { BlobStore, parseBlobRef } from "../omp/pi-coding-agent/session/blob-store";
+import { AgentParsingError } from "../omp/pi-coding-agent/task/agents";
+import { discoverAgents } from "../omp/pi-coding-agent/task/discovery";
+import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "../omp/pi-coding-agent/tools/builtin-names";
+import { getResolvedThemeColors } from "../omp/pi-tui/theme";
+import { getBlobsDir, parseFrontmatter } from "../omp/pi-utils";
 import type { BridgeMethods } from "../types";
 import { paramsOf, requireString } from "./shared";
 
 /** Where omp's discovery reads `.omp` task agents for this session: the user dir and the nearest project dir (or where it would be). */
 async function agentDirs(session: AgentSession): Promise<{ user: string; project: string }> {
 	// Dynamic: `config` is a source copy whose first import transpiles omp's source tree (~540 ms of omp's only thread), so it loads on use, not at startup.
-	const { findAllNearestProjectConfigDirs, getConfigDirs } = await import("@oh-my-pi/pi-coding-agent/config");
+	const { findAllNearestProjectConfigDirs, getConfigDirs } = await import("../omp/pi-coding-agent/config");
 	const cwd = path.resolve(session.sessionManager.getCwd());
 	const user = getConfigDirs("agents", { project: false }).find(entry => entry.source === ".omp")?.path;
 	if (!user) throw new Error("omp reports no user agents directory");
