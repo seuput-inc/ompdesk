@@ -54,7 +54,10 @@ describe("removeOrphanWorktree", () => {
 			const dir = await fs.realpath(addWorktree("pushed"));
 			await commitIn(dir, "pushed.ts", "x\n");
 			gitSync(dir, "push", "-q", "origin", "omp/gui/pushed", "HEAD:main");
-			expect(await removeOrphanWorktree(repo, dir, deps, { keepBranch: true })).toEqual({ removal: "branch-kept" });
+			expect(await removeOrphanWorktree(repo, dir, deps, { keepBranch: true })).toEqual({
+				removal: "branch-kept",
+				remote: { outcome: "deleted", message: expect.stringContaining("omp/gui/pushed") },
+			});
 			expect(gitSync(repo, "branch", "--list", "omp/gui/pushed")).toContain("omp/gui/pushed");
 			expect(gitSync(remote, "for-each-ref", "refs/heads/omp/gui/pushed")).toBe("");
 		},

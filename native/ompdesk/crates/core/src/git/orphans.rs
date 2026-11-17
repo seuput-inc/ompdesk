@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use super::branches::{self, Removal, WorktreeRef};
+use super::branches::{self, Removal, SafeRemoval, WorktreeRef};
 use super::parse;
 use super::read::blocking;
 use super::run::Git;
@@ -307,27 +307,28 @@ pub async fn inspect(
 
 /// Removes the orphan at `path` of the repository at `primary`, never forced: a detached one when git lists it as
 /// linked, one on a branch by `remove_safe` (landed and clean once more, the branch at the tip it judged unless
-/// `keep_branch`, its landed copy on `origin` either way). None when it stayed.
+/// `keep_branch`, its landed copy on `origin` either way, and what became of that copy). None when it stayed.
 pub async fn remove(
     git: &Git,
     primary: &str,
     path: &str,
     branch: Option<String>,
     keep_branch: bool,
-) -> Result<Option<Removal>, Fault> {
+) -> Result<Option<SafeRemoval>, Fault> {
     match branch {
         None => Ok(branches::remove_linked(git, primary, path)
             .await?
-            .map(|_| Removal::Removed)),
+            .map(|_| SafeRemoval {
+                removal: Removal::Removed,
+                remote: None,
+            })),
         Some(branch) => {
             let worktree = WorktreeRef {
                 path: path.to_owned(),
                 branch,
                 base_cwd: primary.to_owned(),
             };
-            Ok(branches::remove_safe(git, &worktree, keep_branch)
-                .await?
-                .map(|removed| removed.removal))
+            branches::remove_safe(git, &worktree, keep_branch).await
         }
     }
 }

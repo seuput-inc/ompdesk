@@ -1310,9 +1310,24 @@ export interface RpcOrphanWorktrees {
 	worktrees: RpcOrphanWorktree[];
 }
 
-/** remove_orphan_worktree: the worktree is gone; `branch-kept` when its branch stayed (asked to, or it moved meanwhile). */
-export interface RpcOrphanWorktreeRemoval {
+/**
+ * What became of a session branch's copy on origin when its worktree or merge went (`drop_landed_remote` in the core's
+ * `git/branches.rs`): deleted because its tip is in `origin/<base>` (by ancestry or by content), or kept and why;
+ * `message` says it in one sentence that names the branch.
+ */
+export interface RpcRemoteCopy {
+	outcome: "deleted" | "not-landed" | "moved" | "base" | "no-base" | "refused" | "failed";
+	message: string;
+}
+
+/**
+ * A safe removal of a session's or an orphaned worktree (`removeSafeWorktree`, remove_orphan_worktree): the worktree is
+ * gone; `branch-kept` when its branch stayed (asked to, or it moved meanwhile). `remote`: what became of the branch's
+ * copy on origin, absent when origin holds none.
+ */
+export interface RpcSafeRemoval {
 	removal: "removed" | "branch-kept";
+	remote?: RpcRemoteCopy;
 }
 
 /** pr_repo: gh availability + the session cwd's GitHub repo, or the typed reason it's unusable. */

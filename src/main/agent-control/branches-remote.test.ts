@@ -98,6 +98,18 @@ describe("a session branch's copy on origin", () => {
 		expect(onOrigin(wt.branch)).toBe(moved);
 	});
 
+	it("stays and says so when origin cannot be reached, and the worktree still goes", async () => {
+		const wt = await pushedChild("offline");
+		gitSync(wt.path, "push", "-q", "origin", "HEAD:main");
+		gitSync(repo, "remote", "set-url", "origin", path.join(root, "gone.git"));
+		expect(await removeSafeWorktree(wt)).toEqual({
+			removal: "removed",
+			remote: { outcome: "failed", message: expect.stringContaining("could not be read") },
+		});
+		await expect(fs.stat(wt.path)).rejects.toThrow();
+		expect(onOrigin(wt.branch)).not.toBe("");
+	});
+
 	it("is nothing to report when origin holds no copy", async () => {
 		const wt = await agentWorktree("unpushed");
 		await commitIn(wt.path, "unpushed.ts", "x\n");

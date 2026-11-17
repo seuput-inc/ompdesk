@@ -537,6 +537,8 @@ const GitWorktree = z.object({
 	baseCwd: AbsolutePath,
 });
 const GitWorktreeParams = z.object({ worktree: GitWorktree });
+/** `withRemote`: answer `{removal, remote?}`; without it, a desktop older than the remote copy's cleanup gets the bare removal. */
+const GitRemoveParams = z.object({ worktree: GitWorktree, withRemote: z.boolean().optional() });
 /** `diffChars` mirrors what `ompdesk_compare` may ask for; a bigger number would only ship more diff than it reads. */
 const GitEvidenceParams = z.object({ worktree: GitWorktree, diffChars: z.number().int().min(0).max(200_000) });
 const GitMergeParams = z.object({ worktree: GitWorktree, label: z.string().max(500) });
@@ -1477,9 +1479,12 @@ export class LocalHostServices implements HostServices {
 			}
 			case GIT_METHODS.landing:
 				return landingFacts(parse(GitWorktreeParams, method, params).worktree);
-			case GIT_METHODS.removeWorktree:
-				// The bare removal, as before the remote copy's cleanup, so a desktop of any version reads it.
-				return (await removeSafeWorktree(parse(GitWorktreeParams, method, params).worktree))?.removal ?? null;
+			case GIT_METHODS.removeWorktree: {
+				const { worktree, withRemote } = parse(GitRemoveParams, method, params);
+				const removed = await removeSafeWorktree(worktree);
+				// The bare removal for a desktop that did not ask, as before the remote copy's cleanup.
+				return withRemote ? removed : (removed?.removal ?? null);
+			}
 			case GIT_METHODS.discardWorktree:
 				return discardOpenedWorktree(parse(GitWorktreeParams, method, params).worktree, {
 					openFolders: sessionOpenFolders,

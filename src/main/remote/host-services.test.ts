@@ -4297,6 +4297,22 @@ describe("LocalHostServices host.git.*: a device's agent working on a session th
 		expect(existsSync(worktree.path)).toBe(false);
 	});
 
+	it("tells a desktop that asks with withRemote what became of the branch's copy on origin", async () => {
+		const { services } = setup();
+		const x = new FakeConnection(peer("device-x"));
+		const worktree = await repoWithChild();
+		const remote = join(workDir, "remote.git");
+		gitSync(workDir, "init", "-q", "--bare", "-b", "main", remote);
+		gitSync(worktree.baseCwd, "remote", "add", "origin", remote);
+		gitSync(worktree.baseCwd, "push", "-q", "-u", "origin", "main");
+		gitSync(worktree.path, "push", "-q", "origin", worktree.branch, "HEAD:main");
+		expect(await services.call(x.peer, "host.git.removeWorktree", { worktree, withRemote: true }, x)).toEqual({
+			removal: "removed",
+			remote: { outcome: "deleted", message: expect.stringContaining(worktree.branch) },
+		});
+		expect(gitSync(remote, "for-each-ref", `refs/heads/${worktree.branch}`)).toBe("");
+	});
+
 	it("refuses relative paths, and sends a merge's refusal back with git's reason", async () => {
 		const { services } = setup();
 		const x = new FakeConnection(peer("device-x"));
