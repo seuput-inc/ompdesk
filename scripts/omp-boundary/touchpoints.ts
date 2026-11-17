@@ -2135,11 +2135,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C07",
 		area: "copy",
 		contract: "internal",
-		disposition: { kind: "open", reason: "Ids are minted before omp starts; no test compares with stock." },
-		summary: "Copy of stock pi-utils `snowflake`: epoch, sequence and hex id; no dedicated test pins it.",
+		disposition: { kind: "registered", reason: "Ids are minted before omp starts." },
+		summary: "Copy of stock pi-utils `snowflake`: epoch, sequence and hex id.",
 		files: ["src/main/snowflake.ts"],
 		stock: ["@oh-my-pi/pi-utils/snowflake"],
-		tests: [],
+		tests: ["src/main/snowflake-stock.test.ts"],
 	},
 	{
 		id: "C08",
@@ -2159,14 +2159,13 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "copy",
 		contract: "internal",
 		disposition: {
-			kind: "open",
-			reason:
-				"Runs before omp starts and in the renderer's launch preview; no test compares with stock's flag tables.",
+			kind: "registered",
+			reason: "Runs before omp starts and in the renderer's launch preview.",
 		},
 		summary: "Copy of stock `cli/flag-tables`: which launch flags take a value.",
 		files: ["src/shared/launch-profile.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/cli/flag-tables"],
-		tests: [],
+		tests: ["src/renderer/lib/launch-profile.test.ts", "src/main/launch-profile-stock.test.ts"],
 	},
 	{
 		id: "C10",
