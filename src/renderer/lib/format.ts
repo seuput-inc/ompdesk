@@ -3,6 +3,7 @@
  */
 
 import { UI_LANGUAGE_INTL } from "../../shared/ui-language";
+import { WEB_BLOB_URL_PREFIX } from "../../shared/web-protocol";
 import { parseAnsi } from "./ansi";
 import { getCurrentLanguage, translate } from "./i18n";
 import { PREVIEW_TEXT_CHARS } from "./preview";
@@ -442,6 +443,16 @@ function imageSource(data: string, mimeType: string): string {
 	return data && !data.startsWith(BLOB_REF_PREFIX) ? `data:${mimeType};base64,${data}` : data;
 }
 
+/** The URL a paired page's host keeps a large picture behind (`ImageContent.blobUrl`), or null. */
+function blobSource(payload: Record<string, unknown>): string | null {
+	const { blobUrl } = payload;
+	return typeof blobUrl === "string" && blobUrl.startsWith(WEB_BLOB_URL_PREFIX) ? blobUrl : null;
+}
+
+function isDrawableSource(source: string): boolean {
+	return source.startsWith("data:") || source.startsWith(WEB_BLOB_URL_PREFIX);
+}
+
 function collectImageSources(value: unknown, keys: readonly string[], depth = 0): string[] {
 	if (value == null || depth > 4) return [];
 	if (typeof value === "string") {
@@ -453,7 +464,7 @@ function collectImageSources(value: unknown, keys: readonly string[], depth = 0)
 	if (typeof value === "object") {
 		const r = value as Record<string, unknown>;
 		if (r.type === "image" && typeof r.data === "string") {
-			return [imageSource(r.data, typeof r.mimeType === "string" ? r.mimeType : "image/png")];
+			return [blobSource(r) ?? imageSource(r.data, typeof r.mimeType === "string" ? r.mimeType : "image/png")];
 		}
 		if (r.type === "image" && r.source && typeof r.source === "object") {
 			const src = r.source as Record<string, unknown>;
@@ -468,7 +479,7 @@ function collectImageSources(value: unknown, keys: readonly string[], depth = 0)
 		if (typeof r.data === "string" && typeof r.mimeType === "string" && r.mimeType.startsWith("image/")) {
 			// `generate_image` reports its pictures as bare `{ data, mimeType }`
 			// pairs under `details.images` — same bytes, no content-block tag.
-			return [imageSource(r.data, r.mimeType)];
+			return [blobSource(r) ?? imageSource(r.data, r.mimeType)];
 		}
 		return keys.flatMap(key => collectImageSources(r[key], keys, depth + 1));
 	}
@@ -476,9 +487,9 @@ function collectImageSources(value: unknown, keys: readonly string[], depth = 0)
 }
 
 /**
- * One picture a tool result or message carries. `src` is its inline-renderable
- * data URL, or `null` when the bytes are unavailable (only stock's blob
- * reference survived, or the payload is empty); `key` identifies it either way.
+ * One picture a tool result or message carries. `src` is what an <img> draws (its data URL, or the `/blob/` URL a
+ * paired page's host kept it behind), or `null` when the bytes are unavailable (only stock's blob reference
+ * survived, or the payload is empty); `key` identifies it either way.
  */
 export interface ResultImage {
 	key: string;
@@ -486,7 +497,7 @@ export interface ResultImage {
 }
 
 function resultImage(source: string): ResultImage {
-	return { key: source, src: source.startsWith("data:") ? source : null };
+	return { key: source, src: isDrawableSource(source) ? source : null };
 }
 
 /** Every picture inside an unknown tool result, drawable or not. */
@@ -506,11 +517,11 @@ export function extractImageDataUrls(value: unknown): string[] {
 }
 
 /**
- * Find the first inline-renderable image (data: URL) inside an unknown tool result.
- * Remote URLs are not returned — the renderer CSP only allows 'self', data:, blob:.
+ * Find the first inline-renderable image (a data: URL, or a paired page's `/blob/` one) inside an unknown tool result.
+ * Other remote URLs are not returned — the renderer CSP only allows 'self', data:, blob:.
  */
 export function extractImageDataUrl(value: unknown): string | null {
-	return collectImageSources(value, SINGLE_IMAGE_KEYS).find(source => source.startsWith("data:")) ?? null;
+	return collectImageSources(value, SINGLE_IMAGE_KEYS).find(isDrawableSource) ?? null;
 }
 
 /** Copy text to the clipboard (Chromium renderer). Resolves true on success. */

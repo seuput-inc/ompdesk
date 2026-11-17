@@ -13,6 +13,7 @@ import type { WebDevice } from "./devices-store";
 import { FileEditReports, parseFileEditReport } from "./file-edit-reports";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 import type { IpcCaller } from "./ipc-registry";
+import { PAGE_IMAGE_MIN_CHARS } from "./page-images";
 import { WebClientWindow, WebWindows } from "./web-client-window";
 import { CLOSE_REVOKED, convertsForModel, type WebChannelTable, type WsRouter } from "./ws-router";
 import { TestRouterHost } from "./ws-router-test-rig";
@@ -1034,6 +1035,79 @@ describe("binary and media results", () => {
 		await r.frame({ t: "snd", ch: IPC_COMMANDS.FS_MEDIA_RELEASE, a: [url] });
 		await vi.waitFor(() => expect(r.send.mock.calls[0]?.[2]).toEqual(["omp-media://stream/tok"]));
 		expect(await r.blobs.mediaUrl("dev1", url)).toBeNull();
+	});
+});
+
+describe("pictures of a transcript", () => {
+	interface PushedMessages {
+		payload: { message: { content: unknown[] } }[];
+	}
+	interface Answered {
+		v: { data: { messages?: { content: unknown[] }[]; note?: string } };
+	}
+	const bigPicture = Buffer.alloc(PAGE_IMAGE_MIN_CHARS).toString("base64");
+	const userMessage = {
+		role: "user",
+		content: [
+			{ type: "text", text: "look" },
+			{ type: "image", mimeType: "image/jpeg", data: bigPicture },
+			{ type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+		],
+	};
+	const end = { type: "message_end", message: userMessage } as AgentSessionEvent;
+	const lifted = {
+		type: "image",
+		mimeType: "image/jpeg",
+		data: "",
+		blobUrl: expect.stringMatching(/^\/blob\/[\w-]+$/),
+	};
+
+	it("pushes a large picture of a message as a blob URL, so the frame stays small", async () => {
+		const r = await rig();
+		r.windows.windowFor("dev1").webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		await r.host.flush();
+		const [sent] = r.socket.frames("evt");
+		const pushed = sent?.d as PushedMessages;
+		expect(pushed.payload[0]?.message.content[1]).toEqual(lifted);
+		expect(pushed.payload[0]?.message.content[2]).toEqual(userMessage.content[2]);
+		expect(JSON.stringify(sent).length).toBeLessThan(1024);
+		expect(await r.blobs.count()).toBe(1);
+	});
+
+	it("answers a transcript read with the same blob URLs, and no other answer is touched", async () => {
+		const r = await rig();
+		r.invoke.mockResolvedValueOnce({ success: true, data: { messages: [userMessage] } });
+		r.invoke.mockResolvedValueOnce({ success: true, data: { note: bigPicture } });
+		const command = (type: string) => [{ tabId: "tab-a", command: { type } }];
+		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: command("get_transcript_page") });
+		await r.frame({ t: "inv", id: 2, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: command("get_state") });
+		await r.settle();
+		const [page, state] = r.socket.frames("res") as unknown as Answered[];
+		expect(page?.v.data.messages?.[0]?.content[1]).toEqual(lifted);
+		expect(state?.v.data.note).toBe(bigPicture);
+		expect(await r.blobs.count()).toBe(1);
+	});
+
+	it("releases a tab's pictures when the device's tab list no longer holds the tab", async () => {
+		const r = await rig();
+		const win = r.windows.windowFor("dev1");
+		win.webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		win.webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-b", payload: [end] });
+		await r.host.flush();
+		expect(await r.blobs.count()).toBe(2);
+		win.webContents.send(IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [{ tabId: "tab-b" }] });
+		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(1));
+		win.webContents.send(IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [] });
+		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(0));
+	});
+
+	it("makes no blob for a page that is hidden, whose streamed pushes the core drops", async () => {
+		const r = await rig();
+		await r.frame({ t: "presence", visible: false });
+		await r.settle();
+		r.windows.windowFor("dev1").webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		await r.host.flush();
+		expect(await r.blobs.count()).toBe(0);
 	});
 });
 
