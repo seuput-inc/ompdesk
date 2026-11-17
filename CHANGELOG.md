@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.132.1] - 2026-11-17
+
+Windows에서 0.131.0의 업데이트가 0.132.0을 설치한 뒤 0.131.0으로 되돌아가던 문제를 고쳤어요.
+
+### 고친 것
+- Windows 설치 프로그램이 새 폴더를 점검할 때 Tauri 앱에는 없는 이전 화면 엔진 파일을 찾아, 모든 업데이트를 미완성으로 보고 이전 앱을 되살렸어요. 이제 Tauri 앱이 실제로 쓰는 파일만 확인해요. 되돌린 판은 기록해 두어 자동 업데이트가 같은 판을 계속 다시 설치하지 않아요(앱이 약 1분마다 꺼졌다 켜지던 증상).
+- 스톡 omp 18.22.0의 새 설정(디스어셈블러, Ghidra, 종료 시 워크트리 강제 제거)에 한국어 설명을 넣었어요.
+
+<!-- en -->
+
+Windows updates from 0.131.0 no longer install 0.132.0 and then fall back to 0.131.0.
+
+### Fixed
+- The Windows setup's check of the new folder looked for a file of the previous rendering engine that the Tauri app does not have, judged every update incomplete and restored the old app. It now checks the files the Tauri app actually uses. A version that was rolled back is recorded, so the automatic update no longer reinstalls it over and over (the app quit and restarted about once a minute).
+- Korean text for the settings stock omp 18.22.0 adds (disassembler, Ghidra, force-removing worktrees on exit).
+
 ## [0.132.0] - 2026-11-17
 
 데스크톱 창을 Electron 대신 Rust(Tauri 2)와 운영체제 기본 웹뷰로 바꿨어요. 기존 세션, 계정, 원격 기능과 설정은 그대로 이어서 써요.
