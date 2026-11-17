@@ -548,15 +548,15 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
                 .map_err(|e| format!("decode framed screencast: {e}"))?;
             let size = png_size(&png);
             seen.push(size);
+            let ack = event.params["sessionId"]
+                .as_i64()
+                .ok_or("missing framed screencast frame id")?;
             if size == Some((780, 1400)) {
-                break Ok::<_, String>(());
+                break Ok::<_, String>(ack);
             }
             if !size.is_some_and(|(width, height)| width == 780 || height == 1400) {
                 break Err("not a transition frame".to_string());
             }
-            let ack = event.params["sessionId"]
-                .as_i64()
-                .ok_or("missing framed screencast frame id")?;
             page.ack_frame(ack)
                 .await
                 .map_err(|e| format!("ack transition frame: {e:?}"))?;
@@ -564,10 +564,9 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
     })
     .await;
     eprintln!("framed screencast frames: {seen:?}");
-    check!(
-        matches!(framed, Ok(Ok(()))),
-        "framed screencast frames: {seen:?} ({framed:?})"
-    );
+    let Ok(Ok(framed)) = framed else {
+        return Err(format!("framed screencast frames: {seen:?} ({framed:?})"));
+    };
     // The emulated page fills the larger view rather than sitting in a corner of it: a trusted click at each CSS
     // corner (sent at the emulation scale Chromium takes input in) lands on the marker laid there.
     page.evaluate(
@@ -620,13 +619,9 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         wheel_seen == json!([[true, 200, 300, 100]]),
         "framed page took the wheel at another place or magnitude: {wheel_seen} at emulation scale {emulation_scale}"
     );
-    page.ack_frame(
-        framed["sessionId"]
-            .as_i64()
-            .ok_or("missing framed screencast frame id")?,
-    )
-    .await
-    .map_err(|e| format!("ack framed frame: {e:?}"))?;
+    page.ack_frame(framed)
+        .await
+        .map_err(|e| format!("ack framed frame: {e:?}"))?;
     page.stop_screencast()
         .await
         .map_err(|e| format!("stop framed screencast: {e:?}"))?;
