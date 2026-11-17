@@ -363,6 +363,7 @@ export class WebHost {
 		this.router.closeDevice(deviceId, CLOSE_REVOKED, "revoked");
 		this.windows.destroy(deviceId);
 		this.blobs.releaseDevice(deviceId);
+		this.router.forgetDevice(deviceId);
 		void this.uploads.removeDevice(deviceId).catch(() => {});
 	}
 

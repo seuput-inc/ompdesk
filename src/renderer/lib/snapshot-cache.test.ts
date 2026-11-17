@@ -152,12 +152,12 @@ describe("snapshot privacy", () => {
 			text: "use sk-abcdefghijklmnopqrstuv and ghp_abcdefghijklmnopqrstuv then Bearer abcdefghijklmnopqrstuvwxyz",
 			jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
 			pem: "-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----",
-			content: [{ type: "image", mimeType: "image/png", data: "AAAA".repeat(100) }],
+			content: [{ type: "image", mimeType: "image/png", data: "AAAA".repeat(100), blobUrl: "/blob/tok" }],
 			list: [{ password: "p", name: "n" }],
 		};
 		const out = scrub(input);
 		const text = JSON.stringify(out);
-		expect(text).not.toMatch(/sk-|ghp_|Bearer abc|eyJhb|PRIVATE KEY|AAAA|"cookie"|"password"|apiKey/);
+		expect(text).not.toMatch(/sk-|ghp_|Bearer abc|eyJhb|PRIVATE KEY|AAAA|"cookie"|"password"|apiKey|\/blob\//);
 		expect(out.title).toBe("deploy");
 		expect(out.nested).toEqual({ ok: 1 });
 		expect(out.list).toEqual([{ name: "n" }]);

@@ -121,12 +121,14 @@ pub enum Outgoing {
     Terminate,
 }
 
-/// Bytes queued for a page and not yet written to its socket past which the connection closes 4408 (`ws-router.ts`
-/// closed a slow consumer by `ws`'s `bufferedAmount`; the socket's queue is the edge's now).
+/// Bytes waiting for a page's socket, behind the frame it is writing, past which the connection closes 4408
+/// (`ws-router.ts` closed a slow consumer by `ws`'s `bufferedAmount`; the socket's queue is the edge's now). A frame
+/// is never refused for its own size: one large message on an idle socket is a long write, not a consumer that falls
+/// behind (a paired page's pictures go behind `/blob` URLs, so a frame is small anyway).
 pub const MAX_BUFFERED_BYTES: usize = 8 * 1024 * 1024;
 pub const CLOSE_SLOW_CONSUMER: u16 = 4408;
 
-/// The way to a page's socket: what the router sends, counted until the socket wrote it.
+/// The way to a page's socket: what the router sends, counted from the queue until the socket starts writing it.
 #[derive(Clone)]
 pub struct Outbox {
     sender: UnboundedSender<Outgoing>,
@@ -143,15 +145,15 @@ impl Outbox {
         }
     }
 
-    /// Queue a frame; false once the socket is gone. A text that takes the queue past `MAX_BUFFERED_BYTES` closes the
-    /// connection 4408 instead, and nothing more is queued after that close.
+    /// Queue a frame; false once the socket is gone. A text sent while more than `MAX_BUFFERED_BYTES` already wait
+    /// closes the connection 4408 instead, and nothing more is queued after that close.
     pub fn send(&self, outgoing: Outgoing) -> bool {
         if self.slow.load(Ordering::Acquire) {
             return false;
         }
         if let Outgoing::Text(text) = &outgoing {
-            let queued = self.queued.fetch_add(text.len(), Ordering::AcqRel) + text.len();
-            if queued > MAX_BUFFERED_BYTES {
+            let waiting = self.queued.fetch_add(text.len(), Ordering::AcqRel);
+            if waiting > MAX_BUFFERED_BYTES {
                 self.slow.store(true, Ordering::Release);
                 return self
                     .sender
@@ -165,8 +167,8 @@ impl Outbox {
         self.sender.send(outgoing).is_ok()
     }
 
-    /// The socket wrote a text of this many bytes.
-    pub fn written(&self, bytes: usize) {
+    /// The socket took a text of this many bytes off the queue to write it: it no longer waits behind anything.
+    pub fn taken(&self, bytes: usize) {
         let _ = self
             .queued
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
@@ -201,3 +203,56 @@ pub trait Router: Send + Sync {
 
 /// The request's headers as the edge hands them to a store.
 pub type Headers = HeaderMap;
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+
+    fn frame(bytes: usize) -> Outgoing {
+        Outgoing::Text("x".repeat(bytes))
+    }
+
+    #[test]
+    fn one_frame_past_the_budget_is_not_a_slow_consumer() {
+        let (sender, mut inbox) = unbounded_channel();
+        let outbox = Outbox::new(sender);
+        assert!(outbox.send(frame(MAX_BUFFERED_BYTES * 3)));
+        assert!(
+            matches!(inbox.try_recv(), Ok(Outgoing::Text(sent)) if sent.len() == MAX_BUFFERED_BYTES * 3)
+        );
+        assert!(inbox.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_backlog_past_the_budget_closes_4408_once() {
+        let (sender, mut inbox) = unbounded_channel();
+        let outbox = Outbox::new(sender);
+        assert!(outbox.send(frame(MAX_BUFFERED_BYTES + 1)));
+        assert!(
+            outbox.send(frame(1)),
+            "the frame that finds the backlog is answered by the close"
+        );
+        assert!(matches!(inbox.try_recv(), Ok(Outgoing::Text(_))));
+        assert!(
+            matches!(inbox.try_recv(), Ok(Outgoing::Close(code, reason)) if code == CLOSE_SLOW_CONSUMER && reason == "slow consumer")
+        );
+        assert!(!outbox.send(frame(1)), "nothing is queued after the close");
+        assert!(inbox.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_frame_the_socket_took_no_longer_counts_as_waiting() {
+        let (sender, mut inbox) = unbounded_channel();
+        let outbox = Outbox::new(sender);
+        assert!(outbox.send(frame(MAX_BUFFERED_BYTES + 1)));
+        let Ok(Outgoing::Text(first)) = inbox.try_recv() else {
+            panic!("the frame was queued");
+        };
+        outbox.taken(first.len());
+        assert!(outbox.send(frame(MAX_BUFFERED_BYTES)));
+        assert!(matches!(inbox.try_recv(), Ok(Outgoing::Text(_))));
+        assert!(inbox.try_recv().is_err());
+    }
+}

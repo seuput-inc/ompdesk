@@ -1477,10 +1477,8 @@ impl Edge {
                 },
                 outgoing = inbox.recv() => match outgoing {
                     Some(Outgoing::Text(text)) => {
-                        let bytes = text.len();
-                        let sent = socket.send(yawc::Frame::text(text)).await;
-                        outbox.written(bytes);
-                        if sent.is_err() { break }
+                        outbox.taken(text.len());
+                        if socket.send(yawc::Frame::text(text)).await.is_err() { break }
                     }
                     Some(Outgoing::Ping) => if socket.send(yawc::Frame::ping(Bytes::new())).await.is_err() { break },
                     Some(Outgoing::Close(code, reason)) => {

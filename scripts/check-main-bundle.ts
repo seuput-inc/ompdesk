@@ -353,7 +353,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // A row clicked while a session switch runs opens beside it (17 Nov 2026, `use-session-switch.ts` counts switches in
 // flight; the sidebar is on the phone's first screen): measured 2,203,472 (branch run 43943178767), 72 bytes over. The
 // budget is that measure plus 78 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_203_550;
+// A phone fetches a large picture over HTTP by its `blobUrl` (17 Nov 2026, cf9fc87f0; the transcript's image content is
+// on the phone's first screen) and a finished run settles calls whose end frame never came (df9455c53, `stores/tools.ts`):
+// measured 2,204,283 (branch run 44004040626), 733 bytes over. The budget is that measure plus 77 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_204_360;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

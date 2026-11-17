@@ -331,6 +331,16 @@ impl Transport {
         self.submit_with_lifetime(method, params, session, PendingLifetime::Timed)
     }
 
+    /// `submit` for a host mutation: the reply waits for Chromium's answer or connection loss, never the read deadline.
+    pub fn submit_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<CommandReply> {
+        self.submit_with_lifetime(method, params, session, PendingLifetime::SettledQueued)
+    }
+
     fn submit_with_lifetime(
         &self,
         method: &str,
@@ -994,6 +1004,42 @@ mod tests {
                 .unwrap()
                 .pending
                 .is_empty()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn settled_navigation_holds_no_later_command_and_outlives_the_read_deadline() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let navigation = transport
+            .submit_settled(
+                "Page.navigate",
+                json!({"url":"http://127.0.0.1/"}),
+                Some("s"),
+            )
+            .unwrap();
+        let stop = transport
+            .submit("Page.stopLoading", json!({}), Some("s"))
+            .unwrap();
+        let first = command(&mut read).await;
+        let second = command(&mut read).await;
+        assert_eq!(first["method"], "Page.navigate");
+        assert_eq!(second["method"], "Page.stopLoading");
+        let stop_id = second["id"].as_u64().unwrap();
+        write
+            .write_all(
+                format!("{{\"id\":{stop_id},\"result\":{{}},\"sessionId\":\"s\"}}\0").as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stop.receive().await.unwrap(), json!({}));
+        tokio::time::advance(Duration::from_secs(60)).await;
+        let id = first["id"].as_u64().unwrap();
+        write.write_all(format!("{{\"id\":{id},\"result\":{{\"errorText\":\"net::ERR_ABORTED\"}},\"sessionId\":\"s\"}}\0").as_bytes()).await.unwrap();
+        assert_eq!(
+            navigation.receive().await.unwrap(),
+            json!({"errorText":"net::ERR_ABORTED"})
         );
     }
 

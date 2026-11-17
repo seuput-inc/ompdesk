@@ -111,7 +111,9 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await rows().filter({ hasText: "Charlie plan" }).locator("button").first().click();
 	await rows().filter({ hasText: "Alpha plan" }).locator("button").first().click();
 	const tabs = () => page.evaluate(() => window.omp.tabs.list());
-	await expect.poll(async () => (await tabs()).some(tab => tab.sessionPath?.endsWith("s-3.jsonl"))).toBe(true);
+	await expect
+		.poll(async () => (await tabs()).map(tab => tab.sessionPath?.split(/[\\/]/).at(-1)).sort())
+		.toEqual(["s-1.jsonl", "s-3.jsonl"]);
 	const order = await titles(page);
 	const charlie = rows().filter({ hasText: "Charlie plan" });
 	await dragRowToRightEdge(page, charlie);

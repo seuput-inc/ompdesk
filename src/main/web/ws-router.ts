@@ -6,7 +6,8 @@
  * is what reads main's state in the same tick: a call the core let through (`web.call`) runs on the one `IpcRegistry`
  * (`invoke` for `inv`, `send` for `snd`) with the device's `WebClientWindow` as the caller, after the model-use quota
  * counted it and a picture the page sent by upload (`WebUploadedImage`) was read back into it; the window's pushes
- * go to the core once per device (`web.deliver`), a stream's data text made once for every device; and a copy of
+ * go to the core once per device (`web.deliver`), a stream's data text made once for every device unless a large
+ * picture of a transcript goes behind the device's `/blob` URL (page-images.ts); and a copy of
  * each device's connections (`web.conns`) answers who is connected and whose page is in the foreground.
  *
  * Every message between the core and main is handled in the order it came: a page's call reaches main before the
@@ -32,6 +33,7 @@ import type { BlobStore } from "./blobs";
 import type { WebDevice, WebDevices } from "./devices-store";
 import { IPC_POLICY } from "./ipc-policy";
 import type { IpcCaller } from "./ipc-registry";
+import { PageImages } from "./page-images";
 import type { UploadStore } from "./uploads";
 import type { WebClientWindow, WebWindows } from "./web-client-window";
 
@@ -53,6 +55,23 @@ const STREAM_CHANNELS: ReadonlySet<string> = new Set([
 	IPC_EVENTS.LOG_LINE,
 	IPC_EVENTS.COMMAND_OUTPUT,
 ]);
+
+/**
+ * The pushes that carry transcript messages and tool results: a picture in one goes behind a `/blob` URL
+ * (page-images.ts). Streamed ones are never shared between devices once it does, since a blob belongs to one.
+ */
+const PICTURE_CHANNELS: Readonly<Record<string, true>> = {
+	[IPC_EVENTS.EVENTS_BATCH]: true,
+	[IPC_EVENTS.SUBAGENT_FRAMES]: true,
+};
+
+/** The RPC commands whose answer is a transcript: its large pictures go behind `/blob` URLs too. */
+const TRANSCRIPT_COMMANDS: Readonly<Record<string, true>> = {
+	get_transcript: true,
+	get_transcript_page: true,
+	get_subagent_transcript: true,
+	get_subagent_messages: true,
+};
 
 /** Calls that read or scan a lot: a device runs a few at once. */
 const HEAVY_CHANNELS: readonly string[] = [
@@ -221,6 +240,19 @@ function isCommandWithType(command: unknown): command is Parameters<typeof comma
 	return typeof command === "object" && command !== null && "type" in command && typeof command.type === "string";
 }
 
+/** The tab ids a `TAB_LIST_CHANGED` payload names; null when it is not the list. */
+function listedTabs(payload: unknown): ReadonlySet<string> | null {
+	if (typeof payload !== "object" || payload === null || !("tabs" in payload) || !Array.isArray(payload.tabs)) {
+		return null;
+	}
+	const ids = new Set<string>();
+	for (const tab of payload.tabs as unknown[]) {
+		if (typeof tab === "object" && tab !== null && "tabId" in tab && typeof tab.tabId === "string")
+			ids.add(tab.tabId);
+	}
+	return ids;
+}
+
 /** An RPC response that reports failure: the request it reserved is given back. */
 function refused(result: unknown): boolean {
 	return typeof result === "object" && result !== null && "success" in result && result.success === false;
@@ -278,11 +310,19 @@ export class WsRouter {
 	readonly #texts = new WeakMap<object, Uint8Array>();
 	/** Devices told of a push they had no connection for: until one connects, one word is all the core needs. */
 	readonly #unsent = new Set<string>();
+	/** The pictures of transcripts this router sent as blob URLs, by device and tab (page-images.ts). */
+	readonly #pictures: PageImages;
 	/** The generation of the core whose router this host started in (`started`); 0 before the first start. */
 	#startedIn = 0;
 
 	constructor(deps: WsRouterDeps) {
 		this.#deps = deps;
+		this.#pictures = new PageImages(deps.blobs);
+	}
+
+	/** The device's blobs went with it (`BlobStore.releaseDevice`): what this router tracked of them goes too. */
+	forgetDevice(deviceId: string): void {
+		this.#pictures.forgetDevice(deviceId);
 	}
 
 	get deps(): WsRouterDeps {
@@ -340,6 +380,10 @@ export class WsRouter {
 	/** A push the pool or a handler made to the device's window. */
 	deliver(deviceId: string, channel: string, payload: unknown): void {
 		this.#recordTokens(deviceId, channel, payload);
+		if (channel === IPC_EVENTS.TAB_LIST_CHANGED) {
+			const listed = listedTabs(payload);
+			if (listed) this.#pictures.tabsChanged(deviceId, listed);
+		}
 		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
 		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
 		if (!this.#open()) return;
@@ -352,7 +396,12 @@ export class WsRouter {
 		}
 		let data: Uint8Array | undefined;
 		try {
-			data = this.#dataBytes(channel, payload);
+			// The core drops a hidden page's streamed pushes (it reloads on return), so no blob is made for those.
+			const pictured =
+				Object.hasOwn(PICTURE_CHANNELS, channel) && this.isDeviceVisible(deviceId)
+					? this.#pictures.lift(deviceId, isTabBatch(payload) ? payload.tabId : undefined, payload)
+					: payload;
+			data = this.#dataBytes(channel, pictured);
 		} catch {
 			return;
 		}
@@ -491,7 +540,7 @@ export class WsRouter {
 			}
 			const result = await registry.invoke(channel, caller, landed);
 			if (refund && refused(result)) refund();
-			return this.#shape(deviceId, channel, args, result);
+			return this.#shape(deviceId, channel, args, result, win);
 		} catch (error) {
 			refund?.();
 			throw error;
@@ -537,7 +586,7 @@ export class WsRouter {
 	}
 
 	/** What a page may see: no secret-looking preferences, no raw bytes or `omp-media://` address. */
-	#shape(deviceId: string, channel: string, args: readonly unknown[], result: unknown): unknown {
+	#shape(deviceId: string, channel: string, args: readonly unknown[], result: unknown, win: WebClientWindow): unknown {
 		if (channel === IPC_COMMANDS.PREFS_GET) {
 			const payload = args[0];
 			const keyed = typeof payload === "object" && payload !== null && "key" in payload && payload.key;
@@ -547,6 +596,13 @@ export class WsRouter {
 		if (channel === IPC_COMMANDS.FS_READ_BINARY || channel === IPC_COMMANDS.FS_SAVE_COPY)
 			return this.#binaryResult(deviceId, result);
 		if (channel === IPC_COMMANDS.FS_MEDIA_STREAM) return this.#mediaResult(deviceId, result);
+		if (channel === IPC_COMMANDS.SESSIONS_MESSAGES) return this.#pictures.lift(deviceId, undefined, result);
+		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {
+			const { command, tabId } = rpcPayload(args[0]);
+			if (isCommandWithType(command) && Object.hasOwn(TRANSCRIPT_COMMANDS, command.type)) {
+				return this.#pictures.lift(deviceId, tabId ?? this.#deps.activeTab?.(win) ?? undefined, result);
+			}
+		}
 		return result;
 	}
 

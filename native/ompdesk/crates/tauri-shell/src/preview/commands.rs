@@ -2,7 +2,7 @@ use super::{frame_scope, target::Target};
 use crate::preview_surface::SurfaceKey;
 use serde_json::{Value, json};
 use shell_core::wire::WireError;
-use shell_preview::{Browser, Page};
+use shell_preview::{Browser, CommandReply, Page};
 
 fn invalid(message: impl Into<String>) -> WireError {
     WireError::new("invalid", message)
@@ -50,17 +50,17 @@ fn load_url(args: &Value) -> Result<&str, WireError> {
         .ok_or_else(|| invalid("loadURL requires a URL"))
 }
 
+/// Queues the page's navigation in order and returns its unawaited reply.
+pub(super) fn submit_load(page: &Page, args: &Value) -> Result<CommandReply, WireError> {
+    page.submit_navigation(load_url(args)?)
+        .map_err(|e| WireError::new(e.code, e.message))
+}
+
 pub async fn operation(page: &Page, op: &str, args: &Value) -> Result<Value, WireError> {
     if !args.is_object() {
         return Err(invalid("Preview operation arguments must be an object"));
     }
     let result = match op {
-        "loadURL" => {
-            page.navigate(load_url(args)?)
-                .await
-                .map_err(|e| WireError::new(e.code, e.message))?;
-            Value::Null
-        }
         "goBack" | "goForward" => {
             let history = page
                 .command("Page.getNavigationHistory", json!({}))

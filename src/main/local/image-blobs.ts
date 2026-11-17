@@ -85,11 +85,29 @@ const INLINE_BELOW = 1024;
  * link's 16 MiB frame (4 Nov 2026). The address is the store's, so a reader that needs the bytes can still ask
  * `read_image_blob` for them.
  */
-export function withImageRefs<T>(value: T, key?: string): T {
+export function withImageRefs<T>(value: T): T {
+	return mapImagePayloads(value, (record, data) => {
+		if (BLOB_REF.test(data) || data.length < INLINE_BELOW) return null;
+		const hash = createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
+		return { ...record, data: `${BLOB_REF_PREFIX}${hash}` };
+	});
+}
+
+/**
+ * `value` with every picture payload (stock's positions, `isImagePosition`) that `swap` answers a record for replaced
+ * by that record, on copies and the originals untouched; `value` itself when nothing was swapped (`swap` answers null
+ * to keep a payload). A record `skip` names is left whole with everything under it.
+ */
+export function mapImagePayloads<T>(
+	value: T,
+	swap: (record: Record<string, unknown>, data: string) => Record<string, unknown> | null,
+	skip?: (record: Record<string, unknown>) => boolean,
+	key?: string,
+): T {
 	if (Array.isArray(value)) {
 		let copy: unknown[] | null = null;
 		value.forEach((item, index) => {
-			const replaced = withImageRefs(item, key);
+			const replaced = mapImagePayloads(item, swap, skip, key);
 			if (replaced === item) return;
 			copy ??= [...value];
 			copy[index] = replaced;
@@ -98,15 +116,13 @@ export function withImageRefs<T>(value: T, key?: string): T {
 	}
 	if (typeof value !== "object" || value === null) return value;
 	const record = value as Record<string, unknown>;
+	if (skip?.(record)) return value;
 	if (typeof record.data === "string" && isImagePosition(record, key)) {
-		const { data } = record;
-		if (BLOB_REF.test(data) || data.length < INLINE_BELOW) return value;
-		const hash = createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
-		return { ...record, data: `${BLOB_REF_PREFIX}${hash}` } as T;
+		return (swap(record, record.data) ?? value) as T;
 	}
 	let copy: Record<string, unknown> | null = null;
 	for (const [childKey, child] of Object.entries(record)) {
-		const replaced = withImageRefs(child, childKey);
+		const replaced = mapImagePayloads(child, swap, skip, childKey);
 		if (replaced === child) continue;
 		copy ??= { ...record };
 		copy[childKey] = replaced;

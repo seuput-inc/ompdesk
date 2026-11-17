@@ -17,7 +17,7 @@ The user's rule: nothing waits on a spinner or a blank window; the app appears a
 - `lib/snapshot-cache.ts`: localStorage on both surfaces (the first React render reads it synchronously). One key per kind × namespace × key: `omp.snap.<SNAPSHOT_VERSION>.…`; a version bump needs no migration (the old generation is never read; `pruneStale` deletes it). Kinds: `shell`, `tabs`, `sessions`, `transcript`, `usage`, `models`, `panel`.
 - Namespace = whose data: `local` or `device:<id>` of a paired host, so a host's snapshot never paints as this computer's. `clearNamespace` forgets one; `clearAll` runs on an unpair (`web/web-boot.ts`).
 - Bounded: entry ≤ `ENTRY_MAX_CHARS` (240 000), each kind keeps its newest `KIND_LIMITS`, whole cache ≤ `TOTAL_MAX_CHARS` (1.8 M), least recently written out first, a full storage evicts once and retries. Older than 30 days (`SNAPSHOT_MAX_AGE_MS`) is not read.
-- **Private**: `scrub` runs on every write (credential-named keys dropped; token-, JWT-, PEM-, bearer-shaped strings replaced; inline picture bytes dropped). A setting's value (can be a secret) is memory only (`settings-data.tsx` `lastRead`).
+- **Private**: `scrub` runs on every write (credential-named keys dropped; token-, JWT-, PEM-, bearer-shaped strings replaced; inline picture bytes and a paired page's picture `blobUrl` dropped). A setting's value (can be a secret) is memory only (`settings-data.tsx` `lastRead`).
 - Never authoritative: a reader paints it and the live read replaces it in place. Writes are idle and coalesced, never on the render path.
 
 ### What is cached

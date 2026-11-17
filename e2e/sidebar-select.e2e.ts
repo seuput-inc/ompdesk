@@ -648,6 +648,12 @@ test("a split's rows read selected only where the window shows the split: a desk
 					throw new Error(`${error.message}\nafter clicking ${id}, the tabs: ${JSON.stringify(list)}`);
 				});
 		}
+		// The second pick opened a tab of its own: a pick during the first one's hydration would have re-rooted it.
+		await expect
+			.poll(async () => (await tabs()).map(tab => tab.sessionPath?.split(/[\\/]/).at(-1)).sort(), {
+				message: "one tab per picked session",
+			})
+			.toEqual(["s-2.jsonl", "s-3.jsonl"]);
 		await dragRowToRightEdge(page, row("s-3"));
 		await page.mouse.up();
 		await expect(page.locator(".omp-session-pane")).toHaveCount(2);

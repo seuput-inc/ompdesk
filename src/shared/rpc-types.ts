@@ -2160,6 +2160,11 @@ export interface ImageContent {
 	type: "image";
 	data: string;
 	mimeType: string;
+	/**
+	 * A paired web page's only: the host kept a picture too large for a frame behind this `/blob/<token>` URL (`data` is
+	 * empty); the page loads it over HTTP with its device cookie (main/web/page-images.ts).
+	 */
+	blobUrl?: string;
 }
 
 export interface TodoPhase {

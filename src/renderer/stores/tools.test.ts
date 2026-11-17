@@ -444,4 +444,61 @@ describe("tools store layout", () => {
 
 		expect(entryOf(store, "run")?.result).toBe(eventResult);
 	});
+
+	it("settles a call whose end event never came from the result its run committed", () => {
+		const store = createToolsStore();
+		// The tab was out of view when `wait` ended: its start arrived, its end did not.
+		store.getState().applyEvents([start("wait"), update("wait", "waiting")]);
+		expect(entryOf(store, "wait")).toMatchObject({ status: "running" });
+
+		const message = committed("wait", "background done");
+		store.getState().applyEvents([{ type: "agent_end", messages: [call("wait"), message] }]);
+
+		expect(entryOf(store, "wait")).toMatchObject({ status: "done", isError: false });
+		expect(envelope(entryOf(store, "wait")?.result).content).toBe(message.content);
+		expect(store.getState().liveTools.size).toBe(0);
+		expect(store.getState().partialResults.size).toBe(0);
+
+		// A replayed start behind the run's end leaves the settled call alone.
+		store.getState().applyEvents([start("wait")]);
+		expect(entryOf(store, "wait")).toMatchObject({ status: "done" });
+		expect(store.getState().liveTools.size).toBe(0);
+	});
+
+	it("ends a call the run committed no result for as interrupted, and a late start still revives it", () => {
+		const store = createToolsStore();
+		store.getState().applyEvents([start("run"), update("run", "partial")]);
+
+		store.getState().applyEvents([{ type: "agent_end", messages: [call("run")] }]);
+		expect(entryOf(store, "run")).toMatchObject({ status: "aborted" });
+		expect(store.getState().liveTools.size).toBe(0);
+		expect(store.getState().partialResults.size).toBe(0);
+
+		store.getState().applyEvents([start("run")]);
+		expect(entryOf(store, "run")).toMatchObject({ status: "running" });
+	});
+
+	it("takes a repeated id's newest result only when the run answered every call of that id", () => {
+		const store = createToolsStore();
+		store.getState().applyEvents([start("read:0")]);
+
+		// The older call of the reused id was answered, the newest was not: no result is its own.
+		store
+			.getState()
+			.applyEvents([
+				{ type: "agent_end", messages: [call("read:0"), committed("read:0", "first"), call("read:0")] },
+			]);
+
+		expect(entryOf(store, "read:0")).toMatchObject({ status: "aborted", result: null });
+	});
+
+	it("leaves running calls alone at a deferred mid-run settle", () => {
+		const store = createToolsStore();
+		store.getState().applyEvents([start("run")]);
+
+		store.getState().applyEvents([{ type: "agent_end", messages: [call("run")], isTerminal: false }]);
+
+		expect(entryOf(store, "run")).toMatchObject({ status: "running" });
+		expect(store.getState().liveTools.size).toBe(1);
+	});
 });

@@ -39,7 +39,7 @@ import { toast, toastError } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
 import { useToolsStore } from "../stores/tools";
 import { useUiStore } from "../stores/ui";
-import { hydrateSession, hydrateTabSession } from "./use-rpc-events";
+import { attachTabSession, hydrateSession, hydrateTabSession } from "./use-rpc-events";
 
 /** Clear every renderer slice owned by one session before a replacement hydrates. */
 export function resetSessionSurface(closeOverlays = true): void {
@@ -267,10 +267,12 @@ async function switchSession(session: SessionInfo, model?: SessionModelOverride)
 			toast({ variant: "info", message: translate("sidebar.openCancelled") });
 			return false;
 		}
-		// Main may already have committed and hydrated the replacement runtime.
-		// A later switch also owns its own pending marker and fallback title.
+		// Main may already have committed the replacement runtime (a later switch also owns its own pending marker and
+		// fallback title). The replacement's hydration is the tab's attach, still under way: the switch stays in flight
+		// until it lands, or the tab reads like the empty landing tab and the next pick re-roots it.
 		if (runtime && (sessionRuntime(runtime.tabId) !== runtime || originStore.getState().switchPending !== pending)) {
 			clearPending();
+			if (sessionRuntime(runtime.tabId) !== runtime) await attachTabSession(runtime.tabId);
 			return true;
 		}
 		// Keep the outgoing transcript painted until hydrate commits the next
