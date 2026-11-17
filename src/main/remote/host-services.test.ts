@@ -2115,6 +2115,35 @@ describe("LocalHostServices", () => {
 		expect(sidecars[1]?.disposed).toBe(true);
 	});
 
+	it("revives a device's turn on a session a window here holds in that window's omp, never a second omp on the file", async () => {
+		// The Mac mini, 17 Nov 2026: the relaunch restored a window's tab on the seuoffice session and then revived the
+		// desktop's turn on it with an omp of its own; the window's tab then waited for that omp's lease for good.
+		const context = setup();
+		const window = new FakeHostSidecar(workDir, "agent");
+		context.local.views.set("/s/shared.jsonl", window);
+		const x = peer("device-x");
+		const marker = { tab: "peer:device-x:t1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/shared.jsonl" };
+		expect(context.services.reviveTab(x, marker)).toBe("peer:device-x:t1");
+		expect(context.sidecars).toEqual([]);
+		expect(context.local.viewed).toEqual([
+			{ origin: { deviceId: "device-x", name: "device-x" }, hostName: "Host B" },
+		]);
+
+		// The relaunch's continuation starts the window's omp, on the session the window holds.
+		expect(context.services.startTab("peer:device-x:t1")).toBe(window);
+		expect(window.started).toHaveLength(1);
+		window.setStatus("ready");
+
+		// The device comes back to the tab it had: it views that same omp.
+		const conn = new FakeConnection(x);
+		expect(await context.services.call(x, "tab.open", { rtab: "t1", cwd: workDir }, conn)).toEqual({
+			cwd: workDir,
+			kind: "agent",
+			attached: true,
+		});
+		expect(context.sidecars).toEqual([]);
+	});
+
 	it("lets a revived turn with no device run to its end: the grace closes only an idle tab, and its fact stays meanwhile", async () => {
 		vi.useFakeTimers();
 		const { services, sidecars } = setup(1_000);
