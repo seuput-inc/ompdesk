@@ -70,6 +70,8 @@ export const KO_GROUP_TITLES: Record<string, string> = {
 	Sharpshooter: "Sharpshooter",
 	Skills: "스킬",
 	"IDA Pro": "IDA Pro",
+	Disassembler: "디스어셈블러",
+	Ghidra: "Ghidra",
 	Stream: "스트림",
 };
 
@@ -2026,6 +2028,31 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "IDA 유휴 닫기 시간",
 		description:
 			"이 초 수보다 오래 유휴 상태인 IDA 데이터베이스를 저장하고 닫아요(0 = 닫지 않음). 다시 열면 exec 네임스페이스가 초기화돼요.",
+	},
+	"disassembler.backend": {
+		label: "디스어셈블러",
+		description:
+			"read의 분석 선택자와 eval의 dsm 네임스페이스가 쓰는 분석 엔진이에요. 선택자 없이 실행 파일을 읽으면 메타데이터만 보여요. 자동은 IDA Pro가 설치돼 있으면 IDA Pro를, 없으면 Ghidra(첫 분석 때 내려받음)를 써요.",
+	},
+	"disassembler.maxOpen": {
+		label: "최대 열린 데이터베이스",
+		description:
+			"프로젝트당 동시에 열 수 있는 데이터베이스(omp ps의 omp.ida.*·omp.ghidra.* 데몬) 수예요. 더 열면 참조되지 않는 유휴 데이터베이스 하나를 닫아요. 다 쓴 dsm 핸들은 닫아 주세요.",
+	},
+	"disassembler.idleCloseSec": {
+		label: "유휴 닫기 시간",
+		description:
+			"이 초 수보다 오래 유휴 상태인, 참조되지 않는 데이터베이스를 저장하고 닫아요(0 = 닫지 않음). 붙잡아 둔 dsm 핸들은 열린 채로 둬요. 다시 열면 exec 네임스페이스가 초기화돼요.",
+	},
+	"ghidra.installDir": {
+		label: "Ghidra 설치 폴더",
+		description:
+			"Ghidra 12 이상의 설치 폴더(Ghidra/application.properties가 있는 곳)예요. 비우면 $GHIDRA_INSTALL_DIR, Homebrew 순으로 찾고, 없으면 ~/.omp/ghidra에 관리용으로 내려받아요.",
+	},
+	"ghidra.python": {
+		label: "Ghidra Python",
+		description:
+			"pyghidra를 import할 수 있는 Python 인터프리터예요. 비우면 설치본에 들어 있는 wheel로 만든 관리용 가상 환경을 써요.",
 	},
 	"tui.renderSvg": {
 		label: "SVG 그림 렌더링",

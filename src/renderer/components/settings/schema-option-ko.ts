@@ -117,6 +117,18 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	Remove: "제거",
 	"Remove clean worktrees; ask when they have uncommitted changes or new commits. Gitignored files (e.g. `.env`) are deleted too":
 		"변경 사항이 없는 워크트리는 제거해요. 커밋하지 않은 변경이나 새 커밋이 있으면 물어봐요. gitignore로 제외된 파일(예: `.env`)도 삭제돼요.",
+	"Force Remove": "강제 제거",
+	"Remove every worktree without asking, even with uncommitted changes. Uncommitted work, gitignored files (e.g. `.env`), and commits only on a detached HEAD are lost; new commits on the branch are kept":
+		"묻지 않고 모든 워크트리를 제거해요. 커밋하지 않은 변경이 있어도 제거해요. 커밋하지 않은 작업, gitignore로 제외된 파일(예: `.env`), detached HEAD에만 있는 커밋은 사라지고, 브랜치의 새 커밋은 남아요.",
+	"IDA Pro when an install with idalib is found, otherwise Ghidra":
+		"idalib가 있는 IDA Pro 설치를 찾으면 IDA Pro를, 아니면 Ghidra를 써요.",
+	Ghidra: "Ghidra",
+	"Ghidra via PyGhidra; provisions Ghidra 12.2, a JDK 25 and PyGhidra on first analysis when not installed":
+		"PyGhidra로 Ghidra를 써요. 설치돼 있지 않으면 첫 분석 때 Ghidra 12.2, JDK 25, PyGhidra를 준비해요.",
+	"IDA Pro": "IDA Pro",
+	"IDA Pro via idalib; analysis disabled when no install is found":
+		"idalib로 IDA Pro를 써요. 설치를 찾지 못하면 분석을 꺼요.",
+	"Executable metadata only; analysis disabled": "실행 파일 메타데이터만 보여요. 분석은 꺼져요.",
 	"4": "4",
 	"8": "8",
 	"16": "16",
