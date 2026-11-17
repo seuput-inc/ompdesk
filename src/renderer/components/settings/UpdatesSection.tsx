@@ -415,6 +415,7 @@ export function HostOmpUpdateRow({
 
 	return (
 		<SettingsRow
+			id="setting-host-omp"
 			badge={<DeviceChip deviceId={deviceId} />}
 			control={
 				coreError ? (

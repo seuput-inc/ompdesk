@@ -472,14 +472,16 @@ async function openSettingsUpdates(page: Page, look: Look): Promise<void> {
 }
 
 /**
- * Settings › Updates & about scrolled to This computer's omp row. The fake omp runs the minimum omp, older than the
- * one this release was tested with, so the row names the tested one (and a paired host's row above it, the host's).
+ * Settings › Updates & about at the omp row naming the omp its release was tested with (the fake omp runs the minimum
+ * omp, older than the tested one): This computer's machine-setup row, or, where the shown tab is on a paired host (the
+ * paired computer's view), the host's omp row, which names the host's tested omp.
  */
 async function openSettingsOmpTested(page: Page, look: Look): Promise<void> {
 	await openSettingsUpdates(page, look);
-	const row = page.locator("[data-settings-page] [data-setup-item='omp']");
-	await row.waitFor({ state: "visible", timeout: 30_000 });
-	await row.scrollIntoViewIfNeeded();
+	const own = page.locator("[data-settings-page] [data-setup-item='omp']");
+	await own.waitFor({ state: "visible", timeout: 30_000 });
+	const host = page.locator("[data-settings-page] #setting-host-omp");
+	await ((await host.count()) > 0 ? host : own).scrollIntoViewIfNeeded();
 }
 
 /**
@@ -1539,9 +1541,10 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "settings-omp-tested",
 		area: "B",
-		title: "Settings › Updates & about, This computer's omp row naming the omp this release was tested with",
+		title: "Settings › Updates & about, the omp row (This computer's, or a paired host's) naming the omp its release was tested with",
 		open: openSettingsOmpTested,
-		ready: "[data-settings-page] [data-setup-item='omp'] [data-testid='omp-tested']",
+		// DOM order puts a paired host's row first, so the paired computer's view waits for the host's line.
+		ready: "[data-settings-page] #setting-host-omp [data-testid='omp-tested'], [data-settings-page] [data-setup-item='omp'] [data-testid='omp-tested']",
 		settle: 600,
 		// Parity only, like settings-disk-care: the row reads the computer's machine setup from main.
 		when: () => false,
