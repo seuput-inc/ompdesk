@@ -1303,9 +1303,24 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .ok_or("invalid Node entry")?;
     let renderer = build.join("renderer");
     let preload = std::fs::read_to_string(build.join("preload/tauri.js"))?;
-    if !entry.is_file() || !renderer.join("index.html").is_file() {
+    // `bun run dev` (scripts/dev.ts): the page comes from Vite's dev server, which main loads by this variable (window.ts).
+    // Only a checkout's run honors it; a packaged app never trusts a page outside its own origin.
+    let dev_renderer = match std::env::var("ELECTRON_RENDERER_URL") {
+        Ok(url) if !packaged => Some(registry::dev_origin(&url).ok_or_else(|| {
+            format!("ELECTRON_RENDERER_URL is not a loopback http origin: {url}")
+        })?),
+        _ => None,
+    };
+    if !entry.is_file() || (dev_renderer.is_none() && !renderer.join("index.html").is_file()) {
         return Err("actual Node main or React renderer is missing".into());
     }
+    if let Some(origin) = &dev_renderer {
+        registry::allow_dev_origin(origin);
+    }
+    let mut context = tauri::generate_context!();
+    // Tauri refuses IPC from any http page but its dev URL (`is_local_url`), and this crate builds without
+    // `custom-protocol`, so its `dev` cfg reads the dev URL.
+    context.config_mut().build.dev_url = dev_renderer;
     let launch = facts::Launch {
         user_data: user_data.clone(),
         exe: exe.clone(),
@@ -1430,7 +1445,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             node::watch(node_gone);
             Ok(())
         })
-        .build(tauri::generate_context!())?;
+        .build(context)?;
     let code = app.run_return(|_, event| match event {
         RunEvent::ExitRequested { api, .. } if !lifecycle::EXITING.load(Ordering::SeqCst) => {
             api.prevent_exit();

@@ -43,3 +43,5 @@ Architecture, conventions and the full list of checks are in [AGENTS.md](AGENTS.
 bun install
 bun run dev
 ```
+
+`bun run dev` builds the Rust parts on its first run, then opens the app from your checkout with its own settings folder (`ompdesk-dev`); the page reloads as you edit it, and the app restarts when main changes.
