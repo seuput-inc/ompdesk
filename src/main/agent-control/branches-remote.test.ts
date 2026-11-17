@@ -105,4 +105,22 @@ describe("a session branch's copy on origin", () => {
 		expect(await removeSafeWorktree(wt)).toEqual({ removal: "removed" });
 		expect(onOrigin("main")).not.toBe("");
 	});
+
+	it("stays when origin pushes elsewhere than it is read from, even though it landed where it is read", async () => {
+		const wt = await pushedChild("split");
+		// The push destination holds the same copy, but its main never got the work.
+		const pushes = path.join(root, "pushes.git");
+		gitSync(root, "clone", "-q", "--bare", remote, pushes);
+		gitSync(wt.path, "push", "-q", "origin", "HEAD:main");
+		gitSync(repo, "remote", "set-url", "--push", "origin", pushes);
+		const onPushes = (branch: string) =>
+			gitSync(pushes, "for-each-ref", "--format=%(objectname)", `refs/heads/${branch}`);
+		const tip = onPushes(wt.branch);
+		expect(await removeSafeWorktree(wt)).toMatchObject({
+			removal: "removed",
+			remote: { outcome: "push-elsewhere" },
+		});
+		expect(onPushes(wt.branch)).toBe(tip);
+		expect(onOrigin(wt.branch)).toBe(tip);
+	});
 });

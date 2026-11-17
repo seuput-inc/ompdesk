@@ -168,7 +168,7 @@ export type WorktreeRemoval = "removed" | "branch-kept" | null;
  * in `origin/<base>` (by ancestry or by content), or kept and why; `message` says it in one sentence for the agent.
  */
 export interface RemoteCopy {
-	outcome: "deleted" | "not-landed" | "moved" | "base" | "no-base" | "refused" | "failed";
+	outcome: "deleted" | "not-landed" | "moved" | "base" | "no-base" | "refused" | "failed" | "push-elsewhere";
 	message: string;
 }
 

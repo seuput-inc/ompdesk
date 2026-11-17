@@ -832,6 +832,9 @@ pub enum RemoteOutcome {
     Refused,
     /// `origin` could not be reached, or git failed.
     Failed,
+    /// `origin` pushes somewhere other than where it is read (`pushurl`, several push URLs): the copy that would be
+    /// deleted is not the one judged.
+    PushElsewhere,
 }
 
 /// `outcome` with one sentence for the agent that names the branch and says why.
@@ -1012,6 +1015,29 @@ async fn drop_landed_remote(
             message: format!("Its copy on origin ({branch}) stays: {why}."),
         }))
     };
+    // Judged by what `ls-remote`/`fetch` read, deleted by what `push` reaches: when those differ, an identical tip at
+    // the push destination says nothing of its base there.
+    let urls = |push: bool| async move {
+        let mut args = vec!["remote", "get-url", "--all"];
+        if push {
+            args.push("--push");
+        }
+        args.push(ORIGIN);
+        git.raw(cwd, &args).await.map(|out| {
+            let mut list: Vec<String> = out
+                .text()
+                .split('\n')
+                .map(js_trim)
+                .filter(|url| !url.is_empty())
+                .map(str::to_owned)
+                .collect();
+            list.sort();
+            list
+        })
+    };
+    // Several `url`s: git fetches from the first and pushes to every one, so one URL each way, the same, or keep.
+    let (fetch_urls, push_urls) = (urls(false).await?, urls(true).await?);
+    let push_elsewhere = fetch_urls.len() != 1 || fetch_urls != push_urls;
     let RemoteBase { base, protected } = remote_base(git, cwd).await?;
     let copy = format!("refs/heads/{branch}");
     let base_ref = base.as_ref().map(|base| format!("refs/heads/{base}"));
@@ -1031,6 +1057,12 @@ async fn drop_landed_remote(
     let Some(tip) = tips.get(&copy).cloned() else {
         return Ok(None);
     };
+    if push_elsewhere {
+        return kept(
+            RemoteOutcome::PushElsewhere,
+            "origin pushes to another URL than it is read from".to_owned(),
+        );
+    }
     if protected.iter().any(|name| name == branch) {
         return kept(
             RemoteOutcome::Base,
