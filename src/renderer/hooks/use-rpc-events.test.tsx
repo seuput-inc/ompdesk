@@ -456,6 +456,20 @@ it("keeps the transcript a restored ghost tab paints when the window's startup s
 	expect(messages.getState().messages).toMatchObject([{ content: "Last run's rows" }]);
 });
 
+it("still tells a reloaded window's restored tab that its omp is ready, so its transcript loads", async () => {
+	installTabRoutedMockOmp();
+	// A reload while the omp runs: the snapshot's tab carries main's own id, and no later `ready` push comes.
+	vi.spyOn(window.omp.sidecar, "getStatus").mockResolvedValue({ status: "ready", cwd: "/alpha" });
+	useTabsStore.setState({
+		tabs: [{ id: "t0", kind: "agent", cwd: "/alpha", status: "starting", unreadDone: false, ghost: true }],
+		activeTabId: "t0",
+	});
+	ensureTabRuntime("t0");
+	setFocusedSessionRuntime("t0");
+	await mount(<RpcEventsProbe />);
+	expect(sessionRuntimeStore<SessionStore>("t0", "session")?.getState().status).toBe("ready");
+});
+
 const assistantMessage: AgentMessage = { role: "assistant", content: [], timestamp: Date.now() };
 
 afterEach(async () => {
