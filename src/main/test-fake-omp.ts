@@ -11,7 +11,7 @@
  * imports modules whose top-level await never settles (`stats` waits on its child, `-p` on a hanging print), so such
  * a fake never armed it.
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -61,7 +61,9 @@ export async function writeFakeBin(dir: string, name: string, source: string): P
 	const script = join(dir, `${name}.ts`);
 	await writeFile(script, source);
 	const exe = join(dir, `${name}.exe`);
-	execFileSync("bun", ["build", "--compile", script, "--outfile", exe], { stdio: "ignore" });
+	// Never `execFileSync`: the compile takes seconds on a loaded Windows runner, and a worker blocked that long misses
+	// vitest's `onTaskUpdate` call (an unhandled "Timeout calling onTaskUpdate" fails the whole run).
+	await run("bun", ["build", "--compile", script, "--outfile", exe]);
 	return exe;
 }
 
