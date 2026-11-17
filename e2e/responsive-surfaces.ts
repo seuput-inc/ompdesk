@@ -462,16 +462,32 @@ async function openSettingsComputerUse(page: Page, look: Look): Promise<void> {
 	await row.scrollIntoViewIfNeeded();
 }
 
-/**
- * Settings › Updates & about, the Disk row with its breakdown open. A test launch cleans only on request, so the row
- * is measured first with its own Clean up button: the breakdown then lists every part.
- */
-async function openSettingsDiskCare(page: Page, look: Look): Promise<void> {
+/** Settings › Updates & about through the sidebar's Settings entry and the section's own nav entry, as a person opens it. */
+async function openSettingsUpdates(page: Page, look: Look): Promise<void> {
 	await openDrawer(page, look);
 	await page.locator('[data-destination="settings"]').first().click();
 	const nav = page.locator('[data-settings-section="updates"]');
 	await nav.waitFor({ state: "visible", timeout: 15_000 });
 	await nav.click();
+}
+
+/**
+ * Settings › Updates & about scrolled to This computer's omp row. The fake omp runs the minimum omp, older than the
+ * one this release was tested with, so the row names the tested one (and a paired host's row above it, the host's).
+ */
+async function openSettingsOmpTested(page: Page, look: Look): Promise<void> {
+	await openSettingsUpdates(page, look);
+	const row = page.locator("[data-settings-page] [data-setup-item='omp']");
+	await row.waitFor({ state: "visible", timeout: 30_000 });
+	await row.scrollIntoViewIfNeeded();
+}
+
+/**
+ * Settings › Updates & about, the Disk row with its breakdown open. A test launch cleans only on request, so the row
+ * is measured first with its own Clean up button: the breakdown then lists every part.
+ */
+async function openSettingsDiskCare(page: Page, look: Look): Promise<void> {
+	await openSettingsUpdates(page, look);
 	const row = page.locator("[data-settings-page] #setting-disk-care");
 	await row.waitFor({ state: "visible", timeout: 30_000 });
 	await row.scrollIntoViewIfNeeded();
@@ -559,11 +575,7 @@ async function openSettingsMailReentry(page: Page, look: Look): Promise<void> {
 
 /** Settings › Updates & about with the token row saying why the saved token was removed. */
 async function openSettingsUpdatesDropped(page: Page, look: Look): Promise<void> {
-	await openDrawer(page, look);
-	await page.locator('[data-destination="settings"]').first().click();
-	const nav = page.locator('[data-settings-section="updates"]');
-	await nav.waitFor({ state: "visible", timeout: 15_000 });
-	await nav.click();
+	await openSettingsUpdates(page, look);
 	const row = page.locator("[data-settings-page] #settings-updates-auth");
 	await row.waitFor({ state: "visible", timeout: 30_000 });
 	await row.scrollIntoViewIfNeeded();
@@ -1521,6 +1533,17 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-settings-page] [data-updates-auth-dropped]",
 		settle: 600,
 		// The marker is in the parity launch's profile only (e2e/parity.e2e.ts).
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-omp-tested",
+		area: "B",
+		title: "Settings › Updates & about, This computer's omp row naming the omp this release was tested with",
+		open: openSettingsOmpTested,
+		ready: "[data-settings-page] [data-setup-item='omp'] [data-testid='omp-tested']",
+		settle: 600,
+		// Parity only, like settings-disk-care: the row reads the computer's machine setup from main.
 		when: () => false,
 		parity: { session: "work" },
 	},

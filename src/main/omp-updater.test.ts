@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { IPC_COMMANDS } from "../shared/ipc-types";
+import ompTested from "../shared/omp-tested.json";
 import type { OmpUpdatedNotice, OmpUpdateState } from "../shared/omp-update";
 import { OmpUpdater, type OmpUpdaterDeps, registerOmpUpdateIpc } from "./omp-updater";
+import { OmpUpdateStateSchema } from "./remote/app-protocol";
 import type { OmpUpdateOutcome } from "./setup/service";
 import { CHECK_INTERVAL_MS, MAX_CHECK_INTERVAL_MS } from "./update-scheduler";
 import { type IpcCaller, IpcRegistry } from "./web/ipc-registry";
@@ -100,6 +102,15 @@ describe("OmpUpdater", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.calls).toEqual(["fetch"]);
 		expect(h.updater.state()).toMatchObject({ latest: "18.9.0", installed: "18.11.0", failure: null });
+		h.updater.dispose();
+	});
+
+	it("names the omp this release was tested with, and a paired device reads it from the host's state", () => {
+		const h = harness();
+		expect(OmpUpdateStateSchema.parse(h.updater.state()).tested).toBe(ompTested.version);
+		// A host whose OMPdesk predates the field still parses: its row just names no tested omp.
+		const { tested: _, ...older } = h.updater.state();
+		expect(OmpUpdateStateSchema.parse(older).tested).toBeUndefined();
 		h.updater.dispose();
 	});
 

@@ -21,6 +21,7 @@
  * LocalMachine.startOmpUpdate) and follows its state, which the host pushes.
  */
 import { IPC_COMMANDS } from "../shared/ipc-types";
+import ompTested from "../shared/omp-tested.json";
 import type { OmpUpdatedNotice, OmpUpdateFailure, OmpUpdateState } from "../shared/omp-update";
 import { isNewer } from "../shared/version";
 import type { OmpUpdateOutcome } from "./setup/service";
@@ -79,6 +80,7 @@ export class OmpUpdater {
 			checkedAt: null,
 			updatedTo: null,
 			failure: null,
+			tested: ompTested.version,
 		};
 	}
 

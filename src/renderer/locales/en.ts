@@ -6706,6 +6706,7 @@ export const en: Record<string, string> = {
 	"ompUpdate.status.checking": "Checking npm for a newer omp…",
 	"ompUpdate.status.updating": "Updating omp…",
 	"ompUpdate.status.available": "omp {latest} is available. Installed: {version}.",
+	"ompUpdate.tested": "Tested with omp {version}",
 	"ompUpdate.failure.check": "Couldn't check npm for a newer omp.",
 	"ompUpdate.failure.install": "The omp update failed.",
 	"ompUpdate.failure.not-updated": "The omp update finished, but omp is still older than {latest}.",
