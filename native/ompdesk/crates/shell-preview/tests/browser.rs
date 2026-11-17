@@ -524,32 +524,49 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
     page.start_screencast(json!({"format": "png", "everyNthFrame": 1}))
         .await
         .map_err(|e| format!("start framed screencast: {e:?}"))?;
+    // Until a surface of the new view size activates, Viz letterboxes the previous 240x160 surface into the new capture
+    // size (Windows: a 780x520 first frame). Such a transition frame keeps one side of the capture; the host drops it
+    // (tauri-shell `frames::pictures_window`). A 780x1400 frame must follow on this still page without any input.
+    let mut seen = Vec::new();
     let framed = timeout(Duration::from_secs(10), async {
         loop {
             let event = framed_events
                 .recv()
                 .await
                 .map_err(|e| format!("receive framed screencast: {e:?}"))?;
-            if event.method == "Page.screencastFrame"
-                && event.session_id.as_deref() == Some(page.session_id.as_str())
+            if event.method != "Page.screencastFrame"
+                || event.session_id.as_deref() != Some(page.session_id.as_str())
             {
-                break Ok::<_, String>(event.params);
+                continue;
             }
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(
+                    event.params["data"]
+                        .as_str()
+                        .ok_or("missing framed screencast data")?,
+                )
+                .map_err(|e| format!("decode framed screencast: {e}"))?;
+            let size = png_size(&png);
+            seen.push(size);
+            if size == Some((780, 1400)) {
+                break Ok::<_, String>(());
+            }
+            if !size.is_some_and(|(width, height)| width == 780 || height == 1400) {
+                break Err("not a transition frame".to_string());
+            }
+            let ack = event.params["sessionId"]
+                .as_i64()
+                .ok_or("missing framed screencast frame id")?;
+            page.ack_frame(ack)
+                .await
+                .map_err(|e| format!("ack transition frame: {e:?}"))?;
         }
     })
-    .await
-    .map_err(|_| "timed out waiting for framed screencast".to_string())??;
-    let framed_png = base64::engine::general_purpose::STANDARD
-        .decode(
-            framed["data"]
-                .as_str()
-                .ok_or("missing framed screencast data")?,
-        )
-        .map_err(|e| format!("decode framed screencast: {e}"))?;
+    .await;
+    eprintln!("framed screencast frames: {seen:?}");
     check!(
-        png_size(&framed_png) == Some((780, 1400)),
-        "framed screencast dimensions: {:?}",
-        png_size(&framed_png)
+        matches!(framed, Ok(Ok(()))),
+        "framed screencast frames: {seen:?} ({framed:?})"
     );
     // The emulated page fills the larger view rather than sitting in a corner of it: a trusted click at each CSS
     // corner (sent at the emulation scale Chromium takes input in) lands on the marker laid there.

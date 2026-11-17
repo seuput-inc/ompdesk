@@ -139,21 +139,36 @@ pub fn frame_pixels(window: Viewport) -> (u32, u32) {
     (pixels(window.width), pixels(window.height))
 }
 
+/// Whether `frame` pictures an offscreen window of `window`'s size. Until a surface of the resized view activates,
+/// Chromium's capturer letterboxes the last surface into the new capture size, keeping that surface's aspect ratio
+/// (Viz `FrameSinkVideoCapturerImpl`, `ContentRectDeterminedForCapture`), and the frame is cut to that content: right
+/// after a 240×160 view became 780×1400 the first frame is the old picture at 780×520. Such a frame shows a geometry
+/// the page no longer has. A side may be over by the rounding of a fractional view scale (`Page::resize_framed`
+/// rounds the view's DIP up).
+pub fn pictures_window(frame: &Frame, window: Viewport) -> bool {
+    let (width, height) = frame_pixels(window);
+    let slack = window.device_scale_factor.ceil() as u32;
+    frame.width.abs_diff(width) <= slack && frame.height.abs_diff(height) <= slack
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    fn painted() -> Frame {
+    fn painted_at(width: u32, height: u32) -> Frame {
         let (png, _, _) = frame::encode(
-            &[0, 0, 255, 255].repeat(200),
-            20,
-            10,
+            &[0, 0, 255, 255].repeat((width * height) as usize),
+            width,
+            height,
             frame::Format::Png,
             80,
             None,
         )
         .unwrap();
-        Frame::from_event(Arc::new(json!({"sessionId":42,"data":STANDARD.encode(png),"metadata":{"deviceWidth":10,"deviceHeight":5,"pageScaleFactor":1,"offsetTop":0,"scrollOffsetX":0,"scrollOffsetY":0}}))).unwrap()
+        Frame::from_event(Arc::new(json!({"sessionId":42,"data":STANDARD.encode(png),"metadata":{"deviceWidth":width / 2,"deviceHeight":height / 2,"pageScaleFactor":1,"offsetTop":0,"scrollOffsetX":0,"scrollOffsetY":0}}))).unwrap()
+    }
+    fn painted() -> Frame {
+        painted_at(20, 10)
     }
     #[test]
     fn encoding_keeps_the_retained_paint_and_never_enlarges_it() {
@@ -191,5 +206,29 @@ mod tests {
         assert_eq!(at(780, 1400, 1.0), (780, 1400));
         assert_eq!(at(390, 700, 2.0), (780, 1400));
         assert_eq!(at(390, 700, 1.5), (585, 1050));
+    }
+    #[test]
+    fn a_letterboxed_frame_of_the_previous_view_does_not_picture_the_window() {
+        for (frame, window, pictured) in [
+            ((780, 1400), (780, 1400, 1.0), true),
+            ((780, 1400), (390, 700, 2.0), true),
+            // A 1.5× view rounds 1400 / 1.5 up to 934 DIP, 1401 pixels.
+            ((780, 1401), (520, 933, 1.5), true),
+            // The 240×160 view's last surface letterboxed into a 780×1400 capture.
+            ((780, 520), (780, 1400, 1.0), false),
+            ((240, 160), (780, 1400, 1.0), false),
+        ] {
+            let (width, height, device_scale_factor) = window;
+            let window = Viewport {
+                width,
+                height,
+                device_scale_factor,
+            };
+            assert_eq!(
+                pictures_window(&painted_at(frame.0, frame.1), window),
+                pictured,
+                "{frame:?} in {width}x{height}@{device_scale_factor}"
+            );
+        }
     }
 }

@@ -1556,15 +1556,20 @@ async fn offscreen_operation(pages: &Pages, wc: u64, params: &Value) -> Result<V
                 .page(wc)
                 .map(|page| page.zoom)
                 .ok_or_else(|| WireError::new("gone", "Preview window ended"))?;
-            entry
+            let layout = layout_metrics(viewport, zoom)?;
+            // Frames are matched against this size from the moment Chromium may paint at it (`deliverable`).
+            let previous = std::mem::replace(
+                &mut entry.document.lock().expect("Preview document").viewport,
+                viewport,
+            );
+            if let Err(error) = entry
                 .page
-                .resize_framed(
-                    layout_metrics(viewport, zoom)?,
-                    frames::frame_pixels(viewport),
-                )
+                .resize_framed(layout, frames::frame_pixels(viewport))
                 .await
-                .map_err(wire)?;
-            entry.document.lock().expect("Preview document").viewport = viewport;
+            {
+                entry.document.lock().expect("Preview document").viewport = previous;
+                return Err(wire(error));
+            }
             host::event(
                 "wc.state",
                 json!({"wcId":wc,"nativeScaleFactor":viewport.device_scale_factor}),
@@ -1700,6 +1705,21 @@ async fn ack_retained(entry: &Entry) {
     {
         crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
     }
+}
+/// An offscreen page's frame goes to its stream only when it pictures the window's current size
+/// (`frames::pictures_window`); a view's frames are placed by their own metadata.
+fn deliverable(entry: &Entry, wc: u64, frame: &frames::Frame) -> bool {
+    let offscreen = runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .page(wc)
+        .is_some_and(|page| page.kind == Kind::PreviewOffscreen);
+    !offscreen
+        || frames::pictures_window(
+            frame,
+            entry.document.lock().expect("Preview document").viewport,
+        )
 }
 fn unmap_urls<'a>(
     partition: &'a str,
@@ -2058,6 +2078,12 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                     continue;
                 }
                 match frames::Frame::from_event(Arc::clone(&event.params)) {
+                    Ok(frame) if !deliverable(&entry, route.wc, &frame) => {
+                        crate::log::log(
+                            "preview.frame.stale",
+                            json!({"wcId":route.wc,"width":frame.width(),"height":frame.height()}),
+                        );
+                    }
                     Ok(frame) => {
                         let (width, height, scale) = (frame.width(), frame.height(), frame.scale());
                         {
