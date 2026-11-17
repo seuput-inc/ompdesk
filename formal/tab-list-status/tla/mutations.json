@@ -23,6 +23,13 @@
 			"breaks": "QuietAgrees"
 		},
 		{
+			"name": "push-counted-twice",
+			"why": "a push is counted twice (the store and a listener both bump it), leaving the range TypeOK states",
+			"search": "    /\\ pushCount' = pushCount + 1",
+			"replace": "    /\\ pushCount' = pushCount + 2",
+			"breaks": "TypeOK"
+		},
+		{
 			"name": "no-terminal-stutter",
 			"why": "a settled system has no step left: TLC reports the end state as a deadlock",
 			"search": "    \\/ (Quiet /\\ mainV = MaxV /\\ UNCHANGED vars)",

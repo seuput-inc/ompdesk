@@ -1,0 +1,9 @@
+baseline: pass
+DETECTED drop-guard: failed on QuietAgrees
+DETECTED count-taken-at-answer: failed on QuietAgrees
+DETECTED change-without-push: failed on QuietAgrees
+DETECTED push-counted-twice: failed on TypeOK
+DETECTED no-terminal-stutter: failed on deadlock
+covered  TypeOK (by push-counted-twice)
+covered  QuietAgrees (by drop-guard, count-taken-at-answer, change-without-push)
+5 of 5 mutations detected
