@@ -1551,7 +1551,10 @@ mod test_hooks {
     pub(super) struct Rig {
         now: Mutex<i64>,
         devices: Arc<TestDevices>,
-        sockets: Mutex<Vec<(u64, mpsc::UnboundedReceiver<Outgoing>)>>,
+        /// Each socket's queue and the outbox counting it: a text the test is handed has left the queue, as a text the
+        /// edge starts writing has (`server.rs` calls `Outbox::taken`), so the slow-consumer budget counts the backlog,
+        /// not every byte the connection ever sent.
+        sockets: Mutex<Vec<(u64, mpsc::UnboundedReceiver<Outgoing>, Outbox)>>,
     }
 
     static RIGS: LazyLock<Mutex<HashMap<u64, Arc<Rig>>>> = LazyLock::new(Mutex::default);
@@ -1568,10 +1571,13 @@ mod test_hooks {
         pub(super) fn drain_test(&self) {
             let Some(rig) = rig(self.host) else { return };
             let mut sockets = rig.sockets.lock().unwrap_or_else(|e| e.into_inner());
-            for (socket, inbox) in sockets.iter_mut() {
+            for (socket, inbox, outbox) in sockets.iter_mut() {
                 while let Ok(outgoing) = inbox.try_recv() {
                     let sent = match outgoing {
-                        Outgoing::Text(text) => json!({ "kind": "text", "text": text }),
+                        Outgoing::Text(text) => {
+                            outbox.taken(text.len());
+                            json!({ "kind": "text", "text": text })
+                        }
                         Outgoing::Ping => json!({ "kind": "ping" }),
                         Outgoing::Close(code, reason) => {
                             json!({ "kind": "close", "code": code, "reason": reason })
@@ -1662,16 +1668,17 @@ mod test_hooks {
             }
             "attach" => {
                 let (sender, inbox) = mpsc::unbounded_channel();
+                let outbox = Outbox::new(sender);
                 match host.attach_conn(
                     &params.device,
-                    Outbox::new(sender),
+                    outbox.clone(),
                     params.resume_from.as_deref(),
                 ) {
                     Some(conn) => {
                         rig.sockets
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .push((conn, inbox));
+                            .push((conn, inbox, outbox));
                         json!({ "socket": conn })
                     }
                     None => Value::Null,
