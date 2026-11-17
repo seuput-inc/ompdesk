@@ -79,10 +79,6 @@ pub struct Page {
     transport: Transport,
     closed: AtomicBool,
     closing: Mutex<()>,
-    /// Device pixels per DIP of the page's own view, measured before any emulation (the view a screencast captures).
-    view_scale: f64,
-    /// Bits of the `f64` factor `resize_framed` emulates on top of the layout.
-    emulation_scale: AtomicU64,
 }
 
 static PROFILE_ID: AtomicU64 = AtomicU64::new(1);
@@ -314,23 +310,13 @@ impl Browser {
                     format!("Page initialization: {}", error.message),
                 )
             })?;
-        let mut page = Page {
+        let page = Page {
             target_id,
             session_id: attached.session_id,
             transport: attached.transport,
             closed: AtomicBool::new(false),
             closing: Mutex::new(()),
-            view_scale: 1.0,
-            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
         };
-        // Before the first override: the page still reports its own view's scale.
-        page.view_scale = page
-            .evaluate("window.devicePixelRatio", false)
-            .await
-            .map_err(|error| Error::new(error.code, format!("Page view scale: {}", error.message)))?
-            .as_f64()
-            .filter(|scale| scale.is_finite() && (0.25..=8.0).contains(scale))
-            .ok_or_else(|| Error::new("cdp", "Chromium reported no usable view scale"))?;
         page.command("Emulation.setDeviceMetricsOverride", metrics)
             .await
             .map_err(|error| {
@@ -473,43 +459,7 @@ impl Page {
     pub async fn resize(&self, viewport: Viewport) -> Result<()> {
         self.command_settled("Emulation.setDeviceMetricsOverride", viewport.params()?)
             .await?;
-        self.emulation_scale
-            .store(1.0_f64.to_bits(), Ordering::Release);
         Ok(())
-    }
-
-    /// Lays the page out as `layout` and sizes Chromium's view so a screencast frame is `frame` pixels (the view's
-    /// DIP size rounds up for a view scale that is not an integer).
-    ///
-    /// A screencast frame is the view's size times the view's own scale (`Page.startScreencast` sizes it from the
-    /// compositor viewport, never from the emulated `deviceScaleFactor`), and `Emulation.setDeviceMetricsOverride`
-    /// alone sets the view to the layout size: a page laid out at 390 CSS px with `deviceScaleFactor` 2 on a 1× view
-    /// streams 390 px frames. This is `Page.captureScreenshot`'s own recipe for a resolution above the view's: the
-    /// view is sized apart from the layout (`dontSetVisibleSize`, then `Emulation.setVisibleSize`), and the emulated
-    /// page is scaled by `deviceScaleFactor` over the view's scale so it fills the larger view. Chromium takes input
-    /// in that scaled space, so a CSS point is sent at `emulation_scale` times its coordinates.
-    pub async fn resize_framed(&self, layout: Viewport, frame: (u32, u32)) -> Result<()> {
-        let (width, height) = visible_size(frame, self.view_scale)?;
-        let scale = layout.device_scale_factor / self.view_scale;
-        let mut metrics = layout.params()?;
-        metrics["dontSetVisibleSize"] = json!(true);
-        metrics["scale"] = json!(scale);
-        self.command_settled("Emulation.setDeviceMetricsOverride", metrics)
-            .await?;
-        self.command_settled(
-            "Emulation.setVisibleSize",
-            json!({"width":width,"height":height}),
-        )
-        .await?;
-        self.emulation_scale
-            .store(scale.to_bits(), Ordering::Release);
-        Ok(())
-    }
-
-    /// The factor Chromium applies to the emulated page on top of its layout (1 unless `resize_framed` set one):
-    /// `Input.dispatch*` coordinates in CSS pixels are taken at this multiple.
-    pub fn emulation_scale(&self) -> f64 {
-        f64::from_bits(self.emulation_scale.load(Ordering::Acquire))
     }
 
     /// CDP clip coordinates are CSS pixels; clip.scale and deviceScaleFactor are not rewritten.
@@ -615,19 +565,6 @@ fn string_field(value: &Value, key: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| Error::new("cdp", "Chromium returned no target or context identifier"))
-}
-
-/// The DIP size of a view whose device pixels are `frame` (each side 1..=16384, the largest frame a Preview paints),
-/// given the view's own pixels per DIP. A scale that is not an integer rounds the DIP up to a whole one.
-fn visible_size(frame: (u32, u32), view_scale: f64) -> Result<(u32, u32)> {
-    let side = |pixels: u32| {
-        let dip = (f64::from(pixels) / view_scale).ceil();
-        ((1..=16384).contains(&pixels) && dip.is_finite() && dip >= 1.0).then_some(dip as u32)
-    };
-    match (side(frame.0), side(frame.1)) {
-        (Some(width), Some(height)) => Ok((width, height)),
-        _ => Err(Error::new("invalid", "Invalid Preview frame size")),
-    }
 }
 
 fn web_url(url: &str) -> bool {
@@ -912,8 +849,6 @@ mod tests {
             transport,
             closed: AtomicBool::new(false),
             closing: Mutex::new(()),
-            view_scale: 1.0,
-            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
         });
         let (read, mut write) = tokio::io::split(peer);
         let mut read = BufReader::new(read);
@@ -968,8 +903,6 @@ mod tests {
             transport,
             closed: AtomicBool::new(false),
             closing: Mutex::new(()),
-            view_scale: 1.0,
-            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
         };
         let first = page
             .submit_command("Runtime.evaluate", json!({"n": 1}))
@@ -1018,8 +951,6 @@ mod tests {
             transport,
             closed: AtomicBool::new(false),
             closing: Mutex::new(()),
-            view_scale: 1.0,
-            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
         };
         assert_eq!(
             page.submit_navigation("file:///secret").err().unwrap().code,
@@ -1075,19 +1006,6 @@ mod tests {
         ] {
             assert!(web_url(url), "{url}");
         }
-    }
-
-    #[test]
-    fn the_view_is_the_frame_over_its_own_scale() {
-        assert_eq!(visible_size((780, 1400), 1.0).unwrap(), (780, 1400));
-        assert_eq!(visible_size((780, 1400), 2.0).unwrap(), (390, 700));
-        assert_eq!(visible_size((781, 1401), 2.0).unwrap(), (391, 701));
-        assert!(visible_size((0, 1400), 1.0).is_err());
-        assert!(visible_size((16385, 1400), 1.0).is_err());
-        assert!(visible_size((780, 16385), 1.0).is_err());
-        assert!(visible_size((131_072, 1400), 8.0).is_err());
-        assert_eq!(visible_size((16384, 16384), 8.0).unwrap(), (2048, 2048));
-        assert!(visible_size((780, 1400), 0.0).is_err());
     }
 
     #[test]

@@ -2,7 +2,6 @@ use crate::preview_surface as native;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use shell_core::{frame, tray_image, wire::WireError};
-use shell_preview::Viewport;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -132,13 +131,6 @@ fn invalid(message: impl std::fmt::Display) -> WireError {
     WireError::new("invalid", message.to_string())
 }
 
-/// The pixels a frame of an offscreen window is: the window's DIP size times the screen's scale, whatever the
-/// page's own zoom (the zoom changes the layout and the scale the page paints at, not the window).
-pub fn frame_pixels(window: Viewport) -> (u32, u32) {
-    let pixels = |dip: u32| (f64::from(dip) * window.device_scale_factor).round() as u32;
-    (pixels(window.width), pixels(window.height))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,18 +170,5 @@ mod tests {
         ] {
             assert!(frame.encode(&params).is_err());
         }
-    }
-    #[test]
-    fn an_offscreen_window_streams_its_size_times_the_screen_scale() {
-        let at = |width, height, device_scale_factor| {
-            frame_pixels(Viewport {
-                width,
-                height,
-                device_scale_factor,
-            })
-        };
-        assert_eq!(at(780, 1400, 1.0), (780, 1400));
-        assert_eq!(at(390, 700, 2.0), (780, 1400));
-        assert_eq!(at(390, 700, 1.5), (585, 1050));
     }
 }

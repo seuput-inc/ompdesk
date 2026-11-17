@@ -264,14 +264,7 @@ async function main() {
 	input({ t: "tap", x: 100 / 390, y: 58 / 700 });
 	await waitFor("the tap on the button", () => log.some(entry => entry.type === "click" && entry.target === "btn"));
 	const click = log.find(entry => entry.type === "click" && entry.target === "btn");
-	result.click = {
-		trusted: click?.trusted,
-		target: click?.target,
-		active: click?.active,
-		x: click?.x,
-		y: click?.y,
-		page: { vw: click?.vw, vh: click?.vh, dpr: click?.dpr },
-	};
+	result.click = { trusted: click?.trusted, target: click?.target, active: click?.active, x: click?.x, y: click?.y };
 
 	// 3. Keys and committed text reach a focused field as trusted input.
 	log.length = 0;
