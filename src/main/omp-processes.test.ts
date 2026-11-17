@@ -36,8 +36,9 @@ function track(file: string, child: ChildProcess): void {
 	const told = core()
 		.call("omp.track", { file, pid })
 		.catch(() => undefined);
+	// A child the cleanup kills exits after its test removed `file`'s folder: that late write fails, and nothing waits.
 	child.once("exit", () => {
-		void told.then(() => core().call("omp.exited", { file, pid }));
+		void told.then(() => core().call("omp.exited", { file, pid })).catch(() => undefined);
 	});
 }
 
