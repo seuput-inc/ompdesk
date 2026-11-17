@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
+import { redactDiagnosticsText } from "../../../resources/gui-bridge/redactor";
 import { nativeBinPath } from "../native-bin";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -31,6 +32,9 @@ const POSIX = process.platform !== "win32";
 const MAX_FAILED_STARTS = 3;
 const FAILED_START_REST_MS = 30_000;
 const NEWLINE = 0x0a;
+/** The last stderr lines of a core that ended, and each one's length, in its `ended` report. */
+const STDERR_TAIL_LINES = 5;
+const STDERR_LINE_CHARS = 300;
 
 /** A request the core refused (`code` from its answer) or that never got an answer (`timeout`, `core_exited`, …). */
 export class CoreError extends Error {
@@ -126,6 +130,9 @@ export interface CoreProcessOptions {
 /** The event `on` hears, with no data, when a running core ended (crash, kill, `stop`). */
 export const CORE_EXITED = "core.exited";
 
+/** A step of a core's loss, as `CoreProcess.report` names it. */
+export type CoreLossStep = "abandoned" | "ended" | "rest";
+
 interface Frame {
 	id?: number;
 	ok?: boolean;
@@ -212,8 +219,6 @@ class FrameReader {
 export class CoreProcess {
 	#child: ChildProcessWithoutNullStreams | null = null;
 	#shuttingDown = false;
-	/** Whether the running core answered anything yet: a start that ends before that counts as failed. */
-	#answered = false;
 	#failedStarts = 0;
 	#restUntil = 0;
 	#sequence = 0;
@@ -230,6 +235,17 @@ export class CoreProcess {
 	readonly #binary: () => string;
 	readonly #log: (line: string) => void;
 	readonly #timeoutMs: number;
+	/** Cores `abandon` ended: their end is a loss, not the quit's stop. */
+	readonly #abandoned = new WeakSet<ChildProcessWithoutNullStreams>();
+	/** Cores that answered a request: one that ends without is a failed start. */
+	readonly #answeredBy = new WeakSet<ChildProcessWithoutNullStreams>();
+	/**
+	 * Each step of a core's loss, for gui-runtime.jsonl (`index.ts` sets it; source `core-loss`): `abandoned` (main
+	 * ended a core that stopped answering, and why), `ended` (a core that was not stopped by the quit ended: its exit,
+	 * whether it had answered, the last lines it wrote to stderr), `rest` (it is not started again for a while). The
+	 * console only gets these where nothing keeps main's output (a packaged app).
+	 */
+	report: ((step: CoreLossStep, details: Record<string, string | number | boolean>) => void) | null = null;
 
 	constructor(options: CoreProcessOptions) {
 		this.#binary = options.binary;
@@ -287,6 +303,8 @@ export class CoreProcess {
 		const child = this.#child;
 		if (!child) return;
 		this.#log(`ompdesk-core: ${reason}; ending it`);
+		this.#abandoned.add(child);
+		this.report?.("abandoned", { generation: this.generation, reason });
 		// Forgotten now, not at its exit event: main's thread may call again before that event can run, and that call
 		// must start the next core. Its exit still fails what waited on it, as a core that died does.
 		this.#child = null;
@@ -413,26 +431,34 @@ export class CoreProcess {
 		});
 		this.#child = child;
 		const hubFolder = this.#hub.folder;
-		this.#answered = false;
 		const generation = this.#hub.generation;
 		const reader = new FrameReader((frame, bin) => this.#receive(child, generation, frame, bin), this.#log);
 		child.stdout.on("data", (chunk: Buffer) => reader.push(chunk));
-		createInterface({ input: child.stderr }).on("line", line => this.#log(line));
+		// The last lines it wrote, for the report of its end.
+		const stderr: string[] = [];
+		createInterface({ input: child.stderr }).on("line", line => {
+			stderr.push(line);
+			if (stderr.length > STDERR_TAIL_LINES) stderr.shift();
+			this.#log(line);
+		});
 		// A write to a core that already ended fails here; its close rejects what waits.
 		child.stdin.on("error", () => {});
 		const gone = Promise.withResolvers<boolean>();
 		this.#gone.set(child, gone.promise);
+		const exit: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
 		let ended = false;
 		const end = (error: CoreError) => {
 			if (ended) return;
 			ended = true;
-			this.#ended(child, generation, error, gone.resolve);
+			this.#ended(child, generation, error, gone.resolve, exit, stderr);
 		};
 		child.on("error", error =>
 			end(new CoreError("core_unavailable", `ompdesk-core could not run: ${error.message}`)),
 		);
 		child.on("close", (code, signal) => {
 			if (hubFolder) rmSync(hubFolder, { recursive: true, force: true });
+			exit.code = code;
+			exit.signal = signal;
 			end(new CoreError("core_exited", `ompdesk-core exited (${signal ?? `code ${code}`})`));
 		});
 		return child;
@@ -444,10 +470,8 @@ export class CoreProcess {
 			return;
 		}
 		if (typeof frame.id !== "number") return;
-		if (child === this.#child) {
-			this.#answered = true;
-			this.#failedStarts = 0;
-		}
+		if (child === this.#child) this.#failedStarts = 0;
+		this.#answeredBy.add(child);
 		const pending = this.#pending.get(frame.id);
 		if (!pending) {
 			const late = this.#late.get(frame.id);
@@ -477,14 +501,26 @@ export class CoreProcess {
 		generation: number,
 		error: CoreError,
 		gone: (empty: boolean) => void,
+		exit: { code: number | null; signal: NodeJS.Signals | null },
+		stderr: readonly string[],
 	): void {
 		const expected = this.#stopping.has(child);
 		this.#stopping.add(child);
+		if (!expected || this.#abandoned.has(child))
+			this.report?.("ended", {
+				generation,
+				code: exit.code ?? -1,
+				signal: exit.signal ?? "",
+				abandoned: this.#abandoned.has(child),
+				answered: this.#answeredBy.has(child),
+				stderr: stderr.map(line => redactDiagnosticsText(line).slice(0, STDERR_LINE_CHARS)).join("\n"),
+			});
 		if (this.#child === child) {
 			this.#child = null;
-			if (!this.#answered && ++this.#failedStarts >= MAX_FAILED_STARTS) {
+			if (!this.#answeredBy.has(child) && ++this.#failedStarts >= MAX_FAILED_STARTS) {
 				this.#failedStarts = 0;
 				this.#restUntil = Date.now() + FAILED_START_REST_MS;
+				this.report?.("rest", { failedStarts: MAX_FAILED_STARTS, restMs: FAILED_START_REST_MS });
 			}
 		}
 		if (!expected) this.#log(error.message);

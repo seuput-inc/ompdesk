@@ -558,6 +558,11 @@ export type RuntimeErrorSource =
 	/** Main's blocked waits on the core's hub, one line a minute (`OMP_GUI_HUB_STATS=1`, `takeHubMinute`). */
 	| "hub"
 	/**
+	 * The core process's loss and each tab's way back (src/main/core/process.ts `report`, sidecar.ts `reportRecovery`):
+	 * `message` names the step: abandoned, ended, rest; lane-lost, resolve-slow, resolved, launch, spawned.
+	 */
+	| "core-loss"
+	/**
 	 * The launch's restore of saved tabs (src/main/index.ts `logLayoutRestore`): counts restored and, by reason, left
 	 * out (folder gone, session deleted, a duplicate) or started fresh (its session file missing).
 	 */

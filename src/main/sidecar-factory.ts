@@ -297,6 +297,8 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 					{ cwd: report.cwd },
 				);
 			},
+			// The way back after a lost core, step by step (source `core-loss`): the next loss names where a tab stopped.
+			reportRecovery: (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details }),
 			// The coordinator adds what only main knows (children, ship queue) before a window sees the status.
 			frameTransform: (frame): Record<string, unknown> =>
 				frame.type === "autopilot_update" ? (deps.autopilot?.()?.overlay(sc, frame) ?? frame) : frame,
