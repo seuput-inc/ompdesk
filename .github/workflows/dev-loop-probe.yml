@@ -112,3 +112,11 @@ jobs:
           name: dev-loop-probe
           path: ${{ runner.temp }}/dev-probe
           retention-days: 7
+      # separatePreload moved from closeBundle to writeBundle: the production build still writes tauri.js and passes
+      # check-main-bundle's preload checks.
+      - name: bun run build still writes the Tauri preload
+        if: success() || failure()
+        run: |
+          set -euo pipefail
+          OMPDESK_FORCE_BUILD=1 bun run build
+          ls -l out/preload/tauri.js out/preload/shell.js
