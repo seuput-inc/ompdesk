@@ -170,6 +170,21 @@ function loadingPosition(node) {
 	return ts.isCallExpression(parent) && parent.arguments.includes(/** @type {ts.Expression} */ (node));
 }
 
+/** A call that loads or resolves a module by its argument: `import()`, `require`, `Bun.resolveSync`, `load…`. */
+const LOADER_NAME = /require|resolve|import|load/i;
+
+/** @param {ts.CallExpression} node */
+function loaderCall(node) {
+	const callee = node.expression;
+	if (callee.kind === ts.SyntaxKind.ImportKeyword) return true;
+	const name = ts.isIdentifier(callee)
+		? callee.text
+		: ts.isPropertyAccessExpression(callee)
+			? callee.name.text
+			: undefined;
+	return name !== undefined && LOADER_NAME.test(name);
+}
+
 /**
  * The relative module a runtime import, re-export or `import()` names, or undefined.
  * @param {ts.Node} node
@@ -248,6 +263,14 @@ export function ompReferences(repoPath, text) {
 			const arg = node.arguments[0];
 			const key = arg && (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) ? arg.text : null;
 			found.push({ specifier: key === null ? null : OMP_SCOPE + key, line: lineOf(node), via: "package" });
+		}
+		// A file-local constant handed to a loader (`const P = "@oh-my-pi/…"; import(P)`) is no longer data.
+		if (ts.isCallExpression(node) && loaderCall(node)) {
+			for (const arg of node.arguments) {
+				const value = ts.isIdentifier(arg) ? constants.get(arg.text) : undefined;
+				if (value !== undefined && SPECIFIER.test(value))
+					found.push({ specifier: value, line: lineOf(arg), via: "direct", data: false });
+			}
 		}
 		/** @type {string | undefined} */
 		let specifier;

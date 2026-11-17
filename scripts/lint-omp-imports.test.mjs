@@ -80,6 +80,16 @@ describe("findOmpImportViolations", () => {
 		expect(lines("scripts/x.ts", 'await import("@oh-my-pi/pi-coding-agent/sdk");')).toEqual([1]);
 	});
 
+	it("refuses the package name once a file-local constant hands it to a loader, and keeps it as a path part", () => {
+		const file = "src/main/x.ts";
+		const held = 'const P = "@oh-my-pi/pi-coding-agent";\n';
+		expect(lines(file, `${held}await import(P);`)).toEqual([2]);
+		expect(lines(file, `${held}const m = require(P);`)).toEqual([2]);
+		expect(lines(file, `${held}Bun.resolveSync(P, root);`)).toEqual([2]);
+		expect(lines(file, `${held}const sdk = await loadPackage(P);`)).toEqual([2]);
+		expect(lines(file, `${held}const manifest = join(root, "node_modules", P, "package.json");`)).toEqual([]);
+	});
+
 	it("sends processes outside omp through omp-package keys", () => {
 		const file = "resources/gui-bridge/stock-helper/x.ts";
 		expect(lines(file, 'import(Bun.resolveSync("@oh-my-pi/pi-natives", root));')).toEqual([1]);
