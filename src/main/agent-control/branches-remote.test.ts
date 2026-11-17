@@ -81,7 +81,9 @@ describe("a session branch's copy on origin", () => {
 		const wt = await pushedChild("moved");
 		gitSync(wt.path, "push", "-q", "origin", "HEAD:main");
 		const tip = onOrigin(wt.branch);
-		const moved = gitSync(remote, "commit-tree", `${tip}^{tree}`, "-p", tip, "-m", "moved");
+		// A bare repository has no identity of its own, and a runner has no global one.
+		const as = ["-c", "user.name=Other", "-c", "user.email=other@example.com"];
+		const moved = gitSync(remote, ...as, "commit-tree", `${tip}^{tree}`, "-p", tip, "-m", "moved");
 		// The deletion's own push runs this hook once origin has told it the tip: origin's copy moves right then.
 		const slash = (file: string) => file.replaceAll("\\", "/");
 		const hooks = path.join(root, "hooks");
