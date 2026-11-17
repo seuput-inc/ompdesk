@@ -613,10 +613,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** todo-compact.ts: the public `tool_result` hook and its `additionalContext` only. Imports nothing from omp. */
 	todoCompact: {},
 	/**
-	 * waste-guards.ts: the public `tool_call` (`block`) and `tool_result` (`content`) hooks, and `registerTool` over the
-	 * built-in `wait` with the same-tool `ctx.invokeTool` (present since before 18.18.2). Imports nothing from omp.
+	 * waste-guards.ts: the public `tool_call` (`block`) and `tool_result` (`content`) hooks, `registerTool` over the
+	 * built-in `wait` with the same-tool `ctx.invokeTool` (present since before 18.18.2), and on Windows stock's
+	 * `WaitTool` from the package index over the process settings, which connects the folder's service broker client.
 	 */
-	wasteGuards: {},
+	wasteGuards: {
+		pkg: ["WaitTool.prototype.execute()", "Settings.instance"],
+	},
 	/**
 	 * quit-journal.ts: the public `tool_execution_start`, `message_end` and `session_shutdown` hooks, and the
 	 * session's agent loop reached through the registry to abort it a moment before stock's dispose does.
