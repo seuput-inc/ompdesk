@@ -23,7 +23,8 @@
  * push through: a broken gate must never make every push impossible.
  *
  * A `probe/*` branch skips the fix-commit rule alone (a test that shows a bug before its fix, an old commit rerun on a
- * runner) and an archive ref (`refs/archive/*`) is not checked at all, so neither ever needs `--no-verify`. `git push
+ * runner) and its commits never reach `main` (`probesInPush`); an archive ref (`refs/archive/*`) is not checked at all,
+ * so neither ever needs `--no-verify`. `git push
  * --no-verify` skips the gate, a person's call; an agent's is refused before it runs (`resources/gui-bridge/waste-guards`).
  */
 import { execFileSync, spawn } from "node:child_process";
@@ -148,6 +149,32 @@ export function rangeBase(cwd: string, ref: PushRef): string {
 	} catch {
 		return `${ref.localSha}~1`;
 	}
+}
+
+/**
+ * The probe branches (`probe/*`, here or as origin's) whose commits a push to `main` would carry: a probe holds what
+ * main must not (a test alone that fails before its fix, an old commit rerun), so its commits never reach main by a
+ * merge or a fast-forward. Its fix carries the test again in a commit of its own.
+ */
+export function probesInPush(cwd: string, ref: PushRef, base: string): string[] {
+	if (ref.remoteRef !== "refs/heads/main") return [];
+	const probes = gitText(cwd, [
+		"for-each-ref",
+		"--format=%(refname)",
+		"refs/heads/probe/",
+		"refs/remotes/origin/probe/",
+	])
+		.split("\n")
+		.filter(Boolean);
+	return probes.filter(probe => {
+		let shared: string;
+		try {
+			shared = gitText(cwd, ["merge-base", probe, ref.localSha]);
+		} catch {
+			return false;
+		}
+		return gitText(cwd, ["rev-list", "--count", `${base}..${shared}`]) !== "0";
+	});
 }
 
 function extract(cwd: string, tree: string, sha: string, paths: string[]): void {
@@ -336,6 +363,13 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 	say(
 		`${ref.localRef} -> ${ref.remoteRef}: ${files.length} changed file(s), ${range.replaceAll(SHA, sha => sha.slice(0, 9))}`,
 	);
+	const probes = probesInPush(root, ref, base);
+	if (probes.length > 0) {
+		console.error(
+			`[pre-push] refused: this push to main carries commits of ${probes.join(", ")}. A probe branch never lands; commit the fix with its test on a branch of its own.`,
+		);
+		return 1;
+	}
 
 	const notes: string[] = [];
 	const results: StepResult[] = needsFixTests(ref)

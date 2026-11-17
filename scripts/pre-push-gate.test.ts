@@ -8,6 +8,7 @@ import {
 	needsFixTests,
 	parsePushRefs,
 	planGate,
+	probesInPush,
 	rangeBase,
 	syncTree,
 	withMutex,
@@ -89,6 +90,40 @@ describe("planGate", () => {
 			surfaces: null,
 			budget: true,
 		});
+	});
+});
+
+describe("a probe branch never lands on main", () => {
+	let repo = "";
+	const commit = (file: string, message: string) => {
+		fs.writeFileSync(path.join(repo, file), `${message}\n`);
+		gitSync(repo, "add", "-A");
+		gitSync(repo, "commit", "-q", "-m", message);
+		return gitSync(repo, "rev-parse", "HEAD");
+	};
+	const toMain = (localSha: string, remoteSha: string) => ({
+		localRef: "HEAD",
+		localSha,
+		remoteRef: "refs/heads/main",
+		remoteSha,
+	});
+	beforeEach(async () => {
+		repo = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-probe-"));
+		await initRepo(repo);
+	});
+	afterEach(() => fs.rmSync(repo, { recursive: true, force: true }));
+
+	it("refuses a push to main that carries a probe's test-only commit, and lets the fix with its own test through", () => {
+		const base = commit("a.ts", "first");
+		gitSync(repo, "checkout", "-q", "-b", "probe/red-test");
+		const red = commit("a.test.ts", "test: the bug, before its fix");
+		expect(probesInPush(repo, toMain(red, base), base)).toEqual(["refs/heads/probe/red-test"]);
+		expect(probesInPush(repo, { ...toMain(red, base), remoteRef: "refs/heads/probe/red-test" }, base)).toEqual([]);
+
+		gitSync(repo, "checkout", "-q", base);
+		fs.writeFileSync(path.join(repo, "a.test.ts"), "test: the bug, before its fix\n");
+		const fix = commit("a.ts", "fix: the bug, with its test");
+		expect(probesInPush(repo, toMain(fix, base), base)).toEqual([]);
 	});
 });
 
