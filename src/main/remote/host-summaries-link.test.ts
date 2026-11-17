@@ -14,15 +14,20 @@ afterEach(closeSessions);
 
 const WAIT = { timeout: 15_000, interval: 20 };
 
-/** Once the host's builder has nothing left to publish, the device holds exactly what the host shows. */
+/**
+ * The device's copy reaches `status` by what the host pushes by itself (`current()` would publish a pending change
+ * for it, so the wait never calls it); only then is the copy held to the host's whole set.
+ */
 async function deviceShows(session: Session, status: SessionSummary["status"]): Promise<void> {
 	const host = session.hostSummaries;
 	if (!host) throw new Error("expected the host's summaries");
-	await vi.waitFor(() => {
-		const built = host.current();
-		expect(built.sessions).toMatchObject([{ status }]);
-		expect(session.device.devices.summaries(session.hostId)).toEqual(built);
-	}, WAIT);
+	await vi.waitFor(
+		() => expect(session.device.devices.summaries(session.hostId)?.sessions).toMatchObject([{ status }]),
+		WAIT,
+	);
+	const built = host.current();
+	expect(built.sessions).toMatchObject([{ status }]);
+	await vi.waitFor(() => expect(session.device.devices.summaries(session.hostId)).toEqual(built), WAIT);
 }
 
 describe("a host's run state on a paired device", () => {
