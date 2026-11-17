@@ -151,8 +151,13 @@ export function bridgeAt(ref: string): string {
 export interface Omp {
 	frames: Frame[];
 	send(command: Record<string, unknown>): Promise<Frame>;
-	/** Sends a prompt and resolves with the frames of its turn once the session settled. */
-	turn(message: string): Promise<Frame[]>;
+	/**
+	 * Sends a prompt and resolves with the frames of its turn once the session settled; one that has not settled
+	 * within `timeoutMs` fails with `diagnose()`.
+	 */
+	turn(message: string, timeoutMs?: number): Promise<Frame[]>;
+	/** What a run that stalled left to read: the frames omp wrote, in order with repeats counted, and its stderr. */
+	diagnose(): string;
 	root: string;
 }
 
@@ -248,15 +253,38 @@ export async function startOmp(options: {
 		return answered.promise;
 	};
 	if (registered.length > 0) await send({ type: "set_host_tools", tools: registered });
-	const turn = async (message: string) => {
+	const diagnose = () => {
+		const seen: string[] = [];
+		let last = "";
+		let repeats = 0;
+		const flush = () => {
+			if (last) seen.push(repeats > 1 ? `${last} x${repeats}` : last);
+		};
+		for (const frame of frames) {
+			const name = frame.toolName ? `${frame.type}:${String(frame.toolName)}` : frame.type;
+			if (name === last) repeats++;
+			else {
+				flush();
+				last = name;
+				repeats = 1;
+			}
+		}
+		flush();
+		return `frames: ${seen.join(" > ")}\nomp stderr: ${stderr.slice(-2000)}`;
+	};
+	const turn = async (message: string, timeoutMs = 300_000) => {
 		const from = frames.length;
 		await send({ type: "prompt", message });
-		await expect
-			.poll(() => frames.slice(from).some(frame => frame.type === "session_settled"), { timeout: 300_000 })
-			.toBe(true);
+		try {
+			await expect
+				.poll(() => frames.slice(from).some(frame => frame.type === "session_settled"), { timeout: timeoutMs })
+				.toBe(true);
+		} catch (error) {
+			throw new Error(`the turn never settled\n${diagnose()}`, { cause: error });
+		}
 		return frames.slice(from);
 	};
-	return { frames, send, turn, root };
+	return { frames, send, turn, diagnose, root };
 }
 
 export function todoOps(frames: readonly Frame[]): string[] {
