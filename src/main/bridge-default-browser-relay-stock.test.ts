@@ -107,6 +107,9 @@ describe.skipIf(!existsSync(bun) || !existsSync(stockRoot))("default browser rel
 		const script = path.join(dir, "servers.mjs");
 		await fs.writeFile(script, SERVERS);
 		const child = spawn(bun, ["run", script], { cwd: dir, stdio: ["pipe", "pipe", "pipe"] });
+		// Windows refuses to remove a folder a live process runs in, so the cleanup waits for bun to be gone.
+		const exited = Promise.withResolvers<void>();
+		child.once("exit", () => exited.resolve());
 		const extensions: FakeExtension[] = [];
 		let errors = "";
 		child.stderr.on("data", chunk => {
@@ -151,6 +154,7 @@ describe.skipIf(!existsSync(bun) || !existsSync(stockRoot))("default browser rel
 			for (const extension of extensions) extension.socket.close();
 			child.stdin.end();
 			child.kill();
+			await exited.promise;
 			await fs.rm(dir, { recursive: true, force: true });
 		}
 	}, 60_000);
