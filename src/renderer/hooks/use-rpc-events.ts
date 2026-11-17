@@ -833,23 +833,28 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 		const snapshotTabId = focusedTabId();
 		const snapshotRuntime = sessionRuntime(snapshotTabId);
 		const snapshotVersion = statusVersion;
-		void window.omp.sidecar
-			.getStatus()
-			.then(status => {
-				// A boot snapshot cannot roll back a newer push, or reset a task
-				// selected/replaced while the active-tab request was in flight.
-				if (
-					disposed ||
-					statusVersion !== snapshotVersion ||
-					focusedTabId() !== snapshotTabId ||
-					sessionRuntime(snapshotTabId) !== snapshotRuntime
-				)
-					return;
-				handleStatus(status, snapshotTabId);
-			})
-			.catch(() => {
-				// Status pushes and GET_TABS remain authoritative when this read fails.
-			});
+		// Main answers for this window's real tab. A ghost (last launch's tab, painted from the tab snapshot until the tab
+		// list adopts it) is not that tab: the list brings the real tab's status, and this answer's `starting` would wipe
+		// the ghost's seeded transcript for the frames before the swap (a skeleton jumping in under the title bar).
+		const snapshotGhost = useTabsStore.getState().tabs.some(tab => tab.id === snapshotTabId && tab.ghost);
+		if (!snapshotGhost)
+			void window.omp.sidecar
+				.getStatus()
+				.then(status => {
+					// A boot snapshot cannot roll back a newer push, or reset a task
+					// selected/replaced while the active-tab request was in flight.
+					if (
+						disposed ||
+						statusVersion !== snapshotVersion ||
+						focusedTabId() !== snapshotTabId ||
+						sessionRuntime(snapshotTabId) !== snapshotRuntime
+					)
+						return;
+					handleStatus(status, snapshotTabId);
+				})
+				.catch(() => {
+					// Status pushes and GET_TABS remain authoritative when this read fails.
+				});
 
 		const handleSubagent = (frame: SubagentFrame, tabId: string) => {
 			if (!openTabFrame(tabId)) return;
