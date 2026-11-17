@@ -2142,6 +2142,42 @@ describe("LocalHostServices", () => {
 			attached: true,
 		});
 		expect(context.sidecars).toEqual([]);
+
+		// The device relaunched and its old tab is gone: it opens the session in a new tab (the desktop's 15d15e7d…), which
+		// takes over the revived one, still on the window's omp.
+		const fresh = await context.services.call(
+			x,
+			"tab.open",
+			{ rtab: "t2", cwd: workDir, sessionPath: "/s/shared.jsonl" },
+			new FakeConnection(x),
+		);
+		expect(fresh).toMatchObject({ attached: true });
+		expect(context.services.startTab("peer:device-x:t1")).toBe(window);
+		expect(context.sidecars).toEqual([]);
+	});
+
+	it("joins a device's new tab, and a window, to the omp its revived turn runs when no window held the session", async () => {
+		const context = setup();
+		const x = peer("device-x");
+		const marker = { tab: "peer:device-x:t1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/kept.jsonl" };
+		const revived = context.services.reviveTab(x, marker);
+		if (!revived) throw new Error("expected a revived tab");
+		context.services.startTab(revived);
+		const omp = context.sidecars[0];
+		omp?.setStatus("ready");
+		expect(context.sidecars).toHaveLength(1);
+
+		// The device relaunched and its tab that ran the turn is gone; it opens the session again in another tab.
+		const opened = await context.services.call(
+			x,
+			"tab.open",
+			{ rtab: "t2", cwd: workDir, sessionPath: "/s/kept.jsonl" },
+			new FakeConnection(x),
+		);
+		expect(opened).toMatchObject({ attached: true });
+		// A window of this computer opening it views the same omp.
+		expect(context.services.viewSession("/s/kept.jsonl")?.statusPayload.status).toBe("ready");
+		expect(context.sidecars).toHaveLength(1);
 	});
 
 	it("lets a revived turn with no device run to its end: the grace closes only an idle tab, and its fact stays meanwhile", async () => {
