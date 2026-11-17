@@ -157,7 +157,7 @@ describe("renderReport", () => {
 		const text = renderReport({
 			version: "18.23.0",
 			summaries: [summary({ job: "node-2", outcome: "failure", report: false })],
-			jobs: { check: "failure", windows: "failure", strings: "success" },
+			jobs: { check: "failure", windows: "failure", strings: "success", push: "cancelled" },
 			missingStrings: null,
 			touchpoints,
 		});
@@ -167,6 +167,7 @@ describe("renderReport", () => {
 				"",
 				"- `node-2`: vitest failed and wrote no report",
 				"- `windows`: failed before its checks",
+				"- `push`: cancelled",
 			].join("\n"),
 		);
 	});

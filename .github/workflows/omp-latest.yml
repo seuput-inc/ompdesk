@@ -239,7 +239,9 @@ jobs:
       actions: read
       issues: write
     env:
-      RESULT: ${{ needs.plan.result == 'success' && needs.check.result == 'success' && needs.windows.result == 'success' && needs.strings.result != 'failure' && 'success' || 'failure' }}
+      # A planned bump passes only when its strings check ran green and, for a fresh version, its branch was pushed: a
+      # cancelled or failed one must not close the failure issue as "Passing again".
+      RESULT: ${{ needs.plan.result == 'success' && needs.check.result == 'success' && needs.windows.result == 'success' && (needs.plan.outputs.bump != 'true' || needs.strings.result == 'success') && (needs.plan.outputs.fresh != 'true' || needs.push.result == 'success') && 'success' || 'failure' }}
       OMP: ${{ needs.check.outputs.omp }}
     steps:
       - if: needs.plan.outputs.bump == 'true'

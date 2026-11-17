@@ -215,7 +215,9 @@ export function renderReport(input: ReportInput): string {
 	);
 	if (input.missingStrings !== null) accounted.add("strings");
 	for (const [job, result] of Object.entries(input.jobs)) {
-		if (result === "failure" && !accounted.has(job)) outside.push(`- \`${job}\`: failed before its checks`);
+		if (accounted.has(job)) continue;
+		if (result === "failure") outside.push(`- \`${job}\`: failed before its checks`);
+		else if (result === "cancelled") outside.push(`- \`${job}\`: cancelled`);
 	}
 	if (outside.length > 0) {
 		out.push("### Failed outside any test file (each job's summary names the step)", "", ...outside, "");
