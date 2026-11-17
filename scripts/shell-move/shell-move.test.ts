@@ -216,9 +216,11 @@ describe("win-update-real.ps1", () => {
 		expect(script).toContain("$updaterArgs = @('--updated', '--force-run', \"--package-file=$package\")");
 		expect(script).toContain("ompdesk-updater\\pending");
 		expect(script).not.toMatch(/\$updaterArgs = [^\n]*\/S/);
-		// Every job of the subset runs both modes against a setup the job downloaded, never one it built under a test identity.
+		// A candidate from a dry run takes the installer path; a published tag adds the published app's own updater on the real feed.
 		const workflow = read(".github/workflows/shell-batch-checks.yml");
-		expect(workflow).toContain("mode: [installer, feed]");
+		expect(workflow).toContain(
+			`mode: \${{ fromJSON(inputs.candidate_run && '["installer"]' || '["installer","feed"]') }}`,
+		);
 		expect(workflow).toContain("only == 'win-update-real'");
 	});
 });
