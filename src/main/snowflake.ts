@@ -8,6 +8,7 @@
 
 const EPOCH = 1420070400000;
 const MAX_SEQ = 0x3fffff;
+const MAX_DT = 2 ** 42 - 1;
 
 /** Process-local sequence, seeded randomly (same scheme as the source util). */
 let seq = (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) & MAX_SEQ;
@@ -15,5 +16,7 @@ let seq = (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) & MAX_SEQ;
 /** Mint the next snowflake id as a 16-char hex string. */
 export function nextSnowflake(timestamp = Date.now()): string {
 	seq = (seq + 1) & MAX_SEQ;
-	return ((BigInt(timestamp - EPOCH) << 22n) | BigInt(seq)).toString(16).padStart(16, "0");
+	// Saturated as stock's `formatParts`: a clock before EPOCH or past ~2154 still yields 16 hex chars.
+	const dt = Math.min(Math.max(timestamp - EPOCH, 0), MAX_DT);
+	return ((BigInt(dt) << 22n) | BigInt(seq)).toString(16).padStart(16, "0");
 }
