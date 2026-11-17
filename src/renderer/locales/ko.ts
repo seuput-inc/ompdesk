@@ -3656,6 +3656,7 @@ export const ko: Record<string, string> = {
 	"tools.image.alt": "이미지",
 	"tools.image.count": "×{count}",
 	"tools.image.unavailable": "이미지를 불러올 수 없어요",
+	"tools.image.quality": "품질 {quality}",
 	"tools.astgrep.fallback": "AST 검색",
 	"tools.astgrep.matching": "찾는 중…",
 	"tools.astgrep.noMatches": "일치 항목 없음",

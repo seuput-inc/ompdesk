@@ -3662,6 +3662,7 @@ export const en: Record<string, string> = {
 	"tools.image.alt": "image",
 	"tools.image.count": "×{count}",
 	"tools.image.unavailable": "Image unavailable",
+	"tools.image.quality": "quality {quality}",
 	"tools.astgrep.fallback": "ast grep",
 	"tools.astgrep.matching": "Matching…",
 	"tools.astgrep.noMatches": "No matches",
