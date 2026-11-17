@@ -23,7 +23,6 @@ export function scanOmpReferences(root: string): OmpReference[] {
 	for (const file of productionFiles(root)) {
 		if (file.startsWith(OMP_ADAPTER_DIR) || file === OMP_PACKAGE_FILE) continue;
 		const text = readFileSync(path.join(root, file), "utf8");
-		if (!/@oh-my-pi\/|\/omp\/|mpModule|omp-package/.test(text)) continue;
 		for (const specifier of ompSpecifiers(file, text)) refs.push({ file, specifier });
 	}
 	return refs.sort((a, b) => a.file.localeCompare(b.file) || a.specifier.localeCompare(b.specifier));

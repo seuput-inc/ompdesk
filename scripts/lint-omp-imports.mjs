@@ -214,6 +214,9 @@ function resolveRelative(repoPath, relative) {
  * `package-import`: a runtime import of omp-package.ts (`specifier` null).
  */
 
+/** Text every kind of reference contains; a file without any is not parsed (most of the ~1500 production files). */
+const REFERENCE_HINT = /@oh-my-pi\/|\/omp\/|mpModule|omp-package/;
+
 /**
  * Every omp reference in one source text.
  * @param {string} repoPath repo-relative, forward slashes
@@ -221,6 +224,7 @@ function resolveRelative(repoPath, relative) {
  * @returns {OmpReference[]}
  */
 export function ompReferences(repoPath, text) {
+	if (!REFERENCE_HINT.test(text)) return [];
 	const source = ts.createSourceFile(repoPath, text, ts.ScriptTarget.ES2022, true, scriptKind(repoPath));
 	const constants = stringConstants(source);
 	/** @type {OmpReference[]} */
