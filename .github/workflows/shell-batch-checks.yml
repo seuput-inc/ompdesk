@@ -48,7 +48,7 @@
 #                <tag>. S4 (a new shell that does not start) is skipped: it needs a broken DMG.
 #              win-update-real  only=win-update-real, `tag` or `candidate_run`: the Windows update, published v0.131.0 into a candidate
 #                setup on a clean windows-latest runner under the real identity: `installer` runs the setup with the arguments v0.131.0's
-#                NsisUpdater passes, `feed` lets the published app's own updater fetch and start it from feed.ts (job win-update-real;
+#                NsisUpdater passes, `feed` (a published `tag` only) lets the published app's own updater fetch and start it from GitHub's real feed (job win-update-real;
 #                scripts/shell-move/win-update-real.ps1 says what is asserted and uploaded). move-win is the harness under a test identity
 #                (build-setups.ts), where the setups are rebuilt and the test launcher and move-test.nsh carry the profile into the app
 #                the setup starts through Explorer, which the published setup has none of.
@@ -793,8 +793,9 @@ jobs:
   # rollback line in %TEMP%\ompdesk-setup.log, userData kept) and uploading everything the run left (win-update-real.ps1's header):
   #   installer  the candidate setup runs with exactly the arguments v0.131.0's NsisUpdater passes (`--updated --force-run
   #              --package-file=<pending file>`, no /S: quitAndInstall() with no arguments), from the updater's pending folder.
-  #   feed       the published v0.131.0 app runs its own updater against feed.ts, which offers the candidate (Chromium switches map
-  #              api.github.com to it), so the real download, SHA-512 check, countdown, setup start and quit run unchanged.
+  #   feed       a published `tag` only (the latest release): the published v0.131.0 app runs its own updater against GitHub's real
+  #              feed, so the real check, download, SHA-512 check, countdown, setup start and quit run unchanged. A candidate_run
+  #              has no feed: a stand-in feed through Chromium's --host-resolver-rules never received v0.131.0's check (run 44005704911).
   win-update-real:
     name: win-update-real (${{ matrix.mode }}, ${{ inputs.candidate_run && format('run {0}', inputs.candidate_run) || inputs.tag }})
     if: github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-real'
@@ -803,7 +804,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [installer, feed]
+        mode: ${{ fromJSON(inputs.candidate_run && '["installer"]' || '["installer","feed"]') }}
     permissions:
       contents: read
       actions: read # gh run download reads the dry run's artifact
@@ -813,9 +814,6 @@ jobs:
       CANDIDATE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.4
       - name: The published v0.131.0 setup and the candidate setup
         shell: bash
         run: |
@@ -837,8 +835,7 @@ jobs:
           $w = Join-Path $env:RUNNER_TEMP 'win-update-real'
           & ./scripts/shell-move/win-update-real.ps1 -Mode '${{ matrix.mode }}' `
             -OldSetup (Join-Path $w 'old\ompdesk-windows-setup.exe') -NewSetup (Join-Path $w 'new\ompdesk-windows-setup.exe') `
-            -OldVersion $env:OLD_VERSION -Out (Join-Path $w 'out-${{ matrix.mode }}') `
-            -FeedScript (Resolve-Path 'scripts/shell-move/feed.ts').Path
+            -OldVersion $env:OLD_VERSION -Out (Join-Path $w 'out-${{ matrix.mode }}')
           exit $LASTEXITCODE
       - name: Evidence lines
         if: always()
