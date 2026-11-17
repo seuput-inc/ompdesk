@@ -72,13 +72,19 @@ afterAll(async () => {
 
 /**
  * Answers stock's recap prompts with `recapReplies` in turn (the last one repeated) and everything else with "DONE";
- * keeps every request body and counts the recap answers sent in full.
+ * keeps every request body, counts the recap answers sent in full and notes when the last main-loop request (the one
+ * carrying tools, whose send starts stock's prompt cache entry) arrived.
  */
-async function startProvider(
-	recapReplies: readonly string[] = [REPLY],
-): Promise<{ url: string; bodies: string[]; recaps(): number; recapsAnswered(): number }> {
+async function startProvider(recapReplies: readonly string[] = [REPLY]): Promise<{
+	url: string;
+	bodies: string[];
+	recaps(): number;
+	recapsAnswered(): number;
+	mainSentAt(): number;
+}> {
 	const bodies: string[] = [];
 	let answered = 0;
+	let mainSentAt = 0;
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
@@ -88,6 +94,7 @@ async function startProvider(
 			bodies.push(body);
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			if (!isRecapRequest(body)) {
+				if (body.includes('"tools":')) mainSentAt = Date.now();
 				res.end(sse("DONE"));
 				return;
 			}
@@ -107,6 +114,7 @@ async function startProvider(
 		bodies,
 		recaps: () => bodies.filter(isRecapRequest).length,
 		recapsAnswered: () => answered,
+		mainSentAt: () => mainSentAt,
 	};
 }
 
@@ -283,7 +291,8 @@ describe.skipIf(!existsSync(omp))("idle maintenance on stock omp through the bri
 
 	it("holds idle compaction while the draft has text and runs it once cleared", async () => {
 		const provider = await startProvider();
-		// A 20 s long-tier cache entry makes stock compact 5 s before its 10 s refresh point, not after an hour.
+		// A 20 s long-tier cache entry makes stock compact 5 s before its 10 s refresh point (5 s after the request), not
+		// after an hour; past 20 s the entry has lapsed and stock falls back to the configured hour.
 		const { frames, bridge, turn } = await startOmp(
 			provider.url,
 			"recap:\n  enabled: false\ncompaction:\n  idleEnabled: true\n  idleThresholdTokens: 1\n  idleTimeoutSeconds: 3600\n",
@@ -293,11 +302,14 @@ describe.skipIf(!existsSync(omp))("idle maintenance on stock omp through the bri
 			frames.filter(frame => frame.type === "auto_compaction_start" && frame.reason === "idle").length;
 		await bridge.request("idle_maintenance_draft", { empty: false });
 		await turn("Build the thing");
-		await sleep(7_000);
+		// Counted from the request, not the turn's end, so a slow runner still clears the draft inside the entry's life.
+		expect(provider.mainSentAt()).toBeGreaterThan(0);
+		await sleep(Math.max(0, provider.mainSentAt() + 7_000 - Date.now()));
 		expect(idleStarts()).toBe(0);
 
 		await bridge.request("idle_maintenance_draft", { empty: true });
-		await expect.poll(idleStarts, { timeout: 15_000 }).toBe(1);
+		const cleared = `draft cleared ${Date.now() - provider.mainSentAt()} ms after the main request`;
+		await expect.poll(idleStarts, { timeout: 15_000, message: cleared }).toBe(1);
 	}, 120_000);
 
 	it("neither shows nor journals a recap the model wrote as mojibake", async () => {
