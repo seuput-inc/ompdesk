@@ -47,16 +47,22 @@ async function rowOf(page: Page, scope: Locator, tabId: string): Promise<Locator
 	return scope.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`);
 }
 
-/** The running count on a row's family chip, or 0 without one. */
+/**
+ * The running count on a row's family chip, or 0 without one. One read in the page: a count then a `getAttribute`
+ * auto-waits for a pill that left between the two calls (the chip goes with the last subagent), and that wait outlasts
+ * the poll, which then reports the last value it saw.
+ */
 async function running(row: Locator): Promise<number> {
-	const pill = row.locator("[data-family-running]");
-	return (await pill.count()) === 0 ? 0 : Number(await pill.getAttribute("data-family-running"));
+	const counts = await row
+		.locator("[data-family-running]")
+		.evaluateAll(pills => pills.map(pill => pill.getAttribute("data-family-running")));
+	return counts.length === 0 ? 0 : Number(counts[0]);
 }
 
 /**
  * The running count of `row` (the tab's session) reaching `count`. A miss says what main's own summary of the session
  * lists then, which is the one source the chip reads: a subagent main still lists is a frame it never took, and none
- * listed is a chip the push of main's change never reached.
+ * listed while the chip stays is a push of main's change that never reached the window.
  */
 async function runningBecomes(page: Page, row: Locator, tabId: string, count: number): Promise<void> {
 	try {
