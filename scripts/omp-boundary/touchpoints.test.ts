@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { REQUIREMENTS } from "../../resources/gui-bridge/capabilities";
-import { ompSpecifiers, scanOmpReferences } from "./scan";
+import { ompSpecifiers } from "../lint-omp-imports.mjs";
+import { scanOmpReferences } from "./scan";
 import { TOUCHPOINTS, type Touchpoint, type TouchpointArea } from "./touchpoints";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -159,5 +160,23 @@ describe("ompSpecifiers", () => {
 		expect(
 			scan(`import { x } from "@oh-my-pi/pi-tui/tools/todo"; export const y = <div>{x}</div>;`, "probe.tsx"),
 		).toEqual(["@oh-my-pi/pi-tui/tools/todo"]);
+	});
+
+	it("reads an adapter import as the stock module it re-exports", () => {
+		expect(
+			scan(
+				'import { lookup } from "../omp/pi-coding-agent/config/registry";',
+				"resources/gui-bridge/modes/probe.ts",
+			),
+		).toEqual(["@oh-my-pi/pi-coding-agent/config/registry"]);
+		expect(scan('const m = await import("./omp/pi-ai");', "resources/gui-bridge/probe.ts")).toEqual([
+			"@oh-my-pi/pi-ai",
+		]);
+	});
+
+	it("reads an omp-package key as @oh-my-pi/<key>", () => {
+		expect(
+			scan('await loadOmpModule("pi-ai", "x"); ompModuleFile(name);', "resources/gui-bridge/stock-helper/probe.ts"),
+		).toEqual(["@oh-my-pi/pi-ai"]);
 	});
 });
