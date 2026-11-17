@@ -17,6 +17,9 @@ inputs:
   runtime:
     description: "The actual replacement host; cef is retained only for historical regression runs."
     default: "cef"
+  test-automation:
+    description: "runtime tauri: 'false' stages the release host (no embedded WebDriver); the Windows move check reads the moved profile from disk and must run the host a release ships."
+    default: "true"
 
 runs:
   using: composite
@@ -30,9 +33,9 @@ runs:
           licenses: "true"
       - if: inputs.runtime == 'tauri'
         uses: ./.github/actions/tauri-shell
-        # The move checks drive the updated page through the embedded WebDriver, which only a test build carries.
+        # The macOS move checks drive the updated page through the embedded WebDriver, which only a test build carries.
         with:
-          test-automation: "true"
+          test-automation: ${{ inputs.test-automation }}
       # The pinned, signed Brave runtime Preview browses with (resources/preview-browser.json); the Tauri bundle carries it.
       - if: inputs.runtime == 'tauri'
         name: Stage the Preview browser

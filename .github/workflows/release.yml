@@ -850,6 +850,7 @@ jobs:
           dist/win-unpacked/resources/node/node.exe --version | grep -Fx "v$(jq -r .version scripts/node-runtime-pin.json)"
           test -f dist/win-unpacked/resources/app/out/main/index.js
           test -f dist/win-unpacked/resources/app/out/preload/tauri.js
+          test -f dist/win-unpacked/resources/app/out/renderer/index.html
           test ! -e dist/win-unpacked/resources/app/out/preload/shell.js
           test ! -e dist/win-unpacked/resources/app.asar
           # Preview's own browser runtime (resources/preview-browser.json, bun scripts/stage-preview-browser.ts): its record
