@@ -241,7 +241,17 @@ async function main() {
 		await waitFor(`${url} to load`, () => lastState()?.url === url && lastState()?.loading === false);
 	};
 
-	const result: Record<string, unknown> = {};
+	// Each step's numbers print as they land, so a run the spec kills at its deadline still says where it stopped.
+	const step = (name: string, value?: unknown) => console.log(`STEP ${name} ${JSON.stringify(value ?? null)}`);
+	const result = new Proxy<Record<string, unknown>>(
+		{},
+		{
+			set(target, key, value) {
+				step(String(key), value);
+				return Reflect.set(target, key, value);
+			},
+		},
+	);
 	const layout = { x: 0, y: 0, width: 390, height: 700 };
 
 	// 1. A phone-sized surface at 3× is encoded at 2×: 780 px wide, whatever the host screen's density.
@@ -354,7 +364,9 @@ async function main() {
 
 	// 7. A busy page (every pixel changing each frame), acknowledged at once: at most 12 frames a second.
 	await loaded(`${origin}/?busy=1`);
+	step("busy-loaded");
 	const drain = await poll(null, 3000);
+	step("busy-drained", drain.frame ? { seq: drain.frame.seq, ...decode(drain.frame) } : null);
 	if (drain.frame) seq = drain.frame.seq;
 	const seconds = 6;
 	const cpuStart = cpuSeconds();

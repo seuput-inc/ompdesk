@@ -146,6 +146,17 @@ impl BindingContexts {
         self.sessions.remove(session);
     }
 
+    /// The observer worlds admitted for `session`, with their frames.
+    #[cfg(feature = "test-automation")]
+    pub(super) fn worlds(&self, session: &str) -> Vec<(i64, String)> {
+        self.sessions.get(session).map_or_else(Vec::new, |worlds| {
+            worlds
+                .iter()
+                .map(|(id, frame)| (*id, frame.clone()))
+                .collect()
+        })
+    }
+
     pub(super) fn notification(
         &self,
         event: &Event,

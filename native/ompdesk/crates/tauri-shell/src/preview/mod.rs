@@ -1833,6 +1833,18 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
             handling.0.clear();
             handling.0.push_str(&event.method);
         }
+        #[cfg(feature = "test-automation")]
+        if event.method == "Runtime.bindingCalled" {
+            let payload = event.params["payload"].as_str().unwrap_or_default();
+            crate::log::log(
+                "preview.binding.event",
+                json!({
+                    "name":event.params["name"],"session":event.session_id,
+                    "context":event.params["executionContextId"],
+                    "kind":if payload.starts_with('{') { "json" } else { payload }
+                }),
+            );
+        }
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 let detached = pages.routes.lock().expect("Preview routes").remove(session);
@@ -2479,6 +2491,35 @@ async fn refresh_state(entry: &Entry, wc: u64) {
             );
             wc_state(wc);
             wc_event(wc, "page-title-updated", json!([title, true]));
+        }
+    }
+    // Whether the title observer's world holds its binding and script, read from the worlds the owner admits.
+    #[cfg(feature = "test-automation")]
+    {
+        let worlds = entry
+            .document
+            .lock()
+            .expect("Preview document")
+            .native_contexts
+            .worlds(&entry.page.session_id);
+        for (context, frame) in worlds {
+            let probe = entry
+                .page
+                .command(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression":"({binding: typeof globalThis.__ompdeskNativeState, observer: Object.hasOwn(globalThis, '__ompdeskNativeComposition'), url: location.href.length})",
+                        "contextId":context,"returnByValue":true
+                    }),
+                )
+                .await;
+            crate::log::log(
+                "preview.title.probe",
+                json!({
+                    "wcId":wc,"context":context,"frame":frame,
+                    "result":probe.map(|reply| reply["result"]["value"].clone()).map_err(|error| error.to_string())
+                }),
+            );
         }
     }
 }
