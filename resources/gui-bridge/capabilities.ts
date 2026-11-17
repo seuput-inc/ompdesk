@@ -1331,10 +1331,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/**
 	 * idle-maintenance.ts: stock's documented idle scheduler (`enableIdleMaintenance`, omp://sdk.md › Idle maintenance,
-	 * omp 18.13.2) on the live session; the bridge supplies the draft and shows the recap stock hands over.
+	 * omp 18.13.2) on the live session; the bridge supplies the draft and shows the recap stock hands over, and wraps
+	 * the session's `recordRecap` so a mojibake reply never reaches history.db.
 	 */
 	idleMaintenance: {
-		session: ["enableIdleMaintenance()", "refreshIdleMaintenance()", "sendCustomMessage()"],
+		session: [
+			"enableIdleMaintenance()",
+			"refreshIdleMaintenance()",
+			"sendCustomMessage()",
+			"sessionManager.recordRecap()",
+		],
 		modules: {
 			"@oh-my-pi/pi-tui/render/render-utils": ["previewLine()", "TRUNCATE_LENGTHS"],
 		},

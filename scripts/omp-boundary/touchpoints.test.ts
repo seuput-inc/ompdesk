@@ -26,7 +26,7 @@ const AREA_OF_PREFIX: Readonly<Record<string, TouchpointArea>> = {
 	C: "copy",
 };
 
-const IN_MEMORY_PATCHES = ["B05", "B14", "B18", "B50", "B52"];
+const IN_MEMORY_PATCHES = ["B05", "B14", "B18", "B50", "B52", "B61"];
 
 function byId(id: string): Touchpoint {
 	const found = TOUCHPOINTS.find(t => t.id === id);
