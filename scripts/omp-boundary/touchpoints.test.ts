@@ -12,7 +12,7 @@ import {
 	productionFiles,
 } from "../lint-omp-imports.mjs";
 import { scanOmpReferences } from "./scan";
-import { TOUCHPOINTS, type Touchpoint, type TouchpointArea } from "./touchpoints";
+import { STOCK_TEST_FILE, TOUCHPOINTS, type Touchpoint, type TouchpointArea } from "./touchpoints";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -40,7 +40,7 @@ function stockTests(): string[] {
 		for (const entry of readdirSync(path.join(ROOT, dir), { recursive: true })) {
 			const file = String(entry).split(path.sep).join("/");
 			if (file.includes("node_modules/")) continue;
-			if (/-stock\.(?:test|e2e)\.[cm]?[jt]sx?$/.test(file)) found.push(`${dir}/${file}`);
+			if (STOCK_TEST_FILE.test(file)) found.push(`${dir}/${file}`);
 		}
 	}
 	return found.sort();

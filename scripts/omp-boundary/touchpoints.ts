@@ -9,6 +9,9 @@
  * in the same change that adds it to the code.
  */
 
+/** A test that runs against the installed stock omp: every one guards some touchpoint (`tests`). */
+export const STOCK_TEST_FILE = /-stock\.(?:test|e2e)\.[cm]?[jt]sx?$/;
+
 export type TouchpointArea = "launch" | "rpc" | "bridge" | "helper" | "settings" | "files" | "copy";
 
 /** `public`: documented omp behaviour (omp://rpc.md, extensions.md, sdk.md, settings.md, session.md). `internal`: anything else. */
