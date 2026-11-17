@@ -52,17 +52,21 @@ export function planBump(input: BumpInput): BumpPlan {
 	};
 }
 
-/**
- * Stock tests that skip on a runner with omp installed for a reason of their own: the person's accounts or real
- * model, a model download, a stand-in Windows cannot start. `test` is a describe title or a test's full name; it
- * covers every test whose full name starts with it.
- */
-export const EXPECTED_STOCK_SKIPS: readonly {
+export interface ExpectedSkip {
 	file: string;
+	/** A describe title or a test's full name; covers every test whose full name starts with it. */
 	test: string;
+	/** Only on these platforms; all when absent. */
 	platforms?: readonly NodeJS.Platform[];
 	reason: string;
-}[] = [
+}
+
+/**
+ * The only stock tests that may skip on a runner with omp installed: each needs what no runner can ever have (the
+ * person's accounts or real model, a model they downloaded). A stand-in a platform cannot start is not a reason; the
+ * test gets one it can. A new entry needs the same reason.
+ */
+export const EXPECTED_STOCK_SKIPS: readonly ExpectedSkip[] = [
 	{
 		file: "src/main/bridge-accounts-stock.test.ts",
 		test: "real stock account/reset adapters",
@@ -82,18 +86,6 @@ export const EXPECTED_STOCK_SKIPS: readonly {
 		file: "src/main/bridge-todo-stale-stock.test.ts",
 		test: "a todo list left from earlier work, on the user's real smol model",
 		reason: "runs the person's real model (OMP_GUI_REAL_WORK)",
-	},
-	{
-		file: "src/main/bridge-computer-use-mcp-stock.test.ts",
-		test: "the agent-desktop check on stock's MCP manager",
-		platforms: ["win32"],
-		reason: "its stand-in server is a shell script",
-	},
-	{
-		file: "src/main/local/git/pr-create-stock.test.ts",
-		test: "prCreate against stock executePrCreate",
-		platforms: ["win32"],
-		reason: "its recording gh is a shebang script",
 	},
 ];
 
@@ -133,19 +125,25 @@ export function repoPath(file: string, root: string): string {
 	return name.toLowerCase().startsWith(prefix.toLowerCase()) ? name.slice(prefix.length) : name;
 }
 
-function expected(skip: StockSkip, platform: NodeJS.Platform): boolean {
-	return EXPECTED_STOCK_SKIPS.some(
-		entry =>
-			entry.file === skip.file &&
-			(skip.test === entry.test || skip.test.startsWith(`${entry.test} `)) &&
-			(!entry.platforms || entry.platforms.includes(platform)),
-	);
-}
-
 export function summarize(
 	report: VitestReport,
-	meta: { group: string; job: string; outcome: string; root: string; platform: NodeJS.Platform },
+	meta: {
+		group: string;
+		job: string;
+		outcome: string;
+		root: string;
+		platform: NodeJS.Platform;
+		allowed?: readonly ExpectedSkip[];
+	},
 ): JobSummary {
+	const allowed = meta.allowed ?? EXPECTED_STOCK_SKIPS;
+	const expected = (skip: StockSkip) =>
+		allowed.some(
+			entry =>
+				entry.file === skip.file &&
+				(skip.test === entry.test || skip.test.startsWith(`${entry.test} `)) &&
+				(!entry.platforms || entry.platforms.includes(meta.platform)),
+		);
 	const failed: string[] = [];
 	const skipped: StockSkip[] = [];
 	for (const result of report.testResults) {
@@ -154,7 +152,7 @@ export function summarize(
 		if (!STOCK_TEST_FILE.test(file)) continue;
 		for (const test of result.assertionResults) {
 			const skip = { file, test: test.fullName };
-			if (test.status === "skipped" && !expected(skip, meta.platform)) skipped.push(skip);
+			if (test.status === "skipped" && !expected(skip)) skipped.push(skip);
 		}
 	}
 	return { group: meta.group, job: meta.job, outcome: meta.outcome, report: true, failed: failed.sort(), skipped };
