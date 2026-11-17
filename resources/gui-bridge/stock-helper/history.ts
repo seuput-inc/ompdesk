@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { ompModuleFile } from "../omp-package";
 
 /** The stock `HistoryStorage` reads the composer's ↑ and ⌃R use. */
 interface StockHistory {
@@ -10,12 +10,8 @@ let opened: Promise<StockHistory> | undefined;
 /** Stock's process-wide handle on the one history.db every omp on this computer writes (`HistoryStorage.open`). */
 function stockHistory(): Promise<StockHistory> {
 	opened ??= (async () => {
-		const root = process.env.OMP_PACKAGE_ROOT;
-		if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
 		// Runtime-selected: the store belongs to the user's resolved omp installation.
-		const module = await import(
-			Bun.resolveSync("@oh-my-pi/pi-coding-agent/session/history-storage", join(root, "package.json"))
-		);
+		const module = await import(ompModuleFile("pi-coding-agent/session/history-storage"));
 		if (typeof module.HistoryStorage?.open !== "function") throw new Error("Installed omp has no HistoryStorage");
 		const store = module.HistoryStorage.open() as Partial<StockHistory>;
 		if (typeof store.getRecent !== "function" || typeof store.search !== "function")

@@ -6,23 +6,10 @@
  * (`setWorktreesDir`), and asks pi-utils for the directory and the repo hash. Nothing is written.
  */
 import * as path from "node:path";
+import { loadOmpModule } from "../omp-package";
 
 interface Handle<T> {
 	get(settings: unknown): T;
-}
-
-/** Stock modules of the user's omp, by subpath, with the named exports checked. */
-async function load<T>(specifier: string, ...names: string[]): Promise<T> {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
-	// Runtime-selected: the modules of the user's resolved omp installation, not this worker's.
-	const module = (await import(Bun.resolveSync(specifier, path.join(root, "package.json")))) as Record<
-		string,
-		unknown
-	>;
-	for (const name of names)
-		if (module[name] === undefined) throw new Error(`Installed omp has no ${specifier} ${name}`);
-	return module as T;
 }
 
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
@@ -31,17 +18,17 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (typeof primaryRoot !== "string" || !path.isAbsolute(primaryRoot) || primaryRoot.includes("\0"))
 			throw new Error("primaryRoot must be an absolute path");
 		const [utils, settingsModule, taskSettings] = await Promise.all([
-			load<{
+			loadOmpModule<{
 				getWorktreesDir(): string;
 				hashPath(absPath: string): string;
 				setWorktreesDir(dir: string | undefined): string | undefined;
-			}>("@oh-my-pi/pi-utils", "getWorktreesDir", "hashPath", "setWorktreesDir"),
-			load<{ Settings: { loadReadOnly(options: { cwd: string }): Promise<unknown> } }>(
-				"@oh-my-pi/pi-coding-agent/config/settings",
+			}>("pi-utils", "getWorktreesDir", "hashPath", "setWorktreesDir"),
+			loadOmpModule<{ Settings: { loadReadOnly(options: { cwd: string }): Promise<unknown> } }>(
+				"pi-coding-agent/config/settings",
 				"Settings",
 			),
-			load<{ cfgWorktreeBase: Handle<string | undefined> }>(
-				"@oh-my-pi/pi-coding-agent/task/settings",
+			loadOmpModule<{ cfgWorktreeBase: Handle<string | undefined> }>(
+				"pi-coding-agent/task/settings",
 				"cfgWorktreeBase",
 			),
 		]);

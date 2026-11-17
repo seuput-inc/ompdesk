@@ -20,15 +20,10 @@
  * sync itself: a full sync now and every 5 minutes, and the transcripts a
  * session writes shortly after it writes them.
  */
-import * as path from "node:path";
+import { ompModuleFile } from "./omp-package";
 
-const root = process.env.OMP_PACKAGE_ROOT;
-if (!root) throw new Error("OMP_PACKAGE_ROOT is not set");
 const host = process.argv[2] ?? "127.0.0.1";
 const port = Number(process.argv[3] ?? "0");
-
-/** Resolve a module the way code inside the omp package would. */
-const fromOmp = (specifier: string) => Bun.resolveSync(specifier, path.join(root, "package.json"));
 
 /** Set once serving: stops the front server and closes stock's database. */
 let stopServing = () => {};
@@ -47,16 +42,16 @@ process.stdin.on("close", shutdown);
 process.stdin.resume();
 
 // Runtime-selected: the modules live in whichever omp install the GUI resolved.
-const stats = await import(fromOmp("@oh-my-pi/omp-stats"));
-const statsDb = await import(fromOmp("@oh-my-pi/omp-stats/db"));
-const { getTimeRangeConfig } = await import(fromOmp("@oh-my-pi/omp-stats/aggregator"));
-const { statsLive } = await import(fromOmp("@oh-my-pi/omp-stats/live"));
+const stats = await import(ompModuleFile("omp-stats"));
+const statsDb = await import(ompModuleFile("omp-stats/db"));
+const { getTimeRangeConfig } = await import(ompModuleFile("omp-stats/aggregator"));
+const { statsLive } = await import(ompModuleFile("omp-stats/live"));
 const cwd = process.cwd();
 // The judge's module is pi-coding-agent's agent graph (~84 of the host's ~142 MB footprint, ~220 ms of its ~310 ms
 // start; omp 18.14.0, macOS): stock asks for the judge only on a `/api/frustration/*` estimate or run, so it loads then.
 const upstream = await stats.startServer(0, "127.0.0.1", {
 	judge: async () => {
-		const { openStandaloneJudge } = await import(fromOmp("@oh-my-pi/pi-coding-agent/judgment/standalone"));
+		const { openStandaloneJudge } = await import(ompModuleFile("pi-coding-agent/judgment/standalone"));
 		return (await openStandaloneJudge(cwd, "stats_frustration")).judge;
 	},
 });

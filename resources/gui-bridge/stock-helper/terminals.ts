@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import type { TerminalOperation } from "../../../src/shared/terminal-types";
+import { ompModuleFile } from "../omp-package";
 import { type Pty, TerminalService } from "./terminal-service";
 
 let service: TerminalService | null = null;
@@ -9,10 +9,8 @@ let starting: Promise<TerminalService> | null = null;
 function terminals(): Promise<TerminalService> {
 	if (service) return Promise.resolve(service);
 	starting ??= (async () => {
-		const root = process.env.OMP_PACKAGE_ROOT;
-		if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
 		// Reuse stock's portable-pty / Windows ConPTY implementation in Bun. No Electron native addon.
-		const stock = await import(Bun.resolveSync("@oh-my-pi/pi-natives", join(root, "package.json")));
+		const stock = await import(ompModuleFile("pi-natives"));
 		if (typeof stock.PtySession !== "function") throw new Error("Installed omp has no interactive PtySession");
 		service = new TerminalService(() => new stock.PtySession() as Pty);
 		return service;

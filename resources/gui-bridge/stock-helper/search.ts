@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { ompModuleFile } from "../omp-package";
 
 /** The pi-natives grep surface the Files panel's content search uses (gitignore-aware, the agent's own engine). */
 interface StockGrep {
@@ -24,9 +24,7 @@ interface StockGrep {
 let natives: Promise<StockGrep> | null = null;
 function stockGrep(): Promise<StockGrep> {
 	natives ??= (async () => {
-		const root = process.env.OMP_PACKAGE_ROOT;
-		if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
-		const stock = await import(Bun.resolveSync("@oh-my-pi/pi-natives", join(root, "package.json")));
+		const stock = await import(ompModuleFile("pi-natives"));
 		if (typeof stock.grep !== "function") throw new Error("Installed omp has no native grep");
 		return stock as StockGrep;
 	})();

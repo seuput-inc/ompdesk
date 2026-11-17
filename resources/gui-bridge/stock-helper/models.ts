@@ -1,5 +1,5 @@
 /** Main-side worker: stock models.yml schemas/catalog need Bun, not Electron's Node runtime. */
-import * as path from "node:path";
+import { ompModuleFile } from "../omp-package";
 
 interface Schema {
 	assert(value: unknown): unknown;
@@ -7,12 +7,8 @@ interface Schema {
 	ir: unknown;
 }
 async function stockSchema(): Promise<Schema> {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
 	// Runtime-selected: the schema belongs to the user's resolved omp installation.
-	const module = await import(
-		Bun.resolveSync("@oh-my-pi/pi-coding-agent/config/models-config-schema", path.join(root, "package.json"))
-	);
+	const module = await import(ompModuleFile("pi-coding-agent/config/models-config-schema"));
 	const schema = module.ModelsConfigSchema as Schema;
 	if (typeof schema?.assert !== "function" || typeof schema.get !== "function") {
 		throw new Error("Installed omp has no ModelsConfigSchema");
@@ -32,13 +28,10 @@ function literals(ir: unknown): string[] {
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"catalog.roster": async () => {
 		const schema = await stockSchema();
-		const root = process.env.OMP_PACKAGE_ROOT;
-		if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
-		const resolve = (specifier: string) => Bun.resolveSync(specifier, path.join(root, "package.json"));
 		// Runtime-selected: catalog modules belong to the resolved omp installation.
 		const [providers, auth] = await Promise.all([
-			import(resolve("@oh-my-pi/pi-catalog/compat/providers")),
-			import(resolve("@oh-my-pi/pi-catalog/compat/auth")),
+			import(ompModuleFile("pi-catalog/compat/providers")),
+			import(ompModuleFile("pi-catalog/compat/auth")),
 		]);
 		if (typeof providers.providerEntries !== "function" || typeof auth.authProviders !== "function") {
 			throw new Error("Installed omp cannot determine built-in providers");

@@ -1,4 +1,5 @@
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { loadOmpModule } from "../omp-package";
 import { PROMPT_ORIGIN_ENTRY } from "../prompt-origin-contracts";
 import { NO_TEXT_PROMPT } from "../session-list-contracts";
 import { lastActivity } from "./session-activity";
@@ -46,17 +47,10 @@ interface StockSessionManagerStatic {
 	): Promise<{ moveTo(cwd: string): Promise<void>; getSessionFile(): string | undefined; close(): Promise<void> }>;
 }
 
-/** Runtime-selected installed paths: static imports would use the app's resolver. */
-function importFromOmp(specifier: string): Promise<Record<string, unknown>> {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is not set");
-	return import(Bun.resolveSync(specifier, join(root, "package.json")));
-}
-
 async function loadStockSessions(): Promise<StockSessions> {
 	const [listing, storageModule] = await Promise.all([
-		importFromOmp("@oh-my-pi/pi-coding-agent/session/session-listing"),
-		importFromOmp("@oh-my-pi/pi-coding-agent/session/session-storage"),
+		loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-listing"),
+		loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-storage"),
 	]);
 	const FileSessionStorage = storageModule.FileSessionStorage as new () => StockSessions["storage"];
 	return { listing: listing as unknown as StockSessions["listing"], storage: new FileSessionStorage() };
@@ -65,8 +59,8 @@ async function loadStockSessions(): Promise<StockSessions> {
 async function loadStockFirstPrompt(): Promise<StockFirstPrompt | null> {
 	try {
 		const [loader, transcript] = await Promise.all([
-			importFromOmp("@oh-my-pi/pi-coding-agent/session/session-loader"),
-			importFromOmp("@oh-my-pi/pi-tui/chat/transcript-entry"),
+			loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-loader"),
+			loadOmpModule<Record<string, unknown>>("pi-tui/chat/transcript-entry"),
 		]);
 		const { visitEntriesFromFileStream } = loader;
 		const { textContent } = transcript;
@@ -119,7 +113,9 @@ async function sessionHeaderId(sessionPath: string): Promise<string | undefined>
 		.slice(0, 64 * 1024)
 		.text()
 		.catch(() => "");
-	const slots = await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-title-slot").catch(() => null);
+	const slots = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-title-slot").catch(
+		() => null,
+	);
 	const parseSlot = slots?.parseTitleSlotFromContent;
 	if (typeof parseSlot !== "function") throw new Error("stock session-title-slot exports changed");
 	if ((parseSlot as (content: string) => unknown)(prefix)) prefix = prefix.slice(prefix.indexOf("\n") + 1);
@@ -357,9 +353,9 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (!sessionPath) throw new Error("Invalid session path");
 		const cwd = typeof params === "object" && params !== null && "cwd" in params ? params.cwd : undefined;
 		if (typeof cwd !== "string" || !isAbsolute(cwd)) throw new Error("Invalid target folder");
-		const { SessionManager } = (await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-manager")) as {
-			SessionManager: StockSessionManagerStatic;
-		};
+		const { SessionManager } = await loadOmpModule<{ SessionManager: StockSessionManagerStatic }>(
+			"pi-coding-agent/session/session-manager",
+		);
 		const manager = await SessionManager.open(sessionPath, undefined, undefined, { throwIfMissing: true });
 		try {
 			await manager.moveTo(resolve(cwd));
@@ -379,7 +375,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (!sessionPath) throw new Error("Invalid session path");
 		const id = await sessionHeaderId(sessionPath);
 		if (!id) return false;
-		const storage = await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-storage");
+		const storage = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-storage");
 		const tryAcquire = storage.tryAcquireSessionLease;
 		if (typeof tryAcquire !== "function") return false;
 		const lease = (tryAcquire as (sessionId: string) => { release(): void } | null)(id);
@@ -394,7 +390,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"sessions.messages": async params => {
 		const { sessionPath } = paths(params);
 		if (!sessionPath) throw new Error("Invalid session path");
-		const loader = await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-loader");
+		const loader = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-loader");
 		const read = loader.loadSessionMessagesReadOnly;
 		if (typeof read !== "function")
 			throw new Error("This omp cannot read stored sessions (loadSessionMessagesReadOnly).");

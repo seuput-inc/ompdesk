@@ -1,9 +1,10 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { REQUIREMENTS } from "../../resources/gui-bridge/capabilities";
-import { ompSpecifiers } from "../lint-omp-imports.mjs";
+import { OMP_PACKAGE_MODULES } from "../../resources/gui-bridge/omp-package";
+import { OMP_PACKAGE_FILE, ompReferences, ompSpecifiers, productionFiles } from "../lint-omp-imports.mjs";
 import { scanOmpReferences } from "./scan";
 import { TOUCHPOINTS, type Touchpoint, type TouchpointArea } from "./touchpoints";
 
@@ -102,6 +103,19 @@ describe("omp touchpoint registry", () => {
 			expect(t.summary, t.id).toContain(counterpart);
 			expect(t.summary, t.id).toMatch(/\bstock\b|\bTUI\b/);
 		}
+	});
+
+	it("loads every omp-package module by a listed key, and lists only keys something loads", () => {
+		const keys: Array<string | null> = [];
+		for (const file of productionFiles(ROOT)) {
+			if (file === OMP_PACKAGE_FILE) continue;
+			for (const ref of ompReferences(file, readFileSync(path.join(ROOT, file), "utf8")))
+				if (ref.via === "package")
+					keys.push(ref.specifier === null ? null : ref.specifier.slice("@oh-my-pi/".length));
+		}
+		const listed = new Set<string>(OMP_PACKAGE_MODULES);
+		expect(keys.filter(key => key === null || !listed.has(key))).toEqual([]);
+		expect([...listed].filter(key => !keys.includes(key))).toEqual([]);
 	});
 });
 
