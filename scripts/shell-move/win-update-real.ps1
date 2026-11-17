@@ -128,6 +128,35 @@ function Get-Shortcuts {
 	}
 }
 
+# A crash of the setup (0xc0000005 in electron-builder's SpiderBanner plugin after its work, run 44019132915) and what
+# Windows Error Reporting shows the person: its windows are watched while the setup runs and after, and pictured.
+$script:errorSeen = ''
+function Get-ErrorWindows {
+	@(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+			$_.MainWindowHandle -ne 0 -and ($_.ProcessName -match '^WerFault' -or $_.MainWindowTitle -match 'stopped working|작동이 중지|ompdesk-windows-setup')
+		} | ForEach-Object { "$($_.ProcessName) '$($_.MainWindowTitle)'" })
+}
+function Save-Screen([string] $Name) {
+	try {
+		Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+		$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+		$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+		$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+		$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+		$bitmap.Save((Join-Path $Out $Name), [System.Drawing.Imaging.ImageFormat]::Png)
+		$graphics.Dispose(); $bitmap.Dispose()
+		Evidence "${Name}: $($bounds.Width)x$($bounds.Height)"
+	} catch { Say "note: no screenshot $Name ($($_.Exception.Message))" }
+}
+function Watch-ErrorWindows {
+	$windows = Get-ErrorWindows
+	if ($windows.Count -and -not $script:errorSeen) {
+		$script:errorSeen = $windows -join '; '
+		Evidence "an error window appeared: $($script:errorSeen)"
+		Save-Screen 'screen-error.png'
+	}
+}
+
 function Write-Facts([string] $Label) {
 	$entry = Get-Entry
 	$facts = [ordered]@{
@@ -171,6 +200,12 @@ $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIde
 Evidence "mode $Mode; old v$OldVersion; candidate v$NewVersion ($((Get-Item -LiteralPath $NewSetup).Length) bytes)"
 Evidence "runner: $([Environment]::OSVersion.VersionString); elevated $($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)); session '$env:SESSIONNAME'; explorer.exe processes $(@(Get-Process explorer -ErrorAction SilentlyContinue).Count); WebView2 runtime $(Get-WebView2)"
 Show-Package
+# The runner image sets HKLM ...\Windows Error Reporting DontShowUI=1, so a crash never shows a window here; a person's
+# Windows does not have it. The throwaway VM gets the default back, so a crash shows what it would show them.
+$werKey = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
+Evidence "WER DontShowUI before: $((Get-ItemProperty -LiteralPath $werKey -ErrorAction SilentlyContinue).DontShowUI)"
+Remove-ItemProperty -LiteralPath $werKey -Name DontShowUI -ErrorAction SilentlyContinue
+Evidence "WER DontShowUI now: $((Get-ItemProperty -LiteralPath $werKey -ErrorAction SilentlyContinue).DontShowUI) (unset is the Windows default)"
 
 Check (-not (Test-Path -LiteralPath $installDir) -and -not (Get-Entry)) 'the runner starts without an OMPdesk install'
 
@@ -227,7 +262,7 @@ if ($Mode -eq 'installer') {
 	$setup = Start-Process -FilePath $package -ArgumentList $updaterArgs -PassThru
 	$null = $setup.Handle
 	$deadline = (Get-Date).AddMinutes(10)
-	while (-not $setup.HasExited -and (Get-Date) -lt $deadline) { Add-Snapshot 'setup running'; Start-Sleep -Seconds 3 }
+	while (-not $setup.HasExited -and (Get-Date) -lt $deadline) { Add-Snapshot 'setup running'; Watch-ErrorWindows; Start-Sleep -Seconds 3 }
 	if (-not $setup.HasExited) { Say 'FAILED the setup was still running after 10 minutes'; $script:failures += 'the setup finished in 10 minutes'; Stop-Process -Id $setup.Id -Force -ErrorAction SilentlyContinue }
 	else { $setupExit = $setup.ExitCode }
 	Evidence "setup exit code $setupExit after $([int]((Get-Date) - $t0).TotalSeconds) s"
@@ -263,6 +298,7 @@ else {
 			if (-not $setupProc) { $setupProc = $running[0]; $null = $setupProc.Handle }
 		} elseif ($seen) { break }
 		if ($seen -or $tick % 5 -eq 0) { Add-Snapshot $(if ($seen) { 'setup running' } else { 'waiting for the updater' }) }
+		if ($seen) { Watch-ErrorWindows }
 		$tick++
 		Start-Sleep -Seconds 3
 	}
@@ -273,18 +309,11 @@ else {
 }
 
 # ---- whether a crash of the setup shows the person anything ---------------------------------------------------------------
-# The setup can end in 0xc0000005 inside electron-builder's SpiderBanner plugin after its work is done (run 44019132915).
-# What Windows Error Reporting did with it: its windows on screen, its report folders, its events, its UI setting, and a
-# picture of the desktop.
-function Get-ErrorWindows {
-	@(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-			$_.MainWindowHandle -ne 0 -and ($_.ProcessName -match '^WerFault' -or $_.MainWindowTitle -match 'stopped working|작동이 중지|ompdesk-windows-setup')
-		} | ForEach-Object { "$($_.ProcessName) '$($_.MainWindowTitle)'" })
-}
 Start-Sleep -Seconds 5
+Watch-ErrorWindows
 $errorWindows = Get-ErrorWindows
-Evidence "error windows on screen: $(if ($errorWindows.Count) { $errorWindows -join '; ' } else { 'none' })"
-Check ($errorWindows.Count -eq 0) 'no Windows error window is on screen after the update'
+Evidence "error windows on screen now: $(if ($errorWindows.Count) { $errorWindows -join '; ' } else { 'none' }); seen while the setup ran: $(if ($script:errorSeen) { $script:errorSeen } else { 'none' })"
+Check (-not $script:errorSeen -and $errorWindows.Count -eq 0) 'no Windows error window appeared during or after the update'
 Evidence "WerFault processes: $(@(Get-Process -Name WerFault, WerFaultSecure -ErrorAction SilentlyContinue | ForEach-Object { "$($_.ProcessName) pid $($_.Id) window '$($_.MainWindowTitle)'" }) -join '; ')"
 Evidence "interactive desktop: session $((Get-Process -Id $PID).SessionId), explorer $(@(Get-Process explorer -ErrorAction SilentlyContinue).Count)"
 foreach ($key in 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting', 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting') {
@@ -306,16 +335,7 @@ $crashEvents = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Start
 		Where-Object { $_.Message -match 'ompdesk-windows-setup' })
 $crashEvents | Select-Object TimeCreated, ProviderName, Id, Message | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $werOut 'events-1000-1001.json')
 Evidence "setup crash events: 1000 x$(@($crashEvents | Where-Object Id -eq 1000).Count), 1001 x$(@($crashEvents | Where-Object Id -eq 1001).Count)"
-try {
-	Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-	$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-	$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-	$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-	$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-	$bitmap.Save((Join-Path $Out 'screen-after.png'), [System.Drawing.Imaging.ImageFormat]::Png)
-	$graphics.Dispose(); $bitmap.Dispose()
-	Evidence "screen-after.png: $($bounds.Width)x$($bounds.Height)"
-} catch { Say "note: no screenshot ($($_.Exception.Message))" }
+Save-Screen 'screen-after.png'
 
 # ---- what the person would see -------------------------------------------------------------------------------------------
 # A setup that succeeded waited for app-started.json itself, so this is only a grace for the old app's restore path.
