@@ -45,16 +45,14 @@ describe("a host's run state on a paired device", () => {
 		await first;
 		await deviceShows(session, "ready");
 
-		// The next turn runs while the link is down and is still running when it comes back.
+		// The next turn is still running when the device's link to the host drops and comes back (Connect pressed again:
+		// the old link ends and a new one carries the host's open tabs). Turning sharing off would close the host's tabs.
 		const prompt = session.sidecar.rpcClient?.command({
 			type: "prompt",
-			message: JSON.stringify({ kind: "tool-wait", seconds: 4 }),
+			message: JSON.stringify({ kind: "tool-wait", seconds: 8 }),
 		});
 		await deviceShows(session, "running");
-		await session.host.devices.setHostEnabled(false);
-		await until(session.device, state => state.hosts[0]?.state !== "online");
-		expect(session.device.devices.summaries(session.hostId)).toBeNull();
-		await session.host.devices.setHostEnabled(true);
+		await session.device.devices.connect("nSTUDIO");
 		await until(session.device, state => state.hosts[0]?.state === "online");
 		await deviceShows(session, "running");
 		await prompt;

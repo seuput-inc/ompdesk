@@ -327,8 +327,6 @@ export interface Session {
 	/** The device's computer and the host's id there, for requests a tab does not make itself (`fs.*`). */
 	device: Computer;
 	hostId: string;
-	/** The host's computer (its sharing switch drops and restores the device's link). */
-	host: Computer;
 	/** The host's one summary builder, wired as `index.ts` wires it (`summaries: true` only). */
 	hostSummaries: SessionSummaries | null;
 	/** Runs one scripted turn and resolves when the host's omp settled it. */
@@ -380,7 +378,7 @@ export async function openSession(
 		builder = new SessionSummaries(() => services.summarySources());
 		builder.onChange(delta => services.summariesChanged(delta));
 	}
-	const { a, b, hostId } = await rig.connected({
+	const { a, hostId } = await rig.connected({
 		services,
 		logLink: (message, details) => hostLog.push({ message, details }),
 	});
@@ -407,7 +405,6 @@ export async function openSession(
 		workDir,
 		device: a,
 		hostId,
-		host: b,
 		hostSummaries: builder,
 		async turn(scenario) {
 			const settled = Promise.withResolvers<void>();
