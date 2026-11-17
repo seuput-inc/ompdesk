@@ -8,6 +8,7 @@ mod frame_scope;
 mod frames;
 mod initialize;
 mod input;
+mod input_scale;
 #[cfg(any(windows, test))]
 pub(super) mod media;
 mod navigation;
@@ -968,6 +969,13 @@ async fn execute(
                     kind: EvaluationKind::Navigate(entry),
                 }));
             }
+            if method.starts_with("Input.") {
+                input_scale::scale_input(
+                    method,
+                    &mut command_params,
+                    entry.page.emulation_scale(),
+                )?;
+            }
             let reply = browser
                 .submit_command(method, command_params, Some(&session))
                 .map_err(wire)?;
@@ -1099,11 +1107,22 @@ async fn execute(
                             WireError::new("invalid", "zoom must be a positive finite number")
                         })?;
                     let viewport = entry.document.lock().expect("Preview document").viewport;
-                    entry
-                        .page
-                        .resize(layout_metrics(viewport, factor)?)
-                        .await
-                        .map_err(wire)?;
+                    let offscreen = runtime()
+                        .registry
+                        .lock()
+                        .expect("registry")
+                        .page(wc)
+                        .is_some_and(|page| page.kind == Kind::PreviewOffscreen);
+                    let layout = layout_metrics(viewport, factor)?;
+                    if offscreen {
+                        entry
+                            .page
+                            .resize_framed(layout, frames::frame_pixels(viewport))
+                            .await
+                    } else {
+                        entry.page.resize(layout).await
+                    }
+                    .map_err(wire)?;
                     if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
                         page.zoom = factor;
                     }
@@ -1301,6 +1320,14 @@ async fn create(
             .expect("Preview pages")
             .insert(wc, Arc::clone(&entry));
         let setup = async {
+            if method == "win.create" {
+                page.resize_framed(
+                    layout_metrics(viewport, 1.0)?,
+                    frames::frame_pixels(viewport),
+                )
+                .await
+                .map_err(wire)?;
+            }
             let tree = page
                 .command("Page.getFrameTree", json!({}))
                 .await
@@ -1531,7 +1558,10 @@ async fn offscreen_operation(pages: &Pages, wc: u64, params: &Value) -> Result<V
                 .ok_or_else(|| WireError::new("gone", "Preview window ended"))?;
             entry
                 .page
-                .resize(layout_metrics(viewport, zoom)?)
+                .resize_framed(
+                    layout_metrics(viewport, zoom)?,
+                    frames::frame_pixels(viewport),
+                )
                 .await
                 .map_err(wire)?;
             entry.document.lock().expect("Preview document").viewport = viewport;
