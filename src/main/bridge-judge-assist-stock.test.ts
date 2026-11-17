@@ -37,11 +37,15 @@ export default function (pi) {
     { role: "user", content: "fix the parser", timestamp: Date.now() - 1000 },
     { role: "assistant", content: [{ type: "text", text }], stopReason: "stop", timestamp: Date.now() },
    ]);
+   // In the app every area module loads at the bridge's first use, so stock's modules behind the judge's loader are
+   // evaluated long before a judgment is asked; this probe loads judge-assist alone. Loading them inside the first ask
+   // spent the 2 s limit on a loaded Windows runner (the \`omp/pi-ai\` adapter's first import blocked omp's thread for
+   // 3.4 s), so the judge "did not decide". \`available\` loads them and sends nothing.
+   out.available = await methods["judge_assist.available"]({}, env);
    say(${JSON.stringify(ASKING)});
    out.asking = await methods["judge_assist.needs_user"]({}, env);
    say(${JSON.stringify(REPORT)});
    out.report = await methods["judge_assist.needs_user"]({}, env);
-   out.available = await methods["judge_assist.available"]({}, env);
    out.stateOn = judgeAssistState();
    out.usage = session.sessionManager.getEntries().filter(entry => entry.type === "model_usage")
     .map(entry => ({ purpose: entry.purpose, role: entry.role, api: entry.api, provider: entry.provider, model: entry.model }));
