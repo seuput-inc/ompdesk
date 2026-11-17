@@ -2123,14 +2123,13 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "copy",
 		contract: "internal",
 		disposition: {
-			kind: "open",
-			reason:
-				"Completion runs per keystroke in the renderer; its test does not compare with stock's table or emojis.json.",
+			kind: "registered",
+			reason: "Completion runs per keystroke in the renderer, where omp is not loaded.",
 		},
 		summary: "Copy of stock pi-tui `emoji-autocomplete` and its `emojis.json` data.",
 		files: ["src/renderer/lib/emoji.ts"],
 		stock: ["@oh-my-pi/pi-tui/prompt/emoji-autocomplete", "prompt/data/emojis.json"],
-		tests: ["src/renderer/lib/emoji.test.ts"],
+		tests: ["src/renderer/lib/emoji.test.ts", "src/main/emoji-stock.test.ts"],
 	},
 	{
 		id: "C07",
