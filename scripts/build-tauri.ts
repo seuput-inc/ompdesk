@@ -51,11 +51,17 @@ function sourceFiles(): Map<string, string> {
 	return files;
 }
 
+function appVersion(): string {
+	return (JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as { version: string }).version;
+}
+
 export function sourceSha256(files = sourceFiles()): string {
 	const digest = createHash("sha256");
 	for (const [name, hash] of files) digest.update(`${name}\0${hash}\0`);
 	digest.update(fs.readFileSync(fileURLToPath(import.meta.url)));
 	digest.update(JSON.stringify(compatibility));
+	// tauri.conf.json takes the app's version from package.json into the host's Windows version resource.
+	digest.update(appVersion());
 	return digest.digest("hex");
 }
 

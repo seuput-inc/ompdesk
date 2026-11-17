@@ -9,12 +9,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # The host's Windows version resource carries the app's version (tauri.conf.json reads package.json), so a new version
+    # is a new host.
+    - name: The app version
+      id: app
+      shell: bash
+      run: echo "version=$(jq -er .version package.json)" >> "$GITHUB_OUTPUT"
     - name: Restore the staged Tauri shell
       id: shell-cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: resources/ompdesk-tauri
-        key: ompdesk-tauri-${{ runner.os }}-${{ runner.arch }}-${{ inputs.test-automation == 'true' && 'test-automation' || 'release' }}-${{ hashFiles('native/ompdesk/crates/tauri-shell/**', '!native/ompdesk/crates/tauri-shell/target/**', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'native/ompdesk/crates/shell-preview/**', '!native/ompdesk/crates/shell-preview/target/**', 'scripts/build-tauri.ts', 'scripts/cargo.ts', 'src/shared/app-compatibility.json') }}
+        key: ompdesk-tauri-${{ runner.os }}-${{ runner.arch }}-${{ inputs.test-automation == 'true' && 'test-automation' || 'release' }}-v${{ steps.app.outputs.version }}-${{ hashFiles('native/ompdesk/crates/tauri-shell/**', '!native/ompdesk/crates/tauri-shell/target/**', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'native/ompdesk/crates/shell-preview/**', '!native/ompdesk/crates/shell-preview/target/**', 'scripts/build-tauri.ts', 'scripts/cargo.ts', 'src/shared/app-compatibility.json') }}
     - if: steps.shell-cache.outputs.cache-hit != 'true'
       uses: ./.github/actions/native-toolchain
       with:

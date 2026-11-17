@@ -1628,3 +1628,16 @@ describe("renderer content security policy", () => {
 		expect(sources("media-src")).toEqual(["'self'", "blob:", "omp-media:"]);
 	});
 });
+
+describe("the Tauri host's version", () => {
+	it("is the app's version, so Windows shows OMPdesk.exe's ProductVersion as the release", () => {
+		// v0.132.1 shipped OMPdesk.exe with FileVersion 0.132.1 (electron-builder's rcedit) and ProductVersion 0.1.0
+		// (tauri.conf.json's own version, which tauri-build writes into the version resource).
+		const tauriDir = path.join(__dirname, "../../native/ompdesk/crates/tauri-shell");
+		const config = JSON.parse(fs.readFileSync(path.join(tauriDir, "tauri.conf.json"), "utf8")) as { version: string };
+		expect(path.resolve(tauriDir, config.version)).toBe(path.resolve(__dirname, "../../package.json"));
+		expect(fs.readFileSync(path.join(tauriDir, "build.rs"), "utf8")).toContain(
+			"cargo:rerun-if-changed=../../../../package.json",
+		);
+	});
+});
