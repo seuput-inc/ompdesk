@@ -243,6 +243,10 @@ export function isTabClosed(tabId: string): boolean {
 	return closedTabIds.has(tabId);
 }
 
+/** TAB_STATUS pushes applied in this window so far, and the count when each tab's latest one was applied. */
+let statusPushes = 0;
+const lastStatusPush = new Map<string, number>();
+
 /** Whether main holds remembered splits (it only learns the list through `setView`). */
 let mainRemembersSplits = false;
 
@@ -715,6 +719,9 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					}),
 				)
 			: null;
+		// A tab whose status push lands while the list is asked is newer than its listing: main pushes every change of
+		// a tab in order, so the answer, read before that push or after it, is never fresher than the pushes that follow.
+		const pushesBefore = statusPushes;
 		const listed = await window.omp.tabs.list().catch(() => null);
 		if (!listed) {
 			// Bridge down — the tab strip simply stays as it is and TAB_STATUS
@@ -760,6 +767,9 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			});
 		if (cannotReconcile) return false;
 		const list = listed.filter(info => !isTabClosed(info.tabId));
+		const pushedSince = new Set(
+			list.filter(info => (lastStatusPush.get(info.tabId) ?? 0) > pushesBefore).map(info => info.tabId),
+		);
 		const resync = options?.resync === true;
 		if (resync) {
 			// Outside set(): dropping a runtime fires the focus listeners synchronously (see applyTabStatus).
@@ -794,6 +804,10 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			const adopted = new Map<string, string>();
 			const merged: SessionTab[] = list.map(info => {
 				let existing = leftovers.get(info.tabId);
+				if (existing && pushedSince.has(info.tabId)) {
+					leftovers.delete(info.tabId);
+					return { ...existing, ...viewerFields(info) };
+				}
 				// No runtime of this id held a status before (an adopted ghost's runtime is the ghost's, not this one).
 				const newRuntime = existing === undefined;
 				let ghostId: string | undefined;
@@ -884,7 +898,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		// missing or too old at launch), or while the tab was not shown.
 		for (const info of list) {
 			const session = sessionRuntimeStore<SessionStore>(info.tabId, "session");
-			if (session) applyTabFailure(session, info, undefined);
+			if (session && !pushedSince.has(info.tabId)) applyTabFailure(session, info, undefined);
 		}
 		for (const tab of get().tabs) watchTabAwaitingInput(tab.id);
 		const activeTabId = get().activeTabId;
@@ -1338,6 +1352,8 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 
 	applyTabStatus: payload => {
 		if (isTabClosed(payload.tabId)) return;
+		statusPushes += 1;
+		lastStatusPush.set(payload.tabId, statusPushes);
 		const state = get();
 		const active = state.activeTabId === payload.tabId;
 		const previous = state.tabs.find(tab => tab.id === payload.tabId);
