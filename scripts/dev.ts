@@ -59,8 +59,10 @@ function devProfile(): string {
 }
 
 /**
- * Builds `config` in watch mode; resolves after the first build, then calls `rebuilt` after each later one. The hook is
- * `sequential`, so it runs after every other `closeBundle` (the preload config writes `tauri.js` in one).
+ * Builds `config` in watch mode; resolves after the first successful build, then calls `rebuilt` after each later one.
+ * Rollup also calls `closeBundle` after a failed build, with the error, which leaves the app running on the last good
+ * output. The hook is `sequential`, so it runs after every other `closeBundle` (the preload config writes `tauri.js` in
+ * one) and not at all when one of those throws.
  */
 function watchBuild(config: InlineConfig, rebuilt: () => void): Promise<void> {
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
@@ -70,7 +72,8 @@ function watchBuild(config: InlineConfig, rebuilt: () => void): Promise<void> {
 		closeBundle: {
 			order: "post",
 			sequential: true,
-			handler() {
+			handler(error) {
+				if (error) return;
 				if (first) {
 					first = false;
 					resolve();
