@@ -149,6 +149,28 @@ Var pid
   !endif
 !macroend
 
+; electron-builder's one-click setup shows SpiderBanner ("Installing…") whenever it is not silent, which is every update
+; (v0.131.0's updater passes no /S; installSection.nsh shows it with no define to turn it off), and never closes it: at
+; Quit, NSIS calls the plugin's unload callback (SpiderBanner.c DestroyMe, a SendMessage WM_CLOSE to the banner's window)
+; and then frees the DLL, while the banner's own thread (BannerThread, never joined) may still be returning through it.
+; That thread then runs in unmapped code: 0xc0000005 in `SpiderBanner.dll_unloaded` after everything was installed and
+; the new app had started (3 of 16 updates on windows-latest runners, 17 Nov 2026; no error window, no failed update).
+; Pinning the module (GetModuleHandleEx with GET_MODULE_HANDLE_EX_FLAG_PIN) keeps it mapped until the process ends, however
+; often it is freed; ExitProcess ends every other thread before anything is unmapped, so the banner's thread can never
+; run in freed code, however slow the computer. This runs first in customCheckAppRunning, the first hook after the Show.
+!macro ompPinBanner
+  !ifndef BUILD_UNINSTALLER
+    !ifdef ONE_CLICK
+      ${IfNot} ${Silent}
+        System::Call 'kernel32::GetModuleHandleEx(i 1, t "SpiderBanner.dll", *p .R5) i .R6'
+        ${if} $R6 == 0
+          !insertmacro ompLog "banner: SpiderBanner.dll was not pinned"
+        ${endIf}
+      ${endIf}
+    !endif
+  !endif
+!macroend
+
 ; REASON is `incomplete` (the unpack came out without what the app needs) or `start-failed` (the new app did not come up).
 !macro ompRestoreOldFolder REASON
   !ifndef BUILD_UNINSTALLER
@@ -406,6 +428,7 @@ Var pid
 !macroend
 
 !macro customCheckAppRunning
+  !insertmacro ompPinBanner
   !insertmacro IS_POWERSHELL_AVAILABLE
   !insertmacro _CHECK_APP_RUNNING
   !insertmacro ompSkipRepeatedFailure

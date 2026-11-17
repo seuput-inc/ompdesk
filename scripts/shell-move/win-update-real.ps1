@@ -30,7 +30,8 @@ param(
 	[Parameter(Mandatory)] [string] $Out,
 	[string] $NewVersion = '',
 	[string] $FeedScript = '',
-	[int] $FeedPort = 8443
+	[int] $FeedPort = 8443,
+	[int] $CpuLoad = 0
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -128,6 +129,35 @@ function Get-Shortcuts {
 	}
 }
 
+# A crash of the setup (0xc0000005 in electron-builder's SpiderBanner plugin after its work, run 44019132915) and what
+# Windows Error Reporting shows the person: its windows are watched while the setup runs and after, and pictured.
+$script:errorSeen = ''
+function Get-ErrorWindows {
+	@(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+			$_.MainWindowHandle -ne 0 -and ($_.ProcessName -match '^WerFault' -or $_.MainWindowTitle -match 'stopped working|작동이 중지|ompdesk-windows-setup')
+		} | ForEach-Object { "$($_.ProcessName) '$($_.MainWindowTitle)'" })
+}
+function Save-Screen([string] $Name) {
+	try {
+		Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+		$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+		$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+		$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+		$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+		$bitmap.Save((Join-Path $Out $Name), [System.Drawing.Imaging.ImageFormat]::Png)
+		$graphics.Dispose(); $bitmap.Dispose()
+		Evidence "${Name}: $($bounds.Width)x$($bounds.Height)"
+	} catch { Say "note: no screenshot $Name ($($_.Exception.Message))" }
+}
+function Watch-ErrorWindows {
+	$windows = Get-ErrorWindows
+	if ($windows.Count -and -not $script:errorSeen) {
+		$script:errorSeen = $windows -join '; '
+		Evidence "an error window appeared: $($script:errorSeen)"
+		Save-Screen 'screen-error.png'
+	}
+}
+
 function Write-Facts([string] $Label) {
 	$entry = Get-Entry
 	$facts = [ordered]@{
@@ -171,6 +201,12 @@ $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIde
 Evidence "mode $Mode; old v$OldVersion; candidate v$NewVersion ($((Get-Item -LiteralPath $NewSetup).Length) bytes)"
 Evidence "runner: $([Environment]::OSVersion.VersionString); elevated $($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)); session '$env:SESSIONNAME'; explorer.exe processes $(@(Get-Process explorer -ErrorAction SilentlyContinue).Count); WebView2 runtime $(Get-WebView2)"
 Show-Package
+# The runner image sets HKLM ...\Windows Error Reporting DontShowUI=1, so a crash never shows a window here; a person's
+# Windows does not have it. The throwaway VM gets the default back, so a crash shows what it would show them.
+$werKey = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
+Evidence "WER DontShowUI before: $((Get-ItemProperty -LiteralPath $werKey -ErrorAction SilentlyContinue).DontShowUI)"
+Remove-ItemProperty -LiteralPath $werKey -Name DontShowUI -ErrorAction SilentlyContinue
+Evidence "WER DontShowUI now: $((Get-ItemProperty -LiteralPath $werKey -ErrorAction SilentlyContinue).DontShowUI) (unset is the Windows default)"
 
 Check (-not (Test-Path -LiteralPath $installDir) -and -not (Get-Entry)) 'the runner starts without an OMPdesk install'
 
@@ -206,6 +242,14 @@ $t0 = Get-Date
 $setup = $null
 $setupExit = $null
 $feed = $null
+# A busy computer (a virus scan, a build) slows every thread of the setup, its banner's included; -CpuLoad keeps that many
+# busy loops per logical processor running from the update to the end of the checks.
+$load = @()
+if ($CpuLoad -gt 0) {
+	$load = @(1..([Environment]::ProcessorCount * $CpuLoad) | ForEach-Object { Start-Process -FilePath pwsh -ArgumentList '-NoProfile', '-Command', 'while ($true) {}' -WindowStyle Hidden -PassThru })
+	Evidence "CPU load: $($load.Count) busy loops on $([Environment]::ProcessorCount) logical processors"
+}
+$nsTempBefore = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue | ForEach-Object Name)
 
 if ($Mode -eq 'installer') {
 	# The app writes its userData once (the start mark of v0.131.0 itself), then goes: its updater is not what runs here.
@@ -227,7 +271,7 @@ if ($Mode -eq 'installer') {
 	$setup = Start-Process -FilePath $package -ArgumentList $updaterArgs -PassThru
 	$null = $setup.Handle
 	$deadline = (Get-Date).AddMinutes(10)
-	while (-not $setup.HasExited -and (Get-Date) -lt $deadline) { Add-Snapshot 'setup running'; Start-Sleep -Seconds 3 }
+	while (-not $setup.HasExited -and (Get-Date) -lt $deadline) { Add-Snapshot 'setup running'; Watch-ErrorWindows; Start-Sleep -Seconds 3 }
 	if (-not $setup.HasExited) { Say 'FAILED the setup was still running after 10 minutes'; $script:failures += 'the setup finished in 10 minutes'; Stop-Process -Id $setup.Id -Force -ErrorAction SilentlyContinue }
 	else { $setupExit = $setup.ExitCode }
 	Evidence "setup exit code $setupExit after $([int]((Get-Date) - $t0).TotalSeconds) s"
@@ -252,18 +296,55 @@ else {
 	}
 	# The app's updater checks, downloads, counts down, starts the setup and quits; the setup then runs on its own.
 	$seen = $false
+	$setupProc = $null
 	$deadline = (Get-Date).AddMinutes(25)
 	$tick = 0
 	while ((Get-Date) -lt $deadline) {
 		$running = @(Get-Process -Name 'ompdesk-windows-setup' -ErrorAction SilentlyContinue)
-		if ($running.Count) { $seen = $true } elseif ($seen) { break }
+		if ($running.Count) {
+			$seen = $true
+			# A handle opened while it runs keeps the exit code readable after it ends (the updater started it, not this script).
+			if (-not $setupProc) { $setupProc = $running[0]; $null = $setupProc.Handle }
+		} elseif ($seen) { break }
 		if ($seen -or $tick % 5 -eq 0) { Add-Snapshot $(if ($seen) { 'setup running' } else { 'waiting for the updater' }) }
+		if ($seen) { Watch-ErrorWindows }
 		$tick++
 		Start-Sleep -Seconds 3
 	}
 	Check $seen "v$OldVersion's own updater started the setup within 25 minutes"
 	Evidence "the setup ran from second $([int]((Get-Date) - $t0).TotalSeconds) of the wait"
+	if ($setupProc -and $setupProc.HasExited) { $setupExit = $setupProc.ExitCode }
+	Evidence "setup exit code $setupExit (started by v$OldVersion's updater, which does not read it)"
 }
+
+# ---- whether a crash of the setup shows the person anything ---------------------------------------------------------------
+Start-Sleep -Seconds 5
+Watch-ErrorWindows
+$errorWindows = Get-ErrorWindows
+Evidence "error windows on screen now: $(if ($errorWindows.Count) { $errorWindows -join '; ' } else { 'none' }); seen while the setup ran: $(if ($script:errorSeen) { $script:errorSeen } else { 'none' })"
+Check (-not $script:errorSeen -and $errorWindows.Count -eq 0) 'no Windows error window appeared during or after the update'
+Evidence "WerFault processes: $(@(Get-Process -Name WerFault, WerFaultSecure -ErrorAction SilentlyContinue | ForEach-Object { "$($_.ProcessName) pid $($_.Id) window '$($_.MainWindowTitle)'" }) -join '; ')"
+Evidence "interactive desktop: session $((Get-Process -Id $PID).SessionId), explorer $(@(Get-Process explorer -ErrorAction SilentlyContinue).Count)"
+foreach ($key in 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting', 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting') {
+	$wer = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+	Evidence "WER setting ${key}: DontShowUI=$($wer.DontShowUI) Disabled=$($wer.Disabled) DontSendAdditionalData=$($wer.DontSendAdditionalData)"
+}
+$werOut = Join-Path $Out 'wer'
+New-Item -ItemType Directory -Force -Path $werOut | Out-Null
+$werReports = @(foreach ($root in "$env:LOCALAPPDATA\Microsoft\Windows\WER", "$env:ProgramData\Microsoft\Windows\WER") {
+		foreach ($kind in 'ReportArchive', 'ReportQueue') {
+			Get-ChildItem -LiteralPath (Join-Path $root $kind) -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'ompdesk|OMPdesk' }
+		}
+	})
+foreach ($report in $werReports) {
+	Copy-Item -LiteralPath (Join-Path $report.FullName 'Report.wer') -Destination (Join-Path $werOut "$($report.Parent.Name)-$($report.Name).wer") -ErrorAction SilentlyContinue
+}
+Evidence "WER reports: $(if ($werReports.Count) { ($werReports | ForEach-Object { "$($_.Parent.Name)\$($_.Name)" }) -join '; ' } else { 'none' })"
+$crashEvents = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $t0; Id = 1000, 1001 } -ErrorAction SilentlyContinue |
+		Where-Object { $_.Message -match 'ompdesk-windows-setup' })
+$crashEvents | Select-Object TimeCreated, ProviderName, Id, Message | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $werOut 'events-1000-1001.json')
+Evidence "setup crash events: 1000 x$(@($crashEvents | Where-Object Id -eq 1000).Count), 1001 x$(@($crashEvents | Where-Object Id -eq 1001).Count)"
+Save-Screen 'screen-after.png'
 
 # ---- what the person would see -------------------------------------------------------------------------------------------
 # A setup that succeeded waited for app-started.json itself, so this is only a grace for the old app's restore path.
@@ -295,6 +376,7 @@ if ($fileVersionTracks) {
 } else { Evidence "OMPdesk.exe's file version did not track the app version in v$OldVersion; not asserted" }
 Check ($mark.version -eq $NewVersion) "app-started.json names $NewVersion (the new app's first page loaded)"
 Check ($setupText -notmatch 'incomplete|start-failed|putting the old app back') 'the setup log has no incomplete, start-failed or rollback line'
+Check ($setupText -notmatch 'banner: SpiderBanner.dll was not pinned') "the setup pinned electron-builder's banner plugin (installer.nsh ompPinBanner)"
 Check (-not (Test-Path -LiteralPath (Join-Path $userData 'update-start-failed.json'))) 'no update-start-failed.json'
 Check (-not (Test-Path -LiteralPath "$installDir.move-backup")) 'no .move-backup folder is left beside the install'
 Check (Test-Path -LiteralPath $canary) 'userData is kept (the canary file written before the update is there)'
@@ -326,6 +408,9 @@ try {
 		ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $Out 'application-events.json')
 } catch { Say "note: no Application-log errors for the apps ($($_.Exception.Message))" }
 
+$nsTempLeft = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin $nsTempBefore })
+Evidence "setup temp folders left in %TEMP%: $(if ($nsTempLeft.Count) { ($nsTempLeft | ForEach-Object { "$($_.Name) [$((Get-ChildItem -LiteralPath $_.FullName -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ')]" }) -join '; ' } else { 'none' })"
+$load | Stop-Process -Force -ErrorAction SilentlyContinue
 Stop-Installed
 if ($feed -and -not $feed.HasExited) { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
 if ($script:failures.Count) { Say "RESULT: FAILED ($($script:failures.Count)): $($script:failures -join '; ')"; exit 1 }
