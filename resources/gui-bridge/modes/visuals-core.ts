@@ -17,6 +17,18 @@ export function visualsTemplate(systemPromptTemplate: string): string {
 	return systemPromptTemplate.slice(start, end + SECTION_CLOSE.length);
 }
 
+/** The words of every `{{…}}` tag in `template` that read a context variable (`{{#if a}}`, `{{#ifAny a b}}`, `{{a}}`). */
+export function templateVariables(template: string): string[] {
+	const variables = new Set<string>();
+	for (const [, body = ""] of template.matchAll(/\{\{([^{}]*)\}\}/g)) {
+		const words = body.trim().split(/\s+/);
+		if (words[0]?.startsWith("/") || words[0] === "else") continue;
+		if (words[0]?.startsWith("#") || words[0]?.startsWith("^")) words.shift();
+		for (const word of words) if (/^[A-Za-z_]\w*$/.test(word)) variables.add(word);
+	}
+	return [...variables];
+}
+
 /** The two Settings switches stock reads for the section (`tui.renderMermaid`, `tui.renderSvg`). */
 export interface VisualsFlags {
 	renderMermaid: boolean;
@@ -26,6 +38,15 @@ export interface VisualsFlags {
 /** Stock's template renderer (`prompt.render` from `@oh-my-pi/pi-utils`). */
 export type PromptRender = (template: string, context: Record<string, unknown>) => string;
 
+/** The section's variables OMPdesk holds off, whatever the settings say (see `visualsInstruction`). */
+const HELD_OFF = { autoGraph: false, renderEmbeds: false } as const;
+
+/** Every variable of stock's section OMPdesk decides; scripts/omp-bump reports one a newer omp's section adds. */
+export const VISUALS_TEMPLATE_VARIABLES: readonly string[] = [
+	...(["renderMermaid", "renderSvg"] satisfies (keyof VisualsFlags)[]),
+	...Object.keys(HELD_OFF),
+];
+
 /**
  * The section for `flags`; undefined when it renders empty. `autoGraph` stays
  * off: OMPdesk draws no chart under numeric tables, and the section would tell
@@ -33,7 +54,7 @@ export type PromptRender = (template: string, context: Record<string, unknown>) 
  * strips `<iframe>` (src/renderer/lib/markdown.tsx), so the section would invite a page the person never sees.
  */
 export function visualsInstruction(render: PromptRender, template: string, flags: VisualsFlags): string | undefined {
-	const text = render(template, { ...flags, autoGraph: false, renderEmbeds: false }).trim();
+	const text = render(template, { ...flags, ...HELD_OFF }).trim();
 	return text || undefined;
 }
 
