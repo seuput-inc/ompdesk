@@ -38,6 +38,10 @@
  * `systemPrompt` instead of registering a section (see scripts/lint-prompt-sections.mjs); an exception carries
  * `prompt-section-ok: <reason>`.
  *
+ * omp imports (src, resources/gui-bridge, scripts; tests excluded): a stock `@oh-my-pi/*` module is loaded only
+ * through the omp layer (resources/gui-bridge/omp/ adapters inside omp, omp-package.ts outside it, health.ts and
+ * capabilities.ts for the probe; see scripts/lint-omp-imports.mjs). There is no marker: the layer is the exception.
+ *
  * Duplicate rules (src/main, src/renderer, src/shared, resources/gui-bridge; tests excluded): a regex bound to a
  * top-level const, or an exported constant, that another side spells again (see scripts/lint-duplicate-rules.mjs);
  * known ones are listed with their reason in scripts/lint-duplicate-rules-allow.json, which only shrinks.
@@ -53,6 +57,7 @@ import { rawControlViolations } from "./lint-controls.mjs";
 import { compareToAllowList, findDuplicateRules, readAllowList, readSides } from "./lint-duplicate-rules.mjs";
 import { findImeViolations } from "./lint-ime.mjs";
 import { findLocaleViolations } from "./lint-locale.mjs";
+import { findOmpImportViolations, productionFiles } from "./lint-omp-imports.mjs";
 import { findPromptHookViolations } from "./lint-prompt-sections.mjs";
 import { findUnhandledCalls } from "./lint-unhandled.mjs";
 
@@ -139,6 +144,17 @@ for (const file of collect(BRIDGE)) {
 		violations.push(
 			`gui-bridge/${rel}:${hit.line}  prompt text outside a section  ${hit.text}  (registerPromptSection, or prompt-section-ok: <reason>)`,
 		);
+	}
+}
+
+// The omp layer covers the production code of every scanned root, not just the bridge.
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+const ompFiles = only
+	? productionFiles(REPO).filter(file => only.includes(resolve(REPO, file)))
+	: productionFiles(REPO);
+for (const file of ompFiles) {
+	for (const hit of findOmpImportViolations(file, readFileSync(resolve(REPO, file), "utf8"))) {
+		violations.push(`${file}:${hit.line}  ${hit.text}`);
 	}
 }
 violations.push(...rawControlViolations(only));
