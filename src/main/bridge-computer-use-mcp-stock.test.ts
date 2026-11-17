@@ -8,7 +8,7 @@
  * - the request deadline stock gives agent-desktop's calls, which needs no server.
  * Skipped without an installed omp.
  */
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -76,7 +76,11 @@ interface Probe {
 	ms: number;
 }
 
-function runCheck<T = Probe>(command: string, mode: string, checkMs: number, probe = PROBE): T {
+/**
+ * Async, not `spawnSync`: a Windows omp takes up to 30 s to start, and a worker blocked across the cases misses
+ * vitest's RPC deadline ("Timeout calling onTaskUpdate", flake-probe run 44133247071).
+ */
+async function runCheck<T = Probe>(command: string, mode: string, checkMs: number, probe = PROBE): Promise<T> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-computer-use-"));
 	chmodSync(isolated, 0o700);
 	try {
@@ -103,7 +107,7 @@ function runCheck<T = Probe>(command: string, mode: string, checkMs: number, pro
 		]) {
 			Reflect.deleteProperty(env, key);
 		}
-		const result = spawnSync(
+		const child = spawn(
 			OMP_COMMAND.file,
 			[
 				...OMP_COMMAND.args,
@@ -117,10 +121,20 @@ function runCheck<T = Probe>(command: string, mode: string, checkMs: number, pro
 				"-e",
 				extension,
 			],
-			{ env, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, input: "" },
+			{ env, stdio: ["pipe", "ignore", "pipe"] },
 		);
-		const line = result.stderr.split(/\r?\n/).find(value => value.startsWith("CHECK_PROBE="));
-		expect(line, result.stderr.slice(-2500)).toMatch(/^CHECK_PROBE=/);
+		child.stdin.end();
+		let stderr = "";
+		child.stderr.on("data", chunk => {
+			stderr += String(chunk);
+		});
+		const closed = Promise.withResolvers<void>();
+		child.once("close", () => closed.resolve());
+		child.once("error", error => closed.reject(error));
+		const timer = setTimeout(() => child.kill(), 120_000);
+		await closed.promise.finally(() => clearTimeout(timer));
+		const line = stderr.split(/\r?\n/).find(value => value.startsWith("CHECK_PROBE="));
+		expect(line, stderr.slice(-2500)).toMatch(/^CHECK_PROBE=/);
 		return JSON.parse(line?.slice("CHECK_PROBE=".length) ?? "{}") as T;
 	} finally {
 		rmSync(isolated, { recursive: true, force: true });
@@ -136,33 +150,33 @@ describe.skipIf(!existsSync(omp))("the agent-desktop check on stock's MCP manage
 	}, 120_000);
 	afterAll(() => rmSync(dir, RM_TEMP));
 
-	it("passes a server that answers", () => {
-		const { verdict } = runCheck(server, "", 15_000);
+	it("passes a server that answers", async () => {
+		const { verdict } = await runCheck(server, "", 15_000);
 		expect(verdict).toEqual({ ok: true });
 	}, 130_000);
 
-	it("fails a command that does not exist, with stock's own error and without waiting out the bound", () => {
-		const { verdict, ms } = runCheck(MISSING, "", 15_000);
+	it("fails a command that does not exist, with stock's own error and without waiting out the bound", async () => {
+		const { verdict, ms } = await runCheck(MISSING, "", 15_000);
 		expect(verdict.ok).toBe(false);
 		expect(ms).toBeLessThan(15_000);
 	}, 130_000);
 
-	it("fails a server that exits at once", () => {
-		const { verdict, ms } = runCheck(server, "exit", 15_000);
+	it("fails a server that exits at once", async () => {
+		const { verdict, ms } = await runCheck(server, "exit", 15_000);
 		expect(verdict.ok).toBe(false);
 		expect(ms).toBeLessThan(15_000);
 	}, 130_000);
 
-	it("fails a server that never answers at the bound, as not started in time", () => {
-		const { verdict, ms } = runCheck(server, "silent", 3_000);
+	it("fails a server that never answers at the bound, as not started in time", async () => {
+		const { verdict, ms } = await runCheck(server, "silent", 3_000);
 		expect(verdict).toEqual({ ok: false, error: "did not start in time" });
 		expect(ms).toBeGreaterThanOrEqual(3_000);
 	}, 130_000);
 });
 
 describe.skipIf(!existsSync(omp))("agent-desktop's request deadline on stock's MCP manager", () => {
-	it("outlasts agent-desktop's own 30 s waits, which a Windows launch of Notepad runs out before it answers", () => {
-		const probe = runCheck<{ found: boolean; timeout: number | null }>(MISSING, "", 0, CONFIG_PROBE);
+	it("outlasts agent-desktop's own 30 s waits, which a Windows launch of Notepad runs out before it answers", async () => {
+		const probe = await runCheck<{ found: boolean; timeout: number | null }>(MISSING, "", 0, CONFIG_PROBE);
 		expect(probe.found).toBe(true);
 		// Without its own value stock cuts every request off at 30 s, the moment agent-desktop's launch, `wait` and
 		// `--wait-for` give up and answer.
