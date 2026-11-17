@@ -307,7 +307,7 @@ pub async fn inspect(
 
 /// Removes the orphan at `path` of the repository at `primary`, never forced: a detached one when git lists it as
 /// linked, one on a branch by `remove_safe` (landed and clean once more, the branch at the tip it judged unless
-/// `keep_branch`). None when it stayed.
+/// `keep_branch`, its landed copy on `origin` either way). None when it stayed.
 pub async fn remove(
     git: &Git,
     primary: &str,
@@ -325,7 +325,9 @@ pub async fn remove(
                 branch,
                 base_cwd: primary.to_owned(),
             };
-            branches::remove_safe(git, &worktree, keep_branch).await
+            Ok(branches::remove_safe(git, &worktree, keep_branch)
+                .await?
+                .map(|removed| removed.removal))
         }
     }
 }

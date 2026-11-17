@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::parse;
 use super::read::{self, blocking};
-use super::run::Git;
+use super::run::{Git, failure};
 use crate::fs::disk;
 use crate::fs::error::{Codes, NodeError};
 use crate::fs::order::js_trim;
@@ -28,6 +28,11 @@ const MAX_FILES: usize = 200;
 const PATCH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CONTENT_VERDICTS: usize = 256;
+/// Each network git of the remote copy's cleanup (`ls-remote`, `fetch`, `push`) may take this long, as main's own push
+/// and fetch (`REMOTE_TIMEOUT_MS` in `scm.ts`).
+const NETWORK_MS: u64 = 300_000;
+/// The one remote whose copy of a session branch is cleaned up.
+const ORIGIN: &str = "origin";
 
 /// The worktree binding of a tab (`IpcTabWorktree`): the checkout, its branch and the repo it forked from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -803,11 +808,46 @@ pub async fn standing(
 
 /// What a safe removal did: worktree and branch gone, or the worktree gone but the branch kept (asked to, or it moved
 /// after its landing was judged). None: nothing went.
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Removal {
     Removed,
     BranchKept,
+}
+
+/// What became of a session branch's copy on `origin`: deleted because its tip is in `origin/<base>`, or kept and why.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteOutcome {
+    Deleted,
+    /// Its tip is not in `origin/<base>`, by ancestry or by content.
+    NotLanded,
+    /// It moved on `origin` after it was judged: something new may be there.
+    Moved,
+    /// It is the branch work lands in (the base, `origin`'s default or the parent's own).
+    Base,
+    /// No branch on `origin` to judge it against.
+    NoBase,
+    /// `origin` refused the deletion (a protected branch, a hook).
+    Refused,
+    /// `origin` could not be reached, or git failed.
+    Failed,
+}
+
+/// `outcome` with one sentence for the agent that names the branch and says why.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct RemoteCopy {
+    pub outcome: RemoteOutcome,
+    pub message: String,
+}
+
+/// A safe removal's answer: what went here, and what became of the branch's copy on `origin` (none when `origin` holds
+/// none).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct SafeRemoval {
+    pub removal: Removal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteCopy>,
 }
 
 /// `git worktree remove` without `--force` of `path`, only when git lists it as a linked worktree of the repository at
@@ -854,14 +894,246 @@ async fn delete_at(git: &Git, primary: &str, reference: &str, tip: &str) -> Resu
     })
 }
 
+fn network() -> Opts<'static> {
+    Opts {
+        timeout_ms: Some(NETWORK_MS),
+        ..Opts::default()
+    }
+}
+
+/// One network git: its output when it exited 0, else git's words (a failed run, a timeout, a nonzero exit). A cancel
+/// still fails.
+async fn over_network(
+    git: &Git,
+    cwd: &str,
+    args: &[&str],
+) -> Result<Result<Output, String>, Fault> {
+    match git.run(cwd, args, network()).await {
+        Err(fault) if is_cancel(&fault) => Err(fault),
+        Err(fault) => Ok(Err(fault.message)),
+        Ok(output) if output.code != 0 => Ok(Err(failure(args, &output).message)),
+        Ok(output) => Ok(Ok(output)),
+    }
+}
+
+/// The tips `origin` holds now for `refs` (full names), by `git ls-remote`; git's words when it could not be read.
+async fn remote_tips(
+    git: &Git,
+    cwd: &str,
+    refs: &[&str],
+) -> Result<Result<HashMap<String, String>, String>, Fault> {
+    let mut args = vec!["ls-remote", ORIGIN];
+    args.extend_from_slice(refs);
+    Ok(over_network(git, cwd, &args).await?.map(|output| {
+        output
+            .text()
+            .split('\n')
+            .filter_map(|line| line.split_once('\t'))
+            .filter(|(_, name)| refs.contains(name))
+            .map(|(sha, name)| (name.to_owned(), sha.to_owned()))
+            .collect()
+    }))
+}
+
+/// Whether this repository holds both commits (a tip `ls-remote` named may not be fetched yet).
+async fn both_present(git: &Git, cwd: &str, one: &str, other: &str) -> Result<bool, Fault> {
+    for sha in [one, other] {
+        let wanted = format!("{sha}^{{commit}}");
+        if git.raw(cwd, &["cat-file", "-e", &wanted]).await?.code != 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The branch name `origin/<name>` names, from a full `refs/remotes/origin/<name>`.
+fn on_origin(output: &Output) -> Option<String> {
+    (output.code == 0)
+        .then(|| trimmed(output))
+        .and_then(|full| full.strip_prefix("refs/remotes/origin/").map(str::to_owned))
+        .filter(|name| !name.is_empty() && name != "HEAD")
+}
+
+/// Where a child's work lands on `origin`: the branch the parent's branch tracks there, else `origin`'s default branch
+/// as last fetched, else the parent's own branch. Every one of them is protected: none is ever deleted.
+struct RemoteBase {
+    base: Option<String>,
+    protected: Vec<String>,
+}
+
+async fn remote_base(git: &Git, cwd: &str) -> Result<RemoteBase, Fault> {
+    let symbolic = git
+        .raw(cwd, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .await?;
+    let own = Some(trimmed(&symbolic)).filter(|name| symbolic.code == 0 && !name.is_empty());
+    let tracked = match &own {
+        Some(own) => {
+            let upstream = format!("{own}@{{upstream}}");
+            let args = ["rev-parse", "--symbolic-full-name", &upstream];
+            on_origin(&git.raw(cwd, &args).await?)
+        }
+        None => None,
+    };
+    let default = on_origin(
+        &git.raw(cwd, &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
+            .await?,
+    );
+    let base = tracked
+        .clone()
+        .or_else(|| default.clone())
+        .or_else(|| own.clone());
+    Ok(RemoteBase {
+        base,
+        protected: [tracked, default, own].into_iter().flatten().collect(),
+    })
+}
+
+/// Delete `branch`'s copy on `origin` once its work landed there: only when the tip `origin` holds is in the tip of
+/// `origin/<base>` it holds now, by ancestry or by content (`landed_by_content`), never judged against a local branch,
+/// so a merge here that was never pushed keeps it. The push deletes with a lease on the very tip judged, so a copy that
+/// moved since stays. None when there is no `origin` or it holds no such branch; else what happened and why. Never
+/// deletes any other branch, nor the base.
+async fn drop_landed_remote(
+    git: &Git,
+    cwd: &str,
+    branch: &str,
+) -> Result<Option<RemoteCopy>, Fault> {
+    let remotes = git.raw(cwd, &["remote"]).await?;
+    if !remotes
+        .text()
+        .split('\n')
+        .any(|name| js_trim(name) == ORIGIN)
+    {
+        return Ok(None);
+    }
+    let kept = |outcome: RemoteOutcome, why: String| -> Result<Option<RemoteCopy>, Fault> {
+        Ok(Some(RemoteCopy {
+            outcome,
+            message: format!("Its copy on origin ({branch}) stays: {why}."),
+        }))
+    };
+    let RemoteBase { base, protected } = remote_base(git, cwd).await?;
+    let copy = format!("refs/heads/{branch}");
+    let base_ref = base.as_ref().map(|base| format!("refs/heads/{base}"));
+    let wanted: Vec<&str> = [Some(copy.as_str()), base_ref.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let tips = match remote_tips(git, cwd, &wanted).await? {
+        Ok(tips) => tips,
+        Err(words) => {
+            return kept(
+                RemoteOutcome::Failed,
+                format!("origin could not be read ({words})"),
+            );
+        }
+    };
+    let Some(tip) = tips.get(&copy).cloned() else {
+        return Ok(None);
+    };
+    if protected.iter().any(|name| name == branch) {
+        return kept(
+            RemoteOutcome::Base,
+            "it is the branch work lands in".to_owned(),
+        );
+    }
+    let base_tip = base_ref.and_then(|name| tips.get(&name).cloned());
+    let (Some(base), Some(base_tip)) = (base.as_deref(), base_tip) else {
+        let on = base
+            .as_deref()
+            .map_or_else(|| "no base branch".to_owned(), |base| format!("no {base}"));
+        return kept(
+            RemoteOutcome::NoBase,
+            format!("origin has {on} to judge it against"),
+        );
+    };
+    if !both_present(git, cwd, &tip, &base_tip).await? {
+        let base_ref = format!("refs/heads/{base}");
+        let args = [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            ORIGIN,
+            &base_ref,
+            &copy,
+        ];
+        if let Err(words) = over_network(git, cwd, &args).await? {
+            return kept(
+                RemoteOutcome::Failed,
+                format!("origin could not be fetched ({words})"),
+            );
+        }
+        if !both_present(git, cwd, &tip, &base_tip).await? {
+            return kept(
+                RemoteOutcome::Moved,
+                "it moved on origin while it was judged".to_owned(),
+            );
+        }
+    }
+    let landed = contains(git, cwd, &base_tip, &tip).await?
+        || landed_by_content(git, cwd, &base_tip, &tip).await?;
+    if !landed {
+        let short = tip.get(..9).unwrap_or(&tip);
+        return kept(
+            RemoteOutcome::NotLanded,
+            format!("{short} is not in origin/{base}"),
+        );
+    }
+    let lease = format!("--force-with-lease={copy}:{tip}");
+    let delete = format!(":{copy}");
+    let refused =
+        match over_network(git, cwd, &["push", "--porcelain", &lease, ORIGIN, &delete]).await? {
+            Ok(_) => {
+                return Ok(Some(RemoteCopy {
+                    outcome: RemoteOutcome::Deleted,
+                    message: format!(
+                        "Its copy on origin ({branch}) had landed in origin/{base} and was deleted."
+                    ),
+                }));
+            }
+            Err(words) => words,
+        };
+    match remote_tips(git, cwd, &[copy.as_str()]).await? {
+        Ok(now) if now.get(&copy) != Some(&tip) => kept(
+            RemoteOutcome::Moved,
+            "it moved on origin after it was judged landed".to_owned(),
+        ),
+        Ok(_) => kept(
+            RemoteOutcome::Refused,
+            format!("origin refused to delete it ({refused})"),
+        ),
+        Err(_) => kept(
+            RemoteOutcome::Failed,
+            format!("origin could not be reached ({refused})"),
+        ),
+    }
+}
+
+/// `drop_landed_remote` that never fails what it follows (a merge, a removal): a git that failed reads as kept. A
+/// cancel still fails.
+async fn remote_copy(git: &Git, cwd: &str, branch: &str) -> Result<Option<RemoteCopy>, Fault> {
+    match drop_landed_remote(git, cwd, branch).await {
+        Err(fault) if !is_cancel(&fault) => Ok(Some(RemoteCopy {
+            outcome: RemoteOutcome::Failed,
+            message: format!(
+                "Its copy on origin ({branch}) stays: git failed ({}).",
+                fault.message
+            ),
+        })),
+        outcome => outcome,
+    }
+}
+
 /// Remove an agent session's worktree and its branch, losing nothing: only a registered linked worktree with no
 /// uncommitted or untracked file whose work has landed in the parent's HEAD or upstream goes. `judge_landing` is the
-/// one judge of landed; the branch goes with `update-ref -d` against the tip it judged, never `branch -d`.
+/// one judge of landed; the branch goes with `update-ref -d` against the tip it judged, never `branch -d`. Its copy on
+/// `origin` goes too once it landed in `origin/<base>` (`drop_landed_remote`), also when `keep_branch` keeps the local
+/// one.
 pub async fn remove_safe(
     git: &Git,
     worktree: &WorktreeRef,
     keep_branch: bool,
-) -> Result<Option<Removal>, Fault> {
+) -> Result<Option<SafeRemoval>, Fault> {
     let (facts, tip) = judge_landing(git, worktree).await?;
     let Some(tip) = tip.filter(|_| facts.landed && facts.clean) else {
         return Ok(None);
@@ -869,11 +1141,14 @@ pub async fn remove_safe(
     let Some(primary) = remove_linked(git, &worktree.base_cwd, &worktree.path).await? else {
         return Ok(None);
     };
-    if keep_branch {
-        return Ok(Some(Removal::BranchKept));
-    }
-    let reference = format!("refs/heads/{}", worktree.branch);
-    Ok(Some(delete_at(git, &primary, &reference, &tip).await?))
+    let remote = remote_copy(git, &primary, &worktree.branch).await?;
+    let removal = if keep_branch {
+        Removal::BranchKept
+    } else {
+        let reference = format!("refs/heads/{}", worktree.branch);
+        delete_at(git, &primary, &reference, &tip).await?
+    };
+    Ok(Some(SafeRemoval { removal, remote }))
 }
 
 /// A worktree an open just made and nobody used, as its `prepare` hears of it.
@@ -951,6 +1226,8 @@ pub enum Merged {
         merged: bool,
         sha: String,
         summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        remote: Option<RemoteCopy>,
     },
     Conflict {
         merged: bool,
@@ -962,7 +1239,8 @@ pub enum Merged {
 
 /// `git merge --no-ff` of the branch into the parent checkout's current branch `base_branch`, with a merge commit
 /// that names `label`. One that fails is aborted, so the parent's checkout is never left half merged: with conflicted
-/// files it is a conflict, else a `branch_error` with git's words.
+/// files it is a conflict, else a `branch_error` with git's words. After a merge the branch's copy on `origin` goes
+/// when it already landed in `origin/<base>` (`drop_landed_remote`; the merge itself pushes nothing).
 pub async fn merge(
     git: &Git,
     worktree: &WorktreeRef,
@@ -1014,10 +1292,12 @@ pub async fn merge(
     }
     let sha = text(git, cwd, &["rev-parse", "--short", "HEAD"]).await?;
     let summary = text(git, cwd, &["diff", "--shortstat", "HEAD~1", "HEAD"]).await?;
+    let remote = remote_copy(git, cwd, &worktree.branch).await?;
     Ok(Merged::Done {
         merged: true,
         sha,
         summary,
+        remote,
     })
 }
 

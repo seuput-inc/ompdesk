@@ -151,13 +151,13 @@ describe("removeSafeWorktree", () => {
 		const wt = await agentWorktree("j");
 		await commitIn(wt.path, "a.ts", "a\n");
 		await mergeBranch(wt, "Worker");
-		expect(await removeSafeWorktree(wt)).toBe("removed");
+		expect(await removeSafeWorktree(wt)).toEqual({ removal: "removed" });
 		await expect(fs.stat(wt.path)).rejects.toThrow();
 		expect(gitSync(repo, "branch", "--list", wt.branch)).toBe("");
 
 		// Nothing was ever done there: removing it loses nothing.
 		const untouched = await agentWorktree("m");
-		expect(await removeSafeWorktree(untouched)).toBe("removed");
+		expect(await removeSafeWorktree(untouched)).toEqual({ removal: "removed" });
 		await expect(fs.stat(untouched.path)).rejects.toThrow();
 	});
 
@@ -165,7 +165,7 @@ describe("removeSafeWorktree", () => {
 		await staleParentMain();
 		const wt = await childOnRemoteMain("pushed");
 		gitSync(wt.path, "push", "-q", "origin", "HEAD:main");
-		expect(await removeSafeWorktree(wt)).toBe("removed");
+		expect(await removeSafeWorktree(wt)).toEqual({ removal: "removed" });
 		await expect(fs.stat(wt.path)).rejects.toThrow();
 		expect(gitSync(repo, "branch", "--list", wt.branch)).toBe("");
 	});
@@ -187,7 +187,7 @@ describe("removeSafeWorktree", () => {
 			{ mode: 0o755 },
 		);
 		gitSync(repo, "config", "core.fsmonitor", slash(hook));
-		expect(await removeSafeWorktree(wt)).toBe("branch-kept");
+		expect(await removeSafeWorktree(wt)).toEqual({ removal: "branch-kept" });
 		expect(existsSync(mark)).toBe(true);
 		await expect(fs.stat(wt.path)).rejects.toThrow();
 		expect(gitSync(repo, "rev-parse", wt.branch).trim()).toBe(moved);

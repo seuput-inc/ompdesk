@@ -5,8 +5,10 @@ import { gitSync } from "./local/git/test-repos";
 import { LocalCommandError } from "./local/types";
 import { listOrphanWorktrees, removeOrphanWorktree } from "./worktree-orphans";
 import {
+	addWorktree,
 	bridge,
 	byBranch,
+	commitIn,
 	deps,
 	installOrphansRig,
 	listedWorktrees,
@@ -38,6 +40,23 @@ describe("removeOrphanWorktree", () => {
 			}
 			const left = (await listOrphanWorktrees(repo, deps)).worktrees.map(worktree => worktree.state).sort();
 			expect(left).toEqual(["dirty", "unlanded"]);
+		},
+		SLOW,
+	);
+
+	it(
+		"keeps the local branch when disk care's sweep asks, and still deletes its copy on origin once it landed there",
+		async () => {
+			const remote = path.join(root, "remote.git");
+			gitSync(root, "init", "-q", "--bare", "-b", "main", remote);
+			gitSync(repo, "remote", "add", "origin", remote);
+			gitSync(repo, "push", "-q", "-u", "origin", "main");
+			const dir = await fs.realpath(addWorktree("pushed"));
+			await commitIn(dir, "pushed.ts", "x\n");
+			gitSync(dir, "push", "-q", "origin", "omp/gui/pushed", "HEAD:main");
+			expect(await removeOrphanWorktree(repo, dir, deps, { keepBranch: true })).toEqual({ removal: "branch-kept" });
+			expect(gitSync(repo, "branch", "--list", "omp/gui/pushed")).toContain("omp/gui/pushed");
+			expect(gitSync(remote, "for-each-ref", "refs/heads/omp/gui/pushed")).toBe("");
 		},
 		SLOW,
 	);

@@ -19,7 +19,7 @@ use crate::agentctl::service::text::{
     StopFlags, by_caller, cleanup_of, ids_of, label, stored_title, waits,
 };
 use crate::agentctl::service::types::{
-    ControlTab, StopArgs, StoredSession, WorktreeRef, WorktreeRemoval,
+    ControlTab, SafeRemoval, StopArgs, StoredSession, WorktreeRef, WorktreeRemoval,
 };
 use crate::agentctl::service::util::join;
 
@@ -316,7 +316,7 @@ impl AgentControl {
 
     /// `#dropWorktree`: a deleted child's worktree and branch go only when nothing would be lost (clean tree,
     /// untracked files included, branch tip in the parent's HEAD or upstream); otherwise both stay and the answer says
-    /// what is unlanded.
+    /// what is unlanded. The answer ends with what became of the branch's copy on `origin`.
     async fn drop_worktree(&self, worktree: &WorktreeRef, device: Option<&str>) -> String {
         let removal = self
             .host
@@ -324,21 +324,24 @@ impl AgentControl {
             .await
             .ok()
             .flatten();
+        let Some(SafeRemoval { removal, remote }) = removal else {
+            return self.kept_worktree(worktree, device).await;
+        };
+        let remote = remote.map_or_else(String::new, |remote| format!(" {}", remote.message));
         match removal {
-            Some(WorktreeRemoval::Removed) => {
-                return format!(
-                    "Removed its worktree {} and branch {}.",
-                    worktree.path, worktree.branch
-                );
-            }
-            Some(WorktreeRemoval::BranchKept) => {
-                return format!(
-                    "Removed its worktree {}; kept branch {}: it moved after its work was checked as landed, so it may hold new commits.",
-                    worktree.path, worktree.branch
-                );
-            }
-            None => {}
+            WorktreeRemoval::Removed => format!(
+                "Removed its worktree {} and branch {}.{remote}",
+                worktree.path, worktree.branch
+            ),
+            WorktreeRemoval::BranchKept => format!(
+                "Removed its worktree {}; kept branch {}: it moved after its work was checked as landed, so it may hold new commits.{remote}",
+                worktree.path, worktree.branch
+            ),
         }
+    }
+
+    /// Why `drop_worktree` kept a worktree and its branch: what is unlanded.
+    async fn kept_worktree(&self, worktree: &WorktreeRef, device: Option<&str>) -> String {
         let facts = self.host.branch_facts(worktree, device).await.ok();
         let mut unlanded: Vec<String> = Vec::new();
         if let Some(facts) = facts {

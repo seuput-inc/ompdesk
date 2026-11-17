@@ -1478,7 +1478,8 @@ export class LocalHostServices implements HostServices {
 			case GIT_METHODS.landing:
 				return landingFacts(parse(GitWorktreeParams, method, params).worktree);
 			case GIT_METHODS.removeWorktree:
-				return removeSafeWorktree(parse(GitWorktreeParams, method, params).worktree);
+				// The bare removal, as before the remote copy's cleanup, so a desktop of any version reads it.
+				return (await removeSafeWorktree(parse(GitWorktreeParams, method, params).worktree))?.removal ?? null;
 			case GIT_METHODS.discardWorktree:
 				return discardOpenedWorktree(parse(GitWorktreeParams, method, params).worktree, {
 					openFolders: sessionOpenFolders,

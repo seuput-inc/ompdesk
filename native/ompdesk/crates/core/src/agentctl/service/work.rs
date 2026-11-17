@@ -619,8 +619,12 @@ impl AgentControl {
             ),
             None => String::new(),
         };
+        let remote = outcome
+            .remote
+            .as_ref()
+            .map_or_else(String::new, |remote| format!(" {}", remote.message));
         Ok(format!(
-            "Merged {} into {} ({}{}). Nothing was pushed.{post}",
+            "Merged {} into {} ({}{}). Nothing was pushed.{remote}{post}",
             worktree.branch,
             worktree.base_cwd,
             outcome.sha.as_deref().unwrap_or(""),

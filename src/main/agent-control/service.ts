@@ -59,7 +59,15 @@ import { CoreError, core } from "../core/process";
 import { RpcTimeoutError } from "../rpc-client";
 import type { Pace } from "../session-pace";
 import type { FileEdits } from "../web/file-edit-reports";
-import type { BranchEvidence, BranchFacts, LandingFacts, MergeOutcome, WorktreeRef, WorktreeRemoval } from "./branches";
+import type {
+	BranchEvidence,
+	BranchFacts,
+	LandingFacts,
+	MergeOutcome,
+	SafeRemoval,
+	WorktreeRef,
+	WorktreeRemoval,
+} from "./branches";
 import type { MailDelivery } from "./mail";
 import { ARGS, looseArgs, type OpenOne } from "./tools";
 
@@ -411,9 +419,9 @@ export interface AgentControlHost {
 	landing(worktree: WorktreeRef, device?: string): Promise<LandingFacts>;
 	/**
 	 * Remove a clean worktree on `device` whose branch tip is in the parent's HEAD or upstream, and its branch at that very
-	 * tip (never forced); `branch-kept` when the branch moved meanwhile.
+	 * tip (never forced); `branch-kept` when the branch moved meanwhile. `remote`: what became of its copy on origin.
 	 */
-	removeSafeWorktree(worktree: WorktreeRef, device?: string): Promise<WorktreeRemoval>;
+	removeSafeWorktree(worktree: WorktreeRef, device?: string): Promise<SafeRemoval | null>;
 	/** Take back on `device` a worktree and branch an open made and nobody used (a failed open; never forced). */
 	discardWorktree(worktree: WorktreeRef, device?: string): Promise<WorktreeRemoval>;
 	/** Remember a session closed after its work landed, so its opener's family still lists it. */

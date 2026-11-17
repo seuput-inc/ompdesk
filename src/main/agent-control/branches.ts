@@ -6,8 +6,9 @@
  * (`native/ompdesk/crates/core/src/git/branches.rs`): where a branch lands and whether it landed, its facts and diff,
  * the merge prediction, the checks before a merge (`merge_problem`), the diff cut to its budget (`bound_diff`, which
  * the compare's judge shares), the merge's git steps and the removals, each one request through `coreGit`. What stays
- * here: the merge hooks around the merge and the `prepare` around a discard. Nothing here pushes, and a merge that
- * conflicts is aborted so the parent's checkout is never left half merged.
+ * here: the merge hooks around the merge and the `prepare` around a discard. Nothing here pushes work: the one push is
+ * the deletion of a branch's copy on origin once it landed there, and a merge that conflicts is aborted so the parent's
+ * checkout is never left half merged.
  */
 import type { WorktreeSetupReport } from "../../shared/rpc-types";
 import { CoreError } from "../core/process";
@@ -64,8 +65,8 @@ export interface BranchEvidence {
 }
 
 export type MergeOutcome =
-	/** `postMerge`: the post-merge hook ran and failed; the merge stays. */
-	| { merged: true; sha: string; summary: string; postMerge?: WorktreeSetupReport }
+	/** `postMerge`: the post-merge hook ran and failed; the merge stays. `remote`: what became of the branch's copy on origin. */
+	| { merged: true; sha: string; summary: string; postMerge?: WorktreeSetupReport; remote?: RemoteCopy }
 	/** The pre-merge hook failed or timed out: `git merge` never started. */
 	| { merged: false; reason: "hook"; hook: WorktreeSetupReport }
 	/** `predicted`: found by `merge-tree` before any merge ran, so the parent's checkout was never touched. */
@@ -88,11 +89,23 @@ const FACTS_ROUNDS = BASE_ROUNDS + LANDING_ROUNDS + 2 + 2;
 const JUDGE_ROUNDS = 1 + BASE_ROUNDS + LANDING_ROUNDS;
 /** The worktree list, then `worktree remove`. */
 const REMOVE_ROUNDS = 2 + 2;
+/**
+ * The core's network timeout for one git of the remote copy's cleanup (`NETWORK_MS` in `branches.rs`, as main's own
+ * push and fetch).
+ */
+const NETWORK_MS = 300_000;
+/**
+ * Cleaning up a branch's copy on origin: the remote list and the base names (four rounds), the object checks and the
+ * landing judgement beside its three network gits (`ls-remote`, a `fetch` when commits are missing, the `push`; one
+ * more `ls-remote` after a refused push).
+ */
+export const REMOTE_COPY_ROUNDS = 4 + 2 + LANDING_ROUNDS;
+export const REMOTE_COPY_MS = 4 * NETWORK_MS;
 
-/** One request to the core; a `BranchError` of its rules keeps its class. */
-async function branchGit<T>(method: string, params: object, rounds: number): Promise<T> {
+/** One request to the core (`rounds`, `slowMs`: see `coreGit`); a `BranchError` of its rules keeps its class. */
+async function branchGit<T>(method: string, params: object, rounds: number, slowMs?: number): Promise<T> {
 	try {
-		return await coreGit<T>(method, params, rounds);
+		return await coreGit<T>(method, params, rounds, slowMs);
 	} catch (error) {
 		if (error instanceof CoreError && error.code === "branch_error") throw new BranchError(error.message);
 		throw error;
@@ -151,22 +164,40 @@ export function landingFacts(worktree: WorktreeRef): Promise<LandingFacts> {
 export type WorktreeRemoval = "removed" | "branch-kept" | null;
 
 /**
+ * What became of a session branch's copy on origin (`drop_landed_remote` in `branches.rs`): deleted because its tip is
+ * in `origin/<base>` (by ancestry or by content), or kept and why; `message` says it in one sentence for the agent.
+ */
+export interface RemoteCopy {
+	outcome: "deleted" | "not-landed" | "moved" | "base" | "no-base" | "refused" | "failed";
+	message: string;
+}
+
+/** A safe removal that removed the worktree; `remote` is absent when origin holds no copy of the branch. */
+export interface SafeRemoval {
+	removal: NonNullable<WorktreeRemoval>;
+	remote?: RemoteCopy;
+}
+
+/**
  * Remove an agent session's worktree and its branch, losing nothing: only a registered linked worktree with no
  * uncommitted or untracked file whose work has landed in the parent's HEAD or upstream (an untouched branch has; a
  * squash-merged one has by content) goes (`worktree remove` without `--force` refuses a dirty one too). `landingFacts`
  * is the one judge of landed: the branch goes with `update-ref -d` against the very tip it judged, never `branch -d`,
  * whose own rule (merged into the parent checkout's HEAD by ancestry) kept the branch of work pushed past a parent
  * that was not pulled, or squash-merged. A branch something moved meanwhile stays (`branch-kept`), and so does one
- * `keepBranch` asks to keep. Null when anything held it back.
+ * `keepBranch` asks to keep. Its copy on origin goes once its tip is in `origin/<base>` (judged against origin alone,
+ * deleted with a lease on that tip), `keepBranch` or not; a network failure keeps it and says so. Null when anything
+ * held the worktree back.
  */
 export function removeSafeWorktree(
 	worktree: WorktreeRef,
 	options: { keepBranch?: boolean } = {},
-): Promise<WorktreeRemoval> {
+): Promise<SafeRemoval | null> {
 	return branchGit(
 		"git.removeSafeWorktree",
 		{ worktree, keepBranch: options.keepBranch === true },
-		JUDGE_ROUNDS + REMOVE_ROUNDS + 1,
+		JUDGE_ROUNDS + REMOVE_ROUNDS + 1 + REMOTE_COPY_ROUNDS,
+		REMOTE_COPY_MS,
 	);
 }
 
@@ -213,7 +244,7 @@ export async function discardNewWorktree(worktree: WorktreeRef, prepare: BeforeR
 /**
  * Merge the worktree's branch into the parent checkout's current branch with a merge commit. Refuses what a
  * merge would lose or tangle (the core's `merge_problem`), and a merge `git merge-tree` predicts would conflict is
- * never started.
+ * never started. After the merge the branch's copy on origin goes when it already landed in `origin/<base>`.
  * The repository's `.ompdesk/worktree-pre-merge` (in the worktree) gates it, `worktree-post-merge` (in the parent
  * checkout) runs once it landed and never undoes it.
  */
@@ -233,7 +264,12 @@ export async function mergeBranch(worktree: WorktreeRef, label: string): Promise
 	});
 	if (pre && !pre.ok) return { merged: false, reason: "hook", hook: pre };
 	// The merge (slow), the conflicted files and the abort, then the short HEAD and its summary (slow each).
-	const outcome = await branchGit<MergeOutcome>("git.mergeBranch", { worktree, baseBranch, label }, 2 + 1 + 1 + 2 + 2);
+	const outcome = await branchGit<MergeOutcome>(
+		"git.mergeBranch",
+		{ worktree, baseBranch, label },
+		2 + 1 + 1 + 2 + 2 + REMOTE_COPY_ROUNDS,
+		REMOTE_COPY_MS,
+	);
 	if (!outcome.merged) return outcome;
 	const post = await runWorktreeHook("post-merge", {
 		primary: worktree.baseCwd,

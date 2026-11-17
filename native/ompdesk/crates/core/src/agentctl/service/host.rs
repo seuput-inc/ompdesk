@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use super::fail::{Fail, R, SavedFolder};
 use super::types::{
     AgentMessage, BranchEvidence, BranchFacts, ClosedChild, ControlDevice, ControlTab,
-    LandingFacts, MergeOutcome, OpenedChild, RpcCommand, RpcResponse, ScheduleCreated,
+    LandingFacts, MergeOutcome, OpenedChild, RpcCommand, RpcResponse, SafeRemoval, ScheduleCreated,
     ScheduleDraft, SchedulesState, SessionSummary, SpawnRequest, Spawned, StoredSession,
     WorktreeRef, WorktreeRemoval,
 };
@@ -718,7 +718,7 @@ impl Host {
         &self,
         worktree: &WorktreeRef,
         device: Option<&str>,
-    ) -> R<Option<WorktreeRemoval>> {
+    ) -> R<Option<SafeRemoval>> {
         self.ask(
             "removeSafeWorktree",
             json!({ "worktree": worktree, "device": device }),

@@ -25,7 +25,15 @@ import type { RpcTurnEdits } from "../../shared/turn-edits";
 import { RpcTimeoutError } from "../rpc-client";
 import type { Pace } from "../session-pace";
 import type { FileEdits } from "../web/file-edit-reports";
-import type { BranchEvidence, BranchFacts, LandingFacts, MergeOutcome, WorktreeRef, WorktreeRemoval } from "./branches";
+import type {
+	BranchEvidence,
+	BranchFacts,
+	LandingFacts,
+	MergeOutcome,
+	SafeRemoval,
+	WorktreeRef,
+	WorktreeRemoval,
+} from "./branches";
 import type { MailDelivery } from "./mail";
 import {
 	AgentControl,
@@ -251,10 +259,10 @@ class FakeHost implements AgentControlHost {
 		this.gitCalls.push({ op: "landing", branch: worktree.branch, device });
 		return this.landings.get(worktree.branch) ?? { hasWork: false, landed: false, clean: true };
 	};
-	removeSafeWorktree = async (worktree: WorktreeRef, device?: string): Promise<WorktreeRemoval> => {
+	removeSafeWorktree = async (worktree: WorktreeRef, device?: string): Promise<SafeRemoval | null> => {
 		this.gitCalls.push({ op: "remove", branch: worktree.branch, device });
 		if (this.removal) this.removed.push(worktree.branch);
-		return this.removal;
+		return this.removal && { removal: this.removal };
 	};
 	/** Worktrees a failed open took back (`discardWorktree`), and what that returns. */
 	discarded: { branch: string; device: string | undefined }[] = [];

@@ -94,6 +94,7 @@ import {
 	landingFacts,
 	type MergeOutcome,
 	mergeBranch,
+	REMOTE_COPY_MS,
 	removeSafeWorktree,
 	type WorktreeRef,
 	type WorktreeRemoval,
@@ -1181,16 +1182,24 @@ export class AgentControlRuntime {
 					GIT_METHODS.merge,
 					{ worktree: gitRef(worktree), label },
 					() => mergeBranch(worktree, label),
-					MERGE_HOOKS_BUDGET_MS,
+					MERGE_HOOKS_BUDGET_MS + REMOTE_COPY_MS,
 				),
 			landing: (worktree, device) =>
 				this.#git<LandingFacts>(device, GIT_METHODS.landing, { worktree: gitRef(worktree) }, () =>
 					landingFacts(worktree),
 				),
-			removeSafeWorktree: (worktree, device) =>
-				this.#git<WorktreeRemoval>(device, GIT_METHODS.removeWorktree, { worktree: gitRef(worktree) }, () =>
-					removeSafeWorktree(worktree),
-				),
+			removeSafeWorktree: async (worktree, device) => {
+				if (!device) return removeSafeWorktree(worktree);
+				// A paired host answers the bare removal (`host.git.removeWorktree`), so a desktop of any version reads it;
+				// the host still cleaned up the branch's landed copy on origin.
+				const removal = await this.#remote().request<WorktreeRemoval>(
+					device,
+					GIT_METHODS.removeWorktree,
+					{ worktree: gitRef(worktree) },
+					GIT_REQUEST_TIMEOUT_MS + REMOTE_COPY_MS,
+				);
+				return removal && { removal };
+			},
 			discardWorktree: (worktree, device) =>
 				this.#git<WorktreeRemoval>(device, GIT_METHODS.discardWorktree, { worktree: gitRef(worktree) }, () =>
 					discardOpenedWorktree(worktree, { openFolders: sessionOpenFolders }),

@@ -847,14 +847,9 @@ pub struct LandingFacts {
     pub clean: bool,
 }
 
-/// What a safe removal did: worktree and branch gone, the worktree gone but the branch kept, or nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WorktreeRemoval {
-    #[serde(rename = "removed")]
-    Removed,
-    #[serde(rename = "branch-kept")]
-    BranchKept,
-}
+/// What a safe removal did (`WorktreeRemoval`), its whole answer and what became of the branch's copy on `origin`:
+/// git's own types.
+pub use crate::git::branches::{RemoteCopy, Removal as WorktreeRemoval, SafeRemoval};
 
 /// A worktree hook's report (`WorktreeSetupReport`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -888,6 +883,10 @@ pub struct MergeOutcome {
     pub summary: Option<String>,
     #[serde(default)]
     pub post_merge: Option<WorktreeSetupReport>,
+    /// With `merged: true`: what became of the branch's copy on `origin` (none when it has none, or from a paired host
+    /// older than the cleanup).
+    #[serde(default)]
+    pub remote: Option<RemoteCopy>,
     /// With `merged: false`: `hook` or `conflict`.
     #[serde(default)]
     pub reason: Option<String>,
