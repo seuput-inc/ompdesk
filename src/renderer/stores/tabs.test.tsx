@@ -302,6 +302,31 @@ describe("tabs store boot reconciliation", () => {
 		expect(tabs[0]?.title).toBe("Alpha");
 	});
 
+	it("keeps a tab's ready status when a tab list asked before its ready push answers after it", async () => {
+		// Cold start: the window lists its tabs while tab 0's omp starts; the answer still says `starting` and no file.
+		const answer = Promise.withResolvers<IpcTabInfo[]>();
+		omp.tabs.list.mockReturnValueOnce(answer.promise);
+		const reconciled = useTabsStore.getState().reconcileTabs();
+		useTabsStore.getState().applyTabStatus({ kind: "agent", tabId: "t0", cwd: "/alpha", status: "starting" });
+		useTabsStore.getState().applyTabStatus({
+			kind: "agent",
+			tabId: "t0",
+			cwd: "/alpha",
+			status: "ready",
+			sessionId: "s-new",
+			sessionPath: "/sessions/new.jsonl",
+		});
+		const runtime = sessionRuntime("t0");
+		answer.resolve([{ ...tabInfo("t0", "/alpha", "starting"), sessionPath: null, active: true, viewerCount: 2 }]);
+		await reconciled;
+
+		expect(useTabsStore.getState().tabs).toEqual([
+			expect.objectContaining({ id: "t0", status: "ready", sessionPath: "/sessions/new.jsonl", viewerCount: 2 }),
+		]);
+		expect(sessionRuntime("t0")).toBe(runtime);
+		expect(sessionRuntimeStore<SessionStore>("t0", "session")?.getState().status).toBe("ready");
+	});
+
 	it("keeps renderer-known tabs the reply misses and re-converges active on reload", async () => {
 		seedTabs("t1");
 		// Main knows only two of three tabs (the third spawned mid-reply).
