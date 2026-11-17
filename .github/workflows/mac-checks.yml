@@ -58,7 +58,9 @@ jobs:
   # The vitest files that drive the real ompdesk-core binary, on macOS, as release.yml's `mac-native`.
   mac-native:
     runs-on: macos-latest
-    timeout-minutes: 10
+    # 25, not 10: on a staged-binary cache miss the install step builds native/ompdesk first (10 minutes ran out inside
+    # that build on mac-main 44051036066 and release 44051042779, 17 Nov 2026).
+    timeout-minutes: 25
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
