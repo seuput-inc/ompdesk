@@ -216,11 +216,11 @@ describe("win-update-real.ps1", () => {
 		expect(script).toContain("$updaterArgs = @('--updated', '--force-run', \"--package-file=$package\")");
 		expect(script).toContain("ompdesk-updater\\pending");
 		expect(script).not.toMatch(/\$updaterArgs = [^\n]*\/S/);
-		// A candidate from a dry run takes the installer path; a published tag adds the published app's own updater on the real feed.
+		// Start-Process quotes nothing: the host rule holds spaces, so it must reach the app as one quoted argument.
+		expect(script).toContain('"`"--host-resolver-rules=MAP api.github.com 127.0.0.1:$FeedPort`""');
+		// Every job of the subset runs both modes against a setup the job downloaded, never one it built under a test identity.
 		const workflow = read(".github/workflows/shell-batch-checks.yml");
-		expect(workflow).toContain(
-			`mode: \${{ fromJSON(inputs.candidate_run && '["installer"]' || '["installer","feed"]') }}`,
-		);
+		expect(workflow).toContain("mode: [installer, feed]");
 		expect(workflow).toContain("only == 'win-update-real'");
 	});
 });
