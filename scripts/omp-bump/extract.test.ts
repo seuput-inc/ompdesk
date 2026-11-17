@@ -171,12 +171,14 @@ describe("omp-bump extraction", () => {
 		expect(failing.status).toBe(1);
 		expect(failing.stdout).toBe("");
 		expect(failing.stderr.trim().split("\n")).toEqual([
-			"omp 1.1.0 has 6 strings OMPdesk's dictionaries lack:",
+			"omp 1.1.0 has 8 strings OMPdesk's dictionaries lack:",
 			'  settings.label (src/renderer/components/settings/schema-ko.ts): fakeNew.setting "Fake new setting"',
 			'  settings.description (src/renderer/components/settings/schema-ko.ts): fakeNew.setting "What the fake new setting does"',
 			"  settings.group (src/renderer/components/settings/schema-ko.ts): Fake new group",
 			"  settings.option (src/renderer/components/settings/schema-option-ko.ts): Fake new option",
 			"  roles.name (src/renderer/components/settings/schema-i18n.ts): Fake role",
+			"  roles.use (src/renderer/locales/en.ts, src/renderer/locales/ko.ts): fakerole",
+			"  roles.fallback (src/renderer/locales/en.ts, src/renderer/locales/ko.ts): fakerole",
 			"  providers.mark (src/renderer/components/settings/providers/provider-marks.ts): fake-provider",
 		]);
 		const passing = extract(olderRoot, "--check");
