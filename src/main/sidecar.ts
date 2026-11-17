@@ -6,6 +6,7 @@
  */
 
 import { EventEmitter } from "node:events";
+import { basename } from "node:path";
 import type { McpLiveChange } from "../../resources/gui-bridge/extensions/mcp-contracts";
 import { type AutoTitleSettings, titleSuppressedByEnv } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import type { DelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
@@ -796,11 +797,20 @@ export class SidecarManager extends EventEmitter {
 		this.#setStatus("error", { message });
 	}
 
-	/** One step of the way back after a lost core, with how long since the loss; nothing outside a recovery. */
+	/**
+	 * One step of the way back after a lost core, with how long since the loss; nothing outside a recovery. `lane` is
+	 * this manager's own lane id (no pool or host tab id); `session` is the session file's name, which carries its id
+	 * (as `session-owner` lines name it), so a loss of several tabs at once reads per session.
+	 */
 	#recovered(step: LaneRecoveryStep, details: Record<string, string | number | boolean> = {}): void {
 		const lostAt = this.#lostAt;
 		if (lostAt === null) return;
-		this.#options.reportRecovery?.(step, { tab: this.#tab, ms: Date.now() - lostAt, ...details });
+		this.#options.reportRecovery?.(step, {
+			lane: this.#tab,
+			...(this.#sessionPath ? { session: basename(this.#sessionPath) } : {}),
+			ms: Date.now() - lostAt,
+			...details,
+		});
 	}
 
 	/** One message to the tab's lane, numbered in the order main sends them; the lane applies them in that order. */

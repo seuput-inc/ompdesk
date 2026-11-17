@@ -45,7 +45,7 @@ describe("tabs whose core ended under them", () => {
 		);
 		const sessions = Array.from({ length: TABS }, (_, index) => path.join(tempDir, `s${index}.jsonl`));
 		for (const session of sessions) await fs.writeFile(session, "{}\n");
-		const reports: Array<{ step: string; tab: unknown }> = [];
+		const reports: Array<{ step: string; session: unknown }> = [];
 		const sidecars = sessions.map(
 			() =>
 				new SidecarManager({
@@ -54,7 +54,7 @@ describe("tabs whose core ended under them", () => {
 					// As the app's tabs: through the app's start queue, and after the session's owner let go.
 					startQueue: {},
 					sessionFree: async () => "free",
-					reportRecovery: (step, details) => reports.push({ step, tab: details.tab }),
+					reportRecovery: (step, details) => reports.push({ step, session: details.session }),
 				}),
 		);
 		const lossReports: Array<{ step: string; details: Record<string, unknown> }> = [];
@@ -85,16 +85,12 @@ describe("tabs whose core ended under them", () => {
 				expect(sidecar.status).toBe("ready");
 				expect(sidecar.processAlive).toBe(true);
 			}
-			// Each tab's way back, step by step, in the log.
-			const tabs = [...new Set(reports.map(report => report.tab))];
-			expect(tabs).toHaveLength(TABS);
-			for (const tab of tabs)
-				expect(reports.filter(report => report.tab === tab).map(report => report.step)).toEqual([
-					"lane-lost",
-					"resolved",
-					"launch",
-					"spawned",
-				]);
+			// Each tab's way back, step by step, named by its session file.
+			for (const session of sessions)
+				expect(
+					reports.filter(report => report.session === path.basename(session)).map(report => report.step),
+				).toEqual(["lane-lost", "resolved", "launch", "spawned"]);
+			expect(reports).toHaveLength(TABS * 4);
 			await vi.waitFor(() => expect(lossReports.map(report => report.step)).toEqual(["abandoned", "ended"]));
 			expect(lossReports[0]?.details).toMatchObject({ reason: "a test ends the core" });
 			expect(lossReports[1]?.details).toMatchObject({ abandoned: true, answered: true });
