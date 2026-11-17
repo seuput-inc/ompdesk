@@ -208,6 +208,17 @@ async function devToolsAnswers(port: number): Promise<true | undefined> {
 	}
 }
 
+/** The targets WebView2's own DevTools endpoint lists on `port` (type and URL), or why it could not say. */
+async function devToolsTargets(port: number): Promise<string> {
+	try {
+		const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2_000) });
+		const targets = (await response.json()) as { type?: string; url?: string }[];
+		return JSON.stringify(targets.map(target => `${target.type ?? "?"} ${target.url ?? "?"}`));
+	} catch (error) {
+		return `unreadable (${String(error)})`;
+	}
+}
+
 function sleep(ms: number): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	setTimeout(resolve, ms);
@@ -373,12 +384,14 @@ export class ShellApplication extends EventEmitter {
 	readonly #child: ChildProcess;
 	readonly #inspector: Inspector;
 	readonly #browser: Browser;
+	readonly #debugPort: number;
 
-	constructor(child: ChildProcess, inspector: Inspector, browser: Browser) {
+	constructor(child: ChildProcess, inspector: Inspector, browser: Browser, debugPort: number) {
 		super();
 		this.#child = child;
 		this.#inspector = inspector;
 		this.#browser = browser;
+		this.#debugPort = debugPort;
 		child.once("close", () => this.emit("close"));
 	}
 
@@ -427,11 +440,42 @@ export class ShellApplication extends EventEmitter {
 				// the app never came) or something else.
 				const pages = this.windows().map(page => page.url());
 				throw new Error(
-					`app.firstWindow: Timeout ${timeout}ms exceeded; open pages: ${JSON.stringify(pages)}; host exit code: ${this.#child.exitCode}`,
+					`app.firstWindow: Timeout ${timeout}ms exceeded; open pages: ${JSON.stringify(pages)}; host exit code: ${this.#child.exitCode}${await this.#timeoutEvidence()}`,
 				);
 			}
 			await sleep(50);
 		}
+	}
+
+	/**
+	 * What the host and WebView2 said when no page became the app's: the targets WebView2 itself lists and what each
+	 * page's own `location` reads (Playwright's cached `url()` may still say `about:blank` for a page that moved on),
+	 * the native log's last lines (whether the host got `loadURL` and the app WebView attached) and the host's output.
+	 */
+	async #timeoutEvidence(): Promise<string> {
+		const capture = diagnostics.get(this.#child);
+		const locations = await Promise.all(
+			this.windows().map(async page =>
+				Promise.race([
+					page.evaluate(() => location.href).catch((error: unknown) => `evaluate failed: ${String(error)}`),
+					sleep(2_000).then(() => "no answer in 2 s"),
+				]),
+			),
+		);
+		let nativeLog = "";
+		if (capture) {
+			try {
+				nativeLog = fs.readFileSync(path.join(capture.userData, "tauri-shell.jsonl"), "utf8").slice(-3_000);
+			} catch {
+				nativeLog = "(no native log)";
+			}
+		}
+		return (
+			`\nDevTools targets: ${await devToolsTargets(this.#debugPort)}` +
+			`\npage locations: ${JSON.stringify(locations)}` +
+			`\nnative log tail:\n${nativeLog}` +
+			`\nhost output tail:\n${capture?.hostOutput().slice(-3_000) ?? ""}`
+		);
 	}
 
 	/** The next window the shell opens (only `"window"` exists on a shell). */
@@ -677,7 +721,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		}
 		if (options.colorScheme === null) keepFocusEmulation(browser);
 		if (env.OMP_GUI_E2E_SHELL_LOG === "1") traceTargets(browser, child.pid);
-		return new ShellApplication(child, inspector, browser);
+		return new ShellApplication(child, inspector, browser, debugPort);
 	} catch (error) {
 		inspector?.close();
 		await browser?.close().catch(() => undefined);
