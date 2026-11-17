@@ -13,6 +13,14 @@ use crate::disk::tree::write_atomic_if;
 /// A trim takes the folder down to this share of the bound, so it does not run again at the next write.
 const TRIM_TO: f64 = 0.75;
 
+/// `OMPDESK_CORE_DEBUG` naming `cache` (a comma list): each trim says what it found and removed, in the order it
+/// removes, and a page read that finds nothing says why. Off in the app; `transcript-cache.test.ts` turns it on, so
+/// its one unexplained Windows failure (main run 44078283149) leaves a trace in the CI log if it comes back.
+pub(super) static TRACE: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("OMPDESK_CORE_DEBUG")
+        .is_ok_and(|value| value.split(',').any(|part| part.trim() == "cache"))
+});
+
 pub struct Folder {
     pub dir: PathBuf,
     state: Mutex<Counted>,
@@ -94,28 +102,45 @@ impl Folder {
     }
 
     /// Through the shared atomic writer (Windows retries a held rename): a reader never sees part of a file. False
-    /// when the disk refused it (full, read-only).
+    /// when the disk refused it (full, read-only); the refusal is logged, the caller reads from the host again.
     pub fn write(self: &Arc<Self>, file: &Path, bytes: &[u8], limit: u64) -> bool {
-        let written = write_atomic_if(file, bytes, None, 0o777, &|| true).is_ok();
+        let written = match write_atomic_if(file, bytes, None, 0o777, &|| true) {
+            Ok(written) => written,
+            Err(fault) => {
+                eprintln!(
+                    "ompdesk-core: cache file not written {}: {} {}",
+                    file.display(),
+                    fault.code,
+                    fault.message
+                );
+                false
+            }
+        };
         if written {
             self.grew(bytes.len() as u64, limit);
         }
         written
     }
 
-    /// One more line at the end of `file` (made if missing); false when it could not be written.
+    /// One more line at the end of `file` (made if missing); false when it could not be written, which is logged.
     pub fn append(self: &Arc<Self>, file: &Path, bytes: &[u8], limit: u64) -> bool {
         use std::io::Write;
         let appended = fs::OpenOptions::new()
             .append(true)
             .create(true)
             .open(file)
-            .and_then(|mut opened| opened.write_all(bytes))
-            .is_ok();
-        if appended {
-            self.grew(bytes.len() as u64, limit);
+            .and_then(|mut opened| opened.write_all(bytes));
+        if let Err(error) = &appended {
+            eprintln!(
+                "ompdesk-core: cache file not appended {}: {:?} {}",
+                file.display(),
+                error.kind(),
+                error
+            );
+            return false;
         }
-        appended
+        self.grew(bytes.len() as u64, limit);
+        true
     }
 
     /// The first write measures the folder (this one included); later ones add theirs. A trim measures it again and
@@ -149,12 +174,33 @@ impl Folder {
         let mut kept = entries(&self.dir);
         kept.sort_by(|a, b| a.read.total_cmp(&b.read));
         let mut total: u64 = kept.iter().map(|entry| entry.size).sum();
+        if *TRACE {
+            eprintln!(
+                "ompdesk-core: cache trim {}: {} files, {total} bytes, bound {limit}, down to {}",
+                self.dir.display(),
+                kept.len(),
+                (limit as f64 * TRIM_TO) as u64
+            );
+        }
         for entry in kept {
-            if total as f64 <= limit as f64 * TRIM_TO {
-                break;
-            }
-            if remove(&entry.file) {
+            let outcome = if total as f64 <= limit as f64 * TRIM_TO {
+                if !*TRACE {
+                    break;
+                }
+                "kept"
+            } else if remove(&entry.file) {
                 total -= entry.size;
+                "removed"
+            } else {
+                "not removed"
+            };
+            if *TRACE {
+                eprintln!(
+                    "ompdesk-core: cache trim   {} read {:.4} size {} {outcome}",
+                    entry.file.file_name().unwrap_or_default().to_string_lossy(),
+                    entry.read,
+                    entry.size
+                );
             }
         }
         let mut state = locked(&self.state);
