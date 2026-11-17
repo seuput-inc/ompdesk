@@ -49,8 +49,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-ai/oauth": () => import("@oh-my-pi/pi-ai/oauth"),
 	"@oh-my-pi/pi-ai/usage/registry": () => import("@oh-my-pi/pi-ai/usage/registry"),
 	"@oh-my-pi/pi-ai/utils/retry-after": () => import("@oh-my-pi/pi-ai/utils/retry-after"),
-	"@oh-my-pi/pi-catalog/compat/prompt-cache-persistent": () =>
-		import("@oh-my-pi/pi-catalog/compat/prompt-cache-persistent"),
 	"@oh-my-pi/pi-catalog/types": () => import("@oh-my-pi/pi-catalog/types"),
 	"@oh-my-pi/pi-coding-agent/autolearn/managed-skills": () =>
 		import("@oh-my-pi/pi-coding-agent/autolearn/managed-skills"),
@@ -113,9 +111,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/modes/model-browser-source": () =>
 		import("@oh-my-pi/pi-coding-agent/modes/model-browser-source"),
 	"@oh-my-pi/pi-coding-agent/session/agent-storage": () => import("@oh-my-pi/pi-coding-agent/session/agent-storage"),
-	"@oh-my-pi/pi-coding-agent/session/context-settings": () =>
-		import("@oh-my-pi/pi-coding-agent/session/context-settings"),
-	"@oh-my-pi/pi-coding-agent/session/cache-warmer": () => import("@oh-my-pi/pi-coding-agent/session/cache-warmer"),
 	"@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents": () =>
 		import("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents"),
 	"@oh-my-pi/pi-coding-agent/modes/settings": () => import("@oh-my-pi/pi-coding-agent/modes/settings"),

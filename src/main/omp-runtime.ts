@@ -42,9 +42,9 @@ import {
  * per-skill estimator it used before (`estimateSkillsTokens`) is gone from 18.18.9.
  * Earlier floors: 18.18.2's `logoutCredential(session, …)`
  * (`slash-commands/helpers/logout`), which Settings' Disconnect calls (`provider_logout`,
- * gui-bridge settings.ts); 18.12.6's pi-catalog `isPromptCachePersistent`, which idle compaction
- * asks so it never throws away a logged-in Codex session's warm cache (stock's own rule
- * since that release, `idle-compaction-core.ts`); 18.12.3's `always-ask-cached` ("Ask and
+ * gui-bridge settings.ts); 18.13.2's `AgentSession.enableIdleMaintenance`, stock's idle
+ * compaction and recap scheduler the bridge opts each session into (`idle-maintenance.ts`);
+ * 18.12.3's `always-ask-cached` ("Ask and
  * remember") tool approval mode the composer offers (`src/shared/tool-approval.ts`);
  * 18.12.2's `@oh-my-pi/pi-ai` `nativeJudgmentImageBounds` (the
  * judge-model preview check, `capabilities.ts` `judgeAssist`); the stock internals

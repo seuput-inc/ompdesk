@@ -55,8 +55,7 @@ export const FEATURES = {
 	sessionImport: "Claude/Codex session import",
 	workspace: "Workspace directories",
 	compactionLimits: "Per-model compaction limits",
-	idleCompaction: "Idle compaction (compaction.idleEnabled)",
-	sessionRecap: "Idle recap (recap.enabled)",
+	idleMaintenance: "Idle compaction and recap (compaction.idleEnabled, recap.enabled)",
 	contextInspector: "Context inspector (per-entry tokens)",
 	promptOrigin: "Prompt origins (from another device)",
 	typedPrompts: "Prompts a person typed, told to the omp (memory recall, answering first)",
@@ -1328,52 +1327,14 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		},
 	},
 	/**
-	 * idle-compaction.ts: the TUI's idle timer re-armed on the live session; stock does the work. `promptCacheEntry`
-	 * (omp ≥ 18.12.2, when stock's own timer started compacting ahead of a 1-hour cache entry) is read when present;
-	 * without it the timer keeps the configured delay, as stock's did.
+	 * idle-maintenance.ts: stock's documented idle scheduler (`enableIdleMaintenance`, omp://sdk.md › Idle maintenance,
+	 * omp 18.13.2) on the live session; the bridge supplies the draft and shows the recap stock hands over.
 	 */
-	idleCompaction: {
-		session: [
-			"subscribe()",
-			"settings",
-			"model",
-			"isStreaming",
-			"isCompacting",
-			"getContextUsage()",
-			"runIdleCompaction()",
-		],
+	idleMaintenance: {
+		session: ["enableIdleMaintenance()", "refreshIdleMaintenance()", "sendCustomMessage()"],
 		modules: {
-			[`${AGENT}/session/context-settings`]: ["cfgCompaction.get()"],
-			[`${AGENT}/session/cache-warmer`]: ["getCacheWarmingDelayMs()"],
-			"@oh-my-pi/pi-catalog/compat/prompt-cache-persistent": ["isPromptCachePersistent()"],
-		},
-	},
-	/**
-	 * session-recap.ts: the TUI's idle recap timer on the live session. Stock's own prompt
-	 * (`prompts/system/recap-user.md`) and `runEphemeralTurn()` make the recap, `recordRecap()` journals it
-	 * (history.db `session_recaps`); `recap.*` are read through `lookup`. The goal and the todo list only
-	 * anchor the prompt and are feature-detected inside the module.
-	 */
-	sessionRecap: {
-		session: [
-			"subscribe()",
-			"settings",
-			"model",
-			"messages",
-			"isStreaming",
-			"isCompacting",
-			"runEphemeralTurn()",
-			"sendCustomMessage()",
-			"sessionManager.recordRecap()",
-			"sessionManager.getSessionName()",
-		],
-		modules: {
-			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/tools/todo`]: ["nextActionableTask()"],
 			"@oh-my-pi/pi-tui/render/render-utils": ["previewLine()", "TRUNCATE_LENGTHS"],
-			[UTILS]: ["prompt.render()"],
 		},
-		prompts: ["system/recap-user.md"],
 	},
 	/** prompt-origin.ts: a host tab journals its device per user message (public `message_end` hook). */
 	promptOrigin: {

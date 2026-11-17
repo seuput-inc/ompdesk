@@ -59,7 +59,7 @@ function perSession<V>(tables: Map<string, WeakMap<object, V>>, customType: stri
 
 /**
  * Puts the `customType` hook of the session `sessionManager` belongs to back on the request path and keeps it there
- * until the returned release: called around the bridge adding such a message outside a prompt (session-recap.ts), so
+ * until the returned release: called around the bridge adding such a message outside a prompt (idle-maintenance.ts), so
  * a side request of the session that runs before the message is in the branch cannot take the hook off. Release once
  * the message is in (the branch then keeps the hook) or the add failed.
  */

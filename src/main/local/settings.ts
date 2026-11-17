@@ -175,14 +175,9 @@ export const handlers: Record<string, LocalHandler> = {
 	get_recent_models: (_command, ctx) => ctx.bridge.request("recent_models"),
 	set_output_style: async (command, ctx) =>
 		ctx.bridge.request("output_style_set", { style: z.object({ style: z.string() }).parse(command).style }),
-	// One draft report serves both idle timers; an omp without the recap feature answers unsupported_omp, which is no failure here.
-	set_idle_compaction_draft: async (command, ctx) => {
-		const { empty } = z.object({ empty: z.boolean() }).parse(command);
-		const recap = ctx.bridge.request("recap_draft", { empty }).catch(() => undefined);
-		const armed = await ctx.bridge.request("idle_compaction_draft", { empty });
-		await recap;
-		return armed;
-	},
+	// The draft holds stock's idle compaction and idle recap back (gui-bridge idle-maintenance.ts).
+	set_idle_compaction_draft: async (command, ctx) =>
+		ctx.bridge.request("idle_maintenance_draft", { empty: z.object({ empty: z.boolean() }).parse(command).empty }),
 	// Reads go to the stock helper's one handle on the history.db every omp on this computer writes: never through the
 	// tab's omp, whose thread is busy mid-turn (stock-helper/history.ts). The write stays there, for the session id.
 	history_recent: async command => stockHelperRequest("history.recent", historyRead.parse(command)),

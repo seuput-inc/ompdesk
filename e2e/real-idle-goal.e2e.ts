@@ -7,11 +7,11 @@ import { realOmpProfile } from "./real-omp";
 
 /**
  * Explicit opt-in audits on the user's small model (`OMP_GUI_REAL_WORK=1`, they spend tokens):
- * the two timers OMPdesk adds around stock on the real omp.
+ * stock's idle compaction and OMPdesk's goal time limit on the real omp.
  *
- * - Idle compaction: stock's `compaction.idle*` settings have a timer only in the TUI; the
- *   bridge's copy must call stock `runIdleCompaction()` once the session sat idle past the
- *   timeout with an empty draft, and stock journals the compaction.
+ * - Idle compaction: RPC mode leaves stock's idle scheduler off; the bridge opts the session in
+ *   (`enableIdleMaintenance`, gui-bridge idle-maintenance.ts), so stock `runIdleCompaction()` runs once
+ *   the session sat idle past the timeout with an empty draft, and stock journals the compaction.
  * - Goal time limit: a goal whose OMPdesk limit runs out is paused the way stock's own pause
  *   does it (goal paused, the `goal` tool back out of the tool set, no further continuation).
  */
