@@ -92,8 +92,11 @@ const AREAS: readonly Area[] = [
 	{ name: "credit-spend", features: ["creditSpend"], load: () => import("./credit-spend") },
 	{ name: "modes/actions", features: ["tan", "omfg", "agentPause"], load: () => import("./modes/actions") },
 	{ name: "compaction-limits", features: ["compactionLimits"], load: () => import("./compaction-limits") },
-	{ name: "idle-compaction", features: ["idleCompaction"], load: () => import("./idle-compaction") },
-	{ name: "session-recap", features: ["sessionRecap", "contextHookIdle"], load: () => import("./session-recap") },
+	{
+		name: "idle-maintenance",
+		features: ["idleMaintenance", "contextHookIdle"],
+		load: () => import("./idle-maintenance"),
+	},
 	{ name: "context-inspect", features: ["contextInspector"], load: () => import("./context-inspect") },
 	{ name: "prompt-origin", features: ["promptOrigin"], load: () => import("./prompt-origin") },
 	{ name: "typed-prompts", features: ["typedPrompts"], load: () => import("./typed-prompts") },

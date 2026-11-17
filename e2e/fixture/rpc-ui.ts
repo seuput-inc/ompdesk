@@ -749,9 +749,9 @@ export function runRpcUi(): void {
 	});
 
 	/**
-	 * `OMP_GUI_TEST_RECAP={"text": "...", "delayMs": 300}` stands in for the bridge's idle recap (resources/gui-bridge/
-	 * session-recap.ts, rules in session-recap-core.ts): after a turn ends, a `recap` custom message arrives once the
-	 * window has passed, unless the composer holds a draft; `recap_draft` reports the draft like the real bridge.
+	 * `OMP_GUI_TEST_RECAP={"text": "...", "delayMs": 300}` stands in for stock's idle recap as the bridge shows it
+	 * (resources/gui-bridge/idle-maintenance.ts): after a turn ends, a `recap` custom message arrives once the window has
+	 * passed, unless the composer holds a draft; `idle_maintenance_draft` reports the draft like the real bridge.
 	 * Unset: no recap.
 	 */
 	const recapScript = JSON.parse(process.env.OMP_GUI_TEST_RECAP ?? "null") as {
@@ -2759,12 +2759,12 @@ export function runRpcUi(): void {
 			setTimeout(() => reply({ title: nameAuto("regenerate") }), autoTitleLatency);
 			return undefined;
 		},
-		// gui-bridge session-recap.ts: the draft report that arms (or cancels) the idle recap.
-		recap_draft: params => {
+		// gui-bridge idle-maintenance.ts: the draft report that holds back (or lets go of) the idle recap.
+		idle_maintenance_draft: params => {
 			recapDraftEmpty = params.empty === true;
 			if (!recapDraftEmpty) cancelRecap();
 			else scheduleRecap();
-			return { armed: recapTimer !== undefined };
+			return { empty: recapDraftEmpty };
 		},
 		next_prompt_draft: params => {
 			nextPromptDraftEmpty = params.empty === true;

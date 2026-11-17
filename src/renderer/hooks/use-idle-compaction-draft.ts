@@ -13,10 +13,10 @@ interface Watch {
 }
 
 /**
- * Tells each tab's bridge whether its composer draft is empty (idle compaction and
- * the built-in prompt suggestions both need it). Stock's idle
- * compaction timer (re-armed by resources/gui-bridge/idle-compaction.ts) skips
- * a session whose input holds text, as the terminal UI does with its editor;
+ * Tells each tab's bridge whether its composer draft is empty (idle compaction, the
+ * idle recap and the built-in prompt suggestions all need it). Stock's idle scheduler
+ * (opted in by resources/gui-bridge/idle-maintenance.ts) holds back while the input
+ * holds text, as the terminal UI does with its editor;
  * the bridge cannot see the GUI draft, so this reports every empty ⇄ non-empty
  * change, and the current state again once a tab's session is ready (a new tab,
  * a restarted omp, a switched session). Mounted once, by App.

@@ -1301,11 +1301,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Compaction limits, idle compaction and idle recap: stock's compaction-threshold, model-compaction-threshold, model-browser source, context-settings, cache-warmer, todo tool, prompt-cache-persistent compat and the recap prompt.",
+			"Compaction limits and the idle recap's preview line: stock's compaction-threshold, model-compaction-threshold, model-browser source and `previewLine` with `TRUNCATE_LENGTHS.RECAP`.",
 		files: [
 			"resources/gui-bridge/compaction-limits.ts",
-			"resources/gui-bridge/idle-compaction.ts",
-			"resources/gui-bridge/session-recap.ts",
+			"resources/gui-bridge/idle-maintenance.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
 		],
@@ -1314,22 +1313,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/session/model-compaction-threshold",
 			"@oh-my-pi/pi-coding-agent/modes/model-browser-source",
 			"@oh-my-pi/pi-tui/overlays/model-browser",
-			"@oh-my-pi/pi-coding-agent/session/context-settings",
-			"@oh-my-pi/pi-coding-agent/session/cache-warmer",
-			"@oh-my-pi/pi-catalog/compat/prompt-cache-persistent",
-			"@oh-my-pi/pi-coding-agent/config/registry",
-			"@oh-my-pi/pi-coding-agent/tools/todo",
 			"@oh-my-pi/pi-tui/render/render-utils",
-			"@oh-my-pi/pi-utils",
-			"system/recap-user.md",
-			"recap.enabled",
-			"recap.idleSeconds",
 		],
-		tests: [
-			"src/main/bridge-compaction-points-stock.test.ts",
-			"src/main/bridge-idle-compaction-stock.test.ts",
-			"src/main/bridge-session-recap-stock.test.ts",
-		],
+		tests: ["src/main/bridge-compaction-points-stock.test.ts", "src/main/bridge-idle-maintenance-stock.test.ts"],
 	},
 	{
 		id: "B45",
@@ -1600,6 +1586,25 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		],
 		stock: ["omp://extensions.md#tool_call", "generate_image `model` argument"],
 		tests: ["src/main/bridge-image-subscription-stock.test.ts"],
+	},
+	{
+		id: "B59",
+		area: "bridge",
+		contract: "public",
+		summary:
+			"Idle compaction and the idle recap: the bridge opts each live session into stock's idle scheduler (`enableIdleMaintenance`) with the GUI draft as `isBlocked` and the recap shown through `onRecap`, and calls `refreshIdleMaintenance` on each draft report.",
+		files: ["resources/gui-bridge/idle-maintenance.ts", "resources/gui-bridge/capabilities.ts"],
+		stock: [
+			"omp://sdk.md#idle-maintenance",
+			"AgentSession.enableIdleMaintenance",
+			"AgentSession.refreshIdleMaintenance",
+			"compaction.idleEnabled",
+			"compaction.idleThresholdTokens",
+			"compaction.idleTimeoutSeconds",
+			"recap.enabled",
+			"recap.idleSeconds",
+		],
+		tests: ["src/main/bridge-idle-maintenance-stock.test.ts", "src/main/bridge-input-history.test.ts"],
 	},
 	{
 		id: "H01",
@@ -2244,34 +2249,6 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/renderer/components/chat/work/narration-stock.test.ts",
 			"src/renderer/components/chat/work/silent-abort-stock.test.ts",
 		],
-	},
-	{
-		id: "C16",
-		area: "copy",
-		contract: "internal",
-		disposition: {
-			kind: "public-api",
-			reason:
-				"`AgentSession.enableIdleMaintenance` (sdk.md › Idle maintenance, omp 18.13.2) runs idle compaction for a session that opts in.",
-		},
-		summary: "Copy of the TUI event-controller's private idle-compaction timer.",
-		files: ["resources/gui-bridge/idle-compaction-core.ts"],
-		stock: ["@oh-my-pi/pi-coding-agent/modes/controllers/event-controller"],
-		tests: ["src/main/bridge-idle-compaction.test.ts", "src/main/bridge-idle-compaction-stock.test.ts"],
-	},
-	{
-		id: "C17",
-		area: "copy",
-		contract: "internal",
-		disposition: {
-			kind: "public-api",
-			reason:
-				"`AgentSession.enableIdleMaintenance` (sdk.md › Idle maintenance, omp 18.13.2) runs the idle recap and hands it to `onRecap`.",
-		},
-		summary: "Copy of the TUI event-controller's private idle-recap timer.",
-		files: ["resources/gui-bridge/session-recap-core.ts"],
-		stock: ["@oh-my-pi/pi-coding-agent/modes/controllers/event-controller"],
-		tests: ["src/main/bridge-session-recap.test.ts", "src/main/bridge-session-recap-stock.test.ts"],
 	},
 	{
 		id: "C18",

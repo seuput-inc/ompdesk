@@ -726,7 +726,7 @@ function HandoffCard({ message }: { message: AgentMessage }) {
 }
 
 /**
- * The idle recap (bridge `session-recap.ts`): one quiet muted line, not a bordered card, since it
+ * The idle recap (stock's, shown by bridge `idle-maintenance.ts`): one quiet muted line, not a bordered card, since it
  * only restates where things stand. Never part of a work run.
  */
 export function RecapCard({ message }: { message: AgentMessage }) {
