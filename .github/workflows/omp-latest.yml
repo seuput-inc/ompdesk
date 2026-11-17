@@ -264,7 +264,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/results"
           bun scripts/omp-bump/latest.ts report "$RUNNER_TEMP/results" > "$RUNNER_TEMP/report.md"
-          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/report.md"
       - name: Failure issue
         if: github.ref == 'refs/heads/main' && inputs.pretend_tested == ''
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8

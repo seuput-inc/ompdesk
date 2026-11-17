@@ -172,17 +172,23 @@ export interface ReportInput {
 
 /** Markdown: every failed or wrongly skipped test file under each touchpoint whose `tests` name it. */
 export function renderReport(input: ReportInput): string {
-	const lines = new Map<string, string[]>();
+	// file → what happened to it → the jobs it happened in
+	const files = new Map<string, Map<string, string[]>>();
+	const note = (file: string, what: string, job: string) => {
+		const notes = files.get(file) ?? new Map<string, string[]>();
+		files.set(file, notes);
+		push(notes, what, job);
+	};
 	for (const summary of input.summaries) {
-		for (const file of summary.failed) push(lines, file, `failed (${summary.job})`);
-		for (const skip of summary.skipped) push(lines, skip.file, `skipped "${skip.test}" (${summary.job})`);
+		for (const file of summary.failed) note(file, "failed", summary.job);
+		for (const skip of summary.skipped) note(skip.file, `skipped "${skip.test}"`, summary.job);
 	}
 	const out: string[] = [];
 	const unknown: string[] = [];
 	const byTouchpoint = new Map<Touchpoint, string[]>();
-	for (const [file, notes] of [...lines].sort(([a], [b]) => a.localeCompare(b))) {
+	for (const [file, notes] of [...files].sort(([a], [b]) => a.localeCompare(b))) {
 		const owners = input.touchpoints.filter(t => t.tests.includes(file));
-		const entry = `\`${file}\` ${notes.join("; ")}`;
+		const entry = `\`${file}\` ${[...notes].map(([what, jobs]) => `${what} (${jobs.join(", ")})`).join("; ")}`;
 		if (owners.length === 0) unknown.push(entry);
 		for (const owner of owners) push(byTouchpoint, owner, entry);
 	}
