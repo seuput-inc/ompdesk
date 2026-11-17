@@ -61,24 +61,19 @@ function devProfile(): string {
 /**
  * Builds `config` in watch mode; resolves after the first successful build, then calls `rebuilt` after each later one.
  * Rollup also calls `closeBundle` after a failed build, with the error, which leaves the app running on the last good
- * output. The hook is `sequential`, so it runs after every other `closeBundle` (the preload config writes `tauri.js` in
- * one) and not at all when one of those throws.
+ * output. It runs after `writeBundle`, where the preload config writes `tauri.js`.
  */
 function watchBuild(config: InlineConfig, rebuilt: () => void): Promise<void> {
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	let first = true;
 	const built: Plugin = {
 		name: "ompdesk:dev-built",
-		closeBundle: {
-			order: "post",
-			sequential: true,
-			handler(error) {
-				if (error) return;
-				if (first) {
-					first = false;
-					resolve();
-				} else rebuilt();
-			},
+		closeBundle(error) {
+			if (error) return;
+			if (first) {
+				first = false;
+				resolve();
+			} else rebuilt();
 		},
 	};
 	build(mergeConfig(config, { plugins: [built] })).catch(reject);
