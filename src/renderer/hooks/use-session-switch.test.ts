@@ -21,14 +21,22 @@ import { useModelStore } from "../stores/model";
 import { usePlanApprovalStore } from "../stores/plan-approval";
 import { useQueueStore } from "../stores/queue";
 import { useSessionStore } from "../stores/session";
+import { deleteSessionRuntime, setFocusedSessionRuntime } from "../stores/session-runtime-context";
 import { useSubagentsStore } from "../stores/subagents";
+import { ensureTabRuntime, replaceTabRuntime } from "../stores/tab-runtime";
 import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";
 import { selectTodoCardVisible, useTodoStore } from "../stores/todo";
 import { useToolsStore } from "../stores/tools";
 import { useUiStore } from "../stores/ui";
 import { routeCommands } from "../test-support/route-commands";
-import { newSessionNow, opensInOwnTab, requestSessionSwitch, switchSessionNow } from "./use-session-switch";
+import {
+	newSessionNow,
+	opensInOwnTab,
+	requestSessionSwitch,
+	sessionSwitchInFlight,
+	switchSessionNow,
+} from "./use-session-switch";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 const globals = globalThis as Record<string, unknown>;
@@ -520,5 +528,32 @@ describe("switchSessionNow F-OWN owner guard", () => {
 		expect(result).toBe(true);
 		expect(omp.rpc.switchSession).toHaveBeenCalledWith("/sessions/agent.jsonl");
 		expect(omp.tabs.spawn).not.toHaveBeenCalled();
+	});
+
+	it("stays in flight until the replacement runtime main committed has hydrated", async () => {
+		seedTabs();
+		ensureTabRuntime("t0");
+		setFocusedSessionRuntime("t0");
+		const transcript = Promise.withResolvers<RpcResponse>();
+		const transcriptStarted = Promise.withResolvers<void>();
+		omp.rpc.switchSession.mockImplementation(async () => {
+			replaceTabRuntime("t0");
+			setFocusedSessionRuntime("t0");
+			return ok({});
+		});
+		omp.rpc.getTranscriptPage.mockImplementation(() => {
+			transcriptStarted.resolve();
+			return transcript.promise;
+		});
+
+		const switching = switchSessionNow(session("/sessions/x.jsonl"));
+		await transcriptStarted.promise;
+		expect(sessionSwitchInFlight()).toBe(true);
+
+		transcript.resolve(ok({ messages: [] }));
+		await expect(switching).resolves.toBe(true);
+		expect(sessionSwitchInFlight()).toBe(false);
+		setFocusedSessionRuntime(null);
+		deleteSessionRuntime("t0");
 	});
 });
