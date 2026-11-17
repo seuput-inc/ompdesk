@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { expect } from "vitest";
@@ -7,6 +7,20 @@ import { ompPackageRoot } from "./omp-runtime";
 
 /** Bun's launcher for the global omp (`omp.exe` on Windows); a stock-pinned test skips when it is not installed. */
 export const INSTALLED_OMP = join(homedir(), ".bun", "bin", process.platform === "win32" ? "omp.exe" : "omp");
+
+/** The installed omp's `@oh-my-pi/<pkg>/src/<file>`, or null without omp or that file (a stock-pinned test skips). */
+export function stockSource(pkg: string, file: string): string | null {
+	const root = ompPackageRoot(INSTALLED_OMP);
+	const full = root ? join(root, "..", pkg, "src", file) : null;
+	return full && existsSync(full) ? full : null;
+}
+
+/** Runs `script` in Bun, which loads stock's TypeScript as omp does, and parses the JSON line it prints. */
+export function runStock<T>(script: string): T {
+	const ran = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 60_000 });
+	if (ran.status !== 0) throw new Error(`stock probe failed: ${ran.stderr || ran.error}`);
+	return JSON.parse(ran.stdout) as T;
+}
 
 /**
  * What a test starts to run the installed omp: `spawn(OMP_COMMAND.file, [...OMP_COMMAND.args, ...omp's own args])`.
