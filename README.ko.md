@@ -73,7 +73,7 @@
 
 macOS 첫 실행: 빌드는 서명했지만 공증은 받지 않아서, 앱을 우클릭하고 **열기**를 한 번 선택하세요. Windows SmartScreen: **추가 정보 → 실행**을 누르세요.
 
-Apple Silicon Mac 또는 Windows 10/11 x64가 필요해요. omp 18.18.9 이상이 필요하고, 알아서 설치돼요.
+macOS 14 이상의 Apple Silicon Mac 또는 Windows 10/11 x64가 필요해요. omp 18.18.9 이상이 필요하고, 알아서 설치돼요.
 
 ## 업데이트
 
@@ -116,7 +116,7 @@ bun run dev
 
 개발·검사·배포 규칙은 [AGENTS.md](AGENTS.md), 버전별 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있어요. 위 미디어를 다시 녹화하려면 `bun run readme:media`를 실행하세요.
 
-데스크톱 창은 Rust(Tauri 2)와 운영체제 기본 웹뷰(macOS의 WebKit, Windows의 WebView2)로 동작해요. 기존 Node 메인 프로세스와 서비스는 그대로 쓰며, React 화면과 순정 omp 확장은 TypeScript로 남아요.
+데스크톱 창은 Rust(Tauri 2)와 운영체제 기본 웹뷰(macOS의 WebKit, Windows의 WebView2)로 동작하고, Preview 패널은 앱에 들어 있는 Chromium 계열 브라우저(Brave)를 별도 프로필로 실행해요. 기존 Node 메인 프로세스와 서비스는 그대로 쓰며, React 화면과 순정 omp 확장은 TypeScript로 남아요.
 
 ## 기여 · 보안 · 라이선스
 

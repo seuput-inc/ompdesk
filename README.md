@@ -73,7 +73,7 @@
 
 macOS first open: the build is signed but not notarized, so right-click the app and choose **Open** once. Windows SmartScreen: **More info → Run anyway**.
 
-Needs macOS on Apple Silicon or Windows 10/11 x64. omp 18.18.9 or newer, installed for you.
+Needs macOS 14 or newer on Apple Silicon, or Windows 10/11 x64. omp 18.18.9 or newer, installed for you.
 
 ## Updates
 
@@ -116,7 +116,7 @@ bun run dev
 
 Development, checks and release rules are in [AGENTS.md](AGENTS.md); changes per version in [CHANGELOG.md](CHANGELOG.md). To re-record the media above: `bun run readme:media`.
 
-The desktop window runs on Rust (Tauri 2) and the operating system's web view (WebKit on macOS, WebView2 on Windows). It still runs the Node main process and services; the React page and stock omp extension remain TypeScript.
+The desktop window runs on Rust (Tauri 2) and the operating system's web view (WebKit on macOS, WebView2 on Windows); the Preview panel runs a bundled Chromium-based browser (Brave) with a profile of its own. It still runs the Node main process and services; the React page and stock omp extension remain TypeScript.
 
 ## Contributing · Security · License
 
