@@ -14,6 +14,15 @@ export type TouchpointArea = "launch" | "rpc" | "bridge" | "helper" | "settings"
 /** `public`: documented omp behaviour (omp://rpc.md, extensions.md, sdk.md, settings.md, session.md). `internal`: anything else. */
 export type TouchpointContract = "public" | "internal";
 
+/**
+ * `public-api`: an omp public API (TouchpointContract `public`) does the same, so the copy goes. `registered`: it
+ * stays, for the reason given, and its tests pin it to stock. `open`: it stays, and nothing pins it to stock yet.
+ */
+export interface CopyDisposition {
+	kind: "public-api" | "registered" | "open";
+	reason: string;
+}
+
 export interface Touchpoint {
 	/** L01.. launch, Q rpc, B bridge, H helper, U settings, F files, C copies. */
 	id: string;
@@ -29,6 +38,8 @@ export interface Touchpoint {
 	tests: readonly string[];
 	/** Commits that had to follow an omp change, with what changed in omp. */
 	changes?: readonly string[];
+	/** Copies only (area `copy`): what becomes of it. */
+	disposition?: CopyDisposition;
 }
 
 export const TOUCHPOINTS: readonly Touchpoint[] = [
@@ -2044,6 +2055,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C01",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason: "The renderer shows a card per mention while the user writes, before omp sees the prompt.",
+		},
 		summary: "Copy of stock `utils/file-mentions`: extracts and replaces `@path` mentions.",
 		files: ["src/shared/file-mentions.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/utils/file-mentions"],
@@ -2053,6 +2068,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C02",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason:
+				"GUI slash commands dispatch synchronously in the renderer; RPC `get_available_commands` lists commands, not the grammar.",
+		},
 		summary: "Copy of stock `parse` in slash-commands/helpers: the `parseSlashCommand` grammar.",
 		files: ["src/renderer/lib/slash-command.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/slash-commands/helpers/parse"],
@@ -2062,6 +2082,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C03",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason: "The composer warns before a token goes out; the renderer cannot import pi-tui.",
+		},
 		summary: "Copy of stock pi-tui `skill-tokens`: the token regex and `allowsSkillTokens`.",
 		files: ["src/renderer/lib/skill-tokens.ts"],
 		stock: ["@oh-my-pi/pi-tui/prompt/skill-tokens"],
@@ -2071,6 +2095,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C04",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason:
+				"RPC carries only the raw `toolcall_delta` text, and providers refresh `partial.arguments` every 256 bytes.",
+		},
 		summary: "Copy of stock pi-utils `json-parse`: `parseStreamingJson`.",
 		files: ["src/renderer/lib/streaming-json.ts"],
 		stock: ["@oh-my-pi/pi-utils/json-parse"],
@@ -2080,6 +2109,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C05",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "open",
+			reason: "The renderer reads xd:// targets; its test does not compare with stock `parseXdUrl`.",
+		},
 		summary: "Copy of stock pi-tui `xd-url`: `parseXdUrl`.",
 		files: ["src/renderer/lib/xdev.ts"],
 		stock: ["@oh-my-pi/pi-tui/tools/xd-url"],
@@ -2089,6 +2122,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C06",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "open",
+			reason:
+				"Completion runs per keystroke in the renderer; its test does not compare with stock's table or emojis.json.",
+		},
 		summary: "Copy of stock pi-tui `emoji-autocomplete` and its `emojis.json` data.",
 		files: ["src/renderer/lib/emoji.ts"],
 		stock: ["@oh-my-pi/pi-tui/prompt/emoji-autocomplete", "prompt/data/emojis.json"],
@@ -2098,6 +2136,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C07",
 		area: "copy",
 		contract: "internal",
+		disposition: { kind: "open", reason: "Ids are minted before omp starts; no test compares with stock." },
 		summary: "Copy of stock pi-utils `snowflake`: epoch, sequence and hex id; no dedicated test pins it.",
 		files: ["src/main/snowflake.ts"],
 		stock: ["@oh-my-pi/pi-utils/snowflake"],
@@ -2107,6 +2146,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C08",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason: "`normalizePrompt` is private; session.md describes the rule but offers no API to call.",
+		},
 		summary: "Copy of stock `session/history-storage` `HistoryStorage.normalizePrompt`, which is private.",
 		files: ["src/renderer/stores/input-history.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/session/history-storage"],
@@ -2116,6 +2159,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C09",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "open",
+			reason:
+				"Runs before omp starts and in the renderer's launch preview; no test compares with stock's flag tables.",
+		},
 		summary: "Copy of stock `cli/flag-tables`: which launch flags take a value.",
 		files: ["src/shared/launch-profile.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/cli/flag-tables"],
@@ -2125,6 +2173,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C10",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason: "Main reads a failed turn's text with no omp; RPC `usageLimit` covers Claude subscriptions only.",
+		},
 		summary: "Copy of stock billing-cap classification and the retry-after reading.",
 		files: ["src/shared/quota-reset.ts"],
 		stock: ["@oh-my-pi/pi-ai/utils/retry-after"],
@@ -2134,6 +2186,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C11",
 		area: "copy",
 		contract: "internal",
+		disposition: { kind: "registered", reason: "Settings reads and edits the chains in the renderer." },
 		summary: "Copy of stock `config/model-resolver` retry fallback chain key selection order.",
 		files: ["src/renderer/components/settings/fallback-chains.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/config/model-resolver"],
@@ -2143,6 +2196,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C12",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason: "Stock's `CONDITIONS` table is private; Settings evaluates it in the renderer.",
+		},
 		summary: "Copy of stock settings-ui CONDITIONS and source gates.",
 		files: ["src/renderer/components/settings/settings-schema-utils.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/config/settings-ui"],
@@ -2152,6 +2209,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C13",
 		area: "copy",
 		contract: "internal",
+		disposition: { kind: "registered", reason: "The renderer draws RPC frames and cannot import pi-tui." },
 		summary: "Copy of stock pi-tui `tools/bash` background-notice detection (`formatBackgroundNotice`).",
 		files: ["src/renderer/components/tools/renderers/BashRenderer.tsx"],
 		stock: ["@oh-my-pi/pi-tui/tools/bash"],
@@ -2161,6 +2219,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C14",
 		area: "copy",
 		contract: "internal",
+		disposition: { kind: "registered", reason: "The renderer draws RPC frames and cannot import pi-tui." },
 		summary: "Copy of stock pi-tui `tools/todo` Roman-numeral phase labels (`phaseRomanNumeral`).",
 		files: ["src/renderer/components/tools/renderers/TodoRenderer.tsx"],
 		stock: ["@oh-my-pi/pi-tui/tools/todo"],
@@ -2170,6 +2229,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C15",
 		area: "copy",
 		contract: "internal",
+		disposition: { kind: "registered", reason: "The renderer draws RPC frames and cannot import pi-tui or pi-ai." },
 		summary:
 			"Copies of stock renderer logic: pi-tui `tools/edit` streaming edit operations, `tools/task` yield and review assembly, pi-ai `utils/narration` and pi-tui `chat/messages` silent-abort detection.",
 		files: [
@@ -2194,6 +2254,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C16",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "public-api",
+			reason:
+				"`AgentSession.enableIdleMaintenance` (sdk.md › Idle maintenance, omp 18.13.2) runs idle compaction for a session that opts in.",
+		},
 		summary: "Copy of the TUI event-controller's private idle-compaction timer.",
 		files: ["resources/gui-bridge/idle-compaction-core.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/modes/controllers/event-controller"],
@@ -2203,6 +2268,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C17",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "public-api",
+			reason:
+				"`AgentSession.enableIdleMaintenance` (sdk.md › Idle maintenance, omp 18.13.2) runs the idle recap and hands it to `onRecap`.",
+		},
 		summary: "Copy of the TUI event-controller's private idle-recap timer.",
 		files: ["resources/gui-bridge/session-recap-core.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/modes/controllers/event-controller"],
@@ -2212,6 +2282,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C18",
 		area: "copy",
 		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason:
+				"OMPdesk asks for ranked lines with its own skip token, the helper's decisions run without omp, and the computer-use prompt serves another engine.",
+		},
 		summary:
 			"Copies of stock's composer-prediction-controller reply normalizer, the helper's exact-version regex and provider ids, and the computer-use safety prompt.",
 		files: [

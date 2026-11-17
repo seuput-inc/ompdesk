@@ -111,6 +111,17 @@ describe("omp touchpoint registry", () => {
 		}
 	});
 
+	it("says what becomes of every copy, and only of copies; a kept copy that its tests pin has tests", () => {
+		for (const t of TOUCHPOINTS) {
+			if (t.area !== "copy") {
+				expect(t.disposition, t.id).toBeUndefined();
+				continue;
+			}
+			expect(t.disposition?.reason, `${t.id} has no disposition`).toMatch(/\S/);
+			if (t.disposition?.kind === "registered") expect(t.tests.length, t.id).toBeGreaterThan(0);
+		}
+	});
+
 	it("loads every omp-package module by a listed key, and lists only keys something loads", () => {
 		const keys: Array<string | null> = [];
 		for (const file of productionFiles(ROOT)) {
