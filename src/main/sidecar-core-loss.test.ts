@@ -7,7 +7,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SidecarStatus } from "../shared/rpc-types";
 import { core } from "./core/process";
 import type { OmpResolution } from "./omp-runtime";
@@ -45,6 +45,7 @@ describe("tabs whose core ended under them", () => {
 		);
 		const sessions = Array.from({ length: TABS }, (_, index) => path.join(tempDir, `s${index}.jsonl`));
 		for (const session of sessions) await fs.writeFile(session, "{}\n");
+		const reports: Array<{ step: string; tab: unknown }> = [];
 		const sidecars = sessions.map(
 			() =>
 				new SidecarManager({
@@ -53,8 +54,11 @@ describe("tabs whose core ended under them", () => {
 					// As the app's tabs: through the app's start queue, and after the session's owner let go.
 					startQueue: {},
 					sessionFree: async () => "free",
+					reportRecovery: (step, details) => reports.push({ step, tab: details.tab }),
 				}),
 		);
+		const lossReports: Array<{ step: string; details: Record<string, unknown> }> = [];
+		core().report = (step, details) => lossReports.push({ step, details });
 		try {
 			await Promise.all(
 				sidecars.map((sidecar, index) => {
@@ -65,6 +69,8 @@ describe("tabs whose core ended under them", () => {
 			);
 			const before = (await fs.readFile(spawns, "utf8")).trim().split("\n");
 			expect(before).toHaveLength(TABS);
+			// A start that is no recovery reports nothing.
+			expect(reports).toEqual([]);
 
 			const back = sidecars.map(nextReady);
 			// As a hub call past its deadline ends it: every lane and every omp of that core is gone.
@@ -79,9 +85,56 @@ describe("tabs whose core ended under them", () => {
 				expect(sidecar.status).toBe("ready");
 				expect(sidecar.processAlive).toBe(true);
 			}
+			// Each tab's way back, step by step, in the log.
+			const tabs = [...new Set(reports.map(report => report.tab))];
+			expect(tabs).toHaveLength(TABS);
+			for (const tab of tabs)
+				expect(reports.filter(report => report.tab === tab).map(report => report.step)).toEqual([
+					"lane-lost",
+					"resolved",
+					"launch",
+					"spawned",
+				]);
+			await vi.waitFor(() => expect(lossReports.map(report => report.step)).toEqual(["abandoned", "ended"]));
+			expect(lossReports[0]?.details).toMatchObject({ reason: "a test ends the core" });
+			expect(lossReports[1]?.details).toMatchObject({ abandoned: true, answered: true });
 		} finally {
+			core().report = null;
 			for (const sidecar of sidecars) sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);
 		}
 	}, 60_000);
+
+	it("names what a recovering start still waits on when it does not come back", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-core-loss-slow-"));
+		const binaryPath = await writeFakeOmp(
+			tempDir,
+			`process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
+		);
+		let hang = false;
+		const reports: Array<{ step: string; details: Record<string, unknown> }> = [];
+		const sidecar = new SidecarManager({
+			omp: ompAt(binaryPath),
+			cwd: tempDir,
+			// After the loss, one of the start's inputs never settles.
+			builtinMcp: () => (hang ? Promise.withResolvers<{ args: string[] }>().promise : Promise.resolve({ args: [] })),
+			recoverySlowMs: 200,
+			reportRecovery: (step, details) => reports.push({ step, details }),
+		});
+		try {
+			const ready = nextReady(sidecar);
+			sidecar.start();
+			await ready;
+			hang = true;
+			core().abandon("a test ends the core");
+			await vi.waitFor(() => expect(reports.map(report => report.step)).toEqual(["lane-lost", "resolve-slow"]), {
+				timeout: 10_000,
+			});
+			expect(reports[1]?.details).toMatchObject({ pending: "builtinMcp" });
+			expect(sidecar.status).not.toBe("ready");
+		} finally {
+			sidecar.dispose();
+			await fs.rm(tempDir, RM_TEMP);
+		}
+	}, 30_000);
 });

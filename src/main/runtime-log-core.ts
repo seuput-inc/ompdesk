@@ -30,6 +30,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"startup-timing": true,
 	"turn-resume": true,
 	hub: true,
+	"core-loss": true,
 	"tab-layout": true,
 	autopilot: true,
 	"app-update": true,

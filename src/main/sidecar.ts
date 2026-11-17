@@ -66,6 +66,11 @@ const CORE_ANSWER_SLACK_MS = 10_000;
  * 45 s stop-and-retry of 0.119.7 killed every omp of a MacBook before it could answer); only Restart stops it.
  */
 const START_SLOW_MS = 20_000;
+/** How long a recovering tab's start may wait on its resolve before the inputs it still waits on are logged. */
+const RECOVERY_SLOW_MS = 30_000;
+
+/** A step of a tab's way back after a lost core (`SidecarOptions.reportRecovery`). */
+export type LaneRecoveryStep = "lane-lost" | "resolve-slow" | "resolved" | "launch" | "spawned";
 
 /**
  * The environment a spawn gets, as node's `spawn` hands it to the child: values that are undefined are left out and,
@@ -335,6 +340,12 @@ export interface SidecarOptions {
 	reportFailure?: (report: SidecarFailureReport) => void;
 	/** Logs a start that has not answered after `START_SLOW_MS`, with what it said so far; once per spawn. */
 	reportSlowStart?: (report: SlowStartReport) => void;
+	/**
+	 * Each step of the tab's way back after the core that ran its lane ended (source `core-loss`): `lane-lost`, then
+	 * `resolve-slow` (what the start still waits on after `RECOVERY_SLOW_MS`), `resolved`, `launch` and `spawned`, each
+	 * with how long since the loss. Nothing is reported outside a recovery.
+	 */
+	reportRecovery?: (step: LaneRecoveryStep, details: Record<string, string | number | boolean>) => void;
 	/** The last lines omp `pid` wrote to its own log (default `ompLogTail`; tests inject). */
 	readOmpLog?: (pid: number, spawnedAt: Date) => Promise<string[]>;
 	/**
@@ -366,6 +377,8 @@ export interface SidecarOptions {
 	sessionProcesses?: Pick<SessionProcesses, "open">;
 	/** How long a started omp may stay silent before its tab reads slow (`START_SLOW_MS`; tests shorten it). */
 	startSlowMs?: number;
+	/** How long a recovering start may wait on its resolve before `resolve-slow` (`RECOVERY_SLOW_MS`; tests shorten it). */
+	recoverySlowMs?: number;
 }
 
 /** A start past `START_SLOW_MS`, as handed to `reportSlowStart`. */
@@ -659,6 +672,8 @@ export class SidecarManager extends EventEmitter {
 	#startGate: SidecarStartGate | null = null;
 	/** The tab's process tag, made at its first spawn and kept for every later one. */
 	#processes: SessionProcessHandle | null = null;
+	/** When the core that ran this tab's lane ended, until the tab's next omp spawned (`reportRecovery`). */
+	#lostAt: number | null = null;
 
 	constructor(options: SidecarOptions) {
 		super();
@@ -761,16 +776,31 @@ export class SidecarManager extends EventEmitter {
 			lanes.delete(this.#tab);
 			return;
 		}
+		const code = error instanceof CoreError ? error.code : "unknown";
 		if (error instanceof CoreError && error.code === "core_exited") {
 			if (core().stops !== stops) return;
 			const asleep = this.#status === "asleep";
 			console.warn(`[sidecar] ${message}: opening the tab's lane again`);
+			this.#lostAt = Date.now();
+			this.#recovered("lane-lost", { code, start: !asleep });
+			// A tab that slept starts when shown: its start is no part of this loss.
+			if (asleep) this.#lostAt = null;
 			this.#setStatus("restarting", { message });
 			this.#ensureOpen();
 			if (!asleep) this.start();
 			return;
 		}
+		this.#lostAt = Date.now();
+		this.#recovered("lane-lost", { code, start: false });
+		this.#lostAt = null;
 		this.#setStatus("error", { message });
+	}
+
+	/** One step of the way back after a lost core, with how long since the loss; nothing outside a recovery. */
+	#recovered(step: LaneRecoveryStep, details: Record<string, string | number | boolean> = {}): void {
+		const lostAt = this.#lostAt;
+		if (lostAt === null) return;
+		this.#options.reportRecovery?.(step, { tab: this.#tab, ms: Date.now() - lostAt, ...details });
 	}
 
 	/** One message to the tab's lane, numbered in the order main sends them; the lane applies them in that order. */
@@ -944,6 +974,8 @@ export class SidecarManager extends EventEmitter {
 			},
 		});
 		this.#rpcClient = client;
+		this.#recovered("spawned");
+		this.#lostAt = null;
 		this.emit("spawned");
 	}
 
@@ -1129,22 +1161,53 @@ export class SidecarManager extends EventEmitter {
 	#onResolve(ask: ResolveAsk): void {
 		const { omp, proxyEnv, shellEnv } = this.#options;
 		const fallback = () => ({}) as Record<string, string>;
+		// What the start still waits on, named for a recovery's `resolve-slow` report.
+		const pending = new Set<string>();
+		const waited = <T>(name: string, value: Promise<T> | T): Promise<T> => {
+			pending.add(name);
+			return Promise.resolve(value).finally(() => pending.delete(name));
+		};
+		const slow =
+			this.#lostAt === null
+				? undefined
+				: setTimeout(
+						() => this.#recovered("resolve-slow", { pending: [...pending].join(",") }),
+						this.#options.recoverySlowMs ?? RECOVERY_SLOW_MS,
+					);
+		slow?.unref?.();
 		void Promise.all([
-			omp().catch(
-				(err: unknown): OmpResolution => ({ ok: false, error: err instanceof Error ? err.message : String(err) }),
+			waited(
+				"omp",
+				omp().catch(
+					(err: unknown): OmpResolution => ({
+						ok: false,
+						error: err instanceof Error ? err.message : String(err),
+					}),
+				),
 			),
-			proxyEnv ? proxyEnv().catch(fallback) : Promise.resolve({}),
-			shellEnv ? shellEnv().catch(fallback) : Promise.resolve({}),
-			this.#options.builtinMcp?.().catch(() => ({ args: [] })) ?? Promise.resolve({ args: [] }),
-			ask.sessionPath && this.#options.sessionFree
-				? this.#options.sessionFree(ask.sessionPath).catch(() => "free" as const)
-				: ("free" as const),
-			Promise.resolve(this.#options.defaultBrowser?.()).catch(() => undefined),
-			this.#options.egoBrowserDir?.().catch(() => null) ?? Promise.resolve(null),
+			waited("proxyEnv", proxyEnv ? proxyEnv().catch(fallback) : {}),
+			waited("shellEnv", shellEnv ? shellEnv().catch(fallback) : {}),
+			waited("builtinMcp", this.#options.builtinMcp?.().catch(() => ({ args: [] })) ?? { args: [] }),
+			waited(
+				"sessionFree",
+				ask.sessionPath && this.#options.sessionFree
+					? this.#options.sessionFree(ask.sessionPath).catch(() => "free" as const)
+					: ("free" as const),
+			),
+			waited(
+				"defaultBrowser",
+				Promise.resolve(this.#options.defaultBrowser?.()).catch(() => undefined),
+			),
+			waited("egoBrowserDir", this.#options.egoBrowserDir?.().catch(() => null) ?? null),
 		]).then(([resolution, proxyVars, shellVars, builtinMcp, session, defaultBrowser, egoBrowserDir]) => {
+			clearTimeout(slow);
 			// A start that a restart or a stop superseded while this resolved must not spawn.
-			if (this.#staleAsk(ask.cmd)) return;
+			if (this.#staleAsk(ask.cmd)) {
+				this.#recovered("resolved", { outcome: "superseded" });
+				return;
+			}
 			if (session === "owned") {
+				this.#recovered("resolved", { outcome: "owned" });
 				this.#answer("sidecar.resolved", ask, {
 					outcome: "owned",
 					message: this.#options.sessionOwnedText?.() ?? "This session is still open in another omp process.",
@@ -1152,6 +1215,7 @@ export class SidecarManager extends EventEmitter {
 				return;
 			}
 			if (!resolution.ok) {
+				this.#recovered("resolved", { outcome: "waiting" });
 				// No usable omp: nothing ran, nothing failed. Machine setup installs it and main starts this tab then.
 				this.#answer("sidecar.resolved", ask, { outcome: "waiting", message: resolution.error });
 				return;
@@ -1162,6 +1226,7 @@ export class SidecarManager extends EventEmitter {
 			this.#builtinMcp = builtinMcp;
 			this.#defaultBrowser = defaultBrowser;
 			this.#egoBrowserDir = egoBrowserDir;
+			this.#recovered("resolved", { outcome: "ok" });
 			this.#answer("sidecar.resolved", ask, { outcome: "ok" });
 		});
 	}
@@ -1238,7 +1303,9 @@ export class SidecarManager extends EventEmitter {
 				start: { bin: spawnCommand(bin), args: spawnArgs(bin, args), env, cwd, shell: needsShell(bin) },
 				hostTools: this.#hostTools(),
 			});
+			this.#recovered("launch", { ok: true });
 		} catch (err) {
+			this.#recovered("launch", { ok: false });
 			this.#answer("sidecar.launched", ask, { error: err instanceof Error ? err.message : String(err) });
 		}
 	}
