@@ -11,7 +11,7 @@
  * imports modules whose top-level await never settles (`stats` waits on its child, `-p` on a hanging print), so such
  * a fake never armed it.
  */
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -43,6 +43,26 @@ export async function writeFakeOmp(dir: string, source: string): Promise<string>
 	const shim = join(binDir, "omp.cmd");
 	await writeFile(shim, `@bun "${script}" %*\r\n`);
 	return shim;
+}
+
+/**
+ * Write `source` (TypeScript run by bun) as an executable named `name` under `dir`; returns its path. POSIX runs it
+ * through its `env bun` shebang. Windows starts neither a shebang script nor, from Rust's `Command` or a spawn without
+ * a shell, a `.cmd`, so there it is compiled to `<name>.exe` (a ~90 MB bun runtime, a few seconds), as a real gh or
+ * agent-desktop is an exe.
+ */
+export async function writeFakeBin(dir: string, name: string, source: string): Promise<string> {
+	if (process.platform !== "win32") {
+		const bin = join(dir, name);
+		await writeFile(bin, `#!/usr/bin/env bun\n${source}`);
+		await chmod(bin, 0o755);
+		return bin;
+	}
+	const script = join(dir, `${name}.ts`);
+	await writeFile(script, source);
+	const exe = join(dir, `${name}.exe`);
+	execFileSync("bun", ["build", "--compile", script, "--outfile", exe], { stdio: "ignore" });
+	return exe;
 }
 
 /**
