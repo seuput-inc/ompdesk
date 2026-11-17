@@ -728,7 +728,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 
 		/** Tabs whose `starting` was a paired host's re-attach (`reconnecting`): the page was kept, and the next `ready` catches up. */
 		const reattaching = new Set<string>();
-		const handleStatus = (payload: IpcSidecarStatusPayload, statusTabId: string) => {
+		const handleStatus = (payload: IpcSidecarStatusPayload, statusTabId: string, boot = false) => {
 			if (disposed || !openTabFrame(statusTabId)) return;
 			statusVersion++;
 			const isFocused = () => useTabsStore.getState().activeTabId === statusTabId;
@@ -737,9 +737,12 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 			if (payload.status === "starting" && !payload.slow && !payload.queued) {
 				retryPendingTabs.delete(statusTabId);
 				// A paired host may still run the omp the page shows: transcript, cards and state stay on screen, and
-				// its `ready` reads only what was missed. A plain `starting` (any new omp) clears them.
+				// its `ready` reads only what was missed. A plain `starting` (any new omp) clears them, except in the window's
+				// boot read: it finds the stores as this page painted them (a restored tab's or a ghost's seeded rows, while
+				// main answers for its real tab), nothing of an earlier omp, and clearing them put the transcript skeleton
+				// in for the frames before the tab list adopted the ghost.
 				if (payload.reconnecting && statusTabId !== "") reattaching.add(statusTabId);
-				else {
+				else if (!boot) {
 					reattaching.delete(statusTabId);
 					withSessionRuntime(statusTabId, () => {
 						useMessagesStore.getState().reset();
@@ -829,7 +832,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 			// A failure's reason reaches the banner with the tab's listing (`applyTabFailure` in stores/tabs.ts), shown or not.
 		};
 
-		const unsubStatus = window.omp.events.onTabSidecarStatus(handleStatus);
+		const unsubStatus = window.omp.events.onTabSidecarStatus((payload, tabId) => handleStatus(payload, tabId));
 		const snapshotTabId = focusedTabId();
 		const snapshotRuntime = sessionRuntime(snapshotTabId);
 		const snapshotVersion = statusVersion;
@@ -845,7 +848,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 					sessionRuntime(snapshotTabId) !== snapshotRuntime
 				)
 					return;
-				handleStatus(status, snapshotTabId);
+				handleStatus(status, snapshotTabId, true);
 			})
 			.catch(() => {
 				// Status pushes and GET_TABS remain authoritative when this read fails.
