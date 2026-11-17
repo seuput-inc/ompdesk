@@ -121,7 +121,7 @@ renderer (React) ── IPC ──▶ main (Electron)
 2. Stock implements it (an exported function or class in `@oh-my-pi/*`, an `omp <subcommand>`) → reuse that implementation through the bridge or the CLI; never port or re-derive its rules in OMPdesk.
 3. Data the GUI can get on its own (git, files, `omp <subcommand>`) → local handler in main.
 4. Needs the live session → bridge method + thin local handler.
-5. Needs a change inside omp → contribute upstream; never fork.
+5. Needs behaviour omp does not offer → solve it inside OMPdesk: through omp's public API, else through an internal touchpoint registered in `scripts/omp-boundary/touchpoints.ts`; never fork omp or patch `node_modules`. **No issue, PR or proposal goes to the omp repository** (the owner's rule, 17 Nov 2026: "앞으로 omp원본에다가 제안같은거 쳐 하지마"); a waiting upstream change is never the plan.
 
 **No duplicate of stock logic.** Before adding domain logic, search the stock packages (`~/.bun/install/global/node_modules/@oh-my-pi/`). If an implementation exists, call it, even through a bridge method, and add its internals to `capabilities.ts`. Keep an OMPdesk copy only when (a) it is measurably better and stock cannot be used as is, or (b) it must run where stock cannot: the renderer, main before omp starts, or a remote client. Say why in a comment naming the stock counterpart. A test pins the copy to stock: it compares against the stock function where importable (bridge tests on a machine with omp), otherwise uses stock's own test cases. Two OMPdesk copies of the same logic are never acceptable; merge them into one shared module.
 
