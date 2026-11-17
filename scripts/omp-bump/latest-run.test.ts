@@ -69,22 +69,39 @@ describe("summarize", () => {
 		},
 	});
 
-	it("counts every skipped stock test as a failure unless a known reason covers it on this platform", () => {
+	it("counts every skipped stock test as a failure, a stand-in Windows cannot start included", () => {
 		expect(summarize(run, { ...meta, platform: "win32" })).toEqual({
 			group: "windows",
 			job: "windows",
 			outcome: "failure",
 			report: true,
 			failed: ["src/main/b.test.ts"],
-			skipped: [{ file: "src/main/a-stock.test.ts", test: "a c" }],
+			skipped: [
+				{ file: "src/main/a-stock.test.ts", test: "a c" },
+				{
+					file: "src/main/local/git/pr-create-stock.test.ts",
+					test: "prCreate against stock executePrCreate passes stock's gh pr create flags",
+				},
+			],
 		});
-		expect(summarize(run, { ...meta, platform: "linux" }).skipped).toEqual([
-			{ file: "src/main/a-stock.test.ts", test: "a c" },
+	});
+
+	it("lets an allowed skip pass only on the platforms it names", () => {
+		const allowed = [{ file: "src/main/a-stock.test.ts", test: "a", platforms: ["win32"] as const, reason: "r" }];
+		expect(summarize(run, { ...meta, platform: "win32", allowed }).skipped).toEqual([
 			{
 				file: "src/main/local/git/pr-create-stock.test.ts",
 				test: "prCreate against stock executePrCreate passes stock's gh pr create flags",
 			},
+			{
+				file: "src/main/bridge-accounts-stock.test.ts",
+				test: "real stock account/reset adapters preserves account listings",
+			},
 		]);
+		expect(summarize(run, { ...meta, platform: "linux", allowed }).skipped).toContainEqual({
+			file: "src/main/a-stock.test.ts",
+			test: "a c",
+		});
 	});
 });
 
