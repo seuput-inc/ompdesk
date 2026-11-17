@@ -48,6 +48,7 @@ import { asRecord, requiredString } from "./params";
 import { type ResetPasses, shapeResetPasses } from "./reset-passes-core";
 import { effectiveOmpdeskRole, effectiveRole, type RoleStock } from "./role-effective";
 import { shownRoleValue, storedRoleValue } from "./role-values";
+import { settingText } from "./settings-core";
 import { heldDefaultNotes, releaseThinkingDefaultFor, syncThinkingDefault } from "./thinking-default";
 import type { BridgeEnv, BridgeMethods } from "./types";
 
@@ -204,21 +205,6 @@ function provenanceReader(settings: SettingsLike, globalPath: string) {
 	};
 }
 
-function optionsOf(setting: SettingLike): Array<{ value: string; label: string; description?: string }> | undefined {
-	const uiOptions = setting.ui?.options;
-	if (Array.isArray(uiOptions)) {
-		return uiOptions.map(raw => {
-			const option = asRecord(raw);
-			return {
-				value: String(option.value),
-				label: String(option.label ?? option.value),
-				...(typeof option.description === "string" ? { description: option.description } : {}),
-			};
-		});
-	}
-	return setting.enumValues?.map(value => ({ value, label: value }));
-}
-
 function settingsSchema(session: AgentSession) {
 	syncThinkingDefault(session.settings);
 	const provenance = provenanceReader(session.settings as unknown as SettingsLike, globalConfigPath());
@@ -231,11 +217,7 @@ function settingsSchema(session: AgentSession) {
 			value: setting.get(session.settings),
 			provenance: provenance(setting),
 			default: setting.default,
-			label: typeof ui?.label === "string" ? ui.label : setting.id,
-			description: typeof ui?.description === "string" ? ui.description : undefined,
-			tab: typeof ui?.tab === "string" ? ui.tab : undefined,
-			group: typeof ui?.group === "string" ? ui.group : undefined,
-			options: optionsOf(setting),
+			...settingText(setting),
 			secret: setting.isCredential === true,
 			advanced: !ui,
 			condition: typeof ui?.condition === "string" ? ui.condition : undefined,

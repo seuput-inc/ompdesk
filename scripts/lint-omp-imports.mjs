@@ -30,8 +30,9 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/;
 const TEST_FILE = /(?:\.(?:test|spec|e2e)\.[cm]?[jt]sx?$|(?:^|\/)test-[^/]*$)/;
 /** Files that name stock specifiers literally besides the adapters: the probe's loaders and its requirement table. */
 const PROBE_FILES = new Set(["resources/gui-bridge/health.ts", "resources/gui-bridge/capabilities.ts"]);
-/** Processes outside omp: they load stock through omp-package.ts, never through an adapter. */
+/** Processes outside omp: they load stock through omp-package.ts, never through an adapter (scripts/omp-bump reads any omp tree). */
 const OUTSIDE_OMP = [
+	"scripts/omp-bump/",
 	"resources/gui-bridge/stock-helper/",
 	"resources/gui-bridge/stats-host.ts",
 	"resources/gui-bridge/boot-model.ts",

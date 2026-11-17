@@ -51,7 +51,7 @@ export function schemaOptionText(lang: Lang, text: string): string {
 // roles in English only; keyed by that name, so a name it does not know stays as stock wrote it. Stock's name for a
 // role can differ by version (Architect or Plan, Commit or Commit messages): each gets the one Korean name, so
 // Settings and the model setup dialog never call a role two things.
-const KO_ROLE_NAMES: Readonly<Record<string, string>> = {
+export const KO_ROLE_NAMES: Readonly<Record<string, string>> = {
 	Default: "기본",
 	Fast: "빠른 모델",
 	Thinking: "사고 모델",
