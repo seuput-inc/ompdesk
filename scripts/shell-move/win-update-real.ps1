@@ -9,9 +9,10 @@ throwaway, so nothing here protects a person's install: never run it on a machin
                    --package-file=<pending file>` (no /S, no /D=: node_modules/electron-updater/out/NsisUpdater.js
                    doInstall; the same on a restart and at quit: src/main/nsis-updater.ts, updater.ts quitAndInstall()).
                    The file sits where the updater keeps it, %LOCALAPPDATA%\ompdesk-updater\pending.
-  -Mode feed       The published v0.131.0 app runs its own updater against GitHub's real feed, so the app's real code path
-                   checks, downloads, verifies and starts the setup and quits. The candidate must be the latest published
-                   release (a stand-in feed through Chromium's --host-resolver-rules never received v0.131.0's check).
+  -Mode feed       The published v0.131.0 app runs its own updater, so the app's real code path checks, downloads,
+                   verifies and starts the setup and quits. With -FeedScript it asks feed.ts (a stand-in for api.github.com
+                   offering the candidate, reached through Chromium's --host-resolver-rules); without it, GitHub's real
+                   feed, whose latest release must then be the candidate.
 
 Both: v0.131.0 is installed by its own setup with `/S` (silent, so the app does not start by itself), the candidate update runs, and the
 outcome a person sees is asserted: the uninstall entry and the installed exe say the candidate's version, app-started.json
@@ -27,7 +28,9 @@ param(
 	[Parameter(Mandatory)] [string] $NewSetup,
 	[Parameter(Mandatory)] [string] $OldVersion,
 	[Parameter(Mandatory)] [string] $Out,
-	[string] $NewVersion = ''
+	[string] $NewVersion = '',
+	[string] $FeedScript = '',
+	[int] $FeedPort = 8443
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -202,6 +205,7 @@ function Start-Old([string[]] $Arguments) {
 $t0 = Get-Date
 $setup = $null
 $setupExit = $null
+$feed = $null
 
 if ($Mode -eq 'installer') {
 	# The app writes its userData once (the start mark of v0.131.0 itself), then goes: its updater is not what runs here.
@@ -229,13 +233,23 @@ if ($Mode -eq 'installer') {
 	Evidence "setup exit code $setupExit after $([int]((Get-Date) - $t0).TotalSeconds) s"
 }
 else {
-	# The real feed: the published app asks api.github.com for the latest release, as on a person's computer. A stand-in
-	# feed reached through Chromium's --host-resolver-rules was tried first (run 44005704911): v0.131.0's update check
-	# still reached GitHub and the stand-in saw no request, so only a published candidate can take this path.
 	Add-Snapshot 'before'
-	$t0 = Get-Date
-	$null = Start-Old @()
-	Evidence "v$OldVersion launched with its real updater against GitHub's real feed, whose latest release must be v$NewVersion"
+	if ($FeedScript) {
+		$env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
+		$certDir = Join-Path $env:TEMP 'win-update-real-cert'
+		$feed = Start-Process -FilePath bun -ArgumentList @($FeedScript, '--setup', $NewSetup, '--version', $NewVersion, '--cert-dir', $certDir, '--port', "$FeedPort") -PassThru -RedirectStandardOutput (Join-Path $Out 'feed.log') -RedirectStandardError (Join-Path $Out 'feed.err')
+		for ($i = 0; $i -lt 30 -and -not (Test-Log (Join-Path $Out 'feed.log') '"listening"'); $i++) { Start-Sleep -Seconds 1 }
+		Check (Test-Log (Join-Path $Out 'feed.log') '"listening"') 'the stand-in feed listens'
+		$t0 = Get-Date
+		# Start-Process joins -ArgumentList with spaces and quotes nothing: the rule's spaces would split it into three
+		# arguments (run 44005704911: the check reached GitHub, the stand-in saw no request), so it goes as one quoted string.
+		$null = Start-Old @("`"--host-resolver-rules=MAP api.github.com 127.0.0.1:$FeedPort`"", '--ignore-certificate-errors')
+		Evidence "v$OldVersion launched with its real updater against the stand-in feed offering v$NewVersion"
+	} else {
+		$t0 = Get-Date
+		$null = Start-Old @()
+		Evidence "v$OldVersion launched with its real updater against GitHub's real feed, whose latest release must be v$NewVersion"
+	}
 	# The app's updater checks, downloads, counts down, starts the setup and quits; the setup then runs on its own.
 	$seen = $false
 	$deadline = (Get-Date).AddMinutes(25)
@@ -303,6 +317,7 @@ Save-Text (Join-Path $userData 'update-install.json') 'update-install.json'
 Save-Text (Join-Path $userData 'tauri-shell.jsonl') 'tauri-shell.jsonl' 4000
 Save-Text (Join-Path $userData 'tauri-local-storage-import.json') 'tauri-local-storage-import.json'
 Save-Text (Join-Path $userData 'logs\gui-runtime.jsonl') 'gui-runtime.jsonl' 4000
+if ($feed) { Save-Text (Join-Path $Out 'feed.log') 'feed-requests.log' }
 Get-ChildItem -LiteralPath $userData -Recurse -Depth 2 -Force -ErrorAction SilentlyContinue | Select-Object -First 400 -ExpandProperty FullName |
 	Set-Content -LiteralPath (Join-Path $Out 'userdata-tree.txt')
 try {
@@ -312,5 +327,6 @@ try {
 } catch { Say "note: no Application-log errors for the apps ($($_.Exception.Message))" }
 
 Stop-Installed
+if ($feed -and -not $feed.HasExited) { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
 if ($script:failures.Count) { Say "RESULT: FAILED ($($script:failures.Count)): $($script:failures -join '; ')"; exit 1 }
 Say 'RESULT: ok'
