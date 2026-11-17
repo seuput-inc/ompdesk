@@ -84,13 +84,17 @@ const ownRoleIds = new Set(OMPDESK_ROLES.map(role => role.id));
 const ownRoleNames = new Set(OMPDESK_ROLES.map(role => role.name));
 const keyed = (keys: readonly string[]): Needed[] => keys.map(key => ({ key }));
 
-/** `modelRoles.<family>.<id>` in both locales (locales.test.ts keeps their key sets equal; this reads both anyway). */
+/**
+ * `modelRoles.<family>.<id>` in both locales (locales.test.ts keeps their key sets equal; this reads both anyway).
+ * Required like the settings words: without them a new role reads only stock's English name (ModelRolesSection's
+ * generic path), so schema-ko-stock.test.ts asserts them too.
+ */
 function roleLocale(family: "use" | "fallback"): Dictionary {
 	const prefix = `modelRoles.${family}.`;
 	return {
 		id: `roles.${family}`,
 		file: "src/renderer/locales/en.ts, src/renderer/locales/ko.ts",
-		required: false,
+		required: true,
 		needs: facts => keyed(facts.roleIds.filter(id => !(id in HIDDEN_ROLES))),
 		has: facts => facts.roleIds,
 		covers: id => `${prefix}${id}` in en && `${prefix}${id}` in ko,

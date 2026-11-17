@@ -31,9 +31,9 @@ describe.skipIf(!existsSync(join(INSTALLED_OMP_ROOT, "package.json")))(
 			).toEqual([]);
 		});
 
-		it("has a Korean name for every built-in model role stock names", () => {
+		it("has a Korean name and words for every built-in model role stock names", () => {
 			expect(facts.roleNames.length).toBeGreaterThan(0);
-			expect(missingStrings(diffs, ["roles.name"])).toEqual([]);
+			expect(missingStrings(diffs, ["roles.name", "roles.use", "roles.fallback"])).toEqual([]);
 			expect(
 				facts.roleNames.every(
 					name =>
