@@ -78,6 +78,13 @@ pub(super) enum Notification {
     Title(String),
 }
 
+#[cfg(feature = "test-automation")]
+pub(super) fn fingerprint(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
 impl BindingContexts {
     pub(super) fn observe(&mut self, event: &Event) {
         let Some(session) = event.session_id.as_deref() else {
@@ -102,12 +109,24 @@ impl BindingContexts {
                         .entry(session.to_owned())
                         .or_default()
                         .insert(id, frame.to_owned());
+                    #[cfg(feature = "test-automation")]
+                    crate::log::log(
+                        "preview.title.world",
+                        serde_json::json!({"change":"created","session":session,"context":id,"frame":frame}),
+                    );
                 }
             }
             "Runtime.executionContextDestroyed" => {
                 if let Some(id) = event.params["executionContextId"].as_i64()
                     && let Some(contexts) = self.sessions.get_mut(session)
                 {
+                    #[cfg(feature = "test-automation")]
+                    if contexts.contains_key(&id) {
+                        crate::log::log(
+                            "preview.title.world",
+                            serde_json::json!({"change":"destroyed","session":session,"context":id}),
+                        );
+                    }
                     contexts.remove(&id);
                 }
             }
@@ -117,6 +136,13 @@ impl BindingContexts {
     }
 
     pub(super) fn detached(&mut self, session: &str) {
+        #[cfg(feature = "test-automation")]
+        if let Some(worlds) = self.sessions.get(session) {
+            crate::log::log(
+                "preview.title.world",
+                serde_json::json!({"change":"cleared-or-detached","session":session,"dropped":worlds.len()}),
+            );
+        }
         self.sessions.remove(session);
     }
 
@@ -133,6 +159,29 @@ impl BindingContexts {
         }
         let session = event.session_id.as_deref()?;
         let context = event.params["executionContextId"].as_i64()?;
+        #[cfg(feature = "test-automation")]
+        if let Some(title) = event.params["payload"]
+            .as_str()
+            .and_then(initialize::observed_title)
+        {
+            let worlds = self.sessions.get(session);
+            let frame = worlds.and_then(|worlds| worlds.get(&context));
+            let decision = match (worlds, frame) {
+                (None, _) => "no-worlds",
+                (_, None) => "unknown-context",
+                _ if session != primary => "not-primary",
+                _ if root != frame.map(String::as_str) => "not-root",
+                _ => "accepted",
+            };
+            crate::log::log(
+                "preview.title.binding",
+                serde_json::json!({
+                    "decision":decision,"session":session,"context":context,
+                    "frame":frame,"root":root,"worldCount":worlds.map_or(0, HashMap::len),
+                    "hash":format!("{:016x}", fingerprint(&title))
+                }),
+            );
+        }
         let frame = self.sessions.get(session)?.get(&context)?;
         match event.params["payload"].as_str()? {
             "text" => Some(Notification::Text),

@@ -1780,7 +1780,16 @@ async fn invalidate_document(entry: &Entry, wc: u64) {
     }
 }
 async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
+    #[cfg(feature = "test-automation")]
+    let mut handling = (String::new(), Instant::now());
     loop {
+        #[cfg(feature = "test-automation")]
+        if handling.1.elapsed() >= Duration::from_millis(500) {
+            crate::log::log(
+                "preview.event.slow",
+                json!({"method":handling.0,"elapsedMs":handling.1.elapsed().as_millis()}),
+            );
+        }
         let mut event = match receive.recv().await {
             Ok(event) => event,
             Err(error) => {
@@ -1798,6 +1807,12 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                 return;
             }
         };
+        #[cfg(feature = "test-automation")]
+        {
+            handling.1 = Instant::now();
+            handling.0.clear();
+            handling.0.push_str(&event.method);
+        }
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 let detached = pages.routes.lock().expect("Preview routes").remove(session);
@@ -1991,14 +2006,24 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                 Some(contexts::Notification::Title(title)) => {
                     let changed = {
                         let mut registry = runtime().registry.lock().expect("registry");
-                        registry.current(identity)
+                        let current = registry.current(identity);
+                        let changed = current
                             && registry.page_mut(route.wc).is_some_and(|page| {
                                 if page.title == title {
                                     return false;
                                 }
                                 page.title.clone_from(&title);
                                 true
-                            })
+                            });
+                        #[cfg(feature = "test-automation")]
+                        crate::log::log(
+                            "preview.title.publish",
+                            json!({
+                                "wcId":route.wc,"identityCurrent":current,"changed":changed,
+                                "hash":format!("{:016x}", contexts::fingerprint(&title))
+                            }),
+                        );
+                        changed
                     };
                     if changed {
                         wc_state(route.wc);
@@ -2421,6 +2446,11 @@ async fn refresh_state(entry: &Entry, wc: u64) {
             if let Some(page) = runtime().registry.lock().expect("registry").page_mut(wc) {
                 page.title = title.to_owned();
             }
+            #[cfg(feature = "test-automation")]
+            crate::log::log(
+                "preview.title.refresh",
+                json!({"wcId":wc,"hash":format!("{:016x}", contexts::fingerprint(title))}),
+            );
             wc_state(wc);
             wc_event(wc, "page-title-updated", json!([title, true]));
         }
