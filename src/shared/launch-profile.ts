@@ -58,34 +58,34 @@ export const DENYLISTED_FLAGS: readonly string[] = [
 
 const DENYLISTED: Record<string, true> = Object.fromEntries(DENYLISTED_FLAGS.map(flag => [flag, true]));
 
-/** Denylisted flags that consume a separate value token (--flag value). The
- * rest are boolean switches; --resume/--session take an optional value and
- * are treated as value-taking so a smuggled value never survives as a stray
- * positional argument. */
-const DENYLISTED_WITH_VALUE: Record<string, true> = {
-	"--session": true,
+/** Flags whose next token is always their value, even a flag-looking one: stock `STRING_VALUE_FLAGS`
+ * (`cli/flag-tables`), held for the denylisted flags and those `profileToFlags` emits, because this must run
+ * before omp starts and in the renderer's launch-command preview. The value of a kept one is DATA (a prompt, a
+ * path, a tool list), never inspected as a smuggled flag: a prompt that happens to be "--session" is a value, as
+ * stock reads it. Pinned to stock `flagConsumesValue` by `src/main/launch-profile-stock.test.ts`. */
+const VALUED_FLAGS: Record<string, true> = {
 	"--mode": true,
 	"--export": true,
 	"--cwd": true,
-	"--resume": true,
 	"--fork": true,
 	"--api-key": true,
-};
-
-/** Non-denylisted flags that consume a separate value token. The value of one
- * of these is DATA (a prompt, a path, a tool list) and must never be inspected
- * as a potential smuggled flag — a prompt that happens to be "--session" is a
- * legitimate value, not an override. Mirrors stock cli/flag-tables; this must
- * run before omp starts and in the renderer's launch-command preview. */
-const VALUED_FLAGS: Record<string, true> = {
 	"--system-prompt": true,
 	"--append-system-prompt": true,
 	"--add-dir": true,
 	"--tools": true,
-	"--profile": true,
 	"--session-dir": true,
 	"--config": true,
 };
+
+/** Flags that take the next token only when it is value-like and not empty: stock `OPTIONAL_VALUE_FLAGS`. */
+const OPTIONAL_VALUE_FLAGS: Record<string, true> = { "--session": true, "--resume": true };
+
+/** Whether stock reads `next` as the value of the bare flag `name` (stock `flagConsumesValue`). */
+function consumesValue(name: string, next: string | undefined): boolean {
+	if (next === undefined) return false;
+	if (VALUED_FLAGS[name] === true) return true;
+	return OPTIONAL_VALUE_FLAGS[name] === true && next !== "" && !next.startsWith("-");
+}
 
 /** Drop denylisted flags (and their separate value tokens) from a flag list.
  * Handles both `--flag value` and `--flag=value` forms. Pair-aware: the value
@@ -102,23 +102,15 @@ export function stripDenylistedFlags(flags: readonly string[]): string[] {
 		const eq = token.indexOf("=");
 		const name = eq === -1 ? token : token.slice(0, eq);
 		if (DENYLISTED[name] === true) {
-			// `--flag value`: the value rides with the flag unless the next token is
-			// itself flag-looking (then the flag is treated as valueless). The
-			// `--flag=value` form carries its value in the dropped token already.
-			if (eq === -1 && DENYLISTED_WITH_VALUE[name] === true) {
-				const next = flags[i + 1];
-				if (next !== undefined && !next.startsWith("-")) i++;
-			}
+			// `--flag value`: the value goes with the flag. `--flag=value` carries it in the dropped token already.
+			if (eq === -1 && consumesValue(name, flags[i + 1])) i++;
 			continue;
 		}
 		out.push(token);
 		// Value position of a valued non-denylisted flag is opaque data.
-		if (eq === -1 && VALUED_FLAGS[name] === true) {
-			const next = flags[i + 1];
-			if (next !== undefined) {
-				out.push(next);
-				i++;
-			}
+		if (eq === -1 && consumesValue(name, flags[i + 1])) {
+			out.push(flags[i + 1]);
+			i++;
 		}
 	}
 	return out;
