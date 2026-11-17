@@ -1909,7 +1909,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary: "Provider id to mark and company presentation table; a new provider id needs an entry.",
 		files: ["src/renderer/components/settings/providers/provider-marks.ts"],
-		stock: ["provider ids", "@oh-my-pi/pi-catalog compat/auth-ids"],
+		stock: ["provider ids", "@oh-my-pi/pi-catalog compat/auth authProviders, compat/providers providerEntries"],
 		tests: ["src/renderer/components/settings/providers/provider-marks.test.tsx"],
 		changes: [
 			"41312bc8 omp 18.18.5 added otari",
@@ -1929,6 +1929,32 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: [
 			"src/main/model-roles-stock-coverage.test.ts",
 			"src/renderer/components/settings/fallback-chains.test.ts",
+		],
+	},
+	{
+		id: "U07",
+		area: "settings",
+		contract: "internal",
+		summary:
+			"Reads an installed omp's settings words, model roles, provider ids and Visuals template variables and diffs them against every dictionary OMPdesk keeps for them; `extract.ts --check` fails on the strings the completeness tests require.",
+		files: [
+			"scripts/omp-bump/stock-facts.ts",
+			"scripts/omp-bump/dictionaries.ts",
+			"scripts/omp-bump/extract.ts",
+			"resources/gui-bridge/settings-core.ts",
+		],
+		stock: [
+			"@oh-my-pi/pi-coding-agent/config/all-settings",
+			"@oh-my-pi/pi-coding-agent/config/model-roles",
+			"@oh-my-pi/pi-catalog/compat/auth",
+			"@oh-my-pi/pi-catalog/compat/providers",
+			"<package>/package.json version",
+			"system/system-prompt.md Visuals block",
+		],
+		tests: [
+			"scripts/omp-bump/extract.test.ts",
+			"src/renderer/components/settings/schema-ko-stock.test.ts",
+			"src/renderer/components/settings/providers/provider-marks.test.tsx",
 		],
 	},
 	{
