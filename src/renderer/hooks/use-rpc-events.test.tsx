@@ -430,6 +430,32 @@ it("does not roll a ready task back to starting when its older startup snapshot 
 	expect(messages.getState().messages).toMatchObject([{ content: "History loaded after ready" }]);
 });
 
+it("keeps the transcript a restored ghost tab paints when the window's startup snapshot says its omp is starting", async () => {
+	installTabRoutedMockOmp();
+	// Main answers for the window's real tab, which the ghost stands in for until the tab list adopts it.
+	vi.spyOn(window.omp.sidecar, "getStatus").mockResolvedValue({ status: "starting", cwd: "/alpha" });
+	useTabsStore.setState({
+		tabs: [
+			{
+				id: "ghost",
+				kind: "agent",
+				cwd: "/alpha",
+				status: "starting",
+				unreadDone: false,
+				sessionPath: "/alpha/session.jsonl",
+				ghost: true,
+			},
+		],
+		activeTabId: "ghost",
+	});
+	ensureTabRuntime("ghost");
+	setFocusedSessionRuntime("ghost");
+	const messages = sessionRuntimeStore<MessagesStore>("ghost", "messages")!;
+	messages.getState().appendMessage({ role: "user", content: "Last run's rows", timestamp: 1 });
+	await mount(<RpcEventsProbe />);
+	expect(messages.getState().messages).toMatchObject([{ content: "Last run's rows" }]);
+});
+
 const assistantMessage: AgentMessage = { role: "assistant", content: [], timestamp: Date.now() };
 
 afterEach(async () => {
