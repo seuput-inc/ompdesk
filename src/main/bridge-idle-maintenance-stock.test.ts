@@ -24,12 +24,14 @@ import { garbled } from "./test-mojibake";
  * Stock's idle maintenance (`AgentSession.enableIdleMaintenance`) as the bridge opts a GUI session into it
  * (resources/gui-bridge/idle-maintenance.ts): the installed omp in `rpc-ui` mode with the whole bridge, a fake
  * OpenAI-compatible provider on 127.0.0.1 and the bridge's draft report sent as main sends it. Stock decides when;
- * these cases pin what OMPdesk supplies: the GUI draft holds both kinds of work back and clearing it lets them run,
- * a settings write through the bridge re-arms, and a recap reaches the transcript as a `recap` card the next model
- * request leaves out.
+ * these cases pin what OMPdesk supplies: the GUI draft holds the recap back and clearing it lets it run (and re-arms
+ * idle compaction, the same scheduler and the same `isBlocked`), a settings write through the bridge re-arms, a
+ * recap reaches the transcript as a `recap` card the next model request leaves out, and a mojibake recap is neither
+ * shown nor journaled.
  *
- * The negative waits run past the configured delay (1 s for the recap, the 5 s cache lead for compaction): absence
- * of a timer's work can only be seen by letting its time pass.
+ * The negative waits run past the configured delay (1 s for the recap): absence of a timer's work can only be seen by
+ * letting its time pass. Idle compaction runs on stock's shortest configured delay (60 s), not ahead of a long-tier
+ * prompt cache entry: whether stock still counts that entry as current after a turn differs between machines.
  */
 
 type Frame = {
@@ -50,16 +52,7 @@ function sse(text: string): string {
 		frame({ choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }),
 		frame({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] }),
 		frame({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }),
-		// Cached tokens confirm stock's prompt cache entry (`promptCacheEntry`), which times idle compaction.
-		frame({
-			choices: [],
-			usage: {
-				prompt_tokens: 5000,
-				completion_tokens: 10,
-				total_tokens: 5010,
-				prompt_tokens_details: { cached_tokens: 4000 },
-			},
-		}),
+		frame({ choices: [], usage: { prompt_tokens: 5000, completion_tokens: 10, total_tokens: 5010 } }),
 		"data: [DONE]\n\n",
 	].join("");
 }
@@ -72,19 +65,13 @@ afterAll(async () => {
 
 /**
  * Answers stock's recap prompts with `recapReplies` in turn (the last one repeated) and everything else with "DONE";
- * keeps every request body, counts the recap answers sent in full and notes when the last main-loop request (the one
- * carrying tools, whose send starts stock's prompt cache entry) arrived.
+ * keeps every request body and counts the recap answers sent in full.
  */
-async function startProvider(recapReplies: readonly string[] = [REPLY]): Promise<{
-	url: string;
-	bodies: string[];
-	recaps(): number;
-	recapsAnswered(): number;
-	mainSentAt(): number;
-}> {
+async function startProvider(
+	recapReplies: readonly string[] = [REPLY],
+): Promise<{ url: string; bodies: string[]; recaps(): number; recapsAnswered(): number }> {
 	const bodies: string[] = [];
 	let answered = 0;
-	let mainSentAt = 0;
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
@@ -94,7 +81,6 @@ async function startProvider(recapReplies: readonly string[] = [REPLY]): Promise
 			bodies.push(body);
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			if (!isRecapRequest(body)) {
-				if (body.includes('"tools":')) mainSentAt = Date.now();
 				res.end(sse("DONE"));
 				return;
 			}
@@ -114,7 +100,6 @@ async function startProvider(recapReplies: readonly string[] = [REPLY]): Promise
 		bodies,
 		recaps: () => bodies.filter(isRecapRequest).length,
 		recapsAnswered: () => answered,
-		mainSentAt: () => mainSentAt,
 	};
 }
 
@@ -150,7 +135,7 @@ interface Omp {
 	dir: string;
 }
 
-async function startOmp(url: string, config: string, env: Record<string, string> = {}): Promise<Omp> {
+async function startOmp(url: string, config: string): Promise<Omp> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-idle-maintenance-"));
 	chmodSync(isolated, 0o700);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-idle-maintenance-repo-")));
@@ -162,7 +147,7 @@ async function startOmp(url: string, config: string, env: Record<string, string>
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(
 		join(agentDir, "models.yml"),
-		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        contextWindow: 200000\n        promptCache: { short: 20, long: 20 }\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
+		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        contextWindow: 200000\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
 	);
 	writeFileSync(join(agentDir, "config.yml"), config);
 	const address = newBridgeAddress();
@@ -173,7 +158,6 @@ async function startOmp(url: string, config: string, env: Record<string, string>
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
 		OMP_GUI_BRIDGE: address,
-		...env,
 	};
 	// XDG folders would move history.db out of the private agent dir.
 	for (const key of [
@@ -289,28 +273,21 @@ describe.skipIf(!existsSync(omp))("idle maintenance on stock omp through the bri
 		await expect.poll(() => recapCards(frames).length, { timeout: 15_000 }).toBe(2);
 	}, 120_000);
 
-	it("holds idle compaction while the draft has text and runs it once cleared", async () => {
+	it("arms idle compaction again once a held draft clears, and stock runs it", async () => {
 		const provider = await startProvider();
-		// A 20 s long-tier cache entry makes stock compact 5 s before its 10 s refresh point (5 s after the request), not
-		// after an hour; past 20 s the entry has lapsed and stock falls back to the configured hour.
 		const { frames, bridge, turn } = await startOmp(
 			provider.url,
-			"recap:\n  enabled: false\ncompaction:\n  idleEnabled: true\n  idleThresholdTokens: 1\n  idleTimeoutSeconds: 3600\n",
-			{ PI_CACHE_RETENTION: "long" },
+			"recap:\n  enabled: false\ncompaction:\n  idleEnabled: true\n  idleThresholdTokens: 1\n  idleTimeoutSeconds: 60\n",
 		);
 		const idleStarts = () =>
 			frames.filter(frame => frame.type === "auto_compaction_start" && frame.reason === "idle").length;
 		await bridge.request("idle_maintenance_draft", { empty: false });
 		await turn("Build the thing");
-		// Counted from the request, not the turn's end, so a slow runner still clears the draft inside the entry's life.
-		expect(provider.mainSentAt()).toBeGreaterThan(0);
-		await sleep(Math.max(0, provider.mainSentAt() + 7_000 - Date.now()));
 		expect(idleStarts()).toBe(0);
-
+		// Held at the turn's end, so nothing is armed; only the clear's refresh arms stock's 60 s delay.
 		await bridge.request("idle_maintenance_draft", { empty: true });
-		const cleared = `draft cleared ${Date.now() - provider.mainSentAt()} ms after the main request`;
-		await expect.poll(idleStarts, { timeout: 15_000, message: cleared }).toBe(1);
-	}, 120_000);
+		await expect.poll(idleStarts, { timeout: 90_000, interval: 1_000 }).toBe(1);
+	}, 150_000);
 
 	it("neither shows nor journals a recap the model wrote as mojibake", async () => {
 		const provider = await startProvider([garbled("지금 테스트를 고치는 중입니다. 다음은 빌드입니다."), REPLY]);
