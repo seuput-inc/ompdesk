@@ -359,7 +359,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // An image card names its provider, model, size and quality under the picture (17 Nov 2026, 14f4f39e5; the image card
 // is on the phone's first screen): measured 2,204,690 (main run 44050798438), 330 bytes over. The budget is that
 // measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_204_770;
+// A tab list answered after a tab's status push keeps what the push said (18 Nov 2026, `stores/tabs.ts` counts the
+// pushes), with the boot status read that keeps the page's seeded stores (20025ddf7, `hooks/use-rpc-events.ts`): measured
+// 2,204,879 (branch run 44144695375), 109 bytes over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_204_959;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
