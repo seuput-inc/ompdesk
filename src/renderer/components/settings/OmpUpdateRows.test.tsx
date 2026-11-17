@@ -135,4 +135,13 @@ describe("OmpUpdateRows", () => {
 		await mount(ompUpdateState({ scheduled: false, latest: null }));
 		expect(nowButton().disabled).toBe(false);
 	});
+
+	it("names the tested omp only while another omp is installed", async () => {
+		await mount(ompUpdateState({ installed: "18.22.0", latest: "18.22.0", tested: "18.22.0" }));
+		expect(document.body.querySelector("[data-testid='omp-tested']")).toBeNull();
+		await push(ompUpdateState({ installed: "18.23.0", latest: "18.23.0", tested: "18.22.0" }));
+		expect(document.body.querySelector("[data-testid='omp-tested']")?.textContent).toBe(
+			translate("ompUpdate.tested", { version: "18.22.0" }),
+		);
+	});
 });
