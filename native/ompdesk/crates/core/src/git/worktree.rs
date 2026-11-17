@@ -533,3 +533,57 @@ pub async fn session_remove(
     }
     Ok(())
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::git::run::tests::git;
+    use crate::git::scm::tests::{repo, sh};
+
+    /// omp's service broker takes its omp's working folder and stays about 3 s after the tab's omp exits, so a worktree
+    /// removed right after its tab closed is still some process's working folder. The holder here is that process:
+    /// its lifetime (`ping` for about 2 s) is the clock being modelled, nothing the test waits out on its own.
+    #[tokio::test]
+    async fn removes_a_worktree_a_process_still_holds_as_its_working_folder() {
+        let primary = repo("held-worktree");
+        let tree = primary.with_file_name(format!(
+            "{}-tree",
+            primary.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&tree);
+        sh(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "held",
+                tree.to_str().unwrap(),
+            ],
+        );
+        let mut holder = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 3 127.0.0.1 >NUL"])
+            .current_dir(&tree)
+            .spawn()
+            .unwrap();
+        let removed = remove(
+            &git(),
+            primary.to_str().unwrap(),
+            tree.to_str().unwrap(),
+            60_000,
+        )
+        .await;
+        let _ = holder.wait();
+        let listed = sh(&primary, &["worktree", "list", "--porcelain"]);
+        assert!(
+            removed.is_ok(),
+            "{:?}; folder left: {}; listed: {listed}",
+            removed.as_ref().err().map(|fault| &fault.message),
+            tree.exists()
+        );
+        assert!(!tree.exists());
+        assert!(!listed.contains("held"), "{listed}");
+        let _ = std::fs::remove_dir_all(&primary);
+    }
+}
