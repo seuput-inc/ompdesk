@@ -701,9 +701,7 @@ pub async fn force_remove(git: &Git, primary: &str, path: &str) -> Result<Option
         timeout_ms: Some(SLOW_MS),
         ..Opts::default()
     };
-    let removed = git
-        .run(primary, &["worktree", "remove", "--force", path], opts)
-        .await?;
+    let removed = crate::git::worktree::git_remove(git, primary, &["--force"], path, opts).await?;
     Ok((removed.code != 0).then(|| js_trim(&removed.stderr).to_owned()))
 }
 

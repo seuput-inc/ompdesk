@@ -314,6 +314,86 @@ pub async fn removal(git: &Git, path: &str, force: bool) -> Result<Removal, Faul
     Ok(Removal { primary })
 }
 
+/// omp's service broker keeps its project's folder as its working folder for 3 s after the project's last omp exits
+/// (stock launch/broker.ts `DEFAULT_IDLE_GRACE_MS`); a removal right after a tab closed waits that out, with room.
+#[cfg(windows)]
+const HELD_FOLDER_MS: u64 = 10_000;
+
+/// `git worktree remove <flags> <target>`, every removal of a session's checkout. On Windows git cannot delete a folder
+/// some process still has as its working folder (omp's service broker in the moments after its tab closed): it empties
+/// the folder, drops the worktree from its list ("there's no going back from here", builtin/worktree.c) and fails with
+/// `failed to delete '<folder>': Permission denied` after well under a second. The folder left behind, no longer a
+/// worktree, is then removed once its holder lets go (within `HELD_FOLDER_MS`), and the answer is git's success; a
+/// holder that stays past that keeps git's failure. A worktree git still lists is never touched here.
+pub(crate) async fn git_remove(
+    git: &Git,
+    primary: &str,
+    flags: &[&str],
+    target: &str,
+    opts: Opts<'_>,
+) -> Result<Output, Fault> {
+    let mut args = vec!["worktree", "remove"];
+    args.extend_from_slice(flags);
+    args.push(target);
+    let output = git.run(primary, &args, opts).await?;
+    #[cfg(windows)]
+    if output.code != 0 && left_behind(git, primary, target).await? {
+        let folder = std::path::PathBuf::from(target);
+        if blocking(move || remove_when_free(&folder)).await? {
+            return Ok(Output {
+                code: 0,
+                stdout: Vec::new(),
+                stderr: String::new(),
+                truncated: false,
+            });
+        }
+    }
+    Ok(output)
+}
+
+/// `target` is still there and git no longer lists it as a worktree of `primary`.
+#[cfg(windows)]
+async fn left_behind(git: &Git, primary: &str, target: &str) -> Result<bool, Fault> {
+    let list = git
+        .raw(primary, &["worktree", "list", "--porcelain", "-z"])
+        .await?;
+    if list.code != 0 {
+        return Ok(false);
+    }
+    let listed: Vec<String> = parse::worktree_paths(&list.text())
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let target = target.to_owned();
+    blocking(move || {
+        let Ok(own) = real(&target) else {
+            return false;
+        };
+        !listed
+            .iter()
+            .any(|path| real(path).is_ok_and(|path| path == own))
+    })
+    .await
+}
+
+/// Removes `folder` (never following a link out of it) once no process holds it, trying until `HELD_FOLDER_MS` ran out:
+/// the holder's exit has no event to wait on.
+#[cfg(windows)]
+fn remove_when_free(folder: &Path) -> bool {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_millis(HELD_FOLDER_MS);
+    let scope = crate::server::Scope::detached();
+    loop {
+        if crate::disk::tree::remove(folder, false, &scope).is_ok() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// `worktree remove --force` with its own timeout, which a person sees refused with git's reason.
 async fn remove_worktree(
     git: &Git,
@@ -325,8 +405,7 @@ async fn remove_worktree(
         timeout_ms: Some(timeout_ms),
         ..Opts::default()
     };
-    git.run(primary, &["worktree", "remove", "--force", target], opts)
-        .await
+    git_remove(git, primary, &["--force"], target, opts).await
 }
 
 #[derive(Serialize)]

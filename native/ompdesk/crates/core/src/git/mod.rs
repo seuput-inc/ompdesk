@@ -24,7 +24,7 @@ mod scm;
 mod seed;
 mod triggers;
 mod unlanded;
-mod worktree;
+pub(crate) mod worktree;
 
 use serde::Deserialize;
 

@@ -879,9 +879,7 @@ pub async fn remove_linked(git: &Git, base_cwd: &str, path: &str) -> Result<Opti
     if !linked.contains(&wanted) {
         return Ok(None);
     }
-    let removed = git
-        .run(primary, &["worktree", "remove", &wanted], slow())
-        .await?;
+    let removed = super::worktree::git_remove(git, primary, &[], &wanted, slow()).await?;
     Ok((removed.code == 0).then(|| primary.clone()))
 }
 

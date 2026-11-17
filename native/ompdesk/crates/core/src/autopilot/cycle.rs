@@ -1615,9 +1615,7 @@ impl Coordinator {
         if dirty.is_none_or(|dirty| dirty.code != 0 || !js_trim(&dirty.text()).is_empty()) {
             return;
         }
-        let _ = git
-            .run(&root, &["worktree", "remove", worktree], slow())
-            .await;
+        let _ = crate::git::worktree::git_remove(&git, &root, &[], worktree, slow()).await;
     }
 
     // ---- the release run --------------------------------------------------------------------------------------
