@@ -2119,17 +2119,17 @@ describe("LocalHostServices", () => {
 		const context = setup();
 		const window = new FakeHostSidecar(workDir, "agent");
 		context.local.views.set("/s/shared.jsonl", window);
+		context.local.owned.set("/s/shared.jsonl", { tabId: "w1", winId: 1 });
 		const x = peer("device-x");
 		const marker = { tab: "peer:device-x:t1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/shared.jsonl" };
-		expect(context.services.reviveTab(x, marker)).toBe("peer:device-x:t1");
+		// The relaunch's continuation runs in the window's tab: the resume reads that tab's facts, and the device's tab,
+		// a view, has none (a continuation keyed to it was dropped by the next sync: the Mac mini, 17 Nov 2026, 10:46Z).
+		expect(context.services.reviveTab(x, marker)).toBe("w1");
+		expect(context.services.resumeFacts()).toEqual([]);
 		expect(context.sidecars).toEqual([]);
 		expect(context.local.viewed).toEqual([
 			{ origin: { deviceId: "device-x", name: "device-x" }, hostName: "Host B" },
 		]);
-
-		// The relaunch's continuation starts the window's omp, on the session the window holds.
-		expect(context.services.startTab("peer:device-x:t1")).toBe(window);
-		expect(window.started).toHaveLength(1);
 		window.setStatus("ready");
 
 		// The device comes back to the tab it had: it views that same omp.
@@ -2152,6 +2152,21 @@ describe("LocalHostServices", () => {
 		expect(fresh).toMatchObject({ attached: true });
 		expect(context.services.startTab("peer:device-x:t1")).toBe(window);
 		expect(context.sidecars).toEqual([]);
+	});
+
+	it("continues a device's revived turn on a session another device's tab here runs in that tab, whose facts the resume reads", async () => {
+		const context = setup();
+		const x = new FakeConnection(peer("device-x"));
+		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
+		await context.services.call(x.peer, "tab.start", { rtab: "t1" }, x);
+		const holder = context.sidecars[0];
+		if (!holder) throw new Error("expected a sidecar");
+		holder.setStatus("ready");
+		holder.emit("session", { sessionId: "s1", sessionFile: "/s/held.jsonl" });
+		const marker = { tab: "peer:device-y:u1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/held.jsonl" };
+		expect(context.services.reviveTab(peer("device-y"), marker)).toBe("peer:device-x:t1");
+		expect(context.services.resumeFacts().map(fact => fact.tabId)).toEqual(["peer:device-x:t1"]);
+		expect(context.sidecars).toHaveLength(1);
 	});
 
 	it("joins a device's new tab, and a window, to the omp its revived turn runs when no window held the session", async () => {

@@ -1142,20 +1142,29 @@ export class LocalHostServices implements HostServices {
 	 * After a crash or quit: the tab a marker names, again, not yet started and waiting for its
 	 * device like a dropped connection's (grace period). The device's `tab.open` re-attaches it.
 	 * A session a window's tab here (restored by the same relaunch) or another device's tab already holds is viewed,
-	 * as the device's own open would: the turn continues in that omp. Null when the marker's id is not a tab of `peer`'s.
+	 * as the device's own open would. Answers the tab whose omp continues the turn: the revived tab, or for a view the
+	 * tab it views, because a view has no resume facts and a continuation keyed to it would be dropped as a closed tab's.
+	 * Null when the marker's id is not a tab of `peer`'s.
 	 */
 	reviveTab(peer: PeerInfo, marker: Pick<ResumeMarker, "tab" | "cwd" | "kind" | "sessionPath">): string | null {
 		const prefix = resumeId(peer.deviceId, "");
 		const rtab = marker.tab.startsWith(prefix) ? marker.tab.slice(prefix.length) : "";
 		if (!Rtab.safeParse(rtab).success) return null;
 		const existing = this.#tabs.get(this.#key(peer.deviceId, rtab));
-		if (existing) return existing.resumeId;
+		if (existing) return this.#continuesIn(existing);
 		const holder = marker.sessionPath ? this.#holderView(peer, marker.sessionPath) : null;
 		const tab = holder
 			? this.#createTab(peer, rtab, holder.sidecar.cwd, holder.sidecar.kind, false, marker.sessionPath, null, holder)
 			: this.#createTab(peer, rtab, marker.cwd, marker.kind, false, marker.sessionPath, null);
 		this.#startGrace(tab);
-		return tab.resumeId;
+		return this.#continuesIn(tab);
+	}
+
+	/** The tab whose omp runs `tab`'s turns, by the id the resume knows it by: a view's holder, else `tab` itself. */
+	#continuesIn(tab: HostTab): string | null {
+		if (typeof tab.viewing === "object") return tab.viewing.resumeId;
+		if (tab.viewing !== "window") return tab.resumeId;
+		return tab.sessionFile ? (this.#deps.localTabs.sessionOwner(tab.sessionFile)?.tabId ?? null) : null;
 	}
 
 	async call(peer: PeerInfo, method: string, params: unknown, conn: HostConnection): Promise<unknown> {

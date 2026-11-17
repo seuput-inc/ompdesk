@@ -2309,9 +2309,26 @@ impl Inst {
             }
             self.log("marker", details);
             let Some(tab) = tab_id else { continue };
+            // A device's turn revived on a session this computer's own tab holds is that tab's (`reviveTab` answers the
+            // holder), beside any marker of the holder's own: the tab continues once.
+            if resumable.iter().any(|(held, _)| *held == tab) {
+                continue;
+            }
             resumable.push((tab.clone(), action));
+            // An opened tab may be another's than the marker's (a window's tab for a device's turn): the marker becomes
+            // that tab's, so a relaunch before the turn goes on looks for it there.
+            let peer = if found.is_none() && unwritten.is_none() {
+                let env = self.look(Some(&tab), &["fact"]).await?;
+                self.stretch(env, |me| me.fact_for(&tab)).map_or_else(
+                    || marker.peer.clone(),
+                    |fact| fact.peer.filter(|peer| !peer.is_empty()),
+                )
+            } else {
+                marker.peer.clone()
+            };
             let next = self.marker(MarkerData {
                 tab: tab.clone(),
+                peer,
                 ..marker.clone()
             });
             self.st.borrow_mut().pending.insert(tab, next);

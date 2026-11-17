@@ -351,6 +351,8 @@ function setup(
 		goalSettled?: (tabId: string, outcome: GoalSettlement) => void;
 		/** The real connectivity monitor in place of the scripted `net` (whose `online` it then drives). */
 		network?: ResumeDeps["network"];
+		/** The tab `openTab` answers (main's: a device's turn revived on a session a window's tab here holds is that tab's). */
+		openTab?: (marker: ResumeMarker) => string | null;
 	} = {},
 ): Harness {
 	const dir = mkdtempSync(join(tmpdir(), "ompdesk-resume-"));
@@ -433,6 +435,7 @@ function setup(
 		now: () => 1_000,
 		openTab: markerToOpen => {
 			state.opened.push(markerToOpen);
+			if (options.openTab) return options.openTab(markerToOpen);
 			facts.push(fact({ tabId: "opened", sessionFile: markerToOpen.sessionPath }));
 			return "opened";
 		},
@@ -680,6 +683,32 @@ describe("TurnResume launch", () => {
 		h.resume.launch();
 		await settle();
 		expect(h.state.opened).toEqual([marker({ tab: "peer:device-a:r1", peer: "device-a" })]);
+		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+	});
+
+	it("continues a device's turn in the window's tab that holds its session, and keeps its marker on that tab", async () => {
+		// The relaunch restored a window's tab on the session, so the device's revived tab views that tab's omp
+		// (`LocalHostServices.reviveTab` answers the window's tab).
+		h = setup({ answers: { restore_interrupted: RESTORED }, status: "starting", openTab: () => "t1" });
+		h.facts.push(fact({ tabId: "t1" }));
+		new InterruptedTurnStore(h.file).write([marker({ tab: "peer:device-a:r1", peer: "device-a" })]);
+		h.resume.launch();
+		await settle();
+		// While the omp comes up the marker is the window tab's own, so a relaunch now continues it there.
+		expect(h.store.read()).toEqual([marker({ tab: "t1" })]);
+		h.setStatus("ready");
+		await settle();
+		expect(h.started).toEqual(["t1"]);
+		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+		expect(h.logs.at(-1)).toMatchObject(["continue", { tab: "t1", restored: "turn", started: true }]);
+	});
+
+	it("continues a session's turn once when its window tab's marker and a device's revived one name the same tab", async () => {
+		h = setup({ answers: { restore_interrupted: RESTORED }, openTab: () => "t1" });
+		h.facts.push(fact({ tabId: "t1" }));
+		new InterruptedTurnStore(h.file).write([marker(), marker({ tab: "peer:device-a:r1", peer: "device-a" })]);
+		h.resume.launch();
+		await settle();
 		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
 	});
 
