@@ -37,7 +37,9 @@ const PRELOAD_OUTPUT = { format: "cjs", banner: "(() => {", footer: "})();" } as
  * Builds `src/preload/<name>.ts` into `out/preload/<name>.js` as a second, single-entry bundle once the main preload
  * build is written. Rollup splits modules two entries share (`createOmpApi`, `describePreloadFailure`) into a chunk
  * either entry would `require()`, and a page script cannot; one entry per bundle inlines everything. A watch build
- * (`bun run dev`) also rebuilds when the entry changes: everything else it imports, the main preload imports too.
+ * (`bun run dev`) also rebuilds when the entry changes: everything else it imports, the main preload imports too. It
+ * runs in `writeBundle`, so a failure is the watch build's own error; thrown from `closeBundle`, which Vite's watcher
+ * calls without awaiting, it ended the dev run.
  */
 function separatePreload(name: string): Plugin {
 	let outDir = "";
@@ -50,8 +52,7 @@ function separatePreload(name: string): Plugin {
 		buildStart() {
 			this.addWatchFile(resolve(__dirname, `src/preload/${name}.ts`));
 		},
-		async closeBundle(error) {
-			if (error) return;
+		async writeBundle() {
 			const { build } = await import("vite");
 			await build({
 				configFile: false,
