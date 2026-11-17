@@ -994,3 +994,28 @@ jobs:
         run: bash scripts/ci-failure.sh
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Old releases go once a new one is out (the owner's rule, 17 Nov 2026): the newest three stay, and so does every
+  # release a check or script downloads by its tag (.github/release-keep.json, pinned by scripts/release-keep.test.ts).
+  # Only the release and its assets go; the git tag stays. A dry run prints what would go. Its own job, so a failed
+  # prune never turns a published release's run red at `publish`.
+  prune:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          sparse-checkout: |
+            .github/release-keep.json
+            scripts/release-prune.sh
+          sparse-checkout-cone-mode: false
+      - name: Delete old releases, keeping their tags
+        run: bash scripts/release-prune.sh ${{ inputs.dry_run == true && '--dry-run' || '' }}
