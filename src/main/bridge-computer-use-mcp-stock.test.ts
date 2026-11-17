@@ -3,21 +3,25 @@
  * manager, mounted with `-e` and its command from `OMP_GUI_AGENT_DESKTOP` as in a session OMPdesk spawns:
  * - the startup check (resources/gui-bridge/modes/computer-use-core.ts `checkServer`), read once the omp has started its
  *   MCP servers. A stand-in stdio server plays agent-desktop (the real one is not needed to pin what stock reports):
- *   one that answers, one that does not exist, one that exits at once, one that never answers. Skipped on Windows (the
- *   stand-in is a shell script).
- * - the request deadline stock gives agent-desktop's calls, which needs no server and runs on Windows too.
+ *   one that answers, one that does not exist, one that exits at once, one that never answers. On Windows the
+ *   stand-in is a compiled exe, as agent-desktop is (`writeFakeBin`).
+ * - the request deadline stock gives agent-desktop's calls, which needs no server.
  * Skipped without an installed omp.
  */
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AGENT_DESKTOP_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
 import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { RM_TEMP, writeFakeBin } from "./test-fake-omp";
+
+/** A command no machine has: stock's spawn fails at once. */
+const MISSING = join(tmpdir(), "ompdesk-no-such-agent-desktop");
 
 /** Answers `initialize` and `tools/list` like a server that works; `FAKE_MODE` makes it exit or stay silent. */
-const FAKE_SERVER = `#!/usr/bin/env bun
+const FAKE_SERVER = `
 if (process.env.FAKE_MODE === "exit") process.exit(3);
 const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
 let buffer = "";
@@ -72,16 +76,13 @@ interface Probe {
 	ms: number;
 }
 
-function runCheck<T = Probe>(command: (dir: string) => string, mode: string, checkMs: number, probe = PROBE): T {
+function runCheck<T = Probe>(command: string, mode: string, checkMs: number, probe = PROBE): T {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-computer-use-"));
 	chmodSync(isolated, 0o700);
 	try {
 		cpSync(resolve("resources/gui-bridge"), join(isolated, "bridge"), { recursive: true });
 		const extension = join(isolated, "bridge", "check-probe.ts");
 		writeFileSync(extension, probe);
-		const server = join(isolated, "fake-agent-desktop");
-		writeFileSync(server, FAKE_SERVER);
-		chmodSync(server, 0o755);
 		const env: Record<string, string | undefined> = {
 			...process.env,
 			PI_CODING_AGENT_DIR: isolated,
@@ -91,7 +92,7 @@ function runCheck<T = Probe>(command: (dir: string) => string, mode: string, che
 			OPENAI_API_KEY: "probe-not-a-real-key",
 			FAKE_MODE: mode,
 			CHECK_MS: String(checkMs),
-			[AGENT_DESKTOP_ENV]: command(isolated),
+			[AGENT_DESKTOP_ENV]: command,
 		};
 		// An `OMP_MCP_TIMEOUT_MS` of the shell would override every server's own deadline.
 		for (const key of [
@@ -126,42 +127,42 @@ function runCheck<T = Probe>(command: (dir: string) => string, mode: string, che
 	}
 }
 
-describe.skipIf(!existsSync(omp) || process.platform === "win32")(
-	"the agent-desktop check on stock's MCP manager",
-	() => {
-		it("passes a server that answers", () => {
-			const { verdict } = runCheck(dir => join(dir, "fake-agent-desktop"), "", 15_000);
-			expect(verdict).toEqual({ ok: true });
-		}, 130_000);
+describe.skipIf(!existsSync(omp))("the agent-desktop check on stock's MCP manager", () => {
+	let dir = "";
+	let server = "";
+	beforeAll(async () => {
+		dir = mkdtempSync(join(tmpdir(), "ompdesk-fake-agent-desktop-"));
+		server = await writeFakeBin(dir, "fake-agent-desktop", FAKE_SERVER);
+	}, 120_000);
+	afterAll(() => rmSync(dir, RM_TEMP));
 
-		it("fails a command that does not exist, with stock's own error and without waiting out the bound", () => {
-			const { verdict, ms } = runCheck(dir => join(dir, "no-such-agent-desktop"), "", 15_000);
-			expect(verdict.ok).toBe(false);
-			expect(ms).toBeLessThan(15_000);
-		}, 130_000);
+	it("passes a server that answers", () => {
+		const { verdict } = runCheck(server, "", 15_000);
+		expect(verdict).toEqual({ ok: true });
+	}, 130_000);
 
-		it("fails a server that exits at once", () => {
-			const { verdict, ms } = runCheck(dir => join(dir, "fake-agent-desktop"), "exit", 15_000);
-			expect(verdict.ok).toBe(false);
-			expect(ms).toBeLessThan(15_000);
-		}, 130_000);
+	it("fails a command that does not exist, with stock's own error and without waiting out the bound", () => {
+		const { verdict, ms } = runCheck(MISSING, "", 15_000);
+		expect(verdict.ok).toBe(false);
+		expect(ms).toBeLessThan(15_000);
+	}, 130_000);
 
-		it("fails a server that never answers at the bound, as not started in time", () => {
-			const { verdict, ms } = runCheck(dir => join(dir, "fake-agent-desktop"), "silent", 3_000);
-			expect(verdict).toEqual({ ok: false, error: "did not start in time" });
-			expect(ms).toBeGreaterThanOrEqual(3_000);
-		}, 130_000);
-	},
-);
+	it("fails a server that exits at once", () => {
+		const { verdict, ms } = runCheck(server, "exit", 15_000);
+		expect(verdict.ok).toBe(false);
+		expect(ms).toBeLessThan(15_000);
+	}, 130_000);
+
+	it("fails a server that never answers at the bound, as not started in time", () => {
+		const { verdict, ms } = runCheck(server, "silent", 3_000);
+		expect(verdict).toEqual({ ok: false, error: "did not start in time" });
+		expect(ms).toBeGreaterThanOrEqual(3_000);
+	}, 130_000);
+});
 
 describe.skipIf(!existsSync(omp))("agent-desktop's request deadline on stock's MCP manager", () => {
 	it("outlasts agent-desktop's own 30 s waits, which a Windows launch of Notepad runs out before it answers", () => {
-		const probe = runCheck<{ found: boolean; timeout: number | null }>(
-			dir => join(dir, "no-such-agent-desktop"),
-			"",
-			0,
-			CONFIG_PROBE,
-		);
+		const probe = runCheck<{ found: boolean; timeout: number | null }>(MISSING, "", 0, CONFIG_PROBE);
 		expect(probe.found).toBe(true);
 		// Without its own value stock cuts every request off at 30 s, the moment agent-desktop's launch, `wait` and
 		// `--wait-for` give up and answer.
