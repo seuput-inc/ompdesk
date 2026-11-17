@@ -10,7 +10,7 @@
  * the deletion of a branch's copy on origin once it landed there, and a merge that conflicts is aborted so the parent's
  * checkout is never left half merged.
  */
-import type { WorktreeSetupReport } from "../../shared/rpc-types";
+import type { RpcRemoteCopy, RpcSafeRemoval, WorktreeSetupReport } from "../../shared/rpc-types";
 import { CoreError } from "../core/process";
 import { coreGit } from "../local/git/exec";
 import { runWorktreeHook } from "../local/git/worktree-seed";
@@ -66,7 +66,7 @@ export interface BranchEvidence {
 
 export type MergeOutcome =
 	/** `postMerge`: the post-merge hook ran and failed; the merge stays. `remote`: what became of the branch's copy on origin. */
-	| { merged: true; sha: string; summary: string; postMerge?: WorktreeSetupReport; remote?: RemoteCopy }
+	| { merged: true; sha: string; summary: string; postMerge?: WorktreeSetupReport; remote?: RpcRemoteCopy }
 	/** The pre-merge hook failed or timed out: `git merge` never started. */
 	| { merged: false; reason: "hook"; hook: WorktreeSetupReport }
 	/** `predicted`: found by `merge-tree` before any merge ran, so the parent's checkout was never touched. */
@@ -164,21 +164,6 @@ export function landingFacts(worktree: WorktreeRef): Promise<LandingFacts> {
 export type WorktreeRemoval = "removed" | "branch-kept" | null;
 
 /**
- * What became of a session branch's copy on origin (`drop_landed_remote` in `branches.rs`): deleted because its tip is
- * in `origin/<base>` (by ancestry or by content), or kept and why; `message` says it in one sentence for the agent.
- */
-export interface RemoteCopy {
-	outcome: "deleted" | "not-landed" | "moved" | "base" | "no-base" | "refused" | "failed" | "push-elsewhere";
-	message: string;
-}
-
-/** A safe removal that removed the worktree; `remote` is absent when origin holds no copy of the branch. */
-export interface SafeRemoval {
-	removal: NonNullable<WorktreeRemoval>;
-	remote?: RemoteCopy;
-}
-
-/**
  * Remove an agent session's worktree and its branch, losing nothing: only a registered linked worktree with no
  * uncommitted or untracked file whose work has landed in the parent's HEAD or upstream (an untouched branch has; a
  * squash-merged one has by content) goes (`worktree remove` without `--force` refuses a dirty one too). `landingFacts`
@@ -192,7 +177,7 @@ export interface SafeRemoval {
 export function removeSafeWorktree(
 	worktree: WorktreeRef,
 	options: { keepBranch?: boolean } = {},
-): Promise<SafeRemoval | null> {
+): Promise<RpcSafeRemoval | null> {
 	return branchGit(
 		"git.removeSafeWorktree",
 		{ worktree, keepBranch: options.keepBranch === true },

@@ -57,6 +57,7 @@ import {
 	isSignInRequest,
 	type RpcCommand,
 	type RpcResponse,
+	type RpcSafeRemoval,
 	type RpcWorktreeCreateResult,
 	type TextContent,
 } from "../../shared/rpc-types";
@@ -1199,16 +1200,16 @@ export class AgentControlRuntime {
 					landingFacts(worktree),
 				),
 			removeSafeWorktree: async (worktree, device) => {
-				if (!device) return removeSafeWorktree(worktree);
-				// A paired host answers the bare removal (`host.git.removeWorktree`), so a desktop of any version reads it;
-				// the host still cleaned up the branch's landed copy on origin.
-				const removal = await this.#remote().request<WorktreeRemoval>(
+				// `withRemote` asks a paired host for the whole answer; one older than the remote copy's cleanup ignores it
+				// and answers the bare removal.
+				const answer = await this.#git<RpcSafeRemoval | WorktreeRemoval>(
 					device,
 					GIT_METHODS.removeWorktree,
-					{ worktree: gitRef(worktree) },
-					GIT_REQUEST_TIMEOUT_MS + REMOTE_COPY_MS,
+					{ worktree: gitRef(worktree), withRemote: true },
+					() => removeSafeWorktree(worktree),
+					REMOTE_COPY_MS,
 				);
-				return removal && { removal };
+				return typeof answer === "string" ? { removal: answer } : answer;
 			},
 			discardWorktree: (worktree, device) =>
 				this.#git<WorktreeRemoval>(device, GIT_METHODS.discardWorktree, { worktree: gitRef(worktree) }, () =>

@@ -24,10 +24,11 @@ import * as path from "node:path";
 import type {
 	OrphanWorktreeState,
 	RpcOrphanWorktree,
-	RpcOrphanWorktreeRemoval,
 	RpcOrphanWorktrees,
+	RpcRemoteCopy,
+	RpcSafeRemoval,
 } from "../shared/rpc-types";
-import { REMOTE_COPY_MS, REMOTE_COPY_ROUNDS, type WorktreeRemoval } from "./agent-control/branches";
+import { REMOTE_COPY_MS, REMOTE_COPY_ROUNDS } from "./agent-control/branches";
 import { KeepWorktree } from "./disk/saved-worktrees";
 import { fs } from "./fenced-fs";
 import { primaryRoot, repoRoot } from "./local/git/changes";
@@ -162,7 +163,7 @@ export async function removeOrphanWorktree(
 	worktreePath: string,
 	deps: OrphanDeps,
 	options: { keepBranch?: boolean; prepare?: BeforeRemove } = {},
-): Promise<RpcOrphanWorktreeRemoval> {
+): Promise<RpcSafeRemoval> {
 	if (!(await repoRoot(cwd))) throw new LocalCommandError(`Not a git repository: ${cwd}`, "not_a_repo");
 	const primary = await primaryRoot(cwd);
 	return withRepoLock(primary, async () => {
@@ -194,7 +195,7 @@ export async function removeOrphanWorktree(
 					throw new LocalCommandError(`${entry.path} was kept: ${error.message}.`, "not_removable");
 				throw error;
 			}
-			const result = await coreGit<WorktreeRemoval>(
+			const result = await coreGit<RpcSafeRemoval | null>(
 				"git.removeOrphanWorktree",
 				{ primary, path: entry.path, branch: entry.branch, keepBranch: options.keepBranch === true },
 				REMOVE_ROUNDS,
@@ -209,7 +210,7 @@ export async function removeOrphanWorktree(
 				"not_removable",
 			);
 		}
-		return { removal };
+		return removal;
 	});
 }
 
@@ -222,6 +223,8 @@ export interface SweptWorktree {
 	squashed?: true;
 	/** Why a removable one was kept after all (its `prepare` or git refused). */
 	reason?: string;
+	/** A removed one's branch copy on origin: deleted once it landed there, or kept and why (disk care logs it). */
+	remote?: RpcRemoteCopy;
 }
 
 export interface SweepReport {
@@ -326,8 +329,11 @@ export async function sweepLandedWorktrees(
 				continue;
 			}
 			try {
-				await removeOrphanWorktree(repo, worktree.path, deps, { keepBranch: true, prepare: options.prepare });
-				report.removed.push(swept);
+				const { remote } = await removeOrphanWorktree(repo, worktree.path, deps, {
+					keepBranch: true,
+					prepare: options.prepare,
+				});
+				report.removed.push(remote ? { ...swept, remote } : swept);
 			} catch (error) {
 				if (error instanceof LocalCommandError && error.code === "not_removable")
 					report.kept.push({ ...swept, reason: error.message });
