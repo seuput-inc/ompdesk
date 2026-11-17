@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const stockRoot = path.join(os.homedir(), ".bun/install/global/node_modules/@oh-my-pi/pi-coding-agent");
-const bun = path.join(os.homedir(), ".bun/bin/bun");
+const bun = path.join(os.homedir(), ".bun/bin", process.platform === "win32" ? "bun.exe" : "bun");
 
 const SERVERS = `
 import { startRelayServer } from ${JSON.stringify(path.join(stockRoot, "src/tools/browser/relay/server"))};
