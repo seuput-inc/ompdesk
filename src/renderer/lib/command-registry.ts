@@ -337,7 +337,7 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 
 	/**
 	 * /autoclear on [delay] | off — stock's idle compaction (`compaction.idle*`),
-	 * which the bridge's idle-compaction timer runs for GUI tabs. A delay like
+	 * which stock's idle scheduler runs for GUI tabs (bridge idle-maintenance.ts). A delay like
 	 * `10m`, `90s`, `1h` or bare seconds sets `compaction.idleTimeoutSeconds`
 	 * (stock clamps it to 60–3600 s when it arms).
 	 */

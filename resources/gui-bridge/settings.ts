@@ -10,7 +10,6 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { accountCredits, creditKind, creditsInRaw } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
 import { guard, probe } from "./health";
-import { idleSettingChanged } from "./idle-compaction";
 import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
 import { releaseDelegationForWrite } from "./modes/delegation";
@@ -49,7 +48,6 @@ import { asRecord, requiredString } from "./params";
 import { type ResetPasses, shapeResetPasses } from "./reset-passes-core";
 import { effectiveOmpdeskRole, effectiveRole, type RoleStock } from "./role-effective";
 import { shownRoleValue, storedRoleValue } from "./role-values";
-import { recapSettingChanged } from "./session-recap";
 import { heldDefaultNotes, releaseThinkingDefaultFor, syncThinkingDefault } from "./thinking-default";
 import type { BridgeEnv, BridgeMethods } from "./types";
 
@@ -300,8 +298,6 @@ async function setSetting(env: BridgeEnv, session: AgentSession, id: string, val
 	}
 	// A reset (`undefined`) leaves the thinking level unset again: OMPdesk's default returns.
 	syncThinkingDefault(session.settings);
-	idleSettingChanged(id);
-	recapSettingChanged(id);
 	env.emit({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 	const provenance = provenanceReader(settings, globalConfigPath());
 	return {
