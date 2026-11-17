@@ -12,6 +12,10 @@
  *   and the GUI has no such row, so the one-line preview becomes a displayed `recap` custom message (a
  *   `custom_message` journal entry the transcript replays; the renderer draws a quiet line), and the `context` hook
  *   below keeps it out of every model request, so a recap never becomes something the model said or was told.
+ *
+ * A reply the model wrote as UTF-8 read as Windows-1252 is no recap: neither shown nor journaled (smart-features ›
+ * Mojibake). Stock journals before `onRecap` runs and offers no hook in between, so the opted-in session's own
+ * `sessionManager.recordRecap` is wrapped to refuse it (stock's only caller is idle maintenance).
  */
 import type { ContextEvent, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -25,6 +29,14 @@ export const RECAP_MESSAGE_TYPE = "recap";
 
 /** The draft each opted-in session's `isBlocked` reads; stock keeps the first options it was given. */
 const drafts = new WeakMap<AgentSession, { empty: boolean }>();
+
+/** In-memory patch of this session's `sessionManager.recordRecap` (readonly on the session): mojibake never persists. */
+function refuseMojibakeRecaps(manager: AgentSession["sessionManager"]): void {
+	const record = manager.recordRecap.bind(manager);
+	manager.recordRecap = recap => {
+		if (!isUtf8Mojibake(recap)) record(recap);
+	};
+}
 
 /** Shows a recap stock has journaled and found still current. */
 async function deliverRecap(session: AgentSession, reply: string): Promise<void> {
@@ -71,6 +83,7 @@ export const methods: BridgeMethods = guard("idleMaintenance", {
 			const state = { empty };
 			draft = state;
 			drafts.set(session, state);
+			refuseMojibakeRecaps(session.sessionManager);
 			session.enableIdleMaintenance({
 				isBlocked: () => !state.empty,
 				onRecap: reply => void deliverRecap(session, reply).catch(() => {}),

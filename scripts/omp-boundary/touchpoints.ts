@@ -1607,6 +1607,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/bridge-idle-maintenance-stock.test.ts", "src/main/bridge-input-history.test.ts"],
 	},
 	{
+		id: "B60",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"In-memory monkey patch: wraps an opted-in session's own `sessionManager.recordRecap` so a mojibake recap reply never reaches history.db, because stock journals the recap before `onRecap` and offers no hook between.",
+		files: ["resources/gui-bridge/idle-maintenance.ts", "resources/gui-bridge/capabilities.ts"],
+		stock: ["SessionManager.recordRecap", "session/idle-maintenance.ts #runRecap"],
+		tests: ["src/main/bridge-idle-maintenance-stock.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

@@ -1,13 +1,24 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { garbled } from "./test-mojibake";
 
 /**
  * Stock's idle maintenance (`AgentSession.enableIdleMaintenance`) as the bridge opts a GUI session into it
@@ -59,9 +70,15 @@ afterAll(async () => {
 	// Two omps end on stdin's close; each may take seconds to journal its exit.
 }, 90_000);
 
-/** Answers stock's recap prompt with {@link REPLY} and everything else with "DONE"; keeps every request body. */
-async function startProvider(): Promise<{ url: string; bodies: string[]; recaps(): number }> {
+/**
+ * Answers stock's recap prompts with `recapReplies` in turn (the last one repeated) and everything else with "DONE";
+ * keeps every request body and counts the recap answers sent in full.
+ */
+async function startProvider(
+	recapReplies: readonly string[] = [REPLY],
+): Promise<{ url: string; bodies: string[]; recaps(): number; recapsAnswered(): number }> {
 	const bodies: string[] = [];
+	let answered = 0;
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
@@ -70,7 +87,14 @@ async function startProvider(): Promise<{ url: string; bodies: string[]; recaps(
 		req.on("end", () => {
 			bodies.push(body);
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.end(sse(isRecapRequest(body) ? REPLY : "DONE"));
+			if (!isRecapRequest(body)) {
+				res.end(sse("DONE"));
+				return;
+			}
+			const index = bodies.filter(isRecapRequest).length - 1;
+			res.end(sse(recapReplies[Math.min(index, recapReplies.length - 1)] ?? REPLY), () => {
+				answered++;
+			});
 		});
 	});
 	await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
@@ -82,7 +106,25 @@ async function startProvider(): Promise<{ url: string; bodies: string[]; recaps(
 		url: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
 		bodies,
 		recaps: () => bodies.filter(isRecapRequest).length,
+		recapsAnswered: () => answered,
 	};
+}
+
+/** The recaps stock journaled in the private agent dir's history.db (`session_recaps`), oldest first. */
+function journaledRecaps(dir: string): string[] {
+	const file = readdirSync(dir, { recursive: true })
+		.map(entry => join(dir, String(entry)))
+		.find(path => path.endsWith("history.db"));
+	if (!file) return [];
+	const db = new DatabaseSync(file, { readOnly: true });
+	try {
+		return db
+			.prepare("SELECT recap FROM session_recaps ORDER BY id")
+			.all()
+			.map(row => String(row.recap));
+	} finally {
+		db.close();
+	}
 }
 
 /** Stock's `prompts/system/recap-user.md`. */
@@ -96,6 +138,8 @@ interface Omp {
 	bridge: GuiBridgeClient;
 	/** Sends a prompt and resolves once its run ended. */
 	turn(message: string): Promise<void>;
+	/** The private folder holding the agent dir and its history.db. */
+	dir: string;
 }
 
 async function startOmp(url: string, config: string, env: Record<string, string> = {}): Promise<Omp> {
@@ -123,7 +167,17 @@ async function startOmp(url: string, config: string, env: Record<string, string>
 		OMP_GUI_BRIDGE: address,
 		...env,
 	};
-	for (const key of ["ELECTRON_RUN_AS_NODE", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
+	// XDG folders would move history.db out of the private agent dir.
+	for (const key of [
+		"ELECTRON_RUN_AS_NODE",
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+		"ANTHROPIC_OAUTH_TOKEN",
+		"XDG_DATA_HOME",
+		"XDG_STATE_HOME",
+		"XDG_CACHE_HOME",
+		"XDG_CONFIG_HOME",
+	])
 		Reflect.deleteProperty(childEnv, key);
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
@@ -181,6 +235,7 @@ async function startOmp(url: string, config: string, env: Record<string, string>
 		frames,
 		send,
 		bridge,
+		dir: isolated,
 		turn: async message => {
 			const ends = frames.filter(frame => frame.type === "agent_end").length;
 			await send({ type: "prompt", message });
@@ -243,5 +298,23 @@ describe.skipIf(!existsSync(omp))("idle maintenance on stock omp through the bri
 
 		await bridge.request("idle_maintenance_draft", { empty: true });
 		await expect.poll(idleStarts, { timeout: 15_000 }).toBe(1);
+	}, 120_000);
+
+	it("neither shows nor journals a recap the model wrote as mojibake", async () => {
+		const provider = await startProvider([garbled("지금 테스트를 고치는 중입니다. 다음은 빌드입니다."), REPLY]);
+		const { frames, bridge, turn, dir } = await startOmp(
+			provider.url,
+			"recap:\n  enabled: true\n  idleSeconds: 1\ncompaction:\n  idleEnabled: false\n",
+		);
+		await bridge.request("idle_maintenance_draft", { empty: true });
+		await turn("Build the thing");
+		await expect.poll(provider.recapsAnswered, { timeout: 15_000 }).toBe(1);
+		// Stock journals the reply as soon as its side turn has read it; the next turn would abort an unfinished one.
+		await sleep(1_000);
+		await turn("Now the next part");
+		await expect.poll(() => recapCards(frames).length, { timeout: 15_000 }).toBe(1);
+		expect(recapCards(frames)[0]).toMatchObject({ content: PREVIEW });
+		// Only the clean recap reached history.db, which also proves the read finds stock's journal.
+		expect(journaledRecaps(dir)).toEqual([REPLY.trim()]);
 	}, 120_000);
 });
