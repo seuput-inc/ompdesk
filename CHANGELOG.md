@@ -6,6 +6,7 @@ Windows에서 0.131.0의 업데이트가 0.132.0을 설치한 뒤 0.131.0으로 
 
 ### 고친 것
 - Windows 설치 프로그램이 새 폴더를 점검할 때 Tauri 앱에는 없는 이전 화면 엔진 파일을 찾아, 모든 업데이트를 미완성으로 보고 이전 앱을 되살렸어요. 이제 Tauri 앱이 실제로 쓰는 파일만 확인해요. 되돌린 판은 기록해 두어 자동 업데이트가 같은 판을 계속 다시 설치하지 않아요(앱이 약 1분마다 꺼졌다 켜지던 증상).
+- Windows 업데이트가 끝날 때 설치 프로그램이 가끔 비정상 종료하던 문제를 고쳤어요. 설치와 새 앱 시작은 이미 끝난 뒤라 화면에 보이거나 업데이트가 실패하지는 않았어요.
 - 스톡 omp 18.22.0의 새 설정(디스어셈블러, Ghidra, 종료 시 워크트리 강제 제거)에 한국어 설명을 넣었어요.
 
 <!-- en -->
@@ -14,6 +15,7 @@ Windows updates from 0.131.0 no longer install 0.132.0 and then fall back to 0.1
 
 ### Fixed
 - The Windows setup's check of the new folder looked for a file of the previous rendering engine that the Tauri app does not have, judged every update incomplete and restored the old app. It now checks the files the Tauri app actually uses. A version that was rolled back is recorded, so the automatic update no longer reinstalls it over and over (the app quit and restarted about once a minute).
+- The Windows setup sometimes crashed as it closed after an update. Installing and starting the new app had already finished, so nothing showed on screen and no update failed.
 - Korean text for the settings stock omp 18.22.0 adds (disassembler, Ghidra, force-removing worktrees on exit).
 
 ## [0.132.0] - 2026-11-17

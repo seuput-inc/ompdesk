@@ -149,6 +149,24 @@ Var pid
   !endif
 !macroend
 
+; electron-builder's one-click setup shows SpiderBanner ("Installing…") whenever it is not silent, which is every update
+; (v0.131.0's updater passes no /S), and never closes it: at Quit, NSIS calls the plugin's unload callback, which closes
+; the banner from the main thread, and frees the DLL while the banner's own thread may still be returning through it.
+; That thread then runs in unloaded code: 0xc0000005 in `SpiderBanner.dll_unloaded` after everything was installed and
+; the new app had started (3 of 16 updates on windows-latest runners, 17 Nov 2026; no error window, no failed update).
+; Closing it here leaves its thread the rest of the setup (starting the app, writing the log) to end before the unload.
+; Destroy restores the setup's hidden main window, so it is hidden again.
+!macro ompCloseBanner
+  !ifndef BUILD_UNINSTALLER
+    !ifdef ONE_CLICK
+      ${IfNot} ${Silent}
+        SpiderBanner::Destroy
+        HideWindow
+      ${endIf}
+    !endif
+  !endif
+!macroend
+
 ; REASON is `incomplete` (the unpack came out without what the app needs) or `start-failed` (the new app did not come up).
 !macro ompRestoreOldFolder REASON
   !ifndef BUILD_UNINSTALLER
@@ -208,6 +226,7 @@ Var pid
         ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
       !endif
     ${endIf}
+    !insertmacro ompCloseBanner
     SetErrorLevel 2
     Quit
   !endif
@@ -343,6 +362,7 @@ Var pid
         !else
           ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
         !endif
+        !insertmacro ompCloseBanner
         SetErrorLevel 2
         Quit
       ${elseIf} ${FileExists} "$ompFailed"
@@ -414,4 +434,5 @@ Var pid
 
 !macro customInstall
   !insertmacro ompCheckNewFolder
+  !insertmacro ompCloseBanner
 !macroend
