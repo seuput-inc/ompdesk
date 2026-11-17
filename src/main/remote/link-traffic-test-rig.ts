@@ -15,11 +15,12 @@ import type { AgentSessionEvent, SubagentFrame } from "../../shared/rpc-types";
 import { type CoreCallOptions, CoreProcess } from "../core/process";
 import type { MachineServices } from "../machine-services";
 import type { OmpResolution } from "../omp-runtime";
+import { SessionSummaries } from "../session-summaries";
 import { SidecarManager } from "../sidecar";
 import type { SidecarLike } from "../sidecar-types";
 import { RM_TEMP, writeFakeOmp } from "../test-fake-omp";
 import { type HostAsk, RemoteHost } from "./host-server";
-import { LocalHostServices } from "./host-services";
+import { type HostServicesDeps, LocalHostServices } from "./host-services";
 import type { RemoteSidecar } from "./remote-sidecar";
 import { type Computer, DevicesRig } from "./test-devices";
 import { Link, type TrafficHandler } from "./wire";
@@ -260,7 +261,13 @@ export interface RawTap {
 	frames: SubagentFrame[];
 }
 
-function hostServices(bin: string, workDir: string, raw: RawTap, bridgeDir?: string): LocalHostServices {
+function hostServices(
+	bin: string,
+	workDir: string,
+	raw: RawTap,
+	bridgeDir?: string,
+	summaries?: HostServicesDeps["summaries"],
+): LocalHostServices {
 	return new LocalHostServices({
 		createSidecar: (cwd, kind, fresh) => {
 			const sidecar = new SidecarManager({ omp: ompAt(bin), cwd, kind, fresh, ...(bridgeDir ? { bridgeDir } : {}) });
@@ -300,6 +307,7 @@ function hostServices(bin: string, workDir: string, raw: RawTap, bridgeDir?: str
 			beginMove: () => () => {},
 		},
 		trashItem: async () => {},
+		...(summaries ? { summaries } : {}),
 	});
 }
 
@@ -319,6 +327,10 @@ export interface Session {
 	/** The device's computer and the host's id there, for requests a tab does not make itself (`fs.*`). */
 	device: Computer;
 	hostId: string;
+	/** The host's computer (its sharing switch drops and restores the device's link). */
+	host: Computer;
+	/** The host's one summary builder, wired as `index.ts` wires it (`summaries: true` only). */
+	hostSummaries: SessionSummaries | null;
 	/** Runs one scripted turn and resolves when the host's omp settled it. */
 	turn(scenario: object): Promise<void>;
 	setLevel(level: "off" | "progress" | "events"): Promise<void>;
@@ -331,7 +343,9 @@ const recorders: LinkRecorder[] = [];
  * `bridge`: the host's omp gets a gui-bridge socket, which the scripted omp serves for `read_image_blob` from its
  * working folder's `blobs/`.
  */
-export async function openSession(options: { device?: DeviceKind; bridge?: boolean } = {}): Promise<Session> {
+export async function openSession(
+	options: { device?: DeviceKind; bridge?: boolean; summaries?: boolean } = {},
+): Promise<Session> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-link-traffic-"));
 	WORK_DIRS.push(dir);
 	const bin = await writeFakeOmp(
@@ -347,8 +361,27 @@ export async function openSession(options: { device?: DeviceKind; bridge?: boole
 	recorder.start(options.device);
 	const hostLog: Session["hostLog"] = [];
 	const raw: RawTap = { events: [], frames: [] };
-	const { a, hostId } = await rig.connected({
-		services: hostServices(bin, workDir, raw, options.bridge ? path.join(dir, "bridge") : undefined),
+	// As `index.ts` wires it: the builder reads the services' tabs, and every change it publishes goes to the devices.
+	let builder: SessionSummaries | null = null;
+	const built = (): SessionSummaries => {
+		if (!builder) throw new Error("summaries not built yet");
+		return builder;
+	};
+	const services = hostServices(
+		bin,
+		workDir,
+		raw,
+		options.bridge ? path.join(dir, "bridge") : undefined,
+		options.summaries
+			? { track: omp => built().track(omp), changed: () => built().changed(), current: () => built().current() }
+			: undefined,
+	);
+	if (options.summaries) {
+		builder = new SessionSummaries(() => services.summarySources());
+		builder.onChange(delta => services.summariesChanged(delta));
+	}
+	const { a, b, hostId } = await rig.connected({
+		services,
 		logLink: (message, details) => hostLog.push({ message, details }),
 	});
 	const sidecar = a.devices.createSidecar(hostId, "t1", workDir, "agent", true);
@@ -374,6 +407,8 @@ export async function openSession(options: { device?: DeviceKind; bridge?: boole
 		workDir,
 		device: a,
 		hostId,
+		host: b,
+		hostSummaries: builder,
 		async turn(scenario) {
 			const settled = Promise.withResolvers<void>();
 			const ended = Promise.withResolvers<void>();
