@@ -114,6 +114,8 @@ bun install
 bun run dev
 ```
 
+`bun run dev` builds the Rust parts on its first run (several minutes), then opens the app from your checkout: the page reloads as you edit it, and the app restarts when main changes. It keeps its own settings folder (`ompdesk-dev`), so it runs beside an installed OMPdesk.
+
 Development, checks and release rules are in [AGENTS.md](AGENTS.md); changes per version in [CHANGELOG.md](CHANGELOG.md). To re-record the media above: `bun run readme:media`.
 
 The desktop window runs on Rust (Tauri 2) and the operating system's web view (WebKit on macOS, WebView2 on Windows); the Preview panel runs a bundled Chromium-based browser (Brave) with a profile of its own. It still runs the Node main process and services; the React page and stock omp extension remain TypeScript.

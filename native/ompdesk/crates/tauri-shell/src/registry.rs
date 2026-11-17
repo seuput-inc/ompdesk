@@ -186,13 +186,48 @@ impl Registry {
     }
 }
 
+/// The Vite dev server's origin `bun run dev` (scripts/dev.ts) loads the app page from; set only in a checkout's run.
+static DEV_ORIGIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// `ELECTRON_RENDERER_URL` as the dev server's origin: `http` on a loopback host with an explicit port, nothing else.
+pub fn dev_origin(renderer_url: &str) -> Option<url::Url> {
+    let parsed = url::Url::parse(renderer_url).ok()?;
+    let loopback = match parsed.host()? {
+        url::Host::Domain(name) => name == "localhost",
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    };
+    if parsed.scheme() != "http"
+        || !loopback
+        || parsed.port().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    url::Url::parse(&parsed.origin().ascii_serialization()).ok()
+}
+
+/// Trusts the dev server's pages as the app's own for the rest of this run.
+pub fn allow_dev_origin(origin: &url::Url) {
+    let _ = DEV_ORIGIN.set(origin.origin().ascii_serialization());
+}
+
 pub fn trusted_url(url: &str) -> bool {
+    trusted_under(url, DEV_ORIGIN.get().map(String::as_str))
+}
+
+fn trusted_under(url: &str, dev_origin: Option<&str>) -> bool {
     // Parse the authority, not a prefix such as app://ompdesk.attacker/.
     let base = url.split(['?', '#']).next().unwrap_or(url);
     base == "app://ompdesk"
         || base.starts_with("app://ompdesk/")
         || (cfg!(windows)
             && (base == "http://app.localhost" || base.starts_with("http://app.localhost/")))
+        || dev_origin.is_some_and(|origin| {
+            base.strip_prefix(origin)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
 }
 
 #[cfg(test)]
@@ -260,6 +295,48 @@ mod tests {
             "http://app.localhost:80/",
         ] {
             assert!(!trusted_url(url), "{url}");
+        }
+    }
+    #[test]
+    fn only_a_loopback_http_origin_with_a_port_is_a_dev_server() {
+        assert_eq!(
+            dev_origin("http://localhost:5173").unwrap().as_str(),
+            "http://localhost:5173/"
+        );
+        assert_eq!(
+            dev_origin("http://127.0.0.1:5174/index.html?x=1")
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:5174/"
+        );
+        assert!(dev_origin("http://[::1]:5173").is_some());
+        for url in [
+            "https://localhost:5173",
+            "http://localhost",
+            "http://example.com:5173",
+            "http://localhost.attacker:5173",
+            "http://user@localhost:5173",
+            "app://ompdesk/",
+            "not a url",
+        ] {
+            assert!(dev_origin(url).is_none(), "{url}");
+        }
+    }
+    #[test]
+    fn the_dev_origin_is_trusted_only_when_set_and_only_itself() {
+        let origin = "http://localhost:5173";
+        assert!(!trusted_under("http://localhost:5173/", None));
+        assert!(trusted_under("http://localhost:5173/?slot=0", Some(origin)));
+        assert!(trusted_under("http://localhost:5173", Some(origin)));
+        assert!(trusted_under("app://ompdesk/index.html", Some(origin)));
+        for url in [
+            "http://localhost:51730/",
+            "http://localhost:5173@attacker/",
+            "http://localhost:5173.attacker/",
+            "http://127.0.0.1:5173/",
+            "https://localhost:5173/",
+        ] {
+            assert!(!trusted_under(url, Some(origin)), "{url}");
         }
     }
 }

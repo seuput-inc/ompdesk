@@ -10,9 +10,8 @@
   "main": "./out/main/index.js",
   "scripts": {
     "postinstall": "bun scripts/ensure-electron.ts",
-    "dev": "bun scripts/build-native.ts && electron-vite dev",
+    "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build-cache.ts",
-    "preview": "electron-vite preview",
     "package:mac": "bun run build && bun scripts/package-mac.ts",
     "package:win": "bun run build && electron-builder --config electron-builder.win.yml --win --x64",
     "gen:icons": "bun scripts/gen-icons.ts",
