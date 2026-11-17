@@ -377,6 +377,7 @@ async function main() {
 	const sizes = new Set<string>();
 	while (Date.now() - started < seconds * 1000) {
 		const reply = await poll(seq, 2000);
+		step("busy-poll", { at: Date.now() - started, seq: reply.frame?.seq ?? null });
 		if (!reply.frame) continue;
 		seq = reply.frame.seq;
 		const decoded = decode(reply.frame);
