@@ -118,6 +118,26 @@ fn reads_the_journal_and_tail_page_the_typescript_kept() {
     assert_eq!(kept, transcripts_rows["page"]);
 }
 
+/// A file written after another was read ranks as read later, so a trim never removes it first. On NTFS a plain write
+/// is stamped with the clock's last tick, before a read made within the same tick.
+#[test]
+fn a_write_right_after_a_read_counts_as_read_later() {
+    let dir = temp_dir("order");
+    let cache = folder(&dir);
+    let modified = |name: &str| {
+        std::fs::metadata(dir.join(name))
+            .unwrap()
+            .modified()
+            .unwrap()
+    };
+    assert!(cache.write(&dir.join("p-read"), b"read", u64::MAX));
+    super::folder::touch(&dir.join("p-read"));
+    assert!(cache.write(&dir.join("p-written"), b"written", u64::MAX));
+    assert!(cache.append(&dir.join("j-appended"), b"line\n", u64::MAX));
+    assert!(modified("p-written") >= modified("p-read"));
+    assert!(modified("j-appended") >= modified("p-written"));
+}
+
 #[test]
 fn drops_a_journal_a_crash_cut_mid_append() {
     let dir = temp_dir("cut");

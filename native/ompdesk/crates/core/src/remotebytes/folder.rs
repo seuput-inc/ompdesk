@@ -94,23 +94,32 @@ impl Folder {
     }
 
     /// Through the shared atomic writer (Windows retries a held rename): a reader never sees part of a file. False
-    /// when the disk refused it (full, read-only).
+    /// when the disk refused it (full, read-only). The write counts as a read now (`touch`): NTFS stamps a write with
+    /// the clock's last tick, older than a `touch` made within the same tick, so files written right after a read
+    /// would rank as read before it and a trim could remove the newest (main run 44078283149, transcript-cache test).
     pub fn write(self: &Arc<Self>, file: &Path, bytes: &[u8], limit: u64) -> bool {
         let written = write_atomic_if(file, bytes, None, 0o777, &|| true).is_ok();
         if written {
+            touch(file);
             self.grew(bytes.len() as u64, limit);
         }
         written
     }
 
-    /// One more line at the end of `file` (made if missing); false when it could not be written.
+    /// One more line at the end of `file` (made if missing), stamped as read now like `write`; false when it could not
+    /// be written.
     pub fn append(self: &Arc<Self>, file: &Path, bytes: &[u8], limit: u64) -> bool {
         use std::io::Write;
         let appended = fs::OpenOptions::new()
             .append(true)
             .create(true)
             .open(file)
-            .and_then(|mut opened| opened.write_all(bytes))
+            .and_then(|mut opened| {
+                opened.write_all(bytes)?;
+                let now = SystemTime::now();
+                let _ = opened.set_times(fs::FileTimes::new().set_accessed(now).set_modified(now));
+                Ok(())
+            })
             .is_ok();
         if appended {
             self.grew(bytes.len() as u64, limit);
