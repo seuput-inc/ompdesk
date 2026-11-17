@@ -498,6 +498,129 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .await
         .map_err(|e| format!("stop screencast: {e:?}"))?;
 
+    // A 390x700 CSS layout at deviceScaleFactor 2 streams 780x1400 frames, not 390x700, whatever the view's own scale.
+    page.resize_framed(
+        Viewport {
+            width: 390,
+            height: 700,
+            device_scale_factor: 2.0,
+        },
+        (780, 1400),
+    )
+    .await
+    .map_err(|e| format!("framed resize: {e:?}"))?;
+    let framed_layout = page
+        .evaluate(
+            "({width: innerWidth, height: innerHeight, dpr: devicePixelRatio})",
+            false,
+        )
+        .await
+        .map_err(|e| format!("framed layout metrics: {e:?}"))?;
+    check!(
+        framed_layout == json!({"width": 390, "height": 700, "dpr": 2}),
+        "framed layout metrics mismatch: {framed_layout}"
+    );
+    let mut framed_events = browser.subscribe();
+    page.start_screencast(json!({"format": "png", "everyNthFrame": 1}))
+        .await
+        .map_err(|e| format!("start framed screencast: {e:?}"))?;
+    let framed = timeout(Duration::from_secs(10), async {
+        loop {
+            let event = framed_events
+                .recv()
+                .await
+                .map_err(|e| format!("receive framed screencast: {e:?}"))?;
+            if event.method == "Page.screencastFrame"
+                && event.session_id.as_deref() == Some(page.session_id.as_str())
+            {
+                break Ok::<_, String>(event.params);
+            }
+        }
+    })
+    .await
+    .map_err(|_| "timed out waiting for framed screencast".to_string())??;
+    let framed_png = base64::engine::general_purpose::STANDARD
+        .decode(
+            framed["data"]
+                .as_str()
+                .ok_or("missing framed screencast data")?,
+        )
+        .map_err(|e| format!("decode framed screencast: {e}"))?;
+    check!(
+        png_size(&framed_png) == Some((780, 1400)),
+        "framed screencast dimensions: {:?}",
+        png_size(&framed_png)
+    );
+    // The emulated page fills the larger view rather than sitting in a corner of it: a trusted click at each CSS
+    // corner (sent at the emulation scale Chromium takes input in) lands on the marker laid there.
+    page.evaluate(
+        "(() => { window.cornerHits = []; window.cornerDone = new Promise(resolve => { for (const [id, side] of [['top-left', 'left:0;top:0'], ['bottom-right', 'right:0;bottom:0']]) { const marker = document.createElement('div'); marker.id = 'corner-' + id; marker.style.cssText = 'position:fixed;width:20px;height:20px;background:#f00;' + side; marker.addEventListener('click', event => { window.cornerHits.push([id, event.isTrusted]); if (window.cornerHits.length === 2) resolve(window.cornerHits); }); document.body.append(marker); } }); return true; })()",
+        false,
+    )
+    .await
+    .map_err(|e| format!("install corner markers: {e:?}"))?;
+    let emulation_scale = page.emulation_scale();
+    for (x, y) in [(10.0, 10.0), (380.0, 690.0)] {
+        for kind in ["mousePressed", "mouseReleased"] {
+            page.command(
+                "Input.dispatchMouseEvent",
+                json!({"type": kind, "x": x * emulation_scale, "y": y * emulation_scale, "button": "left", "clickCount": 1}),
+            )
+            .await
+            .map_err(|e| format!("corner click: {e:?}"))?;
+        }
+    }
+    let corner_hits = page
+        .evaluate(
+            "window.cornerDone.then(hits => { document.querySelectorAll('[id^=corner-]').forEach(marker => marker.remove()); return hits; })",
+            false,
+        )
+        .await
+        .map_err(|e| format!("read corner hits: {e:?}"))?;
+    check!(
+        corner_hits == json!([["top-left", true], ["bottom-right", true]]),
+        "framed page does not fill its view: {corner_hits} at emulation scale {emulation_scale}"
+    );
+    // A wheel is taken in the same space: Blink divides its position and delta by the emulation scale, then the DOM
+    // delta by devicePixelRatio (2 here), so the CSS point and a 100 px page delta are sent at the matching multiples.
+    page.evaluate(
+        "(() => { window.wheelDone = new Promise(resolve => addEventListener('wheel', event => resolve([[event.isTrusted, Math.round(event.clientX), Math.round(event.clientY), Math.round(event.deltaY)]]), {once: true, passive: true})); return true; })()",
+        false,
+    )
+    .await
+    .map_err(|e| format!("install wheel listener: {e:?}"))?;
+    page.command(
+        "Input.dispatchMouseEvent",
+        json!({"type": "mouseWheel", "x": 200.0 * emulation_scale, "y": 300.0 * emulation_scale, "deltaX": 0, "deltaY": 100.0 * emulation_scale * 2.0}),
+    )
+    .await
+    .map_err(|e| format!("wheel: {e:?}"))?;
+    let wheel_seen = page
+        .evaluate("window.wheelDone", false)
+        .await
+        .map_err(|e| format!("read wheel: {e:?}"))?;
+    check!(
+        wheel_seen == json!([[true, 200, 300, 100]]),
+        "framed page took the wheel at another place or magnitude: {wheel_seen} at emulation scale {emulation_scale}"
+    );
+    page.ack_frame(
+        framed["sessionId"]
+            .as_i64()
+            .ok_or("missing framed screencast frame id")?,
+    )
+    .await
+    .map_err(|e| format!("ack framed frame: {e:?}"))?;
+    page.stop_screencast()
+        .await
+        .map_err(|e| format!("stop framed screencast: {e:?}"))?;
+    page.resize(Viewport {
+        width: 240,
+        height: 160,
+        device_scale_factor: 1.0,
+    })
+    .await
+    .map_err(|e| format!("restore resize: {e:?}"))?;
+
     page.evaluate("(() => { const a = document.createElement('a'); a.href = '/download'; a.download = 'preview-test.bin'; document.body.append(a); a.click(); a.remove(); return true; })()", false).await.map_err(|e| format!("request download: {e:?}"))?;
     timeout(Duration::from_secs(10), async {
         loop {
