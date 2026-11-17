@@ -1891,18 +1891,6 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
             handling.0.push_str(&event.method);
             watch.busy(event.method.clone());
         }
-        #[cfg(feature = "test-automation")]
-        if event.method == "Runtime.bindingCalled" {
-            let payload = event.params["payload"].as_str().unwrap_or_default();
-            crate::log::log(
-                "preview.binding.event",
-                json!({
-                    "name":event.params["name"],"session":event.session_id,
-                    "context":event.params["executionContextId"],
-                    "kind":if payload.starts_with('{') { "json" } else { payload }
-                }),
-            );
-        }
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 let detached = pages.routes.lock().expect("Preview routes").remove(session);
@@ -2036,6 +2024,16 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
             continue;
         };
         if session != entry.page.session_id && !route.iframe {
+            continue;
+        }
+        if event.method == "Page.downloadWillBegin" {
+            // Chromium has refused it already (`Browser.setDownloadBehavior` deny); the page's own session names it,
+            // as Electron's `will-download` named the page, so the panel can offer the address to the system browser.
+            host::event(
+                "session.download",
+                json!({"partition":entry.partition,"wcId":route.wc,"url":event.params["url"],
+                    "filename":event.params["suggestedFilename"],"mimeType":"","totalBytes":-1}),
+            );
             continue;
         }
         match dialogs::decode(&event) {

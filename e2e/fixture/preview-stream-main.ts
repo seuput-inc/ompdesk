@@ -243,6 +243,12 @@ async function main() {
 
 	// Each step's numbers print as they land, so a run the spec kills at its deadline still says where it stopped.
 	const step = (name: string, value?: unknown) => console.log(`STEP ${name} ${JSON.stringify(value ?? null)}`);
+	// A tick a second: if a step stops, whether this process still runs (and how late its timers fire).
+	let ticked = Date.now();
+	setInterval(() => {
+		step("tick", Date.now() - ticked);
+		ticked = Date.now();
+	}, 1000).unref();
 	const result = new Proxy<Record<string, unknown>>(
 		{},
 		{
