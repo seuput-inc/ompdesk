@@ -334,7 +334,13 @@ async function main() {
 	input({ t: "pinch", scale: 1 / 1.5 });
 	await waitFor("the zoom to come back", () => lastState()?.zoom === zoomBefore);
 
-	// 6. A still page costs nothing: the poll is held and answers empty.
+	// 6. A still page costs nothing: the poll is held and answers empty. The textarea typed into above still has the
+	// focus, and on the Tauri host's Chromium the page is focused, so its caret blinks a repaint about every 500 ms
+	// (Windows run 44084284161: 7 frames in 3.2 s idle, 779 KB). A tap on the list below the fields takes the focus
+	// off it, as a person's tap would, so the page is still.
+	log.length = 0;
+	input({ t: "tap", x: 200 / 390, y: 650 / 700 });
+	await waitFor("the tap off the fields", () => log.some(entry => entry.type === "click"));
 	await sleep(400);
 	let idleFrames = 0;
 	let idleBytes = 0;
