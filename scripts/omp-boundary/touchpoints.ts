@@ -1607,6 +1607,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/bridge-idle-maintenance-stock.test.ts", "src/main/bridge-input-history.test.ts"],
 	},
 	{
+		id: "B60",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"On Windows the first bash of a project folder waits while stock's WaitTool (package index, over Settings.instance and a session owning nothing) connects the process's service broker client, so the first wait never connects while a shell job runs (a job running during that connection never runs another step).",
+		files: ["resources/gui-bridge/waste-guards.ts", "resources/gui-bridge/capabilities.ts"],
+		stock: ["WaitTool.execute", "launch/services.ts listServicesTolerant", "launch/client.ts daemonClientForProject"],
+		tests: ["src/main/bridge-waste-guards-stock.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",
