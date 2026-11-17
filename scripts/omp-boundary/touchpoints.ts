@@ -1560,6 +1560,20 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/bridge-xdev-notice.test.ts"],
 	},
 	{
+		id: "B58",
+		area: "bridge",
+		contract: "public",
+		summary:
+			"Image generation pinned to the subscription's image model: the public tool_call hook revises a generate_image call's `model` and refuses any other, so stock never falls through to a billed provider.",
+		files: [
+			"resources/gui-bridge/image-subscription.ts",
+			"resources/gui-bridge/image-subscription-core.ts",
+			"resources/gui-bridge/capabilities.ts",
+		],
+		stock: ["omp://extensions.md#tool_call", "generate_image `model` argument"],
+		tests: ["src/main/bridge-image-subscription-stock.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

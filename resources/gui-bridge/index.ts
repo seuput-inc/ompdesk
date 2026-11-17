@@ -119,6 +119,7 @@ const AREAS: readonly Area[] = [
 	{ name: "exit-drain", features: ["exitDrain"], load: () => import("./exit-drain") },
 	{ name: "turn-stages", features: ["turnStages"], load: () => import("./turn-stages") },
 	{ name: "ask-form", features: ["askForm"], load: () => import("./ask-form") },
+	{ name: "image-subscription", features: ["imageSubscription"], load: () => import("./image-subscription") },
 ];
 
 function builtins(failures: readonly AreaFailure[]): BridgeMethods {

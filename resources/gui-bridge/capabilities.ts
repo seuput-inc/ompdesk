@@ -98,6 +98,7 @@ export const FEATURES = {
 	exitDrain: "An omp that ends by itself finishes its exit cleanup first (a login refresh being saved)",
 	turnStages: "Turn stages recorded when a turn waits long for the model or ends without output (gui-runtime.jsonl)",
 	askForm: "An ask form's paragraphs, tables and pictures on its question card",
+	imageSubscription: "Image generation only on the ChatGPT subscription's image model, never on a billed API key",
 } as const;
 
 export type FeatureId = keyof typeof FEATURES;
@@ -1508,6 +1509,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"@oh-my-pi/pi-tui/render/render-utils": ["disambiguateDisplayLabels()"],
 		},
 	},
+	/** image-subscription.ts: the public `tool_call` hook (`input`, `block`) only. Imports nothing from omp. */
+	imageSubscription: {},
 };
 
 export const ALL_FEATURES = Object.keys(FEATURES) as FeatureId[];

@@ -4472,6 +4472,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.exitDrain": "A login refresh saved before a stopped session's omp ends",
 	"bridgeHealth.feature.turnStages": "Logging of slow or empty turns",
 	"bridgeHealth.feature.askForm": "Pictures and paragraphs of an agent's question form",
+	"bridgeHealth.feature.imageSubscription": "Image generation on the ChatGPT subscription only",
 	"bridgeHealth.feature.visuals": "Diagram instructions (Mermaid, SVG)",
 	"bridgeHealth.feature.phoneImages": "Phone photos (HEIC) for the model",
 	"bridgeHealth.feature.sessionOwner": "Waiting for another omp to release a session",
