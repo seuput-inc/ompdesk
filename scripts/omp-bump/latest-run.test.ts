@@ -118,7 +118,13 @@ describe("renderReport", () => {
 			version: "18.23.0",
 			summaries: [
 				summary({ outcome: "failure", failed: ["src/main/c.test.ts", "src/main/new.test.ts"] }),
-				summary({ group: "windows", job: "windows", skipped: [{ file: "src/main/a-stock.test.ts", test: "a c" }] }),
+				summary({
+					group: "windows",
+					job: "windows",
+					outcome: "failure",
+					failed: ["src/main/c.test.ts"],
+					skipped: [{ file: "src/main/a-stock.test.ts", test: "a c" }],
+				}),
 			],
 			jobs: { plan: "success", check: "failure", windows: "failure", strings: "failure" },
 			missingStrings: "omp 18.23.0 has 1 strings OMPdesk's dictionaries lack:\n  KO_SETTINGS: foo.bar\n",
@@ -132,7 +138,7 @@ describe("renderReport", () => {
 				'  - `src/main/a-stock.test.ts` skipped "a c" (windows)',
 				"- **B02** (bridge) B02 summary",
 				'  - `src/main/a-stock.test.ts` skipped "a c" (windows)',
-				"  - `src/main/c.test.ts` failed (node-1)",
+				"  - `src/main/c.test.ts` failed (node-1, windows)",
 				"",
 				"### Test files no touchpoint lists",
 				"",
