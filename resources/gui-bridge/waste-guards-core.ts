@@ -27,6 +27,9 @@ export const POLL_HINT =
 export const EDIT_HINT =
 	"OMPdesk: this edit was refused. Edit only lines shown by the latest read of that file; after a grep hit or an elided or declarations-only read, read the exact range first. Copy the `[FILE#TAG]` from that read or the last edit's response, never invent one; after each edit use the tags and line numbers its response returns.";
 
+export const NO_VERIFY_REASON =
+	"OMPdesk: an agent never skips this repository's git hooks (`--no-verify`, `-n` on commit, `-c core.hooksPath`): the pre-push gate and commit hooks are a person's call to bypass. Fix what the hook refused. A test that shows a bug before its fix, or an old commit to rerun on a runner, goes to a `probe/<name>` branch, which the gate does not hold to the fix-commit rule; an old tip to keep goes to `refs/archive/…`, which it does not check.";
+
 type Token =
 	| { kind: "word"; text: string }
 	| { kind: "redir"; fd: number; op: ">" | ">>" | ">|" | ">&" | "&>"; target: string };
@@ -316,6 +319,37 @@ function segments(command: string): string[] {
 	}
 	out.push(command.slice(start));
 	return out;
+}
+
+/**
+ * Whether a `bash` command runs `git push` or `git commit` past the repository's hooks: `--no-verify`, `-n` in a
+ * commit's short flags (on push `-n` is a dry run), or a `-c core.hooksPath=…` that points the hooks elsewhere.
+ */
+export function skipsGitHooks(input: Record<string, unknown>): boolean {
+	const { command } = input;
+	if (typeof command !== "string") return false;
+	return segments(command).some(segment => {
+		const argv = words(segment);
+		const at = argv.findIndex(word => /(?:^|[/\\])git(?:\.exe)?$/.test(word));
+		if (at < 0) return false;
+		let i = at + 1;
+		let hooksPath = false;
+		for (; i < argv.length; i++) {
+			const word = argv[i] ?? "";
+			if (word === "-C" || word === "-c") {
+				if (word === "-c" && /^core\.hookspath=/i.test(argv[i + 1] ?? "")) hooksPath = true;
+				i++;
+			} else if (!word.startsWith("-")) break;
+		}
+		const sub = argv[i];
+		if (sub !== "push" && sub !== "commit") return false;
+		const rest = argv.slice(i + 1);
+		return (
+			hooksPath ||
+			rest.includes("--no-verify") ||
+			(sub === "commit" && rest.some(word => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(word)))
+		);
+	});
 }
 
 /** Words of one segment, quotes removed; `( ) \`` end a word and redirections are dropped. */

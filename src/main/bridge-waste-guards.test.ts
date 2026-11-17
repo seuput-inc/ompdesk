@@ -6,6 +6,7 @@ import {
 	POLL_HINT,
 	READY_LOG_REASON,
 	readyLogCannotMatch,
+	skipsGitHooks,
 	waitWindowElapsed,
 } from "../../resources/gui-bridge/waste-guards-core";
 
@@ -75,6 +76,33 @@ describe("ready.log that can never match", () => {
 		expect(READY_LOG_REASON).toContain("ready.log can never match");
 		expect(READY_LOG_REASON).toContain("async: true");
 		expect(READY_LOG_REASON).toContain("| tee file");
+	});
+});
+
+describe("a git push or commit past the hooks", () => {
+	it.each([
+		["push --no-verify", "git push --no-verify origin HEAD:refs/heads/x"],
+		["after a cd", "cd /repo && git push -q --no-verify origin main"],
+		["with -C", "git -C /repo push --no-verify"],
+		["commit --no-verify", 'git commit --no-verify -m "x"'],
+		["commit -n", 'git commit -n -m "x"'],
+		["commit -anm", 'git commit -anm "x"'],
+		["hooks path elsewhere", "git -c core.hooksPath=/dev/null push origin main"],
+		["a full git path", "/usr/bin/git push --no-verify"],
+	])("is refused: %s", (_label, command) => {
+		expect(skipsGitHooks({ command })).toBe(true);
+	});
+
+	it.each([
+		["a plain push", "git push origin HEAD:main"],
+		["push -n is a dry run", "git push -n origin main"],
+		["a probe branch", "git push origin HEAD:refs/heads/probe/red-test"],
+		["the words in a message", 'git commit -m "explain why --no-verify is refused"'],
+		["grep for it", 'rg -n "git push --no-verify" scripts'],
+		["another tool's flag", "npm publish --no-verify"],
+		["not a command", undefined],
+	])("is allowed: %s", (_label, command) => {
+		expect(skipsGitHooks({ command })).toBe(false);
 	});
 });
 

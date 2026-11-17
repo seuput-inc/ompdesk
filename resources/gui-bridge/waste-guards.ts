@@ -6,15 +6,18 @@
  * result through the public `tool_result` hook's `content` (stock lets a handler replace the result's content array,
  * a failed call's too; `details` and `isError` stay as they were). `wait` is re-registered (public `registerTool` over a
  * built-in) to call stock's own `wait` (`ctx.invokeTool`) again whenever its window ran out with the jobs still running,
- * so it returns only with news.
+ * so it returns only with news. A `bash` call that pushes or commits past the repository's git hooks (`--no-verify`) is
+ * refused too: bypassing them is a person's call (AGENTS.md), and `probe/*` and `refs/archive/*` are the lawful ways.
  */
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
 import {
 	createHints,
+	NO_VERIFY_REASON,
 	READY_LOG_REASON,
 	readyLogCannotMatch,
+	skipsGitHooks,
 	WAIT_DESCRIPTION,
 	waitWindowElapsed,
 } from "./waste-guards-core";
@@ -26,7 +29,12 @@ const hints = createHints();
 export function install(pi: ExtensionAPI): void {
 	registerWait(pi);
 	pi.on("tool_call", event => {
-		if (event.toolName !== "bash" || !readyLogCannotMatch(event.input)) return undefined;
+		if (event.toolName !== "bash") return undefined;
+		if (skipsGitHooks(event.input)) {
+			pi.logger.debug("gui-bridge: a git push or commit past the hooks refused");
+			return { block: true, reason: NO_VERIFY_REASON };
+		}
+		if (!readyLogCannotMatch(event.input)) return undefined;
 		pi.logger.debug("gui-bridge: bash with a ready.log that cannot match refused");
 		return { block: true, reason: READY_LOG_REASON };
 	});

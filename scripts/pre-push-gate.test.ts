@@ -3,7 +3,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gitSync, initRepo } from "../src/main/local/git/test-repos";
-import { isGated, parsePushRefs, planGate, rangeBase, syncTree, withMutex, worktreeHolds } from "./pre-push-gate";
+import {
+	isGated,
+	needsFixTests,
+	parsePushRefs,
+	planGate,
+	rangeBase,
+	syncTree,
+	withMutex,
+	worktreeHolds,
+} from "./pre-push-gate";
 
 const SHA_A = "a".repeat(40);
 const ZERO = "0".repeat(40);
@@ -15,6 +24,19 @@ describe("parsePushRefs", () => {
 		);
 		expect(refs.map(ref => ref.localRef)).toEqual(["refs/heads/main", "(delete)", "refs/tags/v1"]);
 		expect(refs.filter(isGated).map(ref => ref.localRef)).toEqual(["refs/heads/main"]);
+	});
+
+	it("leaves an archive ref unchecked, and a probe branch out of the fix-commit rule only", () => {
+		const [archive, probe, branch, main] = parsePushRefs(
+			[
+				`${SHA_A} ${SHA_A} refs/archive/2026-11/omp/agent/old ${ZERO}`,
+				`HEAD ${SHA_A} refs/heads/probe/red-test ${ZERO}`,
+				`HEAD ${SHA_A} refs/heads/omp/agent/fix ${ZERO}`,
+				`refs/heads/main ${SHA_A} refs/heads/main ${SHA_A}`,
+			].join("\n"),
+		);
+		expect([archive, probe, branch, main].map(isGated)).toEqual([false, true, true, true]);
+		expect([probe, branch, main].map(needsFixTests)).toEqual([false, true, true]);
 	});
 });
 

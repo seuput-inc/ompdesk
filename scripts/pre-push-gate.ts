@@ -22,7 +22,9 @@
  * moving it at once. A gate that cannot run its checks (no node_modules, a failed extract) says SKIPPED and lets the
  * push through: a broken gate must never make every push impossible.
  *
- * `git push --no-verify` skips it, a person's call; an agent never does.
+ * A `probe/*` branch skips the fix-commit rule alone (a test that shows a bug before its fix, an old commit rerun on a
+ * runner) and an archive ref (`refs/archive/*`) is not checked at all, so neither ever needs `--no-verify`. `git push
+ * --no-verify` skips the gate, a person's call; an agent's is refused before it runs (`resources/gui-bridge/waste-guards`).
  */
 import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -59,9 +61,25 @@ export function parsePushRefs(stdin: string): PushRef[] {
 		}));
 }
 
-/** A ref the gate has nothing to check on: a deleted branch, a tag. */
+/**
+ * A ref the gate has nothing to check on: a deleted branch, a tag, an archive ref (`refs/archive/*`, an old tip kept
+ * off the branch list: no new code, and its old commits predate today's rules).
+ */
 export function isGated(ref: PushRef): boolean {
-	return !ZERO_SHA.test(ref.localSha) && !ref.localRef.startsWith("refs/tags/");
+	return (
+		!ZERO_SHA.test(ref.localSha) &&
+		!ref.localRef.startsWith("refs/tags/") &&
+		!ref.remoteRef.startsWith("refs/archive/")
+	);
+}
+
+/**
+ * Whether the fix-commit rule applies. A `probe/*` branch is the lawful way to push what that rule would refuse: a
+ * test alone that shows a bug before its fix, an old release's commit to rerun a check on. Every other check still
+ * runs on it, and the rule still holds wherever its commits land (a push to `main` checks its own range).
+ */
+export function needsFixTests(ref: PushRef): boolean {
+	return !ref.remoteRef.startsWith("refs/heads/probe/");
 }
 
 export interface Plan {
@@ -320,9 +338,10 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 	);
 
 	const notes: string[] = [];
-	const results: StepResult[] = [
-		await runStep("fix commits carry a test", [process.execPath, "scripts/lint-fix-tests.mjs", range], root),
-	];
+	const results: StepResult[] = needsFixTests(ref)
+		? [await runStep("fix commits carry a test", [process.execPath, "scripts/lint-fix-tests.mjs", range], root)]
+		: [];
+	if (!needsFixTests(ref)) notes.push("probe branch: the fix-commit rule is not checked here; it is where it lands");
 	const gateDir = path.join(gitDir, "ompdesk-gate");
 	fs.mkdirSync(gateDir, { recursive: true });
 	const inPlace =
@@ -368,7 +387,7 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 	if (failed.length === 0) return 0;
 	fs.writeFileSync(path.join(gateDir, "refused"), `${ref.localSha}\n`);
 	console.error(
-		"[pre-push] Fix it, commit, push again. `git push --no-verify` skips the gate: a person's call, never an agent's.",
+		"[pre-push] Fix it, commit, push again. A test that shows a bug before its fix, or an old commit to rerun, goes to a `probe/<name>` branch (no fix-commit rule there). `git push --no-verify` is a person's call, never an agent's.",
 	);
 	return 1;
 }
