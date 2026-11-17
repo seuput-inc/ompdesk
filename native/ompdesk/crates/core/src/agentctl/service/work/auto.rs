@@ -154,6 +154,14 @@ impl AgentControl {
                 continue;
             }
             let facts = self.auto_close_facts(tab, opener_idle).await;
+            // The facts come from its omp just now, the tab from main's state as the pass began. A turn that ran in
+            // between (a message handed to a child a relaunch restored runs at once) leaves facts of a run the tab
+            // does not show yet: judged together, a restored child that owes its opener this turn's report reads as
+            // not run this launch and closes with the report unsent. Main's state as of those reads tells whether
+            // the run moved; a tab that moved is judged by a later pass.
+            if self.moved(tab) {
+                continue;
+            }
             let reported = self.auto_done(caller, tabs, tab, &facts).await?;
             // A problem child's tab holds the only live trace of its failure, and a throwaway child's session goes
             // with its tab: the report just sent is read in the opener's next turn, so the tab closes in a later
@@ -182,6 +190,18 @@ impl AgentControl {
             }
         }
         Ok(())
+    }
+
+    /// Whether `tab`'s run is no longer the one main's state shows now: a turn started or ended, it woke or closed.
+    fn moved(&self, tab: &ControlTab) -> bool {
+        let state = self.host.state();
+        !state.tabs.iter().any(|now| {
+            now.tab_id == tab.tab_id
+                && now.status == tab.status
+                && now.busy == tab.busy
+                && now.last_run == tab.last_run
+                && !waits(now)
+        })
     }
 
     /// `#autoDone`: a child whose turn ended well with a verdict line (`Result: ok` / `Result: problem — <reason>`)

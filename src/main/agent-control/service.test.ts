@@ -3364,6 +3364,32 @@ describe("autoClose: opened sessions whose work landed", () => {
 			await reported.service.autoClose("main0001");
 			expect(reported.host.mails.filter(mail => mail.to === "main0001")).toHaveLength(0);
 		});
+
+		it("reports, then closes, a restored child whose turn of this launch ended while the pass read its omp", async () => {
+			// After a relaunch the child idles with its cut-off turn; the message it lost is handed to it and its turn
+			// ends at once. The pass took the tab from main's state before that (not run this launch), then read the
+			// finished answer from its omp.
+			const { host, service, child } = await finishedChild({
+				patch: { restored: true, lastRun: undefined, last: undefined, messages: [] },
+			});
+			const omp = host.command;
+			host.command = async (tabId, command, timeoutMs) => {
+				if (tabId === child.tabId && command.type === "get_state" && child.lastRun === undefined)
+					Object.assign(child, {
+						lastRun: { stopReason: "stop" },
+						last: "Did C.\nResult: ok",
+						messages: [
+							{ role: "assistant", content: "Did C.\nResult: ok", stopReason: "stop" },
+						] as AgentMessage[],
+					});
+				return omp(tabId, command, timeoutMs);
+			};
+			await service.autoClose("main0001");
+			await service.autoClose("main0001");
+			const done = host.mails.filter(mail => mail.to === "main0001" && mail.content.includes("Did C."));
+			expect(done).toHaveLength(1);
+			expect(host.order.indexOf("mail:main0001")).toBeLessThan(host.order.indexOf(`view:close:${child.tabId}`));
+		});
 	});
 
 	describe("a message to a child whose tab was closed", () => {
