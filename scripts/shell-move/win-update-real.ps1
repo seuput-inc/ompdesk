@@ -381,7 +381,23 @@ Check (-not (Test-Path -LiteralPath (Join-Path $userData 'update-start-failed.js
 Check (-not (Test-Path -LiteralPath "$installDir.move-backup")) 'no .move-backup folder is left beside the install'
 Check (Test-Path -LiteralPath $canary) 'userData is kept (the canary file written before the update is there)'
 Check ($runningApp.Count -gt 0) 'OMPdesk.exe of the install is running after the update'
-if ($Mode -eq 'installer') { Check ($setupExit -eq 0) 'the setup exited 0' }
+if ($Mode -eq 'installer') {
+	Check ($setupExit -eq 0) 'the setup exited 0'
+	# The pinned banner plugin keeps this setup's %TEMP%\ns*.tmp; the next setup removes exactly the folder recorded in
+	# userData (installer.nsh ompPinBanner). A second run of the same setup, as the next update would, must take it away.
+	$record = Join-Path $userData 'setup-banner-dir.txt'
+	$first = if (Test-Path -LiteralPath $record) { (Get-Content -Raw -LiteralPath $record).Trim() } else { '' }
+	Evidence "banner folder recorded by the update: '$first' ($(@(Get-ChildItem -LiteralPath $first -Force -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', '))"
+	Check ($first -and (Test-Path -LiteralPath (Join-Path $first 'SpiderBanner.dll'))) 'the update recorded its banner folder, which holds SpiderBanner.dll'
+	$again = Start-Process -FilePath $package -ArgumentList $updaterArgs -PassThru
+	$null = $again.Handle
+	if (-not $again.WaitForExit(600000)) { Stop-Process -Id $again.Id -Force -ErrorAction SilentlyContinue }
+	$second = if (Test-Path -LiteralPath $record) { (Get-Content -Raw -LiteralPath $record).Trim() } else { '' }
+	Evidence "a second run of the setup exited $($again.ExitCode) and recorded '$second'"
+	Check ($again.ExitCode -eq 0) 'a second run of the setup exited 0'
+	Check ($second -and $second -ne $first) 'the second run recorded its own banner folder'
+	Check (-not (Test-Path -LiteralPath $first)) "the second run removed the first run's banner folder"
+}
 else {
 	$rows = @(Get-Content -LiteralPath (Join-Path $userData 'logs\gui-runtime.jsonl') -ErrorAction SilentlyContinue | ForEach-Object { try { $_ | ConvertFrom-Json } catch { $null } } | Where-Object { $_.source -eq 'app-update' })
 	$events = @($rows | ForEach-Object { "$($_.message) $($_.details.event)".Trim() })

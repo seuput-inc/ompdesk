@@ -158,13 +158,48 @@ Var pid
 ; Pinning the module (GetModuleHandleEx with GET_MODULE_HANDLE_EX_FLAG_PIN) keeps it mapped until the process ends, however
 ; often it is freed; ExitProcess ends every other thread before anything is unmapped, so the banner's thread can never
 ; run in freed code, however slow the computer. This runs first in customCheckAppRunning, the first hook after the Show.
+; A pinned DLL cannot be deleted while its setup runs, so NSIS leaves that setup's plugin folder ($PLUGINSDIR, a
+; `%TEMP%\ns*.tmp`) behind. Each setup writes its own folder's path to `<userData>\setup-banner-dir.txt`, and the next
+; one removes the folder recorded there, and only while it is under %TEMP% and holds nothing but SpiderBanner.dll: a
+; name pattern would also match other NSIS setups' folders.
 !macro ompPinBanner
   !ifndef BUILD_UNINSTALLER
     !ifdef ONE_CLICK
       ${IfNot} ${Silent}
+        !insertmacro ompUserDataDir
+        !insertmacro ompReadText "$ompUserData\setup-banner-dir.txt"
+        StrLen $R4 "$TEMP\ns"
+        StrCpy $R3 $R7 $R4
+        ${if} $R7 != ""
+        ${andIf} $R7 != $PLUGINSDIR
+        ${andIf} $R3 == "$TEMP\ns"
+        ${andIf} ${FileExists} "$R7\SpiderBanner.dll"
+          StrCpy $R2 0
+          FindFirst $R0 $R1 "$R7\*.*"
+          ${DoWhile} $R1 != ""
+            ${if} $R1 != "."
+            ${andIf} $R1 != ".."
+            ${andIf} $R1 != "SpiderBanner.dll"
+              IntOp $R2 $R2 + 1
+            ${endIf}
+            FindNext $R0 $R1
+          ${Loop}
+          FindClose $R0
+          ${if} $R2 == 0
+            Delete "$R7\SpiderBanner.dll"
+            RMDir "$R7"
+          ${endIf}
+        ${endIf}
         System::Call 'kernel32::GetModuleHandleEx(i 1, t "SpiderBanner.dll", *p .R5) i .R6'
         ${if} $R6 == 0
           !insertmacro ompLog "banner: SpiderBanner.dll was not pinned"
+        ${else}
+          CreateDirectory "$ompUserData"
+          FileOpen $R8 "$ompUserData\setup-banner-dir.txt" w
+          ${if} $R8 != ""
+            FileWrite $R8 "$PLUGINSDIR"
+            FileClose $R8
+          ${endIf}
         ${endIf}
       ${endIf}
     !endif
