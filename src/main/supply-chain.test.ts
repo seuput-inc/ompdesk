@@ -49,8 +49,8 @@ describe("supply chain", () => {
 		expect(new Set(uses.map(use => use.version)).size, "workflows pin different Bun versions").toBe(1);
 	});
 
-	it("workflows install omp only through install-omp, and only omp-latest asks for the latest", () => {
-		const latest: string[] = [];
+	it("workflows install omp only through install-omp, and only omp-latest asks for another than the tested", () => {
+		const other: string[] = [];
 		let uses = 0;
 		for (const file of fs.readdirSync(WORKFLOWS).filter(name => /\.ya?ml$/.test(name))) {
 			const text = fs.readFileSync(path.join(WORKFLOWS, file), "utf8");
@@ -62,13 +62,16 @@ describe("supply chain", () => {
 				for (const step of steps) {
 					if (step.uses !== "./.github/actions/install-omp") continue;
 					uses++;
-					if (step.with?.version === "latest") latest.push(file);
-					else expect(step.with?.version ?? "tested", `${file} › ${job}`).toBe("tested");
+					const version = step.with?.version ?? "tested";
+					if (version === "tested") continue;
+					// The newest omp, read once by the run's plan job so every job tests the same one.
+					expect(version, `${file} › ${job}`).toMatch(/^\$\{\{ needs\.plan\.outputs\.latest \}\}$/);
+					other.push(file);
 				}
 			}
 		}
 		expect(uses).toBeGreaterThan(0);
-		expect([...new Set(latest)]).toEqual(["omp-latest.yml"]);
+		expect([...new Set(other)]).toEqual(["omp-latest.yml"]);
 	});
 
 	it("the tested omp is one exact version the app accepts, and install-omp installs exactly it", () => {
