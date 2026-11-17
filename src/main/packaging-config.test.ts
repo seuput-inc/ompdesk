@@ -25,6 +25,7 @@ interface BuilderConfig {
 	productName?: string;
 	afterPack?: string;
 	asar?: boolean;
+	files?: string[];
 	npmRebuild?: boolean;
 	electronDist?: string;
 	afterExtract?: string;
@@ -1402,6 +1403,51 @@ describe("Windows package config", () => {
 		expect(init).toMatch(/\$\{IfNot\} \$\{Silent\}\n\s+\$\{AndIfNot\} \$\{isUpdated\}\n\s+MessageBox MB_OKCANCEL/);
 		expect(init).toMatch(/SetErrorLevel 2\n\s+Quit/);
 		expect(script).not.toMatch(/customInstallMode|RequestExecutionLevel admin/);
+	});
+
+	it("asks the new folder only for files the Windows package config produces, never for CEF's, and records an incomplete one", () => {
+		const script = fs.readFileSync(path.join(PACKAGE_ROOT, "resources/installer.nsh"), "utf8");
+		const release = fs.readFileSync(path.join(PACKAGE_ROOT, ".github/workflows/release.yml"), "utf8");
+		const config = parse(
+			fs.readFileSync(path.join(PACKAGE_ROOT, "electron-builder.win.yml"), "utf8"),
+		) as BuilderConfig;
+		const check = /!macro ompCheckNewFolder\n([\s\S]*?)!macroend/.exec(script)?.[1] ?? "";
+		const required = [...check.matchAll(/FileExists\} "\$INSTDIR\\([^"]+)"/g)].map(match => match[1] as string);
+		const exe = "$" + "{APP_EXECUTABLE_FILENAME}";
+		expect(required).toEqual([
+			exe,
+			"resources\\node\\node.exe",
+			"resources\\app\\out\\main\\index.js",
+			"resources\\app\\out\\preload\\tauri.js",
+			"resources\\app\\out\\renderer\\index.html",
+		]);
+		for (const cef of WIN_CEF_FILES) expect(check, `the check does not require ${cef}`).not.toContain(cef);
+
+		// Where each required file comes from: the Tauri host renamed to the product name, the pinned Node, and the built app
+		// copied unpacked (no asar) from out/.
+		expect(config.productName).toBe("OMPdesk");
+		expect(config.electronDist).toBe("resources/ompdesk-tauri/win32-x64");
+		expect(config.asar).toBe(false);
+		expect(config.extraResources).toContainEqual({ from: "resources/node/win32-x64", to: "node" });
+		const files = config.files ?? [];
+		expect(files).toContain("out/**/*");
+		const app = required.slice(2).map(file => file.replace(/^resources\\app\\/, "").replaceAll("\\", "/"));
+		for (const file of app) expect(files, `${file} is not excluded from the package`).not.toContain(`!${file}`);
+
+		// The release's package check proves each of them present and names the CEF runtime absent.
+		const absent = [...release.matchAll(/test ! -e dist\/win-unpacked\/(\S+)/g)].map(match => match[1] as string);
+		expect(absent).toContain("libcef.dll");
+		for (const file of required.slice(1)) {
+			const inPackage = file.replaceAll("\\", "/");
+			expect(absent, file).not.toContain(inPackage);
+			expect(release, file).toContain(`dist/win-unpacked/${inPackage}`);
+		}
+		expect(release).toContain("test -f dist/win-unpacked/OMPdesk.exe");
+
+		// An incomplete unpack is recorded for the old app's updater before the old folder comes back.
+		expect(check).toMatch(
+			/\$\{else\}\n\s+!insertmacro ompUserDataDir\n\s+!insertmacro ompRecordFailure\n\s+!insertmacro ompRestoreOldFolder "incomplete"/,
+		);
 	});
 });
 

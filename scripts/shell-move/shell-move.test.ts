@@ -103,7 +103,7 @@ describe("resources/installer.nsh and the test seams", () => {
 	const shipping = read("resources/installer.nsh");
 	const seams = read("scripts/shell-move/move-test.nsh");
 
-	it("keeps the old folder until the new one is complete, and checks the shell, CEF, Node and the main", () => {
+	it("keeps the old folder until the new one is complete, and checks the shell, Node and the main", () => {
 		expect(shipping).toContain("!macro customCheckAppRunning");
 		// electron-builder includes getProcessInfo.nsh (and declares $pid) only while it has no such macro of ours to use.
 		expect(shipping).toMatch(/^!include "getProcessInfo\.nsh"\nVar pid$/m);
@@ -113,7 +113,7 @@ describe("resources/installer.nsh and the test seams", () => {
 		);
 		expect(shipping).toContain('Rename "$INSTDIR" "$ompBackup"');
 		expect(shipping).toContain("!macro customInstall");
-		for (const needed of ["libcef.dll", "resources\\node\\node.exe", "resources\\app\\out\\main\\index.js"]) {
+		for (const needed of ["resources\\node\\node.exe", "resources\\app\\out\\main\\index.js"]) {
 			expect(shipping, needed).toContain(`$INSTDIR\\${needed}`);
 		}
 		// A failed check restores the old folder and its uninstall entry's values and fails the setup.
@@ -201,6 +201,25 @@ describe("resources/installer.nsh and the test seams", () => {
 		);
 		expect(seams).toContain("OMP_GUI_TEST_USER_DATA_DIR");
 		expect(seams).toContain("OMP_GUI_HEADLESS");
+	});
+});
+
+describe("win-update-real.ps1", () => {
+	it("runs the candidate setup with the arguments electron-updater's doInstall builds for a restart without /S", () => {
+		const doInstall = read("node_modules/electron-updater/out/NsisUpdater.js");
+		// The restart path (nsis-updater.ts quitAndInstall(): isSilent=false, force-run from autoRunAppAfterInstall=true).
+		expect(doInstall).toMatch(
+			/const args = \["--updated"\];[\s\S]*isSilent\)[\s\S]*push\("\/S"\)[\s\S]*push\("--force-run"\)/,
+		);
+		expect(read("node_modules/electron-updater/out/AppUpdater.js")).toContain("this.autoRunAppAfterInstall = true;");
+		const script = read("scripts/shell-move/win-update-real.ps1");
+		expect(script).toContain("$updaterArgs = @('--updated', '--force-run', \"--package-file=$package\")");
+		expect(script).toContain("ompdesk-updater\\pending");
+		expect(script).not.toMatch(/\$updaterArgs = [^\n]*\/S/);
+		// Every job of the subset runs both modes against a setup the job downloaded, never one it built under a test identity.
+		const workflow = read(".github/workflows/shell-batch-checks.yml");
+		expect(workflow).toContain("mode: [installer, feed]");
+		expect(workflow).toContain("only == 'win-update-real'");
 	});
 });
 

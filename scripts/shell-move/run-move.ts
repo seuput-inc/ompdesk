@@ -1,8 +1,8 @@
 /**
- * The dry run of the update from a released Electron app to the CEF shell, never touching the
+ * The dry run of the update from a released Electron app to the Tauri 2 app, never touching the
  * person's install (native-rust › S):
  *
- *   bun scripts/shell-move/run-move.ts [--label success] [--fail-at swap|start|start-twice] [--work <dir>] [--keep] [--stand-in <project>]
+ *   bun scripts/shell-move/run-move.ts [--label success] [--fail-at swap|swap-twice|start|start-twice] [--work <dir>] [--keep] [--stand-in <project>]
  *   OMP_MOVE_RELEASED_TAG=v0.128.0 bun scripts/shell-move/run-move.ts --work <separate release-1 work dir>
  *
  * `--stand-in <project>` packs a project of the same shape (package.json, out/, a staged shell) in place of this
@@ -10,7 +10,7 @@
  *
  * 1. `build-setups.ts` makes two real electron-builder NSIS setups under a TEST identity (an `nsis.guid` shaped like
  *    electron-builder's, shortcut `OMPdesk-movetest`, folder `%LOCALAPPDATA%\Programs\OMPdesk-movetest`): the released
- *    Electron files selected by OMP_MOVE_RELEASED_TAG (default: the pinned final Electron release) in a setup of the same shape, and this checkout's shell build offered as
+ *    Electron files selected by OMP_MOVE_RELEASED_TAG (default: the pinned final Electron release) in a setup of the same shape, and this checkout's Tauri build offered as
  *    v0.200.0. Neither can touch the person's install: other GUID, other folder, other shortcuts; the setup's own
  *    process search is path-prefixed on the install folder (checked first: `setupCanFindProcesses`), and the folder is
  *    also pinned through the registry (`HKCU\Software\<test guid>\InstallLocation`) before the old setup runs.
@@ -22,19 +22,22 @@
  *    downloads it, checks its SHA-512, counts down, starts the new setup and quits: the update log lines
  *    (`check found` … `swap helper nsis`) are the record.
  * 4. The new setup (electron-builder's NSIS flow over the old install; resources/installer.nsh keeps the old folder
- *    until the new one is complete) starts the shell, which reads the profile: the shell's log (`cef.ready`,
- *    `migrate.token`, `migrate.localStorage`, the window) and the page itself (CDP: the seeded keys are there) are the
- *    record, then the uninstall entry, the folder and the uninstall.
- * 5. `--fail-at swap`: the same, but the unpack comes out incomplete on purpose (the test seam of move-test.nsh): the
+ *    until the new one is complete) starts the Tauri shell, which reads the profile. The record is what the shell and the
+ *    main leave on it (no page is asked: a release host has no WebDriver): `tauri-shell.jsonl`, `app-started.json` of the
+ *    new version, the Local Storage journal `done`, the token file kept, the update log's `swap result installed`; then the
+ *    uninstall entry, the folder (no libcef.dll, no asar) and the uninstall.
+ * 5. `--fail-at swap`: the same, but the unpack comes out incomplete on purpose (the test seam of move-test.nsh deletes Node): the
  *    old app must come back (folder, uninstall entry) and start, and log `swap result … rolled back`.
- * 6. `--fail-at start`: the unpack is complete but the new shell exits right after CEF init
+ * 6. `--fail-at start`: the unpack is complete but the new shell exits right after its native start
  *    (`OMP_GUI_TEST_SHELL_FAIL_START=1`, in the launcher's environment): the setup, which waits for the main's
  *    `app-started.json` of the new version, ends what the new app started, puts the old folder and uninstall entry
  *    back, starts the old app (logging `start-failed`, exit 2, no dialog) and that app logs `swap result … rolled back`.
  *    The success run checks the other side: the marker names the new version and the backup of the old folder is gone.
- * 7. `--fail-at start-twice`: `start`, then the old app runs again with its updater and offers the same version once more.
- *    v0.127.0 reaches NSIS, which reads update-start-failed.json and skips the swap (`start-failed-before: skipped`, exit 2).
- *    v0.128.0's own updater withdraws the repeat before running any setup. Both stay on Electron with no window.
+ * 7. `--fail-at start-twice` and `--fail-at swap-twice`: `start` or `swap`, then the old app runs again with its updater and
+ *    offers the same version once more. v0.127.0 reaches NSIS, which reads update-start-failed.json and skips the swap
+ *    (`start-failed-before: skipped`, exit 2). v0.128.0's and v0.131.0's own updaters withdraw the repeat before running
+ *    any setup. Both stay on Electron with no window. Both failures leave the same record: an incomplete unpack is written
+ *    down like a start that failed.
  *
  * What protects the person's data: the old Electron runs with `OMP_GUI_TEST_USER_DATA_DIR=<temp profile>`,
  * `OMP_GUI_HEADLESS=1` (no `omp://` registration, no focus) and a temp HOME, APPDATA and LOCALAPPDATA (its updater's
@@ -47,9 +50,10 @@
  * entry, `HKCU\Software\Classes\omp`, his shortcuts, the names at the top of `%APPDATA%\ompdesk` and his running
  * processes; any difference fails the run loudly.
  *
- * Needs the shell staged (`bun run build:shell`), Node (`bun run build:node`), CEF's licences (`bun run
- * stage:cef-licenses`), `out/` (`bun run build`) and the other staged binaries, exactly as a package does.
+ * Needs the Tauri host staged (`bun run build:tauri`), Node (`bun run build:node`), the Preview browser, `out/` (`bun run
+ * build`) and the other staged binaries, exactly as a package does (.github/actions/shell-mac-inputs, runtime `tauri`).
  */
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -81,15 +85,14 @@ const { values } = parseArgs({
 	},
 });
 const failAt = values["fail-at"];
-if (failAt !== undefined && !["swap", "start", "start-twice"].includes(failAt))
-	throw new Error("--fail-at takes `swap`, `start` or `start-twice`");
+if (failAt !== undefined && !["swap", "swap-twice", "start", "start-twice"].includes(failAt))
+	throw new Error("--fail-at takes `swap`, `swap-twice`, `start` or `start-twice`");
 const label = values.label ?? (failAt ? `fail-${failAt}` : "success");
 const work = resolve(values.work ?? join(tmpdir(), "ompdesk-shell-move", RELEASED_TAG));
 const out = join(work, "runs", label);
 const profile = join(out, "profile");
 const home = join(out, "home");
 const feedPort = 18000 + (process.pid % 1000);
-const debugPort = feedPort + 1;
 const setupLog = join(out, "setup-env.log");
 const t0 = Date.now();
 const evidence: Record<string, unknown> = {
@@ -194,8 +197,7 @@ function testEnv(): Record<string, string> {
 		OMP_MOVE_LOG: setupLog,
 		OMP_MOVE_SILENT: "1",
 		OMP_MOVE_HOME: home,
-		OMP_MOVE_DEBUG_PORT: String(debugPort),
-		...(failAt ? { OMP_MOVE_FAIL: failAt === "start-twice" ? "start" : failAt } : {}),
+		...(failAt ? { OMP_MOVE_FAIL: failAt.replace(/-twice$/, "") } : {}),
 	};
 	assertTestEnv(env);
 	return env;
@@ -208,38 +210,24 @@ const switches = (port: number) => [
 
 const updateLines = () =>
 	readJsonl(join(profile, "logs", "gui-runtime.jsonl")).filter(line => line.source === "app-update");
-const shellLog = () => readJsonl(join(profile, "shell-webview", "shell.log.jsonl"));
 
-/** Evaluates `expression` in the app's page over CDP (`--remote-debugging-port`); undefined when nothing answers. */
-async function pageEval(expression: string): Promise<unknown> {
+/** The Tauri shell's record of the Local Storage import (crates/tauri-shell/src/profile.rs): `done` once every key was read back. */
+interface Journal {
+	source?: string;
+	destination?: string;
+	state?: { status?: string };
+}
+
+function readJournal(): Journal | null {
 	try {
-		const targets = (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()) as Array<{
-			type: string;
-			url: string;
-			webSocketDebuggerUrl: string;
-		}>;
-		const page = targets.find(target => target.type === "page" && target.url.startsWith("app://ompdesk/"));
-		if (!page) return undefined;
-		const socket = new WebSocket(page.webSocketDebuggerUrl);
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const timer = setTimeout(() => resolve(undefined), 10_000);
-		socket.onopen = () =>
-			socket.send(
-				JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression, returnByValue: true } }),
-			);
-		socket.onmessage = event => {
-			const reply = JSON.parse(String(event.data)) as { id: number; result?: { result?: { value?: unknown } } };
-			if (reply.id !== 1) return;
-			clearTimeout(timer);
-			socket.close();
-			resolve(reply.result?.result?.value);
-		};
-		socket.onerror = () => resolve(undefined);
-		return await promise;
+		return JSON.parse(readFileSync(join(profile, "tauri-local-storage-import.json"), "utf8")) as Journal;
 	} catch {
-		return undefined;
+		return null;
 	}
 }
+
+/** The seeded token file's hash, taken right after Electron wrote it. */
+let seededTokenSha: string | undefined;
 
 /** The stand-in feed, killed in `cleanup` however the run ends. */
 let feed: ReturnType<typeof Bun.spawn> | undefined;
@@ -301,6 +289,9 @@ async function main(): Promise<void> {
 	const seeded = await run([join(seedApp, "OMPdesk.exe"), `--user-data-dir=${profile}`], testEnv());
 	note("profile seeded", seeded.out.trim().split("\n").pop());
 	expect(existsSync(join(profile, "update-token.bin")), "the profile holds an Electron safeStorage token");
+	seededTokenSha = createHash("sha256")
+		.update(readFileSync(join(profile, "update-token.bin")))
+		.digest("hex");
 
 	// 4. The stand-in feed.
 	feed = Bun.spawn(
@@ -383,53 +374,34 @@ async function main(): Promise<void> {
 	);
 
 	if (!failAt) await verifyMoved();
-	else await verifyRolledBack(failAt === "swap" ? "swap" : "start", failAt !== "start-twice");
+	else await verifyRolledBack(failAt.startsWith("swap") ? "swap" : "start", !failAt.endsWith("-twice"));
 }
 
 async function verifyMoved(): Promise<void> {
-	// The new shell starts (through the launcher the test setup left as its start link) and reads the profile.
-	let log = shellLog();
-	for (let waited = 0; waited < 120 && !log.some(event => event.event === "window.created"); waited += 2) {
+	// The new app starts through the launcher the test setup left as its start link. The setup itself waited for its start
+	// mark before it dropped the backup, so what is left to read is what the Tauri shell wrote on the profile.
+	let journal = readJournal();
+	for (let waited = 0; waited < 120 && journal?.state?.status !== "done"; waited += 2) {
 		await sleep(2000);
-		log = shellLog();
+		journal = readJournal();
 	}
-	const wanted = (name: string) => log.find(event => event.event === name);
-	evidence.shellLog = log.filter(event =>
-		/^(cef|node|host\.hello|migrate|window|wc\.created|session)/.test(String(event.event)),
-	);
-	note("shell log", evidence.shellLog);
-	expect(!!wanted("cef.ready"), "the new shell started (cef.ready)");
+	const shellLines = readJsonl(join(profile, "tauri-shell.jsonl"));
+	evidence.tauriShellLog = shellLines.slice(0, 80);
+	note("tauri-shell.jsonl", { lines: shellLines.length });
+	expect(shellLines.length > 0, "the Tauri shell started on the profile (tauri-shell.jsonl)");
+	evidence.journal = journal;
 	expect(
-		wanted("migrate.token")?.ok === true,
-		"Electron's safeStorage token was decrypted by the shell",
-		wanted("migrate.token"),
+		journal?.source === "file://" &&
+			journal.destination === "http://app.localhost" &&
+			journal.state?.status === "done",
+		"the Tauri page imported Electron's Local Storage and read every key back (journal done, file:// to http://app.localhost)",
+		journal,
 	);
+	const tokenFile = join(profile, "update-token.bin");
 	expect(
-		wanted("migrate.localStorage")?.ok === true,
-		"Electron's Local Storage was imported",
-		wanted("migrate.localStorage"),
+		existsSync(tokenFile) && createHash("sha256").update(readFileSync(tokenFile)).digest("hex") === seededTokenSha,
+		"Electron's safeStorage token file is kept byte for byte",
 	);
-	expect(!!wanted("window.created"), "the window was created");
-	// The page itself.
-	let draft: unknown;
-	for (let attempt = 0; attempt < 30 && draft === undefined; attempt++) {
-		draft = await pageEval(
-			`JSON.stringify({ href: location.href, draft: localStorage.getItem("ompdesk.seed.draft"), korean: localStorage.getItem("ompdesk.seed.korean"), large: (localStorage.getItem("ompdesk.seed.large") || "").length, omp: typeof window.omp })`,
-		);
-		if (draft === undefined) await sleep(2000);
-	}
-	const page =
-		typeof draft === "string"
-			? (JSON.parse(draft) as { href: string; draft: string; korean: string; large: number; omp: string })
-			: null;
-	evidence.page = page;
-	note("page", page);
-	expect(page?.href.startsWith("app://ompdesk/") === true, "the page loaded from app://ompdesk", page?.href);
-	expect(
-		page?.draft === "a draft typed in Electron" && page?.korean === "한국어 초안 ✓" && page?.large === 200_000,
-		"Local Storage reached the page (draft, Korean, 200 000 characters)",
-	);
-	expect(page?.omp === "object", "window.omp is there");
 	// The main (Node, through the shim) reads the same profile: its update log says what came of the move.
 	let result = updateLines().find(line => line.message === "swap" && line.details?.event === "result");
 	for (let waited = 0; waited < 60 && !result; waited += 2) {
@@ -467,8 +439,11 @@ async function verifyMoved(): Promise<void> {
 		"InstallLocation is still the test folder",
 	);
 	expect(
-		existsSync(join(TEST_DIR, "libcef.dll")) && !existsSync(join(TEST_DIR, "resources", "app.asar")),
-		"the folder holds the shell (libcef.dll), no asar",
+		!existsSync(join(TEST_DIR, "libcef.dll")) &&
+			!existsSync(join(TEST_DIR, "resources", "app.asar")) &&
+			existsSync(join(TEST_DIR, "resources", "node", "node.exe")) &&
+			existsSync(join(TEST_DIR, "resources", "app", "out", "preload", "tauri.js")),
+		"the folder holds the Tauri app (node.exe, preload/tauri.js; no libcef.dll, no asar)",
 	);
 	expect(!existsSync(`${TEST_DIR}.move-backup`), "the backup of the old folder is gone");
 	const started = existsSync(join(profile, "app-started.json"))
@@ -551,6 +526,17 @@ async function verifyRolledBack(reason: "swap" | "start", final: boolean): Promi
 		`the setup logged ${reason === "swap" ? "the incomplete unpack" : "`start-failed`"} (in %TEMP%\\ompdesk-setup.log), no dialog`,
 		setupText.trim(),
 	);
+	// Whichever way the move failed, the setup wrote the failure down for the old app's updater (and its own next run).
+	const failedFile = join(profile, "update-start-failed.json");
+	const record = existsSync(failedFile)
+		? (JSON.parse(readFileSync(failedFile, "utf8")) as { version?: string; count?: number; at?: number })
+		: null;
+	evidence.startFailedRecord = record;
+	expect(
+		record?.version === OFFERED_VERSION && (record.count ?? 0) >= 1 && typeof record.at === "number",
+		`the failure left update-start-failed.json naming ${OFFERED_VERSION}`,
+		record,
+	);
 	const running = await processesUnder(TEST_DIR);
 	const markerFile = join(profile, "app-started.json");
 	let markerRaw: string | undefined;
@@ -589,16 +575,6 @@ async function verifyRolledBack(reason: "swap" | "start", final: boolean): Promi
  * version before starting any installer. Neither released updater is patched by the harness.
  */
 async function verifyNotTriedAgain(entry: string): Promise<void> {
-	const failedFile = join(profile, "update-start-failed.json");
-	const record = existsSync(failedFile)
-		? (JSON.parse(readFileSync(failedFile, "utf8")) as { version?: string; count?: number; at?: number })
-		: null;
-	evidence.startFailedRecord = record;
-	expect(
-		record?.version === OFFERED_VERSION && (record.count ?? 0) >= 1 && typeof record.at === "number",
-		`the first failure left update-start-failed.json naming ${OFFERED_VERSION}`,
-		record,
-	);
 	await stopTestProcesses();
 	rmSync(join(process.env.TEMP ?? tmpdir(), "ompdesk-setup.log"), { force: true });
 	const helpersBefore = updateLines().filter(

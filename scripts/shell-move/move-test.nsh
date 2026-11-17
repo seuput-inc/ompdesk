@@ -15,7 +15,7 @@
 
 ; Before the new folder is checked: log what the setup saw of its environment (the old app's updater started it with its
 ; own environment: what it passed through is what the setup logs) and, with OMP_MOVE_FAIL=swap, make the unpack
-; incomplete on purpose by deleting CEF's library, so the check fails and the old app must come back.
+; incomplete on purpose by deleting Node's executable, so the check fails and the old app must come back.
 !macro ompMoveTestBeforeCheck
   ReadEnvStr $R9 OMP_MOVE_LOG
   ${if} $R9 != ""
@@ -29,7 +29,7 @@
   ${endif}
   ReadEnvStr $R5 OMP_MOVE_FAIL
   ${if} $R5 == "swap"
-    Delete "$INSTDIR\libcef.dll"
+    Delete "$INSTDIR\resources\node\node.exe"
   ${endif}
 !macroend
 
@@ -37,15 +37,14 @@
 ; through Explorer, which has none of the setup's environment, so the link is a launcher that sets the test profile and
 ; the isolated home first. Without both in the setup's environment the launcher starts nothing: the new app must never
 ; read the person's profile. It sits in %TEMP%, not in the install folder, because the same launcher starts the old app
-; again when the move is undone (the released Electron takes its profile from --user-data-dir only, so the launcher names it), and the folder it lives in is then the old one. It also opens CEF's debugging port
-; (OMP_MOVE_DEBUG_PORT) so the run can read the page's Local Storage, and with OMP_MOVE_FAIL=start it sets
-; OMP_GUI_TEST_SHELL_FAIL_START=1, the shell's seam that exits 1 after CEF init (the new app never comes up). Every app it starts
+; again when the move is undone (the released Electron takes its profile from --user-data-dir only, so the launcher names it),
+; and the folder it lives in is then the old one. With OMP_MOVE_FAIL=start it sets OMP_GUI_TEST_SHELL_FAIL_START=1, the
+; shell's seam that exits 1 after its native start and before Node (the new app never comes up). Every app it starts
 ; also gets api.github.com mapped to a closed port: the old Electron it brings back would otherwise ask the real GitHub, find the
 ; real latest release and start its own setup (a window of the real installer, 21:17 in run 43500402418).
 !macro ompMoveTestAfterInstall
   ReadEnvStr $R9 OMP_GUI_TEST_USER_DATA_DIR
   ReadEnvStr $R7 OMP_MOVE_HOME
-  ReadEnvStr $R6 OMP_MOVE_DEBUG_PORT
   ReadEnvStr $R5 OMP_MOVE_FAIL
   FileOpen $R8 "$TEMP\ompdesk-move-test.cmd" w
   ${if} $R9 == ""
@@ -56,7 +55,7 @@
     ${if} $R5 == "start"
       FileWrite $R8 "set $\"OMP_GUI_TEST_SHELL_FAIL_START=1$\"$\r$\n"
     ${endif}
-    FileWrite $R8 "start $\"$\" $\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" --user-data-dir=$\"$R9$\" --host-resolver-rules=$\"MAP api.github.com 127.0.0.1:1$\" --remote-debugging-port=$R6 %*$\r$\n"
+    FileWrite $R8 "start $\"$\" $\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" --user-data-dir=$\"$R9$\" --host-resolver-rules=$\"MAP api.github.com 127.0.0.1:1$\" %*$\r$\n"
   ${endif}
   FileClose $R8
   StrCpy $launchLink "$TEMP\ompdesk-move-test.cmd"
