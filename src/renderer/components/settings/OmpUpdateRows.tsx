@@ -41,6 +41,20 @@ export function OmpUpdateFailureNotice({ state }: { state: OmpUpdateState }) {
 	);
 }
 
+/**
+ * The omp this OMPdesk was verified against, said only while another one runs (after an `omp update`, say), so a
+ * mismatch is visible; it is a fact, never a warning, and never holds an update back.
+ */
+export function OmpTestedNote({ state, className = "" }: { state: OmpUpdateState; className?: string }) {
+	const t = useT();
+	if (!state.tested || state.installed === null || state.installed === state.tested) return null;
+	return (
+		<p className={`${className} text-sc-xs break-words text-(--sc-text-muted)`} data-testid="omp-tested">
+			{t("ompUpdate.tested", { version: state.tested })}
+		</p>
+	);
+}
+
 /** omp's "Update now", in the action slot of its machine-setup row. */
 export function OmpUpdateNowButton() {
 	const t = useT();
@@ -74,6 +88,7 @@ export function OmpUpdateStatus() {
 					{text}
 				</p>
 			)}
+			<OmpTestedNote className="ps-6" state={state} />
 			<OmpUpdateFailureNotice state={state} />
 		</>
 	);

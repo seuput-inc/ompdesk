@@ -40,6 +40,11 @@ export interface OmpUpdateState {
 	updatedTo: string | null;
 	/** Why the last attempt failed; cleared by the next success. Kept until then. */
 	failure: OmpUpdateFailure | null;
+	/**
+	 * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`). Settings names it beside the
+	 * installed omp when they differ; it never holds an update back. Absent from a host whose OMPdesk predates it.
+	 */
+	tested?: string;
 }
 
 /** What the renderer toasts once an update has been installed ("omp updated to X"). */

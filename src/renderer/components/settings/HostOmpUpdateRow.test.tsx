@@ -133,6 +133,16 @@ describe("HostOmpUpdateRow", () => {
 		);
 	});
 
+	it("names the omp the host's OMPdesk was tested with only while the host runs another", async () => {
+		current = hostState({ installed: "18.22.0", tested: "18.22.0" });
+		await mount();
+		expect(document.body.querySelector("[data-testid='omp-tested']")).toBeNull();
+		await push("dev-studio", hostState({ installed: "18.23.0", tested: "18.22.0" }));
+		expect(document.body.querySelector("[data-testid='omp-tested']")?.textContent).toBe(
+			translate("ompUpdate.tested", { version: "18.22.0" }),
+		);
+	});
+
 	it("shows why the host's update failed and does not toast a success", async () => {
 		await mount();
 		await push("dev-studio", hostState({ phase: "updating" }));

@@ -6690,6 +6690,7 @@ export const ko: Record<string, string> = {
 	"ompUpdate.status.checking": "npm에서 새 omp를 확인하는 중이에요…",
 	"ompUpdate.status.updating": "omp를 업데이트하는 중이에요…",
 	"ompUpdate.status.available": "새 omp를 받을 수 있어요 ({latest}). 설치된 버전: {version}.",
+	"ompUpdate.tested": "omp {version}에서 검증됨",
 	"ompUpdate.failure.check": "npm에서 새 omp를 확인하지 못했어요.",
 	"ompUpdate.failure.install": "omp 업데이트에 실패했어요.",
 	"ompUpdate.failure.not-updated": "omp 업데이트가 끝났지만 아직 최신 버전({latest})이 아니에요.",
