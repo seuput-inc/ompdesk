@@ -78,6 +78,10 @@ on:
         description: "win-update-real: id of a release.yml dry run on the branch (`gh workflow run release.yml --ref <branch> -f dry_run=true`) whose ompdesk-win artifact is the candidate setup; empty uses the published setup of tag"
         type: string
         default: ""
+      cpu_load:
+        description: "win-update-real: busy loops per logical processor kept running while the setup runs (0 = none), to slow the setup the way a busy or scanned computer would"
+        type: string
+        default: "0"
   push:
     branches: [omp/agent/rust-batch-shell]
     paths:
@@ -812,6 +816,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
       CANDIDATE_TAG: ${{ inputs.tag }}
+      CPU_LOAD: ${{ inputs.cpu_load }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -839,7 +844,7 @@ jobs:
           $feed = if ($env:CANDIDATE_RUN) { @{ FeedScript = (Resolve-Path 'scripts/shell-move/feed.ts').Path } } else { @{} }
           & ./scripts/shell-move/win-update-real.ps1 -Mode '${{ matrix.mode }}' `
             -OldSetup (Join-Path $w 'old\ompdesk-windows-setup.exe') -NewSetup (Join-Path $w 'new\ompdesk-windows-setup.exe') `
-            -OldVersion $env:OLD_VERSION -Out (Join-Path $w 'out-${{ matrix.mode }}') @feed
+            -OldVersion $env:OLD_VERSION -Out (Join-Path $w 'out-${{ matrix.mode }}') -CpuLoad ([int]$env:CPU_LOAD) @feed
           exit $LASTEXITCODE
       - name: Evidence lines
         if: always()

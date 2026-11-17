@@ -30,7 +30,8 @@ param(
 	[Parameter(Mandatory)] [string] $Out,
 	[string] $NewVersion = '',
 	[string] $FeedScript = '',
-	[int] $FeedPort = 8443
+	[int] $FeedPort = 8443,
+	[int] $CpuLoad = 0
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -241,6 +242,14 @@ $t0 = Get-Date
 $setup = $null
 $setupExit = $null
 $feed = $null
+# A busy computer (a virus scan, a build) slows every thread of the setup, its banner's included; -CpuLoad keeps that many
+# busy loops per logical processor running from the update to the end of the checks.
+$load = @()
+if ($CpuLoad -gt 0) {
+	$load = @(1..([Environment]::ProcessorCount * $CpuLoad) | ForEach-Object { Start-Process -FilePath pwsh -ArgumentList '-NoProfile', '-Command', 'while ($true) {}' -WindowStyle Hidden -PassThru })
+	Evidence "CPU load: $($load.Count) busy loops on $([Environment]::ProcessorCount) logical processors"
+}
+$nsTempBefore = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue | ForEach-Object Name)
 
 if ($Mode -eq 'installer') {
 	# The app writes its userData once (the start mark of v0.131.0 itself), then goes: its updater is not what runs here.
@@ -367,6 +376,7 @@ if ($fileVersionTracks) {
 } else { Evidence "OMPdesk.exe's file version did not track the app version in v$OldVersion; not asserted" }
 Check ($mark.version -eq $NewVersion) "app-started.json names $NewVersion (the new app's first page loaded)"
 Check ($setupText -notmatch 'incomplete|start-failed|putting the old app back') 'the setup log has no incomplete, start-failed or rollback line'
+Check ($setupText -notmatch 'banner: SpiderBanner.dll was not pinned') "the setup pinned electron-builder's banner plugin (installer.nsh ompPinBanner)"
 Check (-not (Test-Path -LiteralPath (Join-Path $userData 'update-start-failed.json'))) 'no update-start-failed.json'
 Check (-not (Test-Path -LiteralPath "$installDir.move-backup")) 'no .move-backup folder is left beside the install'
 Check (Test-Path -LiteralPath $canary) 'userData is kept (the canary file written before the update is there)'
@@ -398,6 +408,9 @@ try {
 		ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $Out 'application-events.json')
 } catch { Say "note: no Application-log errors for the apps ($($_.Exception.Message))" }
 
+$nsTempLeft = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin $nsTempBefore })
+Evidence "setup temp folders left in %TEMP%: $(if ($nsTempLeft.Count) { ($nsTempLeft | ForEach-Object { "$($_.Name) [$((Get-ChildItem -LiteralPath $_.FullName -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ')]" }) -join '; ' } else { 'none' })"
+$load | Stop-Process -Force -ErrorAction SilentlyContinue
 Stop-Installed
 if ($feed -and -not $feed.HasExited) { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
 if ($script:failures.Count) { Say "RESULT: FAILED ($($script:failures.Count)): $($script:failures -join '; ')"; exit 1 }
