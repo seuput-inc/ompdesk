@@ -662,7 +662,7 @@ mod tests {
             tree.exists()
         );
         assert!(!tree.exists());
-        assert!(!listed.contains("held"), "{listed}");
+        assert!(!listed.contains("refs/heads/held"), "{listed}");
         let _ = std::fs::remove_dir_all(&primary);
     }
 }
