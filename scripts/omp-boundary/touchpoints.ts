@@ -2109,14 +2109,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "C05",
 		area: "copy",
 		contract: "internal",
-		disposition: {
-			kind: "open",
-			reason: "The renderer reads xd:// targets; its test does not compare with stock `parseXdUrl`.",
-		},
+		disposition: { kind: "registered", reason: "The renderer reads xd:// targets with no omp to ask." },
 		summary: "Copy of stock pi-tui `xd-url`: `parseXdUrl`.",
 		files: ["src/renderer/lib/xdev.ts"],
 		stock: ["@oh-my-pi/pi-tui/tools/xd-url"],
-		tests: ["src/renderer/lib/xdev.test.ts"],
+		tests: ["src/renderer/lib/xdev.test.ts", "src/main/xdev-stock.test.ts"],
 	},
 	{
 		id: "C06",
