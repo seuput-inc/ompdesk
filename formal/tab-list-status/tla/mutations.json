@@ -1,0 +1,33 @@
+{
+	"checker": { "kind": "tlc", "config": "MC.cfg" },
+	"mutations": [
+		{
+			"name": "drop-guard",
+			"why": "the listing overwrites a tab pushed while the list was asked: the code before the fix",
+			"search": "    /\\ view' = IF UseGuard /\\ pushCount > req[r].sent THEN view ELSE req[r].snap",
+			"replace": "    /\\ view' = req[r].snap",
+			"breaks": "QuietAgrees"
+		},
+		{
+			"name": "count-taken-at-answer",
+			"why": "the push count is read when the answer lands instead of before the ask, so no push ever counts as since",
+			"search": "    /\\ view' = IF UseGuard /\\ pushCount > req[r].sent THEN view ELSE req[r].snap",
+			"replace": "    /\\ view' = IF UseGuard /\\ pushCount > pushCount THEN view ELSE req[r].snap",
+			"breaks": "QuietAgrees"
+		},
+		{
+			"name": "change-without-push",
+			"why": "main changes the tab without a TAB_STATUS (the assumption the guard rests on): a skipped listing was the only news",
+			"search": "    /\\ pushes' = Append(pushes, mainV + 1)\n    /\\ UNCHANGED <<view, pushCount, req, late>>",
+			"replace": "    /\\ pushes' = IF mainV = 1 THEN pushes ELSE Append(pushes, mainV + 1)\n    /\\ UNCHANGED <<view, pushCount, req, late>>",
+			"breaks": "QuietAgrees"
+		},
+		{
+			"name": "no-terminal-stutter",
+			"why": "a settled system has no step left: TLC reports the end state as a deadlock",
+			"search": "    \\/ (Quiet /\\ mainV = MaxV /\\ UNCHANGED vars)",
+			"replace": "",
+			"breaks": "deadlock"
+		}
+	]
+}

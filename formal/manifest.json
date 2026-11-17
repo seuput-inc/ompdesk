@@ -230,6 +230,23 @@
 			],
 			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
 			"verifySkill": ".omp/skills/stock-lane-verify/SKILL.md"
+		},
+		{
+			"id": "tab-list-status",
+			"title": "A late tab list never undoes a tab status push",
+			"kind": "tla",
+			"dir": "tab-list-status/tla",
+			"spec": "TabListStatus.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/renderer/stores/tabs.ts:722-810",
+				"src/renderer/stores/tabs.ts:1353-1356",
+				"native/ompdesk/crates/core/src/pool/listen.rs#feed_status",
+				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
+				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
+			],
+			"syncCommit": null
 		}
 	]
 }
