@@ -406,6 +406,8 @@ async fn serve(
     let mut observer = None;
     let mut failure = None;
     let mut evaluations = tokio::task::JoinSet::new();
+    #[cfg(feature = "test-automation")]
+    let watch = Watch::new("serve");
     loop {
         let message = tokio::select! {
             _ = &mut stopped => break,
@@ -548,6 +550,8 @@ async fn serve(
             continue;
         }
         let browser = browser.as_ref().expect("launched Preview");
+        #[cfg(feature = "test-automation")]
+        watch.busy(format!("{} {}", call.method, call.params["op"]));
         match execute(
             browser,
             &pages,
@@ -573,6 +577,8 @@ async fn serve(
             Ok(Execution::Complete(answer)) => answer_call(&pages, call, Ok(answer)).await,
             Err(error) => answer_call(&pages, call, Err(error)).await,
         }
+        #[cfg(feature = "test-automation")]
+        watch.idle();
     }
     evaluations.abort_all();
     while evaluations.join_next().await.is_some() {}
@@ -1345,6 +1351,15 @@ async fn create(
             page.command("Runtime.enable", json!({}))
                 .await
                 .map_err(wire)?;
+            // Runtime.disable drops every binding the session added (V8RuntimeAgentImpl::disable), the observer's
+            // too, so without this no title, text or layout notice of this page ever reached the owner (Windows run
+            // 44072093832: `typeof __ompdeskNativeState` was "undefined" in the observer's world).
+            page.command(
+                "Runtime.addBinding",
+                json!({"name":initialize::BINDING,"executionContextName":initialize::WORLD}),
+            )
+            .await
+            .map_err(wire)?;
             Ok::<(), WireError>(())
         }
         .await;
@@ -1706,6 +1721,44 @@ async fn ack_retained(entry: &Entry) {
         crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
     }
 }
+/// Automation builds: names what a loop has been handling for 2 s or more while it still handles it (a handler that
+/// never returns leaves no completion line).
+#[cfg(feature = "test-automation")]
+#[derive(Clone)]
+struct Watch(Arc<Mutex<Option<(String, Instant, bool)>>>);
+#[cfg(feature = "test-automation")]
+impl Watch {
+    fn new(name: &'static str) -> Self {
+        let watch = Self(Arc::default());
+        let state = Arc::downgrade(&watch.0);
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                let mut state = state.lock().expect("Preview watch");
+                if let Some((what, since, reported)) = state.as_mut()
+                    && !*reported
+                    && since.elapsed() >= Duration::from_secs(2)
+                {
+                    *reported = true;
+                    crate::log::log(
+                        "preview.stuck",
+                        json!({"loop":name,"handling":what,"elapsedMs":since.elapsed().as_millis()}),
+                    );
+                }
+            }
+        });
+        watch
+    }
+    fn busy(&self, what: String) {
+        *self.0.lock().expect("Preview watch") = Some((what, Instant::now(), false));
+    }
+    fn idle(&self) {
+        *self.0.lock().expect("Preview watch") = None;
+    }
+}
 /// An offscreen page's frame goes to its stream only when it pictures the window's current size
 /// (`frames::pictures_window`); a view's frames are placed by their own metadata.
 fn deliverable(entry: &Entry, wc: u64, frame: &frames::Frame) -> bool {
@@ -1802,6 +1855,8 @@ async fn invalidate_document(entry: &Entry, wc: u64) {
 async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
     #[cfg(feature = "test-automation")]
     let mut handling = (String::new(), Instant::now());
+    #[cfg(feature = "test-automation")]
+    let watch = Watch::new("observe");
     loop {
         #[cfg(feature = "test-automation")]
         if handling.1.elapsed() >= Duration::from_millis(500) {
@@ -1810,6 +1865,8 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                 json!({"method":handling.0,"elapsedMs":handling.1.elapsed().as_millis()}),
             );
         }
+        #[cfg(feature = "test-automation")]
+        watch.idle();
         let mut event = match receive.recv().await {
             Ok(event) => event,
             Err(error) => {
@@ -1832,6 +1889,7 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
             handling.1 = Instant::now();
             handling.0.clear();
             handling.0.push_str(&event.method);
+            watch.busy(event.method.clone());
         }
         #[cfg(feature = "test-automation")]
         if event.method == "Runtime.bindingCalled" {
