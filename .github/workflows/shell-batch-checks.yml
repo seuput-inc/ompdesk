@@ -11,11 +11,12 @@
 #              swap helper, swap.log installed, the shell on Electron's profile with Local Storage and the seeded token), and
 #              a move that fails (read-only apps folder) rolls back; no SecurityAgent or coreauthd line.
 #  move-win    the whole update move on windows-latest (scripts/shell-move/run-move.ts, a test identity, silent): the released
-#              v0.127.0, v0.128.0 and v0.131.0 each update through their unchanged updater into the real shell (the success run: the main's
-#              app-started.json of the new version appears and the old folder's backup is gone), an unpack made incomplete
-#              puts the Electron app back, and a new shell that exits after CEF init (OMP_GUI_TEST_SHELL_FAIL_START=1)
-#              gets Electron back too, started, `swap result outcome rolled back`, no window, no dialog; and the same
-#              version offered again after that failure is held.
+#              v0.127.0, v0.128.0 and v0.131.0 each update through their unchanged updater into the real Tauri app (the success run:
+#              the main's app-started.json of the new version appears, the Local Storage journal is done, the token file is kept and
+#              the old folder's backup is gone), an unpack made incomplete puts the Electron app back and leaves
+#              update-start-failed.json (the same unpack, offered again, is held), and a new shell that exits right after its native
+#              start (OMP_GUI_TEST_SHELL_FAIL_START=1) gets Electron back too, started, `swap result outcome rolled back`, no window,
+#              no dialog; and the same version offered again after that failure is held.
 #  move-mac-release1  the same move from the real v0.128.0 and v0.131.0 DMGs, re-signed with the throwaway certificate:
 #              its start-checked swap script keeps `<app>.previous` until the
 #              new app writes app-started.json for the offered version (the success path says `started`), and puts it back
@@ -45,11 +46,12 @@
 #                SHA-512 check against the metadata, the staged app is that version), swaps, and the published Tauri app starts on the profile: token decrypted, setting kept, conversation
 #                listed (read from disk: a release has no page to ask), window photographed (screencapture), swap.log installed/started, app-started.json for
 #                <tag>. S4 (a new shell that does not start) is skipped: it needs a broken DMG.
-#              There is no Windows real-feed update: move-win installs each old Electron as a setup REBUILT under a test GUID and folder
-#                (build-setups.ts), so the published setup, which installs under the real identity, would add a second copy instead of
-#                updating it; the test setups' launcher and move-test.nsh carry the profile into the app the setup starts through
-#                Explorer, which the published setup has none of; and run-move.ts asserts the CEF era (libcef.dll, cef.ready,
-#                migrate.token) where 0.132.0 is the Tauri app. That is a harness of its own, not a switch on move-win.
+#              win-update-real  only=win-update-real, `tag` or `candidate_run`: the Windows update, published v0.131.0 into a candidate
+#                setup on a clean windows-latest runner under the real identity: `installer` runs the setup with the arguments v0.131.0's
+#                NsisUpdater passes, `feed` lets the published app's own updater fetch and start it from feed.ts (job win-update-real;
+#                scripts/shell-move/win-update-real.ps1 says what is asserted and uploaded). move-win is the harness under a test identity
+#                (build-setups.ts), where the setups are rebuilt and the test launcher and move-test.nsh carry the profile into the app
+#                the setup starts through Explorer, which the published setup has none of.
 # macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
 # windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`) the gate admits: main, or a branch named in
 # the repository variable MAC_REFS; any other ref fails closed at the gate and no macOS job starts. They share the
@@ -58,7 +60,7 @@
 # Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
 name: shell-batch-checks
 # The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || '') || '' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || inputs.only == 'win-update-real' && format(' tag={0} run={1}', inputs.tag, inputs.candidate_run) || '') || '' }}
 
 on:
   workflow_dispatch:
@@ -66,12 +68,16 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify]
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify, win-update-real]
         default: all
       tag:
-        description: "release-verify: the published release to check (assets, signatures, and the real update path into it)"
+        description: "release-verify: the published release to check (assets, signatures, and the real update path into it). win-update-real: the published setup to update into when candidate_run is empty"
         type: string
         default: v0.132.0
+      candidate_run:
+        description: "win-update-real: id of a release.yml dry run on the branch (`gh workflow run release.yml --ref <branch> -f dry_run=true`) whose ompdesk-win artifact is the candidate setup; empty uses the published setup of tag"
+        type: string
+        default: ""
   push:
     branches: [omp/agent/rust-batch-shell]
     paths:
@@ -106,7 +112,7 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: shell-batch-checks.yml
-      mac: ${{ inputs.only != 'tauri-inputs' && inputs.only != 'preview-transport' }}
+      mac: ${{ inputs.only != 'tauri-inputs' && inputs.only != 'preview-transport' && inputs.only != 'win-update-real' }}
       mac-refs: ${{ vars.MAC_REFS }}
 
   shell-mac:
@@ -281,6 +287,8 @@ jobs:
         with:
           builder: "true"
           playwright: "false"
+          runtime: tauri
+          test-automation: "false"
       # Each run starts from nothing (a fresh profile, update log and setup log); the old setup is kept between them.
       - name: The success move
         shell: bash
@@ -289,6 +297,10 @@ jobs:
         if: always()
         shell: bash
         run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --fail-at swap 2>&1 | tee move-win-fail-swap.log
+      - name: A move whose unpack is incomplete, twice in a row (the old app's updater holds the second round)
+        if: always()
+        shell: bash
+        run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --fail-at swap-twice 2>&1 | tee move-win-fail-swap-twice.log
       - name: A move whose new shell does not start
         if: always()
         shell: bash
@@ -310,6 +322,10 @@ jobs:
             move-win-*.log
             ${{ runner.temp }}/omv/runs/*/evidence.json
             ${{ runner.temp }}/omv/runs/*/*.log
+            ${{ runner.temp }}/omv/runs/*/profile/tauri-shell.jsonl
+            ${{ runner.temp }}/omv/runs/*/profile/app-started.json
+            ${{ runner.temp }}/omv/runs/*/profile/update-start-failed.json
+            ${{ runner.temp }}/omv/runs/*/profile/tauri-local-storage-import.json
           if-no-files-found: ignore
           retention-days: 7
       - if: failure()
@@ -761,6 +777,79 @@ jobs:
             ${{ runner.temp }}/kc/s1/ud/prefs.json
             ${{ runner.temp }}/kc/s1/ud/tauri-local-storage-import.json
             ${{ runner.temp }}/kc/s1/ud/tauri-shell.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # only=win-update-real: the update a Windows user gets, on a clean windows-latest runner under the REAL identity
+  # (%LOCALAPPDATA%\Programs\ompdesk, the real uninstall entry, %APPDATA%\ompdesk), from the PUBLISHED v0.131.0 (scripts/shell-move/
+  # last-electron.json) into a candidate setup: `candidate_run` (the `ompdesk-win` artifact of a release.yml dry run on the branch:
+  # the setup a release would publish) or, when it is empty, the published setup of `tag` (default v0.132.0: the loop's repro).
+  # Two modes, each its own runner, both asserting what a person sees (installed version, app-started.json of the new version, no
+  # rollback line in %TEMP%\ompdesk-setup.log, userData kept) and uploading everything the run left (win-update-real.ps1's header):
+  #   installer  the candidate setup runs with exactly the arguments v0.131.0's NsisUpdater passes (`--updated --force-run
+  #              --package-file=<pending file>`, no /S: quitAndInstall() with no arguments), from the updater's pending folder.
+  #   feed       the published v0.131.0 app runs its own updater against feed.ts, which offers the candidate (Chromium switches map
+  #              api.github.com to it), so the real download, SHA-512 check, countdown, setup start and quit run unchanged.
+  win-update-real:
+    name: win-update-real (${{ matrix.mode }}, ${{ inputs.candidate_run && format('run {0}', inputs.candidate_run) || inputs.tag }})
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-real'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [installer, feed]
+    permissions:
+      contents: read
+      actions: read # gh run download reads the dry run's artifact
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      CANDIDATE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: The published v0.131.0 setup and the candidate setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/win-update-real"
+          mkdir -p "$W/old" "$W/new"
+          OLD_TAG=$(jq -r .tag native/ompdesk/crates/shell/last-electron.json)
+          echo "OLD_VERSION=${OLD_TAG#v}" >> "$GITHUB_ENV"
+          gh release download "$OLD_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/old" --clobber
+          if [ -n "$CANDIDATE_RUN" ]; then
+            gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/new"
+          else
+            gh release download "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/new" --clobber
+          fi
+          ls -l "$W/old" "$W/new"
+      - name: The update (${{ matrix.mode }})
+        shell: pwsh
+        run: |
+          $w = Join-Path $env:RUNNER_TEMP 'win-update-real'
+          & ./scripts/shell-move/win-update-real.ps1 -Mode '${{ matrix.mode }}' `
+            -OldSetup (Join-Path $w 'old\ompdesk-windows-setup.exe') -NewSetup (Join-Path $w 'new\ompdesk-windows-setup.exe') `
+            -OldVersion $env:OLD_VERSION -Out (Join-Path $w 'out-${{ matrix.mode }}') `
+            -FeedScript (Resolve-Path 'scripts/shell-move/feed.ts').Path
+          exit $LASTEXITCODE
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### win-update-real ${{ matrix.mode }}: v$OLD_VERSION to ${CANDIDATE_RUN:+run }${CANDIDATE_RUN:-$CANDIDATE_TAG}"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-real/out-${{ matrix.mode }}/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: win-update-real-${{ matrix.mode }}
+          path: ${{ runner.temp }}/win-update-real/out-${{ matrix.mode }}/
           if-no-files-found: ignore
           retention-days: 14
       - if: failure()
