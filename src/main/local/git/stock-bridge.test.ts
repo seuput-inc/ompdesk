@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -10,6 +10,7 @@ import { parseDocument } from "yaml";
 import type { RpcCommand, RpcResponse } from "../../../shared/rpc-types";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "../../bridge-client";
 import { OMP_COMMAND, INSTALLED_OMP as omp } from "../../test-bridge-probe";
+import { writeFakeBin } from "../../test-fake-omp";
 import { StockRpc } from "../../test-stock-rpc";
 import type { LocalCommandContext } from "../types";
 import { handlers as workspace } from "../workspace";
@@ -61,14 +62,8 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 			}),
 		);
 		const gh = `import { readFileSync } from 'node:fs';\nif (process.argv[2] === 'pr' && process.argv[3] === 'view') console.log(readFileSync(process.env.OMP_TEST_PR, 'utf8')); else { console.error('Unexpected gh invocation'); process.exit(1); }\n`;
-		if (process.platform === "win32") {
-			// The product starts only `gh.exe` on Windows (`resolveBin`), so the stand-in is compiled, as e2e's fake gh is.
-			const source = path.join(scratch, "fake-gh.ts");
-			await fs.writeFile(source, gh);
-			execFileSync("bun", ["build", "--compile", source, "--outfile", path.join(bin, "gh.exe")], {
-				stdio: "ignore",
-			});
-		} else await fs.writeFile(path.join(bin, "gh"), `#!/usr/bin/env bun\n${gh}`, { mode: 0o700 });
+		// The product starts only `gh.exe` on Windows (`resolveBin`), so the stand-in is compiled there.
+		await writeFakeBin(bin, "gh", gh);
 		const child = spawn(
 			OMP_COMMAND.file,
 			[
