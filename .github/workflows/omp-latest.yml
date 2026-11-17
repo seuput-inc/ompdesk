@@ -1,8 +1,9 @@
 # Daily vitest against the newest published omp, so an omp release that breaks
 # what OMPdesk reads from the installed stock omp (its settings and their
 # Korean copy, provider ids, tool renderers, the `*-stock` bridge suites) shows
-# the day it is published, even with no push to main. ci.yml's and release.yml's
-# `check` install the same omp, so every push and release runs these tests too.
+# the day it is published, even with no push to main. ci.yml, the e2e runs and
+# release.yml install the tested omp (src/shared/omp-tested.json, through
+# .github/actions/install-omp), so only this workflow meets a newer one first.
 # Their Windows job (`win-platform`) installs none, so the stock suites skip
 # there; the `windows` job here runs `test:platform` with omp installed, so a
 # stock suite that fails only on Windows (a file a live worker still holds, a
@@ -54,14 +55,10 @@ jobs:
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
-      - name: Install omp
-        id: omp
-        run: |
-          # --minimum-release-age 0: the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version | tee omp-version.txt
-          echo "version=$(head -n1 omp-version.txt)" >> "$GITHUB_OUTPUT"
+      - id: omp
+        uses: ./.github/actions/install-omp
+        with:
+          version: latest
       - run: bunx vitest run ${{ matrix.args }}
       - if: failure()
         run: bash scripts/ci-failure.sh
@@ -86,12 +83,9 @@ jobs:
       - name: Put bun's cache on the workspace volume
         run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          bun pm bin -g >> "$GITHUB_PATH"
-          "$(bun pm bin -g)/omp" --version
+      - uses: ./.github/actions/install-omp
+        with:
+          version: latest
       - run: bun run test:platform
       - if: failure()
         run: bash scripts/ci-failure.sh

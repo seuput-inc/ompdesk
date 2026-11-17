@@ -54,13 +54,8 @@ jobs:
       - if: steps.check.outputs.outdated != ''
         uses: ./.github/actions/install
       # ECC's stock test builds a real omp session; without omp it would skip.
-      - name: Install omp
-        if: steps.check.outputs.outdated != ''
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+      - if: steps.check.outputs.outdated != ''
+        uses: ./.github/actions/install-omp
       - name: Bump each pack that is behind
         id: bump
         if: steps.check.outputs.outdated != ''

@@ -109,12 +109,7 @@ jobs:
         name: Stage the Preview browser
         run: bun scripts/stage-preview-browser.ts
       # As ci.yml's check: the stock suites skip without omp, real-core launches it.
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          bun pm bin -g >> "$GITHUB_PATH"
-          "$(bun pm bin -g)/omp" --version
+      - uses: ./.github/actions/install-omp
       - name: Repeat the spec
         run: bun scripts/flake.ts "$SPEC" --repeat "$REPEAT" ${GREP:+--grep "$GREP"}
       - if: ${{ !cancelled() && endsWith(inputs.spec, '.e2e.ts') }}

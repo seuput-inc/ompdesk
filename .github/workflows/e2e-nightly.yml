@@ -123,12 +123,7 @@ jobs:
       - name: Stage the Preview browser
         run: bun scripts/stage-preview-browser.ts
       # The fake omp's terminals and search run stock's natives from the installed omp (e2e/remote-harness.ts).
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          bun pm bin -g >> "$GITHUB_PATH"
-          "$(bun pm bin -g)/omp" --version
+      - uses: ./.github/actions/install-omp
       # The phone's page runs in Playwright's own Chromium, which a fresh runner lacks.
       - name: Playwright browsers
         run: bunx playwright install chromium webkit

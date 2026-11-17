@@ -70,12 +70,7 @@ jobs:
       # Stages resources/ompdesk-bin (built on a cache miss), which the tests' core process runs.
       - uses: ./.github/actions/install
       # session-index.test.ts reads stock omp's session storage.
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+      - uses: ./.github/actions/install-omp
       - uses: ./.github/actions/native-parity
       - if: failure()
         run: bash scripts/ci-failure.sh

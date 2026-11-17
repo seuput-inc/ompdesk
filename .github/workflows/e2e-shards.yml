@@ -79,12 +79,7 @@ jobs:
       - name: Stage the Preview browser
         run: bun scripts/stage-preview-browser.ts
       # The runner is ephemeral: real-core and deep-audit run the real omp.
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          bun pm bin -g >> "$GITHUB_PATH"
-          "$(bun pm bin -g)/omp" --version
+      - uses: ./.github/actions/install-omp
       # mobile-*.e2e.ts drive the web build in Playwright's own browsers, which a fresh runner lacks.
       - name: Playwright browsers
         run: bunx playwright install chromium webkit
