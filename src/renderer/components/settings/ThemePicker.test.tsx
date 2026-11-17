@@ -21,8 +21,9 @@ const set = vi.fn(async (key: string, value: unknown) => {
 	prefs[key] = value;
 	return true;
 });
+const prefsApi = { get: async (key: string): Promise<unknown> => prefs[key], set };
 Object.assign(window as unknown as Record<string, unknown>, {
-	omp: { prefs: { get: async (key: string) => prefs[key], set } },
+	omp: { prefs: prefsApi },
 	matchMedia: (query: string) => ({
 		matches: query.includes("dark") ? osDark : !osDark,
 		addEventListener: () => {},
@@ -130,6 +131,28 @@ describe("ThemePicker", () => {
 		expect(useUiStore.getState().theme).toBe("dark");
 		expect(option("nord").getAttribute("aria-checked")).toBe("true");
 		expect(option("system").getAttribute("aria-checked")).toBe("false");
+	});
+
+	it("keeps a choice made before the stored theme was read", async () => {
+		// Main answers the picker's reads from the prefs as they were before the click saved, after the click.
+		const stored = prefsApi.get;
+		const beforeClick = { ...prefs };
+		const held = Promise.withResolvers<void>();
+		prefsApi.get = async key => {
+			await held.promise;
+			return beforeClick[key];
+		};
+		try {
+			await mount();
+			await choose("light");
+			await act(async () => held.resolve());
+			await settle();
+			await settle();
+			expect(option("light").getAttribute("aria-checked")).toBe("true");
+			expect(option("system").getAttribute("aria-checked")).toBe("false");
+		} finally {
+			prefsApi.get = stored;
+		}
 	});
 
 	it("moves with the arrow keys across the groups and applies each stop", async () => {
