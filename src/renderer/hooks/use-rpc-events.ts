@@ -925,6 +925,8 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						sessionName: frame.title === undefined ? state.sessionName : frame.title,
 						autoTitle,
 						sessionId: frame.sessionId ?? state.sessionId,
+						// get_state reports the name: a snapshot taken before this frame must not put the old one back.
+						eventVersion: state.eventVersion + 1,
 					};
 				});
 			});
