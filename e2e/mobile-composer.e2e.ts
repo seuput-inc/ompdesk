@@ -14,7 +14,7 @@ import {
 } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { reassertTouch } from "./fixture/touch-emulation";
-import { hitSizes, variants } from "./harness";
+import { closeBrowser, hitSizes, launchBrowser, variants } from "./harness";
 
 /**
  * The phone composer, end to end on the dev harness (390x844, touch input, Chromium iPhone 15 / Pixel 8 and WebKit):
@@ -83,7 +83,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-	for (const browser of browsers.values()) await browser.close();
+	for (const browser of browsers.values()) await closeBrowser(browser);
 	await server?.close();
 });
 
@@ -91,7 +91,7 @@ async function browserFor(engine: Engine): Promise<Browser> {
 	const key = engine.type.name();
 	let browser = browsers.get(key);
 	if (!browser) {
-		browser = await engine.type.launch();
+		browser = await launchBrowser(engine.type);
 		browsers.set(key, browser);
 	}
 	return browser;

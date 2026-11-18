@@ -34,7 +34,7 @@ import {
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 import { type Issue, type Look, measure, safeInsets } from "./responsive-audit";
 
 const OUT = process.env.OMP_GUI_PHONE_DAY;
@@ -900,7 +900,7 @@ test.describe("a day on the phone", () => {
 			rig = await startRig();
 			for (const device of DEVICES) {
 				const browser =
-					browsers[device.engine] ?? (await (device.engine === "webkit" ? webkit : chromium).launch());
+					browsers[device.engine] ?? (await launchBrowser(device.engine === "webkit" ? webkit : chromium));
 				browsers[device.engine] = browser;
 				try {
 					steps.push(...(await runDay(browser, rig, device)));
@@ -923,7 +923,7 @@ test.describe("a day on the phone", () => {
 				await fs.writeFile(path.join(OUT, "summary.md"), summary(steps));
 			}
 		} finally {
-			for (const browser of Object.values(browsers)) await browser?.close().catch(() => undefined);
+			for (const browser of Object.values(browsers)) if (browser) await closeBrowser(browser).catch(() => undefined);
 			await stopRig(rig);
 		}
 		// Every step of the day went through (a step's own checks, a phone's landscape findings included).

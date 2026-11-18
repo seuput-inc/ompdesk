@@ -26,7 +26,7 @@ import { type BrowserType, chromium, devices, expect, type Page, test, webkit } 
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const ENGINES: { name: string; type: BrowserType; device: (typeof devices)[string] }[] = [
 	// 390 px wide.
@@ -280,7 +280,7 @@ for (const engine of ENGINES)
 		Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 		let app: ElectronApplication | null = null;
 		let proxy: ServeProxy | null = null;
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		const numbers: Numbers[] = [];
 		try {
 			app = await electron.launch({
@@ -602,7 +602,7 @@ for (const engine of ENGINES)
 			expect.soft(long.noticeShownMs, "the status goes once the link is back").toBeLessThan(1500);
 			expect(loads).toBe(0);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await proxy?.close();
 			if (app) await exitApp(app).catch(() => undefined);
 			await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);

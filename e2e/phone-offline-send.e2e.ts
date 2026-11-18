@@ -19,7 +19,7 @@ import { type BrowserType, chromium, devices, expect, type Page, test, webkit } 
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, recordPhoneLoads, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const ENGINES: { name: string; type: BrowserType; device: (typeof devices)[string] }[] = [
 	{ name: "webkit", type: webkit, device: devices["iPhone 14"] },
@@ -91,7 +91,7 @@ for (const engine of ENGINES)
 		Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 		let app: ElectronApplication | null = null;
 		let proxy: ServeProxy | null = null;
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		try {
 			app = await electron.launch({
 				args: [path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${desktop}`],
@@ -249,7 +249,7 @@ for (const engine of ENGINES)
 			await phone.waitForTimeout(3000);
 			expect(await received(record, texts)).toEqual([texts[0], texts[1]]);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await proxy?.close();
 			if (app) await exitApp(app).catch(() => undefined);
 			await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);

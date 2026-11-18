@@ -2,7 +2,7 @@ import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test, webkit } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
-import { variants } from "./harness";
+import { closeBrowser, launchBrowser, variants } from "./harness";
 
 // Enter on a touch keyboard (Chromium and WebKit device emulation on the dev harness): the return key adds a line
 // and only the Send button sends, a physical keyboard's key (an arrow, ⌘↵, Shift+Enter) gives the desktop's Enter back,
@@ -41,7 +41,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
 	await chromiumBrowser?.close();
-	await webkitBrowser?.close();
+	if (webkitBrowser) await closeBrowser(webkitBrowser);
 	await server?.close();
 });
 
@@ -49,7 +49,7 @@ type Lang = "en" | "ko";
 
 async function openPhone(engine: "chromium" | "webkit", lang: Lang): Promise<Page> {
 	if (engine === "chromium") chromiumBrowser ??= await chromium.launch();
-	else webkitBrowser ??= await webkit.launch();
+	else webkitBrowser ??= await launchBrowser(webkit);
 	const browser = engine === "chromium" ? chromiumBrowser : webkitBrowser;
 	if (!browser) throw new Error(`${engine} did not start`);
 	const context = await browser.newContext({

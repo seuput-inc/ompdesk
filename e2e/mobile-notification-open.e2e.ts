@@ -12,7 +12,7 @@ import { devices, expect, type Page, test, webkit } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { cssString, exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, cssString, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 async function activeTab(page: Page): Promise<string | undefined> {
 	return (await page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId;
@@ -89,7 +89,7 @@ test("a tapped notification opens its tab on a cold start, and the link is spent
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	let app: ElectronApplication | null = null;
 	let proxy: ServeProxy | null = null;
-	const browser = await webkit.launch();
+	const browser = await launchBrowser(webkit);
 	try {
 		app = await electron.launch({
 			args: [path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${desktop}`],
@@ -159,7 +159,7 @@ test("a tapped notification opens its tab on a cold start, and the link is spent
 		expect(await opened.evaluate(() => location.hash)).toBe("");
 		await expect.poll(() => activeTab(opened)).toBe(first);
 	} finally {
-		await browser.close().catch(() => undefined);
+		await closeBrowser(browser).catch(() => undefined);
 		await proxy?.close().catch(() => undefined);
 		if (app) await exitApp(app).catch(() => undefined);
 		await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
