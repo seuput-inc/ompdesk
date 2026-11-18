@@ -44,6 +44,9 @@ pub struct Scope {
     /// Branches the children of this run were given.
     #[serde(default)]
     pub child_branches: Vec<String>,
+    /// The run's id (`branches::run_id_for`): its children's branches are `autopilot/<run>-c<N>-<area>`.
+    #[serde(default)]
+    pub run: String,
     pub remote: String,
     pub default_branch: String,
     /// The release scope is open: the default branch on the remote and new `v*` tags may move.
@@ -299,6 +302,29 @@ async fn other_worktree_branches(git: &Git, root: &str) -> Result<HashSet<String
     Ok(branches)
 }
 
+/// A branch made for a child of this run (`autopilot/<run>-c<N>-<area>`, the name the run's prompt gives it). The run
+/// enters its children's branches in `child_branches` only at the child's first prompt, but the worktree (and with it the
+/// branch) exists from the open on, through the child's omp start and the project's worktree-setup: a cycle end the next
+/// cycle overlaps can see it in that gap.
+fn child_branch_of_run(name: &str, run: &str) -> bool {
+    if run.is_empty() {
+        return false;
+    }
+    let Some(rest) = name
+        .strip_prefix("refs/heads/")
+        .and_then(|branch| branch.strip_prefix(crate::autopilot::branches::BRANCH_PREFIX))
+        .and_then(|branch| branch.strip_prefix(run))
+        .and_then(|branch| branch.strip_prefix("-c"))
+    else {
+        return false;
+    };
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    digits > 0
+        && rest[digits..]
+            .strip_prefix('-')
+            .is_some_and(|area| !area.is_empty())
+}
+
 fn allowed(change: &RefChange, scope: &Scope) -> bool {
     let name = change.name.as_str();
     if scope.expected_refs.iter().any(|expected| expected == name) {
@@ -380,7 +406,10 @@ pub async fn audit_cycle(
             let held = elsewhere
                 .as_ref()
                 .is_some_and(|set| set.contains(&change.name));
-            if held && others.theirs(&change).await? {
+            // A child's worktree made it, named as this run's child: a `git branch` of that name is checked out nowhere.
+            let opening_child =
+                change.from.is_none() && child_branch_of_run(&change.name, &scope.run);
+            if held && (opening_child || others.theirs(&change).await?) {
                 continue;
             }
         }
@@ -613,6 +642,48 @@ mod tests {
             .map(|v| v.kind)
             .collect();
         assert_eq!(kinds, ["ref"]);
+    }
+
+    #[tokio::test]
+    async fn a_child_branch_of_the_run_passes_once_its_worktree_holds_it_before_the_run_names_it() {
+        let world = world();
+        commit(&world.work, "a.txt");
+        let before = snapshot(&world).await;
+        let mut run = scope();
+        run.run = "2026-10-17".into();
+        let details = |violations: Vec<Violation>| -> Vec<String> {
+            violations.into_iter().map(|v| v.detail).collect()
+        };
+        // A branch of the child's name the agent made itself is checked out nowhere: it still counts.
+        sh(&world.work, &["branch", "autopilot/2026-10-17-c2-docs"]);
+        assert_eq!(
+            details(audit(&world, &before, &run).await),
+            ["refs/heads/autopilot/2026-10-17-c2-docs created"]
+        );
+        sh(
+            &world.work,
+            &["branch", "-D", "autopilot/2026-10-17-c2-docs"],
+        );
+        // The next cycle's open made the child's worktree from the run's tip: its branch holds the run's commits.
+        let tree = |name: &str| world.work.with_file_name(name).to_str().unwrap().to_owned();
+        let add = |branch: &str, name: &str| {
+            sh(
+                &world.work,
+                &["worktree", "add", "-q", "-b", branch, &tree(name)],
+            );
+        };
+        add("autopilot/2026-10-17-c2-tests", "child");
+        assert_eq!(audit(&world, &before, &run).await, vec![]);
+        // Another run's child, or a name that is no child's, still counts.
+        add("autopilot/2026-10-18-c2-tests", "other-run");
+        add("autopilot/2026-10-17-cx", "no-cycle");
+        assert_eq!(
+            details(audit(&world, &before, &run).await),
+            [
+                "refs/heads/autopilot/2026-10-17-cx created",
+                "refs/heads/autopilot/2026-10-18-c2-tests created"
+            ]
+        );
     }
 
     #[tokio::test]

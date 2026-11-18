@@ -142,10 +142,18 @@ impl Coordinator {
                 let record = frame.get("record").cloned().unwrap_or(Value::Null);
                 let received_at = self.now();
                 self.title_by_item(&run, text(&record, "title"));
+                // The cycle's children are the ones open as its end arrives: its pipeline may run after the next cycle has
+                // opened its own (stock's continuation starts it at once, and an earlier step can hold this one back).
+                let ended: Vec<String> = run
+                    .lock()
+                    .children
+                    .iter()
+                    .map(|child| child.tab.clone())
+                    .collect();
                 let max = Some(Duration::from_millis(self.tuning.cycle_end_max_ms));
                 let again = run.clone();
                 self.enqueue(&run, "cycle end", max, async move {
-                    this.cycle_end(&again, &record, received_at).await
+                    this.cycle_end(&again, &record, received_at, &ended).await
                 });
             }
             Some("autopilot_nudge") => {
@@ -285,6 +293,7 @@ impl Coordinator {
         run: &Arc<Run>,
         record: &Value,
         received_at: i64,
+        children: &[String],
     ) -> R<()> {
         // The repository vanishing is one of the few stops left: nothing can be committed or audited without it. Only a
         // confirmed loss pauses; a git that cannot answer this time (a lock, a timeout, a load spike) skips this cycle's
@@ -302,7 +311,7 @@ impl Coordinator {
             }
             RepoProbe::Present => {}
         }
-        self.close_children(run, number(record, "n").unwrap_or(0))
+        self.close_children(run, number(record, "n").unwrap_or(0), Some(children))
             .await;
         let requests = match self
             .bridge(
@@ -459,6 +468,7 @@ impl Coordinator {
             Scope {
                 branch: state.branch.clone(),
                 child_branches: state.child_branches.iter().cloned().collect(),
+                run: state.run.clone(),
                 remote: state.settings.remote(),
                 default_branch: state.base_branch.clone(),
                 release: state.settings.auto_release()
@@ -1414,7 +1424,7 @@ impl Coordinator {
             .as_ref()
             .and_then(|status| number(status, "cycle"))
             .unwrap_or(0);
-        self.close_children(run, cycle).await;
+        self.close_children(run, cycle, None).await;
         self.drain(run, None).await;
         let polling = run.lock().stop_polling.take();
         if let Some(cancel) = polling {
@@ -1534,9 +1544,17 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Usage of every child of the cycle, its tab closed and its clean, merged worktree removed.
-    async fn close_children(self: &Arc<Self>, run: &Arc<Run>, cycle: i64) {
-        let children: Vec<Child> = std::mem::take(&mut run.lock().children);
+    /// Usage of every child of the cycle, its tab closed and its clean, merged worktree removed. `only`: the tabs open as
+    /// the cycle's end arrived (a child the next cycle opened since stays); None closes every child (the run ends).
+    async fn close_children(self: &Arc<Self>, run: &Arc<Run>, cycle: i64, only: Option<&[String]>) {
+        let children: Vec<Child> = {
+            let mut state = run.lock();
+            let (ended, kept) = std::mem::take(&mut state.children)
+                .into_iter()
+                .partition(|child| only.is_none_or(|tabs| tabs.contains(&child.tab)));
+            state.children = kept;
+            ended
+        };
         self.touch(run);
         let (mut tokens, mut usd) = (0f64, 0f64);
         for child in &children {
