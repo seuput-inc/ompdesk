@@ -1324,6 +1324,16 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	},
 	"providers.fireworksTier": { label: "Fireworks 등급", description: "기본 서비스 경로예요(service_tier 없음)" },
 	"live.voice": { label: "실시간 음성 목소리", description: "Codex 기반 실시간 음성 세션에서 쓸 목소리예요" },
+	"live.endpoint": {
+		label: "실시간 엔드포인트",
+		description:
+			"Codex 대신 실시간 음성에 쓸 OpenAI Realtime WebRTC 호환 서버의 기본 URL이에요(예: http://127.0.0.1:8080/v1). 비워 두면 Codex를 써요",
+	},
+	"live.apiKey": {
+		label: "실시간 엔드포인트 API 키",
+		description:
+			"실시간 엔드포인트에만 보내는 Bearer 키예요. 값을 그대로 적거나, 환경 변수 이름이나 !command 형식의 명령을 적어요",
+	},
 	"tts.localVoice": {
 		label: "로컬 TTS 목소리",
 		description: "로컬 TTS 백엔드가 쓰는 목소리예요(미국/영국식, 여성/남성)",
@@ -1716,6 +1726,11 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "웹 검색 타임아웃",
 		description:
 			"프로바이더별 검색 전송 하드 타임아웃이에요. 시간이 지나면 web_search가 다음 대체 항목을 시도해요. 단위는 초예요(최대 300)",
+	},
+	"providers.webKeyless": {
+		label: "키 없는 웹 서비스",
+		description:
+			"웹 검색과 URL 읽기가 내 자격 증명 없이 제3자 서비스를 쓰게 해요. 키 없는 Parallel, Exa, Firecrawl, Keenable, Perplexity와 Jina 리더, 스크레이핑하는 검색 엔진(Startpage, DuckDuckGo, Ecosia, Google, Mojeek, Hacker News)이 해당돼요. 끄면 직접 설정한 서비스만 써요.",
 	},
 	"providers.openaiLiveSteering": {
 		label: "OpenAI 실시간 추가 지시",
