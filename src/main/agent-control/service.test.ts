@@ -5840,6 +5840,36 @@ describe("messages that outlive the omp they were handed to", () => {
 		expect(host.sent.filter(entry => entry.tabId === "kid00002")).toEqual([]);
 	});
 
+	it("numbers a message to its own child still starting past the dispatch its saved transcript holds, so it is never taken as delivered", async () => {
+		// After a relaunch nothing in memory knows the child already holds d1: a send numbered d1 again would be settled
+		// by the sweep as journaled, and never handed over.
+		const host = new FakeHost(
+			{ tabId: "boss0001", title: "Boss", sessionPath: "/s/boss.jsonl" },
+			{ tabId: "kid00002", title: "Kid", sessionPath: "/s/kid.jsonl", status: "starting" },
+		);
+		host.parents.set("kid00002", "boss0001");
+		host.files.sendOutbox = outboxFile();
+		const held: AgentMessage[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "[ompdesk dispatch d1: report with ompdesk_report] Do A" }],
+				timestamp: 1,
+			},
+		];
+		host.storedTranscripts.set("/s/kid.jsonl", held);
+		(host.tabsById.get("kid00002") as FakeTab).messages = held;
+		host.sentMarks = async (tabId, marks) => ({ instance: "omp-a", journaled: journaled(host, tabId, marks) });
+		const service = control(host, { sendReadyWaitMs: 200 });
+		const sent = await service.run("boss0001", T.send, { session: "kid00002", message: "Also do B" });
+		expect(sent.isError, sent.text).toBe(false);
+		expect(sent.text).toContain("Dispatch d2");
+		(host.tabsById.get("kid00002") as FakeTab).status = "ready";
+		host.emit();
+		await service.redeliverSends();
+		expect(prompts(host, "kid00002")).toEqual([expect.stringContaining("[ompdesk dispatch d2:")]);
+		expect(owed()).toHaveLength(1);
+	});
+
 	it("hands a follow-up the child's old omp queued to its omp after a relaunch, once, ahead of the next message", async () => {
 		const before = new FakeHost(
 			{ tabId: "boss0001", title: "Boss", sessionPath: "/s/boss.jsonl" },
