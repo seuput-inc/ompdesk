@@ -508,6 +508,45 @@ test("a session idle while its background subagent works goes on when its omp di
 	}
 });
 
+/** The app's core process (`ompdesk-core`, main's child; not the setup supervisor it starts). */
+function corePids(mainPid: number): number[] {
+	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+		.split("\n")
+		.map(line => line.trim().split(/\s+/))
+		.filter(([, ppid, command]) => Number(ppid) === mainPid && command?.endsWith("ompdesk-core") === true)
+		.map(([pid]) => Number(pid));
+}
+
+// 18 Nov 2026, the Mac mini: the core was lost under 14 running tabs; each lane opened again on the next core, but no
+// turn went on. A lost core takes every omp with it, and the turn it cut must continue on the omp the next core runs.
+test("a turn running when the app's core dies continues on the next core", async () => {
+	test.skip(process.platform === "win32", "the core's pid comes from ps");
+	test.setTimeout(150_000);
+	const profile = await makeProfile("en", "light");
+	let current: ElectronApplication | undefined;
+	try {
+		const { app, page } = await launch(profile);
+		current = app;
+		const sessionPath = await startLongTurn(profile, page);
+		const mainPid = await app.evaluate(() => process.pid);
+		const [core, ...others] = corePids(mainPid);
+		expect(others).toEqual([]);
+		if (core === undefined) throw new Error("expected the app's core");
+		const [omp] = ompPids(profile);
+		process.kill(core, "SIGKILL");
+
+		await expect(page.getByText("Continued after the interruption.")).toBeVisible({ timeout: 90_000 });
+		await expect(page.locator(".omp-user-bubble")).toHaveText([/^fixture running with job/]);
+		await expect.poll(() => markers(profile), { timeout: 15_000 }).toEqual([]);
+		expect(corePids(mainPid)).not.toContain(core);
+		expect(ompPids(profile)).not.toContain(omp);
+		await expectOneSession(profile, page, sessionPath);
+	} finally {
+		if (current) await exitApp(current);
+		await cleanup(profile);
+	}
+});
+
 for (const language of variants(["en", "ko"] as const))
 	for (const theme of variants(["light", "dark"] as const))
 		test(`a network error while offline waits calmly and continues when the connection returns (${language} ${theme})`, async () => {
