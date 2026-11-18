@@ -25,7 +25,8 @@ const FIX_SUBJECT = /^fix(?:\([^)]*\))?!?:/;
 const TEST_FILE =
 	/(?:^|\/)[^/]+\.(?:test|e2e|spec)\.[cm]?[jt]sx?$|^e2e\/|^native\/.*\/tests\/[^/]+\.rs$|^native\/.*\/tests\.rs$/;
 const NO_TEST = /^no-test:\s*\S/m;
-const RUST_TEST_MARK = /^\s*#\[cfg\(test\)\]/;
+/** `#[cfg(test)]`, or tests kept for one platform: `#[cfg(all(test, unix))]`. */
+const RUST_TEST_MARK = /^\s*#\[cfg\((?:test|all\(test\b[^)]*\))\)\]/;
 
 /**
  * @typedef {{ sha: string; subject: string; body: string; files: string[]; rustTests?: boolean }} Commit
