@@ -250,3 +250,39 @@ fn entries(dir: &Path) -> Vec<Entry> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{TRIM_TO, folder, touch};
+
+    /// Writes and reads back to back, as a device keeping pages does: on Windows the file system's own write time is
+    /// its clock tick's, so several of them shared one time and a trim took the page just written first.
+    #[test]
+    fn a_trim_removes_the_least_recently_written_or_read_even_within_one_clock_tick() {
+        let dir = super::super::tests::temp_dir("folder-ties");
+        let folder = folder(&dir);
+        // Written newest-last under names that sort newest-first, the order NTFS lists files with equal times in.
+        let names: Vec<String> = (0..20).rev().map(|n| format!("p{n:02}")).collect();
+        for name in &names {
+            assert!(folder.write(&dir.join(name), &[b'x'; 100], u64::MAX));
+        }
+        // The oldest read again: now the most recent.
+        touch(&dir.join("p19"));
+        let mut recency: Vec<&str> = names[1..].iter().map(String::as_str).collect();
+        recency.push("p19");
+        for keep in (1..recency.len()).rev() {
+            // The bound whose three quarters hold exactly `keep` of the 100-byte pages.
+            folder.trim((((keep * 100 + 50) as f64) / TRIM_TO).ceil() as u64);
+            let mut left: Vec<String> = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            left.sort();
+            let mut expected: Vec<&str> = recency[recency.len() - keep..].to_vec();
+            expected.sort();
+            assert_eq!(left, expected, "keeping {keep}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -17,7 +17,7 @@ fn captured() -> Value {
     serde_json::from_str(include_str!("captured.json")).unwrap()
 }
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
+pub(super) fn temp_dir(name: &str) -> std::path::PathBuf {
     let mut salt = [0u8; 8];
     crate::sys::random(&mut salt).unwrap();
     let dir = std::env::temp_dir().join(format!(
