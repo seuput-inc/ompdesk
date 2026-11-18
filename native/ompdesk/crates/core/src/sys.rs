@@ -164,10 +164,23 @@ impl StopSignals {
     }
 }
 
+/// Starts `command`'s process as the leader of a process group of its own (`setpgid` through `posix_spawn`'s
+/// `POSIX_SPAWN_SETPGROUP`), so `signal_group` with its pid reaches it and everything it starts that stays in its group.
+/// The core is many threads: a `pre_exec` closure (or `setsid`, which std on macOS cannot hand `posix_spawn`) makes std
+/// fork, and a fork while another thread holds libsystem's state killed the child before its exec ("os_once_t is
+/// corrupt … crashed on child side of fork pre-exec", the Mac mini, 18 Nov 2026), so a tab's omp never came back. The
+/// core has no controlling terminal and blocks no signal, so the group is all `new_session` gave these children.
+#[cfg(unix)]
+pub fn own_group(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
 /// Starts `command`'s process in a session and process group of its own (`setsid`), as node's `detached: true` does,
 /// so `signal_group` with its pid reaches it and everything it starts that stays in its group. Its signal mask is
 /// emptied, as libuv's spawn empties it: the supervisor blocks SIGTERM and SIGINT (`StopSignals`), and std passes a
-/// thread's mask on to the child (`SigBlk` read 0x4002 before this).
+/// thread's mask on to the child (`SigBlk` read 0x4002 before this). The closure makes std fork: only for the
+/// supervisor, whose mask must go; the core's children take `own_group`.
 #[cfg(unix)]
 pub fn new_session(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
