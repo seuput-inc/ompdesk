@@ -3724,7 +3724,7 @@ export const ko: Record<string, string> = {
 	"tools.task.footer.requests": "요청 {count}회",
 	"tools.task.depthLimit": "… 중첩 서브에이전트 깊이 한도에 도달했어요",
 	"tools.task.cycle": "… 중첩 서브에이전트 진행 상황은 이미 표시됐어요",
-	"tools.task.yieldLastTurn": "마지막 어시스턴트 턴",
+	"tools.task.yieldFinalize": "섹션 마무리",
 	"tools.task.moreYields": "… 결과 {count}개 더",
 	"tools.task.patchVerdict": "패치 판정: {verdict}",
 	"tools.task.verdict.correct": "올바름",

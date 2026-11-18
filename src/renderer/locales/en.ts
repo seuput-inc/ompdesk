@@ -3730,7 +3730,7 @@ export const en: Record<string, string> = {
 	"tools.task.footer.requests": "{count} req",
 	"tools.task.depthLimit": "… nested subagent depth limit reached",
 	"tools.task.cycle": "… nested subagent progress already shown",
-	"tools.task.yieldLastTurn": "last assistant turn",
+	"tools.task.yieldFinalize": "finalize sections",
 	"tools.task.moreYields": "… {count} more yield{plural}",
 	"tools.task.patchVerdict": "Patch is {verdict}",
 	"tools.task.verdict.correct": "correct",
