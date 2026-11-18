@@ -263,11 +263,13 @@ type TabSidecarStatusHandler = (payload: IpcSidecarStatusPayload, tabId: string)
 function installTabRoutedMockOmp(): {
 	emitTabBatch: TabBatchHandler;
 	emitTabStatus: TabSidecarStatusHandler;
+	emitSessionInfo: (frame: SessionInfoUpdateFrame, tabId: string) => void;
 	notify: Mock<(title: string, body: string) => void>;
 	commandForTab: Mock<(tabId: string, command: RpcCommand) => Promise<RpcResponse>>;
 } {
 	let tabBatchHandler: TabBatchHandler = () => {};
 	let tabStatusHandler: TabSidecarStatusHandler = () => {};
+	let sessionInfoHandler: (frame: SessionInfoUpdateFrame, tabId: string) => void = () => {};
 	const commandForTab = vi.fn(async (_tabId: string, command: RpcCommand): Promise<RpcResponse> => {
 		switch (command.type) {
 			case "get_state":
@@ -329,7 +331,10 @@ function installTabRoutedMockOmp(): {
 			onSignInRelay: noopSub,
 			onTabPromptResult: noopSub,
 			onTabCommandOutput: noopSub,
-			onTabSessionInfoUpdate: noopSub,
+			onTabSessionInfoUpdate: vi.fn((callback: (frame: SessionInfoUpdateFrame, tabId: string) => void) => {
+				sessionInfoHandler = callback;
+				return () => {};
+			}),
 			onTabExtensionError: noopSub,
 		},
 		sidecar: { getStatus: vi.fn(async () => ({ status: "ready", cwd: "/tmp" })) },
@@ -341,6 +346,7 @@ function installTabRoutedMockOmp(): {
 	return {
 		emitTabBatch: (events, tabId) => tabBatchHandler(events, tabId),
 		emitTabStatus: (payload, tabId) => tabStatusHandler(payload, tabId),
+		emitSessionInfo: (frame, tabId) => sessionInfoHandler(frame, tabId),
 		notify,
 		commandForTab,
 	};
@@ -680,6 +686,34 @@ describe("useRpcEvents context usage sync", () => {
 		// The trailing event invalidates the snapshot for everything an event
 		// carries — usage has no event carrier, so the turn's reading must land.
 		expect(session.getState().contextUsage).toMatchObject({ tokens: 1200, percent: 60 });
+	});
+
+	it("keeps a rename that arrives while a get_state taken before it is still on its way", async () => {
+		// e2e/session-rename-title.e2e.ts on a paired host (18 Nov 2026): the turn's end asked get_state, the rename's
+		// `session_info_update` reached the page first, and the older answer put "New session" back for good.
+		const { emitTabBatch, emitSessionInfo, commandForTab } = installTabRoutedMockOmp();
+		const session = seedReadyTab("t-rename");
+		await mount(<RpcEventsProbe />);
+		await elapse(60);
+
+		const state = Promise.withResolvers<RpcResponse>();
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((id, command) =>
+			command.type === "get_state" ? state.promise : original(id, command),
+		);
+		await act(async () => {
+			emitTabBatch([{ type: "agent_end" }], "t-rename");
+		});
+		await act(async () => {
+			emitSessionInfo({ type: "session_info_update", title: "Named on the device" }, "t-rename");
+		});
+		expect(session.getState().sessionName).toBe("Named on the device");
+		state.resolve(settledState({ sessionName: null, contextUsage: { tokens: 10, contextWindow: 100, percent: 10 } }));
+		await flush();
+
+		expect(session.getState().sessionName).toBe("Named on the device");
+		// What no event carries still lands.
+		expect(session.getState().contextUsage).toMatchObject({ tokens: 10 });
 	});
 
 	it("refreshes the usage ring from the liveness probe while the session idles", async () => {
