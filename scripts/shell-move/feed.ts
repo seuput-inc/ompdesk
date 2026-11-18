@@ -12,6 +12,8 @@
  * downloads when the new shell does not come up (OMPDESK_LAUNCHER_RELEASE_URL=http://127.0.0.1:<n>): the tag route
  * `/repos/SeuPut0705/ompdesk/releases/tags/<tag>` (the release JSON with its ompdesk-update comment) and the asset, over
  * plain HTTP, the same routes and comment format as above.
+ * `--seed-port <n>` also serves an isolated HTTPS seed feed: repository access succeeds, no release is offered, and no
+ * asset is available. The released app can validate and store a test token without starting an update while it seeds.
  *
  * The self-signed certificate for api.github.com is made in `--cert-dir` (never the repository). One JSON line per
  * request on stdout; the first line says it is listening.
@@ -28,6 +30,7 @@ const { values } = parseArgs({
 		"cert-dir": { type: "string" },
 		platform: { type: "string", default: "windows" },
 		port: { type: "string", default: "8443" },
+		"seed-port": { type: "string" },
 		"rollback-dmg": { type: "string" },
 		"rollback-tag": { type: "string" },
 		"http-port": { type: "string" },
@@ -98,6 +101,22 @@ const server = Bun.serve({
 		return new Response("not here", { status: 404 });
 	},
 });
+if (values["seed-port"]) {
+	const seed = Bun.serve({
+		port: Number(values["seed-port"]),
+		hostname: "127.0.0.1",
+		tls: { key: Bun.file(key), cert: Bun.file(cert) },
+		fetch(request) {
+			const url = new URL(request.url);
+			console.log(JSON.stringify({ at: Date.now(), seed: true, method: request.method, path: url.pathname }));
+			if (url.pathname === "/repos/SeuPut0705/ompdesk")
+				return Response.json({ full_name: "SeuPut0705/ompdesk", private: false });
+			if (url.pathname === "/repos/SeuPut0705/ompdesk/releases") return Response.json([]);
+			return new Response("not here", { status: 404 });
+		},
+	});
+	console.log(JSON.stringify({ seedListening: seed.port }));
+}
 if (values["rollback-dmg"]) {
 	const tag = values["rollback-tag"] ?? "";
 	const httpPort = Number(values["http-port"]);

@@ -13,7 +13,14 @@ for (let i = 0; i < 120 && !browser; i++) {
 if (!browser) throw new Error("no CDP endpoint");
 let page: Page | undefined;
 /** What the seed reads of the released app's page: its `window.omp` updater calls. */
-type SeedWindow = { omp?: { updater?: { saveAuth(token: string): Promise<unknown>; authInfo(): Promise<unknown> } } };
+type SeedWindow = {
+	omp?: {
+		updater?: {
+			saveAuth(token: string): Promise<{ access?: string; source?: string | null }>;
+			authInfo(): Promise<{ source?: string | null; hasStoredToken?: boolean }>;
+		};
+	};
+};
 for (let i = 0; i < 60 && !page; i++) {
 	page = browser
 		.contexts()
@@ -59,4 +66,13 @@ const out = await page.evaluate(async t => {
 	};
 }, token);
 console.log(JSON.stringify(out));
+if (
+	out.saved?.access !== "ok" ||
+	out.saved.source !== "stored" ||
+	out.auth?.source !== "stored" ||
+	out.auth.hasStoredToken !== true
+) {
+	console.error("seed failed: the released app did not validate and store the token");
+	process.exit(1);
+}
 process.exit(0); // no browser.close(): it would send Browser.close
