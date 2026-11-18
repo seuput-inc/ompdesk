@@ -370,11 +370,13 @@ export function TitleBar() {
 						? ["ready", t("titlebar.status.ready")]
 						: run.down || summary.status === "waiting"
 							? [run.failed || summary.status === "exited" ? "error" : "pending", t(run.signal.labelKey)]
-							: attention
-								? ["attention", t(ATTENTION_LABEL_KEY[attention.kind])]
-								: run.running
-									? ["busy", t("titlebar.status.working")]
-									: ["ready", t(run.signal.labelKey)];
+							: summary.waitsForDevice
+								? ["pending", t("titlebar.status.deviceWait", { device: summary.waitsForDevice })]
+								: attention
+									? ["attention", t(ATTENTION_LABEL_KEY[attention.kind])]
+									: run.running
+										? ["busy", t("titlebar.status.working")]
+										: ["ready", t(run.signal.labelKey)];
 
 	const ui = useUiStore.getState;
 	const sessionMenuItems: ContextMenuItem[] = [

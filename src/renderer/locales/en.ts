@@ -89,6 +89,7 @@ export const en: Record<string, string> = {
 	"titlebar.status.waiting": "Installing omp",
 	"titlebar.status.sessionHeld": "Waiting for the session",
 	"titlebar.status.connectionWait": "Waiting for the internet connection",
+	"titlebar.status.deviceWait": "Waiting for {device}",
 	"titlebar.toggleSidebar": "Toggle sidebar",
 	"titlebar.openProjectFailed": "Couldn't open project",
 	"titlebar.renameFailed": "Couldn't rename session",

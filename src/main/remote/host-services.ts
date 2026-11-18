@@ -220,6 +220,12 @@ import { FrameTooLargeError } from "./wire";
 
 /** How long a disconnected device's tabs keep running, waiting for it to come back. */
 export const HOST_TAB_GRACE_MS = 10 * 60_000;
+/**
+ * How long a hosted tab's turn waits on a call its device runs (a GUI host tool, a URI read) while that device is away
+ * before this computer says so: past the link's own recovery (a dead link is seen within 30 s, a restarting app is
+ * dialed every second for 60 s), so a routine drop and reconnect says nothing.
+ */
+export const HOST_WAIT_NOTICE_MS = 60_000;
 /** Session-index changes come in bursts while an agent writes; one push per burst. */
 const SESSIONS_CHANGED_DEBOUNCE_MS = 300;
 /** Parts of a file that wait this long for the next one are dropped (the sender gave up or went away). */
@@ -304,6 +310,10 @@ export interface HostServicesDeps {
 	/** Moves a path to this machine's trash (Electron `shell.trashItem`). */
 	trashItem: (abs: string) => Promise<void>;
 	graceMs?: number;
+	/** `HOST_WAIT_NOTICE_MS` (tests shorten it). */
+	hostWaitNoticeMs?: number;
+	/** A hosted tab's turn has waited `HOST_WAIT_NOTICE_MS` on a call its device runs while that device is away; once a wait. */
+	hostWaiting?: (wait: { device: string; title: string | undefined }) => void;
 	/** Names a worktree a device's agent makes here (`host.git.worktreeCreate`); default the stock helper's. */
 	worktreeLocation?: Pick<BridgeClient, "request">;
 	/**
@@ -366,6 +376,10 @@ interface HostTab extends RunTracking {
 	 * re-sends the ones this connection never had, and every one to a relaunched device that adopts the tab.
 	 */
 	hostCalls: Map<string, PendingHostCall>;
+	/** Armed while `hostCalls` wait and the device is away (`#syncHostWait`); `waitsForDevice` once it ran out. */
+	hostWaitTimer?: NodeJS.Timeout;
+	/** The turn has waited `HOST_WAIT_NOTICE_MS` on a call of `hostCalls` while the device is away: its summary says so. */
+	waitsForDevice?: true;
 	/** The turn waits for this computer's internet connection (turn-resume.ts; a view's, its window tab's). */
 	awaitingConnection?: boolean;
 	/** Times the device moved this tab to another session or branch (`movesTab`): a held wait of the old one ends. */
@@ -967,6 +981,7 @@ export class LocalHostServices implements HostServices {
 					...(status === "running" && tab.run.since !== undefined ? { since: tab.run.since } : {}),
 					...(ask ? { ask } : {}),
 					...(tab.awaitingConnection ? { awaitingConnection: true as const } : {}),
+					...(tab.waitsForDevice ? { waitsForDevice: tab.origin.name } : {}),
 					...(status === "error" && sidecar.statusPayload?.sessionHeld ? { sessionHeld: true as const } : {}),
 					...(status === "starting" && sidecar.statusPayload?.queued ? { queued: true as const } : {}),
 					...(failure ? { failure } : {}),
@@ -1739,6 +1754,7 @@ export class LocalHostServices implements HostServices {
 	 */
 	#startGrace(tab: HostTab): void {
 		tab.conn = null;
+		this.#syncHostWait(tab);
 		clearTimeout(tab.graceTimer);
 		tab.graceTimer = setTimeout(() => {
 			// A view's wait is the tab's it shows, which holds it there: the view has nothing to keep.
@@ -1747,6 +1763,29 @@ export class LocalHostServices implements HostServices {
 			else this.#closeTab(this.#key(tab.peerId, tab.rtab));
 		}, this.#graceMs);
 		tab.graceTimer.unref?.();
+	}
+
+	/**
+	 * The turn waits on a call only the device runs while the device is away: `HOST_WAIT_NOTICE_MS` later its summary
+	 * reads `waitsForDevice` and the person here is told once; the device's return or the calls' end clears it.
+	 */
+	#syncHostWait(tab: HostTab): void {
+		if (tab.conn === null && tab.hostCalls.size > 0) {
+			if (tab.hostWaitTimer || tab.waitsForDevice) return;
+			tab.hostWaitTimer = setTimeout(() => {
+				tab.hostWaitTimer = undefined;
+				tab.waitsForDevice = true;
+				this.workChanged();
+				this.#deps.hostWaiting?.({ device: tab.origin.name, title: tab.title ?? tab.autoTitle });
+			}, this.#deps.hostWaitNoticeMs ?? HOST_WAIT_NOTICE_MS);
+			tab.hostWaitTimer.unref?.();
+			return;
+		}
+		clearTimeout(tab.hostWaitTimer);
+		tab.hostWaitTimer = undefined;
+		if (!tab.waitsForDevice) return;
+		tab.waitsForDevice = undefined;
+		this.workChanged();
 	}
 
 	#checkOpenSession(sessionPath: string | undefined): void {
@@ -1795,6 +1834,7 @@ export class LocalHostServices implements HostServices {
 				call.delivered = true;
 				this.#emit(existing, call.name, request);
 			}
+			this.#syncHostWait(existing);
 			return { cwd: existing.sidecar.cwd, kind: existing.sidecar.kind, attached };
 		}
 		const holder = params.sessionPath ? this.#holderView(peer, params.sessionPath) : null;
@@ -2215,18 +2255,22 @@ export class LocalHostServices implements HostServices {
 		// The calls a device answers: the omp withdraws one only through a cancel frame, and a process that ends takes its own.
 		const pending = (name: PendingHostCall["name"]) => (request: { id: string }) => {
 			tab.hostCalls.set(request.id, { name, request, delivered: tab.conn !== null });
+			this.#syncHostWait(tab);
 		};
 		sidecar.on("hostToolCall", pending("hostToolCall"));
 		sidecar.on("hostUriRequest", pending("hostUriRequest"));
 		sidecar.on("frame", (frame: { type?: unknown; targetId?: unknown }) => {
 			if (
 				(frame.type === "host_tool_cancel" || frame.type === "host_uri_cancel") &&
-				typeof frame.targetId === "string"
+				typeof frame.targetId === "string" &&
+				tab.hostCalls.delete(frame.targetId)
 			)
-				tab.hostCalls.delete(frame.targetId);
+				this.#syncHostWait(tab);
 		});
 		sidecar.on("status", (payload: SidecarStatusPayload) => {
-			if (payload.status !== "ready") tab.hostCalls.clear();
+			if (payload.status === "ready" || tab.hostCalls.size === 0) return;
+			tab.hostCalls.clear();
+			this.#syncHostWait(tab);
 		});
 	}
 
@@ -2835,6 +2879,7 @@ export class LocalHostServices implements HostServices {
 		this.#tabs.delete(key);
 		this.#deps.localTabs.modelWait?.forget(`hosted:${tab.resumeId}`);
 		clearTimeout(tab.graceTimer);
+		clearTimeout(tab.hostWaitTimer);
 		tab.conn = null;
 		// The windows here that show it close their tab first, quietly, while its omp still runs.
 		for (const view of [...tab.views]) view.end();
