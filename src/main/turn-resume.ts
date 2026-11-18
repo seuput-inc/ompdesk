@@ -30,8 +30,9 @@
  * the scheduled retry, the "continuing" row) and tells Autopilot's goal `none` for a launch continuation it was waiting
  * on, then opens a new instance on the next call and re-seeds it from what can be read again: the marker file (so a
  * run's `startedAt` and the file stay), every outcome and stock retry the pool shows now (as already judged, so an old
- * failure arms nothing), and each tab's `exits`. A failed turn that was waiting is not waited for again; the marker
- * file keeps what the last `sync()` wrote for the next launch.
+ * failure arms nothing), and each tab's `exits`. A failed turn that was waiting is not waited for again. What the
+ * marker file held when the core went is continued at once, as a relaunch continues it (`launch`, `#continueAfterLoss`):
+ * the core ended every omp it ran, so each turn it cut goes on once its tab's next omp is up.
  */
 import { readFileSync } from "node:fs";
 import { parseAgentMessage } from "../shared/agent-control";
@@ -567,10 +568,21 @@ export class TurnResume {
 			},
 		);
 		this.#id = id;
+		if (this.#continueAfterLoss) {
+			this.#continueAfterLoss = false;
+			// Before any other call can sync the new instance: the file still holds what ran when the core went.
+			hub().call(id, "launch", {});
+		}
 		return id;
 	}
 
 	#reseed = false;
+	/**
+	 * The next instance continues the marker file's turns at once (`launch`): a lost core ends every omp it ran, and the
+	 * new one's pool reads each tab idle, so the next `sync` would drop the markers of the turns the loss cut (the Mac
+	 * mini, 18 Nov 2026: 14 tabs came back to nothing). Set only after this launch's own `launch()`.
+	 */
+	#continueAfterLoss = false;
 
 	/** What a new instance of a lost core learns: see the file's header. */
 	#seed(): Record<string, unknown> {
@@ -593,6 +605,8 @@ export class TurnResume {
 	#lost(_error: CoreError): void {
 		this.#id = null;
 		this.#reseed = true;
+		// The lost core took every tab's omp with it: what was running then goes on as after a relaunch (`#instance`).
+		if (this.#launched) this.#continueAfterLoss = true;
 		for (const cancel of this.#timers.values()) cancel();
 		this.#timers.clear();
 		for (const { sidecar, listener } of this.#listeners.values()) sidecar.off("status", listener);

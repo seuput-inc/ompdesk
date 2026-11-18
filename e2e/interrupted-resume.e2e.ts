@@ -530,6 +530,17 @@ function corePids(mainPid: number): number[] {
 		.map(([pid]) => Number(pid));
 }
 
+/** The `turn-resume` lines of the runtime log after the launch's own: each line's message with its details. */
+async function resumeLines(profile: Profile): Promise<Array<Record<string, unknown>>> {
+	const text = await fs.readFile(path.join(profile.desktop, "logs", "gui-runtime.jsonl"), "utf8").catch(() => "");
+	const lines = text
+		.split("\n")
+		.filter(line => line.includes('"turn-resume"'))
+		.map(line => JSON.parse(line) as { message: string; details?: Record<string, unknown> })
+		.map(line => ({ message: line.message, ...line.details }));
+	return lines.slice(lines.findIndex(line => line.message === "launch") + 1);
+}
+
 // 18 Nov 2026, the Mac mini: the core was lost under 14 running tabs; each lane opened again on the next core, but no
 // turn went on. A lost core takes every omp with it, and the turn it cut must continue on the omp the next core runs.
 test("a turn running when the app's core dies continues on the next core", async () => {
@@ -553,6 +564,8 @@ test("a turn running when the app's core dies continues on the next core", async
 		expect(corePids(mainPid)).not.toContain(core);
 		if (omp !== undefined) expect(ompPids(profile)).not.toContain(omp);
 		await expectOneSession(profile, page, sessionPath);
+		// The new core's resume continued the marker the loss left, through its tab (the relaunch's own path).
+		expect(await resumeLines(profile)).toContainEqual(expect.objectContaining({ message: "marker", via: "layout" }));
 	} finally {
 		if (current) await exitApp(current);
 		await cleanup(profile);
