@@ -15,17 +15,18 @@
 //!
 //! Main hands in how a worker starts, when one is needed: the core asks with the event `stock.launch`
 //! `{host, worker, launch}` and main answers `stock.launched` with the binary, its arguments, the whole environment
-//! and the file whose time and size identify the installed omp, or with why none can start. So omp is resolved only
-//! when a worker starts, as before, and a request carries no environment.
+//! and the files whose times and sizes identify the installed omp, or with why none can start. So omp is resolved
+//! only when a worker starts, as before, and a request carries no environment.
 //!
 //! Each request has its own timeout (main names it), armed before any worker starts. It fails only that request; the
 //! worker is told to skip it if it has not started it (a mutation never runs after its caller was told it failed) and
 //! answers `withdrawn` in its turn. A stock worker that answers nothing for `RECYCLE_GRACE` after a timeout is stuck:
 //! everything waiting on it fails, it is ended and the next request starts a fresh one.
 //!
-//! A stock or extensions worker that outlived a reinstall of omp (the stamp file changed since it started) holds the
-//! old files in its module registry and would import the new ones beside them, so it is let go and a fresh one
-//! started, but only with nothing in flight on it.
+//! A stock or extensions worker that outlived a change of the omp install (any stamp file changed since just before
+//! it started) holds the old files in its module registry, or a failed resolution of a package the install had not
+//! written yet, which Bun keeps for the life of the process; so it is let go and a fresh one started, but only with
+//! nothing in flight on it.
 //!
 //! One lane per `(host, worker)`: a task that owns the lane's whole state and takes one message at a time, so no
 //! step interleaves with another. A timer or a worker's reader that reports late names the worker it was armed for
@@ -135,8 +136,10 @@ struct Launch {
     bin: String,
     args: Vec<String>,
     env: BTreeMap<String, String>,
-    /// omp's `package.json`: its time and size tell one install from the next.
-    stamp_file: Option<PathBuf>,
+    /// What identifies the omp install, omp's own `package.json` first: their times and sizes tell one install from
+    /// the next. One missing reads as absent.
+    #[serde(default)]
+    stamp_files: Vec<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -449,10 +452,15 @@ fn worker_answer(mut line: Vec<u8>) -> Option<(u64, Answer)> {
     Some((parsed.id?, answer))
 }
 
-/// What identifies the installed omp now: its `package.json`'s time and size.
-fn stamp(file: Option<&PathBuf>) -> Option<(SystemTime, u64)> {
-    let metadata = std::fs::metadata(file?).ok()?;
-    Some((metadata.modified().ok()?, metadata.len()))
+/// What identifies the installed omp now: each file's time and size, `None` where it is missing.
+fn stamp(files: &[PathBuf]) -> Vec<Option<(SystemTime, u64)>> {
+    files
+        .iter()
+        .map(|file| {
+            let metadata = std::fs::metadata(file).ok()?;
+            Some((metadata.modified().ok()?, metadata.len()))
+        })
+        .collect()
 }
 
 struct Pending {
@@ -470,9 +478,10 @@ struct Running {
     stdin: mpsc::UnboundedSender<Vec<u8>>,
     kill: Arc<Notify>,
     exited: watch::Receiver<bool>,
-    stamp_file: Option<PathBuf>,
-    /// The stamp when it started, so a request can see omp was replaced since.
-    started_stamp: Option<(SystemTime, u64)>,
+    stamp_files: Vec<PathBuf>,
+    /// The stamp read just before it started, so a request can see the install changed since: one read after the
+    /// start could match an install that was still being written while the worker loaded.
+    started_stamp: Vec<Option<(SystemTime, u64)>>,
     /// Requests it was sent and has not answered (a timed-out one included: it may still run, a plugin upgrade's
     /// `bun install`). Neither the idle exit nor a changed omp ends it while there is one.
     unanswered: HashSet<u64>,
@@ -586,21 +595,22 @@ impl Lane {
         }
     }
 
-    /// omp was reinstalled while this worker ran, and nothing is in flight on it: no request it was sent is
-    /// unanswered and none but the asking one waits. The terminals worker is never let go for it.
+    /// The omp install changed since this worker started, and nothing is in flight on it: no request it was sent is
+    /// unanswered and none but the asking one waits. Not while omp's own `package.json` is missing (an install under
+    /// way: a fresh worker would load half of it). The terminals worker is never let go for it.
     fn outlived_its_omp(&self) -> bool {
         let Some(running) = &self.running else {
             return false;
         };
         if self.worker == Worker::Terminals
-            || running.started_stamp.is_none()
+            || running.stamp_files.is_empty()
             || !running.unanswered.is_empty()
             || self.pending.len() > 1
         {
             return false;
         }
-        let now = stamp(running.stamp_file.as_ref());
-        now.is_some() && now != running.started_stamp
+        let now = stamp(&running.stamp_files);
+        now[0].is_some() && now != running.started_stamp
     }
 
     /// Lets the worker go: its stdin closes once what was written to it went out, and it ends on that.
@@ -653,8 +663,9 @@ impl Lane {
             bin,
             args,
             env,
-            stamp_file,
+            stamp_files,
         } = launch;
+        let started_stamp = stamp(&stamp_files);
         let runner = Runner {
             bin,
             args,
@@ -718,8 +729,8 @@ impl Lane {
             stdin: lines,
             kill,
             exited,
-            started_stamp: stamp(stamp_file.as_ref()),
-            stamp_file,
+            started_stamp,
+            stamp_files,
             unanswered: HashSet::new(),
             overdue: HashMap::new(),
         })

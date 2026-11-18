@@ -1649,14 +1649,18 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "helper",
 		contract: "internal",
 		summary:
-			"Starts the stock-helper Bun worker against the resolved omp install (`OMP_PACKAGE_ROOT`, `Bun.resolveSync(specifier, <package>/package.json)`); a manifest mtime/size change starts a new worker generation.",
+			"Starts the stock-helper Bun worker against the resolved omp install (`OMP_PACKAGE_ROOT`, `Bun.resolveSync(specifier, <package>/package.json)`); a change of the install's stamp (mtime/size of omp's manifest, each `@oh-my-pi` package folder and manifest, the scope folder, the install's package.json and lockfile; read before the worker spawns) starts a new worker generation.",
 		files: [
 			"src/main/stock-helper.ts",
 			"resources/gui-bridge/stock-helper/host.ts",
 			"resources/gui-bridge/stock-helper/dispatch.ts",
 			"native/ompdesk/crates/core/src/stock/mod.rs",
 		],
-		stock: ["OMP_PACKAGE_ROOT", "<package>/package.json mtime and size"],
+		stock: [
+			"OMP_PACKAGE_ROOT",
+			"<package>/package.json mtime and size",
+			"node_modules/@oh-my-pi/* folders and manifests, the install's package.json, bun.lock, bun.lockb",
+		],
 		tests: ["src/main/stock-helper.test.ts", "src/main/session-free-stock.test.ts"],
 	},
 	{
