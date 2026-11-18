@@ -280,6 +280,8 @@ fn entries(dir: &Path) -> Vec<Entry> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
     use super::{TRIM_TO, folder, touch};
 
     /// Writes and reads back to back, as a device keeping pages does: on Windows the file system's own write time is
@@ -311,5 +313,39 @@ mod tests {
             assert_eq!(left, expected, "keeping {keep}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A burst of writes leaves stamps ahead of the clock, and a clock that went back leaves them far ahead; a core
+    /// started again must still stamp past them, or the page it writes first sorts oldest and a trim removes it.
+    #[test]
+    fn a_page_written_after_a_restart_sorts_after_an_earlier_runs_stamps_ahead_of_the_clock() {
+        for ahead in [Duration::from_millis(500), Duration::from_secs(24 * 3600)] {
+            let dir = super::super::tests::temp_dir("folder-restart");
+            let time = SystemTime::now() + ahead;
+            for name in ["p0", "p1", "p2"] {
+                std::fs::write(dir.join(name), [b'x'; 100]).unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(dir.join(name))
+                    .unwrap()
+                    .set_times(
+                        std::fs::FileTimes::new()
+                            .set_accessed(time)
+                            .set_modified(time),
+                    )
+                    .unwrap();
+            }
+            // A folder this process has not stamped in, as after a restart.
+            let folder = folder(&dir);
+            assert!(folder.write(&dir.join("p3"), &[b'x'; 100], u64::MAX));
+            folder.trim(((150_f64) / TRIM_TO).ceil() as u64);
+            let left: Vec<String> = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(left, ["p3"], "stored {ahead:?} ahead");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
