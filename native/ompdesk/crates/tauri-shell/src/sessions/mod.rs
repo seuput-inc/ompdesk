@@ -12,6 +12,8 @@ pub mod preview;
 pub mod protocol;
 #[cfg(target_os = "macos")]
 mod protocol_macos;
+#[cfg(any(target_os = "macos", test))]
+mod webkit_store;
 #[cfg(windows)]
 mod windows;
 
@@ -126,6 +128,8 @@ pub fn configure_app<'a, M: Manager<Wry>>(
         .data_store_identifier(identifier);
     #[cfg(target_os = "macos")]
     {
+        // Before WebKit creates the store: one made under the new name would leave the old one's data unread.
+        webkit_store::adopt_for(identifier);
         let configuration =
             protocol_macos::configuration(&partition, identifier, protocol::declared_schemes()?)?;
         builder = builder.with_webview_configuration(configuration);
