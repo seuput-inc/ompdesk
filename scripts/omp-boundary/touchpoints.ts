@@ -1630,6 +1630,21 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/bridge-idle-maintenance-stock.test.ts"],
 	},
 	{
+		id: "B62",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			'A message another session sends a working session goes in as stock\'s aside (`AgentSession.prompt` with `streamingBehavior: "aside"` and `onPromptAdmitted`), which stock hands over together at the next step boundary instead of one steer per boundary.',
+		files: [
+			"resources/gui-bridge/agent-control.ts",
+			"resources/gui-bridge/capabilities.ts",
+			"src/main/local/agent-control.ts",
+			"native/ompdesk/crates/core/src/agentctl/service/messages.rs",
+		],
+		stock: ["AgentSession.prompt", "PromptOptions.streamingBehavior aside", "PromptOptions.onPromptAdmitted"],
+		tests: ["src/main/bridge-agent-send-stock.test.ts", "src/main/agent-control/service.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

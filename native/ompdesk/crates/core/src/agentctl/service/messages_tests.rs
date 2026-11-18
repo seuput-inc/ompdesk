@@ -62,6 +62,8 @@ fn main_replies(method: &str, args: &Value) -> Result<Value, String> {
         "args.parse" => Ok(json!({ "ok": true, "args": args["args"] })),
         "command" => match args["command"]["type"].as_str() {
             Some("prompt") => Ok(json!({ "success": true })),
+            // The bridge takes another session's message to a working session as stock's aside.
+            Some("agent_control_aside") => Ok(json!({ "success": true, "data": {} })),
             Some("get_state") => Ok(json!({ "success": true, "data": { "isStreaming": false } })),
             _ => Ok(json!({ "success": false, "error": "no" })),
         },
@@ -346,11 +348,17 @@ async fn a_steer_ends_the_receiver_s_blocking_wait_and_the_receipt_says_so() {
     assert!(result.text.contains("Returned early"), "{}", result.text);
     assert!(!result.text.contains("Still running"), "{}", result.text);
     assert!(!control.is_blocked("a"));
-    let prompts: Vec<Value> = asked_with(&asked, "command")
+    let asides: Vec<Value> = asked_with(&asked, "command")
         .into_iter()
-        .filter(|args| args["command"]["type"] == "prompt")
+        .filter(|args| args["command"]["type"] == "agent_control_aside")
         .collect();
-    assert_eq!(prompts[0]["command"]["streamingBehavior"], "steer");
+    assert_eq!(asides.len(), 1);
+    assert!(
+        asides[0]["command"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("read me now")
+    );
     control.host.port().close();
 }
 
@@ -402,38 +410,91 @@ async fn a_report_or_the_person_s_prompt_ends_the_blocking_wait_too() {
 }
 
 /// 13 Nov 2026: three default sends to a session waiting for the person's answer closed its question card each time,
-/// while the receipt said they would be read after the user answers.
+/// while the receipt said they would be read after the user answers. Stock's aside leaves the card open; where the
+/// receiver's computer does not know it, the message waits as a follow-up, never a steer.
 #[tokio::test]
-async fn a_message_to_a_session_with_an_open_card_queues_behind_it_whatever_delivery_says() {
+async fn a_message_to_a_session_with_an_open_card_never_closes_it_whatever_delivery_says() {
     for (n, delivery) in [None, Some("steer"), Some("follow_up")]
         .into_iter()
         .enumerate()
     {
-        let mut card = busy("c");
-        card["asks"] = json!([{ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Which?", "options": ["x", "y"] } }]);
-        let (control, asked) = rig(
-            9_312 + n as u64,
-            state(vec![tab("s"), card]),
-            Tuning::default(),
-            main_replies,
-        );
-        let mut args = json!({ "session": "c", "message": "an update" });
-        if let Some(delivery) = delivery {
-            args["delivery"] = json!(delivery);
+        for aside_known in [true, false] {
+            let mut card = busy("c");
+            card["asks"] = json!([{ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Which?", "options": ["x", "y"] } }]);
+            let (control, asked) = rig(
+                9_312 + 2 * n as u64 + u64::from(aside_known),
+                state(vec![tab("s"), card]),
+                Tuning::default(),
+                move |method, args| {
+                    if !aside_known && args["command"]["type"] == "agent_control_aside" {
+                        return Ok(
+                            json!({ "success": false, "error": "Unknown command: agent_control_aside" }),
+                        );
+                    }
+                    main_replies(method, args)
+                },
+            );
+            let mut args = json!({ "session": "c", "message": "an update" });
+            if let Some(delivery) = delivery {
+                args["delivery"] = json!(delivery);
+            }
+            let receipt = control.run("s", "ompdesk_session_send", args, None).await;
+            let kinds: Vec<Value> = asked_with(&asked, "command")
+                .into_iter()
+                .filter_map(|args| match args["command"]["type"].as_str() {
+                    Some("agent_control_aside") => Some(json!("aside")),
+                    Some("prompt") => Some(args["command"]["streamingBehavior"].clone()),
+                    _ => None,
+                })
+                .collect();
+            let expected = if aside_known {
+                vec![json!("aside")]
+            } else {
+                vec![json!("aside"), json!("followUp")]
+            };
+            assert_eq!(kinds, expected, "{delivery:?} aside known: {aside_known}");
+            assert!(
+                receipt.text.contains("that card stays open")
+                    && receipt.text.contains("after the user has answered")
+                    && !receipt.text.contains("delivered as steer"),
+                "{}",
+                receipt.text
+            );
+            control.host.port().close();
         }
-        let receipt = control.run("s", "ompdesk_session_send", args, None).await;
-        let prompts: Vec<Value> = asked_with(&asked, "command")
-            .into_iter()
-            .filter(|args| args["command"]["type"] == "prompt")
-            .collect();
-        assert_eq!(prompts[0]["command"]["streamingBehavior"], "followUp");
-        assert!(
-            receipt.text.contains("which stays open")
-                && receipt.text.contains("once the user has answered")
-                && !receipt.text.contains("delivered as steer"),
-            "{}",
-            receipt.text
-        );
-        control.host.port().close();
     }
+}
+
+/// 18 Nov 2026: the hub's send to a session still starting on another computer never returned, and the person's own
+/// messages waited behind that tool call. A send waits for a start only `send_ready_wait_ms`.
+#[tokio::test]
+async fn a_send_to_a_session_still_starting_returns_within_its_bound() {
+    let mut starting = tab("t");
+    starting["status"] = json!("starting");
+    let tuning = Tuning {
+        send_ready_wait_ms: 100,
+        ready_poll_ms: 10,
+        ..Tuning::default()
+    };
+    let (control, asked) = rig(9_330, state(vec![tab("s"), starting]), tuning, main_replies);
+    let receipt = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        control.run(
+            "s",
+            "ompdesk_session_send",
+            json!({ "session": "t", "message": "when you are up" }),
+            None,
+        ),
+    )
+    .await
+    .expect("the send waited for the start");
+    assert!(receipt.is_error, "{}", receipt.text);
+    assert!(receipt.text.contains("still starting"), "{}", receipt.text);
+    assert!(
+        asked_with(&asked, "command")
+            .iter()
+            .all(|args| args["tabId"] != "t"),
+        "nothing reaches a tab that is not up"
+    );
+    control.host.port().close();
 }

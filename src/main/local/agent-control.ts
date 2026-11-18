@@ -19,19 +19,16 @@ const attachmentCommand = z
 	.refine(command => (command.path === undefined) !== (command.image === undefined), {
 		message: "an attachment is {path} or {image}, one of them",
 	});
-const mailBlocks = z.array(
-	z.union([
-		z.object({ type: z.literal("text"), text: z.string().max(200_000) }),
-		z.object({
-			type: z.literal("image"),
-			data: z
-				.string()
-				.min(1)
-				.max(Math.ceil(ATTACHMENT_MAX_BYTES / 3) * 4),
-			mimeType: z.string().min(1).max(100),
-		}),
-	]),
-);
+const imageBlock = z.object({
+	type: z.literal("image"),
+	data: z
+		.string()
+		.min(1)
+		.max(Math.ceil(ATTACHMENT_MAX_BYTES / 3) * 4),
+	mimeType: z.string().min(1).max(100),
+});
+const mailBlocks = z.array(z.union([z.object({ type: z.literal("text"), text: z.string().max(200_000) }), imageBlock]));
+const asideCommand = z.object({ message: z.string().min(1).max(200_000), images: z.array(imageBlock).optional() });
 const mailCommand = z.object({
 	// A report with pictures sent along is text blocks and image blocks (stock's `(TextContent | ImageContent)[]`).
 	content: z.union([z.string().min(1).max(200_000), mailBlocks.min(1)]),
@@ -83,6 +80,15 @@ export const handlers: Record<string, LocalHandler> = {
 	agent_control_mail: async (command, ctx) => {
 		const mail = mailCommand.parse(command);
 		return ctx.bridge.request("agent_control.mail", mail);
+	},
+	/**
+	 * Another session's message to this one (`ompdesk_session_send`) while it works: its bridge hands it to stock as an
+	 * aside, read with every other one waiting at the next step boundary. `{idle: true}`: nothing sent, the caller
+	 * sends the plain prompt that starts the turn.
+	 */
+	agent_control_aside: async (command, ctx) => {
+		const { message, images } = asideCommand.parse(command);
+		return ctx.bridge.request("agent_control.aside", images ? { message, images } : { message });
 	},
 	/**
 	 * Which message markers main sent this session (`[ompdesk dispatch d2:`, `[ompdesk request <id>]`) its journal

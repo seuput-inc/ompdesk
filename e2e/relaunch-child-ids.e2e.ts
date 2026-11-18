@@ -190,10 +190,14 @@ test("a busy child that reports learns of the follow-up queued behind its turn, 
 			delivery: "follow_up",
 		});
 		expect(next.text).toContain("delivered as steer (it already reported to you in this turn");
-		const prompts = (await readRecords(profile.record)).filter(
-			frame => frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes("And D"),
+		// A working child takes it as stock's aside (gui-bridge `agent_control.aside`), never a queued steer.
+		const asides = (await readRecords(profile.record)).filter(
+			frame =>
+				frame.type === "agent_control.aside" &&
+				typeof frame.message === "string" &&
+				frame.message.includes("And D"),
 		);
-		expect(prompts.at(-1)?.streamingBehavior).toBe("steer");
+		expect(asides).toHaveLength(1);
 	} finally {
 		if (current) await exitApp(current);
 		await fs.rm(profile.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
