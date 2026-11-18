@@ -116,9 +116,10 @@ fn command(start: &Start) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    // A process group (a session) of its own, so the kill at the end of a stop takes the tools it started with it.
+    // A process group of its own, so the kill at the end of a stop takes the tools it started with it; through
+    // `posix_spawn`, never a fork of this many-threaded process (`own_group`).
     #[cfg(unix)]
-    crate::sys::new_session(command.as_std_mut());
+    crate::sys::own_group(command.as_std_mut());
     command
 }
 
@@ -292,5 +293,27 @@ mod tests {
         // `findstr` found no line to match at the end of input, so the shim's own code is 1: what matters is that it ended.
         assert!(exit.code.is_some(), "{exit:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+
+    /// A tab's omp leads a process group of its own, which a stop kills (`sys::own_group`, started by `posix_spawn`).
+    #[tokio::test]
+    async fn an_omp_leads_a_process_group_of_its_own() {
+        let how = Start {
+            bin: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo $$ $(ps -o pgid= -p $$)".into()],
+            env: std::env::vars().collect(),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            shell: false,
+        };
+        let output = command(&how).output().await.unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        let ids: Vec<&str> = text.split_whitespace().collect();
+        assert_eq!(ids.len(), 2, "{text}");
+        assert_eq!(ids[0], ids[1], "the omp does not lead its group: {text}");
     }
 }
