@@ -106,6 +106,10 @@ describe("the hub connection", () => {
 		expect(blocked).toBeGreaterThanOrEqual(HUB_CALL_DEADLINE_MS - 50);
 		expect(blocked).toBeLessThan(HUB_CALL_DEADLINE_MS + 1_000);
 		expect(instance.lost.map(error => error.code)).toEqual(["hub_lost"]);
+		// The loss says which side was silent: the hub's thread took the wait, the core sent nothing after it.
+		expect(instance.lost[0]?.message).toMatch(
+			/its thread took the wait after \d+ ms; the core's last line came \d+ ms before the wait/,
+		);
 		const again = probe(hub);
 		expect(hub.call(again.id, "push", { n: 2 })).toBe(2);
 		expect(core().pid).not.toBe(before);

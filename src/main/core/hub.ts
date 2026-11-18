@@ -47,7 +47,8 @@ const MAX_BYTES = 1 << 30;
 const WORKER = `
 const { parentPort, workerData } = require("node:worker_threads");
 const net = require("node:net");
-const { sab } = workerData;
+const { sab, times: timesBuffer } = workerData;
+const times = new Float64Array(timesBuffer);
 const control = new Int32Array(sab, 0, 4);
 const encoder = new TextEncoder();
 const { StringDecoder } = require("node:string_decoder");
@@ -124,6 +125,7 @@ function connect(endpoint, deadline) {
 		// One decoder per connection: a multibyte character split across two chunks stays whole.
 		const decoder = new StringDecoder("utf8");
 		candidate.on("data", chunk => {
+			times[0] = performance.timeOrigin + performance.now();
 			partial += decoder.write(chunk);
 			let end;
 			while ((end = partial.indexOf("\\n")) >= 0) {
@@ -150,6 +152,7 @@ parentPort.on("message", message => {
 		else queued.push(message.line);
 	}
 	if (message.wait !== undefined) {
+		times[1] = performance.timeOrigin + performance.now();
 		waiting = message.wait;
 		look();
 	}
@@ -201,15 +204,38 @@ export class Connection {
 	readonly control: Int32Array;
 	readonly generation: number;
 	dead: CoreError | null = null;
+	/** [last line from the core, last wait the worker took]: wall times the worker writes (`lossTrace`). */
+	readonly times: Float64Array;
 
 	constructor(endpoint: { address: string; token: string }, generation: number) {
 		this.generation = generation;
 		this.sab = new SharedArrayBuffer(DATA_OFFSET + INITIAL_BYTES, { maxByteLength: DATA_OFFSET + MAX_BYTES });
 		this.control = new Int32Array(this.sab, 0, 4);
-		this.worker = new Worker(WORKER, { eval: true, name: "ompdesk-hub", workerData: { sab: this.sab } });
+		const times = new SharedArrayBuffer(16);
+		this.times = new Float64Array(times);
+		this.worker = new Worker(WORKER, { eval: true, name: "ompdesk-hub", workerData: { sab: this.sab, times } });
 		this.worker.unref();
 		this.worker.postMessage({ endpoint });
 	}
+}
+
+/**
+ * Which side of a lost wait was silent, for the `abandoned` line: whether the hub's thread took main's wait at all (a
+ * starved worker or a lost message), and when the core last sent it a line (a core that stopped answering).
+ */
+function lossTrace(times: Float64Array, waitedAt: number): string {
+	const [lastLine = 0, lastWait = 0] = times;
+	const took =
+		lastWait >= waitedAt
+			? `its thread took the wait after ${Math.round(lastWait - waitedAt)} ms`
+			: "its thread never took the wait";
+	const line =
+		lastLine === 0
+			? "the core sent no line yet"
+			: lastLine >= waitedAt
+				? `the core's last line came ${Math.round(lastLine - waitedAt)} ms into the wait`
+				: `the core's last line came ${Math.round(waitedAt - lastLine)} ms before the wait`;
+	return `${took}; ${line}`;
 }
 
 export class Hub {
@@ -359,6 +385,8 @@ export class Hub {
 	#wait(connection: Connection, id: number | "drain"): Line[] {
 		const { control, worker } = connection;
 		Atomics.store(control, STATE, WAITING);
+		// Wall time, as the worker writes its own (`lossTrace`); a test's fake clock moves neither.
+		const waitedAt = performance.timeOrigin + performance.now();
 		worker.postMessage({ wait: id });
 		const started = this.measuring ? performance.now() : 0;
 		const outcome = this.#block(control);
@@ -368,7 +396,13 @@ export class Hub {
 			this.stats.totalUs += us;
 		}
 		if (outcome === "timed-out") {
-			this.#lose(connection, new CoreError("hub_lost", `the hub did not answer within ${HUB_CALL_DEADLINE_MS} ms`));
+			this.#lose(
+				connection,
+				new CoreError(
+					"hub_lost",
+					`the hub did not answer within ${HUB_CALL_DEADLINE_MS} ms (${lossTrace(connection.times, waitedAt)})`,
+				),
+			);
 			return [];
 		}
 		const length = Atomics.load(control, LENGTH);
