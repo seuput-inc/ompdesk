@@ -28,7 +28,9 @@ use super::text::{
     journal_marks, label, named, pick_option, response_data, saved_id_of_path, transcript_page,
     with_dispatch,
 };
-use super::types::{AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, UiRequest};
+use super::types::{
+    AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, StoredSession, UiRequest,
+};
 use super::util::Flight;
 use super::wrap::{dispatch_mark, request_mark, wrap_agent_message};
 use super::{AgentControl, QueuedFollowUp};
@@ -455,12 +457,42 @@ impl AgentControl {
                 ));
             }
         }
+        // The opener gives its child new work: a new dispatch (its older reports turn stale) and its question is answered.
+        let own_child = {
+            let state = self.host.state();
+            state.parent_of(&target.tab_id) == Some(caller.tab_id.as_str())
+                || self
+                    .opened_by(
+                        &state,
+                        &caller.tab_id,
+                        &state.tabs(&caller.tab_id).unwrap_or_default(),
+                    )
+                    .contains(&target.tab_id)
+        };
         // The target's journal is the durable record: a relaunch (or a retry whose first receipt was lost) finds the
-        // request already there, and the last dispatch it was given.
+        // request already there, and the last dispatch it was given. A target still starting has no omp to ask, so its
+        // saved transcript is read: a dispatch numbered past nothing there would repeat one it holds, and the sweep would
+        // then settle the new message as delivered without handing it over.
         let marks = if up {
             self.journal_marks(&target.tab_id).await
         } else {
-            JournalMarks::default()
+            let saved = StoredSession {
+                path: kept
+                    .as_ref()
+                    .map_or_else(String::new, |kept| kept.path.to_owned()),
+                device: target.device.clone().filter(|device| !device.is_empty()),
+                ..StoredSession::default()
+            };
+            match self.host.stored_messages(&saved).await {
+                Ok(messages) => journal_marks(&messages),
+                Err(_) if own_child => {
+                    return fail(format!(
+                        "Not sent: {} is still starting and its saved transcript could not be read, so the dispatch this message would carry is unknown. Send it again once it is up (ompdesk_sessions shows its state).",
+                        named(target)
+                    ));
+                }
+                Err(_) => JournalMarks::default(),
+            }
         };
         if let Some(id) = args.request_id.as_deref().filter(|id| !id.is_empty())
             && marks.requests.contains(id)
@@ -486,18 +518,6 @@ impl AgentControl {
                     .await
                     .state
                     .is_some_and(|state| state.is_streaming));
-        // The opener gives its child new work: a new dispatch (its older reports turn stale) and its question is answered.
-        let own_child = {
-            let state = self.host.state();
-            state.parent_of(&target.tab_id) == Some(caller.tab_id.as_str())
-                || self
-                    .opened_by(
-                        &state,
-                        &caller.tab_id,
-                        &state.tabs(&caller.tab_id).unwrap_or_default(),
-                    )
-                    .contains(&target.tab_id)
-        };
         // Steer unless a follow-up is asked for. A follow-up to one that already reported back to the caller in this
         // turn waits in it (an answer) or wraps up: it would sit unseen behind that turn, so it reaches it between
         // steps instead.
