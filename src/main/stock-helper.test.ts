@@ -8,7 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "../../resources/gui-bridge/stock-helper/dispatch";
 import { core } from "./core/process";
-import { StockHelper, type StockHelperOptions } from "./stock-helper";
+import { ompInstallStampFiles, StockHelper, type StockHelperOptions } from "./stock-helper";
 
 let dir: string;
 const helpers: StockHelper[] = [];
@@ -67,21 +67,28 @@ input.on("line", line => {
 	return script;
 }
 
+/** `ompRoot`: a fake omp package in a fake install, stamped as production stamps one; else one file stands for it. */
 async function helperOnWorker(
 	requestTimeoutMs: number,
 	options: Omit<StockHelperOptions, "launch"> = {},
-	stampFile = path.join(dir, "omp-package.json"),
+	ompRoot?: string,
 ) {
 	const script = await workerScript();
 	const pids = path.join(dir, `pids-${helpers.length}`);
 	// What stands for omp's package.json: its time and size are what identifies the installed omp.
+	const stampFile = ompRoot ? path.join(ompRoot, "package.json") : path.join(dir, "omp-package.json");
 	let installs = 0;
 	const install = (version: string) => fs.writeFile(stampFile, version + " ".repeat(++installs));
 	await install("18.18.9");
 	const helper = new StockHelper(dir, {
 		requestTimeoutMs,
 		...options,
-		launch: async () => ({ bin: "bun", args: [script], env: { ...process.env, WORKER_PIDS: pids }, stampFile }),
+		launch: async () => ({
+			bin: "bun",
+			args: [script],
+			env: { ...process.env, WORKER_PIDS: pids },
+			stampFiles: ompRoot ? await ompInstallStampFiles(ompRoot) : [stampFile],
+		}),
 	});
 	helpers.push(helper);
 	// Started before a test's timed part: a request's timeout runs through its worker's start, and a cold
@@ -290,7 +297,7 @@ describe("StockHelper request timeout", () => {
 				path.join(root, "index.ts"),
 				'import { version as ai } from "@oh-my-pi/pi-ai";\nexport const version = "agent+" + ai;\n',
 			);
-			const { helper, workers } = await helperOnWorker(30_000, {}, path.join(root, "package.json"));
+			const { helper, workers } = await helperOnWorker(30_000, {}, root);
 			const entry = path.join(root, "index.ts");
 			await expect(helper.request("omp", entry)).rejects.toThrow("Cannot find package '@oh-my-pi/pi-ai'");
 			// The install finishes: Bun remembers the failed resolution for the life of the process, so only a
@@ -300,6 +307,9 @@ describe("StockHelper request timeout", () => {
 			await fs.writeFile(path.join(scope, "pi-ai", "index.ts"), 'export const version = "18.22.1";\n');
 			await fs.writeFile(path.join(install, "bun.lock"), "new lock");
 			await expect(helper.request("omp", entry)).resolves.toBe("agent+18.22.1");
+			expect(workers()).toHaveLength(2);
+			// Nothing moved since: the fresh worker stays.
+			await expect(helper.request("fast", {})).resolves.toBe("ok");
 			expect(workers()).toHaveLength(2);
 		} finally {
 			warn.mockRestore();

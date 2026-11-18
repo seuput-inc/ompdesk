@@ -5,7 +5,7 @@ All code is `native/ompdesk/crates/core/src/stock/mod.rs`. A lane is one task (`
 | Model | Code | Atomic because |
 |---|---|---|
 | `Request(r)` | `Lane::request`: the request is pending; a worker that outlived its omp is let go; the request is written to the worker, or waits and a start is asked for (`stock.launch`) | one message |
-| `Outlived` | `Lane::outlived_its_omp`: not the terminals worker, nothing unanswered, no other request pending, omp's stamp differs from the one read when the worker started | read inside `request`; the stamp is one `metadata` call |
+| `Outlived` | `Lane::outlived_its_omp`: not the terminals worker, nothing unanswered, no other request pending, omp's `package.json` present and the install's stamp (each of main's `stampFiles`: time and size, or absent) differs from the one read just before the worker started | read inside `request`; the stamp is one `metadata` call per file, read in the lane's own step |
 | `Ask` | the `stock.launch` event, numbered from `NEXT_ID` (one sequence for the whole process) | inside `request` |
 | `Launched(l, ok)` | main's `stock.launched` → `Msg::Launched` → `Lane::launched`: spawn and write what waited, or fail it | one message; `answers` models how late main answers, or never |
 | `TimerFires(r)` | the `stock.request` handler's `wait` `select!` chose the timer (or main's cancel) over the answer: the caller is answered at once and `Msg::GaveUp` is sent. `place`, run as the frame is read, puts the request in its lane in frame order; the model lets requests arrive in any order, a superset | the handler decides once; `biased` takes an answer that is already there |
@@ -18,7 +18,7 @@ All code is `native/ompdesk/crates/core/src/stock/mod.rs`. A lane is one task (`
 | `LetGo(why)` | `Lane::let_go` (the worker's stdin sender is dropped, which closes the pipe once its writer wrote what was queued); `overdue` also asks the waiter task to kill | inside the message |
 | `Fail` | `Lane::fail_pending` | inside the message |
 | `Stop` | `stock.stop` / `close_all` → `end_lanes` → `Msg::Stop` → `Lane::stop`; the lane's task ends and its table entry is removed under the table's lock, so a later request makes a fresh lane | one message; the model keeps one lane and empties it, which is the fresh lane's state |
-| `OmpChanges` | another process replaces omp's `package.json` | environment |
+| `OmpChanges` | another process changes the omp install: omp's package, a dependency in its scope, the install's manifest or lockfile (any of main's `stampFiles`). The stamp is read before the spawn, so an install still being written when the worker starts sets `changed` once it writes another file | environment |
 
 ## Abstractions that could hide a bug
 
