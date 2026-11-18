@@ -437,6 +437,48 @@ describe("children", () => {
 		expect(world.released).toEqual(["c1"]);
 		expect(autopilot.isStopping("ap-1")).toBe(false);
 	});
+
+	// A cycle's end runs while the next cycle already works (stock's continuation starts it at once) and may wait behind
+	// an earlier step: what that cycle opens meanwhile is not the ending cycle's.
+	it("a cycle's end closes the children it opened, never one the next cycle opened meanwhile", async () => {
+		await start();
+		const sidecar = world.sidecars.get("ap-1") as unknown as SidecarLike;
+		const child = async (tab: string) => {
+			world.addTab(tab, path.join(tmp, tab));
+			await autopilot.beforeFirstPrompt({ tabId: tab, callerTabId: "ap-1", tag: "autopilot-child" });
+		};
+		// Cycle 1's end is slow (a step of its pipeline has not answered yet): cycle 2's end waits behind it.
+		world.hang.add(`bridge:${AUTOPILOT_BRIDGE_METHODS.takeShipRequests}`);
+		autopilot.frame(sidecar, { type: "autopilot_cycle_end", record: record({ n: 1 }) });
+		await vi.waitFor(() => expect(world.held).toHaveLength(1));
+		world.hang.clear();
+		await child("c2");
+		autopilot.frame(sidecar, { type: "autopilot_cycle_end", record: record({ n: 2 }) });
+		await child("c3");
+		for (const call of world.held.splice(0)) call.release();
+		await autopilot.idle();
+		expect(world.released).toEqual(["c2"]);
+	});
+
+	it("a child's branch the next cycle made while the child still starts is no violation at this cycle's end", async () => {
+		await start();
+		const worktree = path.join(tmp, "wt-2026-10-17");
+		// The run has committed; cycle 2 opened a child from its tip: the child's worktree and branch exist, its session has
+		// not reached its first prompt yet (a slow omp start, the project's worktree-setup).
+		await commit(worktree, "a.txt");
+		gitSync(worktree, "worktree", "add", "-q", "-b", "autopilot/2026-10-17-c2-tests", path.join(tmp, "c2-tests"));
+		autopilot.frame(world.sidecars.get("ap-1") as unknown as SidecarLike, {
+			type: "autopilot_cycle_end",
+			record: record({ n: 1 }),
+		});
+		await autopilot.idle();
+		expect(
+			world
+				.bridgeCalls("ap-1", AUTOPILOT_BRIDGE_METHODS.setState)
+				.filter(call => call.params?.reason === "ban_violation")
+				.map(call => call.params?.detail),
+		).toEqual([]);
+	});
 });
 
 describe("approval cards", () => {
