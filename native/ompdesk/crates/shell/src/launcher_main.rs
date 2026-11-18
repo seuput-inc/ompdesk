@@ -1,7 +1,8 @@
 // UNVERIFIED on macOS: written on Windows without a compiler for this target; `shell-batch-checks` compiles it.
-//! `ompdesk-launcher`: the macOS bundle's `CFBundleExecutable` (`Contents/MacOS/OMPdesk`). It `exec`s the real shell
-//! (`Contents/MacOS/ompdesk-shell`) with the same arguments, so the app's pid stays the shell's (Dock, LaunchServices and
-//! Apple Events see one process). On the first launch of a version an update installed, it first leaves a detached copy
+//! `ompdesk-launcher`: the macOS bundle's `CFBundleExecutable` (`Contents/MacOS/OMPdesk`). It starts the real shell
+//! (`Contents/MacOS/ompdesk-shell`) with the same arguments as a process of its own and exits; the shell checks in with
+//! LaunchServices as the app (an `exec` in place broke the tray on macOS 27: see `main`). On the first launch of a
+//! version an update installed, it first leaves a detached copy
 //! of itself that waits for `<userData>/app-started.json` to hold this version and, if it never does, puts the last
 //! Electron release back (`rollback`). Never a dialog; every step goes to `<userData>/updates/swap.log`.
 //!
@@ -63,17 +64,30 @@ mod unix {
         let exe = std::env::current_exe().unwrap_or_default();
         let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
         let shell = dir.join("ompdesk-shell");
+        // Started as a process of its own, never `exec`ed in place: an exec gives this pid a new pid version, which
+        // macOS 27's MenuBarAgent cannot resolve ("process has mismatched pid version"), so it refused the tray's
+        // status-item scene every second and AppKit retried it synchronously on the main thread; one retry never
+        // returned and hung the shell for 6 h (the Mac mini, 18 Nov 2026). A process the launcher spawns checks in with
+        // LaunchServices as the app itself. Its own process group: the launcher's end takes nothing with it.
+        let child = match Command::new(&shell)
+            .args(&argv[1..])
+            .process_group(0)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!(
+                    "ompdesk-launcher: cannot start {}: {error}",
+                    shell.display()
+                );
+                std::process::exit(1);
+            }
+        };
         // Contents/MacOS/OMPdesk → the bundle.
         let bundle = dir.parent().and_then(Path::parent).map(Path::to_path_buf);
         if let Some(bundle) = bundle {
-            arm_watcher(&exe, &bundle, &argv);
+            arm_watcher(&exe, child.id(), &bundle, &argv);
         }
-        let error = Command::new(&shell).args(&argv[1..]).exec();
-        eprintln!(
-            "ompdesk-launcher: cannot start {}: {error}",
-            shell.display()
-        );
-        std::process::exit(1);
     }
 
     fn user_data(argv: &[OsString]) -> PathBuf {
@@ -96,7 +110,7 @@ mod unix {
 
     /// Leaves the watcher when this launch is the first of an installed version; every failure here only means no
     /// watcher: the start itself is never held up or refused.
-    fn arm_watcher(exe: &Path, bundle: &Path, argv: &[OsString]) {
+    fn arm_watcher(exe: &Path, shell_pid: u32, bundle: &Path, argv: &[OsString]) {
         let Ok(plist) = fs::read_to_string(bundle.join("Contents").join("Info.plist")) else {
             return;
         };
@@ -135,7 +149,7 @@ mod unix {
         let mut watcher = Command::new(exe);
         watcher
             .arg(WATCH_FLAG)
-            .arg(std::process::id().to_string())
+            .arg(shell_pid.to_string())
             .arg(bundle)
             .arg(&user_data)
             .arg(&version)
