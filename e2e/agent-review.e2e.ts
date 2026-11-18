@@ -186,8 +186,9 @@ test("fan out into worktrees, compare, merge two through the tool, close a third
 				},
 			);
 		});
+	// Listed because its branch holds work nothing merged: main's review item says so, read by the child's session file.
 	for (const label of ["attempt a", "attempt b", "attempt c"])
-		await expect(family.filter({ hasText: label })).toHaveCount(1);
+		await expect(family.filter({ hasText: label })).toHaveAttribute("data-child-status", "unmerged");
 	await expect.poll(async () => page.locator("body").innerText()).not.toMatch(/gui-2026|gui-agent/);
 
 	const compared = await call("ompdesk_compare");
