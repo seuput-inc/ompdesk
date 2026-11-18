@@ -559,8 +559,8 @@ export type RuntimeErrorSource =
 	| "hub"
 	/**
 	 * The core process's loss and each tab's way back (src/main/core/process.ts `report`, sidecar.ts `reportRecovery`):
-	 * `message` names the step: abandoned, ended, rest; lane-lost, resolve-slow, resolved, launch, spawned, stuck (no
-	 * omp `RECOVERY_NOTICE_MS` after the loss: the person and the tab's opener are told once).
+	 * `message` names the step: abandoned, ended, rest; lane-lost, resolve-slow, resolved, launch, spawned, ready, stuck
+	 * (not ready `RECOVERY_NOTICE_MS` after the loss: the person and the tab's opener are told once).
 	 */
 	| "core-loss"
 	/**
