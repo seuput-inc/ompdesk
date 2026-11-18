@@ -738,7 +738,11 @@ export function Sidebar() {
 			removed: projectList.removed,
 			folder: at => {
 				const shown = projectName(at);
-				const project = shown.worktree ? shown.root : projectList.worktrees[at];
+				// Git's answer, else main's list, else, for a worktree being made that git cannot place yet, the binding of a
+				// tab here (`worktree_create` names the main checkout as `baseCwd`), as `runOf` reads it below.
+				const project = shown.worktree
+					? shown.root
+					: (projectList.worktrees[at] ?? localTabs.find(tab => tab.worktree?.path === at)?.worktree?.baseCwd);
 				// Git's answer, else what main's list says of the folder (the device's only source).
 				const kind = shown.worktree?.worktree?.kind ?? projectList.worktreeKinds?.[at];
 				return {
