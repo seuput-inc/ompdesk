@@ -1136,7 +1136,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (issuerTabId && response.success) {
 				if (cmd.type === "switch_session") {
 					const cancelled = (response.data as { cancelled?: boolean } | undefined)?.cancelled ?? false;
-					if (!cancelled) sidecarPool.noteSessionFile(issuerTabId, cmd.sessionPath);
+					if (!cancelled) {
+						sidecarPool.noteSessionFile(issuerTabId, cmd.sessionPath);
+						// The tab now holds a saved session, no longer a new one nobody wrote to: TabHousekeeping closes an
+						// unstarted tab left behind while its stores read empty, which a hidden tab still hydrating does.
+						sidecarPool.noteUnstarted(issuerTabId, false);
+					}
 				} else if (cmd.type === "new_session") {
 					const cancelled = (response.data as { cancelled?: boolean } | undefined)?.cancelled ?? false;
 					if (!cancelled) sidecarPool.noteUnstarted(issuerTabId, true);
