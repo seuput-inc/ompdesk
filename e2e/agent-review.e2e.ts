@@ -53,6 +53,8 @@ test.beforeEach(async () => {
 			OMP_GUI_TEST_RECORD: record,
 			OMP_GUI_TEST_AGENT_SWEEP_MS: "500",
 			OMP_GUI_TEST_SESSION_COST: "0.25",
+			// Each session writes its file as stock does: the sidebar ties a child to main's review item by that file.
+			OMP_GUI_TEST_SESSION_FILES: "1",
 		},
 	});
 	page = await app.firstWindow();
