@@ -265,6 +265,9 @@ for (const language of variants(["en", "ko"] as const))
 				// A prompt's attachments: the line that only names them leaves the bubble, their cards come under it.
 				await input.fill("Check these please\n@out/bundle.zip @out/report.pdf");
 				await input.press("Enter");
+				// The composer's echo of the prompt is a stand-in the omp's own delivery replaces (another row, keyed by the
+				// omp's timestamp) about 0.2 s later; the answer comes after it, so the row read from here on is the one that stays.
+				await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
 				const attached = page.locator("[data-prompt-files]").last();
 				await expect(attached.locator("[data-file-card]")).toHaveCount(2, { timeout: 15_000 });
 				await expect(attached.locator("[data-file-card='pdf']")).toHaveAttribute("data-state", "ready");
