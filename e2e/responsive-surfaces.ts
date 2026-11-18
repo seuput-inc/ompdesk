@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import type { Locator, Page } from "@playwright/test";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
+import type { RpcCommand } from "../src/shared/rpc-types";
 import { type Look, touchLook } from "./responsive-audit";
 
 /** A control's words in the look's language, so a Korean look finds by name what an English one does. */
@@ -352,6 +353,18 @@ async function openProjectMenu(page: Page, look: Look): Promise<void> {
 /** Closes the menu or dialog a surface left open (Escape), so the next starts from the same window. */
 async function closeOverlay(page: Page): Promise<void> {
 	await page.keyboard.press("Escape");
+}
+
+/** Closes the queue popover, drops both lanes and stops the turn `composer-queue` started, so the session is idle again. */
+async function endQueuedTurn(page: Page): Promise<void> {
+	await page.keyboard.press("Escape");
+	const tab = await shownTab(page);
+	if (!tab) return;
+	await page.evaluate(async tabId => {
+		await window.omp.rpc.commandForTab(tabId, { type: "queue_clear" });
+		await window.omp.rpc.commandForTab(tabId, { type: "abort" });
+	}, tab.tabId);
+	await page.locator("[data-send-mode]").first().waitFor({ state: "hidden", timeout: 30_000 });
 }
 
 /** The work session's family open, with every other computer's section folded to its count. */
@@ -1902,6 +1915,32 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-ask-context] [data-figure-row] figure:nth-child(3) img",
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "composer-queue",
+		area: "A",
+		title: "Queue popover with a steer and a follow-up waiting behind a running turn: lane headings in the agent's real delivery modes and the policy line",
+		// The host's fake omp runs `fixture running` until stopped. The steer is typed and sent with Send while the turn
+		// runs, as a person steers; a follow-up has no chord on a phone, so it goes through the view's own rpc, as the
+		// composer's follow-up mode sends it.
+		open: async page => {
+			const tab = await shownTab(page);
+			if (!tab) throw new Error("the view shows no session to queue in");
+			const send = (command: RpcCommand) =>
+				page.evaluate(([tabId, body]) => window.omp.rpc.commandForTab(tabId, body), [tab.tabId, command] as const);
+			await send({ type: "prompt", message: "fixture running" });
+			await page.locator("[data-send-mode]").first().waitFor({ state: "visible", timeout: 30_000 });
+			const input = page.locator("[data-composer-input]").first();
+			await input.fill("Check the failing test first");
+			await page.getByRole("button", { name: "Send", exact: true }).first().click();
+			await send({ type: "follow_up", message: "Then write the release note" });
+			const pill = page.locator("[data-queue-pill]").first();
+			await pill.filter({ hasText: "2" }).waitFor({ state: "visible", timeout: 15_000 });
+			await pill.click();
+		},
+		ready: "[data-queue-policy]",
+		when: () => false,
+		parity: { session: "work", after: endQueuedTurn },
 	},
 	{
 		id: "turn-limit-wait",
