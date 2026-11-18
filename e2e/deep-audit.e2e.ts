@@ -228,7 +228,9 @@ function numberCandidates(input: {
 }
 
 function safeStringValue(entry: SettingEntry, profile: string): string {
-	if (entry.path.includes("Url") || entry.path.toLowerCase().includes("url")) return "http://127.0.0.1:9/gui-audit";
+	// Stock refuses anything but an http(s) URL for these (omp 18.22.2's `live.endpoint` validates on set).
+	const path = entry.path.toLowerCase();
+	if (path.includes("url") || path.endsWith("endpoint")) return "http://127.0.0.1:9/gui-audit";
 	if (entry.path.toLowerCase().includes("path") || entry.path.includes("directory")) return profile;
 	if (entry.path.includes("interpreter")) return "/usr/bin/python3";
 	return `__gui_audit__${entry.path.replaceAll(".", "_")}`;
