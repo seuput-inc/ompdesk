@@ -2,7 +2,7 @@
 //! `image-blob-cache.ts` each carried (`#grew`, `#measure`, `#entries`, `#trim`), one copy for both. Nothing here is
 //! ever authoritative: a file that cannot be written, read or removed is the host's to send again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
@@ -132,7 +132,7 @@ impl Folder {
             .open(file)
             .and_then(|mut opened| {
                 opened.write_all(bytes)?;
-                stamped(&opened);
+                stamped(&opened, file);
                 Ok(())
             });
         if let Err(error) = &appended {
@@ -225,13 +225,13 @@ pub fn remove(file: &Path) -> bool {
 /// Read again: the least recently read go first when the folder is full (`utimes(file, stamp, stamp)`).
 pub fn touch(file: &Path) {
     if let Ok(opened) = fs::OpenOptions::new().write(true).open(file) {
-        stamped(&opened);
+        stamped(&opened, file);
     }
 }
 
 /// Leaves a fresh `stamp()` as the file's read and write time; a file that refuses it keeps its own.
-fn stamped(opened: &fs::File) {
-    let now = stamp();
+fn stamped(opened: &fs::File, file: &Path) {
+    let now = stamp(file.parent().unwrap_or(file));
     let _ = opened.set_times(fs::FileTimes::new().set_accessed(now).set_modified(now));
 }
 
@@ -239,16 +239,36 @@ fn stamped(opened: &fs::File) {
 /// and `Entry::read`'s milliseconds as an f64 tell it apart.
 const STAMP_STEP: Duration = Duration::from_millis(1);
 
+struct Stamps {
+    last: Option<SystemTime>,
+    /// Folders whose stored times the floor has been raised past, once each in this process.
+    seeded: HashSet<PathBuf>,
+}
+
 /// The time a write or read leaves on its file: now, or a step past the last stamp of this process when the clock has
 /// not moved that far, so a later write or read always sorts after an earlier one. The file system's own write time is
 /// its clock tick's (Windows: 1 to 15.6 ms), so writes within one tick shared it and a write could even sort before the
-/// read just before it. Files from an earlier run keep the times they were left with.
-fn stamp() -> SystemTime {
-    static LAST: Mutex<Option<SystemTime>> = Mutex::new(None);
-    let mut last = locked(&LAST);
+/// read just before it. The first stamp in a folder starts past its latest stored time, however far ahead of the clock
+/// (a burst's lead, a clock that went back since): a core started again must still stamp after every file there, or the
+/// trim, which reads their stored times, takes its new page first. Order needs stamps that increase, not wall time.
+fn stamp(dir: &Path) -> SystemTime {
+    static STAMPS: LazyLock<Mutex<Stamps>> = LazyLock::new(|| {
+        Mutex::new(Stamps {
+            last: None,
+            seeded: HashSet::new(),
+        })
+    });
+    let mut stamps = locked(&STAMPS);
     let now = SystemTime::now();
-    let next = last.map_or(now, |last| now.max(last + STAMP_STEP));
-    *last = Some(next);
+    if stamps.seeded.insert(dir.to_path_buf()) {
+        let stored = entries(dir)
+            .iter()
+            .map(|entry| UNIX_EPOCH + Duration::from_secs_f64(entry.read / 1000.0))
+            .max();
+        stamps.last = stamps.last.max(stored);
+    }
+    let next = stamps.last.map_or(now, |last| now.max(last + STAMP_STEP));
+    stamps.last = Some(next);
     next
 }
 
