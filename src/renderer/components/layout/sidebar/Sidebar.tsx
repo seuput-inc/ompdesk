@@ -200,6 +200,9 @@ function activeTabUntouched(): boolean {
 	if (!tab || tab.device !== undefined || tab.worktree || tab.status === "running" || tab.compacting) return false;
 	// A pick still loading has not reached the stores below: the tab is not empty, whatever they read yet.
 	if (sessionSwitchInFlight()) return false;
+	// Main names a saved session there (a switch it answered, a restored tab): its transcript may still be loading, and
+	// a pick that ends the switch before the replacement's stores fill would otherwise re-root it.
+	if (tab.sessionPath && tab.unstarted !== true) return false;
 	const session = useSessionStore.getState();
 	const composer = useComposerStore.getState();
 	const queue = useQueueStore.getState();

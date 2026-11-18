@@ -740,6 +740,35 @@ describe("Sidebar menus and pinned ordering", () => {
 		await act(async () => answer({ type: "response", command: "switch_session", success: true, data: {} }));
 	});
 
+	it("opens a pick beside a saved session the tab switched to whose transcript has not landed yet", async () => {
+		const omp = installMockOmp(LIST);
+		// The switch answered and main names the saved file (no longer `unstarted`), but the replacement runtime's
+		// hydration has not committed: its stores still read like the empty tab it was.
+		useSessionStore.setState({ sessionId: "", cwd: "/work/alpha", isStreaming: false, messageCount: 0 });
+		useTabsStore.setState({
+			tabs: [
+				{
+					id: "t0",
+					cwd: "/work/alpha",
+					status: "ready",
+					kind: "agent",
+					unreadDone: false,
+					sessionPath: "/work/alpha/one.jsonl",
+					sessionId: "one",
+					unstarted: false,
+				},
+			],
+			activeTabId: "t0",
+			bundles: new Map(),
+		});
+		await mount(<Sidebar />);
+
+		await fire(rowButton("Session /work/alpha/two"), "onClick");
+		await flush();
+		expect(omp.rpc.switchSession).not.toHaveBeenCalled();
+		expect(omp.tabs.spawn).toHaveBeenCalledWith(expect.objectContaining({ sessionPath: "/work/alpha/two.jsonl" }));
+	});
+
 	it("keeps sessions and projects in place when one is opened", async () => {
 		installMockOmp(LIST);
 		useSessionStore.setState({ sessionId: "", cwd: "/neutral", isStreaming: false });
