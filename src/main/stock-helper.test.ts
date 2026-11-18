@@ -48,6 +48,8 @@ const methods = {
 	},
 	mutate: params => { appendFileSync(${JSON.stringify(path.join(dir, "mutations"))}, params + "\\n"); return "mutated"; },
 	record: params => { appendFileSync(${JSON.stringify(path.join(dir, "order"))}, params + "\\n"); return params; },
+	// Loads a module of the omp under test, by its path, as the stock helper loads omp's own.
+	omp: async params => (await import(params)).version,
 	hang: () => new Promise(() => {}),
 };
 const input = createInterface({ input: process.stdin });
@@ -65,11 +67,14 @@ input.on("line", line => {
 	return script;
 }
 
-async function helperOnWorker(requestTimeoutMs: number, options: Omit<StockHelperOptions, "launch"> = {}) {
+async function helperOnWorker(
+	requestTimeoutMs: number,
+	options: Omit<StockHelperOptions, "launch"> = {},
+	stampFile = path.join(dir, "omp-package.json"),
+) {
 	const script = await workerScript();
 	const pids = path.join(dir, `pids-${helpers.length}`);
 	// What stands for omp's package.json: its time and size are what identifies the installed omp.
-	const stampFile = path.join(dir, "omp-package.json");
 	let installs = 0;
 	const install = (version: string) => fs.writeFile(stampFile, version + " ".repeat(++installs));
 	await install("18.18.9");
@@ -265,6 +270,37 @@ describe("StockHelper request timeout", () => {
 			expect(workers()).toHaveLength(2);
 			await expect(helper.request("fast", {})).resolves.toBe("ok");
 			expect(workers()).toHaveLength(3);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("starts a fresh worker once an omp install it started in the middle of has finished", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			// bun install -g wrote omp's own package first, then its dependencies, then the install's lockfile
+			// (18 Nov 2026, 06:59:53-56: a worker started at 54.5 failed every session open after).
+			const install = path.join(dir, "install");
+			const scope = path.join(install, "node_modules", "@oh-my-pi");
+			const root = path.join(scope, "pi-coding-agent");
+			await fs.mkdir(root, { recursive: true });
+			await fs.writeFile(path.join(install, "package.json"), "{}");
+			await fs.writeFile(path.join(install, "bun.lock"), "old");
+			await fs.writeFile(
+				path.join(root, "index.ts"),
+				'import { version as ai } from "@oh-my-pi/pi-ai";\nexport const version = "agent+" + ai;\n',
+			);
+			const { helper, workers } = await helperOnWorker(30_000, {}, path.join(root, "package.json"));
+			const entry = path.join(root, "index.ts");
+			await expect(helper.request("omp", entry)).rejects.toThrow("Cannot find package '@oh-my-pi/pi-ai'");
+			// The install finishes: Bun remembers the failed resolution for the life of the process, so only a
+			// fresh worker sees the package.
+			await fs.mkdir(path.join(scope, "pi-ai"));
+			await fs.writeFile(path.join(scope, "pi-ai", "package.json"), '{"name":"@oh-my-pi/pi-ai","main":"index.ts"}');
+			await fs.writeFile(path.join(scope, "pi-ai", "index.ts"), 'export const version = "18.22.1";\n');
+			await fs.writeFile(path.join(install, "bun.lock"), "new lock");
+			await expect(helper.request("omp", entry)).resolves.toBe("agent+18.22.1");
+			expect(workers()).toHaveLength(2);
 		} finally {
 			warn.mockRestore();
 		}
