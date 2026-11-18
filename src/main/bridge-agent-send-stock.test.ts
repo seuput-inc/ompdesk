@@ -5,6 +5,7 @@ import {
 	atEnd,
 	CARD,
 	type Frame,
+	HOLD,
 	type Omp,
 	type Provider,
 	runCleanups,
@@ -90,6 +91,93 @@ describe.skipIf(!existsSync(omp))("a message another session sends to a busy rec
 	}, 180_000);
 });
 
+/**
+ * Several messages from other sessions reaching one busy receiver (18 Nov 2026, the hub on 0.133.0: six messages from
+ * one session sat as "다음 단계 뒤 7" in its queue, and each then cost a model request of its own). Stock's steering
+ * queue hands over one steer per step boundary (`steeringMode` one-at-a-time, the default); its `aside` queue hands over
+ * every aside waiting there at once and sits in no queue the person sees. The bridge's `agent_control.aside` is what
+ * main sends a busy receiver.
+ */
+describe.skipIf(!existsSync(omp))("several messages other sessions send one busy receiver on stock omp", () => {
+	const queued = (frames: readonly Frame[]) =>
+		Math.max(0, ...frames.filter(frame => frame.type === "queue_update").map(frame => frame.steering?.length ?? 0));
+	const firsts = (provider: Provider, prefix: string) => [1, 2, 3].map(n => firstWith(provider, `${prefix}-${n}`));
+
+	/** A receiver in the middle of one long reply: its model request is held until `release`, no tool step. */
+	async function replying(): Promise<{ provider: Provider; session: Omp }> {
+		const provider = await startProvider();
+		atEnd(() => provider.close());
+		const session = await startOmp(provider);
+		await session.send({ type: "prompt", message: HOLD });
+		await provider.held;
+		return { provider, session };
+	}
+
+	async function steer(session: Omp, text: string): Promise<void> {
+		const message = wrapAgentMessage(text, "Other");
+		expect((await session.send({ type: "prompt", message, streamingBehavior: "steer" })).success).toBe(true);
+	}
+	async function aside(session: Omp, text: string): Promise<void> {
+		const message = wrapAgentMessage(text, "Other");
+		expect(await session.bridge.request("agent_control.aside", { message })).toEqual({});
+	}
+
+	it("as steers during one reply with no tool step, wait in the person's queue and cost one model request each", async () => {
+		const { provider, session } = await replying();
+		for (const n of [1, 2, 3]) await steer(session, `steer-${n}`);
+		expect(queued(session.frames)).toBe(3);
+		provider.release();
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
+		// Request 0 is the held reply; each steer then rode a request of its own.
+		expect(firsts(provider, "steer")).toEqual([1, 2, 3]);
+		expect(provider.turns).toBe(4);
+	}, 180_000);
+
+	it("as asides during one reply with no tool step, are read together in one request and never queued", async () => {
+		const { provider, session } = await replying();
+		for (const n of [1, 2, 3]) await aside(session, `aside-${n}`);
+		provider.release();
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
+		expect(firsts(provider, "aside")).toEqual([1, 1, 1]);
+		expect(provider.turns).toBe(2);
+		expect(queued(session.frames)).toBe(0);
+		expect(session.frames.some(frame => frame.type === "queue_update" && frame.followUp?.length)).toBe(false);
+	}, 180_000);
+
+	it("as steers during a turn of tool steps, are read one per step", async () => {
+		const { provider, session } = await busyOmp();
+		for (const n of [1, 2, 3]) await steer(session, `step-steer-${n}`);
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(2);
+		expect(firsts(provider, "step-steer")).toEqual([2, 3, 4]);
+		expect(provider.turns).toBe(5);
+	}, 180_000);
+
+	it("as asides during a turn of tool steps, are read together at the next step, and no call is skipped", async () => {
+		const { provider, session } = await busyOmp();
+		for (const n of [1, 2, 3]) await aside(session, `step-aside-${n}`);
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(2);
+		expect(firsts(provider, "step-aside")).toEqual([2, 2, 2]);
+		expect(provider.turns).toBe(5);
+		const ends = session.frames.filter(frame => frame.type === "tool_execution_end");
+		expect(ends.map(frame => [frame.toolCallId, frame.isError])).toEqual([
+			["call_s1", false],
+			["call_s2", false],
+			["call_s3", false],
+		]);
+		expect(queued(session.frames)).toBe(0);
+	}, 180_000);
+
+	it("sends an idle receiver nothing and says so, so main starts its turn with a prompt", async () => {
+		const provider = await startProvider();
+		provider.release();
+		atEnd(() => provider.close());
+		const session = await startOmp(provider);
+		const message = wrapAgentMessage("idle-aside", "Other");
+		expect(await session.bridge.request("agent_control.aside", { message })).toEqual({ idle: true });
+		expect(provider.turns).toBe(0);
+	}, 180_000);
+});
+
 describe.skipIf(!existsSync(omp))("a message another session sends while the receiver shows the person a card", () => {
 	const isCard = (frame: Frame) => frame.type === "extension_ui_request" && frame.method === "select";
 	const askResult = (frames: readonly Frame[]) =>
@@ -139,5 +227,19 @@ describe.skipIf(!existsSync(omp))("a message another session sends while the rec
 		expect(askResult(session.frames)).not.toContain("interrupted");
 		// Requests: the card, the answer, then the message.
 		expect(firstWith(provider, "follow-card")).toBe(2);
+	}, 180_000);
+
+	it("as an aside, leaves the card to the person and is read at the step right after their answer", async () => {
+		const { provider, session, card } = await cardOpen();
+		const message = wrapAgentMessage("aside-card", "Other");
+		expect(await session.bridge.request("agent_control.aside", { message })).toEqual({});
+		session.write({ type: "extension_ui_response", id: card.id, value: card.options?.[0] });
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
+		expect(session.frames.some(frame => frame.type === "extension_ui_request" && frame.method === "cancel")).toBe(
+			false,
+		);
+		expect(askResult(session.frames)).not.toContain("interrupted");
+		// Requests: the card, then the answer together with the message.
+		expect(firstWith(provider, "aside-card")).toBe(1);
 	}, 180_000);
 });
