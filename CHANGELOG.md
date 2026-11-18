@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.134.0] - 2026-11-19
+
+다른 세션이 보낸 메시지가 일하는 세션에 바로 닿고, 앱 안쪽 프로세스가 다시 떠도 세션이 멈춘 채 남지 않습니다.
+
+- 다른 세션이 보낸 메시지를 일하는 세션이 다음 단계에서 한꺼번에 읽어요. 탭에 '대기 중'으로 쌓이지 않아요.
+- 다른 컴퓨터가 연 세션을 이 컴퓨터가 돌리는데 연 컴퓨터가 꺼져 그 세션이 1분 넘게 기다리면, 제목 표시줄에 '<컴퓨터> 연결 대기 중'이 뜨고 알림이 한 번 와요.
+- 아직 시작하지 않은 세션에 보낸 메시지는 보낸 쪽을 붙잡지 않고 '전달 예약됨'으로 바로 돌아와요. 다시 켠 뒤 시작 중인 하위 세션에 보낸 메시지가 사라지던 문제도 고쳤어요.
+- 앱 안쪽 프로세스가 다시 떠도 세션이 다시 살아나 끊긴 턴을 이어요. 3분 안에 못 살아나면 알림과 탭 안내로 알리고, 그 세션을 연 세션에도 알려요.
+- macOS에서 OMPdesk 알림이 다시 떠요. macOS 메뉴 막대 아이콘 때문에 앱이 통째로 멈추던 일과, 세션을 띄울 때 안쪽 프로세스가 죽던 일도 고쳤어요.
+- macOS에서 이 판으로 올라올 때 화면이 저장해 둔 것(작성 중인 글, 화면 기억, 로그인 쿠키)을 그대로 가져와요. 알림 고침 때문에 저장 위치가 바뀌는데, 옛 위치를 새 위치로 옮겨요.
+- 작업 카드가 omp 18.22.1부터 바뀐 결과 정리 방식을 따르고, 데이터 없는 결과를 '섹션 마무리'로 보여 줘요. 이 판은 omp 18.22.2로 시험했어요.
+- omp를 업데이트하는 도중에 뜬 내부 작업자가 계속 실패하던 문제(Windows에서 worktree 세션 열기 실패)를 고쳤어요.
+- omp 18.22.2의 새 설정(실시간 엔드포인트, 키 없는 웹 서비스)과 Kiro·Bifrost 공급자를 한국어와 마크로 보여 줘요.
+- 설정 › 업데이트·정보에서 이 판이 시험한 omp 판이 설치된 판과 다를 때 함께 보여요.
+- 다시 켤 때 대화 기록이 한 프레임 비었다 채워지던 것, 처음 켤 때 탭이 '새 세션'에 멈추던 것, 테마를 고른 직후 선택이 되돌아가던 것을 고쳤어요.
+- Preview: 휴대폰으로 보는 화면이 예전 크기의 틀 낀 화면을 보내지 않고, 제목·글자 변화와 막힌 내려받기 안내가 다시 닿아요.
+- Windows에서 백그라운드 작업이 서비스 연결과 겹쳐 끝나지 않던 문제를 고쳤어요.
+- 유휴 압축과 요약을 omp의 공개 API로 돌려요. 깨진 글자 요약은 기록에도 남지 않아요.
+- 되살린 기기 턴이 세션을 쥔 탭에서 이어지고, 다시 켠 뒤 하위 세션의 완료 보고가 사라지지 않아요.
+- Windows에서 다른 프로세스가 아직 쥔 worktree도 끝까지 지워지고, 세션을 지우거나 쓰지 않는 worktree를 치울 때 origin 사본을 어떻게 했는지 함께 알려요. `bun run dev`가 main이나 preload 빌드 실패로 끝나지 않아요.
+- 페어링한 컴퓨터에서 세션 이름을 바꾼 직후 제목이 다시 '새 세션'으로 돌아가던 문제를 고쳤어요.
+- 새 탭에서 사이드바로 세션을 고른 직후 다른 세션을 고르면, 앞서 연 탭이 닫히거나 덮어써지던 문제를 고쳤어요. 이제 둘 다 탭으로 남아요.
+- 화면이 좁아지면 옆 패널이 바로 접혀요. 앱 안쪽 프로세스가 다시 뜰 때 연결을 기다리던 끊긴 턴의 기록이 '실행 중'으로 잘못 바뀌지 않아요.
+- Autopilot이 자식 세션을 쓸 때, 앞 사이클의 마무리가 늦으면 다음 사이클이 막 만든 브랜치를 '예상 못 한 git 변경'으로 보고 멈추거나 방금 연 자식을 닫던 문제를 고쳤어요.
+- Autopilot이 새 사이클의 자식 세션을 열 때, 사이드바에 자식 폴더 이름의 빈 프로젝트가 잠깐 생기던 문제를 고쳤어요.
+
+알려진 문제: 세션을 연 컴퓨터가 꺼져 있으면, 그 컴퓨터가 다른 컴퓨터에 열어 둔 세션은 다른 세션을 열거나 메시지를 보내는 지점에서 멈춰 기다려요. 연 컴퓨터가 다시 켜지면 이어서 해요.
+
+<!-- en -->
+
+Messages from other sessions reach a working session right away, and sessions no longer sit stuck after the app's inner process restarts.
+
+- A working session reads messages from other sessions together at its next step; they no longer pile up as queued in the tab.
+- When a computer runs a session for another computer that went away, and that session waits on it for more than a minute, its title bar says "Waiting for <computer>" and one notification says so.
+- A message to a session that has not started yet returns at once as "delivery scheduled" instead of holding the sender, and a message to a child still starting after a relaunch is no longer lost.
+- After the app's inner process restarts, sessions come back and continue the interrupted turn; if one cannot within 3 minutes, a notification and a banner in its tab say so, and the session that opened it is told.
+- OMPdesk's notifications show on macOS again. Fixed the whole app freezing over the macOS menu bar icon, and the inner process dying while it started a session.
+- Updating to this release on macOS keeps what the window had stored (drafts, view state, sign-in cookies): the notification fix moves where WebKit keeps it, and the app moves the old store there.
+- The task card follows the result assembly omp 18.22.1 changed and labels a data-less result "finalize sections". This release was tested with omp 18.22.2.
+- A worker started while omp was being updated no longer keeps failing (worktree sessions on Windows).
+- omp 18.22.2's new settings (live endpoint, keyless web services) and its Kiro and Bifrost providers show in Korean and with their marks.
+- Settings › Updates & about names the omp this release was tested with when the installed one differs.
+- Fixed: the transcript blanking for a frame on a warm start, a tab stuck on New session on a cold start, and a theme choice reverting right after the click.
+- Preview: the phone view no longer streams a letterboxed frame of the old size; title, text and blocked-download notices reach the panel again.
+- Fixed a Windows background job that never finished when it overlapped omp's first service connection.
+- Idle compaction and the idle recap run on omp's public API; a garbled recap is not kept either.
+- A revived device turn continues in the tab that holds its session, and a child's done report is no longer lost after a relaunch.
+- On Windows a worktree another process still holds is removed whole; removing a session or an unused worktree also says what became of its copy on origin; `bun run dev` survives a failed main or preload build.
+- A session renamed on a paired computer no longer falls back to "New session" in the title bar a moment later.
+- Picking a session in the sidebar right after a new tab switched to another one no longer closes or replaces that tab; both stay open.
+- The side panel folds away as soon as the window gets narrow, and a cut turn waiting for the network keeps that state across a restart of the app's inner process.
+- Autopilot with child sessions no longer pauses on "a git change it did not expect" or closes the next cycle's new child when the previous cycle's wrap-up runs late.
+- When Autopilot opens a new cycle's child session, the sidebar no longer shows an empty project named after the child's folder for a moment.
+
+Known issue: while the computer that opened a session is off, a session it opened on another computer stops and waits where it opens another session or sends a message; it continues once the computer that opened it is back.
+
 ## [0.133.0] - 2026-11-17
 
 이미지 생성은 이제 ChatGPT 구독으로만 하고, 이미지 카드 아래에 어떤 모델이 어떤 크기·품질로 만들었는지 보여 줘요.
