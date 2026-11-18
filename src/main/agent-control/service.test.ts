@@ -5870,6 +5870,37 @@ describe("messages that outlive the omp they were handed to", () => {
 		expect(owed()).toHaveLength(1);
 	});
 
+	it("ends the blocking wait a session went into after its start when the message kept for it is handed over", async () => {
+		// The kept steer reaches the receiver through the sweep, not a fresh send: its ompdesk_session_result wait must
+		// return then as it does for a fresh one, or the message sits behind that host call until the wait runs out.
+		const host = new FakeHost(
+			{ tabId: "boss0001", title: "Boss", sessionPath: "/s/boss.jsonl" },
+			{ tabId: "kid00002", title: "Kid", sessionPath: "/s/kid.jsonl", status: "starting" },
+			{ tabId: "work0003", title: "Work", sessionPath: "/s/work.jsonl", busy: true },
+		);
+		host.files.sendOutbox = outboxFile();
+		host.sentMarks = async (tabId, marks) => ({ instance: "omp-a", journaled: journaled(host, tabId, marks) });
+		const service = control(host, { sendReadyWaitMs: 200 });
+		const sent = await service.run("boss0001", T.send, { session: "kid00002", message: "Read this now" });
+		expect(sent.text).toContain("kept; it is still starting");
+		const kid = host.tabsById.get("kid00002") as FakeTab;
+		kid.status = "running";
+		kid.busy = true;
+		host.emit();
+		let settled = false;
+		const waiting = service
+			.run("kid00002", T.result, { session: "work0003", wait: true, timeout_seconds: 60 })
+			.finally(() => {
+				settled = true;
+			});
+		await sleep(300);
+		expect(settled).toBe(false);
+		await service.redeliverSends();
+		expect(deliveries(host, "kid00002")).toEqual(["aside"]);
+		const result = await Promise.race([waiting, sleep(3_000).then(() => null)]);
+		expect(result?.text).toContain("Returned early");
+	}, 10_000);
+
 	it("hands a follow-up the child's old omp queued to its omp after a relaunch, once, ahead of the next message", async () => {
 		const before = new FakeHost(
 			{ tabId: "boss0001", title: "Boss", sessionPath: "/s/boss.jsonl" },

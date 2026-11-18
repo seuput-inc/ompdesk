@@ -156,18 +156,20 @@ impl OwedDeps for Owed<'_> {
         let Ok(command) = self.ctl.owed_command(tab_id, entry).await else {
             return HandOver::Refused;
         };
-        let sent = self
-            .ctl
-            .hand_over(
-                tab_id,
-                &command,
-                entry.streaming_behavior == StreamingBehavior::Steer,
-            )
-            .await;
-        let handed = match sent {
-            Ok(response) => response.success || unanswered_text(response.error.as_deref()),
-            Err(error) => error.unanswered(),
+        let steer = entry.streaming_behavior == StreamingBehavior::Steer;
+        let sent = self.ctl.hand_over(tab_id, &command, steer).await;
+        let (handed, taken) = match sent {
+            Ok(response) => (
+                response.success || unanswered_text(response.error.as_deref()),
+                response.success,
+            ),
+            Err(error) => (error.unanswered(), false),
         };
+        // As a fresh send's steer: a blocking ompdesk_session_result wait the receiver stands in returns, so it reads
+        // the message at its next step instead of when the wait runs out.
+        if steer && taken {
+            self.ctl.arrive(tab_id);
+        }
         if handed {
             HandOver::Handed
         } else {
