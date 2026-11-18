@@ -6547,6 +6547,59 @@ describe("Sidebar worktree sessions", () => {
 		expect(rows.slice(1, 4).map(row => row.mark)).toEqual([null, null, null]);
 		expect(rows[4]?.text).toContain("Session /work/alpha/one");
 	});
+
+	it("opens no group for a run's new child while git has not answered for its worktree yet", async () => {
+		// e2e/mobile-autopilot-rows.e2e.ts (flake-probe 44406294984): a cycle's child tab, opened and not written to yet,
+		// whose new worktree git had not placed: its folder got a group of its own, named "2026-10-17-c3-bugs".
+		const BUGS = "/home/me/.omp/wt/h1/gui-2026-10-17-c3-bugs-ccccccc";
+		const omp = installMockOmp([session("/wt/run.jsonl", AUTOPILOT, { title: "Cycle 3" }), ...LIST]);
+		(omp as unknown as Record<string, unknown>).projectOrigins = {
+			get: vi.fn((cwds: string[]) =>
+				cwds.includes(BUGS)
+					? new Promise(() => {})
+					: Promise.resolve(
+							Object.fromEntries(
+								cwds.map(cwd => [
+									cwd,
+									cwd === AUTOPILOT
+										? origin("autopilot/2026-10-17", "autopilot", "2026-10-17")
+										: cwd === "/work/alpha"
+											? { project: "alpha", root: "/work/alpha", worktree: null }
+											: null,
+								]),
+							),
+						),
+			),
+		};
+		seedStores();
+		useTabsStore.setState({
+			tabs: [
+				...useTabsStore.getState().tabs,
+				{
+					id: "child3",
+					cwd: BUGS,
+					status: "ready",
+					kind: "agent",
+					unreadDone: false,
+					unstarted: true,
+					worktree: {
+						name: "2026-10-17-c3-bugs",
+						branch: "autopilot/2026-10-17-c3-bugs",
+						baseCwd: "/work/alpha",
+						path: BUGS,
+					},
+				},
+			],
+		});
+		await mount(<Sidebar />);
+
+		const groups = [...container.querySelectorAll("[data-workspace-group]")].map(element =>
+			(element as unknown as Element).getAttribute("data-workspace-group"),
+		);
+		expect(groups).toContain("/work/alpha");
+		expect(groups).not.toContain(BUGS);
+		expect(container.textContent).not.toMatch(/c3-bugs/);
+	});
 });
 
 describe("Sidebar on a touch screen", () => {
