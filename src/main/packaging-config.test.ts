@@ -1593,6 +1593,19 @@ describe("workflows", () => {
 			expect(ci.jobs[job]?.if ?? "", job).not.toContain("workflow_dispatch'");
 		}
 	});
+
+	it("checks the committed third-party notices on every push without regenerating them first", () => {
+		const ci = parse(workflows.find(entry => entry.name === "ci.yml")?.text ?? "") as {
+			jobs: Record<string, { if?: string; steps: { run?: string }[] }>;
+		};
+		const runs = ci.jobs.static?.steps.map(step => step.run ?? "") ?? [];
+		expect(runs).toContain("bun run licenses:check");
+		// A regeneration before the check would make a stale committed file pass.
+		expect(
+			runs.some(run => /gen:licenses|gen-crate-notices|generate-third-party-notices\.ts(?! --check)/.test(run)),
+		).toBe(false);
+		expect(ci.jobs.static?.if ?? "").not.toContain("inputs.");
+	});
 });
 
 /**
