@@ -1854,6 +1854,14 @@ export function runRpcUi(): void {
 			instance: `${process.pid}-${Math.round(performance.timeOrigin)}`,
 			journaled: journaledMarks(entries, Array.isArray(params.marks) ? params.marks.map(String) : []),
 		}),
+		// gui-bridge agent-control.ts `agent_control.aside` → stock's aside: another session's message read at the next
+		// step with every other one waiting, never shown in the person's queue; an idle session gets nothing here and
+		// main sends it the prompt that starts its turn.
+		"agent_control.aside": params => {
+			if (!isStreaming) return { idle: true };
+			lanes.steering.push(String(params.message ?? ""));
+			return {};
+		},
 		// gui-bridge agent-control.ts `agent_control.mail` → stock `sendMessage`: the report becomes a displayed custom
 		// message in the journal; with `triggerTurn` an idle session takes a turn on it (the parent reacts by itself),
 		// a running one reads it at its next step (stock's `aside`), whatever its kind. The woken turn's reply names the

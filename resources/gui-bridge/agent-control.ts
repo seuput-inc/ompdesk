@@ -38,6 +38,17 @@ interface ControlSession {
 	isStreaming: boolean;
 	/** Stock `AgentSession.messages`: the live conversation, oldest first. */
 	messages: readonly unknown[];
+	/** Stock `AgentSession.prompt`: `streamingBehavior: "aside"` queues for the next step boundary while a turn runs. */
+	prompt(
+		text: string,
+		options: {
+			streamingBehavior: "aside";
+			expandPromptTemplates: false;
+			throwOnDrop: true;
+			images?: { type: "image"; data: string; mimeType: string }[];
+			onPromptAdmitted: () => void;
+		},
+	): Promise<boolean>;
 	sessionManager: {
 		getCwd(): string;
 		getBranch(): { customType?: unknown; data?: unknown }[];
@@ -243,6 +254,41 @@ export const methods: BridgeMethods = {
 		const deliverAs = record.deliverAs === "aside" || env.session().isStreaming ? "aside" : undefined;
 		const triggerTurn = record.triggerTurn === true;
 		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
+		return {};
+	},
+	/**
+	 * `{message, images?}` → `{}`, or `{idle: true}` with nothing sent: a message another session sends one that works
+	 * (`ompdesk_session_send`), as stock's `aside` (`AgentSession.prompt`, `streamingBehavior: "aside"`). Stock hands
+	 * over every aside waiting at a step boundary together, where its steering queue hands over one steer per boundary
+	 * (`steeringMode` one-at-a-time, the default), so six messages cost six model requests; an aside sits in no queue the
+	 * person sees, cuts no tool and leaves a question card open (stock's `ask` closes only for a user steer). An idle
+	 * session gets main's plain prompt instead, which starts its turn as before. Answers once stock admitted it.
+	 */
+	"agent_control.aside": async (params, env) => {
+		const record = (params ?? {}) as Record<string, unknown>;
+		const message = typeof record.message === "string" ? record.message : "";
+		if (!message.trim()) throw new Error("agent_control.aside needs message");
+		const content = mailContent([
+			{ type: "text", text: message },
+			...(Array.isArray(record.images) ? record.images : []),
+		]);
+		const images = Array.isArray(content) ? content.filter(block => block.type === "image") : [];
+		const session = env.session();
+		if (!session.isStreaming) return { idle: true };
+		const admitted = Promise.withResolvers<void>();
+		session
+			.prompt(message, {
+				streamingBehavior: "aside",
+				expandPromptTemplates: false,
+				throwOnDrop: true,
+				...(images.length > 0 ? { images } : {}),
+				onPromptAdmitted: () => admitted.resolve(),
+			})
+			.then(
+				() => admitted.resolve(),
+				(error: unknown) => admitted.reject(error),
+			);
+		await admitted.promise;
 		return {};
 	},
 	/**

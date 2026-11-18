@@ -9,7 +9,7 @@
 //!
 //! `redeliverSends(tabOf)` takes no function over the wire: `tabOf(path, device)` is the tab of `HostState::tabs`
 //! holding that session on that computer (a tab main runs for a device is in no list of `tabs`, as with `hosted`),
-//! started with `host.start` when it reads `asleep`, and the receiver only when it is `ready`.
+//! started with `host.start` when it reads `asleep`, and the receiver once its omp is up (`ready` or `running`).
 //!
 //! Already shared: `find`, `open`, `send_target`, `own_closed`, `session_state`, `refuse_hidden`, `mailbox`.
 
@@ -141,7 +141,8 @@ impl OwedDeps for Owed<'_> {
         if owner.status == super::types::TabStatus::Asleep {
             self.ctl.host.start(&owner.tab_id);
         }
-        (owner.status == super::types::TabStatus::Ready).then(|| owner.tab_id.clone())
+        // A working receiver takes it too: a steer goes in as an aside, read at its next step (`hand_over`).
+        owner.status.is_up().then(|| owner.tab_id.clone())
     }
 
     async fn sent(&self, tab_id: &str, marks: &[String]) -> Option<SentAnswer> {
@@ -155,8 +156,11 @@ impl OwedDeps for Owed<'_> {
         };
         let sent = self
             .ctl
-            .host
-            .command(tab_id, &command, Deadline::Ms(self.ctl.tuning.prompt_ms))
+            .hand_over(
+                tab_id,
+                &command,
+                entry.streaming_behavior == StreamingBehavior::Steer,
+            )
             .await;
         let handed = match sent {
             Ok(response) => response.success || unanswered_text(response.error.as_deref()),
@@ -314,7 +318,11 @@ impl AgentControl {
         let resolved = self
             .resolve_attachments(caller, args.attachments.as_deref())
             .await?;
-        self.ensure_started(found, &caller.tab_id).await?;
+        // A target still starting is waited for only briefly: the sender's tool call must not hang on another
+        // computer's slow start (18 Nov 2026: the hub's send to a starting session on the Mac mini never returned, its
+        // person's own messages waited behind that call and they stopped the turn three times). Past the bound the
+        // message is kept in the outbox, and the sweep hands it over once the target is up.
+        let up = self.started_soon(found, &caller.tab_id).await?;
         // The tab as it is now, never the row it was named by: one woken from asleep has its omp's title, folder, turn
         // and asks only now, and the receipt and the delivery go by those.
         let live = self
@@ -337,8 +345,14 @@ impl AgentControl {
         let (Some(outbox), Some(path)) =
             (self.send_outbox.as_ref(), target.session_path.as_deref())
         else {
+            if !up {
+                return fail(format!(
+                    "Not sent: {} is still starting and has no session file yet to keep the message for. Send it again once it is up (ompdesk_sessions shows its state).",
+                    named(&target)
+                ));
+            }
             return self
-                .hand_send(caller, &target, args, receipt_key, None, resolved)
+                .hand_send(caller, &target, args, receipt_key, None, resolved, true)
                 .await;
         };
         // One delivery to a session at a time: what is still owed to it goes first, and the sweep never sends again what
@@ -353,12 +367,54 @@ impl AgentControl {
                     receipt_key,
                     Some(Kept { outbox, path }),
                     resolved,
+                    up,
                 ),
             )
             .await
     }
 
-    /// `#handSend`.
+    /// `#startedSoon`: the target's omp is up (started now if it was asleep) within `send_ready_wait_ms`; false while it
+    /// is still starting then. A target that stopped is refused as `ensure_started` refuses it.
+    async fn started_soon(&self, target: &ControlTab, caller_tab_id: &str) -> R<bool> {
+        let wait = std::time::Duration::from_millis(self.tuning.send_ready_wait_ms);
+        match tokio::time::timeout(wait, self.ensure_started(target, caller_tab_id)).await {
+            Ok(started) => started.map(|()| true),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// A message handed to a session's omp (`prompt`, the plain command). A steer to a session that works goes in as
+    /// stock's aside instead (`agent_control_aside`): its loop hands every aside waiting at a step boundary over
+    /// together, where stock's steering queue hands over one steer per boundary, a model request each, and shows them
+    /// in the person's queue (`bridge-agent-send-stock.test.ts`). An idle session (`{idle: true}`), and an omp or paired
+    /// computer too old to know the command, get the plain prompt.
+    async fn hand_over(&self, tab_id: &str, prompt: &Value, aside: bool) -> R<RpcResponse> {
+        let deadline = Deadline::Ms(self.tuning.prompt_ms);
+        if aside {
+            let mut command =
+                json!({ "type": "agent_control_aside", "message": prompt["message"] });
+            if let Some(images) = prompt.get("images") {
+                command["images"] = images.clone();
+            }
+            match self.host.command(tab_id, &command, deadline).await {
+                Ok(answer) if answer.success => {
+                    let idle = answer.data.as_ref().and_then(|data| data.get("idle"))
+                        == Some(&Value::Bool(true));
+                    if !idle {
+                        return Ok(answer);
+                    }
+                }
+                Ok(answer) if unanswered_text(answer.error.as_deref()) => return Ok(answer),
+                Err(error) if error.unanswered() => return Err(error),
+                _ => {}
+            }
+        }
+        self.host.command(tab_id, prompt, deadline).await
+    }
+
+    /// `#handSend`. `up`: the target's omp answers; a target still starting gets its message kept (`kept` is then
+    /// always given), handed over by the sweep once it is up.
+    #[allow(clippy::too_many_arguments)]
     async fn hand_send(
         &self,
         caller: &ControlTab,
@@ -367,6 +423,7 @@ impl AgentControl {
         receipt_key: Option<&str>,
         kept: Option<Kept<'_>>,
         resolved: Vec<Resolved>,
+        up: bool,
     ) -> R<String> {
         let from = caller
             .session_path
@@ -375,11 +432,13 @@ impl AgentControl {
         let device = target.device.as_deref();
         if let Some(kept) = &kept {
             // Messages an omp before this one held and lost (a relaunch) reach it first, in order.
-            let owed = Owed {
-                ctl: self,
-                fixed: Some(target.tab_id.clone()),
-            };
-            deliver_owed(kept.outbox, &owed, kept.path, device).await;
+            if up {
+                let owed = Owed {
+                    ctl: self,
+                    fixed: Some(target.tab_id.clone()),
+                };
+                deliver_owed(kept.outbox, &owed, kept.path, device).await;
+            }
             // A resend of a message still on its way (its first send timed out, say) never runs it twice.
             let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
             if let Some(same) = kept
@@ -398,7 +457,11 @@ impl AgentControl {
         }
         // The target's journal is the durable record: a relaunch (or a retry whose first receipt was lost) finds the
         // request already there, and the last dispatch it was given.
-        let marks = self.journal_marks(&target.tab_id).await;
+        let marks = if up {
+            self.journal_marks(&target.tab_id).await
+        } else {
+            JournalMarks::default()
+        };
         if let Some(id) = args.request_id.as_deref().filter(|id| !id.is_empty())
             && marks.requests.contains(id)
         {
@@ -408,17 +471,21 @@ impl AgentControl {
             ));
         }
         // Only a send that will deliver waits on the person's draft: a repeat of a delivered request answers at once.
-        self.until_draft_sent(caller, target).await?;
+        // A tab still starting holds no draft its omp would take this into.
+        if up {
+            self.until_draft_sent(caller, target).await?;
+        }
         // Files land on the receiver's computer before anything is numbered or kept: a failure leaves nothing behind.
         let carried = self
             .carry(&target.tab_id, device, resolved, true, kept.is_some())
             .await?;
-        let running = target.busy
-            || self
-                .session_state(target)
-                .await
-                .state
-                .is_some_and(|state| state.is_streaming);
+        let running = up
+            && (target.busy
+                || self
+                    .session_state(target)
+                    .await
+                    .state
+                    .is_some_and(|state| state.is_streaming));
         // The opener gives its child new work: a new dispatch (its older reports turn stale) and its question is answered.
         let own_child = {
             let state = self.host.state();
@@ -446,10 +513,10 @@ impl AgentControl {
             && reported
                 .is_some_and(|turn| target.busy_since.is_none() || turn == target.busy_since);
         // A follow-up queues the next task of a session the caller opened behind its turn. Any other session would hold
-        // it in its queue until that turn ends, so it gets a steer. A card of the person's open there takes no steer
-        // at all, whatever was asked, because stock closes the card for one ("Ask interrupted by message").
+        // it in its queue until that turn ends, so it gets a steer, which a running session takes as an aside
+        // (`hand_over`): read at its next step with every other one waiting, never closing a card of the person's.
         let card_open = !target.asks.is_empty();
-        let steer = !card_open && (!follow_up || promoted || !own_child);
+        let steer = !follow_up || promoted || !own_child;
         // A dispatch still owed from before a relaunch is not in the journal yet: the next one is numbered past it.
         if own_child {
             let owed = kept
@@ -495,15 +562,17 @@ impl AgentControl {
                 Some(dispatch) => dispatch_mark(dispatch),
                 None => request_mark(request_id.as_deref().unwrap_or("")),
             };
-            instance = match self
-                .host
-                .sent_marks(&target.tab_id, std::slice::from_ref(&mark))
-                .await
-            {
-                Ok(Some(answer)) => sent_answer(&answer).map(|answer| answer.instance),
-                _ => None,
+            if up {
+                instance = match self
+                    .host
+                    .sent_marks(&target.tab_id, std::slice::from_ref(&mark))
+                    .await
+                {
+                    Ok(Some(answer)) => sent_answer(&answer).map(|answer| answer.instance),
+                    _ => None,
+                }
+                .unwrap_or(instance);
             }
-            .unwrap_or(instance);
             let mut made = OutboxSend::new(
                 mark,
                 dispatch_number,
@@ -522,6 +591,26 @@ impl AgentControl {
             kept.outbox.keep(made.clone());
             entry = Some(made);
         }
+        let dispatch_note = dispatch
+            .as_ref()
+            .map(|d| format!(" Dispatch {d}: it reports back with ompdesk_report."))
+            .unwrap_or_default();
+        let attached_note = if carried.count > 0 {
+            format!(" {}.", carried.set.summary())
+        } else {
+            String::new()
+        };
+        if !up {
+            // Kept, never handed: the sweep hands it over once the target's omp is up (`redeliver_sends`).
+            let receipt = format!(
+                "Sent to {}: kept; it is still starting, so OMPdesk hands this over as soon as its omp is up (it reads it then, at its next step if it is working). Do not send it again.{dispatch_note}{attached_note}",
+                named(target)
+            );
+            if let Some(key) = receipt_key {
+                self.mem().receipts.insert(key.to_owned(), receipt.clone());
+            }
+            return Ok(receipt);
+        }
         let settle = |entry: &Option<OutboxSend>| {
             if let (Some(kept), Some(entry)) = (&kept, entry) {
                 kept.outbox
@@ -529,9 +618,16 @@ impl AgentControl {
             }
         };
         // A command that never answered still reached the omp: one holding its command queue (stock's `login` while a
-        // provider sign-in waits) runs the prompt once that ends. Saying it failed made senders send it again.
+        // provider sign-in waits) runs the prompt once that ends. Saying it failed made senders send it again. Where
+        // the aside cannot go (an older paired computer), a card of the person's open there gets a follow-up, which
+        // leaves it open; a steer would close it ("Ask interrupted by message").
+        let plain = if steer && !card_open {
+            StreamingBehavior::Steer
+        } else {
+            StreamingBehavior::FollowUp
+        };
         let mut command =
-            json!({ "type": "prompt", "message": message, "streamingBehavior": behavior.as_str() });
+            json!({ "type": "prompt", "message": message, "streamingBehavior": plain.as_str() });
         if !carried.inline.is_empty() {
             command["images"] = Value::Array(
                 carried
@@ -544,12 +640,7 @@ impl AgentControl {
         let held;
         let mut response: Option<RpcResponse> = None;
         match self
-            .host
-            .command(
-                &target.tab_id,
-                &command,
-                Deadline::Ms(self.tuning.prompt_ms),
-            )
+            .hand_over(&target.tab_id, &command, steer && running)
             .await
         {
             Ok(answer) => {
@@ -580,7 +671,7 @@ impl AgentControl {
             kept.outbox.handed(entry, &instance);
         }
         // A steer is read at the target's next step, which a blocking wait of its own would hold off: it ends now.
-        let woke = running && !held && !card_open && self.is_blocked(&target.tab_id);
+        let woke = running && !held && self.is_blocked(&target.tab_id);
         if steer && !held {
             self.arrive(&target.tab_id);
         }
@@ -611,9 +702,9 @@ impl AgentControl {
                 )
             }
         } else if card_open {
-            // Its turn stands on a question card, which stays open: the message waits behind the turn.
+            // Its turn stands on a question card, which stays open: the message is read at the step after the answer.
             format!(
-                "it is {}, so this is queued behind that card, which stays open, and it reads this once the user has answered and its turn goes on",
+                "it is {}, so that card stays open, and it reads this at its first step after the user has answered",
                 self.state_line(&self.host.state(), target, &SessionState::default())
             )
         } else if promoted {
@@ -622,7 +713,7 @@ impl AgentControl {
             "delivered as steer; it is inside a blocking ompdesk_session_result wait, which returns now with a note, so it reads this at once".to_owned()
         } else if steer {
             format!(
-                "delivered as steer ({}it reads it between steps)",
+                "delivered as steer ({}it reads it at its next step, together with every other message waiting for it)",
                 if follow_up {
                     "you did not open it, and a follow-up waits only behind the turn of a session you opened, so "
                 } else {
@@ -635,18 +726,9 @@ impl AgentControl {
             "queued as a follow-up (it runs when the current turn ends; it is told so if it reports first)".to_owned()
         };
         let receipt = format!(
-            "Sent to {}: accepted{}; {how}.{}{}",
+            "Sent to {}: accepted{}; {how}.{dispatch_note}{attached_note}",
             named(target),
             if started { ", turn started" } else { "" },
-            dispatch
-                .as_ref()
-                .map(|d| format!(" Dispatch {d}: it reports back with ompdesk_report."))
-                .unwrap_or_default(),
-            if carried.count > 0 {
-                format!(" {}.", carried.set.summary())
-            } else {
-                String::new()
-            }
         );
         if let Some(key) = receipt_key {
             self.mem().receipts.insert(key.to_owned(), receipt.clone());

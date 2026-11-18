@@ -378,12 +378,15 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * no-turn report holds while `isStreaming` and goes to the same `sessionId` once the turn ended.
 	 * `agent_control.attachment` reads the live conversation's pictures (`AgentSession.messages`, a persisted one from
 	 * stock's blob store as `read_image_blob` does) and a file in the session's folder (`sessionManager.getCwd()`).
+	 * `agent_control.aside` hands a working session another session's message as stock's aside
+	 * (`AgentSession.prompt` with `streamingBehavior: "aside"` and `onPromptAdmitted`).
 	 */
 	agentControl: {
 		session: [
 			"settings",
 			"sessionId",
 			"isStreaming",
+			"prompt()",
 			"model",
 			"modelRegistry.getApiKey()",
 			"modelRegistry.resolver()",

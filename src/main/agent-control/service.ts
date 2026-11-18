@@ -541,6 +541,7 @@ export type Tuning = Partial<
 		| "closeWaitMs"
 		| "ompExitWaitMs"
 		| "readyPollMs"
+		| "sendReadyWaitMs"
 		| "resultPollMs"
 		| "clearQueueMs"
 		| "promptMs"
