@@ -597,8 +597,12 @@ export class TurnResume {
 		};
 	}
 
-	/** One call; a core lost under it opens again and the call is made once more. */
-	#call<T>(method: string, params: Record<string, unknown> = {}): T {
+	/**
+	 * One call; a core lost under it opens again and the call is made once more. Params that read main (the pool's
+	 * facts, the network) are a function, read again for the second call: after the loss the new instance's `launch`
+	 * has already changed the pool (a held offline wait), and facts read before it would undo that.
+	 */
+	#call<T>(method: string, params: Record<string, unknown> | (() => Record<string, unknown>) = {}): T {
 		return hub().callOnce<T>(() => this.#instance(), method, params);
 	}
 
@@ -845,9 +849,9 @@ export class TurnResume {
 	 */
 	sync(): void {
 		this.#atQuit(() =>
-			this.#call("sync", {
+			this.#call("sync", () => ({
 				env: this.#env(["facts", "network", "enabled", "now"]),
-			}),
+			})),
 		);
 	}
 
@@ -855,7 +859,7 @@ export class TurnResume {
 	async flush(): Promise<void> {
 		let token: number | null;
 		try {
-			token = this.#call<number | null>("flush", { env: this.#env(["facts", "online"]) });
+			token = this.#call<number | null>("flush", () => ({ env: this.#env(["facts", "online"]) }));
 		} catch (error) {
 			if (isCoreShutdown(error)) return;
 			throw error;
@@ -874,10 +878,10 @@ export class TurnResume {
 	 * Continue interrupted work after relaunch is off).
 	 */
 	relaunchContinuation(tabId: string): RelaunchContinuation {
-		const answer = this.#call<RelaunchContinuation>("relaunchContinuation", {
+		const answer = this.#call<RelaunchContinuation>("relaunchContinuation", () => ({
 			tab: tabId,
 			enabled: this.#deps.enabled(),
-		});
+		}));
 		if (answer === "after_restore") this.#owedGoals.add(tabId);
 		return answer;
 	}
