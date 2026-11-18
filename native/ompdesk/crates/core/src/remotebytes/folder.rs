@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::disk::tree::write_atomic_if;
 
@@ -117,6 +117,7 @@ impl Folder {
             }
         };
         if written {
+            touch(file);
             self.grew(bytes.len() as u64, limit);
         }
         written
@@ -129,7 +130,11 @@ impl Folder {
             .append(true)
             .create(true)
             .open(file)
-            .and_then(|mut opened| opened.write_all(bytes));
+            .and_then(|mut opened| {
+                opened.write_all(bytes)?;
+                stamped(&opened);
+                Ok(())
+            });
         if let Err(error) = &appended {
             eprintln!(
                 "ompdesk-core: cache file not appended {}: {:?} {}",
@@ -217,12 +222,34 @@ pub fn remove(file: &Path) -> bool {
     }
 }
 
-/// Read again: the least recently read go first when the folder is full (`utimes(file, now, now)`).
+/// Read again: the least recently read go first when the folder is full (`utimes(file, stamp, stamp)`).
 pub fn touch(file: &Path) {
-    let now = SystemTime::now();
     if let Ok(opened) = fs::OpenOptions::new().write(true).open(file) {
-        let _ = opened.set_times(fs::FileTimes::new().set_accessed(now).set_modified(now));
+        stamped(&opened);
     }
+}
+
+/// Leaves a fresh `stamp()` as the file's read and write time; a file that refuses it keeps its own.
+fn stamped(opened: &fs::File) {
+    let now = stamp();
+    let _ = opened.set_times(fs::FileTimes::new().set_accessed(now).set_modified(now));
+}
+
+/// The least step between two stamps: every file system the cache lives on keeps it (NTFS 100 ns, APFS and ext4 1 ns),
+/// and `Entry::read`'s milliseconds as an f64 tell it apart.
+const STAMP_STEP: Duration = Duration::from_millis(1);
+
+/// The time a write or read leaves on its file: now, or a step past the last stamp of this process when the clock has
+/// not moved that far, so a later write or read always sorts after an earlier one. The file system's own write time is
+/// its clock tick's (Windows: 1 to 15.6 ms), so writes within one tick shared it and a write could even sort before the
+/// read just before it. Files from an earlier run keep the times they were left with.
+fn stamp() -> SystemTime {
+    static LAST: Mutex<Option<SystemTime>> = Mutex::new(None);
+    let mut last = locked(&LAST);
+    let now = SystemTime::now();
+    let next = last.map_or(now, |last| now.max(last + STAMP_STEP));
+    *last = Some(next);
+    next
 }
 
 fn entries(dir: &Path) -> Vec<Entry> {
