@@ -1920,20 +1920,31 @@ export const SURFACES: readonly Surface[] = [
 		id: "composer-queue",
 		area: "A",
 		title: "Queue popover with a steer and a follow-up waiting behind a running turn: lane headings in the agent's real delivery modes and the policy line",
-		// The host's fake omp runs `fixture running` until stopped. The steer is typed and sent with Send while the turn
-		// runs, as a person steers; a follow-up has no chord on a phone, so it goes through the view's own rpc, as the
+		// The host's fake omp runs `fixture running` until stopped. The prompt and the steer are typed and sent with Send,
+		// as a person does; a follow-up has no chord on a phone, so it goes through the view's own rpc, as the
 		// composer's follow-up mode sends it.
 		open: async page => {
 			const tab = await shownTab(page);
 			if (!tab) throw new Error("the view shows no session to queue in");
-			const send = (command: RpcCommand) =>
-				page.evaluate(([tabId, body]) => window.omp.rpc.commandForTab(tabId, body), [tab.tabId, command] as const);
-			await send({ type: "prompt", message: "fixture running" });
-			await page.locator("[data-send-mode]").first().waitFor({ state: "visible", timeout: 30_000 });
 			const input = page.locator("[data-composer-input]").first();
-			await input.fill("Check the failing test first");
-			await page.getByRole("button", { name: "Send", exact: true }).first().click();
-			await send({ type: "follow_up", message: "Then write the release note" });
+			const send = page.getByRole("button", { name: "Send", exact: true }).first();
+			const type = async (text: string) => {
+				await input.fill(text);
+				await send.click({ timeout: 15_000 });
+				await page.waitForFunction(
+					field => (document.querySelector(field) as HTMLTextAreaElement | null)?.value === "",
+					"[data-composer-input]",
+					{ timeout: 15_000 },
+				);
+			};
+			await type("fixture running");
+			await page.locator("[data-send-mode]").first().waitFor({ state: "visible", timeout: 30_000 });
+			await type("Check the failing test first");
+			const queued = await page.evaluate(([tabId, body]) => window.omp.rpc.commandForTab(tabId, body), [
+				tab.tabId,
+				{ type: "follow_up", message: "Then write the release note" } satisfies RpcCommand,
+			] as const);
+			if (!queued.success) throw new Error(`the follow-up was refused: ${queued.error}`);
 			const pill = page.locator("[data-queue-pill]").first();
 			await pill.filter({ hasText: "2" }).waitFor({ state: "visible", timeout: 15_000 });
 			await pill.click();
