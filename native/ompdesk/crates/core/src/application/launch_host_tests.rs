@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "launch_host_tests/concrete.rs"]
+pub(crate) mod concrete;
+
 use std::future::ready;
 
 use super::*;

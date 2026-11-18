@@ -10,6 +10,7 @@ pub mod browsers;
 pub mod care;
 pub mod clock;
 pub mod control;
+pub mod desktop_slot;
 pub mod diagnostics;
 pub mod disk;
 pub mod ext;

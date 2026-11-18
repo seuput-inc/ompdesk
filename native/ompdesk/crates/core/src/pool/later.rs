@@ -7,6 +7,11 @@ use serde_json::{Map, Value, json};
 use super::routes::stop_settled;
 use super::state::{Ctx, R, owner_key};
 
+pub(super) struct Stopping {
+    tab: String,
+    seq: u64,
+}
+
 pub(super) enum Begin {
     Unknown,
     Refused,
@@ -65,6 +70,31 @@ impl Ctx {
     /// tab's run has ended, never on a timer; at once when nothing runs there. Fails `session_running` if the run has
     /// not ended after `STOP_SESSION_WAIT_MS` (`stop_timeout`).
     pub(super) async fn stop_session(&self, token: u64, path: &str, device: Option<&str>) -> R<()> {
+        self.stop_session_generation(token, path, device, None)
+            .await
+    }
+
+    pub(super) async fn stop_session_generation(
+        &self,
+        token: u64,
+        path: &str,
+        device: Option<&str>,
+        generation: Option<u64>,
+    ) -> R<()> {
+        let Some(stopping) = self.stop_session_start(token, path, device) else {
+            return Ok(());
+        };
+        self.on_running_change().await?;
+        self.stop_session_finish(token, stopping, generation);
+        Ok(())
+    }
+
+    pub(super) fn stop_session_start(
+        &self,
+        token: u64,
+        path: &str,
+        device: Option<&str>,
+    ) -> Option<Stopping> {
         let found = self.with(|pool| {
             pool.owner_entry(device, path)
                 .filter(|entry| entry.busy())
@@ -72,17 +102,27 @@ impl Ctx {
         });
         let Some((tab, seq)) = found else {
             self.settle_ok(token, Value::Null);
-            return Ok(());
+            return None;
         };
         self.with(|pool| Ctx::add_stop_wait(pool, token, &tab, seq));
         // The timer is main's, so its (fake) clock is the clock here too; main says how long (`STOP_SESSION_WAIT_MS`).
         let wait = self.with(|pool| pool.stop_wait_ms);
         self.push(&json!({"k": "stopTimer", "token": token, "ms": wait}));
-        self.note_stopped(&tab).await?;
+        self.note_stopped_start(&tab);
+        Some(Stopping { tab, seq })
+    }
+
+    pub(super) fn stop_session_finish(
+        &self,
+        token: u64,
+        stopping: Stopping,
+        generation: Option<u64>,
+    ) {
+        let Stopping { tab, seq } = stopping;
         self.push(&json!({"k": "turnStop", "tab": tab, "command": "abort_and_restore_queue", "by": "session-delete"}));
         // Its queued messages go too: they would start the next turn on a session about to be deleted.
         self.push(
-            &json!({"k": "command", "tab": tab, "command": {"type": "abort_and_restore_queue"}}),
+            &json!({"k": "command", "tab": tab, "incarnation": seq, "generation": generation, "command": {"type": "abort_and_restore_queue"}}),
         );
         let done = self.with(|pool| {
             let settled = stop_settled(pool, &tab, seq);
@@ -94,7 +134,6 @@ impl Ctx {
         if done {
             self.settle_ok(token, Value::Null);
         }
-        Ok(())
     }
 
     /// The timer main ran for `stop_session` ended before the run did.
@@ -279,12 +318,12 @@ impl Ctx {
         command: &Value,
         device: Option<&str>,
     ) -> R<()> {
-        let tab = self.with(|pool| {
+        let target = self.with(|pool| {
             pool.owner_entry(device, path)
                 .filter(|entry| entry.status == "ready")
-                .map(|entry| entry.tab_id.clone())
+                .map(|entry| (entry.tab_id.clone(), entry.seq))
         });
-        let Some(tab) = tab else {
+        let Some((tab, seq)) = target else {
             self.settle_ok(token, Value::Null);
             return Ok(());
         };
@@ -293,7 +332,10 @@ impl Ctx {
         super::spawn(async move {
             match ctx
                 .out
-                .ask_later("rpc", &json!({"tab": tab, "command": command}))
+                .ask_later(
+                    "rpc",
+                    &json!({"tab": tab, "incarnation": seq, "command": command}),
+                )
                 .await
             {
                 Ok(response) => ctx.settle_ok(token, response),

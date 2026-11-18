@@ -113,7 +113,12 @@ impl<H: Host> Application<H> {
                 tab: tab(),
                 file: item["file"].as_str().map(str::to_owned),
             },
-            "gone" => Notification::Gone { tab: tab() },
+            "gone" => {
+                if let Some(incarnation) = item["incarnation"].as_u64() {
+                    self.detach(&tab(), incarnation);
+                }
+                Notification::Gone { tab: tab() }
+            }
             "listenClosed" => Notification::ListenClosed {
                 window: item["win"].as_i64().unwrap_or_default(),
             },

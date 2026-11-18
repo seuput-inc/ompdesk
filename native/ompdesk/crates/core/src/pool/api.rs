@@ -199,20 +199,33 @@ impl Ctx {
 
     /// A session renamed on disk while its tab holds no live omp: the tab entry, its strip and every window's session
     /// title learn the name now.
-    pub(super) async fn note_session_name(&self, tab: &str, title: &str) -> R<()> {
-        let wins = self.with(|pool| {
     pub(super) fn note_session_name_start(
         &self,
         tab: &str,
         title: &str,
     ) -> Option<Vec<(i64, String)>> {
+        self.with(|pool| {
             let entry = pool.entry_mut(tab)?;
             entry.title = Some(Some(title.to_string()));
-            Some(entry.full.clone().unwrap_or_default())
-        });
-        let Some(wins) = wins else {
-            return Ok(());
-        };
+            let wins = entry.full.clone().unwrap_or_default();
+            Some(
+                wins.into_iter()
+                    .filter_map(|win| {
+                        pool.entry(tab)?
+                            .view_id(&pool.view_epoch, win)
+                            .map(|id| (win, id))
+                    })
+                    .collect(),
+            )
+        })
+    }
+
+    pub(super) async fn note_session_name_finish(
+        &self,
+        tab: &str,
+        title: &str,
+        wins: Vec<(i64, String)>,
+    ) -> R<()> {
         self.forward_status(tab).await?;
         for (win, view_id) in wins {
             self.send(
@@ -222,6 +235,13 @@ impl Ctx {
             );
         }
         Ok(())
+    }
+
+    pub(super) async fn note_session_name(&self, tab: &str, title: &str) -> R<()> {
+        let Some(wins) = self.note_session_name_start(tab, title) else {
+            return Ok(());
+        };
+        self.note_session_name_finish(tab, title, wins).await
     }
 
     // ---- window routing -----------------------------------------------------------------------------------------
@@ -1020,13 +1040,17 @@ impl Ctx {
         Ok(true)
     }
 
-    pub(super) async fn note_stopped(&self, tab: &str) -> R<()> {
-        let found = self.with(|pool| {
+    pub(super) fn note_stopped_start(&self, tab: &str) -> bool {
+        self.with(|pool| {
             pool.entry_mut(tab).map(|entry| {
                 entry.tracking.stopped = true;
             })
-        });
-        if found.is_some() {
+        })
+        .is_some()
+    }
+
+    pub(super) async fn note_stopped(&self, tab: &str) -> R<()> {
+        if self.note_stopped_start(tab) {
             self.on_running_change().await?;
         }
         Ok(())
@@ -1298,18 +1322,26 @@ impl Ctx {
         Ok(())
     }
 
-    pub(super) async fn bind_worktree(&self, tab: &str, worktree: Value) -> R<bool> {
-        let win = self.with(|pool| {
+    pub(super) fn bind_worktree_start(&self, tab: &str, worktree: Value) -> Option<Option<i64>> {
+        self.with(|pool| {
             let entry = pool.entry_mut(tab)?;
             entry.worktree = Some(worktree);
             Some(entry.win_id)
-        });
-        let Some(win) = win else {
-            return Ok(false);
-        };
+        })
+    }
+
+    pub(super) async fn bind_worktree_finish(&self, tab: &str, win: Option<i64>) -> R<bool> {
         self.forward_status(tab).await?;
         if let Some(win) = win { self.notify_window_tabs_changed(win).await?; }
         Ok(true)
+    }
+
+    pub(super) async fn bind_worktree(&self, tab: &str, worktree: Value) -> R<bool> {
+        let win = self.bind_worktree_start(tab, worktree);
+        let Some(win) = win else {
+            return Ok(false);
+        };
+        self.bind_worktree_finish(tab, win).await
     }
 
     /// `releaseTab`: false when the tab is unknown.

@@ -10,6 +10,7 @@
 //! `sessions.watching` `{index, watching, missed}` when the tree's watch starts or ends, `sessions.changed`
 //! `{index, names}` with the settled entries relative to the root, `names: null` when anything may have changed.
 
+pub mod list;
 mod rules;
 pub(crate) mod source;
 mod watch;

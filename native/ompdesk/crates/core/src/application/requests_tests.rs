@@ -188,3 +188,88 @@ async fn shutdown_stops_admission_before_waiting_for_domain_cleanup() {
     result.await.unwrap();
     joining.await.unwrap();
 }
+
+#[tokio::test]
+async fn cancelled_and_returned_handlers_keep_the_same_deletion_until_effects_are_gone() {
+    use crate::application::session_authority::{AdmissionRefusal, SessionAuthority};
+    use std::path::Path;
+
+    for handler_returns in [false, true] {
+        let requests = executor();
+        requests.admit(caller()).await.unwrap();
+        let authority = Arc::new(SessionAuthority::open(None));
+        let handler_authority = Arc::clone(&authority);
+        let (started, held) = oneshot::channel();
+        let (cancelled, observed_cancel) = oneshot::channel();
+        let (release, finish) = oneshot::channel();
+        let answer = requests.invoke(caller(), request(30), move |_, scope| async move {
+            let claim = handler_authority
+                .begin_delete_scoped(Path::new("/sessions/request.jsonl"), None, &scope)
+                .ready()
+                .await;
+            tokio::spawn(async move {
+                started.send(()).unwrap();
+                scope.on_cancel().await;
+                cancelled.send(()).unwrap();
+                finish.await.unwrap();
+            });
+            if !handler_returns {
+                std::future::pending::<()>().await;
+            }
+            drop(claim);
+            Ok(())
+        });
+        held.await.unwrap();
+        drop(answer);
+        observed_cancel.await.unwrap();
+        let path = Path::new("/sessions/request.jsonl");
+        assert!(authority.in_progress(path, None));
+        assert_eq!(
+            authority.admit(path, None, || ()),
+            Err(AdmissionRefusal::Deleting)
+        );
+        let closing = requests.close(caller(), |_| async { Ok(()) });
+        tokio::pin!(closing);
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(
+                closing.as_mut().poll(cx).is_pending()
+            ))
+            .await
+        );
+        release.send(()).unwrap();
+        closing.await.unwrap();
+        assert!(!authority.in_progress(path, None));
+        assert_eq!(authority.admit(path, None, || ()), Ok(()));
+    }
+}
+
+#[tokio::test]
+async fn erroring_handler_cancels_but_retains_deletion_for_its_supervised_cleanup() {
+    use crate::application::session_authority::SessionAuthority;
+    use std::path::Path;
+
+    let requests = executor();
+    requests.admit(caller()).await.unwrap();
+    let authority = Arc::new(SessionAuthority::open(None));
+    let handler_authority = Arc::clone(&authority);
+    let (started, held) = oneshot::channel();
+    let (release, finish) = oneshot::channel();
+    let answer = requests.invoke(caller(), request(31), move |_, scope| async move {
+        let _claim = handler_authority
+            .begin_delete_scoped(Path::new("/sessions/error.jsonl"), None, &scope)
+            .ready()
+            .await;
+        tokio::spawn(async move {
+            scope.on_cancel().await;
+            started.send(()).unwrap();
+            finish.await.unwrap();
+        });
+        Err::<(), _>(Fault::new("failed", "failed"))
+    });
+    held.await.unwrap();
+    assert!(authority.in_progress(Path::new("/sessions/error.jsonl"), None));
+    release.send(()).unwrap();
+    assert_eq!(answer.await.unwrap_err().code, "failed");
+    assert!(!authority.in_progress(Path::new("/sessions/error.jsonl"), None));
+    requests.stop().await.unwrap();
+}

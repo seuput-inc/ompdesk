@@ -34,8 +34,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip", "preserve_order"] }
 # The same parser native/memory uses; memory application policy reads disabledExtensions without a second YAML stack.
 serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize", "serialize"] }
+# Structured provider edits must retain comments and unrelated YAML nodes.
+yaml-edit = { version = "=0.3.6", default-features = false }
 # Native MIME decoding follows the WHATWG TextDecoder labels used by routine mail sources.
 encoding_rs = "0.8.35"
+# Diagnostics must match JavaScript lookaround and non-Unicode UTF-16 regex behavior.
+regress = { version = "=0.12.0", features = ["utf16"] }
+# Session dumps are ZIP archives; reuse the existing flate2 zlib-rs implementation.
+zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate2"] }
 # Session pace replays the bridge's shell/check classifiers over stored journals.
 regex = "1"
 # Listings sort as the page's `Intl.Collator(locale, { numeric: true })` does: ICU's collation, same algorithm and data.

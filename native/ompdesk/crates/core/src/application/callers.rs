@@ -9,6 +9,7 @@ use crate::server::{Cancellation, Fault, Gone, Scope};
 mod commands;
 mod executions;
 pub(crate) use commands::{CommandAdmission, CommandView};
+mod windows;
 mod page_output;
 pub(crate) use page_output::PageOutput;
 pub use executions::{Execution, Reservation};
@@ -18,6 +19,7 @@ pub enum Principal {
     Page(NativeCaller),
     Peer { device: String, connection: u64 },
 }
+mod peers;
 pub(crate) use peers::PeerView;
 
 #[derive(Clone)]
@@ -35,10 +37,12 @@ struct Request {
 struct State {
     owners: HashMap<Owner, Principal>,
     pages: HashMap<NativeCaller, Arc<page_output::Page>>,
+    peer_links: HashMap<Owner, crate::remote::requests::RemoteRequests>,
     requests: HashMap<RequestId, Request>,
     executions: HashMap<Owner, executions::Record>,
     active_tabs: HashMap<String, Owner>,
     stopped: bool,
+    focused: Option<NativeCaller>,
 }
 
 /// Native admission only. Page JSON cannot construct an owner or replace its authenticated principal.
@@ -121,6 +125,22 @@ impl Callers {
             .get(owner)
             .cloned()
             .ok_or_else(|| Fault::new("caller_closed", "The caller is no longer admitted"))
+    }
+
+    /// Run a synchronous native admission under the same lock as caller revocation.
+    pub fn admit_owner<T>(
+        &self,
+        owner: &Owner,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.stopped || !state.owners.contains_key(owner) {
+            return Err(Fault::new(
+                "caller_closed",
+                "The caller is no longer admitted",
+            ));
+        }
+        effect()
     }
 
     /// Reject a revoked owner, old app generation or request identity that is already in flight.
@@ -215,6 +235,7 @@ impl Callers {
         {
             page.close();
         }
+        state.peer_links.remove(owner);
         for request in state
             .requests
             .values()
@@ -232,6 +253,7 @@ impl Callers {
         for (_, page) in state.pages.drain() {
             page.close();
         }
+        state.peer_links.clear();
         for request in state.requests.values() {
             request.cancel.cancel();
         }

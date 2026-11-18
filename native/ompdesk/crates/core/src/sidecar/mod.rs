@@ -113,6 +113,7 @@ pub struct LaneEvent {
     pub name: String,
     pub data: Value,
     pub bin: Option<std::sync::Arc<[u8]>>,
+    pub generation: u64,
     pub(crate) observation: Option<native::Observation>,
 }
 
@@ -134,7 +135,7 @@ pub fn subscribe(tab: &str) -> mpsc::UnboundedReceiver<LaneEvent> {
 }
 
 /// Hands a lane's event to the tab's subscribers (`lane.rs` calls it beside every send to main).
-pub(crate) fn tap(tab: &str, name: &str, data: &Value, bin: Option<&[u8]>) {
+pub(crate) fn tap(tab: &str, name: &str, data: &Value, bin: Option<&[u8]>, generation: u64) {
     if TAPPED.load(std::sync::atomic::Ordering::SeqCst) == 0 {
         return;
     }
@@ -146,6 +147,7 @@ pub(crate) fn tap(tab: &str, name: &str, data: &Value, bin: Option<&[u8]>) {
         name: name.to_owned(),
         data: data.clone(),
         bin: bin.map(std::sync::Arc::from),
+        generation,
         observation: None,
     };
     let before = senders.len();
@@ -356,6 +358,7 @@ fn command(call: Call) -> Answer {
         &params.tab,
         params.seq,
         Command::Stock {
+            generation: None,
             seq: params.seq,
             command: params.command,
             timeout: params.timeout_ms.map(Duration::from_millis),
@@ -411,6 +414,7 @@ fn bridge_request(call: Call) -> Answer {
         &params.tab,
         params.seq,
         Command::Bridge {
+            generation: None,
             method: params.method,
             params: params.params,
             timeout: params.timeout_ms.map(Duration::from_millis),

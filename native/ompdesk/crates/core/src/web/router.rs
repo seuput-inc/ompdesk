@@ -1062,6 +1062,19 @@ impl Host {
         }
     }
 
+    pub fn deliver_connection(&self, device: &str, conn_id: &str, pushed: Arc<Pushed>) -> bool {
+        let mut state = self.state();
+        let conn = state.devices.get(device).into_iter().flatten().copied().find(|id| {
+            state.conns.get(id).is_some_and(|connection| {
+                !connection.closed && connection.device == device && connection.conn_id == conn_id
+            })
+        });
+        let Some(conn) = conn else { return false };
+        *state.pushes.entry(device.to_owned()).or_insert(0) += 1;
+        self.push(&mut state, conn, &pushed);
+        true
+    }
+
     fn push(&self, state: &mut State, conn: u64, pushed: &Arc<Pushed>) {
         let Some(c) = state.conns.get_mut(&conn) else {
             return;

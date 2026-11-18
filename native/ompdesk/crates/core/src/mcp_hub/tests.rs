@@ -4,12 +4,12 @@ use tokio::net::TcpStream;
 
 static FIXTURE_PORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-struct Fixture {
+pub(crate) struct Fixture {
     dir: PathBuf,
     _port_owner: tokio::sync::MutexGuard<'static, ()>,
 }
 impl Fixture {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let port_owner = FIXTURE_PORTS.lock().await;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let dir = std::env::temp_dir().join(format!(
@@ -23,7 +23,7 @@ impl Fixture {
             _port_owner: port_owner,
         }
     }
-    fn config(&self) -> Config {
+    pub(crate) fn config(&self) -> Config {
         let mut env = fixture_environment(&self.dir);
         env.insert(
             "OMP_GUI_MCP_HUB_SECRET".into(),

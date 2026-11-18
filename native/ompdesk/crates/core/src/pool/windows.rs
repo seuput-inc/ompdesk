@@ -330,21 +330,47 @@ impl Ctx {
     /// window takes over; viewer windows lose the tab the same way and hear their list changed. False when the tab is
     /// not in the pool.
     pub(super) async fn release_entry(&self, tab: &str) -> R<bool> {
-        let removed = self.with(|pool| {
+        match self.release_entry_detail(tab).await {
+            None => Ok(false),
+            Some((result, _)) => result.map(|()| true),
+        }
+    }
+
+    pub(super) fn take_entry(&self, tab: &str) -> Option<u64> {
+        self.with(|pool| {
             let at = pool.index(tab)?;
             let entry = pool.entries.remove(at);
             let seq = entry.seq;
             pool.detached.push(entry);
             Some(seq)
-        });
-        let Some(seq) = removed else {
-            return Ok(false);
-        };
+        })
+    }
+
+    pub(super) async fn release_entry_detail(&self, tab: &str) -> Option<(R<()>, bool)> {
+        let seq = self.take_entry(tab)?;
+        Some(self.release_taken_detail(tab, seq).await)
+    }
+
+    pub(super) async fn release_taken_detail(&self, tab: &str, seq: u64) -> (R<()>, bool) {
         // The tab is gone for everyone now (`byTabId.delete`): main stops handing out its sidecar.
-        self.push(&json!({"k": "gone", "tab": tab}));
-        let result = self.release_detached(tab, seq).await;
+        self.push(&json!({"k": "gone", "tab": tab, "incarnation": seq}));
+        let session_file = self.with(|pool| {
+            pool.by_seq(seq)
+                .and_then(|entry| entry.session_file.clone())
+        });
+        let before = self.release_detached(tab, seq).await;
+        if before.is_err() {
+            let _ = self.unregister_session_file_of(seq).await;
+        }
+        let disposal = self.dispose_detached(tab, seq, session_file).await;
+        let after = if before.is_ok() && disposal.is_ok() {
+            self.finish_release(tab, seq).await
+        } else {
+            Ok(())
+        };
         self.with(|pool| pool.detached.retain(|entry| entry.seq != seq));
-        result.map(|()| true)
+        let disposed = disposal.is_ok();
+        (before.and(disposal).and(after), disposed)
     }
 
     async fn release_detached(&self, tab: &str, seq: u64) -> R<()> {
@@ -409,15 +435,31 @@ impl Ctx {
             self.ask("endViews", json!({"tab": tab, "views": devices}))
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn dispose_detached(&self, tab: &str, seq: u64, session_file: Option<String>) -> R<()> {
+        let (device, hosted) = self.with(|pool| {
+            let entry = pool.by_seq(seq).expect("a released entry is detached");
+            (entry.device.clone(), entry.hosted_view)
+        });
         self.ask(
             "dispose",
             json!({
-                "tab": tab, "device": device, "hosted": hosted,
+                "tab": tab, "incarnation": seq, "device": device, "hosted": hosted,
                 "sessionFile": session_file,
                 "ownerKey": session_file.as_ref().map(|file| super::state::owner_key(device.as_deref(), file)),
             }),
-        )
-        .await?;
+        ).await?;
+        Ok(())
+    }
+
+    async fn finish_release(&self, tab: &str, seq: u64) -> R<()> {
+        let win = self.with(|pool| {
+            pool.by_seq(seq)
+                .expect("a released entry is detached")
+                .win_id
+        });
         if let Some(win) = win { self.leave_window_view(tab, win).await?; }
         let viewers = self.with(|pool| {
             pool.by_seq_mut(seq)

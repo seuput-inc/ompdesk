@@ -1,0 +1,444 @@
+use super::*;
+use crate::sidecar::native::{Config as SidecarConfig, DirectSpawn, Service as SidecarService};
+use tokio::sync::mpsc;
+
+struct Recorded(mpsc::UnboundedSender<crate::sidecar::LaneEvent>);
+impl crate::sidecar::native::Sink for Recorded {
+    fn event(&self, event: crate::sidecar::LaneEvent) {
+        let _ = self.0.send(event);
+    }
+    fn before_response(&self) {}
+    fn reply_barrier(&self) -> crate::sidecar::native::Held {
+        Box::pin(async { Ok(()) })
+    }
+    fn remove_listeners(&self) {}
+    fn sync_settings(&self) -> EffectFuture<'_, ()> {
+        Box::pin(async {})
+    }
+}
+
+fn lane_config(tab: String) -> SidecarConfig {
+    SidecarConfig {
+        tab,
+        seq: 0,
+        cwd: std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        fresh: true,
+        event_filter: Vec::new(),
+        bridge: false,
+        ledger_file: None,
+        start_slow_ms: None,
+        entry_id_timeout_ms: None,
+        tuning: None,
+        session_path: None,
+        is_new: Some(true),
+    }
+}
+
+#[tokio::test]
+async fn a_rejoined_peer_keeps_its_execution_but_each_admission_captures_the_current_run() {
+    let callers = Arc::new(Callers::new(64));
+    let host = test_host(Arc::clone(&callers));
+    let app = Arc::new(Application::new(host));
+    let pool = Service::new(
+        Config {
+            id: 0x706f_6f6c_7065_6572,
+            view_epoch: "peer-test".into(),
+            layout_version: 1,
+            max_former_tab_ids: 8,
+            stop_session_wait_ms: 60_000,
+            window_tabs_hook: false,
+            now_ms: || 1234,
+            callers: Arc::clone(&callers),
+            removal_claims: RemovalClaims::new(),
+        },
+        Arc::clone(&app),
+    )
+    .await
+    .unwrap();
+    pool.call(
+        "seed",
+        json!({"tabs":[
+            {"tab":"peer:original:rtab","win":0,"status":"asleep"},
+            {"tab":"peer:original:dormant","win":0,"status":"asleep"}
+        ]}),
+        false,
+    )
+    .await
+    .unwrap();
+    let (events, _keep_output, _frames) = crate::server::Events::capture();
+    let (record, mut recorded) = mpsc::unbounded_channel();
+    let (source, held) = SidecarService::new(
+        lane_config(format!("native-peer-capture-{}", std::process::id())),
+        events,
+        Arc::new(Recorded(record)),
+        Arc::new(DirectSpawn),
+    )
+    .unwrap();
+    set_test_source(&app, "peer:original:rtab", Arc::clone(&source));
+    let (dormant_events, _keep_dormant, _dormant_frames) = crate::server::Events::capture();
+    let (dormant, dormant_held) = SidecarService::new(
+        lane_config(format!("native-peer-dormant-{}", std::process::id())),
+        dormant_events,
+        Arc::new(SidecarSink),
+        Arc::new(DirectSpawn),
+    )
+    .unwrap();
+    set_test_source(&app, "peer:original:dormant", Arc::clone(&dormant));
+    let (first, first_remote, _keep_first) = crate::remote::requests::tests::pair().await;
+    let (next, next_remote, _keep_next) = crate::remote::requests::tests::pair().await;
+    let admitted = callers
+        .admit_peer("peer".into(), first.link_id().unwrap())
+        .unwrap();
+    callers
+        .bind_peer_connection(&admitted.owner, first.clone())
+        .unwrap();
+    let reservation = callers
+        .reserve_execution(&admitted.owner, "peer:original:rtab", None)
+        .unwrap();
+    let execution = callers.execution_owner("peer:original:rtab").unwrap();
+    callers.finish_execution_reservation(reservation, true);
+    let dormant_reservation = callers
+        .reserve_execution(&admitted.owner, "peer:original:dormant", None)
+        .unwrap();
+    callers.finish_execution_reservation(dormant_reservation, true);
+    let observation_dir = crate::remotebytes::native::tests::Dir::new();
+    let prefs = crate::application::prefs::Prefs::open(observation_dir.path()).unwrap();
+    let authority = Arc::new(crate::application::session_authority::SessionAuthority::open(None));
+    let run_source = Arc::clone(&source);
+    let run_first = first.clone();
+    let run_next = next.clone();
+    let scenario = tokio::spawn(async move {
+        run_source.start();
+        crate::sidecar::native::tests::ready(&run_source, &mut recorded).await;
+        let target = pool
+            .peer_execution_target(&admitted.owner, &run_first, "peer:original:rtab")
+            .await
+            .unwrap();
+        assert_eq!(target.owner(), &execution);
+        assert!(Arc::ptr_eq(target.source(), &run_source));
+        let old = pool
+            .peer_execution_selected(&admitted.owner, &run_first, &target, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            old.session_file, None,
+            "an unwritten hosted execution is still selectable"
+        );
+        let before = pool
+            .peer_execution_command(
+                &admitted.owner,
+                &run_first,
+                &target,
+                ExecutionCommand::Stock(json!({"type":"get_state"})),
+            )
+            .await
+            .unwrap();
+        assert_eq!(before["success"], true);
+        let view = pool.attach_peer_presentation(&admitted.owner, &run_first, &target, None, 991).await.unwrap();
+        let original_command = pool.capture_peer_command(admitted.clone(), run_first.clone(), &view, None, crate::server::Scope::detached()).await.unwrap();
+        assert_eq!(original_command.execution_owner(), &execution);
+        assert_eq!(original_command.selected().generation, old.generation);
+        pool.call("noteSessionFile", json!({"tab":"peer:original:rtab","file":"/peer-original.jsonl"}), false).await.unwrap();
+        pool.feed_captured(&execution, "peer:original:rtab", Arc::clone(&run_source), CapturedEvent { generation: old.generation, name: "extensionUi".into(), payload: json!({"request":{"id":"stale-question","method":"input","title":"Before restart"},"kinds":{"blocking":true}}), from_link: false }).await.unwrap();
+        let original_omp = pool.execution_omp(&target).await.unwrap();
+        let restarted = run_source.restart_for_generation(old.generation);
+        crate::sidecar::native::tests::ready(&run_source, &mut recorded).await;
+        restarted.await.unwrap();
+        assert!(
+            run_source
+                .stock_for_generation(old.generation, json!({"type":"get_state"}), None)
+                .await
+                .is_err()
+        );
+        let current = pool
+            .peer_execution_selected(&admitted.owner, &run_first, &target, None)
+            .await
+            .unwrap();
+        assert_ne!(current.generation, old.generation);
+        assert_eq!(current.cwd, old.cwd);
+        assert_eq!(pool.command_effect(Arc::clone(&original_command), |_| Ok(())).await.unwrap_err().code, "tab_stale");
+        let new_omp = pool.execution_omp(&target).await.unwrap();
+        assert_eq!(pool.peer_observe_card(&admitted.owner, &run_first, &target, new_omp, "stale-question".into(), Arc::clone(&prefs), Arc::clone(&authority)).await.unwrap_err().code, "observed_card_changed", "an old pool question cannot be issued under a replacement omp");
+        let rejoined = callers
+            .admit_peer("peer".into(), run_next.link_id().unwrap())
+            .unwrap();
+        callers
+            .bind_peer_connection(&rejoined.owner, run_next.clone())
+            .unwrap();
+        assert!(
+            pool.peer_execution_selected(&admitted.owner, &run_first, &target, None)
+                .await
+                .is_err()
+        );
+        let answer = pool
+            .peer_execution_command(
+                &rejoined.owner,
+                &run_next,
+                &target,
+                ExecutionCommand::Stock(json!({"type":"get_state"})),
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer["success"], true);
+        assert_eq!(
+            callers.execution_owner("peer:original:rtab").unwrap(),
+            execution
+        );
+        let fresh_command = pool.capture_peer_command(rejoined.clone(), run_next.clone(), &view, None, crate::server::Scope::detached()).await.unwrap();
+        let response = pool.command_effect(Arc::clone(&fresh_command), |selected| Ok(crate::pool::application::Sidecar::stock_for_generation(selected.sidecar.as_ref(), selected.generation, json!({"type":"get_state"}), crate::agentctl::service::host::Deadline::Default))).await.unwrap().await.unwrap();
+        assert_eq!(response["success"], true);
+        assert_eq!(pool.note_subagent_level_command(Arc::clone(&fresh_command), "events".into()).await.unwrap(), "events");
+        view.retire().wait().await.unwrap();
+        assert!(pool.note_subagent_level_command(Arc::clone(&fresh_command), "events".into()).await.is_err());
+        let cleanup = pool.execution_selected(&target).await.unwrap();
+        assert_eq!(cleanup.generation, current.generation);
+        assert!(Arc::ptr_eq(&cleanup.sidecar, &run_source));
+        let dormant_target = pool
+            .peer_execution_target(&rejoined.owner, &run_next, "peer:original:dormant")
+            .await
+            .unwrap();
+        let incarnation = dormant_target.incarnation();
+        pool.execute(false, move |ctx, _| {
+            ctx.with(|pool| pool.entry_mut("peer:original:dormant").unwrap().seq = incarnation + 1);
+            Outcome::Now(Ok(Value::Null))
+        })
+        .await
+        .unwrap();
+        assert!(pool.release_peer_execution(&dormant_target).await.is_err());
+        pool.execute(false, move |ctx, _| {
+            ctx.with(|pool| pool.entry_mut("peer:original:dormant").unwrap().seq = incarnation);
+            Outcome::Now(Ok(Value::Null))
+        })
+        .await
+        .unwrap();
+        pool.release_peer_execution(&dormant_target).await.unwrap();
+        assert!(pool.execution_selected(&dormant_target).await.is_err());
+        assert_eq!(run_source.facts()["processAlive"], true);
+        pool.call(
+            "noteSessionFile",
+            json!({
+                "tab": "peer:original:rtab", "file": "/peer-original.jsonl"
+            }),
+            false,
+        )
+        .await
+        .unwrap();
+        let question =
+            json!({"id":"child-question","method":"input","title":"Actual child question"});
+        pool.feed_captured(&execution, "peer:original:rtab", Arc::clone(&run_source), CapturedEvent { generation: current.generation, name: "extensionUi".into(), payload: json!({"request":question,"kinds":{"blocking":true}}), from_link: false })
+        .await
+        .unwrap();
+        let current_omp = pool.execution_omp(&target).await.unwrap();
+        let observe = |omp: String| {
+            pool.peer_observe_card(
+                &rejoined.owner,
+                &run_next,
+                &target,
+                omp,
+                "child-question".into(),
+                Arc::clone(&prefs),
+                Arc::clone(&authority),
+            )
+        };
+        assert_eq!(
+            observe(original_omp).await.unwrap_err().code,
+            "observed_card_changed"
+        );
+        let card = observe(current_omp.clone()).await.unwrap();
+        assert_eq!(card.session_path, "/peer-original.jsonl");
+        assert_eq!(card.omp_epoch, current_omp);
+        assert_eq!(card.request, question);
+        prefs.set("agentControl", json!(false)).unwrap();
+        assert_eq!(
+            observe(current_omp.clone()).await.unwrap_err().code,
+            "agent_control_forbidden"
+        );
+        prefs.set("agentControl", json!(true)).unwrap();
+        prefs
+            .set("sidebar.agentHidden", json!(["/peer-original.jsonl"]))
+            .unwrap();
+        assert_eq!(
+            observe(current_omp.clone()).await.unwrap_err().code,
+            "agent_control_forbidden"
+        );
+        prefs.set("sidebar.agentHidden", json!([])).unwrap();
+        pool.feed_captured(&execution, "peer:original:rtab", Arc::clone(&run_source), CapturedEvent { generation: current.generation, name: "extensionUi".into(), payload: json!({"request":{"id":"child-question","method":"input","title":"[OMPdesk] Internal approval"},"kinds":{"blocking":true}}), from_link: false }).await.unwrap();
+        assert_eq!(observe(current_omp.clone()).await.unwrap_err().code, "observed_card_changed");
+        pool.feed_captured(&execution, "peer:original:rtab", Arc::clone(&run_source), CapturedEvent { generation: current.generation, name: "extensionUi".into(), payload: json!({"request":question,"kinds":{"blocking":true}}), from_link: false }).await.unwrap();
+        let deleting = authority.begin_delete(std::path::Path::new("/peer-original.jsonl"), None);
+        assert_eq!(
+            observe(current_omp.clone()).await.unwrap_err().code,
+            "observed_card_changed"
+        );
+        drop(deleting);
+        pool.call(
+            "feed",
+            json!({"tab":"peer:original:rtab","event":"extensionUi",
+            "payload":{"request":{"id":"cancel-question","targetId":"child-question","method":"cancel"}}}),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            observe(current_omp).await.unwrap_err().code,
+            "observed_card_changed"
+        );
+        let frozen = pool
+            .session_target(&execution, "/peer-original.jsonl", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(pool.session_runtime(&execution, &frozen).await.is_ok());
+        assert!(callers.retire_execution(&execution));
+        assert!(
+            pool.peer_execution_command(
+                &rejoined.owner,
+                &run_next,
+                &target,
+                ExecutionCommand::Stock(json!({"type":"get_state"}))
+            )
+            .await
+            .is_err()
+        );
+        assert!(pool.execution_selected(&target).await.is_err());
+        assert_eq!(
+            pool.session_runtime(&execution, &frozen)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "caller_closed"
+        );
+        assert_eq!(
+            pool.stop_session(&execution, &frozen)
+                .await
+                .unwrap_err()
+                .code,
+            "caller_closed"
+        );
+        assert_eq!(
+            pool.command_for_session(&execution, &frozen, json!({"type":"get_state"}))
+                .await
+                .unwrap_err()
+                .code,
+            "caller_closed"
+        );
+        assert_eq!(
+            pool.note_name_for_session(&execution, &frozen, "not authorized")
+                .await
+                .unwrap_err()
+                .code,
+            "caller_closed"
+        );
+        assert_eq!(
+            pool.close_session_tab(&execution, &frozen)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "caller_closed"
+        );
+        assert!(run_source.facts()["processAlive"].as_bool().unwrap());
+    })
+    .await;
+    source.dispose(std::time::Duration::ZERO);
+    held.await.unwrap();
+    dormant.dispose(std::time::Duration::ZERO);
+    dormant_held.await.unwrap();
+    for connection in [&first, &first_remote, &next, &next_remote] {
+        let mut changes = connection.changes();
+        connection.disconnect_for_test();
+        changes.wait_for(|online| !*online).await.unwrap();
+    }
+    scenario.unwrap();
+}
+
+#[tokio::test]
+async fn retirement_during_the_stop_observer_refuses_the_queued_abort() {
+    let callers = Arc::new(Callers::new(65));
+    let page = callers
+        .admit_page(ompdesk_app_contract::NativeCaller::Desktop {
+            win_id: 17,
+            wc_id: 17,
+        })
+        .unwrap();
+    let reservation = callers
+        .reserve_execution(&page.owner, "stopping", Some(17))
+        .unwrap();
+    let owner = callers.execution_owner("stopping").unwrap();
+    callers.finish_execution_reservation(reservation, true);
+    let host = test_host(Arc::clone(&callers));
+    let app = Arc::new(Application::new(Arc::clone(&host)));
+    let pool = Service::new(
+        Config {
+            id: 0x706f_6f6c_7374_6f70,
+            view_epoch: "stop-test".into(),
+            layout_version: 1,
+            max_former_tab_ids: 8,
+            stop_session_wait_ms: 60_000,
+            window_tabs_hook: false,
+            now_ms: || 1234,
+            callers: Arc::clone(&callers),
+            removal_claims: RemovalClaims::new(),
+        },
+        Arc::clone(&app),
+    )
+    .await
+    .unwrap();
+    pool.call(
+        "seed",
+        json!({"tabs":[{
+            "tab":"stopping", "win":17, "status":"ready", "sessionFile":"/stopping.jsonl"
+        }]}),
+        false,
+    )
+    .await
+    .unwrap();
+    let (events, _transport, _frames) = crate::server::Events::capture();
+    let (source, held) = SidecarService::new(
+        lane_config("native-stop-retirement".into()),
+        events,
+        Arc::new(SidecarSink),
+        Arc::new(DirectSpawn),
+    )
+    .unwrap();
+    set_test_source(&app, "stopping", Arc::clone(&source));
+    let captured = Arc::clone(&source);
+    let scenario = tokio::spawn(async move {
+        pool.feed("stopping", "events", json!([{"type":"agent_start"}]), false)
+            .await
+            .unwrap();
+        let target = pool
+            .session_target(&owner, "/stopping.jsonl", None)
+            .await
+            .unwrap()
+            .unwrap();
+        *locked(&host.retire_on_running) = Some((callers, owner.clone()));
+        let (seen, command_seen) = oneshot::channel();
+        *locked(&host.command_seen) = Some(seen);
+        let error = tokio::select! {
+            result = pool.stop_session(&owner, &target) => result.unwrap_err(),
+            _ = command_seen => panic!("retired execution admitted an abort command"),
+        };
+        assert_eq!(error.code, "caller_closed");
+        let waits = pool
+            .execute(false, |ctx, _| {
+                Outcome::Now(Ok(json!(ctx.with(|pool| pool.stop_waits.len()))))
+            })
+            .await
+            .unwrap();
+        assert_eq!(waits, 0);
+        assert_eq!(captured.facts()["processAlive"], false);
+    })
+    .await;
+    let exited = source.when_exited();
+    source.dispose(std::time::Duration::ZERO);
+    let exit = exited.await;
+    let joined = held.await;
+    exit.unwrap();
+    joined.unwrap();
+    scenario.unwrap();
+}

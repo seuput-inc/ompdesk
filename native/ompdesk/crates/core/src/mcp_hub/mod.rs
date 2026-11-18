@@ -672,4 +672,4 @@ fn fixture_environment(home: &std::path::Path) -> BTreeMap<String, String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

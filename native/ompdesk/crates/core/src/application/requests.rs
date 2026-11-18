@@ -177,8 +177,11 @@ impl Requests {
                         Err(panicked())
                     }
                 };
+                if result.is_err() {
+                    scope.cancel();
+                }
+                let cancel = scope.cancellation();
                 drop(scope);
-                gone.wait().await;
                 if matches!(reply_when, ReplyWhen::HandlerAnswered) {
                     if reply.send(result).is_err() {
                         cancel.cancel();
@@ -186,6 +189,15 @@ impl Requests {
                     gone.wait().await;
                     callers.finish(&owner, id);
                     return;
+                }
+                let gone = gone.wait();
+                tokio::pin!(gone);
+                tokio::select! {
+                    () = &mut gone => {}
+                    _ = reply.closed() => {
+                        cancel.cancel();
+                        gone.await;
+                    }
                 }
                 callers.finish(&owner, id);
                 let _ = reply.send(result);

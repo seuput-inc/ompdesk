@@ -85,10 +85,7 @@ impl Host for SetupHost {
     }
 
     fn before_omp_update(&self) -> Boxed<'_, Result<(), String>> {
-        Box::pin(async move {
-            self.stock.stop().await;
-            Ok(())
-        })
+        Box::pin(async move { self.stock.stop().await.map_err(|error| error.message) })
     }
 
     fn git_aslr_log(&self, entry: setup::git_aslr::Log) {

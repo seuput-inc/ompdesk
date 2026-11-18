@@ -4,9 +4,9 @@ use super::*;
 use std::sync::atomic::AtomicUsize;
 use tokio::sync::mpsc;
 
-struct Recorder {
-    events: mpsc::UnboundedSender<LaneEvent>,
-    flushes: AtomicUsize,
+pub(crate) struct Recorder {
+    pub(crate) events: mpsc::UnboundedSender<LaneEvent>,
+    pub(crate) flushes: AtomicUsize,
 }
 
 impl Sink for Recorder {
@@ -53,53 +53,10 @@ async fn native_commands_flush_before_reply_and_close_waits_for_the_real_child()
     let (service, held) =
         Service::new(config, events, sink.clone(), Arc::new(DirectSpawn)).unwrap();
     service.start();
-    loop {
-        let event = recorded.recv().await.expect("the lane's events stay open");
-        let ask = Ask {
-            ask: event.data["ask"].as_u64().unwrap_or(0),
-            cmd: event.data["cmd"].as_u64().unwrap(),
-        };
-        match event.name.as_str() {
-            "sidecar.resolve" => service.answer(
-                ask,
-                Answer::Resolved {
-                    outcome: "ok",
-                    message: None,
-                },
-            ),
-            "sidecar.launch" => {
-                let mut env: std::collections::BTreeMap<String, String> =
-                    std::env::vars().collect();
-                env.insert("OMPDESK_FAKE_OMP".into(), "normal".into());
-                service.answer(
-                    ask,
-                    Answer::Launched {
-                        command: LaunchCommand {
-                            bin: std::env::current_exe().unwrap(),
-                            args: [
-                                "--nocapture",
-                                "--exact",
-                                "sidecar::tests::fake_omp_stand_in",
-                                "--",
-                            ]
-                            .map(String::from)
-                            .to_vec(),
-                            env,
-                            cwd: std::env::current_dir()
-                                .unwrap()
-                                .to_string_lossy()
-                                .into_owned(),
-                        },
-                        host_tools: json!([]),
-                    },
-                );
-            }
-            "sidecar.status" if event.data["payload"]["status"] == "ready" => break,
-            _ => {}
-        }
-    }
+    ready(&service, &mut recorded).await;
     assert_eq!(service.facts()["status"], "ready");
     assert_eq!(service.facts()["processAlive"], true);
+    assert!(crate::pool::application::Sidecar::generation(service.as_ref()) > 0);
     let before = sink.flushes.load(Ordering::SeqCst);
     let answer = service
         .stock(json!({"type": "get_state"}), Some(Duration::from_secs(2)))
@@ -111,6 +68,7 @@ async fn native_commands_flush_before_reply_and_close_waits_for_the_real_child()
         "the ordered stream flush happens before the stock answer becomes visible"
     );
     service.barrier().await.unwrap();
+    let first_generation = crate::pool::application::Sidecar::generation(service.as_ref());
     let original_cwd = service.facts()["cwd"].as_str().unwrap().to_owned();
     let adopted_cwd = std::env::temp_dir().to_string_lossy().into_owned();
     let adoption = service.adopt_cwd_for_generation(first_generation, adopted_cwd.clone());
@@ -119,14 +77,55 @@ async fn native_commands_flush_before_reply_and_close_waits_for_the_real_child()
     assert_eq!(service.facts()["cwd"], adopted_cwd);
     assert!(!service.adopt_cwd_for_generation(first_generation, adopted_cwd).await.unwrap());
     assert!(service.adopt_cwd_for_generation(first_generation, original_cwd.clone()).await.unwrap());
+    let first_pid = service.facts()["pid"].as_u64().unwrap();
+    let restarted = service.restart_for_generation(first_generation);
+    ready(&service, &mut recorded).await;
+    restarted.await.unwrap();
+    let replacement_generation = crate::pool::application::Sidecar::generation(service.as_ref());
+    let replacement_pid = service.facts()["pid"].as_u64().unwrap();
+    assert_ne!(replacement_generation, first_generation);
+    assert_ne!(replacement_pid, first_pid);
+    assert!(
+        service
+            .restart_for_generation(first_generation)
+            .await
+            .is_err()
+    );
     assert!(service.adopt_cwd_for_generation(first_generation, "stale-original-cwd".into()).await.is_err());
     assert_eq!(service.facts()["cwd"], original_cwd);
+    let current = service
+        .stock_for_generation(
+            replacement_generation,
+            json!({"type": "get_state"}),
+            Some(Duration::from_secs(2)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(current["success"], true);
+    assert_eq!(service.facts()["pid"].as_u64(), Some(replacement_pid));
+    let generation = crate::pool::application::Sidecar::generation(service.as_ref());
+    service.restart(None, None);
+    let stale_stock = service.stock_for_generation(
+        generation,
+        json!({"type": "get_state"}),
+        Some(Duration::from_secs(2)),
+    );
+    let stale_bridge = service.bridge_for_generation(generation, "stale".into(), None, None);
+    let stale_send = service.send_for_generation(generation, json!({"type": "stale"}));
     let stale_cwd = service.adopt_cwd_for_generation(generation, "queued-stale-cwd".into());
+    assert!(stale_stock.await.is_err());
+    assert!(stale_bridge.await.is_err());
+    assert!(stale_send.await.is_err());
     assert!(stale_cwd.await.is_err());
     let exited = service.when_exited();
     service.dispose(Duration::ZERO);
-    exited.await;
+    exited.await.unwrap();
     held.await.unwrap();
+    assert!(
+        service.when_exited().await.is_err(),
+        "a closed lane cannot produce a child-exit receipt"
+    );
+    assert!(service.restart_for_generation(generation).await.is_err());
     assert!(!service.current(Ask {
         ask: 99,
         cmd: u64::MAX
@@ -177,4 +176,71 @@ async fn abandoning_a_native_handle_releases_its_lane_without_an_explicit_dispos
             break;
         }
     }
+}
+
+pub(crate) async fn ready_with(
+    recorded: &mut mpsc::UnboundedReceiver<LaneEvent>,
+    mut respond: impl FnMut(LaneEvent) -> Option<EffectFuture<'static, ()>>,
+) -> LaneEvent {
+    loop {
+        let event = recorded.recv().await.expect("the lane's events stay open");
+        if event.name == "sidecar.status" {
+            match event.data["payload"]["status"].as_str() {
+                Some("ready") => return event,
+                Some("error") => panic!("native child failed to start: {}", event.data),
+                _ => {}
+            }
+        }
+        if let Some(pending) = respond(event) {
+            pending.await;
+        }
+    }
+}
+
+pub(crate) async fn ready(service: &Service, recorded: &mut mpsc::UnboundedReceiver<LaneEvent>) {
+    ready_with(recorded, |event| {
+        let ask = Ask {
+            ask: event.data["ask"].as_u64().unwrap_or(0),
+            cmd: event.data["cmd"].as_u64().unwrap(),
+        };
+        match event.name.as_str() {
+            "sidecar.resolve" => service.answer(
+                ask,
+                Answer::Resolved {
+                    outcome: "ok",
+                    message: None,
+                },
+            ),
+            "sidecar.launch" => {
+                let mut env: std::collections::BTreeMap<String, String> =
+                    std::env::vars().collect();
+                env.insert("OMPDESK_FAKE_OMP".into(), "normal".into());
+                service.answer(
+                    ask,
+                    Answer::Launched {
+                        command: LaunchCommand {
+                            bin: std::env::current_exe().unwrap(),
+                            args: [
+                                "--nocapture",
+                                "--exact",
+                                "sidecar::tests::fake_omp_stand_in",
+                                "--",
+                            ]
+                            .map(String::from)
+                            .to_vec(),
+                            env,
+                            cwd: std::env::current_dir()
+                                .unwrap()
+                                .to_string_lossy()
+                                .into_owned(),
+                        },
+                        host_tools: json!([]),
+                    },
+                );
+            }
+            _ => {}
+        }
+        None
+    })
+    .await;
 }

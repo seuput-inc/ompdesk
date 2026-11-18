@@ -116,7 +116,7 @@ async fn stopping_before_an_update_replaces_the_stock_worker() {
     let before = request().await.unwrap();
     host.before_omp_update().await.unwrap();
     assert_ne!(request().await.unwrap(), before);
-    host.stock.close().await;
+    host.stock.close().await.unwrap();
 }
 
 #[tokio::test]

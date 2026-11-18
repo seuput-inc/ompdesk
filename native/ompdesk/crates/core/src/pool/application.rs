@@ -242,6 +242,9 @@ pub fn merge_plans(a: &Value, b: &Value) -> Value {
 pub trait Sidecar: Send + Sync {
     type Error: Send + 'static;
     fn facts(&self) -> Value;
+    fn generation(&self) -> u64;
+    fn bridge_connected(&self) -> bool;
+    fn before_response(&self);
     fn start(&self);
     fn restart(&self, session: Option<&str>);
     fn sleep(&self) -> Result<(), Self::Error>;
@@ -249,7 +252,25 @@ pub trait Sidecar: Send + Sync {
     fn send_now(&self, frame: Value) -> Result<(), Self::Error>;
     fn send(&self, frame: Value) -> EffectFuture<'_, Result<(), Self::Error>>;
     fn stock(&self, command: Value) -> EffectFuture<'static, Result<Value, Self::Error>>;
+    /// Generation-bound operations enqueue before returning; the future is the Lane's receipt.
+    fn send_for_generation(
+        &self,
+        generation: u64,
+        frame: Value,
+    ) -> EffectFuture<'static, Result<(), Self::Error>>;
+    fn stock_for_generation(
+        &self,
+        generation: u64,
+        command: Value,
         deadline: crate::agentctl::service::host::Deadline,
+    ) -> EffectFuture<'static, Result<Value, Self::Error>>;
+    fn bridge_for_generation(
+        &self,
+        generation: u64,
+        method: String,
+        params: Option<Value>,
+        timeout_ms: Option<u64>,
+    ) -> EffectFuture<'static, Result<Value, Self::Error>>;
     fn bridge(
         &self,
         method: String,
@@ -257,7 +278,7 @@ pub trait Sidecar: Send + Sync {
         timeout_ms: Option<u64>,
     ) -> EffectFuture<'static, Result<Value, Self::Error>>;
     /// Must capture the currently exiting generation before dispose forgets it, not when first polled.
-    fn exit_waiter(&self) -> EffectFuture<'static, ()>;
+    fn exit_waiter(&self) -> EffectFuture<'static, Result<(), Self::Error>>;
     fn reply_barrier(&self) -> EffectFuture<'static, Result<(), Self::Error>>;
     fn remove_listeners(&self);
     fn dispose(&self);
@@ -279,12 +300,13 @@ pub struct Spawn {
     pub defer_start: bool,
 }
 
-pub struct Released {
+pub struct Released<S: Sidecar + ?Sized> {
     pub tab: String,
+    pub source: Arc<S>,
     pub owner_key: Option<String>,
     pub cwd: String,
     pub local: bool,
-    pub exited: EffectFuture<'static, ()>,
+    pub exited: EffectFuture<'static, Result<(), S::Error>>,
 }
 
 /// Actual native collaborators, injected by Base. No second worker, raw page caller or Node request adapter.
@@ -301,7 +323,13 @@ pub trait Host: Send + Sync {
     fn prepare_gate(&self, spawn: &Spawn, sidecar: &Arc<Self::Sidecar>);
     fn wire_light(&self, tab: &str, sidecar: &Arc<Self::Sidecar>);
     fn track_summary(&self, sidecar: &Arc<Self::Sidecar>);
-    fn released(&self, release: Released);
+    fn released(&self, release: Released<Self::Sidecar>);
+}
+
+#[derive(Hash, PartialEq, Eq)]
+enum HandleKey {
+    Tab(String),
+    Detached(u64),
 }
 
 struct Handle<S: Sidecar + ?Sized> {
@@ -311,7 +339,7 @@ struct Handle<S: Sidecar + ?Sized> {
 
 pub struct Application<H: Host> {
     host: Arc<H>,
-    handles: std::sync::Mutex<HashMap<String, Handle<H::Sidecar>>>,
+    handles: Arc<std::sync::Mutex<HashMap<HandleKey, Handle<H::Sidecar>>>>,
 }
 
 impl<H: Host> Application<H> {
@@ -322,7 +350,7 @@ impl<H: Host> Application<H> {
         }
     }
 
-    fn handles(&self) -> std::sync::MutexGuard<'_, HashMap<String, Handle<H::Sidecar>>> {
+    fn handles(&self) -> std::sync::MutexGuard<'_, HashMap<HandleKey, Handle<H::Sidecar>>> {
         self.handles
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -330,7 +358,23 @@ impl<H: Host> Application<H> {
 
     pub fn sidecar(&self, tab: &str) -> Option<Arc<H::Sidecar>> {
         self.handles()
-            .get(tab)
+            .get(&HandleKey::Tab(tab.to_owned()))
+            .map(|handle| Arc::clone(&handle.sidecar))
+    }
+
+    fn incarnation_sidecar(
+        &self,
+        tab: &str,
+        incarnation: u64,
+        live: bool,
+    ) -> Option<Arc<H::Sidecar>> {
+        let handles = self.handles();
+        handles
+            .get(&HandleKey::Detached(incarnation))
+            .or_else(|| {
+                live.then(|| handles.get(&HandleKey::Tab(tab.to_owned())))
+                    .flatten()
+            })
             .map(|handle| Arc::clone(&handle.sidecar))
     }
 
@@ -347,7 +391,7 @@ impl<H: Host> Application<H> {
         let status = sidecar.facts()["status"].clone();
         self.host.prepare_gate(&spawn, &sidecar);
         self.handles().insert(
-            spawn.tab.clone(),
+            HandleKey::Tab(spawn.tab.clone()),
             Handle {
                 sidecar: Arc::clone(&sidecar),
                 device: spawn.device.clone(),
@@ -364,7 +408,7 @@ impl<H: Host> Application<H> {
         let handles = self.handles();
         let mut facts = serde_json::Map::new();
         for tab in tabs {
-            if let Some(handle) = handles.get(tab) {
+            if let Some(handle) = handles.get(&HandleKey::Tab(tab.clone())) {
                 facts.insert(tab.clone(), handle.sidecar.facts());
             }
         }
@@ -437,10 +481,24 @@ impl<H: Host> Application<H> {
         }
     }
 
-    pub fn dispose(&self, tab: &str, owner_key: Option<String>, hosted: bool) {
-        let handle = self.handles().remove(tab);
+    fn detach(&self, tab: &str, incarnation: u64) {
+        let mut handles = self.handles();
+        if let Some(handle) = handles.remove(&HandleKey::Tab(tab.to_owned())) {
+            handles.insert(HandleKey::Detached(incarnation), handle);
+        }
+    }
+
+    pub fn dispose(
+        &self,
+        tab: &str,
+        incarnation: Option<u64>,
+        owner_key: Option<String>,
+        hosted: bool,
+    ) -> bool {
+        let key = incarnation.map_or_else(|| HandleKey::Tab(tab.to_owned()), HandleKey::Detached);
+        let handle = self.handles().remove(&key);
         let Some(handle) = handle else {
-            return;
+            return false;
         };
         handle.sidecar.remove_listeners();
         let exited = handle.sidecar.exit_waiter();
@@ -451,11 +509,13 @@ impl<H: Host> Application<H> {
         handle.sidecar.dispose();
         self.host.released(Released {
             tab: tab.into(),
+            source: handle.sidecar,
             owner_key,
             cwd,
             local: handle.device.is_none() && !hosted,
             exited,
         });
+        true
     }
 
     pub async fn sync_settings(&self, tab: &str) {

@@ -20,15 +20,16 @@ pub struct Reservation {
 }
 
 #[derive(Clone, Copy)]
-enum Life {
+pub(super) enum Life {
     Provisional(NonZeroUsize),
     Bound { pending: usize },
     Retiring,
 }
 
 pub(super) struct Record {
-    facts: Execution,
-    life: Life,
+    pub(super) facts: Execution,
+    pub(super) life: Life,
+    pub(super) window: Option<crate::worktree_lifecycle::Window>,
 }
 
 impl Callers {
@@ -101,6 +102,10 @@ impl Callers {
                     window,
                     creator,
                 },
+                window: window.map(|id| crate::worktree_lifecycle::Window {
+                    id,
+                    incarnation: caller.id(),
+                }),
                 life: Life::Provisional(NonZeroUsize::new(1).unwrap()),
             },
         );
@@ -203,6 +208,31 @@ impl Callers {
         remove_record(&mut state, owner);
         true
     }
+
+    /// Admit a captured tab effect under the same lock as both presentation and execution retirement.
+    pub fn admit_tab_effect<T>(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.stopped {
+            return Err(closed());
+        }
+        if let Some(record) = state.executions.get(owner) {
+            if record.facts.tab != tab
+                || !matches!(record.life, Life::Bound { .. })
+                || state.active_tabs.get(tab) != Some(owner)
+            {
+                return Err(closed());
+            }
+        } else if !state.owners.contains_key(owner) {
+            return Err(closed());
+        }
+        effect()
+    }
+
     /// Host-generated observations bind two existing executions, never an identity from report fields.
     /// The effect is synchronous and must not reenter this registry.
     pub(crate) fn admit_execution_pair<T>(
@@ -227,6 +257,37 @@ impl Callers {
         effect()
     }
 
+    /// `effect` must only capture/enqueue native work, never await or reenter this registry.
+    /// A window is required for creation; cleanup retains the execution identity after a page closes.
+    pub fn admit_execution<T>(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        window: Option<crate::worktree_lifecycle::Window>,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let record = state
+            .executions
+            .get(owner)
+            .filter(|record| {
+                record.facts.tab == tab
+                    && matches!(record.life, Life::Bound { .. })
+                    && state.active_tabs.get(tab) == Some(owner)
+            })
+            .ok_or_else(closed)?;
+        if let Some(window) = window
+            && (state.stopped
+                || record.window != Some(window)
+                || super::windows::page(&state, window).is_none())
+        {
+            return Err(Fault::new(
+                "window_closed",
+                "The original native window is no longer admitted",
+            ));
+        }
+        effect()
+    }
 }
 
 fn remove_record(state: &mut State, owner: &Owner) {

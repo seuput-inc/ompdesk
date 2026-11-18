@@ -11,6 +11,14 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use super::link::{Command, Link};
 use crate::server::Fault;
 
+/// Transport metadata only. Resolving this pair never grants caller or tab authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionBinding {
+    pub core_generation: u64,
+    pub link_id: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct RemoteEvent {
     pub event: String,
@@ -56,6 +64,7 @@ struct Pending {
 type Listener = Box<dyn Fn(&RemoteEvent) -> bool + Send + Sync>;
 
 pub(super) struct Inner {
+    id: Option<u64>,
     link: Option<Link>,
     pending: Mutex<Pending>,
     events: broadcast::Sender<RemoteEvent>,
@@ -104,7 +113,7 @@ impl RemoteRequests {
             .get(&id)
             .cloned()
             .ok_or_else(|| offline().fault)?;
-        let requests = Self::with_link(Some(link));
+        let requests = Self::with_link(Some((id, link)));
         state.applications.insert(id, Arc::downgrade(&requests.0));
         Ok(requests)
     }
@@ -112,10 +121,15 @@ impl RemoteRequests {
     pub(crate) fn disconnected() -> Self {
         Self::with_link(None)
     }
-    fn with_link(link: Option<Link>) -> Self {
+    fn with_link(link: Option<(u64, Link)>) -> Self {
         let online = link.is_some();
+        let (id, link) = match link {
+            Some((id, link)) => (Some(id), Some(link)),
+            None => (None, None),
+        };
         let (incoming, requests) = mpsc::unbounded_channel();
         Self(Arc::new(Inner {
+            id,
             link,
             pending: Mutex::new(Pending {
                 next: 0,
@@ -138,8 +152,25 @@ impl RemoteRequests {
         WeakRequests(Arc::downgrade(&self.0))
     }
 
+    /// Metadata of this already authenticated transport, never authority supplied by a page.
+    pub fn link_id(&self) -> Option<u64> {
+        self.0.id
+    }
+
     pub fn is_online(&self) -> bool {
         lock(&self.0.pending).online
+    }
+
+    /// Native synchronous admission only. The effect must not reenter this connection or await.
+    pub(crate) fn admit_online<T>(
+        &self,
+        effect: impl FnOnce() -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
+        let pending = lock(&self.0.pending);
+        if !pending.online {
+            return Err(offline().fault);
+        }
+        effect()
     }
 
     pub fn changes(&self) -> watch::Receiver<bool> {
@@ -384,7 +415,7 @@ pub(super) fn closed(id: u64) {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::remote::link::{Conn, LinkOptions, Liveness};
     use crate::server::Events;

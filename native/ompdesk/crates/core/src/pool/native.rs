@@ -11,13 +11,21 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use super::{Application, EffectFuture, Sidecar, effects};
+use crate::application::callers::Callers;
 use crate::hub::{self, LocalFuture, NativeSink, Out, Outcome};
 use crate::pool::{
     self as engine,
     state::{Ctx, P},
 };
 use crate::server::Fault;
+use crate::worktree_lifecycle::{Folder, RemovalClaims};
 
+#[path = "worktree_admission.rs"]
+mod worktree_admission;
+
+#[path = "peer_admission.rs"]
+mod peer_admission;
+pub use peer_admission::ExecutionTarget;
 
 #[path = "peer_views.rs"]
 mod peer_views;
@@ -40,6 +48,8 @@ pub struct Config {
     pub stop_session_wait_ms: u64,
     pub window_tabs_hook: bool,
     pub now_ms: fn() -> i64,
+    pub callers: Arc<Callers>,
+    pub removal_claims: Arc<RemovalClaims>,
 }
 
 pub struct Acquire {
@@ -59,10 +69,62 @@ pub struct Acquire {
 
 pub struct Selected<S: Sidecar + ?Sized> {
     pub tab: String,
+    pub cwd: String,
     pub device: Option<String>,
     pub window: Option<i64>,
     pub session_file: Option<String>,
+    pub generation: u64,
     pub sidecar: Arc<S>,
+}
+#[derive(Debug)]
+pub enum SessionRelease {
+    Busy,
+    /// The entry was released and its captured receipt joined, even when later observers failed.
+    Released(Result<(), Fault>),
+}
+
+#[derive(Clone, Copy)]
+pub struct SessionRuntime {
+    pub activity: crate::session_ops::Activity,
+    pub state: crate::session_ops::RuntimeState,
+}
+
+pub enum ExecutionCommand {
+    Stock(Value),
+    Bridge {
+        method: String,
+        params: Option<Value>,
+        timeout_ms: Option<u64>,
+    },
+}
+
+pub enum ExecutionRun {
+    Captured(u64),
+    Current,
+}
+
+pub struct SessionTarget<S: Sidecar + ?Sized> {
+    pub tab: String,
+    pub window: Option<i64>,
+    pub device: Option<String>,
+    pub session_file: String,
+    pub incarnation: u64,
+    pub generation: u64,
+    pub sidecar: Arc<S>,
+}
+
+impl<S: Sidecar + ?Sized> Clone for SessionTarget<S> {
+    fn clone(&self) -> Self {
+        Self {
+            tab: self.tab.clone(),
+            window: self.window,
+            device: self.device.clone(),
+            session_file: self.session_file.clone(),
+            incarnation: self.incarnation,
+            generation: self.generation,
+            sidecar: Arc::clone(&self.sidecar),
+        }
+    }
 }
 
 pub trait Host: effects::Host<Sidecar: Sidecar<Error = Fault>> + 'static {
@@ -78,7 +140,11 @@ pub trait Host: effects::Host<Sidecar: Sidecar<Error = Fault>> + 'static {
     fn finish_reservation(&self, reservation: Self::Reservation, acquired: bool);
     fn authorize_tab(&self, owner: &Owner, tab: &str) -> Result<(), Fault>;
     /// The actual release receipt registered inside Application::dispose, not a wait captured before release.
-    fn when_released(&self, tab: String) -> EffectFuture<'static, ()>;
+    fn when_released(
+        &self,
+        tab: String,
+        source: Arc<Self::Sidecar>,
+    ) -> EffectFuture<'static, Result<(), Fault>>;
     /// Called on the hub thread with the snapshot captured at this activity, before the next job can change it.
     fn announce(&self, activity: Value, tabs: Value, outcome_id: Option<u64>);
 }
@@ -121,6 +187,23 @@ struct Sink<H: Host> {
     id: u64,
     app: Arc<Application<H>>,
     pending: Arc<Mutex<Pending>>,
+    removal_claims: Arc<RemovalClaims>,
+}
+
+impl<H: Host> Sink<H> {
+    fn incarnation_sidecar(&self, payload: &Value) -> Option<Arc<H::Sidecar>> {
+        let tab = payload["tab"].as_str()?;
+        let incarnation = payload["incarnation"].as_u64()?;
+        let live = engine::POOLS.with(|pools| {
+            pools.borrow().get(&self.id).is_some_and(|ctx| {
+                ctx.with(|pool| {
+                    pool.entry(tab)
+                        .is_some_and(|entry| entry.seq == incarnation)
+                })
+            })
+        });
+        self.app.incarnation_sidecar(tab, incarnation, live)
+    }
 }
 
 impl<H: Host> NativeSink for Sink<H> {
@@ -140,6 +223,23 @@ impl<H: Host> NativeSink for Sink<H> {
             }
             return;
         }
+        if item["k"] == "command" && item["incarnation"].as_u64().is_some() {
+            if let Some(sidecar) = self.incarnation_sidecar(&item) {
+                let work = match item["generation"].as_u64() {
+                    Some(generation) => self.app.host.command_for_generation(
+                        sidecar,
+                        generation,
+                        item["command"].clone(),
+                    ),
+                    None => self.app.host.command(sidecar, item["command"].clone()),
+                };
+                hub::spawn(async move {
+                    let _ = work.await;
+                });
+            }
+            return;
+        }
+
         // Application::effect performs synchronous delivery before yielding its optional continuation.
         if let Some(work) = self.app.effect(&item) {
             hub::spawn(work);
@@ -152,6 +252,17 @@ impl<H: Host> NativeSink for Sink<H> {
         payload: Value,
         _sync: bool,
     ) -> LocalFuture<Result<Value, Fault>> {
+        if question == "rpc" && payload["incarnation"].as_u64().is_some() {
+            let work = self
+                .incarnation_sidecar(&payload)
+                .map(|sidecar| self.app.host.command(sidecar, payload["command"].clone()));
+            return Box::pin(async move {
+                match work {
+                    Some(work) => work.await,
+                    None => Ok(Value::Null),
+                }
+            });
+        }
         if question == "announce" {
             let ctx = engine::POOLS.with(|pools| pools.borrow().get(&self.id).cloned());
             let result = ctx.ok_or_else(closed).map(|ctx| {
@@ -171,7 +282,22 @@ impl<H: Host> NativeSink for Sink<H> {
             return Box::pin(std::future::ready(result));
         }
         let app = Arc::clone(&self.app);
-        Box::pin(async move { app.ask(&question, &payload).await })
+        let claims = Arc::clone(&self.removal_claims);
+        Box::pin(async move {
+            if matches!(question.as_str(), "blocked" | "spawn") && payload["device"].is_null() {
+                let folder = Folder::resolve_now(payload["cwd"].as_str().ok_or_else(|| {
+                    Fault::new("invalid_cwd", "The native acquire has no working directory")
+                })?)?;
+                if claims.holds(&folder) {
+                    return if question == "blocked" {
+                        Ok(Value::Bool(true))
+                    } else {
+                        Err(Fault::new("in_use", "The worktree is being removed"))
+                    };
+                }
+            }
+            app.ask(&question, &payload).await
+        })
     }
 }
 
@@ -188,7 +314,119 @@ pub struct Service<H: Host> {
     next: AtomicU64,
     now_ms: fn() -> i64,
     window_tabs_hook: bool,
+    callers: Arc<Callers>,
+    removal_claims: Arc<RemovalClaims>,
     run_namespace: Arc<str>,
+}
+
+fn admit_session<H: Host, T>(
+    callers: &Callers,
+    ctx: &Ctx,
+    app: &Application<H>,
+    owner: &Owner,
+    target: &SessionTarget<H::Sidecar>,
+    effect: impl FnOnce() -> Result<T, Fault>,
+) -> Result<T, Fault> {
+    app.host.authorize_tab(owner, &target.tab)?;
+    callers.admit_tab_effect(owner, &target.tab, || {
+        check_target(ctx, app, target)?;
+        effect()
+    })
+}
+
+fn check_target<H: Host>(
+    ctx: &Ctx,
+    app: &Application<H>,
+    target: &SessionTarget<H::Sidecar>,
+) -> Result<(), Fault> {
+    let current = ctx.with(|pool| {
+        pool.owner_entry(target.device.as_deref(), &target.session_file)
+            .is_some_and(|entry| entry.closing.is_none() && entry.seq == target.incarnation && entry.tab_id == target.tab)
+    });
+    if !current
+        || !app.sidecar(&target.tab).is_some_and(|sidecar| {
+            Arc::ptr_eq(&sidecar, &target.sidecar) && sidecar.generation() == target.generation
+        })
+    {
+        return Err(Fault::new("tab_stale", "The session's sidecar has changed"));
+    }
+    Ok(())
+}
+
+fn source_identity<H: Host>(
+    ctx: &Ctx,
+    app: &Application<H>,
+    tab: &str,
+    source: &Arc<H::Sidecar>,
+    window: Option<crate::worktree_lifecycle::Window>,
+) -> Result<Option<i64>, Fault> {
+    let win = ctx
+        .with(|pool| pool.entry(tab).map(|entry| entry.win_id))
+        .ok_or_else(|| Fault::new("tab_stale", "The execution's tab is no longer open"))?;
+    if window.is_some_and(|window| Some(window.id) != win)
+        || !app
+            .sidecar(tab)
+            .is_some_and(|current| Arc::ptr_eq(&current, source))
+    {
+        return Err(Fault::new(
+            "tab_stale",
+            "The execution's captured source has changed",
+        ));
+    }
+    Ok(win)
+}
+
+fn execution_source<H: Host>(
+    ctx: &Ctx,
+    app: &Application<H>,
+    tab: &str,
+    source: &Arc<H::Sidecar>,
+    window: Option<crate::worktree_lifecycle::Window>,
+) -> Result<Option<i64>, Fault> {
+    let window = source_identity(ctx, app, tab, source, window)?;
+    if ctx.with(|pool| pool.entry(tab).is_none_or(|entry| entry.closing.is_some())) {
+        return Err(Fault::new("tab_stale", "The execution is closing"));
+    }
+    Ok(window)
+}
+
+enum EventRun {
+    Current(u64),
+    Observed(crate::sidecar::native::Observation),
+}
+
+fn observed_source<H: Host>(
+    ctx: &Ctx,
+    app: &Application<H>,
+    tab: &str,
+    source: &Arc<H::Sidecar>,
+    generation: u64,
+    observation: Option<&crate::sidecar::native::Observation>,
+) -> Result<(), Fault> {
+    let Some(observation) = observation else {
+        return event_source(ctx, app, tab, source, generation);
+    };
+    source_identity(ctx, app, tab, source, None)?;
+    if observation.generation() != generation
+        || !app.host.local_source(source.as_ref()).is_some_and(|native| observation.belongs_to(native))
+    {
+        return Err(Fault::new("tab_stale", "The event was not observed by this original source"));
+    }
+    Ok(())
+}
+
+fn event_source<H: Host>(
+    ctx: &Ctx,
+    app: &Application<H>,
+    tab: &str,
+    source: &Arc<H::Sidecar>,
+    generation: u64,
+) -> Result<(), Fault> {
+    execution_source(ctx, app, tab, source, None)?;
+    if source.generation() != generation {
+        return Err(Fault::new("tab_stale", "The event belongs to an earlier run"));
+    }
+    Ok(())
 }
 
 impl<H: Host> Service<H> {
@@ -200,11 +438,15 @@ impl<H: Host> Service<H> {
         let now_ms = config.now_ms;
         let window_tabs_hook = config.window_tabs_hook;
         let run_namespace: Arc<str> = Arc::from(config.view_epoch.as_str());
+        let callers = config.callers;
+        let removal_claims = config.removal_claims;
+        let sink_claims = Arc::clone(&removal_claims);
         hub::post(move || {
             let sink = Rc::new(Sink {
                 id: config.id,
                 app: sink_app,
                 pending: sink_pending,
+                removal_claims: sink_claims,
             });
             let opts = serde_json::value::to_raw_value(&json!({
                 "layoutVersion": config.layout_version, "maxFormerTabIds": config.max_former_tab_ids,
@@ -229,6 +471,8 @@ impl<H: Host> Service<H> {
             now_ms,
             window_tabs_hook,
             run_namespace,
+            callers,
+            removal_claims,
         }))
     }
 
@@ -283,6 +527,24 @@ impl<H: Host> Service<H> {
         })
     }
 
+    fn execute_typed<T: Send + 'static>(
+        &self,
+        action: impl FnOnce(Ctx) -> LocalFuture<Result<T, Fault>> + Send + 'static,
+    ) -> EffectFuture<'static, Result<T, Fault>> {
+        let (reply, answer) = oneshot::channel();
+        let completed = self.execute(false, move |ctx, _| {
+            Outcome::Later(Box::pin(async move {
+                let result = action(ctx).await;
+                let _ = reply.send(result);
+                Ok(Value::Null)
+            }))
+        });
+        Box::pin(async move {
+            completed.await?;
+            answer.await.map_err(|_| closed())?
+        })
+    }
+
     /// Internal engine calls retain Value as the engine's data model; nothing is encoded through a Node/IPC client.
     pub(crate) fn call(
         &self,
@@ -304,6 +566,463 @@ impl<H: Host> Service<H> {
         self.app
             .sidecar(tab)
             .ok_or_else(|| Fault::new("tab_unknown", "The tab is not open"))
+    }
+    pub fn execution_command(
+        &self,
+        callers: Arc<crate::application::callers::Callers>,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        window: Option<crate::worktree_lifecycle::Window>,
+        run: ExecutionRun,
+        command: ExecutionCommand,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        self.execute(false, move |ctx, _| {
+            match callers.admit_execution(&owner, &tab, window, || {
+                execution_source(&ctx, &app, &tab, &source, window)?;
+                let generation = match run {
+                    ExecutionRun::Captured(generation) => generation,
+                    ExecutionRun::Current => source.generation(),
+                };
+                Ok(match command {
+                    ExecutionCommand::Stock(command) => source.stock_for_generation(
+                        generation,
+                        command,
+                        crate::agentctl::service::host::Deadline::Default,
+                    ),
+                    ExecutionCommand::Bridge {
+                        method,
+                        params,
+                        timeout_ms,
+                    } => source.bridge_for_generation(generation, method, params, timeout_ms),
+                })
+            }) {
+                Ok(receipt) => Outcome::Later(receipt),
+                Err(error) => Outcome::Now(Err(error)),
+            }
+        })
+    }
+
+    pub fn execution_note_stopped(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        generation: u64,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        let callers = Arc::clone(&self.callers);
+        self.execute_typed(move |ctx| {
+            Box::pin(async move {
+                callers.admit_execution(&owner, &tab, None, || {
+                    execution_source(&ctx, &app, &tab, &source, None)?;
+                    if source.generation() != generation {
+                        return Err(Fault::new("tab_stale", "The execution's run has changed"));
+                    }
+                    ctx.with(|pool| {
+                        pool.entry_mut(&tab)
+                            .expect("admitted execution remains in this hub step")
+                            .tracking
+                            .stopped = true;
+                    });
+                    Ok(())
+                })?;
+                ctx.on_running_change().await
+            })
+        })
+    }
+
+    pub fn bind_execution(
+        &self,
+        callers: Arc<crate::application::callers::Callers>,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        window: crate::worktree_lifecycle::Window,
+        binding: Value,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        self.execute_typed(move |ctx| {
+            Box::pin(async move {
+                let win = callers.admit_execution(&owner, &tab, Some(window), || {
+                    execution_source(&ctx, &app, &tab, &source, Some(window))?;
+                    Ok(ctx.bind_worktree_start(&tab, binding))
+                })?;
+                match win {
+                    Some(win) => ctx.bind_worktree_finish(&tab, win).await,
+                    None => Ok(false),
+                }
+            })
+        })
+    }
+
+    pub fn release_execution(
+        &self,
+        callers: Arc<crate::application::callers::Callers>,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        self.release_execution_captured(callers, owner, tab, source, None)
+    }
+
+    fn release_execution_captured(
+        &self,
+        callers: Arc<Callers>,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        incarnation: Option<u64>,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        let work = self.execute(false, move |ctx, _| {
+            let captured = callers.admit_execution(&owner, &tab, None, || {
+                let win = source_identity(&ctx, &app, &tab, &source, None)?;
+                let (seq, closing) = ctx.with(|pool| {
+                    let entry = pool.entry(&tab).expect("the original source has an entry");
+                    (entry.seq, entry.closing.clone())
+                });
+                if incarnation.is_some_and(|expected| seq != expected) {
+                    return Err(Fault::new("tab_stale", "The captured execution has changed"));
+                }
+                Ok((win, seq, closing))
+            });
+            let (win, seq, closing) = match captured {
+                Ok(captured) => captured,
+                Err(error) => return Outcome::Now(Err(error)),
+            };
+            let close = match closing {
+                Some(closing) => closing,
+                None => {
+                    // The same hub segment closes event admission without re-entering the Callers lock.
+                    source.remove_listeners();
+                    let drained = source.reply_barrier();
+                    let (closing_ctx, closing_app, closing_tab) =
+                        (ctx.clone(), Arc::clone(&app), tab.clone());
+                    let close = async move {
+                        let drained = drained.await;
+                        let original = closing_ctx.with(|pool| {
+                            pool.entry(&closing_tab).is_some_and(|entry| entry.seq == seq)
+                        });
+                        if !original {
+                            return drained.and(Err(Fault::new(
+                                "tab_stale", "The original closing entry has changed",
+                            )));
+                        }
+                        let taken = closing_ctx.take_entry(&closing_tab)
+                            .expect("the same hub segment retains the original entry");
+                        let (mut result, disposed) =
+                            closing_ctx.release_taken_detail(&closing_tab, taken).await;
+                        if result.is_ok() && let Some(win) = win {
+                            result = closing_ctx.notify_window_tabs_changed(win).await;
+                        }
+                        if disposed {
+                            let receipt = closing_app.host.when_released(closing_tab, source).await;
+                            result = result.and(receipt);
+                        }
+                        drained.and(result)
+                    }.boxed_local().shared();
+                    ctx.with(|pool| {
+                        pool.entry_mut(&tab).expect("the original source has an entry")
+                            .closing = Some(close.clone());
+                    });
+                    close
+                }
+            };
+            Outcome::Later(Box::pin(async move { close.await.map(|()| Value::Null) }))
+        });
+        Box::pin(async move { work.await.map(|_| ()) })
+    }
+    pub fn bind_if_live(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        binding: Value,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Later(Box::pin(async move {
+                app.host.authorize_tab(&owner, &tab)?;
+                let win = {
+                    let handles = app.handles();
+                    if !handles
+                        .get(&super::HandleKey::Tab(tab.clone()))
+                        .is_some_and(|handle| Arc::ptr_eq(&handle.sidecar, &source))
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+                    ctx.bind_worktree_start(&tab, binding)
+                };
+                let Some(win) = win else {
+                    return Ok(Value::Bool(false));
+                };
+                Ok(Value::Bool(ctx.bind_worktree_finish(&tab, win).await?))
+            }))
+        });
+        Box::pin(async move { Ok(work.await? == Value::Bool(true)) })
+    }
+
+    pub fn stock_if_live(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        generation: u64,
+        command: Value,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        self.execute(false, move |ctx, _| {
+            if let Err(error) = app.host.authorize_tab(&owner, &tab) {
+                return Outcome::Now(Err(error));
+            }
+            let live = ctx.with(|pool| pool.entry(&tab).is_some_and(|entry| entry.closing.is_none()));
+            if !live
+                || !app
+                    .sidecar(&tab)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &source))
+            {
+                return Outcome::Now(Err(Fault::new(
+                    "tab_stale",
+                    "The tab's sidecar has changed",
+                )));
+            }
+            let request = source.stock_for_generation(
+                generation,
+                command,
+                crate::agentctl::service::host::Deadline::Default,
+            );
+            Outcome::Later(Box::pin(request))
+        })
+    }
+
+    pub fn bridge_if_live(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        generation: u64,
+        method: String,
+        params: Option<Value>,
+        timeout_ms: Option<u64>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let app = Arc::clone(&self.app);
+        self.execute(false, move |ctx, _| {
+            if let Err(error) = app.host.authorize_tab(&owner, &tab) {
+                return Outcome::Now(Err(error));
+            }
+            let live = ctx.with(|pool| pool.entry(&tab).is_some_and(|entry| entry.closing.is_none()));
+            if !live
+                || !app
+                    .sidecar(&tab)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &source))
+            {
+                return Outcome::Now(Err(Fault::new(
+                    "tab_stale",
+                    "The tab's sidecar has changed",
+                )));
+            }
+            let request = source.bridge_for_generation(generation, method, params, timeout_ms);
+            Outcome::Later(Box::pin(request))
+        })
+    }
+
+    pub fn guard_plan(&self, tab: &str, own: bool) -> EffectFuture<'static, Result<(), Fault>> {
+        let tab = tab.to_owned();
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Now(ctx.guard_plan(&tab, own).map(|()| Value::Null))
+        });
+        Box::pin(async move { work.await.map(|_| ()) })
+    }
+
+    pub fn note_prompted(&self, tab: &str) -> EffectFuture<'static, Result<(), Fault>> {
+        self.note_counter(tab, false)
+    }
+
+    pub fn note_touched(&self, tab: &str) -> EffectFuture<'static, Result<(), Fault>> {
+        self.note_counter(tab, true)
+    }
+
+    fn note_counter(&self, tab: &str, touched: bool) -> EffectFuture<'static, Result<(), Fault>> {
+        let tab = tab.to_owned();
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Later(Box::pin(async move {
+                ctx.note_counter(&tab, touched).await.map(|()| Value::Null)
+            }))
+        });
+        Box::pin(async move { work.await.map(|_| ()) })
+    }
+
+    pub fn note_unstarted(
+        &self,
+        tab: &str,
+        unstarted: bool,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let tab = tab.to_owned();
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Later(Box::pin(async move {
+                ctx.note_unstarted(&tab, unstarted)
+                    .await
+                    .map(|()| Value::Null)
+            }))
+        });
+        Box::pin(async move { work.await.map(|_| ()) })
+    }
+
+    pub fn note_draft(
+        &self,
+        tab: &str,
+        window: i64,
+        command: &str,
+        empty: bool,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let tab = tab.to_owned();
+        let command = command.to_owned();
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Now(Ok(Value::Bool(
+                ctx.note_draft(&tab, window, &command, empty),
+            )))
+        });
+        Box::pin(async move { Ok(work.await? == Value::Bool(true)) })
+    }
+
+    pub fn note_subagent_level(
+        &self,
+        tab: &str,
+        window: i64,
+        level: &str,
+    ) -> EffectFuture<'static, Result<String, Fault>> {
+        let tab = tab.to_owned();
+        let level = level.to_owned();
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Now(Ok(Value::String(ctx.note_subagent_level(
+                &tab,
+                engine::state::LevelKey::Window(window),
+                &level,
+            ))))
+        });
+        Box::pin(async move {
+            match work.await? {
+                Value::String(level) => Ok(level),
+                _ => Err(Fault::new("invalid_result", "Invalid subagent level")),
+            }
+        })
+    }
+
+    pub fn foreign_session_owner(
+        &self,
+        tab: Option<&str>,
+        path: &str,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let tab = tab.map(str::to_owned);
+        let path = path.to_owned();
+        self.execute(false, move |ctx, _| {
+            Outcome::Now(Ok(ctx.foreign_session_owner(tab.as_deref(), &path)))
+        })
+    }
+    pub fn session_running(
+        &self,
+        path: &str,
+        device: Option<&str>,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let path = path.to_owned();
+        let device = device.map(str::to_owned);
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Now(Ok(Value::Bool(
+                ctx.session_running(&path, device.as_deref()),
+            )))
+        });
+        Box::pin(async move { Ok(work.await? == Value::Bool(true)) })
+    }
+
+    pub fn session_owner(
+        &self,
+        path: &str,
+        device: Option<&str>,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let path = path.to_owned();
+        let device = device.map(str::to_owned);
+        self.execute(false, move |ctx, _| {
+            Outcome::Now(Ok(ctx.session_owner(&path, device.as_deref())))
+        })
+    }
+
+    pub fn session_owner_is_live(
+        &self,
+        path: &str,
+        device: Option<&str>,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let path = path.to_owned();
+        let device = device.map(str::to_owned);
+        let app = Arc::clone(&self.app);
+        let work = self.execute(false, move |ctx, _| {
+            let found = ctx.with(|pool| {
+                pool.owner_entry(device.as_deref(), &path)
+                    .map(|entry| (entry.tab_id.clone(), entry.status.clone()))
+            });
+            let Some((tab, status)) = found else {
+                return Outcome::Now(Ok(Value::Bool(false)));
+            };
+            let Some(sidecar) = app.sidecar(&tab) else {
+                return Outcome::Now(Err(Fault::new(
+                    "tab_unknown",
+                    "The session's sidecar is not open",
+                )));
+            };
+            let alive = sidecar.facts()["processAlive"] == true
+                || !matches!(status.as_str(), "asleep" | "exited" | "error");
+            Outcome::Now(Ok(Value::Bool(alive)))
+        });
+        Box::pin(async move { Ok(work.await? == Value::Bool(true)) })
+    }
+
+    pub fn note_session_name(
+        &self,
+        owner: &Owner,
+        tab: &str,
+        source: Arc<H::Sidecar>,
+        title: &str,
+    ) -> EffectFuture<'static, Result<bool, Fault>> {
+        let owner = owner.clone();
+        let tab = tab.to_owned();
+        let title = title.to_owned();
+        let app = Arc::clone(&self.app);
+        let work = self.execute(false, move |ctx, _| {
+            Outcome::Later(Box::pin(async move {
+                app.host.authorize_tab(&owner, &tab)?;
+                let wins = {
+                    let handles = app.handles();
+                    if !handles
+                        .get(&super::HandleKey::Tab(tab.clone()))
+                        .is_some_and(|handle| Arc::ptr_eq(&handle.sidecar, &source))
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+                    ctx.note_session_name_start(&tab, &title)
+                };
+                let Some(wins) = wins else {
+                    return Ok(Value::Bool(false));
+                };
+                ctx.note_session_name_finish(&tab, &title, wins).await?;
+                Ok(Value::Bool(true))
+            }))
+        });
+        Box::pin(async move { Ok(work.await? == Value::Bool(true)) })
     }
 
     pub fn acquire(
@@ -404,11 +1123,23 @@ impl<H: Host> Service<H> {
                     return Ok(None);
                 };
                 app.host.authorize_tab(&owner, &selected.tab)?;
-                Ok(app.sidecar(&selected.tab).map(|sidecar| Selected {
+                let Some(sidecar) = app.sidecar(&selected.tab) else {
+                    return Ok(None);
+                };
+                let facts = sidecar.facts();
+                let cwd = facts["cwd"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        Fault::new("tab_state", "The selected tab has no working directory")
+                    })?
+                    .to_owned();
+                Ok(Some(Selected {
                     tab: selected.tab,
+                    cwd,
                     device: selected.device,
                     window: selected.window,
                     session_file: selected.session_file,
+                    generation: sidecar.generation(),
                     sidecar,
                 }))
             })();
@@ -416,6 +1147,239 @@ impl<H: Host> Service<H> {
         });
         Box::pin(async move { answer.await.map_err(|_| closed())? })
     }
+
+    pub fn session_target(
+        &self,
+        owner: &Owner,
+        path: &str,
+        device: Option<&str>,
+    ) -> EffectFuture<'static, Result<Option<SessionTarget<H::Sidecar>>, Fault>> {
+        let owner = owner.clone();
+        let path = path.to_owned();
+        let device = device.map(str::to_owned);
+        let app = Arc::clone(&self.app);
+        let out = self.out;
+        let (reply, answer) = oneshot::channel();
+        hub::post(move || {
+            let result = (|| {
+                if !out.open() {
+                    return Err(closed());
+                }
+                let ctx = engine::POOLS
+                    .with(|pools| pools.borrow().get(&out.id()).cloned())
+                    .ok_or_else(closed)?;
+                let entry = ctx.with(|pool| {
+                    pool.owner_entry(device.as_deref(), &path).map(|entry| {
+                        (
+                            entry.tab_id.clone(),
+                            entry.win_id,
+                            entry.device.clone(),
+                            entry.seq,
+                        )
+                    })
+                });
+                let Some((tab, window, device, incarnation)) = entry else {
+                    return Ok(None);
+                };
+                app.host.authorize_tab(&owner, &tab)?;
+                let sidecar = app.sidecar(&tab).ok_or_else(|| {
+                    Fault::new("tab_unknown", "The session's sidecar is not open")
+                })?;
+                let generation = sidecar.generation();
+                Ok(Some(SessionTarget {
+                    tab,
+                    window,
+                    device,
+                    session_file: path,
+                    incarnation,
+                    generation,
+                    sidecar,
+                }))
+            })();
+            let _ = reply.send(result);
+        });
+        Box::pin(async move { answer.await.map_err(|_| closed())? })
+    }
+
+    pub fn session_runtime(
+        &self,
+        owner: &Owner,
+        target: &SessionTarget<H::Sidecar>,
+    ) -> EffectFuture<'static, Result<SessionRuntime, Fault>> {
+        let owner = owner.clone();
+        let target = target.clone();
+        let app = Arc::clone(&self.app);
+        let callers = Arc::clone(&self.callers);
+        self.execute_typed(move |ctx| {
+            Box::pin(async move {
+                use crate::session_ops::{Activity, RuntimeState};
+                admit_session(&callers, &ctx, &app, &owner, &target, || {
+                    let (activity, ready) = ctx.with(|pool| {
+                        let entry = pool
+                            .entry(&target.tab)
+                            .expect("checked target remains in this hub step");
+                        let run = &entry.tracking.run;
+                        let activity = if run.compacting == Some(true) {
+                            Activity::Compacting
+                        } else if run.running {
+                            Activity::Running
+                        } else {
+                            Activity::Idle
+                        };
+                        (activity, entry.status == "ready")
+                    });
+                    let alive = target.sidecar.facts()["processAlive"]
+                        .as_bool()
+                        .ok_or_else(|| {
+                            Fault::new("tab_state", "The sidecar has no process lifetime fact")
+                        })?;
+                    Ok(SessionRuntime {
+                        activity,
+                        state: if alive && ready {
+                            RuntimeState::Ready
+                        } else if alive {
+                            RuntimeState::Starting
+                        } else {
+                            RuntimeState::Dormant
+                        },
+                    })
+                })
+            })
+        })
+    }
+    pub fn close_session_tab(
+        &self,
+        owner: &Owner,
+        target: &SessionTarget<H::Sidecar>,
+    ) -> EffectFuture<'static, Result<SessionRelease, Fault>> {
+        let owner = owner.clone();
+        let target = target.clone();
+        let app = Arc::clone(&self.app);
+        let callers = Arc::clone(&self.callers);
+        self.execute_typed(move |ctx| {
+            Box::pin(async move {
+                let seq = admit_session(&callers, &ctx, &app, &owner, &target, || {
+                    if ctx.with(|pool| pool.entry(&target.tab).is_some_and(|entry| entry.busy())) {
+                        return Ok(None);
+                    }
+                    ctx.take_entry(&target.tab)
+                        .map(Some)
+                        .ok_or_else(|| Fault::new("tab_stale", "The session's tab is not open"))
+                })?;
+                let Some(seq) = seq else {
+                    return Ok(SessionRelease::Busy);
+                };
+                let (mut result, disposed) = ctx.release_taken_detail(&target.tab, seq).await;
+                if result.is_ok() && let Some(window) = target.window {
+                    result = ctx.notify_window_tabs_changed(window).await;
+                }
+                if result.is_ok() && let Some(window) = target.window {
+                    result = ctx
+                        .send_tab_list(window, Some(std::slice::from_ref(&target.tab)), None)
+                        .await;
+                }
+                if disposed {
+                    let receipt = app.host.when_released(target.tab, target.sidecar).await;
+                    result = result.and(receipt);
+                }
+                Ok(SessionRelease::Released(result))
+            })
+        })
+    }
+
+    pub fn stop_session(
+        &self,
+        owner: &Owner,
+        target: &SessionTarget<H::Sidecar>,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let owner = owner.clone();
+        let target = target.clone();
+        let app = Arc::clone(&self.app);
+        let callers = Arc::clone(&self.callers);
+        let work = self.execute(true, move |ctx, token| {
+            Outcome::Later(Box::pin(async move {
+                let stopping = admit_session(&callers, &ctx, &app, &owner, &target, || {
+                    Ok(ctx.stop_session_start(
+                        token,
+                        &target.session_file,
+                        target.device.as_deref(),
+                    ))
+                })?;
+                if let Some(stopping) = stopping {
+                    let admitted = match ctx.on_running_change().await {
+                        Err(error) => Err(error),
+                        Ok(()) => admit_session(&callers, &ctx, &app, &owner, &target, || {
+                            ctx.stop_session_finish(token, stopping, Some(target.generation));
+                            Ok(())
+                        }),
+                    };
+                    if let Err(error) = admitted {
+                        ctx.with(|pool| pool.stop_waits.retain(|wait| wait.token != token));
+                        return Err(error);
+                    }
+                }
+                Ok(Value::Null)
+            }))
+        });
+        Box::pin(async move { work.await.map(|_| ()) })
+    }
+
+    pub fn command_for_session(
+        &self,
+        owner: &Owner,
+        target: &SessionTarget<H::Sidecar>,
+        command: Value,
+    ) -> EffectFuture<'static, Result<Value, Fault>> {
+        let owner = owner.clone();
+        let target = target.clone();
+        let app = Arc::clone(&self.app);
+        let callers = Arc::clone(&self.callers);
+        self.execute(false, move |ctx, _| {
+            match admit_session(&callers, &ctx, &app, &owner, &target, || {
+                if !ctx.with(|pool| {
+                    pool.entry(&target.tab)
+                        .is_some_and(|entry| entry.status == "ready")
+                }) {
+                    return Ok(None);
+                }
+                Ok(Some(app.host.command_for_generation(
+                    Arc::clone(&target.sidecar),
+                    target.generation,
+                    command,
+                )))
+            }) {
+                Err(error) => Outcome::Now(Err(error)),
+                Ok(None) => Outcome::Now(Ok(Value::Null)),
+                Ok(Some(command)) => Outcome::Later(Box::pin(command)),
+            }
+        })
+    }
+
+    pub fn note_name_for_session(
+        &self,
+        owner: &Owner,
+        target: &SessionTarget<H::Sidecar>,
+        title: &str,
+    ) -> EffectFuture<'static, Result<(), Fault>> {
+        let owner = owner.clone();
+        let target = target.clone();
+        let title = title.to_owned();
+        let app = Arc::clone(&self.app);
+        let callers = Arc::clone(&self.callers);
+        self.execute_typed(move |ctx| {
+            Box::pin(async move {
+                let wins = admit_session(&callers, &ctx, &app, &owner, &target, || {
+                    ctx.note_session_name_start(&target.tab, &title)
+                        .ok_or_else(|| {
+                            Fault::new("tab_stale", "The captured session is no longer open")
+                        })
+                })?;
+                ctx.note_session_name_finish(&target.tab, &title, wins)
+                    .await
+            })
+        })
+    }
+
     pub fn facts(&self, tab: &str) -> EffectFuture<'static, Result<Value, Fault>> {
         self.call("tabFacts", json!({"tab": tab}), false)
     }
@@ -557,28 +1521,39 @@ impl<H: Host> Service<H> {
         tab: String,
     ) -> Result<EffectFuture<'static, Result<Value, Fault>>, Fault> {
         let window = self.app.host.window_for(owner)?;
-        self.app.host.authorize_tab(owner, &tab)?;
-        let released_tab = tab.clone();
+        let source = self.source(owner, &tab)?;
+        let expected = Arc::clone(&source);
+        let owner = owner.clone();
+        let checked_app = Arc::clone(&self.app);
         let closed = self.execute(false, move |ctx, _| {
             Outcome::Later(Box::pin(async move {
+                checked_app.host.authorize_tab(&owner, &tab)?;
+                if !checked_app
+                    .sidecar(&tab)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &expected))
+                {
+                    return Ok(Value::Bool(false));
+                }
                 let owns =
                     ctx.with(|pool| pool.entry(&tab).is_some_and(|entry| entry.win_id == Some(window)));
-                let closed = if owns {
-                    ctx.release_tab(&tab).await?
+                if owns {
+                    let Some((mut result, disposed)) = ctx.release_entry_detail(&tab).await else {
+                        return Ok(Value::Bool(false));
+                    };
+                    if result.is_ok() {
+                        result = ctx.notify_window_tabs_changed(window).await;
+                    }
+                    if disposed {
+                        let receipt = checked_app.host.when_released(tab, expected).await;
+                        result = result.and(receipt);
+                    }
+                    result.map(|()| Value::Bool(true))
                 } else {
-                    ctx.detach_viewer(window, &tab).await?
-                };
-                Ok(json!({"closed": closed, "owner": owns}))
+                    Ok(Value::Bool(ctx.detach_viewer(window, &tab).await?))
+                }
             }))
         });
-        let app = Arc::clone(&self.app);
-        Ok(Box::pin(async move {
-            let result = closed.await?;
-            if result["owner"] == true && result["closed"] == true {
-                app.host.when_released(released_tab).await;
-            }
-            Ok(result["closed"].clone())
-        }))
+        Ok(closed)
     }
 
     pub fn answer(
@@ -665,4 +1640,4 @@ impl Drop for Waiting {
 
 #[cfg(test)]
 #[path = "native_tests.rs"]
-mod tests;
+pub(crate) mod tests;
