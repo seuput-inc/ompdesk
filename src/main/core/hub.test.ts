@@ -150,6 +150,38 @@ describe("the hub connection", () => {
 		expect(performance.now() - started).toBeLessThan(HUB_CALL_DEADLINE_MS);
 		expect(instance.lost).toHaveLength(1);
 	});
+
+	it("reads a call's params again when the core is lost under it, so the second call carries what main reads after the loss", () => {
+		const hub = new Hub();
+		const order: string[] = [];
+		let first = true;
+		const open = () =>
+			probe(hub, () => {
+				// The first core ends while its rule waits on main, as a core that stops answering mid-call.
+				if (first) {
+					first = false;
+					process.kill(core().pid ?? 0, "SIGKILL");
+				}
+				return "answered";
+			});
+		let instance = open();
+		const lostOne = instance;
+		// Each read says whether the instance it goes to is the next core's, opened after the loss.
+		const params = () => {
+			order.push(instance === lostOne ? "read before the loss" : "read after the loss");
+			return {};
+		};
+		const answer = hub.callOnce<string>(
+			() => {
+				if (instance.lost.length > 0) instance = open();
+				return instance.id;
+			},
+			"ask",
+			params,
+		);
+		expect(answer).toBe("answered");
+		expect(order).toEqual(["read before the loss", "read after the loss"]);
+	});
 });
 
 describe("the hub worker's line reader", () => {
