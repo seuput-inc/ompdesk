@@ -9,9 +9,10 @@
 #            app, a regular (Dock) app, the shell its own responsible process (TCC asks for that process's code identity).
 #  handover  `open -b com.seuput.ompdesk` and `open <app>` again: still one shell, the same pid, one running application,
 #            and it is the frontmost app afterwards (Finder was activated first).
-#  quit      a quit request (`NSRunningApplication.terminate`: what the Dock's Quit sends, NSApp terminate, the same
-#            `app.quit()` the menu's Quit and the tray's Quit reach in main): nothing of the bundle, and no ompdesk-core, is
-#            left running.
+#  quit      three launches, each quit one way: a quit request (`NSRunningApplication.terminate`, what the Dock's Quit sends),
+#            then Quit in the menu bar menu and Quit in the tray's menu, each clicked through main's test inspector
+#            (scripts/mac-menu-quit.ts: the shim's own `menu.click` delivery, as the shell delivers a person's click).
+#            After each, nothing of the bundle and no ompdesk-core is left running.
 # No `osascript` or synthetic input: LaunchServices activates Finder (`open -a`) and AppKit sends the quit, so no Automation
 # consent is asked. The default profile, so a launch with no arguments finds the same single-instance name (runner homes
 # are fresh), and the fake omp (scripts/shell-move/fake-omp.ts), so a tab starts without an install.
@@ -68,6 +69,7 @@ wait_for "test -s '$FAKE_DIR/bin.txt'" 60; check $? "the fake omp is installed"
 launchctl setenv OMP_GUI_OMP "$(cat "$FAKE_DIR/bin.txt")"
 cleanup() {
 	launchctl unsetenv OMP_GUI_OMP
+	launchctl unsetenv OMP_GUI_TEST_NODE_INSPECT
 	kill "$FAKE_HOLDER" 2>/dev/null
 	pkill -f "$APP/Contents/" 2>/dev/null
 }
@@ -119,6 +121,35 @@ handover "open -b $ID" open -b "$ID"
 handover "open $APP" open "$APP"
 
 evidence "quit request: $("$W/apps" quit | tr '\n' ' ')"
-wait_for '[ -z "$(leftovers)" ]' 60; check $? "after the quit nothing of the bundle and no ompdesk-core runs"
+wait_for '[ -z "$(leftovers)" ]' 60; check $? "after the quit request nothing of the bundle and no ompdesk-core runs"
 evidence "left: $(leftovers | cut -c1-200 | tr '\n' '|')"
+
+# The inspector's port: main's Node listens on a free one (`--inspect=127.0.0.1:0`); the one that answers /json/list.
+inspector_port() {
+	local node port
+	node=$(pgrep -f "^$APP/Contents/.*Resources/node/node" | head -1)
+	[ -n "$node" ] || return 1
+	for port in $(lsof -nP -a -p "$node" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 { sub(/.*:/, "", $9); print $9 }'); do
+		curl -s "http://127.0.0.1:$port/json/list" | grep -q webSocketDebuggerUrl && { echo "$port"; return 0; }
+	done
+	return 1
+}
+# A launch with main's test inspector on, quit by clicking Quit in one menu (`app`: the menu bar's, `tray`: the tray's).
+menu_quit() {
+	local where=$1 port
+	rm -f "$UD/app-started.json"
+	open "$APP"
+	wait_for "test -s '$UD/app-started.json'" 180; check $? "$where: the app started again"
+	wait_for 'port=$(inspector_port)' 60; check $? "$where: main's inspector answers (port ${port:-none})"
+	wait_for "bun '$REPO/scripts/mac-menu-quit.ts' '$port' '$where' > '$W/quit-$where.out' 2>&1" 30
+	check $? "$where: Quit clicked in the menu"
+	evidence "$where: $(tr '\n' ' ' < "$W/quit-$where.out" | cut -c1-400)"
+	wait_for '[ -z "$(leftovers)" ]' 60; check $? "$where: after its Quit nothing of the bundle and no ompdesk-core runs"
+	evidence "$where: left: $(leftovers | cut -c1-200 | tr '\n' '|')"
+	pkill -f "$APP/Contents/" 2>/dev/null
+}
+launchctl setenv OMP_GUI_TEST_NODE_INSPECT 1
+menu_quit app
+menu_quit tray
+launchctl unsetenv OMP_GUI_TEST_NODE_INSPECT
 exit $FAILED

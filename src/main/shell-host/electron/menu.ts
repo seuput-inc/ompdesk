@@ -347,12 +347,32 @@ export function createMenuModule(host: Host, deps: MenuDeps) {
 		return menu;
 	};
 
-	host.client.on(
-		"menu.click",
-		({ menuId, itemId, checked }: { menuId: number; itemId: string; checked?: boolean }) => {
-			menus.get(menuId)?.findCommand(itemId)?.activate(checked);
-		},
-	);
+	/** What the shell's `menu.click` runs: a click on an item of the application menu, the tray's menu or a popup. */
+	const deliverClick = ({ menuId, itemId, checked }: { menuId: number; itemId: string; checked?: boolean }) => {
+		menus.get(menuId)?.findCommand(itemId)?.activate(checked);
+	};
+	host.client.on("menu.click", deliverClick);
+	// The test inspector (OMP_GUI_TEST_NODE_INSPECT=1, as `__ompdeskElectron` in index.ts) clicks the menu items a person
+	// clicks, through this same delivery: scripts/mac-launch-check.sh quits from the app menu and from the tray's menu
+	// without synthetic OS input. `menus` lists every registered menu with its items' ids, roles and labels.
+	if (process.env.OMP_GUI_TEST_NODE_INSPECT === "1")
+		Object.defineProperty(globalThis, "__ompdeskMenus", {
+			configurable: true,
+			value: {
+				click: deliverClick,
+				applicationMenuId: () => applicationMenu?.menuId ?? 0,
+				menus: () =>
+					[...menus.values()].map(menu => ({
+						menuId: menu.menuId,
+						items: menu.items.flatMap(function flat(item: MenuItem): object[] {
+							return [
+								{ itemId: item.commandId, role: item.role ?? null, label: item.label },
+								...(item.submenu?.items.flatMap(flat) ?? []),
+							];
+						}),
+					})),
+			},
+		});
 	host.client.on("menu.event", ({ menuId, name }: { menuId: number; name: "will-show" | "will-close" }) => {
 		menus.get(menuId)?.emit(name === "will-show" ? "menu-will-show" : "menu-will-close", {});
 	});
