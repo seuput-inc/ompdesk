@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use super::fail::{Fail, R, fail, unanswered_text};
+use super::fail::{Fail, R, fail};
 use super::host::{Deadline, HostState};
 use super::js::{number, one_line, trim, trim_start};
 use super::pace::pace_line;
@@ -159,10 +159,7 @@ impl OwedDeps for Owed<'_> {
         let steer = entry.streaming_behavior == StreamingBehavior::Steer;
         let sent = self.ctl.hand_over(tab_id, &command, steer).await;
         let (handed, taken) = match sent {
-            Ok(response) => (
-                response.success || unanswered_text(response.error.as_deref()),
-                response.success,
-            ),
+            Ok(response) => (response.success || response.unanswered(), response.success),
             Err(error) => (error.unanswered(), false),
         };
         // As a fresh send's steer: a blocking ompdesk_session_result wait the receiver stands in returns, so it reads
@@ -408,7 +405,7 @@ impl AgentControl {
                         return Ok(answer);
                     }
                 }
-                Ok(answer) if unanswered_text(answer.error.as_deref()) => return Ok(answer),
+                Ok(answer) if answer.unanswered() => return Ok(answer),
                 Err(error) if error.unanswered() => return Err(error),
                 _ => {}
             }
@@ -660,13 +657,19 @@ impl AgentControl {
             );
         }
         let held;
+        // No answer from a paired host's link (`rpc_delivery_unknown`): the host may have delivered it. Never "nothing
+        // was sent" (the hub got three copies of one request on 19 Nov 2026): it is kept as handed, with a receipt.
+        let mut unconfirmed = None;
         let mut response: Option<RpcResponse> = None;
         match self
             .hand_over(&target.tab_id, &command, steer && running)
             .await
         {
             Ok(answer) => {
-                held = !answer.success && unanswered_text(answer.error.as_deref());
+                held = answer.unanswered();
+                if answer.unconfirmed() {
+                    unconfirmed = Some(answer.error.clone().unwrap_or_default());
+                }
                 response = Some(answer);
             }
             Err(error) => {
@@ -712,7 +715,12 @@ impl AgentControl {
             );
         }
         let started = !running && !held && self.turn_starts(&caller.tab_id, &target.tab_id).await;
-        let how = if held {
+        let how = if let Some(why) = &unconfirmed {
+            format!(
+                "{} did not answer in time ({why}), so it may already have arrived or still arrive, and runs once; this receipt answers a resend with the same request_id, so do not send it again: check with ompdesk_session_result",
+                named(target)
+            )
+        } else if held {
             "queued: its omp is busy with another command (a provider sign-in, for one), and the message runs once that ends, so do not send it again".to_owned()
         } else if !running {
             if started {
@@ -748,8 +756,13 @@ impl AgentControl {
             "queued as a follow-up (it runs when the current turn ends; it is told so if it reports first)".to_owned()
         };
         let receipt = format!(
-            "Sent to {}: accepted{}; {how}.{dispatch_note}{attached_note}",
+            "Sent to {}: {}{}; {how}.{dispatch_note}{attached_note}",
             named(target),
+            if unconfirmed.is_some() {
+                "not confirmed"
+            } else {
+                "accepted"
+            },
             if started { ", turn started" } else { "" },
         );
         if let Some(key) = receipt_key {
