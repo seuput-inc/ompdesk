@@ -85,7 +85,7 @@ evidence "the candidate's page: $(echo "$SEEN" | cut -c1-600)"
 jq -e --arg m "$MARKER" '.present[$m] == true' <<<"$SEEN" >/dev/null 2>&1; check $? "the candidate's page reads the marker $TAG's store held"
 MISSING=$(jq -r '.present | to_entries | map(select(.value != true) | .key) | join(" ")' <<<"$SEEN" 2>/dev/null || echo unreadable)
 [ -z "$MISSING" ]; check $? "the candidate's page holds every key $TAG's page wrote (missing: ${MISSING:-none})"
-evidence "the store's shell log lines: $(grep -h 'webkit.store' "$UD/tauri-shell.jsonl" 2>/dev/null | cut -c1-300 | tr '\n' '|')"
+evidence "the store's shell log lines: $(grep -hF '"event":"webkit.store.' "$UD/tauri-shell.jsonl" 2>/dev/null | cut -c1-300 | tr '\n' '|')"
 test -d "$NEW_STORES/$UUID"; check $? "the store is under ~/Library/WebKit/$ID now"
 [ ! -e "$OLD_STORES/$UUID" ]; check $? "nothing of the store is left under ~/Library/WebKit/$OLD_NAME"
 (cd "$REPO" && limit 60 bun scripts/shell-move/native-profile.ts "$PORT" quit >/dev/null 2>&1)
