@@ -1,6 +1,7 @@
-//! The pure parts of `ompdesk-launcher`, the macOS bundle's `CFBundleExecutable` (`Contents/MacOS/OMPdesk`): it execs the
-//! real shell (`Contents/MacOS/ompdesk-shell`) and, for the first launch of a version an update installed, leaves a
-//! watcher that puts the last Electron release back when the new app never reports it started. The process work is in
+//! The pure parts of `ompdesk-launcher`, the macOS bundle's `CFBundleExecutable` (`Contents/MacOS/OMPdesk`): it starts
+//! the real shell (`Contents/MacOS/ompdesk-shell`) as a process of its own and, for the first launch of a version an
+//! update installed, leaves a watcher that puts the last Electron release back when the new app never reports it
+//! started. The process work is in
 //! `launcher_main.rs`; what it decides and parses is here, where `cargo test` runs on every OS.
 
 use std::io::{self, Read};
