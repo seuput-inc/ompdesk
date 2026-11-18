@@ -156,6 +156,11 @@ jobs:
       - run: bun run check:types
       - run: bunx biome check src e2e resources scripts
       - run: node scripts/lint-surfaces.mjs
+      # The committed notices against node_modules and every Cargo.lock, never regenerated first: a lock changed without
+      # `bun scripts/gen-crate-notices.ts <workspace>` and `bun run gen:licenses` fails here (the Tauri list was stale on
+      # main for three commits because only mac-checks.yml ran this, and only when native/memory changed).
+      - name: Third-party notices match the lockfiles
+        run: bun run licenses:check
       # A pushed range whose base git cannot find (a new branch, a dispatch) checks the head commit alone.
       - name: Fix commits carry a test
         env:
