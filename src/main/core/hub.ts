@@ -287,14 +287,18 @@ export class Hub {
 	/**
 	 * A call of the instance `instance()` opens or returns: when the hub is lost under it (the core died or stopped
 	 * answering), the instance's `lost` handler has run, so `instance()` opens it on the next core and the call is made
-	 * once more. Everything the lost core knew is gone, so the second call lands where a call after the loss would.
+	 * once more. Everything the lost core knew is gone, so the second call lands where a call after the loss would:
+	 * `params` given as a function is read for each attempt, so what it reads of main (a pool's facts) is read after
+	 * the loss and after whatever the new instance's opening changed.
 	 */
-	callOnce<T>(instance: () => number, method: string, params: unknown = {}): T {
+	callOnce<T>(instance: () => number, method: string, params: unknown | (() => unknown) = {}): T {
+		const read = () => (typeof params === "function" ? (params as () => unknown)() : params);
 		try {
-			return this.call<T>(instance(), method, params);
+			return this.call<T>(instance(), method, read());
 		} catch (error) {
 			if (!(error instanceof CoreError) || error.code !== "hub_lost") throw error;
-			return this.call<T>(instance(), method, params);
+			const id = instance();
+			return this.call<T>(id, method, read());
 		}
 	}
 
