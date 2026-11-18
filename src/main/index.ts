@@ -1375,6 +1375,17 @@ app.whenReady().then(async () => {
 		},
 		mobileWebUrl: () => mobileWebService?.state().url ?? null,
 		trashItem: abs => shell.trashItem(abs),
+		...(Number(process.env.OMP_GUI_TEST_HOST_WAIT_MS) > 0 && !app.isPackaged
+			? { hostWaitNoticeMs: Number(process.env.OMP_GUI_TEST_HOST_WAIT_MS) }
+			: {}),
+		// One notification per wait: the turn of a paired device's session stands in a call only that device runs.
+		hostWaiting: ({ device, title }) =>
+			appNotification({
+				title: mainT("remote.hostWait.title", undefined, { device }),
+				body: title
+					? mainT("remote.hostWait.body", undefined, { session: title, device })
+					: mainT("remote.hostWait.bodyUntitled", undefined, { device }),
+			}).show(),
 		// Autopilot runs paired devices started here, charged to them until they end (remote/hosted-autopilot.ts).
 		runChargesFile: join(app.getPath("userData"), "autopilot-device-runs.json"),
 	});

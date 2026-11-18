@@ -78,6 +78,7 @@ import {
 } from "./app-protocol";
 import type { HostConnection } from "./host-server";
 import {
+	HOST_WAIT_NOTICE_MS,
 	type HostServicesDeps,
 	LocalHostServices,
 	UPLOAD_PART_IDLE_MS,
@@ -2970,13 +2971,14 @@ describe("LocalHostServices for this computer's own windows", () => {
 	}
 
 	/** The one builder of this computer's summaries wired to these services as `index.ts` wires it. */
-	function withSummaries(graceMs?: number) {
+	function withSummaries(graceMs?: number, extra: Partial<HostServicesDeps> = {}) {
 		let builder: SessionSummaries | undefined;
 		const live = (): SessionSummaries => {
 			if (!builder) throw new Error("summaries not built yet");
 			return builder;
 		};
 		const context = setup(graceMs, {
+			...extra,
 			summaries: {
 				track: sidecar => live().track(sidecar),
 				changed: () => live().changed(),
@@ -2989,8 +2991,8 @@ describe("LocalHostServices for this computer's own windows", () => {
 	}
 
 	/** A device's agent opened a session here, with this computer's summaries built from it. */
-	async function hostedWithSummaries(graceMs?: number) {
-		const context = withSummaries(graceMs);
+	async function hostedWithSummaries(graceMs?: number, extra: Partial<HostServicesDeps> = {}) {
+		const context = withSummaries(graceMs, extra);
 		const x = new FakeConnection(peer("device-x"));
 		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
 		await context.services.call(x.peer, "tab.start", { rtab: "t1" }, x);
@@ -3039,6 +3041,65 @@ describe("LocalHostServices for this computer's own windows", () => {
 		expect(builder.current().sessions[0]).toMatchObject({ status: "ready", awaitingConnection: true });
 		services.setAwaitingConnection("peer:device-x:t1", false);
 		expect(builder.current().sessions[0]).not.toHaveProperty("awaitingConnection");
+	});
+
+	it("says when a hosted tab's turn waits on a call its device runs while that device is away: after the grace, once a wait, until the device is back or the call ends", async () => {
+		// 18 Nov 2026: a device's session here stood 6 h in an `ompdesk_session_open` its offline device never ran, and
+		// nothing on this computer said so.
+		vi.useFakeTimers();
+		const waits: Array<{ device: string; title: string | undefined }> = [];
+		const { services, builder, sidecar, x } = await hostedWithSummaries(undefined, {
+			hostWaiting: wait => waits.push(wait),
+		});
+		const waitsFor = () => builder.current().sessions[0]?.waitsForDevice;
+		sidecar.emit("events", [{ type: "agent_start" }]);
+		const call = (id: string) => ({
+			type: "host_tool_call",
+			id,
+			toolCallId: `c-${id}`,
+			toolName: "ompdesk_session_open",
+		});
+
+		// The device runs it while connected: nothing to say however long it takes.
+		sidecar.emit("hostToolCall", call("open"));
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS * 3);
+		expect(waitsFor()).toBeUndefined();
+
+		// The link drops under it: a routine reconnect within the grace says nothing.
+		services.disconnected(x.peer, x);
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS - 1);
+		expect(waitsFor()).toBeUndefined();
+		expect(waits).toEqual([]);
+		vi.advanceTimersByTime(1);
+		expect(waitsFor()).toBe("device-x");
+		expect(waits).toEqual([{ device: "device-x", title: "Fix login" }]);
+		// Hours more, another call meanwhile: still the one notice.
+		sidecar.emit("hostToolCall", call("report"));
+		vi.advanceTimersByTime(6 * 60 * 60_000);
+		expect(waits).toHaveLength(1);
+
+		// The device is back: the wait is its again.
+		const back = new FakeConnection(peer("device-x"));
+		await services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, back);
+		expect(waitsFor()).toBeUndefined();
+
+		// Away again: a new wait, a new notice; the omp withdrawing its calls ends it.
+		services.disconnected(back.peer, back);
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS);
+		expect(waitsFor()).toBe("device-x");
+		expect(waits).toHaveLength(2);
+		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-1", targetId: "open" });
+		expect(waitsFor()).toBe("device-x");
+		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-2", targetId: "report" });
+		expect(waitsFor()).toBeUndefined();
+
+		// A call made while away that ends within the grace never says anything.
+		sidecar.emit("hostToolCall", call("brief"));
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS - 1);
+		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-3", targetId: "brief" });
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS);
+		expect(waitsFor()).toBeUndefined();
+		expect(waits).toHaveLength(2);
 	});
 
 	it("sends every connected device one `host.summaries` delta per burst of a device tab's turn and ask, and answers `sessions.summaries` with the whole set", async () => {

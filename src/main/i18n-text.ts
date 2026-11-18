@@ -28,6 +28,16 @@ export const MAIN_TEXT = {
 		en: "This session's agent did not come back after OMPdesk's background process restarted. Press Restart.",
 		ko: "OMPdesk 백그라운드 프로세스가 다시 시작된 뒤 이 세션의 에이전트가 돌아오지 않았어요. 다시 시작을 눌러 주세요.",
 	},
+	// A paired device's session here waits on a call that device runs while it is away (host-services.ts `#syncHostWait`).
+	"remote.hostWait.title": { en: "Waiting for {device}", ko: "{device} 연결 대기 중" },
+	"remote.hostWait.body": {
+		en: "{session} waits for {device} to come back.",
+		ko: "‘{session}’ 세션이 {device}의 재연결을 기다리고 있어요.",
+	},
+	"remote.hostWait.bodyUntitled": {
+		en: "A session waits for {device} to come back.",
+		ko: "세션 하나가 {device}의 재연결을 기다리고 있어요.",
+	},
 	"menu.about": { en: "About OMPdesk", ko: "OMPdesk 정보" },
 	"menu.checkUpdates": { en: "Check for Updates…", ko: "업데이트 확인…" },
 	"menu.services": { en: "Services", ko: "서비스" },

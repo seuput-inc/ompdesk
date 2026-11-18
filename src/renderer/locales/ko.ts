@@ -88,6 +88,7 @@ export const ko: Record<string, string> = {
 	"titlebar.status.waiting": "omp 설치 중",
 	"titlebar.status.sessionHeld": "세션을 기다리는 중",
 	"titlebar.status.connectionWait": "인터넷 연결을 기다리는 중",
+	"titlebar.status.deviceWait": "{device} 연결 대기 중",
 	"titlebar.toggleSidebar": "사이드바 전환",
 	"titlebar.openProjectFailed": "프로젝트를 열 수 없어요",
 	"titlebar.renameFailed": "세션 이름을 바꾸지 못했어요",
