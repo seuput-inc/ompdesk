@@ -210,6 +210,7 @@ import {
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
 import { SidebarProjects } from "./sidebar-projects";
+import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
 import { nextSnowflake } from "./snowflake";
@@ -483,6 +484,10 @@ function parsePacResult(pac: string): string | undefined {
 
 /** Representative URL for system-proxy resolution (codex's OAuth backend). */
 const SYSTEM_PROXY_PROBE_URL = "https://chatgpt.com";
+/** How long the system proxy lookup may take (`systemProxyUrl`): the host's PAC run has 3 s. */
+const SYSTEM_PROXY_LOOKUP_MS = 5_000;
+/** How long the tabs of one core loss that have no omp are gathered before the one notification counts them. */
+const STUCK_NOTICE_GATHER_MS = 10_000;
 /** How long the stats server and setup's optional installs wait for a first ready tab before starting anyway. */
 const FIRST_TAB_GRACE_MS = 30_000;
 
@@ -504,11 +509,27 @@ function inheritedProxyUrl(): string | undefined {
 	);
 }
 
+/**
+ * The system proxy for the agent's requests, from the Tauri host. Bounded: the host answers on its main thread, and a
+ * host whose main thread hung (the Mac mini, 18 Nov 2026: 6 h) held every tab's start that waited for it. A lookup past
+ * the bound reads as no system proxy, logged (source `omp-start-input`); the host's own PAC run has 3 s.
+ */
 async function systemProxyUrl(): Promise<string | undefined> {
+	const late = Promise.withResolvers<"late">();
+	const timer = setTimeout(() => late.resolve("late"), SYSTEM_PROXY_LOOKUP_MS);
 	try {
-		return parsePacResult(await session.defaultSession.resolveProxy(SYSTEM_PROXY_PROBE_URL));
+		const answer = await Promise.race([session.defaultSession.resolveProxy(SYSTEM_PROXY_PROBE_URL), late.promise]);
+		if (answer !== "late") return parsePacResult(answer);
+		writeRuntimeLog({
+			source: "omp-start-input",
+			message: "proxyEnv",
+			details: { ms: SYSTEM_PROXY_LOOKUP_MS, reason: "the shell did not answer resolveProxy" },
+		});
+		return undefined;
 	} catch {
 		return undefined;
+	} finally {
+		clearTimeout(timer);
 	}
 }
 
@@ -942,6 +963,39 @@ app.whenReady().then(async () => {
 	const autopilotRef: { current: Autopilot | null } = { current: null };
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
+	const tabReport: IpcDeps["tabReport"] = { current: null };
+	/** Tabs a lost core took that still have no omp, gathered for one notification (`recovery.stuck*`). */
+	let stuckTabs: { count: number; minutes: number } | null = null;
+	/**
+	 * A tab the core's loss took has no omp `RECOVERY_NOTICE_MS` later (sidecar.ts `onRecoveryStuck`): its opener is told
+	 * by a report of the tab's own, the person by one notification for every tab of the loss, and the tab's banner says
+	 * it (the answer).
+	 */
+	function noteRecoveryStuck(sidecar: SidecarManager, stuck: RecoveryStuck): string {
+		const minutes = Math.max(1, Math.round(stuck.waitedMs / 60_000));
+		const tabId = sidecarPool.resumeFacts().find(fact => sidecarPool.sidecarOf(fact.tabId) === sidecar)?.tabId;
+		if (tabId)
+			tabReport.current?.(tabId, {
+				kind: "blocked",
+				// One report per loss of this tab, whoever asks twice.
+				id: `core-loss-${stuck.lane}-${Date.now() - stuck.waitedMs}`,
+				text: `[OMPdesk] This session's agent has not come back ${minutes} min after OMPdesk's core process restarted${stuck.sessionPath ? ` (session ${basename(stuck.sessionPath)})` : ""}; its work is stopped until the person presses Restart on its tab.`,
+			});
+		if (!stuckTabs) {
+			const burst = { count: 0, minutes };
+			stuckTabs = burst;
+			// The tabs of one loss reach the bound within moments of each other: one notification counts them all.
+			setTimeout(() => {
+				stuckTabs = null;
+				appNotification({
+					title: mainT("recovery.stuckTitle"),
+					body: mainT("recovery.stuckBody", undefined, { count: burst.count, minutes: burst.minutes }),
+				}).show();
+			}, STUCK_NOTICE_GATHER_MS).unref();
+		}
+		stuckTabs.count++;
+		return mainT("recovery.stuckTab");
+	}
 	// The desktop slot's host is built in ipc.ts next to the pool's wiring; the factory reads it from here.
 	const desktopSlotRef: { current: DesktopSlotHost | null } = { current: null };
 	// The shared-checkout pass is built in ipc.ts too; the factory runs it when a bridge reports a new changed file.
@@ -1031,6 +1085,7 @@ app.whenReady().then(async () => {
 		eccPref: () => prefsStore().get(ECC_PREF),
 		onReady: () => firstTabReady.resolve(),
 		proxyEnv: resolveProxyEnvForSpawn,
+		recoveryStuck: noteRecoveryStuck,
 		bridgeHealth,
 		sessionKinds,
 		replyLanguagePref: () => prefsStore().get(REPLY_LANGUAGE_PREF),
@@ -2332,6 +2387,7 @@ app.whenReady().then(async () => {
 		summaries: sessionSummaries,
 		webTabNotice,
 		sessionWake,
+		tabReport,
 		webPages: () => webHost?.windows.all() ?? [],
 		spawnWindow,
 		initialCwd: resolveInitialCwd,

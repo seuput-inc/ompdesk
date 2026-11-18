@@ -487,6 +487,16 @@ export class AgentControlRuntime {
 	}
 
 	/**
+	 * Tells `tabId`'s opener what main saw happen to that tab, as an `ompdesk_report` of the tab's own: through the
+	 * core's mail outbox, so an opener whose omp is not up yet gets it once it is; `id` makes a repeat one report.
+	 * Nothing for a tab nobody opened.
+	 */
+	reportFor(tabId: string, report: { kind: "blocked"; text: string; id: string }): void {
+		if (!this.#openerOf(tabId)) return;
+		void this.control.run(tabId, "ompdesk_report", report).catch(() => undefined);
+	}
+
+	/**
 	 * The tab that opened `tabId`: the one this launch saw open it, else the opener the pool kept across a relaunch
 	 * (its tab id, or, as tab ids are new after a relaunch, the tab now holding the opener's session file).
 	 */

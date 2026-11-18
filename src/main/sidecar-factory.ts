@@ -36,7 +36,7 @@ import { writeRuntimeLog } from "./runtime-log";
 import type { SessionKindStore } from "./session-kinds";
 import type { SessionProcesses } from "./session-processes";
 import { shellSpawnEnv } from "./shell-env";
-import { SidecarManager, type SidecarOptions } from "./sidecar";
+import { type RecoveryStuck, SidecarManager, type SidecarOptions } from "./sidecar";
 import { markStartup } from "./startup-timing";
 import { turnStagesReport } from "./turn-stages-log";
 
@@ -130,6 +130,11 @@ export interface LocalSidecarDeps {
 	tuning?: SidecarOptions["tuning"];
 	/** Whose the processes an omp starts are (session-processes.ts); absent: none followed (tests). */
 	sessionProcesses?: Pick<SessionProcesses, "open">;
+	/**
+	 * A tab the core's loss took still has no omp after `RECOVERY_NOTICE_MS` (`sidecar` is its manager): the caller
+	 * tells the person and the tab's opener, once. Absent: nobody is told (tests).
+	 */
+	recoveryStuck?: (sidecar: SidecarManager, stuck: RecoveryStuck) => string | undefined;
 }
 
 /** The device language as a BCP 47 subtag (`ko`, `zh-Hant`): not the UI one, which ships only en/ko. */
@@ -299,6 +304,9 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			},
 			// The way back after a lost core, step by step (source `core-loss`): the next loss names where a tab stopped.
 			reportRecovery: (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details }),
+			// An input a start went on without (the Tauri host's proxy lookup that never answered, …).
+			reportStartInput: (input, details) => writeRuntimeLog({ source: "omp-start-input", message: input, details }),
+			...(deps.recoveryStuck ? { onRecoveryStuck: stuck => deps.recoveryStuck?.(sc, stuck) } : {}),
 			// The coordinator adds what only main knows (children, ship queue) before a window sees the status.
 			frameTransform: (frame): Record<string, unknown> =>
 				frame.type === "autopilot_update" ? (deps.autopilot?.()?.overlay(sc, frame) ?? frame) : frame,

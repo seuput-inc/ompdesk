@@ -52,6 +52,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"settle-watch": true,
 	"sidecar-restart": true,
 	"omp-slow-start": true,
+	"omp-start-input": true,
 	"process-priority": true,
 	"omp-reap": true,
 	"session-processes": true,

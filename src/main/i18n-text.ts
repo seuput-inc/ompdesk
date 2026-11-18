@@ -18,6 +18,16 @@ export const MAIN_TEXT = {
 		en: "OMPdesk couldn't save {what}; it will retry.",
 		ko: "디스크가 가득 차서 {what} 저장에 실패했어요. 자동으로 다시 시도할게요.",
 	},
+	// Tabs a lost core took that have no omp again minutes later (sidecar.ts `onRecoveryStuck`): one notice per loss.
+	"recovery.stuckTitle": { en: "Sessions did not come back", ko: "세션이 다시 열리지 않았어요" },
+	"recovery.stuckBody": {
+		en: "{count} session(s) still have no agent {minutes} min after OMPdesk's background process restarted. Press Restart on each one.",
+		ko: "OMPdesk 백그라운드 프로세스가 다시 시작된 뒤 {minutes}분이 지나도 세션 {count}개에 에이전트가 없어요. 각 세션에서 다시 시작을 눌러 주세요.",
+	},
+	"recovery.stuckTab": {
+		en: "This session's agent did not come back after OMPdesk's background process restarted. Press Restart.",
+		ko: "OMPdesk 백그라운드 프로세스가 다시 시작된 뒤 이 세션의 에이전트가 돌아오지 않았어요. 다시 시작을 눌러 주세요.",
+	},
 	"menu.about": { en: "About OMPdesk", ko: "OMPdesk 정보" },
 	"menu.checkUpdates": { en: "Check for Updates…", ko: "업데이트 확인…" },
 	"menu.services": { en: "Services", ko: "서비스" },
