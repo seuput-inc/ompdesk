@@ -1,5 +1,6 @@
-// bun native-profile.ts <port> [read|write|quit|shots <conversation> <language> <token>]: the Tauri page of the moved profile through its WebDriver.
-// `read` also reports the Settings preference and the seeded conversation through window.omp (seed-state.ts).
+// bun native-profile.ts <port> [read|write|quit|shots <conversation> <language> <token>|keys <key>...]: the Tauri page of the moved profile through its WebDriver.
+// `read` also reports the Settings preference and the seeded conversation through window.omp (seed-state.ts); `keys` says which
+// of the named Local Storage keys the page holds (webkit-store-mac.sh).
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { Driver, until } from "../tauri-native-smoke";
@@ -8,7 +9,7 @@ import { FIND_SEED_SESSION, PNG_MAGIC, takeSeedShots } from "./seed-state";
 const port = Number(process.argv[2]);
 const mode = process.argv[3] ?? "read";
 assert(Number.isInteger(port) && port >= 1024 && port <= 65535);
-assert(["read", "write", "quit", "shots"].includes(mode));
+assert(["read", "write", "quit", "shots", "keys"].includes(mode));
 const driver = new Driver(port);
 const alive = new Promise<never>(() => undefined);
 await until(
@@ -50,6 +51,13 @@ if (mode === "shots") {
 		{ conversation, language, token },
 	);
 	console.log(JSON.stringify({ shots: [conversation, language, token], taken }));
+} else if (mode === "keys") {
+	const keys = process.argv.slice(4);
+	assert(keys.length > 0, "keys needs at least one key");
+	const observed = await driver.evaluate(
+		`({href:location.href,length:localStorage.length,present:Object.fromEntries(${JSON.stringify(keys)}.map(k=>[k,localStorage.getItem(k)!==null]))})`,
+	);
+	console.log(JSON.stringify(observed));
 } else if (mode === "quit") {
 	await driver.evaluate("(setTimeout(()=>window.omp.app.quit(),0),true)");
 	console.log(JSON.stringify({ quit: "requested", transport: "native-webdriver" }));
