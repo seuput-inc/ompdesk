@@ -27,7 +27,7 @@ import { type ElectronApplication, _electron as electron } from "playwright";
 import { crash } from "./autopilot-harness";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired as paired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { cssString, exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, cssString, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const ENGINES: { name: string; type: BrowserType; device: (typeof devices)[string] }[] = [
 	{ name: "chromium", type: chromium, device: devices["Pixel 7"] },
@@ -142,7 +142,7 @@ for (const engine of ENGINES)
 			...tailscale.env,
 		});
 		Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		let current: ElectronApplication | null = null;
 		let proxy: ServeProxy | null = null;
 		let buildB: string | null = null;
@@ -321,7 +321,7 @@ for (const engine of ENGINES)
 				)
 				.toBe(true);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await proxy?.close();
 			if (current) await exitApp(current).catch(() => undefined);
 			if (buildB) await fs.rm(buildB, { recursive: true, force: true }).catch(() => undefined);

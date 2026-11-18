@@ -34,7 +34,7 @@ import { Driver, launchNative, saveFailure, stopNative, until } from "../scripts
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, recordPhoneLoads, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { copyShellDiagnostics } from "./fixture/shell-launch";
-import { captureTo, exitApp, fixtureOmp } from "./harness";
+import { captureTo, closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const CAPTURES = process.env.OMP_GUI_MOBILE_ATTACH;
 
@@ -300,7 +300,7 @@ for (const engine of ENGINES)
 	test(`A photo attached on the phone (${engine.name}) goes up through the serve prefix, omp gets it as an image and the sent bubble shows it: a camera JPEG, a 12 MB JPEG and a HEIC`, async () => {
 		test.setTimeout(240_000);
 		const profile = await makeProfile();
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		let host: Host | null = null;
 		try {
 			host = await startHost(engine, profile);
@@ -447,7 +447,7 @@ for (const engine of ENGINES)
 			await captureTo(CAPTURES, phone, `${engine.name}-two-photos-sent`);
 			expect(uploads).toEqual(Array(pictures.length + 2).fill("POST 200"));
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await host?.proxy.close();
 			if (host) await host.desktop.stop().catch(() => undefined);
 			await fs.rm(profile.root, { recursive: true, force: true }).catch(() => undefined);
@@ -500,7 +500,7 @@ for (const engine of ENGINES)
 	test(`Through the + menu on the phone (${engine.name}), a PDF, a text file and a photo picked while the page hides behind the picker and a reply streams all reach omp; a file over 25 MB is refused with a message`, async () => {
 		test.setTimeout(240_000);
 		const profile = await makeProfile();
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		let host: Host | null = null;
 		try {
 			host = await startHost(engine, profile);
@@ -608,7 +608,7 @@ for (const engine of ENGINES)
 			expect(uploads).toEqual([]);
 			await expect(phone.locator("[data-upload-chip]")).toHaveCount(0);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await host?.proxy.close();
 			if (host) await host.desktop.stop().catch(() => undefined);
 			await fs.rm(profile.root, { recursive: true, force: true }).catch(() => undefined);

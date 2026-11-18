@@ -13,7 +13,7 @@ import {
 	webkit,
 } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
-import { hitSizes, variants } from "./harness";
+import { closeBrowser, hitSizes, launchBrowser, variants } from "./harness";
 
 // The side panels on a phone (mobile web, design §7) in Chromium device emulation (a tablet and WebKit with
 // OMP_GUI_VARIANTS=1), on the dev harness (src/renderer/dev-harness): the Preview as streamed frames with touch
@@ -168,10 +168,10 @@ for (const { engine, device } of variants(
 		let browser: Browser;
 
 		test.beforeAll(async () => {
-			browser = await engine.type.launch();
+			browser = await launchBrowser(engine.type);
 		});
 		test.afterAll(async () => {
-			await browser.close();
+			await closeBrowser(browser);
 		});
 
 		test("the preview is the host's page as frames: a tap, a swipe and a pinch-free scroll reach it as pointer input", async () => {

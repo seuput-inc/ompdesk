@@ -14,7 +14,7 @@ import {
 } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { expectTouchInput, reassertTouch } from "./fixture/touch-emulation";
-import { hitSizes, variants } from "./harness";
+import { closeBrowser, hitSizes, launchBrowser, variants } from "./harness";
 import { composerGeometry, seedPaused, seedQueue, tapProbe } from "./queue-harness";
 
 // The mobile shell (design §6) in Chromium and WebKit device emulation, on the dev harness: the renderer in a
@@ -250,7 +250,7 @@ test("a tablet usage deep link scrolls settings without displacing the shell", a
 		expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.contentTop);
 		expect(geometry.targetTop).toBeLessThan(geometry.contentBottom);
 	} finally {
-		await browser.close();
+		await closeBrowser(browser);
 	}
 });
 
@@ -265,10 +265,10 @@ for (const { engine, device } of variants(
 		const drawerMode = device.drawer;
 
 		test.beforeAll(async () => {
-			browser = await engine.type.launch();
+			browser = await launchBrowser(engine.type);
 		});
 		test.afterAll(async () => {
-			await browser.close();
+			await closeBrowser(browser);
 		});
 
 		test("the page is in the shell mode its size gives, with touch input", async () => {

@@ -2,7 +2,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+	type Browser,
+	type BrowserServer,
+	type BrowserType,
+	expect,
+	type Locator,
+	type Page,
+	test,
+} from "@playwright/test";
 import type { ElectronApplication } from "playwright";
 import { assertAppBuilt } from "../scripts/e2e-app-entry";
 import { writeFakeOmp } from "../src/main/test-fake-omp";
@@ -192,6 +200,52 @@ export async function seedSetupBackoff(desktop: string, items: readonly SetupIte
  */
 export function variants<T>(all: readonly T[], keep: (item: T) => boolean = item => item === all[0]): readonly T[] {
 	return process.env.OMP_GUI_VARIANTS === "1" ? all : all.filter(keep);
+}
+
+/** The process behind each WebKit phone browser, so {@link closeBrowser} can let go of it. */
+const webkitServers = new WeakMap<Browser, BrowserServer>();
+
+/**
+ * A phone browser of `type`. WebKit is launched as a server this test holds (and connected to), so a close that cannot
+ * finish can still be let go of: see {@link closeBrowser}.
+ */
+export async function launchBrowser(type: BrowserType): Promise<Browser> {
+	if (type.name() !== "webkit") return type.launch();
+	const server = await type.launchServer();
+	const browser = await type.connect(server.wsEndpoint()).catch(async (error: unknown) => {
+		await server.close();
+		throw error;
+	});
+	webkitServers.set(browser, server);
+	return browser;
+}
+
+/**
+ * Closes a browser from {@link launchBrowser}. Playwright's WebKit for Windows sometimes leaves its WebKitNetworkProcess
+ * behind when the browser process exits: it holds sockets the server already closed (CloseWait), survives the server
+ * and the app, and does not exit even when terminated (`Stop-Process` succeeds, the process is still there 60 s
+ * later). It inherited the browser's stdio pipes, and Playwright waits for them to close, so its close never returns,
+ * nor does the worker's teardown (nightly 44304148487; 5 of 691 closes in flake-probes 44318325958, 44326978889,
+ * 44326998079, 44327008525, every other close at most 415 ms; the kill in 44346305091, the teardown in 44355416904).
+ * After 10 s this closes this side of those pipes, which ends Playwright's wait, and says so.
+ */
+export async function closeBrowser(browser: Browser): Promise<void> {
+	const server = webkitServers.get(browser);
+	if (!server) return browser.close();
+	const outcome = browser
+		.close()
+		.then(() => server.close())
+		.then(
+			() => "closed" as const,
+			(error: unknown) => ({ error }),
+		);
+	const { promise: stalled, resolve } = Promise.withResolvers<"stalled">();
+	const timer = setTimeout(() => resolve("stalled"), 10_000);
+	const result = await Promise.race([outcome, stalled]).finally(() => clearTimeout(timer));
+	if (result === "stalled") {
+		for (const stream of server.process().stdio) stream?.destroy();
+		console.warn("[closeBrowser] WebKit's close did not finish in 10 s; its stdio pipes were let go");
+	} else if (result !== "closed") throw result.error;
 }
 
 /** A screenshot of `page` in the test's output dir (`<name>.png`), CSS pixels, animations stopped. */
