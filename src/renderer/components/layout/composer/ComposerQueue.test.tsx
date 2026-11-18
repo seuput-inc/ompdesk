@@ -163,15 +163,18 @@ describe("ComposerQueuePill", () => {
 		expect(document.querySelector(".omp-composer-queue")).toBeNull();
 	});
 
-	it("opens a popover with one heading per lane and its count", async () => {
+	it("opens a popover with one heading per lane, its count and how the agent's real modes deliver it", async () => {
 		await mount([queued("s1", "steer first")], [queued("f1", "follow later"), queued("f2", "follow too")]);
+		useSettingsStore.getState().update({ steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" });
 		await openPopover();
 		expect(pill()?.getAttribute("aria-expanded")).toBe("true");
-		const heads = Array.from(document.querySelectorAll("[data-lane-head]")) as unknown as TestElement[];
-		expect(heads.map(head => head.textContent)).toEqual([
-			"After next step1· arrive togetherClear",
-			"After this turn2· sent one by oneClear",
-		]);
+		const heads = () =>
+			(Array.from(document.querySelectorAll("[data-lane-head]")) as unknown as TestElement[]).map(
+				head => head.textContent,
+			);
+		expect(heads()).toEqual(["After next step1· one per stepClear", "After this turn2· sent one by oneClear"]);
+		await act(async () => useSettingsStore.getState().update({ steeringMode: "all", followUpMode: "all" }));
+		expect(heads()).toEqual(["After next step1· arrive togetherClear", "After this turn2· sent togetherClear"]);
 		const rows = Array.from(document.querySelectorAll("[data-queue-row]")) as unknown as TestElement[];
 		expect(rows.map(row => row.getAttribute("data-lane"))).toEqual(["steering", "followUp", "followUp"]);
 	});
@@ -192,7 +195,7 @@ describe("ComposerQueuePill", () => {
 		await act(async () =>
 			useSettingsStore.getState().update({ steeringMode: "one-at-a-time", interruptMode: "immediate" }),
 		);
-		expect(policy()).toBe("Steers arrive one at a time · a steer interrupts the running tool");
+		expect(policy()).toBe("Steers arrive one at a time · a steer moves a running shell to the background");
 	});
 
 	it("names every row action by the start of its message", async () => {
