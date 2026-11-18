@@ -964,10 +964,10 @@ app.whenReady().then(async () => {
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
-	/** Tabs a lost core took that still have no omp, gathered for one notification (`recovery.stuck*`). */
+	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
 	let stuckTabs: { count: number; minutes: number } | null = null;
 	/**
-	 * A tab the core's loss took has no omp `RECOVERY_NOTICE_MS` later (sidecar.ts `onRecoveryStuck`): its opener is told
+	 * A tab the core's loss took is not ready `RECOVERY_NOTICE_MS` later (sidecar.ts `onRecoveryStuck`): its opener is told
 	 * by a report of the tab's own, the person by one notification for every tab of the loss, and the tab's banner says
 	 * it (the answer).
 	 */

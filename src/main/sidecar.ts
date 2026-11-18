@@ -84,7 +84,7 @@ const START_INPUT_MS = 45_000;
 const RECOVERY_NOTICE_MS = 180_000;
 
 /** A step of a tab's way back after a lost core (`SidecarOptions.reportRecovery`). */
-export type LaneRecoveryStep = "lane-lost" | "resolve-slow" | "resolved" | "launch" | "spawned" | "stuck";
+export type LaneRecoveryStep = "lane-lost" | "resolve-slow" | "resolved" | "launch" | "spawned" | "ready" | "stuck";
 
 /**
  * The environment a spawn gets, as node's `spawn` hands it to the child: values that are undefined are left out and,
@@ -400,13 +400,13 @@ export interface SidecarOptions {
 	/** How long after a lost core a tab without a new omp is told (`RECOVERY_NOTICE_MS`; tests shorten it). */
 	recoveryNoticeMs?: number;
 	/**
-	 * A tab the core's loss took has no omp `RECOVERY_NOTICE_MS` later; once per loss. Answers the message the tab's
+	 * A tab the core's loss took is not ready `RECOVERY_NOTICE_MS` later; once per loss. Answers the message the tab's
 	 * status shows meanwhile (an `error` with Restart), or nothing.
 	 */
 	onRecoveryStuck?: (stuck: RecoveryStuck) => string | undefined;
 }
 
-/** A tab with no omp `RECOVERY_NOTICE_MS` after the core that ran it was lost, as handed to `onRecoveryStuck`. */
+/** A tab not ready `RECOVERY_NOTICE_MS` after the core that ran it was lost, as handed to `onRecoveryStuck`. */
 export interface RecoveryStuck {
 	/** The tab's lane id, as its `core-loss` lines name it. */
 	lane: string;
@@ -705,7 +705,7 @@ export class SidecarManager extends EventEmitter {
 	#startGate: SidecarStartGate | null = null;
 	/** The tab's process tag, made at its first spawn and kept for every later one. */
 	#processes: SessionProcessHandle | null = null;
-	/** When the core that ran this tab's lane ended, until the tab's next omp spawned (`reportRecovery`). */
+	/** When the core that ran this tab's lane ended, until the tab is ready again (`reportRecovery`). */
 	#lostAt: number | null = null;
 	/** `RECOVERY_NOTICE_MS` after a loss that started this tab again (`#armStuck`). */
 	#stuckTimer: NodeJS.Timeout | undefined;
@@ -856,9 +856,9 @@ export class SidecarManager extends EventEmitter {
 	}
 
 	/**
-	 * A tab the core's loss took that has no omp again `RECOVERY_NOTICE_MS` later is told once (`onRecoveryStuck`):
-	 * the person and the session that opened it learn it from one notice, not from a tab that reads `starting` for
-	 * hours (the Mac mini, 18 Nov 2026). The start goes on meanwhile.
+	 * A tab the core's loss took that is not ready again `RECOVERY_NOTICE_MS` later (no omp, or one that never
+	 * answered) is told once (`onRecoveryStuck`): the person and the session that opened it learn it from one notice,
+	 * not from a tab that reads `starting` for hours (the Mac mini, 18 Nov 2026). The start goes on meanwhile.
 	 */
 	#armStuck(lostAt: number): void {
 		clearTimeout(this.#stuckTimer);
@@ -873,7 +873,8 @@ export class SidecarManager extends EventEmitter {
 				sessionPath: this.#sessionPath,
 				waitedMs: Date.now() - lostAt,
 			});
-			if (message) this.#setStatus("error", { message });
+			// A tab already failed (its crash budget spent) keeps the reason it shows.
+			if (message && this.#status !== "error") this.#setStatus("error", { message });
 		}, this.#options.recoveryNoticeMs ?? RECOVERY_NOTICE_MS);
 		this.#stuckTimer.unref?.();
 	}
@@ -1005,6 +1006,11 @@ export class SidecarManager extends EventEmitter {
 		const { status, cwd, ...detail } = event.payload;
 		this.#status = status;
 		this.#statusDetail = detail;
+		// The way back ends when the tab can work again: a spawned omp that never answers is still a tab not back.
+		if (status === "ready" && this.#lostAt !== null) {
+			this.#recovered("ready");
+			this.#endRecovery();
+		}
 		// A cwd the lane sent before it applied a predicted one (`restart(cwd)`, `adoptCwd`) is the old one.
 		if (cwd !== undefined && event.cmd >= this.#cwdFence && cwd !== this.#options.cwd)
 			this.#options = { ...this.#options, cwd };
@@ -1050,7 +1056,6 @@ export class SidecarManager extends EventEmitter {
 		});
 		this.#rpcClient = client;
 		this.#recovered("spawned");
-		this.#endRecovery();
 		this.emit("spawned");
 	}
 

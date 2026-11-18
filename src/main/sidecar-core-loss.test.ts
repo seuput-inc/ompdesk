@@ -89,8 +89,8 @@ describe("tabs whose core ended under them", () => {
 			for (const session of sessions)
 				expect(
 					reports.filter(report => report.session === path.basename(session)).map(report => report.step),
-				).toEqual(["lane-lost", "resolved", "launch", "spawned"]);
-			expect(reports).toHaveLength(TABS * 4);
+				).toEqual(["lane-lost", "resolved", "launch", "spawned", "ready"]);
+			expect(reports).toHaveLength(TABS * 5);
 			await vi.waitFor(() => expect(lossReports.map(report => report.step)).toEqual(["abandoned", "ended"]));
 			expect(lossReports[0]?.details).toMatchObject({ reason: "a test ends the core" });
 			expect(lossReports[1]?.details).toMatchObject({ abandoned: true, answered: true });
@@ -194,6 +194,43 @@ describe("tabs whose core ended under them", () => {
 			core().abandon("a test ends the core");
 			await vi.waitFor(() => expect(sidecar.status).toBe("error"), { timeout: 10_000 });
 			expect(stuck).toEqual([expect.objectContaining({ sessionPath: session })]);
+		} finally {
+			sidecar.dispose();
+			await fs.rm(tempDir, RM_TEMP);
+		}
+	}, 30_000);
+
+	it("tells too when the next omp spawns but never answers", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-core-loss-silent-"));
+		const silent = path.join(tempDir, "silent");
+		// The first omp answers; every omp started once `silent` exists stays mute (no `ready`, no answer).
+		const binaryPath = await writeFakeOmp(
+			tempDir,
+			`import * as fs from "node:fs";\nif (fs.existsSync(${JSON.stringify(silent)})) setInterval(() => {}, 60_000);\nelse {\nprocess.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n}\n`,
+		);
+		const steps: string[] = [];
+		const stuck: unknown[] = [];
+		const sidecar = new SidecarManager({
+			omp: ompAt(binaryPath),
+			cwd: tempDir,
+			recoveryNoticeMs: 1_000,
+			reportRecovery: step => steps.push(step),
+			onRecoveryStuck: report => {
+				stuck.push(report);
+				return "did not come back";
+			},
+		});
+		try {
+			const ready = nextReady(sidecar);
+			sidecar.start();
+			await ready;
+			await fs.writeFile(silent, "");
+			core().abandon("a test ends the core");
+			await vi.waitFor(() => expect(stuck).toHaveLength(1), { timeout: 10_000 });
+			// The omp spawned; the tab still was not back.
+			expect(steps).toContain("spawned");
+			expect(steps).not.toContain("ready");
+			expect(sidecar.status).toBe("error");
 		} finally {
 			sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);
