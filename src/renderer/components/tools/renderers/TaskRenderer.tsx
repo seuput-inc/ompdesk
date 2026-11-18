@@ -102,8 +102,9 @@ function resultCost(row: Record<string, unknown>): number {
 // Yields + review rendering
 // ---------------------------------------------------------------------------
 
-function yieldPreview(item: RenderYieldItem, lastTurnLabel: string): string {
-	if (item.data === undefined) return lastTurnLabel;
+// Stock pi-tui tools/task.ts `formatYieldPreview`: since omp 18.22.1 a data-less yield finalizes the sections.
+function yieldPreview(item: RenderYieldItem, finalizeLabel: string): string {
+	if (item.data === undefined) return finalizeLabel;
 	if (typeof item.data === "string") return item.data.replace(/\s+/g, " ").trim();
 	try {
 		return JSON.stringify(item.data) ?? "null";
@@ -126,11 +127,11 @@ function YieldLines({ value }: { value: unknown }) {
 			{visible.map(({ item, labels }, i) => (
 				<div key={i} className="flex gap-1.5 font-mono text-omp-xs leading-[1.5]">
 					<span className="shrink-0 text-[var(--omp-dim)]">└</span>
-					<span className="min-w-0 truncate" title={yieldPreview(item, t("tools.task.yieldLastTurn"))}>
+					<span className="min-w-0 truncate" title={yieldPreview(item, t("tools.task.yieldFinalize"))}>
 						<span className="text-[var(--omp-dim)]">
 							{t("tools.task.yieldLabel", { suffix: Array.isArray(item.type) ? "+" : "" })}[{labels.join(", ")}]:
 						</span>{" "}
-						<span className="text-[var(--omp-muted)]">{yieldPreview(item, t("tools.task.yieldLastTurn"))}</span>
+						<span className="text-[var(--omp-muted)]">{yieldPreview(item, t("tools.task.yieldFinalize"))}</span>
 					</span>
 				</div>
 			))}
