@@ -261,6 +261,18 @@ export function signBundle(app: string, identity: string, keychain: string | nul
 	codesign(["--verify", "--deep", "--strict", "--verbose=2", app]);
 }
 
+/**
+ * The shell is not the bundle's CFBundleExecutable, so Foundation reads its main bundle's identifier from the
+ * Info.plist embedded in its own binary (`native/ompdesk/crates/tauri-shell/Info.plist`); 0.133.0's had none, and every
+ * macOS notification failed ("macOS notifications need the app to run from an application bundle").
+ */
+function checkShellIdentity(app: string): void {
+	const shell = path.join(app, "Contents", "MacOS", bundle.SHELL);
+	const embedded = spawnSync("launchctl", ["plist", "__TEXT,__info_plist", shell], { encoding: "utf8" });
+	if (embedded.status !== 0 || !embedded.stdout.includes(`"CFBundleIdentifier" = "${bundle.APP_ID}";`))
+		fail(`${shell} embeds no CFBundleIdentifier ${bundle.APP_ID}: ${embedded.stdout}${embedded.stderr}`);
+}
+
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 	if (process.platform !== "darwin") fail("run this on a Mac (codesign, hdiutil)");
@@ -270,6 +282,7 @@ async function main(): Promise<void> {
 	const version = versionAt >= 0 ? args[versionAt + 1] : undefined;
 	const runtime = args.includes("--historical-cef") ? "cef" : "tauri";
 	const app = assembleBundle(REPO_ROOT, out, version, runtime);
+	if (runtime === "tauri") checkShellIdentity(app);
 	await afterPack({
 		electronPlatformName: "darwin",
 		appOutDir: out,
