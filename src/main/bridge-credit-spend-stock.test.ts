@@ -318,6 +318,12 @@ function runProbe(fake: string, scenario: Scenario): Promise<ProbeResult> {
 		join(isolated, "config.yml"),
 		"retry:\n  maxRetries: 1\n  baseDelayMs: 50\n  maxDelayMs: 1000\n  fallbackOn: usage-limit\n",
 	);
+	// omp 18.22.1+ (pi-catalog wire/codex-version.ts) fetches `@openai/codex`'s npm version without a fresh record;
+	// one no newer than stock's pin keeps that pin and leaves the network alone.
+	writeFileSync(
+		join(isolated, "codex-client-version.json"),
+		JSON.stringify({ version: "0.0.0", checkedAt: Date.now() }),
+	);
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		HOME: isolated,
