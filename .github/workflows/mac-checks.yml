@@ -17,7 +17,7 @@ jobs:
   # WebDriver (scripts/tauri-native-smoke.ts; Playwright cannot attach to WKWebView), on the built app (out/), on macOS.
   mac-smoke:
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
@@ -26,14 +26,13 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
-      # See release.yml's mac job: a plain install may leave no Electron binary; the shared install fetches it.
-      - uses: ./.github/actions/install
-      # The Tauri host (system WebView), the rollback launcher and the pinned Node (the tauri-shell action: a cached build),
-      # built with the test-automation feature: the embedded WebDriver server the smoke drives (a released host has none).
-      - uses: ./.github/actions/tauri-shell
+      # install, the Tauri host with the test-automation feature (the embedded WebDriver server the smoke drives; a released
+      # host has none), the rollback launcher, the pinned Node, the Preview browser, the build, memory and agent-desktop: what
+      # the smoke and the packaged app below need.
+      - uses: ./.github/actions/shell-mac-inputs
         with:
-          test-automation: "true"
-      - run: bun run build
+          runtime: tauri
+          playwright: "false"
       # The same driver release.yml's `mac` runs on the packaged app, here on the staged host: bridge, new tab, a prompt
       # round trip on the fake omp, settings, a clean quit.
       - name: Smoke the staged Tauri host
@@ -43,6 +42,13 @@ jobs:
           export OMPDESK_TAURI_TEST_BINARY="$PWD/resources/ompdesk-tauri/darwin-arm64/ompdesk-shell"
           export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
           bun scripts/tauri-native-smoke.ts
+      # The packaged app (ad-hoc signed, the test host above inside) started as a person starts it: one app whose pid is the
+      # shell's, a second `open` handing over, a quit leaving nothing behind (scripts/mac-launch-check.sh). The launcher
+      # starts the shell and exits since the macOS 27 tray hang (launcher_main.rs); these say that changed nothing else.
+      - name: Package the app
+        run: bun scripts/package-mac.ts --no-dmg --sign-with -
+      - name: Launch, hand over and quit the packaged app
+        run: bash scripts/mac-launch-check.sh dist/mac-arm64/OMPdesk.app
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
