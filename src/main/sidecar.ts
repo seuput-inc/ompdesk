@@ -69,9 +69,22 @@ const CORE_ANSWER_SLACK_MS = 10_000;
 const START_SLOW_MS = 20_000;
 /** How long a recovering tab's start may wait on its resolve before the inputs it still waits on are logged. */
 const RECOVERY_SLOW_MS = 30_000;
+/**
+ * How long a start waits on one input it resolves (omp, the proxy, the login shell's environment, the built-in
+ * extensions, the browsers) before it goes on as if that input had failed, logged (`reportStartInput`). Each is
+ * seconds at most when it works (the login shell's probe has 4 s); past `RECOVERY_SLOW_MS`, so a recovering tab's
+ * `resolve-slow` line still names what it waits on first.
+ */
+const START_INPUT_MS = 45_000;
+/**
+ * How long after a lost core a tab may go without a new omp before the person and its opener are told (once). Every
+ * input of the start is bounded (`START_INPUT_MS`), the start queue holds a place 15 s, and the session's owner is
+ * waited for 60 s: past three minutes something no bound covers holds the tab.
+ */
+const RECOVERY_NOTICE_MS = 180_000;
 
 /** A step of a tab's way back after a lost core (`SidecarOptions.reportRecovery`). */
-export type LaneRecoveryStep = "lane-lost" | "resolve-slow" | "resolved" | "launch" | "spawned";
+export type LaneRecoveryStep = "lane-lost" | "resolve-slow" | "resolved" | "launch" | "spawned" | "stuck";
 
 /**
  * The environment a spawn gets, as node's `spawn` hands it to the child: values that are undefined are left out and,
@@ -380,6 +393,25 @@ export interface SidecarOptions {
 	startSlowMs?: number;
 	/** How long a recovering start may wait on its resolve before `resolve-slow` (`RECOVERY_SLOW_MS`; tests shorten it). */
 	recoverySlowMs?: number;
+	/** How long a start may wait on one input it resolves before it goes on without it (`START_INPUT_MS`; tests shorten it). */
+	startInputMs?: number;
+	/** Logs an input a start went on without, past `START_INPUT_MS` (source `omp-start-input`). */
+	reportStartInput?: (input: string, details: Record<string, string | number | boolean>) => void;
+	/** How long after a lost core a tab without a new omp is told (`RECOVERY_NOTICE_MS`; tests shorten it). */
+	recoveryNoticeMs?: number;
+	/**
+	 * A tab the core's loss took has no omp `RECOVERY_NOTICE_MS` later; once per loss. Answers the message the tab's
+	 * status shows meanwhile (an `error` with Restart), or nothing.
+	 */
+	onRecoveryStuck?: (stuck: RecoveryStuck) => string | undefined;
+}
+
+/** A tab with no omp `RECOVERY_NOTICE_MS` after the core that ran it was lost, as handed to `onRecoveryStuck`. */
+export interface RecoveryStuck {
+	/** The tab's lane id, as its `core-loss` lines name it. */
+	lane: string;
+	sessionPath: string | null;
+	waitedMs: number;
 }
 
 /** A start past `START_SLOW_MS`, as handed to `reportSlowStart`. */
@@ -675,6 +707,8 @@ export class SidecarManager extends EventEmitter {
 	#processes: SessionProcessHandle | null = null;
 	/** When the core that ran this tab's lane ended, until the tab's next omp spawned (`reportRecovery`). */
 	#lostAt: number | null = null;
+	/** `RECOVERY_NOTICE_MS` after a loss that started this tab again (`#armStuck`). */
+	#stuckTimer: NodeJS.Timeout | undefined;
 
 	constructor(options: SidecarOptions) {
 		super();
@@ -785,7 +819,8 @@ export class SidecarManager extends EventEmitter {
 			this.#lostAt = Date.now();
 			this.#recovered("lane-lost", { code, start: !asleep });
 			// A tab that slept starts when shown: its start is no part of this loss.
-			if (asleep) this.#lostAt = null;
+			if (asleep) this.#endRecovery();
+			else this.#armStuck(this.#lostAt);
 			this.#setStatus("restarting", { message });
 			this.#ensureOpen();
 			if (!asleep) this.start();
@@ -793,7 +828,7 @@ export class SidecarManager extends EventEmitter {
 		}
 		this.#lostAt = Date.now();
 		this.#recovered("lane-lost", { code, start: false });
-		this.#lostAt = null;
+		this.#endRecovery();
 		this.#setStatus("error", { message });
 	}
 
@@ -811,6 +846,36 @@ export class SidecarManager extends EventEmitter {
 			ms: Date.now() - lostAt,
 			...details,
 		});
+	}
+
+	/** The way back after a lost core is over: the next omp spawned, or the tab shows why it waits. */
+	#endRecovery(): void {
+		this.#lostAt = null;
+		clearTimeout(this.#stuckTimer);
+		this.#stuckTimer = undefined;
+	}
+
+	/**
+	 * A tab the core's loss took that has no omp again `RECOVERY_NOTICE_MS` later is told once (`onRecoveryStuck`):
+	 * the person and the session that opened it learn it from one notice, not from a tab that reads `starting` for
+	 * hours (the Mac mini, 18 Nov 2026). The start goes on meanwhile.
+	 */
+	#armStuck(lostAt: number): void {
+		clearTimeout(this.#stuckTimer);
+		this.#stuckTimer = setTimeout(() => {
+			this.#stuckTimer = undefined;
+			if (this.#lostAt !== lostAt || this.#disposed) return;
+			this.#recovered("stuck");
+			// The tab's own banner says it, in every window, a paired computer's view and the phone (its Restart starts
+			// it again); the start goes on and its next status replaces this one.
+			const message = this.#options.onRecoveryStuck?.({
+				lane: this.#tab,
+				sessionPath: this.#sessionPath,
+				waitedMs: Date.now() - lostAt,
+			});
+			if (message) this.#setStatus("error", { message });
+		}, this.#options.recoveryNoticeMs ?? RECOVERY_NOTICE_MS);
+		this.#stuckTimer.unref?.();
 	}
 
 	/** One message to the tab's lane, numbered in the order main sends them; the lane applies them in that order. */
@@ -985,7 +1050,7 @@ export class SidecarManager extends EventEmitter {
 		});
 		this.#rpcClient = client;
 		this.#recovered("spawned");
-		this.#lostAt = null;
+		this.#endRecovery();
 		this.emit("spawned");
 	}
 
@@ -1171,11 +1236,33 @@ export class SidecarManager extends EventEmitter {
 	#onResolve(ask: ResolveAsk): void {
 		const { omp, proxyEnv, shellEnv } = this.#options;
 		const fallback = () => ({}) as Record<string, string>;
+		const bound = this.#options.startInputMs ?? START_INPUT_MS;
 		// What the start still waits on, named for a recovery's `resolve-slow` report.
 		const pending = new Set<string>();
-		const waited = <T>(name: string, value: Promise<T> | T): Promise<T> => {
+		// Every input but the session's owner has a bound, past which the start goes on with what it would take for a
+		// failed one (logged): the Tauri host answered none of its calls for 6 h while its main thread hung, and every
+		// recovering tab sat in `resolve-slow pending proxyEnv` (the Mac mini, 18 Nov 2026). The owner's wait has its
+		// own bound (`SESSION_FREE_WAIT_MS`) and a held session is a state the tab shows, not a start that hangs.
+		const waited = <T>(name: string, value: Promise<T> | T, otherwise: (() => T) | null): Promise<T> => {
 			pending.add(name);
-			return Promise.resolve(value).finally(() => pending.delete(name));
+			const settled = Promise.resolve(value);
+			if (otherwise === null) return settled.finally(() => pending.delete(name));
+			const { promise, resolve } = Promise.withResolvers<T>();
+			const timer = setTimeout(() => {
+				pending.delete(name);
+				this.#options.reportStartInput?.(name, {
+					lane: this.#tab,
+					...(this.#sessionPath ? { session: basename(this.#sessionPath) } : {}),
+					ms: bound,
+				});
+				resolve(otherwise());
+			}, bound);
+			timer.unref?.();
+			void settled.then(resolve).finally(() => {
+				clearTimeout(timer);
+				pending.delete(name);
+			});
+			return promise;
 		};
 		const slow =
 			this.#lostAt === null
@@ -1185,30 +1272,31 @@ export class SidecarManager extends EventEmitter {
 						this.#options.recoverySlowMs ?? RECOVERY_SLOW_MS,
 					);
 		slow?.unref?.();
+		const noOmp = (error: string): OmpResolution => ({ ok: false, error });
 		void Promise.all([
 			waited(
 				"omp",
-				omp().catch(
-					(err: unknown): OmpResolution => ({
-						ok: false,
-						error: err instanceof Error ? err.message : String(err),
-					}),
-				),
+				omp().catch((err: unknown): OmpResolution => noOmp(err instanceof Error ? err.message : String(err))),
+				() => noOmp(`omp was not found within ${bound / 1000} s`),
 			),
-			waited("proxyEnv", proxyEnv ? proxyEnv().catch(fallback) : {}),
-			waited("shellEnv", shellEnv ? shellEnv().catch(fallback) : {}),
-			waited("builtinMcp", this.#options.builtinMcp?.().catch(() => ({ args: [] })) ?? { args: [] }),
+			waited("proxyEnv", proxyEnv ? proxyEnv().catch(fallback) : {}, fallback),
+			waited("shellEnv", shellEnv ? shellEnv().catch(fallback) : {}, fallback),
+			waited("builtinMcp", this.#options.builtinMcp?.().catch(() => ({ args: [] })) ?? { args: [] }, () => ({
+				args: [],
+			})),
 			waited(
 				"sessionFree",
 				ask.sessionPath && this.#options.sessionFree
 					? this.#options.sessionFree(ask.sessionPath).catch(() => "free" as const)
 					: ("free" as const),
+				null,
 			),
 			waited(
 				"defaultBrowser",
 				Promise.resolve(this.#options.defaultBrowser?.()).catch(() => undefined),
+				() => undefined,
 			),
-			waited("egoBrowserDir", this.#options.egoBrowserDir?.().catch(() => null) ?? null),
+			waited("egoBrowserDir", this.#options.egoBrowserDir?.().catch(() => null) ?? null, () => null),
 		]).then(([resolution, proxyVars, shellVars, builtinMcp, session, defaultBrowser, egoBrowserDir]) => {
 			clearTimeout(slow);
 			// A start that a restart or a stop superseded while this resolved must not spawn.
@@ -1218,6 +1306,8 @@ export class SidecarManager extends EventEmitter {
 			}
 			if (session === "owned") {
 				this.#recovered("resolved", { outcome: "owned" });
+				// A held session is a wait the tab shows (`sessionHeld`), not a way back that hangs.
+				this.#endRecovery();
 				this.#answer("sidecar.resolved", ask, {
 					outcome: "owned",
 					message: this.#options.sessionOwnedText?.() ?? "This session is still open in another omp process.",
@@ -1618,6 +1708,7 @@ export class SidecarManager extends EventEmitter {
 	dispose(): void {
 		if (!this.#disposed) {
 			this.#disposed = true;
+			clearTimeout(this.#stuckTimer);
 			if (this.#opened) {
 				// Stock omp emits `session_shutdown` (ai-memory's `session-end` hook, which makes the handoff) only when its
 				// stdin ends; SIGTERM kills it before. With a grace period its stdin closes first.

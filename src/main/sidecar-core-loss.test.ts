@@ -133,4 +133,70 @@ describe("tabs whose core ended under them", () => {
 			await fs.rm(tempDir, RM_TEMP);
 		}
 	}, 30_000);
+
+	// The Mac mini, 18 Nov 2026: the shell's proxy lookup never answered and every recovering tab sat at `starting`.
+	it("goes on without an input that never settles, and says which", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-core-loss-input-"));
+		const binaryPath = await writeFakeOmp(
+			tempDir,
+			`process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
+		);
+		let hang = false;
+		const skipped: string[] = [];
+		const sidecar = new SidecarManager({
+			omp: ompAt(binaryPath),
+			cwd: tempDir,
+			proxyEnv: () => (hang ? Promise.withResolvers<Record<string, string>>().promise : Promise.resolve({})),
+			startInputMs: 300,
+			reportStartInput: input => skipped.push(input),
+		});
+		try {
+			const ready = nextReady(sidecar);
+			sidecar.start();
+			await ready;
+			hang = true;
+			const back = nextReady(sidecar);
+			core().abandon("a test ends the core");
+			await back;
+			expect(skipped).toEqual(["proxyEnv"]);
+		} finally {
+			sidecar.dispose();
+			await fs.rm(tempDir, RM_TEMP);
+		}
+	}, 30_000);
+
+	it("tells, and shows on the tab, when a recovering tab still has no omp at the bound", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-core-loss-stuck-"));
+		const binaryPath = await writeFakeOmp(
+			tempDir,
+			`process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
+		);
+		const session = path.join(tempDir, "s.jsonl");
+		await fs.writeFile(session, "{}\n");
+		let hang = false;
+		const stuck: unknown[] = [];
+		const sidecar = new SidecarManager({
+			omp: ompAt(binaryPath),
+			cwd: tempDir,
+			// After the loss, the wait for the session's owner (no bound of the start's own) never ends.
+			sessionFree: () => (hang ? Promise.withResolvers<"free">().promise : Promise.resolve("free")),
+			recoveryNoticeMs: 300,
+			onRecoveryStuck: report => {
+				stuck.push(report);
+				return "did not come back";
+			},
+		});
+		try {
+			const ready = nextReady(sidecar);
+			sidecar.restart(undefined, session);
+			await ready;
+			hang = true;
+			core().abandon("a test ends the core");
+			await vi.waitFor(() => expect(sidecar.status).toBe("error"), { timeout: 10_000 });
+			expect(stuck).toEqual([expect.objectContaining({ sessionPath: session })]);
+		} finally {
+			sidecar.dispose();
+			await fs.rm(tempDir, RM_TEMP);
+		}
+	}, 30_000);
 });

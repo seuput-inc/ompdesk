@@ -559,7 +559,8 @@ export type RuntimeErrorSource =
 	| "hub"
 	/**
 	 * The core process's loss and each tab's way back (src/main/core/process.ts `report`, sidecar.ts `reportRecovery`):
-	 * `message` names the step: abandoned, ended, rest; lane-lost, resolve-slow, resolved, launch, spawned.
+	 * `message` names the step: abandoned, ended, rest; lane-lost, resolve-slow, resolved, launch, spawned, stuck (no
+	 * omp `RECOVERY_NOTICE_MS` after the loss: the person and the tab's opener are told once).
 	 */
 	| "core-loss"
 	/**
@@ -639,6 +640,8 @@ export type RuntimeErrorSource =
 	| "sidecar-restart"
 	/** A tab's omp that has not answered its first `get_state` after `START_SLOW_MS` and is still waited for (src/main/sidecar.ts `SlowStartReport`): `details.stderr` and `details.ompLog` (its own log) are its tails, `details.ready` whether it printed `ready`, `details.unanswered` the stock commands it holds. */
 	| "omp-slow-start"
+	/** An input a tab's omp start went on without after `START_INPUT_MS` (src/main/sidecar.ts `#onResolve`): `message` names it (omp, proxyEnv, shellEnv, builtinMcp, defaultBrowser, egoBrowserDir), `details` the lane and session. */
+	| "omp-start-input"
 	/** An omp whose CPU priority could not be lowered below the app's (src/main/agent-priority.ts), logged once: `message` is why. */
 	| "process-priority"
 	/**
