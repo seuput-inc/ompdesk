@@ -144,7 +144,7 @@ export function ThemePicker() {
 	useEffect(() => {
 		let cancelled = false;
 		void getPersistedThemeSelection().then(selection => {
-			// A read answered after a click holds the prefs from before it: the choice wins.
+			// A read sent before a click answers with the prefs from before it: the choice wins.
 			if (!cancelled) setCurrent(chosen => chosen ?? selection);
 		});
 		return () => {

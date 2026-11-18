@@ -133,14 +133,14 @@ describe("ThemePicker", () => {
 		expect(option("system").getAttribute("aria-checked")).toBe("false");
 	});
 
-	it("keeps a choice made before the stored theme was read", async () => {
-		// Main answers the picker's reads from the prefs as they were before the click saved, after the click.
+	it("keeps a choice made while its stored-theme read is still in flight", async () => {
+		// Each read answers with the prefs as they were when it was sent; the second one (the legacy `theme`
+		// pref, read because `themeName` is unset) is sent before the click and answered after it.
 		const stored = prefsApi.get;
-		const beforeClick = { ...prefs };
 		const held = Promise.withResolvers<void>();
-		prefsApi.get = async key => {
-			await held.promise;
-			return beforeClick[key];
+		prefsApi.get = key => {
+			const sent = prefs[key];
+			return key === "theme" ? held.promise.then(() => sent) : Promise.resolve(sent);
 		};
 		try {
 			await mount();
