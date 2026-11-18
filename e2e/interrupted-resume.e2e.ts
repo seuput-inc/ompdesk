@@ -510,6 +510,19 @@ test("a session idle while its background subagent works goes on when its omp di
 
 /** The app's core process (`ompdesk-core`, main's child; not the setup supervisor it starts). */
 function corePids(mainPid: number): number[] {
+	if (process.platform === "win32")
+		return execFileSync(
+			"powershell.exe",
+			[
+				"-NoProfile",
+				"-Command",
+				`Get-CimInstance Win32_Process -Filter "ParentProcessId=${mainPid} AND Name='ompdesk-core.exe'" | ForEach-Object { $_.ProcessId }`,
+			],
+			{ encoding: "utf8" },
+		)
+			.split(/\s+/)
+			.filter(Boolean)
+			.map(Number);
 	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
 		.split("\n")
 		.map(line => line.trim().split(/\s+/))
@@ -520,7 +533,6 @@ function corePids(mainPid: number): number[] {
 // 18 Nov 2026, the Mac mini: the core was lost under 14 running tabs; each lane opened again on the next core, but no
 // turn went on. A lost core takes every omp with it, and the turn it cut must continue on the omp the next core runs.
 test("a turn running when the app's core dies continues on the next core", async () => {
-	test.skip(process.platform === "win32", "the core's pid comes from ps");
 	test.setTimeout(150_000);
 	const profile = await makeProfile("en", "light");
 	let current: ElectronApplication | undefined;
@@ -532,14 +544,14 @@ test("a turn running when the app's core dies continues on the next core", async
 		const [core, ...others] = corePids(mainPid);
 		expect(others).toEqual([]);
 		if (core === undefined) throw new Error("expected the app's core");
-		const [omp] = ompPids(profile);
+		const omp = process.platform === "win32" ? undefined : ompPids(profile)[0];
 		process.kill(core, "SIGKILL");
 
 		await expect(page.getByText("Continued after the interruption.")).toBeVisible({ timeout: 90_000 });
 		await expect(page.locator(".omp-user-bubble")).toHaveText([/^fixture running with job/]);
 		await expect.poll(() => markers(profile), { timeout: 15_000 }).toEqual([]);
 		expect(corePids(mainPid)).not.toContain(core);
-		expect(ompPids(profile)).not.toContain(omp);
+		if (omp !== undefined) expect(ompPids(profile)).not.toContain(omp);
 		await expectOneSession(profile, page, sessionPath);
 	} finally {
 		if (current) await exitApp(current);
