@@ -147,23 +147,34 @@ describe("deriveUnavailable", () => {
 		for (const feature of ALL_FEATURES) expect(en[`bridgeHealth.feature.${feature}`], feature).toBeTruthy();
 	});
 
-	it("reports composer unavailable on an omp without the session members its methods read", () => {
-		const members = [
-			"AgentSession.disarmPrewalk",
-			"AgentSession.autoRetryEnabled",
-			"AgentSession.configuredThinkingLevel",
-		];
-		const composer = { session: REQUIREMENTS.composer.session };
-		expect(missingFor(composer, sources({ session: {} }))).toEqual(expect.arrayContaining(members));
+	it("reports composer status unavailable on an omp without the session members it reads", () => {
+		const members = ["AgentSession.autoRetryEnabled", "AgentSession.configuredThinkingLevel"];
+		const status = { session: REQUIREMENTS.composerState.session };
+		expect(missingFor(status, sources({ session: {} }))).toEqual(expect.arrayContaining(members));
 		const current = {
-			disarmPrewalk() {},
 			get autoRetryEnabled() {
 				return true;
 			},
 			configuredThinkingLevel() {},
 		};
-		const missing = missingFor(composer, sources({ session: current }));
+		const missing = missingFor(status, sources({ session: current }));
 		for (const member of members) expect(missing).not.toContain(member);
+	});
+
+	it("marks only the core capabilities core, so main repairs omp for those alone", () => {
+		const requirements = {
+			relaunchResume: { session: ["restoreInterruptedTurn()"] },
+			abortCompaction: { session: ["abortCompaction()"] },
+		};
+		expect(deriveUnavailable(["relaunchResume", "abortCompaction"], sources({ session: {} }), requirements)).toEqual([
+			{ feature: "relaunchResume", missing: ["AgentSession.restoreInterruptedTurn"], core: true },
+			{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
+		]);
+		expect(
+			mergeAreaFailures([], [{ area: "composer", features: ["relaunchResume", "jobs"], error: "x" }]).map(
+				entry => entry.core === true,
+			),
+		).toEqual([true, false]);
 	});
 });
 

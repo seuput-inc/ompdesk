@@ -169,7 +169,7 @@ export const methods: BridgeMethods = {
 		},
 	}),
 
-	...guard("composer", {
+	...guard("localPaste", {
 		/**
 		 * `{content}` → write a large paste into the live session's local:// store (the read
 		 * tool's own root). `wx` claims paste-N.md exclusively, so concurrent writers never collide.
@@ -189,7 +189,8 @@ export const methods: BridgeMethods = {
 				}
 			}
 		},
-
+	}),
+	...guard("localLinks", {
 		/**
 		 * `{url}` → the on-disk path of a `local://` link in the live session, through stock's own
 		 * resolution (Windows MAX_PATH shortening, root containment). Refuses anything else.
@@ -200,7 +201,8 @@ export const methods: BridgeMethods = {
 				throw new Error("resolve_local_url requires a local:// URL");
 			return { path: resolveLocalUrlToPath(url, localProtocolOptions(env)) };
 		},
-
+	}),
+	...guard("argCompletions", {
 		/** `{cwd, command, prefix}` → a builtin slash command's argument candidates and inline hint. */
 		"sessions.arg_completions": async params => {
 			const cwd = param(params, "cwd");

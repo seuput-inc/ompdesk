@@ -1,9 +1,16 @@
 /**
  * Compatibility self-check: every omp internal the bridge modules use, grouped
- * by the GUI feature that needs it. omp internals carry no semver, so after an
+ * by the GUI capability that needs it. omp internals carry no semver, so after an
  * `omp update` a method can vanish; `capabilities` (index.ts) reports which
- * features lost something, and `guard` (health.ts) fails their bridge methods
+ * capabilities lost something, and `guard` (health.ts) fails their bridge methods
  * with a coded `unsupported_omp` error instead of a raw TypeError.
+ *
+ * One id per action a person sees: `guard(id, methods)` refuses every method of its
+ * group when any internal listed under `id` is missing, so a group holds only methods
+ * that use the same internals (a stated reason otherwise). A method that needs an
+ * internal its siblings do not gets an id of its own, and the warning names that one
+ * action, never a whole area (omp 19 dropped two handoff members and took ten composer
+ * actions and the relaunch resume down with them while they shared one id).
  *
  * Pure on purpose: no omp imports (not even types) and no Bun globals, so the
  * GUI's own vitest/tsc can exercise the derivation with fake objects
@@ -16,7 +23,27 @@
 
 export const FEATURES = {
 	core: "GUI bridge core",
-	composer: "Composer extras (eval, forced tool, prewalk, context, jobs, dequeue)",
+	composerState: "Composer status (folder, auto-retry, thinking, agent pause, ultrafast)",
+	ultrafast: "Ultrafast mode (/fast ultra)",
+	pythonEval: "Python in the composer ($)",
+	abortCompaction: "Cancel compaction",
+	bashExcluded: "Bash kept out of context (!!)",
+	clearContext: "Clear context",
+	forceTool: "Forced tool",
+	prewalk: "Prewalk",
+	toolExtras: "Tool sources and mounted tools",
+	contextReport: "/context report",
+	jobs: "Background jobs list (/jobs)",
+	cancelJob: "Cancel a background job",
+	cycleModelBackward: "Previous model (backward model cycling)",
+	relaunchResume: "Continuing interrupted turns and subagents after a relaunch",
+	skillCount: "Skill count",
+	dequeue: "Pull a queued message back into the composer",
+	copyTargets: "/copy",
+	lastLink: "/open (the last link)",
+	localPaste: "Large pastes kept as local:// files",
+	localLinks: "Opening local:// links",
+	argCompletions: "Slash-command argument completion",
 	share: "Session sharing",
 	planMode: "Plan mode",
 	goalMode: "Goal mode",
@@ -118,7 +145,19 @@ export interface FeatureRequirement {
 export interface UnavailableFeature {
 	feature: FeatureId;
 	missing: string[];
+	/** A capability a core flow needs (`CORE_FEATURES`): main repairs omp only for these. */
+	core?: true;
 }
+
+/**
+ * Capabilities whose loss breaks a core flow, each with why. Only these start main's omp repair
+ * (BridgeHealth `onIncompatible`); a missing optional action is reported and its methods refused, nothing more.
+ */
+export const CORE_FEATURES: Readonly<Partial<Record<FeatureId, string>>> = {
+	core: "the bridge's registry access: without it no bridge method reaches the session",
+	relaunchResume: "a relaunch would drop the turns and background subagents it cut, losing their work",
+	sessionOwner: "a session another omp still holds could be opened twice, two writers on one journal",
+};
 
 const AGENT = "@oh-my-pi/pi-coding-agent";
 const UTILS = "@oh-my-pi/pi-utils";
@@ -156,41 +195,51 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	composer: {
+	composerState: {
+		session: [
+			"sessionManager.getCwd()",
+			"autoRetryEnabled",
+			"configuredThinkingLevel()",
+			"isUltrafastModeEnabled()",
+			"model",
+		],
+		modules: {
+			"@oh-my-pi/pi-agent-core": ["agentPauseGate.paused", "agentPauseGate.pausedAt"],
+			"@oh-my-pi/pi-ai": ["serviceTierFamily()", "shouldSendServiceTier()"],
+		},
+	},
+	ultrafast: {
+		session: ["setUltrafastMode()", "isFastModeEnabled()", "isFastModeActive()", "isUltrafastModeEnabled()"],
+	},
+	/** composer.eval and composer.abort_eval together: an eval that cannot be stopped is not started. */
+	pythonEval: { session: ["executePython()", "abortEval()"] },
+	abortCompaction: { session: ["abortCompaction()"] },
+	bashExcluded: { session: ["executeBash()"] },
+	clearContext: { session: ["resetSessionContext()"] },
+	/** composer.get_force_tool reads what composer.set_force_tool queued: one id for both. */
+	forceTool: {
 		session: [
 			"getActiveToolNames()",
 			"toolChoiceQueue.pushSequence()",
 			"toolChoiceQueue.removeByLabel()",
 			"toolChoiceQueue.inspect()",
-			"getPrewalkState()",
-			"disarmPrewalk()",
-			"autoRetryEnabled",
-			"configuredThinkingLevel()",
-			"executePython()",
-			"abortEval()",
-			"abortCompaction()",
-			"executeBash()",
-			"resetSessionContext()",
-			"getContextBreakdown()",
-			"getAsyncJobTree()",
-			"inspectAsyncJob()",
-			"cancelAsyncJob()",
-			"cycleModel()",
-			"isFastModeEnabled()",
-			"isFastModeActive()",
-			"isUltrafastModeEnabled()",
-			"setUltrafastMode()",
-			"popLastQueuedMessage()",
-			"getQueuedMessages()",
-			"agent.state",
-			"hasBuiltInTool()",
-			"getXdevToolEntries()",
-			"settings",
 			"model",
-			"skills",
-			"sessionManager.getCwd()",
-			"sessionManager.getArtifactsDir()",
-			"sessionManager.getSessionId()",
+		],
+		modules: { [`${AGENT}/utils/tool-choice`]: ["buildNamedToolChoice()"] },
+	},
+	/** composer.prewalk_armed shows what composer.disarm_prewalk drops: an armed mark nobody can disarm is not shown. */
+	prewalk: { session: ["getPrewalkState()", "disarmPrewalk()"] },
+	toolExtras: { session: ["hasBuiltInTool()", "agent.state", "getXdevToolEntries()"] },
+	contextReport: { session: ["getContextBreakdown()", "model"] },
+	jobs: {
+		session: ["getAsyncJobTree()", "inspectAsyncJob()"],
+		modules: { "@oh-my-pi/pi-tui/overlays/job-tree": ["buildJobTree()"] },
+	},
+	cancelJob: { session: ["cancelAsyncJob()"] },
+	cycleModelBackward: { session: ["cycleModel()"] },
+	/** composer.restore_interrupted: stock's `omp --restore` path plus the subagent and restart-note preparation. */
+	relaunchResume: {
+		session: [
 			"restoreInterruptedTurn()",
 			// A turn stock's restore continues gets the prompt sections set on its agent (prompt-sections.ts
 			// `keepSectionsOnRestore`, wrapped on the AgentSession prototype).
@@ -200,26 +249,17 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"extensionRunner.createContext()",
 			"getToolByName()",
 			"sessionManager.getBranch()",
+			"sessionManager.appendMessage()",
+			"sessionManager.getSessionFile()",
 			"promptCustomMessage()",
 			// The restart notice for a turn stock's restore continues is queued at that turn's `turn_start`.
 			"subscribe()",
-			"sessionManager.appendMessage()",
 			"isStreaming",
+			"model",
 			"getGoalModeState()",
 			"asyncJobManager",
-			"sessionManager.getSessionFile()",
 		],
 		modules: {
-			"@oh-my-pi/pi-agent-core": ["agentPauseGate.paused", "agentPauseGate.pausedAt"],
-			"@oh-my-pi/pi-ai": ["serviceTierFamily()", "shouldSendServiceTier()"],
-			"@oh-my-pi/pi-tui/overlays/job-tree": ["buildJobTree()"],
-			"@oh-my-pi/pi-tui/overlays/copy-targets": [
-				"extractBlocks()",
-				"commandFromToolCall()",
-				"assistantText()",
-				"extractLastLink()",
-			],
-			[`${AGENT}/utils/tool-choice`]: ["buildNamedToolChoice()"],
 			[`${AGENT}/task/restore`]: ["restoreSession()"],
 			[`${AGENT}/session/exit-diagnostics`]: [
 				"createInterruptedTurnAbortMessage()",
@@ -228,7 +268,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 			// A subagent a graceful stop parked on an aborted reply, or cut in a call stock's exit record calls clean, gets
 			// stock's "outcome unknown" results and interrupted-turn record appended through stock's writer before the
-			// restore (composer.restore_interrupted).
+			// restore.
 			[`${AGENT}/session/sub-sessions`]: ["collectSubSessions()"],
 			[`${AGENT}/session/session-manager`]: [
 				"SessionManager.open()",
@@ -236,11 +276,35 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 				"SessionManager.prototype.close()",
 				"extractSessionInit()",
 			],
-			[`${AGENT}/internal-urls/local-protocol`]: ["resolveLocalRoot()", "resolveLocalUrlToPath()"],
+		},
+	},
+	skillCount: { session: ["skills"] },
+	dequeue: { session: ["popLastQueuedMessage()", "getQueuedMessages()"] },
+	/** Guarded with sessionTree too: the transcript comes from session-display's `buildTranscript`. */
+	copyTargets: {
+		modules: {
+			"@oh-my-pi/pi-tui/overlays/copy-targets": ["extractBlocks()", "commandFromToolCall()", "assistantText()"],
+		},
+	},
+	/** Guarded with sessionTree too, as copyTargets. */
+	lastLink: { modules: { "@oh-my-pi/pi-tui/overlays/copy-targets": ["extractLastLink()"] } },
+	localPaste: {
+		session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()"],
+		modules: {
+			[`${AGENT}/internal-urls/local-protocol`]: ["resolveLocalRoot()"],
+			[UTILS]: ["isEexist()"],
+		},
+	},
+	localLinks: {
+		session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()"],
+		modules: { [`${AGENT}/internal-urls/local-protocol`]: ["resolveLocalUrlToPath()"] },
+	},
+	argCompletions: {
+		modules: {
 			[`${AGENT}/slash-commands/builtin-completions`]: ["buildMcpArgumentCompletions()"],
 			[`${AGENT}/slash-commands/builtin-registry`]: ["BUILTIN_SLASH_COMMANDS"],
 			[`${AGENT}/mcp/manager`]: ["MCPManager.instance()"],
-			[UTILS]: ["isEexist()", "getProjectDir()"],
+			[UTILS]: ["getProjectDir()"],
 		},
 	},
 	share: {
@@ -1644,6 +1708,11 @@ export function missingFor(requirement: FeatureRequirement, sources: ProbeSource
 	return missing;
 }
 
+/** One unavailable entry, marked `core` when a core flow needs the feature. */
+function unavailableEntry(feature: FeatureId, missing: string[]): UnavailableFeature {
+	return Object.hasOwn(CORE_FEATURES, feature) ? { feature, missing, core: true } : { feature, missing };
+}
+
 /** Features (in `features` order) with at least one missing requirement. */
 export function deriveUnavailable(
 	features: readonly FeatureId[],
@@ -1655,7 +1724,7 @@ export function deriveUnavailable(
 		const requirement = requirements[feature];
 		if (!requirement) continue;
 		const missing = missingFor(requirement, sources);
-		if (missing.length > 0) unavailable.push({ feature, missing });
+		if (missing.length > 0) unavailable.push(unavailableEntry(feature, missing));
 	}
 	return unavailable;
 }
@@ -1681,7 +1750,7 @@ export function mergeAreaFailures(
 			merged.set(feature, missing);
 		}
 	}
-	return [...merged].map(([feature, missing]) => ({ feature, missing }));
+	return [...merged].map(([feature, missing]) => unavailableEntry(feature, missing));
 }
 
 /** `OMP_GUI_BRIDGE_PROBE_HIDE`: comma-separated missing labels to simulate (diagnostics and tests). */

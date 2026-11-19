@@ -799,10 +799,11 @@ export interface UpdateAuthTestResult {
 
 /**
  * A gui-bridge compatibility problem found at sidecar startup (src/main/bridge-health.ts).
- * `features` are the bridge's feature ids (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `features` are the bridge's capability ids, one action each (resources/gui-bridge/capabilities.ts `FEATURES`);
+ * `repairing` is true when a core one is missing and OMPdesk repairs omp for it.
  */
 export type BridgeHealthWarning =
-	| { kind: "unsupported"; ompVersion: string; features: string[] }
+	| { kind: "unsupported"; ompVersion: string; features: string[]; repairing: boolean }
 	| { kind: "unavailable"; ompVersion: string; reason: string };
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */

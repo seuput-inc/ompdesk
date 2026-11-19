@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 describe("unavailableFeatures", () => {
-	it("reads distinct feature ids and ignores malformed entries", () => {
+	it("reads distinct feature ids, whether any is core, and ignores malformed entries", () => {
 		expect(
 			unavailableFeatures({
 				ompVersion: "19.0.0",
@@ -23,9 +23,12 @@ describe("unavailableFeatures", () => {
 					"btw",
 				],
 			}),
-		).toEqual(["planMode"]);
-		expect(unavailableFeatures({ unavailable: [] })).toEqual([]);
-		expect(unavailableFeatures(null)).toEqual([]);
+		).toEqual({ features: ["planMode"], core: false });
+		expect(
+			unavailableFeatures({ unavailable: [{ feature: "jobs" }, { feature: "relaunchResume", core: true }] }),
+		).toEqual({ features: ["jobs", "relaunchResume"], core: true });
+		expect(unavailableFeatures({ unavailable: [] })).toEqual({ features: [], core: false });
+		expect(unavailableFeatures(null)).toEqual({ features: [], core: false });
 	});
 });
 
@@ -49,7 +52,7 @@ describe("BridgeHealth", () => {
 		expect(broken.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(health.take()).toEqual([
-			{ kind: "unsupported", ompVersion: "19.0.0", features: ["planMode", "goalMode"] },
+			{ kind: "unsupported", ompVersion: "19.0.0", features: ["planMode", "goalMode"], repairing: false },
 		]);
 		expect(health.take()).toEqual([]);
 
@@ -78,7 +81,9 @@ describe("BridgeHealth", () => {
 		await health.observe({ connected: true, ompVersion: "18.9.0", bridge: after.bridge });
 		expect(after.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
-		expect(health.take()).toEqual([{ kind: "unsupported", ompVersion: "18.9.0", features: ["planMode"] }]);
+		expect(health.take()).toEqual([
+			{ kind: "unsupported", ompVersion: "18.9.0", features: ["planMode"], repairing: false },
+		]);
 		expect(health.supports("18.9.0", "planMode")).toBe(false);
 		// The old version's answer stays; a second tab on 18.9.0 does not warn twice.
 		expect(health.supports("18.8.7", "planMode")).toBe(true);
@@ -112,7 +117,9 @@ describe("BridgeHealth", () => {
 		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: next.bridge });
 		expect(next.request).toHaveBeenCalledTimes(1);
 		// No version in the result: the sidecar's own omp version stands in.
-		expect(health.take()).toEqual([{ kind: "unsupported", ompVersion: "19.0.0", features: ["mcp"] }]);
+		expect(health.take()).toEqual([
+			{ kind: "unsupported", ompVersion: "19.0.0", features: ["mcp"], repairing: false },
+		]);
 	});
 
 	it("reports a bridge that never connected once per version", async () => {
@@ -134,16 +141,38 @@ describe("BridgeHealth", () => {
 
 describe("BridgeHealth self-repair", () => {
 	const lacking = (version: string) =>
-		fakeBridge(async () => ({ ompVersion: version, unavailable: [{ feature: "planMode", missing: ["x"] }] }));
+		fakeBridge(async () => ({
+			ompVersion: version,
+			unavailable: [{ feature: "relaunchResume", missing: ["x"], core: true }],
+		}));
 
-	it("newest omp still incompatible: one repair attempt, the toast still shows", async () => {
+	it("newest omp still lacks a core capability: one repair attempt, the toast still shows", async () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 		const onIncompatible = vi.fn();
 		const notify = vi.fn();
 		const health = new BridgeHealth(notify, onIncompatible);
 		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge });
 		expect(onIncompatible).toHaveBeenCalledExactlyOnceWith("19.0.1");
-		expect(health.take()).toHaveLength(1);
+		expect(health.take()).toEqual([
+			{ kind: "unsupported", ompVersion: "19.0.1", features: ["relaunchResume"], repairing: true },
+		]);
+	});
+
+	it("an omp that lacks only optional actions is reported, not repaired", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const onIncompatible = vi.fn();
+		const health = new BridgeHealth(vi.fn(), onIncompatible);
+		const newer = fakeBridge(async () => ({
+			ompVersion: "19.1.0",
+			unavailable: [{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] }],
+		}));
+		await health.observe({ connected: true, ompVersion: "19.1.0", bridge: newer.bridge });
+		expect(onIncompatible).not.toHaveBeenCalled();
+		expect(health.take()).toEqual([
+			{ kind: "unsupported", ompVersion: "19.1.0", features: ["abortCompaction"], repairing: false },
+		]);
+		expect(health.supports("19.1.0", "abortCompaction")).toBe(false);
+		expect(health.supports("19.1.0", "jobs")).toBe(true);
 	});
 
 	it("a second probe of the same version, connected or not, starts no new attempt", async () => {

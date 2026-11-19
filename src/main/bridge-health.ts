@@ -3,8 +3,11 @@
  * carry no semver, so after `omp update` a bridge method can lose what it
  * relies on. Once per omp version per app launch, the first sidecar whose
  * bridge connects is asked for `capabilities` (resources/gui-bridge/capabilities.ts);
- * missing features, or a bridge that never connected at all, become one warning
- * the renderer takes (BRIDGE_HEALTH_TAKE) and toasts in the UI language.
+ * missing capabilities (one action each), or a bridge that never connected at all,
+ * become one warning the renderer takes (BRIDGE_HEALTH_TAKE) and toasts in the UI
+ * language. Only a missing core capability (`core: true`, capabilities.ts
+ * `CORE_FEATURES`) or an unreachable bridge starts the omp repair; an optional
+ * action is reported and nothing more, so a newer omp is never replaced for it.
  */
 import type { BridgeHealthWarning } from "../shared/ipc-types";
 import type { BridgeClient } from "./local/types";
@@ -19,17 +22,20 @@ interface Capabilities {
 	unavailable?: unknown;
 }
 
-/** Feature ids from a `capabilities` result; anything malformed reads as none. */
-export function unavailableFeatures(result: unknown): string[] {
+/** Feature ids from a `capabilities` result, and whether any is core; anything malformed reads as none. */
+export function unavailableFeatures(result: unknown): { features: string[]; core: boolean } {
 	const unavailable = (result as Capabilities | null)?.unavailable;
-	if (!Array.isArray(unavailable)) return [];
 	const features: string[] = [];
+	let core = false;
+	if (!Array.isArray(unavailable)) return { features, core };
 	for (const entry of unavailable) {
 		if (typeof entry !== "object" || entry === null || !("feature" in entry)) continue;
 		const feature = entry.feature;
-		if (typeof feature === "string" && !features.includes(feature)) features.push(feature);
+		if (typeof feature !== "string") continue;
+		if (!features.includes(feature)) features.push(feature);
+		if ("core" in entry && entry.core === true) core = true;
 	}
-	return features;
+	return { features, core };
 }
 
 export class BridgeHealth {
@@ -46,7 +52,7 @@ export class BridgeHealth {
 	/** `notify` tells every window that warnings are waiting. */
 	constructor(
 		notify: () => void,
-		/** An omp that lacks what the bridge needs (or that the bridge never reached): the app updates omp itself. */
+		/** An omp that lacks a core capability (or that the bridge never reached): the app updates omp itself. */
 		onIncompatible: (ompVersion: string) => void = () => {},
 	) {
 		this.#notify = notify;
@@ -76,7 +82,7 @@ export class BridgeHealth {
 			);
 			return;
 		}
-		const features = unavailableFeatures(capabilities);
+		const { features, core } = unavailableFeatures(capabilities);
 		this.#unavailable.set(result.ompVersion, features);
 		if (features.length === 0) return;
 		console.warn(
@@ -87,6 +93,7 @@ export class BridgeHealth {
 			kind: "unsupported",
 			ompVersion: typeof reported === "string" && reported ? reported : result.ompVersion,
 			features,
+			repairing: core,
 		});
 	}
 
@@ -109,7 +116,7 @@ export class BridgeHealth {
 	#push(warning: BridgeHealthWarning): void {
 		this.#pending.push(warning);
 		this.#notify();
-		if (this.#repaired.has(warning.ompVersion)) return;
+		if ((warning.kind === "unsupported" && !warning.repairing) || this.#repaired.has(warning.ompVersion)) return;
 		this.#repaired.add(warning.ompVersion);
 		this.#onIncompatible(warning.ompVersion);
 	}
