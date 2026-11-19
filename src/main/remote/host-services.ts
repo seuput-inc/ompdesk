@@ -663,6 +663,11 @@ export class LocalHostServices implements HostServices {
 	 */
 	readonly #opening = new Map<string, number>();
 	readonly #closedWhileOpening = new Set<string>();
+	/**
+	 * Views whose window tab closed while their device was away (it never heard `viewEnded`): its return under that
+	 * rtab is told the view ended once, never given an omp of its own on a session its owner closed.
+	 */
+	readonly #endedViews = new Set<string>();
 	readonly #runningListeners = new Set<() => void>();
 	readonly #remoteOpenedListeners = new Set<() => void>();
 	readonly #windowHeldListeners = new Set<() => void>();
@@ -1705,9 +1710,11 @@ export class LocalHostServices implements HostServices {
 		void this.#deps.machine.abortBenchmark(benchCaller(deviceId));
 		void this.#deps.machine.abortModelSetup(benchCaller(deviceId));
 		for (const [key, tab] of this.#tabs) if (tab.peerId === deviceId) this.#closeTab(key);
+		for (const key of this.#endedViews) if (key.startsWith(this.#key(deviceId, ""))) this.#endedViews.delete(key);
 	}
 
 	disposeAll(): void {
+		this.#endedViews.clear();
 		for (const key of [...this.#tabs.keys()]) this.#closeTab(key);
 		clearTimeout(this.#sessionsTimer);
 		this.#sessionsTimer = undefined;
@@ -1804,6 +1811,8 @@ export class LocalHostServices implements HostServices {
 		const key = this.#key(peer.deviceId, params.rtab);
 		const held = this.#tabs.get(key);
 		const existing = held ?? this.#adopt(peer, params, conn);
+		if (!existing && this.#endedViews.delete(key))
+			throw codedError("view_ended", "The tab this one showed was closed on the host");
 		if (existing) {
 			clearTimeout(existing.graceTimer);
 			existing.graceTimer = undefined;
@@ -2105,7 +2114,11 @@ export class LocalHostServices implements HostServices {
 				this.#emit(tab, "scheduledRetry", scheduledRetryArg(retry));
 			});
 			// The tab it views closed: the device heard `viewEnded` (#wire), and its tab here goes.
-			sidecar.on(VIEW_ENDED_EVENT, () => this.#closeTab(this.#key(tab.peerId, tab.rtab)));
+			sidecar.on(VIEW_ENDED_EVENT, () => {
+				const key = this.#key(tab.peerId, tab.rtab);
+				if (tab.conn === null) this.#endedViews.add(key);
+				this.#closeTab(key);
+			});
 		}
 		return tab;
 	}
