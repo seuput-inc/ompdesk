@@ -5,6 +5,8 @@
  * level, as they do there.
  */
 import { shutdownCore } from "../../core/process";
+import { exitReport } from "../../quit-log";
+import { appendRuntimeLogAtPath, runtimeLogFile } from "../../runtime-log-core";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
 import { createElectron } from "./create";
@@ -24,10 +26,21 @@ const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello",
 if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
 
 let stopping = false;
+/** Main's app once made: its log line names the profile and the version. */
+let electronApp: { getPath(name: "userData"): string; getVersion(): string } | null = null;
+/** `app.exit` wrote the run's end line: the shell's stdin ending after it is the exit's own. */
+let ended = false;
 function endMain(reason: string): void {
 	if (stopping) return;
 	stopping = true;
 	console.error(`[shell-host] ${reason}; exiting`);
+	if (electronApp && !ended) {
+		appendRuntimeLogAtPath(runtimeLogFile(electronApp.getPath("userData")), exitReport(1, reason), {
+			appVersion: electronApp.getVersion(),
+			platform: process.platform,
+			pid: process.pid,
+		});
+	}
 	void shutdownCore(true).then(
 		() => process.exit(1),
 		(error: unknown) => {
@@ -41,6 +54,10 @@ process.stdin.once("end", () => endMain("the shell's stdin ended"));
 process.stdin.resume();
 
 const electron = createElectron(client, hello.facts, { patchProcess: true });
+electronApp = electron.app;
+electron.app.once("quit", () => {
+	ended = true;
+});
 
 // The e2e harness (OMP_GUI_TEST_NODE_INSPECT=1: main runs under `--inspect`) evaluates specs' functions against this
 // object through the inspector, where Electron's `app.evaluate` handed them the module.

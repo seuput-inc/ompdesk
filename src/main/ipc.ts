@@ -1922,8 +1922,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Renderer-initiated quit (the `quit` command). Straight to the guard, never
 	// `window.close()`: closing the focused window only hides the rest of the
 	// session behind it.
-	ipc.on(IPC_COMMANDS.APP_QUIT, () => {
-		requestQuit();
+	ipc.on(IPC_COMMANDS.APP_QUIT, caller => {
+		requestQuit("command", caller.connId ? { detail: "from a paired device" } : undefined);
 	});
 
 	// System

@@ -45,6 +45,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"remote-link": true,
 	"gpu-fallback": true,
 	"launch-guard": true,
+	"app-quit": true,
 	"user-data-migration": true,
 	setup: true,
 	"keep-awake": true,
@@ -156,6 +157,11 @@ export function appendRuntimeLogAtPath(filePath: string, report: RuntimeLogRepor
 	} catch {
 		// A crash logger must never trigger a second failure path.
 	}
+}
+
+/** gui-runtime.jsonl under a profile: main's one log of what happened at run time. */
+export function runtimeLogFile(userData: string): string {
+	return path.join(userData, "logs", "gui-runtime.jsonl");
 }
 
 /**

@@ -10,7 +10,7 @@ import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, 
 import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
 import { appIconPath } from "./app-icon";
-import { quitRisk, requestQuit } from "./app-quit";
+import { askQuit, quitRisk, requestQuit } from "./app-quit";
 import { editableContextMenuTemplate } from "./editable-context-menu";
 import { softwareCompositing } from "./gpu-fallback";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
@@ -227,7 +227,7 @@ export class WindowManager {
 				this.lastWindowHidden?.();
 			}
 			// The quit guard asks first; an approved quit then closes every window, this one included.
-			else app.quit();
+			else askQuit("last-window");
 		});
 
 		win.on("closed", () => {
@@ -435,7 +435,7 @@ export class WindowManager {
 		// `requestQuit` carries the approval, so the guard below the restart
 		// prompt never asks a second time about the same running sessions.
 		app.relaunch();
-		requestQuit();
+		requestQuit("restart-prompt", { relaunch: true });
 	}
 
 	#crashRecoveryOffered = new Set<number>();
@@ -459,7 +459,7 @@ export class WindowManager {
 			: await dialog.showMessageBox(win, options);
 		if (answer.response !== 0) return;
 		app.relaunch();
-		requestQuit();
+		requestQuit("crash-recovery", { relaunch: true });
 	}
 
 	recordFor(win: ClientWindow): WindowRecord | undefined {

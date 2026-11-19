@@ -17,8 +17,10 @@ import {
 	updateRestartConfirmation,
 	type WindowTabFact,
 } from "./quit-guard";
+import { exitReport, type QuitAsk, type QuitAsker, quitAskedReport, uncleanEndReport } from "./quit-log";
 import { QuitWatchdog, type QuitWatchdogReason } from "./quit-watchdog";
-import { writeRuntimeLog } from "./runtime-log";
+import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
+import { tailLogLines } from "./runtime-log-core";
 
 const latch = new QuitLatch();
 let asking = false;
@@ -56,9 +58,48 @@ export function disarmQuitWatchdog(reason?: QuitWatchdogReason): void {
 	quitWatchdog.disarm(reason);
 }
 
-export function requestQuit(): void {
+/**
+ * A named ask is logged and its `before-quit` is still to come: that one is not the shell's. Every quit main starts
+ * names itself, so a `before-quit` that starts a quit without one came from the shell (`app.quitRequested`).
+ */
+let askPending = false;
+
+/** Write who asked to end the app, before the quit work starts; for an end that never reaches `before-quit` too. */
+export function logQuitAsked(asker: QuitAsker, ask?: QuitAsk): void {
+	askPending = true;
+	writeRuntimeLog(quitAskedReport(asker, ask));
+}
+
+function approveAndQuit(): void {
 	latch.approve();
 	app.quit();
+}
+
+/** Quit without asking about running work: the asker already did, or nobody can answer. A relaunch calls `app.relaunch()` first. */
+export function requestQuit(asker: QuitAsker, ask?: QuitAsk): void {
+	logQuitAsked(asker, ask);
+	approveAndQuit();
+}
+
+/** Quit through the guard, which asks first when running work would stop (Continue interrupted work off). */
+export function askQuit(asker: QuitAsker): void {
+	logQuitAsked(asker);
+	app.quit();
+}
+
+/**
+ * At start: the line for a previous run that left no end line, this run's end line on `quit` (every exit goes through
+ * `app.exit`, which emits it), and the signals a script or a terminal sends, which quit as Electron quit on them.
+ */
+export function startQuitLog(): void {
+	void tailLogLines(runtimeLogPath(), 400).then(lines => {
+		const report = uncleanEndReport(lines, process.pid);
+		if (report) writeRuntimeLog(report);
+	});
+	app.on("quit", (_event, code) => writeRuntimeLog(exitReport(code)));
+	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+		process.on(signal, () => requestQuit("signal", { detail: signal }));
+	}
 }
 
 /** A quit is underway (approved): windows must close, not hide to the tray. */
@@ -184,6 +225,8 @@ export function installQuitGuard(
 		);
 	});
 	app.on("before-quit", event => {
+		if (!askPending && !latch.approved) writeRuntimeLog(quitAskedReport("shell"));
+		askPending = false;
 		if (latch.approved && finalizing !== "done") {
 			event.preventDefault();
 			if (finalizing === "pending") {
@@ -205,7 +248,7 @@ export function installQuitGuard(
 		}
 		event.preventDefault();
 		void confirmQuit().then(ok => {
-			if (ok) requestQuit();
+			if (ok) approveAndQuit();
 		});
 	});
 	// electron-updater emits this from `quitAndInstall()` (Squirrel natively,

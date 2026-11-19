@@ -5,6 +5,7 @@ import { app, Menu, type MenuItemConstructorOptions, shell } from "electron";
 import { nativeAccelerator } from "../shared/hotkeys";
 import { IPC_EVENTS, type MenuAction } from "../shared/ipc-types";
 import { PRODUCT_REPO_URL } from "../shared/product-repo";
+import { askQuit } from "./app-quit";
 import { editRoleItems } from "./editable-context-menu";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
 import type { SpawnWindow, WindowManager } from "./window";
@@ -55,7 +56,8 @@ export function createMenu(windowManager: WindowManager, spawnWindow: SpawnWindo
 							{ role: "hideOthers" as const, label: mainT("menu.hideOthers", language) },
 							{ role: "unhide" as const, label: mainT("menu.showAll", language) },
 							{ type: "separator" as const },
-							{ role: "quit" as const, label: mainT("menu.quit", language) },
+							// The role keeps ⌘Q and the item scripts/mac-menu-quit.ts finds; the click names the asker.
+							{ role: "quit" as const, label: mainT("menu.quit", language), click: () => askQuit("app-menu") },
 						],
 					},
 				]
