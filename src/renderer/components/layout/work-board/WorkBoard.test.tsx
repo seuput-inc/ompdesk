@@ -516,11 +516,11 @@ describe("WorkBoard sections", () => {
 			]);
 		});
 
-		it("counts them and lists each on one line over the list, in place of the reason's row", async () => {
+		it("counts them first and lists each on one line over the list, as news while two are fresh", async () => {
 			const at = changedAt();
 			useTodoStore.getState().setDrift({
 				changedAt: at,
-				stale: "instruction",
+				stale: null,
 				received: [
 					{ at: at + 60_000, text: "Also add a strip for the phone" },
 					{ at: at + 120_000, text: "And never widen the board" },
@@ -530,24 +530,45 @@ describe("WorkBoard sections", () => {
 			await mount();
 
 			expect(planRows()).toEqual([
-				"2 instructions received since the list last changed",
+				"Since last list change: 2 instructions",
 				"Also add a strip for the phone",
 				"And never widen the board",
 				"Write the board",
 				"Test it",
 			]);
 			const plan = section("plan");
-			// The head keeps its warning mark; the count line carries it in place of the reason's row.
-			expect(plan?.querySelector(".omp-work-board-aside svg")).not.toBeNull();
+			// News, not a warning: a neutral dot, and the head carries no warning mark.
+			expect(plan?.querySelector('[data-todo-received] [data-status-dot="neutral"]')).not.toBeNull();
+			expect(plan?.querySelector(".omp-work-board-aside svg")).toBeNull();
 			expect(plan?.querySelector("[data-board-todo-stale]")).toBeNull();
-			expect(plan?.querySelector('[data-todo-received] [data-tone="warning"]')).not.toBeNull();
+			// The count's tooltip says what it measures: when they came, not whether the list covers them.
+			expect(plan?.querySelector("[data-todo-received]")?.getAttribute("title")).toContain(
+				"Whether the list already covers them is not checked",
+			);
 			// A clipped line's tooltip says when it came and the whole line.
 			const tooltip = plan?.querySelector("[data-todo-received-line]")?.getAttribute("title")?.split("\n");
 			expect(tooltip?.[0]).toMatch(/\d{2}:\d{2}/);
 			expect(tooltip?.[1]).toBe("Also add a strip for the phone");
 		});
 
-		it("says one in the singular, with no warning while the agent has not worked past it", async () => {
+		it("warns once they pile up, the count line standing for the reason's row", async () => {
+			const at = changedAt();
+			useTodoStore.getState().setDrift({
+				changedAt: at,
+				stale: "instruction",
+				received: [1, 2, 3].map(n => ({ at: at + n * 60_000, text: `Instruction ${n}` })),
+				receivedCount: 3,
+			});
+			await mount();
+
+			expect(planRows()[0]).toBe("Since last list change: 3 instructions");
+			const plan = section("plan");
+			expect(plan?.querySelector(".omp-work-board-aside svg")).not.toBeNull();
+			expect(plan?.querySelector("[data-board-todo-stale]")).toBeNull();
+			expect(plan?.querySelector('[data-todo-received] [data-tone="warning"]')).not.toBeNull();
+		});
+
+		it("says one in the singular", async () => {
 			const at = changedAt();
 			useTodoStore.getState().setDrift({
 				changedAt: at,
@@ -558,10 +579,9 @@ describe("WorkBoard sections", () => {
 			await mount();
 
 			expect(planRows().slice(0, 2)).toEqual([
-				"1 instruction received since the list last changed",
+				"Since last list change: 1 instruction",
 				"Also add a strip for the phone",
 			]);
-			expect(section("plan")?.querySelector('[data-todo-received] [data-tone="warning"]')).toBeNull();
 		});
 
 		it("names how many more came than the lines it was given", async () => {
@@ -578,7 +598,7 @@ describe("WorkBoard sections", () => {
 			await mount();
 
 			expect(planRows()).toEqual([
-				"6 instructions received since the list last changed",
+				"Since last list change: 6 instructions",
 				"Instruction 2",
 				"Instruction 3",
 				"Instruction 4",

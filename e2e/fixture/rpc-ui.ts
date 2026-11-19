@@ -5812,8 +5812,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			);
 		} else if (message !== "fixture running") {
 			if (message === "fixture todo behind") {
-				// A list the agent left behind a steered instruction (resources/gui-bridge/todo-drift.ts): the todo call
-				// 12 minutes ago, then the bridge's reading of it, pushed as the bridge pushes it.
+				// A list with two instructions steered in since its last change (resources/gui-bridge/todo-drift.ts): the
+				// todo call 12 minutes ago, then the bridge's reading of it, pushed as the bridge pushes it (two are news,
+				// no warning: RECEIVED_WARN).
 				todoPhases = [
 					{
 						name: "Parser",
@@ -5838,7 +5839,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
 				todoDrift = {
 					changedAt: minutesAgo(12),
-					stale: "instruction",
+					stale: null,
 					received: [
 						{ at: minutesAgo(9), text: "Also fix the README typo on line 3" },
 						{ at: minutesAgo(4), text: "Then rename parse() to parseConfig() everywhere" },

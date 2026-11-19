@@ -1935,11 +1935,11 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "todo-behind",
 		area: "A",
-		title: "A todo list behind the work: the plan zone, the strip or the dock's todo card says when it last changed and that a new instruction has no row",
+		title: "Instructions since a todo list last changed: the plan zone, the strip or the dock's todo card counts them first and says when the list last changed",
 		// The host's fake omp lists three items and reports the bridge's reading (e2e/fixture/rpc-ui.ts "fixture todo
-		// behind", as resources/gui-bridge/todo-drift.ts pushes it): changed 12 minutes ago, behind an instruction.
+		// behind", as resources/gui-bridge/todo-drift.ts pushes it): changed 12 minutes ago, two instructions since.
 		open: page => promptShownTab(page, "fixture todo behind"),
-		ready: "[data-todo-freshness='instruction']",
+		ready: "[data-todo-freshness='received']",
 		when: () => false,
 		parity: {
 			session: "work",

@@ -4,7 +4,11 @@
 export interface TodoDriftState {
 	/** Epoch ms of the list's last change (an agent's todo call or a person's edit); null without a list. */
 	changedAt: number | null;
-	/** `instruction`: a new instruction came after that change and the agent worked on; `drift`: a long run of tool calls or active time without a change. */
+	/**
+	 * The panel's warning. `drift`: a long run of tool calls or active time without a change (old, whatever came);
+	 * `instruction`: `RECEIVED_WARN` or more instructions piled up after that change and the agent worked on. Null for
+	 * one or two fresh ones: the panel lists them as news, since the reading never knows whether the list covers them.
+	 */
 	stale: "instruction" | "drift" | null;
 	/**
 	 * The instructions received since that change (a person's message or an opening agent's, at a turn's start or

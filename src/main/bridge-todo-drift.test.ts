@@ -3,6 +3,7 @@ import {
 	DRIFT_CALLS,
 	journalDriftEvents,
 	RECEIVED_SHOWN,
+	RECEIVED_WARN,
 	type TodoDriftEntry,
 	type TodoDriftEvent,
 	type TodoDriftPhase,
@@ -71,12 +72,23 @@ describe("todo drift: when a list is behind the work", () => {
 		expect(nudgeAfter(steered)).toBeUndefined();
 		const worked = [...steered, ...calls(1, 6_000)];
 		expect(nudgeAfter(worked)).toBe("instruction");
-		expect(todoDrift(worked).stale).toBe("instruction");
 		const named = [...worked, { kind: "nudge", at: 7_000, nudge: "instruction" } as const, ...calls(3, 8_000)];
 		expect(nudgeAfter(named)).toBeUndefined();
+	});
+
+	it("warns the panel only when instructions pile up or the list grows old, never for one or two fresh ones", () => {
+		const instructions = (n: number): TodoDriftEvent[] =>
+			Array.from({ length: n }, (_, i) => ({ kind: "instruction", at: 1_000 + i, text: `Also do step ${i}` }));
+		// Two fresh ones are news: the reading cannot tell whether the list already covers them.
+		expect(todoDrift([list(), ...instructions(RECEIVED_WARN - 1), ...calls(3, 2_000)]).stale).toBeUndefined();
+		const piled = [list(), ...instructions(RECEIVED_WARN), ...calls(1, 2_000)];
+		expect(todoDrift(piled).stale).toBe("instruction");
+		// Piled up but not worked past yet: no warning until a call follows.
+		expect(todoDrift([list(), ...instructions(RECEIVED_WARN)]).stale).toBeUndefined();
+		// Old: a long run of work since the change warns, one instruction or none.
+		expect(todoDrift([list(), ...instructions(1), ...calls(DRIFT_CALLS, 2_000)]).stale).toBe("drift");
 		// The panel keeps the mark until the list changes.
-		expect(todoDrift(named).stale).toBe("instruction");
-		expect(todoDrift([...named, list(20_000)]).stale).toBeUndefined();
+		expect(todoDrift([...piled, list(20_000)]).stale).toBeUndefined();
 	});
 
 	it("names it again after a compaction took the reminder out of the model's context", () => {
@@ -169,6 +181,22 @@ describe("todo drift read from a journal", () => {
 			"call",
 			"compaction",
 		]);
+	});
+
+	it("receives another session's steer and a person's request, never a short reply that needs no row", () => {
+		const steer =
+			'<ompdesk-agent-message from="Main" session="01a1">\nTitle: Fix the strip\n\nDetails…\n</ompdesk-agent-message>';
+		const branch: TodoDriftEntry[] = [
+			result(0, "todo"),
+			user(1, steer, { attribution: "user" }),
+			user(2, "응"),
+			user(3, "계속"),
+			user(4, "ok"),
+			user(5, "계속 해줘"),
+			user(6, "Rename the strip's label everywhere"),
+		];
+		const received = todoDriftState(todoDrift(journalDriftEvents(branch, 0, LIST))).received;
+		expect(received.map(item => item.text)).toEqual(["Fix the strip", "Rename the strip's label everywhere"]);
 	});
 
 	it("knows its own reminders and stock's once journaled", () => {

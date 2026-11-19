@@ -3765,9 +3765,12 @@ export const en: Record<string, string> = {
 	"todoPanel.reminderRepeat": "Answered the same again, folded",
 	"todoPanel.dismissReminder": "Dismiss reminder",
 	"todoPanel.updated": "Updated {ago}",
-	"todoPanel.stale.instruction": "A new instruction has no row on this list",
+	"todoPanel.stale.instruction": "Instructions piling up since the list last changed",
 	"todoPanel.stale.drift": "Not updated while the agent kept working",
-	"todoPanel.received": "{count} instruction{plural} received since the list last changed",
+	"todoPanel.received": "Since last list change: {count} instruction{plural}",
+	"todoPanel.receivedShort": "Since list change: {count}",
+	"todoPanel.receivedNote":
+		"Instructions that arrived after the list last changed. Whether the list already covers them is not checked; they fold away once any row changes, which says only that the list changed since.",
 
 	// Log panel
 	"logPanel.title": "Logs",

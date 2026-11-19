@@ -197,7 +197,7 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		await mount();
 		const strip = container.querySelector("[data-work-chip]");
 		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe(
-			"1/2Not updated while the agent kept working58m ago",
+			"1/2Not updated while the agent kept working·58m ago",
 		);
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe(
 			"1 of 2 done · Not updated while the agent kept working",
@@ -211,6 +211,23 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		);
 		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Wait for the row3m ago");
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done");
+
+		// Instructions since the list changed lead with their count in place of the current task, as news.
+		const changedAt = Date.now() - 12 * 60_000 - 5000;
+		await act(async () =>
+			useTodoStore.getState().setDrift({
+				changedAt,
+				stale: null,
+				received: [
+					{ at: changedAt + 60_000, text: "Also fix the README typo on line 3" },
+					{ at: changedAt + 120_000, text: "Then rename parse() to parseConfig() everywhere" },
+				],
+				receivedCount: 2,
+			}),
+		);
+		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Since list change: 2·12m ago");
+		expect(strip?.querySelector('.omp-work-chip-plan [data-status-dot="neutral"]')).not.toBeNull();
+		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done · Since list change: 2");
 	});
 
 	it("says the figure Needs you counts, ahead of the plan's progress", async () => {

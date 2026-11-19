@@ -267,7 +267,7 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 				<span aria-live="polite" className="omp-work-chip-label" role="status">
 					{plan && counts.needs === 0 && !autopilotState ? (
 						<>
-							<span className="sr-only">{freshness?.reason ? `${label} · ${freshness.reason}` : label}</span>
+							<span className="sr-only">{freshness?.summary ? `${label} · ${freshness.summary}` : label}</span>
 							<span aria-hidden className="omp-work-chip-plan">
 								<span className="omp-work-chip-bar">
 									<span style={{ "--fill": plan.done / plan.total } as CSSProperties} />
@@ -275,8 +275,9 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 								<span className="tabular-nums">
 									{plan.done}/{plan.total}
 								</span>
-								{/* A list behind the work says why in place of its "now" row, which is the part in doubt. */}
-								{plan.active && !freshness?.stale ? (
+								{/* Instructions since the list changed or a list behind the work say so in place of its "now" row,
+								    the part in doubt; a tap opens the panel, which lists them. */}
+								{plan.active && !freshness?.summary ? (
 									<span className="omp-work-chip-active">{plan.active}</span>
 								) : null}
 								<TodoFreshnessMark className="text-(--sc-text-muted)" form="strip" freshness={freshness} />

@@ -3758,10 +3758,13 @@ export const ko: Record<string, string> = {
 	"todoPanel.reminderCount": "확인이 필요한 할 일 {count}개",
 	"todoPanel.reminderRepeat": "같은 답이 한 번 더 나와 접어 뒀어요",
 	"todoPanel.dismissReminder": "알림 닫기",
-	"todoPanel.updated": "{ago} 갱신",
-	"todoPanel.stale.instruction": "새 지시가 목록에 없음",
-	"todoPanel.stale.drift": "작업이 계속되는 동안 갱신되지 않음",
-	"todoPanel.received": "목록이 바뀐 뒤 받은 지시 {count}개",
+	"todoPanel.updated": "{ago} 고침",
+	"todoPanel.stale.instruction": "목록을 고친 뒤 지시가 쌓임",
+	"todoPanel.stale.drift": "작업은 계속됐는데 목록은 오래됨",
+	"todoPanel.received": "목록을 고친 뒤 받은 지시 {count}개",
+	"todoPanel.receivedShort": "고친 뒤 지시 {count}",
+	"todoPanel.receivedNote":
+		"목록을 마지막으로 고친 뒤 온 지시예요. 목록에 이미 들어 있는지는 따지지 않아요. 목록의 한 줄이라도 바뀌면 접히는데, 그건 그 뒤에 목록이 바뀌었다는 뜻일 뿐이에요.",
 
 	// Log panel
 	"logPanel.title": "로그",
@@ -4466,7 +4469,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.todoWait": "답을 기다리는 세션에는 할 일 알림 안 보냄",
 	"bridgeHealth.feature.todoStale": "새 요청에 지난 할 일 목록 전달",
 	"bridgeHealth.feature.todoCompact": "길어진 할 일 목록을 에이전트가 접기",
-	"bridgeHealth.feature.todoDrift": "할 일 패널에 마지막 변경, 그 뒤 받은 지시, 뒤처짐 표시",
+	"bridgeHealth.feature.todoDrift": "할 일 패널에 마지막으로 고친 때, 그 뒤 받은 지시, 오래됨 표시",
 	"bridgeHealth.feature.wasteGuards": "일치할 수 없는 bash ready.log 거부와 폴링 방지 안내",
 	"bridgeHealth.feature.quitJournal": "도구 실행 중 종료해도 중단된 도구 결과 기록",
 	"bridgeHealth.feature.exitDrain": "세션의 omp가 끝나기 전에 로그인 갱신 저장",
