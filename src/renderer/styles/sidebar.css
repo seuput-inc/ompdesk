@@ -190,7 +190,10 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
    reserve (composer.md › The age slot), and draws the arc out of the flow at the box's start, with the box's start
    padded by the arc and its gap and the reserve pulled back by as much: the reserve wraps exactly when an idle age
    would, so with room the branch never moves when work starts or ends, and without it only the reserve goes while the
-   arc stays. */
+   arc stays.
+   Nothing on the line is a control (the chip and the ⋯ sit beside it, raised), so a click anywhere on it is the row's:
+   it passes through to the row button's stretched click target, which the positioned give-way box would otherwise
+   cover, and a click or a phone's tap on the age or the branch opened nothing. The row's tooltip names the branch. */
 .omp-session-row-line {
 	display: flex;
 	flex: 1 1 0;
@@ -198,6 +201,7 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	align-items: center;
 	gap: var(--sc-space-1-5);
 	line-height: var(--sc-leading-tight);
+	pointer-events: none;
 }
 
 .omp-session-row-line > * {
