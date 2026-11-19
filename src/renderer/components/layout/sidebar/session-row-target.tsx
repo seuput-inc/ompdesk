@@ -128,9 +128,9 @@ export function SessionRowArtwork({ target }: { target: SessionRowTarget | null 
 /**
  * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age)
  * and the checkout's branch, the branch's mark between them (a `·` too cost a narrow line its branch). The state keeps
- * its width down to `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css).
- * While the session works the slot still holds its hidden age (composer.md › The age slot) but gives that hidden part
- * up first, from its start, the arc staying whole at its end; then the branch ends in an ellipsis.
+ * its width down to `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css);
+ * a working row's arc stands alone there (sidebar.css drops the hidden age the one-line row kept for its title), and
+ * the branch ends in an ellipsis.
  */
 export function SessionRowLine({
 	state,
@@ -144,7 +144,7 @@ export function SessionRowLine({
 	return (
 		<>
 			<span
-				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center justify-end gap-1.5 overflow-hidden has-[.omp-live-age]:min-w-(--sc-icon-md) has-[.omp-live-age]:shrink-[100]"
+				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center gap-1.5 overflow-hidden"
 				data-sidebar-row-end
 			>
 				{state}

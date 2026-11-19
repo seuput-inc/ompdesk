@@ -168,6 +168,13 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	--row-meta-min: 2.125rem;
 }
 
+/* The working arc stands alone on the second line. The one-line row kept the hidden age under it so the title's cut
+   never moved when work started or ended (composer.md › The age slot); the two-line row's title has its own line, and
+   the reserved age only took a narrow line's branch (a 248 px sidebar beside a chip read "m…" for main). */
+.omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-end] .omp-live-age > time {
+	display: none;
+}
+
 .omp-sidebar-controls {
 	padding-bottom: var(--sc-space-3);
 }

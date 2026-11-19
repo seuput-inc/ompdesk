@@ -147,6 +147,13 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		.locator(`.omp-sidebar-session-row[data-device-session=${cssString(sessionFile(PROJECT, "sess-live"))}]`);
 	await expect(live.locator("[data-family-running]")).toBeVisible();
 	await expect(live.locator('[data-session-head="branch"]')).toHaveText("release");
+	// In the default 248 px sidebar a short branch reads whole beside the arc and the chip (the arc stands alone).
+	if (surface.name === "desktop")
+		expect(
+			await live
+				.locator('[data-session-head="branch"] .truncate')
+				.evaluate(text => text.scrollWidth <= text.clientWidth),
+		).toBe(true);
 	const local = rowFor(list, sessionFile(PROJECT, "sess-1"));
 	// The repository's own picture once `sessions.artwork` answered; the website has none: its letter.
 	await expect(local.locator('[data-project-artwork="image"] img')).toBeVisible();
