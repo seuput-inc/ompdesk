@@ -2,9 +2,10 @@ import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:chil
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
+import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { initRepo, pathExists, stockShapedWorktree } from "./local/git/test-repos";
 import { removeWorktree } from "./local/git/worktree";
 import type { BridgeClient } from "./local/types";
@@ -76,23 +77,37 @@ interface Omp {
 	stop(): Promise<void>;
 }
 
-/** An rpc omp in `cwd` on the shared private config `isolated`. */
+/**
+ * An omp in `cwd` on the shared private config `isolated`, spawned as OMPdesk spawns one: rpc-ui with the bridge (a
+ * plain rpc omp ran the same prompt without ever starting the daemon).
+ */
 async function startOmp(isolated: string, cwd: string): Promise<Omp> {
+	const address = newBridgeAddress();
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		PI_CODING_AGENT_DIR: join(isolated, "agent"),
 		PI_CONFIG_DIR: configDirName(isolated),
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
+		OMP_GUI_BRIDGE: address,
 	};
 	for (const key of ["ELECTRON_RUN_AS_NODE", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
 		Reflect.deleteProperty(env, key);
 	withoutAwsCredentials(env, isolated);
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
-		[...OMP_COMMAND.args, "--mode", "rpc", "--no-extensions", "--no-skills", "--no-rules", "--model", "fake/m1"],
+		[
+			...OMP_COMMAND.args,
+			...["--mode", "rpc-ui", "--no-extensions", "--no-skills", "--no-rules", "--model", "fake/m1"],
+			...["-e", resolve("resources/gui-bridge/index.ts")],
+		],
 		{ cwd, env: env as NodeJS.ProcessEnv },
 	);
+	const bridge = new GuiBridgeClient(address);
+	cleanups.push(() => {
+		bridge.close();
+		removeBridgeAddress(address);
+	});
 	let stderr = "";
 	child.stderr.on("data", chunk => {
 		stderr += chunk;
@@ -118,6 +133,16 @@ async function startOmp(isolated: string, cwd: string): Promise<Omp> {
 	});
 	await expect
 		.poll(() => frames.some(frame => frame.type === "ready"), { timeout: 60_000, message: stderr })
+		.toBe(true);
+	await expect
+		.poll(
+			() =>
+				bridge.connect(1_000).then(
+					() => true,
+					() => false,
+				),
+			{ timeout: 60_000, message: `bridge never came up\n${stderr.slice(-2000)}` },
+		)
 		.toBe(true);
 	let counter = 0;
 	return {
@@ -230,12 +255,16 @@ describe.skipIf(process.platform !== "win32" || !existsSync(omp))("a worktree a 
 		try {
 			await removeWorktree({ path: worktree.path }, bridge, repo);
 		} catch (error) {
-			// What removes it: ending the daemon (with its units) while the second omp still runs.
+			// git emptied the folder and dropped it from its list; what frees what is left is ending the daemon (with its
+			// units) while the second omp still runs.
 			if (daemon !== undefined) stopOmpDaemon(isolated);
-			const after = await removeWorktree({ path: worktree.path }, bridge, repo).then(
-				() => "removed after the daemon ended",
-				(again: unknown) => `still refused after the daemon ended: ${String(again)}`,
-			);
+			let after: string;
+			try {
+				rmSync(worktree.path, RM_TEMP);
+				after = "the folder left behind was removable once the daemon ended";
+			} catch (again) {
+				after = `the folder left behind stayed busy after the daemon ended: ${String(again)}`;
+			}
 			throw new Error(
 				[
 					`removal refused: ${String(error)}`,
