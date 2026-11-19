@@ -25,6 +25,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | B2 | A command does not run twice after a relaunch (seen: an empty commit made twice). Cause: stock retry replays a cut batch whose results are all errors. Fixed: a call an earlier process started is answered, never run again (real omp, counter file: before 2 runs in 3 of 3, after 1 run in 6 of 6; formal relaunch-once green). | green, into next-line | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
 | B3 | A session opened during the restart countdown keeps its first message: the automatic restart holds until the opened session has taken its first message. | green, into next-line | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
 | B4 | A session that paused waiting for the restart starts again by itself. Fixed: agents are told a relaunch continues their turn (catalog, pstack adapter); an idle goal tab, an armed backoff retry and a deferred Autopilot tab are revived at relaunch. A turn an agent ends anyway is not woken. | green, into next-line | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
+| B5 | A launch-time omp update cut the orchestrator's resume (Mac mini, 0.135.0 relaunch, 23:10Z): omp-update 19.0.0->19.0.1 ran 23:10:35-39 while turns resumed; the orchestrator tab's resume failed 'GUI bridge closed' and was never retried, so it sat idle 25 min. The three other tabs resumed. | in progress | resume-omp-update [Mac mini] | omp/agent/resume-omp-update-20261120 | |
 | B5 | A session another computer opened keeps working when that computer goes off (away-opener). | on branch | next-line [desktop] | omp/agent/next-0134-1 (`e82d28e1f`) | |
 
 ## C. Sessions and tabs
@@ -71,6 +72,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | F3 | Ends with no known cause (MacBook 23:28, Mac mini 23:33 force quit on 19 Nov). | blocked on D6 | | | |
 | F4 | ompdesk.checkout-claims writes a full snapshot of every claimed file every 15 s while editing (up to 951 files, 116 KB per entry); Main's journal held 951 claims for about a day. Claims that never retired, or snapshots that should be deltas. | in progress | memory-mini [Mac mini] | | |
 | F5 | A long-lived orchestrator session grows its omp with its journal (stock keeps every entry). Product lever: hand it to a fresh session past some journal size. Not started. | open | | | |
+| F6 | 2,860 main-unhandled-rejection lines 'ompdesk-core is shutting down' (CoreProcess #start) within one second on the Mac mini, 0.134.0 pid 90451, 19 Nov 14:12:18Z: calls into the core during its shutdown reject unhandled in a loop. | open | | | |
 
 ## G. Tests and tools
 
