@@ -57,7 +57,9 @@
 #                native network ignores Chromium's switches; GitHub's public Latest is never touched). Windows, three modes (job
 #                win-update-gate, scripts/shell-move/win-update-gate.ps1): `break` published old_tag is offered the candidate
 #                and its first download must fail as 0.134.0/0.134.1's do ("session electron-updater does not exist"); `manual`
-#                the candidate setup /S --force-run over the running old_tag starts it on the kept profile; `update` the installed candidate updates itself
+#                the candidate setup /S --force-run over the running old_tag starts it on the kept profile, where both saved tabs
+#                come back and the turn the setup cut off (stock omp from install-omp, a scripted loopback provider:
+#                scripts/shell-move/scripted-provider.ts) is continued once; `update` the installed candidate updates itself
 #                into next_run's higher build. macOS (job mac-update-gate, scripts/shell-move/mac-update-gate.sh): `update` once.
 # macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
 # windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`) the gate admits: main, or a branch named in
@@ -902,6 +904,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
+      # manual: the turn the setup cuts off runs on stock omp, the version every other workflow tests against.
+      - if: matrix.mode == 'manual'
+        uses: ./.github/actions/install-omp
       - name: The published, candidate and next setups
         shell: bash
         run: |

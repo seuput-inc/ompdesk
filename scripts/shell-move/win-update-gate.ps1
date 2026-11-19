@@ -6,8 +6,10 @@ install.
   -Mode break   the old app (-OldSetup, e.g. published v0.134.1) is offered -NewSetup by the stand-in feed; the gate passes
                 when its download fails with "session electron-updater does not exist" (the defect 0.134.2 fixes), and it
                 records every update-log row for eight minutes, so what the second check after the failure does is seen too.
-  -Mode manual  the old app runs, and -NewSetup is run by hand with /S --force-run over it (what a person stuck on the old
-                app does once); the setup starts -NewVersion with userData, the WebView store and ~\.omp kept.
+  -Mode manual  the old app runs a turn on the runner's stock omp, which a scripted provider on loopback holds open, and
+                -NewSetup is run by hand with /S --force-run over it (what a person stuck on the old app does once); the
+                setup starts -NewVersion with userData, the WebView store and ~\.omp kept, both tabs come back and the
+                cut-off turn is continued once, in the new app.
   -Mode update  the old app (-OldSetup = the candidate) is offered -NewSetup (a higher build of the same branch) and its
                 own updater checks, downloads, verifies, counts down, starts the setup and quits; the setup installs and
                 starts the new app.
@@ -35,20 +37,30 @@ $canary = Join-Path $userData 'win-update-gate-canary.txt'
 $ompCanary = Join-Path $HOME '.omp\agent\sessions\win-update-gate\canary.jsonl'
 $webViewStore = Join-Path $userData 'tauri-webview'
 $feed = $null
+$provider = $null
 
 Evidence "mode $Mode; installed v$OldVersion; offered v$NewVersion ($((Get-Item -LiteralPath $NewSetup).Length) bytes)"
 Check (-not (Test-Path -LiteralPath $installDir) -and -not (Get-Entry)) 'the runner starts without an OMPdesk install'
 
-# No omp and no machine setup on the runner: the app looks for omp at a path that is not there, and "installs" with whoami.
+# break and update: no omp and no machine setup on the runner: the app looks for omp at a path that is not there, and
+# "installs" with whoami. manual: the runner's stock omp (install-omp), which the app finds on PATH as a person's.
 $noOmp = Join-Path $env:TEMP 'no-omp.cmd'
 $noInstall = Join-Path $env:SystemRoot 'System32\whoami.exe'
+$appEnv = @{ OMP_GUI_HEADLESS = '1' }
+if ($Mode -ne 'manual') { $appEnv.OMP_GUI_OMP = $noOmp; $appEnv.OMP_GUI_TEST_INSTALLER = $noInstall }
+function Set-AppEnv { foreach ($name in $appEnv.Keys) { Set-Item -LiteralPath "Env:$name" -Value $appEnv[$name] } }
+function Clear-AppEnv { foreach ($name in $appEnv.Keys) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue } }
 function Start-App {
-	$env:OMP_GUI_HEADLESS = '1'
-	$env:OMP_GUI_OMP = $noOmp
-	$env:OMP_GUI_TEST_INSTALLER = $noInstall
-	try { Start-Process -FilePath $exe -PassThru } finally {
-		Remove-Item Env:OMP_GUI_HEADLESS, Env:OMP_GUI_OMP, Env:OMP_GUI_TEST_INSTALLER -ErrorAction SilentlyContinue
-	}
+	Set-AppEnv
+	try { Start-Process -FilePath $exe -PassThru } finally { Clear-AppEnv }
+}
+function Read-JsonLines([string] $File) {
+	@(Get-Content -LiteralPath $File -ErrorAction SilentlyContinue |
+		ForEach-Object { try { $_ | ConvertFrom-Json } catch { $null } } | Where-Object { $_ })
+}
+# The lines one version of the app wrote to gui-runtime.jsonl (runtime-log.ts stamps each with appVersion).
+function Get-LogRows([string] $Source, [string] $Version) {
+	@(Read-JsonLines (Join-Path $userData 'logs\gui-runtime.jsonl') | Where-Object { $_.source -eq $Source -and $_.appVersion -eq $Version })
 }
 function Wait-Started([string] $Version, [int] $Seconds) {
 	$mark = $null
@@ -101,33 +113,112 @@ if ($Mode -eq 'break') {
 	Evidence "a later download of v$NewVersion was verified: $($null -ne $verified)"
 }
 elseif ($Mode -eq 'manual') {
-	# A setting a person picks (Settings › General › reply language; prefs.json is electron-store's file, SafeStore "prefs"),
-	# written before the first start so the old app reads and keeps it.
+	# The turn under test runs on stock omp against a scripted provider on loopback (scripted-provider.ts: no account, no
+	# spend), which omp reaches through ~\.omp\agent of this throwaway runner. The provider holds the turn's request open
+	# until $release exists, so the turn stays running in the old app until the setup ends it.
+	$turnMark = 'WIN-UPDATE-GATE-TURN-0134'
+	$providerPort = 18434
+	$providerLog = Join-Path $Out 'provider.log'
+	$release = Join-Path $env:TEMP 'win-update-gate-release'
+	Remove-Item -LiteralPath $release -ErrorAction SilentlyContinue
+	$omp = Get-Command omp -ErrorAction SilentlyContinue
+	Check ($null -ne $omp) "stock omp is on PATH ($($omp.Source): $(if ($omp) { & $omp.Source '--version' | Select-Object -First 1 }))"
+	$provider = Start-Process -FilePath bun -ArgumentList @((Join-Path $PSScriptRoot 'scripted-provider.ts'), '--marker', $turnMark, '--release', $release, '--port', "$providerPort") -PassThru -RedirectStandardOutput $providerLog -RedirectStandardError (Join-Path $Out 'provider.err')
+	for ($i = 0; $i -lt 30 -and -not (Test-Log $providerLog '"listening"'); $i++) { Start-Sleep -Seconds 1 }
+	Check (Test-Log $providerLog '"listening"') "the scripted provider listens on 127.0.0.1:$providerPort"
+	$agentDir = Join-Path $HOME '.omp\agent'
+	Set-Content -LiteralPath (Join-Path $agentDir 'models.yml') -Value @(
+		'providers:', '  fake:', "    baseUrl: http://127.0.0.1:$providerPort/v1", '    apiKey: x', '    api: openai-completions',
+		'    models:', '      - id: m1', '        name: m1', '        reasoning: false',
+		'        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }')
+	Set-Content -LiteralPath (Join-Path $agentDir 'config.yml') -Value @('modelRoles:', '  default: fake/m1', '  smol: fake/m1', '  slow: fake/m1')
+
+	# What the old app finds at its first start: two saved tabs (prefs.json tabLayouts, tab-layout.ts) and, for the first
+	# one, a stock session whose prompt nothing answered with its marker (turn-resume.ts ResumeMarker). The old app
+	# continues that turn itself (stock restoreSession), so from then on the running turn, its marker and the saved layout
+	# are the old app's own; nothing is seeded while it runs or after it.
+	$projects = Join-Path $HOME 'win-update-gate-projects'
+	$turnCwd = Join-Path $projects 'interrupted'
+	$otherCwd = Join-Path $projects 'second'
+	New-Item -ItemType Directory -Force -Path $turnCwd, $otherCwd | Out-Null
+	$turnSession = Join-Path (Split-Path $ompCanary) 'interrupted-turn.jsonl'
+	$otherSession = Join-Path (Split-Path $ompCanary) 'second-tab.jsonl'
+	$markerFile = Join-Path $userData 'interrupted-turns.json'
+	$now = [DateTimeOffset]::UtcNow
+	$stamp = $now.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+	function Write-Session([string] $File, [string] $Cwd, [hashtable[]] $Messages) {
+		$lines = @([ordered]@{ type = 'session'; version = 3; id = [guid]::NewGuid().ToString(); timestamp = $stamp; cwd = $Cwd } | ConvertTo-Json -Compress)
+		$parent = $null
+		foreach ($message in $Messages) {
+			$entry = '{0:x8}' -f $lines.Count
+			$lines += [ordered]@{
+				type = 'message'; id = $entry; parentId = $parent; timestamp = $stamp
+				message = [ordered]@{ role = $message.role; content = @(@{ type = 'text'; text = $message.text }); timestamp = $now.ToUnixTimeMilliseconds() }
+			} | ConvertTo-Json -Compress -Depth 5
+			$parent = $entry
+		}
+		Set-Content -LiteralPath $File -NoNewline -Value (($lines -join "`n") + "`n")
+	}
+	# The journal as its message roles and record types, in order.
+	function Get-Journal([string] $File) {
+		(Read-JsonLines $File | ForEach-Object {
+			if ($_.type -eq 'message') { "$($_.message.role)$(if ($_.message.stopReason) { "/$($_.message.stopReason)" })" } elseif ($_.customType) { $_.customType } else { $_.type }
+		}) -join ' '
+	}
+	function Test-Reply {
+		[bool](Read-JsonLines $turnSession | Where-Object { $_.type -eq 'message' -and $_.message.role -eq 'assistant' -and (($_.message.content | ForEach-Object { $_.text }) -join '') -cmatch 'CONTINUED' })
+	}
+	Write-Session $turnSession $turnCwd @(@{ role = 'user'; text = "$turnMark Answer in one word." })
+	Write-Session $otherSession $otherCwd @(@{ role = 'user'; text = 'The second tab.' }, @{ role = 'assistant'; text = 'It stays open across the update.' })
+	Set-Content -LiteralPath $markerFile -Value (ConvertTo-Json -Compress -InputObject @([ordered]@{ window = 1; tab = 'seed'; sessionPath = $turnSession; cwd = $turnCwd; kind = 'agent'; startedAt = $now.ToUnixTimeMilliseconds(); reason = 'running' }))
+	# With them a setting a person picks (Settings › General › reply language; prefs.json is electron-store's file, SafeStore
+	# "prefs"), written before the first start so the old app reads and keeps it.
 	$prefsFile = Join-Path $userData 'prefs.json'
-	Set-Content -LiteralPath $prefsFile -Value '{"replyLanguage":"Japanese"}'
+	$tabs = @([ordered]@{ cwd = $turnCwd; sessionPath = $turnSession; kind = 'agent' }, [ordered]@{ cwd = $otherCwd; sessionPath = $otherSession; kind = 'agent' })
+	Set-Content -LiteralPath $prefsFile -Value ([ordered]@{ replyLanguage = 'Japanese'; tabLayouts = @([ordered]@{ version = 1; tabs = $tabs; activeIndex = 0 }) } | ConvertTo-Json -Compress -Depth 6)
 	$sessionHash = (Get-FileHash -LiteralPath $ompCanary).Hash
 	$null = Start-App
 	$mark = Wait-Started $OldVersion 90
 	Check ($mark.version -eq $OldVersion) "v$OldVersion started (app-started.json)"
+	for ($i = 0; $i -lt 60 -and -not (Test-Log $providerLog '"phase":"held"'); $i++) { Start-Sleep -Seconds 2 }
 	Start-Sleep -Seconds 15
 	$store = Get-Item -LiteralPath $webViewStore -Force -ErrorAction SilentlyContinue
 	$storeBorn = $store.CreationTimeUtc
 	$prefsBefore = Read-Json $prefsFile
-	Evidence "before: WebView store created $($storeBorn.ToString('o')), $(@(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count) files; prefs $($prefsBefore | ConvertTo-Json -Compress -Depth 2)"
+	Evidence "before: WebView store created $($storeBorn.ToString('o')), $(@(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count) files; prefs $($prefsBefore | ConvertTo-Json -Compress -Depth 6)"
 	Check ($prefsBefore.replyLanguage -eq 'Japanese') "v$OldVersion kept the seeded reply language"
+	$held = @(Read-JsonLines $providerLog | Where-Object { $_.phase -eq 'held' })
+	$marked = @(Read-Json $markerFile | Where-Object { $_ })
+	foreach ($row in Get-LogRows 'turn-resume' $OldVersion) { Evidence "before: v$OldVersion turn-resume $($row.message) $($row.details | ConvertTo-Json -Compress -Depth 3)" }
+	Evidence "before: the provider holds $($held.Count) request(s) of the turn; marker file $($marked | ConvertTo-Json -Compress -Depth 3); journal: $(Get-Journal $turnSession)"
+	Check ($held.Count -ge 1 -and -not (Read-JsonLines $providerLog | Where-Object { $_.phase -eq 'continued' })) "v$OldVersion runs the seeded turn on stock omp and the provider holds its request unanswered"
+	Check ($marked.Count -eq 1 -and $marked[0].reason -eq 'running' -and $marked[0].sessionPath -eq $turnSession -and $marked[0].tab -ne 'seed') "v$OldVersion wrote the marker of that running turn itself (tab $($marked[0].tab))"
 	# A person runs the setup while the app is open. /S alone closes the running app and starts nothing; --force-run starts
-	# the new app (with this script's runner environment: no omp, no machine setup). Only the setup itself is waited for:
-	# Start-Process -Wait would also wait for the app it starts.
-	$env:OMP_GUI_HEADLESS = '1'; $env:OMP_GUI_OMP = $noOmp; $env:OMP_GUI_TEST_INSTALLER = $noInstall
+	# the new app. The provider is let go only once every process of the old install has ended, so the one answer it gives
+	# can reach nothing but the app the setup starts. The setup is polled, not waited for: Start-Process -Wait would also
+	# wait for the app it starts.
+	$oldIds = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$installDir\*" } | ForEach-Object { $_.Id })
+	Check ($oldIds.Count -gt 0) "v$OldVersion is running when the setup starts ($($oldIds.Count) processes of the install)"
+	$letGo = {
+		if (-not (Test-Path -LiteralPath $release) -and -not ($oldIds.Count -and (Get-Process -Id $oldIds -ErrorAction SilentlyContinue))) {
+			Set-Content -LiteralPath $release -Value 'the old app ended'
+			Evidence "every process of v$OldVersion had ended at second $([int]((Get-Date) - $t0).TotalSeconds): the provider answers from here ($([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()))"
+		}
+	}
+	Set-AppEnv
 	$setup = Start-Process -FilePath $NewSetup -ArgumentList '/S', '--force-run' -PassThru
-	Remove-Item Env:OMP_GUI_HEADLESS, Env:OMP_GUI_OMP, Env:OMP_GUI_TEST_INSTALLER -ErrorAction SilentlyContinue
+	Clear-AppEnv
 	$null = $setup.Handle
-	$null = $setup.WaitForExit(600000)
+	$deadline = (Get-Date).AddMinutes(10)
+	while (-not $setup.HasExited -and (Get-Date) -lt $deadline) { & $letGo; Start-Sleep -Milliseconds 200 }
+	& $letGo
 	Check ($setup.HasExited -and $setup.ExitCode -eq 0) "v$NewVersion's setup /S --force-run over the running v$OldVersion exited 0 (exit $($setup.ExitCode))"
 	$entry = Get-Entry
 	Check ($entry -and $entry.DisplayVersion -eq $NewVersion) "the uninstall entry says $NewVersion"
 	$mark = Wait-Started $NewVersion 120
 	Check ($mark.version -eq $NewVersion) "the setup started v$NewVersion on the same profile (app-started.json)"
+	for ($i = 0; $i -lt 90 -and -not (Test-Reply); $i++) { Start-Sleep -Seconds 2 }
+	# Ten more seconds: a second request of the turn, were one sent, is in the provider's log by then.
 	Start-Sleep -Seconds 10
 	$prefsAfter = Read-Json $prefsFile
 	$lost = @($prefsBefore.PSObject.Properties.Name | Where-Object { $_ -notin @($prefsAfter.PSObject.Properties.Name) })
@@ -136,7 +227,22 @@ elseif ($Mode -eq 'manual') {
 	Check ($null -ne $store -and $null -ne $storeAfter -and $storeAfter.CreationTimeUtc -eq $storeBorn) 'the WebView store is the same folder, not made anew'
 	Check ($prefsAfter.replyLanguage -eq 'Japanese' -and $lost.Count -eq 0) "v$NewVersion keeps the reply language and every setting key"
 	Check ((Test-Path -LiteralPath $ompCanary) -and (Get-FileHash -LiteralPath $ompCanary).Hash -eq $sessionHash) '~\.omp session file is unchanged'
-	Evidence 'not covered here: restored tabs and an interrupted turn continuing (the runner has no omp and no model account)'
+	foreach ($row in @(Get-LogRows 'tab-layout' $NewVersion) + @(Get-LogRows 'turn-resume' $NewVersion)) { Evidence "after: v$NewVersion $($row.source) $($row.message) $($row.details | ConvertTo-Json -Compress -Depth 3)" }
+	$layout = Get-LogRows 'tab-layout' $NewVersion | Where-Object { $_.message -like 'restored*' } | Select-Object -First 1
+	Check ($layout.message -eq 'restored' -and $layout.details.tabs -eq 2) "v$NewVersion restored both tabs, none left out or started fresh (tab-layout '$($layout.message)', tabs $($layout.details.tabs))"
+	$resume = Get-LogRows 'turn-resume' $NewVersion
+	$launch = $resume | Where-Object { $_.message -eq 'launch' } | Select-Object -First 1
+	Check ($launch.details.markers -eq 1 -and $launch.details.enabled -eq $true) "v$NewVersion found the one interrupted turn at launch (turn-resume launch: markers $($launch.details.markers), enabled $($launch.details.enabled))"
+	$started = @($resume | Where-Object { $_.message -eq 'continue' -and $_.details.started -eq $true })
+	Check ($started.Count -eq 1) "v$NewVersion continued it once (turn-resume continue with started true: $($started.Count))"
+	$turnRows = @(Read-JsonLines $providerLog | Where-Object { $_.marker -eq $true -and $_.main -eq $true })
+	$answered = @($turnRows | Where-Object { $_.phase -eq 'continued' })
+	Evidence "after: the provider's requests of the turn: $(($turnRows | ForEach-Object { "$($_.phase) at $($_.at)" }) -join ', '); requests of any kind: $(@(Read-JsonLines $providerLog | Where-Object { $_.phase -and $_.phase -ne 'cut' }).Count)"
+	Check ($answered.Count -eq 1) "the provider got exactly one request of the interrupted turn after v$OldVersion had ended, and answered it (got $($answered.Count))"
+	Check (Test-Reply) "the turn's session file journals the provider's reply (journal: $(Get-Journal $turnSession))"
+	Save-Text $turnSession 'interrupted-turn.jsonl'
+	Save-Text $markerFile 'interrupted-turns.json'
+	Save-Text $prefsFile 'prefs.json'
 }
 else {
 	Start-Feed
@@ -189,5 +295,6 @@ Save-Text (Join-Path $userData 'logs\gui-runtime.jsonl') 'gui-runtime.jsonl' 400
 if ($feed) { Save-Text (Join-Path $Out 'feed.log') 'feed-requests.log' }
 Stop-Installed
 if ($feed -and -not $feed.HasExited) { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
+if ($provider -and -not $provider.HasExited) { Stop-Process -Id $provider.Id -Force -ErrorAction SilentlyContinue }
 if ($script:failures.Count) { Say "RESULT: FAILED ($($script:failures.Count)): $($script:failures -join '; ')"; exit 1 }
 Say 'RESULT: ok'
