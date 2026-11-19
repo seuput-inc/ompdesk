@@ -290,6 +290,79 @@ public static class GpuCrash {
 	[GpuCrash]::Crash($ProcessId)
 }
 
+# How painted OMPdesk's window is: PrintWindow with PW_RENDERFULLCONTENT (2) reads the composed window, WebView2's
+# content included, even when another window covers it. A grid of 48 x 32 samples gives the distinct colors and the
+# share of near-black ones; the picture is saved as a capture. The app's painted UI shows dozens of colors (text,
+# borders, icons); a window WebView2 stopped drawing is one flat color (black or the background).
+function Measure-WindowPaint([int] $ProcessId, [string] $Name) {
+	if (-not ('WindowPaint' -as [type])) {
+		Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WindowPaint {
+	[StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+	public delegate bool EnumProc(IntPtr window, IntPtr data);
+	[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect);
+	[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+	[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data);
+	[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+	[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+	// The process's largest visible top-level window: the Tauri host also owns small helper windows.
+	public static IntPtr Largest(uint pid) {
+		IntPtr best = IntPtr.Zero;
+		long bestArea = 0;
+		EnumWindows((window, data) => {
+			uint owner;
+			GetWindowThreadProcessId(window, out owner);
+			Rect rect;
+			if (owner == pid && IsWindowVisible(window) && GetWindowRect(window, out rect)) {
+				long area = (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top);
+				if (area > bestArea) { bestArea = area; best = window; }
+			}
+			return true;
+		}, IntPtr.Zero);
+		return best;
+	}
+}
+'@
+	}
+	Add-Type -AssemblyName System.Drawing
+	$window = [WindowPaint]::Largest([uint32] $ProcessId)
+	if ($window -eq [IntPtr]::Zero) { return @{ Painted = $false; Text = 'no visible window' } }
+	$rect = New-Object WindowPaint+Rect
+	[void][WindowPaint]::GetWindowRect($window, [ref] $rect)
+	$width = $rect.Right - $rect.Left
+	$height = $rect.Bottom - $rect.Top
+	if ($width -lt 48 -or $height -lt 32) { return @{ Painted = $false; Text = "window $width x $height" } }
+	$bitmap = New-Object System.Drawing.Bitmap $width, $height
+	$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+	$dc = $graphics.GetHdc()
+	$printed = [WindowPaint]::PrintWindow($window, $dc, 2)
+	$graphics.ReleaseHdc($dc)
+	$colors = @{}
+	$black = 0
+	$samples = 0
+	for ($y = 0; $y -lt 32; $y++) {
+		for ($x = 0; $x -lt 48; $x++) {
+			$pixel = $bitmap.GetPixel([math]::Floor(($x + 0.5) * $width / 48), [math]::Floor(($y + 0.5) * $height / 32))
+			$colors[$pixel.ToArgb()] = $true
+			if ($pixel.R + $pixel.G + $pixel.B -lt 30) { $black++ }
+			$samples++
+		}
+	}
+	if ($Captures) {
+		New-Item -ItemType Directory -Force -Path $Captures | Out-Null
+		$bitmap.Save((Join-Path $Captures "$Name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+	}
+	$graphics.Dispose()
+	$bitmap.Dispose()
+	$share = [math]::Round(100 * $black / $samples)
+	@{
+		Painted = $printed -and $colors.Count -ge 8
+		Text = "$width x $height, PrintWindow $printed, $($colors.Count) colors, $share% near-black"
+	}
+}
+
 # The loop a laptop hit on v0.44.0 (Electron): a GPU crash relaunched into software rendering, and crashes there
 # relaunched again, so the app opened and closed forever. The Tauri host has no such relaunch: nothing in it reports
 # a WebView2 process failure to main (`app.childProcessGone` came only from the retired CEF shell), so
@@ -302,7 +375,9 @@ function Assert-SurvivesGpuCrashes {
 	if ($main.Count -ne 1) { Fail "expected one OMPdesk main process, found $($main.Count)" }
 	$main = [int] $main[0]
 	$crashed = @()
+	$paint = { param($label) $seen = Measure-WindowPaint $main "paint-$label"; Write-Host "     paint $label`: $($seen.Painted) ($($seen.Text))" }
 	try {
+		& $paint 'before'
 		for ($i = 0; $i -lt 2; $i++) {
 			$gpu = @()
 			$deadline = (Get-Date).AddSeconds(30)
@@ -318,7 +393,10 @@ function Assert-SurvivesGpuCrashes {
 			try { Stop-ProcessAsCrash $gpu[0] } catch { Fail "the crash request for GPU pid $($gpu[0]) failed: $($_.Exception.Message)" }
 			Write-Host "     crashed WebView2 GPU pid $($gpu[0]) of OMPdesk $main"
 			$crashed += $gpu[0]
-			Start-Sleep -Seconds 5
+			Start-Sleep -Seconds 2
+			& $paint "crash$($i + 1)-2s"
+			Start-Sleep -Seconds 4
+			& $paint "crash$($i + 1)-6s"
 		}
 		$deadline = (Get-Date).AddSeconds(30)
 		while ((Get-Date) -lt $deadline) {
@@ -332,6 +410,7 @@ function Assert-SurvivesGpuCrashes {
 		if (@(Get-Process -Id $main -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count -eq 0) {
 			Fail "OMPdesk $main has no window after the GPU crashes"
 		}
+		& $paint 'after-30s'
 		$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
 		$lines = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() }
 		if (@($lines | Where-Object { $_ -match 'relaunching with software rendering' }).Count -ne 0) { Fail 'a GPU crash relaunched the app' }
