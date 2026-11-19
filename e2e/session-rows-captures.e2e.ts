@@ -13,6 +13,7 @@ import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, chromium, expect, type Locator, type Page, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
+import { cssString } from "./harness";
 
 const SHOTS = process.env.OMP_GUI_SESSION_ROWS_SHOTS;
 const PROJECT = "/Users/dev/projects/ompdesk";
@@ -73,7 +74,7 @@ const sidebar = (page: Page) => page.locator(".omp-session-sidebar").first();
 const rowFor = (scope: Locator, file: string) =>
 	scope
 		.locator(
-			`.omp-sidebar-session-row[data-session-path="${file}"], .omp-sidebar-session-row[data-device-session="${file}"]`,
+			`.omp-sidebar-session-row[data-session-path=${cssString(file)}], .omp-sidebar-session-row[data-device-session=${cssString(file)}]`,
 		)
 		.first();
 
