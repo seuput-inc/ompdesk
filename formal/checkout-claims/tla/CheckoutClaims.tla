@@ -185,6 +185,9 @@ Held == stamp # 0
 \* @code resources/gui-bridge/modes/checkout-peers.ts:71-87 writeJournal: when the claims changed (agent_end, the 15 s interval, session_shutdown), the next entry nextClaimsEntry gives; nothing when F is where the journal has it
 \* @code resources/gui-bridge/modes/checkout-claims.ts:405-414 nextClaimsEntry: the change since the writer's base as a delta, or the whole set when one is due (a whole one may also come early: a change no smaller than the set)
 JournalWrite ==
+    \* Only a restart reads the journal: once none can come, its writes change nothing the properties see, and leaving
+    \* them out keeps the restart-free runs (MC_clean.cfg) the size they were.
+    /\ restarts < MaxRestarts
     /\ Held # jbase
     /\ \/ /\ jlog' = <<[kind |-> "whole", held |-> Held]>> /\ jdeltas' = 0
        \/ /\ jdeltas < FullEvery
