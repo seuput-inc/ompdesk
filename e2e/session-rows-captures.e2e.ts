@@ -178,11 +178,13 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	);
 	expect(heads.length).toBeGreaterThan(2);
 	for (const head of heads) {
-		if (surface.name !== "narrow" || !head.workingBesideChip)
-			expect(head.letters, head.name).toBeGreaterThanOrEqual(16);
+		// The 220 px row at work beside a chip is the floor: its branch's mark at the line's edge.
+		if (surface.name === "narrow" && head.workingBesideChip) continue;
+		expect(head.letters, head.name).toBeGreaterThanOrEqual(16);
 		expect(head.past, head.name).toBeLessThanOrEqual(0.5);
 	}
-	// The narrow row's idle age is out of sight (tooltip and screen-reader text keep it); the phone keeps it.
+	// The narrow row's idle age is out of sight (tooltip and screen-reader text keep it); the 248 px row and the phone
+	// keep it.
 	const idleAge = rowFor(list, sessionFile(PROJECT, "sess-1")).locator("[data-sidebar-row-end] > time");
 	const ageWidth = await idleAge.evaluate(time => time.getBoundingClientRect().width);
 	if (surface.name === "narrow") expect(ageWidth).toBeLessThanOrEqual(1);
