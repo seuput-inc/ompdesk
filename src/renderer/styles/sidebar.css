@@ -1,10 +1,12 @@
 /* Sidebar-only polish; shared controls and the theme scales stay unchanged. */
-/* A session row is 32 px for a mouse (one more row in view at 1280×800) and 36 px under a finger. The empty place a row
-   leaves while the person points at the list (`data-sidebar-gap`, layout/sidebar/sidebar-hold.ts) is the same height. */
+/* A session row is two fixed lines whatever its title (the owner's approved design, 15 Nov 2026): the repository's
+   picture spans both, the title is the first, the state, branch, family count and ⋯ the second. 48 px for a mouse,
+   52 px under a finger. The empty place a row leaves while the person points at the list (`data-sidebar-gap`,
+   layout/sidebar/sidebar-hold.ts) is the same height. */
 .omp-session-sidebar .omp-sidebar-session-row,
 .omp-session-sidebar [data-sidebar-gap="session"],
 .omp-sidebar-session-rename {
-	--omp-sidebar-row-h: var(--sc-control-md);
+	--omp-sidebar-row-h: 3rem;
 	min-height: var(--omp-sidebar-row-h);
 }
 
@@ -14,7 +16,17 @@ html[data-input="touch"]
 		.omp-session-sidebar [data-sidebar-gap="session"],
 		.omp-sidebar-session-rename
 	) {
-	--omp-sidebar-row-h: var(--sc-control-lg);
+	--omp-sidebar-row-h: 3.25rem;
+}
+
+/* The second line's controls are line-high (20 px): the family chip and the ⋯ keep the row at two lines. Under a
+   finger mobile.css widens their hit areas past the line without growing it. */
+.omp-session-sidebar .omp-sidebar-session-row :is(.omp-family-chip, [data-sidebar-row-menu]) {
+	height: 1.25rem;
+}
+
+.omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-menu] {
+	width: 1.5rem;
 }
 
 /* A session row out of view skips style, layout and paint. With 500 stored
@@ -24,11 +36,11 @@ html[data-input="touch"]
    row paints (hover wash, focus ring, actions) stays inside its box. */
 .omp-session-sidebar .omp-sidebar-session-row {
 	content-visibility: auto;
-	/* The size is the content box's; ListRow's py-1 padding comes on top. As
+	/* The size is the content box's; ListRow's two-line py-1.5 padding comes on top. As
 	   `auto var(--sc-control-lg)` a row never rendered stood 44px against a
 	   rendered 36px, and with the list's scroll anchoring off, each row above the
 	   view that rendered while scrolling up moved the rows on screen by 8px. */
-	contain-intrinsic-size: auto calc(var(--omp-sidebar-row-h) - 2 * var(--sc-space-1));
+	contain-intrinsic-size: auto calc(var(--omp-sidebar-row-h) - 2 * var(--sc-space-1-5));
 }
 
 /* The session list keeps its scrollbar's room whether it scrolls or not, so a row's width is its own and never how
@@ -40,8 +52,8 @@ html[data-input="touch"]
 	scrollbar-gutter: stable;
 }
 
-/* No leading slot: a session row's title starts where its group header's content does (the header button's `pl-2`),
-   nested in a project group or not, so the list reads as one left edge under the project's chevron. */
+/* The picture leads the row: it starts where its group header's content does (the header button's `pl-2`), nested
+   in a project group or not, so the list reads as one left edge under the project's chevron. */
 .omp-session-sidebar .omp-sidebar-session-row {
 	padding-left: var(--sc-space-2);
 }

@@ -16,14 +16,13 @@ import {
 	Folder,
 	FolderOpen,
 	FolderPlus,
-	MessageCircle,
 	Monitor,
 	MoreHorizontal,
 	Pin,
 	Plus,
 	Settings2,
 } from "lucide-react";
-import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { reviewUnmerged } from "../../../../shared/agent-control";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
@@ -63,6 +62,7 @@ import { pickRemoteDirectory } from "../../../stores/remote";
 import type { SessionStore } from "../../../stores/session";
 import { sessionListFeed } from "../../../stores/session-list";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
+import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useProjectList } from "../../../stores/sidebar-projects";
@@ -107,6 +107,7 @@ import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubag
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
+import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowLine } from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, openedChildStatus, reviewKey } from "./sidebar-family";
 import { useHeld } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -559,6 +560,19 @@ function DeviceSessions({
 		prefix,
 		query,
 	]);
+	// What each of the host's sessions works in (picture, branch), asked of the host, as this computer's rows ask it.
+	const sessionTargets = useSessionTargets();
+	useEffect(() => {
+		ensureSessionTargetsOnFocus();
+		const rows = new Map<string, { sessionPath: string; cwd: string; stamp?: string }>();
+		for (const tab of deviceTabs)
+			if (tab.sessionPath && tab.kind !== "chat")
+				rows.set(tab.sessionPath, { sessionPath: tab.sessionPath, cwd: tab.cwd });
+		for (const session of sessions)
+			if (session.kind !== "chat")
+				rows.set(session.path, { sessionPath: session.path, cwd: session.cwd, stamp: session.modified });
+		requestSessionTargets(host.deviceId, [...rows.values()]);
+	}, [sessions, deviceTabs, host.deviceId]);
 	// While the pointer is on the sidebar the host's rows keep their places (`sidebar-hold.ts`), as this computer's do.
 	const ownOrder = useMemo(
 		() => JSON.stringify([groupOrder, sessionOrder, hostPins, [...hostArchived], query]),
@@ -1039,10 +1053,18 @@ function DeviceSessions({
 				</div>
 			);
 		}
-		// No leading slot (the local rows' rule, Sidebar.tsx): the title starts at the group's content edge, a chat's
-		// glyph sits at the end before the age, and a tab open elsewhere is said in words only.
+		// The same two lines as this computer's rows (Sidebar.tsx): the picture of the repository the host says it
+		// works in, the title, then the state, branch, family count and the one ⋯; a tab open elsewhere is said in
+		// words only.
 		const openElsewhere = tab !== undefined && !current && !inVisibleSplit;
-		const chat = session.kind === "chat" ? <MessageCircle aria-hidden className="size-(--sc-icon-sm)" /> : null;
+		const target =
+			session.kind === "chat"
+				? null
+				: resolveRowTarget(sessionTargets, host.deviceId, session.path, {
+						name: basename(projectList.worktrees[session.cwd] ?? session.cwd) || session.cwd,
+						artwork: null,
+						head: null,
+					});
 		// Its family, as a local row's (Sidebar.tsx): the tab's subagents and the sessions its agent opened. The ones
 		// running light the row as on the host, though no tab here holds it.
 		const opened = openedOf(session);
@@ -1059,30 +1081,14 @@ function DeviceSessions({
 		);
 		const list = listOf(session);
 		const pinned = hostPins.includes(session.path);
-		const marker = chat ?? (pinned ? <Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" /> : null);
+		const marker = pinned ? <Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" /> : null;
 		const family = tab !== undefined || opened.length > 0 || (summary?.agents.length ?? 0) > 0;
 		// Its own key: two hosts may keep a session at the same path, and this computer's prune never sees host rows.
 		const familyKey = `device:${host.deviceId}:${session.path}`;
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					// One ⋯ on every input, so the title keeps its width; at rest under touch, on hover or focus elsewhere.
-					actions={
-						<IconButton
-							data-sidebar-row-menu
-							icon={<MoreHorizontal />}
-							label={t("sidebar.sessionMenu")}
-							onClick={event => {
-								const rect = event.currentTarget.getBoundingClientRect();
-								setRowMenu({ x: rect.left, y: rect.bottom + 4, items: menuFor(session), label: title });
-							}}
-							size="sm"
-							tabIndex={-1}
-						/>
-					}
-					actionCount={1}
-					actionsAtRest={touchInput}
-					actionsOnHover={!touchInput}
+					leading={<SessionRowArtwork target={target} />}
 					buttonProps={{
 						tabIndex: -1,
 						"data-roving-item": `device-session:${host.deviceId}:${session.path}`,
@@ -1102,14 +1108,40 @@ function DeviceSessions({
 					}}
 					className="omp-sidebar-session-row"
 					key={session.path}
-					meta={
-						folderMissing || marker || age ? (
-							<span className="inline-flex min-w-0 items-center gap-1.5">
-								{folderMissing && <SidebarFolderMissingMark />}
-								{marker}
-								{folderMissing ? null : age}
-							</span>
-						) : undefined
+					secondary={
+						<SessionRowLine
+							head={target?.head ?? null}
+							state={
+								<>
+									{folderMissing && <SidebarFolderMissingMark />}
+									{marker}
+									{folderMissing ? null : age}
+								</>
+							}
+						/>
+					}
+					secondaryEnd={
+						<>
+							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(familyKey)) && (
+								<SidebarSubagentsToggle
+									agents={summary?.agents}
+									opened={opened}
+									sessionKey={familyKey}
+									tabId={tab?.id ?? null}
+								/>
+							)}
+							<IconButton
+								data-sidebar-row-menu
+								icon={<MoreHorizontal />}
+								label={t("sidebar.sessionMenu")}
+								onClick={event => {
+									const rect = event.currentTarget.getBoundingClientRect();
+									setRowMenu({ x: rect.left, y: rect.bottom + 4, items: menuFor(session), label: title });
+								}}
+								size="sm"
+								tabIndex={-1}
+							/>
+						</>
 					}
 					onClick={() => openSession(session)}
 					rowProps={{
@@ -1144,24 +1176,15 @@ function DeviceSessions({
 					}
 					titleText={[
 						title,
+						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
+						target?.head ? headWords(t, target.head).tip : null,
 						openElsewhere && !working ? t("sidebar.row.open") : null,
 						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 						reason ?? null,
-						// The age slot reads "3w"; the exact time is here, since hovering puts the ⋯ in the age's place.
 						indexed ? formatClock(session.modified) : null,
 					]
 						.filter(Boolean)
 						.join("\n")}
-					trailing={
-						hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(familyKey)) ? (
-							<SidebarSubagentsToggle
-								agents={summary?.agents}
-								opened={opened}
-								sessionKey={familyKey}
-								tabId={tab?.id ?? null}
-							/>
-						) : undefined
-					}
 				/>
 				{family && (
 					<SidebarSubagents
