@@ -7,7 +7,8 @@
 | `Peek` | the `peek` `watchAsides` puts in `Agent.hasIrcInterrupts`, polled by stock `executeToolCalls` every 250 ms |
 | `Drain` | stock's aside provider at a step boundary (`setAsideMessageProvider`, `IrcBridge.drainPending`) |
 | `HandOver(m)` | stock's `message_end` for the injected message; the bridge's `message_end` hook deletes its key |
-| `TurnEnd` | stock's `agent_end`; the bridge's hook clears every mark |
+| `TurnEnd` | the main agent's `agent_end`; the bridge's hook clears every mark |
+| `ChildMessageEnd(m)` / `ChildTurnEnd` | a subagent's `message_end` / `agent_end`: index.ts installs the area hooks again on each subagent's `pi`, and the hooks return for `ctx.agent.kind !== "main"` |
 | `BatchStart` / `BatchEnd` / `TurnStart` | stock agent loop (environment) |
 
 ## Assumptions

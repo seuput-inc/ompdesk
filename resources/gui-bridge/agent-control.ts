@@ -192,10 +192,11 @@ interface RegistryHost {
 	};
 }
 
-/** The stock events agent-control listens to besides its prompt section. */
+/** The stock events agent-control listens to besides its prompt section; `ctx.agent` names whose event it is. */
+type AgentContext = { agent: { kind: string } };
 type ControlHost = PromptSectionHost & {
-	on(event: "message_end", handler: (event: { message?: unknown }) => void): void;
-	on(event: "agent_end", handler: () => void): void;
+	on(event: "message_end", handler: (event: { message?: unknown }, ctx: AgentContext) => void): void;
+	on(event: "agent_end", handler: (event: unknown, ctx: AgentContext) => void): void;
 };
 
 export function install(pi: ControlHost & Partial<MailHost> & RegistryHost): void {
@@ -209,13 +210,18 @@ export function install(pi: ControlHost & Partial<MailHost> & RegistryHost): voi
 			watchAsides(pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session?.agent);
 		return undefined;
 	});
-	pi.on("message_end", event => {
+	// The marks are the main agent's: a rebind installs these hooks on every subagent's `pi` too (index.ts), and a
+	// subagent's own messages and turn ends must leave them alone.
+	pi.on("message_end", (event, ctx) => {
+		if (ctx.agent.kind !== "main") return;
 		const key = urgentKey(event.message);
 		if (key) urgent.delete(key);
 	});
 	// A mark whose aside stock never handed over (dropped with its turn) must not make later quiet ones urgent; one
 	// still queued starts the next turn, whose first step reads it before any tool runs.
-	pi.on("agent_end", () => urgent.clear());
+	pi.on("agent_end", (_event, ctx) => {
+		if (ctx.agent.kind === "main") urgent.clear();
+	});
 }
 
 const EXTENSION_TYPES: Record<string, string> = {

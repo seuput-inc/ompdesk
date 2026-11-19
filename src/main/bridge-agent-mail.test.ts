@@ -127,6 +127,27 @@ describe("agent_control.mail", () => {
 		await mail?.({ content: "status again", details: { id: "u3", kind: "progress" }, triggerTurn: false }, busy);
 		expect(await agent.hasIrcInterrupts?.()).toBe(false);
 	});
+
+	it("keeps the main agent's urgent report when one of its subagents ends a turn", async () => {
+		// index.ts installs every area module again on each subagent's `pi` (a rebind); its hooks see that subagent.
+		const child = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
+		const onChild = (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+			child.set(event, [...(child.get(event) ?? []), handler]);
+		};
+		install({ on: onChild as Parameters<typeof install>[0]["on"], sendMessage });
+		const queue: unknown[] = [];
+		sendMessage.mockImplementation(message => queue.push(message));
+		const agent: Peeks = { hasIrcInterrupts: () => false, hasQueuedAsides: () => queue.length > 0 };
+		const busy = env({ isStreaming: true, agent });
+		await mail?.({ content: "question", details: { id: "c1", kind: "question" }, triggerTurn: true }, busy);
+		for (const hook of child.get("agent_end") ?? []) hook({ type: "agent_end" }, { agent: { kind: "task" } });
+		for (const hook of child.get("message_end") ?? [])
+			hook(
+				{ type: "message_end", message: { role: "custom", customType: MAIL_CUSTOM_TYPE, details: { id: "c1" } } },
+				{ agent: { kind: "task" } },
+			);
+		expect(await agent.hasIrcInterrupts?.()).toBe(true);
+	});
 });
 
 describe("agent_control.sent", () => {

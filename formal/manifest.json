@@ -291,9 +291,9 @@
 				"resources/gui-bridge/agent-control.ts#watchAsides",
 				"resources/gui-bridge/agent-control.ts#interruptFor",
 				"resources/gui-bridge/agent-control.ts#install",
-				"resources/gui-bridge/agent-control.ts:337-390"
+				"resources/gui-bridge/agent-control.ts:343-396"
 			],
-			"syncCommit": "aee9cdf781bc63bc159626c7f0abda7ad027d9cc"
+			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
 		}
 	]
 }
