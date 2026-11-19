@@ -5,12 +5,7 @@ import { translate } from "./i18n";
 describe("bridgeHealthToast", () => {
 	it("names the unavailable features in the UI language and stays until dismissed", () => {
 		const input = bridgeHealthToast(
-			{
-				kind: "unsupported",
-				ompVersion: "19.0.0",
-				features: ["relaunchResume", "mcp", "futureFeature"],
-				repairing: true,
-			},
+			{ kind: "unsupported", ompVersion: "19.0.0", features: ["relaunchResume", "mcp", "futureFeature"] },
 			translate,
 		);
 		expect(input.variant).toBe("warning");
@@ -24,7 +19,7 @@ describe("bridgeHealthToast", () => {
 
 	it("names only the one missing action, and promises no repair when nothing core is missing", () => {
 		const input = bridgeHealthToast(
-			{ kind: "unsupported", ompVersion: "19.0.0", features: ["abortCompaction"], repairing: false },
+			{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["abortCompaction"] },
 			translate,
 		);
 		expect(input.message).toBe(

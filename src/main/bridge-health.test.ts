@@ -52,7 +52,7 @@ describe("BridgeHealth", () => {
 		expect(broken.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(health.take()).toEqual([
-			{ kind: "unsupported", ompVersion: "19.0.0", features: ["planMode", "goalMode"], repairing: false },
+			{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["planMode", "goalMode"] },
 		]);
 		expect(health.take()).toEqual([]);
 
@@ -81,9 +81,7 @@ describe("BridgeHealth", () => {
 		await health.observe({ connected: true, ompVersion: "18.9.0", bridge: after.bridge });
 		expect(after.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
-		expect(health.take()).toEqual([
-			{ kind: "unsupported", ompVersion: "18.9.0", features: ["planMode"], repairing: false },
-		]);
+		expect(health.take()).toEqual([{ kind: "unsupportedOptional", ompVersion: "18.9.0", features: ["planMode"] }]);
 		expect(health.supports("18.9.0", "planMode")).toBe(false);
 		// The old version's answer stays; a second tab on 18.9.0 does not warn twice.
 		expect(health.supports("18.8.7", "planMode")).toBe(true);
@@ -117,9 +115,7 @@ describe("BridgeHealth", () => {
 		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: next.bridge });
 		expect(next.request).toHaveBeenCalledTimes(1);
 		// No version in the result: the sidecar's own omp version stands in.
-		expect(health.take()).toEqual([
-			{ kind: "unsupported", ompVersion: "19.0.0", features: ["mcp"], repairing: false },
-		]);
+		expect(health.take()).toEqual([{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["mcp"] }]);
 	});
 
 	it("reports a bridge that never connected once per version", async () => {
@@ -153,9 +149,7 @@ describe("BridgeHealth self-repair", () => {
 		const health = new BridgeHealth(notify, onIncompatible);
 		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge });
 		expect(onIncompatible).toHaveBeenCalledExactlyOnceWith("19.0.1");
-		expect(health.take()).toEqual([
-			{ kind: "unsupported", ompVersion: "19.0.1", features: ["relaunchResume"], repairing: true },
-		]);
+		expect(health.take()).toEqual([{ kind: "unsupported", ompVersion: "19.0.1", features: ["relaunchResume"] }]);
 	});
 
 	it("an omp that lacks only optional actions is reported, not repaired", async () => {
@@ -169,7 +163,7 @@ describe("BridgeHealth self-repair", () => {
 		await health.observe({ connected: true, ompVersion: "19.1.0", bridge: newer.bridge });
 		expect(onIncompatible).not.toHaveBeenCalled();
 		expect(health.take()).toEqual([
-			{ kind: "unsupported", ompVersion: "19.1.0", features: ["abortCompaction"], repairing: false },
+			{ kind: "unsupportedOptional", ompVersion: "19.1.0", features: ["abortCompaction"] },
 		]);
 		expect(health.supports("19.1.0", "abortCompaction")).toBe(false);
 		expect(health.supports("19.1.0", "jobs")).toBe(true);

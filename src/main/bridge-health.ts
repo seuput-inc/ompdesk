@@ -90,10 +90,9 @@ export class BridgeHealth {
 		);
 		const reported = (capabilities as Capabilities).ompVersion;
 		this.#push({
-			kind: "unsupported",
+			kind: core ? "unsupported" : "unsupportedOptional",
 			ompVersion: typeof reported === "string" && reported ? reported : result.ompVersion,
 			features,
-			repairing: core,
 		});
 	}
 
@@ -116,7 +115,7 @@ export class BridgeHealth {
 	#push(warning: BridgeHealthWarning): void {
 		this.#pending.push(warning);
 		this.#notify();
-		if ((warning.kind === "unsupported" && !warning.repairing) || this.#repaired.has(warning.ompVersion)) return;
+		if (warning.kind === "unsupportedOptional" || this.#repaired.has(warning.ompVersion)) return;
 		this.#repaired.add(warning.ompVersion);
 		this.#onIncompatible(warning.ompVersion);
 	}
