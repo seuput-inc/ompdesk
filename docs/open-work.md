@@ -31,14 +31,15 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
 | C1 | A finished tab closes by tool; a close is never refused with a made-up reason (close-visible). | on branch | next-line [desktop] | omp/agent/next-0134-1 (`b24ab49ba`) | |
-| C2 | One session's tab stays open on every device after its owner closed it. Case 20 Nov: the Mac mini closed its child "Persistent bridge health" (01a1f309) at ~01:40; the desktop's window kept its tab for that Mac mini session, idle. | in progress | tabs-tidy [desktop] | | |
-| C3 | Reading another session opens a tab in the reader's window and leaves it. | in progress | tabs-tidy [desktop] | | |
-| C4 | A scratch folder shows as a sidebar project. | in progress | tabs-tidy [desktop] | | |
-| C5 | A test tab an agent opens stays after the test. | in progress | tabs-tidy [desktop] | | |
-| C6 | An open to a never-started start tab never answers (fix `3d135b59e`); a call to a tab whose omp cleanup ended never answers. | in progress | next-line (3d135b59e), tabs-tidy (cleanup-ended calls) [desktop] | omp/agent/close-web-rc-20261119 (`3d135b59e`) | |
-| C7 | `ompdesk_sessions` with `mine: true` lists nothing. | in progress | tabs-tidy [desktop] | | |
-| C8 | A paired computer's sidebar differs from the host's real state. | in progress | tabs-tidy [desktop] | | |
+| C2 | One session's tab stays open on every device after its owner closed it. Case 20 Nov: the Mac mini closed its child "Persistent bridge health" (01a1f309) at ~01:40; the desktop's window kept its tab for that Mac mini session, idle. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C3 | Reading another session opens a tab in the reader's window and leaves it. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C4 | A scratch folder shows as a sidebar project. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C5 | A test tab an agent opens stays after the test. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C6 | An open to a never-started start tab never answers (fix `3d135b59e`); a call to a tab whose omp cleanup ended never answers. | start-tab fix on next-line; cleanup-ended call: not reproduced (only open/join/reopen wait unbounded on when_ready), needs a captured hang | next-line (3d135b59e), tabs-tidy (cleanup-ended calls) [desktop] | omp/agent/close-web-rc-20261119 (`3d135b59e`) | |
+| C7 | `ompdesk_sessions` with `mine: true` lists nothing. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C8 | A paired computer's sidebar differs from the host's real state. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
 | C9 | A tab another tab holds open on a frozen window cannot be closed (live repro on the Mac mini). | in progress | 01a1f2ea [Mac mini] | omp/agent/page-watch-20261119 | |
+| C10 | After a messageless session's omp was killed, its restarted omp got a new saved id (01a1f4bf → 01a1f4ca) and the empty session file was not resumed. | not started | | | |
 
 ## D. Silently stale or stopped
 
