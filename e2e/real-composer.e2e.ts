@@ -151,6 +151,7 @@ test("the composer's ! and !! lines and the Plan card, on the real omp", async (
 		await exitApp(app);
 		server.closeAllConnections();
 		await new Promise<void>(done => server.close(() => done()));
-		await fs.rm(profile, { recursive: true, force: true });
+		// omp's daemon, outside the app's tree, can hold the project folder for 3 s after exit (e2e-ci-windows rule).
+		await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
