@@ -160,7 +160,12 @@ async function keptRun(
 	onChunk?: ((error: Error | null, chunk: string) => void) | null,
 ): Promise<ShellRunResult> {
 	await fs.mkdir(dir, { recursive: true });
-	const seedEnv = await sessionSeed(shell, run, options, dir);
+	const seedEnv = await sessionSeed(shell, run, options, dir).catch(() => undefined);
+	if (!seedEnv) {
+		// Nothing started yet: the job runs in omp, as stock runs it, and a relaunch ends it.
+		await fs.rm(dir, { recursive: true, force: true });
+		return run.call(shell, options, onChunk);
+	}
 	const { application, args } = shellProcessCommand({ command: options.command, source: path.join(dir, "seed.sh") });
 	await fs.writeFile(path.join(dir, "spec.json"), JSON.stringify({ argv: [application, ...args], cwd: options.cwd }));
 	const start = Bun.spawn([binary, "keep", "start", dir], {
