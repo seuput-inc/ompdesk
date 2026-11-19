@@ -223,10 +223,11 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 		await send({ type: "prompt", message: "add a greeting file and run the checks" });
 		// The execution turn reads stock's approved-plan prompt with the plan itself inlined. (Stock's loop may send
 		// one more request after the propose call before the bridge's abort lands; the approved turn comes after it.)
-		await expect
-			.poll(() => approvedPrompt(provider.bodies), { timeout: 60_000 })
-			.toContain("Plan approved.")
-			.catch(explained(provider.bodies, frames, events));
+		try {
+			await expect.poll(() => approvedPrompt(provider.bodies), { timeout: 60_000 }).toContain("Plan approved.");
+		} catch (error) {
+			explained(provider.bodies, frames, events)(error);
+		}
 		expect(approvedPrompt(provider.bodies)).toContain("Add the greeting file.");
 		await expect
 			.poll(() => frames.some(frame => frame.type === "agent_end" && frame.isTerminal !== false), {
@@ -243,10 +244,11 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 		const { frames, events, bridge, send } = await startOmp(provider.url);
 		await bridge.request("modes.set_plan_mode", { enabled: true });
 		await send({ type: "prompt", message: "add a greeting file and run the checks" });
-		await expect
-			.poll(() => events.some(event => event.type === "plan_proposal"), { timeout: 60_000 })
-			.toBe(true)
-			.catch(explained(provider.bodies, frames, events));
+		try {
+			await expect.poll(() => events.some(event => event.type === "plan_proposal"), { timeout: 60_000 }).toBe(true);
+		} catch (error) {
+			explained(provider.bodies, frames, events)(error);
+		}
 		// The proposal waits for an answer, with plan mode still on, and no approved turn runs.
 		expect(await bridge.request("modes.get_plan_mode", {})).toMatchObject({
 			enabled: true,
