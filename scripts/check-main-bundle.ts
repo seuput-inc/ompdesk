@@ -393,7 +393,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // A turn refused because credits are off reads as the plan's limit, not a failed response (20 Nov 2026, f8aedbc24:
 // `lib/messages.ts`, `TurnErrorNotice.tsx`): measured 2,208,473 (branch run 44622480250), 58 bytes over. The budget is
 // that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_208_728;
+// next-line with relaunch-keeps-work, the board fix, earlier-list's compaction line, theme sets and limit card, and G12
+// (20 Nov 2026): measured 2,211,213 (branch run 44627539158). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_211_293;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
