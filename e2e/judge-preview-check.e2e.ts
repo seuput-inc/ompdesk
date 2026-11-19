@@ -10,6 +10,12 @@ import { exitApp, fixtureOmp } from "./harness";
 // the notice and the gui_visualize result the hint; without one, the result and the Preview are as before. The rules
 // themselves (thresholds, privacy, timeouts) are pinned by preview-check.test.ts and the "Preview check" cases of
 // preview/host.test.ts.
+//
+// The first open of a cold app may not get its page judged within the check's 4 s: on a fresh GitHub Windows runner
+// the app's first launch spawned omp at 5.7 s (1.4 s later on) and created the Preview page 2.7 s after the tool
+// opened the visual (instrumented runs 44499841018, 44504420552; full e2e 44508806311). That open must still never
+// read as a fine page: the error verdict or "could not check", never neither. The verdict itself is asserted on a
+// second open of the same, unchanged version once its page is loaded on screen.
 
 interface Frame {
 	type?: string;
@@ -61,19 +67,33 @@ for (const judge of ["error", "none"] as const) {
 				.poll(async () => (await shell.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 				.toBe("ready");
 			const composer = shell.locator("textarea").first();
-			await composer.fill(
-				`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "page.html" })}`,
-			);
-			await composer.press("Enter");
-			await expect.poll(async () => (await results()).join("\n"), { timeout: 20_000 }).toContain("Showing");
-			const result = (await results()).join("\n");
-			const notice = shell.locator("aside[data-docked] [data-preview-check]");
+			const open = async () => {
+				await composer.fill(
+					`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "page.html" })}`,
+				);
+				await composer.press("Enter");
+			};
+			await open();
+			await expect.poll(async () => (await results()).length, { timeout: 20_000 }).toBe(1);
+			const [cold = ""] = await results();
+			expect(cold).toContain("Showing");
+			const aside = shell.locator("aside[data-docked]");
+			const notice = aside.locator("[data-preview-check]");
 			if (judge === "error") {
-				expect(result).toContain("Preview check: the page shows an error message.");
+				expect(cold).toMatch(
+					/Preview check: the page shows an error message\.|Preview check: could not check the page in time/,
+				);
+				// The page is on screen and loaded: the Preview's reload button is enabled and no longer "Stop".
+				await expect(aside.getByRole("button", { name: "Reload", exact: true })).toBeEnabled();
+				await open();
+				await expect.poll(async () => (await results()).length, { timeout: 20_000 }).toBe(2);
+				const warm = (await results())[1] ?? "";
+				expect(warm).toContain("version 1 (unchanged)");
+				expect(warm).toContain("Preview check: the page shows an error message.");
 				await expect(notice).toHaveAttribute("data-preview-check", "error");
 			} else {
-				expect(result).not.toContain("Preview check");
-				await expect(shell.locator("aside[data-docked]")).toBeVisible();
+				expect(cold).not.toContain("Preview check");
+				await expect(aside).toBeVisible();
 				await expect(notice).toHaveCount(0);
 			}
 		} finally {
