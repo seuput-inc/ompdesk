@@ -22,7 +22,13 @@ test.beforeEach(async () => {
 	const agent = path.join(profile, "agent");
 	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
 	await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
-	app = await launchApp({ project, desktop, agent, profile, env: { OMP_GUI_HEADLESS: "1" } });
+	app = await launchApp({
+		project,
+		desktop,
+		agent,
+		profile,
+		env: { OMP_GUI_HEADLESS: "1", OMP_GUI_E2E_SHELL_LOG: "1" },
+	});
 	page = await app.firstWindow();
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
@@ -50,6 +56,23 @@ test("a window whose page stops answering is started again with its tabs and dra
 	await expect
 		.poll(() => page.evaluate(() => localStorage.getItem("omp.composerDrafts") ?? ""))
 		.toContain("half-written thought");
+	// TEMP diagnosis: who ends main after the restart (runs 44570371258, 44574031048 saw the app exit right after it).
+	await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+		const say = (what: string) => console.error(`[hang-diag] ${what}\n${new Error().stack}`);
+		process.on("exit", code => say(`process exit ${code}`));
+		const quit = electronApp.quit.bind(electronApp);
+		const exit = electronApp.exit.bind(electronApp);
+		electronApp.quit = () => {
+			say("app.quit");
+			quit();
+		};
+		electronApp.exit = (code?: number) => {
+			say(`app.exit ${code}`);
+			exit(code);
+		};
+		electronApp.on("window-all-closed", () => say("window-all-closed"));
+		for (const win of BrowserWindow.getAllWindows()) win.on("closed", () => say(`window ${win.id} closed`));
+	});
 
 	// Hold the page's main thread for longer than detection and the grace together; never awaited (it cannot answer).
 	void page
