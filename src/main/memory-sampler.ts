@@ -23,7 +23,7 @@ export interface MemoryReading {
 export interface ProcessRow {
 	pid: number;
 	ppid: number;
-	/** Resident bytes. */
+	/** Resident bytes; on macOS the footprint (compressed and swapped pages too) of a process this user may read. */
 	bytes: number;
 	/** Image name (`conhost.exe`), Windows only: `ps` names none. */
 	name?: string;
