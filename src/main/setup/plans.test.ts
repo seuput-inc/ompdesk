@@ -19,6 +19,7 @@ import {
 	type ArchiveRelease,
 	buildPlan,
 	manualSteps,
+	ompInstallSpecs,
 	type PlanContext,
 	PORTABLE_GIT,
 	selectMethod,
@@ -42,6 +43,8 @@ const mac: PlanContext = {
 	toolsDir: "/data/tools",
 	bun: "/home/u/.bun/bin/bun",
 	omp: null,
+	ompManaged: false,
+	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
 	brew: "/opt/homebrew/bin/brew",
 	winget: null,
 	systemRoot: "C:\\Windows",
@@ -53,6 +56,8 @@ const win: PlanContext = {
 	toolsDir: "C:\\Users\\First Last\\AppData\\Local\\ompdesk\\tools",
 	bun: "C:\\Users\\First Last\\.bun\\bin\\bun.exe",
 	omp: null,
+	ompManaged: false,
+	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
 	brew: null,
 	winget: "C:\\Users\\First Last\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe",
 	systemRoot: "C:\\Windows",
@@ -77,6 +82,10 @@ describe("selectMethod", () => {
 		expect(selectMethod("omp", missing, mac)).toBe("bun-global");
 		expect(selectMethod("omp", { kind: "broken", detail: "x", path: "/x" }, mac)).toBe("bun-global");
 		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp" })).toBe("omp-update");
+		// A too-old omp Bun manages gets the package install (the tested omp); stock's update picks its own target.
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp", ompManaged: true })).toBe(
+			"bun-global",
+		);
 	});
 
 	it("upgrades a Bun older than omp's engines with `bun upgrade`, and installs it afresh without one", () => {
@@ -172,15 +181,54 @@ describe("buildPlan", () => {
 		90_000,
 	);
 
-	it("installs omp with the absolute bun path, and refuses without Bun", () => {
+	it("installs omp at the versions it is handed, with the absolute bun path, and refuses without Bun", () => {
 		const plan = buildPlan("omp", "bun-global", win);
 		expect(plan?.spawn).toEqual({
 			file: win.bun,
-			args: ["install", "-g", "@oh-my-pi/pi-coding-agent"],
+			args: ["install", "-g", "@oh-my-pi/pi-coding-agent@18.22.2"],
 			shell: false,
 		});
-		expect(plan?.command).toBe(`"${win.bun}" install -g @oh-my-pi/pi-coding-agent`);
+		expect(plan?.command).toBe(`"${win.bun}" install -g @oh-my-pi/pi-coding-agent@18.22.2`);
 		expect(buildPlan("omp", "bun-global", { ...mac, bun: null })).toBeNull();
+		// An update's own target, and the natives Bun's manifest pins beside the agent, all in one install.
+		const specs = ["@oh-my-pi/pi-coding-agent@18.23.0", "@oh-my-pi/pi-natives@18.23.0"];
+		expect(buildPlan("omp", "bun-global", { ...mac, ompSpecs: specs })?.spawn.args).toEqual([
+			"install",
+			"-g",
+			...specs,
+		]);
+	});
+
+	it("names the omp package at one exact version, and with it the natives packages Bun's global manifest pins", () => {
+		const root = mkdtempSync(join(tmpdir(), "ompdesk-omp-specs-"));
+		try {
+			// A first install: no manifest, the agent alone.
+			expect(ompInstallSpecs(root, "18.22.2")).toEqual(["@oh-my-pi/pi-coding-agent@18.22.2"]);
+			mkdirSync(join(root, "install", "global"), { recursive: true });
+			const manifest = join(root, "install", "global", "package.json");
+			// What stock's own update leaves: the agent, the natives and this platform's leaf, pinned together.
+			writeFileSync(
+				manifest,
+				JSON.stringify({
+					dependencies: {
+						"@oh-my-pi/pi-coding-agent": "18.22.0",
+						"@oh-my-pi/pi-natives": "18.22.0",
+						"@oh-my-pi/pi-natives-darwin-arm64": "18.22.0",
+						"@oh-my-pi/pi-natively-other": "1.0.0",
+						typescript: "5.9.0",
+					},
+				}),
+			);
+			expect(ompInstallSpecs(root, "18.22.2")).toEqual([
+				"@oh-my-pi/pi-coding-agent@18.22.2",
+				"@oh-my-pi/pi-natives@18.22.2",
+				"@oh-my-pi/pi-natives-darwin-arm64@18.22.2",
+			]);
+			writeFileSync(manifest, "not json");
+			expect(ompInstallSpecs(root, "18.22.2")).toEqual(["@oh-my-pi/pi-coding-agent@18.22.2"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("upgrades Bun with the absolute bun path, which replaces itself even while it runs (Windows included)", () => {

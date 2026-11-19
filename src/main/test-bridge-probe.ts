@@ -44,6 +44,38 @@ export function configDirName(folder: string, home = homedir()): string {
 }
 
 /**
+ * Ends the omp daemon a test's private config folder `folder` started, with what it runs. From omp 19 an omp starts
+ * one per config folder (`<folder>/run/daemon`); it inherits that omp's working folder (stock `resolveWorkerSpawnCmd`
+ * names none for the bundled entry), runs the session's units (bash services and the like) there and outlives it, so
+ * on Windows the test's folders stay busy (EBUSY) while they run. Older omps have none (`omp ps --json` names no
+ * daemon), and nothing is done.
+ */
+export function stopOmpDaemon(folder: string): void {
+	const ps = spawnSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "ps", "--json"], {
+		env: { ...process.env, PI_CONFIG_DIR: configDirName(folder) },
+		encoding: "utf8",
+		timeout: 30_000,
+	});
+	let report: unknown;
+	try {
+		report = JSON.parse(ps.stdout);
+	} catch {
+		return;
+	}
+	const daemon = report && typeof report === "object" && "daemon" in report ? report.daemon : undefined;
+	const pid = daemon && typeof daemon === "object" && "pid" in daemon ? daemon.pid : undefined;
+	if (typeof pid !== "number") return;
+	if (process.platform === "win32") spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], { timeout: 30_000 });
+	else {
+		try {
+			process.kill(pid);
+		} catch {
+			// Already gone.
+		}
+	}
+}
+
+/**
  * Takes every AWS credential source out of `env`, an environment a test hands the installed omp as "no provider but
  * the fake key it adds". Stock counts Amazon Bedrock as signed in on any host that has one (pi-ai
  * `registry/aws.ts` `hasAwsCredentialSource`): `AWS_*` keys, the shared files under the home folder and, on an EC2

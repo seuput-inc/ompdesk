@@ -944,6 +944,21 @@ impl AgentControl {
                 };
                 match target {
                     Target::Tab(tab) => self.stop(&caller, tabs, &tab, &args).await,
+                    // Open in a tab no window of this app holds (a paired host's, or one this computer runs for a
+                    // paired device): stopped or closed through that tab, never answered as open nowhere.
+                    Target::Stored(row) if args.delete != Some(true) && row.elsewhere.is_some() => {
+                        match self.rejoin(&caller, &row).await? {
+                            resolve::Rejoined::Held(tab) => {
+                                self.stop(&caller, tabs, &tab, &args).await
+                            }
+                            resolve::Rejoined::Joined(tab) => {
+                                self.stop_joined(&caller, tabs, &tab, &row, &args).await
+                            }
+                            resolve::Rejoined::Nowhere(now) => {
+                                self.stop_stored(&caller, &now, &args).await
+                            }
+                        }
+                    }
                     Target::Stored(row) => self.stop_stored(&caller, &row, &args).await,
                 }
             }

@@ -9,7 +9,9 @@
  * tab on it (the boot log shows the floor then the newer one), shows one "omp updated to
  * …" toast, and the restarted bridge's capabilities probe names a feature
  * the new omp lacks. With the pref off nothing checks on its own, and "Update
- * now" still works.
+ * now" still works. A release whose major is above the omp OMPdesk was tested
+ * with (`UNTESTED_MAJOR`) is never installed on its own: Settings says it is held
+ * and why, "Update now" installs it, and gui-runtime.jsonl says who did what.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -20,7 +22,10 @@ import { writeFakeOmp } from "../src/main/test-fake-omp";
 import { FIXTURE_MIN_OMP_VERSION as FLOOR, FIXTURE_NEWER_OMP_VERSION as NEWER } from "./fixture/version";
 import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible } from "./harness";
 
-/** The fake installer: logs each call; the omp update waits for the test's `go` file, then "installs" `NEWER`. */
+/** A major above any omp an OMPdesk release was tested with (`src/shared/omp-tested.json`). */
+const UNTESTED_MAJOR = "99.0.0";
+
+/** The fake installer: logs each call; the omp update waits for the test's `go` file, then "installs" the launch's newest omp. */
 const INSTALLER = `
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,8 +34,8 @@ const dir = process.env.OMPDESK_FAKE_INSTALLER_DIR;
 appendFileSync(join(dir, "installs.log"), item + " " + method + "\\n");
 if (item === "omp" && method === "omp-update") {
 	while (!existsSync(join(dir, "go"))) await Bun.sleep(25);
-	writeFileSync(process.env.OMPDESK_FAKE_VERSION_FILE, "${NEWER}");
-	console.log("Updated to ${NEWER}");
+	writeFileSync(process.env.OMPDESK_FAKE_VERSION_FILE, process.env.OMPDESK_FAKE_NEW_VERSION);
+	console.log("Updated to " + process.env.OMPDESK_FAKE_NEW_VERSION);
 } else {
 	console.log("fake " + item + " install");
 }
@@ -53,7 +58,21 @@ async function checks(launched: Launched): Promise<string[]> {
 	return log.split("\n").filter(Boolean);
 }
 
-async function launch(name: string, prefs: Record<string, unknown>): Promise<Launched> {
+/** The `omp-update` lines of gui-runtime.jsonl, in order: each step and the path that started it (`checked launch`). */
+async function updateLog(launched: Launched): Promise<string[]> {
+	const log = await fs
+		.readFile(path.join(launched.root, "desktop", "logs", "gui-runtime.jsonl"), "utf8")
+		.catch(() => "");
+	return log
+		.split("\n")
+		.filter(Boolean)
+		.map(line => JSON.parse(line) as { source?: string; message?: string; details?: { path?: string } })
+		.filter(entry => entry.source === "omp-update")
+		.map(entry => `${entry.message} ${entry.details?.path}`);
+}
+
+/** `latest`: what the fixture omp's `update --check` calls the newest release, and what the fake installer installs. */
+async function launch(name: string, prefs: Record<string, unknown>, latest = NEWER): Promise<Launched> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), `omp-gui-update-${name}-`));
 	const project = path.join(root, "project");
 	const desktop = path.join(root, "desktop");
@@ -75,7 +94,8 @@ async function launch(name: string, prefs: Record<string, unknown>): Promise<Lau
 			OMP_GUI_OMP: omp,
 			OMP_GUI_TEST_INSTALLER: installer,
 			OMP_GUI_TEST_OMP_UPDATES: "1",
-			OMP_GUI_TEST_LATEST_OMP: NEWER,
+			OMP_GUI_TEST_LATEST_OMP: latest,
+			OMPDESK_FAKE_NEW_VERSION: latest,
 			OMP_GUI_TEST_UPDATE_CHECK_LOG: path.join(root, "update-checks.log"),
 			OMP_GUI_TEST_VERSION_FILE: path.join(root, "omp-version"),
 			OMP_GUI_TEST_BOOT_LOG: path.join(root, "boots.log"),
@@ -172,6 +192,58 @@ test("a newer omp installs on its own; the idle tab restarts on it with its draf
 		await expect(settings.getByTestId("omp-update-status")).toHaveCount(0);
 		// On a local tab "This computer" is the only place that updates omp: no second omp row above it.
 		await expect(settings.getByText("The omp CLI installed on this system", { exact: false })).toHaveCount(0);
+	} finally {
+		await close(launched);
+	}
+});
+
+test("a newer major waits for the person: nothing installs on its own, Settings says why, and Update now installs it", async () => {
+	test.setTimeout(120_000);
+	const launched = await launch("held", {}, UNTESTED_MAJOR);
+	try {
+		const { page } = launched;
+		const state = () => page.evaluate(() => window.omp.ompUpdate.getState());
+		await expect.poll(() => sidecarStatus(page), { timeout: 30_000 }).toBe("ready");
+		// The launch check found the newer major and left it alone: no installer ran, the tab keeps its omp.
+		await expect.poll(state, { timeout: 30_000 }).toMatchObject({
+			phase: "idle",
+			installed: FLOOR,
+			latest: UNTESTED_MAJOR,
+			held: { version: UNTESTED_MAJOR, reason: "untested-major" },
+			updatedTo: null,
+			failure: null,
+		});
+		expect(await installs(launched)).toEqual([]);
+		expect(await boots(launched)).toEqual([FLOOR]);
+		// Settings › Updates & about › This computer: omp's row says what is held and why, and keeps Update now.
+		const settings = page.locator("[data-settings-page]");
+		await pressShortcutUntilVisible(page, "ControlOrMeta+Comma", settings);
+		await settings.locator('[data-settings-section="updates"]').click();
+		const held = settings.getByTestId("omp-update-held");
+		await expect(held).toContainText(`omp ${UNTESTED_MAJOR} is available`);
+		await expect(held).toContainText("tested with omp");
+		await expect(settings.getByTestId("omp-update-status")).toHaveCount(0);
+		// The person's click is the ask: the same update now runs.
+		await settings.locator('[data-setup-item="omp"]').getByTestId("omp-update-now").click();
+		await expect.poll(() => installs(launched), { timeout: 30_000 }).toEqual(["omp omp-update"]);
+		await releaseInstaller(launched);
+		await expect.poll(state, { timeout: 30_000 }).toMatchObject({
+			phase: "idle",
+			installed: UNTESTED_MAJOR,
+			updatedTo: UNTESTED_MAJOR,
+			held: null,
+			failure: null,
+		});
+		await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, UNTESTED_MAJOR]);
+		await expect(held).toHaveCount(0);
+		// Who installed what: the launch's check held it, the person's pass installed it (a later repair check may follow).
+		expect((await updateLog(launched)).slice(0, 5)).toEqual([
+			"checked launch",
+			"held launch",
+			"checked manual",
+			"started manual",
+			"finished manual",
+		]);
 	} finally {
 		await close(launched);
 	}

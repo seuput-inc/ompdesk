@@ -227,6 +227,10 @@ pub struct ControlTab {
     pub former_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_edits: Option<FileEdits>,
+    /// A view of a tab another party holds (a paired host's window or another device's tab there, or a tab this
+    /// computer runs for a paired device): one omp, shared, and closing the view only leaves it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub viewing: bool,
 }
 
 impl ControlTab {
@@ -441,6 +445,18 @@ impl RpcResponse {
             error: Some(error.into()),
             ..RpcResponse::default()
         }
+    }
+
+    /// No answer came, so the command may still run: a local omp's `RPC timeout (…)`, or main's
+    /// `rpc_delivery_unknown`, which a paired host's tab gets when `tab.command` timed out on the link (the host may
+    /// have delivered it and answered too late).
+    pub fn unanswered(&self) -> bool {
+        !self.success && (super::fail::unanswered_text(self.error.as_deref()) || self.unconfirmed())
+    }
+
+    /// The unanswered case where the command left this computer and its fate is unknown (`rpc_delivery_unknown`).
+    pub fn unconfirmed(&self) -> bool {
+        !self.success && self.code.as_deref() == Some("rpc_delivery_unknown")
     }
 }
 

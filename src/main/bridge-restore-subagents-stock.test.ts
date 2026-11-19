@@ -586,9 +586,9 @@ describe.skipIf(!existsSync(omp))("revived subagents on stock omp", () => {
 		// stdout-disconnect exit journals as pending. On Windows a broken stdout makes stock dispose instead (exit reason
 		// `dispose`, the call answered "Command aborted" before it), so no exit names a cut call and the note has no label.
 		if (process.platform !== "win32") {
-			expect(
-				mainJournal(isolated).find(entry => entry.customType === "ompdesk-restart-subagents")?.details,
-			).toMatchObject({ subagents: [{ id, doing: "bash: probing the stream" }] });
+			await expect
+				.poll(() => restartNotes(isolated)[0]?.details, { timeout: 30_000 })
+				.toMatchObject({ subagents: [{ id, doing: "bash: probing the stream" }] });
 		}
 	}, 240_000);
 });

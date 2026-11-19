@@ -3,30 +3,52 @@
  * `omp update --check` (SetupService.latestOmp: the omp OMPdesk runs, with the
  * user's registry, channel and install method) for the newest omp at launch and
  * then every few hours, backing off after errors. When that is newer than the
- * installed omp it runs stock `omp update` on its own (SetupService.updateOmp,
- * under the setup supervisor, in the same environment as the check): no click,
- * and without waiting for any turn to end, because a running omp keeps the code
- * it loaded — `bun install -g` replaces package files with new ones (new inodes)
+ * installed omp it installs it on its own (SetupService.updateOmp, under the
+ * setup supervisor, in the same environment as the check): no click, and
+ * without waiting for any turn to end, because a running omp keeps the code it
+ * loaded — `bun install -g` replaces package files with new ones (new inodes)
  * instead of rewriting them, and the bridge's `@oh-my-pi/*` imports resolve to
  * omp's bundled singletons, not to files on disk. The processes that do read
  * omp's files from disk (the stats server and the stock helper) are stopped
  * before the installer starts and brought back after it. Windows locks files a
- * running omp holds, so there stock's own update fails or repairs the launcher;
- * that attempt is just a failure here, shown in Settings and retried on the next
- * check.
+ * running omp holds, so there an install can fail; that attempt is just a
+ * failure here, shown in Settings and retried on the next check.
  *
- * OMPdesk's own update is not part of this: it stays manual (updater.ts).
+ * **Nothing here installs an untested major unasked** (the owner's rule, 19 Nov
+ * 2026: omp 19.0.0 came out and OMPdesk, tested with 18, put it on two computers
+ * within hours; the composer's extras, the plan card and resume broke). A pass
+ * nobody asked for (the timer's, the bridge compatibility repair's) runs only
+ * under the pref and installs only an omp whose major is at most the tested
+ * omp's (`src/shared/omp-tested.json`). A newer major is `held`: the state names
+ * it, Settings says so, and a person's "Update now" installs it. While one is
+ * held, such a pass still brings omp to the newest release of the tested major.
+ *
+ * OMPdesk's own update is not part of this (updater.ts).
  * Each computer runs its own instance under its own pref. A paired device
  * that wants a host's omp updated asks that host's instance (`host.ompUpdate.now`,
  * LocalMachine.startOmpUpdate) and follows its state, which the host pushes.
  */
 import { IPC_COMMANDS } from "../shared/ipc-types";
-import ompTested from "../shared/omp-tested.json";
-import type { OmpUpdatedNotice, OmpUpdateFailure, OmpUpdateState } from "../shared/omp-update";
-import { isNewer } from "../shared/version";
+import type {
+	OmpUpdatedNotice,
+	OmpUpdateFailure,
+	OmpUpdateHold,
+	OmpUpdateState,
+	OmpUpdateTrigger,
+} from "../shared/omp-update";
+import { isNewer, majorOf } from "../shared/version";
+import { TESTED_OMP_VERSION } from "./omp-runtime";
 import type { OmpUpdateOutcome } from "./setup/service";
 import { nextCheckDelay, UpdateScheduler } from "./update-scheduler";
 import type { IpcRegistry } from "./web/ipc-registry";
+
+/**
+ * A step of a pass, one gui-runtime.jsonl line each (source `omp-update`), so a later reader can tell who installed
+ * what and when: `checked` (installed, latest, tested), `held` (the major left alone), `started` (from, target),
+ * `finished` (the version that runs now), `failed` (reason), `skipped` (nothing ran, and why). Every line names
+ * its `path` (`OmpUpdateTrigger`).
+ */
+export type OmpUpdateLogStep = "checked" | "held" | "started" | "finished" | "failed" | "skipped";
 
 export interface OmpUpdaterDeps {
 	/** This launch checks on a timer: a packaged app, or a test launch that opts in. Dev and test launches never do. */
@@ -35,10 +57,19 @@ export interface OmpUpdaterDeps {
 	enabled: () => boolean;
 	/** The newest omp for the installed one (stock `omp update --check`); rejects with the reason it could not tell. */
 	fetchLatest: () => Promise<string>;
+	/**
+	 * The newest omp release of `major` that can be installed here as a named version (SetupService.newestOmpIn);
+	 * null when nothing can (an omp Bun does not manage). Rejects with the reason it could not tell.
+	 */
+	newestWithin: (major: number) => Promise<string | null>;
 	/** The omp that runs now (from machine setup's detection); null while omp is missing. */
 	installed: () => string | null;
-	/** Stock `omp update` and the re-detection after it. `beforeInstall` runs just before the installer starts. */
-	update: (target: string, beforeInstall: () => Promise<void>) => Promise<OmpUpdateOutcome>;
+	/**
+	 * Install `target` and detect omp again (SetupService.updateOmp). `beforeInstall` runs just before the installer
+	 * starts. `exactOnly`: `target` is not the registry's newest, so only an install that names the version may run,
+	 * never stock `omp update`, which picks its own.
+	 */
+	update: (target: string, beforeInstall: () => Promise<void>, exactOnly: boolean) => Promise<OmpUpdateOutcome>;
 	/** Stop what reads omp's files from disk (stats server, stock helper); resolves once they are gone. */
 	releaseHelpers: () => Promise<void>;
 	/**
@@ -50,6 +81,9 @@ export interface OmpUpdaterDeps {
 	onState: (state: OmpUpdateState) => void;
 	/** One quiet "omp updated to X". */
 	onUpdated: (notice: OmpUpdatedNotice) => void;
+	log: (step: OmpUpdateLogStep, details: Record<string, unknown>) => void;
+	/** The omp this OMPdesk was tested with; `TESTED_OMP_VERSION` unless a test names another. */
+	tested?: string;
 	now?: () => number;
 }
 
@@ -57,17 +91,25 @@ export class OmpUpdater {
 	readonly #deps: OmpUpdaterDeps;
 	/** The check after `#failures` failed ones in a row waits `nextCheckDelay(#failures)`. */
 	readonly #scheduler: UpdateScheduler;
+	readonly #tested: string;
 	#state: OmpUpdateState;
 	#failures = 0;
 	/** One check at a time: Update now during a check joins it. */
 	#running: Promise<void> | null = null;
+	/** A person asked for the pass that runs now ("Update now"), whoever started it. */
+	#asked = false;
+	/** The timer's first tick is the launch check. */
+	#ticked = false;
 
 	constructor(deps: OmpUpdaterDeps) {
 		this.#deps = deps;
+		this.#tested = deps.tested ?? TESTED_OMP_VERSION;
 		this.#scheduler = new UpdateScheduler({
 			scheduled: deps.scheduled,
 			tick: async () => {
-				if (this.#deps.enabled()) await this.#run();
+				const trigger = this.#ticked ? "scheduled" : "launch";
+				this.#ticked = true;
+				if (this.#deps.enabled()) await this.#run(trigger);
 			},
 			delay: () => nextCheckDelay(this.#failures),
 		});
@@ -80,7 +122,8 @@ export class OmpUpdater {
 			checkedAt: null,
 			updatedTo: null,
 			failure: null,
-			tested: ompTested.version,
+			tested: this.#tested,
+			held: null,
 		};
 	}
 
@@ -104,19 +147,39 @@ export class OmpUpdater {
 			void this.#scheduler.tick();
 	}
 
-	/** Settings › Update now: check and install whatever the pref or the schedule says. */
+	/**
+	 * Settings › Update now: check and install the newest omp whatever the pref, the schedule or its major say. A
+	 * click that lands while another pass has not yet chosen what to install makes that pass the person's.
+	 */
 	updateNow(): Promise<void> {
-		return this.#run();
+		this.#asked = true;
+		return this.#run("manual");
+	}
+
+	/**
+	 * A tab's omp lacks what the bridge needs, or the bridge never reached it (BridgeHealth): a newer omp may have
+	 * it. Nobody asked, so this is the timer's pass run early: in a launch that schedules, under the pref, within
+	 * the tested major.
+	 */
+	repair(): Promise<void> {
+		if (this.#scheduler.disposed) return Promise.resolve();
+		const enabled = this.#deps.enabled();
+		if (!this.#deps.scheduled || !enabled) {
+			this.#deps.log("skipped", { path: "repair", reason: enabled ? "not-scheduled" : "auto-update-off" });
+			return Promise.resolve();
+		}
+		return this.#run("repair");
 	}
 
 	dispose(): void {
 		this.#scheduler.dispose();
 	}
 
-	#run(): Promise<void> {
+	#run(trigger: OmpUpdateTrigger): Promise<void> {
 		if (this.#scheduler.disposed) return Promise.resolve();
-		this.#running ??= this.#check().finally(() => {
+		this.#running ??= this.#check(trigger).finally(() => {
 			this.#running = null;
+			this.#asked = false;
 			this.#set({ phase: "idle" });
 		});
 		return this.#running;
@@ -131,12 +194,20 @@ export class OmpUpdater {
 		if (!this.#scheduler.disposed) this.#deps.onState(this.state());
 	}
 
-	#fail(failure: OmpUpdateFailure): void {
+	#fail(path: OmpUpdateTrigger, failure: OmpUpdateFailure, target?: string): void {
 		this.#failures += 1;
+		this.#deps.log("failed", { path, ...(target ? { target } : {}), ...failure });
 		this.#set({ failure });
 	}
 
-	async #check(): Promise<void> {
+	/** `version`'s major is known and at most the tested omp's: a pass nobody asked for may install it. */
+	#withinTested(version: string): boolean {
+		const major = majorOf(version);
+		const tested = majorOf(this.#tested);
+		return major !== null && tested !== null && major <= tested;
+	}
+
+	async #check(trigger: OmpUpdateTrigger): Promise<void> {
 		// Missing, outdated or broken omp is machine setup's to install; there is nothing to check or update yet.
 		if (this.#deps.installed() === null) return;
 		this.#set({ phase: "checking" });
@@ -144,34 +215,73 @@ export class OmpUpdater {
 		try {
 			latest = await this.#deps.fetchLatest();
 		} catch (error) {
-			this.#fail({ reason: "check", detail: error instanceof Error ? error.message : String(error) });
+			const detail = error instanceof Error ? error.message : String(error);
+			this.#fail(this.#asked ? "manual" : trigger, { reason: "check", detail });
 			return;
 		}
-		this.#set({ latest, checkedAt: (this.#deps.now ?? Date.now)() });
 		const installed = this.#deps.installed();
+		const newer = installed !== null && isNewer(latest, installed);
+		const held: OmpUpdateHold | null =
+			newer && !this.#withinTested(latest) ? { version: latest, reason: "untested-major" } : null;
+		this.#set({ latest, checkedAt: (this.#deps.now ?? Date.now)(), held });
 		if (installed === null) return;
-		if (!isNewer(latest, installed)) {
+		// Whoever started the pass, a click before the version is chosen makes it the person's.
+		const path = (): OmpUpdateTrigger => (this.#asked ? "manual" : trigger);
+		this.#deps.log("checked", { path: path(), installed, latest, tested: this.#tested });
+		let target = latest;
+		if (held && !this.#asked) {
+			this.#deps.log("held", {
+				path: path(),
+				installed,
+				version: held.version,
+				reason: held.reason,
+				tested: this.#tested,
+			});
+			let within: string | null;
+			try {
+				within = await this.#deps.newestWithin(majorOf(this.#tested) ?? 0);
+			} catch (error) {
+				this.#fail(path(), { reason: "check", detail: error instanceof Error ? error.message : String(error) });
+				return;
+			}
+			// The lookup is asked for one major; an answer outside it is never installed.
+			if (!this.#asked) target = within !== null && this.#withinTested(within) ? within : installed;
+		}
+		if (!isNewer(target, installed)) {
 			this.#failures = 0;
 			this.#set({ failure: null });
 			return;
 		}
+		// The version is chosen: from here the install is this path's, whatever is clicked meanwhile.
+		const by = path();
+		this.#deps.log("started", { path: by, from: installed, target });
 		this.#set({ phase: "updating" });
 		let released = false;
-		const outcome = await this.#deps.update(latest, async () => {
-			released = true;
-			await this.#deps.releaseHelpers();
-		});
+		const outcome = await this.#deps.update(
+			target,
+			async () => {
+				released = true;
+				await this.#deps.releaseHelpers();
+			},
+			target !== latest,
+		);
 		// Quit while the installer ran: teardown is under way, so nothing starts again (helpers, tabs, toast).
 		if (this.#scheduler.disposed) return;
 		if (outcome.kind === "updated") {
 			this.#failures = 0;
-			this.#set({ failure: null, updatedTo: outcome.version });
+			this.#deps.log("finished", { path: by, from: installed, target, version: outcome.version });
+			this.#set({
+				failure: null,
+				updatedTo: outcome.version,
+				held: held && isNewer(held.version, outcome.version) ? held : null,
+			});
 			await this.#deps.resume(true).catch(() => undefined);
 			this.#deps.onUpdated({ version: outcome.version });
 			return;
 		}
 		if (released) await this.#deps.resume(false).catch(() => undefined);
-		if (outcome.kind === "failed") this.#fail(outcome.failure);
+		if (outcome.kind === "failed") this.#fail(by, outcome.failure, target);
+		else this.#deps.log("skipped", { path: by, target, reason: "no-install" });
 	}
 }
 

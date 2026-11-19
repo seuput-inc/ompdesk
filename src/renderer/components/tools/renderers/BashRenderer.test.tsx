@@ -211,13 +211,16 @@ describe("BashRenderer", () => {
 		expect(container.querySelector(".omp-bash-notes")?.textContent).toBe("Timeout 5s (requested 999s)");
 	});
 
-	it("strips the exit-code trailer when the structured artifact id confirms the footer", async () => {
+	it.each([
+		["omp 18", "artifact://42"],
+		["omp 19", "local://42.log"],
+	])("strips the exit-code trailer when the structured artifact id confirms the footer (%s)", async (_omp, url) => {
 		// The byte-cap appends the footer after every notice and mirrors its id
 		// in details, so printed lookalikes remain ordinary command output.
 		await mount(
 			<BashRenderer
 				args={{ command: "huge-output" }}
-				result={bashResult("tail of output\nCommand exited with code 1\n[raw output: artifact://42]", {
+				result={bashResult(`tail of output\nCommand exited with code 1\n[raw output: ${url}]`, {
 					exitCode: 1,
 					artifactId: "42",
 					meta: { truncation: { direction: "tail" } },
@@ -227,7 +230,7 @@ describe("BashRenderer", () => {
 		);
 		expect(container.textContent).toContain("tail of output");
 		expect(container.textContent).not.toContain("Command exited with code");
-		expect(container.textContent).not.toContain("[raw output: artifact://42]");
+		expect(container.textContent).not.toContain("[raw output:");
 		expect(container.querySelector(".omp-bash-notes")?.textContent).toBe("Full output saved as artifact 42");
 		expect(container.querySelector(".omp-bash-badge")?.textContent).toBe("exit 1");
 	});

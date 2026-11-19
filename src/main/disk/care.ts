@@ -48,6 +48,7 @@ import {
 	type OrphanListing,
 	orphanRepositories,
 	sweepLandedWorktrees,
+	sweepLeftBehind,
 } from "../worktree-orphans";
 import { withRemovalClaim } from "../worktree-removals";
 import { type CacheTools, type LocatedCache, locateCaches, REGENERABLE_CACHES, type RegenerableCache } from "./caches";
@@ -224,6 +225,13 @@ export class DiskCare {
 			const removed = await this.#landed(listed, folders, tally);
 			const left = listed.repos.flatMap(entry => entry.worktrees).filter(orphan => !removed.has(orphan.path));
 			await this.#saveIdle(left, preRead, folders, tally);
+		});
+		await step("worktree-left-behind", async () => {
+			if (!this.#deps.worktrees) return;
+			for (const swept of await sweepLeftBehind(this.#deps.openFolders)) {
+				if (swept.outcome === "removed") this.#deps.log("worktree-left-behind", { path: swept.path });
+				else if (swept.outcome === "kept") this.#kept(tally, swept.path, swept.reason);
+			}
 		});
 		await step("scratch", async () => {
 			// As the worktree steps: only where the tabs this process sees are the app's.
