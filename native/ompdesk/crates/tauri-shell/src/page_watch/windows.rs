@@ -5,7 +5,6 @@
 #![allow(unsafe_code)]
 
 use crate::host::Call;
-use shell_core::wire::WireError;
 use std::cell::RefCell;
 use std::rc::Rc;
 use tauri::WebviewWindow;
@@ -117,7 +116,7 @@ fn end_process(pid: i32) -> Result<(), String> {
 
 pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
     // A view that is gone drops the closure, and the call with it: that answers `failed`.
-    let _ = window.with_webview(move |view| {
+    let asked = window.with_webview(move |view| {
         let found = (|| {
             // SAFETY: Tauri hands this closure the live controller on the owning UI thread; `frame` outlives the call.
             unsafe {
@@ -134,7 +133,7 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
             Ok(found) => found,
             Err(error) => {
                 let error = crate::failed(format!("WebView2 process list: {error}"));
-                return super::crash_answer(call, Err(error));
+                return super::crash_answer(wc, call, Err(error));
             }
         };
         let call = Rc::new(RefCell::new(Some(call)));
@@ -151,11 +150,15 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
                         pid.ok_or_else(|| "the page's renderer process was not found".to_owned())
                     })
                     .and_then(|pid| {
+                        crate::log::log(
+                            "page.kill_pid",
+                            serde_json::json!({"wcId": wc, "pid": pid}),
+                        );
                         super::killing(wc, true);
                         end_process(pid).inspect_err(|_| super::killing(wc, false))
                     });
                 if let Some(call) = answer.borrow_mut().take() {
-                    super::crash_answer(call, ended.map_err(crate::failed));
+                    super::crash_answer(wc, call, ended.map_err(crate::failed));
                 }
                 Ok(())
             }));
@@ -164,9 +167,15 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
             && let Some(call) = call.borrow_mut().take()
         {
             let error = crate::failed(format!("WebView2 process list: {error}"));
-            super::crash_answer(call, Err(error));
+            super::crash_answer(wc, call, Err(error));
         }
     });
+    if let Err(error) = asked {
+        crate::log::log(
+            "page.kill_failed",
+            serde_json::json!({"wcId": wc, "error": format!("with_webview: {error}")}),
+        );
+    }
 }
 
 /// Reports the page's renderer ending, and WebView2's own verdict that it is unresponsive. A subframe's renderer and

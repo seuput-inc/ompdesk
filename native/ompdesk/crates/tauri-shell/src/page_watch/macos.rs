@@ -61,6 +61,6 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
                 WireError::new("failed", "WebKit refused to end the content process")
             })
         })();
-        super::crash_answer(call, result);
+        super::crash_answer(wc, call, result);
     });
 }

@@ -195,9 +195,19 @@ fn killing(wc: u64, on: bool) {
     }
 }
 
-fn crash_answer(call: Call, result: Result<(), WireError>) {
+/// Answers `forcefullyCrashRenderer` and logs how the kill went: Node posts it unanswered, so this line is the record.
+fn crash_answer(wc: u64, call: Call, result: Result<(), WireError>) {
     match result {
-        Ok(()) => call.ok(json!({})),
-        Err(error) => call.err(&error.code, error.message),
+        Ok(()) => {
+            crate::log::log("page.killed", json!({"wcId": wc}));
+            call.ok(json!({}));
+        }
+        Err(error) => {
+            crate::log::log(
+                "page.kill_failed",
+                json!({"wcId": wc, "code": error.code, "error": error.message}),
+            );
+            call.err(&error.code, error.message);
+        }
     }
 }
