@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
-import type { ElectronApplication, Page } from "playwright";
+import { chromium, type ElectronApplication, type Page } from "playwright";
 import { exitApp, launchApp } from "./harness";
 
 // 19 Nov 2026, the Mac mini: the window's page sat in a WebKit log-stream wait from 09:12 for hours; it showed the same
@@ -27,7 +27,7 @@ test.beforeEach(async () => {
 		desktop,
 		agent,
 		profile,
-		env: { OMP_GUI_HEADLESS: "1", OMP_GUI_E2E_SHELL_LOG: "1" },
+		env: { OMP_GUI_HEADLESS: "1" },
 	});
 	page = await app.firstWindow();
 	await page.waitForFunction(() => window.omp?.rpc != null);
@@ -56,27 +56,10 @@ test("a window whose page stops answering is started again with its tabs and dra
 	await expect
 		.poll(() => page.evaluate(() => localStorage.getItem("omp.composerDrafts") ?? ""))
 		.toContain("half-written thought");
-	// TEMP diagnosis: who ends main after the restart (runs 44570371258, 44574031048 saw the app exit right after it).
-	await app.evaluate(({ app: electronApp, BrowserWindow }) => {
-		const say = (what: string) => console.error(`[hang-diag] ${what}\n${new Error().stack}`);
-		process.on("exit", code => say(`process exit ${code}`));
-		const quit = electronApp.quit.bind(electronApp);
-		const exit = electronApp.exit.bind(electronApp);
-		electronApp.quit = () => {
-			say("app.quit");
-			quit();
-		};
-		electronApp.exit = (code?: number) => {
-			say(`app.exit ${code}`);
-			exit(code);
-		};
-		electronApp.on("window-all-closed", () => say("window-all-closed"));
-		for (const win of BrowserWindow.getAllWindows()) win.on("closed", () => say(`window ${win.id} closed`));
-	});
 
 	// Hold the page's main thread for longer than detection and the grace together. The page starts the loop itself
-	// once this call has answered: a Playwright call still waiting when the renderer ends fails the test with "Target
-	// crashed" whatever catches it (run 44578357450).
+	// once this call has answered: a Playwright call still pending when the renderer ended came back as an unhandled
+	// "Target crashed" (run 44578357450).
 	await page.evaluate(() => {
 		setTimeout(() => {
 			const until = Date.now() + 10 * 60_000;
@@ -93,33 +76,30 @@ test("a window whose page stops answering is started again with its tabs and dra
 		.poll(async () => (await runtimeLog()).some(line => line.source === "renderer-process"), { timeout: 30_000 })
 		.toBe(true);
 
-	// The page loads again in the same window: the same tabs, and what the person had typed. Whether Playwright keeps
-	// the Page of the ended renderer or hands a new one, the window's app page that answers is the reloaded document.
-	const answering = async () => {
-		for (const candidate of app.windows()) {
-			const ready = await Promise.race([
-				candidate.evaluate(() => window.omp?.rpc != null).catch(() => false),
-				new Promise<false>(resolve => setTimeout(() => resolve(false), 2_000)),
-			]);
-			if (ready) return candidate;
-		}
-		return undefined;
-	};
-	let found: Page | undefined;
-	await expect
-		.poll(
-			async () => {
-				found = await answering();
-				return found !== undefined;
-			},
-			{ timeout: 60_000, intervals: [1_000] },
-		)
-		.toBe(true);
-	if (!found) throw new Error("no app page answered after the restart");
-	const back = found;
-	await expect
-		.poll(async () => (await back.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId), { timeout: 30_000 })
-		.toEqual(tabsBefore);
-	await expect(back.locator(".omp-composer-input").first()).toHaveValue("half-written thought", { timeout: 30_000 });
-	await expect(back.getByText("Something went wrong")).toHaveCount(0);
+	// The page loads again in the same window: the same tabs, and what the person had typed. Playwright closes the Page
+	// of a renderer that ended and never hands the reloaded document back (run 44579406111), so a new connection reads it.
+	const port = (app as unknown as { devToolsPort(): number }).devToolsPort();
+	const again = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+	try {
+		const appPage = () =>
+			again
+				.contexts()
+				.flatMap(context => context.pages())
+				.find(candidate => candidate.url().startsWith("http://app.localhost/"));
+		await expect.poll(() => appPage() !== undefined, { timeout: 30_000 }).toBe(true);
+		const reloaded = appPage();
+		if (!reloaded) throw new Error("no app page after the restart");
+		await reloaded.waitForFunction(() => window.omp?.rpc != null, undefined, { timeout: 60_000 });
+		await expect
+			.poll(async () => (await reloaded.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId), {
+				timeout: 30_000,
+			})
+			.toEqual(tabsBefore);
+		await expect(reloaded.locator(".omp-composer-input").first()).toHaveValue("half-written thought", {
+			timeout: 30_000,
+		});
+		await expect(reloaded.getByText("Something went wrong")).toHaveCount(0);
+	} finally {
+		await again.close();
+	}
 });
