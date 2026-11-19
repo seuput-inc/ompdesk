@@ -100,8 +100,7 @@ const SHARED_PREFIXES = [AGENT_BRANCH_PREFIX, AUTOPILOT_BRANCH_PREFIX];
 
 /**
  * What a row's line shows of a branch: past a prefix nearly every agent branch shares (`omp/agent/`, `autopilot/`) only
- * `…/` and the part that tells it from its siblings, which ends in an ellipsis on a short line. A detached head and any
- * other branch read whole.
+ * `…/` and the part that tells it from its siblings. A detached head and any other branch read whole.
  */
 export function shownHead(text: string, head: SessionHead): string {
 	if (head.kind === "detached") return text;
@@ -112,31 +111,44 @@ export function shownHead(text: string, head: SessionHead): string {
 /** The fewest characters a branch keeps in view before it goes whole (the owner's "about eight"). */
 const HEAD_FLOOR_CHARS = 8;
 
+/** The longest last segment (its separator included) a cut name keeps whole. */
+const HEAD_TAIL_MAX = 11;
+
 /** Hangul, CJK and fullwidth forms: about 1.75 `ch` each in the sidebar's fonts. */
 const WIDE_CHAR = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/u;
 
+const widthCh = (chars: readonly string[]) => chars.reduce((sum, char) => sum + (WIDE_CHAR.test(char) ? 1.75 : 1), 0);
+
 /**
- * The head's floor in `ch` when the name may be cut: its first `HEAD_FLOOR_CHARS` characters (a wide one 1.75) and 1 for
- * the ellipsis. Null for a name no longer than that: it stays whole or goes, at its own width.
+ * How a name gives way on a short line: the middle goes (the owner's "keep the distinguishing tail", 19 Nov 2026), so
+ * `…/settings-panel-dark` and `…/settings-panel-light` read `…/settings-pa…-dark` and `…-light`. `body` ends in the
+ * ellipsis, `tail` (the last `-`, `_` or `/` segment with its separator, at most `HEAD_TAIL_MAX`) never shrinks; a name
+ * with no such tail ends in the ellipsis. `floorCh` is what the name keeps before the head goes whole: about
+ * `HEAD_FLOOR_CHARS` characters (a wide one 1.75 `ch`) and the ellipsis; null for a name no longer than that, which
+ * stays whole or goes at its own width.
  */
-function headFloorCh(shown: string): number | null {
+export function headParts(shown: string): { body: string; tail: string; floorCh: number | null } {
 	const chars = [...shown];
-	if (chars.length <= HEAD_FLOOR_CHARS) return null;
-	return chars.slice(0, HEAD_FLOOR_CHARS).reduce((sum, char) => sum + (WIDE_CHAR.test(char) ? 1.75 : 1), 1);
+	if (chars.length <= HEAD_FLOOR_CHARS) return { body: shown, tail: "", floorCh: null };
+	const cut = Math.max(shown.lastIndexOf("-"), shown.lastIndexOf("_"), shown.lastIndexOf("/"));
+	const tail = cut > 2 && shown.length - cut <= HEAD_TAIL_MAX ? shown.slice(cut) : "";
+	const body = tail ? shown.slice(0, cut) : shown;
+	const tailChars = [...tail];
+	const kept = [...body].slice(0, Math.max(3, HEAD_FLOOR_CHARS - tailChars.length));
+	return { body, tail, floorCh: widthCh(tailChars) + widthCh(kept) + 1 };
 }
 
 /**
  * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name past a
- * shared prefix (`shownHead`), which ends in an ellipsis when the line is short; the whole name is its hover title.
- * Its box (`.omp-session-head-box`, sidebar.css) drops the whole head, mark too, once the line cannot hold its mark and
- * `HEAD_FLOOR_CHARS` characters (a shorter name: all of it; one more `ch` is the ellipsis). `worktree` names what a
- * linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's child.
+ * shared prefix (`shownHead`), whose middle gives way on a short line (`headParts`: the last segment stays); the whole
+ * name is its hover title. Its box (`.omp-session-head-box`, sidebar.css) drops the whole head, mark too, once the line
+ * cannot hold its mark and the name's floor. `worktree` names what a linked worktree is for (`data-sidebar-worktree`),
+ * absent for a main checkout and a run's child.
  */
 export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktree?: WorktreeKind }) {
 	const t = useT();
 	const { text, tip } = headWords(t, head);
-	const shown = shownHead(text, head);
-	const floor = headFloorCh(shown);
+	const { body, tail, floorCh: floor } = headParts(shownHead(text, head));
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
@@ -151,7 +163,14 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 				title={tip}
 			>
 				<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />
-				<span className="min-w-0 truncate">{shown}</span>
+				<span className="flex min-w-0">
+					<span className="min-w-0 truncate">{body}</span>
+					{tail && (
+						<span className="shrink-0 whitespace-nowrap" data-head-tail>
+							{tail}
+						</span>
+					)}
+				</span>
 			</span>
 		</span>
 	);

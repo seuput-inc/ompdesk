@@ -87,7 +87,7 @@ async function openHarness(surface: Surface, theme: "light" | "dark", lang: "en"
 			surface.sidebarWidth,
 		);
 	const page = await context.newPage();
-	await page.goto(`${origin}/harness.html?theme=${theme}&lang=${lang}&rows=6`);
+	await page.goto(`${origin}/harness.html?theme=${theme}&lang=${lang}&rows=7`);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });
 	await page.waitForFunction(() => window.__harness?.summaries !== undefined, undefined, { timeout: 45_000 });
 	// The paired host runs its ompdesk session with three subagents at work: that row's family chip counts them. A second
@@ -179,20 +179,26 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	await expect(long).toHaveAttribute("title", new RegExp(LONG_BRANCH));
 	const cut = await long.locator(".truncate").evaluate(text => text.scrollWidth > text.clientWidth);
 	expect(cut).toBe(true);
-	// Two long agent branches read apart: past the shared `omp/agent/` only `…/` and the part that differs shows, and
-	// its first letters stay in view; the whole name stays the title.
-	const agentHeads = [];
-	for (const file of [sessionFile(PROJECT, "sess-2"), sessionFile(PROJECT, "sess-row-2")]) {
+	// Two agent branches that differ only at their end read apart: past the shared `omp/agent/` only `…/` shows, the
+	// middle gives way and the last segment stays; the whole name stays the title. In the 220 px sidebar both are cut.
+	const twins = [];
+	for (const file of [sessionFile(PROJECT, "sess-row-2"), sessionFile(PROJECT, "sess-row-4")]) {
 		const head = rowFor(list, file).locator('[data-session-head="branch"]');
 		await head.scrollIntoViewIfNeeded();
-		agentHeads.push(await head.evaluate(readHeadIn));
+		twins.push(await head.evaluate(readHeadIn));
 	}
-	for (const head of agentHeads) {
-		expect(head.title).toContain("omp/agent/");
-		expect(head.visible.startsWith("…/"), head.title).toBe(true);
-		expect(head.visible.length, head.title).toBeGreaterThanOrEqual(8);
+	for (const [head, tail] of [
+		[twins[0], "-light"],
+		[twins[1], "-dark"],
+	] as const) {
+		expect(head?.title).toContain(`omp/agent/settings-panel${tail}`);
+		expect(head?.onLine, head?.title).toBe(true);
+		expect(head?.visible.startsWith("…/"), head?.title).toBe(true);
+		expect(head?.visible.endsWith(tail), head?.title).toBe(true);
+		expect(head?.visible.length, head?.title).toBeGreaterThanOrEqual(8);
+		if (surface.name === "narrow") expect(head?.cut, head?.title).toBe(true);
 	}
-	expect(agentHeads[0]?.visible).not.toBe(agentHeads[1]?.visible);
+	expect(twins[0]?.visible).not.toBe(twins[1]?.visible);
 
 	// The owner's order on a short line, on every row: the age gives way whole before the branch loses a letter, the
 	// branch keeps at least eight characters or goes with its mark (never the mark alone), a working arc stays, and the
@@ -286,12 +292,21 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
  * left of its ellipsis, all it shows, its title, how far it reaches past its line. Runs in the page (Playwright
  * serializes it whole).
  */
-function readHeadIn(node: Element): { title: string; onLine: boolean; shown: string; visible: string; past: number } {
+function readHeadIn(node: Element): {
+	title: string;
+	onLine: boolean;
+	cut: boolean;
+	shown: string;
+	visible: string;
+	past: number;
+} {
 	const text = node.querySelector(".truncate");
+	const tail = node.querySelector("[data-head-tail]");
 	const line = node.closest(".omp-session-row-give")?.getBoundingClientRect();
 	const title = node.getAttribute("title") ?? "";
 	const onLine = Boolean(line && node.getBoundingClientRect().top < line.bottom - 1);
-	if (!text?.firstChild || !onLine) return { title, onLine, shown: text?.textContent ?? "", visible: "", past: 0 };
+	const whole = `${text?.textContent ?? ""}${tail?.textContent ?? ""}`;
+	if (!text?.firstChild || !onLine) return { title, onLine, cut: false, shown: whole, visible: "", past: 0 };
 	const box = text.getBoundingClientRect();
 	const cut = text.scrollWidth > text.clientWidth + 0.5;
 	const style = getComputedStyle(text);
@@ -307,7 +322,16 @@ function readHeadIn(node: Element): { title: string; onLine: boolean; shown: str
 		if (range.getBoundingClientRect().right > limit + 0.5) break;
 		visible += source[index];
 	}
-	return { title, onLine, shown: source, visible, past: line ? box.right - line.right : 0 };
+	// The tail never shrinks: it is in view whole when its own box is inside the line.
+	const end = (tail ?? text).getBoundingClientRect().right;
+	return {
+		title,
+		onLine,
+		cut,
+		shown: whole,
+		visible: visible + (tail?.textContent ?? ""),
+		past: line ? end - line.right : 0,
+	};
 }
 
 for (const surface of SURFACES)
