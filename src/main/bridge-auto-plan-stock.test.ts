@@ -12,12 +12,15 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  * A plan the automatic mode choice entered for one request (bridge `modes.set_plan_mode {auto: true}`) is approved
  * by the bridge itself the moment the agent proposes it: no `plan_proposal` frame (so no card in any window), plan
  * mode ends, and the execution turn starts in the same session with the plan inlined in stock's approved-plan prompt.
- * A plan mode the user turned on still waits for the person's answer. Installed omp, scripted loopback provider, no
- * spend.
+ * A plan mode the user turned on still waits for the person's answer, and the card's answers (`modes.plan_approval`)
+ * do what the card says: approve and execute runs the plan in a new session, a rejection with feedback sends the
+ * feedback as the next turn with plan mode still on, a bare rejection sends nothing. Installed omp, scripted
+ * loopback provider, no spend.
  */
 
 type Frame = { type: string; [key: string]: unknown };
 
+const PROMPT = "add a greeting file and run the checks";
 const PLAN = "# Demo\n\n1. Add the greeting file.\n2. Run the checks.\n";
 
 function sse(delta: unknown, finish: string): string {
@@ -170,9 +173,31 @@ async function startOmp(url: string): Promise<Omp> {
 	};
 }
 
-async function sessionId(send: Omp["send"]): Promise<unknown> {
+/** The session stock reports: a new one has another id and another file. */
+async function session(send: Omp["send"]): Promise<{ sessionId: unknown; sessionFile: unknown }> {
 	const { data } = await send({ type: "get_state" });
-	return data && typeof data === "object" && "sessionId" in data ? data.sessionId : undefined;
+	const state: { sessionId?: unknown; sessionFile?: unknown } = data && typeof data === "object" ? data : {};
+	return { sessionId: state.sessionId, sessionFile: state.sessionFile };
+}
+
+function text(content: unknown): string {
+	if (typeof content === "string") return content;
+	return Array.isArray(content) ? content.map(part => (typeof part?.text === "string" ? part.text : "")).join("") : "";
+}
+
+/**
+ * What the model was asked turn by turn: each request that ends in a user message, by its text. Stock's own
+ * `<system-reminder>` blocks (the date before a prompt, its plan-mode nudge after a turn that proposed nothing) are
+ * not turns anyone sent.
+ */
+function userTurns(bodies: readonly string[]): string[] {
+	return bodies.flatMap(body => {
+		const messages: Array<{ role?: string; content?: unknown }> = JSON.parse(body).messages ?? [];
+		const last = messages.at(-1);
+		const said = last?.role === "user" ? text(last.content) : "";
+		const sent = said.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+		return sent ? [sent] : [];
+	});
 }
 
 /** The approved-plan prompt the model was sent, if any: a message whose text starts with stock's "Plan approved.". */
@@ -180,13 +205,8 @@ function approvedPrompt(bodies: readonly string[]): string | undefined {
 	for (const body of bodies) {
 		const parsed: { messages?: Array<{ content?: unknown }> } = JSON.parse(body);
 		for (const message of parsed.messages ?? []) {
-			const text =
-				typeof message.content === "string"
-					? message.content
-					: Array.isArray(message.content)
-						? message.content.map(part => (typeof part?.text === "string" ? part.text : "")).join("")
-						: "";
-			if (text.includes("Plan approved.")) return text;
+			const prompt = text(message.content);
+			if (prompt.includes("Plan approved.")) return prompt;
 		}
 	}
 	return undefined;
@@ -214,13 +234,41 @@ function explained(bodies: readonly string[], frames: readonly Frame[], events: 
 	};
 }
 
+/** Whether a turn ended at or after `from`, an index into the frames. */
+const turnEnded = (frames: readonly Frame[], from = 0) =>
+	frames.slice(from).some(frame => frame.type === "agent_end" && frame.isTerminal !== false);
+
+/** Plan mode the user turned on, up to the card: the agent wrote a plan and proposed it, and that turn is over. */
+async function proposed() {
+	const provider = await startProvider();
+	const omp = await startOmp(provider.url);
+	await omp.bridge.request("modes.set_plan_mode", { enabled: true });
+	await omp.send({ type: "prompt", message: PROMPT });
+	try {
+		await expect.poll(() => omp.events.some(event => event.type === "plan_proposal"), { timeout: 60_000 }).toBe(true);
+		await expect.poll(() => turnEnded(omp.frames), { timeout: 30_000 }).toBe(true);
+	} catch (error) {
+		explained(provider.bodies, omp.frames, omp.events)(error);
+	}
+	const planFilePath = omp.events.find(event => event.type === "plan_proposal")?.planFilePath;
+	/** The card's answer, and the `plan_proposal_resolved` frame that takes the card off every window. */
+	const answer = async (params: Record<string, unknown>) => {
+		const result = await omp.bridge.request("modes.plan_approval", params);
+		await expect
+			.poll(() => omp.events.filter(event => event.type === "plan_proposal_resolved"), { timeout: 30_000 })
+			.toEqual([{ type: "plan_proposal_resolved", planFilePath }]);
+		return result;
+	};
+	return { provider, ...omp, answer };
+}
+
 describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on stock omp", () => {
 	it("is approved by itself when proposed: no card, plan mode ends, the plan runs in the same session", async () => {
 		const provider = await startProvider();
 		const { frames, events, bridge, send } = await startOmp(provider.url);
-		const before = await sessionId(send);
+		const before = await session(send);
 		await bridge.request("modes.set_plan_mode", { enabled: true, auto: true });
-		await send({ type: "prompt", message: "add a greeting file and run the checks" });
+		await send({ type: "prompt", message: PROMPT });
 		// The execution turn reads stock's approved-plan prompt with the plan itself inlined. (Stock's loop may send
 		// one more request after the propose call before the bridge's abort lands; the approved turn comes after it.)
 		try {
@@ -229,31 +277,63 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 			explained(provider.bodies, frames, events)(error);
 		}
 		expect(approvedPrompt(provider.bodies)).toContain("Add the greeting file.");
-		await expect
-			.poll(() => frames.some(frame => frame.type === "agent_end" && frame.isTerminal !== false), {
-				timeout: 30_000,
-			})
-			.toBe(true);
+		await expect.poll(() => turnEnded(frames), { timeout: 30_000 }).toBe(true);
 		expect(events.some(event => event.type === "plan_proposal")).toBe(false);
 		expect(await bridge.request("modes.get_plan_mode", {})).toMatchObject({ enabled: false });
-		expect(await sessionId(send)).toBe(before);
+		expect(await session(send)).toEqual(before);
 	}, 120_000);
 
 	it("still waits for the person's answer when the user turned plan mode on", async () => {
-		const provider = await startProvider();
-		const { frames, events, bridge, send } = await startOmp(provider.url);
-		await bridge.request("modes.set_plan_mode", { enabled: true });
-		await send({ type: "prompt", message: "add a greeting file and run the checks" });
-		try {
-			await expect.poll(() => events.some(event => event.type === "plan_proposal"), { timeout: 60_000 }).toBe(true);
-		} catch (error) {
-			explained(provider.bodies, frames, events)(error);
-		}
+		const { provider, bridge } = await proposed();
 		// The proposal waits for an answer, with plan mode still on, and no approved turn runs.
 		expect(await bridge.request("modes.get_plan_mode", {})).toMatchObject({
 			enabled: true,
 			proposal: { title: expect.any(String) },
 		});
+		expect(approvedPrompt(provider.bodies)).toBeUndefined();
+	}, 120_000);
+
+	it("runs the plan in a new session with plan mode off when the card approves and executes", async () => {
+		const { provider, frames, bridge, send, answer } = await proposed();
+		const before = await session(send);
+		expect(before).toEqual({ sessionId: expect.any(String), sessionFile: expect.any(String) });
+		const answered = frames.length;
+		expect(await answer({ approved: true, option: "execute" })).toEqual({ approved: true, dispatched: true });
+		await expect.poll(() => approvedPrompt(provider.bodies), { timeout: 60_000 }).toContain("Plan approved.");
+		expect(approvedPrompt(provider.bodies)).toContain("Add the greeting file.");
+		await expect.poll(() => turnEnded(frames, answered), { timeout: 30_000 }).toBe(true);
+		expect(await bridge.request("modes.get_plan_mode", {})).toMatchObject({ enabled: false });
+		const after = await session(send);
+		expect(after.sessionId).not.toBe(before.sessionId);
+		expect(after.sessionFile).not.toBe(before.sessionFile);
+	}, 120_000);
+
+	it("sends the card's feedback as the next turn and keeps plan mode on when the card rejects with it", async () => {
+		const { provider, frames, bridge, send, answer } = await proposed();
+		const before = await session(send);
+		const answered = frames.length;
+		expect(await answer({ approved: false, feedback: "use a smaller step" })).toEqual({
+			approved: false,
+			dispatched: true,
+		});
+		await expect.poll(() => userTurns(provider.bodies), { timeout: 60_000 }).toEqual([PROMPT, "use a smaller step"]);
+		await expect.poll(() => turnEnded(frames, answered), { timeout: 30_000 }).toBe(true);
+		const mode = await bridge.request("modes.get_plan_mode", {});
+		expect(mode).toMatchObject({ enabled: true });
+		expect(mode).not.toHaveProperty("proposal");
+		expect(approvedPrompt(provider.bodies)).toBeUndefined();
+		expect(await session(send)).toEqual(before);
+	}, 120_000);
+
+	it("sends nothing and keeps plan mode on when the card rejects without feedback", async () => {
+		const { provider, bridge, send, answer } = await proposed();
+		expect(await answer({ approved: false })).toEqual({ approved: false, dispatched: false, reason: "rejected" });
+		const mode = await bridge.request("modes.get_plan_mode", {});
+		expect(mode).toMatchObject({ enabled: true });
+		expect(mode).not.toHaveProperty("proposal");
+		// The person's next message is the next thing the model is asked: the rejection put no turn before it.
+		await send({ type: "prompt", message: "what now" });
+		await expect.poll(() => userTurns(provider.bodies), { timeout: 60_000 }).toEqual([PROMPT, "what now"]);
 		expect(approvedPrompt(provider.bodies)).toBeUndefined();
 	}, 120_000);
 });
