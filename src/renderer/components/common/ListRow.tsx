@@ -285,9 +285,8 @@ export function ListRow({
 				<span
 					id={metaId}
 					className={cx(
-						// Down to `--row-meta-min` (its whole content unless the list sets less: the sidebar lets a waiting
-						// badge's word go, down to its ⚠ glyph) before the title loses a character.
-						"flex min-w-(--row-meta-min,min-content) flex-[0_99_auto] items-center justify-end overflow-hidden text-sc-xs whitespace-nowrap tabular-nums text-(--sc-text-muted)",
+						// Whole (min-content) before the title loses a character.
+						"flex min-w-min flex-[0_99_auto] items-center justify-end overflow-hidden text-sc-xs whitespace-nowrap tabular-nums text-(--sc-text-muted)",
 						actions && !actionsAtRest
 							? cx(
 									actionsOnHover
