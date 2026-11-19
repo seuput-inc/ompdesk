@@ -53,11 +53,9 @@ import { useComposerSubmit } from "./use-composer-submit";
 import { useComposerSuggestions } from "./use-composer-suggestions";
 import { useStableCallback } from "./use-stable-callback";
 
-type SendMode = "prompt" | "steer" | "followUp";
-
 /**
  * Composer: auto-growing textarea, Enter to send / Shift+Enter for newline,
- * image paste, @file mentions, /command completion, steering-mode selector,
+ * image paste, @file mentions, /command completion,
  * and an abort button while the agent streams.
  */
 export function InputArea() {
@@ -101,13 +99,6 @@ export function InputArea() {
 	const setImages = useComposerStore(s => s.setImages);
 	/** A queued message is being edited in the field (ComposerQueueEdit.tsx): the saved draft is the one it replaced. */
 	const editingQueued = useComposerStore(s => s.editingQueued);
-	const [mode, setMode] = useState<SendMode>("prompt");
-	// The chip says how messages join the run on screen: a Follow-up picked there lasts until that run
-	// ends, and the next run starts as Steer again (the chip is hidden between runs, so a choice that
-	// carried over sent every later message to the follow-up lane unseen).
-	useEffect(() => {
-		if (!isStreaming) setMode("prompt");
-	}, [isStreaming]);
 	/** ⌃G: the composer expands in place to fill the session pane. */
 	const [expanded, setExpanded] = useState(false);
 	const { textareaRef, ownEdit, placeDraft, continueListAtCaret, insertAtCaret, fieldNarrow } = useComposerField({
@@ -262,7 +253,6 @@ export function InputArea() {
 		sending,
 		status: sendStatus,
 		isStreaming,
-		mode,
 		queuedMessageCount,
 		commands,
 		emojiAutocomplete,
@@ -277,12 +267,12 @@ export function InputArea() {
 	 * suggestion stale. False when nothing left: empty, still sending or connecting, delivery unknown.
 	 */
 	const send = useCallback(
-		(overrideText?: string, forceMode?: SendMode): boolean => {
+		(overrideText?: string): boolean => {
 			const composer = sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer") ?? useComposerStore;
 			// Edit queued: Send saves the message back into the queue instead of sending the field.
 			if (composer.getState().editingQueued) return queueEdit.save(composer.getState().draft);
 			const hadContent = (overrideText ?? composer.getState().draft).trim() !== "" || images.length > 0;
-			dispatchSend(overrideText, forceMode);
+			dispatchSend(overrideText);
 			const after = composer.getState();
 			const sent = hadContent && after.draft === "" && after.images.length === 0;
 			if (sent) useNextPromptStore.getState().clear(nextPromptKey);
@@ -361,11 +351,6 @@ export function InputArea() {
 		// The button leaves with the run: typing goes on in the field, never on <body>.
 		textareaRef.current?.focus();
 	});
-	const toggleSendMode = useCallback(() => {
-		setMode(current => (current === "followUp" ? "steer" : "followUp"));
-		// The choice is for the message being typed: typing goes on in the field.
-		textareaRef.current?.focus();
-	}, [textareaRef]);
 	const filesPicked = useStableCallback(onFilesPicked);
 	const openHistorySearch = useCallback(() => setHistorySearchOpen(true), []);
 	const openSkillPicker = useCallback(() => setSkillPickerOpen(true), []);
@@ -378,7 +363,7 @@ export function InputArea() {
 	});
 	useComposerActionEvents(runtimeTabId, onPaletteAction);
 	// What the field's placeholder says, first match wins (RA-20): a question, approval or plan waits on the user, a queued
-	// message is being edited, the suggestion the user can take, then the lane Enter sends to, then idle.
+	// message is being edited, the suggestion the user can take, then that a turn runs (Enter steers it), then idle.
 	const placeholder =
 		status !== "ready" && status !== "starting"
 			? t("input.placeholder.connecting")
@@ -389,9 +374,7 @@ export function InputArea() {
 					: shownPrompt !== undefined
 						? shownPrompt
 						: isStreaming
-							? mode === "followUp"
-								? t("input.placeholder.followUp")
-								: t("input.placeholder.streaming")
+							? t("input.placeholder.streaming")
 							: isChat || fieldNarrow
 								? t("input.placeholder.chat")
 								: t("input.placeholder.idle");
@@ -542,7 +525,6 @@ export function InputArea() {
 							dictationPhase={dictation.phase}
 							editingQueued={editingQueued !== null}
 							fileInputRef={fileInputRef}
-							followUp={mode === "followUp"}
 							onFilesPicked={filesPicked}
 							onMic={dictation.toggle}
 							onOpenFilePicker={openFilePicker}
@@ -551,7 +533,6 @@ export function InputArea() {
 							onSend={sendFromToolbar}
 							onStop={stopFromToolbar}
 							onStopAndSend={dictation.stopAndSend}
-							onToggleSendMode={toggleSendMode}
 							queueSplitCount={queueSplitCount}
 							queued={queueBody !== undefined}
 							queueSlot={queueSlot}

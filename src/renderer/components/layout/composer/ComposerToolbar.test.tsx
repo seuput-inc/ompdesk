@@ -1,7 +1,7 @@
 /**
  * The toolbar's own contracts: Send and Stop are ONE button in one slot (send-slot.ts), whose node stays while a turn
  * starts or ends or a draft appears, and nothing waits beside it; while a turn runs with a draft its right click (a
- * long press on touch) offers a Stop that keeps the draft; the Steer/Follow-up chip shows only while a turn runs; the
+ * long press on touch) offers a Stop that keeps the draft; Send names the steer lane while a turn runs; the
  * dictation "Stop and send" arrow takes the button's place; the model chip says `Model · Thinking`; and the tooltips
  * carry their chords. The pixel claims are measured in e2e/composer-toolbar.e2e.ts.
  */
@@ -11,7 +11,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, translate } from "../../../lib/i18n";
-import { composerFollowUpChord, formatShortcut } from "../../../lib/keymap";
+import { formatShortcut } from "../../../lib/keymap";
 import { useModelStore } from "../../../stores/model";
 import { useSessionStore } from "../../../stores/session";
 import { useSettingsStore } from "../../../stores/settings";
@@ -61,8 +61,6 @@ const baseProps: ComposerToolbarProps = {
 	dictationPhase: "idle",
 	onMic: () => {},
 	onStopAndSend: () => {},
-	followUp: false,
-	onToggleSendMode: () => {},
 	stoppable: false,
 	hasDraft: true,
 	sendDisabled: false,
@@ -88,7 +86,6 @@ async function render(props: Partial<ComposerToolbarProps> = {}): Promise<void> 
 
 const slot = (name: string) => container.querySelector(`[data-slot="${name}"]`) as unknown as HTMLElement;
 const button = () => slot("send").querySelector("button") as unknown as HTMLButtonElement;
-const lane = () => container.querySelector("[data-send-mode]");
 
 afterEach(async () => {
 	await act(async () => root?.unmount());
@@ -180,8 +177,9 @@ describe("one action button", () => {
 		expect(button().getAttribute("data-send-state")).toBe(row.state);
 		expect(button().querySelector("[data-send-stop-hint]") !== null).toBe(row.stopHint);
 		expect(button().hasAttribute("aria-describedby")).toBe(row.stopHint);
-		// The lane chip is there only while a turn runs; no slot is held for it (or for Stop) while idle.
-		expect(lane() !== null).toBe(row.streaming);
+		// While a turn runs Send steers it; no lane chip exists, and no slot is held for one (or for Stop).
+		expect(button().getAttribute("data-send-lane")).toBe(row.streaming && row.state !== "stop" ? "steer" : null);
+		expect(container.querySelector("[data-send-mode]")).toBeNull();
 		expect(slot("send").querySelectorAll("button").length).toBe(1);
 		expect(container.querySelector('[data-slot="stop"], [data-slot="steer"], .omp-composer-slot')).toBeNull();
 	});
@@ -332,16 +330,10 @@ describe("model chip", () => {
 });
 
 describe("tooltips with chords", () => {
-	it("names Steer and the follow-up chord on Send while a turn runs; the follow-up lane says so", async () => {
+	it("names Steer on Send while a turn runs", async () => {
 		await act(async () => useSessionStore.setState({ isStreaming: true }));
 		await render({ stoppable: true });
-		const send = slot("send").querySelector("button");
-		expect(await tooltipOf(send)).toContain(
-			translate("input.send.tipSteer", { chord: formatShortcut(composerFollowUpChord()) }),
-		);
-		await act(async () => send?.dispatchEvent(new Event("pointerout", { bubbles: true })));
-		await render({ followUp: true, stoppable: true });
-		expect(await tooltipOf(slot("send").querySelector("button"))).toContain(translate("input.send.tipFollowUp"));
+		expect(await tooltipOf(slot("send").querySelector("button"))).toContain(translate("input.send.tipSteer"));
 	});
 
 	it("says on the desktop how to stop without losing the draft", async () => {
@@ -414,17 +406,15 @@ describe("+ menu Dictation item", () => {
 });
 
 describe("editing a queued message", () => {
-	it("turns Send into a check named Save changes, in the same slot, and steps the lane chip aside", async () => {
+	it("turns Send into a check named Save changes, in the same slot", async () => {
 		await act(async () => useSessionStore.setState({ isStreaming: true }));
 		await render({ stoppable: true });
 		const send = button();
 		expect(send.getAttribute("aria-label")).toBe(translate("input.send"));
-		expect(lane()).not.toBeNull();
 
 		await render({ stoppable: true, editingQueued: true });
 		expect(button()).toBe(send);
 		expect(send.getAttribute("aria-label")).toBe(translate("composerQueue.editSave"));
 		expect(send.querySelector("svg")?.getAttribute("class")).toContain("lucide-check");
-		expect(lane()).toBeNull();
 	});
 });

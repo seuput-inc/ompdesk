@@ -470,7 +470,7 @@ for (const engine of ENGINES) {
 					}
 				});
 
-				test("keeps the field focused through +, the Run chip, Send, Stop, the lane chip and the mic; a long press on Send stops and keeps the draft", async () => {
+				test("keeps the field focused through +, the Run chip, Send, Stop and the mic; a long press on Send stops and keeps the draft", async () => {
 					const page = await openPhone(engine, { lang, theme, stt: true });
 					try {
 						await field(page).focus();
@@ -488,8 +488,6 @@ for (const engine of ENGINES) {
 						await setRunning(page, true);
 						await field(page).focus();
 						await field(page).fill("and also lint it");
-						await page.locator("[data-send-mode]").tap();
-						expect(await focusedIsField(page), "lane chip").toBe(true);
 						// Touch has no Esc: a long press on Send (lib/long-press-menu.ts turns a still finger into
 						// `contextmenu`) opens a sheet whose Stop ends the turn and leaves the draft in the field.
 						const button = sendSlot(page).getByRole("button");
@@ -582,11 +580,12 @@ for (const engine of ENGINES) {
 					}
 				});
 
-				test("shows the lane as a text chip beside Stop and Send while a turn runs, with the field at full width", async () => {
+				test("keeps the row and the full-width field while a turn runs, with no lane chip", async () => {
 					const page = await openPhone(engine, { lang, theme });
 					try {
 						await setRunning(page, true);
-						await expect(page.locator("[data-send-mode]")).toBeVisible();
+						await expect(page.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible();
+						await expect(page.locator("[data-send-mode]")).toHaveCount(0);
 						await capture(page, "running", engine, theme, lang);
 						await field(page).fill("and also lint it");
 						expect((await boxOf(field(page))).width).toBeGreaterThanOrEqual(330);
