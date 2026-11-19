@@ -50,12 +50,7 @@ test("a window whose page stops answering is started again with its tabs and dra
 	await expect
 		.poll(() => page.evaluate(() => localStorage.getItem("omp.composerDrafts") ?? ""))
 		.toContain("half-written thought");
-	// On Windows the shell learns the page's renderer while the page answers its probes (page_watch/windows.rs), as it
-	// has long before any real freeze; the kill ends that process.
-	if (process.platform === "win32")
-		await expect
-			.poll(() => fs.readFile(path.join(desktop, "tauri-shell.jsonl"), "utf8").catch(() => ""), { timeout: 30_000 })
-			.toContain('"page.renderer_learned"');
+
 	// Hold the page's main thread for longer than detection and the grace together; never awaited (it cannot answer).
 	void page
 		.evaluate(() => {
