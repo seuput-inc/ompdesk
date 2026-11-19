@@ -128,7 +128,9 @@ export function SessionRowArtwork({ target }: { target: SessionRowTarget | null 
 
 /**
  * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age),
- * then the checkout's branch, which gives way first when the line is short.
+ * then the checkout's branch, which gives way first when the line is short. The state keeps its width down to
+ * `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css): squeezed below it
+ * the working arc slid over the branch's mark.
  */
 export function SessionRowLine({
 	state,
@@ -141,7 +143,10 @@ export function SessionRowLine({
 }) {
 	return (
 		<>
-			<span className="inline-flex min-w-0 flex-[0_1_auto] items-center gap-1.5" data-sidebar-row-end>
+			<span
+				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center gap-1.5 overflow-hidden"
+				data-sidebar-row-end
+			>
 				{state}
 			</span>
 			{head && (

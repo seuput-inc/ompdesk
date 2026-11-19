@@ -158,6 +158,13 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		if (title && more) expect(more.y + more.height / 2).toBeGreaterThan(title.y + title.height);
 		const overflow = await row.evaluate(element => element.scrollWidth - element.clientWidth);
 		expect(overflow, `row ${index} overflow`).toBeLessThanOrEqual(1);
+		// The state (age, arc, badge) and the branch never draw over each other.
+		const gap = await row.evaluate(element => {
+			const state = element.querySelector("[data-sidebar-row-end]")?.getBoundingClientRect();
+			const head = element.querySelector("[data-session-head]")?.getBoundingClientRect();
+			return state && head ? head.left - state.right : null;
+		});
+		if (gap !== null) expect(gap, `row ${index} state over branch`).toBeGreaterThanOrEqual(0);
 	}
 }
 
