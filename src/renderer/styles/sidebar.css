@@ -19,14 +19,15 @@ html[data-input="touch"]
 	--omp-sidebar-row-h: 3.25rem;
 }
 
-/* The second line's controls are line-high (20 px): the family chip and the ⋯ keep the row at two lines. Under a
-   finger mobile.css widens their hit areas past the line without growing it. */
+/* The second line's controls are line-high (20 px): the family chip and the ⋯ (a 20 px square, so the branch beside
+   a chip keeps a short name whole in a 248 px sidebar) keep the row at two lines. Under a finger mobile.css widens
+   the ⋯ to its 44 px slot and both hit areas past the line without growing it. */
 .omp-session-sidebar .omp-sidebar-session-row :is(.omp-family-chip, [data-sidebar-row-menu]) {
 	height: 1.25rem;
 }
 
 .omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-menu] {
-	width: 1.5rem;
+	width: 1.25rem;
 }
 
 /* A session row out of view skips style, layout and paint. With 500 stored
