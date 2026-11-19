@@ -99,7 +99,16 @@ impl Runtime {
                 rt.moved.remove(tab);
                 rt.listed_in.remove(tab);
             }
+            // Its resting children close with it; none while the app quits (the session is left out then, and
+            // the next launch restores those tabs).
+            let orphans = self.control.opened_of(tab);
             self.control.released(tab, activity.session.as_ref());
+            if let Some(session) = &activity.session
+                && !orphans.is_empty()
+            {
+                let (control, opener) = (self.control.clone(), session.path.clone());
+                tokio::spawn(async move { control.close_orphans(orphans, Some(opener)).await });
+            }
         }
     }
 

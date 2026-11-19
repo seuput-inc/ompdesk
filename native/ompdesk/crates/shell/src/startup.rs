@@ -1,5 +1,5 @@
 //! What the shell decides before CEF starts, as pure functions: the user-data folder, the single-instance name, where
-//! the app and Node are, and which of the shell's own arguments are Chromium switches.
+//! the app and Node are, which of the shell's own arguments are Chromium switches, and how it was started.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -143,12 +143,101 @@ pub fn is_plain_relative(rel: &str) -> bool {
             .all(|c| matches!(c, Component::Normal(_)))
 }
 
+/// Set by a shell on the shell it spawns for Node's `app.relaunch`, to its own pid; the new shell reads and removes it.
+pub const RELAUNCHED_BY_ENV: &str = "OMPDESK_RELAUNCHED_BY";
+
+/// Who started this shell, for the first line of its log.
+pub struct Started<'a> {
+    pub pid: u32,
+    pub parent_pid: Option<u32>,
+    /// The parent's executable (a path on macOS, a file name on Windows), while it still runs.
+    pub parent: Option<&'a str>,
+    /// `RELAUNCHED_BY_ENV` as this process found it.
+    pub relaunched_by: Option<&'a str>,
+    /// macOS `XPC_SERVICE_NAME`: `application.<bundle id>.…` when LaunchServices opened the app.
+    pub xpc_service: Option<&'a str>,
+    pub argv: &'a [String],
+    /// Wall-clock milliseconds since the Unix epoch (the log's `t` counts from this start only).
+    pub at_ms: u64,
+}
+
+/// The `shell.started` fields. `via`: `relaunch` (a previous shell started it for Node's `app.relaunch`),
+/// `launchservices` (macOS opened the app: Finder, the Dock, `open`, a login item) or `process` (another program ran
+/// the executable; `parent` names it: Explorer, a terminal, an installer).
+pub fn started_line(started: &Started) -> serde_json::Value {
+    let relaunched_by = started.relaunched_by.filter(|s| !s.is_empty());
+    let via = if relaunched_by.is_some() {
+        "relaunch"
+    } else if started
+        .xpc_service
+        .is_some_and(|s| s.starts_with("application."))
+    {
+        "launchservices"
+    } else {
+        "process"
+    };
+    serde_json::json!({
+        "via": via,
+        "pid": started.pid,
+        "parentPid": started.parent_pid,
+        "parent": started.parent,
+        "relaunchedBy": relaunched_by,
+        "xpcService": started.xpc_service,
+        "argv": started.argv,
+        "at": started.at_ms,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn started<'a>(
+        relaunched_by: Option<&'a str>,
+        xpc: Option<&'a str>,
+        argv: &'a [String],
+    ) -> Started<'a> {
+        Started {
+            pid: 20,
+            parent_pid: Some(10),
+            parent: Some("/Applications/OMPdesk.app/Contents/MacOS/OMPdesk"),
+            relaunched_by,
+            xpc_service: xpc,
+            argv,
+            at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn the_start_line_says_whether_a_relaunch_launchservices_or_a_program_started_the_shell() {
+        let argv = args(&["OMPdesk", "--lang=ko"]);
+        let relaunch = started_line(&started(
+            Some("4242"),
+            Some("application.com.seuput.ompdesk.1.2"),
+            &argv,
+        ));
+        assert_eq!(relaunch["via"], "relaunch");
+        assert_eq!(relaunch["relaunchedBy"], "4242");
+        let opened = started_line(&started(
+            None,
+            Some("application.com.seuput.ompdesk.1.2"),
+            &argv,
+        ));
+        assert_eq!(opened["via"], "launchservices");
+        assert_eq!(opened["parentPid"], 10);
+        assert_eq!(opened["argv"], serde_json::json!(["OMPdesk", "--lang=ko"]));
+        let ran = started_line(&started(Some(""), Some("0"), &argv));
+        assert_eq!(ran["via"], "process");
+        assert_eq!(
+            ran["parent"],
+            "/Applications/OMPdesk.app/Contents/MacOS/OMPdesk"
+        );
+        assert_eq!(ran["relaunchedBy"], serde_json::Value::Null);
+        assert_eq!(ran["at"], 1_700_000_000_000u64);
     }
 
     #[test]

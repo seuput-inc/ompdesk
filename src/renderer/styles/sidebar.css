@@ -1,20 +1,57 @@
 /* Sidebar-only polish; shared controls and the theme scales stay unchanged. */
-/* A session row is 32 px for a mouse (one more row in view at 1280×800) and 36 px under a finger. The empty place a row
-   leaves while the person points at the list (`data-sidebar-gap`, layout/sidebar/sidebar-hold.ts) is the same height. */
+/* A session row is two fixed lines whatever its title (the owner's approved design, 15 Nov 2026): the repository's
+   picture spans both, the title is the first, the state, branch, family count and ⋯ the second.
+   Its density is ONE token, `--omp-session-row-h`, set once here (the owner's "slim" choice, 19 Nov 2026: 40 px for a
+   mouse, 48 px under a finger, whose 44 px hit height stays). The picture, the row's padding and the project, Chats and
+   archive headers follow from it. The empty place a row leaves while the person points at the list
+   (`data-sidebar-gap`, layout/sidebar/sidebar-hold.ts) is the same height. */
+:is(.omp-session-sidebar, .omp-sidebar-session-rename) {
+	--omp-session-row-h: 2.5rem;
+	--omp-session-pic: calc(var(--omp-session-row-h) - 1rem);
+	/* The two lines' content (a 1.25 line-height title, an 18 px second line) is 36 px; the rest is the padding. */
+	--omp-session-pad: max(0px, calc((var(--omp-session-row-h) - 2.25rem) / 2));
+	--omp-sidebar-head-h: calc(var(--omp-session-row-h) * 0.6);
+}
+
+html[data-input="touch"] :is(.omp-session-sidebar, .omp-sidebar-session-rename) {
+	--omp-session-row-h: 3rem;
+	--omp-session-pic: 1.75rem;
+	--omp-sidebar-head-h: 2rem;
+}
+
 .omp-session-sidebar .omp-sidebar-session-row,
 .omp-session-sidebar [data-sidebar-gap="session"],
 .omp-sidebar-session-rename {
-	--omp-sidebar-row-h: var(--sc-control-md);
-	min-height: var(--omp-sidebar-row-h);
+	min-height: var(--omp-session-row-h);
 }
 
-html[data-input="touch"]
-	:is(
-		.omp-session-sidebar .omp-sidebar-session-row,
-		.omp-session-sidebar [data-sidebar-gap="session"],
-		.omp-sidebar-session-rename
-	) {
-	--omp-sidebar-row-h: var(--sc-control-lg);
+.omp-session-sidebar .omp-sidebar-session-row {
+	padding-block: var(--omp-session-pad);
+}
+
+.omp-session-sidebar .omp-sidebar-session-row button[data-roving-item] {
+	line-height: var(--sc-leading-tight);
+}
+
+/* A project, Chats or archive header (`.omp-sidebar-head`): 24 px for a mouse at the slim density, its two buttons
+   square to it; under a finger 32 px (mobile.css raises a project header to `--sc-row-touch`). */
+.omp-session-sidebar .omp-sidebar-head {
+	height: var(--omp-sidebar-head-h);
+}
+
+html:not([data-input="touch"]) .omp-session-sidebar .omp-sidebar-head {
+	--sc-control-sm: var(--omp-sidebar-head-h);
+}
+
+/* The second line's controls are 18 px: the family chip and the ⋯ (an 18 px square, so the branch beside a chip keeps
+   a short name whole in a 248 px sidebar) keep the row at two lines. Under a finger mobile.css widens the ⋯ to its
+   44 px slot and both hit areas past the line without growing it. */
+.omp-session-sidebar .omp-sidebar-session-row :is(.omp-family-chip, [data-sidebar-row-menu]) {
+	height: 1.125rem;
+}
+
+.omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-menu] {
+	width: 1.125rem;
 }
 
 /* A session row out of view skips style, layout and paint. With 500 stored
@@ -24,11 +61,11 @@ html[data-input="touch"]
    row paints (hover wash, focus ring, actions) stays inside its box. */
 .omp-session-sidebar .omp-sidebar-session-row {
 	content-visibility: auto;
-	/* The size is the content box's; ListRow's py-1 padding comes on top. As
+	/* The size is the content box's; the row's padding comes on top. As
 	   `auto var(--sc-control-lg)` a row never rendered stood 44px against a
 	   rendered 36px, and with the list's scroll anchoring off, each row above the
 	   view that rendered while scrolling up moved the rows on screen by 8px. */
-	contain-intrinsic-size: auto calc(var(--omp-sidebar-row-h) - 2 * var(--sc-space-1));
+	contain-intrinsic-size: auto calc(var(--omp-session-row-h) - 2 * var(--omp-session-pad));
 }
 
 /* The session list keeps its scrollbar's room whether it scrolls or not, so a row's width is its own and never how
@@ -40,8 +77,8 @@ html[data-input="touch"]
 	scrollbar-gutter: stable;
 }
 
-/* No leading slot: a session row's title starts where its group header's content does (the header button's `pl-2`),
-   nested in a project group or not, so the list reads as one left edge under the project's chevron. */
+/* The picture leads the row: it starts where its group header's content does (the header button's `pl-2`), nested
+   in a project group or not, so the list reads as one left edge under the project's chevron. */
 .omp-session-sidebar .omp-sidebar-session-row {
 	padding-left: var(--sc-space-2);
 }
@@ -55,14 +92,11 @@ html[data-input="touch"]
 	padding-left: calc(var(--sc-space-2) + var(--sc-icon-md));
 }
 
-/* A project or device header: 28 / 32 px for a mouse. Under a finger mobile.css makes a project header a
-   `--sc-row-touch` row; a device header keeps `--sc-control-lg`, as before. */
-.omp-session-sidebar [data-workspace-group] {
-	min-height: var(--sc-control-sm);
-}
-
-.omp-session-sidebar [data-device-group] > div:first-child {
-	min-height: var(--sc-control-md);
+/* A project header, this computer's and a paired computer's alike: `--omp-sidebar-head-h` for a mouse (24 px at the
+   slim density). Under a finger mobile.css makes this computer's a `--sc-row-touch` row; a paired computer's keeps
+   `--sc-control-lg`, as before. */
+.omp-session-sidebar :is([data-workspace-group], [data-device-group] > div:first-child) {
+	min-height: var(--omp-sidebar-head-h);
 }
 
 html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-child {
@@ -147,11 +181,116 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	font-weight: var(--sc-weight-regular);
 }
 
-/* A row's end (ListRow's meta) gives way before its title, down to `--row-meta-min`: an age stays whole (ListRow's
-   default), a waiting badge goes down to its ⚠ glyph in the pill (the word's tooltip and accessible text stay). */
-.omp-session-sidebar .omp-sidebar-session-row[data-signal="waiting"] {
-	/* The pill's 8 px sides, the 12 px glyph and the 6 px gap after it: the word's box is then 0 wide, never a sliver. */
-	--row-meta-min: 2.125rem;
+/* A row's second line (`SessionRowLine`, `data-sidebar-row-end`): the marks (✓, a missing folder, the waiting badge),
+   then the age and the branch, which give way on a short line in the owner's order (19 Nov 2026): the age first and
+   whole, then the branch down to about eight characters, then the branch with its mark, never the mark alone (the
+   row's tooltip names it). The family chip and the ⋯ beside the line never give way.
+   The give-way box is row-reversed and wraps into an invisible second line: the branch is laid out first, so the age
+   is the item that wraps out of sight when both do not fit. A working row keeps its age there, hidden, as the arc's
+   reserve (composer.md › The age slot), and draws the arc out of the flow at the box's start, with the box's start
+   padded by the arc and its gap and the reserve pulled back by as much: the reserve wraps exactly when an idle age
+   would, so with room the branch never moves when work starts or ends, and without it only the reserve goes while the
+   arc stays.
+   Nothing on the line is a control (the chip and the ⋯ sit beside it, raised), so a click anywhere on it is the row's:
+   it passes through to the row button's stretched click target, which the positioned give-way box would otherwise
+   cover, and a click or a phone's tap on the age or the branch opened nothing. The row's tooltip names the branch. */
+.omp-session-row-line {
+	display: flex;
+	flex: 1 1 0;
+	min-width: 0;
+	align-items: center;
+	gap: var(--sc-space-1-5);
+	line-height: var(--sc-leading-tight);
+	pointer-events: none;
+}
+
+.omp-session-row-line > * {
+	flex-shrink: 0;
+}
+
+/* The waiting badge goes down to its ⚠ in the pill (its 8 px sides, the 12 px glyph and the 6 px gap after it; the
+   word's tooltip and accessible text stay), the last thing on the line to give way. */
+.omp-session-row-line > .omp-sidebar-approval {
+	flex-shrink: 1;
+	min-width: 2.125rem;
+}
+
+.omp-session-row-give {
+	position: relative;
+	display: flex;
+	flex: 1 1 0;
+	flex-flow: row-reverse wrap;
+	justify-content: flex-end;
+	align-content: flex-start;
+	align-items: center;
+	column-gap: var(--sc-space-1-5);
+	min-width: 0;
+	height: 1lh;
+	overflow: hidden;
+}
+
+.omp-session-row-age:empty {
+	display: none;
+}
+
+.omp-session-row-give:has(.omp-live-age) {
+	padding-left: calc(1em + var(--sc-space-1-5));
+}
+
+.omp-session-row-age:has(> .omp-live-age) {
+	margin-left: calc(-1em - var(--sc-space-1-5));
+}
+
+.omp-session-row-age > .omp-live-age {
+	position: static;
+	display: inline;
+}
+
+.omp-session-row-age > .omp-live-age > .omp-working-arc {
+	position: absolute;
+	top: 50%;
+	left: 0;
+	translate: 0 -50%;
+}
+
+/* The head's own box drops the whole head, mark too, onto an invisible second line once it cannot hold the head's
+   floor (`SessionHeadLabel` measures it and sets it as the head's flex basis and min-width: the mark and about eight
+   characters with the kept tail, or all of a shorter name): the head is
+   laid out at that floor after a 1 px first item, so it wraps exactly when the floor does not fit, and grows to its
+   whole name when there is room. The first item must be wider than 0: Chromium and WebKit put any item onto a line
+   still 0 wide, so a 0 px one kept the head on the line, cut at its edge. It is a line high, so the wrapped head sits
+   below the box's clip. The box itself sizes by the whole name, so the age above wraps first. */
+.omp-session-head-box {
+	display: flex;
+	flex: 0 1 auto;
+	flex-wrap: wrap;
+	align-content: flex-start;
+	align-items: center;
+	min-width: 0;
+	height: 1lh;
+	overflow: hidden;
+}
+
+.omp-session-head-sentinel {
+	flex: none;
+	width: 1px;
+	height: 1lh;
+}
+
+.omp-session-head-box > [data-session-head] {
+	flex: 1 1 0;
+	max-width: max-content;
+}
+
+/* A name no longer than the floor is laid out at its own width: whole, or wrapped out of sight. */
+.omp-session-head-box > [data-head-whole] {
+	flex: none;
+}
+
+/* The family chip on a session row gives its button's sides before the branch gives a letter (the owner's order: the
+   chip's room before the branch); its pill keeps the glyph and the count. */
+.omp-session-sidebar .omp-sidebar-session-row .omp-family-chip {
+	padding-inline: 0;
 }
 
 .omp-sidebar-controls {

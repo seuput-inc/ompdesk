@@ -18,7 +18,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { AgentControlViewEvent } from "../../shared/agent-control";
+import type { AgentCloseAnswer, AgentControlViewEvent } from "../../shared/agent-control";
 import type {
 	IpcSignIn,
 	IpcSpawnTabPayload,
@@ -128,6 +128,7 @@ interface MockOmp {
 		setView: Mock<
 			(tabId: string, ids: string[], split?: SplitLayout, remembered?: SplitLayout[]) => Promise<boolean>
 		>;
+		answerAgentClose: Mock<(answer: AgentCloseAnswer) => Promise<void>>;
 	};
 	events: {
 		onTabStatus: Mock<(callback: (payload: IpcTabStatusPayload) => void) => () => void>;
@@ -154,6 +155,7 @@ function installMockOmp(): { omp: MockOmp; emitTabStatus: TabStatusHandler } {
 			close: vi.fn(async () => true),
 			setActive: vi.fn(async () => true),
 			setView: vi.fn(async () => true),
+			answerAgentClose: vi.fn(async () => {}),
 		},
 		events: {
 			onTabStatus: vi.fn((callback: TabStatusHandler) => {
@@ -1676,7 +1678,10 @@ describe("tabs store background tab signals", () => {
 		seedTabs();
 		const session = sessionRuntimeStore<SessionStore>("t1", "session")!;
 		const shown = { attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: "529", startedAt: 1 };
-		session.setState({ retryInfo: shown, compactionInfo: { reason: "threshold", action: "compacting" } });
+		session.setState({
+			retryInfo: shown,
+			compactionInfo: { reason: "threshold", action: "compacting", startedAt: 1 },
+		});
 		const saga = { ...shown, startedAt: 5 };
 		const status = (retrySaga?: typeof saga) =>
 			useTabsStore
@@ -3060,12 +3065,41 @@ describe("agent control view requests", () => {
 		expect(useTabsStore.getState().split).toBeNull();
 	});
 
-	it("close closes the tab the way the user's close does", async () => {
+	it("close closes the tab the way the user's close does, and answers the close with what it did", async () => {
 		await bootWith("t0", "t1");
-		await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close" });
+		await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close", closeId: 7 });
 		expect(tabOf("t1")).toBeUndefined();
 		expect(omp.tabs.close).toHaveBeenCalledWith("t1");
 		expect(useTabsStore.getState().activeTabId).toBe("t0");
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 7, outcome: "closing" });
+	});
+
+	// 19 Nov 2026: an agent's close a window kept came back as "its last tab, or unsaved Files edits", whichever it was,
+	// and the same words when the window never heard it. The window says which of its rules kept the tab.
+	it("answers a close it refuses with its own reason and keeps the tab", async () => {
+		await bootWith("t0");
+		await useTabsStore.getState().applyAgentView({ tabId: "t0", how: "close", closeId: 8 });
+		expect(tabOf("t0")).toBeDefined();
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t0", closeId: 8, outcome: "last-tab" });
+
+		await bootWith("t0", "t1");
+		useUiStore.setState({ fileEditDirty: true, fileEditTabId: "t1", pendingFileSwitch: null });
+		try {
+			await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close", closeId: 9 });
+			expect(tabOf("t1")).toBeDefined();
+			expect(omp.tabs.close).not.toHaveBeenCalledWith("t1");
+			expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 9, outcome: "unsaved-edits" });
+		} finally {
+			useUiStore.setState({
+				fileEditDirty: false,
+				fileEditTabId: null,
+				pendingFileSwitch: null,
+				discardedForTabClose: null,
+			});
+		}
+
+		await useTabsStore.getState().applyAgentView({ tabId: "gone", how: "close", closeId: 10 });
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "gone", closeId: 10, outcome: "not-here" });
 	});
 
 	it("a tab main spawns in the background appears without switching the current view", async () => {

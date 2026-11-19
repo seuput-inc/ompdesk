@@ -39,6 +39,8 @@ use crate::watch::gb;
 
 /// Set for a check's command: a check started inside it runs as its child (no second runner, no second slot).
 pub const RUN_ENV: &str = "OMPDESK_CHECK_RUN";
+/// The tag OMPdesk gives everything a session's omp starts (`src/main/session-processes.ts`): who started a run.
+const SESSION_ENV: &str = "OMP_GUI_SESSION_TAG";
 
 /// Defaults that keep a check's browsers and reports off the person's screen; a variable already set is kept.
 /// Playwright already starts Chromium and Electron headless with `--use-mock-keychain` unless a config asks for a
@@ -58,12 +60,22 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn open_store() -> io::Result<Store> {
+pub(crate) fn open_store() -> io::Result<Store> {
     Store::open(store::store_dir(&env))
 }
 
+/// The OMPdesk session this process runs in; none in a plain terminal.
+pub(crate) fn session_tag() -> Option<String> {
+    env(SESSION_ENV).filter(|tag| !tag.is_empty())
+}
+
+/// A session cancels only the runs it started; a person (a plain terminal, no session) cancels any.
+fn may_cancel(owner: Option<&str>, caller: Option<&str>) -> bool {
+    caller.is_none() || owner == caller
+}
+
 /// A result that fails a verdict.
-fn failing(status: &str) -> bool {
+pub(crate) fn failing(status: &str) -> bool {
     !matches!(status, "passed" | "skipped" | "flaky")
 }
 
@@ -246,6 +258,7 @@ pub fn start(opts: Start) -> i32 {
         light: opts.light,
         release: opts.release,
         summary: None,
+        session: session_tag(),
     };
     if let Err(e) = store.create(&run) {
         eprintln!("ompdesk check: cannot record the run: {e}");
@@ -385,7 +398,7 @@ const RUNNER_LINGER: Duration = Duration::from_secs(5);
 
 /// `attach_id` into `out`. A run reads as finished the moment its runner saved the state, but the runner is only done
 /// with the log once it released `alive` (its process ended): returning earlier could leave out its last lines.
-fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
+pub(crate) fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
     let Ok(mut log) = fs::File::open(store.file(id, "log")) else {
         eprintln!("ompdesk check: no run {id}");
         return 1;
@@ -441,7 +454,7 @@ fn exit_of(run: &Run) -> i32 {
     }
 }
 
-fn find_run(store: &Store, id: Option<&str>) -> Option<Run> {
+pub(crate) fn find_run(store: &Store, id: Option<&str>) -> Option<Run> {
     match id {
         Some(id) => store.read(id).or_else(|| {
             store
@@ -550,6 +563,18 @@ pub fn cancel(id: &str) -> i32 {
     if run.state.finished() {
         eprintln!("ompdesk check: run {} has already ended", run.id);
         return 0;
+    }
+    if !may_cancel(run.session.as_deref(), session_tag().as_deref()) {
+        eprintln!(
+            "ompdesk check: run {} was started by {}, so this session does not cancel it",
+            run.id,
+            run.session
+                .as_deref()
+                .map_or("a person in a terminal".into(), |s| format!(
+                    "another session ({s})"
+                ))
+        );
+        return 1;
     }
     let _ = fs::write(store.file(&run.id, "cancel"), "");
     stop_command(&store, &run);
@@ -1667,12 +1692,16 @@ fn finish(
     }
     let verdict = rt.store.file(&own, "verdict.txt");
     let _ = fs::write(&verdict, &text);
+    let counted_keys: BTreeSet<&str> = counted.iter().map(|(r, _)| r.key.as_str()).collect();
+    // `counted` and `error` are what `ompdesk checks wait` answers from (`board.rs`).
     let json: Vec<serde_json::Value> = records
         .iter()
         .map(|(r, o)| {
             serde_json::json!({
                 "key": r.key, "name": display_name(r), "status": r.status, "ms": r.ms,
                 "quarantined": book.quarantined(&r.key),
+                "counted": counted_keys.contains(r.key.as_str()),
+                "error": r.error,
                 "origin": if o.run == own { serde_json::Value::Null } else { serde_json::to_value(o).unwrap_or_default() },
             })
         })
@@ -1749,6 +1778,16 @@ mod tests {
         );
         assert_eq!(test_suffix("src/index.ts"), None);
         assert_eq!(test_suffix(".eslintrc.js"), None);
+    }
+
+    #[test]
+    fn a_session_cancels_only_its_own_runs_and_a_person_any() {
+        assert!(may_cancel(Some("tab-a"), Some("tab-a")));
+        assert!(!may_cancel(Some("tab-a"), Some("tab-b")));
+        // A run a person started in a terminal is never an agent's to cancel.
+        assert!(!may_cancel(None, Some("tab-b")));
+        assert!(may_cancel(Some("tab-a"), None));
+        assert!(may_cancel(None, None));
     }
 
     fn earlier_run(store: &Store, id: &str, state: &str, digest: &str) -> Run {

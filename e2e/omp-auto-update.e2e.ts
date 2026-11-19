@@ -31,14 +31,17 @@ const UNVERIFIED = "99.0.0";
 /** This OMPdesk release: the verified list's key. */
 const APP_VERSION: string = JSON.parse(readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8")).version;
 
-/** The fake installer: logs each call; the omp update waits for the test's `go` file, then "installs" the launch's newest omp. */
+/**
+ * The fake installer: logs each call; an omp install (`bun-global` for the Bun-owned fixture, `omp-update` for one no
+ * package manager owns) waits for the test's `go` file, then "installs" the launch's newest omp.
+ */
 const INSTALLER = `
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const [item, method] = process.argv.slice(2);
 const dir = process.env.OMPDESK_FAKE_INSTALLER_DIR;
 appendFileSync(join(dir, "installs.log"), item + " " + method + "\\n");
-if (item === "omp" && method === "omp-update") {
+if (item === "omp" && (method === "omp-update" || method === "bun-global")) {
 	while (!existsSync(join(dir, "go"))) await Bun.sleep(25);
 	writeFileSync(process.env.OMPDESK_FAKE_VERSION_FILE, process.env.OMPDESK_FAKE_NEW_VERSION);
 	console.log("Updated to " + process.env.OMPDESK_FAKE_NEW_VERSION);
@@ -84,6 +87,12 @@ interface LaunchOptions {
 	verified?: string[];
 	/** Stock's global config (`update.auto`); absent: no config file. */
 	stockConfig?: Record<string, boolean>;
+	/**
+	 * The fixture omp sits in a Bun root (`<root>/install/global/node_modules/@oh-my-pi/pi-coding-agent`), so a pass
+	 * nobody asked for may install a named version there (`bun-global`); default true. Without it no package manager
+	 * owns the omp: only "Update now" moves it, through stock's `omp update`.
+	 */
+	bunOwned?: boolean;
 }
 
 async function launch(name: string, prefs: Record<string, unknown>, options: LaunchOptions = {}): Promise<Launched> {
@@ -106,6 +115,22 @@ async function launch(name: string, prefs: Record<string, unknown>, options: Lau
 		JSON.stringify({ firstRunComplete: true, language: "en", ...prefs }),
 	);
 	const omp = await fixtureOmp(root);
+	if (options.bunOwned ?? true) {
+		// `ompBunRoot`: the folder above the launcher's holds Bun's global install of the package.
+		const pkg = path.join(
+			path.dirname(path.dirname(omp)),
+			"install",
+			"global",
+			"node_modules",
+			"@oh-my-pi",
+			"pi-coding-agent",
+		);
+		await fs.mkdir(pkg, { recursive: true });
+		await fs.writeFile(
+			path.join(pkg, "package.json"),
+			JSON.stringify({ name: "@oh-my-pi/pi-coding-agent", version: FLOOR }),
+		);
+	}
 	const installer = await writeFakeOmp(installerDir, INSTALLER);
 	const app = await launchApp({
 		project,
@@ -167,7 +192,8 @@ async function expectUpdated(launched: Launched): Promise<void> {
 	await expect(page.locator(".omp-composer-input").first()).toHaveValue(DRAFT);
 	// The restarted bridge answered the capabilities probe for the newer omp; planMode is missing there.
 	await expect(page.getByText(/lacks internals OMPdesk needs for: Plan mode/)).toBeVisible({ timeout: 30_000 });
-	expect(await installs(launched)).toEqual(["omp omp-update"]);
+	// Bun's root owns the fixture, so the unasked pass installed the version it picked, by name, never `omp update`.
+	expect(await installs(launched)).toEqual(["omp bun-global"]);
 	// Every check (main's, and Settings' on the tab) ran with this omp's folder first on PATH: stock's
 	// `omp update` resolves `$which("omp")`, so that is the install it checked and would update.
 	const ran = await checks(launched);
@@ -195,7 +221,7 @@ test("a newer omp installs on its own; the idle tab restarts on it with its draf
 		await page.locator(".omp-composer-input").first().fill(DRAFT);
 		// Nobody clicked: main found a release newer than the installed floor and runs the installer, which waits for `go`.
 		await expect.poll(() => updatePhase(page), { timeout: 30_000 }).toBe("updating");
-		await expect.poll(() => installs(launched), { timeout: 30_000 }).toEqual(["omp omp-update"]);
+		await expect.poll(() => installs(launched), { timeout: 30_000 }).toEqual(["omp bun-global"]);
 		// The install never touches the running tab: same process, still ready.
 		expect(await boots(launched)).toEqual([FLOOR]);
 		expect(await sidecarStatus(page)).toBe("ready");
@@ -223,10 +249,11 @@ test("a newer omp installs on its own; the idle tab restarts on it with its draf
 
 test("an omp runners have not verified waits: nothing installs on its own, Settings says why, Update now installs it; stock's own update is taken and given back", async () => {
 	test.setTimeout(120_000);
+	// No package manager owns this omp: nothing but a person's "Update now" may move it, through stock's `omp update`.
 	const launched = await launch(
 		"held",
 		{},
-		{ latest: UNVERIFIED, verified: [], stockConfig: { "update.auto": true } },
+		{ latest: UNVERIFIED, verified: [], stockConfig: { "update.auto": true }, bunOwned: false },
 	);
 	try {
 		const { page } = launched;

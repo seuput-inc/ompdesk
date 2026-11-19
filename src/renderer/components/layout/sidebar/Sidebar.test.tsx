@@ -1230,7 +1230,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(row().getAttribute("data-signal")).toBeNull();
 	});
 
-	it("leads no session row with a slot: a chat's glyph sits at the end, before the age", async () => {
+	it("leads every session row with its repository's picture spanning both lines: a project's letter mark, a chat's glyph", async () => {
 		installMockOmp(LIST);
 		seedStores();
 		await mount(<Sidebar />);
@@ -1238,11 +1238,14 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelectorAll("[data-sidebar-workspace-icon]").length).toBeGreaterThan(0);
 		const chatRow = container.querySelector('[data-session-kind="chat"]');
 		const groupedAgentRow = container.querySelector('[data-session-group="/work/alpha"] [data-session-kind="agent"]');
-		expect(chatRow?.querySelector("[data-sidebar-row-end] svg[data-sidebar-session-icon]")).not.toBeNull();
-		expect(groupedAgentRow?.querySelector("[data-sidebar-session-icon]")).toBeNull();
-		// The title is the row's first content: nothing comes before it.
+		expect(chatRow?.querySelector('[data-project-artwork="icon"] svg[data-sidebar-session-icon]')).not.toBeNull();
+		// No repository picture is known here: the project's letter on its hue.
+		const mark = groupedAgentRow?.querySelector('[data-project-artwork="letter"]');
+		expect(mark?.textContent).toBe("A");
+		expect(mark?.getAttribute("data-mark-hue")).toBeTruthy();
+		// The picture is the row's first content, the title after it.
 		const firstContent = (groupedAgentRow as unknown as Element | null)?.children[0];
-		expect(firstContent?.querySelector("button")).not.toBeNull();
+		expect(firstContent?.querySelector("[data-project-artwork]")).not.toBeNull();
 	});
 
 	it("right-click on a workspace header opens the agent-only group menu with move actions", async () => {
@@ -1911,7 +1914,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(twoIndex).toBeLessThan(oneIndex);
 	});
 
-	it("session titles truncate in place and row actions appear only on hover or focus within, overlaying the end", async () => {
+	it("keeps the title alone on the first line and the state and the one ⋯ on the second, the ⋯ always shown", async () => {
 		installMockOmp(LIST);
 		seedStores();
 		await mount(<Sidebar />);
@@ -1919,27 +1922,20 @@ describe("Sidebar menus and pinned ordering", () => {
 		const row = rowFor("Session /work/alpha/one");
 		const title = row.querySelector("button");
 		expect(title?.className).toContain("truncate");
-		// One ⋯ holds every action: no rename, archive or delete button of its own takes the title's width.
+		// One ⋯ holds every action: no rename, archive or delete button of its own.
 		expect(row.querySelectorAll("[data-sidebar-row-menu]")).toHaveLength(1);
 		expect(row.querySelector('[aria-label="Rename session"]')).toBeNull();
 		expect(row.querySelector('[aria-label="Delete session"]')).toBeNull();
 		expect(row.querySelector("[data-sidebar-archive]")).toBeNull();
 		const more = row.querySelector("[data-sidebar-row-menu]");
 		expect(more?.getAttribute("aria-label")).toBe("Session actions");
-		// Hidden at rest and out of the pointer's way, but never display:none, so keyboard users keep it.
-		const actions = (more?.parentNode as unknown as Element | null)?.className.split(/\s+/) ?? [];
-		expect(actions).toContain("opacity-0");
-		expect(actions).toContain("pointer-events-none");
-		expect(actions).toContain("group-hover/row:opacity-100");
-		expect(actions).not.toContain("hidden");
-		// The title keeps its full width at rest and while it shows: no padding is reserved for it.
-		const titleBox = (title?.parentNode as unknown as Element | null)?.className ?? "";
-		expect(titleBox).not.toMatch(/(^|\s)(group-[a-z-]+\/row:)?pr-\d+/);
-
-		// The current row does not keep it either.
-		const active = container.querySelector('[data-active="true"]') as unknown as Element | null;
-		const activeActions = active?.querySelector("[data-sidebar-row-menu]")?.parentNode as unknown as Element | null;
-		if (activeActions) expect(activeActions.className.split(/\s+/)).not.toContain("opacity-100");
+		// The second line holds the state and ends in the ⋯, never hidden at rest.
+		const line = (title?.parentNode as unknown as Element | null)?.lastElementChild;
+		expect(line?.querySelector("[data-sidebar-row-end]")).not.toBeNull();
+		expect(line?.querySelector("[data-sidebar-row-menu]")).toBe(more);
+		let box = more?.parentNode as unknown as Element | null;
+		for (; box && box !== row; box = box.parentNode as unknown as Element | null)
+			expect(box.className.split(/\s+/)).not.toContain("opacity-0");
 	});
 
 	it("a row's ⋯ and its right click list one menu, rename inline, and the ⋯ is the keyboard's next stop after the row", async () => {
@@ -2347,9 +2343,13 @@ describe("Sidebar menus and pinned ordering", () => {
 			name
 				? translate("session.fork.tooltip", { name, time: formatTimeAgo(created) })
 				: translate("session.fork.tooltipNoParent", { time: formatTimeAgo(created) });
-		// A stored row's tooltip ends with its exact time (the age slot reads "3w"): the fork lines come before it.
+		// A stored row's tooltip ends with its exact time (the age slot reads "3w"), after the repository it works in:
+		// the fork lines come before them.
 		const title = (button: Element | null | undefined) =>
-			button?.getAttribute("title")?.replace(/\n[^\n]*\d{2}:\d{2}$/, "");
+			button
+				?.getAttribute("title")
+				?.replace(/\n[^\n]*\d{2}:\d{2}$/, "")
+				.replace(/\nRepository: [^\n]*$/, "");
 		expect(title(fork.querySelector("button"))).toBe(
 			`Refactor the parser\n${tooltip("2026-01-01T00:00:00Z", "Refactor the parser")}`,
 		);
@@ -6533,7 +6533,9 @@ describe("Sidebar worktree sessions", () => {
 			(element as unknown as Element).getAttribute("data-workspace-group"),
 		);
 		for (const folder of [AUTOPILOT, DOCS, TESTS, BUGS]) expect(groups).not.toContain(folder);
-		expect(container.textContent).not.toMatch(/c2-docs|c3-bugs|c2-tests/);
+		// No group header is named after a run's worktree (each child's own branch is its second line).
+		for (const header of container.querySelectorAll("[data-workspace-group]"))
+			expect(header.textContent).not.toMatch(/c2-docs|c3-bugs|c2-tests/);
 
 		// In the project's group: the run's row where its recency puts it, its children right under it, newest first,
 		// one step in and with no mark of their own; then the project's older rows.

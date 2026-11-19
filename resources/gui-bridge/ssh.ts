@@ -4,26 +4,11 @@
  * Wire shapes match `src/shared/rpc-types.ts`.
  */
 
+import type { SSHHost } from "@oh-my-pi/pi-coding-agent/capability/ssh";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { SSHHostConfig } from "@oh-my-pi/pi-coding-agent/ssh/config-writer";
+import type { SSHConnectionTarget } from "@oh-my-pi/pi-coding-agent/ssh/connection-manager";
 import { guard } from "./health";
-import { type SSHHost, sshCapability } from "./omp/pi-coding-agent/capability/ssh";
-import { loadCapability, reset as resetCapabilities } from "./omp/pi-coding-agent/discovery";
-import {
-	readSSHConfigFile,
-	removeSSHHost,
-	type SSHHostConfig,
-	updateSSHHost,
-	validateHostName,
-} from "./omp/pi-coding-agent/ssh/config-writer";
-import {
-	ensureConnection,
-	ensureHostInfo,
-	getHostInfoForHost,
-	invalidateHostMetadata,
-	type SSHConnectionTarget,
-} from "./omp/pi-coding-agent/ssh/connection-manager";
-import { buildSshTarget } from "./omp/pi-coding-agent/ssh/utils";
-import { $which, getSSHConfigPath, ptree } from "./omp/pi-utils";
 import { asRecord, requiredString } from "./params";
 import type { BridgeMethods } from "./types";
 
@@ -60,7 +45,8 @@ function connectionTarget(name: string, host: SshHostInput): SSHConnectionTarget
 	};
 }
 
-function validateSshHost(name: string, host: SshHostInput): void {
+async function validateSshHost(name: string, host: SshHostInput): Promise<void> {
+	const { validateHostName } = await import("./omp/pi-coding-agent/ssh/config-writer");
 	const nameError = validateHostName(name);
 	if (nameError) throw new Error(nameError);
 	if (!host.host.trim()) throw new Error("Host address cannot be empty");
@@ -70,6 +56,7 @@ function validateSshHost(name: string, host: SshHostInput): void {
 }
 
 async function projectSshHost(host: SSHHost) {
+	const { getHostInfoForHost } = await import("./omp/pi-coding-agent/ssh/connection-manager");
 	const cached = await getHostInfoForHost(connectionTarget(host.name, host));
 	return {
 		name: host.name,
@@ -94,6 +81,11 @@ async function projectSshHost(host: SSHHost) {
 }
 
 async function sshHosts(session: AgentSession) {
+	const [{ sshCapability }, { loadCapability }, { $which }] = await Promise.all([
+		import("./omp/pi-coding-agent/capability/ssh"),
+		import("./omp/pi-coding-agent/discovery"),
+		import("./omp/pi-utils"),
+	]);
 	const result = await loadCapability<SSHHost>(sshCapability.id, { cwd: session.sessionManager.getCwd() });
 	return {
 		openSshAvailable: Boolean($which("ssh")),
@@ -118,6 +110,7 @@ async function moveSshHost(
 	sourcePath: string,
 	sourceName: string,
 ) {
+	const { removeSSHHost, updateSSHHost } = await import("./omp/pi-coding-agent/ssh/config-writer");
 	await updateSSHHost(filePath, name, config);
 	try {
 		await removeSSHHost(sourcePath, sourceName);
@@ -135,6 +128,17 @@ async function manageSshHost(session: AgentSession, params: unknown) {
 	const previousName = typeof p.previousName === "string" ? p.previousName : undefined;
 	const previousScope = sshScope(p.previousScope);
 	const cwd = session.sessionManager.getCwd();
+	const [
+		{ readSSHConfigFile, removeSSHHost, updateSSHHost },
+		{ invalidateHostMetadata },
+		{ reset: resetCapabilities },
+		{ getSSHConfigPath },
+	] = await Promise.all([
+		import("./omp/pi-coding-agent/ssh/config-writer"),
+		import("./omp/pi-coding-agent/ssh/connection-manager"),
+		import("./omp/pi-coding-agent/discovery"),
+		import("./omp/pi-utils"),
+	]);
 	const filePath = getSSHConfigPath(scope, cwd);
 	if (action === "delete") {
 		await removeSSHHost(filePath, name);
@@ -144,7 +148,7 @@ async function manageSshHost(session: AgentSession, params: unknown) {
 	}
 	if (action !== "create" && action !== "update") throw new Error(`Unknown ssh_manage action: ${String(action)}`);
 	const host = sshInput(p.host);
-	validateSshHost(name, host);
+	await validateSshHost(name, host);
 	const config: SSHHostConfig = {
 		host: host.host.trim(),
 		...(host.username?.trim() ? { username: host.username.trim() } : {}),
@@ -191,6 +195,10 @@ const SSH_LOG_MAX_LINES = 200;
  * stale master socket cannot hide the handshake, and runs `exit` remotely.
  */
 async function sshVerboseLog(host: SshHostInput): Promise<string | undefined> {
+	const [{ buildSshTarget }, { $which, ptree }] = await Promise.all([
+		import("./omp/pi-coding-agent/ssh/utils"),
+		import("./omp/pi-utils"),
+	]);
 	if (!$which("ssh")) return undefined;
 	const args = [
 		"ssh",
@@ -226,7 +234,8 @@ async function testSshHost(params: unknown) {
 	const raw = asRecord(asRecord(params).host);
 	const name = typeof raw.name === "string" ? raw.name : "";
 	const host = sshInput(raw);
-	validateSshHost(name, host);
+	await validateSshHost(name, host);
+	const { ensureConnection, ensureHostInfo } = await import("./omp/pi-coding-agent/ssh/connection-manager");
 	const target = connectionTarget(name, host);
 	const checkedAt = new Date().toISOString();
 	const deadline = Promise.withResolvers<never>();
@@ -259,8 +268,15 @@ async function testSshHost(params: unknown) {
 	}
 }
 
-export const methods: BridgeMethods = guard("ssh", {
-	ssh_hosts: async (_params, env) => sshHosts(env.session()),
-	ssh_manage: async (params, env) => manageSshHost(env.session(), params),
-	ssh_test: async params => testSshHost(params),
-});
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("ssh", {
+		ssh_hosts: async (_params, env) => sshHosts(env.session()),
+	}),
+	...guard("sshManage", {
+		ssh_manage: async (params, env) => manageSshHost(env.session(), params),
+	}),
+	...guard("sshTest", {
+		ssh_test: async params => testSshHost(params),
+	}),
+};

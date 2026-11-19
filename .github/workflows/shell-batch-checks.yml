@@ -52,6 +52,15 @@
 #                scripts/shell-move/win-update-real.ps1 says what is asserted and uploaded). move-win is the harness under a test identity
 #                (build-setups.ts), where the setups are rebuilt and the test launcher and move-test.nsh carry the profile into the app
 #                the setup starts through Explorer, which the published setup has none of.
+#              win-update-gate  only=win-update-gate, `candidate_run`, `next_run`, `old_tag`: a release's update gate, the INSTALLED Tauri
+#                app's own updater against feed.ts (mapped in the hosts file, its certificate trusted by the system: the shell's
+#                native network ignores Chromium's switches; GitHub's public Latest is never touched). Windows, three modes (job
+#                win-update-gate, scripts/shell-move/win-update-gate.ps1): `break` published old_tag is offered the candidate
+#                and its first download must fail as 0.134.0/0.134.1's do ("session electron-updater does not exist"); `manual`
+#                the candidate setup /S --force-run over the running old_tag starts it on the kept profile, where both saved tabs
+#                come back and the turn the setup cut off (stock omp from install-omp, a scripted loopback provider:
+#                scripts/shell-move/scripted-provider.ts) is continued once; `update` the installed candidate updates itself
+#                into next_run's higher build. macOS (job mac-update-gate, scripts/shell-move/mac-update-gate.sh): `update` once.
 # macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
 # windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`) the gate admits: main, or a branch named in
 # the repository variable MAC_REFS; any other ref fails closed at the gate and no macOS job starts. They share the
@@ -60,7 +69,7 @@
 # Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
 name: shell-batch-checks
 # The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || inputs.only == 'win-update-real' && format(' tag={0} run={1}', inputs.tag, inputs.candidate_run) || '') || '' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || inputs.only == 'win-update-real' && format(' tag={0} run={1}', inputs.tag, inputs.candidate_run) || inputs.only == 'win-update-gate' && format(' old={0} run={1} next={2}', inputs.old_tag, inputs.candidate_run, inputs.next_run) || '') || '' }}
 
 on:
   workflow_dispatch:
@@ -68,20 +77,28 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify, win-update-real]
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify, win-update-real, win-update-gate]
         default: all
       tag:
         description: "release-verify: the published release to check (assets, signatures, and the real update path into it). win-update-real: the published setup to update into when candidate_run is empty"
         type: string
         default: v0.132.0
       candidate_run:
-        description: "win-update-real: id of a release.yml dry run on the branch (`gh workflow run release.yml --ref <branch> -f dry_run=true`) whose ompdesk-win artifact is the candidate setup; empty uses the published setup of tag"
+        description: "win-update-real and win-update-gate: id of a release.yml dry run on the branch (`gh workflow run release.yml --ref <branch> -f dry_run=true`) whose ompdesk-win (and ompdesk-mac) artifact is the candidate; win-update-real: empty uses the published setup of tag"
         type: string
         default: ""
       cpu_load:
         description: "win-update-real: busy loops per logical processor kept running while the setup runs (0 = none), to slow the setup the way a busy or scanned computer would"
         type: string
         default: "0"
+      next_run:
+        description: "win-update-gate: id of a release.yml dry run of the same change with a HIGHER version (a probe/* branch), the build the installed candidate updates into"
+        type: string
+        default: ""
+      old_tag:
+        description: "win-update-gate: the published release a person has installed (break and manual start from it)"
+        type: string
+        default: v0.134.1
   push:
     branches: [omp/agent/rust-batch-shell]
     paths:
@@ -467,6 +484,7 @@ jobs:
           set -euo pipefail
           bun native/ompdesk/crates/tauri-shell/tests/preload.ts
           bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/ipc-post-message.ts
       - name: Test and lint the test-only WebDriver build
         shell: bash
         if: inputs.only == 'tauri-native'
@@ -856,6 +874,148 @@ jobs:
         with:
           name: win-update-real-${{ matrix.mode }}
           path: ${{ runner.temp }}/win-update-real/out-${{ matrix.mode }}/
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # only=win-update-gate: a release's Windows update gate (win-update-gate.ps1 says what each mode asserts and uploads).
+  win-update-gate:
+    name: win-update-gate (${{ matrix.mode }})
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-gate'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [break, manual, update]
+    permissions:
+      contents: read
+      actions: read # gh run download reads the dry runs' artifacts
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      NEXT_RUN: ${{ inputs.next_run }}
+      OLD_TAG: ${{ inputs.old_tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      # manual: the turn the setup cuts off runs on stock omp, the version every other workflow tests against.
+      - if: matrix.mode == 'manual'
+        uses: ./.github/actions/install-omp
+      - name: The published, candidate and next setups
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$CANDIDATE_RUN" ] || { echo "::error::win-update-gate needs candidate_run"; exit 1; }
+          W="$RUNNER_TEMP/win-update-gate"
+          mkdir -p "$W/old" "$W/candidate" "$W/next"
+          gh release download "$OLD_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/old" --clobber
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/candidate"
+          if [ "${{ matrix.mode }}" = update ]; then
+            [ -n "$NEXT_RUN" ] || { echo "::error::the update mode needs next_run"; exit 1; }
+            gh run download "$NEXT_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/next"
+          fi
+          ls -l "$W"/*
+      - name: The update (${{ matrix.mode }})
+        shell: pwsh
+        run: |
+          $w = Join-Path $env:RUNNER_TEMP 'win-update-gate'
+          function Version([string] $Setup) { ((Get-Item -LiteralPath $Setup).VersionInfo.ProductVersion -split '\.')[0..2] -join '.' }
+          $old = Join-Path $w 'old\ompdesk-windows-setup.exe'
+          $candidate = Join-Path $w 'candidate\ompdesk-windows-setup.exe'
+          $next = Join-Path $w 'next\ompdesk-windows-setup.exe'
+          $from, $to = if ('${{ matrix.mode }}' -eq 'update') { $candidate, $next } else { $old, $candidate }
+          $fromVersion = if ($from -eq $old) { $env:OLD_TAG.TrimStart('v') } else { Version $from }
+          & ./scripts/shell-move/win-update-gate.ps1 -Mode '${{ matrix.mode }}' -OldSetup $from -OldVersion $fromVersion `
+            -NewSetup $to -NewVersion (Version $to) -Out (Join-Path $w 'out') -FeedScript (Resolve-Path 'scripts/shell-move/feed.ts').Path
+          exit $LASTEXITCODE
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### win-update-gate ${{ matrix.mode }}"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-gate/out/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: win-update-gate-${{ matrix.mode }}
+          path: ${{ runner.temp }}/win-update-gate/out/
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # only=win-update-gate, macOS: the installed candidate updates itself into next_run's build once (relaunch mode;
+  # scripts/shell-move/mac-update-gate.sh says what it asserts and uploads). Same stand-in as Windows: /etc/hosts and the
+  # System keychain's trust, the app opened unchanged.
+  mac-update-gate:
+    name: mac-update-gate (macos-15)
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'win-update-gate'"
+    concurrency:
+      group: mac-dispatch
+      cancel-in-progress: false
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read # the dry runs' artifacts; the failure report reads this run's jobs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      NEXT_RUN: ${{ inputs.next_run }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      # Nothing is built: the e2e fake omp needs the repository's dependencies; the apps are the dry runs'.
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - name: The two dry runs' DMGs (before api.github.com is mapped to the stand-in)
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$CANDIDATE_RUN" ] && [ -n "$NEXT_RUN" ] || { echo "::error::mac-update-gate needs candidate_run and next_run"; exit 1; }
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-mac --dir "$RUNNER_TEMP/candidate"
+          gh run download "$NEXT_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-mac --dir "$RUNNER_TEMP/next"
+          ls -l "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/next"
+          mkdir "$RUNNER_TEMP/next-mount"
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$RUNNER_TEMP/next-mount" "$RUNNER_TEMP/next/ompdesk-mac-arm64.dmg" >/dev/null
+          echo "NEXT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$RUNNER_TEMP/next-mount/OMPdesk.app/Contents/Info.plist")" >> "$GITHUB_ENV"
+          hdiutil detach "$RUNNER_TEMP/next-mount" >/dev/null
+      # No token: the app is opened through launchd and checks anonymously, as an installed app does.
+      - name: The installed candidate updates itself into the next build
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          CANDIDATE_DMG: ${{ runner.temp }}/candidate/ompdesk-mac-arm64.dmg
+          NEXT_DMG: ${{ runner.temp }}/next/ompdesk-mac-arm64.dmg
+          OUT: ${{ runner.temp }}/mac-update-gate
+          FEED_SCRIPT: scripts/shell-move/feed.ts
+        run: set -o pipefail; bash scripts/shell-move/mac-update-gate.sh 2>&1 | tee mac-update-gate.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### mac-update-gate: run $CANDIDATE_RUN to run $NEXT_RUN (${NEXT_VERSION:-unknown})"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED|RESULT)' mac-update-gate.log | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-update-gate
+          path: |
+            mac-update-gate.log
+            ${{ runner.temp }}/mac-update-gate/
           if-no-files-found: ignore
           retention-days: 14
       - if: failure()

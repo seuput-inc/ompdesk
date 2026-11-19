@@ -67,8 +67,8 @@ export interface OmpUpdaterDeps {
 	installed: () => string | null;
 	/**
 	 * Install `target` and detect omp again (SetupService.updateOmp). `beforeInstall` runs just before the installer
-	 * starts. `exactOnly`: `target` is not the registry's newest, so only an install that names the version may run,
-	 * never stock `omp update`, which picks its own.
+	 * starts. `exactOnly`: only an install that names the version may run, never stock `omp update`, which picks its
+	 * own target and can swap in its compiled build; every pass but a person's "Update now".
 	 */
 	update: (target: string, beforeInstall: () => Promise<void>, exactOnly: boolean) => Promise<OmpUpdateOutcome>;
 	/** Stop what reads omp's files from disk (stats server, stock helper); resolves once they are gone. */
@@ -264,7 +264,7 @@ export class OmpUpdater {
 				released = true;
 				await this.#deps.releaseHelpers();
 			},
-			target !== latest,
+			by !== "manual",
 		);
 		// Quit while the installer ran: teardown is under way, so nothing starts again (helpers, tabs, toast).
 		if (this.#scheduler.disposed) return;

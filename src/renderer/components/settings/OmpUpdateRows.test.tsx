@@ -10,6 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OmpUpdateState } from "../../../shared/omp-update";
 import { I18nProvider, translate } from "../../lib/i18n";
+import { ko } from "../../locales/ko";
 import { useOmpUpdateStore } from "../../stores/omp-update";
 import { OmpUpdateNowButton, OmpUpdateRows, OmpUpdateStatus } from "./OmpUpdateRows";
 
@@ -81,6 +82,7 @@ const push = (state: OmpUpdateState) =>
 const toggle = () => document.body.querySelector("#setting-gui-toolsAutoUpdate [role='switch']") as HTMLElement;
 const nowButton = () => document.body.querySelector("[data-testid='omp-update-now']") as HTMLButtonElement;
 const status = () => document.body.querySelector("[data-testid='omp-update-status']")?.textContent;
+const testedNote = () => document.body.querySelector("[data-testid='omp-tested']")?.textContent;
 
 afterEach(async () => {
 	await act(async () => root?.unmount());
@@ -175,9 +177,39 @@ describe("OmpUpdateRows", () => {
 			ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", verified: [], held: null }),
 		);
 		expect(heldNote()).toBeUndefined();
-		expect(document.body.querySelector("[data-testid='omp-tested']")?.textContent).toBe(
-			translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }),
+		expect(testedNote()).toBe(translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }));
+	});
+
+	it("says an unverified omp may not work with every feature, in English and Korean, beside a held line too", async () => {
+		const unverified = { installed: "19.0.0", tested: "18.22.2", verified: [] };
+		await mount(ompUpdateState({ ...unverified, latest: "19.0.0" }));
+		expect(testedNote()).toBe(
+			"omp 19.0.0 hasn't passed OMPdesk's checks for this release (tested with omp 18.22.2). Some features may not work.",
 		);
+		expect(ko["ompUpdate.unverified"]).toBe(
+			"지금 쓰는 omp {version} 판은 이 OMPdesk에서 아직 검사를 통과하지 않았어요(omp {tested}에서 검증됨). 일부 기능이 동작하지 않을 수 있어요.",
+		);
+		// A newer release is held as well: the held line and this one both stay.
+		const held = { version: "19.0.1", reason: "verifying" } as const;
+		await push(ompUpdateState({ ...unverified, latest: "19.0.1", held }));
+		expect(document.body.querySelector("[data-testid='omp-update-held']")?.textContent).toBe(
+			translate("ompUpdate.held.verifying", { latest: "19.0.1" }),
+		);
+		expect(testedNote()).toBe(translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }));
+		expect(status()).toBeUndefined();
+	});
+
+	it("reads a host on OMPdesk 0.134, which sends no verified list, by the tested major", async () => {
+		const onNewerMajor = { installed: "19.0.0", tested: "18.22.2" };
+		const held = { version: "19.0.1", reason: "untested-major" } as const;
+		await mount(ompUpdateState({ ...onNewerMajor, latest: "19.0.1", held }));
+		expect(document.body.querySelector("[data-testid='omp-update-held']")?.textContent).toBe(
+			translate("ompUpdate.held.untested-major", { latest: "19.0.1", tested: "18.22.2" }),
+		);
+		expect(testedNote()).toBe(translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }));
+		// Inside the tested major the line stays the plain fact.
+		await push(ompUpdateState({ installed: "18.23.0", latest: "18.23.0", tested: "18.22.2" }));
+		expect(testedNote()).toBe(translate("ompUpdate.tested", { version: "18.22.2" }));
 	});
 
 	it("says an omp the checks failed stays held, and for how many days", async () => {

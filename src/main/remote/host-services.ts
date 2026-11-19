@@ -58,6 +58,7 @@ import {
 	type AgentSessionEvent,
 	BLOCKING_UI_METHODS,
 	type ExtensionUIRequest,
+	type HostToolCallRequest,
 	type PromptResultFrame,
 	type RpcCommand,
 	type RpcResponse,
@@ -101,6 +102,7 @@ import {
 	sessionDeleteInProgress,
 } from "../session-mutations";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "../session-summaries";
+import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "../session-targets";
 import type { SidecarSessionIdentity } from "../sidecar";
 import { type SidecarPool, STOP_SESSION_WAIT_MS } from "../sidecar-pool";
 import {
@@ -209,6 +211,7 @@ import {
 } from "./app-protocol";
 import type { HostConnection, HostServices } from "./host-server";
 import { HostedTabView, labelForViewer } from "./hosted-view";
+import { KEPT_CALL_PREFIX, KeptCalls } from "./kept-calls";
 import { createLinkEventSender, createReadEncoder, encodedReadKey, type LinkEventSender } from "./link-events";
 import type { PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
@@ -226,6 +229,35 @@ export const HOST_TAB_GRACE_MS = 10 * 60_000;
  * dialed every second for 60 s), so a routine drop and reconnect says nothing.
  */
 export const HOST_WAIT_NOTICE_MS = 60_000;
+/**
+ * Control calls of a device's session that tell the device's side (its opener, its screen): while the device is
+ * away they are kept for it (kept-calls.ts) and handed over once it is back.
+ */
+const KEPT_FOR_DEVICE: Record<string, true> = { ompdesk_report: true, ompdesk_notify: true };
+/** Control calls that act on the device's own app: refused here while the device is away. */
+const DEVICE_APP_TOOLS: Record<string, true> = { ompdesk_app: true, ompdesk_app_list: true };
+
+function hostToolResult(id: string, text: string, isError: boolean): object {
+	return {
+		type: "host_tool_result",
+		id,
+		result: { content: [{ type: "text", text }] },
+		...(isError ? { isError } : {}),
+	};
+}
+
+/** A window here's answer to a call it carried out for the absent device, saying so to the session. */
+function withAwayNote(frame: object, origin: PromptOriginEnv): object {
+	const note = `(${origin.name} is away, so ${origin.hostName} carried this out; a session it opened is a tab on ${origin.hostName}.)`;
+	const result = "result" in frame && typeof frame.result === "object" && frame.result !== null ? frame.result : {};
+	const content = "content" in result && Array.isArray(result.content) ? (result.content as unknown[]) : [];
+	const [first, ...rest] = content;
+	const noted =
+		typeof first === "object" && first !== null && "type" in first && first.type === "text" && "text" in first
+			? [{ ...first, text: `${String(first.text)}\n\n${note}` }, ...rest]
+			: [{ type: "text", text: note }, ...content];
+	return { ...frame, result: { ...result, content: noted } };
+}
 /** Session-index changes come in bursts while an agent writes; one push per burst. */
 const SESSIONS_CHANGED_DEBOUNCE_MS = 300;
 /** Parts of a file that wait this long for the next one are dropped (the sender gave up or went away). */
@@ -334,12 +366,18 @@ export interface HostServicesDeps {
 	mobileWebUrl?: () => string | null;
 	/** Where a device's attached files land (`host.files.upload`): the phones' upload folder, same limits and lifetime. */
 	uploads?: Pick<UploadStore, "store">;
+	/**
+	 * Where the control calls a device's session made while the device was away wait for it (kept-calls.ts); absent:
+	 * nothing is kept and such a call waits for the device.
+	 */
+	keptCallsFile?: string;
 }
 
 /** A call of the omp's that a device answers; `delivered` once a connection was handed it. */
 interface PendingHostCall {
 	name: "hostToolCall" | "hostUriRequest";
-	request: { id: string };
+	/** A host tool call names its tool and arguments; a URI read does not. */
+	request: { id: string; toolName?: string; arguments?: Record<string, unknown> };
 	delivered: boolean;
 }
 
@@ -380,6 +418,17 @@ interface HostTab extends RunTracking {
 	hostWaitTimer?: NodeJS.Timeout;
 	/** The turn has waited `HOST_WAIT_NOTICE_MS` on a call of `hostCalls` while the device is away: its summary says so. */
 	waitsForDevice?: true;
+	/**
+	 * A call of `hostCalls` has waited `HOST_WAIT_NOTICE_MS` while the device was away (`hostWaitTimer`): the calls no
+	 * connection was handed are this computer's to answer (`#takeOver`) until the device is back.
+	 */
+	away?: true;
+	/** A window here was asked to show the tab so it can carry the calls out (`showAway`); once per absence. */
+	awayShown?: true;
+	/** Calls a window here carries out for the absent device, by request id: their answer says so. */
+	awayRan?: Set<string>;
+	/** The kept calls (kept-calls.ts) handed to the current connection, by id: each goes once per connection. */
+	keptHanded?: Set<string>;
 	/** The turn waits for this computer's internet connection (turn-resume.ts; a view's, its window tab's). */
 	awaitingConnection?: boolean;
 	/** Times the device moved this tab to another session or branch (`movesTab`): a held wait of the old one ends. */
@@ -663,6 +712,11 @@ export class LocalHostServices implements HostServices {
 	 */
 	readonly #opening = new Map<string, number>();
 	readonly #closedWhileOpening = new Set<string>();
+	/**
+	 * Views whose window tab closed while their device was away (it never heard `viewEnded`): its return under that
+	 * rtab is told the view ended once, never given an omp of its own on a session its owner closed.
+	 */
+	readonly #endedViews = new Set<string>();
 	readonly #runningListeners = new Set<() => void>();
 	readonly #remoteOpenedListeners = new Set<() => void>();
 	readonly #windowHeldListeners = new Set<() => void>();
@@ -701,10 +755,20 @@ export class LocalHostServices implements HostServices {
 	#chargesSaver: AtomicSaver | null = null;
 	/** The run (worktree root) a window tab holding a session belongs to: the run itself or one of its children. */
 	#runRootOfSession: ((sessionPath: string) => string | undefined) | null = null;
+	/** The calls a device's session made while the device was away, kept for it (`keptCallsFile`). */
+	readonly #kept: KeptCalls | null;
+	/** The views `viewSession` made for this computer's windows: the ones that carry out an absent device's calls. */
+	readonly #windowViews = new WeakSet<HostedTabView>();
+	/**
+	 * Shows a session a device's tab here runs in a window of this computer, in the background (ipc.ts, through the
+	 * spawn path's `viewSession`), so that window carries out the calls the absent device was never handed.
+	 */
+	showAway: ((sessionPath: string) => void) | null = null;
 
 	constructor(deps: HostServicesDeps) {
 		this.#deps = deps;
 		this.#graceMs = deps.graceMs ?? HOST_TAB_GRACE_MS;
+		this.#kept = deps.keptCallsFile ? new KeptCalls(deps.keptCallsFile) : null;
 		this.#deviceList.onChange = delta => {
 			for (const conn of this.#conns)
 				emitSafely(conn, SESSIONS_CHANGED_EVENT, delta && conn.slim?.sessionLists === true ? delta : null);
@@ -1107,6 +1171,9 @@ export class LocalHostServices implements HostServices {
 			},
 		});
 		tab.views.add(view);
+		this.#windowViews.add(view);
+		// The window's pool listens once this returns: a device away past the notice has calls for it.
+		if (tab.away) queueMicrotask(() => this.#syncHostWait(tab));
 		return view;
 	}
 
@@ -1127,8 +1194,18 @@ export class LocalHostServices implements HostServices {
 		from?: HostedTabView,
 		claim?: number,
 	): void {
-		if ((frame.type === "host_tool_result" || frame.type === "host_uri_result") && typeof frame.id === "string")
+		if ((frame.type === "host_tool_result" || frame.type === "host_uri_result") && typeof frame.id === "string") {
+			// The device took over a call this computer kept for it: the omp had its answer long ago.
+			if (frame.id.startsWith(KEPT_CALL_PREFIX)) {
+				if (side === "device") this.#kept?.settle(frame.id);
+				return;
+			}
 			tab.hostCalls.delete(frame.id);
+			if (tab.awayRan?.delete(frame.id)) {
+				tab.sidecar.sendSideChannel(withAwayNote(frame, tab.origin));
+				return;
+			}
+		}
 		const id = frame.type === "extension_ui_response" && typeof frame.id === "string" ? frame.id : undefined;
 		// An agent's answer holds the question while its attachments go in: no other answer lands (`being_answered`).
 		const held = id === undefined ? undefined : tab.askClaims.get(id);
@@ -1248,7 +1325,9 @@ export class LocalHostServices implements HostServices {
 				return null;
 			case "sessions.list": {
 				const { scope, cwd, versioned } = parse(SessionsListParams, method, params);
-				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd));
+				// One folder's rows: decorated, but the shared list's snapshot stays what that list last said, or a change
+				// read here first would never reach the devices holding the shared list.
+				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd), false);
 				// Each read decorates the index's copy again (a tab here taking a session moves no journal) and keeps the
 				// version while nothing changed.
 				this.#deviceList.stale();
@@ -1309,6 +1388,10 @@ export class LocalHostServices implements HostServices {
 					this.#deps.sessionIndex.moveSession(sessionPath, cwd),
 				);
 			}
+			case "sessions.targets":
+				return sessionTargets(parse(SessionTargetsParams, method, params));
+			case "sessions.artwork":
+				return sessionArtwork(parse(SessionArtworkParams, method, params));
 			// C114: the tab's terminals run here, in the tab's folder, with this machine's shells.
 			case "terminal.shells":
 				return detectShells();
@@ -1494,6 +1577,8 @@ export class LocalHostServices implements HostServices {
 				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
 			case "host.projects.command":
 				return this.#deps.machine.sidebarProjects(parse(ProjectsCommandParams, method, params).request);
+			case "host.bridgeHealth.get":
+				return this.#deps.machine.bridgeHealth();
 			// Agent control of a session this computer runs for the device: the git it would run on its own checkout.
 			case GIT_METHODS.facts:
 				return branchFacts(parse(GitWorktreeParams, method, params).worktree);
@@ -1610,10 +1695,13 @@ export class LocalHostServices implements HostServices {
 		return { openers: this.#deps.sessionOpeners?.() ?? new Map<string, string>(), held };
 	}
 
-	/** This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`). */
-	#decorated(rows: readonly SessionInfo[]): SessionInfo[] {
+	/**
+	 * This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`).
+	 * `shared`: the rows are the shared list's, so the listing they show becomes what devices last heard.
+	 */
+	#decorated(rows: readonly SessionInfo[], shared = true): SessionInfo[] {
 		const { openers, held } = this.#listing();
-		this.#listingSnapshot = listingSignature(openers, held);
+		if (shared) this.#listingSnapshot = listingSignature(openers, held);
 		const problems = new Map([...this.#childProblems.values()].flatMap(children => [...children]));
 		// Every row says, even `null` for none: an older host's rows say nothing, and a device lists those as before.
 		return rows.map(row => {
@@ -1705,9 +1793,11 @@ export class LocalHostServices implements HostServices {
 		void this.#deps.machine.abortBenchmark(benchCaller(deviceId));
 		void this.#deps.machine.abortModelSetup(benchCaller(deviceId));
 		for (const [key, tab] of this.#tabs) if (tab.peerId === deviceId) this.#closeTab(key);
+		for (const key of this.#endedViews) if (key.startsWith(this.#key(deviceId, ""))) this.#endedViews.delete(key);
 	}
 
 	disposeAll(): void {
+		this.#endedViews.clear();
 		for (const key of [...this.#tabs.keys()]) this.#closeTab(key);
 		clearTimeout(this.#sessionsTimer);
 		this.#sessionsTimer = undefined;
@@ -1771,14 +1861,19 @@ export class LocalHostServices implements HostServices {
 	}
 
 	/**
-	 * The turn waits on a call only the device runs while the device is away: `HOST_WAIT_NOTICE_MS` later its summary
-	 * reads `waitsForDevice` and the person here is told once; the device's return or the calls' end clears it.
+	 * The turn waits on a call while the device is away: `HOST_WAIT_NOTICE_MS` later the device counts as away and
+	 * this computer answers the calls it can (`#takeOver`); for one it leaves to the device the summary reads
+	 * `waitsForDevice` and the person here is told once. The device's return or the calls' end clears it.
 	 */
 	#syncHostWait(tab: HostTab): void {
+		if (tab.conn === null && tab.away) this.#takeOver(tab);
 		if (tab.conn === null && tab.hostCalls.size > 0) {
 			if (tab.hostWaitTimer || tab.waitsForDevice) return;
 			tab.hostWaitTimer = setTimeout(() => {
 				tab.hostWaitTimer = undefined;
+				tab.away = true;
+				this.#takeOver(tab);
+				if (![...tab.hostCalls.values()].some(call => this.#leftToDevice(tab, call))) return;
 				tab.waitsForDevice = true;
 				this.workChanged();
 				this.#deps.hostWaiting?.({ device: tab.origin.name, title: tab.title ?? tab.autoTitle });
@@ -1793,6 +1888,133 @@ export class LocalHostServices implements HostServices {
 		this.workChanged();
 	}
 
+	/**
+	 * Whether a call waits for the device even while it is away. A call a connection was handed may be running there
+	 * (a sleeping computer's link stays up here until it is seen dead), so only the device answers it: run here too it
+	 * would run twice (formal/away-calls). A report or notice for the device waits for it unless it can be kept, and
+	 * any other call until a window here shows the session to carry it out.
+	 */
+	#leftToDevice(tab: HostTab, call: PendingHostCall): boolean {
+		if (call.delivered) return true;
+		const tool = call.request.toolName;
+		if (tool !== undefined && KEPT_FOR_DEVICE[tool]) return this.#kept === null;
+		if (this.showAway === null) return true;
+		return tool !== undefined && DEVICE_APP_TOOLS[tool] ? false : tab.awayShown !== true;
+	}
+
+	/**
+	 * The device is away past the notice: each call of the omp's no connection was handed is answered here, once (it
+	 * leaves `hostCalls` first, so the device's re-attach never gets it). A report or notice for the device is kept
+	 * for it (`#keepForDevice`); an action on the device's own app is refused; anything else a window here carries out
+	 * as its own tab's, through a view of the session (`showAway` opens one in the background when none is open).
+	 */
+	#takeOver(tab: HostTab): void {
+		for (const [id, call] of [...tab.hostCalls]) {
+			if (call.delivered) continue;
+			const { request } = call;
+			const tool = request.toolName;
+			if (tool !== undefined && KEPT_FOR_DEVICE[tool]) {
+				if (!this.#kept) continue;
+				tab.hostCalls.delete(id);
+				void this.#keepForDevice(tab, { ...request, toolName: tool });
+				continue;
+			}
+			if (this.showAway === null) continue;
+			if (tool !== undefined && DEVICE_APP_TOOLS[tool]) {
+				tab.hostCalls.delete(id);
+				const device = tab.origin.name;
+				tab.sidecar.sendSideChannel(
+					hostToolResult(
+						id,
+						`Not done: ${tool} acts on ${device}'s OMPdesk, and ${device} is away. Call it again once ${device} is back; keep working meanwhile.`,
+						true,
+					),
+				);
+				continue;
+			}
+			const view = [...tab.views].find(
+				candidate => this.#windowViews.has(candidate) && candidate.listenerCount(call.name) > 0,
+			);
+			if (view) {
+				// Taken before it is handed: a window's tool may answer within this call (`#answer` then notes it).
+				tab.hostCalls.delete(id);
+				const ran = tab.awayRan ?? new Set<string>();
+				tab.awayRan = ran;
+				ran.add(id);
+				if (view.carryOut(call.name, request)) continue;
+				ran.delete(id);
+				tab.hostCalls.set(id, call);
+			}
+			if (!tab.awayShown && tab.sessionFile) {
+				tab.awayShown = true;
+				this.showAway(tab.sessionFile);
+			}
+		}
+	}
+
+	/** Keeps a report or notice for the absent device, then tells the session; one that cannot be saved says so. */
+	async #keepForDevice(
+		tab: HostTab,
+		request: { id: string; toolName: string; arguments?: Record<string, unknown> },
+	): Promise<void> {
+		const device = tab.origin.name;
+		const sessionPath = tab.sessionFile;
+		try {
+			if (!sessionPath || !this.#kept) throw new Error("the session has no file here yet");
+			await this.#kept.keep({
+				device: tab.peerId,
+				sessionPath,
+				id: `${KEPT_CALL_PREFIX}${request.id}`,
+				toolName: request.toolName,
+				arguments: request.arguments ?? {},
+				at: Date.now(),
+			});
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			tab.sidecar.sendSideChannel(
+				hostToolResult(
+					request.id,
+					`Not kept: ${device} is away and ${tab.origin.hostName} could not keep this for it (${reason}). Call it again later.`,
+					true,
+				),
+			);
+			return;
+		}
+		const what =
+			request.toolName === "ompdesk_notify" ? "notification shows there" : "report reaches your opener there";
+		tab.sidecar.sendSideChannel(
+			hostToolResult(
+				request.id,
+				`Kept for ${device}: ${device} is away, so this ${what} once it is back. OMPdesk hands it over by itself, once; do not send it again. Keep working.`,
+				false,
+			),
+		);
+		this.#handKept(tab);
+	}
+
+	/**
+	 * The calls kept for the device while it was away go to its tab's connection, once per connection, until it
+	 * answers each (`#answer` settles it): it carries them out as the session's own, after the session's file is
+	 * known and its omp runs.
+	 */
+	#handKept(tab: HostTab): void {
+		const sessionPath = tab.sessionFile;
+		if (!this.#kept || tab.conn === null || !sessionPath || tab.sidecar.status !== "ready") return;
+		for (const call of this.#kept.for(tab.peerId, sessionPath)) {
+			const handed = tab.keptHanded ?? new Set<string>();
+			tab.keptHanded = handed;
+			if (handed.has(call.id)) continue;
+			handed.add(call.id);
+			this.#emit(tab, "hostToolCall", {
+				type: "host_tool_call",
+				id: call.id,
+				toolCallId: call.id,
+				toolName: call.toolName,
+				arguments: call.arguments,
+			} satisfies HostToolCallRequest);
+		}
+	}
+
 	#checkOpenSession(sessionPath: string | undefined): void {
 		if (!sessionPath) return;
 		if (deletedSessions().has(sessionPath)) throw codedError("session_deleted", "Session was deleted");
@@ -1804,10 +2026,16 @@ export class LocalHostServices implements HostServices {
 		const key = this.#key(peer.deviceId, params.rtab);
 		const held = this.#tabs.get(key);
 		const existing = held ?? this.#adopt(peer, params, conn);
+		if (!existing && this.#endedViews.delete(key))
+			throw codedError("view_ended", "The tab this one showed was closed on the host");
 		if (existing) {
 			clearTimeout(existing.graceTimer);
 			existing.graceTimer = undefined;
 			existing.conn = conn;
+			// Back: what the omp asks from now on is the device's again, and its kept calls go to this connection.
+			existing.away = undefined;
+			existing.awayShown = undefined;
+			existing.keptHanded = undefined;
 			// Re-attach: the device missed every event while it was away, so it
 			// gets the live status first. A never-started tab is not attached:
 			// the device still has to `tab.start` it.
@@ -1828,17 +2056,19 @@ export class LocalHostServices implements HostServices {
 			// The device's waiting row and retry countdown may date from before it lost this computer.
 			this.#emit(existing, "awaitingConnection", existing.awaitingConnection === true);
 			this.#emit(existing, "scheduledRetry", scheduledRetryArg(existing.scheduledRetry));
-			// The calls the omp still waits on: a relaunched device (it adopts the tab under a new rtab) lost every one
-			// its last process held; the same device back from a lost link lacks only those made while it was away.
+			// The calls the omp still waits on, every one: a relaunched device (it adopts the tab under a new rtab) lost
+			// those its last process held, and the same device back from a lost link may never have had one handed to the
+			// connection that died (a sleeping computer's link stays up here until it is seen dead).
 			for (const call of existing.hostCalls.values()) {
-				if (held && call.delivered) continue;
 				// One an earlier connection was handed may have run on that device already: it says so (`resent`), and the
-				// device answers from its record of the call instead of running it blindly (agent-control/call-journal.ts).
+				// device answers from its record of the call, or leaves it to the run still under way, instead of running
+				// it blindly (agent-control/call-journal.ts, ipc.ts `hostToolExecutor`).
 				const request =
 					call.delivered && call.name === "hostToolCall" ? { ...call.request, resent: true } : call.request;
 				call.delivered = true;
 				this.#emit(existing, call.name, request);
 			}
+			this.#handKept(existing);
 			this.#syncHostWait(existing);
 			return { cwd: existing.sidecar.cwd, kind: existing.sidecar.kind, attached };
 		}
@@ -2105,7 +2335,11 @@ export class LocalHostServices implements HostServices {
 				this.#emit(tab, "scheduledRetry", scheduledRetryArg(retry));
 			});
 			// The tab it views closed: the device heard `viewEnded` (#wire), and its tab here goes.
-			sidecar.on(VIEW_ENDED_EVENT, () => this.#closeTab(this.#key(tab.peerId, tab.rtab)));
+			sidecar.on(VIEW_ENDED_EVENT, () => {
+				const key = this.#key(tab.peerId, tab.rtab);
+				if (tab.conn === null) this.#endedViews.add(key);
+				this.#closeTab(key);
+			});
 		}
 		return tab;
 	}
@@ -2148,6 +2382,7 @@ export class LocalHostServices implements HostServices {
 						if ((payload.status === "starting" && !resend) || payload.status === "restarting")
 							tab.omp = randomUUID();
 						this.#emit(tab, name, this.#statusArg(tab, payload));
+						if (payload.status === "ready") this.#handKept(tab);
 					});
 					break;
 				case "session":
@@ -2159,6 +2394,7 @@ export class LocalHostServices implements HostServices {
 						this.#emit(tab, name, identity);
 						if (changed) this.#dedupe(tab);
 						if (changed) this.listingChanged();
+						if (changed) this.#handKept(tab);
 					});
 					break;
 				case "bridge":

@@ -19,6 +19,7 @@ import type {
 	NextPromptState,
 	NextPromptUpdate,
 } from "../../resources/gui-bridge/modes/next-prompt-contracts";
+import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import type { ModelRequestFrame } from "../../resources/gui-bridge/turn-stages-contracts";
 import type { GithubRequest } from "./github";
 
@@ -1703,6 +1704,8 @@ export interface RpcSessionState {
 	/** True only when the session is idle with no queued or pending async work. */
 	isSettled?: boolean;
 	todoPhases: TodoPhase[];
+	/** When the todo list last changed and whether it is behind the work (bridge todo-drift.ts); absent without the bridge. */
+	todoDrift?: TodoDriftState;
 	systemPrompt?: string[];
 	dumpTools?: ToolDump[];
 	contextUsage?: ContextUsage | null;
@@ -2925,6 +2928,8 @@ export type AgentSessionEvent =
 	| { type: "ttsr_triggered"; rules: { name: string; description?: string }[] }
 	| { type: "todo_reminder"; todos: TodoTask[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
+	/** The bridge's reading of the todo list changed (todo-drift.ts; `TODO_DRIFT_EVENT`). */
+	| { type: "todo_drift"; state: TodoDriftState }
 	| { type: "irc_message"; message: unknown }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
 	| {

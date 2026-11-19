@@ -92,7 +92,7 @@ describe("a web page's device preferences", () => {
 
 	it("keeps the phone's theme when the computer's changes", async () => {
 		const { web, host } = rig({ device: { themeName: "dark" } });
-		host.themeName = "sepia";
+		host.themeName = "gruvbox-light";
 		host.fontSize = 20;
 		expect(await web.api.prefs.get("themeName")).toBe("dark");
 		const all = (await web.api.prefs.get()) as Record<string, unknown>;

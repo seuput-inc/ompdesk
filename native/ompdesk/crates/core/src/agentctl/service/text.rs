@@ -29,8 +29,6 @@ pub const LIST_DEFAULT_ROWS: usize = 30;
 /// `READ_MAX_CHARS` of `tools.ts`: a read returns at most this many characters per page.
 pub const READ_MAX_CHARS: usize = 16_000;
 const CHECK_TAIL_CHARS: usize = 1_200;
-/// Reports after which a session waits for, or no longer expects, its receiver's next message in the same turn.
-pub const WAITS_AFTER_REPORT: [&str; 4] = ["done", "review", "question", "blocked"];
 /// Stock's label for the custom-answer row of a choice card.
 pub const OTHER_OPTION: &str = "Other (type your own)";
 

@@ -166,7 +166,8 @@ export const CHILDREN_WAIT_CALL = "call-children-wait";
 
 /**
  * The busy session's last turn, after its last prompt: three memories the bridge recalled (one with a long Korean
- * title) and a failed `bun test`, so the memory row and the failed-check section show.
+ * title) and a failed release check (`ompdesk check --release -- bun test`), so the memory row and the check row with
+ * its release gate show.
  */
 export function boardTurnMessages(base: number): Record<string, unknown>[] {
 	const item = (title: string, kind: string, path: string) => ({ title, kind, path });
@@ -220,7 +221,7 @@ export function boardTurnMessages(base: number): Record<string, unknown>[] {
 					type: "toolCall",
 					id: "call-board-test",
 					name: "bash",
-					arguments: { command: "bun test src/renderer/components/layout/work-board" },
+					arguments: { command: "ompdesk check --release -- bun test src/renderer/components/layout/work-board" },
 				},
 			],
 			stopReason: "toolUse",

@@ -53,6 +53,7 @@ interface Rows {
 	 * the group they sit in.
 	 */
 	childRows: Array<{ path: string; text: string; group: string }>;
+	/** The list's text without each row's branch line (`data-session-head`), which names an Autopilot child's worktree. */
 	text: string;
 }
 
@@ -103,7 +104,9 @@ async function readRows(phone: Page): Promise<Rows> {
 		const groups = [...element.querySelectorAll("[data-workspace-group]")].map(
 			group => group.textContent?.trim() ?? "",
 		);
-		return { perPath, groups, childRows, text: element.textContent ?? "" };
+		const named = element.cloneNode(true) as Element;
+		for (const head of named.querySelectorAll("[data-session-head]")) head.remove();
+		return { perPath, groups, childRows, text: named.textContent ?? "" };
 	});
 }
 

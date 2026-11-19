@@ -51,6 +51,16 @@ pub struct Fact {
     pub opened_by_session: Option<String>,
     /// `limitHeldElsewhere(tab) === true`, read by main for the tabs that have a run's outcome.
     pub limit_held: bool,
+    /// The session's goal is active: between its turns (no run on) the relaunch revives it, which resumes the goal
+    /// stock paused when the session loaded.
+    pub goal_active: bool,
+    /// The tab is an active Autopilot run's own (main's mirror of the run): revived like an active goal, so a run whose
+    /// tab a relaunch restored deferred still goes on.
+    pub autopilot_active: bool,
+    /// A scheduled retry of the tab's transient failure is armed (set by the resume machine, never by the pool): it lives
+    /// in this process only, so its marker carries it over a relaunch.
+    #[serde(skip)]
+    pub retry_armed: bool,
 }
 
 /// JavaScript truthiness of an optional string.
@@ -71,6 +81,8 @@ pub enum Reason {
     Asking,
     Network,
     Limit,
+    /// The turn failed and a scheduled retry waited for its time.
+    Retry,
 }
 
 /// One row of the marker file. Field order is the order the TypeScript built the object in, which the file's text
@@ -136,6 +148,11 @@ pub fn derive_markers(
             Some(Reason::Running)
         } else if limited.contains(&fact.tab_id) {
             Some(Reason::Limit)
+        } else if fact.retry_armed {
+            Some(Reason::Retry)
+        } else if fact.goal_active || fact.autopilot_active {
+            // Between a goal's turns: no turn to restore, so the relaunch revives it (`background`) and resumes the goal.
+            Some(Reason::Running)
         } else {
             None
         };
@@ -154,15 +171,21 @@ pub fn derive_markers(
             peer: truthy(&fact.peer).then(|| fact.peer.clone().unwrap_or_default()),
             prompt: truthy(&fact.unsaved_prompt)
                 .then(|| fact.unsaved_prompt.clone().unwrap_or_default()),
-            background: fact.settling && reason != Reason::Network,
+            background: (fact.settling
+                || (!fact.running && (fact.goal_active || fact.autopilot_active)))
+                && reason != Reason::Network,
         });
     }
     markers
 }
 
-/// What a launch does with a marker: a turn that waited for the connection or a limit had failed, so stock retries it.
+/// What a launch does with a marker: a turn that waited for the connection, a limit or its scheduled retry had failed,
+/// so stock retries it.
 pub fn launch_action(marker: &MarkerData) -> Action {
-    if matches!(marker.reason, Reason::Network | Reason::Limit) {
+    if matches!(
+        marker.reason,
+        Reason::Network | Reason::Limit | Reason::Retry
+    ) {
         Action::Retry
     } else if marker.background {
         Action::Revive
@@ -317,6 +340,76 @@ mod tests {
         );
         assert!(reasons(&[fact(json!({"stopped": true}))], &[], &["t1"]).is_empty());
         assert!(reasons(&[fact(json!({}))], &[], &["other"]).is_empty());
+    }
+
+    /// B4 (4): a scheduled retry of a transient failure lived in the process only; its marker carries it over a relaunch.
+    #[test]
+    fn an_armed_scheduled_retry_is_kept_and_retried_after_a_limit_wait_and_before_a_goal() {
+        let mut armed = fact(json!({"goalActive": true}));
+        armed.retry_armed = true;
+        let markers = derive_markers(&[armed.clone()], &[], 500.0, &HashSet::new());
+        assert_eq!(markers[0].reason, Reason::Retry);
+        assert_eq!(launch_action(&markers[0]), Action::Retry);
+        let limited = HashSet::from(["t1".to_owned()]);
+        assert_eq!(
+            derive_markers(&[armed.clone()], &[], 500.0, &limited)[0].reason,
+            Reason::Limit
+        );
+        armed.stopped = true;
+        assert!(derive_markers(&[armed], &[], 500.0, &HashSet::new()).is_empty());
+    }
+
+    /// B4 (2): an Autopilot run's tab a relaunch restored deferred never started its omp, so the run (between cycles, in
+    /// its quota wait) waited until someone opened the tab. Its marker makes the launch start and revive it.
+    #[test]
+    fn an_active_autopilot_runs_tab_is_revived_between_its_cycles() {
+        let markers = derive_markers(
+            &[fact(json!({"autopilotActive": true}))],
+            &[],
+            500.0,
+            &HashSet::new(),
+        );
+        assert_eq!(launch_action(&markers[0]), Action::Revive);
+        assert!(
+            reasons(
+                &[fact(json!({"autopilotActive": true, "stopped": true}))],
+                &[],
+                &[]
+            )
+            .is_empty()
+        );
+    }
+
+    /// B4 (1): a goal session idle between its turns at a quit came back paused (stock pauses an active goal when its
+    /// session loads) and nothing resumed it, because only a tab with a run had a marker.
+    #[test]
+    fn an_idle_session_whose_goal_is_active_is_revived_unless_the_person_stopped_it() {
+        let markers = derive_markers(
+            &[fact(json!({"goalActive": true}))],
+            &[],
+            500.0,
+            &HashSet::new(),
+        );
+        assert_eq!(markers[0].reason, Reason::Running);
+        assert!(markers[0].background);
+        assert_eq!(launch_action(&markers[0]), Action::Revive);
+        // A goal turn under way is a turn: restored, not only revived.
+        let running = derive_markers(
+            &[fact(json!({"goalActive": true, "running": true}))],
+            &[],
+            500.0,
+            &HashSet::new(),
+        );
+        assert_eq!(launch_action(&running[0]), Action::Restore);
+        assert!(
+            reasons(
+                &[fact(json!({"goalActive": true, "stopped": true}))],
+                &[],
+                &[]
+            )
+            .is_empty()
+        );
+        assert!(reasons(&[fact(json!({"goalActive": false}))], &[], &[]).is_empty());
     }
 
     #[test]

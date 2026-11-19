@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
+import { NEXT_PROMPT_ENV } from "../../resources/gui-bridge/modes/next-prompt-contracts";
 import {
 	MODEL_REQUEST_EVENT,
 	TURN_STAGES_EVENT,
@@ -157,6 +158,9 @@ async function startOmp(provider: Provider, isolated: string, extension: string)
 		OMP_GUI_BRIDGE: address,
 		PI_STREAM_FIRST_EVENT_TIMEOUT_MS: String(FIRST_EVENT_TIMEOUT_MS),
 		[TURN_STAGES_LATE_ENV]: String(LATE_MS),
+		// The provider counts every request. After `agent_end` the bridge's next-prompt suggestion sends one of its own
+		// (smol role, no tools); on a loaded runner it lands before the count is read ("got 2", omp-latest 44516017584).
+		[NEXT_PROMPT_ENV]: JSON.stringify({ suggestions: false, inline: false }),
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) Reflect.deleteProperty(env, key);

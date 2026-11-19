@@ -46,7 +46,6 @@ const mac: PlanContext = {
 	toolsDir: "/data/tools",
 	bun: "/home/u/.bun/bin/bun",
 	omp: null,
-	ompManaged: false,
 	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
 	ompNpm: null,
 	ompVersion: "18.22.2",
@@ -61,7 +60,6 @@ const win: PlanContext = {
 	toolsDir: "C:\\Users\\First Last\\AppData\\Local\\ompdesk\\tools",
 	bun: "C:\\Users\\First Last\\.bun\\bin\\bun.exe",
 	omp: null,
-	ompManaged: false,
 	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
 	ompNpm: null,
 	ompVersion: "18.22.2",
@@ -83,20 +81,23 @@ describe("selectMethod", () => {
 		}
 	});
 
-	it("picks Bun's script, the bun global install, and omp update only for a too-old omp no package manager owns", () => {
+	it("picks Bun's script and an exact-version install for omp, npm's for an omp npm owns, never stock's update", () => {
 		expect(selectMethod("bun", missing, mac)).toBe("bun-script");
 		expect(selectMethod("bun", missing, win)).toBe("bun-script");
 		expect(selectMethod("omp", missing, mac)).toBe("bun-global");
 		expect(selectMethod("omp", { kind: "broken", detail: "x", path: "/x" }, mac)).toBe("bun-global");
-		expect(selectMethod("omp", outdated, { ...mac, omp: "/opt/checkout/bin/omp" })).toBe("omp-update");
-		// A too-old omp npm owns gets a version OMPdesk names through that npm; a missing one is still Bun's to install.
+		// Never stock `omp update` (it picks the registry's newest, whatever its major): a too-old omp of another Bun root
+		// or a checkout gets the tested omp as Bun's package.
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp" })).toBe("bun-global");
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/opt/checkout/bin/omp" })).toBe("bun-global");
+		expect(
+			selectMethod("omp", outdated, { ...win, omp: "C:\\Users\\First Last\\AppData\\Local\\other\\omp.exe" }),
+		).toBe("bun-global");
+		// A too-old or broken omp npm owns gets the tested omp through that npm; a missing one is still Bun's to install.
 		const ompNpm = { npm: "/usr/local/bin/npm", prefix: "/usr/local" };
 		expect(selectMethod("omp", outdated, { ...mac, omp: "/usr/local/bin/omp", ompNpm })).toBe("npm-global");
-		expect(selectMethod("omp", missing, { ...mac, ompNpm })).toBe("bun-global");
-		// A too-old omp Bun manages gets the package install (the tested omp); stock's update picks its own target.
-		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp", ompManaged: true })).toBe(
-			"bun-global",
-		);
+		expect(selectMethod("omp", { kind: "broken", detail: "x", path: "/x" }, { ...mac, ompNpm })).toBe("npm-global");
+		expect(selectMethod("omp", missing, mac)).toBe("bun-global");
 	});
 
 	it("upgrades a Bun older than omp's engines with `bun upgrade`, and installs it afresh without one", () => {

@@ -1,6 +1,6 @@
 # Check control
 
-Design for the owner's review, 13 Nov 2026. Evidence pass the same day. Nothing here is built. P0 is already in flight as the workflow enforcement of agent `CiQueueStructure`; this page is everything after it. Pictures use fake data (made-up repos, `example.com`, the real theme tokens and shared components), English labels, both themes.
+Design for the owner's review, 13 Nov 2026. Evidence pass the same day. Nothing here was built that day; §13 says what exists since. P0 is already in flight as the workflow enforcement of agent `CiQueueStructure`; this page is everything after it. Pictures use fake data (made-up repos, `example.com`, the real theme tokens and shared components), English labels, both themes.
 
 **One sentence.** Agents start, wait for, judge, retry and quarantine checks through one tool that sees every computer and GitHub runner as one pool. The person only watches, and is asked only when a decision is theirs.
 
@@ -216,3 +216,55 @@ Read 13 Nov 2026. Repos were cloned read-only with `git clone --depth 1` (github
 | O17 | This repo, `native/ompdesk/crates/checks/src/flaky.rs` (`CLEAR_AFTER`), `heavy.rs`, `scripts/lock-slots.ts` | n/a | Quarantine on same-digest pass and fail, cleared after 5; `ompdesk heavy status --json` |
 
 Seen as search results only, not used for a number. GitHub billing usage API (`docs.github.com/en/rest/billing/usage`).
+
+## 13. Status (2026-11-20)
+
+What exists in the repository on 20 Nov 2026, item by item. **Done** means built and pinned by a test. **Partial** names the half that exists. **Missing** names what blocks it. The local half is the `ompdesk` CLI's own commands (`native/ompdesk/crates/checks`), which need no running OMPdesk. The hub half (`ChecksHub`, the GitHub poller, the page) is not started.
+
+| Item | Status | Evidence, and what is left |
+| --- | --- | --- |
+| §3 `Pool` | Partial | `board.rs` `PoolRow` (`id`, `os`, `limit`, `running`, `queued`, `oldestWaitMs`, `lowDisk`) for this computer's heavy slots, from `heavy.rs` `Pool::status` and `Pool::oldest_wait_ms`. No GitHub pool, no other computer's pool, no `where` or `state` (one live pool needs neither) |
+| §3 `Origin` | Partial | `store.rs` `Run.session`: the tab's `OMP_GUI_SESSION_TAG` at `ompdesk check` start, none from a plain terminal (the person). No device, goal, `outside` or `foreign` |
+| §3 `Lane` | Partial | `board.rs` `RunRow.lane`: `release` for `ompdesk check --release`, else `local`. `land` and `branch` are the hub's |
+| §3 `Run`, `Job` | Partial | `store.rs` `Run` is one local run (`plan.from` is `reusedFrom`, `inputs` is `digest`). No jobs per OS, `gate` or `supersededBy` |
+| §3 `Gate`, `Policy`, `Decision`, `QueueEntry` | Missing | They belong to the hub. A local run's decision is its `Plan` (`reason`, `evidence`), printed in its log |
+| §3 `TestResult`, `TestHistory` | Partial | `runner.rs` `Record` (now with `error`, the first line of the failure, from the three reporters) and `flaky.rs` `Test` (pass and fail counts, `quarantined`, `since`, `streak` of `CLEAR_AFTER`). No `p50Ms30d` |
+| §3 `Answer` | Done, local | `board.rs` `Answer`, pinned by its tests and by `src/main/ompdesk-check.test.ts` on a real Playwright run. Differences: `blocksRelease` is a boolean (a `--release` check that is not green; there are no gate ids), no `expectedWaitMin` (needs pool throughput history), `next` never says `ask-owner` (no local decision is the owner's) |
+| §4 GitHub runs, limits, runner minutes | Missing | No `GithubPoller`. The account's macOS limit is enforced only in the workflows (P0) |
+| §4 Device slots and disk | Partial | `ompdesk checks status` and `ompdesk heavy status --json` on each computer. Not read over the paired link |
+| §4 Local runs, results, flaky state | Done | The journals (`store.rs`, `flaky.rs`), read by `checks status` and `checks wait`, never re-run |
+| §4 Who started a run | Partial | `Run.session` (above). Not AgentControl provenance |
+| §4 Release gates | Missing | No gate list. `--release` is the one local gate |
+| §5 Cancel superseded | Partial | P0: `ci.yml` `concurrency`, `queue-gate.yml` rule 2. Outside workflows nothing cancels a run |
+| §5 Release-bound first | Partial | P0: `queue-gate.yml` rule 1 (`MAC_REFS`). No lane order in OMPdesk |
+| §5 Wait when full | Partial | Local: the heavy slots' ordered queue (`heavy.rs`). No OMPdesk-side queue in front of GitHub |
+| §5 Reuse a green result | Partial | Local: by input digest (`check.rs` `decide`, `inputs.rs`). CI: same commit and inputs (`queue-gate.yml` rule 2) |
+| §5 Merge queue | Missing | P3, not started |
+| §5 Flaky tests | Partial | Local: quarantine on one digest, rerun of failures only, leaving after 5, `--release` fails on a quarantined failure (`flaky.rs`, `check.rs` `finish`). Not from GitHub runs, no slowdown alert |
+| §5 Local or runner | Partial | Only "no start under `min_free`" (`heavy.rs` `Volumes`). No placement |
+| §6 `ompdesk_checks` agent tool | Missing | Agents use the CLI twin through bash. The `check-runs` prompt section names it |
+| §6 `start` | Partial | `ompdesk check [--release] -- CMD` starts a local run and prints its decision (reused, narrowed, full, waiting for a slot) with the reason. No `purpose`, `scope`, placement or GitHub start |
+| §6 `wait` | Done, local | `ompdesk checks wait [ID]` (`board.rs` `wait`): blocks until the run ends, prints the `Answer`, exits 0 green, 1 red, 4 unknown. It follows the run's journal, costs no GitHub request, and under bash `async: true` its end wakes the session. It is not the control socket's wait, and it knows no GitHub run |
+| §6 `status` | Done, local | `ompdesk checks status` (`board.rs` `board`): the pool, every run not finished and the newest 20, each with `session` and `mine`. No `scope` argument |
+| §6 A session cancels only its own runs | Done | `check.rs` `may_cancel`: `ompdesk check cancel` from a session refuses a run of another session or of a terminal. A terminal cancels any. Pinned by the crate's test and `crates/cli/tests/check_runs.rs` |
+| §7.1 Only path | Partial | P0's gate admits macOS from `main` and `MAC_REFS` only. No admission ticket |
+| §7.2 Waiting by notification | Partial | `checks wait` and the prompt section's rule ("never poll it or read its log"). The waste guard's polling hint covers `gh run` already. The board's check row says the session is woken (§8). No server-side wait for a GitHub run |
+| §7.3 Answers carry the judgment | Done, local | `Answer` (above). `verdict` is `unknown`, never green, for a pass whose inputs changed while it ran, and for a run that was killed, stopped or cancelled |
+| §7.4 Policy decides | Partial | A local check decides what runs again. Placement does not exist |
+| §7.5 Proof, and the adoption card | Missing | The trial compares before and after P2, which needs the hub |
+| §8 Sidebar block, Checks page, phone, Pause admission, asking the person | Missing | They read the hub's stream. See "What is left" |
+| §8 Work board row | Partial | `WorkBoardSession.tsx` `CheckRow`: a release check's row ends in "release gate" (`session-board.ts` `RELEASE_CHECK`), and a check running as a background job says in its tooltip that the session is woken when the result arrives. Pinned by `WorkBoardSession.test.tsx`. Shown by the `board-strip-open` surface. No tap to a page (there is none) |
+| §9.1 Cancel only what is ours | Partial | Local: `may_cancel`. CI: the workflows' `concurrency` |
+| §9.2 No GitHub quota per session | Missing | Nothing of this tool calls GitHub. A session can still run `gh run` by hand |
+| §9.3 Never green from old data | Done, local | `board.rs` `answer`, test "a pass is green only while its results hold" |
+| §9.4 No start under `min_free`, none while paused | Partial | The disk rule is done (`heavy.rs`). There is no Pause |
+| §9.5 A quarantined failure is no pass for a release | Done | `check.rs` `finish` (`release_blocked`), and `Answer.blocksRelease` |
+| §9.6 Rerun cap | Partial | `board.rs` `RERUN_CAP`: for failures that are all known flaky, `next` says `rerun-failed` twice per input set, then `fix`, and the note carries the count. It does not shrink with test duration. `ompdesk check` reruns nothing by itself |
+| §9.7 Admission key | Not applicable yet | No key exists |
+| §10 P0 | Done | `queue-gate.yml`, called first by every workflow a session can dispatch (`ci.yml` among them) |
+| §10 P1 | Missing, except the local read | `checks status` is the pools-and-runs read for one computer. Poller, sidebar block and page are not started |
+| §10 P2 | Partial | Local `wait`, `status`, `Answer`, the prompt section and the cancel rule. Missing: the hub's `start`, the ticket, the server-side wait, Pause, the formal model |
+| §10 P3 | Missing | Not started |
+| §10 P4 | Partial | Local quarantine only |
+
+**What is left, and why it was not done here.** Everything missing depends on `ChecksHub`. §11 left its home open, and this pass decides it: the hub and its one GitHub poller live in the core process (`crates/core`), and the CLI keeps answering local pools and runs when no OMPdesk runs, which is what `board.rs` does now. The hub was not built in this pass for three reasons. The core crate, the main process's relay, the paired page's policy and the page's Playwright surfaces cannot be built or run on the memory-limited desktop this pass ran on. P2's admission needs its formal model first (§10) and an Actions secret only the owner can create. And a sidebar block fed by one computer's `checks status` would not be the pool view of §8: it would leave out GitHub's macOS limit and the other computers, the two things §1 says nobody can see today, and its tap would have no page to open. The next unit is P1 in the core: the poller, `checks.status` and `checks.watch` over the paired link, then the `sidebar-checks` and `checks-page` surfaces.

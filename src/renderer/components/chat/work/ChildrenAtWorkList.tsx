@@ -8,9 +8,9 @@ import { useLiveReview } from "../../../hooks/use-live-review";
 import { cx, formatElapsed } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useNowTick } from "../../../lib/now-tick";
-import { useTabsStore } from "../../../stores/tabs";
 import { useWorkBoardStore } from "../../../stores/work-board";
 import { Tooltip } from "../../common";
+import { openedChildOpener } from "../../layout/work-board/open-peer";
 import { childActivity, type OpenedChildRow } from "../../layout/work-board/opened-children";
 import { useChildrenAtWork } from "./ChildrenAtWork";
 import { useBoardDocked } from "./use-board-docked";
@@ -20,30 +20,30 @@ function ChildLine({ row, now }: { row: OpenedChildRow; now: number }) {
 	const title = row.title || t("workBoard.review.untitled");
 	const activity = childActivity(row) ?? (row.status === "waiting" ? t("workBoard.opened.status.waiting") : null);
 	const clock = row.status === "running" && row.since ? formatElapsed(Math.max(0, now - row.since)) : "";
+	const open = openedChildOpener(row);
+	const body = (
+		<>
+			<span aria-hidden className="omp-children-at-work-dot" data-status={row.status ?? "open"} />
+			<span className="omp-children-at-work-title">{title}</span>
+			{activity ? <span className="omp-children-at-work-step">{activity}</span> : null}
+			{clock ? <span className="omp-children-at-work-clock">{clock}</span> : null}
+		</>
+	);
+	const data = { "data-child-at-work": row.key, "data-status": row.status ?? "open" };
 	return (
 		<li>
 			<Tooltip content={[title, activity].filter(Boolean).join(" · ")} describe={false}>
-				{/* controls-ok: the omp-children-at-work-row class draws the whole control */}
-				<button
-					className="omp-children-at-work-row"
-					data-child-at-work={row.key}
-					data-status={row.status ?? "open"}
-					onClick={() => {
-						if (row.tabId) void useTabsStore.getState().applyAgentView({ tabId: row.tabId, how: "focus" });
-						else if (row.sessionPath)
-							void useTabsStore.getState().openTab({
-								sessionPath: row.sessionPath,
-								kind: "agent",
-								...(row.deviceId ? { device: row.deviceId } : {}),
-							});
-					}}
-					type="button"
-				>
-					<span aria-hidden className="omp-children-at-work-dot" data-status={row.status ?? "open"} />
-					<span className="omp-children-at-work-title">{title}</span>
-					{activity ? <span className="omp-children-at-work-step">{activity}</span> : null}
-					{clock ? <span className="omp-children-at-work-clock">{clock}</span> : null}
-				</button>
+				{open ? (
+					// controls-ok: the omp-children-at-work-row class draws the whole control
+					<button className="omp-children-at-work-row" onClick={open} type="button" {...data}>
+						{body}
+					</button>
+				) : (
+					// A paired host's child still starting: no tab here and no file yet, so nothing to open (open-peer.ts).
+					<div className="omp-children-at-work-row" {...data}>
+						{body}
+					</div>
+				)}
 			</Tooltip>
 		</li>
 	);

@@ -4,7 +4,7 @@
  */
 
 import type { AccountRotationMode, AccountRotationState } from "./account-rotation";
-import type { AgentAppEvent, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
+import type { AgentAppEvent, AgentCloseAnswer, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
 import type {
 	AiMemoryCareSummary,
 	AiMemoryDeleted,
@@ -66,6 +66,7 @@ import type {
 import type { SchedulesApi, SchedulesState } from "./schedules";
 import type { SessionListDelta, VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
+import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
 import type { GitAslrAction, GitAslrResult, SetupItemId, SetupState } from "./setup";
 import type { SidebarChange } from "./sidebar-prefs";
 import type { SidebarProjectsApi } from "./sidebar-projects";
@@ -264,6 +265,10 @@ export const IPC_COMMANDS = {
 	SESSIONS_MESSAGES: "sessions:messages",
 	/** Move a stored session (no tab holds it) to another project folder */
 	SESSIONS_MOVE: "sessions:move",
+	/** What each listed session works in: repository, HEAD, cached image (`SessionTargetQuery[]` → `SessionTargets`) */
+	SESSIONS_TARGETS: "sessions:targets",
+	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
+	SESSIONS_ARTWORK: "sessions:artwork",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -383,6 +388,8 @@ export const IPC_COMMANDS = {
 	CLOSE_TAB: "tab:close",
 	/** A paired web page says which of its tabs holds unsaved Files edits (`IpcFileEditReportPayload`); main closes a tab for an agent only while that page says it is clean. */
 	FILE_EDIT_REPORT: "tab:file-edit-report",
+	/** A window answers an agent's close (`AgentCloseAnswer`): what it did, so the agent hears the window's own reason or that it did not answer. */
+	AGENT_CLOSE_ANSWER: "tab:agent-close-answer",
 	/** Move full event forwarding to the window's active tab */
 	SET_ACTIVE_TAB: "tab:set-active",
 	/** Atomically set the focused tab and the one or two tabs receiving full event streams. */
@@ -628,6 +635,11 @@ export type RuntimeErrorSource =
 	| "gpu-fallback"
 	/** The crash-loop guard (src/main/launch-guard.ts): this launch starts in safe mode. */
 	| "launch-guard"
+	/**
+	 * Why the app ends or relaunches (src/main/quit-log.ts): who asked to quit or relaunch, the exit itself
+	 * (`details.end: true`), and at start a previous run that left no end line (killed, crashed, power lost).
+	 */
+	| "app-quit"
 	/** The pre-rename profile moved into userData (src/main/legacy-user-data.ts). */
 	| "user-data-migration"
 	/**
@@ -669,6 +681,12 @@ export type RuntimeErrorSource =
 	 * whether it was let go or the wait ran out, `details` the session file's name and the wait.
 	 */
 	| "session-owner"
+	/**
+	 * The bridge's compatibility self-check of an omp this computer runs (src/main/bridge-health.ts), one line per omp
+	 * version and launch, never per tab: `message` is `probed` (details `ompVersion`, `ok`, `unavailable` with each
+	 * capability's missing labels) or `unreachable` (the bridge never connected; details `reason`).
+	 */
+	| "bridge-health"
 	/** A goal's time-limit update that failed (src/main/sidecar-factory.ts): `message` is the error. */
 	| "goal-time-limit"
 	/**
@@ -682,6 +700,25 @@ export type RuntimeErrorSource =
 	 * `details` has the chain, the step and the bound in ms.
 	 */
 	| "chain-stall"
+	/**
+	 * A console window that opened on Windows (src/main/console-window-watch.ts): `details` is the window's class and
+	 * title, its process (`pid`, `exe`, `cmd`, `ageMs`), `ours` (it descends from OMPdesk or carries a session's tag),
+	 * `via` (the OMPdesk process that started it), `chain` (it and its ancestors) and `recent` (the processes OMPdesk
+	 * started just before, for a window another program hosts).
+	 */
+	| "console-window"
+	/**
+	 * A step that was slow (src/main/slow-steps.ts): `details.kind` is `loop` (main's thread was blocked), `ipc` (a
+	 * handler), `hub` (main waited on the core), `stock` (a stock helper request) or `tab-open` (an omp's start),
+	 * `name` which one, `ms` how long; `again` and `worstMs` count what the rate limit kept out since the line before.
+	 */
+	| "slow-step"
+	/**
+	 * A tab that has waited long without a step (src/main/turn-wait-watch.ts), again at doubling intervals: `details.on`
+	 * is what it waits on (ask, connection, limit, retry, stock-retry, resuming, background, turn), `waitedMs` how long,
+	 * `tools` the tool calls still running, and what its omp answered (`omp`, `streaming`, `queued`).
+	 */
+	| "turn-wait"
 	/**
 	 * A routine's trigger (src/main/routines): a source that could not read what it watches (GitHub through `gh`, a
 	 * path that does not exist, a branch or repository git cannot read). Told once per distinct failure; `message`
@@ -799,11 +836,33 @@ export interface UpdateAuthTestResult {
 
 /**
  * A gui-bridge compatibility problem found at sidecar startup (src/main/bridge-health.ts).
- * `features` are the bridge's feature ids (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `features` are the bridge's capability ids, one action each (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `unsupported`: a core one is among them and OMPdesk repairs omp; `unsupportedOptional`: only optional actions,
+ * reported and nothing more. The kind is the renderer's message key (`bridgeHealth.<kind>`).
  */
 export type BridgeHealthWarning =
-	| { kind: "unsupported"; ompVersion: string; features: string[] }
+	| { kind: "unsupported" | "unsupportedOptional"; ompVersion: string; features: string[] }
 	| { kind: "unavailable"; ompVersion: string; reason: string };
+
+/** One omp version's latest bridge self-check on a computer (`BRIDGE_HEALTH_GET`, `host.bridgeHealth.get`). */
+export interface BridgeHealthResult {
+	ompVersion: string;
+	/** When the check answered (ms). */
+	at: number;
+	/** Every capability is present and the bridge connected. */
+	ok: boolean;
+	/** omps of this version that run on that computer now; 0 = none any more. */
+	running: number;
+	/** Capability ids it lacks, each with the missing omp internals as `capabilities` labels them. */
+	unavailable: Array<{ feature: string; missing: string[] }>;
+	/** Why the bridge never connected; absent when it answered. */
+	unreachable?: string;
+}
+
+/** The latest result per omp version checked in this launch: running versions first, then the newest. */
+export interface BridgeHealthReport {
+	results: BridgeHealthResult[];
+}
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */
 export interface DiskFullState {
@@ -1220,6 +1279,18 @@ export interface IpcSessionsMovePayload {
 	sessionPath: string;
 	/** Absolute target project folder on the session's device. */
 	cwd: string;
+	device?: string;
+}
+
+export interface IpcSessionsTargetsPayload {
+	/** At most `SESSION_TARGET_BATCH` rows. */
+	sessions: SessionTargetQuery[];
+	device?: string;
+}
+
+export interface IpcSessionsArtworkPayload {
+	/** Repository roots (`SessionTargetRepository.root`), at most `SESSION_TARGET_BATCH`. */
+	roots: string[];
 	device?: string;
 }
 
@@ -2426,6 +2497,13 @@ export interface OmpApi {
 		/** Move a stored session to `cwd`; resolves with its new path. */
 		move(sessionPath: string, cwd: string, device?: string): Promise<string>;
 		/**
+		 * What each listed session works in (`session-target.ts`), resolved on the computer that runs it (`device`),
+		 * keyed by session file. Answers from cached facts: an image not looked up yet is left absent.
+		 */
+		targets(sessions: SessionTargetQuery[], device?: string): Promise<SessionTargets>;
+		/** Repository images by root, looked up where missing (bounded and cached there); null where none. */
+		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
+		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.
 		 */
@@ -2470,6 +2548,8 @@ export interface OmpApi {
 		reorder(tabIds: string[]): Promise<boolean>;
 		/** Say which tab's Files editor holds unsaved edits (null: none). A web page only; main closes a tab for an agent only while this says it is clean. */
 		reportFileEdits(dirtyTabId: string | null): Promise<void>;
+		/** Answer an agent's close (`AgentControlViewEvent.closeId`) with what this window did. */
+		answerAgentClose(answer: AgentCloseAnswer): Promise<void>;
 		/** The tab/window currently attached to a session file on `device` (absent = this device), if any (F-OWN). */
 		getSessionOwner(sessionPath: string, device?: string): Promise<IpcSessionOwner | null>;
 	};

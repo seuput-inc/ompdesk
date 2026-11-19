@@ -47,9 +47,12 @@ export function todoCompaction(op: unknown, phases: readonly TodoCompactPhase[])
 	return { total: tasks.length, closed, open: tasks.length - closed };
 }
 
+/** How the fold line opens; todo-drift-core counts a journaled one as a reminder by it. */
+export const COMPACT_LEAD = "Your todo list now holds";
+
 /** The line the agent reads after that call, wrapped like stock's own todo reminders. */
 export function compactTodoText(long: LongTodo): string {
 	return `<system-reminder>
-Your todo list now holds ${long.total} items, ${long.closed} of them finished: too long to read at a glance. Fold the finished items with your next todo call: one \`init\` whose first phase holds a single item summing up the finished work (e.g. "Done: review rounds 1-20, perf baseline, 6 fixes"), followed by every unfinished item (${long.open} now: pending, in progress or blocked), verbatim, in their phases. Then mark the summary item done beside your next real call, and \`block\` each item that was blocked again with its blocker as the reason, since \`init\` reopens it. Only finished items fold; an unfinished item leaves the list only when a newer item replaced it, and the summary names that replacement. Never drop an unfinished item for being old. From then on give a new request or round its own phase instead of appending to one catch-all phase, and fold a finished phase the same way before the list grows long again.
+${COMPACT_LEAD} ${long.total} items, ${long.closed} of them finished: too long to read at a glance. Fold the finished items with your next todo call: one \`init\` whose first phase holds a single item summing up the finished work (e.g. "Done: review rounds 1-20, perf baseline, 6 fixes"), followed by every unfinished item (${long.open} now: pending, in progress or blocked), verbatim, in their phases. Then mark the summary item done beside your next real call, and \`block\` each item that was blocked again with its blocker as the reason, since \`init\` reopens it. Only finished items fold; an unfinished item leaves the list only when a newer item replaced it, and the summary names that replacement. Never drop an unfinished item for being old. From then on give a new request or round its own phase instead of appending to one catch-all phase, and fold a finished phase the same way before the list grows long again.
 </system-reminder>`;
 }

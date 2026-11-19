@@ -203,7 +203,6 @@ describe("ComposerQueuePill", () => {
 		await mount([queued("s1", "steer first")], [queued("f1", long)]);
 		await openPopover();
 		expect(byLabel("Edit: steer first")).toBeDefined();
-		expect(byLabel("Move after this turn: steer first")).toBeDefined();
 		expect(byLabel("More actions: steer first")).toBeDefined();
 		const name = `${long.slice(0, 39)}…`;
 		expect(name).toHaveLength(40);
@@ -211,13 +210,13 @@ describe("ComposerQueuePill", () => {
 		expect(byLabel(`Edit: ${name}`)).toBeDefined();
 	});
 
-	it("offers Steer now as the primary action of follow-ups only", async () => {
+	it("offers Steer now on follow-ups only; a steer has no way into the follow-up lane", async () => {
 		await mount([queued("s1", "steer first")], [queued("f1", "follow later")]);
 		await openPopover();
 		const [steerRow, followRow] = Array.from(
 			document.querySelectorAll("[data-queue-row]"),
 		) as unknown as TestElement[];
-		expect(steerRow?.querySelector('[aria-label^="Steer now"]')).toBeNull();
+		expect(steerRow?.querySelector("[data-queue-primary]")).toBeNull();
 		expect(followRow?.querySelector('[aria-label^="Steer now"]')?.textContent).toBe("Steer now");
 		await click(byLabel("Steer now: follow later"));
 		expect(queueMove).toHaveBeenCalledWith("f1", Number.MAX_SAFE_INTEGER, "steering");

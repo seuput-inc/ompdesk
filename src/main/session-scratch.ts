@@ -14,7 +14,7 @@
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, normalize } from "node:path";
+import { isAbsolute, join, normalize, relative } from "node:path";
 import { z } from "zod";
 import { writeFileAtomicDeferred } from "./atomic-file";
 
@@ -52,7 +52,7 @@ export interface SessionScratchDeps {
 }
 
 /** A session file as a key: Windows names the same file in either case and with either slash. */
-function sessionKey(path: string): string {
+export function sessionKey(path: string): string {
 	const normal = normalize(path);
 	return process.platform === "win32" ? normal.toLowerCase() : normal;
 }
@@ -107,6 +107,17 @@ export class SessionScratch {
 	/** Every folder this app made, with the sessions it served. */
 	records(): ScratchRecord[] {
 		return [...this.#records.values()].map(record => ({ ...record, sessions: [...record.sessions] }));
+	}
+
+	/**
+	 * The sessions of the tab whose scratch folder `folder` is or lies in (none known: empty); null when `folder` is
+	 * outside every scratch folder.
+	 */
+	sessionsOf(folder: string): string[] | null {
+		const inside = relative(this.root, folder);
+		const tag = inside.split(/[\\/]/)[0] ?? "";
+		if (!inside || isAbsolute(inside) || !SCRATCH_TAG.test(tag)) return null;
+		return [...(this.#records.get(tag)?.sessions ?? [])];
 	}
 
 	/**

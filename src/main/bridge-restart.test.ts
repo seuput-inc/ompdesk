@@ -23,6 +23,7 @@ import {
 	shutdownMarks,
 	stoppedSubagents,
 	turnCutBehindNotes,
+	unsettledJobs,
 } from "../../resources/gui-bridge/restart-core";
 
 const exit: JournalEntry = { type: "custom", customType: "session_exit" };
@@ -128,6 +129,14 @@ describe("interruptedJobs", () => {
 			content: restartFollowUp([{ id: "bg_7", command: "x", intent: "Watch" }], [])?.content,
 		};
 		expect(interruptedJobs(replaced(bashCall("c1", "x"), started("c1", "bg_7"), named), startedAt)).toEqual([]);
+	});
+});
+
+describe("unsettledJobs", () => {
+	it("finds a job still unsettled two relaunches later, with its call, and drops it once its result arrived", () => {
+		const branch = [bashCall("c1", "make", "Build"), started("c1", "bg_1"), exit, exit, exit];
+		expect(unsettledJobs(branch)).toEqual([{ id: "bg_1", command: "make", intent: "Build", toolCallId: "c1" }]);
+		expect(unsettledJobs([...branch, delivered("bg_1")])).toEqual([]);
 	});
 });
 

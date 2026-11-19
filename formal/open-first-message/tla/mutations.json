@@ -1,0 +1,66 @@
+{
+	"checker": {
+		"kind": "tlc",
+		"config": "MC.cfg",
+		"timeoutSec": 600
+	},
+	"properties": [
+		"TypeOK",
+		"OnceAtMost",
+		"NeverLost",
+		"Arrives"
+	],
+	"waive": {
+		"TypeOK": "Shape check only: no behaviour change breaks it without also breaking a property above it."
+	},
+	"mutations": [
+		{
+			"name": "no-keep",
+			"why": "The open sends before anything is kept (v0.134.0).",
+			"file": "OpenFirstMessage.tla",
+			"search": "    /\\ kept' = IF Keep THEN [at |-> None, there |-> TRUE] ELSE kept",
+			"replace": "    /\\ kept' = kept",
+			"breaks": "NeverLost"
+		},
+		{
+			"name": "settle-on-hand",
+			"why": "The entry goes once the omp took the prompt, not once it journaled it: a quit in between loses it.",
+			"file": "OpenFirstMessage.tla",
+			"search": "    /\\ kept' = IF kept.there THEN [kept EXCEPT !.at = omp] ELSE kept",
+			"replace": "    /\\ kept' = NoEntry",
+			"breaks": "NeverLost"
+		},
+		{
+			"name": "no-instance",
+			"why": "The sweep hands the message to the omp that already holds it.",
+			"file": "OpenFirstMessage.tla",
+			"search": "IF TrackInstance /\\ kept.at = omp",
+			"replace": "IF FALSE",
+			"breaks": "OnceAtMost"
+		},
+		{
+			"name": "ignore-journal",
+			"why": "The sweep never asks the journal: a relaunch's omp gets a message the old one already journaled.",
+			"file": "OpenFirstMessage.tla",
+			"search": "    /\\ IF journaled > 0",
+			"replace": "    /\\ IF FALSE",
+			"breaks": "OnceAtMost"
+		},
+		{
+			"name": "no-lane",
+			"why": "The sweep runs while the open is still sending (no receiver lane): both hand it over.",
+			"file": "OpenFirstMessage.tla",
+			"search": "    /\\ up /\\ kept.there /\\ open # \"sending\"",
+			"replace": "    /\\ up /\\ kept.there",
+			"breaks": "OnceAtMost"
+		},
+		{
+			"name": "no-relaunch-fairness",
+			"why": "Nothing makes the app start again after a quit.",
+			"file": "OpenFirstMessage.tla",
+			"search": " /\\ WF_vars(Relaunch)",
+			"replace": "",
+			"breaks": "Arrives"
+		}
+	]
+}

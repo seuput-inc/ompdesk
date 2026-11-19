@@ -8,6 +8,7 @@ import { RefreshCcw, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { TOOLS_AUTO_UPDATE_PREF } from "../../../shared/desktop-prefs";
 import type { OmpUpdateFailure, OmpUpdateHold, OmpUpdateState } from "../../../shared/omp-update";
+import { majorOf } from "../../../shared/version";
 import { saveGuiPreference } from "../../lib/display-preferences";
 import { useT } from "../../lib/i18n";
 import { useOmpUpdateStore } from "../../stores/omp-update";
@@ -71,18 +72,24 @@ export function OmpHeldNote({ state, className = "" }: { state: OmpUpdateState; 
 }
 
 /**
- * The omp that runs is one runners have not verified against this release (a person ran `omp update` or pressed
- * Update now): said as a fact beside the tested omp, never as a warning. A host on an older OMPdesk sends no verified
- * list; its line names the tested omp whenever another one runs. A held omp's line speaks instead.
+ * The omp that runs is one runners have not verified against this release (a person's "Update now", an `omp update`
+ * in a terminal): said in full, beside a held line too, because OMPdesk keeps that omp and never moves it back, so the
+ * row is where the person learns that features may not work on it. A host on an older OMPdesk sends no verified list:
+ * its omp above the tested major is the unverified one, and any other omp than the tested one is named as a plain
+ * fact ("Tested with"), which a held line already says.
  */
 export function OmpTestedNote({ state, className = "" }: { state: OmpUpdateState; className?: string }) {
 	const t = useT();
 	if (!state.tested || state.installed === null || state.installed === state.tested) return null;
-	if (state.held && state.phase === "idle") return null;
 	if (state.verified?.includes(state.installed)) return null;
+	const installedMajor = majorOf(state.installed);
+	const testedMajor = majorOf(state.tested);
+	const unverified =
+		state.verified !== undefined || (installedMajor !== null && testedMajor !== null && installedMajor > testedMajor);
+	if (!unverified && state.held && state.phase === "idle") return null;
 	return (
 		<p className={`${className} text-sc-xs break-words text-(--sc-text-muted)`} data-testid="omp-tested">
-			{state.verified
+			{unverified
 				? t("ompUpdate.unverified", { version: state.installed, tested: state.tested })
 				: t("ompUpdate.tested", { version: state.tested })}
 		</p>

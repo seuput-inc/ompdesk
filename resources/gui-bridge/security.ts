@@ -13,13 +13,9 @@ import type { SecurityOperationSnapshot } from "@oh-my-pi/pi-coding-agent/securi
 import type { SecurityTargetRequest } from "@oh-my-pi/pi-coding-agent/security/preflight";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { SecurityScanTool } from "@oh-my-pi/pi-coding-agent/tools/security-scan";
 import { guard } from "./health";
 import { ompPrompt } from "./modes/shared";
-import { lookup } from "./omp/pi-coding-agent/config/registry";
-import { SecurityStore } from "./omp/pi-coding-agent/security/store";
-import { SecurityScanTool } from "./omp/pi-coding-agent/tools/security-scan";
-import * as vcs from "./omp/pi-natives/vcs";
-import { prompt } from "./omp/pi-utils";
 import { asRecord, requiredString } from "./params";
 import type { BridgeMethods } from "./types";
 
@@ -55,8 +51,15 @@ async function runSecurityTool(session: AgentSession, params: SecurityScanParams
 		getAgentId: () => session.getAgentId(),
 		asyncJobManager: session.asyncJobManager,
 	} satisfies Partial<ToolSession>;
+	const { SecurityScanTool } = await import("./omp/pi-coding-agent/tools/security-scan");
 	const result = await new SecurityScanTool(toolSession as ToolSession).execute("ompdesk-security", params);
 	return (result.details ?? {}) as ToolDetails;
+}
+
+/** Stock's store of the session's repository. */
+async function openStore(session: AgentSession) {
+	const { SecurityStore } = await import("./omp/pi-coding-agent/security/store");
+	return SecurityStore.openForCwd(session.sessionManager.getCwd());
 }
 
 function toolTarget(target: SecurityTargetRequest): SecurityScanParams {
@@ -160,7 +163,11 @@ function projectOperation(operation: SecurityOperationSnapshot) {
 
 async function securityDashboard(session: AgentSession) {
 	const cwd = session.sessionManager.getCwd();
-	const store = await SecurityStore.openForCwd(cwd);
+	const [store, vcs, { lookup }] = await Promise.all([
+		openStore(session),
+		import("./omp/pi-natives/vcs"),
+		import("./omp/pi-coding-agent/config/registry"),
+	]);
 	const repository = vcs.git(cwd);
 	const readBundles = async () =>
 		(await Promise.all((await store.listScans()).map(summary => store.getBundle(summary.id)))).filter(
@@ -192,7 +199,7 @@ async function securityDashboard(session: AgentSession) {
 }
 
 async function securityScan(session: AgentSession, scanId: string) {
-	const bundle = await (await SecurityStore.openForCwd(session.sessionManager.getCwd())).getBundle(scanId);
+	const bundle = await (await openStore(session)).getBundle(scanId);
 	if (!bundle) throw new Error(`Unknown security scan: ${scanId}`);
 	return { scan: projectScan(bundle), findings: bundle.findings.map(projectFinding) };
 }
@@ -212,7 +219,7 @@ async function setDisposition(session: AgentSession, params: unknown) {
 	if (!DISPOSITIONS[status]) throw new Error(`Unknown disposition: ${status}`);
 	const rationale = (asRecord(params).rationale as string | undefined)?.trim();
 	if (status !== "open" && !rationale) throw new Error(`${status} requires a rationale`);
-	const store = await SecurityStore.openForCwd(session.sessionManager.getCwd());
+	const store = await openStore(session);
 	const finding = await store.updateDisposition(scanId, findingId, {
 		status: status as SecurityFinding["disposition"]["status"],
 		...(rationale ? { rationale } : {}),
@@ -222,32 +229,45 @@ async function setDisposition(session: AgentSession, params: unknown) {
 	return projectFinding(finding);
 }
 
-export const methods: BridgeMethods = guard("security", {
-	security_dashboard: async (_params, env) => securityDashboard(env.session()),
-	security_scan: async (params, env) => securityScan(env.session(), requiredString(params, "scanId")),
-	security_start: async (params, env) =>
-		projectOperation(await startOperation(env.session(), asRecord(params).target as SecurityTargetRequest)),
-	security_cancel: async (params, env) => ({
-		cancelled:
-			(
-				await runSecurityTool(env.session(), {
-					action: "cancel",
-					operation_id: requiredString(params, "operationId"),
-				})
-			).cancelled === true,
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("security", {
+		security_dashboard: async (_params, env) => securityDashboard(env.session()),
 	}),
-	security_set_disposition: async (params, env) => setDisposition(env.session(), params),
-	security_validation_prompt: async (params, env) => {
-		const scanId = requiredString(params, "scanId");
-		const findingId = requiredString(params, "findingId");
-		const store = await SecurityStore.openForCwd(env.session().sessionManager.getCwd());
-		if (!(await store.getFinding(scanId, findingId))) throw new Error(`Unknown security finding: ${findingId}`);
-		return {
-			prompt: prompt.render(ompPrompt("security/validate-request.md"), {
-				findingUri: `security://scans/${scanId}/findings/${findingId}`,
-				scanId,
-				findingId,
-			}),
-		};
-	},
-});
+	...guard("securityScanDetail", {
+		security_scan: async (params, env) => securityScan(env.session(), requiredString(params, "scanId")),
+	}),
+	// One id for both: each is one call of stock's tool, and a scan that cannot be cancelled is not started.
+	...guard("securityRun", {
+		security_start: async (params, env) =>
+			projectOperation(await startOperation(env.session(), asRecord(params).target as SecurityTargetRequest)),
+		security_cancel: async (params, env) => ({
+			cancelled:
+				(
+					await runSecurityTool(env.session(), {
+						action: "cancel",
+						operation_id: requiredString(params, "operationId"),
+					})
+				).cancelled === true,
+		}),
+	}),
+	...guard("securityDisposition", {
+		security_set_disposition: async (params, env) => setDisposition(env.session(), params),
+	}),
+	...guard("securityValidation", {
+		security_validation_prompt: async (params, env) => {
+			const scanId = requiredString(params, "scanId");
+			const findingId = requiredString(params, "findingId");
+			const store = await openStore(env.session());
+			if (!(await store.getFinding(scanId, findingId))) throw new Error(`Unknown security finding: ${findingId}`);
+			const { prompt } = await import("./omp/pi-utils");
+			return {
+				prompt: prompt.render(ompPrompt("security/validate-request.md"), {
+					findingUri: `security://scans/${scanId}/findings/${findingId}`,
+					scanId,
+					findingId,
+				}),
+			};
+		},
+	}),
+};

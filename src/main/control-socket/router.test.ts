@@ -107,7 +107,6 @@ describe("control requests", () => {
 					method: "send",
 					session: "t1",
 					message: "hi",
-					delivery: "steer",
 					requestId: "r1",
 					wait: {},
 				}),
@@ -119,7 +118,7 @@ describe("control requests", () => {
 			expect(backend.runs[0]).toEqual({
 				caller,
 				tool: "ompdesk_session_send",
-				args: { session: "t1", message: "hi", delivery: "steer", request_id: "r1" },
+				args: { session: "t1", message: "hi", request_id: "r1" },
 			});
 
 			const done = resultOf(

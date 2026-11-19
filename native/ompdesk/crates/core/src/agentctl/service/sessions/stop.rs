@@ -1,6 +1,8 @@
 //! `ompdesk_session_stop`: `#stop`, `#stopStored`, `#personTurn`, `#abort`, `#within`, `#deleteWhenIdle`,
 //! `#journalClose`, `#dropWorktree`, `#whenGone`, `#closeTab`, `#fated`, `#rememberClosed`.
 
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -19,17 +21,33 @@ use crate::agentctl::service::text::{
     StopFlags, by_caller, cleanup_of, ids_of, label, stored_title, waits,
 };
 use crate::agentctl::service::types::{
-    ControlTab, SafeRemoval, StopArgs, StoredSession, WorktreeRef, WorktreeRemoval,
+    CloseOutcome, ControlTab, SafeRemoval, StopArgs, StoredSession, WorktreeRef, WorktreeRemoval,
 };
 use crate::agentctl::service::util::join;
 
-/// How a close of one tab ended (`TabClose`): `Kept`: the tab is still open; `Dirty`: not touched, its paired page's
-/// unsaved Files edits in it are the person's.
+/// How a close of one tab ended (`TabClose`): `Kept`: the tab is still open (main kept a page's tab it was asked to
+/// release, or a window let go of it and main still lists it); `Dirty`: not touched, its paired page's unsaved Files
+/// edits in it are the person's; `Refused`: its window answered why it keeps it; `Unanswered`: its window said
+/// nothing within the wait, so its page is not running.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabClose {
     Closed,
     Kept,
     Dirty,
+    Refused(CloseOutcome),
+    Unanswered,
+}
+
+/// The id of the next close a window is asked to make: unique across a core's restarts too, because main keeps a
+/// window's last answer while a new core starts counting (ids start from the clock).
+fn next_close_id() -> u64 {
+    static NEXT: LazyLock<AtomicU64> = LazyLock::new(|| {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64);
+        AtomicU64::new(ms * 1000)
+    });
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// What a close of one tab is told (`closeTab`'s `how`): `auto` marks the window's close as the app's own; `cleared`:
@@ -47,6 +65,56 @@ fn facts(tab: &ControlTab) -> TabCloseFacts {
         web_edits: tab.web_edits.map(|edits| edits.to_rules()),
         looked: tab.looked,
         user_touched: tab.user_touched,
+    }
+}
+
+/// What a close of a view says: the view went, the tab it viewed (another computer's window, or a paired device's
+/// tab this computer runs) stays open with its omp. `stopped`: its turn was asked to stop first.
+fn view_kept(target: &ControlTab, stopped: bool) -> String {
+    let holder = match target.device_name.as_deref().or(target.device.as_deref()) {
+        Some(computer) => format!(
+            "in a tab on {computer} (that computer's own window, or a tab it runs for another device)"
+        ),
+        None => "in a tab this computer runs for a paired device (that device's window)".to_owned(),
+    };
+    format!(
+        "{} is still open {holder}: this app only viewed that tab, so the close ended this app's view and left that tab {}. A tab another computer's window holds closes only there: ask the user to close it there; its session is saved either way.",
+        label(target),
+        if stopped {
+            "open (its turn was asked to stop)"
+        } else {
+            "and its omp running"
+        }
+    )
+}
+
+/// What a close that left `target` open says: its window's own answer, or that its window did not answer.
+fn kept_text(target: &ControlTab, outcome: TabClose, waited_ms: u64) -> String {
+    let name = label(target);
+    let saved = "its session is saved either way.";
+    match outcome {
+        TabClose::Refused(CloseOutcome::LastTab) => format!(
+            "{name} is still open: it is its window's last tab, and a window keeps its last tab. Ask the user to close it or open another tab there; {saved}"
+        ),
+        TabClose::Refused(CloseOutcome::UnsavedEdits) => format!(
+            "{name} is still open: its Files editor holds unsaved edits, so its window asked the user to save or discard them before the tab closes. Ask the user to answer that; {saved}"
+        ),
+        TabClose::Refused(CloseOutcome::InUse) => format!(
+            "{name} is still open: the user is at it in its window. Ask the user to close it; {saved}"
+        ),
+        TabClose::Refused(CloseOutcome::NotHere) => format!(
+            "{name} is still open: its window does not list that tab (it may still be adding it). Call again in a moment; {saved}"
+        ),
+        TabClose::Dirty => format!(
+            "{name} is still open: its page holds unsaved edits in the Files editor of this tab, and closing it would lose them. Ask the user to save or discard them, then close it again; {saved}"
+        ),
+        TabClose::Unanswered => format!(
+            "{name} is still open: its window did not answer the close within {} s, so its page is not running (a stuck window closes nothing and shows nothing new). Ask the user to look at that window; {saved}",
+            number(waited_ms as f64 / 1000.0)
+        ),
+        TabClose::Kept | TabClose::Refused(CloseOutcome::Closing) | TabClose::Closed => format!(
+            "{name} is still open: its window let go of the tab but the app still holds it. Ask the user to close it; {saved}"
+        ),
     }
 }
 
@@ -112,18 +180,15 @@ impl AgentControl {
         }
     }
 
-    /// `#whenGone`: resolves once the tab is out of the caller's window and its omp has exited, or after a few
-    /// seconds. The omp outlives its tab by a moment, and where it works is no folder to remove or hand on while it
-    /// does (Windows).
-    async fn when_gone(&self, caller_tab_id: &str, tab_id: &str, wait_ms: u64) {
+    /// `#whenGone`: resolves once no window of the app lists the tab and its omp has exited, or after a few seconds.
+    /// The omp outlives its tab by a moment, and where it works is no folder to remove or hand on while it does
+    /// (Windows).
+    async fn when_gone(&self, tab_id: &str, wait_ms: u64) {
         // Every snapshot main pushes is looked at, so a tab that was gone only between two pushes counts.
         let gone = self
             .host
             .wait_for(Some(wait_ms), |state| {
-                (!state
-                    .tabs(caller_tab_id)
-                    .is_some_and(|tabs| tabs.iter().any(|tab| tab.tab_id == tab_id)))
-                .then_some(())
+                (!state.tabs.iter().any(|tab| tab.tab_id == tab_id)).then_some(())
             })
             .await;
         // The window kept the tab: its omp runs on.
@@ -156,24 +221,69 @@ impl AgentControl {
                     TabClose::Kept
                 });
             }
-            TabCloseStep::AskWindow => self.host.view(caller_tab_id, tab_id, "close", how.auto),
+            TabCloseStep::AskWindow => {
+                return Ok(self.ask_window_close(caller_tab_id, tab_id, how).await);
+            }
             TabCloseStep::Release => {
                 if !self.host.release(caller_tab_id, tab_id).await? {
                     return Ok(TabClose::Kept);
                 }
             }
         }
-        self.when_gone(caller_tab_id, tab_id, how.wait_ms).await;
+        self.when_gone(tab_id, how.wait_ms).await;
+        // Read from every tab of the app, not the caller's view of them: a caller that went meanwhile (its window
+        // closed, its tab released) has no view, and that says nothing of whether the target closed.
         let still = self
             .host
             .state()
-            .tabs(caller_tab_id)
-            .is_some_and(|tabs| tabs.iter().any(|entry| entry.tab_id == tab_id));
+            .tabs
+            .iter()
+            .any(|entry| entry.tab_id == tab_id);
         Ok(if still {
             TabClose::Kept
         } else {
             TabClose::Closed
         })
+    }
+
+    /// A desktop window closes its own tab (its renderer applies the person's guards) and answers the close with
+    /// what it did. Waits until the tab is gone (then for its omp's exit) or the window answered that it keeps it;
+    /// no answer within the wait is a window whose page is not running.
+    async fn ask_window_close(&self, caller_tab_id: &str, tab_id: &str, how: CloseHow) -> TabClose {
+        let close_id = next_close_id();
+        self.host
+            .close_view(caller_tab_id, tab_id, how.auto, close_id);
+        let answer_of =
+            |state: &crate::agentctl::service::host::HostState| -> Option<Option<CloseOutcome>> {
+                let Some(tab) = state.tabs.iter().find(|entry| entry.tab_id == tab_id) else {
+                    return Some(None);
+                };
+                tab.close_answer
+                    .filter(|answer| answer.close_id == close_id)
+                    .map(|answer| Some(answer.outcome))
+            };
+        // Every snapshot main pushes is looked at, so a tab that was gone only between two pushes counts.
+        let seen = self
+            .host
+            .wait_for(Some(how.wait_ms), |state| match answer_of(state) {
+                Some(Some(CloseOutcome::Closing)) => None,
+                other => other,
+            })
+            .await;
+        match seen {
+            Some(None) => {
+                let _ = self
+                    .within(self.host.exited(tab_id), self.tuning.omp_exit_wait_ms)
+                    .await;
+                TabClose::Closed
+            }
+            Some(Some(outcome)) => TabClose::Refused(outcome),
+            None => match answer_of(&self.host.state()) {
+                Some(None) => TabClose::Closed,
+                Some(Some(_)) => TabClose::Kept,
+                None => TabClose::Unanswered,
+            },
+        }
     }
 
     /// `#personTurn`: whether the person's own typed message started the caller's current run, as its omp's bridge
@@ -388,10 +498,50 @@ impl AgentControl {
         target: &ControlTab,
         args: &StopArgs,
     ) -> R<String> {
-        self.refuse_hidden(target, caller)?;
         let own = self
             .opened_by(&self.host.state(), &caller.tab_id, tabs)
             .contains(&target.tab_id);
+        self.stop_as(caller, tabs, target, args, own).await
+    }
+
+    /// `ompdesk_session_stop` of a saved session open in a tab elsewhere, through the tab `rejoin` opened on it: this
+    /// computer's own tab on a paired host taken over again (its close ends that host's omp), or a view of a tab a
+    /// paired host's window or another device holds. A view opened only to reach the turn is left again.
+    pub(in crate::agentctl::service) async fn stop_joined(
+        &self,
+        caller: &ControlTab,
+        tabs: &[ControlTab],
+        joined: &ControlTab,
+        row: &StoredSession,
+        args: &StopArgs,
+    ) -> R<String> {
+        let own = self.own_closed(&self.host.state(), caller, &row.path, row.device.as_deref());
+        let answer = self.stop_as(caller, tabs, joined, args, own).await;
+        if joined.viewing && args.close != Some(true) {
+            let _ = self
+                .close_tab(
+                    &caller.tab_id,
+                    &joined.tab_id,
+                    CloseHow {
+                        auto: true,
+                        wait_ms: self.tuning.close_wait_ms,
+                        cleared: true,
+                    },
+                )
+                .await;
+        }
+        answer
+    }
+
+    async fn stop_as(
+        &self,
+        caller: &ControlTab,
+        tabs: &[ControlTab],
+        target: &ControlTab,
+        args: &StopArgs,
+        own: bool,
+    ) -> R<String> {
+        self.refuse_hidden(target, caller)?;
         let flags = StopFlags {
             close: args.close.unwrap_or(false),
             delete: args.delete.unwrap_or(false),
@@ -467,7 +617,10 @@ impl AgentControl {
                     return self.refuse_in_use::<()>(caller, tabs, target, flags);
                 }
                 self.delete_when_idle(caller, target).await?;
-                let fated = self.fated(target, own.then_some(caller.session_path.as_deref()).flatten());
+                let fated = self.fated(
+                    target,
+                    own.then_some(caller.session_path.as_deref()).flatten(),
+                );
                 self.fates().deleted(fated, &by_caller(caller), None);
             } else if flags.close {
                 let now = self.live(&caller.tab_id, &target.tab_id);
@@ -488,19 +641,12 @@ impl AgentControl {
                         },
                     )
                     .await?;
-                if outcome == TabClose::Kept {
-                    // Only that the tab is still there is known: the window's ask has no answer, so a window that
-                    // stopped answering (the Mac mini, 18 Nov 2026) reads the same as one that refused.
-                    return fail(format!(
-                        "{} is still open: its window did not close the tab. A window keeps its last tab and a tab with unsaved Files edits; when neither applies, the window is not answering. Ask the user to close it; its session is saved either way.",
-                        label(target)
-                    ));
+                if outcome != TabClose::Closed {
+                    return fail(kept_text(target, outcome, self.tuning.close_wait_ms));
                 }
-                if outcome == TabClose::Dirty {
-                    return fail(format!(
-                        "{} is still open: its page holds unsaved edits in the Files editor of this tab, and closing it would lose them. Ask the user to save or discard them, then close it again; its session is saved either way.",
-                        label(target)
-                    ));
+                if target.viewing {
+                    // Only this app's view went: the tab it viewed holds the session's omp and stays open there.
+                    return fail(view_kept(target, running));
                 }
                 self.remember_closed(target, own.then_some(caller), &by_caller(caller));
             }

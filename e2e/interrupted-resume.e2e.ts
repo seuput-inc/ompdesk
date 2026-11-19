@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { capture, exitApp, fixtureOmp, variants } from "./harness";
-import { survivors } from "./process-tree";
+import { corePids, survivors } from "./process-tree";
 
 type Language = "en" | "ko";
 type Theme = "light" | "dark";
@@ -66,9 +66,18 @@ async function makeProfile(language: Language, theme: Theme): Promise<Profile> {
 		PI_PROFILE: "",
 		OMP_GUI_OMP: await fixtureOmp(root),
 		OMP_GUI_TEST_SESSION_FILES: "1",
+		OMP_GUI_TEST_START_FILE: path.join(root, "start.json"),
 	});
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	return { root, desktop, agent, env };
+}
+
+/**
+ * Holds the relaunch's resumed turn (the fake omp's `holdResume`) while true, so the window shows its "continuing" row
+ * however late it mounts: on a loaded runner the turn ran before the window's first render (19 Nov 2026, Windows).
+ */
+async function holdResume(profile: Profile, hold: boolean): Promise<void> {
+	await fs.writeFile(path.join(profile.root, "start.json"), JSON.stringify({ holdResume: hold }));
 }
 
 /**
@@ -287,12 +296,13 @@ for (const language of variants(["en", "ko"] as const))
 				const sessionPath = await startLongTurn(profile, first.page);
 				// The marker is already on disk and no quit hook will run.
 				await crash(first.app, profile);
-
+				await holdResume(profile, true);
 				const second = await launch(profile, { ready: false, height: 420 });
 				current = second.app;
 				await probeResume(second.page);
 				await expect(second.page.locator("[data-resuming]")).toHaveCount(1, { timeout: 30_000 });
 				await capture(second.page, `${language}-${theme}-relaunch-resuming`);
+				await holdResume(profile, false);
 				await expectQuietContinuation(second.page, text.notice);
 				// The finished turn leaves no marker behind.
 				await expect.poll(() => markers(profile), { timeout: 15_000 }).toEqual([]);
@@ -327,10 +337,12 @@ test("@smoke a normal quit asks nothing and continues the running turn on the ne
 		current = undefined;
 		// Quitting must not have cleared what the turn was doing.
 		expect(await markers(profile)).toMatchObject([{ reason: "running" }]);
-
+		await holdResume(profile, true);
 		const second = await launch(profile, { ready: false, height: 420 });
 		current = second.app;
 		await probeResume(second.page);
+		await expect(second.page.locator("[data-resuming]")).toHaveCount(1, { timeout: 30_000 });
+		await holdResume(profile, false);
 		await expectQuietContinuation(second.page, TEXT.en.notice);
 		await expectOneSession(profile, second.page, sessionPath);
 	} finally {
@@ -507,28 +519,6 @@ test("a session idle while its background subagent works goes on when its omp di
 		await cleanup(profile);
 	}
 });
-
-/** The app's core process (`ompdesk-core`, main's child; not the setup supervisor it starts). */
-function corePids(mainPid: number): number[] {
-	if (process.platform === "win32")
-		return execFileSync(
-			"powershell.exe",
-			[
-				"-NoProfile",
-				"-Command",
-				`Get-CimInstance Win32_Process -Filter "ParentProcessId=${mainPid} AND Name='ompdesk-core.exe'" | ForEach-Object { $_.ProcessId }`,
-			],
-			{ encoding: "utf8" },
-		)
-			.split(/\s+/)
-			.filter(Boolean)
-			.map(Number);
-	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
-		.split("\n")
-		.map(line => line.trim().split(/\s+/))
-		.filter(([, ppid, command]) => Number(ppid) === mainPid && command?.endsWith("ompdesk-core") === true)
-		.map(([pid]) => Number(pid));
-}
 
 /** The `turn-resume` lines of the runtime log after the launch's own: each line's message with its details. */
 async function resumeLines(profile: Profile): Promise<Array<Record<string, unknown>>> {

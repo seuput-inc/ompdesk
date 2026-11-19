@@ -2795,6 +2795,25 @@ describe("SidecarPool background tabs", () => {
 			expect(fw.sentTo(IPC_EVENTS.TAB_STATUS).at(-1)?.data).not.toHaveProperty("awaitingConnection");
 		});
 
+		it("says when a session's goal is active, idle between its turns too, and tells the resume rules when it changes", () => {
+			const { pool, sidecars } = fakePool();
+			const fw = fakeWindow(1);
+			pool.acquire("/a", fw.win, "tab-a", "/sessions/a.jsonl");
+			const a = sidecars[0];
+			a?.emitStatus("ready");
+			const changes = vi.fn();
+			pool.onRunningChange = changes;
+			const factA = () => pool.resumeFacts().find(fact => fact.tabId === "tab-a");
+			expect(factA()?.goalActive).toBeUndefined();
+			a?.emitEvents([{ type: "goal_updated", goal: { status: "active", objective: "ship it" } }]);
+			expect(factA()).toMatchObject({ running: false, goalActive: true });
+			expect(changes).toHaveBeenCalled();
+			changes.mockClear();
+			a?.emitEvents([{ type: "goal_updated", goal: { status: "paused", objective: "ship it" } }]);
+			expect(factA()?.goalActive).toBeUndefined();
+			expect(changes).toHaveBeenCalled();
+		});
+
 		it("hands the resume rules one outcome object per finished run, however often the facts are read", () => {
 			const { pool, sidecars } = fakePool();
 			const fw = fakeWindow(1);

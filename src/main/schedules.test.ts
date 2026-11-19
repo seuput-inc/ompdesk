@@ -798,6 +798,7 @@ const prompt = await Bun.stdin.text();
 console.log("args:" + JSON.stringify(process.argv.slice(2)));
 console.log("prompt:" + prompt);
 console.log("cwd:" + process.cwd());
+console.log("credit:" + process.env.OMP_GUI_CREDIT_SPEND);
 if (prompt.includes("hang")) {
 	await Bun.write(process.env.FAKE_PID_FILE, String(process.pid));
 	setInterval(() => {}, 1000);
@@ -813,6 +814,7 @@ if (prompt.includes("hang")) {
 		log = join(dir, "run.log"),
 		extensionArgs?: string[],
 		asked: string[] = [],
+		creditSpend?: { args: string[]; env: Record<string, string> },
 	) {
 		const bin = await writeFakeOmp(dir, FAKE);
 		const omp: OmpResolution = {
@@ -832,6 +834,7 @@ if (prompt.includes("hang")) {
 						},
 					}
 				: {}),
+			...(creditSpend ? { creditSpend: () => creditSpend } : {}),
 		})(
 			{
 				...draft(dir, { prompt, model: "anthropic/claude-x", autoApprove: true }),
@@ -863,6 +866,18 @@ if (prompt.includes("hang")) {
 		expect(await readFile(files.log, "utf8")).toContain(
 			'args:["-p","-e","/app/ai-memory/omp-ext","--model","anthropic/claude-x","--yolo"]',
 		);
+	});
+
+	it("a run carries the Credit use switch and the extension that applies it, since it has no bridge", async () => {
+		const dir = await tempDir();
+		const creditSpend = { args: ["-e", "/app/gui-bridge/credit-spend-run.ts"], env: { OMP_GUI_CREDIT_SPEND: "0" } };
+		const { run, files } = await launch(dir, "x", join(dir, "run.log"), undefined, [], creditSpend);
+		await run.done;
+		const log = await readFile(files.log, "utf8");
+		expect(log).toContain(
+			'args:["-p","-e","/app/gui-bridge/credit-spend-run.ts","--model","anthropic/claude-x","--yolo"]',
+		);
+		expect(log).toContain("credit:0");
 	});
 
 	it("an unwritable log neither crashes main nor stops the run", async () => {

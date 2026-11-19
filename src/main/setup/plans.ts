@@ -162,8 +162,6 @@ export interface PlanContext {
 	/** Detected executables; null when absent. */
 	bun: string | null;
 	omp: string | null;
-	/** The detected omp is Bun's global package under `bunInstall` (`ompBunRoot`): a package install replaces it in place. */
-	ompManaged: boolean;
 	/** What a Bun package install of omp names (`ompInstallSpecs`): the tested omp for setup's own install, an update's target for an update. */
 	ompSpecs: readonly string[];
 	/** The npm install that owns the detected omp (`ompNpmOwner`); null for an omp Bun manages and for any other. */
@@ -218,7 +216,7 @@ export interface InstallPlan {
 
 /**
  * How `item` installs here, or null when nothing can install it automatically. omp is always installed at a version
- * OMPdesk names (`bun-global`, `npm-global`) wherever a package manager owns it; see the `omp` case for the rest.
+ * OMPdesk names (`bun-global`, `npm-global`); machine setup never runs stock `omp update`.
  */
 export function selectMethod(item: SetupItemId, presence: SetupPresence, ctx: PlanContext): SetupMethod | null {
 	if (presence.kind === "present" || ctx.platform === "other") return null;
@@ -227,12 +225,11 @@ export function selectMethod(item: SetupItemId, presence: SetupPresence, ctx: Pl
 		case "bun":
 			return presence.kind === "outdated" && ctx.bun ? "bun-upgrade" : "bun-script";
 		case "omp":
-			// A missing or broken omp, and one below the minimum that this Bun root manages, gets the tested omp as a Bun
-			// package; one npm owns gets the tested omp through that npm. Stock `omp update` takes no version and picks
-			// its own target (the registry's newest, whatever its major), so it is the last resort: only for a too-old omp
-			// that neither this Bun root nor npm owns (another Bun root's, a checkout's), which nothing else can move.
-			if (presence.kind !== "outdated" || !ctx.omp || ctx.ompManaged) return "bun-global";
-			return ctx.ompNpm ? "npm-global" : "omp-update";
+			// The tested omp, always at that exact version: through npm for an omp npm owns, else as Bun's package, also for a
+			// too-old omp of another Bun root. Stock `omp update` picks its own target, the registry's newest whatever its
+			// major, and its launcher repair can leave a compiled omp, so setup never runs it. After a Bun install the
+			// lookup runs Bun's omp past the too-old one (`resolveOmpAmong`).
+			return ctx.ompNpm ? "npm-global" : "bun-global";
 		case "git":
 			return mac ? "xcode-select" : "portable-git";
 		case "gh":

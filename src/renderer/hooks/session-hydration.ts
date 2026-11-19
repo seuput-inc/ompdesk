@@ -129,6 +129,8 @@ export function applySessionState(
 	const todo = useTodoStore.getState();
 	todo.setTurnActive(state.isStreaming, todo.turnSourceKnown ? undefined : turnStartedAt);
 	useTodoStore.getState().setPhases(state.todoPhases);
+	// After the phases: a list this snapshot changed read as fresh there, and the bridge's reading is the one to show.
+	useTodoStore.getState().setDrift(state.todoDrift ?? null);
 }
 
 /**

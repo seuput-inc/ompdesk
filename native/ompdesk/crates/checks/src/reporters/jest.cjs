@@ -4,6 +4,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const CASE = { passed: "passed", failed: "failed" };
+/** A failure's first line without colour codes, for the result's `error`; undefined when nothing failed. */
+const firstLine = message =>
+	String(message ?? "")
+		.replace(/\u001b\[[0-9;]*m/g, "")
+		.split("\n")
+		.find(line => line.trim())
+		?.trim()
+		.slice(0, 300);
 
 class OmpdeskCheckReporter {
 	constructor(globalConfig) {
@@ -21,7 +29,8 @@ class OmpdeskCheckReporter {
 		const file = path.relative(this.root, abs).split(path.sep).join("/");
 		for (const a of result.testResults || []) {
 			const status = CASE[a.status] || (a.status === "pending" || a.status === "skipped" || a.status === "todo" ? "skipped" : "unknown");
-			this.write({ runner: "jest", file, abs, titles: [...(a.ancestorTitles || []), a.title], status, ms: a.duration || 0 });
+			const error = firstLine(a.failureMessages?.[0]);
+			this.write({ runner: "jest", file, abs, titles: [...(a.ancestorTitles || []), a.title], status, ms: a.duration || 0, error });
 		}
 		const ok = !result.testExecError && !result.failureMessage && (result.numFailingTests || 0) === 0;
 		const ms = result.perfStats ? result.perfStats.end - result.perfStats.start : 0;

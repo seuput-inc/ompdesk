@@ -27,13 +27,14 @@ import {
 	type SidebarProjectsState,
 } from "../shared/sidebar-projects";
 import { readProjectOrigin } from "./local/git/origin";
+import { sessionKey } from "./session-scratch";
 
 /** How long the list waits after the session index last changed before it looks for new folders. */
 export const SIDEBAR_PROJECTS_SYNC_DELAY_MS = 1_500;
 
 export type SidebarProjectsSession = Pick<
 	SessionInfo,
-	"cwd" | "kind" | "created" | "messageCount" | "title" | "firstMessage"
+	"path" | "cwd" | "kind" | "created" | "messageCount" | "title" | "firstMessage"
 >;
 
 export interface SidebarProjectsDeps {
@@ -58,6 +59,11 @@ export interface SidebarProjectsDeps {
 	autopilotRunOf?: (cwd: string) => Promise<AutopilotRun | null>;
 	/** The worktrees this computer's own tabs are bound to (folder, branch, main checkout): a run git cannot read yet. */
 	worktreeBindings?: () => ReadonlyArray<{ path: string; branch: string; baseCwd: string }>;
+	/**
+	 * The session files of the tab whose scratch folder `folder` is or lies in (`SessionScratch.sessionsOf`); null for
+	 * any other folder. A session an agent opened there (a test tab) is a row of that tab's project, never a project.
+	 */
+	scratchSessions?: (folder: string) => readonly string[] | null;
 	/** The projects the person pinned on this computer: one only sessions brought in stays while pinned. */
 	pinned?: () => readonly string[];
 	onState: (state: SidebarProjectsState) => void;
@@ -217,6 +223,7 @@ export class SidebarProjects {
 			const created = Date.parse(session.created);
 			newest.set(session.cwd, Math.max(newest.get(session.cwd) ?? 0, Number.isNaN(created) ? 0 : created));
 		}
+		const cwdOf = new Map((sessions ?? []).map(session => [sessionKey(session.path), session.cwd]));
 		const found = new Map<string, number>();
 		// A linked worktree's folder → its project: a paired device groups the host's sessions by it (git runs here). A
 		// removed worktree keeps naming its project, so a session of it a tab still holds is a row of that project there.
@@ -232,7 +239,7 @@ export class SidebarProjects {
 			const known = this.#resolved.get(cwd);
 			// A folder seen before is asked again only once it is gone: a worktree removed while this app runs (disk care,
 			// a landed child) left a project here that the next pass must not keep listing as there.
-			const project = known != null && (await exists(cwd)) ? known : await this.#projectOf(cwd);
+			const project = known != null && (await exists(cwd)) ? known : await this.#projectOfFolder(cwd, cwdOf);
 			// A gone folder may come back (a restored worktree): asked again next pass.
 			if (project !== null) this.#resolved.set(cwd, project);
 			if (project === null) {
@@ -264,7 +271,7 @@ export class SidebarProjects {
 			if (missing) continue;
 			let project = this.#resolved.get(listedPath);
 			if (project === undefined) {
-				project = await this.#projectOf(listedPath);
+				project = await this.#projectOfFolder(listedPath, cwdOf);
 				this.#resolved.set(listedPath, project);
 			}
 			if (project && project !== listedPath && project !== workspace) moved.set(listedPath, project);
@@ -295,6 +302,21 @@ export class SidebarProjects {
 			added.push({ path, addedAt: addedAt || this.#now(), by: "sessions" });
 		}
 		await this.#checkFolders(added, ended, worktrees, worktreeKinds, autopilotRuns, moved, gone.sort());
+	}
+
+	/**
+	 * A folder's project. A tab's scratch folder, or a folder inside it, belongs to the project of the session that
+	 * tab ran (the newest one known that worked outside the scratch root); with no such session it is the Work
+	 * workspace, so never a project of its own.
+	 */
+	async #projectOfFolder(cwd: string, cwdOf: ReadonlyMap<string, string>): Promise<string | null> {
+		const owners = this.#deps.scratchSessions?.(cwd);
+		if (!owners) return this.#projectOf(cwd);
+		for (const file of [...owners].reverse()) {
+			const owner = cwdOf.get(sessionKey(file));
+			if (owner && !this.#deps.scratchSessions?.(owner)) return this.#projectOf(owner);
+		}
+		return this.#deps.defaultWorkspace();
 	}
 
 	/**

@@ -110,9 +110,24 @@ function settles(entry: JournalEntry, id: string): boolean {
  * relaunch already named (`RESTART_JOBS_MESSAGE`) counts as settled.
  */
 export function interruptedJobs(branch: readonly JournalEntry[], startedAt: number): InterruptedJob[] {
-	const life = replacedLife(branch, startedAt);
-	const jobs: InterruptedJob[] = [];
-	life.forEach((entry, index) => {
+	return runningJobs(replacedLife(branch, startedAt), branch).map(({ toolCallId: _call, ...job }) => job);
+}
+
+/**
+ * Every background bash job of `branch` that never settled, whatever process started it, with the call that started
+ * it: the ones a kept runner (`kept-jobs.ts`) may still run, also across several relaunches.
+ */
+export function unsettledJobs(branch: readonly JournalEntry[]): Array<InterruptedJob & { toolCallId: string }> {
+	return runningJobs(branch, branch);
+}
+
+/** The jobs `entries` (part of `branch`) started that no later entry of `branch` settles. */
+function runningJobs(
+	entries: readonly JournalEntry[],
+	branch: readonly JournalEntry[],
+): Array<InterruptedJob & { toolCallId: string }> {
+	const jobs: Array<InterruptedJob & { toolCallId: string }> = [];
+	entries.forEach((entry, index) => {
 		const message = entry.message;
 		if (entry.type !== "message" || message?.role !== "toolResult" || !message.toolCallId) return;
 		const state = asyncState(message.details);
@@ -120,10 +135,12 @@ export function interruptedJobs(branch: readonly JournalEntry[], startedAt: numb
 		if (branch.slice(branch.indexOf(entry) + 1).some(later => settles(later, state.jobId))) return;
 		let call: { command: string; intent?: string } | undefined;
 		for (let back = index - 1; back >= 0 && call === undefined; back--) {
-			const candidate = life[back];
+			const candidate = entries[back];
 			if (candidate) call = toolCallArguments(candidate, message.toolCallId);
 		}
-		if (call !== undefined && !jobs.some(job => job.id === state.jobId)) jobs.push({ id: state.jobId, ...call });
+		if (call !== undefined && !jobs.some(job => job.id === state.jobId)) {
+			jobs.push({ id: state.jobId, ...call, toolCallId: message.toolCallId });
+		}
 	});
 	return jobs;
 }

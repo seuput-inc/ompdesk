@@ -61,8 +61,10 @@ const PROBE = `
 import { methods } from "./settings";
 const PATHS = ${JSON.stringify(PATHS)};
 const WRITES = ${JSON.stringify(WRITES)};
-export default function (pi) {
+// Awaited in the factory, as index.ts does: stock builds the first session's tool set right after the factories return.
+export default async function (pi) {
  const ready = import("./thinking-default").then(module => module.applyGuiThinkingDefault(pi));
+ await ready;
  pi.on("session_start", async () => {
   try {
    await ready;
@@ -82,7 +84,7 @@ export default function (pi) {
    if (process.env.DEFAULTS_PROBE_FALLBACK === "1") {
     // The engine's startup check failed (modes/computer-use.ts): stock's own listener must reconcile the live prelude.
     const { holdBuiltinComputerPrelude } = await import("./thinking-default");
-    holdBuiltinComputerPrelude(session.settings);
+    await holdBuiltinComputerPrelude(session.settings);
     // Stock's listener recomputes in a microtask.
     await Promise.resolve();
     await Promise.resolve();

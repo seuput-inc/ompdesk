@@ -17,7 +17,7 @@ import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { CostAmount, hasCost } from "../../common";
 import { BoardRow, CappedRows, elapsedLabel, KindMark, type RowTag, SECTION_CAP } from "./board-parts";
-import { openOpenedChild } from "./open-peer";
+import { openedChildOpener } from "./open-peer";
 import { childActivity, type OpenedChildRow } from "./opened-children";
 
 /** A session this one's agent opened, as a child like a subagent: status, what it does now, how long, its branch. */
@@ -104,7 +104,7 @@ function OpenedRow({ row, now, tag }: { row: OpenedChildRow; now: number; tag?: 
 					<CostAmount className="tabular-nums" data={{ "data-board-opened-cost": true }} kinds={kinds} />
 				) : undefined
 			}
-			onClick={() => openOpenedChild(row)}
+			onClick={openedChildOpener(row)}
 			sub={
 				activity ? (
 					<span className="min-w-0 truncate" data-board-child-activity>

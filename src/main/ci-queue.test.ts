@@ -98,6 +98,7 @@ describe("every macOS job of a dispatchable workflow", () => {
 			"ci.yml:mac",
 			"flake-probe.yml:probe",
 			"shell-batch-checks.yml:keychain",
+			"shell-batch-checks.yml:mac-update-gate",
 			"shell-batch-checks.yml:move-mac",
 			"shell-batch-checks.yml:move-mac-release1",
 			"shell-batch-checks.yml:phone-webkit-mac",

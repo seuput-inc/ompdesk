@@ -59,6 +59,7 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/capability/hook": () => import("@oh-my-pi/pi-coding-agent/capability/hook"),
 	"@oh-my-pi/pi-coding-agent/capability/ssh": () => import("@oh-my-pi/pi-coding-agent/capability/ssh"),
 	"@oh-my-pi/pi-coding-agent/commands/settings": () => import("@oh-my-pi/pi-coding-agent/commands/settings"),
+	"@oh-my-pi/pi-coding-agent/commit/model-selection": () => import("@oh-my-pi/pi-coding-agent/commit/model-selection"),
 	"@oh-my-pi/pi-coding-agent/config": () => import("@oh-my-pi/pi-coding-agent/config"),
 	"@oh-my-pi/pi-coding-agent/config/all-settings": () => import("@oh-my-pi/pi-coding-agent/config/all-settings"),
 	"@oh-my-pi/pi-coding-agent/config/compaction-threshold": () =>
@@ -73,6 +74,8 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/config/settings": () => import("@oh-my-pi/pi-coding-agent/config/settings"),
 	"@oh-my-pi/pi-coding-agent/discovery": () => import("@oh-my-pi/pi-coding-agent/discovery"),
 	"@oh-my-pi/pi-coding-agent/discovery/helpers": () => import("@oh-my-pi/pi-coding-agent/discovery/helpers"),
+	"@oh-my-pi/pi-coding-agent/extensibility/extensions/runner": () =>
+		import("@oh-my-pi/pi-coding-agent/extensibility/extensions/runner"),
 	"@oh-my-pi/pi-coding-agent/export/share": () => import("@oh-my-pi/pi-coding-agent/export/share"),
 	"@oh-my-pi/pi-coding-agent/extensibility/plugins/loader": () =>
 		import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader"),
@@ -198,7 +201,9 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/tts/wav": () => import("@oh-my-pi/pi-coding-agent/tts/wav"),
 	"@oh-my-pi/pi-coding-agent/utils/atomic-file": () => import("@oh-my-pi/pi-coding-agent/utils/atomic-file"),
 	"@oh-my-pi/pi-coding-agent/utils/tool-choice": () => import("@oh-my-pi/pi-coding-agent/utils/tool-choice"),
+	"@oh-my-pi/pi-natives": () => import("@oh-my-pi/pi-natives"),
 	"@oh-my-pi/pi-natives/vcs": () => import("@oh-my-pi/pi-natives/vcs"),
+	"@oh-my-pi/pi-coding-agent/exec/shell-process": () => import("@oh-my-pi/pi-coding-agent/exec/shell-process"),
 	"@oh-my-pi/pi-tui/overlays/copy-targets": () => import("@oh-my-pi/pi-tui/overlays/copy-targets"),
 	"@oh-my-pi/pi-tui/overlays/job-tree": () => import("@oh-my-pi/pi-tui/overlays/job-tree"),
 	"@oh-my-pi/pi-tui/overlays/model-browser": () => import("@oh-my-pi/pi-tui/overlays/model-browser"),

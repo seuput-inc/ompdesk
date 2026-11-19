@@ -38,6 +38,8 @@ interface ControlSession {
 	isStreaming: boolean;
 	/** Stock `AgentSession.messages`: the live conversation, oldest first. */
 	messages: readonly unknown[];
+	/** Stock `AgentSession.agent`: the loop's peeks at the session's queues (`AgentLoopConfig`), see `interruptFor`. */
+	agent: AsidePeeks;
 	/** Stock `AgentSession.prompt`: `streamingBehavior: "aside"` queues for the next step boundary while a turn runs. */
 	prompt(
 		text: string,
@@ -103,6 +105,77 @@ interface MailMessage {
 	details?: unknown;
 }
 
+/**
+ * Stock agent-core's non-consuming peeks the tool batch polls every 250 ms (`executeToolCalls` `checkAsideInterrupts`).
+ * `hasIrcInterrupts` true is an urgent message: it ends an interruptible `wait` and raises the cooperative steering
+ * signal, on which a running `bash` or `eval` backgrounds itself; no call is killed or skipped but a not-yet-started
+ * `wait`, and a question card stays open (stock's `ask` closes only for a user steer). `hasQueuedAsides` true only ends
+ * a `wait`. Typed as functions or unset, as stock's `Agent` holds them.
+ */
+interface AsidePeeks {
+	hasIrcInterrupts?: () => boolean | Promise<boolean>;
+	hasQueuedAsides?: () => boolean | Promise<boolean>;
+}
+
+/**
+ * Urgent asides of ours stock has not handed to the model yet, by key (`urgentKey`). A mark goes at the `message_end`
+ * stock emits as it hands that message over at a step boundary, before the next model request and so before the next
+ * tool batch peeks, or at `agent_end`; never because a peek found the queue empty, which a progress report that lands
+ * after the handover but before the next peek would read as still urgent (formal/urgent-asides).
+ */
+const urgent = new Set<string>();
+const ownPeeks = new WeakSet<object>();
+
+/** Stock's message as `message_end` carries it: a report (custom `ompdesk.mail`) or a message from another session (user). */
+function urgentKey(message: unknown): string | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const record = message as { role?: unknown; customType?: unknown; details?: unknown; content?: unknown };
+	if (record.role === "custom" && record.customType === MAIL_CUSTOM_TYPE) {
+		const id = (record.details as { id?: unknown } | undefined)?.id;
+		return typeof id === "string" ? `mail:${id}` : undefined;
+	}
+	if (record.role !== "user") return undefined;
+	const text =
+		typeof record.content === "string"
+			? record.content
+			: Array.isArray(record.content)
+				? record.content
+						.filter((block): block is { type: "text"; text: string } => block?.type === "text")
+						.map(block => block.text)
+						.join("")
+				: "";
+	return `aside:${text}`;
+}
+
+/**
+ * Puts OMPdesk's peek in front of stock's `hasIrcInterrupts` on the main agent, once: it answers true also while an
+ * urgent aside of ours is pending (`urgent`) and stock's aside queue holds anything. Stock copies the peek into each
+ * run's loop config when the run starts (`Agent` `#runLoop`), so it is put there at every main run's
+ * `before_agent_start` and kept: a run already going when the first message comes still reads the plain aside.
+ */
+function watchAsides(agent: AsidePeeks | undefined): void {
+	if (!agent || typeof agent.hasQueuedAsides !== "function") return;
+	const stock = agent.hasIrcInterrupts;
+	if (stock && ownPeeks.has(stock)) return;
+	const peek = async (): Promise<boolean> =>
+		(await stock?.()) === true || (urgent.size > 0 && (await agent.hasQueuedAsides?.()) === true);
+	ownPeeks.add(peek);
+	agent.hasIrcInterrupts = peek;
+}
+
+/**
+ * Makes an aside handed to stock urgent: another session's message (`ompdesk_session_send`) or a report that asks for a
+ * turn reaches a working session at its next step even while a shell runs, where a plain aside waits for the running
+ * call or its 60 s auto-background (measured 58.6 s on omp 18.22.2, `bridge-steer-now-stock.test.ts`). A progress or
+ * note report never arms it. A report is armed before `sendMessage`'s own awaits queue it, so for that moment a quiet
+ * aside already queued can cut a shell for it; the urgent one is read at the same step.
+ */
+function interruptFor(agent: AsidePeeks | undefined, key: string): void {
+	if (!agent) return;
+	urgent.add(key);
+	watchAsides(agent);
+}
+
 /** Stock's `pi.sendMessage` (a custom message, journaled and shown per its delivery). */
 interface MailHost {
 	sendMessage(message: MailMessage, options?: { triggerTurn?: boolean; deliverAs?: "aside" }): void;
@@ -111,12 +184,44 @@ interface MailHost {
 /** The main session's `pi` (the first install; a subagent's rebinding never replaces it). */
 let mailHost: MailHost | undefined;
 
-export function install(pi: PromptSectionHost & Partial<MailHost>): void {
+/** The stock package index on the extension's `pi`: the live main session's `Agent`. */
+interface RegistryHost {
+	pi?: {
+		AgentRegistry: { global(): { get(id: string): { session?: { agent?: AsidePeeks } } | undefined } };
+		MAIN_AGENT_ID: string;
+	};
+}
+
+/** The stock events agent-control listens to besides its prompt section; `ctx.agent` names whose event it is. */
+type AgentContext = { agent: { kind: string } };
+type ControlHost = PromptSectionHost & {
+	on(event: "message_end", handler: (event: { message?: unknown }, ctx: AgentContext) => void): void;
+	on(event: "agent_end", handler: (event: unknown, ctx: AgentContext) => void): void;
+};
+
+export function install(pi: ControlHost & Partial<MailHost> & RegistryHost): void {
 	if (!mailHost && typeof pi.sendMessage === "function") mailHost = pi as MailHost;
 	// The main agent only: its own subagents are briefed by it, not by this contract.
 	registerPromptSection(pi, "ompdesk-worker", ctx =>
 		ctx.agent.kind === "main" && isWorkerSession(ctx) ? WORKER_CONTRACT : undefined,
 	);
+	pi.on("before_agent_start", (_event, ctx) => {
+		if (ctx.agent.kind === "main" && pi.pi)
+			watchAsides(pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session?.agent);
+		return undefined;
+	});
+	// The marks are the main agent's: a rebind installs these hooks on every subagent's `pi` too (index.ts), and a
+	// subagent's own messages and turn ends must leave them alone.
+	pi.on("message_end", (event, ctx) => {
+		if (ctx.agent.kind !== "main") return;
+		const key = urgentKey(event.message);
+		if (key) urgent.delete(key);
+	});
+	// A mark whose aside stock never handed over (dropped with its turn) must not make later quiet ones urgent; one
+	// still queued starts the next turn, whose first step reads it before any tool runs.
+	pi.on("agent_end", (_event, ctx) => {
+		if (ctx.agent.kind === "main") urgent.clear();
+	});
 }
 
 const EXTENSION_TYPES: Record<string, string> = {
@@ -245,14 +350,17 @@ export const methods: BridgeMethods = {
 		// Idempotent across restarts of either side: the journal is the record of what arrived, and until stock's loop
 		// takes a queued aside this process remembers it. `journaled` tells main which of the two it is: main keeps a
 		// report until the receiver's journal holds it (a killed omp loses an aside it still queued).
-		const branch = env.session().sessionManager.getBranch();
+		const session = env.session();
+		const branch = session.sessionManager.getBranch();
 		const journaled = id !== undefined && hasMailEntry(branch, id);
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
 		if (id) queuedMail.add(id);
 		const message = { customType: MAIL_CUSTOM_TYPE, content, display: true, details };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
-		const deliverAs = record.deliverAs === "aside" || env.session().isStreaming ? "aside" : undefined;
+		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;
 		const triggerTurn = record.triggerTurn === true;
+		// A report that asks for a turn (question, blocked, done, review) is read at once; progress and notes wait.
+		if (id && triggerTurn && session.isStreaming) interruptFor(session.agent, `mail:${id}`);
 		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
 		return {};
 	},
@@ -261,8 +369,9 @@ export const methods: BridgeMethods = {
 	 * (`ompdesk_session_send`), as stock's `aside` (`AgentSession.prompt`, `streamingBehavior: "aside"`). Stock hands
 	 * over every aside waiting at a step boundary together, where its steering queue hands over one steer per boundary
 	 * (`steeringMode` one-at-a-time, the default), so six messages cost six model requests; an aside sits in no queue the
-	 * person sees, cuts no tool and leaves a question card open (stock's `ask` closes only for a user steer). An idle
-	 * session gets main's plain prompt instead, which starts its turn as before. Answers once stock admitted it.
+	 * person sees, is urgent (`interruptFor`: a running shell backgrounds, no call is killed) and leaves a question card
+	 * open (stock's `ask` closes only for a user steer). An idle session gets main's plain prompt instead, which starts
+	 * its turn as before. Answers once stock admitted it.
 	 */
 	"agent_control.aside": async (params, env) => {
 		const record = (params ?? {}) as Record<string, unknown>;
@@ -282,7 +391,10 @@ export const methods: BridgeMethods = {
 				expandPromptTemplates: false,
 				throwOnDrop: true,
 				...(images.length > 0 ? { images } : {}),
-				onPromptAdmitted: () => admitted.resolve(),
+				onPromptAdmitted: () => {
+					interruptFor(session.agent, `aside:${message}`);
+					admitted.resolve();
+				},
 			})
 			.then(
 				() => admitted.resolve(),

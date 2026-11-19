@@ -61,6 +61,7 @@ vi.mock("./app-quit", () => ({
 	confirmUpdateRestart: async () => true,
 	disarmQuitWatchdog: () => {},
 	onQuitForcedExit: () => {},
+	logQuitAsked: () => {},
 	requestQuit: () => {},
 }));
 vi.mock("./hang-watchdog", () => ({ markMainStep: () => {} }));
@@ -91,6 +92,7 @@ beforeAll(() => {
 		asking: () => false,
 		planWaiting: () => false,
 		compacting: () => false,
+		opening: () => false,
 		backgroundWork: async () => NO_BACKGROUND_WORK,
 	});
 });

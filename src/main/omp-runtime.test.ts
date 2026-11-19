@@ -13,8 +13,9 @@ import {
 	ompUpdateEnv,
 	parseOmpVersion,
 	parseUpdateCheck,
-	pickOmp,
 	resolveOmp,
+	resolveOmpAmong,
+	TESTED_OMP_VERSION,
 } from "./omp-runtime";
 import { RM_TEMP, writeFakeOmp } from "./test-fake-omp";
 import { itWithFileSymlinks } from "./test-symlinks";
@@ -31,6 +32,9 @@ async function fakeOmp(versionLine: string): Promise<{ bin: string; dir: string 
 	const bin = await writeFakeOmp(dir, `console.log(${JSON.stringify(versionLine)});\n`);
 	return { bin, dir };
 }
+
+/** The PATH a fake omp's `env bun` shebang resolves on. */
+const LOOKUP_PATH = process.env.PATH ?? "";
 
 /** The first bytes of a Mach-O 64-bit executable (`MH_MAGIC_64`, little-endian on disk). */
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01]);
@@ -221,16 +225,47 @@ describe("omp lookup", () => {
 
 	it("runs the first omp that runs from its package, past a compiled one earlier in the lookup", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-pick-"));
+		const usable = await fakeOmp(`omp/${MIN_OMP_VERSION}`);
 		try {
 			const compiled = path.join(dir, "compiled-omp");
 			await fs.writeFile(compiled, compiledOmpBytes());
-			const script = path.join(dir, "script-omp");
-			await fs.writeFile(script, "#!/usr/bin/env bun\n");
-			expect(pickOmp([compiled, script])).toEqual({ bin: script, compiled });
-			expect(pickOmp([compiled])).toEqual({ bin: null, compiled });
-			expect(pickOmp([])).toEqual({ bin: null, compiled: null });
+			expect(await resolveOmpAmong([compiled, usable.bin], LOOKUP_PATH)).toMatchObject({
+				ok: true,
+				runtime: { bin: usable.bin, version: MIN_OMP_VERSION },
+			});
+			expect(await resolveOmpAmong([compiled], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "compiled", bin: compiled },
+			});
+			expect(await resolveOmpAmong([], LOOKUP_PATH)).toBeNull();
 		} finally {
 			await fs.rm(dir, RM_TEMP);
+			await fs.rm(usable.dir, RM_TEMP);
+		}
+	});
+
+	it("runs the omp Bun installed past an omp below the minimum earlier in the lookup (one neither Bun nor npm owns, which setup leaves alone)", async () => {
+		const old = await fakeOmp("omp/18.0.0");
+		const older = await fakeOmp("omp/17.9.0");
+		const tested = await fakeOmp(`omp/${TESTED_OMP_VERSION}`);
+		const broken = await fakeOmp("no version here");
+		try {
+			expect(await resolveOmpAmong([old.bin, older.bin, old.bin, tested.bin], LOOKUP_PATH)).toMatchObject({
+				ok: true,
+				runtime: { bin: tested.bin, version: TESTED_OMP_VERSION },
+			});
+			// With no usable omp behind it, the refusal is the first one's: that is the omp setup calls outdated.
+			expect(await resolveOmpAmong([old.bin, older.bin], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "too-old", version: "18.0.0", minimum: MIN_OMP_VERSION, bin: old.bin },
+			});
+			// Only a too-old omp is passed over: one that does not run ends the lookup, as before.
+			expect(await resolveOmpAmong([broken.bin, tested.bin], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "cannot-run", bin: broken.bin },
+			});
+		} finally {
+			for (const fake of [old, older, tested, broken]) await fs.rm(fake.dir, RM_TEMP);
 		}
 	});
 

@@ -510,6 +510,18 @@ impl Pool {
             disk: self.disks(),
         }
     }
+
+    /// How long the oldest live waiter has waited (its ticket's age); 0 with nobody waiting.
+    pub fn oldest_wait_ms(&self) -> u64 {
+        self.live_tickets(None)
+            .first()
+            .and_then(|(number, pid)| {
+                fs::metadata(self.dir.join("queue").join(format!("{number:020}.{pid}"))).ok()
+            })
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .map_or(0, |age| age.as_millis() as u64)
+    }
 }
 
 fn parse_ticket(name: &str) -> Option<(u64, u32)> {

@@ -1,10 +1,10 @@
 /**
- * The GPU fallback marker's rules (`<userData>/gpu-fallback.json`, wired in gpu-fallback.ts). A GPU process crash
- * in a hardware launch writes the marker with the GPU it crashed on; later launches render in software until the
- * GPU or its driver changed (a software launch records the GPU it sees) or `HARDWARE_RETRY_AFTER_MS` passed, then
- * one launch tries hardware again. That trial is recorded in the marker before it runs, so it happens once; it
- * clears the marker when it stays up, and a crash in it writes a fresh marker. Whether a crash may relaunch is
- * `gpuRelaunchDecision`'s (launch-guard-core.ts), so a trial can never start a cycle.
+ * The GPU fallback marker's rules (`<userData>/gpu-fallback.json`, wired in gpu-fallback.ts). A GPU that keeps
+ * crashing writes the marker with the GPU it crashed on; later launches render in software until the GPU or its
+ * driver changed (a software launch records the GPU it sees) or `HARDWARE_RETRY_AFTER_MS` passed, then one launch
+ * tries hardware again. That trial is recorded in the marker before it runs, so it happens once; it clears the marker
+ * when it stays up, and a crash in it writes a fresh marker. Whether a crash may relaunch is `gpuRelaunchDecision`'s
+ * (launch-guard-core.ts), so a trial can never start a cycle.
  */
 
 /** The adapter Chromium names in `app.getGPUInfo("basic").gpuDevice`. */
@@ -32,11 +32,12 @@ export interface GpuMarker {
 
 export const HARDWARE_RETRY_AFTER_MS = 7 * 24 * 60 * 60_000;
 /**
- * The crash policy of this build. 2 (4 Nov 2026): a crash in a launch up `GPU_CRASH_SETTLED_MS` writes no marker. A
- * marker without it came from a build that wrote one for every crash, a mid-run one included, so the next launch
+ * The crash policy of this build. 3 (20 Nov 2026): one GPU crash writes no marker (WebView2 restarts the GPU
+ * process and repaints); a second within 10 minutes or a crash in a hardware trial does. A marker of an older policy
+ * (2: any crash in a launch's first 5 minutes; none: every crash) was written for a single crash, so the next launch
  * tries hardware once under this policy instead of serving out the week.
  */
-export const MARKER_POLICY = 2;
+export const MARKER_POLICY = 3;
 /** SwiftShader's device, which a software launch lists beside the real adapter. */
 const SWIFTSHADER_VENDOR = 0xffff;
 

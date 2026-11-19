@@ -377,6 +377,8 @@ struct World {
     rpcs: Vec<Value>,
     events: Vec<Value>,
     notes: Vec<String>,
+    device: Option<String>,
+    answers: HashMap<String, Value>,
 }
 
 #[derive(Clone)]
@@ -417,7 +419,7 @@ impl AppPorts for Fake {
         Ok(self.world().prefs.get(key).cloned())
     }
     async fn device(&self, _caller: &str) -> Result<Option<String>, PortError> {
-        Ok(None)
+        Ok(self.world().device.clone())
     }
     async fn set_pref(&self, _caller: &str, key: &str, value: &Value) -> Result<(), PortError> {
         let mut world = self.world();
@@ -447,10 +449,9 @@ impl AppPorts for Fake {
         channel: &str,
         args: &[Value],
     ) -> Result<Value, PortError> {
-        self.world()
-            .invoked
-            .push((channel.to_string(), args.to_vec()));
-        Ok(json!([]))
+        let mut world = self.world();
+        world.invoked.push((channel.to_string(), args.to_vec()));
+        Ok(world.answers.get(channel).cloned().unwrap_or(json!([])))
     }
     fn fire(&self, _caller: &str, channel: &str, args: &[Value]) {
         self.world()
@@ -509,25 +510,25 @@ async fn a_change_is_journaled_toasted_and_undone() {
         .run(
             "tab",
             Some(&json!("settings.theme")),
-            Some(&json!({"value": "nord"})),
+            Some(&json!({"value": "github-dark"})),
         )
         .await
         .unwrap();
-    assert_eq!(said, "Theme is now nord.");
+    assert_eq!(said, "Theme is now github-dark.");
     {
         let world = fake.world();
-        assert_eq!(world.prefs["themeName"], "nord");
+        assert_eq!(world.prefs["themeName"], "github-dark");
         assert_eq!(world.prefs["theme"], "dark");
-        assert_eq!(world.notes, ["Agent changed: Theme → nord"]);
+        assert_eq!(world.notes, ["Agent changed: Theme → github-dark"]);
         assert!(world.cards.is_empty());
         assert!(
             world
                 .events
-                .contains(&json!({"kind": "pref", "key": "themeName", "value": "nord"}))
+                .contains(&json!({"kind": "pref", "key": "themeName", "value": "github-dark"}))
         );
         assert!(world.events.contains(&json!({
             "kind": "toast",
-            "message": "Agent changed: Theme → nord",
+            "message": "Agent changed: Theme → github-dark",
             "undo": {"kind": "pref", "key": "themeName", "value": "dark"}
         })));
     }
@@ -639,11 +640,11 @@ async fn an_unknown_never_or_ill_formed_call_is_refused_before_anything_runs() {
                 "light",
                 "github-light",
                 "solarized-light",
-                "sepia",
+                "gruvbox-light",
                 "hc-light",
                 "dark",
-                "nord",
-                "tokyo-night",
+                "github-dark",
+                "solarized-dark",
                 "gruvbox-dark",
                 "hc-dark"
             ]
@@ -717,6 +718,50 @@ async fn a_context_refuses_the_routes_to_the_agents_own_power() {
             "{steps}"
         );
     }
+}
+
+#[tokio::test]
+async fn bridge_health_reads_each_omp_version_of_the_callers_computer() {
+    let fake = Fake::new();
+    let control = control(&fake);
+    let (action, args) = (json!("omp.bridge_health"), json!({}));
+    let read = || control.run("tab", Some(&action), Some(&args));
+    assert_eq!(
+        read().await.unwrap(),
+        "Nothing checked yet in this launch: the check runs when an omp's bridge first connects."
+    );
+    fake.world().answers.insert(
+        "bridge-health:get".into(),
+        json!({"results": [
+            {"ompVersion": "19.0.0", "at": 1_795_000_000_000_i64, "ok": true, "running": 2, "unavailable": []},
+            {"ompVersion": "18.9.0", "at": 1_795_000_060_000_i64, "ok": false, "running": 1, "unavailable": [
+                {"feature": "abortCompaction", "missing": ["AgentSession.abortCompaction"]},
+                {"feature": "sessionTree", "missing": ["SessionManager.getTree", "SessionManager.branch"]}
+            ]},
+            {"ompVersion": "18.0.0", "at": 1_794_990_000_000_i64, "ok": false, "running": 0, "unavailable": [],
+             "unreachable": "GUI bridge did not accept a connection within 3000ms"}
+        ]}),
+    );
+    assert_eq!(
+        read().await.unwrap(),
+        "omp 19.0.0 (2 running, checked 2026-11-18T11:06:40Z): ok\n\
+         omp 18.9.0 (1 running, checked 2026-11-18T11:07:40Z): 2 actions unavailable:\n\
+         - abortCompaction: AgentSession.abortCompaction\n\
+         - sessionTree: SessionManager.getTree, SessionManager.branch\n\
+         omp 18.0.0 (no longer running, checked 2026-11-18T08:20:00Z): bridge never connected: \
+         GUI bridge did not accept a connection within 3000ms"
+    );
+    fake.world().device = Some("host-1".into());
+    read().await.unwrap();
+    let world = fake.world();
+    assert!(world.writes.is_empty() && world.rpcs.is_empty() && world.cards.is_empty());
+    let sent: Vec<&Vec<Value>> = world
+        .invoked
+        .iter()
+        .filter(|(channel, _)| channel == "bridge-health:get")
+        .map(|(_, args)| args)
+        .collect();
+    assert_eq!(sent, [&vec![], &vec![], &vec![json!("host-1")]]);
 }
 
 #[tokio::test]

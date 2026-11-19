@@ -28,6 +28,12 @@ export const MAIN_TEXT = {
 		en: "On hold for {days} day(s): it failed OMPdesk's checks, so this computer stays on omp {installed}. OMPdesk moves on by itself once a fix is out.",
 		ko: "{days}일째 보류 중이에요. OMPdesk 검사를 통과하지 못해서 이 컴퓨터는 omp {installed} 판을 그대로 써요. 고친 판이 나오면 저절로 올라가요.",
 	},
+	// A window whose page stopped answering a second time within the hour and was started again (window.ts).
+	"rendererHang.title": { en: "OMPdesk's window stopped responding again", ko: "OMPdesk 창이 또 멈췄어요" },
+	"rendererHang.body": {
+		en: "Its page was started again by itself, with its tabs and sessions. Nothing was lost.",
+		ko: "창의 화면을 자동으로 다시 띄웠어요. 탭과 세션은 그대로예요.",
+	},
 	// Tabs a lost core took that have no omp again minutes later (sidecar.ts `onRecoveryStuck`): one notice per loss.
 	"recovery.stuckTitle": { en: "Sessions did not come back", ko: "세션이 다시 열리지 않았어요" },
 	"recovery.stuckBody": {
