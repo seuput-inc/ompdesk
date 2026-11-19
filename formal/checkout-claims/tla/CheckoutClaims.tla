@@ -172,7 +172,7 @@ BridgeRetire(m) ==
     /\ UNCHANGED <<seq, inst, running, nextId, dirty, aWrote, landed, commitIds, world, restarts>> /\ UNCHANGED mainVars
     /\ UNCHANGED bVars
 
-\* @code resources/gui-bridge/modes/checkout-peers.ts:147-198 install: session_shutdown journals the claims; the next load restores them under a new instance, stamps from 1
+\* @code resources/gui-bridge/modes/checkout-peers.ts:171-224 install: session_shutdown journals the claims; the next load restores them under a new instance, stamps from 1
 Restart ==
     /\ restarts < MaxRestarts
     /\ restarts' = restarts + 1

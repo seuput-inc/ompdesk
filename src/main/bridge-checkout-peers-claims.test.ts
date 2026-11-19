@@ -458,6 +458,35 @@ describe("modes/checkout-peers.ts: the hooks and the journal", () => {
 		expect(after.files).toEqual([]);
 	});
 
+	it("writes only what changed once the set is large, nothing when nothing did, and a new load restores the set", async () => {
+		const first = await load();
+		const edit = async (name: string, id: string) => {
+			await first.fire("tool_call", { toolName: "edit", toolCallId: id, input: { path: name } }, ctx());
+			await first.fire("tool_result", { toolName: "edit", toolCallId: id, isError: false, content: [] }, ctx());
+		};
+		for (let i = 0; i < 300; i++) await edit(`src/f${i}.ts`, `a${i}`);
+		await first.fire("agent_end", {}, ctx());
+		const large = first.entries.length;
+		for (let run = 0; run < 5; run++) {
+			await edit(`src/new${run}.ts`, `n${run}`);
+			await edit("src/f7.ts", `m${run}`);
+			await first.fire("agent_end", {}, ctx());
+		}
+		await first.fire("agent_end", {}, ctx());
+		const later = first.entries.slice(large);
+		expect(later).toHaveLength(5);
+		// A whole set of 300 files is about 9 KB; each run changed two.
+		for (const entry of later) expect(JSON.stringify(entry.data).length).toBeLessThan(200);
+
+		const files = async (loaded: Awaited<ReturnType<typeof load>>) =>
+			((await loaded.methods.checkout_status({}, loaded.env as never)) as { files: string[] }).files;
+		const second = await load();
+		const branch = first.entries.map(entry => ({ type: "custom", customType: entry.type, data: entry.data }));
+		await second.fire("session_start", {}, ctx(branch));
+		expect(await files(second)).toEqual(await files(first));
+		expect(await files(second)).toHaveLength(305);
+	});
+
 	it("keeps a backgrounded bash call pending until its job's update says it ended", async () => {
 		const loaded = await load();
 		await loaded.fire(
