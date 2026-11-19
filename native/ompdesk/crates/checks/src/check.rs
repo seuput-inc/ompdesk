@@ -39,6 +39,8 @@ use crate::watch::gb;
 
 /// Set for a check's command: a check started inside it runs as its child (no second runner, no second slot).
 pub const RUN_ENV: &str = "OMPDESK_CHECK_RUN";
+/// The tag OMPdesk gives everything a session's omp starts (`src/main/session-processes.ts`): who started a run.
+const SESSION_ENV: &str = "OMP_GUI_SESSION_TAG";
 
 /// Defaults that keep a check's browsers and reports off the person's screen; a variable already set is kept.
 /// Playwright already starts Chromium and Electron headless with `--use-mock-keychain` unless a config asks for a
@@ -58,12 +60,12 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn open_store() -> io::Result<Store> {
+pub(crate) fn open_store() -> io::Result<Store> {
     Store::open(store::store_dir(&env))
 }
 
 /// A result that fails a verdict.
-fn failing(status: &str) -> bool {
+pub(crate) fn failing(status: &str) -> bool {
     !matches!(status, "passed" | "skipped" | "flaky")
 }
 
@@ -246,6 +248,7 @@ pub fn start(opts: Start) -> i32 {
         light: opts.light,
         release: opts.release,
         summary: None,
+        session: env(SESSION_ENV).filter(|tag| !tag.is_empty()),
     };
     if let Err(e) = store.create(&run) {
         eprintln!("ompdesk check: cannot record the run: {e}");
@@ -441,7 +444,7 @@ fn exit_of(run: &Run) -> i32 {
     }
 }
 
-fn find_run(store: &Store, id: Option<&str>) -> Option<Run> {
+pub(crate) fn find_run(store: &Store, id: Option<&str>) -> Option<Run> {
     match id {
         Some(id) => store.read(id).or_else(|| {
             store
@@ -1667,12 +1670,16 @@ fn finish(
     }
     let verdict = rt.store.file(&own, "verdict.txt");
     let _ = fs::write(&verdict, &text);
+    let counted_keys: BTreeSet<&str> = counted.iter().map(|(r, _)| r.key.as_str()).collect();
+    // `counted` and `error` are what `ompdesk checks wait` answers from (`board.rs`).
     let json: Vec<serde_json::Value> = records
         .iter()
         .map(|(r, o)| {
             serde_json::json!({
                 "key": r.key, "name": display_name(r), "status": r.status, "ms": r.ms,
                 "quarantined": book.quarantined(&r.key),
+                "counted": counted_keys.contains(r.key.as_str()),
+                "error": r.error,
                 "origin": if o.run == own { serde_json::Value::Null } else { serde_json::to_value(o).unwrap_or_default() },
             })
         })
