@@ -7,7 +7,7 @@
  * session row draws it 32 px, spanning the row's two lines.
  */
 import { type ReactNode, useState } from "react";
-import { hueOf } from "../../lib/device-color";
+import { autoDeviceColor } from "../../lib/device-color";
 import { cx } from "../../lib/format";
 
 export interface ProjectArtworkProps {
@@ -41,7 +41,7 @@ export function ProjectArtwork({ name, src, icon, size = 32, className }: Projec
 				className,
 			)}
 			data-project-artwork={kind}
-			data-mark-hue={kind === "letter" ? hueOf(name) : undefined}
+			data-mark-hue={kind === "letter" ? autoDeviceColor(name) : undefined}
 			style={{ width: size, height: size, fontSize: Math.round(size * 0.47) }}
 		>
 			{image ? (

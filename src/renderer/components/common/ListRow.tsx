@@ -16,7 +16,8 @@
  * cut. `secondary` is a free muted line under the title whose parts each shrink
  * or stay whole on their own (a number, an author, a branch, counts, an age);
  * `secondaryEnd` ends that line with always-visible controls (a count chip, a
- * ⋯), raised above the row's click target and never clipped by the line.
+ * ⋯), never clipped by the line; the caller raises them above the row's click
+ * target (`relative z-(--sc-z-raised)`).
  * The button is named by the title and described by the description and the
  * secondary line; `accessibleName="row"` names it by every text of the row in
  * order, for a list whose rows are found by any of their words.
@@ -44,7 +45,7 @@ export interface ListRowProps {
 	descriptionLines?: 1 | 2;
 	/** A muted one-line row of parts under the title and description; each part sets how it shrinks. */
 	secondary?: ReactNode;
-	/** Controls at the end of the second line, always shown (a family chip, the row's ⋯); needs `secondary`. */
+	/** Controls ending the second line, never clipped by it (a family chip, the row's ⋯); raised by the caller. */
 	secondaryEnd?: ReactNode;
 	/** `md` (default) or `sm`, the dense side-panel row. */
 	size?: "sm" | "md";
@@ -186,14 +187,6 @@ export function ListRow({
 			{actions}
 		</span>
 	);
-	const secondaryLine = secondary && (
-		<span
-			className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-sc-xs whitespace-nowrap text-(--sc-text-muted)"
-			id={secondaryId}
-		>
-			{secondary}
-		</span>
-	);
 	// The row's one button: its action, or with only a `tooltip` a press that opens the tooltip and does nothing else.
 	const rowButton =
 		onClick || tooltip ? (
@@ -276,17 +269,17 @@ export function ListRow({
 						{description}
 					</span>
 				)}
-				{secondaryLine &&
-					(secondaryEnd ? (
-						<span className="flex min-w-0 items-center gap-2">
-							{secondaryLine}
-							<span className="relative z-(--sc-z-raised) flex shrink-0 items-center gap-0.5">
-								{secondaryEnd}
-							</span>
+				{secondary && (
+					<span className="flex min-w-0 items-center gap-2">
+						<span
+							className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-sc-xs whitespace-nowrap text-(--sc-text-muted)"
+							id={secondaryId}
+						>
+							{secondary}
 						</span>
-					) : (
-						secondaryLine
-					))}
+						{secondaryEnd}
+					</span>
+				)}
 			</span>
 			{meta && (
 				<span

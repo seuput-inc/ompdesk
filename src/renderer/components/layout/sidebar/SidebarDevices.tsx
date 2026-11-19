@@ -107,7 +107,7 @@ import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubag
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
-import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowLine } from "./session-row-target";
+import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowEnd, SessionRowLine } from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, openedChildStatus, reviewKey } from "./sidebar-family";
 import { useHeld } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -1121,7 +1121,7 @@ function DeviceSessions({
 						/>
 					}
 					secondaryEnd={
-						<>
+						<SessionRowEnd>
 							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(familyKey)) && (
 								<SidebarSubagentsToggle
 									agents={summary?.agents}
@@ -1141,7 +1141,7 @@ function DeviceSessions({
 								size="sm"
 								tabIndex={-1}
 							/>
-						</>
+						</SessionRowEnd>
 					}
 					onClick={() => openSession(session)}
 					rowProps={{

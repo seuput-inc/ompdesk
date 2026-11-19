@@ -157,7 +157,14 @@ import { SidebarUsage } from "./SidebarUsage";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
-import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowLine, targetFromOrigin } from "./session-row-target";
+import {
+	headWords,
+	resolveRowTarget,
+	SessionRowArtwork,
+	SessionRowEnd,
+	SessionRowLine,
+	targetFromOrigin,
+} from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, isShownOpened, openedChildStatus, reviewKey } from "./sidebar-family";
 import { SidebarHoldContext, useHeld, usePointingAt } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -1826,7 +1833,7 @@ export function Sidebar() {
 						/>
 					}
 					secondaryEnd={
-						<>
+						<SessionRowEnd>
 							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) && (
 								<SidebarSubagentsToggle
 									agents={summary?.agents}
@@ -1845,7 +1852,7 @@ export function Sidebar() {
 									tabIndex={-1}
 								/>
 							)}
-						</>
+						</SessionRowEnd>
 					}
 					onClick={() => {
 						// Clicking the session already in view folds/unfolds its family rows.
