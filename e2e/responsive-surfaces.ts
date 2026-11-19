@@ -527,15 +527,12 @@ async function openSettingsDiskCare(page: Page, look: Look): Promise<void> {
 	if ((await measured.count()) === 0) await row.locator("[data-testid='disk-care-clean']").click();
 	await measured.waitFor({ state: "visible", timeout: 180_000 });
 	await row.locator("[data-testid='disk-care-clean']:not([disabled])").waitFor({ timeout: 180_000 });
-	// A pointer opens the row's (i) by resting on it, a finger by pressing it.
+	// A pointer opens the row's (i) by resting on it, a finger by tapping it. Never a mouse click on touch: its move
+	// in starts the hover timer (at once while a tooltip closed lately is warm) and the click then toggles the bubble
+	// shut (reverse parity, run 44634794678, phone).
 	const info = row.locator("[data-setting-info]");
-	await info.hover();
-	const shown = page.locator("[role='tooltip']").first();
-	const hovered = await shown.waitFor({ state: "visible", timeout: 2_000 }).then(
-		() => true,
-		() => false,
-	);
-	if (!hovered) await info.click();
+	if (touchLook(look)) await info.tap();
+	else await info.hover();
 }
 
 /**
