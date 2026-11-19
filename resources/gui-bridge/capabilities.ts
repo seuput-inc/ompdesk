@@ -93,7 +93,8 @@ export const FEATURES = {
 	todoCompact: "A todo list grown long by appends is asked to fold its finished items",
 	wasteGuards:
 		"A bash service start whose ready.log cannot match is refused; a polling call or a refused edit is told once what to do instead; a wait returns only with news",
-	quitJournal: "A quit while a tool runs journals the tool's aborted result before the process ends",
+	quitJournal:
+		"A quit lets a running command finish and journals every tool's result before the process ends; a relaunch never runs a command a second time",
 	exitDrain: "An omp that ends by itself finishes its exit cleanup first (a login refresh being saved)",
 	turnStages: "Turn stages recorded when a turn waits long for the model or ends without output (gui-runtime.jsonl)",
 	askForm: "An ask form's paragraphs, tables and pictures on its question card",
@@ -623,8 +624,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["WaitTool.prototype.execute()", "Settings.instance"],
 	},
 	/**
-	 * quit-journal.ts: the public `tool_execution_start`, `message_end` and `session_shutdown` hooks, and the
-	 * session's agent loop reached through the registry to abort it a moment before stock's dispose does.
+	 * quit-journal.ts: the public `tool_call` (`block`), `tool_execution_start`, `message_end`, `context` and
+	 * `session_shutdown` hooks with the context's read-only `sessionManager` (`getEntries`, `getLeafEntry`), and the
+	 * session's agent loop reached through the registry to abort it once its running commands finished.
 	 */
 	quitJournal: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
