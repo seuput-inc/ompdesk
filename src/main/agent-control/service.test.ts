@@ -5076,7 +5076,7 @@ describe("after a relaunch: ids, titles, and messages a busy child waits for", (
 		);
 	});
 
-	it("hands a running session a message as an aside by default, and queues a follow-up only when asked", async () => {
+	it("hands a running session a message as an aside, read at its next step", async () => {
 		// The owner's call (6 Nov 2026): an agent's instruction to a running session waited for that session's whole turn.
 		// 18 Nov 2026: as stock steers, six of them waited in the person's queue and cost a model request each.
 		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
@@ -5086,9 +5086,6 @@ describe("after a relaunch: ids, titles, and messages a busy child waits for", (
 		const now = await service.run("boss0001", T.send, { session: kid, message: "Stop at B" });
 		expect(now.text).toContain("delivered as steer (it reads it at its next step, together with every other");
 		expect(deliveries(host, kid).at(-1)).toBe("aside");
-		const later = await service.run("boss0001", T.send, { session: kid, message: "Then C", delivery: "follow_up" });
-		expect(later.text).toContain("queued as a follow-up");
-		expect(deliveries(host, kid).at(-1)).toBe("followUp");
 	});
 
 	it("gives a session whose turn just ended the prompt that starts its next, when its bridge took no aside", async () => {
@@ -5119,48 +5116,6 @@ describe("after a relaunch: ids, titles, and messages a busy child waits for", (
 		const result = await control(host).run("boss0001", T.send, { session: "work0002", message: "Look at E" });
 		expect(result.isError, result.text).toBe(false);
 		expect(deliveries(host, "work0002")).toEqual(["aside", "steer"]);
-	});
-
-	it("tells a busy child that reports of a follow-up queued for it, and steers the next one", async () => {
-		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
-		const service = control(host);
-		const opened = await service.run("boss0001", T.open, { message: "Title: part A\nDo A" });
-		const kid = /Opened session (\w+)/.exec(opened.text)?.[1] as string;
-		// The child works (its first prompt made it busy); the opener queues more work behind its turn.
-		const queued = await service.run("boss0001", T.send, {
-			session: kid,
-			message: "Also do C",
-			delivery: "follow_up",
-		});
-		expect(queued.text).toContain("queued as a follow-up");
-		// It reports done and would keep waiting in the same turn: the report must say a message waits for it.
-		const report = await service.run(kid, T.report, { kind: "done", text: "A done", dispatch: "d2" });
-		expect(report.text).toMatch(/d2/);
-		expect(report.text).toMatch(/waiting for you|waits for you/);
-		expect(report.text).toMatch(/end (this|your) turn/i);
-		// A message sent after it reported in this turn reaches it between its steps.
-		const next = await service.run("boss0001", T.send, { session: kid, message: "And D" });
-		expect(next.text).toContain("steer");
-		expect(deliveries(host, kid).at(-1)).toBe("aside");
-	});
-
-	it("says nothing about a follow-up the child already read", async () => {
-		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
-		const service = control(host);
-		const opened = await service.run("boss0001", T.open, { message: "Do A" });
-		const kid = /Opened session (\w+)/.exec(opened.text)?.[1] as string;
-		await service.run("boss0001", T.send, { session: kid, message: "Also do C", delivery: "follow_up" });
-		const tab = host.tabsById.get(kid);
-		if (tab)
-			tab.messages = [
-				{
-					role: "user",
-					content: [{ type: "text", text: prompts(host, kid).at(-1) as string }],
-					timestamp: 1,
-				} as AgentMessage,
-			];
-		const report = await service.run(kid, T.report, { kind: "done", text: "C done", dispatch: "d2" });
-		expect(report.text).toBe("Delivered.");
 	});
 });
 
@@ -5894,7 +5849,7 @@ describe("messages that outlive the omp they were handed to", () => {
 		expect(result?.text).toContain("Returned early");
 	}, 10_000);
 
-	it("hands a follow-up the child's old omp queued to its omp after a relaunch, once, ahead of the next message", async () => {
+	it("hands a message the child's old omp held to its omp after a relaunch, once, ahead of the next message", async () => {
 		const before = new FakeHost(
 			{ tabId: "boss0001", title: "Boss", sessionPath: "/s/boss.jsonl" },
 			{ tabId: "kid00002", title: "Kid", sessionPath: "/s/kid.jsonl", busy: true },
@@ -5902,15 +5857,11 @@ describe("messages that outlive the omp they were handed to", () => {
 		before.parents.set("kid00002", "boss0001");
 		before.files.sendOutbox = outboxFile();
 		before.sentMarks = async () => ({ instance: "omp-a", journaled: [] });
-		const queued = await control(before).run("boss0001", T.send, {
-			session: "kid00002",
-			message: "Also do C",
-			delivery: "follow_up",
-		});
-		expect(queued.text).toContain("queued as a follow-up");
+		const queued = await control(before).run("boss0001", T.send, { session: "kid00002", message: "Also do C" });
+		expect(queued.text).toContain("delivered as steer");
 		expect(queued.text).toContain("Dispatch d1");
 
-		// OMPdesk relaunches: the old omp is gone with its queue; the child's session is back under a new id.
+		// OMPdesk relaunches: the old omp is gone with what it held; the child's session is back under a new id.
 		const after = new FakeHost(
 			{ tabId: "boss0009", title: "Boss", sessionPath: "/s/boss.jsonl" },
 			{ tabId: "kid00009", title: "Kid", sessionPath: "/s/kid.jsonl", formerIds: ["kid00002"] },
@@ -6438,13 +6389,12 @@ describe("one id per session: a message names its sender and reaches the session
 });
 
 /**
- * 11 Nov 2026 16:01 UTC: 메인 answered "문의", the person's own session on SeuPut that it did not open, with
- * `delivery: "follow_up"` while 문의 was mid-turn. Stock held the answer in 문의's follow-up queue until that turn ended,
- * where the person saw it waiting and had to press 지금 추가 지시. A follow-up waits behind the turn only of a session
- * the sender opened (its next task); whatever reaches any other running session is read at its next step, as stock's
- * aside, which leaves a card of the person's open (a steer closes it: `bridge-agent-send-stock.test.ts`).
+ * 11 Nov 2026 16:01 UTC: 메인 answered "문의", the person's own session on SeuPut that it did not open, while 문의 was
+ * mid-turn, and asked for a follow-up. Stock held the answer in 문의's follow-up queue until that turn ended, where the
+ * person saw it waiting and had to press 지금 추가 지시. Whatever reaches a running session is read at its next step,
+ * as stock's aside, which leaves a card of the person's open (a steer closes it: `bridge-agent-send-stock.test.ts`).
  */
-describe("a message to a running session the sender did not open is read between its steps", () => {
+describe("a message to a running session is read between its steps", () => {
 	const MAIN = "01a1c4ad-72b6-75db-9140-8a896455855b";
 	const ASK = "01a1c9f4-8354-70aa-91a9-473beaf7e427";
 	const askFile = `/Users/seuput/.omp/agent/sessions/-Desktop-GitHub-yuyu-mos/2026-11-11T09-33-27-252Z_${ASK}.jsonl`;
@@ -6467,14 +6417,13 @@ describe("a message to a running session the sender did not open is read between
 		host.deviceList = [seuput];
 		return host;
 	};
-	const answer = { session: ASK, message: "결과: 재현했고 고쳤다", delivery: "follow_up" };
+	const answer = { session: ASK, message: "결과: 재현했고 고쳤다" };
 
-	it("hands a follow-up asked for a session it did not open over at its next step", async () => {
+	it("hands it over at its next step", async () => {
 		const host = world([]);
 		const result = await control(host).run("main0001", T.send, answer);
 		expect(deliveries(host, "15ca089d159bfde0")).toEqual(["aside"]);
 		expect(result.text).toContain("delivered as steer");
-		expect(result.text).not.toContain("queued as a follow-up");
 	});
 
 	it("hands it over as an aside while that session shows the person a card, which the aside leaves open", async () => {

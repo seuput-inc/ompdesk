@@ -1,5 +1,5 @@
-//! A message one session sends another (`ompdesk_session_send`) is a stock `prompt`; a busy receiver queues it in its
-//! omp's memory and journals it only when its loop takes it, so an omp that ends first loses it (`send-outbox.ts`).
+//! A message one session sends another (`ompdesk_session_send`) reaches a busy receiver as an aside, which its omp
+//! holds in memory and journals only when its loop takes it, so an omp that ends first loses it (`send-outbox.ts`).
 //! Main keeps each message, per receiver session file (and paired device), until the receiver's journal holds its
 //! marker. It remembers which omp process it handed the message to: that omp still holds it, so it is never sent there
 //! again; a different omp (a relaunch's) gets it once, in the order sent. An omp that holds it no more while idle with
@@ -29,21 +29,6 @@ use super::{
 pub const SEND_OUTBOX_MAX: usize = 200;
 pub const SEND_OUTBOX_TTL_MS: f64 = THREE_DAYS_MS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamingBehavior {
-    Steer,
-    FollowUp,
-}
-
-impl StreamingBehavior {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StreamingBehavior::Steer => "steer",
-            StreamingBehavior::FollowUp => "followUp",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboxSend {
     /// The marker the message carries: what the receiver's journal is asked for.
@@ -65,7 +50,6 @@ pub struct OutboxSend {
     pub attachments: Option<AttachedSet>,
     /// Its record of attachments was damaged: it is never delivered as text alone.
     pub attachments_corrupt: bool,
-    pub streaming_behavior: StreamingBehavior,
     /// The receiver omp it was handed to, or `tab:<tab id>`; absent: not handed to any omp yet.
     pub instance: Option<String>,
     pub at: f64,
@@ -84,7 +68,6 @@ impl OutboxSend {
         from: String,
         body: String,
         message: String,
-        streaming_behavior: StreamingBehavior,
         at: f64,
     ) -> OutboxSend {
         OutboxSend {
@@ -98,7 +81,6 @@ impl OutboxSend {
             message,
             attachments: None,
             attachments_corrupt: false,
-            streaming_behavior,
             instance: None,
             at,
             instance_last: false,
@@ -127,10 +109,8 @@ impl OutboxSend {
         if self.attachments_corrupt {
             map.insert("attachmentsCorrupt".into(), true.into());
         }
-        map.insert(
-            "streamingBehavior".into(),
-            self.streaming_behavior.as_str().into(),
-        );
+        // Every message is handed over the one way; the key stays for an earlier build reading this file.
+        map.insert("streamingBehavior".into(), "steer".into());
         if let Some(instance) = self.instance.as_ref().filter(|_| !self.instance_last) {
             map.insert("instance".into(), instance.clone().into());
         }
@@ -169,11 +149,10 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
     let from = string(fields, "from")?;
     let body = string(fields, "body")?;
     let message = string(fields, "message").filter(|message| !message.is_empty())?;
-    let streaming_behavior = match string(fields, "streamingBehavior")? {
-        "steer" => StreamingBehavior::Steer,
-        "followUp" => StreamingBehavior::FollowUp,
-        _ => return None,
-    };
+    // `followUp`: what an earlier build kept for a message asked to wait for the turn's end; it goes as every other.
+    if !matches!(string(fields, "streamingBehavior")?, "steer" | "followUp") {
+        return None;
+    }
     let at = number(fields, "at")?;
     // A record of attachments that cannot be read never reads as "none": the message would go without them.
     let (attachments, corrupt) = match read_attached(fields.get("attachments")) {
@@ -200,7 +179,6 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
         attachments,
         attachments_corrupt: corrupt
             || fields.get("attachmentsCorrupt") == Some(&Value::Bool(true)),
-        streaming_behavior,
         instance: string(fields, "instance")
             .filter(|i| !i.is_empty())
             .map(str::to_owned),

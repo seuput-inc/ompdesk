@@ -612,10 +612,16 @@ impl AgentControl {
             }
         }
         let images = self.host.stored_images_p(attached.as_ref()).await?;
+        let card_open = self
+            .host
+            .state()
+            .tabs
+            .iter()
+            .any(|tab| tab.tab_id == tab_id && !tab.asks.is_empty());
         let mut command = json!({
             "type": "prompt",
             "message": message,
-            "streamingBehavior": entry.streaming_behavior.as_str(),
+            "streamingBehavior": super::messages::plain_behavior(card_open),
         });
         if !images.is_empty() {
             command["images"] = Value::Array(images);

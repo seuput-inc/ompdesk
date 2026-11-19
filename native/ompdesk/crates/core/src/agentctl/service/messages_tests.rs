@@ -413,55 +413,47 @@ async fn a_report_or_the_person_s_prompt_ends_the_blocking_wait_too() {
 /// while the receipt said they would be read after the user answers. Stock's aside leaves the card open; where the
 /// receiver's computer does not know it, the message waits as a follow-up, never a steer.
 #[tokio::test]
-async fn a_message_to_a_session_with_an_open_card_never_closes_it_whatever_delivery_says() {
-    for (n, delivery) in [None, Some("steer"), Some("follow_up")]
-        .into_iter()
-        .enumerate()
-    {
-        for aside_known in [true, false] {
-            let mut card = busy("c");
-            card["asks"] = json!([{ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Which?", "options": ["x", "y"] } }]);
-            let (control, asked) = rig(
-                9_312 + 2 * n as u64 + u64::from(aside_known),
-                state(vec![tab("s"), card]),
-                Tuning::default(),
-                move |method, args| {
-                    if !aside_known && args["command"]["type"] == "agent_control_aside" {
-                        return Ok(
-                            json!({ "success": false, "error": "Unknown command: agent_control_aside" }),
-                        );
-                    }
-                    main_replies(method, args)
-                },
-            );
-            let mut args = json!({ "session": "c", "message": "an update" });
-            if let Some(delivery) = delivery {
-                args["delivery"] = json!(delivery);
-            }
-            let receipt = control.run("s", "ompdesk_session_send", args, None).await;
-            let kinds: Vec<Value> = asked_with(&asked, "command")
-                .into_iter()
-                .filter_map(|args| match args["command"]["type"].as_str() {
-                    Some("agent_control_aside") => Some(json!("aside")),
-                    Some("prompt") => Some(args["command"]["streamingBehavior"].clone()),
-                    _ => None,
-                })
-                .collect();
-            let expected = if aside_known {
-                vec![json!("aside")]
-            } else {
-                vec![json!("aside"), json!("followUp")]
-            };
-            assert_eq!(kinds, expected, "{delivery:?} aside known: {aside_known}");
-            assert!(
-                receipt.text.contains("that card stays open")
-                    && receipt.text.contains("after the user has answered")
-                    && !receipt.text.contains("delivered as steer"),
-                "{}",
-                receipt.text
-            );
-            control.host.port().close();
-        }
+async fn a_message_to_a_session_with_an_open_card_never_closes_it() {
+    for aside_known in [true, false] {
+        let mut card = busy("c");
+        card["asks"] = json!([{ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Which?", "options": ["x", "y"] } }]);
+        let (control, asked) = rig(
+            9_312 + u64::from(aside_known),
+            state(vec![tab("s"), card]),
+            Tuning::default(),
+            move |method, args| {
+                if !aside_known && args["command"]["type"] == "agent_control_aside" {
+                    return Ok(
+                        json!({ "success": false, "error": "Unknown command: agent_control_aside" }),
+                    );
+                }
+                main_replies(method, args)
+            },
+        );
+        let args = json!({ "session": "c", "message": "an update" });
+        let receipt = control.run("s", "ompdesk_session_send", args, None).await;
+        let kinds: Vec<Value> = asked_with(&asked, "command")
+            .into_iter()
+            .filter_map(|args| match args["command"]["type"].as_str() {
+                Some("agent_control_aside") => Some(json!("aside")),
+                Some("prompt") => Some(args["command"]["streamingBehavior"].clone()),
+                _ => None,
+            })
+            .collect();
+        let expected = if aside_known {
+            vec![json!("aside")]
+        } else {
+            vec![json!("aside"), json!("followUp")]
+        };
+        assert_eq!(kinds, expected, "aside known: {aside_known}");
+        assert!(
+            receipt.text.contains("that card stays open")
+                && receipt.text.contains("after the user has answered")
+                && !receipt.text.contains("delivered as steer"),
+            "{}",
+            receipt.text
+        );
+        control.host.port().close();
     }
 }
 
