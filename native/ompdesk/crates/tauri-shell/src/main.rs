@@ -13,6 +13,7 @@ mod preview_protocol;
 pub use native_chrome::menu;
 mod preview;
 mod preview_surface;
+mod process_failed;
 mod profile;
 mod registry;
 mod runtime_inputs;
@@ -477,6 +478,10 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         .app
         .get_webview(&label)
         .ok_or_else(|| WireError::new("gone", "created app WebView missing"))?;
+    #[cfg(windows)]
+    if let Err(error) = process_failed::watch(&webview, wc) {
+        eprintln!("[tauri-shell] ProcessFailed not watched for wc {wc}: {error}");
+    }
     let (initialized, ready) = tokio::sync::watch::channel(None);
     runtime()
         .app_initializations

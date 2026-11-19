@@ -366,29 +366,43 @@ public static class WindowPaint {
 	$share = [math]::Round(100 * $black / $samples)
 	@{
 		Painted = $printed -and $colors.Count -ge 8
+		Colors = $colors.Count
 		Text = "$width x $height, PrintWindow $printed, $($colors.Count) colors, $share% near-black"
 	}
 }
 
-# The loop a laptop hit on v0.44.0 (Electron): a GPU crash relaunched into software rendering, and crashes there
-# relaunched again, so the app opened and closed forever. The Tauri host has no such relaunch: nothing in it reports
-# a WebView2 process failure to main (`app.childProcessGone` came only from the retired CEF shell), so
-# src/main/gpu-fallback.ts never fires, and WebView2 restarts its own GPU process. What stays to prove: crashes of
-# this app's WebView2 GPU process leave the same main process up with its window, with no relaunch and no safe mode.
-# Each failure says which of the three went wrong: no GPU process of this app found, the crash request failed, or
-# the app did not survive it.
-function Assert-SurvivesGpuCrashes {
+# A WebView2 process of this app ending, on the Tauri host (open-work G12; installer-check run 44616509774 before the
+# host reported it). The GPU process: WebView2 starts a new one and repaints, so the app is never relaunched (a GPU
+# that keeps dying leaves src/main/gpu-fallback.ts's marker for the next launch; v0.44.0's relaunch loop is what a
+# relaunch did), and main's log names the crash the host reported. The renderer: WebView2 shows its own error page
+# until main reloads the app, which it does on the `render-process-gone` the host reports. Each failure says which
+# went wrong: no process of this app found, the crash request failed, the app did not survive, the window was not
+# repainted, or the host reported nothing.
+function Assert-SurvivesWebViewCrashes {
 	$main = Get-MainPids
 	if ($main.Count -ne 1) { Fail "expected one OMPdesk main process, found $($main.Count)" }
 	$main = [int] $main[0]
 	$crashed = @()
-	$paint = { param($label) $seen = Measure-WindowPaint $main "paint-$label"; Write-Host "     paint $label`: $($seen.Painted) ($($seen.Text))" }
-	try {
-		& $paint 'before'
+	$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+	$logLines = { if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() } }
+	$paint = {
+		param($label)
+		$seen = Measure-WindowPaint $main "paint-$label"
+		Write-Host "     paint $label`: $($seen.Painted) ($($seen.Text))"
+		$seen
+	}
+	# A repaint, not a kept frame: the grown area exists only if WebView2 draws again.
+	$grown = {
+		param($label)
 		[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), 200, 100)
 		Start-Sleep -Seconds 2
-		& $paint 'before-grown'
+		$seen = & $paint $label
 		[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), -200, -100)
+		$seen
+	}
+	try {
+		[void](& $paint 'before')
+		if (-not (& $grown 'before-grown').Painted) { Fail 'the window was not painted when grown before any crash: the paint check proves nothing' }
 		for ($i = 0; $i -lt 2; $i++) {
 			$gpu = @()
 			$deadline = (Get-Date).AddSeconds(30)
@@ -404,15 +418,8 @@ function Assert-SurvivesGpuCrashes {
 			try { Stop-ProcessAsCrash $gpu[0] } catch { Fail "the crash request for GPU pid $($gpu[0]) failed: $($_.Exception.Message)" }
 			Write-Host "     crashed WebView2 GPU pid $($gpu[0]) of OMPdesk $main"
 			$crashed += $gpu[0]
-			Start-Sleep -Seconds 2
-			& $paint "crash$($i + 1)-2s"
-			Start-Sleep -Seconds 4
-			& $paint "crash$($i + 1)-6s"
-			# A repaint, not a kept frame: the grown area exists only if WebView2 draws again after the crash.
-			[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), 200, 100)
-			Start-Sleep -Seconds 2
-			& $paint "crash$($i + 1)-grown"
-			[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), -200, -100)
+			Start-Sleep -Seconds 6
+			if (-not (& $grown "crash$($i + 1)-grown").Painted) { Fail "the window was not repainted after GPU crash $($i + 1)" }
 		}
 		$deadline = (Get-Date).AddSeconds(30)
 		while ((Get-Date) -lt $deadline) {
@@ -423,43 +430,41 @@ function Assert-SurvivesGpuCrashes {
 			}
 			Start-Sleep -Seconds 2
 		}
-		if (@(Get-Process -Id $main -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count -eq 0) {
-			Fail "OMPdesk $main has no window after the GPU crashes"
-		}
-		& $paint 'after-30s'
-		$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
-		$lines = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() }
-		if (@($lines | Where-Object { $_ -match 'relaunching with software rendering' }).Count -ne 0) { Fail 'a GPU crash relaunched the app' }
+		$lines = & $logLines
 		if (@($lines | Where-Object { $_ -match '"source":"launch-guard"' }).Count -ne 0) { Fail 'the app went into safe mode' }
+		$reported = @($lines | Where-Object { $_ -match '"source":"child-process"' -and $_ -match '"type":"GPU"' })
+		foreach ($line in @($lines | Where-Object { $_ -match '"source":"(child-process|gpu-fallback)"' })) { Write-Host "     log: $line" }
+		if ($reported.Count -lt $crashed.Count) { Fail "main heard of $($reported.Count) of $($crashed.Count) GPU crashes: the host did not report WebView2's ProcessFailed" }
 	} catch {
 		Show-GpuEvidence
 		throw
 	}
 	$now = @(Get-WebViewGpuPids $main)
-	Ok "OMPdesk $main stayed up with its window through $($crashed.Count) WebView2 GPU crashes ($($crashed -join ', ')); GPU now: $(if ($now.Count) { $now -join ', ' } else { 'none running' })"
-	# Evidence only (not asserted yet): what a crash of this app's WebView2 renderer leaves on screen.
+	Ok "OMPdesk $main stayed up and repainted through $($crashed.Count) WebView2 GPU crashes ($($crashed -join ', ')), each reported to main; GPU now: $(if ($now.Count) { $now -join ', ' } else { 'none running' })"
+
 	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue)
 	$browsers = @($all | Where-Object { $_.ParentProcessId -eq $main -and $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.ProcessId })
 	$renderers = @($all | Where-Object { $browsers -contains $_.ParentProcessId -and $_.CommandLine -match '--type=renderer' -and $_.CommandLine -notmatch '--extension-process' } |
 			ForEach-Object { $_.ProcessId })
-	Write-Host "     WebView2 renderers of OMPdesk $main`: $($renderers -join ', ')"
+	if ($renderers.Count -eq 0) { Fail "no WebView2 renderer of OMPdesk $main" }
 	foreach ($renderer in $renderers) {
-		try { Stop-ProcessAsCrash $renderer; Write-Host "     crashed WebView2 renderer pid $renderer" } catch { Write-Host "     could not crash renderer $renderer`: $($_.Exception.Message)" }
+		try { Stop-ProcessAsCrash $renderer } catch { Fail "the crash request for renderer pid $renderer failed: $($_.Exception.Message)" }
+		Write-Host "     crashed WebView2 renderer pid $renderer of OMPdesk $main"
 	}
-	if ($renderers.Count -gt 0) {
-		$since = 0
-		foreach ($wait in 2, 6, 20) {
-			Start-Sleep -Seconds ($wait - $since)
-			$since = $wait
-			$alive = @(Get-MainPids)
-			Write-Host "     after the renderer crash, $wait s: main $($alive -join ', ')"
-			if ($alive -contains $main) { & $paint "renderer-$($wait)s" }
-		}
-		$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
-		if (Test-Path -LiteralPath $log) {
-			Get-Content -LiteralPath $log -Tail 30 | Where-Object { $_ -match 'render|crash|gone|reload|unresponsive' } | ForEach-Object { Write-Host "     log: $_" }
-		}
+	# The app's own UI shows dozens of colors (41 to 48 on this window); WebView2's error page about 10.
+	$recovered = $null
+	$deadline = (Get-Date).AddSeconds(30)
+	while ((Get-Date) -lt $deadline -and -not $recovered) {
+		Start-Sleep -Seconds 2
+		if (@(Get-MainPids) -notcontains $main) { Fail "the app exited after its renderer crashed (main was $main)" }
+		$seen = & $paint 'renderer'
+		if ($seen.Colors -ge 30) { $recovered = $seen }
 	}
+	$reloads = @(& $logLines | Where-Object { $_ -match '"source":"renderer-process"' })
+	foreach ($line in $reloads) { Write-Host "     log: $line" }
+	if ($reloads.Count -eq 0) { Fail 'main never heard the renderer crash: the host did not report render-process-gone' }
+	if (-not $recovered) { Save-Screen 'renderer-crash'; Fail 'the window still shows no app 30 s after its renderer crashed' }
+	Ok "a renderer crash was reported to main and the app reloaded ($($recovered.Text))"
 	Stop-App
 	foreach ($file in 'gpu-fallback.json', 'launch-history.json') {
 		Remove-Item -LiteralPath (Join-Path $env:APPDATA "ompdesk\$file") -Force -ErrorAction SilentlyContinue
@@ -628,7 +633,7 @@ switch ($Mode) {
 		Save-Screen 'app-started'
 		Assert-StaysUp 60
 		Save-Screen 'app-after-60s'
-		Assert-SurvivesGpuCrashes
+		Assert-SurvivesWebViewCrashes
 		Uninstall-PerUser $entry
 	}
 	'legacy' {
