@@ -4,12 +4,18 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SidebarProjectsState } from "../shared/sidebar-projects";
 import { SidebarProjectsStateSchema } from "./remote/app-protocol";
-import { linkedWorktreeRoot, SidebarProjects, type SidebarProjectsSession } from "./sidebar-projects";
+import { SessionScratch } from "./session-scratch";
+import {
+	linkedWorktreeRoot,
+	SidebarProjects,
+	type SidebarProjectsDeps,
+	type SidebarProjectsSession,
+} from "./sidebar-projects";
 
 const WORKSPACE = "/home/me/.omp/work";
 
 function session(cwd: string, created: string, extra: Partial<SidebarProjectsSession> = {}): SidebarProjectsSession {
-	return { cwd, created, messageCount: 2, title: "t", firstMessage: "hi", ...extra };
+	return { path: `${cwd}/${created}.jsonl`, cwd, created, messageCount: 2, title: "t", firstMessage: "hi", ...extra };
 }
 
 /** Folders as git sees them: a worktree names its main checkout, a gone folder nothing. */
@@ -28,7 +34,7 @@ const LOCATIONS: Record<string, { root: string; hash: string }> = {
 	"/work/beta": { root: "/home/me/.omp/wt", hash: "7654321" },
 };
 
-function harness(stored: unknown = undefined) {
+function harness(stored: unknown = undefined, extra: Partial<SidebarProjectsDeps> = {}) {
 	let sessions: SidebarProjectsSession[] | null = [];
 	let pinned: string[] = [];
 	let saved: unknown = stored;
@@ -49,6 +55,7 @@ function harness(stored: unknown = undefined) {
 			pinned: () => pinned,
 			onState: state => pushes.push(state),
 			now: () => 5_000,
+			...extra,
 		});
 	return {
 		projects: make(),
@@ -410,5 +417,37 @@ describe("SidebarProjects", () => {
 		expect(reopened.projects.map(entry => entry.path)).toEqual([...many.slice(1), "/work/p600"]);
 		expect(reopened.removed).toHaveLength(601);
 		expect(reopened.removed).toContain("/work/p0");
+	});
+
+	it("files a session in a tab's scratch folder under the project of the session that owns the folder, never as a project", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sidebar-scratch-"));
+		const root = path.join(dir, "scratch");
+		const owned = path.join(root, "a".repeat(32));
+		const orphan = path.join(root, "b".repeat(32));
+		const file = path.join(dir, "session-scratch.json");
+		await fs.writeFile(
+			file,
+			JSON.stringify({ scratch: [{ tag: "a".repeat(32), since: 1, sessions: ["/s/child.jsonl"] }] }),
+		);
+		const scratch = new SessionScratch(file, root, { log: () => {} });
+		// An earlier pass listed the folder as a project of its own.
+		const h = harness(
+			{ projects: [{ path: owned, addedAt: 1, by: "sessions" }], removed: [] },
+			{ scratchSessions: folder => scratch.sessionsOf(folder) },
+		);
+		h.setSessions([
+			session("/home/me/.omp/wt/gui-alpha-1234567", "2026-10-01T00:00:00Z", { path: "/s/child.jsonl" }),
+			// A test tab the child opened in its scratch folder, one in a folder inside it, one whose owner is unknown.
+			session(owned, "2026-10-02T00:00:00Z"),
+			session(path.join(owned, "clone"), "2026-10-02T00:00:00Z"),
+			session(orphan, "2026-10-02T00:00:00Z"),
+		]);
+		await h.projects.sync();
+		expect(paths(h.projects)).toEqual(["/work/alpha"]);
+		expect(h.projects.state().worktrees).toMatchObject({
+			[owned]: "/work/alpha",
+			[path.join(owned, "clone")]: "/work/alpha",
+		});
+		expect(h.projects.state().worktrees[orphan]).toBeUndefined();
 	});
 });
