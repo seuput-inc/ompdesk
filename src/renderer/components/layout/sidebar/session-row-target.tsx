@@ -1,0 +1,155 @@
+/**
+ * What a session row's second line and picture say of where the session works: the repository (its picture and
+ * name) and the checkout's real HEAD, a branch, a branch with no commit yet or a detached commit. The sidebar's rows
+ * (this computer's and a paired computer's section, which the phone page draws too) and the work board resolve it the
+ * same way, from `stores/session-targets.ts` (`shared/session-target.ts`), by `resolveRowTarget`.
+ */
+import { GitBranch, GitCommitHorizontal, MessageCircle, Rocket } from "lucide-react";
+import type { ReactNode } from "react";
+import { type ProjectOrigin, type WorktreeKind, worktreeKindOf } from "../../../../shared/project-origin";
+import type { SessionArtwork, SessionTarget, SessionTargetHead } from "../../../../shared/session-target";
+import { useT } from "../../../lib/i18n";
+import { targetKey } from "../../../stores/session-targets";
+import { ProjectArtwork } from "../../common";
+
+/** The checkout's HEAD; a detached one whose commit nothing named yet has `commit` null (a worktree git listed bare). */
+export type SessionHead = SessionTargetHead | { kind: "detached"; commit: null };
+
+export interface SessionRowTarget {
+	/** The repository's name, else the folder's: the letter mark's letter and the tooltip's words. */
+	name: string;
+	/** The repository's picture or its owner's avatar (a `data:` URI); null draws the letter mark. */
+	artwork: string | null;
+	/** Null while nothing says it (no repository, git not answered). */
+	head: SessionHead | null;
+}
+
+/**
+ * A row's target: the answer of the computer that runs the session (`targets`, its picture from `artworks` by the
+ * repository's root), else `fallback` (what this view's git origins said of the folder) until that computer answers.
+ * A session whose folder is gone or unreadable keeps the folder's letter mark and no head.
+ */
+export function resolveRowTarget(
+	maps: {
+		targets: Readonly<Record<string, SessionTarget | null>>;
+		artworks: Readonly<Record<string, SessionArtwork | null>>;
+	},
+	device: string | undefined,
+	sessionPath: string,
+	fallback: SessionRowTarget,
+): SessionRowTarget {
+	const target = maps.targets[targetKey(device, sessionPath)];
+	if (target === undefined) return fallback;
+	if (target === null) return { name: fallback.name, artwork: null, head: null };
+	const root = target.repository?.root;
+	const picture = target.artwork ?? (root ? maps.artworks[targetKey(device, root)] : null);
+	return {
+		name: target.repository?.name || fallback.name,
+		artwork: picture?.src ?? null,
+		head: target.head,
+	};
+}
+
+/** A detached commit as the row writes it: its first seven characters. */
+export function shortCommit(commit: string): string {
+	return commit.slice(0, 7);
+}
+
+/**
+ * What git already told this view of a folder (`ProjectOrigin`): the project's name and, for a linked worktree, its
+ * branch (a worktree with no branch is detached). A main checkout's HEAD is not part of an origin: null.
+ */
+export function targetFromOrigin(origin: ProjectOrigin | null | undefined, folderName: string): SessionRowTarget {
+	const worktree = origin?.worktree;
+	return {
+		name: origin?.project || folderName,
+		artwork: null,
+		head: worktree
+			? worktree.branch
+				? { kind: "branch", name: worktree.branch }
+				: { kind: "detached", commit: null }
+			: null,
+	};
+}
+
+/** The head in words: what the line shows and the tooltip's whole name. */
+export function headWords(
+	t: (key: string, params?: Record<string, string | number>) => string,
+	head: SessionHead,
+): { text: string; tip: string } {
+	if (head.kind === "branch") return { text: head.name, tip: t("sidebar.row.branchTip", { branch: head.name }) };
+	if (head.kind === "unborn") return { text: head.name, tip: t("sidebar.row.unbornTip", { branch: head.name }) };
+	if (head.commit === null) {
+		const word = t("sidebar.row.detachedUnknown");
+		return { text: word, tip: word };
+	}
+	return {
+		text: t("sidebar.row.detached", { commit: shortCommit(head.commit) }),
+		tip: t("sidebar.row.detachedTip", { commit: head.commit }),
+	};
+}
+
+/**
+ * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name, which
+ * gives way to an ellipsis before anything else on the line; the whole name is its hover title. `worktree` names
+ * what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's child.
+ */
+export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktree?: WorktreeKind }) {
+	const t = useT();
+	const { text, tip } = headWords(t, head);
+	const Mark =
+		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
+	return (
+		<span
+			className="inline-flex min-w-0 flex-[0_100_auto] items-center gap-1"
+			data-session-head={head.kind}
+			data-sidebar-worktree={worktree}
+			title={tip}
+		>
+			<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />
+			<span className="min-w-0 truncate">{text}</span>
+		</span>
+	);
+}
+
+/** The picture a session row leads with, spanning its two lines; a chat (no repository) shows its glyph. */
+export function SessionRowArtwork({ target }: { target: SessionRowTarget | null }) {
+	return target ? (
+		<ProjectArtwork name={target.name} src={target.artwork} />
+	) : (
+		<ProjectArtwork
+			icon={<MessageCircle aria-hidden className="size-(--sc-icon-md)" data-sidebar-session-icon />}
+			name=""
+		/>
+	);
+}
+
+/**
+ * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age),
+ * then the checkout's branch, which gives way first when the line is short.
+ */
+export function SessionRowLine({
+	state,
+	head,
+	worktree,
+}: {
+	state: ReactNode;
+	head: SessionHead | null;
+	worktree?: WorktreeKind;
+}) {
+	return (
+		<>
+			<span className="inline-flex min-w-0 flex-[0_1_auto] items-center gap-1.5" data-sidebar-row-end>
+				{state}
+			</span>
+			{head && (
+				<>
+					<span aria-hidden className="shrink-0">
+						·
+					</span>
+					<SessionHeadLabel head={head} worktree={worktree} />
+				</>
+			)}
+		</>
+	);
+}
