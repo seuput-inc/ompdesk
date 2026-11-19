@@ -193,18 +193,12 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Message OMPdesk session",
 		description:
 			"Send a message to another open session.\n" +
-			'Send a message to any other open session. An idle session starts on it; a running one reads it at its next step, together with every other message waiting for it (steer, the default; it cuts no tool and leaves a question card the user has open). follow_up holds it until that turn ends, and only for a session you opened: to queue its next task behind the one it works on, never for an answer, a result or news it needs now (the user sees a held message waiting in that session\'s queue). To a session you did not open it goes as steer. A session still starting gets it kept, and reads it once it is up: the call returns at once, so do not send it again. A session blocked in ompdesk_session_result with wait takes a steer at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. Pictures and files go along in attachments. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
+			'Send a message to any other open session. An idle session starts on it; a running one reads it at its next step, together with every other message waiting for it (it cuts no tool and leaves a question card the user has open, which it reads the message after). There is no way to hold a message until the turn ends. A session still starting gets it kept, and reads it once it is up: the call returns at once, so do not send it again. A session blocked in ompdesk_session_result with wait takes it at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. Pictures and files go along in attachments. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
 		parameters: {
 			type: "object",
 			properties: {
 				session: SESSION,
 				message: { type: "string" },
-				delivery: {
-					type: "string",
-					enum: ["follow_up", "steer"],
-					description:
-						"For a running session. steer (default): read at its next step with every other message waiting for it. follow_up: held until its turn ends, only for a session you opened (its next task); any other session gets it as steer.",
-				},
 				request_id: {
 					type: "string",
 					description:
@@ -774,7 +768,6 @@ export const ARGS = {
 		.object({
 			session: sessionArg,
 			message: z.string().trim().min(1).max(MESSAGE_MAX_CHARS),
-			delivery: z.enum(["follow_up", "steer"]).optional(),
 			request_id: z.string().trim().min(1).max(200).optional(),
 			attachments: attachmentsArg.optional(),
 		})

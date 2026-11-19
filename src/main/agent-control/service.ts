@@ -127,6 +127,11 @@ export interface ControlTab {
 	 * (`tabCloseStep` decides what a close does with it).
 	 */
 	webEdits?: FileEdits;
+	/**
+	 * A view of a tab another party holds (a paired host's window or another device's tab there, or a tab this
+	 * computer runs for a paired device; `SidecarLike.shared`): closing it only leaves, that tab stays open.
+	 */
+	viewing?: true;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */

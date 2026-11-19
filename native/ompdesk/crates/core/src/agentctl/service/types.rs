@@ -227,6 +227,10 @@ pub struct ControlTab {
     pub former_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_edits: Option<FileEdits>,
+    /// A view of a tab another party holds (a paired host's window or another device's tab there, or a tab this
+    /// computer runs for a paired device): one omp, shared, and closing the view only leaves it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub viewing: bool,
 }
 
 impl ControlTab {
@@ -1120,9 +1124,6 @@ pub struct SendArgs {
     pub message: String,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
-    /// `follow_up` or `steer`.
-    #[serde(default)]
-    pub delivery: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }

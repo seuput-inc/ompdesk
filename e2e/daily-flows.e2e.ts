@@ -816,9 +816,7 @@ test("daily flow d: a notification click opens its tab on the phone, a steer arr
 			await expect(send).toBeEnabled();
 			await send.click();
 			await expect(phone.getByRole("button", { name: /^(Stop|중지)$/ })).toBeVisible({ timeout: 30_000 });
-			await expect(phone.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", {
-				timeout: 30_000,
-			});
+			await expect(phone.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible({ timeout: 30_000 });
 			await field.fill("steer from the phone");
 			await expect(send).toBeEnabled({ timeout: 30_000 });
 			await send.click();

@@ -1208,18 +1208,6 @@ html[data-shell="phone"] .omp-composer-toolbar > .omp-composer-actions {
 	margin-left: 3px;
 }
 
-/* The lane chip is its icon on a phone (the width ladder folds it; its name and the lane are its accessible name and
-   tooltip). While it shows, a turn runs: the model is its provider mark alone, so the row still ends before the
-   action button. */
-html[data-shell="phone"] .omp-composer-toolbar [data-send-mode] {
-	height: 28px;
-	padding-inline: 6px;
-}
-
-html[data-shell="phone"] .omp-composer-scroll:has([data-send-mode]) .omp-composer-model-label {
-	display: none;
-}
-
 /* The queue pill and the action button sit 8 px apart (the desktop ladder narrows it to 4): each one's reach ends where
    its neighbour's drawn box begins. */
 html[data-shell="phone"] .omp-composer-actions {
@@ -1256,9 +1244,8 @@ html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 	max-width: 6em;
 }
 
-/* A 360 px phone's idle row has ~120 px of empty row beside the chip, so it keeps the name there (6 em at most, "Sonnet
-   5.5" whole). While a turn runs the lane chip appears and the name goes (above, `[data-send-mode]`); a 320 px phone
-   (a toolbar under 300 px) keeps the mark alone. */
+/* A 360 px phone's row has ~120 px of empty row beside the chip, so it keeps the name there (6 em at most, "Sonnet
+   5.5" whole), idle and while a turn runs; a 320 px phone (a toolbar under 300 px) keeps the mark alone. */
 @container omp-toolbar (max-width: 300px) {
 	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 		display: none;

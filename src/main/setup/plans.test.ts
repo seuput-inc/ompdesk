@@ -43,7 +43,6 @@ const mac: PlanContext = {
 	toolsDir: "/data/tools",
 	bun: "/home/u/.bun/bin/bun",
 	omp: null,
-	ompManaged: false,
 	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
 	brew: "/opt/homebrew/bin/brew",
 	winget: null,
@@ -56,7 +55,6 @@ const win: PlanContext = {
 	toolsDir: "C:\\Users\\First Last\\AppData\\Local\\ompdesk\\tools",
 	bun: "C:\\Users\\First Last\\.bun\\bin\\bun.exe",
 	omp: null,
-	ompManaged: false,
 	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
 	brew: null,
 	winget: "C:\\Users\\First Last\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe",
@@ -76,16 +74,19 @@ describe("selectMethod", () => {
 		}
 	});
 
-	it("picks Bun's script, the bun global install, and omp update for an omp below the minimum", () => {
+	it("picks Bun's script and the bun global install, also for an omp below the minimum, whoever installed it", () => {
 		expect(selectMethod("bun", missing, mac)).toBe("bun-script");
 		expect(selectMethod("bun", missing, win)).toBe("bun-script");
 		expect(selectMethod("omp", missing, mac)).toBe("bun-global");
 		expect(selectMethod("omp", { kind: "broken", detail: "x", path: "/x" }, mac)).toBe("bun-global");
-		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp" })).toBe("omp-update");
-		// A too-old omp Bun manages gets the package install (the tested omp); stock's update picks its own target.
-		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp", ompManaged: true })).toBe(
-			"bun-global",
-		);
+		// Never stock `omp update` (it picks the registry's newest, whatever its major): npm's too-old omp included.
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp" })).toBe("bun-global");
+		expect(
+			selectMethod("omp", { ...outdated, path: "/usr/local/bin/omp" }, { ...mac, omp: "/usr/local/bin/omp" }),
+		).toBe("bun-global");
+		expect(
+			selectMethod("omp", outdated, { ...win, omp: "C:\\Users\\First Last\\AppData\\Roaming\\npm\\omp.cmd" }),
+		).toBe("bun-global");
 	});
 
 	it("upgrades a Bun older than omp's engines with `bun upgrade`, and installs it afresh without one", () => {

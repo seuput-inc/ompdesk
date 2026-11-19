@@ -868,10 +868,13 @@ function modelRoles(session: AgentSession) {
 // Methods
 // ============================================================================
 
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
 	// Schema, reads and writes re-check OMPdesk's thinking defaults (syncThinkingDefault).
-	...guard(["settings", "thinkingDefault"], {
+	...guard(["settingsSchema", "thinkingDefault"], {
 		settings_schema: async (_params, env) => settingsSchema(env.session()),
+	}),
+	...guard(["settings", "thinkingDefault"], {
 		settings_get: async (params, env) => {
 			const paths = asRecord(params).paths;
 			return getSettings(
@@ -882,7 +885,7 @@ export const methods: BridgeMethods = {
 		settings_set: async (params, env) =>
 			setSetting(env, env.session(), requiredString(params, "path"), asRecord(params).value),
 	}),
-	...guard("settings", {
+	...guard("imageGeneration", {
 		/** Main calls this when the bridge connects and after any tab's login or logout. */
 		image_generation_sync: async (_params, env) => {
 			await refreshImageGeneration(env.session());
@@ -892,12 +895,14 @@ export const methods: BridgeMethods = {
 	...guard("models", {
 		models_catalog: async (params, env) => refreshCatalog(env, env.session(), asRecord(params).forceRefresh === true),
 	}),
-	...guard(["models", "providers"], {
+	...guard("providers", {
 		providers: async (params, env) => {
 			const session = env.session();
 			const catalog = await refreshCatalog(env, session, asRecord(params).forceRefresh === true);
 			return { providers: buildProviders(session), ...catalog };
 		},
+	}),
+	...guard("providerLogout", {
 		/**
 		 * Explicit "disconnect the provider": removes every stored account (one account: stock `logout`). Stock's
 		 * `logoutCredential` takes the session (omp 18.18.2; a model registry and session id before): it also refreshes
@@ -914,7 +919,7 @@ export const methods: BridgeMethods = {
 			return { providerId };
 		},
 	}),
-	...guard(["providers", "usage"], {
+	...guard("providerAccounts", {
 		provider_accounts: async (params, env) =>
 			providerAccounts(env, env.session(), requiredString(params, "providerId"), asRecord(params).refresh === true),
 	}),
@@ -926,7 +931,11 @@ export const methods: BridgeMethods = {
 			const roles = modelRoles(env.session());
 			return asRecord(params).compact === true ? compactModelRoles(roles) : { roles };
 		},
+	}),
+	...guard("modelRoleMetadata", {
 		model_role_metadata: async (_params, env) => ({ roles: roleMetadata(env.session()) }),
+	}),
+	...guard("modelRoleSet", {
 		model_role_set: async (params, env) => {
 			const session = env.session();
 			const role = requiredString(params, "role");

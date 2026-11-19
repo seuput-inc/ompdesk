@@ -14,6 +14,8 @@
  * resolve. A compiled omp earlier in the lookup is passed over; with none other
  * the resolution fails `compiled` and machine setup reinstalls the package.
  * The package's `engines.bun` gates the Bun that would run it the same way.
+ * An omp below MIN_OMP_VERSION is passed over too when a usable one follows:
+ * setup installs the tested omp with Bun beside a too-old one it does not own.
  */
 import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
@@ -225,19 +227,6 @@ export function isCompiledOmp(file: string, platform: NodeJS.Platform = process.
 	return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(head.readUInt32BE(0));
 }
 
-/** The first of `candidates` that runs from its package, and the first compiled one passed over on the way. */
-export function pickOmp(
-	candidates: readonly string[],
-	platform: NodeJS.Platform = process.platform,
-): { bin: string | null; compiled: string | null } {
-	let compiled: string | null = null;
-	for (const file of candidates) {
-		if (!isCompiledOmp(file, platform)) return { bin: file, compiled };
-		compiled ??= file;
-	}
-	return { bin: null, compiled };
-}
-
 /**
  * The oldest Bun an omp package manifest names in `engines.bun` (stock publishes `>=X.Y.Z`, and its CLI exits
  * on an older Bun: "Bun runtime must be >= X.Y.Z"); null without one or for another range form.
@@ -363,7 +352,7 @@ function runOmp(
 	return promise;
 }
 
-/** Find omp, run `omp --version`, and gate it on MIN_OMP_VERSION. */
+/** Find omp among the lookup's candidates (`resolveOmpAmong`); the override, when set, is the only candidate. */
 export async function resolveOmp(): Promise<OmpResolution> {
 	const basePath = await spawnPath();
 	const override = process.env.OMP_GUI_OMP;
@@ -372,23 +361,47 @@ export async function resolveOmp(): Promise<OmpResolution> {
 			? [override]
 			: []
 		: ompCandidates(basePath, homedir(), process.platform).filter(file => isExecutableFile(file, process.platform));
-	const { bin, compiled } = pickOmp(candidates);
-	if (!bin) {
-		if (compiled) {
-			return {
+	const resolution = await resolveOmpAmong(candidates, basePath);
+	if (resolution) return resolution;
+	return override
+		? {
 				ok: false,
-				error: `omp at ${compiled} is a compiled build, which OMPdesk cannot load its bridge into. ${INSTALL_HINT}`,
-				reason: { kind: "compiled", bin: compiled },
-			};
+				error: `OMP_GUI_OMP points at a missing file (${override}).`,
+				reason: { kind: "override-missing", path: override },
+			}
+		: { ok: false, error: `omp not found. ${INSTALL_HINT}`, reason: { kind: "not-found" } };
+}
+
+/**
+ * The first of `candidates` (in lookup order) that OMPdesk can run. Two kinds are passed over for a later one: a
+ * compiled omp, and an omp below MIN_OMP_VERSION. The second is what lets machine setup leave a too-old omp it does
+ * not own (npm's, another Bun root's) where it is: setup installs the tested omp with Bun and that one runs, while
+ * stock `omp update` on the old one would install the registry's newest whatever its major. Any other refusal ends
+ * the lookup. With none usable the answer is the first refusal, else `compiled`; null without a candidate.
+ */
+export async function resolveOmpAmong(candidates: readonly string[], basePath: string): Promise<OmpResolution | null> {
+	let compiled: string | null = null;
+	let refused: OmpResolution | null = null;
+	for (const bin of new Set(candidates)) {
+		if (isCompiledOmp(bin)) {
+			compiled ??= bin;
+			continue;
 		}
-		return override
-			? {
-					ok: false,
-					error: `OMP_GUI_OMP points at a missing file (${override}).`,
-					reason: { kind: "override-missing", path: override },
-				}
-			: { ok: false, error: `omp not found. ${INSTALL_HINT}`, reason: { kind: "not-found" } };
+		const resolution = await examineOmp(bin, basePath);
+		if (resolution.ok) return resolution;
+		refused ??= resolution;
+		if (resolution.reason?.kind !== "too-old") break;
 	}
+	if (refused || !compiled) return refused;
+	return {
+		ok: false,
+		error: `omp at ${compiled} is a compiled build, which OMPdesk cannot load its bridge into. ${INSTALL_HINT}`,
+		reason: { kind: "compiled", bin: compiled },
+	};
+}
+
+/** Whether the package omp at `bin` runs here: its Bun, then its version (`omp --version`), gated on MIN_OMP_VERSION. */
+async function examineOmp(bin: string, basePath: string): Promise<OmpResolution> {
 	const bunMinimum = ompBunMinimum(ompPackageRoot(bin));
 	// The Bun omp's `env bun` shebang (or bun's Windows launcher) finds on the PATH omp is spawned with.
 	const bun = bunMinimum

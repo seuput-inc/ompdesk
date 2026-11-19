@@ -15,8 +15,7 @@ use super::mail_outbox::{
 };
 use super::pending_cleanups::{PendingCleanup, PendingCleanups};
 use super::send_outbox::{
-    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, deliver_owed,
-    redeliver_sends,
+    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, deliver_owed, redeliver_sends,
 };
 use super::session_fates::{FatedSession, SessionFates, fate_when};
 use super::{Clock, js_number};
@@ -774,7 +773,6 @@ fn send(n: i64) -> OutboxSend {
         "/s/boss.jsonl".into(),
         format!("do part {n}"),
         format!("do part {n}\n\n[ompdesk dispatch d{n}: report]"),
-        StreamingBehavior::FollowUp,
         1_000.0,
     )
 }

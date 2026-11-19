@@ -44,7 +44,7 @@ import { applyMcpToggleRuntime } from "../omp/pi-coding-agent/modes/components/e
 import { MCPCommandController } from "../omp/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { inferMcpTransport } from "../omp/pi-tui/overlays/extensions/mcp-runtime";
 import { getMCPConfigPath, Snowflake } from "../omp/pi-utils";
-import type { BridgeEnv, BridgeMethods } from "../types";
+import type { BridgeEnv, BridgeMethod, BridgeMethods } from "../types";
 import { installMcpConfigRenameRetry } from "./mcp-config-rename";
 import type { McpSyncResult } from "./mcp-contracts";
 import { adoptedEntry, authStateOf, offReasonOf } from "./mcp-core";
@@ -534,110 +534,135 @@ async function runReauth(session: AgentSession, env: BridgeEnv, name: string, si
 	await reloadMcpServers(session);
 }
 
-export const methods: BridgeMethods = guard("mcp", {
-	get_mcp_servers: async (_params, env) => ({ servers: await listMcpServers(env.session()) }),
+const runMcpAction: BridgeMethod = async (params, env) => {
+	const p = paramsOf(params);
+	return await mcpAction(env.session(), requireString(p, "name"), p.action, optScope(p));
+};
 
+/**
+ * `mcp_action` by `action`, each under the capability a person sees (capabilities.ts): a missing omp internal
+ * refuses only the actions that use it.
+ */
+const MCP_ACTIONS: BridgeMethods = {
+	...guard("mcpToggle", { enable: runMcpAction, disable: runMcpAction }),
+	...guard("mcpReconnect", { reconnect: runMcpAction }),
+	...guard("mcpRemove", { remove: runMcpAction }),
+	...guard("mcpAdopt", { adopt: runMcpAction }),
+};
+
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("mcp", {
+		get_mcp_servers: async (_params, env) => ({ servers: await listMcpServers(env.session()) }),
+	}),
 	mcp_action: async (params, env) => {
-		const p = paramsOf(params);
-		return await mcpAction(env.session(), requireString(p, "name"), p.action, optScope(p));
+		const action = paramsOf(params).action;
+		// An unknown action gets `mcpAction`'s own error.
+		const run = typeof action === "string" && Object.hasOwn(MCP_ACTIONS, action) ? MCP_ACTIONS[action] : runMcpAction;
+		return run(params, env);
 	},
-
-	mcp_add: async (params, env) => {
-		const p = paramsOf(params);
-		const name = requireString(p, "name");
-		if (!name.trim()) throw new Error("Server name cannot be empty");
-		const session = env.session();
-		const filePath = getMCPConfigPath(optScope(p) ?? "project", session.sessionManager.getCwd());
-		await addMCPServer(filePath, name, inputToServerConfig(p.config));
-		// A server that does not connect (needs a sign-in, offline) was still added: its row says why.
-		const warning = await reloadMcpServers(session);
-		const server = (await listMcpServers(session)).find(entry => entry.name === name);
-		if (!server) throw new Error(`Server "${name}" was added but is not visible in the refreshed server list.`);
-		return { added: true, server, ...(warning ? { warning } : {}) };
-	},
-
-	/** Never throws: every outcome rides `{ ok, error }`. */
-	mcp_test: async (params, env) => {
-		const p = paramsOf(params);
-		const name = typeof p.name === "string" ? p.name : undefined;
-		if ((name === undefined) === (p.config === undefined)) {
-			return {
-				ok: false,
-				error: "Provide exactly one of `name` (configured server) or `config` (inline definition).",
-			};
-		}
-		const session = env.session();
-		let config: MCPServerConfig;
-		let probeName: string;
-		try {
-			if (name !== undefined) {
-				const found = await findTestTarget(session.sessionManager.getCwd(), name);
-				if (!found) return { ok: false, error: `Server "${name}" not found.` };
-				config = found;
-				probeName = name;
-			} else {
-				config = inputToServerConfig(p.config);
-				const errors = validateServerConfig("test", config);
-				if (errors.length > 0) return { ok: false, error: `Invalid server config: ${errors.join("; ")}` };
-				probeName = `mcp_test_${Date.now()}`;
+	...guard("mcpAdd", {
+		mcp_add: async (params, env) => {
+			const p = paramsOf(params);
+			const name = requireString(p, "name");
+			if (!name.trim()) throw new Error("Server name cannot be empty");
+			const session = env.session();
+			const filePath = getMCPConfigPath(optScope(p) ?? "project", session.sessionManager.getCwd());
+			await addMCPServer(filePath, name, inputToServerConfig(p.config));
+			// A server that does not connect (needs a sign-in, offline) was still added: its row says why.
+			const warning = await reloadMcpServers(session);
+			const server = (await listMcpServers(session)).find(entry => entry.name === name);
+			if (!server) throw new Error(`Server "${name}" was added but is not visible in the refreshed server list.`);
+			return { added: true, server, ...(warning ? { warning } : {}) };
+		},
+	}),
+	...guard("mcpTest", {
+		/** Never throws: every outcome rides `{ ok, error }`. */
+		mcp_test: async (params, env) => {
+			const p = paramsOf(params);
+			const name = typeof p.name === "string" ? p.name : undefined;
+			if ((name === undefined) === (p.config === undefined)) {
+				return {
+					ok: false,
+					error: "Provide exactly one of `name` (configured server) or `config` (inline definition).",
+				};
 			}
-		} catch (error) {
-			return { ok: false, error: errorMessage(error) };
-		}
-		const timeout = new AbortController();
-		return await withTimeout(
-			probeServer(session, probeName, config, timeout.signal),
-			MCP_TEST_TIMEOUT_MS,
-			`Connection test timed out after ${MCP_TEST_TIMEOUT_MS / 1000} seconds`,
-			() => timeout.abort("MCP connection test timed out"),
-		).catch(error => ({ ok: false, error: errorMessage(error) }));
-	},
-
-	/**
-	 * Resolves after login + persist + reload. `{ busy }` reports a reauth
-	 * already in flight (the GUI maps it to `oauth_busy`); a user cancel is
-	 * `{ ok: false, error: "cancelled" }`.
-	 */
-	mcp_reauth: async (params, env) => {
-		const name = requireString(paramsOf(params), "name");
-		if (!name.trim()) throw new Error("Server name cannot be empty");
-		if (activeReauth) return { busy: activeReauth.name };
-		const abort = new AbortController();
-		activeReauth = { name, abort };
-		try {
-			await runReauth(env.session(), env, name, abort.signal);
-			return { ok: true };
-		} catch (error) {
-			if (error instanceof MCPOAuthCancelledError) return { ok: false, error: "cancelled" };
-			return { ok: false, error: errorMessage(error) };
-		} finally {
-			if (activeReauth?.abort === abort) activeReauth = undefined;
-		}
-	},
-
+			const session = env.session();
+			let config: MCPServerConfig;
+			let probeName: string;
+			try {
+				if (name !== undefined) {
+					const found = await findTestTarget(session.sessionManager.getCwd(), name);
+					if (!found) return { ok: false, error: `Server "${name}" not found.` };
+					config = found;
+					probeName = name;
+				} else {
+					config = inputToServerConfig(p.config);
+					const errors = validateServerConfig("test", config);
+					if (errors.length > 0) return { ok: false, error: `Invalid server config: ${errors.join("; ")}` };
+					probeName = `mcp_test_${Date.now()}`;
+				}
+			} catch (error) {
+				return { ok: false, error: errorMessage(error) };
+			}
+			const timeout = new AbortController();
+			return await withTimeout(
+				probeServer(session, probeName, config, timeout.signal),
+				MCP_TEST_TIMEOUT_MS,
+				`Connection test timed out after ${MCP_TEST_TIMEOUT_MS / 1000} seconds`,
+				() => timeout.abort("MCP connection test timed out"),
+			).catch(error => ({ ok: false, error: errorMessage(error) }));
+		},
+	}),
+	...guard("mcpReauth", {
+		/**
+		 * Resolves after login + persist + reload. `{ busy }` reports a reauth
+		 * already in flight (the GUI maps it to `oauth_busy`); a user cancel is
+		 * `{ ok: false, error: "cancelled" }`.
+		 */
+		mcp_reauth: async (params, env) => {
+			const name = requireString(paramsOf(params), "name");
+			if (!name.trim()) throw new Error("Server name cannot be empty");
+			if (activeReauth) return { busy: activeReauth.name };
+			const abort = new AbortController();
+			activeReauth = { name, abort };
+			try {
+				await runReauth(env.session(), env, name, abort.signal);
+				return { ok: true };
+			} catch (error) {
+				if (error instanceof MCPOAuthCancelledError) return { ok: false, error: "cancelled" };
+				return { ok: false, error: errorMessage(error) };
+			} finally {
+				if (activeReauth?.abort === abort) activeReauth = undefined;
+			}
+		},
+	}),
+	// No omp internal: only this module's own AbortController.
 	mcp_reauth_cancel: async params => {
 		const name = requireString(paramsOf(params), "name");
 		if (!activeReauth || activeReauth.name !== name) return { cancelled: false };
 		activeReauth.abort.abort("Reauthorization cancelled by user");
 		return { cancelled: true };
 	},
-
-	/**
-	 * Follow MCP changes another tab or process made (main sends it to every live tab after one tab changed the
-	 * configuration or signed in): `names` the servers that changed, none for all of them.
-	 */
-	mcp_sync: async (params, env) => {
-		const raw = paramsOf(params).names;
-		if (raw !== undefined && !(Array.isArray(raw) && raw.every(name => typeof name === "string" && name !== "")))
-			throw new Error("names must be a list of server names");
-		return await syncMcpServers(env.session(), raw as string[] | undefined);
-	},
-
-	/** `/mcp reload` for the GUI: stock's full rediscovery of this session (MCPCommandController.reloadServers). */
-	mcp_reload: async (_params, env) => {
-		clearFsCache();
-		await env.session().modelRegistry.authStorage.credentials.reload();
-		const warning = await reloadMcpServers(env.session());
-		return { servers: await listMcpServers(env.session()), ...(warning ? { warning } : {}) };
-	},
-});
+	...guard("mcpSync", {
+		/**
+		 * Follow MCP changes another tab or process made (main sends it to every live tab after one tab changed the
+		 * configuration or signed in): `names` the servers that changed, none for all of them.
+		 */
+		mcp_sync: async (params, env) => {
+			const raw = paramsOf(params).names;
+			if (raw !== undefined && !(Array.isArray(raw) && raw.every(name => typeof name === "string" && name !== "")))
+				throw new Error("names must be a list of server names");
+			return await syncMcpServers(env.session(), raw as string[] | undefined);
+		},
+	}),
+	...guard("mcpReload", {
+		/** `/mcp reload` for the GUI: stock's full rediscovery of this session (MCPCommandController.reloadServers). */
+		mcp_reload: async (_params, env) => {
+			clearFsCache();
+			await env.session().modelRegistry.authStorage.credentials.reload();
+			const warning = await reloadMcpServers(env.session());
+			return { servers: await listMcpServers(env.session()), ...(warning ? { warning } : {}) };
+		},
+	}),
+};
