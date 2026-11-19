@@ -17,7 +17,7 @@ import { expect } from "vitest";
 import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
 import { deliveryFor, type MailKind } from "./agent-control/mail";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { removeWhenFree } from "./test-folders";
 
 /**
@@ -190,7 +190,12 @@ export async function startProvider(): Promise<Provider> {
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
-/** Run by the suite's `afterAll`: closes every omp, provider and folder a test started. */
+/**
+ * The suite's `afterAll` budget: each omp gets up to 30 s to exit on stdin's end, and on Windows each folder waits for
+ * omp's daemon to end (`stopOmpDaemon` asks `omp ps`, seconds under load), past vitest's 10 s/20 s hook default.
+ */
+export const CLEANUP_MS = 180_000;
+/** Run by the suite's `afterAll` (with `CLEANUP_MS`): closes every omp, provider and folder a test started. */
 export async function runCleanups(): Promise<void> {
 	for (const cleanup of cleanups.reverse()) await cleanup();
 }
@@ -222,6 +227,8 @@ export async function startOmp(
 	const root = again?.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-mail-repo-")));
 	if (!again)
 		atEnd(async () => {
+			// omp 19's daemon has the first omp's folder (`root`) as its working folder and outlives it (Windows: EBUSY).
+			if (process.platform === "win32") stopOmpDaemon(isolated);
 			await removeWhenFree(isolated);
 			await removeWhenFree(root);
 		});

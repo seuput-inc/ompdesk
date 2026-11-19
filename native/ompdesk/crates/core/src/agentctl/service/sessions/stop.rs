@@ -489,8 +489,10 @@ impl AgentControl {
                     )
                     .await?;
                 if outcome == TabClose::Kept {
+                    // Only that the tab is still there is known: the window's ask has no answer, so a window that
+                    // stopped answering (the Mac mini, 18 Nov 2026) reads the same as one that refused.
                     return fail(format!(
-                        "{} is still open: its window kept the tab (it is that window's last tab, or it holds unsaved Files edits). Ask the user to close it; its session is saved either way.",
+                        "{} is still open: its window did not close the tab. A window keeps its last tab and a tab with unsaved Files edits; when neither applies, the window is not answering. Ask the user to close it; its session is saved either way.",
                         label(target)
                     ));
                 }

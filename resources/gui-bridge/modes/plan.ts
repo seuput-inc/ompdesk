@@ -66,7 +66,8 @@ function settlePending(): void {
 	pending = undefined;
 	if (shown) emit({ type: "plan_proposal_resolved", planFilePath: shown.planFilePath });
 }
-let installedHandler: PlanProposalHandler | undefined;
+/** Our handler as the session holds it: stock wraps what `setPlanProposalHandler` gets, so this is what peek returns. */
+let installed: PlanProposalHandler | undefined;
 /** Active tools before plan mode added `write`; restored when it ends. */
 let previousTools: string[] | undefined;
 
@@ -91,12 +92,20 @@ async function readPlan(session: AgentSession, planFilePath: string): Promise<st
 	});
 }
 
+/**
+ * A handler the session holds. From omp 19 stock's `peekPlanProposalHandler` also answers in plan mode without one, with
+ * a stand-in (`preparePlanForReview`) made on every call; a held one is the same function each time.
+ */
+function heldHandler(session: AgentSession): PlanProposalHandler | undefined {
+	const handler = session.peekPlanProposalHandler();
+	return handler && handler === session.peekPlanProposalHandler() ? handler : undefined;
+}
+
 /** Install the proposal handler; never clobbers a foreign one (prewalk's plan-yolo installs its own). */
 function arm(session: AgentSession): void {
-	if (installedHandler && session.peekPlanProposalHandler() === installedHandler) return;
-	if (session.peekPlanProposalHandler()) return;
+	if (heldHandler(session)) return;
 	// Print mode's handler: validate and shape the proposal, promote the reviewed path, journal it.
-	installedHandler = async title => {
+	session.setPlanProposalHandler(async title => {
 		const result = await session.preparePlanForReview(title);
 		const details = result.details;
 		if (details) {
@@ -106,15 +115,13 @@ function arm(session: AgentSession): void {
 			pending = { planFilePath: details.planFilePath, title: details.title };
 		}
 		return result;
-	};
-	session.setPlanProposalHandler(installedHandler);
+	});
+	installed = heldHandler(session);
 }
 
 function disarm(session: AgentSession): void {
-	if (installedHandler && session.peekPlanProposalHandler() === installedHandler) {
-		session.setPlanProposalHandler(null);
-	}
-	installedHandler = undefined;
+	if (installed && heldHandler(session) === installed) session.setPlanProposalHandler(null);
+	installed = undefined;
 	settlePending();
 }
 

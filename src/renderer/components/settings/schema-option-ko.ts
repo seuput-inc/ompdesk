@@ -1084,4 +1084,13 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	"Up to 4 workers": "워커 최대 4개",
 	"Up to 8 workers": "워커 최대 8개",
 	med: "중간",
+	// ── omp 19.0 신규 열거형 옵션 ───────────────────────────────────────────────
+	"Compact at the first decision once the prompt reaches the bridge-compaction threshold":
+		"프롬프트가 브리지 압축 기준에 닿으면 첫 판단 시점에 압축해요",
+	"Isolated subagents and `/wt` use ovnfs checkouts when ovnfs is found; otherwise (and for other worktrees) the PAL picks the best available backend":
+		"ovnfs가 있으면 격리된 서브에이전트와 `/wt`가 ovnfs 체크아웃을 써요. 없으면(그리고 다른 워크트리에는) PAL이 쓸 수 있는 가장 좋은 백엔드를 골라요",
+	"Keep Alive": "계속 유지",
+	"Never compact; refresh until it stops paying": "압축하지 않아요. 이득이 없어질 때까지 갱신해요",
+	"Refresh while the refresh spend stays within the cheaper buy-out, then compact large prompts or let the entry expire":
+		"갱신 비용이 더 저렴한 대안 비용 안에 머무는 동안 갱신하고, 그 뒤에는 큰 프롬프트를 압축하거나 항목을 만료되게 둬요",
 };

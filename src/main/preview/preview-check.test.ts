@@ -14,11 +14,12 @@ import {
 	createTabCheck,
 	judgeImage,
 	PREVIEW_CHECK_BEHIND_MS,
-	PREVIEW_CHECK_CAPTURE_MS,
 	PREVIEW_CHECK_IMAGE_MAX,
+	PREVIEW_CHECK_JUDGE_MS,
 	PREVIEW_CHECK_PROBE_MS,
 	PREVIEW_CHECK_TOTAL_MS,
 	type PreviewCheckDeps,
+	type PreviewCheckOutcome,
 	type PreviewImage,
 	previewHint,
 } from "./preview-check";
@@ -26,6 +27,8 @@ import { runVisualizeTool, type VisualPages, VisualStore } from "./visuals";
 
 const IMAGE: PreviewImage = { data: "cG5n", mimeType: "image/png" };
 const HINT_ERROR = "Preview check: the page shows an error message. Look at it with gui_visualize or fix the page.";
+const HINT_UNCHECKED =
+	"Preview check: could not check the page in time, so nobody has seen how it looks. Look at it with gui_visualize before you rely on it.";
 const HINT_BLANK =
 	"Preview check: the page looks blank (nothing rendered). Look at it with gui_visualize or fix the page.";
 
@@ -58,7 +61,7 @@ function fakeDeps(overrides: Partial<PreviewCheckDeps> = {}) {
 }
 
 /** What `gui_visualize open` answers for a fresh visual, the id masked; `check` is the context's (none = no check). */
-async function open(check?: (id: string, version: number) => Promise<"error" | "blank" | null>) {
+async function open(check?: (id: string, version: number) => Promise<PreviewCheckOutcome | null>) {
 	const store = new VisualStore(path.join(root, `visuals-${++stores}`));
 	const pages: VisualPages = {
 		close: () => {},
@@ -84,7 +87,7 @@ describe("Preview check on gui_visualize open", () => {
 		expect(withCheck.text).toBe(`${without.text}\n${HINT_ERROR}`);
 		expect(withCheck.isError).toBe(false);
 		expect(flagged).toEqual([[withCheck.id, 1, "error"]]);
-		expect(deps.capture).toHaveBeenCalledWith(withCheck.id, 1, PREVIEW_CHECK_CAPTURE_MS, PREVIEW_CHECK_CAPTURE_MS);
+		expect(deps.capture).toHaveBeenCalledWith(withCheck.id, 1, expect.any(Number), expect.any(Number));
 		expect(deps.judge).toHaveBeenCalledWith(IMAGE, expect.any(Number));
 		// The page is shown first; the check follows it.
 		expect(withCheck.revealed).toEqual([withCheck.id]);
@@ -98,8 +101,16 @@ describe("Preview check on gui_visualize open", () => {
 		expect(flagged).toEqual([[withCheck.id, 1, "blank"]]);
 	});
 
-	const quiet: Array<[string, Partial<PreviewCheckDeps>]> = [
-		["a page the judge finds fine", { judge: async () => ({ problem: null, judged: true }) }],
+	it("answers exactly as before, with no notice, for a page the judge finds fine", async () => {
+		const { deps, flagged } = fakeDeps({ judge: async () => ({ problem: null, judged: true }) });
+		const withCheck = await open((id, version) => checkVisualPage(deps, id, version));
+		const without = await open();
+		expect(withCheck.text).toBe(without.text);
+		expect(withCheck.isError).toBe(false);
+		expect(flagged).toEqual([]);
+	});
+
+	const unseen: Array<[string, Partial<PreviewCheckDeps>]> = [
 		["a judge that did not decide", { judge: async () => ({ problem: "error", judged: false }) }],
 		["a failed judge request", { judge: async () => null }],
 		[
@@ -120,11 +131,11 @@ describe("Preview check on gui_visualize open", () => {
 			},
 		],
 	];
-	it.each(quiet)("answers exactly as before, with no notice, for %s", async (_name, overrides) => {
+	it.each(unseen)("tells the agent the page went unchecked, with no notice, for %s", async (_name, overrides) => {
 		const { deps, flagged } = fakeDeps(overrides);
 		const withCheck = await open((id, version) => checkVisualPage(deps, id, version));
 		const without = await open();
-		expect(withCheck.text).toBe(without.text);
+		expect(withCheck.text).toBe(`${without.text}\n${HINT_UNCHECKED}`);
 		expect(withCheck.isError).toBe(false);
 		expect(flagged).toEqual([]);
 	});
@@ -142,7 +153,7 @@ describe("Preview check on gui_visualize open", () => {
 		expect(flagged).toEqual([]);
 	});
 
-	it("gives up at the total bound with no verdict, and drops a verdict that comes later", async () => {
+	it("calls the page unchecked when the judge runs past the total, and drops its late verdict", async () => {
 		vi.useFakeTimers();
 		const late = Promise.withResolvers<PreviewCheckResult>();
 		const { deps, flagged } = fakeDeps({ judge: () => late.promise });
@@ -153,13 +164,13 @@ describe("Preview check on gui_visualize open", () => {
 		await vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS - 1);
 		expect(verdict).toBeUndefined();
 		await vi.advanceTimersByTimeAsync(1);
-		expect(verdict).toBeNull();
+		expect(verdict).toBe("unchecked");
 		late.resolve({ problem: "error", judged: true });
 		await vi.advanceTimersByTimeAsync(0);
 		expect(flagged).toEqual([]);
 	});
 
-	it("gives up on a page that never shows, and drops a picture that comes later", async () => {
+	it("calls a page that never shows unchecked, and drops a picture that comes later", async () => {
 		vi.useFakeTimers();
 		const never = Promise.withResolvers<PreviewImage>();
 		const { deps } = fakeDeps({ capture: () => never.promise });
@@ -168,10 +179,34 @@ describe("Preview check on gui_visualize open", () => {
 			verdict = result;
 		});
 		await vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS);
-		expect(verdict).toBeNull();
+		expect(verdict).toBe("unchecked");
 		never.resolve(IMAGE);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(deps.judge).not.toHaveBeenCalled();
+	});
+
+	it("judges a page ready late with a judge slower than its usual answer", async () => {
+		vi.useFakeTimers();
+		// The page ready as the Windows runner had it (1.2 s), the judge at 1.5 s, well past its 409 ms p50 on the 22 pages.
+		const { deps, flagged } = fakeDeps({
+			capture: () => {
+				const { promise, resolve } = Promise.withResolvers<PreviewImage>();
+				setTimeout(() => resolve(IMAGE), 1200);
+				return promise;
+			},
+			judge: () => {
+				const { promise, resolve } = Promise.withResolvers<PreviewCheckResult>();
+				setTimeout(() => resolve({ problem: "error", judged: true }), 1500);
+				return promise;
+			},
+		});
+		let verdict: string | null | undefined;
+		void checkVisualPage(deps, "v", 1).then(result => {
+			verdict = result;
+		});
+		await vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS);
+		expect(verdict).toBe("error");
+		expect(flagged).toEqual([["v", 1, "error"]]);
 	});
 
 	it("gives the judge only what is left of the total bound", async () => {
@@ -186,14 +221,41 @@ describe("Preview check on gui_visualize open", () => {
 		expect(deps.judge).toHaveBeenCalledWith(IMAGE, PREVIEW_CHECK_TOTAL_MS - 1500);
 	});
 
-	it("waits the whole capture budget for the page of a tab in front, and only a moment for one behind", async () => {
+	it("judges the page of a window that shows it late, while the total bound still has room", async () => {
+		vi.useFakeTimers();
+		// Measured on GitHub's Windows runner (e2e runs 44492478044, 44499841018): the window asked for the Preview's page
+		// 1.2 s after the tool opened the visual and had it loaded at 1.6 s, and on a run's first open not even asked for
+		// it by 2 s. The capture's fake keeps to the budget it is given, as host.ts's does.
+		const showsAt = 2400;
+		const { deps, flagged } = fakeDeps({
+			judge: judgedAs("error"),
+			capture: vi.fn(async (_id: string, _version: number, budgetMs: number) => {
+				await vi.advanceTimersByTimeAsync(Math.min(showsAt, budgetMs));
+				return showsAt <= budgetMs ? IMAGE : null;
+			}),
+		});
+		expect(await checkVisualPage(deps, "v", 1)).toBe("error");
+		expect(flagged).toEqual([["v", 1, "error"]]);
+		expect(deps.judge).toHaveBeenCalledWith(IMAGE, PREVIEW_CHECK_TOTAL_MS - showsAt);
+	});
+
+	it("waits for the page of a tab in front until only the judge's share is left, and a moment for one behind", async () => {
+		vi.useFakeTimers();
+		const probeMs = 300;
+		const pageMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS - probeMs;
 		for (const [inFront, appearMs] of [
-			[true, PREVIEW_CHECK_CAPTURE_MS],
+			[true, pageMs],
 			[false, PREVIEW_CHECK_BEHIND_MS],
 		] as const) {
-			const { deps } = fakeDeps({ inFront: () => inFront });
+			const { deps } = fakeDeps({
+				inFront: () => inFront,
+				available: async () => {
+					await vi.advanceTimersByTimeAsync(probeMs);
+					return true;
+				},
+			});
 			await checkVisualPage(deps, "v", 1);
-			expect(deps.capture).toHaveBeenCalledWith("v", 1, PREVIEW_CHECK_CAPTURE_MS, appearMs);
+			expect(deps.capture).toHaveBeenCalledWith("v", 1, pageMs, appearMs);
 		}
 	});
 });
@@ -318,24 +380,30 @@ describe("createTabCheck", () => {
 	});
 
 	it.each([
-		["a failed command", { type: "response", command: "judge_preview_check", success: false, error: "x" }],
+		[
+			"a failed command",
+			{ type: "response", command: "judge_preview_check", success: false, error: "x" },
+			"unchecked",
+		],
 		[
 			"an answer that did not decide",
 			{ type: "response", command: "judge_preview_check", success: true, data: { problem: null, judged: false } },
+			"unchecked",
 		],
 		[
 			"an unknown problem",
 			{ type: "response", command: "judge_preview_check", success: true, data: { problem: "bad", judged: true } },
+			null,
 		],
-		["no data", { type: "response", command: "judge_preview_check", success: true }],
-	])("keeps today's behaviour for %s", async (_name, response) => {
+		["no data", { type: "response", command: "judge_preview_check", success: true }, "unchecked"],
+	])("reads %s as %s, with no notice", async (_name, response, outcome) => {
 		const { flagged, pages, command } = tab(response);
 		expect(
 			await createTabCheck({ enabled: () => true, inFront: () => true, pages, rpc: { command: command as never } })(
 				"v",
 				1,
 			),
-		).toBeNull();
+		).toBe(outcome);
 		expect(flagged).toEqual([]);
 	});
 
@@ -392,8 +460,10 @@ describe("createTabCheck", () => {
 	});
 
 	it("tells the capture how long to wait for the page by whether the tab is in front", async () => {
+		vi.useFakeTimers();
+		const pageMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS;
 		for (const [inFront, appearMs] of [
-			[true, PREVIEW_CHECK_CAPTURE_MS],
+			[true, pageMs],
 			[false, PREVIEW_CHECK_BEHIND_MS],
 		] as const) {
 			const { command, capture, pages } = tab({
@@ -408,7 +478,7 @@ describe("createTabCheck", () => {
 				pages,
 				rpc: { command: command as never },
 			})("v", 1);
-			expect(capture).toHaveBeenCalledWith("v", 1, PREVIEW_CHECK_CAPTURE_MS, appearMs);
+			expect(capture).toHaveBeenCalledWith("v", 1, pageMs, appearMs);
 		}
 	});
 });

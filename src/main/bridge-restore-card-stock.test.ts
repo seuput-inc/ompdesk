@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon } from "./test-bridge-probe";
+import { RM_TEMP } from "./test-fake-omp";
 
 /**
  * A card open when the app quits into an update comes back after the relaunch (bridge `composer.restore_interrupted`
@@ -250,8 +251,9 @@ async function relaunchOverCard(step: Step, how: Stop, extra: string[] = []) {
 	chmodSync(isolated, 0o700);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-card-repo-")));
 	cleanups.push(() => {
-		rmSync(isolated, { recursive: true, force: true });
-		rmSync(root, { recursive: true, force: true });
+		stopOmpDaemon(isolated);
+		rmSync(isolated, RM_TEMP);
+		rmSync(root, RM_TEMP);
 	});
 	const first = await startOmp(provider, isolated, root, false, extra);
 	await first.send({ type: "prompt", message: PROMPT });

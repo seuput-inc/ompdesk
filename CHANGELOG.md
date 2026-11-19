@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.134.1] - 2026-11-19
+
+OMPdesk가 omp 19.0.0을 지원합니다. 이 판은 omp 19.0.0으로 시험했어요.
+
+- omp 19.0.0에서 입력창의 확장 기능(`!` bash, `$` eval, 문맥 보기, 백그라운드 작업, 대기열 빼기, 압축 멈추기 등)과 끊긴 턴·하위 세션 잇기가 다시 돼요.
+- omp 19.0.0에서 Plan 카드가 다시 뜨고, 승인한 계획이 바로 실행돼요.
+- omp 19.0.0의 새 설정을 한국어로 보여 주고, bash 카드가 19의 `local://N.log` 출력 안내 줄을 숨겨요.
+- Bun으로 깐 omp(OMPdesk가 까는 방식)에서, OMPdesk가 스스로 하는 omp 업데이트(켤 때, 4시간마다, 고장 복구)는 이 판이 시험한 omp의 주 판까지만 정확한 판으로 올려요. 더 높은 주 판은 설정 › 업데이트 및 정보에 보이고, 업데이트 버튼을 누를 때만 깔려요. omp를 깔거나 미루거나 실패한 일은 모두 로그에 남아요. npm 등 다른 방법으로 깐 낡은 omp를 고칠 때는 아직 최신이 깔릴 수 있어요(다음 판에서 고쳐요).
+- Windows에서 omp 19가 처음 세션의 폴더를 붙잡고 있어도 worktree가 지워지고, 남은 빈 폴더는 나중에 치워요.
+- 다른 컴퓨터가 답하지 않은 메시지는 '보내지 않음'이 아니라 '확인 안 됨'으로 알리고, 다시 보내면 기록에서 답해 같은 메시지가 두 번 가지 않아요.
+- 에이전트가 만든 화면의 미리보기 검사가 느린 컴퓨터에서도 시간 안에 화면을 보고, 끝내 보지 못하면 '확인 못 함'이라고 에이전트에게 알려요. 보지 못한 화면을 '문제없음'으로 믿지 않게 해요.
+- 두 하위 세션의 완료 보고 id가 같아도 둘 다 연 세션에 닿아요.
+- Windows에서 MCP 서버 로그인과 설정 바꾸기가, 방금 쓴 설정 파일을 다른 프로그램이 잠깐 잡고 있어도 실패하지 않아요.
+- 창이 탭을 닫지 않았을 때 에이전트에게 지어낸 까닭 대신 '창이 닫지 않았다'고 사실대로 알려요.
+
+아직 확인하지 못한 것: Windows 시험에서 한 번, 앱을 끈 직후 시험을 정리할 때 프로젝트 폴더가 잠깐 지워지지 않았어요. 앱을 끈 뒤 마지막 몇 초 동안 남은 프로세스가 그 폴더를 쥐고 있던 것으로 보고, 어느 프로세스인지 찾고 있어요. 자료가 지워지거나 상하는 일은 없어요. OMPdesk가 worktree를 지울 때 같은 일이 생기면 지우기가 실패로 알려지거나 빈 폴더가 남고, 빈 폴더는 나중에 치워요.
+
+<!-- en -->
+
+OMPdesk supports omp 19.0.0. This release was tested with omp 19.0.0.
+
+- On omp 19.0.0 the composer extras (`!` bash, `$` eval, the context view, background jobs, dequeue, cancelling a compaction and the like) and the resume of interrupted turns and subagents work again.
+- On omp 19.0.0 the plan card shows again and an approved plan runs.
+- omp 19.0.0's new settings read in Korean, and the bash card hides 19's `local://N.log` output footer.
+- For omp installed with Bun (the way OMPdesk installs it), OMPdesk's own omp updates (at launch, every 4 hours, repair) install an exact version up to the major this release was tested with. A newer major shows in Settings › Updates & about and installs only when you press Update. Every install, hold and failure is logged. Repairing a too-old omp installed another way (npm and the like) can still install the newest one; the next release fixes that.
+- On Windows a worktree is removed even while omp 19 holds the first session's folder; the empty folder left behind is cleaned up later.
+- The preview check of an agent-made page now sees the page in time on slower computers, and when it cannot it tells the agent "could not check", so an unseen page is never taken as fine.
+- A message a paired computer never answered reads "not confirmed" instead of "not sent", and sending it again answers from the record, so it never arrives twice.
+- Two child sessions' done reports with the same id both reach the session that opened them.
+- On Windows an MCP sign-in or settings change no longer fails when another program briefly holds the config file it just wrote.
+- When a window does not close a tab, the agent is told just that instead of a made-up reason.
+
+Not yet confirmed: once in a Windows test, a project folder could not be removed at test cleanup right after the app quit. A process in its last seconds after quit seems to have held it; which one is still being looked for. No data is removed or damaged: if OMPdesk's worktree removal meets the same, the removal reports a failure or leaves an empty folder, which is cleaned up later.
+
 ## [0.134.0] - 2026-11-19
 
 다른 세션이 보낸 메시지가 일하는 세션에 바로 닿고, 앱 안쪽 프로세스가 다시 떠도 세션이 멈춘 채 남지 않습니다.

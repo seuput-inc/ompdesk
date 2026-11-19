@@ -296,6 +296,38 @@ export async function listAllOrphans(
 	return { root, repos: listed };
 }
 
+/** What the core did with one folder a removal left behind (`left_behind.rs` `Swept`). */
+export type LeftBehindSwept =
+	| { outcome: "removed" | "gone" | "held" }
+	| { outcome: "kept"; reason: string }
+	| { outcome: "in_use" };
+
+/**
+ * The later pass over the empty folders a Windows removal left behind while a process still had them as its working
+ * folder (omp 19's daemon keeps the first session's folder; `git_remove`, `left_behind.rs`). The removal's claim ended
+ * when it answered, so the path may be a new worktree or hold the user's files by now: each folder gets a fresh claim
+ * (none while a session runs there), and the core deletes it only when git still does not list it, and only with a
+ * non-recursive `remove_dir`, so anything in it stays. `held` ones are tried again on the next pass.
+ */
+export async function sweepLeftBehind(
+	openFolders: () => readonly string[],
+): Promise<Array<{ path: string } & LeftBehindSwept>> {
+	const entries = await coreGit<Array<{ path: string }>>("git.leftBehind", {}, 1);
+	const swept: Array<{ path: string } & LeftBehindSwept> = [];
+	for (const { path: folder } of entries) {
+		try {
+			const outcome = await withRemovalClaim(folder, openFolders, () =>
+				coreGit<LeftBehindSwept>("git.leftBehindRemove", { path: folder }, 1),
+			);
+			swept.push({ path: folder, ...outcome });
+		} catch (error) {
+			if (!(error instanceof LocalCommandError && error.code === "in_use")) throw error;
+			swept.push({ path: folder, outcome: "in_use" });
+		}
+	}
+	return swept;
+}
+
 /**
  * Remove every orphaned worktree under stock's worktree root whose work is landed (or never begun), keeping its
  * branch: each repository of `orphanRepositories` listed and removed by `listOrphanWorktrees` / `removeOrphanWorktree`,

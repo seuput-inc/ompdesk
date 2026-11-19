@@ -144,4 +144,29 @@ describe("OmpUpdateRows", () => {
 			translate("ompUpdate.tested", { version: "18.22.0" }),
 		);
 	});
+
+	it("says a newer major is held and why, keeps Update now as the way to install it, and goes quiet once it is installed", async () => {
+		const held = { version: "19.0.0", reason: "untested-major" } as const;
+		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
+		await mount(ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", held }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.untested-major", { latest: "19.0.0", tested: "18.22.2" }));
+		expect(heldNote()).toContain("19.0.0");
+		expect(heldNote()).toContain("18.22.2");
+		// One line says it: no "is available" beside it.
+		expect(status()).toBeUndefined();
+		expect(nowButton().disabled).toBe(false);
+		await act(async () => nowButton().click());
+		expect(api.now).toHaveBeenCalledTimes(1);
+		// The person's update runs: the status line speaks, the held line steps back.
+		await push(
+			ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", held, phase: "updating" }),
+		);
+		expect(status()).toBe(translate("ompUpdate.status.updating"));
+		expect(heldNote()).toBeUndefined();
+		await push(ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", held: null }));
+		expect(heldNote()).toBeUndefined();
+		expect(document.body.querySelector("[data-testid='omp-tested']")?.textContent).toBe(
+			translate("ompUpdate.tested", { version: "18.22.2" }),
+		);
+	});
 });
