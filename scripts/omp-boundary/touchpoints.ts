@@ -182,6 +182,24 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/agent-worktrees.test.ts"],
 	},
 	{
+		id: "L12",
+		area: "launch",
+		contract: "internal",
+		summary:
+			"On Windows a worktree removal outlasts what stock leaves holding the folder as its working folder (omp 18's project broker for 3 s; omp 19's per-user daemon, started by the first session's omp, for as long as any omp is connected): an empty folder git already dropped is written down and removed by disk care later.",
+		files: [
+			"native/ompdesk/crates/core/src/git/worktree.rs",
+			"native/ompdesk/crates/core/src/git/left_behind.rs",
+			"src/main/worktree-orphans.ts",
+		],
+		stock: [
+			"__omp_worker_daemon (daemon/client.ts spawnDaemon, no cwd)",
+			"__omp_worker_daemon_broker (omp 18 launch/broker.ts)",
+			"omp ps --json",
+		],
+		tests: ["src/main/omp-daemon-folder-stock.test.ts"],
+	},
+	{
 		id: "Q01",
 		area: "rpc",
 		contract: "public",
