@@ -68,6 +68,7 @@ describe("omp-latest.yml", () => {
 			"pretend_tested",
 			"recheck",
 			"rehearse_app",
+			"rehearse_branch",
 		]);
 	});
 
@@ -150,6 +151,12 @@ describe("omp-latest.yml", () => {
 		for (const step of latest.jobs.compat?.steps ?? []) {
 			if (step.uses?.startsWith("actions/github-script@")) expect(step.if).toContain("env.WRITE == 'true'");
 		}
+		// The probe branch a rehearsal may write is taken only by a run that would write nothing: a real run writes the list.
+		const record = latest.jobs.compat?.steps?.find(step => step.run?.includes("compat.ts record"));
+		expect(record?.env).toMatchObject({
+			COMPAT_BRANCH: expr("needs.plan.outputs.write != 'true' && inputs.rehearse_branch || ''"),
+			WRITE: expr("(needs.plan.outputs.write == 'true' || inputs.rehearse_branch != '') && 'true' || 'false'"),
+		});
 	});
 });
 

@@ -179,4 +179,22 @@ describe("recordOnBranch", () => {
 		);
 		expect(run(origin, "rev-parse", "omp-compat")).toBe(before);
 	});
+
+	it("writes a rehearsal to its probe branch and leaves the list apps read alone", () => {
+		const git = gitIn(clone());
+		recordOnBranch(git, { app: APP, omp: "19.1.0", verdict: green, write: true });
+		const before = run(origin, "rev-parse", "omp-compat");
+		const probe = "probe/omp-compat-rehearsal";
+		const recorded = recordOnBranch(git, { app: APP, omp: "19.2.0", verdict: green, write: true, branch: probe });
+		expect(recorded.pushed).toBe(true);
+		expect(parseOmpCompat(`${run(origin, "show", `${probe}:omp-compat.json`)}\n`)).toEqual({
+			[APP]: { verified: ["19.2.0"], holding: null },
+		});
+		expect(run(origin, "rev-parse", "omp-compat")).toBe(before);
+		for (const elsewhere of ["main", "probe/other", "omp-compat-x", "probe/omp-compat-../main"]) {
+			expect(() =>
+				recordOnBranch(git, { app: APP, omp: "19.2.0", verdict: green, write: true, branch: elsewhere }),
+			).toThrow(/not a branch the verified list may be written to/);
+		}
+	});
 });

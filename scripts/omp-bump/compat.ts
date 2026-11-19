@@ -2,17 +2,20 @@
  * The verified-omp list on its branch (`omp-compat`, one file `omp-compat.json`; rules in compat-run.ts).
  *
  *   bun scripts/omp-bump/compat.ts record   env APP, OMP, VERDICT=green|red, WRITE=true|false, ISSUE (red: the hold
- *                                           issue's number, may be empty), AT (red: ISO time, default now)
+ *                                           issue's number, may be empty), AT (red: ISO time, default now),
+ *                                           COMPAT_BRANCH (default omp-compat; else a `probe/omp-compat-*` branch)
  *
  * `record` reads the branch, applies the verdict and, with WRITE=true, pushes one commit as github-actions[bot]. A
  * push only ever adds a commit on top of the one that was read (no force), so a writer that lost the race reads again
- * and applies its verdict to the newer list. Without WRITE it prints the list it would have written: the rehearsal.
+ * and applies its verdict to the newer list; after a push it reads the branch back and fails unless the app would read
+ * exactly the list it wrote. Without WRITE it prints the list it would have written: the rehearsal. A rehearsal that
+ * must also prove the write names a probe branch (COMPAT_BRANCH), never the list apps read.
  * Writes GITHUB_OUTPUT (`pushed`, `released_issue`) and the step summary.
  */
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
-import { type CompatVerdict, OMP_COMPAT_BRANCH, OMP_COMPAT_FILE } from "../../src/shared/omp-compat";
+import { type CompatVerdict, OMP_COMPAT_BRANCH, OMP_COMPAT_FILE, parseOmpCompat } from "../../src/shared/omp-compat";
 import { type Applied, applyVerdict } from "./compat-run";
 
 export interface GitResult {
@@ -29,8 +32,17 @@ export function gitIn(cwd: string): Git {
 	};
 }
 
-const REF = `refs/heads/${OMP_COMPAT_BRANCH}`;
-const TRACKING = `refs/remotes/origin/${OMP_COMPAT_BRANCH}`;
+/** Where a verdict may be written: the list apps read, or a probe branch a rehearsal proves the write on. */
+const PROBE_BRANCH = /^probe\/omp-compat-[a-z0-9][a-z0-9-]*$/;
+
+export function compatBranch(name: string | undefined): string {
+	const branch = (name ?? "").trim() || OMP_COMPAT_BRANCH;
+	if (branch !== OMP_COMPAT_BRANCH && !PROBE_BRANCH.test(branch)) {
+		throw new Error(`not a branch the verified list may be written to: ${JSON.stringify(branch)}`);
+	}
+	return branch;
+}
+
 const BOT = [
 	"-c",
 	"user.name=github-actions[bot]",
@@ -44,13 +56,15 @@ function ok(result: GitResult, what: string): string {
 }
 
 /** The branch's head and the file's text as origin has them now; null for a branch or a file that does not exist. */
-export function readCompat(git: Git): { commit: string | null; text: string | null } {
-	const remote = git(["ls-remote", "--exit-code", "--heads", "origin", REF]);
+export function readCompat(git: Git, branch = OMP_COMPAT_BRANCH): { commit: string | null; text: string | null } {
+	const ref = `refs/heads/${branch}`;
+	const tracking = `refs/remotes/origin/${branch}`;
+	const remote = git(["ls-remote", "--exit-code", "--heads", "origin", ref]);
 	// 2: no such ref. Any other failure must not read as an empty list.
 	if (remote.status === 2) return { commit: null, text: null };
 	ok(remote, "git ls-remote");
-	ok(git(["fetch", "--quiet", "origin", `+${REF}:${TRACKING}`]), "git fetch");
-	const commit = ok(git(["rev-parse", "--verify", TRACKING]), "git rev-parse").trim();
+	ok(git(["fetch", "--quiet", "origin", `+${ref}:${tracking}`]), "git fetch");
+	const commit = ok(git(["rev-parse", "--verify", tracking]), "git rev-parse").trim();
 	const listed = ok(git(["ls-tree", "--name-only", commit, "--", OMP_COMPAT_FILE]), "git ls-tree").trim();
 	if (listed === "") return { commit, text: null };
 	return { commit, text: ok(git(["show", `${commit}:${OMP_COMPAT_FILE}`]), "git show") };
@@ -62,6 +76,8 @@ export interface RecordInput {
 	verdict: CompatVerdict;
 	/** false: read and apply only. */
 	write: boolean;
+	/** `compatBranch`: `omp-compat` unless a rehearsal names a probe branch. */
+	branch?: string;
 	tries?: number;
 }
 
@@ -71,12 +87,14 @@ export interface Recorded extends Applied {
 
 /**
  * Applies the verdict to the list origin holds and pushes it. Each try starts from what origin has at that moment, so
- * a run that crashed after its push, a re-run and a writer that pushed in between all end with the same list.
+ * a run that crashed after its push, a re-run and a writer that pushed in between all end with the same list. A push
+ * is read back from origin: what the app would parse there must be the list this run wrote, or the run fails.
  */
 export function recordOnBranch(git: Git, input: RecordInput): Recorded {
 	const tries = input.tries ?? 3;
+	const branch = compatBranch(input.branch);
 	for (let attempt = 1; ; attempt++) {
-		const remote = readCompat(git);
+		const remote = readCompat(git, branch);
 		const applied = applyVerdict(remote.text, input.app, input.omp, input.verdict);
 		if (!input.write || !applied.changed) return { ...applied, pushed: false };
 		const message = `chore(omp-compat): ${input.app} ${input.verdict.green ? "green" : "red"} omp ${input.omp}`;
@@ -85,10 +103,17 @@ export function recordOnBranch(git: Git, input: RecordInput): Recorded {
 		const tree = ok(git(["mktree"], `100644 blob ${blob}\t${OMP_COMPAT_FILE}\n`), "git mktree").trim();
 		const parent = remote.commit ? ["-p", remote.commit] : [];
 		const commit = ok(git([...BOT, "commit-tree", tree, ...parent, "-m", message]), "git commit-tree").trim();
-		const push = git(["push", "--quiet", "origin", `${commit}:${REF}`]);
-		if (push.status === 0) return { ...applied, pushed: true };
+		const push = git(["push", "--quiet", "origin", `${commit}:refs/heads/${branch}`]);
+		if (push.status === 0) {
+			const back = readCompat(git, branch).text;
+			const read = back === null ? null : parseOmpCompat(back);
+			if (!read || JSON.stringify(read) !== JSON.stringify(parseOmpCompat(applied.text))) {
+				throw new Error(`${branch} does not read back as the list just pushed: ${JSON.stringify(back)}`);
+			}
+			return { ...applied, pushed: true };
+		}
 		if (attempt >= tries) throw new Error(`git push failed ${tries} times: ${push.stderr.trim()}`);
-		console.error(`push ${attempt} was rejected; reading ${OMP_COMPAT_BRANCH} again\n${push.stderr.trim()}`);
+		console.error(`push ${attempt} was rejected; reading ${branch} again\n${push.stderr.trim()}`);
 	}
 }
 
@@ -116,11 +141,13 @@ if (import.meta.main) {
 		process.exit(2);
 	}
 	const [app, omp, verdict, write] = [env("APP"), env("OMP"), verdictFromEnv(), env("WRITE") === "true"];
-	const recorded = recordOnBranch(gitIn(path.resolve(import.meta.dirname, "../..")), { app, omp, verdict, write });
+	const branch = compatBranch(process.env.COMPAT_BRANCH);
+	const git = gitIn(path.resolve(import.meta.dirname, "../.."));
+	const recorded = recordOnBranch(git, { app, omp, verdict, write, branch });
 	const outcome = recorded.pushed
-		? `pushed to \`${OMP_COMPAT_BRANCH}\``
+		? `pushed to \`${branch}\` and read back`
 		: write
-			? `\`${OMP_COMPAT_BRANCH}\` already says so, nothing pushed`
+			? `\`${branch}\` already says so, nothing pushed`
 			: "rehearsal, nothing pushed";
 	const summary = [
 		`### omp ${omp} against OMPdesk ${app}: ${verdict.green ? "green" : "red"} (${outcome})`,
