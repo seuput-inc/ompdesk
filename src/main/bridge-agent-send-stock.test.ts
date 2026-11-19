@@ -4,6 +4,7 @@ import { wrapAgentMessage } from "../shared/agent-control";
 import {
 	atEnd,
 	CARD,
+	CLEANUP_MS,
 	type Frame,
 	HOLD,
 	type Omp,
@@ -15,7 +16,7 @@ import {
 } from "./bridge-agent-mail-stock-harness";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
-afterAll(runCleanups);
+afterAll(runCleanups, CLEANUP_MS);
 
 /**
  * What a message another session's agent sends (`ompdesk_session_send`: stock `prompt` with the `streamingBehavior`
