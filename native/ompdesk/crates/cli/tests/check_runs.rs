@@ -215,3 +215,41 @@ fn a_cancelled_waiter_never_runs_its_command() {
     std::thread::sleep(Duration::from_millis(500));
     assert!(!marker.exists(), "the cancelled check ran its command");
 }
+
+#[test]
+fn a_session_cancels_only_a_run_it_started() {
+    let case = Case::new("cancel-owner");
+    let mut check = case
+        .command(
+            &["check", "--", "sleep", "30"],
+            &[("OMP_GUI_SESSION_TAG", "tab-a")],
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    case.wait_for("the check to run", |c| state(&c.latest()) == "running");
+    let id = case.latest().unwrap()["id"].as_str().unwrap().to_string();
+
+    let (out, text) = case.run(
+        &["check", "cancel", &id],
+        &[("OMP_GUI_SESSION_TAG", "tab-b")],
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("another session (tab-a)"), "{text}");
+    assert_eq!(state(&case.latest()), "running");
+
+    // `checks wait` ends with the run and answers that there is no judgment.
+    let waiter = case.spawn(&["checks", "wait", &id]);
+    let (out, text) = case.run(
+        &["check", "cancel", &id],
+        &[("OMP_GUI_SESSION_TAG", "tab-a")],
+    );
+    assert!(out.status.success(), "{text}");
+    let waited = waiter.wait_with_output().unwrap();
+    assert_eq!(waited.status.code(), Some(4));
+    let answer: serde_json::Value = serde_json::from_slice(&waited.stdout).unwrap();
+    assert_eq!(answer["verdict"], "unknown");
+    assert_eq!(answer["next"], "rerun-failed");
+    let _ = check.wait();
+}

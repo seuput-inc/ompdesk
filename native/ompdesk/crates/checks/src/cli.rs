@@ -7,6 +7,7 @@
 //! - `ompdesk heavy hold [--all]`: for a program that holds a slot itself: prints `held <slots>` once it has the
 //!   slot(s) and gives them back when its stdin closes (or it dies).
 //! - `ompdesk check [--full] [--light] [--release] [--] CMD [ARG…]`, `check status|attach|cancel`: see `check.rs`.
+//! - `ompdesk checks wait [ID]`, `checks status`: see `board.rs`.
 
 use std::io::{self, BufRead, Write};
 use std::process::Command;
@@ -24,6 +25,9 @@ pub const HELP: &str = concat!(
     "  check     `check [--full] [--light] [--release] [--] CMD [ARG...]`: run a test suite or check, reusing only results\n",
     "            whose inputs are unchanged; survives OMPdesk restarts. `check status [ID] [--all] [--json]`,\n",
     "            `check attach [ID]`, `check cancel ID`.\n",
+    "  checks    `checks wait [ID]` blocks until a check run ends, then prints its judgment as JSON: verdict, each failed\n",
+    "            test with its first error, known flaky or not, what to do next (exit 0 green, 1 red, 4 unknown).\n",
+    "            `checks status` prints this computer's heavy pool and check runs, with who started each, as JSON.\n",
 );
 
 fn env(name: &str) -> Option<String> {
@@ -37,7 +41,23 @@ pub fn dispatch(argv: &[String]) -> Option<i32> {
         "run" => Some(run(rest)),
         "heavy" => Some(heavy_command(rest)),
         "check" => Some(check_command(rest)),
+        "checks" => Some(checks_command(rest)),
         _ => None,
+    }
+}
+
+fn checks_command(rest: &[String]) -> i32 {
+    match rest.split_first().map(|(word, more)| (word.as_str(), more)) {
+        Some(("status", [])) => match pool(&[]) {
+            Ok(pool) => crate::board::status(&pool),
+            Err(e) => {
+                eprintln!("ompdesk: {e}");
+                EXIT_FAILED
+            }
+        },
+        Some(("wait", [])) => crate::board::wait(None),
+        Some(("wait", [id])) if !id.starts_with('-') => crate::board::wait(Some(id)),
+        _ => usage("checks takes `wait [ID]` or `status`"),
     }
 }
 

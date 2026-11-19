@@ -5015,6 +5015,8 @@ export const ko: Record<string, string> = {
 	"workBoard.session.check.typecheck.running": "타입 검사 중",
 	"workBoard.session.check.lint.running": "린트 실행 중",
 	"workBoard.session.check.build.running": "빌드 중",
+	"workBoard.session.check.release": "릴리스 게이트",
+	"workBoard.session.check.wakes": "결과가 나오면 이 세션이 깨어나요.",
 	"workBoard.session.peers.worktree": "이 체크아웃에 세션 {count}개",
 	"workBoard.session.peers.repo": "이 저장소에 세션 {count}개",
 	"workBoard.session.peers.hidden": "숨겨진 세션",

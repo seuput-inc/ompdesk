@@ -64,6 +64,16 @@ pub(crate) fn open_store() -> io::Result<Store> {
     Store::open(store::store_dir(&env))
 }
 
+/// The OMPdesk session this process runs in; none in a plain terminal.
+pub(crate) fn session_tag() -> Option<String> {
+    env(SESSION_ENV).filter(|tag| !tag.is_empty())
+}
+
+/// A session cancels only the runs it started; a person (a plain terminal, no session) cancels any.
+fn may_cancel(owner: Option<&str>, caller: Option<&str>) -> bool {
+    caller.is_none() || owner == caller
+}
+
 /// A result that fails a verdict.
 pub(crate) fn failing(status: &str) -> bool {
     !matches!(status, "passed" | "skipped" | "flaky")
@@ -248,7 +258,7 @@ pub fn start(opts: Start) -> i32 {
         light: opts.light,
         release: opts.release,
         summary: None,
-        session: env(SESSION_ENV).filter(|tag| !tag.is_empty()),
+        session: session_tag(),
     };
     if let Err(e) = store.create(&run) {
         eprintln!("ompdesk check: cannot record the run: {e}");
@@ -388,7 +398,7 @@ const RUNNER_LINGER: Duration = Duration::from_secs(5);
 
 /// `attach_id` into `out`. A run reads as finished the moment its runner saved the state, but the runner is only done
 /// with the log once it released `alive` (its process ended): returning earlier could leave out its last lines.
-fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
+pub(crate) fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
     let Ok(mut log) = fs::File::open(store.file(id, "log")) else {
         eprintln!("ompdesk check: no run {id}");
         return 1;
@@ -553,6 +563,18 @@ pub fn cancel(id: &str) -> i32 {
     if run.state.finished() {
         eprintln!("ompdesk check: run {} has already ended", run.id);
         return 0;
+    }
+    if !may_cancel(run.session.as_deref(), session_tag().as_deref()) {
+        eprintln!(
+            "ompdesk check: run {} was started by {}, so this session does not cancel it",
+            run.id,
+            run.session
+                .as_deref()
+                .map_or("a person in a terminal".into(), |s| format!(
+                    "another session ({s})"
+                ))
+        );
+        return 1;
     }
     let _ = fs::write(store.file(&run.id, "cancel"), "");
     stop_command(&store, &run);
@@ -1756,6 +1778,16 @@ mod tests {
         );
         assert_eq!(test_suffix("src/index.ts"), None);
         assert_eq!(test_suffix(".eslintrc.js"), None);
+    }
+
+    #[test]
+    fn a_session_cancels_only_its_own_runs_and_a_person_any() {
+        assert!(may_cancel(Some("tab-a"), Some("tab-a")));
+        assert!(!may_cancel(Some("tab-a"), Some("tab-b")));
+        // A run a person started in a terminal is never an agent's to cancel.
+        assert!(!may_cancel(None, Some("tab-b")));
+        assert!(may_cancel(Some("tab-a"), None));
+        assert!(may_cancel(None, None));
     }
 
     fn earlier_run(store: &Store, id: &str, state: &str, digest: &str) -> Run {

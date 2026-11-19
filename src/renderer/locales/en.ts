@@ -5019,6 +5019,8 @@ export const en: Record<string, string> = {
 	"workBoard.session.check.typecheck.running": "types checking",
 	"workBoard.session.check.lint.running": "lint running",
 	"workBoard.session.check.build.running": "build running",
+	"workBoard.session.check.release": "release gate",
+	"workBoard.session.check.wakes": "This session is woken when the result arrives.",
 	"workBoard.session.peers.worktree": "{count} session{plural} in this checkout",
 	"workBoard.session.peers.repo": "{count} session{plural} in this repository",
 	"workBoard.session.peers.hidden": "a hidden session",
