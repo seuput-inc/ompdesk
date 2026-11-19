@@ -197,12 +197,8 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		});
 		await mount();
 		const strip = container.querySelector("[data-work-chip]");
-		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe(
-			"1/2Not updated while the agent kept working·58m ago",
-		);
-		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe(
-			"1 of 2 done · Not updated while the agent kept working",
-		);
+		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2List out of date·58m ago");
+		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done · List out of date");
 
 		// A list that follows the work keeps its current task and only says when it last changed.
 		await act(async () =>
