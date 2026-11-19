@@ -498,3 +498,44 @@ async fn a_send_to_a_session_still_starting_returns_within_its_bound() {
     );
     control.host.port().close();
 }
+
+/// A paired host's tab whose `tab.command` timed out on the link (main answers `rpc_delivery_unknown`): the host may
+/// have delivered it (19 Nov 2026: the hub got all three copies of one request id after two "nothing was sent").
+#[tokio::test]
+async fn an_unanswered_send_is_not_confirmed_and_its_resend_answers_from_the_record() {
+    let tuning = Tuning {
+        turn_start_wait_ms: 40,
+        ..Tuning::default()
+    };
+    let mut remote = tab("b");
+    remote["device"] = json!("macbook");
+    let (control, asked) = rig(
+        9_331,
+        state(vec![tab("a"), remote]),
+        tuning,
+        |method, args| match (method, args["command"]["type"].as_str()) {
+            ("command", Some("prompt")) => Ok(json!({
+                "success": false,
+                "code": "rpc_delivery_unknown",
+                "error": "tab.command timed out after 35000 ms",
+            })),
+            _ => main_replies(method, args),
+        },
+    );
+    let args = json!({ "session": "b", "message": "gate green", "request_id": "main-gate3" });
+    let first = control
+        .run("a", "ompdesk_session_send", args.clone(), None)
+        .await;
+    assert!(!first.is_error, "{}", first.text);
+    assert!(first.text.contains("not confirmed"), "{}", first.text);
+    assert!(!first.text.contains("nothing was sent"), "{}", first.text);
+    let again = control.run("a", "ompdesk_session_send", args, None).await;
+    assert!(!again.is_error, "{}", again.text);
+    assert!(again.text.contains("nothing sent again"), "{}", again.text);
+    let prompts = asked_with(&asked, "command")
+        .into_iter()
+        .filter(|args| args["command"]["type"] == "prompt")
+        .count();
+    assert_eq!(prompts, 1, "the resend reached the host again");
+    control.host.port().close();
+}
