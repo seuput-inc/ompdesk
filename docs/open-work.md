@@ -8,7 +8,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| T1 | An agent's to-do list goes stale: the "now" row shows a step finished hours ago, done counts jump, playbook steps fill the list while the real work has no row. Find which of: copied playbook steps, steers that add no row, the "never a todo-only turn" rule deferring updates, compaction, reminder thresholds, a panel that shows a stale "now" without saying so. Fix on both sides (agent prompts and the panel) and measure before/after from session files. | in progress | todo-truth [desktop] | | before/after: minutes of tool calls with no list change; share of new instructions that add a row |
+| T1 | An agent's to-do list goes stale: the "now" row shows a step finished hours ago, done counts jump, playbook steps fill the list while the real work has no row. Find which of: copied playbook steps, steers that add no row, the "never a todo-only turn" rule deferring updates, compaction, reminder thresholds, a panel that shows a stale "now" without saying so. Fix on both sides (agent prompts and the panel) and measure before/after from session files. | panel half on branch (green); agent-side reminder: no measured effect yet, in progress | todo-truth-mini [Mac mini] | omp/agent/todo-truth-mini-20261120 `943d80516` | ci 44586054074, parity 44580590175, e2e 44580640061; before: 952 steers, 30.6% got a row; long scenario stretch 31-32 → 32-34 calls |
 
 ## A. My message waits in the queue
 
