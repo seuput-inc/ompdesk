@@ -307,6 +307,13 @@ public static class WindowPaint {
 	[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data);
 	[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
 	[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+	[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+	// Grows (or shrinks) the window by dx, dy without moving or activating it: an area no earlier frame covered.
+	public static void Grow(IntPtr window, int dx, int dy) {
+		Rect rect;
+		if (GetWindowRect(window, out rect))
+			SetWindowPos(window, IntPtr.Zero, 0, 0, rect.Right - rect.Left + dx, rect.Bottom - rect.Top + dy, 0x0002 | 0x0004 | 0x0010);
+	}
 	// The process's largest visible top-level window: the Tauri host also owns small helper windows.
 	public static IntPtr Largest(uint pid) {
 		IntPtr best = IntPtr.Zero;
@@ -378,6 +385,10 @@ function Assert-SurvivesGpuCrashes {
 	$paint = { param($label) $seen = Measure-WindowPaint $main "paint-$label"; Write-Host "     paint $label`: $($seen.Painted) ($($seen.Text))" }
 	try {
 		& $paint 'before'
+		[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), 200, 100)
+		Start-Sleep -Seconds 2
+		& $paint 'before-grown'
+		[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), -200, -100)
 		for ($i = 0; $i -lt 2; $i++) {
 			$gpu = @()
 			$deadline = (Get-Date).AddSeconds(30)
@@ -397,6 +408,11 @@ function Assert-SurvivesGpuCrashes {
 			& $paint "crash$($i + 1)-2s"
 			Start-Sleep -Seconds 4
 			& $paint "crash$($i + 1)-6s"
+			# A repaint, not a kept frame: the grown area exists only if WebView2 draws again after the crash.
+			[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), 200, 100)
+			Start-Sleep -Seconds 2
+			& $paint "crash$($i + 1)-grown"
+			[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), -200, -100)
 		}
 		$deadline = (Get-Date).AddSeconds(30)
 		while ((Get-Date) -lt $deadline) {
@@ -421,6 +437,29 @@ function Assert-SurvivesGpuCrashes {
 	}
 	$now = @(Get-WebViewGpuPids $main)
 	Ok "OMPdesk $main stayed up with its window through $($crashed.Count) WebView2 GPU crashes ($($crashed -join ', ')); GPU now: $(if ($now.Count) { $now -join ', ' } else { 'none running' })"
+	# Evidence only (not asserted yet): what a crash of this app's WebView2 renderer leaves on screen.
+	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue)
+	$browsers = @($all | Where-Object { $_.ParentProcessId -eq $main -and $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.ProcessId })
+	$renderers = @($all | Where-Object { $browsers -contains $_.ParentProcessId -and $_.CommandLine -match '--type=renderer' -and $_.CommandLine -notmatch '--extension-process' } |
+			ForEach-Object { $_.ProcessId })
+	Write-Host "     WebView2 renderers of OMPdesk $main`: $($renderers -join ', ')"
+	foreach ($renderer in $renderers) {
+		try { Stop-ProcessAsCrash $renderer; Write-Host "     crashed WebView2 renderer pid $renderer" } catch { Write-Host "     could not crash renderer $renderer`: $($_.Exception.Message)" }
+	}
+	if ($renderers.Count -gt 0) {
+		$since = 0
+		foreach ($wait in 2, 6, 20) {
+			Start-Sleep -Seconds ($wait - $since)
+			$since = $wait
+			$alive = @(Get-MainPids)
+			Write-Host "     after the renderer crash, $wait s: main $($alive -join ', ')"
+			if ($alive -contains $main) { & $paint "renderer-$($wait)s" }
+		}
+		$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+		if (Test-Path -LiteralPath $log) {
+			Get-Content -LiteralPath $log -Tail 30 | Where-Object { $_ -match 'render|crash|gone|reload|unresponsive' } | ForEach-Object { Write-Host "     log: $_" }
+		}
+	}
 	Stop-App
 	foreach ($file in 'gpu-fallback.json', 'launch-history.json') {
 		Remove-Item -LiteralPath (Join-Path $env:APPDATA "ompdesk\$file") -Force -ErrorAction SilentlyContinue
