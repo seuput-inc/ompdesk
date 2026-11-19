@@ -91,6 +91,7 @@ beforeAll(() => {
 		asking: () => false,
 		planWaiting: () => false,
 		compacting: () => false,
+		opening: () => false,
 		backgroundWork: async () => NO_BACKGROUND_WORK,
 	});
 });

@@ -966,6 +966,7 @@ app.whenReady().then(async () => {
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
+	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
 	let stuckTabs: { count: number; minutes: number } | null = null;
 	/**
@@ -2411,6 +2412,7 @@ app.whenReady().then(async () => {
 		webTabNotice,
 		sessionWake,
 		tabReport,
+		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],
 		spawnWindow,
 		initialCwd: resolveInitialCwd,
@@ -2641,6 +2643,7 @@ app.whenReady().then(async () => {
 			[...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.awaitingUi),
 		planWaiting: () => sidecarPool.restartHolds().planWaiting,
 		compacting: () => sidecarPool.restartHolds().compacting || hostServices.compacting(),
+		opening: () => agentOpening.current?.() ?? false,
 		// Running subagents and background jobs: `composer.jobs` of every omp whose run is on (background-work.ts).
 		backgroundWork: () =>
 			askBackgroundWork(() => [...sidecarPool.runningBridges(), ...hostServices.runningBridges()]),

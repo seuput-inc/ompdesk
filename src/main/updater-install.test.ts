@@ -148,6 +148,7 @@ beforeAll(() => {
 		asking: () => holds.asking,
 		planWaiting: () => holds.planWaiting,
 		compacting: () => false,
+		opening: () => false,
 		backgroundWork: async () => background.work,
 	});
 });

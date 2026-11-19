@@ -322,6 +322,8 @@ export interface IpcDeps {
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
 	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
 	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
+	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */
+	agentOpening: { current: (() => boolean) | null };
 	/** The paired web pages' windows: `broadcast` reaches the desktop's own only. */
 	webPages?: () => readonly ClientWindow[];
 	/** The desktop slot's host, built in `registerIpcHandlers` (it needs the pool) and published here for the sidecar factory. */
@@ -1507,6 +1509,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.remoteDevices.onHostOnline(() => agentControl.control.changed());
 	deps.sessionWake.current = (schedule, runId) => agentControl.wakeSession(schedule, runId);
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
+	deps.agentOpening.current = () => agentControl.opening();
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),

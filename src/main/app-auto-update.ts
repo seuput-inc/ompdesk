@@ -63,6 +63,11 @@ export interface AutoInstallFacts {
 	planWaiting?: boolean;
 	/** Some tab compacts its context: a restart then would cut the compaction, which does not resume. */
 	compacting?: boolean;
+	/**
+	 * An agent is opening a session that has not taken its first message yet (the new omp is starting, or the message is
+	 * on its way): a restart then would lose it, since nothing sends it again after the relaunch.
+	 */
+	opening?: boolean;
 	/** One of this app's windows has focus. */
 	focused: boolean;
 	/** Time since the user's last input anywhere on the computer. */
@@ -79,7 +84,12 @@ export interface AutoInstallEffects {
 }
 
 /** Why the scheduler is not installing yet. */
-export type AutoInstallWaitReason = "busy turn" | "open ask" | "compaction" | "focused+active input";
+export type AutoInstallWaitReason =
+	| "busy turn"
+	| "open ask"
+	| "compaction"
+	| "opening session"
+	| "focused+active input";
 
 /** Who started an install: the scheduler, a click on "Restart & install" (or a paired device's), or a plain quit. */
 export type InstallTrigger = "auto" | "user click" | "quit";
@@ -117,12 +127,14 @@ function waitReason(facts: AutoInstallFacts): AutoInstallWaitReason {
 
 /**
  * What a resume-on restart must wait for: an open card (its answer would be lost while someone may give it; an ask or
- * approval stops holding once nobody is there, `#cardGivesWay`) or a compaction (a cut one does not resume); else none.
- * Running turns, subagents and jobs are not in it: the relaunch continues them.
+ * approval stops holding once nobody is there, `#cardGivesWay`), a compaction (a cut one does not resume) or a session an
+ * agent is opening (its first message would be lost); else none. Running turns, subagents and jobs are not in it: the
+ * relaunch continues them.
  */
-function unsafeReason(facts: AutoInstallFacts): "open ask" | "compaction" | undefined {
+function unsafeReason(facts: AutoInstallFacts): "open ask" | "compaction" | "opening session" | undefined {
 	if (facts.asking) return "open ask";
 	if (facts.compacting) return "compaction";
+	if (facts.opening) return "opening session";
 	return undefined;
 }
 

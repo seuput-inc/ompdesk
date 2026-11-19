@@ -372,6 +372,31 @@ describe("AgentControlRuntime", () => {
 		expect(spawned[0]).toMatchObject({ task: "Fix the upload test" });
 	});
 
+	it("holds an update restart while a session it opens has not taken its first message, and a moment after", async () => {
+		const { runtime, win, deps } = setup();
+		const prompt = Promise.withResolvers<void>();
+		let held = false;
+		const dispatch = deps.dispatch;
+		deps.dispatch = async (target, sidecar, tabId, command, timeoutMs) => {
+			if (command.type === "prompt") {
+				held = true;
+				await prompt.promise;
+			}
+			return dispatch(target, sidecar, tabId, command, timeoutMs);
+		};
+		expect(runtime.opening()).toBe(false);
+		const opened = runtime.run(win, "main0001", T.open, { message: "Title: Fix the upload test\nIt times out." });
+		await expect.poll(() => held).toBe(true);
+		expect(runtime.opening()).toBe(true);
+		prompt.resolve();
+		await opened;
+		expect(runtime.opening()).toBe(true);
+		expect(runtime.opening(Date.now() + 3_000)).toBe(false);
+		// An open without a first message has nothing to lose.
+		await runtime.run(win, "main0001", T.open, {});
+		expect(runtime.opening()).toBe(false);
+	});
+
 	/** The review frames a window was sent (`AGENT_CONTROL_REVIEW`), as their JSON. */
 	const reviewFrames = (target: { sent: [string, unknown][] }) =>
 		target.sent
