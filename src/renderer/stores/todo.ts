@@ -1,4 +1,5 @@
 import { createStore } from "zustand/vanilla";
+import type { TodoDriftState } from "../../../resources/gui-bridge/todo-drift-contracts";
 import type { TodoPhase, TodoTask } from "../../shared/rpc-types";
 import { createScopedStoreHook } from "./session-runtime-context";
 
@@ -59,6 +60,12 @@ export interface TodoStore {
 	 * (released when that turn ends) or when the user reopens it explicitly.
 	 */
 	keepClosedVisible: boolean;
+	/**
+	 * When the list last changed and whether it is behind the work (the bridge's reading: get_state `todoDrift` and
+	 * `todo_drift` frames); null until one arrives. A change seen here reads as fresh at once, ahead of the bridge.
+	 */
+	drift: TodoDriftState | null;
+	setDrift: (drift: TodoDriftState | null) => void;
 	setPhases: (phases: TodoPhase[]) => void;
 	setTurnActive: (active: boolean, turnStartedAt?: number) => void;
 	revealClosed: () => void;
@@ -80,6 +87,7 @@ const initialState = {
 	turnSourceKnown: false,
 	historyEpoch: 0,
 	keepClosedVisible: false,
+	drift: null as TodoDriftState | null,
 };
 
 function normalizePhases(phases: TodoPhase[]): UiTodoPhase[] {
@@ -158,8 +166,10 @@ export const createTodoStore = () =>
 			const history =
 				previous?.id === snapshot.id ? [...state.history.slice(0, -1), snapshot] : [...state.history, snapshot];
 			if (history.length > HISTORY_LIMIT) history.shift();
-			set({ ...live, history });
+			// A person's edit or an agent's todo call: fresh at once; the bridge's next reading confirms it.
+			set({ ...live, history, drift: { changedAt: Date.now(), stale: null, received: [], receivedCount: 0 } });
 		},
+		setDrift: drift => set({ drift }),
 		setTurnActive: (active, sourceTimestamp) =>
 			set(state => {
 				const changed = active !== state.turnActive;

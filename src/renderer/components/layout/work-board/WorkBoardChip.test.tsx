@@ -178,6 +178,41 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 3 done");
 	});
 
+	it("says why a list is behind the work in place of its current task, and when it last changed", async () => {
+		useTodoStore.getState().setPhases([
+			{
+				name: "Fix",
+				tasks: [
+					{ content: "Reproduce", status: "completed" },
+					{ content: "Wait for the row", status: "in_progress" },
+				],
+			},
+		]);
+		useTodoStore.getState().setDrift({
+			changedAt: Date.now() - 58 * 60_000 - 5000,
+			stale: "drift",
+			received: [],
+			receivedCount: 0,
+		});
+		await mount();
+		const strip = container.querySelector("[data-work-chip]");
+		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe(
+			"1/2Not updated while the agent kept working58m ago",
+		);
+		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe(
+			"1 of 2 done · Not updated while the agent kept working",
+		);
+
+		// A list that follows the work keeps its current task and only says when it last changed.
+		await act(async () =>
+			useTodoStore
+				.getState()
+				.setDrift({ changedAt: Date.now() - 3 * 60_000 - 5000, stale: null, received: [], receivedCount: 0 }),
+		);
+		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Wait for the row3m ago");
+		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done");
+	});
+
 	it("says the figure Needs you counts, ahead of the plan's progress", async () => {
 		useTodoStore.getState().setPhases([{ name: "Fix", tasks: [{ content: "Reproduce", status: "in_progress" }] }]);
 		for (const id of ["c1", "c2"])

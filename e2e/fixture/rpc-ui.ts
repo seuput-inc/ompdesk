@@ -48,6 +48,7 @@ import {
 	stoppedSubagents,
 } from "../../resources/gui-bridge/restart-core";
 import { type ForkEntry, forkCut } from "../../resources/gui-bridge/session-fork-core";
+import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import { transcriptPageMessages, transcriptRunStart } from "../../resources/gui-bridge/transcript-page";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
@@ -448,6 +449,10 @@ export function runRpcUi(): void {
 	}
 	/** Stock `/btw` history, newest first. */
 	const btwRecords: object[] = [];
+	/** The session's todo list and the bridge's reading of it (todo-drift.ts), set by `fixture todo behind`. */
+	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
+	const noDrift: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
+	let todoDrift = noDrift;
 	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
 		model,
@@ -474,7 +479,7 @@ export function runRpcUi(): void {
 		hasPendingAsyncWork: false,
 		isSettled: !isStreaming,
 		queuedMessages: { steering: [...lanes.steering], followUp: [...lanes.followUp] },
-		todoPhases: [],
+		todoPhases,
 		fastModeEnabled: false,
 		tokensPerSecond: null,
 		fastModeActive: false,
@@ -2015,6 +2020,7 @@ export function runRpcUi(): void {
 			return null;
 		},
 		model_choice: () => ({ chosen: standIn }),
+		"todoDrift.state": () => todoDrift,
 		"composer.state": () => ({
 			cwd: process.cwd(),
 			autoRetryEnabled: true,
@@ -5805,6 +5811,49 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				Number(process.env.OMP_GUI_TEST_LATER_MS ?? 3000),
 			);
 		} else if (message !== "fixture running") {
+			if (message === "fixture todo behind") {
+				// A list the agent left behind a steered instruction (resources/gui-bridge/todo-drift.ts): the todo call
+				// 12 minutes ago, then the bridge's reading of it, pushed as the bridge pushes it.
+				todoPhases = [
+					{
+						name: "Parser",
+						tasks: [
+							{ content: "Write the parser", status: "completed" },
+							{ content: "Test the parser", status: "in_progress" },
+							{ content: "Document the parser", status: "pending" },
+						],
+					},
+				];
+				const tool = { toolCallId: `todo-behind-${Date.now()}`, toolName: "todo" };
+				write({ type: "tool_execution_start", ...tool, args: { op: "init" } });
+				write({
+					type: "tool_execution_end",
+					...tool,
+					result: {
+						content: [{ type: "text", text: "todo updated" }],
+						details: { op: "init", phases: todoPhases },
+					},
+					isError: false,
+				});
+				const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
+				todoDrift = {
+					changedAt: minutesAgo(12),
+					stale: "instruction",
+					received: [
+						{ at: minutesAgo(9), text: "Also fix the README typo on line 3" },
+						{ at: minutesAgo(4), text: "Then rename parse() to parseConfig() everywhere" },
+					],
+					receivedCount: 2,
+				};
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
+			if (message === "fixture todo clear") {
+				todoPhases = [];
+				todoDrift = noDrift;
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
 			if (message === "fixture reply actions") {
 				// Stock auto thinking names the effort it classified for this turn.
 				thinking = { level: "high", configured: "auto" };
