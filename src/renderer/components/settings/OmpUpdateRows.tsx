@@ -8,6 +8,7 @@ import { RefreshCcw, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { TOOLS_AUTO_UPDATE_PREF } from "../../../shared/desktop-prefs";
 import type { OmpUpdateFailure, OmpUpdateState } from "../../../shared/omp-update";
+import { majorOf } from "../../../shared/version";
 import { saveGuiPreference } from "../../lib/display-preferences";
 import { useT } from "../../lib/i18n";
 import { useOmpUpdateStore } from "../../stores/omp-update";
@@ -60,15 +61,23 @@ export function OmpHeldNote({ state, className = "" }: { state: OmpUpdateState; 
 
 /**
  * The omp this OMPdesk was verified against, said only while another one runs (after an `omp update`, say), so a
- * mismatch is visible; it is a fact, never a warning. A held omp's line names it already.
+ * mismatch is visible; a held omp's line names it already. Inside the tested major it is a fact, never a warning.
+ * An installed omp above the tested major (a person's "Update now", or an install made outside OMPdesk) is said in
+ * full instead, whatever else the row says: OMPdesk keeps that omp and never moves it back, so the row is where the
+ * person learns that features may not work on it.
  */
 export function OmpTestedNote({ state, className = "" }: { state: OmpUpdateState; className?: string }) {
 	const t = useT();
 	if (!state.tested || state.installed === null || state.installed === state.tested) return null;
-	if (state.held && state.phase === "idle") return null;
+	const installedMajor = majorOf(state.installed);
+	const testedMajor = majorOf(state.tested);
+	const untested = installedMajor !== null && testedMajor !== null && installedMajor > testedMajor;
+	if (!untested && state.held && state.phase === "idle") return null;
 	return (
 		<p className={`${className} text-sc-xs break-words text-(--sc-text-muted)`} data-testid="omp-tested">
-			{t("ompUpdate.tested", { version: state.tested })}
+			{untested
+				? t("ompUpdate.untested", { version: state.installed, tested: state.tested })
+				: t("ompUpdate.tested", { version: state.tested })}
 		</p>
 	);
 }

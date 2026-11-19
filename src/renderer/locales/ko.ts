@@ -6695,6 +6695,8 @@ export const ko: Record<string, string> = {
 	"ompUpdate.held.untested-major":
 		"새 omp {latest} 버전이 나왔지만 이 OMPdesk는 omp {tested}에서 검증했어요. 주 버전이 달라서 자동으로 올리지 않아요. 그래도 올리려면 업데이트 버튼을 눌러 주세요.",
 	"ompUpdate.tested": "omp {version}에서 검증됨",
+	"ompUpdate.untested":
+		"설치된 버전: omp {version}. 이 OMPdesk를 검증한 omp {tested}보다 주 버전이 높아서 일부 기능이 동작하지 않을 수 있어요.",
 	"ompUpdate.failure.check": "npm에서 새 omp를 확인하지 못했어요.",
 	"ompUpdate.failure.install": "omp 업데이트에 실패했어요.",
 	"ompUpdate.failure.not-updated": "omp 업데이트가 끝났지만 아직 최신 버전({latest})이 아니에요.",
