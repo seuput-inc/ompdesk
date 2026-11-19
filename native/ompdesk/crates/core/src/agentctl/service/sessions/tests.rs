@@ -15,11 +15,12 @@ use crate::ports::Port;
 
 type Asked = Arc<Mutex<Vec<(String, Value)>>>;
 
-/// Plays main: answers each ask with `reply(method, args)` and records it.
+/// Plays main: answers each ask with `reply(method, args, port)` and records it. `reply` also sees each tell (its
+/// answer is dropped) and may push a snapshot through the port first, as main does before it answers.
 fn play_main(
     port: Arc<Port<HostState>>,
     mut lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
-    reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
+    reply: impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static,
 ) -> Asked {
     let asked: Asked = Arc::default();
     let record = asked.clone();
@@ -30,8 +31,9 @@ fn play_main(
             let method = data["method"].as_str().unwrap_or("").to_owned();
             let args = data["args"].clone();
             record.lock().unwrap().push((method.clone(), args.clone()));
+            let answer = reply(&method, &args, &port);
             if let Some(ask) = data["ask"].as_u64() {
-                match reply(&method, &args) {
+                match answer {
                     Ok(value) => crate::ports::apply_answer(&port, ask, Ok(&value.to_string())),
                     Err(message) => crate::ports::apply_answer(&port, ask, Err((&message, None))),
                 }
@@ -51,6 +53,13 @@ fn rig(
     extra: Value,
     reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
+    rig_with(id, state_of(tabs, extra), move |method, args, _| {
+        reply(method, args)
+    })
+}
+
+/// Main's snapshot: `tabs`, each in window "w", plus `extra`'s fields.
+fn state_of(tabs: Vec<Value>, extra: Value) -> Value {
     let windows: Map<String, Value> = tabs
         .iter()
         .map(|tab| (tab["tabId"].as_str().unwrap().to_owned(), json!("w")))
@@ -59,6 +68,14 @@ fn rig(
     for (key, value) in extra.as_object().cloned().unwrap_or_default() {
         state[key] = value;
     }
+    state
+}
+
+fn rig_with(
+    id: u64,
+    state: Value,
+    reply: impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static,
+) -> (AgentControl, Asked) {
     let (writer, reader) = tokio::io::duplex(1 << 20);
     let (tx, _task) = crate::wire::spawn_writer(writer);
     let events = crate::server::test_events(&tx);
@@ -433,5 +450,145 @@ async fn a_delete_of_an_own_idle_child_removes_it_journals_it_and_remembers_the_
         crate::agentctl::journal::session_fates::FateState::Deleted
     );
     assert!(!control.mem().closing.contains("c1"));
+    control.host.port().close();
+}
+
+const DESK_ID: &str = "01a1ed95-53b0-752a-a272-9c911a8499c4";
+const DESK_PATH: &str = "C:/s/z_01a1ed95-53b0-752a-a272-9c911a8499c4.jsonl";
+
+/// This window ("a") with `tabs`, and the paired host "Desk".
+fn desk_state(tabs: Vec<Value>) -> Value {
+    let mut all = vec![tab("a", "/s/x_1.jsonl")];
+    all.extend(tabs);
+    state_of(
+        all,
+        json!({ "devices": [{ "id": "d1", "name": "Desk", "state": "online" }] }),
+    )
+}
+
+/// The tab this app has on Desk's session: `viewing` when Desk gave a view of a tab it holds for someone else.
+fn desk_tab(id: &str, viewing: bool) -> Value {
+    let mut tab = tab(id, DESK_PATH);
+    tab["title"] = json!("Report gap");
+    tab["device"] = json!("d1");
+    tab["deviceName"] = json!("Desk");
+    if viewing {
+        tab["viewing"] = json!(true);
+    }
+    tab
+}
+
+/// Plays main for a saved session Desk runs in a tab no window here holds (`holder` as Desk's summaries name the
+/// device that tab runs for; none: Desk's own window): the join opens tab "j" (`viewing` when Desk answers with a
+/// view), and the window's close drops it.
+fn desk_main(
+    holder: Option<&'static str>,
+    viewing: bool,
+) -> impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static {
+    let seq = std::sync::atomic::AtomicU64::new(10);
+    move |method, args, port| {
+        let push = |tabs: Vec<Value>| {
+            let state = desk_state(tabs).to_string();
+            let seq = seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            crate::ports::apply_state(port, seq, &state).unwrap();
+        };
+        match method {
+            "stored" if args["device"] == "d1" => {
+                let elsewhere =
+                    holder.map_or_else(|| json!({}), |holder| json!({ "holder": holder }));
+                Ok(
+                    json!([{ "id": DESK_ID, "path": DESK_PATH, "title": "Report gap", "cwd": "C:/w", "modified": "2026-11-19", "messages": 4, "status": "idle", "device": "d1", "deviceName": "Desk", "elsewhere": elsewhere }]),
+                )
+            }
+            "spawn" => {
+                push(vec![desk_tab("j", viewing)]);
+                Ok(json!({ "tabId": "j" }))
+            }
+            "view" if args["event"]["how"] == "close" => {
+                push(Vec::new());
+                Ok(Value::Null)
+            }
+            other => main_of(other, args),
+        }
+    }
+}
+
+#[tokio::test]
+async fn closing_a_saved_session_a_paired_host_still_runs_for_this_computer_closes_that_tab() {
+    // 19 Nov 2026: the Mac mini's window lost two children Desk ran for it; the list said "open in a tab Desk runs
+    // for Mac mini" and a close answered "not open in any tab: nothing to stop or close" while Desk's omp ran on.
+    let (control, asked) = rig_with(
+        7_311,
+        desk_state(Vec::new()),
+        desk_main(Some("Mini"), false),
+    );
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_session_stop",
+            json!({ "session": DESK_ID, "close": true }),
+            None,
+        )
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.text);
+    assert_eq!(
+        outcome.text,
+        "Closed \"Report gap\" (its session stays saved)."
+    );
+    let spawn = &names(&asked, "spawn")[0]["request"];
+    assert_eq!(spawn["sessionPath"], DESK_PATH);
+    assert_eq!(spawn["device"], "d1");
+    assert_eq!(spawn["join"], true);
+    let views = names(&asked, "view");
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0]["event"], json!({ "tabId": "j", "how": "close" }));
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn closing_a_view_of_a_tab_another_computer_holds_says_that_tab_stays_open() {
+    // 14 Nov 2026: a close answered "Closed" while the session stayed open in a tab on the MacBook: the tab here was
+    // a view of the MacBook window's tab, and closing a view only leaves it.
+    let expected = "\"Report gap\" is still open in a tab on Desk (that computer's own window, or a tab it runs for another device): this app only viewed that tab, so the close ended this app's view and left that tab and its omp running. A tab another computer's window holds closes only there: ask the user to close it there; its session is saved either way.";
+    let (control, asked) = rig_with(
+        7_312,
+        desk_state(vec![desk_tab("v", true)]),
+        |method, args, port| match method {
+            "view" if args["event"]["how"] == "close" => {
+                crate::ports::apply_state(port, 10, &desk_state(Vec::new()).to_string()).unwrap();
+                Ok(Value::Null)
+            }
+            other => main_of(other, args),
+        },
+    );
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_session_stop",
+            json!({ "session": "v", "close": true }),
+            None,
+        )
+        .await;
+    assert!(outcome.is_error);
+    assert_eq!(outcome.text, expected);
+    assert_eq!(names(&asked, "view").len(), 1);
+    // Nothing was closed that the close would tell: no note in either session, no closed record.
+    assert!(names(&asked, "mail").is_empty());
+    assert!(control.fates().find("v").is_none());
+    control.host.port().close();
+
+    // The same session named by its saved id while no tab here holds it: joined as a view, and told the same.
+    let (control, asked) = rig_with(7_313, desk_state(Vec::new()), desk_main(None, true));
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_session_stop",
+            json!({ "session": DESK_ID, "close": true }),
+            None,
+        )
+        .await;
+    assert!(outcome.is_error);
+    assert_eq!(outcome.text, expected);
+    assert_eq!(names(&asked, "view")[0]["event"]["tabId"], "j");
     control.host.port().close();
 }
