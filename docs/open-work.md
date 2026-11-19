@@ -97,4 +97,4 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| I1 | An agent can read another project's session content. Propose a per-project boundary: other projects' sessions show counts and state only. | proposal sent 20 Nov 02:4x (per-session grant by default) | tabs-tidy [desktop] | | proposal |
+| I1 | An agent can read another project's session content. Propose a per-project boundary: other projects' sessions show counts and state only. | in progress on a branch, not in any release until the owner decides (access rule) | tabs-tidy [desktop] | omp/agent/project-boundary-20261120 | proposal |
