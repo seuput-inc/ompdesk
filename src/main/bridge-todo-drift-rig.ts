@@ -103,10 +103,11 @@ export function steerAgent(
 	return { respond, state };
 }
 
-/** The prompt, and the steer while its first bash runs. */
+/** The prompt, and the steer while its first bash runs (`steers`: the commands that deliver it, in order). */
 export async function steeredTurn(
 	session: Omp,
 	prompt = "Build the parser module for the config files and test it.",
+	steers: ReadonlyArray<Record<string, unknown>> = [{ type: "steer", message: STEER }],
 ): Promise<void> {
 	const from = session.frames.length;
 	const turn = session.turn(prompt);
@@ -119,7 +120,7 @@ export async function steeredTurn(
 			{ timeout: 60_000 },
 		)
 		.toBe(true);
-	await session.send({ type: "steer", message: STEER });
+	for (const steer of steers) expect((await session.send(steer)).success, JSON.stringify(steer)).toBe(true);
 	await turn;
 }
 

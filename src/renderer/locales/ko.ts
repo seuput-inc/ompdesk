@@ -3761,6 +3761,7 @@ export const ko: Record<string, string> = {
 	"todoPanel.updated": "{ago} 고침",
 	"todoPanel.stale.instruction": "목록을 고친 뒤 지시가 쌓임",
 	"todoPanel.stale.drift": "작업은 계속됐는데 목록은 오래됨",
+	"todoPanel.stale.driftShort": "목록 오래됨",
 	"todoPanel.received": "목록을 고친 뒤 받은 지시 {count}개",
 	"todoPanel.receivedShort": "고친 뒤 지시 {count}",
 	"todoPanel.receivedNote":

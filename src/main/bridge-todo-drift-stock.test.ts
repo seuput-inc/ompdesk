@@ -142,6 +142,19 @@ describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind th
 		expect(await panel(session)).toEqual({ hydrated: nowOf(journal), live: nowOf(journal) });
 	}, 180_000);
 
+	it("receives a hub's message sent into the running turn as ompdesk_session_send does, never a short reply", async () => {
+		const { session } = await start(forgets().respond);
+		// AgentControl delivers another session's message as a stock prompt that steers (bridge-agent-send-stock).
+		const hub = `<ompdesk-agent-message from="Main" session="01a1">\n${STEER}\n</ompdesk-agent-message>`;
+		await steeredTurn(session, undefined, [
+			{ type: "prompt", message: hub, streamingBehavior: "steer" },
+			{ type: "prompt", message: "계속", streamingBehavior: "steer" },
+			{ type: "steer", message: "ok" },
+		]);
+
+		expect(await driftState(session)).toMatchObject({ stale: null, receivedCount: 1, received: [{ text: STEER }] });
+	}, 180_000);
+
 	it("marks a playbook child's list behind after a long run of calls without a change", async () => {
 		let reads = 25;
 		const respond = (step: number): string => {

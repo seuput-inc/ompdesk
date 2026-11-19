@@ -175,7 +175,11 @@ describe("TodoDockCard", () => {
 			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "drift", ...NONE_RECEIVED });
 			await mount();
 
-			expect(peekText()).toContain("Not updated while the agent kept working");
+			// The peek holds one line: the short words, the full reason in the tooltip.
+			expect(peekText()).toBe("1/2Wire the peek into the headerList out of dateUpdated 12m ago");
+			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).toContain(
+				"Not updated while the agent kept working",
+			);
 		});
 
 		it("shows only when a list that follows the work last changed, with no mark", async () => {
@@ -262,7 +266,7 @@ describe("TodoDockCard", () => {
 
 				expect(commandForTab).toHaveBeenCalledWith("t1", expect.objectContaining({ type: "set_todos" }), undefined);
 				expect(useTodoStore.getState().phases[0]?.tasks[0]?.status).toBe("completed");
-				expect(container.textContent).toContain("Not updated while the agent kept workingUpdated 12m ago");
+				expect(container.textContent).toContain("List out of dateUpdated 12m ago");
 			} finally {
 				await act(async () => root?.unmount());
 				setFocusedSessionRuntime(null);

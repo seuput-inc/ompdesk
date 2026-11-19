@@ -30,7 +30,7 @@ export interface TodoFreshness {
 	level: "warning" | "info" | null;
 	/** Why the list is behind the work, in the person's words; null while it follows it. */
 	reason: string | null;
-	/** The few words a one-line surface shows: "Since list change: 2" while instructions came, else the reason. */
+	/** The few words a one-line surface shows: "Since list change: 2" while instructions came, "List out of date" for drift. */
 	summary: string | null;
 	/** "12m ago". */
 	ago: string;
@@ -69,7 +69,13 @@ export function useTodoFreshness(): TodoFreshness | null {
 		stale,
 		level: stale ? "warning" : receivedCount > 0 ? "info" : null,
 		reason,
-		summary: receivedCount > 0 ? t("todoPanel.receivedShort", { count: receivedCount }) : reason,
+		// One-line surfaces get the short words; the full reason stays for the plan zone's row and the tooltip.
+		summary:
+			receivedCount > 0
+				? t("todoPanel.receivedShort", { count: receivedCount })
+				: stale === "drift"
+					? t("todoPanel.stale.driftShort")
+					: reason,
 		ago,
 		updated,
 		title: [reason, receivedHeader, receivedHeader && t("todoPanel.receivedNote"), updated]
@@ -161,8 +167,9 @@ export function TodoReceived({ freshness, list = false }: { freshness: TodoFresh
 				lead={behind ? <KindMark icon={TodoStaleIcon} tone="warning" /> : <StatusDot decorative tone="neutral" />}
 				title={freshness.title}
 			/>
-			{received.map((line, index) => {
-				const key = `${line.at}:${index}`;
+			{received.map(line => {
+				// By arrival, not position: the reading keeps the newest five, so a sixth shifts every index.
+				const key = `${line.at}:${line.text}`;
 				const whole = opened.has(key);
 				return (
 					<BoardRow

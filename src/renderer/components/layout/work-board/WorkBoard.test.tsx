@@ -487,7 +487,8 @@ describe("WorkBoard sections", () => {
 		await mount();
 		const plan = section("plan");
 		const head = plan?.querySelector(".omp-work-board-aside");
-		expect(head?.textContent).toBe("Not updated while the agent kept working12m ago");
+		// The head's words are for screen readers (the short ones); the first row says the full reason.
+		expect(head?.textContent).toBe("List out of date12m ago");
 		expect(head?.querySelector("svg")).not.toBeNull();
 		const rows = [...(plan?.querySelectorAll(".omp-work-board-row") ?? [])].map(row => row.textContent);
 		expect(rows).toEqual(["Not updated while the agent kept working", "Write the board", "Test it"]);
