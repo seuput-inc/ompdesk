@@ -846,9 +846,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * `agent_control.attachment` reads the live conversation's pictures (`AgentSession.messages`, a persisted one from
 	 * stock's blob store as `read_image_blob` does) and a file in the session's folder (`sessionManager.getCwd()`).
 	 * `agent_control.aside` hands a working session another session's message as stock's aside
-	 * (`AgentSession.prompt` with `streamingBehavior: "aside"` and `onPromptAdmitted`).
+	 * (`AgentSession.prompt` with `streamingBehavior: "aside"` and `onPromptAdmitted`). That aside, and a report that
+	 * asks for a turn, are urgent while they wait in stock's aside queue: at each main run's start the bridge wraps the
+	 * main agent's peek `Agent.hasIrcInterrupts` (found through `AgentRegistry`) to answer true then (read with
+	 * `Agent.hasQueuedAsides`), so a running shell backgrounds.
 	 */
 	agentControl: {
+		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 		session: [
 			"settings",
 			"sessionId",
@@ -859,6 +863,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"modelRegistry.resolver()",
 			"messages",
 			"sessionManager.getCwd()",
+			"agent.hasIrcInterrupts()",
+			"agent.hasQueuedAsides()",
 		],
 		modules: {
 			"@oh-my-pi/pi-ai": ["completeSimple()"],

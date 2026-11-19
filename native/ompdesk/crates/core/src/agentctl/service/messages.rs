@@ -2,9 +2,9 @@
 //!
 //! Owns these TypeScript methods: `#send` (2574), `#untilDraftSent` (2606), `#deliverSend` (2623), `#handSend`
 //! (2649), `#owedDeps` and `redeliverSends` (2765-2798), `#journalMarks` (2800), `#turnStarts` (2809),
-//! `#reportFields` (2824), `#report` (2839), `#queuedNote` (2935), `#answer` (3363), `#answerPlan` (3474), the mail
+//! `#reportFields` (2824), `#report` (2839), `#answer` (3363), `#answerPlan` (3474), the mail
 //! side of `childAsked` (1387) and `personTyped` (3739), and the receipts, in-flight sends and `#cardsTold` /
-//! `#reportedAt` / `#queuedFollowUp` / `#nudged` state in `Mem`. `#mailbox` is `self.mailbox`, the send outbox
+//! `#nudged` state in `Mem`. `#mailbox` is `self.mailbox`, the send outbox
 //! `self.send_outbox` (`journal::send_outbox::deliver_owed`, `redeliver_sends`, `OwedDeps`).
 //!
 //! `redeliverSends(tabOf)` takes no function over the wire: `tabOf(path, device)` is the tab of `HostState::tabs`
@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
+use super::AgentControl;
 use super::fail::{Fail, R, fail};
 use super::host::{Deadline, HostState};
 use super::js::{number, one_line, trim, trim_start};
@@ -24,27 +25,31 @@ use super::pace::pace_line;
 use super::resolve::OpenOptions;
 use super::state::SessionState;
 use super::text::{
-    JournalMarks, OTHER_OPTION, WAITS_AFTER_REPORT, card_text, cleanup_caller, is_agent_card,
-    journal_marks, label, named, pick_option, response_data, saved_id_of_path, transcript_page,
-    with_dispatch,
+    JournalMarks, OTHER_OPTION, card_text, cleanup_caller, is_agent_card, journal_marks, label,
+    named, pick_option, response_data, saved_id_of_path, transcript_page, with_dispatch,
 };
 use super::types::{
     AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, StoredSession, UiRequest,
 };
 use super::util::Flight;
 use super::wrap::{dispatch_mark, request_mark, wrap_agent_message};
-use super::{AgentControl, QueuedFollowUp};
 use crate::agentctl::journal::attachments::{Resolved, image_block, shas_sig, with_attached};
 use crate::agentctl::journal::pending_cleanups::CleanupAction;
 use crate::agentctl::journal::send_outbox::{
-    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, deliver_owed,
-    receiver_key, redeliver_sends,
+    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, deliver_owed, receiver_key,
+    redeliver_sends,
 };
 use crate::agentctl::journal::session_fates::FateState;
 use crate::agentctl::rules::custody::custody_of;
 use crate::agentctl::rules::mail::{
     Mail, MailCheck, MailKind, Posted, delivery_for, mail_details, mail_text,
 };
+
+/// The plain prompt of a message, for a receiver idle or too old to know the aside: a card of the person's open there
+/// stays open only behind stock's follow-up (a steer closes it: "Ask interrupted by message").
+pub(super) fn plain_behavior(card_open: bool) -> &'static str {
+    if card_open { "followUp" } else { "steer" }
+}
 
 /// `EVIDENCE_MESSAGES`.
 const EVIDENCE_MESSAGES: u64 = 200;
@@ -195,15 +200,14 @@ impl OwedDeps for Owed<'_> {
         let Ok(command) = self.ctl.owed_command(tab_id, entry).await else {
             return HandOver::Refused;
         };
-        let steer = entry.streaming_behavior == StreamingBehavior::Steer;
-        let sent = self.ctl.hand_over(tab_id, &command, steer).await;
+        let sent = self.ctl.hand_over(tab_id, &command, true).await;
         let (handed, taken) = match sent {
             Ok(response) => (response.success || response.unanswered(), response.success),
             Err(error) => (error.unanswered(), false),
         };
-        // As a fresh send's steer: a blocking ompdesk_session_result wait the receiver stands in returns, so it reads
-        // the message at its next step instead of when the wait runs out.
-        if steer && taken {
+        // As a fresh send: a blocking ompdesk_session_result wait the receiver stands in returns, so it reads the
+        // message at its next step instead of when the wait runs out.
+        if taken {
             self.ctl.arrive(tab_id);
         }
         if handed {
@@ -556,25 +560,9 @@ impl AgentControl {
                     .await
                     .state
                     .is_some_and(|state| state.is_streaming));
-        // Steer unless a follow-up is asked for. A follow-up to one that already reported back to the caller in this
-        // turn waits in it (an answer) or wraps up: it would sit unseen behind that turn, so it reaches it between
-        // steps instead.
-        let reported = self
-            .mem()
-            .reported_in
-            .get(&format!("{}\n{}", target.tab_id, caller.tab_id))
-            .copied();
-        let follow_up = args.delivery.as_deref() == Some("follow_up");
-        // It reported in the turn it runs now: main's stamp of that turn is the one it had at the report.
-        let promoted = running
-            && follow_up
-            && reported
-                .is_some_and(|turn| target.busy_since.is_none() || turn == target.busy_since);
-        // A follow-up queues the next task of a session the caller opened behind its turn. Any other session would hold
-        // it in its queue until that turn ends, so it gets a steer, which a running session takes as an aside
-        // (`hand_over`): read at its next step with every other one waiting, never closing a card of the person's.
+        // A running session takes it as an aside (`hand_over`): read at its next step with every other one waiting,
+        // never closing a card of the person's.
         let card_open = !target.asks.is_empty();
-        let steer = !follow_up || promoted || !own_child;
         // A dispatch still owed from before a relaunch is not in the journal yet: the next one is numbered past it.
         if own_child {
             let owed = kept
@@ -607,11 +595,6 @@ impl AgentControl {
             &caller.title,
             saved_id_of_path(caller.session_path.as_deref()).as_deref(),
         );
-        let behavior = if steer {
-            StreamingBehavior::Steer
-        } else {
-            StreamingBehavior::FollowUp
-        };
         let dispatch_number = dispatch.as_deref().and_then(|d| d[1..].parse::<i64>().ok());
         let mut entry: Option<OutboxSend> = None;
         let mut instance = format!("tab:{}", target.tab_id);
@@ -639,7 +622,6 @@ impl AgentControl {
                 from.clone(),
                 args.message.clone(),
                 message.clone(),
-                behavior,
                 self.now(),
             );
             made.from_device = caller.device.clone().filter(|device| !device.is_empty());
@@ -679,13 +661,9 @@ impl AgentControl {
         // provider sign-in waits) runs the prompt once that ends. Saying it failed made senders send it again. Where
         // the aside cannot go (an older paired computer), a card of the person's open there gets a follow-up, which
         // leaves it open; a steer would close it ("Ask interrupted by message").
-        let plain = if steer && !card_open {
-            StreamingBehavior::Steer
-        } else {
-            StreamingBehavior::FollowUp
-        };
+        let plain = plain_behavior(card_open);
         let mut command =
-            json!({ "type": "prompt", "message": message, "streamingBehavior": plain.as_str() });
+            json!({ "type": "prompt", "message": message, "streamingBehavior": plain });
         if !carried.inline.is_empty() {
             command["images"] = Value::Array(
                 carried
@@ -700,10 +678,7 @@ impl AgentControl {
         // was sent" (the hub got three copies of one request on 19 Nov 2026): it is kept as handed, with a receipt.
         let mut unconfirmed = None;
         let mut response: Option<RpcResponse> = None;
-        match self
-            .hand_over(&target.tab_id, &command, steer && running)
-            .await
-        {
+        match self.hand_over(&target.tab_id, &command, running).await {
             Ok(answer) => {
                 held = answer.unanswered();
                 if answer.unconfirmed() {
@@ -734,24 +709,10 @@ impl AgentControl {
         if let (Some(kept), Some(entry)) = (&kept, &entry) {
             kept.outbox.handed(entry, &instance);
         }
-        // A steer is read at the target's next step, which a blocking wait of its own would hold off: it ends now.
+        // It is read at the target's next step, which a blocking wait of its own would hold off: it ends now.
         let woke = running && !held && self.is_blocked(&target.tab_id);
-        if steer && !held {
+        if !held {
             self.arrive(&target.tab_id);
-        }
-        if running
-            && !steer
-            && !held
-            && let Some(dispatch) = &dispatch
-        {
-            self.mem().queued_follow_up.insert(
-                target.tab_id.clone(),
-                QueuedFollowUp {
-                    n: dispatch_number.unwrap_or(0) as u64,
-                    id: dispatch.clone(),
-                    from: caller.tab_id.clone(),
-                },
-            );
         }
         let started = !running && !held && self.turn_starts(&caller.tab_id, &target.tab_id).await;
         let how = if let Some(why) = &unconfirmed {
@@ -776,23 +737,11 @@ impl AgentControl {
                 "it is {}, so that card stays open, and it reads this at its first step after the user has answered",
                 self.state_line(&self.host.state(), target, &SessionState::default())
             )
-        } else if promoted {
-            "delivered as steer (it already reported to you in this turn, so it reads it between steps)".to_owned()
-        } else if steer && woke {
-            "delivered as steer; it is inside a blocking ompdesk_session_result wait, which returns now with a note, so it reads this at once".to_owned()
-        } else if steer {
-            format!(
-                "delivered as steer ({}it reads it at its next step, together with every other message waiting for it)",
-                if follow_up {
-                    "you did not open it, and a follow-up waits only behind the turn of a session you opened, so "
-                } else {
-                    ""
-                }
-            )
         } else if woke {
-            "queued as a follow-up (it runs when the current turn ends; it is inside a blocking ompdesk_session_result wait, which a follow-up does not end: send it as a steer to be read at once)".to_owned()
+            "delivered as steer; it is inside a blocking ompdesk_session_result wait, which returns now with a note, so it reads this at once".to_owned()
         } else {
-            "queued as a follow-up (it runs when the current turn ends; it is told so if it reports first)".to_owned()
+            "delivered as steer (it reads it at its next step, together with every other message waiting for it)"
+                .to_owned()
         };
         let receipt = format!(
             "Sent to {}: {}{}; {how}.{dispatch_note}{attached_note}",
@@ -1096,21 +1045,12 @@ impl AgentControl {
         if let Some(parent) = &parent {
             self.host.review_changed(parent);
         }
-        if outcome != Posted::Duplicate
-            && outcome != Posted::Stale
-            && WAITS_AFTER_REPORT.contains(&args.kind.as_str())
-        {
-            self.mem()
-                .reported_in
-                .insert(format!("{}\n{to}", caller.tab_id), caller.busy_since);
-        }
         let mut waiting = match &attached {
             Some(carried) if outcome != Posted::Duplicate && outcome != Posted::Stale => {
                 format!(" {}.", carried.set.summary())
             }
             _ => String::new(),
         };
-        waiting.push_str(&self.queued_note(caller, tabs).await);
         if let Some(gap) = custody
             .as_ref()
             .and_then(|c| c.gap.as_deref())
@@ -1147,26 +1087,6 @@ impl AgentControl {
                 }
             }
         })
-    }
-
-    /// `#queuedNote`: stock shows a queued follow-up to nobody until the turn ends, so a session that reports and then
-    /// waits in the same turn never sees the message it waits for. When one is queued for `caller` and its transcript
-    /// does not hold it yet, the report's answer says so.
-    async fn queued_note(&self, caller: &ControlTab, tabs: &[ControlTab]) -> String {
-        let queued = self.mem().queued_follow_up.get(&caller.tab_id).cloned();
-        let Some(queued) = queued else {
-            return String::new();
-        };
-        if self.journal_marks(&caller.tab_id).await.dispatch >= queued.n {
-            self.mem().queued_follow_up.remove(&caller.tab_id);
-            return String::new();
-        }
-        let sender = tabs.iter().find(|tab| tab.tab_id == queued.from);
-        format!(
-            " A message from {} (dispatch {}) waits for you, queued until this turn ends: end your turn now to read it, rather than waiting for it in this turn.",
-            sender.map_or_else(|| queued.from.clone(), label),
-            queued.id
-        )
     }
 
     /// `ompdesk_session_answer` (`#answer`, `#answerPlan`).

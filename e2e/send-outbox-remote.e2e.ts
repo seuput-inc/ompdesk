@@ -1,10 +1,10 @@
 /**
  * Messages an agent on a device (A) sends to the session it opened on a paired host (B), across a relaunch of either
  * computer (main's send outbox, `src/main/agent-control/send-outbox.ts`; the one-computer case is
- * relaunch-child-ids.e2e.ts). The child on B is busy, so A's two follow-ups wait in B's omp's queue:
- * - B relaunches: that omp and its queue end; A hands both to B's new omp once, in the order they were sent.
- * - A relaunches after a quit that leaves interrupted work to continue: B's omp keeps the child's turn and its queue;
- *   A hands nothing again, and once the turn ends the follow-ups run there once, in order. After "Quit anyway" (the
+ * relaunch-child-ids.e2e.ts). The child on B is busy in a call, so A's two messages wait unread in B's omp:
+ * - B relaunches: that omp and what it held end; A hands both to B's new omp once, in the order they were sent.
+ * - A relaunches after a quit that leaves interrupted work to continue: B's omp keeps the child's turn and both
+ *   messages; A hands nothing again, and once the turn ends they run there once, in order. After "Quit anyway" (the
  *   setting off) the quit stopped the child on B too, and A hands both to B's new omp once, in order.
  * Either way the child's done report reaches the opener on A, and the child's id A's agent was given before the
  * relaunch takes the next message. Unit cases: send-outbox.test.ts, service.test.ts ("messages that outlive the omp
@@ -89,11 +89,13 @@ async function journaled(sessionPath: string): Promise<string[]> {
 	return (await userTexts(sessionPath)).flatMap(text => /\[ompdesk dispatch (d\d+):/.exec(text)?.[1] ?? []);
 }
 
-/** How many prompts B's omps were handed that carry `dispatch`. */
+/** How many times B's omps were handed the message that carries `dispatch` (the aside each hand-over starts with). */
 async function handed(profile: RemoteProfile, dispatch: string): Promise<number> {
 	return (await readRecords(profile.record)).filter(
 		frame =>
-			frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes(dispatchMark(dispatch)),
+			frame.type === "agent_control.aside" &&
+			typeof frame.message === "string" &&
+			frame.message.includes(dispatchMark(dispatch)),
 	).length;
 }
 
@@ -173,9 +175,9 @@ async function queuedOnHost(resume = true): Promise<Paired> {
 		["d2", "Also do C"],
 		["d3", "Then D fixture:result-ok"],
 	] as const) {
-		const queued = await call("ompdesk_session_send", { session: kid, message, delivery: "follow_up" });
+		const queued = await call("ompdesk_session_send", { session: kid, message });
 		expect(queued.isError, queued.text).toBe(false);
-		expect(queued.text).toContain("queued as a follow-up");
+		expect(queued.text).toContain("delivered as steer");
 		expect(queued.text).toContain(`Dispatch ${dispatch}`);
 	}
 	expect(await journaled(childPath)).toEqual(["d1"]);
@@ -183,7 +185,7 @@ async function queuedOnHost(resume = true): Promise<Paired> {
 	return { hostProfile, clientProfile, opener, kid, childPath, call };
 }
 
-test("the host relaunches: the device hands its queued follow-ups to the new omp once, in order, and hears the done report", async () => {
+test("the host relaunches: the device hands the messages its omp had not read to the new omp once, in order, and hears the done report", async () => {
 	test.setTimeout(300_000);
 	const { hostProfile, opener, kid, childPath, call } = await queuedOnHost();
 	const a = (client as RemoteInstance).page;
@@ -257,14 +259,14 @@ for (const resume of [true, false])
 				.toMatch(/^(ready|running)$/);
 
 		if (resume) {
-			// The quit left the child's turn running on B, in the omp that queued both: A hands neither again.
+			// The quit left the child's turn running on B, in the omp that holds both: A hands neither again.
 			await a.waitForTimeout(3_000);
 			expect([await handed(hostProfile, "d2"), await handed(hostProfile, "d3")]).toEqual([1, 1]);
 			expect(await journaled(childPath)).toEqual(["d1"]);
-			// The child's turn ends; its omp runs the follow-ups it kept.
+			// The child's turn ends; its omp runs the messages it kept.
 			await a.evaluate(id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:finish" }), kid);
 		}
-		// Without it the quit stopped the child (its omp and queue went): A hands both to B's new omp once.
+		// Without it the quit stopped the child (its omp and what it held went): A hands both to B's new omp once.
 		const times = resume ? 1 : 2;
 		await expect.poll(() => journaled(childPath), { timeout: 60_000 }).toEqual(["d1", "d2", "d3"]);
 		await expect.poll(() => doneReports(a, opener), { timeout: 60_000 }).toEqual(["d3"]);

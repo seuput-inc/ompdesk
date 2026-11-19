@@ -1124,9 +1124,6 @@ pub struct SendArgs {
     pub message: String,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
-    /// `follow_up` or `steer`.
-    #[serde(default)]
-    pub delivery: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }

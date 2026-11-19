@@ -1,6 +1,6 @@
 /**
  * Queue mutations of the composer's queue popover and its edit-in-field: edit (omp re-queues the text at the end of its lane),
- * cross-lane move (queue_move with toLane, appended to the target lane's end),
+ * Steer now (queue_move of a follow-up into the steering lane, appended to its end),
  * per-item remove (queue_remove) and per-lane clear (queue_clear). omp cannot
  * reorder within a lane. Every mutation applies optimistically, rolls back on
  * a failed response or rejected transport call unless a newer snapshot
@@ -45,34 +45,27 @@ function noteLanded(queueStore: StoreApi<QueueStore>, lane: QueueLane, id: strin
 	if (index !== -1) queueStore.getState().noteMoved({ id, lane, position: index + 1, count: items.length, kind });
 }
 
-async function applyCrossLaneMove(
+async function applySteerNow(
 	queueStore: StoreApi<QueueStore>,
 	rpc: TabRpc,
-	lane: QueueLane,
 	id: string,
 	t: (key: string) => string,
 ): Promise<void> {
-	const target: QueueLane = lane === "steering" ? "followUp" : "steering";
 	const settled = optimisticWrite({
 		store: queueStore,
 		mutate: state => {
-			const item = state[lane].find(entry => entry.id === id);
+			const item = state.followUp.find(entry => entry.id === id);
 			if (!item) return {};
-			const without = state[lane].filter(entry => entry.id !== id);
-			return lane === "steering"
-				? { steering: without, followUp: [...state.followUp, item] }
-				: { steering: [...state.steering, item], followUp: without };
+			return { steering: [...state.steering, item], followUp: state.followUp.filter(entry => entry.id !== id) };
 		},
-		persist: () => rpc.queueMove(id, Number.MAX_SAFE_INTEGER, target),
+		persist: () => rpc.queueMove(id, Number.MAX_SAFE_INTEGER, "steering"),
 		onFailure: failure => {
 			queueStore.setState({ moved: null });
 			toastError({ title: t("queuePanel.moveFailed"), error: failure });
 		},
 		resync: () => queueStore.getState().refresh(),
 	});
-	// Stock re-queues a steer as a follow-up with its text only; a follow-up promoted to a steer keeps its pictures.
-	if (lane === "steering") queueStore.getState().forgetImages(id);
-	noteLanded(queueStore, target, id, "lane");
+	noteLanded(queueStore, "steering", id, "lane");
 	await settled;
 }
 
@@ -81,7 +74,8 @@ export interface QueueActions {
 	ready: boolean;
 	remove: (lane: QueueLane, id: string) => void;
 	edit: (lane: QueueLane, id: string, text: string) => void;
-	moveToLane: (lane: QueueLane, id: string) => void;
+	/** A follow-up (stock's lane) joins the running turn: it moves to the end of the steering lane, pictures kept. */
+	steerNow: (id: string) => void;
 	clearLane: (lane: QueueLane) => void;
 }
 
@@ -130,10 +124,10 @@ export function useQueueActions(): QueueActions {
 		[ready, t, tabRpc.queueEdit, queueStore],
 	);
 
-	const moveToLane = useCallback(
-		(lane: QueueLane, id: string) => {
+	const steerNow = useCallback(
+		(id: string) => {
 			if (!ready) return;
-			void applyCrossLaneMove(queueStore, tabRpc, lane, id, t);
+			void applySteerNow(queueStore, tabRpc, id, t);
 		},
 		[ready, t, tabRpc, queueStore],
 	);
@@ -153,5 +147,5 @@ export function useQueueActions(): QueueActions {
 		[ready, t, tabRpc.queueClear, queueStore],
 	);
 
-	return { ready, remove, edit, moveToLane, clearLane };
+	return { ready, remove, edit, steerNow, clearLane };
 }

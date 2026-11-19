@@ -385,7 +385,7 @@ export interface AgentReviewResult {
 }
 
 /**
- * A message one session's agent sends another session arrives as an ordinary stock prompt, steer or follow-up
+ * A message one session's agent sends another session arrives as an ordinary stock prompt (or the bridge's aside)
  * wrapped in this tag, so the receiving model knows another agent wrote it and every surface that renders
  * the transcript (live, reloaded, a paired host's tab) shows it as "sent by an agent". `session` is the sender's saved
  * id (the `<id>` of its `<time>_<id>.jsonl` file): titles repeat and tab ids differ per app and per launch, so it is
