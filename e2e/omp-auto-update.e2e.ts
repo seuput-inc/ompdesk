@@ -272,8 +272,10 @@ test("an omp runners have not verified waits: nothing installs on its own, Setti
 		await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, UNVERIFIED]);
 		await expect(held).toHaveCount(0);
 		// Who installed what: the launch's check held it (and tried the tested omp, which only Bun or npm can install by
-		// name, so nothing ran), the person's pass installed it (a later repair check may follow).
-		expect((await updateLog(launched)).slice(0, 7)).toEqual([
+		// name, so nothing ran), the person's pass installed it (a later repair check may follow). The stock take-over
+		// writes its own lines to the same log, at whatever moment its `omp config` calls answer.
+		const passes = (await updateLog(launched)).filter(line => !line.startsWith("stock-auto"));
+		expect(passes.slice(0, 7)).toEqual([
 			"checked launch",
 			"held launch",
 			"started launch",
@@ -282,10 +284,12 @@ test("an omp runners have not verified waits: nothing installs on its own, Setti
 			"started manual",
 			"finished manual",
 		]);
+		expect(await updateLog(launched)).toContain("stock-auto-taken undefined");
 		// Turning "Keep tools up to date" off gives stock's own update back.
 		await settings.locator("#setting-gui-toolsAutoUpdate [role='switch']").click();
 		await expect.poll(stockAuto, { timeout: 30_000 }).toBe(true);
 		await expect(settings.getByTestId("omp-stock-auto-taken")).toHaveCount(0);
+		await expect.poll(() => updateLog(launched), { timeout: 30_000 }).toContain("stock-auto-given-back undefined");
 	} finally {
 		await close(launched);
 	}
