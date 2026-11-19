@@ -308,6 +308,9 @@ jobs:
           path: node_modules/.vite/vitest
           key: vitest-results-win-${{ matrix.shard }}-${{ github.run_id }}
           restore-keys: vitest-results-win-${{ matrix.shard }}-
+      # The stock suites run the installed omp and skip without one; some are Windows-only (a folder a process holds as
+      # its working folder: omp-daemon-folder-stock), so they never ran anywhere before this.
+      - uses: ./.github/actions/install-omp
       - run: bun run test:platform --shard=${{ matrix.shard }}/3
       - name: Save vitest's file durations
         if: ${{ !cancelled() && hashFiles('node_modules/.vite/vitest/**/results.json') != '' }}
