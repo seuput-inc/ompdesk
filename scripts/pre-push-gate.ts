@@ -181,7 +181,8 @@ function extract(cwd: string, tree: string, sha: string, paths: string[]): void 
 	const chunk = 400;
 	for (let at = 0; at < paths.length; at += chunk) {
 		const tar = git(cwd, ["archive", "--format=tar", sha, "--", ...paths.slice(at, at + chunk)]);
-		execFileSync("tar", ["-x", "-C", tree], { input: tar, maxBuffer: 1 << 30 });
+		// cwd, not `-C <path>`: Git for Windows' GNU tar (first on a hook's PATH) reads `C:\…` as a remote host.
+		execFileSync("tar", ["-x"], { cwd: tree, input: tar, maxBuffer: 1 << 30 });
 	}
 }
 
