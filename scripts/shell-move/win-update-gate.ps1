@@ -101,13 +101,20 @@ if ($Mode -eq 'break') {
 	Evidence "a later download of v$NewVersion was verified: $($null -ne $verified)"
 }
 elseif ($Mode -eq 'manual') {
+	# A setting a person picks (Settings › General › reply language; prefs.json is electron-store's file, SafeStore "prefs"),
+	# written before the first start so the old app reads and keeps it.
+	$prefsFile = Join-Path $userData 'prefs.json'
+	Set-Content -LiteralPath $prefsFile -Value '{"replyLanguage":"Japanese"}'
+	$sessionHash = (Get-FileHash -LiteralPath $ompCanary).Hash
 	$null = Start-App
 	$mark = Wait-Started $OldVersion 90
 	Check ($mark.version -eq $OldVersion) "v$OldVersion started (app-started.json)"
 	Start-Sleep -Seconds 15
-	$storeBefore = @(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count
-	$prefsBefore = Read-Json (Join-Path $userData 'prefs.json')
-	Evidence "before: WebView store files $storeBefore; prefs keys $(@($prefsBefore.PSObject.Properties.Name) -join ',')"
+	$store = Get-Item -LiteralPath $webViewStore -Force -ErrorAction SilentlyContinue
+	$storeBorn = $store.CreationTimeUtc
+	$prefsBefore = Read-Json $prefsFile
+	Evidence "before: WebView store created $($storeBorn.ToString('o')), $(@(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count) files; prefs $($prefsBefore | ConvertTo-Json -Compress -Depth 2)"
+	Check ($prefsBefore.replyLanguage -eq 'Japanese') "v$OldVersion kept the seeded reply language"
 	# A person runs the setup while the app is open. /S alone closes the running app and starts nothing; --force-run starts
 	# the new app (with this script's runner environment: no omp, no machine setup). Only the setup itself is waited for:
 	# Start-Process -Wait would also wait for the app it starts.
@@ -122,15 +129,14 @@ elseif ($Mode -eq 'manual') {
 	$mark = Wait-Started $NewVersion 120
 	Check ($mark.version -eq $NewVersion) "the setup started v$NewVersion on the same profile (app-started.json)"
 	Start-Sleep -Seconds 10
-	$storeAfter = @(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count
-	$prefsAfter = Read-Json (Join-Path $userData 'prefs.json')
+	$prefsAfter = Read-Json $prefsFile
 	$lost = @($prefsBefore.PSObject.Properties.Name | Where-Object { $_ -notin @($prefsAfter.PSObject.Properties.Name) })
-	Evidence "after: WebView store files $storeAfter; prefs keys lost: $($lost -join ',')"
-	Check ($storeBefore -gt 0 -and $storeAfter -gt 0) 'the WebView store is kept'
-	if ($prefsBefore) { Check ($null -ne $prefsAfter -and $lost.Count -eq 0) 'the settings file (prefs.json) keeps every key' }
-	else { Evidence "v$OldVersion wrote no prefs.json on the runner; settings retention not asserted" }
-	Check (Test-Path -LiteralPath $ompCanary) '~\.omp (sessions) is kept'
-	Evidence 'not covered here: an interrupted turn continuing (the runner has no omp and no model account)'
+	$storeAfter = Get-Item -LiteralPath $webViewStore -Force -ErrorAction SilentlyContinue
+	Evidence "after: WebView store created $($storeAfter.CreationTimeUtc.ToString('o')); prefs keys lost: $($lost -join ',')"
+	Check ($null -ne $store -and $null -ne $storeAfter -and $storeAfter.CreationTimeUtc -eq $storeBorn) 'the WebView store is the same folder, not made anew'
+	Check ($prefsAfter.replyLanguage -eq 'Japanese' -and $lost.Count -eq 0) "v$NewVersion keeps the reply language and every setting key"
+	Check ((Test-Path -LiteralPath $ompCanary) -and (Get-FileHash -LiteralPath $ompCanary).Hash -eq $sessionHash) '~\.omp session file is unchanged'
+	Evidence 'not covered here: restored tabs and an interrupted turn continuing (the runner has no omp and no model account)'
 }
 else {
 	Start-Feed
