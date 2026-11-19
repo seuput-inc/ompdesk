@@ -166,9 +166,7 @@ async fn a_stored_list_refuses_a_status_filter() {
 
 /// Main's index: the caller, the child it opened whose tab closed, and a session nobody opened.
 fn main_with_saved(method: &str, args: &Value) -> Result<Value, String> {
-    let row = |id: &str, path: &str| {
-        json!({ "id": id, "path": path, "title": id, "cwd": "/w", "modified": "2026-11-20T00:00:00Z", "messages": 2, "status": "complete" })
-    };
+    let row = |id: &str, path: &str| json!({ "id": id, "path": path, "title": id, "cwd": "/w", "modified": "2026-11-20T00:00:00Z", "messages": 2, "status": "complete" });
     match method {
         "stored" => Ok(json!([
             row("boss1111", "/s/x_boss1111.jsonl"),
@@ -213,7 +211,7 @@ async fn mine_lists_the_sessions_the_caller_opened_whose_tabs_closed_and_open_on
 }
 
 #[tokio::test]
-async fn a_view_a_call_joined_to_reach_a_session_held_elsewhere_closes_when_the_call_ends_and_one_to_show_stays() {
+async fn a_view_joined_only_to_reach_a_session_closes_when_the_call_ends() {
     // The view main makes is already in the window (no session file yet), ready.
     let mut view = tab("view1", "");
     view.as_object_mut().unwrap().remove("sessionPath");
@@ -222,7 +220,9 @@ async fn a_view_a_call_joined_to_reach_a_session_held_elsewhere_closes_when_the_
         vec![tab("boss", "/s/x_boss1111.jsonl"), view],
         json!({}),
         |method, args| match method {
-            "stored" => Ok(json!([{ "id": "far55555", "path": "/s/far_far55555.jsonl", "title": "Far", "cwd": "/w", "elsewhere": { "work": "idle" } }])),
+            "stored" => Ok(
+                json!([{ "id": "far55555", "path": "/s/far_far55555.jsonl", "title": "Far", "cwd": "/w", "elsewhere": { "work": "idle" } }]),
+            ),
             "spawn" => Ok(json!({ "tabId": "view1" })),
             other => main_of(other, args),
         },

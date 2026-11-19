@@ -592,7 +592,7 @@ async fn a_running_child_is_read_again_only_when_it_moved_and_a_list_went_out() 
 }
 
 #[tokio::test]
-async fn an_opener_s_closed_tab_closes_its_resting_children_and_leaves_the_working_and_watched_ones() {
+async fn an_opener_s_closed_tab_closes_its_resting_children_only() {
     let child = |id: &str, extra: Value| {
         let mut tab = tab(id, &format!("/s/{id}.jsonl"));
         tab["autoClosable"] = json!(true);
