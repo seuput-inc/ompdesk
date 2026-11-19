@@ -151,7 +151,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "launch",
 		contract: "internal",
 		summary:
-			"Updates and installs omp through `omp update` and `bun install -g @oh-my-pi/pi-coding-agent`, including launcher repair, install-kind detection and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
+			"Updates and installs omp through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (an exact version, with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) and, for an omp Bun does not manage, `omp update`; including launcher repair, install-kind detection, the newest release of one major (`bun pm view`) and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
 		files: [
 			"src/main/omp-updater.ts",
 			"src/main/setup/plans.ts",
@@ -160,11 +160,17 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"scripts/omp-update-lock-check.ts",
 			"scripts/setup-install-check.ts",
 		],
-		stock: ["omp update", "bun install -g @oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-coding-agent"],
+		stock: [
+			"omp update",
+			"bun install -g @oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-natives* pinned in <BUN_INSTALL>/install/global/package.json",
+		],
 		tests: [
 			"src/main/setup/omp-update-install.test.ts",
 			"src/main/setup/plans.test.ts",
 			"src/main/setup/service.test.ts",
+			"src/main/omp-updater.test.ts",
 		],
 	},
 	{

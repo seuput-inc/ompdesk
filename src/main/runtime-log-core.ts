@@ -34,6 +34,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"tab-layout": true,
 	autopilot: true,
 	"app-update": true,
+	"omp-update": true,
 	"ai-memory": true,
 	"disk-care": true,
 	"main-thread-hang": true,
