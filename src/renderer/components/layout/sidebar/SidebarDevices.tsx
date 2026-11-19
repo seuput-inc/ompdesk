@@ -1110,12 +1110,12 @@ function DeviceSessions({
 					key={session.path}
 					secondary={
 						<SessionRowLine
+							age={folderMissing ? null : age}
 							head={target?.head ?? null}
-							state={
+							marks={
 								<>
 									{folderMissing && <SidebarFolderMissingMark />}
 									{marker}
-									{folderMissing ? null : age}
 								</>
 							}
 						/>
@@ -1337,7 +1337,7 @@ function DeviceSessions({
 								{dragHandle => (
 									<div data-device-group={group.cwd} data-project-missing={group.missing ? "" : undefined}>
 										<div
-											className="group/head flex h-7 [html[data-input=touch]_&]:h-8 items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+											className="omp-sidebar-head group/head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 											data-flip-key={`group:${group.cwd}`}
 											onContextMenu={event =>
 												setRowMenu({ ...anchorFromEvent(event), items: groupItems, label: name })
@@ -1427,7 +1427,7 @@ function DeviceSessions({
 			{archivedRows.length > 0 && (
 				<section className="mt-1" data-sidebar-archived={host.deviceId}>
 					<div
-						className="flex h-7 [html[data-input=touch]_&]:h-8 items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+						className="omp-sidebar-head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 						data-flip-key="archived"
 					>
 						<SidebarFoldButton

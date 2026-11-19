@@ -3,7 +3,7 @@
  * would answer for this computer or a paired host: every kind of row the two-line session row draws. The ompdesk
  * project has a picture and its sessions sit on `main` and on a long agent branch; the website project has none (its
  * letter mark) and sits on a detached HEAD; `?rows=N`'s saved sessions cycle through an unborn branch, a branch and a
- * folder in no repository.
+ * folder in no repository, the second a second long agent branch (two `omp/agent/…` names a row must tell apart).
  */
 import type { SessionArtworks, SessionTarget, SessionTargetQuery, SessionTargets } from "../../shared/session-target";
 import { PROJECT } from "./fixture";
@@ -42,6 +42,12 @@ function targetOf({ sessionPath, cwd }: SessionTargetQuery): SessionTarget {
 		case 1:
 			return { path: cwd, repository: repo(PROJECT), head: { kind: "unborn", name: "main" } };
 		default:
+			if (index === 2)
+				return {
+					path: cwd,
+					repository: repo(PROJECT),
+					head: { kind: "branch", name: "omp/agent/sidebar-branch-truncation-20261119" },
+				};
 			return { path: cwd, repository: repo(PROJECT), head: { kind: "branch", name: `fix/row-${index}` } };
 	}
 }

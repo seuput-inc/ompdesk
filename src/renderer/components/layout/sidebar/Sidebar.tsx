@@ -1762,11 +1762,11 @@ export function Sidebar() {
 		) : null;
 		const openTabId = tab?.id;
 		const folderMissing = missingFolders.has(session.path);
-		// The age slot: the waiting token, else the working arc while the session or anything it started works, else
-		// the time since it last did something.
+		// The age slot: the waiting token (a mark that stays), else the working arc while the session or anything it
+		// started works, else the time since it last did something (both give way first on a short line).
 		const runningOpened = opened.filter(child => child.status === "running").length;
 		const workingAgents = workingAgentCount(summary?.agents ?? []);
-		const age = waiting ? (
+		const waitingBadge = waiting ? (
 			<Badge className="omp-sidebar-approval" variant="warning">
 				{/* The glyph stays when the word has no room left beside the title (it truncates, then hides). */}
 				<AlertTriangle aria-hidden className="size-3 shrink-0" />
@@ -1774,7 +1774,8 @@ export function Sidebar() {
 					{waitingLabel}
 				</span>
 			</Badge>
-		) : (
+		) : null;
+		const age = waiting ? null : (
 			<SessionLiveAge
 				agents={workingAgents}
 				iso={indexed ? session.modified : null}
@@ -1820,16 +1821,17 @@ export function Sidebar() {
 					className={cx("omp-sidebar-session-row", runChild && "omp-sidebar-session-run-child")}
 					secondary={
 						<SessionRowLine
+							// The mark takes the age's place: the time is in the tooltip.
+							age={folderMissing ? null : age}
 							head={target?.head ?? null}
-							worktree={worktree?.kind}
-							state={
+							marks={
 								<>
 									{folderMissing && <SidebarFolderMissingMark />}
 									{marker}
-									{/* The mark takes the age's place: the time is in the tooltip. */}
-									{folderMissing ? null : age}
+									{folderMissing ? null : waitingBadge}
 								</>
 							}
+							worktree={worktree?.kind}
 						/>
 					}
 					secondaryEnd={
@@ -1940,7 +1942,7 @@ export function Sidebar() {
 				{dragHandle => (
 					<>
 						<div
-							className="group/head relative flex h-7 [html[data-input=touch]_&]:h-8 cursor-default items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+							className="omp-sidebar-head group/head relative flex cursor-default items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 							data-flip-key={`group:${group.cwd}`}
 							data-workspace-group={group.cwd}
 							data-project-missing={group.missing ? "" : undefined}
@@ -2148,7 +2150,7 @@ export function Sidebar() {
 				{archivedRows.length > 0 && (
 					<section className="mt-3" data-sidebar-archived ref={archivedRef}>
 						<div
-							className="group/head relative flex h-7 [html[data-input=touch]_&]:h-8 items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+							className="omp-sidebar-head group/head relative flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 							data-flip-key="archived"
 							onContextMenu={event => setArchivedMenu(anchorFromEvent(event))}
 						>

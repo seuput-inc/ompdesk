@@ -6,7 +6,13 @@
  */
 import { GitBranch, GitCommitHorizontal, MessageCircle, Rocket } from "lucide-react";
 import type { ReactNode } from "react";
-import { type ProjectOrigin, type WorktreeKind, worktreeKindOf } from "../../../../shared/project-origin";
+import {
+	AGENT_BRANCH_PREFIX,
+	AUTOPILOT_BRANCH_PREFIX,
+	type ProjectOrigin,
+	type WorktreeKind,
+	worktreeKindOf,
+} from "../../../../shared/project-origin";
 import type { SessionArtwork, SessionTarget, SessionTargetHead } from "../../../../shared/session-target";
 import { useT } from "../../../lib/i18n";
 import { targetKey } from "../../../stores/session-targets";
@@ -89,9 +95,23 @@ export function headWords(
 	};
 }
 
+/** The worktree prefixes every agent's and Autopilot's branch shares; the row draws `…/` for them (the tooltip keeps it). */
+const SHARED_PREFIXES = [AGENT_BRANCH_PREFIX, AUTOPILOT_BRANCH_PREFIX];
+
 /**
- * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name, which
- * ends in an ellipsis when the line is short, never cut by the line's edge; the whole name is its hover title.
+ * What a row's line shows of a branch: past a prefix nearly every agent branch shares (`omp/agent/`, `autopilot/`) only
+ * `…/` and the part that tells it from its siblings, which ends in an ellipsis on a short line. A detached head and any
+ * other branch read whole.
+ */
+export function shownHead(text: string, head: SessionHead): string {
+	if (head.kind === "detached") return text;
+	const prefix = SHARED_PREFIXES.find(start => text.startsWith(start) && text.length > start.length);
+	return prefix ? `…/${text.slice(prefix.length)}` : text;
+}
+
+/**
+ * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name past a
+ * shared prefix (`shownHead`), which ends in an ellipsis when the line is short; the whole name is its hover title.
  * `worktree` names what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's
  * child.
  */
@@ -108,49 +128,59 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 			title={tip}
 		>
 			<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />
-			<span className="min-w-0 truncate">{text}</span>
+			<span className="min-w-0 truncate">{shownHead(text, head)}</span>
 		</span>
 	);
 }
 
-/** The picture a session row leads with, spanning its two lines; a chat (no repository) shows its glyph. */
+/**
+ * The picture a session row leads with, spanning its two lines, `--omp-session-pic` square (sidebar.css, from the
+ * row's density); a chat (no repository) shows its glyph.
+ */
 export function SessionRowArtwork({ target }: { target: SessionRowTarget | null }) {
 	return target ? (
-		<ProjectArtwork name={target.name} src={target.artwork} />
+		<ProjectArtwork name={target.name} size="var(--omp-session-pic)" src={target.artwork} />
 	) : (
 		<ProjectArtwork
 			icon={<MessageCircle aria-hidden className="size-(--sc-icon-md)" data-sidebar-session-icon />}
 			name=""
+			size="var(--omp-session-pic)"
 		/>
 	);
 }
 
 /**
- * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age)
- * and the checkout's branch, the branch's mark between them (a `·` too cost a narrow line its branch). The state keeps
- * its width down to `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css);
- * a working row's arc stands alone there (sidebar.css drops the hidden age the one-line row kept for its title), and
- * the branch ends in an ellipsis.
+ * A session row's second line before its controls (`data-sidebar-row-end`): the marks (✓, a missing folder, the
+ * waiting badge, which goes down to its ⚠), then the age and the branch, which give way in that order on a short line
+ * (the owner's order, 19 Nov 2026; sidebar.css `.omp-session-row-give`): the age goes whole first (a working arc keeps
+ * its place and gives up only its hidden age), then the branch ends in an ellipsis down to about eight characters, then
+ * goes with its mark, never leaving the mark alone (the tooltip keeps the name). With room, a working arc reserves the
+ * age's width (composer.md › The age slot), so the branch stays where it was when work starts or ends.
  */
 export function SessionRowLine({
-	state,
+	marks,
+	age,
 	head,
 	worktree,
 }: {
-	state: ReactNode;
+	marks?: ReactNode;
+	age?: ReactNode;
 	head: SessionHead | null;
 	worktree?: WorktreeKind;
 }) {
 	return (
-		<>
-			<span
-				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center gap-1.5 overflow-hidden"
-				data-sidebar-row-end
-			>
-				{state}
+		<span className="omp-session-row-line" data-sidebar-row-end>
+			{marks}
+			<span className="omp-session-row-give">
+				{/* Row-reversed: the branch is laid out first and the age wraps out of sight before it. */}
+				{head && <SessionHeadLabel head={head} worktree={worktree} />}
+				{age && (
+					<span className="omp-session-row-age" data-session-row-age>
+						{age}
+					</span>
+				)}
 			</span>
-			{head && <SessionHeadLabel head={head} worktree={worktree} />}
-		</>
+		</span>
 	);
 }
 

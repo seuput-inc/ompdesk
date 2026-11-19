@@ -141,12 +141,27 @@ async function openHarness(surface: Surface, theme: "light" | "dark", lang: "en"
 
 async function checkRows(page: Page, surface: Surface): Promise<void> {
 	const list = sidebar(page);
-	// The host's just-written session at work beside its chip: its branch keeps its letters.
+	// The host's just-written session at work beside its chip ("Ship the release").
 	const live = list
 		.locator(`[data-sidebar-device="${HOST}"]`)
 		.locator(`.omp-sidebar-session-row[data-device-session=${cssString(sessionFile(PROJECT, "sess-live"))}]`);
 	await expect(live.locator("[data-family-running]")).toBeVisible();
 	await expect(live.locator('[data-session-head="branch"]')).toHaveText("release");
+	// Its title's faded letters are a frame of the moving light, never a still dim state: the light's window runs
+	// (components.css `omp-live-shine-text`, whose holds put the band off the title) and is further on two frames later.
+	const motion = await live.locator(".omp-live-shine-window").evaluate(async node => {
+		const animation = node.getAnimations()[0] as CSSAnimation | undefined;
+		const before = Number(animation?.currentTime ?? 0);
+		const frames = Promise.withResolvers<void>();
+		requestAnimationFrame(() => requestAnimationFrame(() => frames.resolve()));
+		await frames.promise;
+		return {
+			name: animation?.animationName,
+			state: animation?.playState,
+			advanced: Number(animation?.currentTime ?? 0) > before,
+		};
+	});
+	expect(motion).toEqual({ name: "omp-live-shine-text", state: "running", advanced: true });
 	const local = rowFor(list, sessionFile(PROJECT, "sess-1"));
 	// The repository's own picture once `sessions.artwork` answered; the website has none: its letter.
 	await expect(local.locator('[data-project-artwork="image"] img')).toBeVisible();
@@ -159,61 +174,133 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	await expect(long).toHaveAttribute("title", new RegExp(LONG_BRANCH));
 	const cut = await long.locator(".truncate").evaluate(text => text.scrollWidth > text.clientWidth);
 	expect(cut).toBe(true);
-	// No branch reaches past its line (the line clips: a branch cut there loses its ellipsis, or all of it), and every
-	// branch keeps letters in view: in a 248 px sidebar and on a phone beside a family chip too; in the 220 px sidebar
-	// (whose idle age gives its place to the branch) every row but one at work beside a chip, whose ~40 px line holds
-	// the arc and the branch's mark (its name is the row's tooltip).
-	const heads = await list.locator("[data-session-head]:visible").evaluateAll(nodes =>
-		nodes.map(node => {
-			const text = node.querySelector(".truncate")?.getBoundingClientRect();
-			const line = node.parentElement?.getBoundingClientRect();
-			const row = node.closest(".omp-sidebar-session-row");
+	// Two long agent branches read apart: past the shared `omp/agent/` only `…/` and the part that differs shows, and
+	// its first letters stay in view; the whole name stays the title.
+	const agentHeads = [];
+	for (const file of [sessionFile(PROJECT, "sess-2"), sessionFile(PROJECT, "sess-row-2")]) {
+		const head = rowFor(list, file).locator('[data-session-head="branch"]');
+		await head.scrollIntoViewIfNeeded();
+		agentHeads.push(await head.evaluate(readHeadIn));
+	}
+	for (const head of agentHeads) {
+		expect(head.title).toContain("omp/agent/");
+		expect(head.visible.startsWith("…/"), head.title).toBe(true);
+		expect(head.visible.length, head.title).toBeGreaterThanOrEqual(8);
+	}
+	expect(agentHeads[0]?.visible).not.toBe(agentHeads[1]?.visible);
+
+	// The owner's order on a short line, on every row: the age gives way whole before the branch loses a letter, the
+	// branch keeps at least eight characters or goes with its mark (never the mark alone), a working arc stays, and the
+	// family chip and the ⋯ stay whole beside the line.
+	const lines = await list.locator(".omp-sidebar-session-row:visible").evaluateAll(rows =>
+		rows.map(row => {
+			const give = row.querySelector(".omp-session-row-give")?.getBoundingClientRect();
+			const shown = (element: Element | null | undefined) => {
+				if (!element || !give) return false;
+				const box = element.getBoundingClientRect();
+				return box.width > 0 && box.top < give.bottom - 1 && box.right <= give.right + 0.5;
+			};
+			const head = row.querySelector("[data-session-head]");
+			const text = head?.querySelector(".truncate");
+			const end = row.querySelector("[data-sidebar-row-menu]")?.parentElement?.getBoundingClientRect();
 			return {
-				name: node.getAttribute("title") ?? "",
-				letters: text ? Math.min(text.right, line?.right ?? text.right) - text.left : 0,
-				past: text && line ? text.right - line.right : 0,
-				workingBesideChip: Boolean(row?.querySelector("[data-family-running]")),
+				name: row.textContent ?? "",
+				hasHead: Boolean(head),
+				head: shown(head),
+				cut: text ? text.scrollWidth > text.clientWidth + 0.5 : false,
+				age: shown(row.querySelector("[data-session-row-age] > time")),
+				working: Boolean(row.querySelector("[data-session-working]")),
+				arc: (() => {
+					const arc = row.querySelector("[data-session-working] .omp-working-arc")?.getBoundingClientRect();
+					return Boolean(arc && give && arc.width > 0 && arc.left >= give.left - 0.5 && arc.right <= give.right);
+				})(),
+				endClear: Boolean(!end || !give || end.left >= give.right - 0.5),
 			};
 		}),
 	);
-	expect(heads.length).toBeGreaterThan(2);
-	for (const head of heads) {
-		// The 220 px row at work beside a chip is the floor: its branch's mark at the line's edge.
-		if (surface.name === "narrow" && head.workingBesideChip) continue;
-		expect(head.letters, head.name).toBeGreaterThanOrEqual(16);
-		expect(head.past, head.name).toBeLessThanOrEqual(0.5);
+	expect(lines.length).toBeGreaterThan(4);
+	for (const line of lines) {
+		if (line.cut || (line.hasHead && !line.head)) expect(line.age, `${line.name}: age before branch`).toBe(false);
+		if (line.working) expect(line.arc, `${line.name}: arc stays`).toBe(true);
+		expect(line.endClear, `${line.name}: chip and ⋯ beside the line`).toBe(true);
 	}
-	// The narrow row's idle age is out of sight (tooltip and screen-reader text keep it); the 248 px row and the phone
-	// keep it.
-	const idleAge = rowFor(list, sessionFile(PROJECT, "sess-1")).locator("[data-sidebar-row-end] > time");
-	const ageWidth = await idleAge.evaluate(time => time.getBoundingClientRect().width);
-	if (surface.name === "narrow") expect(ageWidth).toBeLessThanOrEqual(1);
-	else expect(ageWidth).toBeGreaterThan(8);
+	const heads = await Promise.all(
+		(await list.locator("[data-session-head]:visible").all()).map(head => head.evaluate(readHeadIn)),
+	);
+	for (const head of heads) {
+		expect(head.visible.length, `${head.title}: eight characters or none`).toBeGreaterThanOrEqual(
+			Math.min(8, head.shown.length),
+		);
+		expect(head.past, head.title).toBeLessThanOrEqual(0.5);
+	}
 
-	// Every session row: two lines, the picture first, the ⋯ under the title's line, nothing past the row's edge.
+	// The age slot (composer.md): with room, a working arc keeps the age's place, so the branch starts where it did
+	// when work starts and ends; at rest the age shows.
+	const restRow = rowFor(list, sessionFile(PROJECT, "sess-1"));
+	const branchStart = () =>
+		restRow.locator("[data-session-head]").evaluate(head => Math.round(head.getBoundingClientRect().left));
+	const visibleAge = () =>
+		restRow
+			.locator("[data-session-row-age] > time")
+			.evaluate(time => getComputedStyle(time).visibility === "visible" && time.getBoundingClientRect().width > 8);
+	const setRun = (status: "running" | "ready") =>
+		page.evaluate(next => window.__harness?.summaries.tab("tab-1", { status: next }), status);
+	expect(await visibleAge()).toBe(true);
+	const atRest = await branchStart();
+	await setRun("running");
+	await expect(restRow.locator("[data-session-working]")).toBeVisible();
+	expect(await branchStart()).toBe(atRest);
+	await setRun("ready");
+	await expect(restRow.locator("[data-session-working]")).toHaveCount(0);
+	expect(await visibleAge()).toBe(true);
+	expect(await branchStart()).toBe(atRest);
+
+	// Every session row: two lines in the slim density (40 px for a mouse, 48 under a finger, whose hit height stays
+	// 44), the picture first, the ⋯ under the title's line, nothing past the row's edge.
 	const rows = list.locator(".omp-sidebar-session-row:visible");
 	const count = await rows.count();
-	expect(count).toBeGreaterThan(4);
+	const touch = surface.name === "phone";
 	for (let index = 0; index < count; index++) {
 		const row = rows.nth(index);
 		const box = await row.boundingBox();
 		if (!box) continue;
-		expect(box.height, `row ${index} height`).toBeGreaterThanOrEqual(44);
-		expect(box.height, `row ${index} height`).toBeLessThanOrEqual(surface.name === "desktop" ? 52 : 58);
-		await expect(row.locator("[data-project-artwork]")).toHaveCount(1);
+		expect(box.height, `row ${index} height`).toBeGreaterThanOrEqual(touch ? 44 : 38);
+		expect(box.height, `row ${index} height`).toBeLessThanOrEqual(touch ? 50 : 42);
+		const picture = await row.locator("[data-project-artwork]").boundingBox();
+		expect(picture?.height, `row ${index} picture`).toBe(touch ? 28 : 24);
 		const title = await row.locator("button[data-roving-item]").first().boundingBox();
 		const more = await row.locator("[data-sidebar-row-menu]").boundingBox();
 		if (title && more) expect(more.y + more.height / 2).toBeGreaterThan(title.y + title.height);
 		const overflow = await row.evaluate(element => element.scrollWidth - element.clientWidth);
 		expect(overflow, `row ${index} overflow`).toBeLessThanOrEqual(1);
-		// The state (age, arc, badge) and the branch never draw over each other.
-		const gap = await row.evaluate(element => {
-			const state = element.querySelector("[data-sidebar-row-end]")?.getBoundingClientRect();
-			const head = element.querySelector("[data-session-head]")?.getBoundingClientRect();
-			return state && head ? head.left - state.right : null;
-		});
-		if (gap !== null) expect(gap, `row ${index} state over branch`).toBeGreaterThanOrEqual(0);
 	}
+}
+
+/**
+ * A branch label as the eye reads it: the characters fully left of its ellipsis, all it shows, its title, how far it
+ * reaches past its line. Runs in the page (Playwright serializes it whole).
+ */
+function readHeadIn(node: Element): { title: string; shown: string; visible: string; past: number } {
+	const text = node.querySelector(".truncate");
+	const line = node.closest(".omp-session-row-give")?.getBoundingClientRect();
+	const title = node.getAttribute("title") ?? "";
+	if (!text?.firstChild) return { title, shown: "", visible: "", past: 0 };
+	const box = text.getBoundingClientRect();
+	const cut = text.scrollWidth > text.clientWidth + 0.5;
+	const style = getComputedStyle(text);
+	const canvas = document.createElement("canvas").getContext("2d");
+	if (canvas) canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+	const limit = box.right - (cut ? (canvas?.measureText("…").width ?? 0) : 0);
+	const source = text.textContent ?? "";
+	const range = document.createRange();
+	let visible = "";
+	for (let index = 0; index < source.length; index++) {
+		range.setStart(text.firstChild, index);
+		range.setEnd(text.firstChild, index + 1);
+		if (range.getBoundingClientRect().right > limit + 0.5) break;
+		visible += source[index];
+	}
+	return { title, shown: source, visible, past: line ? box.right - line.right : 0 };
 }
 
 for (const surface of SURFACES)
