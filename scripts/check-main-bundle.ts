@@ -370,7 +370,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // A compaction's line and card say what happens and how long (20 Nov 2026, a50471797: `ChatStream.tsx`,
 // `MessageBubble.tsx`, `lib/compaction-action.ts`), with the work board's release-gate check row (830248735): measured
 // 2,207,914 (branch run 44612367045), 1,922 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_207_994;
+// Five theme sets, each light and dark (20 Nov 2026, 7d7e723de: `lib/theme-palettes.ts`, the set picker's model in
+// `lib/themes.ts`): measured 2,208,335 (branch run 44615749422), 341 bytes over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_208_415;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
