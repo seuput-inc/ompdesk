@@ -258,6 +258,21 @@
 			"mutations": "mutations.json",
 			"covers": ["src/main/remote/host-services.ts", "src/main/remote/kept-calls.ts", "src/main/ipc.ts:642-661"],
 			"syncCommit": null
+		},
+		{
+			"id": "open-first-message",
+			"title": "An open's setup and first message across a quit: kept before it goes out, handed once per omp",
+			"kind": "tla",
+			"dir": "open-first-message/tla",
+			"spec": "OpenFirstMessage.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/open.rs",
+				"native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs",
+				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
+			],
+			"syncCommit": null
 		}
 	]
 }
