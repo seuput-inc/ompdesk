@@ -24,10 +24,16 @@ const FILES: &[&str] = &[
     "src/app/favicon.ico",
     "favicon.png",
     "favicon.ico",
+    // A desktop app's own icon where Electron, electron-builder and Tauri keep it.
+    "build/icon.png",
+    "resources/icon.png",
+    "assets/icon.png",
+    "src-tauri/icons/128x128.png",
+    "public/logo.png",
 ];
 
 async fn read(root: &Path, relative: &str, limit: usize) -> Option<Vec<u8>> {
-    let path = tokio::fs::canonicalize(root.join(relative)).await.ok()?;
+    let path = crate::fs::disk::real(root.join(relative)).await?;
     if !path.starts_with(root) {
         return None;
     }
@@ -61,6 +67,24 @@ fn external_url(value: &str) -> Option<Url> {
     }
     url.set_fragment(None);
     Some(url)
+}
+
+/// A homepage that is the repository's own site. A code host's page (`"homepage": "https://github.com/o/r#readme"`,
+/// npm's default) would give the host's favicon to every repository, so the owner's avatar is tried instead.
+fn homepage_url(value: &str) -> Option<Url> {
+    const CODE_HOSTS: &[&str] = &[
+        "github.com",
+        "www.github.com",
+        "gitlab.com",
+        "www.gitlab.com",
+        "bitbucket.org",
+        "www.bitbucket.org",
+        "npmjs.com",
+        "www.npmjs.com",
+    ];
+    let url = external_url(value)?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    (!CODE_HOSTS.contains(&host.as_str())).then_some(url)
 }
 
 async fn fetch_image(url: &Url, source: Source) -> Option<Artwork> {
@@ -218,7 +242,7 @@ pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwor
     let homepage = async {
         if let Some(bytes) = read(root, "package.json", 64 * 1024).await
             && let Ok(package) = serde_json::from_slice::<Value>(&bytes)
-            && let Some(homepage) = package["homepage"].as_str().and_then(external_url)
+            && let Some(homepage) = package["homepage"].as_str().and_then(homepage_url)
         {
             let mut base = homepage.clone();
             if let Ok(response) = crate::http::public_get(homepage.as_str(), 64 * 1024).await
@@ -271,6 +295,9 @@ mod tests {
         );
         assert!(icon_links("<meta property='og:image' content='custom-social.png'>").is_empty());
         assert!(external_url("https://private.invalid/?token=synthetic").is_none());
+        assert!(homepage_url("https://github.com/synthetic-owner/project#readme").is_none());
+        assert!(homepage_url("https://WWW.GitHub.com/synthetic-owner/project").is_none());
+        assert!(homepage_url("https://synthetic-owner.github.io/project/").is_some());
     }
 
     #[test]

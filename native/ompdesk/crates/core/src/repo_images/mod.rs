@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize, Serializer};
 use tokio::sync::{Semaphore, watch};
 
+use crate::fs::disk::real;
 use crate::git::{origin, read, run::Git};
 use crate::run::Runner;
 use crate::server::{Fault, Registry, Reply, Scope};
@@ -139,7 +140,7 @@ impl Service {
     /// Git's facts of one folder and the image cached for its repository; never waits on an image.
     async fn metadata(&self, git: &Git, input: &str) -> Option<Metadata> {
         let _permit = self.slots.acquire().await.ok()?;
-        let path = tokio::fs::canonicalize(input).await.ok()?;
+        let path = real(input).await?;
         if !tokio::fs::metadata(&path).await.ok()?.is_dir() {
             return None;
         }
@@ -154,7 +155,7 @@ impl Service {
                 image: None,
             });
         };
-        let checkout = tokio::fs::canonicalize(checkout).await.ok()?;
+        let checkout = real(checkout).await?;
         let checkout = checkout.to_str()?;
         let (facts, sha) = tokio::join!(
             origin::facts(git, checkout, GIT_MS),
@@ -351,12 +352,12 @@ impl Service {
                 if scope.cancelled() {
                     return Err(Fault::cancelled());
                 }
-                let root = match tokio::fs::canonicalize(&input).await {
-                    Ok(path) => {
+                let root = match real(&input).await {
+                    Some(path) => {
                         let _permit = self.slots.acquire().await.ok();
                         repository_root(git, &path).await
                     }
-                    Err(_) => None,
+                    None => None,
                 };
                 let image = match root {
                     Some(root) => self.image(root, runner).await,
