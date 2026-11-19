@@ -100,6 +100,8 @@ export interface ResumeFact {
 	running: boolean;
 	/** The run's turn ended; only background work (subagents, async jobs) keeps it on. */
 	settling?: boolean;
+	/** The session's goal is active (stock's last `goal_updated`): idle between its turns, a relaunch revives it. */
+	goalActive?: boolean;
 	/** The user pressed Stop since the run began. */
 	stopped: boolean;
 	/** An ask or approval is open on this tab. */

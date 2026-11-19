@@ -530,6 +530,9 @@ impl Ctx {
                     if run.settling() {
                         fact.insert("settling".into(), Value::from(true));
                     }
+                    if entry.tracking.goal_active {
+                        fact.insert("goalActive".into(), Value::from(true));
+                    }
                     if let Some(prompt) = &entry.unsaved_prompt {
                         fact.insert("unsavedPrompt".into(), Value::from(prompt.clone()));
                     }

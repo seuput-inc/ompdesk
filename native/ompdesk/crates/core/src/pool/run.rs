@@ -228,6 +228,9 @@ pub(crate) struct Tracking {
     pub stopped: bool,
     /// Stock's auto-retry waiting for its next attempt: `errorMessage`, and the serial of its `auto_retry_start`.
     pub retry: Option<Retry>,
+    /// The session's goal is active (stock's last `goal_updated`): between its turns a relaunch must resume it, since
+    /// stock pauses an active goal when the session loads.
+    pub goal_active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -261,6 +264,9 @@ impl Tracking {
                 *serial += 1;
                 self.last_run_serial = *serial;
                 self.last_run = Some(run_outcome(event.get("messages")));
+            }
+            Some("goal_updated") => {
+                self.goal_active = event["goal"]["status"].as_str() == Some("active");
             }
             Some("auto_retry_end") => {
                 self.retry = None;

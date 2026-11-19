@@ -279,6 +279,13 @@ function messageText(message: AgentMessage): string {
 	return content.map(block => (block.type === "text" ? block.text : "")).join("");
 }
 
+/** A `goal_updated` event's goal status (stock's `Goal.status`), or null without a goal. */
+function goalStatus(goal: unknown): string | null {
+	return typeof goal === "object" && goal !== null && "status" in goal && typeof goal.status === "string"
+		? goal.status
+		: null;
+}
+
 /**
  * The agent events the core's rules read, and of each only what they read. A streaming reply makes a `message_update`
  * per delta, each carrying the whole message so far: none of that crosses (the windows' forwarders have it), nor the
@@ -343,6 +350,10 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 			case "plan_proposal_resolved":
 				// Small, and a hidden tab's row is sent them whole.
 				kept.push(event);
+				break;
+			case "goal_updated":
+				// Only whether the goal is active: an idle goal session gets a relaunch marker (resume/facts.rs).
+				kept.push({ type: event.type, goal: { status: goalStatus(event.goal) } });
 				break;
 			case "message_end":
 				kept.push({
