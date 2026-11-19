@@ -480,7 +480,19 @@ export const methods: BridgeMethods = {
 			const branch = entries as readonly JournalEntry[];
 			// This process's start: the entries before it are the lives of the processes the relaunch replaced.
 			const startedAt = performance.timeOrigin;
-			const cutOff = interruptedJobs(branch, startedAt);
+			// Background jobs still running outside omp (kept-jobs.ts) are registered again, not named as stopped. Imported
+			// on use: an omp without the internals kept jobs need must not take the composer's methods down with it.
+			const kept = await import("./kept-jobs")
+				.then(module => module.reattachKeptJobs(session, branch))
+				.catch((error: unknown): string[] => {
+					env.emit({
+						type: "notice",
+						level: "error",
+						message: `Taking up the background jobs that ran on through the restart failed: ${error instanceof Error ? error.message : String(error)}`,
+					});
+					return [];
+				});
+			const cutOff = interruptedJobs(branch, startedAt).filter(job => !kept.includes(job.id));
 			const goalPausedByExit =
 				goalActiveAtExit(branch, startedAt) && session.getGoalModeState()?.goal.status === "paused";
 			// Stock's record for a turn whose process exit it did not see as clean: read past that exit record

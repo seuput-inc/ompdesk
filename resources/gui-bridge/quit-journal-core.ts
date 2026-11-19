@@ -50,6 +50,23 @@ export function isCommandTool(tool: string): boolean {
 }
 
 /**
+ * The file in a session's artifacts folder that lists, one call id a line, every plain `bash` call whose command
+ * reached the shell: written before the command runs, so a crash cannot lose it. A replayed call missing there never
+ * ran (it was cut while its approval card waited, or before it started), so running it now runs it once.
+ */
+export const RAN_COMMANDS_FILE = "ran-commands";
+
+/** A call whose command runs in the session's embedded shell, where its start is recorded (`RAN_COMMANDS_FILE`). */
+export function startsInShell(tool: string, input: Record<string, unknown>): boolean {
+	return tool === "bash" && input.pty !== true && input.name === undefined;
+}
+
+/** Whether `ran` (the `RAN_COMMANDS_FILE` text) lists call `toolCallId`. */
+export function ranBefore(ran: string, toolCallId: string): boolean {
+	return ran.split("\n").includes(toolCallId);
+}
+
+/**
  * How long a stop lets running commands finish before it aborts them. Inside main's quit watchdog (30 s,
  * quit-watchdog.ts), which ends the core and with it every omp: the stop is told this bound by the exit-hold line
  * (`commandDrainLine`), so it waits instead of ending omp after its 5 s grace (core sidecar/stop.rs `Hold`).

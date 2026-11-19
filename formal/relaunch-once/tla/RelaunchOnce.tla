@@ -23,9 +23,10 @@ VARIABLES
     callLife,  \* the life that journaled the reply holding the call
     result,    \* the call's journaled result: "none" | "ok" | "error" | "aborted" | "unrun" (aborted before it ran)
     effected,  \* the execution under way has made its effect
-    effects    \* how often the command's effect happened, over every life
+    effects,   \* how often the command's effect happened, over every life
+    ran        \* the call's command reached the shell in some life (its record in `ran-commands`)
 
-vars == <<alive, life, stopping, call, callLife, result, effected, effects>>
+vars == <<alive, life, stopping, call, callLife, result, effected, effects, ran>>
 
 TypeOK ==
     /\ alive \in BOOLEAN
@@ -36,6 +37,7 @@ TypeOK ==
     /\ result \in {"none", "ok", "error", "aborted", "unrun"}
     /\ effected \in BOOLEAN
     /\ effects \in 0 .. MaxLives
+    /\ ran \in BOOLEAN
 
 Init ==
     /\ alive = TRUE
@@ -46,19 +48,23 @@ Init ==
     /\ result = "none"
     /\ effected = FALSE
     /\ effects = 0
+    /\ ran = FALSE
 
 \* Stock: the model's reply with the call reaches the journal.
 Journal ==
     /\ alive /\ ~stopping /\ call = "none"
     /\ call' = "journaled"
     /\ callLife' = life
-    /\ UNCHANGED <<alive, life, stopping, result, effected, effects>>
+    /\ UNCHANGED <<alive, life, stopping, result, effected, effects, ran>>
 
-\* Stock: the loop runs the call it dispatched (`tool_call` let it through on its first run).
+\* Stock: the loop runs the call it dispatched (`tool_call` let it through on its first run). The shell's run records
+\* the call before the command starts (`ran-commands`, kept across lives).
+\* @code resources/gui-bridge/quit-journal.ts:84-98 Shell.prototype.run appends the call id before it runs
 Start ==
     /\ alive /\ ~stopping /\ call = "journaled"
     /\ call' = "running"
     /\ effected' = FALSE
+    /\ ran' = TRUE \* recorded before the command runs
     /\ UNCHANGED <<alive, life, stopping, callLife, result, effects>>
 
 \* The command does what it does (a commit, a push, a line appended).
@@ -66,31 +72,31 @@ Effect ==
     /\ alive /\ call = "running" /\ ~effected
     /\ effected' = TRUE
     /\ effects' = effects + 1
-    /\ UNCHANGED <<alive, life, stopping, call, callLife, result>>
+    /\ UNCHANGED <<alive, life, stopping, call, callLife, result, ran>>
 
 \* The command returns and its result is journaled; also while a stop lets it finish.
-\* @code resources/gui-bridge/quit-journal.ts:76-80 message_end of the result settles the call the stop waits for
+\* @code resources/gui-bridge/quit-journal.ts:124-128 message_end of the result settles the call the stop waits for
 Finish ==
     /\ alive /\ call = "running"
     /\ call' = "done"
     /\ result' \in IF effected THEN {"ok", "error"} ELSE {"error"}
-    /\ UNCHANGED <<alive, life, stopping, callLife, effected, effects>>
+    /\ UNCHANGED <<alive, life, stopping, callLife, effected, effects, ran>>
 
-\* @code resources/gui-bridge/quit-journal.ts:86-90 session_shutdown: the stop begins and holds dispose
+\* @code resources/gui-bridge/quit-journal.ts:134-140 session_shutdown: the stop begins and holds dispose
 BeginStop ==
     /\ alive /\ ~stopping
     /\ stopping' = TRUE
-    /\ UNCHANGED <<alive, life, call, callLife, result, effected, effects>>
+    /\ UNCHANGED <<alive, life, call, callLife, result, effected, effects, ran>>
 
 \* The loop is aborted with the command still running: its aborted result is journaled. Under `Drain` the stop first
 \* waits for the command, so only one that outlasts the wait is cut.
-\* @code resources/gui-bridge/quit-journal.ts:90-97 the wait for running commands, then the abort
+\* @code resources/gui-bridge/quit-journal.ts:136-145 the wait for running commands, then the abort
 StopAbort ==
     /\ alive /\ stopping /\ call = "running"
     /\ ~(Drain /\ Short)
     /\ call' = "done"
     /\ result' = "aborted"
-    /\ UNCHANGED <<alive, life, stopping, callLife, effected, effects>>
+    /\ UNCHANGED <<alive, life, stopping, callLife, effected, effects, ran>>
 
 \* Dispose ends: the process exits. A call journaled but never started gets stock's aborted result: it never ran.
 StopEnd ==
@@ -100,14 +106,14 @@ StopEnd ==
     /\ IF call = "journaled"
           THEN call' = "done" /\ result' = "unrun"
           ELSE UNCHANGED <<call, result>>
-    /\ UNCHANGED <<life, callLife, effected, effects>>
+    /\ UNCHANGED <<life, callLife, effected, effects, ran>>
 
 \* A crash or a kill at any moment: nothing more is journaled.
 Kill ==
     /\ alive
     /\ alive' = FALSE
     /\ stopping' = FALSE
-    /\ UNCHANGED <<life, call, callLife, result, effected, effects>>
+    /\ UNCHANGED <<life, call, callLife, result, effected, effects, ran>>
 
 \* The next omp opens the session and the relaunch restores it: a call with no result is closed as "outcome unknown",
 \* and stock's retry replays a call whose result is an error; an ok result is answered by the model.
@@ -120,15 +126,16 @@ Relaunch ==
     /\ call' = IF call \in {"journaled", "running"} \/ (call = "done" /\ result \in {"error", "aborted", "unrun"})
                   THEN "replay"
                   ELSE call
-    /\ UNCHANGED <<stopping, callLife, result, effects>>
+    /\ UNCHANGED <<stopping, callLife, result, effects, ran>>
 
-\* Stock's replay dispatches the call again; `tool_call` refuses a command an earlier life journaled.
-\* @code resources/gui-bridge/quit-journal.ts:63-70 tool_call: replayOfEarlierLife -> block
+\* Stock's replay dispatches the call again; `tool_call` refuses a command an earlier life journaled and started (its
+\* record of having reached the shell); one that never started (cut while its approval card waited) runs.
+\* @code resources/gui-bridge/quit-journal.ts:106-118 tool_call: replayOfEarlierLife and ran-commands -> block
 Replay ==
     /\ alive /\ ~stopping /\ call = "replay"
-    /\ IF Guard /\ callLife < life
-          THEN call' = "refused" /\ UNCHANGED effected
-          ELSE call' = "running" /\ effected' = FALSE
+    /\ IF Guard /\ callLife < life /\ ran
+          THEN call' = "refused" /\ UNCHANGED <<effected, ran>>
+          ELSE call' = "running" /\ effected' = FALSE /\ ran' = TRUE
     /\ UNCHANGED <<alive, life, stopping, callLife, result, effects>>
 
 Next ==

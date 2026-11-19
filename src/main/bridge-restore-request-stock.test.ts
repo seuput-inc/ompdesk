@@ -15,7 +15,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
+import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
+import { nativeBinPath } from "./native-bin";
 import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon } from "./test-bridge-probe";
 import { RM_TEMP } from "./test-fake-omp";
 
@@ -71,18 +73,21 @@ interface Provider {
 	url: string;
 	/** Second-turn requests past `secondTurn`'s steps, answered `CONTINUED`: the continued turn. */
 	continued: number;
+	/** Every request body, in order. */
+	requests: string[];
 	close(): Promise<void>;
 }
 
 /** The first prompt is answered in text; the second runs `secondTurn` (one step per tool result since it), then `CONTINUED`. */
 async function startProvider(secondTurn: readonly Step[]): Promise<Provider> {
-	const provider: Provider = { url: "", continued: 0, close: async () => undefined };
+	const provider: Provider = { url: "", continued: 0, requests: [], close: async () => undefined };
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
 			body += chunk;
 		});
 		req.on("end", () => {
+			provider.requests.push(body);
 			if (!req.url?.endsWith("/chat/completions")) {
 				res.writeHead(404).end();
 				return;
@@ -169,7 +174,13 @@ afterAll(async () => {
 	for (const cleanup of cleanups.reverse()) await cleanup();
 });
 
-async function startOmp(provider: Provider, isolated: string, root: string, resume: boolean): Promise<Omp> {
+async function startOmp(
+	provider: Provider,
+	isolated: string,
+	root: string,
+	resume: boolean,
+	extraEnv: Record<string, string> = {},
+): Promise<Omp> {
 	const agentDir = join(isolated, "agent");
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(
@@ -196,6 +207,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
 		OMP_GUI_BRIDGE: address,
+		...extraEnv,
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) Reflect.deleteProperty(env, key);
@@ -512,5 +524,51 @@ describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock om
 		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 8`, "kill");
 		expect(textOf(results().at(-1)?.message?.content)).toContain("Not run again");
 		expect(runs()).toBe(1);
+	}, 240_000);
+});
+
+/**
+ * A background job runs on through a relaunch (kept-jobs.ts, `ompdesk keep`): stock ran it in omp's own shell, so the
+ * relaunch ended it and the agent was told to start it again. The command logs its start and its end to a counter
+ * file; the relaunch comes while it sleeps.
+ */
+describe.skipIf(!existsSync(omp) || !existsSync(nativeBinPath("ompdesk")))("a background job on stock omp", () => {
+	it("keeps running through a relaunch, once, and its result reaches the agent after it", async () => {
+		const isolated = mkdtempSync(join(tmpdir(), "ompdesk-kept-"));
+		chmodSync(isolated, 0o700);
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-kept-repo-")));
+		cleanups.push(() => {
+			stopOmpDaemon(isolated);
+			rmSync(isolated, RM_TEMP);
+			rmSync(root, RM_TEMP);
+		});
+		const counter = join(root, "counter").replaceAll("\\", "/");
+		// The output is computed, so it reaches a request only from the job's result, never from the call's command.
+		const command = `echo started >> "${counter}"; sleep 8; echo KEPT-$((40 + 2)); echo finished >> "${counter}"`;
+		const provider = await startProvider([{ tool: "bash", args: { command, async: true, i: "kept" } }]);
+		cleanups.push(() => provider.close());
+		const { hold } = writeHoldExtension(isolated, "user");
+		rmSync(hold);
+		const keep = { [KEEP_CLI_ENV]: nativeBinPath("ompdesk") };
+		const first = await startOmp(provider, isolated, root, false, keep);
+		await first.send({ type: "prompt", message: FIRST });
+		await expect
+			.poll(() => first.frames.filter(frame => frame.type === "agent_end").length, { timeout: 60_000 })
+			.toBe(1);
+		await first.send({ type: "prompt", message: SECOND });
+		await expect.poll(() => existsSync(counter), { timeout: 60_000 }).toBe(true);
+		await expect.poll(() => provider.continued, { timeout: 60_000 }).toBe(1);
+		await first.quit();
+		const lines = () => readFileSync(counter, "utf8").split("\n").filter(Boolean);
+		expect(lines()).toEqual(["started"]);
+		const second = await startOmp(provider, isolated, root, true, keep);
+		const outcome = await second.bridge.request<{ jobs: string[]; followUp: boolean }>(
+			"composer.restore_interrupted",
+			{},
+		);
+		expect(outcome).toMatchObject({ jobs: [], followUp: false });
+		await expect.poll(() => provider.requests.some(body => body.includes("KEPT-42")), { timeout: 60_000 }).toBe(true);
+		expect(lines()).toEqual(["started", "finished"]);
+		expect(journal(isolated).some(entry => entry.customType === "ompdesk-restart-jobs")).toBe(false);
 	}, 240_000);
 });

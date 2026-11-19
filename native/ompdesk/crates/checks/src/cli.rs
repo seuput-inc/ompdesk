@@ -24,6 +24,8 @@ pub const HELP: &str = concat!(
     "  check     `check [--full] [--light] [--release] [--] CMD [ARG...]`: run a test suite or check, reusing only results\n",
     "            whose inputs are unchanged; survives OMPdesk restarts. `check status [ID] [--all] [--json]`,\n",
     "            `check attach [ID]`, `check cancel ID`.\n",
+    "  keep      `keep start DIR` runs the command DIR/spec.json names so it outlives the caller and OMPdesk (output in\n",
+    "            DIR/output.log, exit code in DIR/exit); `keep cancel DIR` ends it.\n",
 );
 
 fn env(name: &str) -> Option<String> {
@@ -37,6 +39,7 @@ pub fn dispatch(argv: &[String]) -> Option<i32> {
         "run" => Some(run(rest)),
         "heavy" => Some(heavy_command(rest)),
         "check" => Some(check_command(rest)),
+        "keep" => Some(crate::keep::command(rest)),
         _ => None,
     }
 }

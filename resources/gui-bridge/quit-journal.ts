@@ -17,18 +17,25 @@
  *
  * Stock's restore then `retry`s a batch whose every result is an error with the same call ids and arguments: a cut
  * command, or one that failed, would run a second time. A `tool_call` of a command whose call an earlier process
- * journaled is refused with what that process recorded (`replayOfEarlierLife`).
+ * journaled is refused with what that process recorded (`replayOfEarlierLife`), except a plain `bash` call whose
+ * command never reached the shell (`RAN_COMMANDS_FILE`): cut while its approval card waited, it asks again and runs once.
  */
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
 import * as runner from "./omp/pi-coding-agent/extensibility/extensions/runner";
+import { Shell } from "./omp/pi-natives";
 import {
 	commandDrainLine,
 	createPendingToolCalls,
 	isCommandTool,
 	QUIT_COMMAND_DRAIN_MS,
+	RAN_COMMANDS_FILE,
+	ranBefore,
 	replayOfEarlierLife,
 	replayRefusal,
+	startsInShell,
 } from "./quit-journal-core";
 
 /** Longer than a tool needs to see its abort and return; a tool that ignores the abort does not hold the quit past it. */
@@ -62,6 +69,34 @@ const startedAt = performance.timeOrigin;
  */
 runner.testSetSessionShutdownHandlerTimeoutMs?.(QUIT_COMMAND_DRAIN_MS + QUIT_TOOL_SETTLE_MS + 1_000);
 
+/** Plain bash calls admitted and not yet in the shell, by call id: the artifacts folder their start is recorded in. */
+const shellCalls = new Map<string, string>();
+
+function readRan(artifacts: string): string {
+	try {
+		return readFileSync(join(artifacts, RAN_COMMANDS_FILE), "utf8");
+	} catch {
+		return "";
+	}
+}
+
+// Once per process: a plain bash call's command is recorded as started right before the shell runs it.
+const shellRun = Shell.prototype.run;
+Shell.prototype.run = function (this: Shell, options, onChunk) {
+	const id = options.env?.PI_TOOL_CALL_ID;
+	const artifacts = id ? shellCalls.get(id) : undefined;
+	if (id && artifacts) {
+		shellCalls.delete(id);
+		try {
+			mkdirSync(artifacts, { recursive: true });
+			appendFileSync(join(artifacts, RAN_COMMANDS_FILE), `${id}\n`);
+		} catch {
+			// Unrecorded, a replay of it after a relaunch runs, as stock does: the command itself still runs now.
+		}
+	}
+	return shellRun.call(this, options, onChunk);
+} satisfies typeof shellRun;
+
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: ExtensionAPI): void {
 	const calls = createPendingToolCalls();
@@ -71,10 +106,15 @@ export function install(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event, ctx) => {
 		if (!isCommandTool(event.toolName)) return undefined;
 		const sessions = ctx.sessionManager;
+		const artifacts = startsInShell(event.toolName, event.input) ? sessions.getArtifactsDir?.() : undefined;
 		const replay = replayOfEarlierLife(sessions.getEntries(), sessions.getBranch(), event.toolCallId, startedAt);
-		if (!replay) return undefined;
-		pi.logger.debug("gui-bridge: a command an earlier process started was not run again");
-		return { block: true, reason: replayRefusal(event.toolName, replay.earlier) };
+		const ran = (): boolean => artifacts == null || ranBefore(readRan(artifacts), event.toolCallId);
+		if (replay && ran()) {
+			pi.logger.debug("gui-bridge: a command an earlier process started was not run again");
+			return { block: true, reason: replayRefusal(event.toolName, replay.earlier) };
+		}
+		if (artifacts) shellCalls.set(event.toolCallId, artifacts);
+		return undefined;
 	});
 	pi.on("tool_execution_start", event => {
 		if (event.toolName === LEFT_PENDING_TOOL) return;

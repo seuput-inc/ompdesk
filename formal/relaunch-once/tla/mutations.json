@@ -37,6 +37,15 @@
 			"replace": "/\\ TRUE",
 			"breaks": "ShortCommandNotCut",
 			"config": "MC.cfg"
+		},
+		{
+			"name": "record-only-after-the-command",
+			"why": "The shell's run records the call only once the command returned: a crash after its effect leaves no record, and the replay runs it again.",
+			"file": "RelaunchOnce.tla",
+			"search": "/\\ ran' = TRUE \\* recorded before the command runs",
+			"replace": "/\\ UNCHANGED ran",
+			"breaks": "AtMostOnce",
+			"config": "MC.cfg"
 		}
 	]
 }
