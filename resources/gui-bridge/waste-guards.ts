@@ -9,12 +9,16 @@
  * so it returns only with news. A `bash` call that pushes or commits past the repository's git hooks (`--no-verify`) is
  * refused too: bypassing them is a person's call (AGENTS.md), and `probe/*` and `refs/archive/*` are the lawful ways.
  * On Windows the first `bash` of each project folder waits until this process holds its connection to stock's service
- * broker, so the first `wait` never makes it while a job runs.
+ * broker, so the first `wait` never makes it while a job runs. A `gh` the gh guard refused (gh-guard.ts) makes its call
+ * an error with the refusal appended, and stock's `github` `run_watch` is refused below the quota floor.
  */
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { realGh, refusedFile, wideRefusal } from "./gh-guard";
 import { guard } from "./health";
+import { SCRATCH_ENV } from "./modes/scratch-core";
 import {
 	createHints,
 	NO_VERIFY_REASON,
@@ -59,6 +63,13 @@ function connectBroker(pi: ExtensionAPI, cwd: string): Promise<unknown> {
 export function install(pi: ExtensionAPI): void {
 	registerWait(pi);
 	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName === "github" && event.input.op === "run_watch") {
+			// Stock's watch polls every 3 s for a minute, then every 15 s, from omp's own process: the gh guard never
+			// sees it, so its floor is held here.
+			const gh = realGh();
+			const refused = gh ? wideRefusal(["github run_watch"], "core", gh) : undefined;
+			return refused ? { block: true, reason: refused } : undefined;
+		}
 		if (event.toolName !== "bash") return undefined;
 		if (skipsGitHooks(event.input)) {
 			pi.logger.debug("gui-bridge: a git push or commit past the hooks refused");
@@ -73,9 +84,27 @@ export function install(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_result", event => {
 		const text = event.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
+		const refused = ghRefusal(event.toolCallId);
 		const hint = hints.note(event.toolName, event.input, { isError: event.isError, text });
-		return hint === undefined ? undefined : { content: [...event.content, { type: "text", text: `\n${hint}` }] };
+		const added = [refused, hint].filter(line => line !== undefined);
+		if (added.length === 0) return undefined;
+		const content = [...event.content, ...added.map(line => ({ type: "text" as const, text: `\n${line}` }))];
+		// A gh the guard refused fails the call even when a pipeline's exit status hid it.
+		return refused === undefined ? { content } : { content, isError: true };
 	});
+}
+
+/** The message of a gh the guard refused during this call (gh-guard.ts `refuse`), taken once. */
+function ghRefusal(toolCallId: string): string | undefined {
+	const scratch = process.env[SCRATCH_ENV];
+	if (!scratch) return undefined;
+	const file = refusedFile(scratch, toolCallId);
+	if (!existsSync(file)) return undefined;
+	try {
+		return readFileSync(file, "utf8");
+	} finally {
+		rmSync(file, { force: true });
+	}
 }
 
 /**

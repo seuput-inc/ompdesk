@@ -45,6 +45,7 @@ import {
 	type SessionSettings,
 	sessionEnv,
 	withCreditSpendRuns,
+	sessionPath,
 	withoutSessionEnv,
 } from "./omp-launch";
 import { ompLogTail } from "./omp-log-tail";
@@ -1405,6 +1406,7 @@ export class SidecarManager extends EventEmitter {
 			const args = ompArgs(launch);
 			const bin = runtime.bin;
 			console.log(`[sidecar] spawning omp ${runtime.version} (${args.length} args, cwd: ${cwd})`);
+			const owned = sessionEnv(launch);
 			const env = childEnv({
 				// Bun's own defaults for omp first, so the user's environment still wins (`ompBunDefaults`).
 				...ompBunDefaults(),
@@ -1413,13 +1415,19 @@ export class SidecarManager extends EventEmitter {
 				// (`SESSION_OWNED_ENV`), nor another OMPdesk's control socket (`withoutControlEnv`).
 				...withoutControlEnv(withoutSessionEnv({ ...process.env, ...this.#shellEnvVars })),
 				...this.#proxyEnvVars,
-				PATH: ompPathEnv(
-					bin,
-					this.#shellEnvVars.PATH ?? process.env.PATH ?? "",
-					this.#egoBrowserDir ? [this.#egoBrowserDir] : [],
+				PATH: sessionPath(
+					ompPathEnv(
+						bin,
+						this.#shellEnvVars.PATH ?? process.env.PATH ?? "",
+						this.#egoBrowserDir ? [this.#egoBrowserDir] : [],
+					),
+					owned,
 				),
-				...sessionEnv(launch),
+				...owned,
 				...this.#options.controlEnv?.(),
+				// Stock sets it for the agent's tool calls only; one inherited from the shell OMPdesk was started in (a dev
+				// run from a session's shell) would make the person's `!` commands look like an agent's to the gh guard.
+				PI_TOOL_CALL_ID: "",
 				PI_RPC_EMIT_TITLE: "1",
 				PI_NO_PTY: "1",
 				PI_NOTIFICATIONS: "off",

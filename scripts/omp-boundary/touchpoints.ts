@@ -1738,6 +1738,27 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/bridge-restore-request-stock.test.ts", "src/main/bridge-restart.test.ts"],
 	},
 	{
+		id: "B65",
+		area: "bridge",
+		contract: "public",
+		summary:
+			"The gh guard: a `gh` wrapper first on a tab omp's PATH acts only when stock's bash sets `PI_TOOL_CALL_ID` (the agent's tool calls and the scripts they run; the composer's `!` runs without it), the bridge's tool_result hook turns a refused gh into an error (`isError`), and its tool_call hook refuses stock's `github` `run_watch` below the quota floor.",
+		files: [
+			"resources/gui-bridge/gh-guard.ts",
+			"resources/gui-bridge/gh-guard-core.ts",
+			"resources/gui-bridge/gh-bin/gh",
+			"resources/gui-bridge/waste-guards.ts",
+			"src/main/omp-launch.ts",
+			"src/main/sidecar.ts",
+		],
+		stock: [
+			"tools/bash.ts #sessionEnv PI_TOOL_CALL_ID",
+			"tools/gh-run-watch.ts run_watch",
+			"omp://extensions.md#tool_result",
+		],
+		tests: ["src/main/gh-guard-stock.test.ts", "src/main/gh-guard.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

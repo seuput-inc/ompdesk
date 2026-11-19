@@ -252,7 +252,9 @@ async function main(argv: string[]): Promise<number> {
 		const holder = lane.holders[0];
 		if (decision.go || decision.code !== 3 || !args.wait || !holder) break;
 		console.log(`waiting for run ${holder.id} (one gh run watch, no polling)`);
-		gh(["run", "watch", String(holder.id), "--interval", "120"]);
+		const watched = gh(["run", "watch", String(holder.id), "--interval", "120"]);
+		// A watch the gh guard refused (the account's quota below its floor) ends the wait instead of looping on lists.
+		if (!watched.ok) fail(`could not wait for run ${holder.id}: ${watched.err}`, 1);
 	}
 	if (!decision.go) fail(decision.why, decision.code);
 	if (decision.note) console.log(decision.note);

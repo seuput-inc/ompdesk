@@ -181,6 +181,8 @@ export async function startOmp(options: {
 	hostTools?: Record<string, { description: string; parameters: Record<string, unknown>; answer: string }>;
 	/** An earlier run's folder, to continue its newest session there (`--continue`), as a relaunch does. */
 	resume?: string;
+	/** Variables set over the test's environment for this omp (after the OMPdesk ones are removed). */
+	env?: Record<string, string>;
 }): Promise<Omp> {
 	const root = options.resume ?? realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-todo-stock-repo-")));
 	if (!options.resume) execFileSync("git", ["init", "--quiet"], { cwd: root });
@@ -198,6 +200,7 @@ export async function startOmp(options: {
 		Reflect.deleteProperty(env, key);
 	for (const key of Object.keys(env))
 		if (key.startsWith("OMP_GUI_") && key !== "OMP_GUI_BRIDGE") Reflect.deleteProperty(env, key);
+	Object.assign(env, options.env);
 	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs: omp 18's service
 	// broker, which ended with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`), and omp 19's daemon, which does not.
 	if (!options.resume)

@@ -26,7 +26,7 @@ This file holds what every change needs. Each area's detailed rules (its user's 
 - `interrupted-work` (`.omp/rules/interrupted-work.md`): Interrupted turns resuming, relaunch log and stop log, fork, auto panels, batched notifications, scheduled retry, close to tray, keep awake, watchdogs, diagnostics and bundles.
 - `e2e-ci-windows` (`.omp/rules/e2e-ci-windows.md`): Playwright e2e rules and fixtures, responsive audit, CI and release workflow layout, Windows test scope and fakes, the machine-wide lock.
 - `app-updater` (`.omp/rules/app-updater.md`): OMPdesk's updater: auth, release lookup, install modes, automatic install timing, update log.
-- `waste-guards` (`.omp/rules/waste-guards.md`): Measured session waste: a bash `ready.log` that cannot match is refused, polling gets one hint per kind.
+- `waste-guards` (`.omp/rules/waste-guards.md`): Measured session waste: a bash `ready.log` that cannot match is refused, polling gets one hint per kind, the gh guard keeps one session from emptying the GitHub account's quota.
 - `native-rust` (`.omp/rules/native-rust.md`): The conversion from Electron/TypeScript to Rust: what stays TypeScript, target architecture, unit order, the `native/ompdesk` workspace, its build, staging, packaging and CI, the ledger of what has moved.
 
 - New detail about an area goes into its rule file, never here. This file stays under 64 KB (`src/main/agents-md.test.ts`): every byte of it rides in front of every request of every session here.
