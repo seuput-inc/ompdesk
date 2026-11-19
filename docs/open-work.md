@@ -31,7 +31,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
 | C1 | A finished tab closes by tool; a close is never refused with a made-up reason (close-visible). | on branch | next-line [desktop] | omp/agent/next-0134-1 (`b24ab49ba`) | |
-| C2 | One session's tab stays open on every device after its owner closed it. | in progress | tabs-tidy [desktop] | | |
+| C2 | One session's tab stays open on every device after its owner closed it. Case 20 Nov: the Mac mini closed its child "Persistent bridge health" (01a1f309) at ~01:40; the desktop's window kept its tab for that Mac mini session, idle. | in progress | tabs-tidy [desktop] | | |
 | C3 | Reading another session opens a tab in the reader's window and leaves it. | in progress | tabs-tidy [desktop] | | |
 | C4 | A scratch folder shows as a sidebar project. | in progress | tabs-tidy [desktop] | | |
 | C5 | A test tab an agent opens stays after the test. | in progress | tabs-tidy [desktop] | | |
