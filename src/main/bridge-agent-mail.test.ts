@@ -14,7 +14,18 @@ import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contr
 type BridgeEnv = Parameters<NonNullable<(typeof methods)[string]>>[1];
 
 const sendMessage = vi.fn();
-install({ on: () => undefined, sendMessage });
+/** The hooks `install` puts on stock's events, by event name. */
+const hooks = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
+install({
+	on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+		hooks.set(event, [...(hooks.get(event) ?? []), handler]),
+	sendMessage,
+});
+/** What stock emits as it hands a queued message to the model at a step boundary. */
+const handedOver = (message: unknown) => {
+	for (const hook of hooks.get("message_end") ?? [])
+		hook({ type: "message_end", message }, { agent: { kind: "main" } });
+};
 
 /** Stock agent-core's peeks the tool batch polls (`Agent.hasIrcInterrupts`, `Agent.hasQueuedAsides`). */
 interface Peeks {
@@ -99,19 +110,18 @@ describe("agent_control.mail", () => {
 		});
 	});
 
-	it("makes a report that asks for a turn urgent while it waits in stock's aside queue; progress never", async () => {
+	it("makes a report that asks for a turn urgent until stock hands it over; progress never", async () => {
 		// Stock's aside queue, filled by sendMessage and drained whole at a step boundary.
-		const queue: string[] = [];
-		sendMessage.mockImplementation((message: { content: string }) => queue.push(message.content));
+		const queue: { customType: string; content: string; details: unknown }[] = [];
+		sendMessage.mockImplementation(message => queue.push(message));
 		const agent: Peeks = { hasIrcInterrupts: () => false, hasQueuedAsides: () => queue.length > 0 };
 		const busy = env({ isStreaming: true, agent });
 		await mail?.({ content: "status", details: { id: "u1", kind: "progress" }, triggerTurn: false }, busy);
 		expect(await agent.hasIrcInterrupts?.()).toBe(false);
 		await mail?.({ content: "finished", details: { id: "u2", kind: "done" }, triggerTurn: true }, busy);
 		expect(await agent.hasIrcInterrupts?.()).toBe(true);
-		queue.length = 0;
-		expect(await agent.hasIrcInterrupts?.()).toBe(false);
-		// A later progress report finds nothing urgent left.
+		// The boundary takes both, and a progress report lands before the next tool batch looks again.
+		for (const message of queue.splice(0)) handedOver({ role: "custom", ...message });
 		await mail?.({ content: "status again", details: { id: "u3", kind: "progress" }, triggerTurn: false }, busy);
 		expect(await agent.hasIrcInterrupts?.()).toBe(false);
 	});
