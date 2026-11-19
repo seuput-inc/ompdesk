@@ -90,9 +90,13 @@ async function openHarness(surface: Surface, theme: "light" | "dark", lang: "en"
 	await page.goto(`${origin}/harness.html?theme=${theme}&lang=${lang}&rows=6`);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });
 	await page.waitForFunction(() => window.__harness?.summaries !== undefined, undefined, { timeout: 45_000 });
-	// The paired host runs its ompdesk session with three subagents at work: that row's family chip counts them.
+	// The paired host runs its ompdesk session with three subagents at work: that row's family chip counts them. A second
+	// session written a moment ago works there too, with one subagent: its age reads "just now", the widest the working
+	// arc's slot holds, beside a chip (a 248 px sidebar once left its branch nothing but its mark).
 	await page.evaluate(
-		({ host, file }) => {
+		({ host, file, live, project }) => {
+			const harness = window.__harness;
+			if (!harness) throw new Error("no harness");
 			const agent = (index: number) => ({
 				id: `agent-${index}`,
 				index,
@@ -101,18 +105,32 @@ async function openHarness(surface: Surface, theme: "light" | "dark", lang: "en"
 				title: `Child task ${index}`,
 				startedAt: Date.now() - index * 60_000,
 			});
-			window.__harness?.summaries.host(host, [
-				{
-					sessionPath: file,
-					tabId: "tab-host",
-					cwd: "/Users/dev/projects/ompdesk",
-					kind: "agent" as const,
-					status: "running" as const,
-					agents: [agent(1), agent(2), agent(3)],
-				},
-			]);
+			const now = new Date().toISOString();
+			harness.sessions.unshift({
+				path: live,
+				id: "sess-live",
+				title: "Ship the release",
+				cwd: project,
+				created: now,
+				modified: now,
+				messageCount: 2,
+				size: 4096,
+				status: "complete",
+				firstMessage: "Ship the release",
+			});
+			const working = (sessionPath: string, tabId: string, agents: number) => ({
+				sessionPath,
+				tabId,
+				cwd: project,
+				kind: "agent" as const,
+				status: "running" as const,
+				agents: Array.from({ length: agents }, (_, index) => agent(index + 1)),
+			});
+			harness.summaries.host(host, [working(file, "tab-host", 3), working(live, "tab-host-live", 1)]);
+			harness.emit("sessions:changed", {});
+			harness.emit("sessions:changed", { device: host });
 		},
-		{ host: HOST, file: sessionFile(PROJECT, "sess-1") },
+		{ host: HOST, file: sessionFile(PROJECT, "sess-1"), live: sessionFile(PROJECT, "sess-live"), project: PROJECT },
 	);
 	if (surface.name === "phone") {
 		await page.getByRole("button", { name: /Open menu|메뉴 열기/ }).click();
@@ -123,6 +141,12 @@ async function openHarness(surface: Surface, theme: "light" | "dark", lang: "en"
 
 async function checkRows(page: Page, surface: Surface): Promise<void> {
 	const list = sidebar(page);
+	// The host's just-written session at work beside its chip: its branch keeps its letters.
+	const live = list
+		.locator(`[data-sidebar-device="${HOST}"]`)
+		.locator(`.omp-sidebar-session-row[data-device-session=${cssString(sessionFile(PROJECT, "sess-live"))}]`);
+	await expect(live.locator("[data-family-running]")).toBeVisible();
+	await expect(live.locator('[data-session-head="branch"]')).toHaveText("release");
 	const local = rowFor(list, sessionFile(PROJECT, "sess-1"));
 	// The repository's own picture once `sessions.artwork` answered; the website has none: its letter.
 	await expect(local.locator('[data-project-artwork="image"] img')).toBeVisible();

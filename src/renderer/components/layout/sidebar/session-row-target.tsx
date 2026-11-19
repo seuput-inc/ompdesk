@@ -103,7 +103,7 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
 		<span
-			className="inline-flex min-w-[4.5em] flex-[0_1_auto] items-center gap-1"
+			className="inline-flex min-w-[4em] flex-[0_1_auto] items-center gap-1"
 			data-session-head={head.kind}
 			data-sidebar-worktree={worktree}
 			title={tip}
@@ -129,8 +129,10 @@ export function SessionRowArtwork({ target }: { target: SessionRowTarget | null 
 /**
  * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age),
  * then the checkout's branch, which gives way first when the line is short. The state keeps its width down to
- * `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css): squeezed below it
- * the working arc slid over the branch's mark.
+ * `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css). While the session
+ * works the slot still holds its hidden age (composer.md › The age slot) but may give that hidden part up from its
+ * start, the arc staying whole at its end: beside a family chip in a 248 px sidebar the reserved age left the branch
+ * nothing but its mark.
  */
 export function SessionRowLine({
 	state,
@@ -144,7 +146,7 @@ export function SessionRowLine({
 	return (
 		<>
 			<span
-				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center gap-1.5 overflow-hidden"
+				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center justify-end gap-1.5 overflow-hidden has-[.omp-live-age]:min-w-(--sc-icon-md)"
 				data-sidebar-row-end
 			>
 				{state}

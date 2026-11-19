@@ -20,6 +20,8 @@ const repo = (root: string) => ({ root, name: root.split("/").pop() ?? root, own
 function targetOf({ sessionPath, cwd }: SessionTargetQuery): SessionTarget {
 	if (sessionPath.includes("sess-1"))
 		return { path: cwd, repository: repo(PROJECT), head: { kind: "branch", name: "main" } };
+	if (sessionPath.includes("sess-live"))
+		return { path: cwd, repository: repo(PROJECT), head: { kind: "branch", name: "release" } };
 	if (sessionPath.includes("sess-2"))
 		return {
 			path: cwd,
