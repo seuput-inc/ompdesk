@@ -75,7 +75,7 @@ describe("todoStaleness", () => {
 		expect(todoStaleness({ branch, snapshotId: SNAPSHOT, phases: open, prompt: REQUEST })).toBeUndefined();
 	});
 
-	it("never reminds on a question or a short reply", () => {
+	it("never reminds on a question or an acknowledgement, and does on a short order", () => {
 		const branch = [user("fix the bug"), snapshot(), assistant(), user("rename the menu"), assistant()];
 		for (const prompt of [
 			"why did the build fail?",
@@ -86,6 +86,10 @@ describe("todoStaleness", () => {
 			"!git status",
 		])
 			expect(todoStaleness({ branch, snapshotId: SNAPSHOT, phases: finished, prompt })).toBeUndefined();
+		for (const prompt of ["배포 중단", "revert"])
+			expect(todoStaleness({ branch, snapshotId: SNAPSHOT, phases: finished, prompt })).toMatchObject({
+				kind: "finished",
+			});
 	});
 
 	it("reminds once per list, and once more only after three more requests left it as it was", () => {
@@ -141,11 +145,62 @@ describe("isNewRequest", () => {
 			"",
 			"왜 빌드가 실패했어?",
 			"What is the current status?",
-			"go on",
-			"진행해",
 			"how does the merge work",
+			"why did the build fail?",
+			"빌드 끝났나요",
 		])
 			expect(isNewRequest(text), text).toBe(false);
+	});
+
+	it("counts a short order, however few its characters", () => {
+		for (const text of [
+			"배포 중단",
+			"되돌려",
+			"푸시해",
+			"탭 닫아",
+			"멈춰",
+			"revert",
+			"Stop the deploy",
+			"do the release",
+			"푸시하죠",
+		])
+			expect(isNewRequest(text), text).toBe(true);
+	});
+
+	it("leaves out a message of acknowledgement words only, with any punctuation", () => {
+		for (const text of [
+			"응",
+			"계속",
+			"ok",
+			"ㅇㅇ",
+			"네!",
+			"응응, 계속~",
+			"진행해",
+			"계속 진행해 주세요",
+			"좋아요 ㅋㅋ",
+			"고마워요 👍",
+			"go on",
+			"Continue please.",
+			"OK, thanks!",
+			"yes, go ahead",
+			"...",
+			"a",
+		])
+			expect(isNewRequest(text), text).toBe(false);
+		// A listed word beside anything unlisted is a request again.
+		for (const text of ["계속 배포해", "ok, now revert it", "응 탭 닫아"])
+			expect(isNewRequest(text), text).toBe(true);
+	});
+
+	it("counts a question that presses for work not done, not one that only asks", () => {
+		for (const text of ["왜 아직 안 했어?", "왜 안 해?", "Why didn't you push?", "Did you push yet?"])
+			expect(isNewRequest(text), text).toBe(true);
+		for (const text of ["아직 빌드 중이야?", "Is it still running?", "뭐가 문제야?"])
+			expect(isNewRequest(text), text).toBe(false);
+	});
+
+	it("never counts a command", () => {
+		for (const text of ["/compact", "!git status", "$ ls"]) expect(isNewRequest(text), text).toBe(false);
 	});
 });
 
