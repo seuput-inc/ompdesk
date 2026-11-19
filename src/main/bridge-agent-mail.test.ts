@@ -16,11 +16,11 @@ type BridgeEnv = Parameters<NonNullable<(typeof methods)[string]>>[1];
 const sendMessage = vi.fn();
 /** The hooks `install` puts on stock's events, by event name. */
 const hooks = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
-install({
-	on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
-		hooks.set(event, [...(hooks.get(event) ?? []), handler]),
-	sendMessage,
-});
+/** Stock's `pi.on` takes every event's own handler; this fake keeps them all by name. */
+const on = (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+	hooks.set(event, [...(hooks.get(event) ?? []), handler]);
+};
+install({ on: on as Parameters<typeof install>[0]["on"], sendMessage });
 /** What stock emits as it hands a queued message to the model at a step boundary. */
 const handedOver = (message: unknown) => {
 	for (const hook of hooks.get("message_end") ?? [])
@@ -51,6 +51,8 @@ const mail = methods["agent_control.mail"];
 
 afterEach(() => {
 	sendMessage.mockReset();
+	// Each case is a turn of its own: stock's agent_end ends it.
+	for (const hook of hooks.get("agent_end") ?? []) hook({ type: "agent_end" }, { agent: { kind: "main" } });
 });
 
 describe("agent_control.mail", () => {

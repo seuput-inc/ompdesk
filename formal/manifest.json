@@ -273,6 +273,23 @@
 				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
 			],
 			"syncCommit": null
+		},
+		{
+			"id": "urgent-asides",
+			"title": "Urgent asides background a running shell; a progress report or note never does",
+			"kind": "tla",
+			"dir": "urgent-asides/tla",
+			"spec": "UrgentAsides.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/agent-control.ts#urgentKey",
+				"resources/gui-bridge/agent-control.ts#watchAsides",
+				"resources/gui-bridge/agent-control.ts#interruptFor",
+				"resources/gui-bridge/agent-control.ts#install",
+				"resources/gui-bridge/agent-control.ts:337-390"
+			],
+			"syncCommit": null
 		}
 	]
 }
