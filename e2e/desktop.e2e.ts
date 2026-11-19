@@ -534,7 +534,7 @@ test("failed preference writes retain edits and never allow a premature restart"
 	await lineNumbers.click();
 	await expect(page.getByRole("alert").filter({ hasText: "audit appearance write refused" })).toBeVisible();
 	await expect(lineNumbers).toHaveAttribute("aria-checked", checked ?? "false");
-	await settings.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "OMPdesk Light" }).click();
+	await settings.locator('[data-theme-mode="dark"]').click();
 	await expect(page.getByRole("alert").filter({ hasText: "audit appearance write refused" })).toBeVisible();
 	await page.keyboard.press("Escape");
 	expect(errors).toEqual([]);
