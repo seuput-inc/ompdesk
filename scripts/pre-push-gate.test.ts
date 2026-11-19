@@ -49,7 +49,14 @@ describe("planGate", () => {
 			"native/ompdesk/crates/core/src/lib.rs",
 			".github/workflows/ci.yml",
 		]);
-		expect(plan).toEqual({ biome: [], surfaces: null, types: false, budget: false });
+		expect(plan).toEqual({ biome: [], surfaces: null, types: false, budget: false, tables: false });
+	});
+
+	it("checks ompdesk_app's tables when a commit touches the Rust tables or their captured copy", () => {
+		const app = "native/ompdesk/crates/core/src/agentctl/app";
+		for (const file of ["captured/meta.json", "channels.rs", "catalog.rs", "settings.rs"])
+			expect(planGate([`${app}/${file}`]).tables).toBe(true);
+		expect(planGate([`${app}/control.rs`, "src/main/a.ts"]).tables).toBe(false);
 	});
 
 	it("runs every static check for a renderer source and the budget for it", () => {
@@ -58,6 +65,7 @@ describe("planGate", () => {
 			surfaces: { only: ["src/renderer/components/Row.tsx"] },
 			types: true,
 			budget: true,
+			tables: false,
 		});
 	});
 
@@ -124,6 +132,28 @@ describe("a probe branch never lands on main", () => {
 		fs.writeFileSync(path.join(repo, "a.test.ts"), "test: the bug, before its fix\n");
 		const fix = commit("a.ts", "fix: the bug, with its test");
 		expect(probesInPush(repo, toMain(fix, base), base)).toEqual([]);
+	});
+
+	it("lets main take the commits a probe sits on: the branch's own work and a candidate branch main merges", () => {
+		const base = commit("a.ts", "first");
+		gitSync(repo, "checkout", "-q", "-b", "work");
+		const work = commit("b.ts", "feat: the work");
+		gitSync(repo, "checkout", "-q", "-b", "probe/on-work");
+		commit("b.test.ts", "test: a red check on the work");
+		expect(probesInPush(repo, toMain(work, base), base)).toEqual([]);
+
+		gitSync(repo, "checkout", "-q", "-b", "rc", base);
+		const candidate = commit("c.ts", "fix: in the candidate");
+		gitSync(repo, "checkout", "-q", "-b", "probe/on-rc");
+		commit("c.test.ts", "test: a red check on the candidate");
+		gitSync(repo, "checkout", "-q", "work");
+		gitSync(repo, "merge", "-q", "--no-ff", "-m", "merge the candidate", candidate);
+		const merged = gitSync(repo, "rev-parse", "HEAD");
+		expect(probesInPush(repo, toMain(merged, base), base)).toEqual([]);
+
+		gitSync(repo, "merge", "-q", "--no-ff", "-m", "merge the probe", "probe/on-rc");
+		const carried = gitSync(repo, "rev-parse", "HEAD");
+		expect(probesInPush(repo, toMain(carried, base), base)).toEqual(["refs/heads/probe/on-rc"]);
 	});
 });
 
