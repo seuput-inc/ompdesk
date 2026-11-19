@@ -155,6 +155,36 @@ describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind th
 		expect(await driftState(session)).toMatchObject({ stale: null, receivedCount: 1, received: [{ text: STEER }] });
 	}, 180_000);
 
+	it("receives a typed order however short, Korean or English, never an acknowledgement", async () => {
+		const { session } = await start(forgets().respond);
+		const typed = [
+			"배포 중단",
+			"응",
+			"되돌려",
+			"계속",
+			"ok",
+			"계속 진행해 주세요",
+			"Stop the deploy",
+			"thanks!",
+			"왜 아직 안 했어?",
+			"go on",
+		];
+		await steeredTurn(
+			session,
+			undefined,
+			typed.map(message => ({ type: "steer", message })),
+		);
+
+		const drift = await driftState(session);
+		expect(drift.receivedCount).toBe(4);
+		expect(drift.received.map(item => item.text)).toEqual([
+			"배포 중단",
+			"되돌려",
+			"Stop the deploy",
+			"왜 아직 안 했어?",
+		]);
+	}, 180_000);
+
 	it("marks a playbook child's list behind after a long run of calls without a change", async () => {
 		let reads = 25;
 		const respond = (step: number): string => {
