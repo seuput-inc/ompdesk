@@ -66,7 +66,7 @@ Init ==
 \* The hub's bridge holds a report once per id (`hasMailEntry`); a replay with a new id is a new message.
 Deliver(r) == hub' = [hub EXCEPT ![r] = IF StableIds /\ @ >= 1 THEN @ ELSE @ + 1]
 
-\* @code src/main/remote/host-services.ts#LocalHostServices.#trackRun omp's host_tool_call: kept in hostCalls, `delivered` while a connection is held, forwarded to it
+\* @code src/main/remote/host-services.ts:2472-2476 omp's host_tool_call: kept in hostCalls, `delivered` while a connection is held, forwarded to it
 Call(c) ==
     /\ pending[c] = "new"
     /\ pending' = [pending EXCEPT ![c] = "waiting"]
@@ -86,13 +86,13 @@ Wake ==
     /\ link' = "up"
     /\ UNCHANGED <<pending, delivered, inflight, replies, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts#LocalHostServices.#startGrace B notices: the tab's connection is gone
+\* @code src/main/remote/host-services.ts:1831-1834 B notices: the tab's connection is gone
 Detect ==
     /\ link = "dead"
     /\ link' = "down"
     /\ UNCHANGED <<pending, delivered, inflight, replies, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts#LocalHostServices.#open A's tab.open re-attaches: waiting calls go again (resent when handed before), then the kept reports
+\* @code src/main/remote/host-services.ts:2041-2050 A's tab.open re-attaches: waiting calls go again (resent when handed before), then the kept reports
 Reattach ==
     /\ link = "down" /\ AReturns
     /\ LET again == {c \in Calls : pending[c] = "waiting" /\ (~delivered[c] \/ ResendDelivered)}
@@ -112,7 +112,7 @@ LoseReply(m) ==
     /\ replies' = replies \ {m}
     /\ UNCHANGED <<link, pending, delivered, inflight, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/ipc.ts:639-651 A runs the call: a control call through its journal (a re-sent one it ran answers the record), a report reaches the hub
+\* @code src/main/ipc.ts:642-661 A runs the call: a control call through its journal (a re-sent one it ran answers the record), a report reaches the hub
 ARun(m) ==
     /\ m \in inflight
     /\ inflight' = inflight \ {m}
@@ -124,7 +124,7 @@ ARun(m) ==
             /\ UNCHANGED hub
     /\ UNCHANGED <<link, pending, delivered, kept, toldKept, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts#LocalHostServices.#answer A's host_tool_result: the omp gets its answer; a replay's ends its outbox entry
+\* @code src/main/remote/host-services.ts:1184-1203 A's host_tool_result: the omp gets its answer; a replay's ends its outbox entry
 BReply(m) ==
     /\ link = "up" /\ m \in replies
     /\ replies' = replies \ {m}
@@ -135,7 +135,7 @@ BReply(m) ==
             /\ UNCHANGED pending
     /\ UNCHANGED <<link, delivered, inflight, aJournal, runs, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts#LocalHostServices.#takeOver A away past the notice: B answers each call no connection was handed; a report is kept for A
+\* @code src/main/remote/host-services.ts:1892-1979 A away past the notice: B answers each call no connection was handed; a report is kept for A
 TakeOver(c) ==
     /\ UseTakeover /\ link = "down" /\ pending[c] = "waiting"
     /\ TakeDelivered \/ ~delivered[c]

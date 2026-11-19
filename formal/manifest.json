@@ -256,7 +256,7 @@
 			"spec": "AwayCalls.tla",
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
-			"covers": ["src/main/remote/host-services.ts"],
+			"covers": ["src/main/remote/host-services.ts", "src/main/remote/kept-calls.ts", "src/main/ipc.ts:642-661"],
 			"syncCommit": null
 		}
 	]
