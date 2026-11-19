@@ -106,20 +106,24 @@ collect() {
   evidence "feed requests: $(feed_paths | sort | uniq -c | tr -s ' ' | tr '\n' '|' | cut -c1-600)"
   evidence "evidence folder $OUT: $(ls "$OUT" | tr '\n' ' ')"
 }
+# Every step is bounded and named: run 44549296246 printed its evidence and then hung here until the job's 60 minutes (most
+# likely `security remove-trusted-cert`, which can wait on an authorization prompt nobody answers on a runner).
 finish() {
   trap - EXIT
   collect
-  stop_app "$APP" >/dev/null 2>&1
+  echo "cleanup: stopping the app"; stop_app "$APP" >/dev/null 2>&1
   launchctl unsetenv OMP_GUI_OMP
-  stop_gate_feed
-  if [ "$HOSTS_MAPPED" = 1 ]; then sudo -n sed -i '' "/$HOSTS_MARK\$/d" /etc/hosts; flush_dns; fi
+  echo "cleanup: stopping the feed"; stop_gate_feed
+  if [ "$HOSTS_MAPPED" = 1 ]; then echo "cleanup: /etc/hosts"; limit 30 sudo -n sed -i '' "/$HOSTS_MARK\$/d" /etc/hosts; flush_dns; fi
   if [ "$CERT_TRUSTED" = 1 ]; then
-    sudo -n security remove-trusted-cert -d "$CERT" >/dev/null 2>&1
-    sudo -n security delete-certificate -Z "$(/usr/bin/openssl x509 -in "$CERT" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')" /Library/Keychains/System.keychain >/dev/null 2>&1
+    echo "cleanup: the feed's certificate"
+    limit 30 sudo -n security remove-trusted-cert -d "$CERT" >/dev/null 2>&1 || echo "cleanup: remove-trusted-cert did not finish (a throwaway runner keeps it)"
+    limit 30 sudo -n security delete-certificate -Z "$(/usr/bin/openssl x509 -in "$CERT" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')" /Library/Keychains/System.keychain >/dev/null 2>&1
   fi
+  echo "cleanup: keychains"
   [ "$KEYCHAIN_SWAPPED" = 0 ] || restore
   kill "${WATCH:-}" "$FAKE_OMP_HOLDER" 2>/dev/null
-  security delete-keychain "$KC0" 2>/dev/null
+  limit 30 security delete-keychain "$KC0" 2>/dev/null
   if [ "$FAILED" = 0 ]; then echo "RESULT: ok"; exit 0; fi
   echo "RESULT: FAILED (${FAILURES:-the script stopped before its checks})"
   exit 1
@@ -239,8 +243,12 @@ RESULT_ROW=$(update_rows '.message == "swap" and .details.event == "result"' | t
 evidence "swap result: $(jq -c .details <<<"$RESULT_ROW" 2>/dev/null)"
 [ "$(jq -r .details.outcome <<<"$RESULT_ROW" 2>/dev/null)" = installed ]; check $? "swap result outcome installed"
 [ "$(jq -r .pid <<<"$RESULT_ROW" 2>/dev/null)" != "$(jq -r .pid <<<"$HELPER" 2>/dev/null)" ]; check $? "swap result was logged by another process than the one that started the helper (after the relaunch)"
+# The new shell's launcher logs its own `started` too, which can come before the helper's (the helper removes the 380 MB
+# `.previous` first, then logs it): wait for both lines, then for the folder to go.
+swap_started_twice() { [ "$(grep -c '^started' "$SWAP_LOG" 2>/dev/null)" -ge 2 ] || { swap_started && [ ! -e "$APP.previous" ]; }; }
 wait_for swap_started 180; check $? "the start-checked helper saw the new app's start mark (swap.log started)"
-[ ! -e "$APP.previous" ] && [ ! -e "$APP.updating" ]; check $? "no .previous or .updating bundle is left in /Applications"
+no_leftovers() { [ ! -e "$APP.previous" ] && [ ! -e "$APP.updating" ]; }
+wait_for swap_started_twice 60; wait_for no_leftovers 60; check $? "no .previous or .updating bundle is left in /Applications"
 [ "$(bundle_version "$APP")" = "$NEXT_VERSION" ]; check $? "/Applications/OMPdesk.app is $NEXT_VERSION (Info.plist CFBundleShortVersionString: $(bundle_version "$APP"))"
 codesign --verify --deep --strict "$APP"; check $? "the installed $NEXT_VERSION verifies"
 [ "$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')" = "$REQUIREMENT" ]; check $? "the installed $NEXT_VERSION keeps the candidate's designated requirement"
