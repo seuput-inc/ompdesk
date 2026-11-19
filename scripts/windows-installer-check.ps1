@@ -328,21 +328,22 @@ function Assert-NoGpuRelaunchLoop {
 	}
 }
 
-# Headless (no tray, no automatic machine setup); the CDP page list proves the window loaded its renderer.
+# Headless (no tray, no automatic machine setup). The release host opens no DevTools port (it drops WEBVIEW2_*
+# and takes no --remote-debugging-port), so the proof that the window loaded its renderer is the renderer's own
+# `renderer-mounted` startup mark (src/shared/startup-timing.ts), which main appends to logs\gui-runtime.jsonl.
 function Assert-Launches {
+	$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+	$mounted = {
+		if (-not (Test-Path -LiteralPath $log)) { return 0 }
+		@(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue |
+				Where-Object { $_ -match '"source":\s*"startup-timing"' -and $_ -match '"message":\s*"renderer-mounted"' }).Count
+	}
+	$before = & $mounted
 	$env:OMP_GUI_HEADLESS = '1'
-	Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9333' | Out-Null
+	Start-Process -FilePath $exe | Out-Null
 	Remove-Item Env:OMP_GUI_HEADLESS
-	$script:page = $null
-	Wait-Until {
-		try {
-			$script:page = Invoke-RestMethod -Uri 'http://127.0.0.1:9333/json/list' -TimeoutSec 2 |
-				Where-Object { $_.type -eq 'page' -and $_.url -like '*index.html*' } |
-				Select-Object -First 1
-		} catch { $script:page = $null }
-		$null -ne $script:page
-	} 120 'the installed app to load its window'
-	Ok "the installed app opened its window: '$($script:page.title)' $($script:page.url)"
+	Wait-Until { (& $mounted) -gt $before } 120 'the installed app to load its window'
+	Ok "the installed app opened its window: its renderer mounted ($log)"
 	Stop-App
 }
 
