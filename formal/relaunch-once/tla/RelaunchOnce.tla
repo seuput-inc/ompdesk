@@ -21,7 +21,7 @@ VARIABLES
     stopping,  \* a stop is under way (session_shutdown ran, dispose waits on it)
     call,      \* "none" | "journaled" | "running" | "done" | "replay" | "refused"
     callLife,  \* the life that journaled the reply holding the call
-    result,    \* the call's journaled result: "none" | "ok" | "error" | "aborted"
+    result,    \* the call's journaled result: "none" | "ok" | "error" | "aborted" | "unrun" (aborted before it ran)
     effected,  \* the execution under way has made its effect
     effects    \* how often the command's effect happened, over every life
 
@@ -33,7 +33,7 @@ TypeOK ==
     /\ stopping \in BOOLEAN
     /\ call \in {"none", "journaled", "running", "done", "replay", "refused"}
     /\ callLife \in 0 .. MaxLives
-    /\ result \in {"none", "ok", "error", "aborted"}
+    /\ result \in {"none", "ok", "error", "aborted", "unrun"}
     /\ effected \in BOOLEAN
     /\ effects \in 0 .. MaxLives
 
@@ -92,13 +92,13 @@ StopAbort ==
     /\ result' = "aborted"
     /\ UNCHANGED <<alive, life, stopping, callLife, effected, effects>>
 
-\* Dispose ends: the process exits. A call journaled but never started gets stock's aborted result.
+\* Dispose ends: the process exits. A call journaled but never started gets stock's aborted result: it never ran.
 StopEnd ==
     /\ alive /\ stopping /\ call # "running"
     /\ alive' = FALSE
     /\ stopping' = FALSE
     /\ IF call = "journaled"
-          THEN call' = "done" /\ result' = "aborted"
+          THEN call' = "done" /\ result' = "unrun"
           ELSE UNCHANGED <<call, result>>
     /\ UNCHANGED <<life, callLife, effected, effects>>
 
@@ -117,7 +117,7 @@ Relaunch ==
     /\ alive' = TRUE
     /\ life' = life + 1
     /\ effected' = FALSE
-    /\ call' = IF call \in {"journaled", "running"} \/ (call = "done" /\ result \in {"error", "aborted"})
+    /\ call' = IF call \in {"journaled", "running"} \/ (call = "done" /\ result \in {"error", "aborted", "unrun"})
                   THEN "replay"
                   ELSE call
     /\ UNCHANGED <<stopping, callLife, result, effects>>
