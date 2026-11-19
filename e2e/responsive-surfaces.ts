@@ -364,7 +364,7 @@ async function endQueuedTurn(page: Page): Promise<void> {
 		await window.omp.rpc.commandForTab(tabId, { type: "queue_clear" });
 		await window.omp.rpc.commandForTab(tabId, { type: "abort" });
 	}, tab.tabId);
-	await page.locator("[data-send-mode]").first().waitFor({ state: "hidden", timeout: 30_000 });
+	await page.locator(".omp-composer-toolbar[data-turn-running]").first().waitFor({ state: "hidden", timeout: 30_000 });
 }
 
 /** The work session's family open, with every other computer's section folded to its count. */
@@ -1941,7 +1941,10 @@ export const SURFACES: readonly Surface[] = [
 				);
 			};
 			await type("fixture running");
-			await page.locator("[data-send-mode]").first().waitFor({ state: "visible", timeout: 30_000 });
+			await page
+				.locator(".omp-composer-toolbar[data-turn-running]")
+				.first()
+				.waitFor({ state: "visible", timeout: 30_000 });
 			await type("Check the failing test first");
 			const queued = await page.evaluate(([tabId, body]) => window.omp.rpc.commandForTab(tabId, body), [
 				tab.tabId,

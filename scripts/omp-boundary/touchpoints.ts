@@ -406,7 +406,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Compatibility probe and import rewriting: reads each LOADERS function's source for `omp-legacy-pi-bundled:` targets, and COPY_SAFE, HEAVY_COPIES and PRESENCE_ONLY decide which separate module copies are acceptable. Every in-omp stock import goes through a one-line `export * from` adapter under resources/gui-bridge/omp/, which omp rewrites like a direct import.",
+			"Compatibility probe and import rewriting: reads each LOADERS function's source for `omp-legacy-pi-bundled:` targets, and COPY_SAFE, HEAVY_COPIES and PRESENCE_ONLY decide which separate module copies are acceptable. Every in-omp stock import goes through a one-line `export * from` adapter under resources/gui-bridge/omp/, which omp rewrites like a direct import. `guard` refuses only the methods of the one action whose listed internals are missing; CORE_FEATURES alone start main's omp repair.",
 		files: [
 			"resources/gui-bridge/health.ts",
 			"resources/gui-bridge/capabilities.ts",
@@ -424,6 +424,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: [
 			"src/main/bridge-capabilities.test.ts",
 			"src/main/bridge-health.test.ts",
+			"src/main/bridge-capability-granular-stock.test.ts",
+			"src/main/bridge-guard.test.mjs",
+			"src/main/bridge-session-extras-guard.test.mjs",
 			"src/main/bridge-stock-settings-stock.test.ts",
 			"scripts/lint-omp-imports.test.mjs",
 		],
@@ -1668,6 +1671,21 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		],
 		stock: ["AgentSession.prompt", "PromptOptions.streamingBehavior aside", "PromptOptions.onPromptAdmitted"],
 		tests: ["src/main/bridge-agent-send-stock.test.ts", "src/main/agent-control/service.test.ts"],
+	},
+	{
+		id: "B63",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"In-memory monkey patch: at each main run's `before_agent_start` (stock copies the peek into the run's loop config when the run starts) the bridge wraps the main agent's `Agent.hasIrcInterrupts` peek, found through `AgentRegistry`, so it also answers true while an aside the bridge queued (another session's message, a report that asks for a turn) waits in stock's aside queue (`Agent.hasQueuedAsides`). The tool batch then raises its cooperative steering signal (source `irc`): a running `bash` or `eval` backgrounds itself and the message is read at the next step, where a plain aside waits for the call or its 60 s auto-background. No call is killed, a question card stays open.",
+		files: ["resources/gui-bridge/agent-control.ts", "resources/gui-bridge/capabilities.ts"],
+		stock: [
+			"Agent.hasIrcInterrupts",
+			"Agent.hasQueuedAsides",
+			"agent-loop.ts executeToolCalls checkAsideInterrupts",
+			"async/auto-background.ts raceJobSettlement",
+		],
+		tests: ["src/main/bridge-steer-now-stock.test.ts", "src/main/bridge-agent-mail.test.ts"],
 	},
 	{
 		id: "H01",

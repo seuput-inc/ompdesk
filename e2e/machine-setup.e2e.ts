@@ -88,7 +88,7 @@ interface LaunchOptions {
 	reuse?: string;
 	/** What the fake installer's failing attempt prints. */
 	failOutput?: string;
-	/** omp is installed but older than the minimum (the install runs `omp update`). */
+	/** omp is installed but older than the minimum (setup installs the tested omp over it, `bun-global`). */
 	outdated?: boolean;
 }
 

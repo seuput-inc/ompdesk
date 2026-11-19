@@ -1496,9 +1496,9 @@ describe("AgentControlRuntime", () => {
 		}
 	});
 
-	it("hands a follow-up a busy child's omp queued to the omp that holds its session after a relaunch, once", async () => {
-		// One fake omp per tab: a prompt into a running turn waits in its memory, as stock's follow-up queue does, and
-		// only what a turn took is in its journal.
+	it("hands a message a busy child's omp held to the omp that holds its session after a relaunch, once", async () => {
+		// One fake omp per tab: a message into a running turn waits in its memory, and only what a turn took is in its
+		// journal.
 		const journals = new Map<string, string[]>();
 		const prompted: { tabId: string; message: string }[] = [];
 		const attach = (deps: AgentControlHostDeps) => {
@@ -1511,7 +1511,8 @@ describe("AgentControlRuntime", () => {
 							(journals.get(tabId) ?? []).some(text => text.includes(mark)),
 						),
 					});
-				if (command.type === "prompt") prompted.push({ tabId, message: command.message });
+				if (command.type === "prompt" || command.type === "agent_control_aside")
+					prompted.push({ tabId, message: command.message });
 				return inner(target, sidecar, tabId, command, timeoutMs);
 			};
 		};
@@ -1530,12 +1531,11 @@ describe("AgentControlRuntime", () => {
 			const sent = await before.runtime.run(before.win, "main0001", T.send, {
 				session: "busy0002",
 				message: "Also do C",
-				delivery: "follow_up",
 			});
-			expect(sent.text).toContain("queued as a follow-up");
+			expect(sent.text).toContain("delivered as steer");
 			expect(prompted.map(entry => entry.tabId)).toEqual(["busy0002"]);
 
-			// OMPdesk relaunches (an update): that omp ends with its queue; the child's session is back in a new tab.
+			// OMPdesk relaunches (an update): that omp ends with what it held; the child's session is back in a new tab.
 			before.runtime.control.close();
 			const after = setup({
 				tabs: [
@@ -1673,7 +1673,11 @@ describe("closing a child a paired web page owns", () => {
 		});
 		const closing = runtime.run(win, "main0001", T.stop, { session: "desk0002", close: true });
 		await vi.waitFor(
-			() => expect(win.sent).toContainEqual([AGENT_CONTROL_VIEW, { tabId: "desk0002", how: "close" }]),
+			() =>
+				expect(win.sent).toContainEqual([
+					AGENT_CONTROL_VIEW,
+					expect.objectContaining({ tabId: "desk0002", how: "close" }),
+				]),
 			{ timeout: 5_000 },
 		);
 		expect(log).toEqual([]);

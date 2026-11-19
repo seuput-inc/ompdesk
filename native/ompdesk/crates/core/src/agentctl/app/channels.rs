@@ -72,6 +72,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("tab:spawn", Risk::Never(SESSION_TOOLS)),
     ("tab:close", Risk::Never(SESSION_TOOLS)),
     ("tab:file-edit-report", Risk::Never(SESSION_TOOLS)),
+    ("tab:agent-close-answer", Risk::Never(SESSION_TOOLS)),
     ("tab:set-active", Risk::Never(SESSION_TOOLS)),
     ("tab:set-view", Risk::Never(SESSION_TOOLS)),
     ("tab:reorder", Risk::Never(SESSION_TOOLS)),

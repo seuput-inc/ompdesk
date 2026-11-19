@@ -42,6 +42,9 @@ export const STEPS = "STEPS-MARK run";
 /** A prompt whose turn asks the person one question (stock `ask`: a `select` card), then replies. */
 export const CARD = "CARD-MARK run";
 
+/** A prompt whose first reply is held until `release` (`held` resolves) and then calls the shell tool (`sleep 300`). */
+export const HELD_SHELL = "HELD-SHELL-MARK run";
+
 export type Frame = {
 	type: string;
 	toolCallId?: string;
@@ -153,6 +156,12 @@ export async function startProvider(): Promise<Provider> {
 			const wait = toolNamed("wait");
 			if (shell && body.includes(STEPS) && results < 3) {
 				reply([{ id: `call_s${results + 1}`, name: shell, args: { command: "sleep 2" } }]);
+				return;
+			}
+			if (shell && body.includes(HELD_SHELL) && results === 0) {
+				arrived.resolve();
+				await released.promise;
+				reply([{ id: "call_held", name: shell, args: { command: "sleep 300" } }]);
 				return;
 			}
 			// `toolNamed("ask")` would also match `task`.

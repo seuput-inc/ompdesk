@@ -94,7 +94,6 @@ export type ControlRequest =
 			method: "send";
 			session: string;
 			message: string;
-			delivery?: "follow_up" | "steer";
 			requestId?: string;
 			force?: boolean;
 			wait?: { until?: WaitUntil; timeoutMs?: number };

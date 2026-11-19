@@ -613,6 +613,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				const payload: IpcFileEditReportPayload = { dirtyTabId };
 				await transport.invoke(IPC_COMMANDS.FILE_EDIT_REPORT, payload);
 			},
+			answerAgentClose: async answer => {
+				await transport.invoke(IPC_COMMANDS.AGENT_CLOSE_ANSWER, answer);
+			},
 			getSessionOwner: (sessionPath: string, device?: string) =>
 				transport.invoke(IPC_COMMANDS.GET_SESSION_OWNER, {
 					sessionPath,

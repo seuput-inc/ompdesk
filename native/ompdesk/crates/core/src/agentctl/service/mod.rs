@@ -88,14 +88,6 @@ pub struct Nudge {
     pub told_opener: bool,
 }
 
-/// The newest dispatch queued as a follow-up behind a busy child's turn, until its transcript shows it.
-#[derive(Clone, Debug)]
-pub struct QueuedFollowUp {
-    pub n: u64,
-    pub id: String,
-    pub from: String,
-}
-
 /// A session's last read cost and split, which stand while its omp cannot answer.
 #[derive(Clone, Debug)]
 pub struct Spend {
@@ -147,16 +139,10 @@ pub struct Mem {
     pub calling: HashMap<String, Flight<ToolOutcome>>,
     /// Sessions (`device\npath`) whose saved name `name_untitled` already looked up (`#namesSought`).
     pub names_sought: HashSet<String>,
-    /// The turn in which each session (`sender\nreceiver`) last reported done, review, a question or a blocker
-    /// (`#reportedAt`): its `busySince` as main saw it at the report. The TypeScript kept the report's time and
-    /// compared it with `busySince`; the core's clock and main's are two processes' (on Windows a tick apart), so
-    /// "the same turn" is told by main's own stamp instead.
-    pub reported_in: HashMap<String, Option<f64>>,
-    /// The turn in which each session (`sender\nreceiver`) sent its last mail, the same way: a turn with another
-    /// `busySince` is one it carried on with.
+    /// The turn in which each session (`sender\nreceiver`) sent its last mail: its `busySince` as main saw it then
+    /// (the core's clock and main's are two processes', on Windows a tick apart, so "the same turn" is told by
+    /// main's own stamp). A turn with another `busySince` is one it carried on with.
     pub mailed_in: HashMap<String, Option<f64>>,
-    /// The newest dispatch queued as a follow-up behind each busy child's turn (`#queuedFollowUp`).
-    pub queued_follow_up: HashMap<String, QueuedFollowUp>,
     /// Sends with a request id still on their way (`#inflight`).
     pub inflight: HashMap<String, Shared<String>>,
     /// The question cards of each child its opener was already told of (`#cardsTold`).
@@ -418,9 +404,6 @@ impl AgentControl {
             mem.conflicts.remove(tab_id);
             mem.cards_told.remove(tab_id);
             mem.last_spend.remove(tab_id);
-            mem.queued_follow_up.remove(tab_id);
-            mem.reported_in
-                .retain(|key, _| !key.split('\n').any(|part| part == tab_id));
             mem.mailed_in
                 .retain(|key, _| !key.split('\n').any(|part| part == tab_id));
         }
@@ -909,7 +892,7 @@ impl AgentControl {
                     .await?;
                 self.refuse_hidden(&target, &caller)?;
                 let how = args.how.as_deref().unwrap_or("focus");
-                self.host.view(&caller.tab_id, &target.tab_id, how, false);
+                self.host.view(&caller.tab_id, &target.tab_id, how);
                 Ok(format!("Showing {} ({how}).", text::label(&target)))
             }
             Tool::Notify => {
@@ -944,6 +927,21 @@ impl AgentControl {
                 };
                 match target {
                     Target::Tab(tab) => self.stop(&caller, tabs, &tab, &args).await,
+                    // Open in a tab no window of this app holds (a paired host's, or one this computer runs for a
+                    // paired device): stopped or closed through that tab, never answered as open nowhere.
+                    Target::Stored(row) if args.delete != Some(true) && row.elsewhere.is_some() => {
+                        match self.rejoin(&caller, &row).await? {
+                            resolve::Rejoined::Held(tab) => {
+                                self.stop(&caller, tabs, &tab, &args).await
+                            }
+                            resolve::Rejoined::Joined(tab) => {
+                                self.stop_joined(&caller, tabs, &tab, &row, &args).await
+                            }
+                            resolve::Rejoined::Nowhere(now) => {
+                                self.stop_stored(&caller, &now, &args).await
+                            }
+                        }
+                    }
                     Target::Stored(row) => self.stop_stored(&caller, &row, &args).await,
                 }
             }

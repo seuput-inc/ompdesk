@@ -46,7 +46,7 @@ function startCheck(pi: ExtensionAPI, current: ComputerUseState): Promise<void> 
 	startup ??= checkServer(() => MCPManager.instance())
 		.then(verdict => (verdict.ok ? undefined : verdict.error))
 		.catch((error: unknown) => (error instanceof Error ? error.message : String(error)))
-		.then(failure => {
+		.then(async failure => {
 			if (failure === undefined || !current.fail(failure)) return;
 			pi.logger.warn(
 				"gui-bridge: agent-desktop did not start; this omp falls back to the built-in computer prelude",
@@ -54,7 +54,7 @@ function startCheck(pi: ExtensionAPI, current: ComputerUseState): Promise<void> 
 					error: failure,
 				},
 			);
-			holdBuiltinComputerPrelude(pi.pi.Settings.instance);
+			await holdBuiltinComputerPrelude(pi.pi.Settings.instance);
 		})
 		.catch((error: unknown) => {
 			pi.logger.warn("gui-bridge: computer use fallback failed", { error: String(error) });

@@ -247,6 +247,53 @@
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
 			"syncCommit": "5c502f9a208886c32caef2c7fdc95e6a4ce1bdc0"
+		},
+		{
+			"id": "away-calls",
+			"title": "A device tab's control calls while the device is away: the host carries out unhanded calls and keeps reports for the device",
+			"kind": "tla",
+			"dir": "away-calls/tla",
+			"spec": "AwayCalls.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/main/remote/host-services.ts",
+				"src/main/remote/kept-calls.ts",
+				"src/main/ipc.ts:642-661"
+			],
+			"syncCommit": null
+		},
+		{
+			"id": "open-first-message",
+			"title": "An open's setup and first message across a quit: kept before it goes out, handed once per omp",
+			"kind": "tla",
+			"dir": "open-first-message/tla",
+			"spec": "OpenFirstMessage.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/open.rs",
+				"native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs",
+				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
+			],
+			"syncCommit": null
+		},
+		{
+			"id": "urgent-asides",
+			"title": "Urgent asides background a running shell; a progress report or note never does",
+			"kind": "tla",
+			"dir": "urgent-asides/tla",
+			"spec": "UrgentAsides.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/agent-control.ts#urgentKey",
+				"resources/gui-bridge/agent-control.ts#watchAsides",
+				"resources/gui-bridge/agent-control.ts#interruptFor",
+				"resources/gui-bridge/agent-control.ts#install",
+				"resources/gui-bridge/agent-control.ts:343-396"
+			],
+			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
 		}
 	]
 }

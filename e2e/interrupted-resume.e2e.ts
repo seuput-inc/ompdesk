@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { capture, exitApp, fixtureOmp, variants } from "./harness";
-import { survivors } from "./process-tree";
+import { corePids, survivors } from "./process-tree";
 
 type Language = "en" | "ko";
 type Theme = "light" | "dark";
@@ -507,28 +507,6 @@ test("a session idle while its background subagent works goes on when its omp di
 		await cleanup(profile);
 	}
 });
-
-/** The app's core process (`ompdesk-core`, main's child; not the setup supervisor it starts). */
-function corePids(mainPid: number): number[] {
-	if (process.platform === "win32")
-		return execFileSync(
-			"powershell.exe",
-			[
-				"-NoProfile",
-				"-Command",
-				`Get-CimInstance Win32_Process -Filter "ParentProcessId=${mainPid} AND Name='ompdesk-core.exe'" | ForEach-Object { $_.ProcessId }`,
-			],
-			{ encoding: "utf8" },
-		)
-			.split(/\s+/)
-			.filter(Boolean)
-			.map(Number);
-	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
-		.split("\n")
-		.map(line => line.trim().split(/\s+/))
-		.filter(([, ppid, command]) => Number(ppid) === mainPid && command?.endsWith("ompdesk-core") === true)
-		.map(([pid]) => Number(pid));
-}
 
 /** The `turn-resume` lines of the runtime log after the launch's own: each line's message with its details. */
 async function resumeLines(profile: Profile): Promise<Array<Record<string, unknown>>> {

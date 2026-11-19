@@ -220,7 +220,7 @@ for (const width of WIDTHS) {
 					"idle row needs no scroll",
 				).toBeLessThanOrEqual(width === 360 ? 8 : 1);
 				await setRunning(page, true);
-				await expect(page.locator("[data-send-mode]")).toBeVisible();
+				await expect(page.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible();
 				await expectRowClear(page, "running");
 			} finally {
 				await page.context().close();

@@ -7,7 +7,7 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, withoutAwsCredentials
 
 /**
  * Pins the built-in prompt suggestions to the installed omp, in an empty private agent dir (no model is called):
- * - the bridge's `nextPrompt` feature is available (every stock internal it needs exists);
+ * - the bridge's `nextPrompt` and `inlineCompletion` features are available (every stock internal they need exists);
  * - the smol model is resolved through stock's own role chain (an isolated profile with only a fake OpenAI key:
  *   the empty `smol` role falls back to stock's priority list) and reported with the role that chose it;
  * - an explicitly configured `smol` role wins, and a role naming a model that is not available is unavailable
@@ -52,7 +52,7 @@ export default function (pi) {
 const HELPER = `
 import { probe } from "./health";
 export async function capabilitiesFor(env) {
- return (await probe(env, ["nextPrompt"])).map(entry => ({ feature: entry.feature, missing: entry.missing }));
+ return (await probe(env, ["nextPrompt", "inlineCompletion"])).map(entry => ({ feature: entry.feature, missing: entry.missing }));
 }
 `;
 

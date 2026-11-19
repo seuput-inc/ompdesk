@@ -35,7 +35,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("sessions.attach_entry_ids on a recor
 				`
 import { attachEntryIds } from "./session-display.ts";
 const { events, entries } = JSON.parse(await Bun.file("./recording.json").text());
-const stamped = events.filter(event => event.type === "agent_end").map(event => attachEntryIds(event.messages, entries));
+const stamped = await Promise.all(events.filter(event => event.type === "agent_end").map(event => attachEntryIds(event.messages, entries)));
 console.log(JSON.stringify(stamped));
 `,
 			);

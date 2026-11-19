@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutopilotStartOptions, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
-import { type ClosedChild, AGENT_CONTROL_TOOLS as T, wrapAgentMessage } from "../../shared/agent-control";
+import {
+	type AgentCloseOutcome,
+	type ClosedChild,
+	AGENT_CONTROL_TOOLS as T,
+	wrapAgentMessage,
+} from "../../shared/agent-control";
 import type {
 	AgentMessage,
 	ExtensionUIRequest,
@@ -176,13 +181,21 @@ class FakeHost implements AgentControlHost {
 			tab.title = task;
 		}
 	};
-	view = (_caller: string, event: { tabId: string; how: string }) => {
-		this.views.push(event);
+	view = (_caller: string, event: { tabId: string; how: string; auto?: true; closeId?: number }) => {
+		const { closeId, ...shown } = event;
+		this.views.push(shown);
 		this.order.push(`view:${event.how}:${event.tabId}`);
-		if (event.how === "close" && !this.refuseClose.has(event.tabId)) this.tabsById.delete(event.tabId);
+		if (event.how !== "close") return;
+		const refused = this.closeRefusals.get(event.tabId);
+		const tab = this.tabsById.get(event.tabId);
+		// The window answers what it did (`AGENT_CLOSE_ANSWER`), which main lists as the tab's `closeAnswer`.
+		if (refused && tab && closeId !== undefined) tab.closeAnswer = { closeId, outcome: refused };
+		if (!refused && !this.refuseClose.has(event.tabId)) this.tabsById.delete(event.tabId);
 	};
-	/** Tabs whose window keeps them when asked to close (a draft, the window's last tab, unsaved edits). */
+	/** Tabs whose window never answers a close (its page is stuck). */
 	refuseClose = new Set<string>();
+	/** Tabs whose window keeps them when asked to close, and says why (its last tab, unsaved Files edits). */
+	closeRefusals = new Map<string, AgentCloseOutcome>();
 	/** Everything that happened to a closing tab, in order (a view event, a release, a mail). */
 	order: string[] = [];
 	/** Tabs main released itself (`release`): a paired web page's, never asked of its window. */
@@ -4870,13 +4883,32 @@ describe("closing and stopping: ownership after a relaunch, cards by risk", () =
 describe("a close is told only once the tab is gone", () => {
 	const closeArgs = { session: "kid00002", close: true };
 
-	it("sends no close note when the window kept the tab, and says it is still open", async () => {
+	it("sends no close note when the window did not answer, and says its page is not running", async () => {
 		const host = new FakeHost({ tabId: "boss0001", title: "Boss" }, { tabId: "kid00002", title: "Kid" });
 		host.parents.set("kid00002", "boss0001");
 		host.refuseClose.add("kid00002");
 		const result = await shortWaits(() => control(host).run("boss0001", T.stop, closeArgs));
 		expect(result.isError).toBe(true);
-		expect(result.text).toMatch(/still open/);
+		expect(result.text).toMatch(
+			/^"Kid" is still open: its window did not answer the close within [\d.]+ s, so its page is not running/,
+		);
+		expect(host.mails).toEqual([]);
+	});
+
+	// 19 Nov 2026: every close a window kept read "it is that window's last tab, or it holds unsaved Files edits",
+	// also from a window whose page had stopped. A window that keeps a tab now says which of its own rules kept it.
+	it.each([
+		["last-tab", "it is its window's last tab, and a window keeps its last tab"],
+		["unsaved-edits", "its Files editor holds unsaved edits, so its window asked the user to save or discard them"],
+	] as const)("says the window kept the tab for %s, at once and with no close note", async (outcome, words) => {
+		const host = new FakeHost({ tabId: "boss0001", title: "Boss" }, { tabId: "kid00002", title: "Kid" });
+		host.parents.set("kid00002", "boss0001");
+		host.closeRefusals.set("kid00002", outcome);
+		const result = await control(host).run("boss0001", T.stop, closeArgs);
+		expect(result.isError).toBe(true);
+		expect(result.text).toBe(
+			`"Kid" is still open: ${words}${outcome === "last-tab" ? ". Ask the user to close it or open another tab there" : " before the tab closes. Ask the user to answer that"}; its session is saved either way.`,
+		);
 		expect(host.mails).toEqual([]);
 	});
 
@@ -5114,7 +5146,7 @@ describe("after a relaunch: ids, titles, and messages a busy child waits for", (
 		);
 	});
 
-	it("hands a running session a message as an aside by default, and queues a follow-up only when asked", async () => {
+	it("hands a running session a message as an aside, read at its next step", async () => {
 		// The owner's call (6 Nov 2026): an agent's instruction to a running session waited for that session's whole turn.
 		// 18 Nov 2026: as stock steers, six of them waited in the person's queue and cost a model request each.
 		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
@@ -5124,9 +5156,6 @@ describe("after a relaunch: ids, titles, and messages a busy child waits for", (
 		const now = await service.run("boss0001", T.send, { session: kid, message: "Stop at B" });
 		expect(now.text).toContain("delivered as steer (it reads it at its next step, together with every other");
 		expect(deliveries(host, kid).at(-1)).toBe("aside");
-		const later = await service.run("boss0001", T.send, { session: kid, message: "Then C", delivery: "follow_up" });
-		expect(later.text).toContain("queued as a follow-up");
-		expect(deliveries(host, kid).at(-1)).toBe("followUp");
 	});
 
 	it("gives a session whose turn just ended the prompt that starts its next, when its bridge took no aside", async () => {
@@ -5157,48 +5186,6 @@ describe("after a relaunch: ids, titles, and messages a busy child waits for", (
 		const result = await control(host).run("boss0001", T.send, { session: "work0002", message: "Look at E" });
 		expect(result.isError, result.text).toBe(false);
 		expect(deliveries(host, "work0002")).toEqual(["aside", "steer"]);
-	});
-
-	it("tells a busy child that reports of a follow-up queued for it, and steers the next one", async () => {
-		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
-		const service = control(host);
-		const opened = await service.run("boss0001", T.open, { message: "Title: part A\nDo A" });
-		const kid = /Opened session (\w+)/.exec(opened.text)?.[1] as string;
-		// The child works (its first prompt made it busy); the opener queues more work behind its turn.
-		const queued = await service.run("boss0001", T.send, {
-			session: kid,
-			message: "Also do C",
-			delivery: "follow_up",
-		});
-		expect(queued.text).toContain("queued as a follow-up");
-		// It reports done and would keep waiting in the same turn: the report must say a message waits for it.
-		const report = await service.run(kid, T.report, { kind: "done", text: "A done", dispatch: "d2" });
-		expect(report.text).toMatch(/d2/);
-		expect(report.text).toMatch(/waiting for you|waits for you/);
-		expect(report.text).toMatch(/end (this|your) turn/i);
-		// A message sent after it reported in this turn reaches it between its steps.
-		const next = await service.run("boss0001", T.send, { session: kid, message: "And D" });
-		expect(next.text).toContain("steer");
-		expect(deliveries(host, kid).at(-1)).toBe("aside");
-	});
-
-	it("says nothing about a follow-up the child already read", async () => {
-		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
-		const service = control(host);
-		const opened = await service.run("boss0001", T.open, { message: "Do A" });
-		const kid = /Opened session (\w+)/.exec(opened.text)?.[1] as string;
-		await service.run("boss0001", T.send, { session: kid, message: "Also do C", delivery: "follow_up" });
-		const tab = host.tabsById.get(kid);
-		if (tab)
-			tab.messages = [
-				{
-					role: "user",
-					content: [{ type: "text", text: prompts(host, kid).at(-1) as string }],
-					timestamp: 1,
-				} as AgentMessage,
-			];
-		const report = await service.run(kid, T.report, { kind: "done", text: "C done", dispatch: "d2" });
-		expect(report.text).toBe("Delivered.");
 	});
 });
 
@@ -5932,7 +5919,7 @@ describe("messages that outlive the omp they were handed to", () => {
 		expect(result?.text).toContain("Returned early");
 	}, 10_000);
 
-	it("hands a follow-up the child's old omp queued to its omp after a relaunch, once, ahead of the next message", async () => {
+	it("hands a message the child's old omp held to its omp after a relaunch, once, ahead of the next message", async () => {
 		const before = new FakeHost(
 			{ tabId: "boss0001", title: "Boss", sessionPath: "/s/boss.jsonl" },
 			{ tabId: "kid00002", title: "Kid", sessionPath: "/s/kid.jsonl", busy: true },
@@ -5940,15 +5927,11 @@ describe("messages that outlive the omp they were handed to", () => {
 		before.parents.set("kid00002", "boss0001");
 		before.files.sendOutbox = outboxFile();
 		before.sentMarks = async () => ({ instance: "omp-a", journaled: [] });
-		const queued = await control(before).run("boss0001", T.send, {
-			session: "kid00002",
-			message: "Also do C",
-			delivery: "follow_up",
-		});
-		expect(queued.text).toContain("queued as a follow-up");
+		const queued = await control(before).run("boss0001", T.send, { session: "kid00002", message: "Also do C" });
+		expect(queued.text).toContain("delivered as steer");
 		expect(queued.text).toContain("Dispatch d1");
 
-		// OMPdesk relaunches: the old omp is gone with its queue; the child's session is back under a new id.
+		// OMPdesk relaunches: the old omp is gone with what it held; the child's session is back under a new id.
 		const after = new FakeHost(
 			{ tabId: "boss0009", title: "Boss", sessionPath: "/s/boss.jsonl" },
 			{ tabId: "kid00009", title: "Kid", sessionPath: "/s/kid.jsonl", formerIds: ["kid00002"] },
@@ -6476,13 +6459,12 @@ describe("one id per session: a message names its sender and reaches the session
 });
 
 /**
- * 11 Nov 2026 16:01 UTC: 메인 answered "문의", the person's own session on SeuPut that it did not open, with
- * `delivery: "follow_up"` while 문의 was mid-turn. Stock held the answer in 문의's follow-up queue until that turn ended,
- * where the person saw it waiting and had to press 지금 추가 지시. A follow-up waits behind the turn only of a session
- * the sender opened (its next task); whatever reaches any other running session is read at its next step, as stock's
- * aside, which leaves a card of the person's open (a steer closes it: `bridge-agent-send-stock.test.ts`).
+ * 11 Nov 2026 16:01 UTC: 메인 answered "문의", the person's own session on SeuPut that it did not open, while 문의 was
+ * mid-turn, and asked for a follow-up. Stock held the answer in 문의's follow-up queue until that turn ended, where the
+ * person saw it waiting and had to press 지금 추가 지시. Whatever reaches a running session is read at its next step,
+ * as stock's aside, which leaves a card of the person's open (a steer closes it: `bridge-agent-send-stock.test.ts`).
  */
-describe("a message to a running session the sender did not open is read between its steps", () => {
+describe("a message to a running session is read between its steps", () => {
 	const MAIN = "01a1c4ad-72b6-75db-9140-8a896455855b";
 	const ASK = "01a1c9f4-8354-70aa-91a9-473beaf7e427";
 	const askFile = `/Users/seuput/.omp/agent/sessions/-Desktop-GitHub-yuyu-mos/2026-11-11T09-33-27-252Z_${ASK}.jsonl`;
@@ -6505,14 +6487,13 @@ describe("a message to a running session the sender did not open is read between
 		host.deviceList = [seuput];
 		return host;
 	};
-	const answer = { session: ASK, message: "결과: 재현했고 고쳤다", delivery: "follow_up" };
+	const answer = { session: ASK, message: "결과: 재현했고 고쳤다" };
 
-	it("hands a follow-up asked for a session it did not open over at its next step", async () => {
+	it("hands it over at its next step", async () => {
 		const host = world([]);
 		const result = await control(host).run("main0001", T.send, answer);
 		expect(deliveries(host, "15ca089d159bfde0")).toEqual(["aside"]);
 		expect(result.text).toContain("delivered as steer");
-		expect(result.text).not.toContain("queued as a follow-up");
 	});
 
 	it("hands it over as an aside while that session shows the person a card, which the aside leaves open", async () => {

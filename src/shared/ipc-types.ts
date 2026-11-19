@@ -4,7 +4,7 @@
  */
 
 import type { AccountRotationMode, AccountRotationState } from "./account-rotation";
-import type { AgentAppEvent, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
+import type { AgentAppEvent, AgentCloseAnswer, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
 import type {
 	AiMemoryCareSummary,
 	AiMemoryDeleted,
@@ -383,6 +383,8 @@ export const IPC_COMMANDS = {
 	CLOSE_TAB: "tab:close",
 	/** A paired web page says which of its tabs holds unsaved Files edits (`IpcFileEditReportPayload`); main closes a tab for an agent only while that page says it is clean. */
 	FILE_EDIT_REPORT: "tab:file-edit-report",
+	/** A window answers an agent's close (`AgentCloseAnswer`): what it did, so the agent hears the window's own reason or that it did not answer. */
+	AGENT_CLOSE_ANSWER: "tab:agent-close-answer",
 	/** Move full event forwarding to the window's active tab */
 	SET_ACTIVE_TAB: "tab:set-active",
 	/** Atomically set the focused tab and the one or two tabs receiving full event streams. */
@@ -799,10 +801,12 @@ export interface UpdateAuthTestResult {
 
 /**
  * A gui-bridge compatibility problem found at sidecar startup (src/main/bridge-health.ts).
- * `features` are the bridge's feature ids (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `features` are the bridge's capability ids, one action each (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `unsupported`: a core one is among them and OMPdesk repairs omp; `unsupportedOptional`: only optional actions,
+ * reported and nothing more. The kind is the renderer's message key (`bridgeHealth.<kind>`).
  */
 export type BridgeHealthWarning =
-	| { kind: "unsupported"; ompVersion: string; features: string[] }
+	| { kind: "unsupported" | "unsupportedOptional"; ompVersion: string; features: string[] }
 	| { kind: "unavailable"; ompVersion: string; reason: string };
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */
@@ -2470,6 +2474,8 @@ export interface OmpApi {
 		reorder(tabIds: string[]): Promise<boolean>;
 		/** Say which tab's Files editor holds unsaved edits (null: none). A web page only; main closes a tab for an agent only while this says it is clean. */
 		reportFileEdits(dirtyTabId: string | null): Promise<void>;
+		/** Answer an agent's close (`AgentControlViewEvent.closeId`) with what this window did. */
+		answerAgentClose(answer: AgentCloseAnswer): Promise<void>;
 		/** The tab/window currently attached to a session file on `device` (absent = this device), if any (F-OWN). */
 		getSessionOwner(sessionPath: string, device?: string): Promise<IpcSessionOwner | null>;
 	};

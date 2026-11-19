@@ -5,7 +5,7 @@
  * (`describeModelCompactionPoint`, `resolveRoleAssignments` over
  * `createModelBrowserSource`). Writes go through the generic `settings_set`.
  *
- * Stock internals load only after `guard` checks the compactionLimits feature.
+ * Stock internals load only after `guard` checks the method's capability.
  * Deferral keeps incompatible modules from failing the entire area at startup.
  * Literal specifiers resolve onto omp's loaded singletons (see health.ts).
  */
@@ -84,7 +84,7 @@ async function compactionPoints(session: AgentSession, selector?: string) {
 }
 
 export const methods: BridgeMethods = {
-	...guard("compactionLimits", {
+	...guard("compactionPoints", {
 		compaction_points: async (params, env) =>
 			compactionPoints(
 				env.session(),
@@ -92,6 +92,8 @@ export const methods: BridgeMethods = {
 					? (params as { selector: string }).selector
 					: undefined,
 			),
+	}),
+	...guard("compactionLimits", {
 		compaction_limits: async params => {
 			// Defer internals until guard succeeds so missing modules cannot break bridge startup.
 			const { parseCompactionPointInput, validateModelCompactionThresholds, formatCompactionPointInput } =

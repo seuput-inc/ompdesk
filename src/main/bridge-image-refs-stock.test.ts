@@ -34,8 +34,8 @@ const page = [
 	{ role: "assistant", content: [{ type: "text", text: "a ${"long ".repeat(300)}text with no picture" }] },
 ];
 const before = JSON.stringify(page);
-const shown = withImageRefs(page, store);
-const again = withImageRefs(page, store);
+const shown = await withImageRefs(page, store);
+const again = await withImageRefs(page, store);
 console.log(JSON.stringify({
 	shown,
 	untouched: JSON.stringify(page) === before,

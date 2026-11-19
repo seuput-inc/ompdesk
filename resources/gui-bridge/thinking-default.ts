@@ -25,9 +25,11 @@
  * Not held, because stock reads them before the extensions load or only the
  * terminal UI reads them: `telemetry.otlpExportEnabled` (main.ts
  * initTelemetryExport), `display.showTurnTime` and `read.toolResultPreview` (TUI renderers).
+ *
+ * Stock's settings registry loads where a default is read or held: settings.ts imports this module, and a static
+ * import would tie every settings action to the registry at link time.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "./omp/pi-coding-agent/config/registry";
 import {
 	applyThinkingDefault,
 	asThinkingDefaultSetting,
@@ -61,7 +63,8 @@ function heldIds(): string[] {
 }
 
 /** The handles this omp has for OMPdesk's defaults (a missing one is skipped). */
-function handles(): ThinkingDefaultSetting[] {
+async function handles(): Promise<ThinkingDefaultSetting[]> {
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
 	return heldIds().flatMap(id => {
 		const setting = asThinkingDefaultSetting(lookup(id));
 		return setting ? [setting] : [];
@@ -90,7 +93,7 @@ async function detectNatives(pi: ExtensionAPI): Promise<void> {
 /** Before the first session: hold OMPdesk's defaults on the process Settings unless a layer sets them. */
 export async function applyGuiThinkingDefault(pi: ExtensionAPI): Promise<void> {
 	await detectNatives(pi);
-	const settings = handles();
+	const settings = await handles();
 	if (settings.length < heldIds().length) {
 		pi.logger.warn("gui-bridge: this omp cannot hold every OMPdesk default", {
 			held: settings.map(setting => setting.id),
@@ -101,14 +104,15 @@ export async function applyGuiThinkingDefault(pi: ExtensionAPI): Promise<void> {
 }
 
 /** Re-check against config.yml and the project config (Settings reads and writes call this). */
-export function syncThinkingDefault(scope: object): void {
+export async function syncThinkingDefault(scope: object): Promise<void> {
 	const layers = scope as PersistedLayers;
-	for (const setting of handles()) settleThinkingDefault(setting, scope, persistedIn(layers, setting));
+	for (const setting of await handles()) settleThinkingDefault(setting, scope, persistedIn(layers, setting));
 }
 
 /** A Settings write of `settingId` is the user's choice: drop the default under it first. */
-export function releaseThinkingDefaultFor(settingId: string, scope: object): void {
+export async function releaseThinkingDefaultFor(settingId: string, scope: object): Promise<void> {
 	if (!(settingId in GUI_THINKING_DEFAULTS)) return;
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
 	const setting = asThinkingDefaultSetting(lookup(settingId));
 	if (setting) releaseThinkingDefault(setting, scope);
 }
@@ -118,8 +122,9 @@ export function releaseThinkingDefaultFor(settingId: string, scope: object): voi
  * for this process only. Stock's own `computer.enabled` listener then reconciles the live prelude. A value the user
  * set in config.yml or a project config (or `/computer off`) stays as it is.
  */
-export function holdBuiltinComputerPrelude(scope: object): void {
+export async function holdBuiltinComputerPrelude(scope: object): Promise<void> {
 	noteComputerUseFallback();
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
 	const setting = asThinkingDefaultSetting(lookup("computer.enabled"));
 	if (setting) refreshThinkingDefault(setting, scope, persistedIn(scope as PersistedLayers, setting));
 }
