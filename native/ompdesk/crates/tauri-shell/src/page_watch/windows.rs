@@ -36,9 +36,14 @@ thread_local! {
 }
 
 pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
-    let started = window.with_webview(move |view| {
+    let window = window.clone();
+    let started = window.clone().with_webview(move |view| {
         let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, _value| {
             super::settled(wc, probe, result.is_ok());
+            // The renderer is learned right after the page answered, while it runs script.
+            if result.is_ok() {
+                let _ = window.with_webview(move |view| learn(&view, wc));
+            }
             Ok(())
         }));
         // SAFETY: Tauri hands this closure the live controller on the owning UI thread; WebView2 retains the handler
@@ -48,7 +53,6 @@ pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
         if sent.is_err() {
             super::settled(wc, probe, false);
         }
-        learn(&view, wc);
     });
     if started.is_err() {
         super::settled(wc, probe, false);
@@ -160,7 +164,9 @@ fn live_renderer(view: &PlatformWebview, pid: i32) -> windows::core::Result<bool
     Ok(false)
 }
 
-/// Whether the renderer `process` runs the frame `frame`.
+/// Whether the renderer `process` runs the frame `frame`. The walk follows `MoveNext`'s own answer and stops at
+/// [`FRAMES_PER_RENDERER`]: it runs on the UI thread, and the first version of this walk never returned there (19 Nov
+/// 2026, the Windows e2e: the list answered, and neither a renderer nor an error came after).
 fn runs_frame(
     process: &ICoreWebView2ProcessExtendedInfo,
     frame: u32,
@@ -168,12 +174,10 @@ fn runs_frame(
     // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call.
     unsafe {
         let frames = process.AssociatedFrameInfos()?.GetIterator()?;
-        loop {
-            let mut more = BOOL::default();
-            frames.HasCurrent(&mut more)?;
-            if !more.as_bool() {
-                return Ok(false);
-            }
+        let mut more = BOOL::default();
+        frames.HasCurrent(&mut more)?;
+        let mut seen = Vec::new();
+        while more.as_bool() && seen.len() < FRAMES_PER_RENDERER {
             let mut id = 0;
             frames
                 .GetCurrent()?
@@ -182,10 +186,19 @@ fn runs_frame(
             if id == frame {
                 return Ok(true);
             }
+            seen.push(id);
             frames.MoveNext(&mut more)?;
         }
+        crate::log::log(
+            "page.renderer_frames",
+            serde_json::json!({"frame": frame, "seen": seen, "more": more.as_bool()}),
+        );
+        Ok(false)
     }
 }
+
+/// More frames than any app page has; the walk stops there.
+const FRAMES_PER_RENDERER: usize = 256;
 
 /// The renderer process that runs the frame `frame`.
 fn renderer(
