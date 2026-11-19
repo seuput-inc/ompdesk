@@ -814,12 +814,14 @@ function SessionTranscript() {
 	}, []);
 
 	const handleScroll = useCallback(() => {
-		if (!userScrollIntentRef.current) return;
 		const el = parentRef.current;
 		if (!el) return;
+		// Asked on every scroll of a view the reader took off the tail, not only while their gesture lasts: a touch
+		// fling scrolls on after the finger lifted (`endScrollGesture`), and a phone reaches the top on those events.
 		if (!viewRef.current.pinned && el.scrollTop < 240 && prevCursor && !isLoadingPage && !pageError) {
 			void requestOlder();
 		}
+		if (!userScrollIntentRef.current) return;
 		const anchor = readingAnchor(el);
 		if (anchor) {
 			const looked = gestureAnchorRef.current;

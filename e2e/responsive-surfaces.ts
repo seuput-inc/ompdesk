@@ -86,7 +86,7 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "limit" | "turns";
+export type ParitySession = "work" | "reply" | "steer" | "advisor" | "limit" | "turns" | "long";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -798,6 +798,46 @@ async function showTranscriptStart(page: Page): Promise<void> {
 	await holdAtTop(first);
 }
 
+/**
+ * Reads the `long` session back to its first turn. A transcript opens on its newest page and asks for the page before
+ * each time the reader's view comes to the top of what is loaded (ChatStream `handleScroll`), so the view goes to the
+ * top again and again, seven pages of the fake omp's 250 turns, until the first turn is mounted. A window's reader
+ * turns a wheel first (see `showTurn`); a phone's flicks, and its view scrolls on after the finger lifted. The
+ * newest page is on screen before either: a view sent to the top of an empty transcript scrolls nothing afterwards.
+ */
+async function showSessionStart(page: Page, look: Look): Promise<void> {
+	const scroller = page.locator(".omp-transcript-scroll").first();
+	const first = scroller.locator(".omp-user-bubble").getByText("Long session turn 000", { exact: true });
+	await scroller.getByText("Long session answer 249", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+	// The reader's gesture, taken in by the page (two frames) before the view moves: a wheel, or a finger's move.
+	const touch = touchLook(look);
+	await scroller.evaluate(async (element, finger) => {
+		element.dispatchEvent(
+			finger
+				? new TouchEvent("touchmove", { bubbles: true })
+				: new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true }),
+		);
+		const taken = Promise.withResolvers<void>();
+		requestAnimationFrame(() => requestAnimationFrame(() => taken.resolve()));
+		await taken.promise;
+	}, touch);
+	// A flick: the finger lifts as the view starts to move, so every scroll event comes after it.
+	if (touch)
+		await scroller.evaluate(element => {
+			element.scrollTop = 0;
+			element.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
+		});
+	const until = Date.now() + 30_000;
+	while ((await first.count()) === 0 && Date.now() < until)
+		await scroller.evaluate(async element => {
+			element.scrollTop = 0;
+			const mounted = Promise.withResolvers<void>();
+			requestAnimationFrame(() => requestAnimationFrame(() => mounted.resolve()));
+			await mounted.promise;
+		});
+	await holdAtTop(first);
+}
+
 /** What the turn rail draws: its ticks, the number of the first one, the ticks marked as the turn in view, the earlier item's name. */
 interface TurnRailReading {
 	ticks: number;
@@ -1300,6 +1340,17 @@ export const SURFACES: readonly Surface[] = [
 		settle: 900,
 		when: () => false,
 		parity: { session: "turns" },
+	},
+	// A session longer than the page a transcript opens with: the pages before it load as the reader comes to the top.
+	{
+		id: "transcript-older-history",
+		area: "A",
+		title: "A 250-turn session read back to its first turn: every page before its newest loaded on the way up",
+		open: showSessionStart,
+		ready: '.omp-transcript-scroll .omp-user-bubble:has-text("Long session turn 000")',
+		settle: 900,
+		when: () => false,
+		parity: { session: "long", inView: '.omp-user-bubble:has-text("Long session turn 000")' },
 	},
 	{
 		id: "image-viewer",
