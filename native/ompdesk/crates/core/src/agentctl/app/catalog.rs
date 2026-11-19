@@ -199,13 +199,13 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
             .manage(Manage::Lifts(r##"only contacts the release server; nothing is downloaded into use or applied (updates.apply asks)"##)),
         action("updates.download", "updates", r##"Download the OMPdesk update that updates.status says is available, on this computer (what the Download button does). It installs nothing: updates.apply does, and always asks."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_updates_download(ctx, args)))
             .manage(Manage::Lifts(r##"only fetches the release the check found; nothing is installed or restarted (updates.apply asks)"##)),
-        action("updates.apply", "updates", r##"Install the downloaded OMPdesk update and restart the app (every running turn ends). host: true asks the paired host this session runs on to install and restart its own; it refuses while work runs there."##, json!({"type":"object","properties":{"host":{"type":"boolean","description":"true: the paired host this session runs on, not this computer. Refused for a session on this computer."}},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_updates_apply(ctx, args)))
-            .manage(Manage::Always { reason: r##"installs new code and restarts, ending every running turn"##, when: None })
+        action("updates.apply", "updates", r##"Install the downloaded OMPdesk update and restart the app (running turns go on when OMPdesk starts again, while Continue interrupted work is on, the default: never end a turn to wait for it). host: true asks the paired host this session runs on to install and restart its own; it refuses while work runs there."##, json!({"type":"object","properties":{"host":{"type":"boolean","description":"true: the paired host this session runs on, not this computer. Refused for a session on this computer."}},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_updates_apply(ctx, args)))
+            .manage(Manage::Always { reason: r##"installs new code and restarts, cutting every running turn until the relaunch continues it"##, when: None })
             .describe(describe_updates_apply),
         action("disk.status", "updates", r##"How much disk OMPdesk uses on this computer (worktrees, sessions, logs, stats, app data, session scratch files, the Bun and npm caches) and what the last disk cleanup freed."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_disk_status(ctx, args))),
         action("disk.clean", "updates", r##"Run disk care now on this computer and wait for it: drops build output and dependencies from worktrees idle 3+ days (the project makes them again) and saves then removes worktrees idle 14+ days (restorable from the Work tree view). Nothing the user could lose is deleted."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_disk_clean(ctx, args))),
-        action("app.quit", "app", r##"Quit OMPdesk (every running turn ends)."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_app_quit(ctx, args)))
-            .manage(Manage::Always { reason: r##"quitting ends every running turn"##, when: None }),
+        action("app.quit", "app", r##"Quit OMPdesk (running turns go on when OMPdesk starts again, while Continue interrupted work is on, the default: never end a turn to wait for it)."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_app_quit(ctx, args)))
+            .manage(Manage::Always { reason: r##"quitting stops every running turn until OMPdesk starts again and continues it"##, when: None }),
         action("accounts.github_status", "accounts", r##"Whether GitHub CLI is signed in and as which login."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_accounts_github_status(ctx, args))),
         action("accounts.github_sign_in", "accounts", r##"Start GitHub sign-in. Only starts the existing sign-in flow (a browser page or a code the person completes); it never reads or stores a credential."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_accounts_github_sign_in(ctx, args)))
             .manage(Manage::Always { reason: r##"signing in connects the person's account (a credential)"##, when: None }),
@@ -270,9 +270,9 @@ fn when_enabled(args: &Args) -> bool {
 
 fn describe_updates_apply(args: &Args) -> String {
     if args.get("host") == Some(&Value::Bool(true)) {
-        "Install the downloaded OMPdesk update on the paired host this session runs on and restart that computer's app (its running turns end)".into()
+        "Install the downloaded OMPdesk update on the paired host this session runs on and restart that computer's app (its running turns go on after its relaunch)".into()
     } else {
-        "Install the downloaded OMPdesk update and restart the app (every running turn ends)."
+        "Install the downloaded OMPdesk update and restart the app (running turns go on when OMPdesk starts again, while Continue interrupted work is on, the default: never end a turn to wait for it)."
             .into()
     }
 }
