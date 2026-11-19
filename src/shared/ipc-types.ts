@@ -419,9 +419,6 @@ export const IPC_COMMANDS = {
 	UPDATER_AUTH_CLEAR: "updater:authClear",
 	/** Pending gui-bridge compatibility warnings, handed to exactly one caller */
 	BRIDGE_HEALTH_TAKE: "bridge-health:take",
-	/** The bridge self-check's latest result per omp version on this computer, or on the paired host `device` names
-	 * (payload: device?; answer: BridgeHealthReport). */
-	BRIDGE_HEALTH_GET: "bridge-health:get",
 	/** The files waiting for space (payload: none; answer: DiskFullState) */
 	DISK_FULL_GET: "disk-full:get",
 	/** Cancel a tab's wait for the internet connection (payload: tab id) */

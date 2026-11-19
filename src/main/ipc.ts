@@ -36,6 +36,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
+import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { REA_PREF } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -2404,7 +2405,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		machineFor(caller, device).startOmpUpdate(),
 	);
 	// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
-	ipc.handle(IPC_COMMANDS.BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
+	ipc.handle(BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
 	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
