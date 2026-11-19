@@ -999,13 +999,18 @@ impl Ctx {
         Ok(())
     }
 
+    /// What the person typed (main's `TYPED_COMMANDS`) makes a new session one. A shell or eval line starts no agent
+    /// turn, so `agent_start` never clears the start tab's mark: it goes here too, or the window's housekeeping closes
+    /// the tab (and a host tool call its omp still waits on) once another tab opens.
     pub(super) async fn note_unstarted(&self, tab: &str, unstarted: bool) -> R<()> {
         let win = self.with(|pool| {
             let entry = pool.entry_mut(tab)?;
-            if entry.unstarted == unstarted {
+            let placeholder = entry.placeholder && unstarted;
+            if entry.unstarted == unstarted && entry.placeholder == placeholder {
                 return None;
             }
             entry.unstarted = unstarted;
+            entry.placeholder = placeholder;
             Some(entry.win_id)
         });
         let Some(win) = win else {

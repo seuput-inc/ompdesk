@@ -660,3 +660,23 @@ async fn a_tab_a_paired_host_runs_keeps_the_host_s_plan_generation_and_a_local_t
         .is_some()
     );
 }
+
+#[tokio::test]
+async fn a_shell_line_typed_in_the_start_tab_makes_it_a_tab_of_its_own() {
+    let mut main = Main::start(opts()).await;
+    main.call(
+        "acquire",
+        json!({"cwd": "/work", "win": 1, "tab": "start", "kind": "agent", "fresh": true, "placeholder": true}),
+    )
+    .await;
+    let tabs = main.call("tabsForWindow", json!({"win": 1})).await;
+    assert_eq!(tabs[0]["placeholder"], true);
+    // A `bash` or `eval` the tab ran (main's TYPED_COMMANDS) starts no agent turn, so `agent_start` never clears
+    // the start tab's mark; the window's housekeeping would then close the tab, and with it a host tool call its omp
+    // still waits on (an ompdesk_session_open from it never answered: e2e probes 44523723439, 44523730496).
+    main.call("noteUnstarted", json!({"tab": "start", "unstarted": false}))
+        .await;
+    let tabs = main.call("tabsForWindow", json!({"win": 1})).await;
+    assert!(tabs[0].get("unstarted").is_none());
+    assert_eq!(tabs[0]["placeholder"], false);
+}
