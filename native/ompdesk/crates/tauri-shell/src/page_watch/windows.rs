@@ -1,33 +1,40 @@
-//! WebView2. The probe is `ExecuteScript`, which the browser process carries to the renderer: no page IPC, no
-//! resource load. The kill is DevTools `Page.crash`, which the browser sends to the renderer's IO thread, so it ends a
-//! renderer whose main thread is held. (Ending the process found through `GetProcessExtendedInfos` took the shell down
-//! on the Windows runner as soon as its list answered, 19 Nov 2026.) `ProcessFailed` reports a renderer that ended,
-//! and one the engine itself found unresponsive.
+//! WebView2. The probe is DevTools `Runtime.evaluate` of an empty script, which the browser carries to the renderer:
+//! no page IPC, no resource load. It also keeps this host's DevTools session attached to the page's renderer, and the
+//! kill needs that: it is DevTools `Page.crash`, which the browser sends to the renderer's IO thread, so it ends a
+//! renderer whose main thread is held; but a session first used after the hang never reached the renderer (19 Nov
+//! 2026, the Windows runner: `ExecuteScript` probes, then `Page.crash` with no answer and no process end). Ending the
+//! process `GetProcessExtendedInfos` names took the shell down there as soon as its list answered. `ProcessFailed`
+//! reports a renderer that ended, and one the engine itself found unresponsive.
 #![allow(unsafe_code)]
 
 use crate::host::Call;
 use tauri::WebviewWindow;
+use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
     ICoreWebView2ProcessFailedEventArgs2,
 };
-use webview2_com::{
-    CallDevToolsProtocolMethodCompletedHandler, ExecuteScriptCompletedHandler,
-    ProcessFailedEventHandler,
-};
+use webview2_com::ProcessFailedEventHandler;
 use windows::core::{HSTRING, Interface};
 
 pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
     let started = window.with_webview(move |view| {
-        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, _value| {
-            super::settled(wc, probe, result.is_ok());
-            Ok(())
-        }));
+        let handler =
+            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, _json| {
+                super::settled(wc, probe, result.is_ok());
+                Ok(())
+            }));
+        let params = serde_json::json!({"expression": super::PROBE}).to_string();
         // SAFETY: Tauri hands this closure the live controller on the owning UI thread; WebView2 retains the handler
-        // until the script answers.
-        let sent = unsafe { view.controller().CoreWebView2() }
-            .and_then(|core| unsafe { core.ExecuteScript(&HSTRING::from(super::PROBE), &handler) });
+        // until the protocol call answers.
+        let sent = unsafe { view.controller().CoreWebView2() }.and_then(|core| unsafe {
+            core.CallDevToolsProtocolMethod(
+                &HSTRING::from("Runtime.evaluate"),
+                &HSTRING::from(params),
+                &handler,
+            )
+        });
         if sent.is_err() {
             super::settled(wc, probe, false);
         }
