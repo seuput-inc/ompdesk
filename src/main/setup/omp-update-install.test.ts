@@ -12,12 +12,22 @@
  * the temp root is written: HOME, BUN_INSTALL and Bun's cache all point into it.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SetupPresence } from "../../shared/setup";
-import { isCompiledOmp, MIN_OMP_VERSION, parseOmpVersion, TESTED_OMP_VERSION } from "../omp-runtime";
+import { isCompiledOmp, MIN_OMP_VERSION, parseOmpVersion, resolveOmpAmong, TESTED_OMP_VERSION } from "../omp-runtime";
+import { writeFakeOmp } from "../test-fake-omp";
 import { type OmpRegistry, type OmpRelease, ompRegistry, ompRelease } from "../test-omp-registry";
 import type { Detection } from "./detect";
 import { OMP_PACKAGE } from "./plans";
@@ -262,4 +272,78 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 		expect(readdirSync(dirname(shellOmp)).filter(name => name.includes(".ompdesk-compiled-"))).toEqual([]);
 		service.dispose();
 	}, 120_000);
+
+	for (const path of ["launch setup", "the repair path"] as const) {
+		it(`${path} leaves npm's too-old omp alone and installs the tested omp with Bun while the registry's newest is a higher major; OMPdesk then runs the tested one`, async () => {
+			// 19 Nov 2026: stock `omp update` on such an omp takes no version and would install the registry's newest.
+			latest = beyond.version;
+			const slug = path === "launch setup" ? "launch" : "repair";
+			const npmOmp = await writeFakeOmp(join(root, `npm-${slug}`), 'console.log("omp/18.0.0");\n');
+			const bunRoot = join(root, `bun-${slug}`);
+			const bunOmp = join(bunRoot, "bin", windows ? "omp.exe" : "omp");
+			// OMPdesk's lookup: npm's omp comes first on PATH, Bun's own folder after it.
+			const lookup = () => resolveOmpAmong([npmOmp, bunOmp].filter(existsSync), env.PATH ?? "");
+			const present: SetupPresence = { kind: "present", version: bunVersion, path: bun ?? "" };
+			const detect = async (): Promise<Detection> => {
+				const resolution = await lookup();
+				const reason = resolution?.ok === false ? resolution.reason : undefined;
+				const omp: SetupPresence = resolution?.ok
+					? { kind: "present", version: resolution.runtime.version, path: resolution.runtime.bin }
+					: reason?.kind === "too-old"
+						? { kind: "outdated", version: reason.version, minimum: reason.minimum, path: reason.bin }
+						: { kind: "missing" };
+				return {
+					presence: {
+						bun: present,
+						git: present,
+						gh: present,
+						node: present,
+						"agent-desktop": present,
+						tailscale: present,
+						omp,
+					},
+					bun,
+					omp: omp.kind === "missing" ? null : omp.path,
+					brew: null,
+					winget: null,
+				};
+			};
+			const lines: [string, Record<string, unknown>][] = [];
+			const service = new SetupService({
+				platform: windows ? "win32" : "darwin",
+				arch: process.arch,
+				systemRoot: process.env.SystemRoot ?? "C:\\Windows",
+				toolsDir: join(root, "tools"),
+				bunInstall: bunRoot,
+				statePath: join(root, `setup-state-${slug}.json`),
+				// Launch setup installs on its own; the repair path is `retry("omp")` (BridgeHealth's `onIncompatible`).
+				automatic: path === "launch setup",
+				testInstaller: null,
+				spawnEnv: async () => ({ ...env }),
+				onState: () => undefined,
+				onOmpReady: () => undefined,
+				detect,
+				refreshPath: async () => undefined,
+				logOmpInstall: (step, details) => lines.push([step, details]),
+			});
+			await service.start();
+			if (path === "the repair path") {
+				expect(lines).toEqual([]);
+				await service.retry("omp");
+			}
+			const item = service.state().items.find(entry => entry.id === "omp");
+			expect(item?.presence, item?.output).toEqual({ kind: "present", version: tested.version, path: bunOmp });
+			expect(installedVersion(bunRoot)).toBe(tested.version);
+			// Exactly one install ran, Bun's, and it named the tested omp.
+			const command = `"${bun}" install -g ${OMP_PACKAGE}@${tested.version}`;
+			expect(lines).toEqual([
+				["started", { path: "setup", method: "bun-global", command }],
+				["finished", { path: "setup", method: "bun-global", command, version: tested.version }],
+			]);
+			// npm's omp was never run to update itself: it is what it was, and the lookup passes over it.
+			expect((await run(npmOmp, ["--version"], env)).output.trim()).toBe("omp/18.0.0");
+			expect(await lookup()).toMatchObject({ ok: true, runtime: { bin: bunOmp, version: tested.version } });
+			service.dispose();
+		}, 120_000);
+	}
 });

@@ -111,8 +111,6 @@ export interface PlanContext {
 	/** Detected executables; null when absent. */
 	bun: string | null;
 	omp: string | null;
-	/** The detected omp is Bun's global package under `bunInstall` (`ompBunRoot`): a package install replaces it in place. */
-	ompManaged: boolean;
 	/** What a package install of omp names (`ompInstallSpecs`): the tested omp for setup's own install, an update's target for an update. */
 	ompSpecs: readonly string[];
 	brew: string | null;
@@ -165,9 +163,10 @@ export function selectMethod(item: SetupItemId, presence: SetupPresence, ctx: Pl
 		case "bun":
 			return presence.kind === "outdated" && ctx.bun ? "bun-upgrade" : "bun-script";
 		case "omp":
-			// An omp below the minimum that Bun manages gets the tested omp as a package; stock `omp update` picks its
-			// own target (the registry's newest, whatever its major), so it is left to an omp nothing else can install.
-			return presence.kind === "outdated" && ctx.omp && !ctx.ompManaged ? "omp-update" : "bun-global";
+			// Always the tested omp as Bun's package, also for a too-old omp Bun does not manage (npm's, another root's):
+			// stock `omp update` picks its own target, the registry's newest whatever its major, so setup never runs it.
+			// The lookup then runs Bun's omp past the too-old one (`resolveOmpAmong`).
+			return "bun-global";
 		case "git":
 			return mac ? "xcode-select" : "portable-git";
 		case "gh":
