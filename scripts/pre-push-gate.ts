@@ -11,8 +11,10 @@
  *   budget     the phone's first-screen JavaScript budget (scripts/check-main-bundle.ts), only for a renderer change and
  *              only when this checkout's `out/` was built from exactly the pushed inputs, which means the build's own
  *              check already passed; a fresh build takes minutes, so otherwise the output says it was skipped
+ *   tables     scripts/check-captured-tables.ts on the pushed commit, when it touched `ompdesk_app`'s Rust tables or
+ *              their captured TypeScript copy (a second; otherwise only CI's `cargo test` finds a mismatch)
  *
- * Only the checks the change needs run: a push of docs, native Rust or workflows runs fix-tests alone.
+ * Only the checks the change needs run: a push of docs, workflows or other native Rust runs fix-tests alone.
  *
  * The checks read exactly the pushed commit. In a working tree that holds those files unchanged (a worktree of one's
  * own, after the commit) they run in place, on the warm typecheck cache `bun run check:types` keeps and the `out/`
@@ -36,6 +38,7 @@ import { processAlive } from "../src/main/process-alive";
 import { withoutGitSelectors } from "../src/shared/git-env";
 import { inputHash, rebuildReason } from "./build-cache";
 import { biomeFiles, changedScope } from "./changed-scope";
+import { CAPTURED_TABLE_INPUT } from "./check-captured-tables";
 
 const ZERO_SHA = /^0+$/;
 const SHA = /[0-9a-f]{40}/g;
@@ -90,6 +93,8 @@ export interface Plan {
 	types: boolean;
 	/** A renderer change: the first-screen budget applies. */
 	budget: boolean;
+	/** The Rust tables `ompdesk_app` keeps or their captured TypeScript copy changed (scripts/check-captured-tables.ts). */
+	tables: boolean;
 }
 
 /** A change to a lint itself or to the duplicate rules' allow list: the per-file rules run on the whole tree. */
@@ -109,6 +114,7 @@ export function planGate(files: readonly string[]): Plan {
 		surfaces: lintChanged || surfaceFiles.length > 0 ? { only: lintChanged ? null : surfaceFiles } : null,
 		types: scope.files.some(file => TYPE_INPUT.test(file)),
 		budget: scope.files.some(file => /^src\/(?:renderer|shared)\//.test(file)),
+		tables: files.some(file => CAPTURED_TABLE_INPUT.test(file)),
 	};
 }
 
@@ -412,6 +418,14 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 		? [await runStep("fix commits carry a test", [process.execPath, "scripts/lint-fix-tests.mjs", range], root)]
 		: [];
 	if (!needsFixTests(ref)) notes.push("probe branch: the fix-commit rule is not checked here; it is where it lands");
+	if (plan.tables)
+		results.push(
+			await runStep(
+				"ompdesk_app's Rust tables match captured/meta.json",
+				[process.execPath, "scripts/check-captured-tables.ts", ref.localSha],
+				root,
+			),
+		);
 	const gateDir = path.join(gitDir, "ompdesk-gate");
 	fs.mkdirSync(gateDir, { recursive: true });
 	const inPlace =

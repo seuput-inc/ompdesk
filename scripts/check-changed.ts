@@ -46,6 +46,7 @@ import { changeBase, changedPaths, changedReaders } from "./changed-readers";
 import { biomeFiles, changedScope } from "./changed-scope";
 import { specsFor } from "./changed-specs";
 import { pickTests, RELATED_CAP, reach, sourceImports } from "./changed-tests";
+import { CAPTURED_TABLE_INPUT } from "./check-captured-tables";
 import { browsersNeeded, missingBrowsers, missingBrowsersNotice } from "./e2e-browsers";
 
 const args = process.argv.slice(2);
@@ -134,6 +135,8 @@ if (biomeTargets.length > 0)
 CHECKS.push(["surfaces", ["node", "scripts/lint-surfaces.mjs"]]);
 // This branch's fix commits each change a test (or say `no-test: <reason>`), before CI refuses the push.
 CHECKS.push(["fix-tests", ["bun", "scripts/lint-fix-tests.mjs"]]);
+if (changed.some(file => CAPTURED_TABLE_INPUT.test(file)))
+	CHECKS.push(["captured-tables", ["bun", "scripts/check-captured-tables.ts"]]);
 if (scope.allTests) CHECKS.push(["vitest", ["bunx", "vitest", "run"]]);
 else if (tests.files.length > 0) {
 	CHECKS.push([

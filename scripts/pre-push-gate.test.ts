@@ -49,7 +49,14 @@ describe("planGate", () => {
 			"native/ompdesk/crates/core/src/lib.rs",
 			".github/workflows/ci.yml",
 		]);
-		expect(plan).toEqual({ biome: [], surfaces: null, types: false, budget: false });
+		expect(plan).toEqual({ biome: [], surfaces: null, types: false, budget: false, tables: false });
+	});
+
+	it("checks ompdesk_app's tables when a commit touches the Rust tables or their captured copy", () => {
+		const app = "native/ompdesk/crates/core/src/agentctl/app";
+		for (const file of ["captured/meta.json", "channels.rs", "catalog.rs", "settings.rs"])
+			expect(planGate([`${app}/${file}`]).tables).toBe(true);
+		expect(planGate([`${app}/control.rs`, "src/main/a.ts"]).tables).toBe(false);
 	});
 
 	it("runs every static check for a renderer source and the budget for it", () => {
@@ -58,6 +65,7 @@ describe("planGate", () => {
 			surfaces: { only: ["src/renderer/components/Row.tsx"] },
 			types: true,
 			budget: true,
+			tables: false,
 		});
 	});
 
