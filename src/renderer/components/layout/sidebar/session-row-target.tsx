@@ -153,3 +153,8 @@ export function SessionRowLine({
 		</>
 	);
 }
+
+/** The second line's controls (the family chip, the one ⋯), raised above the row's click target. */
+export function SessionRowEnd({ children }: { children: ReactNode }) {
+	return <span className="relative z-(--sc-z-raised) flex shrink-0 items-center gap-0.5">{children}</span>;
+}
