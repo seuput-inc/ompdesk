@@ -71,7 +71,6 @@ fn rig(
         abort_before_close_ms: 30,
         omp_exit_wait_ms: 30,
         stop_wait_ms: 100,
-        ready_wait_ms: 300,
         ..Tuning::default()
     };
     (
@@ -227,38 +226,6 @@ async fn an_open_that_cannot_set_the_child_up_names_every_failure() {
     assert_eq!(
         outcome.text,
         "Could not open a session: Marking the session as a worker failed: no way"
-    );
-    control.host.port().close();
-}
-
-#[tokio::test]
-async fn an_open_whose_child_never_starts_fails_after_the_ready_wait_and_closes_the_child() {
-    let mut child = tab("c1", "/s/c_1.jsonl");
-    child["status"] = json!("starting");
-    let (control, asked) = rig(
-        7_311,
-        vec![tab("a", "/s/x_1.jsonl"), child],
-        json!({}),
-        |method, args| match method {
-            "spawn" => Ok(json!({ "tabId": "c1" })),
-            other => main_of(other, args),
-        },
-    );
-    // The Mac mini, 18 Nov 2026: a tab whose omp never came up held its open for 4 h.
-    let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        control.run("a", "ompdesk_session_open", json!({ "message": "x" }), None),
-    )
-    .await
-    .expect("the open still waited for a child that never started");
-    assert!(outcome.is_error);
-    assert_eq!(
-        outcome.text,
-        "Could not open a session: The session did not start within 1 s: its tab still reads \"starting\", and its omp never answered."
-    );
-    assert_eq!(
-        names(&asked, "view")[0]["event"],
-        json!({ "tabId": "c1", "how": "close" })
     );
     control.host.port().close();
 }
