@@ -959,39 +959,42 @@ impl AgentControl {
                 .await?,
             )
         };
-        let id = match &args.id {
-            Some(id) => id.clone(),
-            None => {
-                // The same report from the same session file is the same id, so a call stock re-runs after a relaunch
-                // (its result lost in the crash) is recognized by the receiver's journal instead of arriving twice.
-                let receiver = tabs
-                    .iter()
-                    .find(|tab| tab.tab_id == to)
-                    .and_then(|tab| tab.session_path.clone())
-                    .unwrap_or_else(|| to.clone());
-                let sender = caller
-                    .session_path
-                    .clone()
-                    .unwrap_or_else(|| caller.tab_id.clone());
-                let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
-                let mut parts = vec![
-                    sender.as_str(),
-                    receiver.as_str(),
-                    args.kind.as_str(),
-                    args.dispatch.as_deref().unwrap_or(""),
-                    args.text.as_str(),
-                ];
-                if !resolved.is_empty() {
-                    parts.push(sig.as_str());
+        // The id names a report among its sender's own reports to this receiver: the same report re-run (a call stock
+        // repeats after a relaunch, its result lost in the crash) has the same id, so the receiver's journal knows it, while
+        // another session's report never does, whatever id it chose (every child's first dispatch is d1, and two children
+        // that both said `d1-done` lost the second report on 18 Nov 2026: "Delivered.", and nothing arrived).
+        let id = {
+            let receiver = tabs
+                .iter()
+                .find(|tab| tab.tab_id == to)
+                .and_then(|tab| tab.session_path.clone())
+                .unwrap_or_else(|| to.clone());
+            let sender = caller
+                .session_path
+                .clone()
+                .unwrap_or_else(|| caller.tab_id.clone());
+            let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
+            let mut parts = vec![sender.as_str(), receiver.as_str()];
+            match &args.id {
+                Some(id) => parts.extend(["id", id.as_str()]),
+                None => {
+                    parts.extend([
+                        args.kind.as_str(),
+                        args.dispatch.as_deref().unwrap_or(""),
+                        args.text.as_str(),
+                    ]);
+                    if !resolved.is_empty() {
+                        parts.push(sig.as_str());
+                    }
                 }
-                let joined = parts.join("\u{0}");
-                let digest = Sha256::digest(joined.as_bytes());
-                digest
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()[..24]
-                    .to_owned()
             }
+            let joined = parts.join("\u{0}");
+            let digest = Sha256::digest(joined.as_bytes());
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()[..24]
+                .to_owned()
         };
         let text = [
             Some(args.text.clone()),
@@ -1083,7 +1086,7 @@ impl AgentControl {
         Ok(match outcome {
             Posted::Duplicate => format!(
                 "Report {} was already delivered; nothing sent again.{waiting}",
-                mail.id
+                args.id.as_deref().unwrap_or(&mail.id)
             ),
             Posted::Stale => format!(
                 "Ignored: dispatch {} is no longer current (the session that opened you has since sent dispatch {}). Work on its latest message.{waiting}",

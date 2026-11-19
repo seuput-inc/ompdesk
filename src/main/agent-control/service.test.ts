@@ -4506,6 +4506,18 @@ describe("ompdesk_report: sessions tell their opener", () => {
 		expect(host.mails).toHaveLength(1);
 	});
 
+	it("delivers two children's reports that chose the same id: a report id names a report among its sender's own", async () => {
+		// 18 Nov 2026: a child on a paired desktop reported `{kind: "done", dispatch: "d1", id: "d1-done"}`, was told
+		// "Delivered.", and its opener never got it: an earlier child had reported with that id (every child's first
+		// dispatch is d1). Its own final answer was not sent as the done report either, since it had reported done.
+		const { host, service, a, b } = await family();
+		const fromA = await service.run(a, T.report, { kind: "done", text: "A finished", dispatch: "d1", id: "d1-done" });
+		const fromB = await service.run(b, T.report, { kind: "done", text: "B finished", dispatch: "d1", id: "d1-done" });
+		expect([fromA.text, fromB.text]).toEqual(["Delivered.", "Delivered."]);
+		expect(host.mails.map(mail => String(mail.details.text).split("\n")[0])).toEqual(["A finished", "B finished"]);
+		expect(host.mails[0]?.details.id).not.toBe(host.mails[1]?.details.id);
+	});
+
 	it("coalesces progress into its latest report, without a turn, and a done supersedes the pending progress", async () => {
 		const { host, service, a, fire } = await family();
 		await service.run(a, T.report, { kind: "progress", text: "step 1" });
@@ -4613,6 +4625,32 @@ describe("mail across failures and relaunches", () => {
 		await rerun.run(child, T.report, { kind: "done", text: "A finished" });
 		// A relaunched main delivers again; the receiver's bridge drops it by the same id (bridge-agent-mail.test.ts).
 		expect(host.mails.map(mail => mail.details.id)).toEqual([host.mails[0]?.details.id, host.mails[0]?.details.id]);
+	});
+
+	it("never takes another child's report with the same id for a repeat in the opener's journal, after a relaunch too", async () => {
+		const host = new FakeHost({ tabId: "boss0001", title: "Boss" });
+		const service = control(host);
+		const opened = await service.run("boss0001", T.open, {
+			sessions: [{ message: "Title: part A\nDo A" }, { message: "Title: part B\nDo B" }],
+		});
+		const [a, b] = [...opened.text.matchAll(/Opened session (\w+)/g)].map(match => match[1] as string);
+		// The opener's bridge, as `agent_control.mail` does: an id its journal holds is a repeat, dropped.
+		const journal = new Set<string>();
+		const record = host.mail;
+		host.mail = (async (...args: Parameters<FakeHost["mail"]>) => {
+			const id = String(args[2].id);
+			if (journal.has(id)) return { duplicate: true, journaled: true };
+			journal.add(id);
+			return record(...args);
+		}) as FakeHost["mail"];
+		await service.run(a as string, T.report, { kind: "done", text: "A finished", dispatch: "d1", id: "d1-done" });
+		// main relaunched since: only the opener's journal remembers what arrived.
+		const relaunched = control(host);
+		await relaunched.run(b as string, T.report, { kind: "done", text: "B finished", dispatch: "d1", id: "d1-done" });
+		expect(host.mails.map(mail => String(mail.details.text).split("\n")[0])).toEqual(["A finished", "B finished"]);
+		// The same child's report again is still one report.
+		await relaunched.run(b as string, T.report, { kind: "done", text: "B finished", dispatch: "d1", id: "d1-done" });
+		expect(host.mails).toHaveLength(2);
 	});
 
 	it("after a relaunch reads the child's dispatch and the request ids back from its journal", async () => {
