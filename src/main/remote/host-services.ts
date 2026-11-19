@@ -1499,6 +1499,8 @@ export class LocalHostServices implements HostServices {
 				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
 			case "host.projects.command":
 				return this.#deps.machine.sidebarProjects(parse(ProjectsCommandParams, method, params).request);
+			case "host.bridgeHealth.get":
+				return this.#deps.machine.bridgeHealth();
 			// Agent control of a session this computer runs for the device: the git it would run on its own checkout.
 			case GIT_METHODS.facts:
 				return branchFacts(parse(GitWorktreeParams, method, params).worktree);

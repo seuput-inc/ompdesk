@@ -674,6 +674,12 @@ export type RuntimeErrorSource =
 	 * whether it was let go or the wait ran out, `details` the session file's name and the wait.
 	 */
 	| "session-owner"
+	/**
+	 * The bridge's compatibility self-check of an omp this computer runs (src/main/bridge-health.ts), one line per omp
+	 * version and launch, never per tab: `message` is `probed` (details `ompVersion`, `ok`, `unavailable` with each
+	 * capability's missing labels) or `unreachable` (the bridge never connected; details `reason`).
+	 */
+	| "bridge-health"
 	/** A goal's time-limit update that failed (src/main/sidecar-factory.ts): `message` is the error. */
 	| "goal-time-limit"
 	/**
@@ -809,6 +815,26 @@ export interface UpdateAuthTestResult {
 export type BridgeHealthWarning =
 	| { kind: "unsupported"; ompVersion: string; features: string[] }
 	| { kind: "unavailable"; ompVersion: string; reason: string };
+
+/** One omp version's latest bridge self-check on a computer (`BRIDGE_HEALTH_GET`, `host.bridgeHealth.get`). */
+export interface BridgeHealthResult {
+	ompVersion: string;
+	/** When the check answered (ms). */
+	at: number;
+	/** Every capability is present and the bridge connected. */
+	ok: boolean;
+	/** omps of this version that run on that computer now; 0 = none any more. */
+	running: number;
+	/** Capability ids it lacks, each with the missing omp internals as `capabilities` labels them. */
+	unavailable: Array<{ feature: string; missing: string[] }>;
+	/** Why the bridge never connected; absent when it answered. */
+	unreachable?: string;
+}
+
+/** The latest result per omp version checked in this launch: running versions first, then the newest. */
+export interface BridgeHealthReport {
+	results: BridgeHealthResult[];
+}
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */
 export interface DiskFullState {

@@ -58,6 +58,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"omp-reap": true,
 	"session-processes": true,
 	"session-owner": true,
+	"bridge-health": true,
 	"goal-time-limit": true,
 	"turn-stages": true,
 	"chain-stall": true,
@@ -98,6 +99,7 @@ function source(value: unknown): RuntimeErrorSource {
 		: "unknown";
 }
 
+/** Untrusted input only: flat details (a string, number, boolean or null per key); anything nested is dropped. */
 function details(value: unknown): Record<string, string | number | boolean | null> | undefined {
 	const input = record(value);
 	if (!input) return undefined;
@@ -111,6 +113,28 @@ function details(value: unknown): Record<string, string | number | boolean | nul
 		}
 	}
 	return Object.keys(output).length > 0 ? output : undefined;
+}
+
+/**
+ * The one structured detail a main source may log, by source: an array kept as an array. Its source bounds the list
+ * (`bridge-health.ts` drops whole entries and counts them); a list that still serializes past MAX_DETAIL_VALUE_LENGTH
+ * is left out, never cut into a string. Every other detail stays flat, as `details` keeps it.
+ */
+const STRUCTURED_DETAIL: Partial<Record<RuntimeErrorSource, string>> = { "bridge-health": "unavailable" };
+
+function mainDetails(source: RuntimeErrorSource, value: unknown): Record<string, unknown> | undefined {
+	const flat = details(value);
+	const key = STRUCTURED_DETAIL[source];
+	const list = key === undefined ? undefined : record(value)?.[key];
+	if (key === undefined || !Array.isArray(list)) return flat;
+	let json: string;
+	try {
+		json = JSON.stringify(list);
+	} catch {
+		return flat;
+	}
+	if (json.length > MAX_DETAIL_VALUE_LENGTH) return flat;
+	return { ...flat, [key]: JSON.parse(json) as unknown };
 }
 
 /** Validate and bound an IPC payload before it reaches disk. */
@@ -147,10 +171,14 @@ export function appendRuntimeLogAtPath(filePath: string, report: RuntimeLogRepor
 			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 		}
 
+		// The renderer's reports reach here already through `normalizeRuntimeErrorReport` (ipc.ts); main's own keep
+		// their source's one structured detail.
+		const normalized = normalizeRuntimeErrorReport(report);
 		const entry = {
 			timestamp: new Date().toISOString(),
 			...context,
-			...normalizeRuntimeErrorReport(report),
+			...normalized,
+			details: mainDetails(normalized.source, report.details),
 		};
 		fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, "utf8");
 	} catch {

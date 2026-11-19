@@ -55,6 +55,7 @@ const REMOTE_SET_DEVICE_NAME: &str = "remote:set-device-name";
 const REMOTE_RENAME_HOST: &str = "remote:rename-host";
 const REMOTE_RENAME_PEER: &str = "remote:rename-peer";
 const SIDEBAR_PROJECTS_COMMAND: &str = "sidebar-projects:command";
+const BRIDGE_HEALTH_GET: &str = "bridge-health:get";
 
 /// The side panel's views an agent may open (the renderer's `PANEL_TABS`; a test keeps them equal).
 pub const PANEL_TABS: [&str; 4] = ["terminal", "diff", "preview", "files"];
@@ -177,6 +178,7 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
         action("models.set_role", "models", r##"Assign a model to a model role (default, slow, smol, plan, task, ...); omit modelId to clear the role. device sets it in another computer's omp."##, json!({"type":"object","properties":{"role":{"type":"string","minLength":1,"maxLength":60},"modelId":{"type":"string","minLength":1,"maxLength":200},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"required":["role"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_models_set_role(ctx, args))),
         action("omp_settings.get", "omp", r##"Read stock omp settings (the ones omp itself lists, e.g. retry.fallbackChains, retry.fallbackOn, compaction.thresholdTokens): paths = exact paths, query = words from a path, label or description. device reads another computer's omp. Credentials and the approval, security, memory and computer-use settings are never shown."##, json!({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string","maxLength":200},"maxItems":40},"query":{"type":"string","minLength":1,"maxLength":100},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_omp_settings_get(ctx, args))),
         action("omp_settings.set", "omp", r##"Write one stock omp setting by its exact path (find it with omp_settings.get query). value must fit the setting's type (true/false, number, one of its options, a list, or an object for a record such as retry.fallbackChains). device writes another computer's omp. One step back with app.undo. Credentials and the approval, security, memory and computer-use settings are refused."##, json!({"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":200},"value":{"type":"json"},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"required":["path","value"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_omp_settings_set(ctx, args))),
+        action("omp.bridge_health", "omp", r##"What OMPdesk's bridge self-check found for each omp version running on the computer this session runs on (a paired host's own when it runs there): whether every OMPdesk action works with it, and each unavailable action with the omp internals it lacks."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_omp_bridge_health(ctx, args))),
         action("ui.panel", "ui", r##"Open a side panel view (terminal, diff, preview, files), open a session view as a sheet (jobs = background tasks, plan = the plan document, logs, tree = the session tree, work = the work tree), or close the panel."##, json!({"type":"object","properties":{"tab":{"type":"string","enum":["terminal","diff","preview","files","jobs","plan","logs","tree","work","close"]}},"required":["tab"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_panel(ctx, args))),
         action("ui.settings_open", "ui", r##"Open Settings at a section (for the user to look at or to finish a step only they may do)."##, json!({"type":"object","properties":{"section":{"type":"string","enum":["general","appearance","keyboard","models","agent","memory","tools","permissions","workspace","schedules","connections","updates","advanced"]},"sub":{"type":"string","maxLength":60}},"required":["section"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_settings_open(ctx, args))),
         action("sessions.saved", "sessions", r##"Saved sessions on the computer this session runs on (a paired host's own when it runs there): title, folder, last change, path."##, json!({"type":"object","properties":{"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_saved(ctx, args))),
@@ -1667,6 +1669,54 @@ async fn h_ui_open_system_privacy<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done 
         "Opened System Settings › Privacy & Security › {}. Tell the person to switch OMPdesk on there; you cannot.",
         pane.replace('_', " ")
     )))
+}
+
+/// The bridge's self-check per omp version on the caller's computer (the channel routes by `device`).
+async fn h_omp_bridge_health<P: AppPorts>(ctx: Ctx<P>, _args: Args) -> Done {
+    let args = ctx
+        .device()
+        .map_or(Vec::new(), |device| vec![json!(device)]);
+    let report = ctx.invoke(BRIDGE_HEALTH_GET, args).await?;
+    let results = records(report.get("results"));
+    if results.is_empty() {
+        return Ok(ActionResult::text(
+            "Nothing checked yet in this launch: the check runs when an omp's bridge first connects.",
+        ));
+    }
+    let mut lines = Vec::new();
+    for result in results {
+        let running = match finite(result.get("running")) {
+            Some(count) if count > 0.0 => format!("{} running", js_number(count)),
+            _ => "no longer running".to_string(),
+        };
+        let checked = finite(result.get("at"))
+            .map_or(String::new(), |at| format!(", checked {}", iso_time(at)));
+        let head = format!(
+            "omp {} ({running}{checked})",
+            text_of(result.get("ompVersion"))
+        );
+        let unavailable = records(result.get("unavailable"));
+        if let Some(reason) = result.get("unreachable").and_then(Value::as_str) {
+            lines.push(format!("{head}: bridge never connected: {reason}"));
+        } else if unavailable.is_empty() {
+            lines.push(format!("{head}: ok"));
+        } else {
+            let noun = if unavailable.len() == 1 {
+                "action"
+            } else {
+                "actions"
+            };
+            lines.push(format!("{head}: {} {noun} unavailable:", unavailable.len()));
+            for feature in unavailable {
+                lines.push(format!(
+                    "- {}: {}",
+                    text_of(feature.get("feature")),
+                    string_list(feature.get("missing")).join(", ")
+                ));
+            }
+        }
+    }
+    Ok(ActionResult::text(lines.join("\n")))
 }
 
 async fn h_sidebar_projects<P: AppPorts>(ctx: Ctx<P>, _args: Args) -> Done {

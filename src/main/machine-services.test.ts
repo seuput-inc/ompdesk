@@ -120,6 +120,7 @@ function localMachine(
 		ompUpdater: () => updater,
 		schedules: () => null,
 		sidebarProjects: () => null,
+		bridgeHealth: () => ({ results: [] }),
 	});
 }
 
