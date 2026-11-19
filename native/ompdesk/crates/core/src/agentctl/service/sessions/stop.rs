@@ -50,6 +50,26 @@ fn facts(tab: &ControlTab) -> TabCloseFacts {
     }
 }
 
+/// What a close of a view says: the view went, the tab it viewed (another computer's window, or a paired device's
+/// tab this computer runs) stays open with its omp. `stopped`: its turn was asked to stop first.
+fn view_kept(target: &ControlTab, stopped: bool) -> String {
+    let holder = match target.device_name.as_deref().or(target.device.as_deref()) {
+        Some(computer) => format!(
+            "in a tab on {computer} (that computer's own window, or a tab it runs for another device)"
+        ),
+        None => "in a tab this computer runs for a paired device (that device's window)".to_owned(),
+    };
+    format!(
+        "{} is still open {holder}: this app only viewed that tab, so the close ended this app's view and left that tab {}. A tab another computer's window holds closes only there: ask the user to close it there; its session is saved either way.",
+        label(target),
+        if stopped {
+            "open (its turn was asked to stop)"
+        } else {
+            "and its omp running"
+        }
+    )
+}
+
 impl AgentControl {
     /// `#within`: `future`'s value, or None once `ms` passed. The future is dropped then: what it already sent to main
     /// stays sent, but nothing more is waited for (the TypeScript let the promise run on).
@@ -388,10 +408,50 @@ impl AgentControl {
         target: &ControlTab,
         args: &StopArgs,
     ) -> R<String> {
-        self.refuse_hidden(target, caller)?;
         let own = self
             .opened_by(&self.host.state(), &caller.tab_id, tabs)
             .contains(&target.tab_id);
+        self.stop_as(caller, tabs, target, args, own).await
+    }
+
+    /// `ompdesk_session_stop` of a saved session open in a tab elsewhere, through the tab `rejoin` opened on it: this
+    /// computer's own tab on a paired host taken over again (its close ends that host's omp), or a view of a tab a
+    /// paired host's window or another device holds. A view opened only to reach the turn is left again.
+    pub(in crate::agentctl::service) async fn stop_joined(
+        &self,
+        caller: &ControlTab,
+        tabs: &[ControlTab],
+        joined: &ControlTab,
+        row: &StoredSession,
+        args: &StopArgs,
+    ) -> R<String> {
+        let own = self.own_closed(&self.host.state(), caller, &row.path, row.device.as_deref());
+        let answer = self.stop_as(caller, tabs, joined, args, own).await;
+        if joined.viewing && args.close != Some(true) {
+            let _ = self
+                .close_tab(
+                    &caller.tab_id,
+                    &joined.tab_id,
+                    CloseHow {
+                        auto: true,
+                        wait_ms: self.tuning.close_wait_ms,
+                        cleared: true,
+                    },
+                )
+                .await;
+        }
+        answer
+    }
+
+    async fn stop_as(
+        &self,
+        caller: &ControlTab,
+        tabs: &[ControlTab],
+        target: &ControlTab,
+        args: &StopArgs,
+        own: bool,
+    ) -> R<String> {
+        self.refuse_hidden(target, caller)?;
         let flags = StopFlags {
             close: args.close.unwrap_or(false),
             delete: args.delete.unwrap_or(false),
@@ -501,6 +561,10 @@ impl AgentControl {
                         "{} is still open: its page holds unsaved edits in the Files editor of this tab, and closing it would lose them. Ask the user to save or discard them, then close it again; its session is saved either way.",
                         label(target)
                     ));
+                }
+                if target.viewing {
+                    // Only this app's view went: the tab it viewed holds the session's omp and stays open there.
+                    return fail(view_kept(target, running));
                 }
                 self.remember_closed(target, own.then_some(caller), &by_caller(caller));
             }

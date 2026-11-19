@@ -6790,6 +6790,8 @@ export const en: Record<string, string> = {
 	"ompUpdate.held.untested-major":
 		"omp {latest} is available, but this OMPdesk was tested with omp {tested}, so it isn't installed automatically. Press the update button to install it anyway.",
 	"ompUpdate.tested": "Tested with omp {version}",
+	"ompUpdate.untested":
+		"omp {version} is newer than the omp this OMPdesk was tested with ({tested}). Some features may not work.",
 	"ompUpdate.failure.check": "Couldn't check npm for a newer omp.",
 	"ompUpdate.failure.install": "The omp update failed.",
 	"ompUpdate.failure.not-updated": "The omp update finished, but omp is still older than {latest}.",

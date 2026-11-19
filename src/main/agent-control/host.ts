@@ -718,6 +718,7 @@ export class AgentControlRuntime {
 			...(info.device ? { device: info.device, deviceName: this.#deps.deviceName(info.device) } : {}),
 			status: info.status,
 			...(this.#deps.pool.sidecarOf(info.tabId)?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
+			...(this.#deps.pool.sidecarOf(info.tabId)?.shared === true ? { viewing: true as const } : {}),
 			...(info.message && (info.status === "error" || info.status === "exited") ? { failure: info.message } : {}),
 			...(info.status === "starting" && (info.queued || info.slow)
 				? { startWait: info.queued ? ("queued" as const) : ("slow" as const) }
