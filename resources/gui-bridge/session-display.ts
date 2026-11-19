@@ -1,8 +1,9 @@
-/** Stock owns transcript replay; this module only associates GUI entry ids and flattens its indexed tree. */
+/**
+ * Stock owns transcript replay; this module only associates GUI entry ids and flattens its indexed tree. Each stock
+ * function loads where it is used: a missing one fails that function's callers, never this module's other exports.
+ */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry, SessionManager, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { buildSessionContext } from "./omp/pi-coding-agent/session/session-context";
-import { sameMessageContent, sessionMessagePersistenceKey } from "./omp/pi-coding-agent/session/turn-persistence";
 
 type DisplayMessage = AgentMessage & { entryId?: string };
 
@@ -15,10 +16,13 @@ function customEntryKey(customType: unknown, timestamp: number): string {
 	return `${String(customType)}:${timestamp}`;
 }
 
-export function attachEntryIds(
+export async function attachEntryIds(
 	messages: readonly DisplayMessage[],
 	entries: readonly SessionEntry[],
-): DisplayMessage[] {
+): Promise<DisplayMessage[]> {
+	const { sameMessageContent, sessionMessagePersistenceKey } = await import(
+		"./omp/pi-coding-agent/session/turn-persistence"
+	);
 	const byKey = new Map<string, Array<{ id: string; message: AgentMessage }>>();
 	const customByKey = new Map<string, Array<{ id: string; content: unknown }>>();
 	for (const entry of entries) {
@@ -57,7 +61,8 @@ export function attachEntryIds(
 }
 
 /** Match generated rows in reverse journal order, so a same-timestamp frame rescue belongs to its replacement. */
-export function buildTranscript(manager: Pick<SessionManager, "getEntries" | "getLeafId" | "getBranch">) {
+export async function buildTranscript(manager: Pick<SessionManager, "getEntries" | "getLeafId" | "getBranch">) {
+	const { buildSessionContext } = await import("./omp/pi-coding-agent/session/session-context");
 	const entries = manager.getEntries();
 	const leafId = manager.getLeafId();
 	const branch = leafId === null ? [] : manager.getBranch(leafId);

@@ -10,13 +10,9 @@
  * every successful mutation ends in the same reload `/reload-plugins` runs.
  */
 import * as path from "node:path";
+import type { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import type { InstalledPlugin } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/types";
 import { guard } from "../health";
-import { clearPluginRootsAndCaches } from "../omp/pi-coding-agent/discovery/helpers";
-import { getEnabledPlugins } from "../omp/pi-coding-agent/extensibility/plugins/loader";
-import { PluginManager, validateSetting } from "../omp/pi-coding-agent/extensibility/plugins/manager";
-import { classifySource, parsePluginId } from "../omp/pi-coding-agent/extensibility/plugins/marketplace";
-import { pathIsWithin } from "../omp/pi-utils";
 import type { BridgeMethod, BridgeMethods } from "../types";
 import {
 	classifyPluginActivation,
@@ -28,6 +24,18 @@ import {
 	reloadPluginState,
 	requireString,
 } from "./shared";
+
+/** Stock's npm plugin manager for `cwd`. */
+async function pluginManager(cwd: string): Promise<PluginManager> {
+	const stock = await import("../omp/pi-coding-agent/extensibility/plugins/manager");
+	return new stock.PluginManager(cwd);
+}
+
+/** The plugins the runtime would load in `cwd` (stock's loader). */
+async function enabledPlugins(cwd: string) {
+	const { getEnabledPlugins } = await import("../omp/pi-coding-agent/extensibility/plugins/loader");
+	return getEnabledPlugins(cwd);
+}
 
 /** Accept a `name@marketplace` id verbatim; a bare name needs the `marketplace` field. */
 function resolvePluginId(plugin: string | undefined, marketplace: string | undefined): string {
@@ -46,6 +54,7 @@ function resolvePluginId(plugin: string | undefined, marketplace: string | undef
  */
 async function findPlugin(manager: PluginManager, pluginId: string, cwd: string): Promise<InstalledPlugin | undefined> {
 	if (!pluginId.trim()) return undefined;
+	const { parsePluginId } = await import("../omp/pi-coding-agent/extensibility/plugins/marketplace");
 	const name = parsePluginId(pluginId)?.name ?? pluginId;
 	const plugins = await manager.list();
 	const npmPlugin = plugins.find(plugin => plugin.name === pluginId) ?? plugins.find(plugin => plugin.name === name);
@@ -60,7 +69,7 @@ async function findPlugin(manager: PluginManager, pluginId: string, cwd: string)
 		.catch(() => undefined);
 	const pkgName = pkg && typeof pkg === "object" && "name" in pkg ? pkg.name : undefined;
 	const packageName = (typeof pkgName === "string" && pkgName.trim()) || name;
-	const effective = (await getEnabledPlugins(cwd)).find(
+	const effective = (await enabledPlugins(cwd)).find(
 		plugin => plugin.path === entry.installPath || plugin.name === packageName,
 	);
 	return effective ?? (await manager.getPlugin(packageName, { path: entry.installPath }));
@@ -94,6 +103,7 @@ const marketplaceAction: BridgeMethod = async (params, env) => {
 			const source = optString(p, "source");
 			if (!source?.trim()) return { ok: false, error: "Missing `source` for marketplace add." };
 			// Rejects bare names with guidance before the manager probes the fs.
+			const { classifySource } = await import("../omp/pi-coding-agent/extensibility/plugins/marketplace");
 			classifySource(source);
 		}
 		const manager = await createMarketplaceManager(cwd);
@@ -116,11 +126,11 @@ const marketplaceAction: BridgeMethod = async (params, env) => {
 				if (action === "install" && !marketplace?.trim()) {
 					return { ok: false, error: "Missing `marketplace` for install." };
 				}
-				const before = await getEnabledPlugins(cwd);
+				const before = await enabledPlugins(cwd);
 				if (action === "install") await manager.installPlugin(plugin ?? "", marketplace ?? "");
 				else if (action === "uninstall") await manager.uninstallPlugin(resolvePluginId(plugin, marketplace));
 				else await manager.upgradePlugin(resolvePluginId(plugin, marketplace));
-				return { ok: true, activation: classifyPluginActivation(before, await getEnabledPlugins(cwd)) };
+				return { ok: true, activation: await classifyPluginActivation(before, await enabledPlugins(cwd)) };
 			}
 			case "list_available": {
 				// Cache-backed: reflects the last add/update fetch.
@@ -178,9 +188,10 @@ export const methods: BridgeMethods = {
 		get_plugins: async (_params, env) => {
 			const cwd = env.session().sessionManager.getCwd();
 			const plugins: Record<string, unknown>[] = [];
-			for (const plugin of await new PluginManager(cwd).list()) {
+			for (const plugin of await (await pluginManager(cwd)).list()) {
 				plugins.push({ name: plugin.name, marketplace: "npm", enabled: plugin.enabled, version: plugin.version });
 			}
+			const { parsePluginId } = await import("../omp/pi-coding-agent/extensibility/plugins/marketplace");
 			for (const summary of await (await createMarketplaceManager(cwd)).listInstalledPlugins()) {
 				const entry = summary.entries[0];
 				const parsed = parsePluginId(summary.id);
@@ -232,17 +243,19 @@ export const methods: BridgeMethods = {
 			const enabled = p.enabled === true;
 			const session = env.session();
 			const cwd = session.sessionManager.getCwd();
-			const before = await getEnabledPlugins(cwd);
+			const { parsePluginId } = await import("../omp/pi-coding-agent/extensibility/plugins/marketplace");
+			const before = await enabledPlugins(cwd);
 			let channel: "npm" | "marketplace";
 			if (parsePluginId(id)) {
 				await (await createMarketplaceManager(cwd)).setPluginEnabled(id, enabled, optScope(p));
 				channel = "marketplace";
 			} else {
-				await new PluginManager(cwd).setEnabled(id, enabled);
+				const { clearPluginRootsAndCaches } = await import("../omp/pi-coding-agent/discovery/helpers");
+				await (await pluginManager(cwd)).setEnabled(id, enabled);
 				clearPluginRootsAndCaches();
 				channel = "npm";
 			}
-			const activation = classifyPluginActivation(before, await getEnabledPlugins(cwd));
+			const activation = await classifyPluginActivation(before, await enabledPlugins(cwd));
 			await reloadPluginState(session);
 			return { id, enabled, channel, activation };
 		},
@@ -256,7 +269,8 @@ export const methods: BridgeMethods = {
 		 */
 		get_gui_themes: async (_params, env) => {
 			const themes: Array<{ id: string; tokens: Record<string, string> }> = [];
-			for (const plugin of await getEnabledPlugins(env.session().sessionManager.getCwd())) {
+			const { pathIsWithin } = await import("../omp/pi-utils");
+			for (const plugin of await enabledPlugins(env.session().sessionManager.getCwd())) {
 				const gui = "gui" in plugin.manifest ? plugin.manifest.gui : undefined;
 				const themePath = gui && typeof gui === "object" && "theme" in gui ? gui.theme : undefined;
 				if (typeof themePath !== "string" || themePath.length === 0) continue;
@@ -283,7 +297,7 @@ export const methods: BridgeMethods = {
 		get_plugin_detail: async (params, env) => {
 			const pluginId = requireString(paramsOf(params), "pluginId");
 			const cwd = env.session().sessionManager.getCwd();
-			const manager = new PluginManager(cwd);
+			const manager = await pluginManager(cwd);
 			const plugin = await findPlugin(manager, pluginId, cwd);
 			if (!plugin) throw new Error(`Plugin "${pluginId}" not found.`);
 			const enabledSet = plugin.enabledFeatures === null ? null : new Set(plugin.enabledFeatures);
@@ -322,13 +336,14 @@ export const methods: BridgeMethods = {
 			const session = env.session();
 			const cwd = session.sessionManager.getCwd();
 			const result = await pluginMutation(async () => {
-				const manager = new PluginManager(cwd);
+				const { clearPluginRootsAndCaches } = await import("../omp/pi-coding-agent/discovery/helpers");
+				const manager = await pluginManager(cwd);
 				const plugin = await findPlugin(manager, pluginId, cwd);
 				if (!plugin) return { ok: false, error: `Plugin "${pluginId}" not found.` };
-				const before = await getEnabledPlugins(cwd);
+				const before = await enabledPlugins(cwd);
 				await manager.setEnabledFeatures(plugin.name, features);
 				clearPluginRootsAndCaches();
-				return { ok: true, activation: classifyPluginActivation(before, await getEnabledPlugins(cwd)) };
+				return { ok: true, activation: await classifyPluginActivation(before, await enabledPlugins(cwd)) };
 			});
 			if (result.ok) await reloadPluginState(session);
 			return result;
@@ -344,7 +359,7 @@ export const methods: BridgeMethods = {
 			const cwd = session.sessionManager.getCwd();
 			const result = await pluginMutation(async () => {
 				if (!key.trim()) return { ok: false, error: "Setting key cannot be empty" };
-				const manager = new PluginManager(cwd);
+				const manager = await pluginManager(cwd);
 				const plugin = await findPlugin(manager, pluginId, cwd);
 				if (!plugin) return { ok: false, error: `Plugin "${pluginId}" not found.` };
 				const settings = plugin.manifest.settings;
@@ -356,6 +371,7 @@ export const methods: BridgeMethods = {
 					};
 				}
 				if (schema) {
+					const { validateSetting } = await import("../omp/pi-coding-agent/extensibility/plugins/manager");
 					const validation = validateSetting(p.value, schema);
 					if (!validation.valid) {
 						return { ok: false, error: `Invalid value for "${key}": ${validation.error ?? "schema mismatch"}` };
@@ -376,7 +392,7 @@ export const methods: BridgeMethods = {
 			const cwd = session.sessionManager.getCwd();
 			const result = await pluginMutation(async () => {
 				if (!key.trim()) return { ok: false, error: "Setting key cannot be empty" };
-				const manager = new PluginManager(cwd);
+				const manager = await pluginManager(cwd);
 				const plugin = await findPlugin(manager, pluginId, cwd);
 				if (!plugin) return { ok: false, error: `Plugin "${pluginId}" not found.` };
 				await manager.deletePluginSetting(plugin.name, key);

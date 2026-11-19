@@ -7,9 +7,6 @@
  */
 
 import { guard } from "../health";
-import { loadAllMCPConfigs } from "../omp/pi-coding-agent/mcp/config";
-import { MCPManager } from "../omp/pi-coding-agent/mcp/manager";
-import { cfgMcpEnableProjectConfig } from "../omp/pi-coding-agent/mcp/settings";
 import type { BridgeMethods } from "../types";
 import { serializeMcpReload } from "./mcp";
 import { paramsOf, reloadPluginState } from "./shared";
@@ -39,6 +36,11 @@ export const methods: BridgeMethods = {
 		"extension_update.reconnect": async (params, env) => {
 			const names = serverNames(params);
 			const session = env.session();
+			const [{ loadAllMCPConfigs }, { MCPManager }, { cfgMcpEnableProjectConfig }] = await Promise.all([
+				import("../omp/pi-coding-agent/mcp/config"),
+				import("../omp/pi-coding-agent/mcp/manager"),
+				import("../omp/pi-coding-agent/mcp/settings"),
+			]);
 			const manager = MCPManager.instance();
 			if (!manager) throw new Error("MCP manager not available.");
 			return serializeMcpReload(async () => {

@@ -6,13 +6,6 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "./health";
 import { currentReplyLanguage } from "./modes/reply-language";
-import { resolveRoleChain } from "./omp/pi-coding-agent/config/model-resolver";
-import { roleCandidatePool } from "./omp/pi-coding-agent/config/model-roles";
-import { lookup } from "./omp/pi-coding-agent/config/registry";
-import { sttClient } from "./omp/pi-coding-agent/stt/asr-client";
-import { downloadSttModel, isSttModelCached } from "./omp/pi-coding-agent/stt/downloader";
-import { resolveSttModelSpec } from "./omp/pi-coding-agent/stt/models";
-import { resolveSpeechCandidates } from "./omp/pi-coding-agent/tools/tts";
 import { asRecord, requiredString } from "./params";
 import { SttDictation, type SttSetup, speechLanguageOfName } from "./stt-language-core";
 import type { BridgeMethods } from "./types";
@@ -39,20 +32,22 @@ function decodeWav(bytes: Uint8Array): { samples: Float32Array; sampleRate: numb
 	return { samples, sampleRate };
 }
 
-/** Stock's catalog entry for `key`, the facts the rules read (an unknown key reads as stock's default model). */
-function sttModelFacts(key: string | undefined) {
-	const spec = resolveSttModelSpec(key);
-	return { key: spec.key, englishOnly: spec.englishOnly };
-}
-
 /**
- * Same resolution as the TUI stt-controller: stale/legacy keys fall back to the default model. The language is the
- * conversation's (Settings › General, the device language by default), else stock's `stt.language`.
+ * Same resolution as the TUI stt-controller: stale/legacy keys fall back to the default model (an unknown key reads
+ * as stock's default catalog entry). The language is the conversation's (Settings › General, the device language by
+ * default), else stock's `stt.language`.
  */
-function sttSetup(session: AgentSession): SttSetup {
+async function sttSetup(session: AgentSession): Promise<SttSetup> {
+	const [{ resolveRoleChain }, { roleCandidatePool }, { lookup }, { resolveSttModelSpec }] = await Promise.all([
+		import("./omp/pi-coding-agent/config/model-resolver"),
+		import("./omp/pi-coding-agent/config/model-roles"),
+		import("./omp/pi-coding-agent/config/registry"),
+		import("./omp/pi-coding-agent/stt/models"),
+	]);
 	const pool = roleCandidatePool("dictation", session.settings, session.modelRegistry);
+	const spec = resolveSttModelSpec(resolveRoleChain("dictation", session.settings, pool)[0]?.model.id);
 	return {
-		selected: sttModelFacts(resolveRoleChain("dictation", session.settings, pool)[0]?.model.id),
+		selected: { key: spec.key, englishOnly: spec.englishOnly },
 		language:
 			speechLanguageOfName(currentReplyLanguage()) ??
 			((lookup("stt.language")?.get(session.settings) as string | undefined) || undefined),
@@ -65,7 +60,8 @@ async function transcribe(session: AgentSession, params: unknown) {
 		throw new Error(`Unsupported sample rate ${sampleRate} Hz — transcribe_audio expects 16 kHz mono PCM16 WAV`);
 	}
 	if (samples.length === 0) return { text: "" };
-	const { modelKey, language } = await dictation.sttModel(params, session);
+	const { modelKey, language } = await dictation.sttModel(params, await sttSetup(session));
+	const { sttClient } = await import("./omp/pi-coding-agent/stt/asr-client");
 	return { text: await sttClient.transcribe(modelKey, samples, { language }) };
 }
 
@@ -74,10 +70,11 @@ async function transcribe(session: AgentSession, params: unknown) {
  * `wantsMp3` false it is that function's own `resolveRoleChain` over `roleCandidatePool`): omp's bundle does not
  * export `tts/vocalizer`, and an import of it is a second copy whose role chain reads other settings' slots.
  */
-function localSpeechModelId(
+async function localSpeechModelId(
 	session: Pick<AgentSession, "settings" | "modelRegistry">,
 	fallback: { key: string },
-): string {
+): Promise<string> {
+	const { resolveSpeechCandidates } = await import("./omp/pi-coding-agent/tools/tts");
 	const local = resolveSpeechCandidates(session.settings, session.modelRegistry, false).find(
 		candidate => candidate.model.api === "local-inference",
 	);
@@ -88,13 +85,14 @@ async function synthesize(session: AgentSession, rawText: string) {
 	const text = rawText.trim();
 	if (!text) return { audioBase64: "", mimeType: "audio/wav" };
 	// Dynamic: `tts/*` is a source copy whose first import transpiles omp's source tree (~540 ms of omp's only thread), so it loads on use, not at startup.
-	const [{ DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS }, { ttsClient }, { encodeWav }] = await Promise.all([
+	const [{ DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS }, { ttsClient }, { encodeWav }, { lookup }] = await Promise.all([
 		import("./omp/pi-coding-agent/tts/models"),
 		import("./omp/pi-coding-agent/tts/tts-client"),
 		import("./omp/pi-coding-agent/tts/wav"),
+		import("./omp/pi-coding-agent/config/registry"),
 	]);
 	const voice = (lookup("speech.voice")?.get(session.settings) as string | undefined) || DEFAULT_TTS_VOICE;
-	const modelKey = localSpeechModelId(session, TTS_LOCAL_MODELS[0]);
+	const modelKey = await localSpeechModelId(session, TTS_LOCAL_MODELS[0]);
 	const audio = await ttsClient.synthesize(modelKey, text, { voice });
 	if (!audio) throw new Error("Local TTS model is unavailable — download it from the TUI speech settings first");
 	return {
@@ -103,9 +101,13 @@ async function synthesize(session: AgentSession, rawText: string) {
 	};
 }
 
-const dictation = new SttDictation<AgentSession>(sttSetup, {
-	isCached: isSttModelCached,
-	download: (key, onProgress) => downloadSttModel(key, progress => onProgress(progress.loaded, progress.total)),
+/** The setup is resolved by the method that asks (`sttSetup`), and stock's downloader loads on the first model check. */
+const dictation = new SttDictation<SttSetup>(setup => setup, {
+	isCached: async key => (await import("./omp/pi-coding-agent/stt/downloader")).isSttModelCached(key),
+	download: async (key, onProgress) => {
+		const { downloadSttModel } = await import("./omp/pi-coding-agent/stt/downloader");
+		await downloadSttModel(key, progress => onProgress(progress.loaded, progress.total));
+	},
 });
 
 // One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
@@ -113,7 +115,7 @@ export const methods: BridgeMethods = {
 	// One id for both: `stt_prepare` gets the model `transcribe_audio` runs on.
 	...guard("dictation", {
 		transcribe_audio: async (params, env) => transcribe(env.session(), params),
-		stt_prepare: async (params, env) => dictation.sttPrepare(params, env.session()),
+		stt_prepare: async (params, env) => dictation.sttPrepare(params, await sttSetup(env.session())),
 	}),
 	...guard("readAloud", {
 		synthesize_speech: async (params, env) => {

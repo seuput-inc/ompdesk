@@ -621,7 +621,8 @@ export const methods: BridgeMethods = {
 			// Late imports isolate moved stock internals from the other composer adapters.
 			const stock = await import("./omp/pi-tui/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
-			const messages = buildTranscript(env.session().sessionManager).messages as unknown as AgentMessage[];
+			const transcript = await buildTranscript(env.session().sessionManager);
+			const messages = transcript.messages as unknown as AgentMessage[];
 			return {
 				targets: buildCopyTargets(messages, {
 					extractBlocks: stock.extractBlocks,
@@ -637,9 +638,8 @@ export const methods: BridgeMethods = {
 		"composer.last_link": async (_params, env) => {
 			const stock = await import("./omp/pi-tui/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
-			const messages = buildTranscript(env.session().sessionManager).messages as unknown as Parameters<
-				typeof stock.extractLastLink
-			>[0];
+			const transcript = await buildTranscript(env.session().sessionManager);
+			const messages = transcript.messages as unknown as Parameters<typeof stock.extractLastLink>[0];
 			return { href: stock.extractLastLink(messages)?.href ?? null };
 		},
 	}),

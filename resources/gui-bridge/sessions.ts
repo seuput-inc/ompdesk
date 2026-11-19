@@ -5,11 +5,10 @@
  */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { BlobStore } from "@oh-my-pi/pi-coding-agent/session/blob-store";
+import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { guard } from "./health";
 import { withImageRefs } from "./image-refs";
-import { BlobStore } from "./omp/pi-coding-agent/session/blob-store";
-import { SessionManager } from "./omp/pi-coding-agent/session/session-manager";
-import { getBlobsDir } from "./omp/pi-utils";
 import { promptOrigin } from "./prompt-origin";
 import { labelPromptOrigins } from "./prompt-origin-contracts";
 import { attachEntryIds, buildTranscript, flattenSessionTree } from "./session-display";
@@ -44,9 +43,9 @@ function optionalString(params: unknown, key: string): string | undefined {
  */
 let replay: { key: string; snapshot: TranscriptSnapshot } | undefined;
 
-type TranscriptSnapshot = ReturnType<typeof buildTranscript> & { version: string };
+type TranscriptSnapshot = Awaited<ReturnType<typeof buildTranscript>> & { version: string };
 
-function transcriptSnapshot(manager: SessionManager): TranscriptSnapshot {
+async function transcriptSnapshot(manager: SessionManager): Promise<TranscriptSnapshot> {
 	const entries = manager.getEntries();
 	const key = [
 		manager.getSessionFile() ?? "",
@@ -55,7 +54,7 @@ function transcriptSnapshot(manager: SessionManager): TranscriptSnapshot {
 		manager.getLeafId() ?? "",
 	].join("\0");
 	if (replay?.key !== key) {
-		const { leafId, messages } = buildTranscript(manager);
+		const { leafId, messages } = await buildTranscript(manager);
 		const version = createHash("sha256").update(key).digest("base64url").slice(0, 22);
 		// A85: prompts a paired device (or this host) typed, labelled for the viewing device.
 		replay = { key, snapshot: { leafId, version, messages: labelPromptOrigins(messages, entries, promptOrigin) } };
@@ -70,8 +69,14 @@ function pageNumber(params: unknown, key: string, fallback: number): number {
 
 let blobs: BlobStore | undefined;
 /** The store stock's session manager writes this session's pictures to (`read_image_blob` reads the same). */
-function blobStore(): BlobStore {
-	blobs ??= new BlobStore(getBlobsDir());
+async function blobStore(): Promise<BlobStore> {
+	if (!blobs) {
+		const [{ BlobStore }, { getBlobsDir }] = await Promise.all([
+			import("./omp/pi-coding-agent/session/blob-store"),
+			import("./omp/pi-utils"),
+		]);
+		blobs ??= new BlobStore(getBlobsDir());
+	}
 	return blobs;
 }
 
@@ -82,7 +87,7 @@ export const methods: BridgeMethods = {
 	...guard("transcript", {
 		"sessions.transcript": async (params, env) => {
 			const { decorateMessages } = await import("./stream-metadata");
-			const { leafId, version, messages } = transcriptSnapshot(env.session().sessionManager);
+			const { leafId, version, messages } = await transcriptSnapshot(env.session().sessionManager);
 			let offset = Math.min(pageNumber(params, "offset", 0), messages.length);
 			const end = Math.min(messages.length, offset + pageNumber(params, "limit", messages.length));
 			// A page starts with a run (a typed prompt, or after a run that ended), never with an orphan tool result
@@ -90,7 +95,7 @@ export const methods: BridgeMethods = {
 			if (param(params, "snapToTurn") === true) offset = transcriptRunStart(messages, offset, end);
 			const page = transcriptPageMessages(messages.slice(offset, end));
 			// `imageRefs`: a paired device reads each picture once by its reference (image-refs.ts).
-			const shown = param(params, "imageRefs") === true ? withImageRefs(page, blobStore()) : page;
+			const shown = param(params, "imageRefs") === true ? await withImageRefs(page, await blobStore()) : page;
 			return {
 				leafId,
 				version,
@@ -113,7 +118,7 @@ export const methods: BridgeMethods = {
 			}
 			const { decorateMessages } = await import("./stream-metadata");
 			const entries = env.session().sessionManager.getEntries();
-			return { messages: decorateMessages(attachEntryIds(messages as AgentMessage[], entries)) };
+			return { messages: decorateMessages(await attachEntryIds(messages as AgentMessage[], entries)) };
 		},
 	}),
 	...guard("sessionTree", {
@@ -182,6 +187,7 @@ export const methods: BridgeMethods = {
 			const sessionDir = live.getSessionDir();
 			const cwd = live.getCwd();
 			await live.flush();
+			const { SessionManager } = await import("./omp/pi-coding-agent/session/session-manager");
 			const copy = await SessionManager.open(sourceFile, sessionDir, undefined, {
 				suppressBreadcrumb: true,
 				throwIfMissing: true,

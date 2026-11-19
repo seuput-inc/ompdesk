@@ -82,7 +82,7 @@ export default function (pi) {
    if (process.env.DEFAULTS_PROBE_FALLBACK === "1") {
     // The engine's startup check failed (modes/computer-use.ts): stock's own listener must reconcile the live prelude.
     const { holdBuiltinComputerPrelude } = await import("./thinking-default");
-    holdBuiltinComputerPrelude(session.settings);
+    await holdBuiltinComputerPrelude(session.settings);
     // Stock's listener recomputes in a microtask.
     await Promise.resolve();
     await Promise.resolve();

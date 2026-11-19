@@ -425,6 +425,8 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-capabilities.test.ts",
 			"src/main/bridge-health.test.ts",
 			"src/main/bridge-capability-granular-stock.test.ts",
+			"src/main/bridge-guard.test.mjs",
+			"src/main/bridge-session-extras-guard.test.mjs",
 			"src/main/bridge-stock-settings-stock.test.ts",
 			"scripts/lint-omp-imports.test.mjs",
 		],
