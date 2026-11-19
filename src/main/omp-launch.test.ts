@@ -1,11 +1,14 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	creditSpendRun,
 	type OmpLaunch,
 	ompArgs,
 	SESSION_OWNED_ENV,
 	type SessionOpen,
 	sessionEnv,
 	sessionOpen,
+	withCreditSpendRuns,
 	withoutSessionEnv,
 } from "./omp-launch";
 
@@ -69,6 +72,35 @@ describe("omp launch", () => {
 		const bare: OmpLaunch = { open: "default", builtin: { args: [] }, userFlags: [], settings: {} };
 		expect(sessionEnv({ ...bare, settings: { creditSpend: false } })).toEqual({ OMP_GUI_CREDIT_SPEND: "0" });
 		expect(sessionEnv({ ...bare, settings: { creditSpend: true } })).toEqual({ OMP_GUI_CREDIT_SPEND: "1" });
+	});
+
+	it("gives an `omp -p` run beside the sessions the credit-use extension and the switch, and no other omp command", async () => {
+		const calls: Array<{ args: string[]; env?: Record<string, string> }> = [];
+		let enabled = false;
+		const omp = withCreditSpendRuns(
+			{
+				bin: "/bin/omp",
+				version: "19.0.0",
+				run: async (args, opts) => {
+					calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
+					return { code: 0, stdout: "", stderr: "" };
+				},
+			},
+			() => creditSpendRun("/bridge", enabled),
+		);
+		await omp.run(["-p", "--no-session"], { env: { PI_NOTIFICATIONS: "off" } });
+		// The switch is read at each run, as the person left it.
+		enabled = true;
+		await omp.run(["-p"]);
+		await omp.run(["commit", "--dry-run"], { env: { A: "1" } });
+		await omp.run(["plugin", "list"]);
+		const entry = ["-e", join("/bridge", "credit-spend-run.ts")];
+		expect(calls).toEqual([
+			{ args: ["-p", "--no-session", ...entry], env: { PI_NOTIFICATIONS: "off", OMP_GUI_CREDIT_SPEND: "0" } },
+			{ args: ["-p", ...entry], env: { OMP_GUI_CREDIT_SPEND: "1" } },
+			{ args: ["commit", "--dry-run"], env: { A: "1" } },
+			{ args: ["plugin", "list"] },
+		]);
 	});
 
 	it("opens a tab's session by the one rule, for every combination of what the tab knows", () => {

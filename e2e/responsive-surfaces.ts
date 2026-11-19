@@ -1588,6 +1588,25 @@ export const SURFACES: readonly Surface[] = [
 		},
 	},
 	{
+		id: "settings-credit-use",
+		area: "B",
+		title: "Settings › Models & accounts at the Credit use row: the switch, and the auto top-up line with its two links",
+		open: async (page, look) => {
+			await openSettingsModels(page, look);
+			const row = page.locator("[data-settings-page] [data-credit-spend]");
+			await row.waitFor({ state: "visible", timeout: 30_000 });
+			await row.scrollIntoViewIfNeeded();
+		},
+		ready: "[data-settings-page] [data-credit-spend] [data-credit-top-up-link]",
+		settle: 600,
+		// Parity only, and only over a host with a signed-in subscription: the row stands under account rotation.
+		when: () => false,
+		parity: {
+			session: "work",
+			available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
+		},
+	},
+	{
 		id: "settings-disk-care",
 		area: "B",
 		title: "Settings › Updates & about, the Disk row after a cleanup with its breakdown open",

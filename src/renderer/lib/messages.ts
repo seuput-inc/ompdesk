@@ -1,4 +1,5 @@
 import type { StoreApi } from "zustand/vanilla";
+import { CREDIT_SPEND_OFF_WORDING } from "../../shared/credit-spend";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -110,6 +111,7 @@ export type TurnErrorKind =
 	| "connection"
 	| "contextOverflow"
 	| "auth"
+	| "creditsOff"
 	| "rateLimit"
 	| "overloaded"
 	| "compaction"
@@ -136,6 +138,8 @@ const TURN_ERROR_ACTIONS: Record<TurnErrorKind, readonly TurnErrorAction[]> = {
 	connection: ["retry", "openProviders"],
 	contextOverflow: ["compact", "changeModel"],
 	auth: ["openProviders", "changeModel"],
+	// Trying again only meets the same refusal: the ways on are the switch (Models & accounts) or another model.
+	creditsOff: ["openProviders", "changeModel"],
 	rateLimit: ["retry", "changeModel"],
 	overloaded: ["retry", "changeModel"],
 	compaction: ["changeModel", "retry"],
@@ -154,6 +158,8 @@ function statusPattern(codes: string): RegExp {
 const TURN_ERROR_PATTERNS: ReadonlyArray<readonly [Exclude<TurnErrorKind, "unknown">, readonly RegExp[]]> = [
 	["aborted", [/request was aborted|operation was aborted|aborted by (?:the )?user|\babort ?error\b/i]],
 	["compaction", [/compaction freed too little|compaction failed|failed to compact|could not compact/i]],
+	// Before `rateLimit`: the bridge's refusal is worded as a usage limit too (the limit wait reads that).
+	["creditsOff", [CREDIT_SPEND_OFF_WORDING]],
 	["rateLimit", [statusPattern("429"), /rate[ _-]?limit|too many requests|quota|usage limit|insufficient_quota/i]],
 	[
 		"contextOverflow",

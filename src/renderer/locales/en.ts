@@ -4389,7 +4389,9 @@ export const en: Record<string, string> = {
 	// Settings › Models & accounts: credit use (providers/CreditSpendRow.tsx)
 	"providers.creditSpend.label": "Credit use",
 	"providers.creditSpend.desc":
-		"Off: once an account's plan limit is used up, OMPdesk counts it as limited and moves on to another account or your fallback models instead of running on ChatGPT credits or Claude extra usage. On: accounts keep running on credits and extra usage, as omp does by itself. OMPdesk never buys or tops up credits; a provider's auto top-up fires only when credits are spent, so it cannot fire from OMPdesk while this is off, and when on it follows your billing setting at the provider, which OMPdesk can't see or change.",
+		"Off: once an account's plan limit is used up, OMPdesk stops using it until the limit resets and moves on to another account or your fallback models; with none left, the turn stops and says so. Nothing runs on ChatGPT credits or Claude extra usage. On: accounts keep running on credits and extra usage, as omp does by itself.",
+	"providers.creditSpend.topUp": "OMPdesk never buys credits. Auto top-up is set at the provider:",
+	"providers.creditSpend.topUpOpen": "Open {provider}'s usage and billing settings",
 
 	// Settings › Models & providers: account rotation (providers/RotationModeControl.tsx)
 	"providers.rotation.label": "Account rotation",
@@ -5780,6 +5782,9 @@ export const en: Record<string, string> = {
 		"This session is longer than the model's context window. Compact the context or switch to a model with a larger window.",
 	"turnError.auth.title": "Sign-in needed",
 	"turnError.auth.guidance": "The provider rejected the credentials. Check your sign-in or API key in Providers.",
+	"turnError.creditsOff.title": "Plan limit reached",
+	"turnError.creditsOff.guidance":
+		"This account's plan limit is used up and Credit use is off, so OMPdesk stopped instead of spending credits or extra usage. Wait for the reset, switch models, or turn Credit use on in Models & accounts.",
 	"turnError.rateLimit.title": "Usage limit reached",
 	"turnError.rateLimit.guidance":
 		"You've hit the provider's rate limit or quota. Try again in a moment or switch to another model.",

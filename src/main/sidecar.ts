@@ -38,11 +38,13 @@ import { projectQueueUpdate } from "./local/queue";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError, type OmpRuntime } from "./local/types";
 import {
 	type BuiltinLaunch,
+	creditSpendRun,
 	type OmpLaunch,
 	ompArgs,
 	type SessionOpen,
 	type SessionSettings,
 	sessionEnv,
+	withCreditSpendRuns,
 	withoutSessionEnv,
 } from "./omp-launch";
 import { ompLogTail } from "./omp-log-tail";
@@ -1482,10 +1484,14 @@ export class SidecarManager extends EventEmitter {
 	async #localContext(client: RpcClient, runtime: OmpRuntime, bridge: BridgeRelay): Promise<LocalCommandContext> {
 		const send = stockSender(client, LOCAL_SEND_TIMEOUT_MS);
 		if (!this.#session) await client.stock({ type: "get_state" }).catch(() => undefined);
+		const { bridgeDir, creditSpend } = this.#options;
 		return {
 			cwd: this.#options.cwd,
 			sessionFile: this.#session?.sessionFile,
-			omp: runtime,
+			// A PR draft is an `omp -p` beside the session, with no bridge: the Credit use switch goes with it.
+			omp: bridgeDir
+				? withCreditSpendRuns(runtime, () => creditSpendRun(bridgeDir, creditSpend?.() ?? false))
+				: runtime,
 			send,
 			bridge,
 		};

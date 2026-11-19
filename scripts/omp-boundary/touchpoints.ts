@@ -685,14 +685,22 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Credit-spend control: pi-ai's retry-after helper, the auth key selector and usage provider wrapping, and credential reports (including a provider's raw credits).",
+			"Credit-spend control: pi-ai's retry-after helper, the auth key selector and `oauth.access` wrapping (in-memory patches of the process's AuthStorage), usage provider wrapping and its own usage fetch, the provider's ranking strategy for a model's own windows, credential reports (including a provider's raw credits), one ledger file in the agent directory (`ompdesk-credit-limits.json`), and the same check loaded alone (`-e credit-spend-run.ts`) by the `omp -p` runs OMPdesk starts without its bridge (a scheduled run, a PR draft).",
 		files: [
 			"resources/gui-bridge/credit-spend.ts",
+			"resources/gui-bridge/credit-spend-run.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
+			"src/main/omp-launch.ts",
 		],
-		stock: ["@oh-my-pi/pi-ai/utils/retry-after"],
-		tests: ["src/main/bridge-credit-spend-stock.test.ts"],
+		stock: [
+			"@oh-my-pi/pi-ai/utils/retry-after",
+			"@oh-my-pi/pi-ai/auth/usage-report",
+			"@oh-my-pi/pi-ai/usage/registry",
+			"@oh-my-pi/pi-utils",
+			"omp -p -e <extension>",
+		],
+		tests: ["src/main/bridge-credit-spend-stock.test.ts", "src/main/omp-launch.test.ts"],
 	},
 	{
 		id: "B17",

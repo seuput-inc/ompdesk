@@ -23,9 +23,12 @@ import type { PromptOriginEnv } from "../../resources/gui-bridge/prompt-origin-c
 import type { AccountRotationMode } from "../shared/account-rotation";
 import { type AgentBrowser, DEFAULT_BROWSER_ENV } from "../shared/default-browser";
 import { stripDenylistedFlags } from "../shared/launch-profile";
+import type { OmpRuntime } from "./local/types";
 
 /** The bridge extension's entry in the gui-bridge directory. */
 const BRIDGE_ENTRY = "index.ts";
+/** The extension an omp run without the bridge loads for the Credit use switch alone. */
+const CREDIT_SPEND_RUN_ENTRY = "credit-spend-run.ts";
 /** `--config` overlay pinning `autoResume: false`, so a new tab never reopens the last session. */
 const FRESH_LAUNCH_CONFIG = "fresh-launch.yml";
 /**
@@ -179,4 +182,34 @@ export function sessionEnv(launch: OmpLaunch): Record<string, string> {
 	if (launch.processTag) env[SESSION_TAG_ENV] = launch.processTag;
 	if (launch.scratchDir) env[SCRATCH_ENV] = launch.scratchDir;
 	return { ...env, ...builtin.env };
+}
+
+/** What an `omp -p` run OMPdesk starts beside its sessions carries, so the Credit use switch holds there too. */
+export interface CreditSpendRun {
+	args: string[];
+	env: Record<string, string>;
+}
+
+/**
+ * A scheduled run and a PR draft are `omp -p` with no bridge, so nothing applied the switch to them: stock alone
+ * serves a spent plan from credits. They load the extension that installs the bridge's check
+ * (resources/gui-bridge/credit-spend-run.ts) and get the switch as a tab's spawn does.
+ */
+export function creditSpendRun(bridgeDir: string, enabled: boolean): CreditSpendRun {
+	return {
+		args: ["-e", join(bridgeDir, CREDIT_SPEND_RUN_ENTRY)],
+		env: { [CREDIT_SPEND_ENV]: enabled ? "1" : "0" },
+	};
+}
+
+/** `runtime` whose `omp -p` runs carry `flags`; every other omp command (none takes an extension) runs as it was. */
+export function withCreditSpendRuns(runtime: OmpRuntime, flags: () => CreditSpendRun): OmpRuntime {
+	return {
+		...runtime,
+		run: (args, opts) => {
+			if (args[0] !== "-p") return runtime.run(args, opts);
+			const run = flags();
+			return runtime.run([...args, ...run.args], { ...opts, env: { ...opts?.env, ...run.env } });
+		},
+	};
 }

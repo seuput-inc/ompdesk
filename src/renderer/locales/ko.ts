@@ -4383,7 +4383,9 @@ export const ko: Record<string, string> = {
 	// Settings › Models & accounts: credit use (providers/CreditSpendRow.tsx)
 	"providers.creditSpend.label": "크레딧 사용",
 	"providers.creditSpend.desc":
-		"끄면 계정의 요금제 한도를 다 쓴 뒤 그 계정을 한도에 걸린 것으로 보고, ChatGPT 크레딧이나 Claude 추가 사용량으로 이어 쓰지 않고 다른 계정이나 대체 모델로 넘어가요. 켜면 omp 기본 동작대로 크레딧과 추가 사용량으로 계속 써요. OMPdesk는 크레딧을 사거나 충전하지 않아요. 프로바이더의 자동충전은 크레딧을 써야만 일어나서 이 설정이 꺼져 있으면 OMPdesk 때문에 일어나지 않고, 켜면 프로바이더의 결제 설정을 따르는데 OMPdesk는 그 설정을 보거나 바꿀 수 없어요.",
+		"끄면 계정의 요금제 한도를 다 쓴 뒤 한도가 초기화될 때까지 그 계정을 쓰지 않고 다른 계정이나 대체 모델로 넘어가요. 넘어갈 곳이 없으면 턴을 멈추고 알려요. ChatGPT 크레딧이나 Claude 추가 사용량으로는 아무것도 실행하지 않아요. 켜면 omp 기본 동작대로 크레딧과 추가 사용량으로 계속 써요.",
+	"providers.creditSpend.topUp": "OMPdesk는 크레딧을 사지 않아요. 자동충전은 프로바이더에서 설정해요:",
+	"providers.creditSpend.topUpOpen": "{provider} 사용량·결제 설정 열기",
 
 	// Settings › Models & providers: account rotation (providers/RotationModeControl.tsx)
 	"providers.rotation.label": "계정 순환",
@@ -5773,6 +5775,9 @@ export const ko: Record<string, string> = {
 		"이 세션이 모델의 컨텍스트 창을 넘었어요. 컨텍스트를 압축하거나 컨텍스트 창이 더 큰 모델로 바꾸세요.",
 	"turnError.auth.title": "로그인 필요",
 	"turnError.auth.guidance": "프로바이더가 인증을 거부했어요. 프로바이더에서 로그인이나 API 키를 확인하세요.",
+	"turnError.creditsOff.title": "요금제 한도 도달",
+	"turnError.creditsOff.guidance":
+		"이 계정의 요금제 한도를 다 썼고 크레딧 사용이 꺼져 있어서, 크레딧이나 추가 사용량을 쓰지 않고 멈췄어요. 한도 초기화를 기다리거나, 모델을 바꾸거나, 모델 및 계정에서 크레딧 사용을 켜세요.",
 	"turnError.rateLimit.title": "사용 한도 도달",
 	"turnError.rateLimit.guidance":
 		"프로바이더의 요청 한도나 할당량에 도달했어요. 잠시 후 다시 시도하거나 다른 모델을 쓰세요.",

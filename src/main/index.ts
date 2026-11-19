@@ -54,7 +54,7 @@ import {
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
 import { REA_PREF, reaEnabled } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF } from "../shared/computer-use";
-import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
+import { CREDIT_SPEND_PREF, creditSpendEnabled } from "../shared/credit-spend";
 import { DEFAULT_BROWSER_PREF } from "../shared/default-browser";
 import {
 	APP_AUTO_UPDATE_PREF,
@@ -168,6 +168,7 @@ import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { followSetupState } from "./omp-availability";
+import { creditSpendRun } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
 import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
 import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
@@ -2088,6 +2089,7 @@ app.whenReady().then(async () => {
 		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
 		extensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
 		extensionEnv: cwd => mcpHub?.ompEnv(cwd) ?? Promise.resolve({}),
+		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
 	});
 	scheduleService = new ScheduleService({
 		file: join(app.getPath("userData"), "schedules.json"),
