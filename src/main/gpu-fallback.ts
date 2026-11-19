@@ -1,10 +1,15 @@
 /**
- * Software rendering for a GPU that keeps failing. A GPU process crash never relaunches the running app: WebView2
- * starts a new GPU process and repaints the window by itself (measured on the Tauri host, `gpuCrashDecision` in
- * launch-guard-core.ts), and on v0.44.0 a relaunch from a launch whose GPU kept dying opened and closed OMPdesk
- * forever. A GPU that crashes again within 10 minutes, or in the launch that tries hardware again, leaves the marker
- * (`<userData>/gpu-fallback.json`), and the next launch renders in software until the GPU or its driver changes or
- * 7 days pass (gpu-fallback-core.ts).
+ * Software-rendering escape hatch for a GPU that keeps failing. One GPU process crash is WebView2's to recover: it
+ * starts a new GPU process and repaints (the Tauri host reports the crash as `app.childProcessGone`). A second crash
+ * within 10 minutes, or a crash in a hardware trial, relaunches once with hardware acceleration disabled.
+ *
+ * Never twice: with hardware acceleration off Chromium still runs a GPU
+ * process (SwiftShader, WARP on Windows), restarts it itself when it dies and
+ * falls back further on its own. Relaunching from such a launch only started
+ * the same software launch again, so a laptop whose software GPU process also
+ * died opened and closed OMPdesk forever (v0.44.0). `gpuRelaunchDecision`
+ * (launch-guard-core.ts) allows a relaunch only from a hardware launch outside
+ * safe mode, at most once per 10 minutes across processes.
  *
  * The marker must live on disk and be read before `app.whenReady()` —
  * `app.disableHardwareAcceleration()` is only legal that early.
@@ -22,8 +27,8 @@ import {
 	markerForTrial,
 	parseGpuMarker,
 } from "./gpu-fallback-core";
-import { launchSafeMode } from "./launch-guard";
-import { gpuCrashDecision } from "./launch-guard-core";
+import { launchHistory, launchSafeMode, noteGpuRelaunch } from "./launch-guard";
+import { gpuRelaunchDecision } from "./launch-guard-core";
 import { writeRuntimeLog } from "./runtime-log";
 
 const MARKER_FILENAME = "gpu-fallback.json";
@@ -183,9 +188,8 @@ export function softwareCompositing(): Promise<boolean> {
 
 let softwareCompositingResult: Promise<boolean> | undefined;
 
-/** This launch left the marker: later crashes change nothing more. */
 let gpuCrashHandled = false;
-/** When this launch's GPU process last crashed and WebView2 recovered it. */
+/** When this launch's GPU process last crashed while the launch went on (a settled crash Chromium recovered). */
 let gpuCrashedAt: number | undefined;
 
 /**
@@ -208,38 +212,54 @@ export function markerForcesSoftware(marker: string): boolean {
 }
 
 /**
- * Called from the `child-process-gone` handler (the Tauri host reports WebView2's `ProcessFailed` of a GPU process
- * as one). Never relaunches (`gpuCrashDecision`): the first crash of a hardware launch is logged and left to WebView2;
- * a crash in a hardware trial, or a second one within 10 minutes, leaves the marker for the next launch.
+ * Called from the `child-process-gone` handler. A hardware launch leaves its first GPU crash to WebView2 (it restarts
+ * the GPU process and repaints) and writes no marker, so hardware stays, here and on the next launch; a second crash
+ * within the cooldown of that one is a GPU that keeps dying, and it, or a crash in a hardware trial, writes the marker
+ * and relaunches into software rendering, once. Every other launch leaves recovery to WebView2.
  */
 export function handleGpuProcessGone(details: { type: string; reason: string; exitCode: number | undefined }): void {
 	if (!isGpuProcessCrash(details) || gpuCrashHandled) return;
 	const exit = { reason: details.reason, exitCode: details.exitCode ?? null };
 	const now = Date.now();
-	const decision = gpuCrashDecision({
+	const decision = gpuRelaunchDecision({
 		software: softwareLaunch,
 		safeMode: launchSafeMode(),
+		testLaunch: process.env.OMP_GUI_HEADLESS === "1",
 		trial: hardwareTrial,
+		history: launchHistory(),
 		now,
 		crashedBefore: gpuCrashedAt,
 	});
-	if (!decision.marker) {
-		if (decision.why === "recovers") gpuCrashedAt = now;
+	if (!decision.relaunch && decision.why === "settled") {
+		gpuCrashedAt = now;
 		writeRuntimeLog({
 			source: "gpu-fallback",
-			message: `GPU process exited (${details.reason}): WebView2 restarts it, no relaunch (${decision.why})`,
+			message: `GPU process exited (${details.reason}): WebView2 restarts it and repaints, hardware acceleration stays`,
 			details: { ...exit, why: decision.why },
 		});
 		return;
 	}
 	gpuCrashHandled = true;
-	// A crash in a hardware trial starts the cool-off again with the GPU it crashed on.
-	const before = readMarkerText();
-	const gpu = currentGpu ?? (before === undefined ? undefined : parseGpuMarker(before).gpu);
-	writeMarker({ at: now, policy: MARKER_POLICY, ...exit, ...(gpu ? { gpu } : {}) });
+	if (!softwareLaunch) {
+		// A crash in a hardware trial starts the cool-off again with the GPU it crashed on.
+		const before = readMarkerText();
+		const gpu = currentGpu ?? (before === undefined ? undefined : parseGpuMarker(before).gpu);
+		writeMarker({ at: now, policy: MARKER_POLICY, ...exit, ...(gpu ? { gpu } : {}) });
+	}
+	if (!decision.relaunch) {
+		writeRuntimeLog({
+			source: "gpu-fallback",
+			message: `GPU process exited (${details.reason}): no relaunch (${decision.why}); Chromium restarts it`,
+			details: { ...exit, why: decision.why, lastRelaunchAt: decision.lastRelaunchAt ?? null },
+		});
+		return;
+	}
 	writeRuntimeLog({
 		source: "gpu-fallback",
-		message: `GPU process exited (${details.reason}) ${decision.why === "trial" ? "in the hardware trial" : "again within 10 minutes"}: the next launch renders in software, no relaunch`,
-		details: { ...exit, why: decision.why },
+		message: `GPU process exited (${details.reason}): relaunching with software rendering`,
+		details: exit,
 	});
+	noteGpuRelaunch(now);
+	app.relaunch();
+	app.exit(0);
 }

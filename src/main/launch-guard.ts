@@ -52,7 +52,19 @@ export function markLaunchStable(): void {
 	save(guard);
 }
 
+/** This launch is about to relaunch itself for a GPU process crash. */
+export function noteGpuRelaunch(at = Date.now()): void {
+	if (!guard) return;
+	guard.current.gpuRelaunchAt = at;
+	save(guard);
+}
+
 /** This launch started in safe mode (false when the guard never started: dev, tests, a second instance). */
 export function launchSafeMode(): boolean {
 	return guard?.current.safeMode === true;
+}
+
+/** Every recorded launch, this one last. */
+export function launchHistory(): readonly LaunchRecord[] {
+	return guard ? [...guard.previous, guard.current] : [];
 }

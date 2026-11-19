@@ -372,12 +372,12 @@ public static class WindowPaint {
 }
 
 # A WebView2 process of this app ending, on the Tauri host (open-work G12; installer-check run 44616509774 before the
-# host reported it). The GPU process: WebView2 starts a new one and repaints, so the app is never relaunched (a GPU
-# that keeps dying leaves src/main/gpu-fallback.ts's marker for the next launch; v0.44.0's relaunch loop is what a
-# relaunch did), and main's log names the crash the host reported. The renderer: WebView2 shows its own error page
-# until main reloads the app, which it does on the `render-process-gone` the host reports. Each failure says which
-# went wrong: no process of this app found, the crash request failed, the app did not survive, the window was not
-# repainted, or the host reported nothing.
+# host reported it). The GPU process: WebView2 starts a new one and repaints, so one crash never relaunches the app
+# (a second within 10 minutes is a GPU that keeps dying and relaunches once into software, src/main/gpu-fallback.ts,
+# pinned by gpu-fallback-loop.test.ts), and main's log names the crash the host reported. The renderer: WebView2
+# shows its own error page until main reloads the app, which it does on the `render-process-gone` the host reports.
+# Each failure says which went wrong: no process of this app found, the crash request failed, the app did not
+# survive, the window was not repainted, or the host reported nothing.
 function Assert-SurvivesWebViewCrashes {
 	$main = Get-MainPids
 	if ($main.Count -ne 1) { Fail "expected one OMPdesk main process, found $($main.Count)" }
@@ -403,7 +403,7 @@ function Assert-SurvivesWebViewCrashes {
 	try {
 		[void](& $paint 'before')
 		if (-not (& $grown 'before-grown').Painted) { Fail 'the window was not painted when grown before any crash: the paint check proves nothing' }
-		for ($i = 0; $i -lt 2; $i++) {
+		for ($i = 0; $i -lt 1; $i++) {
 			$gpu = @()
 			$deadline = (Get-Date).AddSeconds(30)
 			while ((Get-Date) -lt $deadline) {
