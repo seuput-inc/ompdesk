@@ -41,8 +41,15 @@ pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
 pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
     // A view that is gone drops the closure, and the call with it: that answers `failed`.
     let asked = window.with_webview(move |view| {
-        // The protocol call's own answer, if any, says nothing the page's end does not.
-        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+        // The renderer it ends never answers; an answer means it did not end, and says why.
+        let handler =
+            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+                crate::log::log(
+                    "page.kill_answer",
+                    serde_json::json!({"wcId": wc, "ok": result.is_ok(), "answer": json}),
+                );
+                Ok(())
+            }));
         super::killing(wc, true);
         // SAFETY: Tauri hands this closure the live controller on the owning UI thread; WebView2 retains the handler
         // until the protocol call answers.
@@ -78,6 +85,10 @@ pub fn watch_failures(window: &WebviewWindow, wc: u64) -> tauri::Result<()> {
             let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
             // SAFETY: WebView2 hands the handler live event arguments on the UI thread.
             unsafe { failure.ProcessFailedKind(&mut kind) }?;
+            crate::log::log(
+                "page.process_failed",
+                serde_json::json!({"wcId": wc, "kind": kind.0}),
+            );
             if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED {
                 let mut code = 0;
                 let exit = failure
