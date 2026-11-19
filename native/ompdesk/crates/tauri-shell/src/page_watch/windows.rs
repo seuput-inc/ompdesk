@@ -1,9 +1,9 @@
 //! WebView2. The probe is `ExecuteScript`, which the browser process carries to the renderer: no page IPC, no
-//! resource load. The kill ends the renderer process that runs the page's main frame, learned from
-//! `ICoreWebView2Environment13::GetProcessExtendedInfos` right after the page answered a probe (a renderer whose main
-//! thread is held may answer nothing), and checked against the environment's live renderers (`GetProcessInfos`)
-//! before it is ended. DevTools `Page.crash` ended nothing there (19 Nov 2026, the Windows runner). `ProcessFailed`
-//! reports a renderer that ended, and one the engine itself found unresponsive.
+//! resource load. The kill ends the renderer process that runs the page's main frame, as
+//! `ICoreWebView2Environment13::GetProcessExtendedInfos` lists it: learned right after the page answered a probe and
+//! checked against the environment's live renderers (`GetProcessInfos`), else looked up at the kill (the list answers
+//! while the page's main thread is held). DevTools `Page.crash` ended nothing on the Windows runner (19 Nov 2026).
+//! `ProcessFailed` reports a renderer that ended, and one the engine itself found unresponsive.
 #![allow(unsafe_code)]
 
 use crate::host::Call;
@@ -112,10 +112,6 @@ fn lookup(view: &PlatformWebview, answer: impl FnOnce(Result<i32, String>) + 'st
     let answered = finish.clone();
     let handler =
         GetProcessExtendedInfosCompletedHandler::create(Box::new(move |result, processes| {
-            crate::log::log(
-                "page.renderer_list",
-                serde_json::json!({"ok": result.is_ok(), "list": processes.is_some()}),
-            );
             answered(
                 result
                     .and_then(|()| match &processes {
@@ -129,14 +125,8 @@ fn lookup(view: &PlatformWebview, answer: impl FnOnce(Result<i32, String>) + 'st
             );
             Ok(())
         }));
-    crate::log::log("page.renderer_lookup", serde_json::json!({"frame": frame}));
     // SAFETY: the live environment on its UI thread; WebView2 retains the handler until the list answers.
-    let asked = unsafe { environment.GetProcessExtendedInfos(&handler) };
-    crate::log::log(
-        "page.renderer_asked",
-        serde_json::json!({"frame": frame, "error": asked.as_ref().err().map(|e| e.to_string())}),
-    );
-    if let Err(error) = asked {
+    if let Err(error) = unsafe { environment.GetProcessExtendedInfos(&handler) } {
         finish(Err(format!("WebView2 process list: {error}")));
     }
 }
@@ -164,50 +154,32 @@ fn live_renderer(view: &PlatformWebview, pid: i32) -> windows::core::Result<bool
     Ok(false)
 }
 
-/// One step of the renderer lookup, logged before it runs: the shell ended inside this walk on the Windows runner
-/// (19 Nov 2026) with nothing on stderr, and these lines name the call it ended in.
-fn step(what: &str, detail: serde_json::Value) {
-    crate::log::log(
-        "page.renderer_step",
-        serde_json::json!({"step": what, "detail": detail}),
-    );
-}
-
 /// Whether the renderer `process` runs the frame `frame`. The walk follows `MoveNext`'s own answer and stops at
-/// [`FRAMES_PER_RENDERER`].
+/// [`FRAMES_PER_RENDERER`]. The frame collection is held for as long as its iterator is used: the walk that let it go
+/// right after `GetIterator` ended the shell on the Windows runner (19 Nov 2026, nothing on stderr); held, it has not
+/// (inferred: the iterator does not keep its collection alive).
 fn runs_frame(
     process: &ICoreWebView2ProcessExtendedInfo,
     frame: u32,
 ) -> windows::core::Result<bool> {
-    // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call.
+    // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call; `collection`
+    // outlives `frames`.
     unsafe {
-        step("AssociatedFrameInfos", serde_json::Value::Null);
         let collection = process.AssociatedFrameInfos()?;
-        step("GetIterator", serde_json::Value::Null);
         let frames = collection.GetIterator()?;
         let mut more = BOOL::default();
-        step("HasCurrent", serde_json::Value::Null);
         frames.HasCurrent(&mut more)?;
-        let mut seen = Vec::new();
-        while more.as_bool() && seen.len() < FRAMES_PER_RENDERER {
-            step("GetCurrent", serde_json::json!(seen.len()));
-            let current = frames.GetCurrent()?;
-            step("FrameInfo2", serde_json::Value::Null);
-            let current = current.cast::<ICoreWebView2FrameInfo2>()?;
+        let mut walked = 0;
+        while more.as_bool() && walked < FRAMES_PER_RENDERER {
+            let current = frames.GetCurrent()?.cast::<ICoreWebView2FrameInfo2>()?;
             let mut id = 0;
-            step("FrameId", serde_json::Value::Null);
             current.FrameId(&mut id)?;
             if id == frame {
                 return Ok(true);
             }
-            seen.push(id);
-            step("MoveNext", serde_json::json!(id));
+            walked += 1;
             frames.MoveNext(&mut more)?;
         }
-        crate::log::log(
-            "page.renderer_frames",
-            serde_json::json!({"frame": frame, "seen": seen, "more": more.as_bool()}),
-        );
         Ok(false)
     }
 }
@@ -223,17 +195,12 @@ fn renderer(
     // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call.
     unsafe {
         let mut count = 0;
-        step("Count", serde_json::Value::Null);
         processes.Count(&mut count)?;
         for index in 0..count {
-            step("GetValueAtIndex", serde_json::json!(index));
             let process = processes.GetValueAtIndex(index)?;
-            step("ProcessInfo", serde_json::json!(index));
             let info = process.ProcessInfo()?;
             let mut kind = COREWEBVIEW2_PROCESS_KIND::default();
-            step("Kind", serde_json::json!(index));
             info.Kind(&mut kind)?;
-            step("kind", serde_json::json!(kind.0));
             if kind == COREWEBVIEW2_PROCESS_KIND_RENDERER && runs_frame(&process, frame)? {
                 let mut pid = 0;
                 info.ProcessId(&mut pid)?;
