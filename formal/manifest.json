@@ -256,7 +256,11 @@
 			"spec": "AwayCalls.tla",
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
-			"covers": ["src/main/remote/host-services.ts", "src/main/remote/kept-calls.ts", "src/main/ipc.ts:642-661"],
+			"covers": [
+				"src/main/remote/host-services.ts",
+				"src/main/remote/kept-calls.ts",
+				"src/main/ipc.ts:642-661"
+			],
 			"syncCommit": null
 		},
 		{
@@ -289,7 +293,7 @@
 				"resources/gui-bridge/agent-control.ts#install",
 				"resources/gui-bridge/agent-control.ts:337-390"
 			],
-			"syncCommit": null
+			"syncCommit": "aee9cdf781bc63bc159626c7f0abda7ad027d9cc"
 		}
 	]
 }
