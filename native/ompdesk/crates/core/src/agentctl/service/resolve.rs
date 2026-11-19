@@ -872,7 +872,17 @@ impl AgentControl {
                 now.id
             ));
         }
-        self.join(caller, &now).await
+        let joined = self.join(caller, &now).await?;
+        // A view made only to reach the session for this call closes when the call ends (`let_go_joined`); one made
+        // to show it stays, as does one a caller outside OMPdesk waits on.
+        if matches!(verb, "send to" | "answer" | "report to" | "merge") {
+            self.mem()
+                .joined
+                .entry(caller.tab_id.clone())
+                .or_default()
+                .push(joined.tab_id.clone());
+        }
+        Ok(joined)
     }
 
     /// `#join`: joins a saved session open in a tab elsewhere: a tab in the caller's window that views that tab's omp

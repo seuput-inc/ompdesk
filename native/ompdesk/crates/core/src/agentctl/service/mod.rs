@@ -112,6 +112,8 @@ pub type Shared<T> = Flight<Result<T, Fail>>;
 pub struct Mem {
     /// Tabs each calling tab opened, for the "opened by you" marks (`#opened`).
     pub opened: HashMap<String, Vec<String>>,
+    /// Views a calling tab's current call joined to reach a session held elsewhere, closed when it ends.
+    pub joined: HashMap<String, Vec<String>>,
     /// Tabs whose stop or close is in flight (`#closing`).
     pub closing: HashSet<String>,
     /// Children whose review item the person settled (`#reviewed`).
@@ -587,12 +589,28 @@ impl AgentControl {
         tool: Tool,
         args: Value,
     ) -> ToolOutcome {
-        match self.dispatch(caller_tab_id, tabs, tool, args).await {
+        let outcome = match self.dispatch(caller_tab_id, tabs, tool, args).await {
             Ok(text) => ToolOutcome {
                 text,
                 is_error: false,
             },
             Err(error) => outcome_of(tool.name(), &error),
+        };
+        self.let_go_joined(caller_tab_id).await;
+        outcome
+    }
+
+    /// The views this call joined only to reach a session held elsewhere (`join_stored`) close as it ends: the
+    /// session's own tab keeps its omp, and a view nobody asked to see would otherwise stay in the caller's window.
+    async fn let_go_joined(&self, caller_tab_id: &str) {
+        let joined = self.mem().joined.remove(caller_tab_id).unwrap_or_default();
+        for tab_id in joined {
+            let how = sessions::CloseHow {
+                auto: true,
+                wait_ms: self.tuning.close_wait_ms,
+                cleared: true,
+            };
+            let _ = self.close_tab(caller_tab_id, &tab_id, how).await;
         }
     }
 
