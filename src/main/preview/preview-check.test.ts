@@ -186,6 +186,24 @@ describe("Preview check on gui_visualize open", () => {
 		expect(deps.judge).toHaveBeenCalledWith(IMAGE, PREVIEW_CHECK_TOTAL_MS - 1500);
 	});
 
+	it("judges the page of a window that shows it late, while the total bound still has room", async () => {
+		vi.useFakeTimers();
+		// Measured on GitHub's Windows runner (e2e runs 44492478044, 44499841018): the window asked for the Preview's page
+		// 1.2 s after the tool opened the visual and had it loaded at 1.6 s, and on a run's first open not even asked for
+		// it by 2 s. The capture's fake keeps to the budget it is given, as host.ts's does.
+		const showsAt = 2400;
+		const { deps, flagged } = fakeDeps({
+			judge: judgedAs("error"),
+			capture: vi.fn(async (_id: string, _version: number, budgetMs: number) => {
+				await vi.advanceTimersByTimeAsync(Math.min(showsAt, budgetMs));
+				return showsAt <= budgetMs ? IMAGE : null;
+			}),
+		});
+		expect(await checkVisualPage(deps, "v", 1)).toBe("error");
+		expect(flagged).toEqual([["v", 1, "error"]]);
+		expect(deps.judge).toHaveBeenCalledWith(IMAGE, PREVIEW_CHECK_TOTAL_MS - showsAt);
+	});
+
 	it("waits the whole capture budget for the page of a tab in front, and only a moment for one behind", async () => {
 		for (const [inFront, appearMs] of [
 			[true, PREVIEW_CHECK_CAPTURE_MS],
