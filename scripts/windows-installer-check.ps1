@@ -329,23 +329,43 @@ function Assert-NoGpuRelaunchLoop {
 }
 
 # Headless (no tray, no automatic machine setup). A release build of the Tauri shell opens no DevTools port (only the
-# test-automation build does), so the window is proven the way the installer's own start check proves it
-# (installer.nsh ompStartAndVerify): main writes <userData>\app-started.json with this version once its first window's
-# page loaded (update-log-core.ts START_MARK_FILE).
+# test-automation build does), so the launch is proven from what the app itself writes, in the order it happens:
+# the process, <userData>\app-started.json with this version (main writes it at the first window's first
+# did-finish-load, which can be the shell's /__profile/migrate page), then gui-runtime.jsonl's startup-timing
+# `renderer-mounted` line of the same main pid (the app's React shell mounted, so past the migrate page). A failure
+# names the last stage reached.
 function Assert-Launches([string] $Version) {
 	$mark = Join-Path $env:APPDATA 'ompdesk\app-started.json'
+	$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
 	Remove-Item -LiteralPath $mark -Force -ErrorAction SilentlyContinue
+	$launchedAt = Get-Date
 	$env:OMP_GUI_HEADLESS = '1'
 	Start-Process -FilePath $exe | Out-Null
 	Remove-Item Env:OMP_GUI_HEADLESS
 	$script:started = $null
-	Wait-Until {
-		try {
-			$script:started = Get-Content -LiteralPath $mark -Raw -ErrorAction Stop | ConvertFrom-Json
-		} catch { $script:started = $null }
-		$null -ne $script:started -and $script:started.version -eq $Version
-	} 120 'the installed app to load its first window'
-	Ok "the installed app loaded its first window: version $($script:started.version), pid $($script:started.pid)"
+	$script:stage = 'started OMPdesk.exe'
+	try {
+		Wait-Until {
+			if (@(Get-Process OMPdesk -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count -gt 0) {
+				$script:stage = 'OMPdesk.exe running'
+			}
+			try {
+				$item = Get-Item -LiteralPath $mark -ErrorAction Stop
+				$read = Get-Content -LiteralPath $mark -Raw -ErrorAction Stop | ConvertFrom-Json
+				if ($item.LastWriteTime -ge $launchedAt -and $read.version -eq $Version) {
+					$script:started = $read
+					$script:stage = "app-started.json written (version $Version, pid $($read.pid))"
+				}
+			} catch {}
+			$null -ne $script:started -and (Test-Path -LiteralPath $log) -and
+				@(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue |
+					Where-Object { $_ -match '"source":"startup-timing"' -and $_ -match '"message":"renderer-mounted"' -and $_ -match "`"pid`":$($script:started.pid)\b" }).Count -gt 0
+		} 120 'the installed app to mount its renderer'
+	} catch {
+		Write-Host "last stage reached: $($script:stage)"
+		throw
+	}
+	Ok "the installed app mounted its renderer: version $($script:started.version), pid $($script:started.pid)"
 	Stop-App
 }
 
