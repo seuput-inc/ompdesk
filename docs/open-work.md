@@ -101,7 +101,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | R1 | A click on a session row's new second line selected nothing (the line painted over the row's click target). | release-ready | | omp/agent/rc-0134-2 `a59111ad4` (de0fc9205) | candidate 0/8 vs v0.134.1 8/8 vs fixed 8/8 passing (44580646695, 44580654743, 44581975250); notification-open fixed 8/8 (44581981616); row hit test 6/6 |
 | R2 | mobile-autopilot-rows read the new branch line as a child named after its branch. | release-ready (test) | | `69228ec7e` | spec run 44580343480 |
 | R3 | mobile-remote-session:459 'a host slow to start': the app window never loaded in 30 s once (WebView2 stuck at __profile/migrate). Unconfirmed: v0.134.1 0 of 10 failed, fixed candidate 0 of 10, candidate line 1 of 11. Migrate page leaves no log. | unconfirmed | | | 44584888421, 44584897113, 44581968887 |
-| R4 | The shell's profile-migration page (/__profile/migrate, only while tauri-local-storage-import.json is missing: a new profile's first launch, the first launch after the Electron→Tauri move) shows an error and Retry when it throws, but has no timeout, no automatic retry and no log line when profileRead/profileAck never answer: the window just stays. | not started | | | |
+| R4 | The shell's profile-migration page (/__profile/migrate, only while tauri-local-storage-import.json is missing: a new profile's first launch, the first launch after the Electron→Tauri move) shows an error and Retry when it throws, but has no timeout, no automatic retry and no log line when profileRead/profileAck never answer: the window just stays. | next release: retry on a timeout and log why (a new install's first screen) | | | |
 
 ## I. Boundaries
 
