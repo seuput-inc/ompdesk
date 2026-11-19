@@ -285,7 +285,9 @@ test("an omp runners have not verified waits: nothing installs on its own, Setti
 			"finished manual",
 		]);
 		expect(await updateLog(launched)).toContain("stock-auto-taken undefined");
-		// Turning "Keep tools up to date" off gives stock's own update back.
+		// Turning "Keep tools up to date" off gives stock's own update back (Settings again: the update restarted the tab).
+		if (!(await settings.isVisible())) await pressShortcutUntilVisible(page, "ControlOrMeta+Comma", settings);
+		await settings.locator('[data-settings-section="updates"]').click();
 		await settings.locator("#setting-gui-toolsAutoUpdate [role='switch']").click();
 		await expect.poll(stockAuto, { timeout: 30_000 }).toBe(true);
 		await expect(settings.getByTestId("omp-stock-auto-taken")).toHaveCount(0);
