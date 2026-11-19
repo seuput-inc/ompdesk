@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, expect } from "vitest";
+import { CLEANUP_MS } from "./bridge-agent-mail-stock-harness";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { RM_TEMP } from "./test-fake-omp";
@@ -39,9 +40,11 @@ export type Frame = {
 };
 
 const cleanups: Array<() => Promise<void> | void> = [];
+// The same budget as the agent-mail stock suites: each omp gets up to 30 s to exit and each folder waits for omp's
+// daemon, past vitest's 10 s hook default (bridge-todo-drift-stock's six omps took longer on a busy Linux runner).
 afterAll(async () => {
 	for (const cleanup of cleanups.reverse()) await cleanup();
-});
+}, CLEANUP_MS);
 
 export function onCleanup(cleanup: () => Promise<void> | void): void {
 	cleanups.push(cleanup);
