@@ -13,7 +13,10 @@ export interface BumpPlan {
 	latest: string;
 	/** The version the run treats as tested: the file's, or a rehearsal's `pretend_tested`. */
 	tested: string;
-	/** latest > tested on main (or in a rehearsal): run the stock skip guard and the string check, report by touchpoint. */
+	/**
+	 * latest > tested on main (or in a rehearsal), in a run that tests main: run the stock skip guard and the string
+	 * check, report by touchpoint.
+	 */
 	bump: boolean;
 	/** `bump`, and no branch for this version yet: a green run pushes it. */
 	fresh: boolean;
@@ -26,6 +29,8 @@ export interface BumpInput {
 	/** A dispatch's `pretend_tested`; empty on schedule. Lets any ref rehearse the bump path. */
 	pretendTested: string;
 	onMain: boolean;
+	/** Whether this run tests main at all (`planTargets`, compat-run.ts); an hourly run with nothing new does not. */
+	runs: boolean;
 	/** Whether `omp/bump/<latest>` already exists on the remote. */
 	branchExists: boolean;
 }
@@ -42,7 +47,8 @@ export function planBump(input: BumpInput): BumpPlan {
 	]) {
 		if (!VERSION.test(value)) throw new Error(`${name} omp version is not X.Y.Z: ${JSON.stringify(value)}`);
 	}
-	const bump = (input.onMain || input.pretendTested !== "") && (compareVersions(input.latest, tested) ?? 0) > 0;
+	const bump =
+		input.runs && (input.onMain || input.pretendTested !== "") && (compareVersions(input.latest, tested) ?? 0) > 0;
 	return {
 		latest: input.latest,
 		tested,
@@ -156,6 +162,26 @@ export function summarize(
 		}
 	}
 	return { group: meta.group, job: meta.job, outcome: meta.outcome, report: true, failed: failed.sort(), skipped };
+}
+
+/** One entry of a job's `toJSON(needs)`. */
+export interface Need {
+	result: string;
+	outputs?: Readonly<Record<string, string>>;
+}
+
+/**
+ * `toJSON(needs)` as a job → result map. `target` is the job that calls omp-vitest.yml: a call has one result for the
+ * whole workflow, so it is replaced by that workflow's `check` and `windows` jobs, whose results are the call's
+ * outputs (the call's own result where an output is empty: a call that never started, or ended before its outputs).
+ */
+export function jobResults(needs: Readonly<Record<string, Need>>, target: string): Record<string, string> {
+	const jobs: Record<string, string> = {};
+	for (const [job, need] of Object.entries(needs)) {
+		if (job !== target) jobs[job] = need.result;
+		else for (const inner of ["check", "windows"]) jobs[inner] = need.outputs?.[inner] || need.result;
+	}
+	return jobs;
 }
 
 export interface ReportInput {

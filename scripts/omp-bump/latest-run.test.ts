@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Touchpoint } from "../omp-boundary/touchpoints";
-import { type JobSummary, planBump, renderReport, summarize, type VitestReport } from "./latest-run";
+import { type JobSummary, jobResults, planBump, renderReport, summarize, type VitestReport } from "./latest-run";
 
-const base = { latest: "18.23.0", fileTested: "18.22.0", pretendTested: "", onMain: true, branchExists: false };
+const base = {
+	latest: "18.23.0",
+	fileTested: "18.22.0",
+	pretendTested: "",
+	onMain: true,
+	runs: true,
+	branchExists: false,
+};
 
 describe("planBump", () => {
 	it("takes the bump path on main when npm's omp is newer, comparing numbers, not text", () => {
@@ -35,9 +42,42 @@ describe("planBump", () => {
 		});
 	});
 
+	it("plans no bump in a run that does not test main, however new npm's omp is", () => {
+		expect(planBump({ ...base, runs: false })).toMatchObject({ latest: "18.23.0", bump: false, fresh: false });
+	});
+
 	it("refuses a version it cannot order", () => {
 		expect(() => planBump({ ...base, latest: "" })).toThrow(/latest/);
 		expect(() => planBump({ ...base, pretendTested: "18.21" })).toThrow(/tested/);
+	});
+});
+
+describe("jobResults", () => {
+	const needs = {
+		plan: { result: "success", outputs: { latest: "18.23.0" } },
+		main: { result: "failure", outputs: { omp: "18.23.0", check: "success", windows: "failure" } },
+		strings: { result: "skipped", outputs: {} },
+	};
+
+	it("reads the vitest call as the two jobs it ran, so the report can tell which one failed", () => {
+		expect(jobResults(needs, "main")).toEqual({
+			plan: "success",
+			check: "success",
+			windows: "failure",
+			strings: "skipped",
+		});
+	});
+
+	it("gives both jobs the call's own result when the call reported none of theirs", () => {
+		expect(jobResults({ ...needs, main: { result: "failure", outputs: {} } }, "main")).toMatchObject({
+			check: "failure",
+			windows: "failure",
+		});
+		expect(jobResults({ plan: needs.plan, release: { result: "cancelled" } }, "release")).toEqual({
+			plan: "success",
+			check: "cancelled",
+			windows: "cancelled",
+		});
 	});
 });
 
