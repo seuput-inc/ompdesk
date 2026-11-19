@@ -159,12 +159,24 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	await expect(long).toHaveAttribute("title", new RegExp(LONG_BRANCH));
 	const cut = await long.locator(".truncate").evaluate(text => text.scrollWidth > text.clientWidth);
 	expect(cut).toBe(true);
-	// No branch shrinks to its mark alone: beside a family chip, in a 220 px sidebar and on a phone it keeps letters.
-	const widths = await list
-		.locator("[data-session-head] .truncate:visible")
-		.evaluateAll(texts => texts.map(text => text.getBoundingClientRect().width));
-	expect(widths.length).toBeGreaterThan(2);
-	for (const width of widths) expect(width).toBeGreaterThanOrEqual(16);
+	// No branch shrinks to its mark alone or reaches past its line (the line clips: a branch cut there loses its
+	// ellipsis, or all of it): beside a family chip, in a 220 px sidebar and on a phone it keeps letters in view.
+	const heads = await list.locator("[data-session-head]:visible").evaluateAll(nodes =>
+		nodes.map(node => {
+			const text = node.querySelector(".truncate")?.getBoundingClientRect();
+			const line = node.parentElement?.getBoundingClientRect();
+			return {
+				name: node.getAttribute("title") ?? "",
+				letters: text ? Math.min(text.right, line?.right ?? text.right) - text.left : 0,
+				past: text && line ? text.right - line.right : 0,
+			};
+		}),
+	);
+	expect(heads.length).toBeGreaterThan(2);
+	for (const head of heads) {
+		expect(head.letters, head.name).toBeGreaterThanOrEqual(16);
+		expect(head.past, head.name).toBeLessThanOrEqual(0.5);
+	}
 
 	// Every session row: two lines, the picture first, the ⋯ under the title's line, nothing past the row's edge.
 	const rows = list.locator(".omp-sidebar-session-row:visible");
