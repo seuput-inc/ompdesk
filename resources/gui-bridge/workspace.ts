@@ -9,8 +9,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "./health";
-import { normalizeWorkspaceDirectory } from "./omp/pi-coding-agent/session/session-workspace";
-import { resolveToCwd } from "./omp/pi-coding-agent/tools/path-utils";
 import type { BridgeMethods } from "./types";
 
 interface WorkspaceDirectory {
@@ -58,6 +56,7 @@ export const methods: BridgeMethods = {
 		"workspace.resolve_path": async (params, env) => {
 			const raw = requirePath(params);
 			if (/[\r\n\0]/.test(raw)) throw new Error("path must not contain line breaks or NUL");
+			const { resolveToCwd } = await import("./omp/pi-coding-agent/tools/path-utils");
 			return { path: resolveToCwd(raw, env.session().sessionManager.getCwd()) };
 		},
 	}),
@@ -67,6 +66,7 @@ export const methods: BridgeMethods = {
 			const session = env.session();
 			requireIdle(session, "add a directory");
 			const manager = session.sessionManager;
+			const { normalizeWorkspaceDirectory } = await import("./omp/pi-coding-agent/session/session-workspace");
 			const resolved = normalizeWorkspaceDirectory(requirePath(params), manager.getCwd());
 			await requireExistingDirectory(resolved);
 			const added = await manager.addWorkspaceDirectory(resolved);
@@ -79,6 +79,7 @@ export const methods: BridgeMethods = {
 			const session = env.session();
 			requireIdle(session, "remove a directory");
 			const manager = session.sessionManager;
+			const { normalizeWorkspaceDirectory } = await import("./omp/pi-coding-agent/session/session-workspace");
 			const resolved = normalizeWorkspaceDirectory(requirePath(params), manager.getCwd());
 			if (resolved === path.resolve(manager.getCwd())) {
 				throw new Error("Cannot remove the working directory; use /move to change it.");

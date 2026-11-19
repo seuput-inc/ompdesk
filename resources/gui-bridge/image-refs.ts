@@ -13,8 +13,8 @@
  * the blob and writes nothing while it is there. Nothing is changed in place: the replay snapshot's objects are
  * shared with every other reader.
  */
-import { type BlobStore, externalizeImageDataSync, isBlobRef } from "./omp/pi-coding-agent/session/blob-store";
-import { isExternalizableImagePosition } from "./omp/pi-coding-agent/session/session-persistence";
+import type { BlobStore, externalizeImageDataSync, isBlobRef } from "@oh-my-pi/pi-coding-agent/session/blob-store";
+import type { isExternalizableImagePosition } from "@oh-my-pi/pi-coding-agent/session/session-persistence";
 
 /** Stock's `BLOB_EXTERNALIZE_THRESHOLD` (session-persistence.ts): shorter base64 is never in the store. */
 const INLINE_BELOW = 1024;
@@ -22,34 +22,54 @@ const INLINE_BELOW = 1024;
 /** The reference minted for a picture's object: a page is read again at every version, the objects stay. */
 const minted = new WeakMap<object, string>();
 
-export function withImageRefs<T>(value: T, store: BlobStore, key?: string): T {
+/** The stock functions a walk uses. */
+interface ImageStock {
+	externalizeImageDataSync: typeof externalizeImageDataSync;
+	isBlobRef: typeof isBlobRef;
+	isExternalizableImagePosition: typeof isExternalizableImagePosition;
+}
+
+export async function withImageRefs<T>(value: T, store: BlobStore): Promise<T> {
+	// Loaded by the page that asks for references: a transcript read without them needs neither module.
+	const [blobs, persistence] = await Promise.all([
+		import("./omp/pi-coding-agent/session/blob-store"),
+		import("./omp/pi-coding-agent/session/session-persistence"),
+	]);
+	return replaced(value, store, {
+		externalizeImageDataSync: blobs.externalizeImageDataSync,
+		isBlobRef: blobs.isBlobRef,
+		isExternalizableImagePosition: persistence.isExternalizableImagePosition,
+	});
+}
+
+function replaced<T>(value: T, store: BlobStore, stock: ImageStock, key?: string): T {
 	if (Array.isArray(value)) {
 		let copy: unknown[] | null = null;
 		value.forEach((item, index) => {
-			const replaced = withImageRefs(item, store, key);
-			if (replaced === item) return;
+			const next = replaced(item, store, stock, key);
+			if (next === item) return;
 			copy ??= [...value];
-			copy[index] = replaced;
+			copy[index] = next;
 		});
 		return (copy ?? value) as T;
 	}
 	if (typeof value !== "object" || value === null) return value;
-	if (isExternalizableImagePosition(value, key)) {
+	if (stock.isExternalizableImagePosition(value, key)) {
 		const { data } = value;
-		if (isBlobRef(data) || data.length < INLINE_BELOW) return value;
+		if (stock.isBlobRef(data) || data.length < INLINE_BELOW) return value;
 		let ref = minted.get(value);
 		if (ref === undefined) {
-			ref = externalizeImageDataSync(store, data, value.mimeType);
+			ref = stock.externalizeImageDataSync(store, data, value.mimeType);
 			minted.set(value, ref);
 		}
 		return { ...value, data: ref };
 	}
 	let copy: Record<string, unknown> | null = null;
 	for (const [childKey, child] of Object.entries(value)) {
-		const replaced = withImageRefs(child, store, childKey);
-		if (replaced === child) continue;
+		const next = replaced(child, store, stock, childKey);
+		if (next === child) continue;
 		copy ??= { ...(value as Record<string, unknown>) };
-		copy[childKey] = replaced;
+		copy[childKey] = next;
 	}
 	return (copy ?? value) as T;
 }

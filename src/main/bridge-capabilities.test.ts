@@ -104,6 +104,119 @@ function adapterSpecifiers(): string[] {
 		.map(entry => `@oh-my-pi/${entry.split(path.sep).join("/").slice(0, -".ts".length)}`);
 }
 
+/** The bridge file a relative specifier of `from` names (`./x` → `x.ts`, a folder → its `index.ts`), if it is one. */
+function bridgeModule(from: string, specifier: string): string | undefined {
+	const base = path.posix.join(path.posix.dirname(from), specifier);
+	if (base.startsWith("..")) return undefined;
+	return [base, `${base}.ts`, `${base}/index.ts`].find(
+		candidate => candidate.endsWith(".ts") && fs.existsSync(path.join(BRIDGE_DIR, candidate)),
+	);
+}
+
+/** Each `AREAS` entry of index.ts: how many capabilities it serves and the module its `load` imports. */
+function bridgeAreas(): { name: string; features: number; module: string }[] {
+	const areas: { name: string; features: number; module: string }[] = [];
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === "AREAS" &&
+			node.initializer &&
+			ts.isArrayLiteralExpression(node.initializer)
+		) {
+			for (const element of node.initializer.elements) {
+				const value = (key: string): ts.Expression | undefined =>
+					ts.isObjectLiteralExpression(element)
+						? element.properties.find(
+								(property): property is ts.PropertyAssignment =>
+									ts.isPropertyAssignment(property) && propertyName(property) === key,
+							)?.initializer
+						: undefined;
+				const name = value("name");
+				const features = value("features");
+				const load = value("load");
+				const imported =
+					load &&
+					ts.isArrowFunction(load) &&
+					ts.isCallExpression(load.body) &&
+					load.body.expression.kind === ts.SyntaxKind.ImportKeyword
+						? load.body.arguments[0]
+						: undefined;
+				const module =
+					imported && ts.isStringLiteral(imported) ? bridgeModule("index.ts", imported.text) : undefined;
+				if (!name || !ts.isStringLiteral(name) || !features || !ts.isArrayLiteralExpression(features) || !module) {
+					throw new Error(`index.ts: AREAS entry the audit cannot read: ${element.getText().slice(0, 80)}`);
+				}
+				areas.push({ name: name.text, features: features.elements.length, module });
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(parseBridgeFile("index.ts"));
+	return areas;
+}
+
+const linkedSpecifiers = new Map<string, string[]>();
+
+/**
+ * The specifiers a bridge file loads at link time: its static imports and re-exports, less `import type` and named
+ * imports that are all `type` (both are erased).
+ */
+function linkTimeSpecifiers(file: string): string[] {
+	const known = linkedSpecifiers.get(file);
+	if (known) return known;
+	const specifiers: string[] = [];
+	for (const statement of parseBridgeFile(file).statements) {
+		if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+			const clause = statement.importClause;
+			const named = clause?.namedBindings;
+			const erased =
+				clause !== undefined &&
+				(clause.isTypeOnly ||
+					(!clause.name &&
+						named !== undefined &&
+						ts.isNamedImports(named) &&
+						named.elements.length > 0 &&
+						named.elements.every(element => element.isTypeOnly)));
+			if (!erased) specifiers.push(statement.moduleSpecifier.text);
+		} else if (
+			ts.isExportDeclaration(statement) &&
+			statement.moduleSpecifier &&
+			ts.isStringLiteral(statement.moduleSpecifier) &&
+			!statement.isTypeOnly
+		) {
+			specifiers.push(statement.moduleSpecifier.text);
+		}
+	}
+	linkedSpecifiers.set(file, specifiers);
+	return specifiers;
+}
+
+/**
+ * The stock modules `entry` links at load, itself or through the bridge files it statically imports, as
+ * `<file>: <specifier>` (an adapter under omp/, or stock's own package name).
+ */
+function linkTimeStock(entry: string): string[] {
+	const seen = new Set<string>();
+	const found: string[] = [];
+	const queue = [entry];
+	for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
+		if (seen.has(file)) continue;
+		seen.add(file);
+		for (const specifier of linkTimeSpecifiers(file)) {
+			if (specifier.startsWith("@oh-my-pi/")) found.push(`${file}: ${specifier}`);
+			if (!specifier.startsWith(".")) continue;
+			const target = path.posix.join(path.posix.dirname(file), specifier);
+			if (target.startsWith("omp/")) found.push(`${file}: ${target}`);
+			else {
+				const local = bridgeModule(file, specifier);
+				if (local) queue.push(local);
+			}
+		}
+	}
+	return found;
+}
+
 class FakeStore {
 	static open() {}
 	upsert() {}
@@ -333,6 +446,24 @@ describe("one capability per action", () => {
 	it("guards only with capabilities the table knows", () => {
 		const unknown = guardCalls().flatMap(call => call.ids.filter(id => !Object.hasOwn(FEATURES, id)));
 		expect(unknown).toEqual([]);
+	});
+
+	/**
+	 * Stock modules a module serving several capabilities may still link at load, as `<file>: <specifier>`, each with
+	 * the reason: only one EVERY capability of that module needs. A stock export that vanished fails a static import at
+	 * link time, and index.ts then marks all the module's capabilities unavailable, whatever each guard would say.
+	 */
+	const LINKED_STOCK: Readonly<Record<string, string>> = {};
+
+	it("links no stock module into a module that serves several capabilities", () => {
+		// Stock loads where an action uses it (`await import("./omp/…")`), in the module and in every bridge file it
+		// statically imports; type-only imports are erased and stay.
+		const areas = bridgeAreas().filter(area => area.features > 1);
+		expect(areas.length).toBeGreaterThan(0);
+		const linked = [...new Set(areas.flatMap(area => linkTimeStock(area.module)))];
+		expect(linked.filter(line => !Object.hasOwn(LINKED_STOCK, line))).toEqual([]);
+		// An entry whose import is gone is removed with it.
+		expect(Object.keys(LINKED_STOCK).filter(line => !linked.includes(line))).toEqual([]);
 	});
 });
 

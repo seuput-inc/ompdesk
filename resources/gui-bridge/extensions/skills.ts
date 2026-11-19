@@ -3,16 +3,11 @@
  * pages. Ported from the omp-gui fork's rpc-domains / rpc-skills / rpc-actions.
  */
 
+import type { ContextFile } from "@oh-my-pi/pi-coding-agent/capability/context-file";
+import type { Hook } from "@oh-my-pi/pi-coding-agent/capability/hook";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "../health";
-import { MANAGED_SKILLS_PROVIDER_ID, sanitizeSkillName } from "../omp/pi-coding-agent/autolearn/managed-skills";
-import { loadCapability, reset as resetCapabilities } from "../omp/pi-coding-agent/capability";
-import { type ContextFile, contextFileCapability } from "../omp/pi-coding-agent/capability/context-file";
-import { type Hook, hookCapability } from "../omp/pi-coding-agent/capability/hook";
-import { templateUsesInlineArgPlaceholders } from "../omp/pi-coding-agent/config/prompt-templates";
-import { ManageSkillTool } from "../omp/pi-coding-agent/tools/manage-skill";
-import { parseFrontmatter } from "../omp/pi-utils";
 import type { BridgeMethods } from "../types";
 import { optString, paramsOf, readSetting, requireString, setExtensionDisabled } from "./shared";
 
@@ -37,13 +32,18 @@ interface SkillInfo {
  * inventory keeps disabled skills visible without changing provider policy.
  */
 async function listSkills(session: AgentSession): Promise<SkillInfo[]> {
+	const [{ loadCapability }, { MANAGED_SKILLS_PROVIDER_ID }] = await Promise.all([
+		import("../omp/pi-coding-agent/capability"),
+		import("../omp/pi-coding-agent/autolearn/managed-skills"),
+	]);
 	const enabledNames = new Set(session.skills.map(skill => skill.name));
+	const disabledExtensions = (await readSetting<string[]>(session, "disabledExtensions")) ?? [];
 	const discovered = await loadCapability<Skill>("skills", {
 		cwd: session.sessionManager.getCwd(),
 		agentDir: session.settings.getAgentDir(),
 		extensionRoots: session.effectiveExtensionRoots,
 		includeDisabled: true,
-		disabledExtensions: readSetting<string[]>(session, "disabledExtensions") ?? [],
+		disabledExtensions,
 	});
 	return discovered.items.map(skill => {
 		return {
@@ -84,6 +84,7 @@ export const methods: BridgeMethods = {
 			if (file.size > MAX_SKILL_DETAIL_BYTES) {
 				throw new Error(`Skill "${skill.name}" is too large to preview (${file.size} bytes).`);
 			}
+			const { parseFrontmatter } = await import("../omp/pi-utils");
 			const { body } = parseFrontmatter(await file.text(), { source: skill.location });
 			return { ...skill, body: body.trim() };
 		},
@@ -111,6 +112,7 @@ export const methods: BridgeMethods = {
 				throw new Error(`Unknown manage_skill action: ${String(action)}`);
 			}
 			const session = env.session();
+			const { sanitizeSkillName } = await import("../omp/pi-coding-agent/autolearn/managed-skills");
 			const name = sanitizeSkillName(requireString(p, "name"));
 			const description = optString(p, "description") ?? "";
 			const body = optString(p, "body") ?? "";
@@ -126,6 +128,7 @@ export const methods: BridgeMethods = {
 			}
 			// Stock's own tool, so the write joins the session's per-skill mutation chain (`autolearn/managed-skills`
 			// is not in omp's bundle: a direct import is a copy with a chain of its own, racing the agent's writes).
+			const { ManageSkillTool } = await import("../omp/pi-coding-agent/tools/manage-skill");
 			const result = await new ManageSkillTool().execute("ompdesk-skills", { action, name, description, body });
 			if (result.isError) {
 				throw new Error(result.content.map(part => (part.type === "text" ? part.text : "")).join(" "));
@@ -139,7 +142,11 @@ export const methods: BridgeMethods = {
 		get_hooks: async (_params, env) => {
 			const session = env.session();
 			const cwd = session.sessionManager.getCwd();
-			const disabledExtensions = readSetting<string[]>(session, "disabledExtensions") ?? [];
+			const [{ loadCapability }, { hookCapability }] = await Promise.all([
+				import("../omp/pi-coding-agent/capability"),
+				import("../omp/pi-coding-agent/capability/hook"),
+			]);
+			const disabledExtensions = (await readSetting<string[]>(session, "disabledExtensions")) ?? [];
 			const [enabledResult, allResult] = await Promise.all([
 				loadCapability<Hook>(hookCapability.id, { cwd, disabledExtensions: [...disabledExtensions] }),
 				loadCapability<Hook>(hookCapability.id, { cwd, includeDisabled: true }),
@@ -181,7 +188,11 @@ export const methods: BridgeMethods = {
 		 */
 		get_context_files: async (_params, env) => {
 			const session = env.session();
-			const disabled = new Set(readSetting<string[]>(session, "disabledExtensions") ?? []);
+			const [{ loadCapability }, { contextFileCapability }] = await Promise.all([
+				import("../omp/pi-coding-agent/capability"),
+				import("../omp/pi-coding-agent/capability/context-file"),
+			]);
+			const disabled = new Set((await readSetting<string[]>(session, "disabledExtensions")) ?? []);
 			const result = await loadCapability<ContextFile>(contextFileCapability.id, {
 				cwd: session.sessionManager.getCwd(),
 				agentDir: session.settings.getAgentDir(),
@@ -230,19 +241,23 @@ export const methods: BridgeMethods = {
 			if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
 			const session = env.session();
 			const state = await setExtensionDisabled(session, id, p.enabled);
+			const { reset: resetCapabilities } = await import("../omp/pi-coding-agent/capability");
 			resetCapabilities();
 			await session.refreshBaseSystemPrompt();
 			return { id, ...state };
 		},
 	}),
 	...guard("promptTemplates", {
-		get_prompt_templates: async (_params, env) => ({
-			templates: env.session().promptTemplates.map(template => ({
-				name: template.name,
-				description: template.description,
-				source: template.source,
-				argumentHint: templateUsesInlineArgPlaceholders(template.content) ? "[arguments]" : undefined,
-			})),
-		}),
+		get_prompt_templates: async (_params, env) => {
+			const { templateUsesInlineArgPlaceholders } = await import("../omp/pi-coding-agent/config/prompt-templates");
+			return {
+				templates: env.session().promptTemplates.map(template => ({
+					name: template.name,
+					description: template.description,
+					source: template.source,
+					argumentHint: templateUsesInlineArgPlaceholders(template.content) ? "[arguments]" : undefined,
+				})),
+			};
+		},
 	}),
 };

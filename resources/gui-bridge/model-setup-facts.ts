@@ -6,8 +6,13 @@
  *
  * Read-only and offline: no model request, no OAuth refresh, no discovery. Billing fails closed per provider: any
  * error reading stock's data leaves that provider `metered` with basis `unknown`.
+ *
+ * Stock modules load where a read uses them: the two actions here need different ones, and a vanished stock export
+ * must cost only the action that calls it.
  */
 import * as path from "node:path";
+import type { getEnvApiKey, getProviderDefinition } from "@oh-my-pi/pi-ai";
+import type { Model } from "@oh-my-pi/pi-catalog/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "./health";
 import {
@@ -20,18 +25,16 @@ import {
 	UNKNOWN_BILLING,
 } from "./model-setup-billing-core";
 import type { ModelSetupFacts, ProviderBilling, SessionSpend, SetupModelFacts } from "./model-setup-contracts";
-import { getEnvApiKey, getProviderDefinition } from "./omp/pi-ai";
-import { type Model, modelKind } from "./omp/pi-catalog/types";
-import { resolveModelOverride, rolePriorityDefaults } from "./omp/pi-coding-agent/config/model-resolver";
-import { roleCandidatePool } from "./omp/pi-coding-agent/config/model-roles";
-import { ModelsConfigFile } from "./omp/pi-coding-agent/config/models-config";
-import { getAgentDir } from "./omp/pi-utils";
 import { dayStart, spendByProvider } from "./session-spend-core";
 import { roleMetadata } from "./settings";
 import type { BridgeMethods } from "./types";
 
 /** `models.yml` providers: name → whether the entry sets a `baseUrl`; undefined when the file cannot be read. */
-function modelsYmlProviders(): Map<string, boolean> | undefined {
+async function modelsYmlProviders(): Promise<Map<string, boolean> | undefined> {
+	const [{ ModelsConfigFile }, { getAgentDir }] = await Promise.all([
+		import("./omp/pi-coding-agent/config/models-config"),
+		import("./omp/pi-utils"),
+	]);
 	const { value, status } = ModelsConfigFile.relocate(path.join(getAgentDir(), "models.yml")).tryLoad();
 	if (status === "error") return undefined;
 	const providers = new Map<string, boolean>();
@@ -39,8 +42,15 @@ function modelsYmlProviders(): Map<string, boolean> | undefined {
 	return providers;
 }
 
+/** The stock functions billing reads (pi-ai), handed in by the read that loaded them. */
+interface AuthStock {
+	getEnvApiKey: typeof getEnvApiKey;
+	getProviderDefinition: typeof getProviderDefinition;
+}
+
 /** Stock's view of one provider's auth, for {@link classifyProvider}. */
 function stockFacts(
+	stock: AuthStock,
 	session: AgentSession,
 	provider: string,
 	yml: Map<string, boolean>,
@@ -53,10 +63,10 @@ function stockFacts(
 		source: authStorage.keys.source(provider, { env: "aliases" })?.kind as AuthSourceKind | undefined,
 		storedOAuth: stored.some(row => row.credential.type === "oauth"),
 		storedKey: !keyless && stored.some(row => row.credential.type === "api_key"),
-		envKey: Boolean(getEnvApiKey(provider)),
+		envKey: Boolean(stock.getEnvApiKey(provider)),
 		modelsYml: yml.has(provider),
 		modelsYmlBaseUrl: yml.get(provider) === true,
-		catalog: getProviderDefinition(provider) !== undefined,
+		catalog: stock.getProviderDefinition(provider) !== undefined,
 		keylessRuntime:
 			(Object.hasOwn(KEYLESS_RUNTIME_ENDPOINT_ENV, provider) && discoverable.has(provider)) ||
 			IN_PROCESS_LOCAL[provider] === true,
@@ -65,14 +75,17 @@ function stockFacts(
 }
 
 /** Billing of each of `providers`, decided from stock's auth data; a provider stock's data cannot be read for is metered. */
-export function providerBillings(session: AgentSession, providers: Iterable<string>): Record<string, ProviderBilling> {
-	const yml = modelsYmlProviders();
+export async function providerBillings(
+	session: AgentSession,
+	providers: Iterable<string>,
+): Promise<Record<string, ProviderBilling>> {
+	const [stock, yml] = await Promise.all([import("./omp/pi-ai"), modelsYmlProviders()]);
 	const discoverable = new Set(session.modelRegistry.getDiscoverableProviders());
 	const billings: Record<string, ProviderBilling> = {};
 	for (const provider of providers) {
 		try {
 			billings[provider] = yml
-				? classifyProvider(stockFacts(session, provider, yml, discoverable))
+				? classifyProvider(stockFacts(stock, session, provider, yml, discoverable))
 				: UNKNOWN_BILLING;
 		} catch {
 			billings[provider] = UNKNOWN_BILLING;
@@ -97,7 +110,11 @@ function measuredTps(perf: ReadonlyMap<string, { tps: number }>, selector: strin
 	return fastest;
 }
 
-function modelFacts(model: Model, perf: ReadonlyMap<string, { tps: number }>): SetupModelFacts {
+function modelFacts(
+	model: Model,
+	kind: SetupModelFacts["kind"],
+	perf: ReadonlyMap<string, { tps: number }>,
+): SetupModelFacts {
 	const selector = `${model.provider}/${model.id}`;
 	const family = model.identity?.class;
 	const int = finite(model.int);
@@ -109,7 +126,7 @@ function modelFacts(model: Model, perf: ReadonlyMap<string, { tps: number }>): S
 		provider: model.provider,
 		id: model.id,
 		name: model.name,
-		kind: modelKind(model),
+		kind,
 		...(family ? { family } : {}),
 		...(int !== undefined ? { int } : {}),
 		...(tps !== undefined ? { tps } : {}),
@@ -124,7 +141,11 @@ function modelFacts(model: Model, perf: ReadonlyMap<string, { tps: number }>): S
  * The judge models stock's own judge defaults name, each entry resolved alone over the judge pool (aliases such as
  * `@tiny` stand for other roles' chains and are skipped): the pinned versions only, in stock's order.
  */
-function judgePins(session: AgentSession, pool: Pool): string[] {
+async function judgePins(session: AgentSession, pool: Pool): Promise<string[]> {
+	const [{ resolveModelOverride, rolePriorityDefaults }, { modelKind }] = await Promise.all([
+		import("./omp/pi-coding-agent/config/model-resolver"),
+		import("./omp/pi-catalog/types"),
+	]);
 	const pins = new Set<string>();
 	for (const entry of rolePriorityDefaults("judge")) {
 		if (entry.startsWith("@")) continue;
@@ -134,24 +155,32 @@ function judgePins(session: AgentSession, pool: Pool): string[] {
 	return [...pins];
 }
 
-export function modelSetupFacts(session: AgentSession): ModelSetupFacts {
+export async function modelSetupFacts(session: AgentSession): Promise<ModelSetupFacts> {
+	const [{ roleCandidatePool }, { modelKind }, listed] = await Promise.all([
+		import("./omp/pi-coding-agent/config/model-roles"),
+		import("./omp/pi-catalog/types"),
+		roleMetadata(session),
+	]);
 	const { settings, modelRegistry } = session;
 	const perf = settings.getStorage?.()?.getModelPerf() ?? new Map<string, { tps: number }>();
 	const models: Record<string, SetupModelFacts> = {};
 	const roles: ModelSetupFacts["roles"] = {};
 	let judgePool: Pool = [];
-	for (const { id } of roleMetadata(session)) {
+	for (const { id } of listed) {
 		const pool = roleCandidatePool(id, settings, modelRegistry);
 		if (id === "judge") judgePool = pool;
 		for (const model of pool) {
 			const selector = `${model.provider}/${model.id}`;
-			models[selector] ??= modelFacts(model, perf);
+			models[selector] ??= modelFacts(model, modelKind(model), perf);
 		}
 		const persisted = settings.getGlobalModelRole(id) ?? settings.getProjectModelRole?.(id);
 		roles[id] = persisted ? { persisted } : {};
 	}
-	const providers = providerBillings(session, new Set(Object.values(models).map(model => model.provider)));
-	return { providers, models, roles, judgePins: judgePins(session, judgePool) };
+	const [providers, pins] = await Promise.all([
+		providerBillings(session, new Set(Object.values(models).map(model => model.provider))),
+		judgePins(session, judgePool),
+	]);
+	return { providers, models, roles, judgePins: pins };
 }
 
 /**
@@ -161,10 +190,11 @@ export function modelSetupFacts(session: AgentSession): ModelSetupFacts {
  * (the stats server's standalone judge has no session ledger, so its calls are not). Each provider carries stock's
  * display name (`getProviderDefinition`, the registry Settings' provider rows read through `getOAuthProviders`).
  */
-export function sessionSpend(session: AgentSession, now: number): SessionSpend {
+export async function sessionSpend(session: AgentSession, now: number): Promise<SessionSpend> {
+	const { getProviderDefinition } = await import("./omp/pi-ai");
 	const spend = spendByProvider(session.sessionManager.getEntries(), dayStart(now));
 	const known = new Set([...Object.keys(spend), ...session.modelRegistry.getAll().map(model => model.provider)]);
-	const billings = providerBillings(session, known);
+	const billings = await providerBillings(session, known);
 	const providers: SessionSpend["providers"] = {};
 	for (const [provider, row] of Object.entries(spend))
 		providers[provider] = {

@@ -11,39 +11,12 @@
  */
 import * as path from "node:path";
 import type { MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
+import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPServerConfig, MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { guard } from "../health";
-import {
-	isForeignUserProvider,
-	isProviderEnabled,
-	isUserSourceEnabled,
-	loadCapability,
-} from "../omp/pi-coding-agent/capability";
-import { clearCache as clearFsCache } from "../omp/pi-coding-agent/capability/fs";
-import { connectToServer, disconnectServer, listTools } from "../omp/pi-coding-agent/mcp/client";
-import { loadAllMCPConfigs, validateServerConfig } from "../omp/pi-coding-agent/mcp/config";
-import {
-	addMCPServer,
-	readMCPConfigFile,
-	removeMCPServer,
-	setMcpServerEnabled,
-} from "../omp/pi-coding-agent/mcp/config-writer";
-import { MCPManager } from "../omp/pi-coding-agent/mcp/manager";
-import { hasMcpAuthorizationHeader, lookupMcpOAuthCredential } from "../omp/pi-coding-agent/mcp/oauth-credentials";
-import { analyzeAuthError } from "../omp/pi-coding-agent/mcp/oauth-discovery";
-import {
-	findMcpServerForAuth,
-	MCPOAuthCancelledError,
-	reauthorizeMcpServer,
-} from "../omp/pi-coding-agent/mcp/oauth-reauth";
-import { cfgMcpEnableProjectConfig } from "../omp/pi-coding-agent/mcp/settings";
-import { applyMcpToggleRuntime } from "../omp/pi-coding-agent/modes/components/extensions/mcp-runtime";
-import { MCPCommandController } from "../omp/pi-coding-agent/modes/controllers/mcp-command-controller";
-import { inferMcpTransport } from "../omp/pi-tui/overlays/extensions/mcp-runtime";
-import { getMCPConfigPath, Snowflake } from "../omp/pi-utils";
 import type { BridgeEnv, BridgeMethod, BridgeMethods } from "../types";
 import { installMcpConfigRenameRetry } from "./mcp-config-rename";
 import type { McpSyncResult } from "./mcp-contracts";
@@ -55,6 +28,12 @@ import { errorMessage, optScope, optString, paramsOf, requireString } from "./sh
 installMcpConfigRenameRetry();
 
 const MCP_TEST_TIMEOUT_MS = 30_000;
+
+/** Stock's process-global manager (its `instance()`), loaded where an action needs it. */
+async function mcpManager() {
+	const stock = await import("../omp/pi-coding-agent/mcp/manager");
+	return stock.MCPManager.instance();
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string, onTimeout?: () => void): Promise<T> {
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<T>();
@@ -130,7 +109,10 @@ export function serializeMcpReload<T>(reload: () => Promise<T>): Promise<T> {
  */
 function reloadMcpServers(session: AgentSession): Promise<string | undefined> {
 	return serializeMcpReload(async () => {
-		const manager = MCPManager.instance();
+		const [manager, { MCPCommandController }] = await Promise.all([
+			mcpManager(),
+			import("../omp/pi-coding-agent/modes/controllers/mcp-command-controller"),
+		]);
 		if (!manager) throw new Error("MCP manager not available.");
 		let warning: string | undefined;
 		// reloadServers reads only these context members; its only output is the connection-error warning.
@@ -158,16 +140,34 @@ async function connectFailures(manager: MCPManager | undefined): Promise<Map<str
 	return new Map(status.failed.map(failure => [failure.name, failure.error]));
 }
 
-/** Stock's own reading of an auth failure (`/mcp add` and the TUI reconnect start OAuth on it). */
-function challenged(failure: string | undefined, url: string | undefined): boolean {
-	return failure !== undefined && analyzeAuthError(new Error(failure), url).requiresAuth;
-}
-
 /** Union of user config, project config, disabled markers and runtime-discovered servers (`/mcp list`). */
 async function listMcpServers(session: AgentSession) {
-	const failures = await connectFailures(MCPManager.instance());
+	const [
+		{ isForeignUserProvider, isProviderEnabled, isUserSourceEnabled, loadCapability },
+		{ loadAllMCPConfigs },
+		{ readMCPConfigFile },
+		{ hasMcpAuthorizationHeader, lookupMcpOAuthCredential },
+		{ analyzeAuthError },
+		{ cfgMcpEnableProjectConfig },
+		{ inferMcpTransport },
+		{ getMCPConfigPath },
+		manager,
+	] = await Promise.all([
+		import("../omp/pi-coding-agent/capability"),
+		import("../omp/pi-coding-agent/mcp/config"),
+		import("../omp/pi-coding-agent/mcp/config-writer"),
+		import("../omp/pi-coding-agent/mcp/oauth-credentials"),
+		import("../omp/pi-coding-agent/mcp/oauth-discovery"),
+		import("../omp/pi-coding-agent/mcp/settings"),
+		import("../omp/pi-tui/overlays/extensions/mcp-runtime"),
+		import("../omp/pi-utils"),
+		mcpManager(),
+	]);
+	/** Stock's own reading of an auth failure (`/mcp add` and the TUI reconnect start OAuth on it). */
+	const challenged = (failure: string | undefined, url: string | undefined): boolean =>
+		failure !== undefined && analyzeAuthError(new Error(failure), url).requiresAuth;
+	const failures = await connectFailures(manager);
 	const cwd = session.sessionManager.getCwd();
-	const manager = MCPManager.instance();
 	const enableProjectConfig = cfgMcpEnableProjectConfig.get(session.settings);
 	const [userConfig, projectConfig, inventory, active] = await Promise.all([
 		readMCPConfigFile(getMCPConfigPath("user", cwd)),
@@ -266,13 +266,25 @@ async function listMcpServers(session: AgentSession) {
 async function mcpAction(session: AgentSession, name: string, action: unknown, scope: "user" | "project" | undefined) {
 	if (!name.trim()) throw new Error("Server name cannot be empty");
 	const cwd = session.sessionManager.getCwd();
-	const manager = MCPManager.instance();
 	switch (action) {
 		case "adopt":
 			return await adoptServer(session, name);
 		case "enable":
 		case "disable": {
 			const enabled = action === "enable";
+			const [
+				{ readMCPConfigFile, setMcpServerEnabled },
+				{ cfgMcpEnableProjectConfig },
+				{ applyMcpToggleRuntime },
+				{ getMCPConfigPath },
+				manager,
+			] = await Promise.all([
+				import("../omp/pi-coding-agent/mcp/config-writer"),
+				import("../omp/pi-coding-agent/mcp/settings"),
+				import("../omp/pi-coding-agent/modes/components/extensions/mcp-runtime"),
+				import("../omp/pi-utils"),
+				mcpManager(),
+			]);
 			const userPath = getMCPConfigPath("user", cwd);
 			const projectPath = getMCPConfigPath("project", cwd);
 			const [userConfig, projectConfig] = await Promise.all([
@@ -307,6 +319,7 @@ async function mcpAction(session: AgentSession, name: string, action: unknown, s
 			return { name, action, status: manager?.getConnectionStatus(name) ?? "disconnected" };
 		}
 		case "reconnect": {
+			const manager = await mcpManager();
 			if (!manager) throw new Error("MCP manager not available.");
 			const connection = await serializeMcpReload(async () => {
 				const reconnected = await manager.reconnectServer(name, { manual: true });
@@ -318,6 +331,10 @@ async function mcpAction(session: AgentSession, name: string, action: unknown, s
 		}
 		case "remove": {
 			const target = scope ?? "project";
+			const [{ readMCPConfigFile, removeMCPServer }, { getMCPConfigPath }] = await Promise.all([
+				import("../omp/pi-coding-agent/mcp/config-writer"),
+				import("../omp/pi-utils"),
+			]);
 			const filePath = getMCPConfigPath(target, cwd);
 			if (!(await readMCPConfigFile(filePath)).mcpServers?.[name]) {
 				throw new Error(`Server "${name}" not found in ${target} config.`);
@@ -332,7 +349,8 @@ async function mcpAction(session: AgentSession, name: string, action: unknown, s
 }
 
 /** Startup's discovery filters (sdk.ts, `/mcp reload`, `/mcp enable`). */
-function startupDiscovery(session: AgentSession) {
+async function startupDiscovery(session: AgentSession) {
+	const { cfgMcpEnableProjectConfig } = await import("../omp/pi-coding-agent/mcp/settings");
 	return {
 		enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
 		filterExa: true,
@@ -349,6 +367,17 @@ function startupDiscovery(session: AgentSession) {
  * definition, as stock discovered it, is written into omp's own user mcp.json with stock's writer, and connected.
  */
 async function adoptServer(session: AgentSession, name: string) {
+	const [
+		{ isForeignUserProvider, isUserSourceEnabled, loadCapability },
+		{ addMCPServer },
+		{ inferMcpTransport },
+		{ getMCPConfigPath },
+	] = await Promise.all([
+		import("../omp/pi-coding-agent/capability"),
+		import("../omp/pi-coding-agent/mcp/config-writer"),
+		import("../omp/pi-tui/overlays/extensions/mcp-runtime"),
+		import("../omp/pi-utils"),
+	]);
 	const cwd = session.sessionManager.getCwd();
 	const inventory = await loadCapability<MCPServer>("mcps", {
 		cwd,
@@ -368,7 +397,7 @@ async function adoptServer(session: AgentSession, name: string) {
 	const entry = adoptedEntry(foreign as unknown as Record<string, unknown>, inferMcpTransport(foreign), process.env);
 	await addMCPServer(userPath, name, entry as unknown as MCPServerConfig);
 	const result = await syncMcpServers(session, [name]);
-	const manager = MCPManager.instance();
+	const manager = await mcpManager();
 	return {
 		name,
 		action: "adopt" as const,
@@ -390,14 +419,21 @@ async function adoptServer(session: AgentSession, name: string) {
  * reconnect every server of the session; this touches only what moved.
  */
 async function syncMcpServers(session: AgentSession, names?: readonly string[]): Promise<McpSyncResult> {
-	const manager = MCPManager.instance();
+	const manager = await mcpManager();
 	const result: McpSyncResult = { connected: [], disconnected: [], unchanged: [], failed: [] };
 	if (!manager) return result;
 	// Another process wrote the files and the credential row: stock caches both per process.
+	const [{ clearCache: clearFsCache }, { loadAllMCPConfigs }] = await Promise.all([
+		import("../omp/pi-coding-agent/capability/fs"),
+		import("../omp/pi-coding-agent/mcp/config"),
+	]);
 	clearFsCache();
 	await session.modelRegistry.authStorage.credentials.reload();
 	return serializeMcpReload(async () => {
-		const { configs, sources } = await loadAllMCPConfigs(session.sessionManager.getCwd(), startupDiscovery(session));
+		const { configs, sources } = await loadAllMCPConfigs(
+			session.sessionManager.getCwd(),
+			await startupDiscovery(session),
+		);
 		const known = new Set(manager.getAllServerNames());
 		const targets = names ?? [...new Set([...known, ...Object.keys(configs)])];
 		const connect: Record<string, MCPServerConfig> = {};
@@ -441,6 +477,10 @@ async function syncMcpServers(session: AgentSession, names?: readonly string[]):
 
 /** `/mcp test` lookup: project shadows user, disabled servers are invisible. */
 async function findTestTarget(cwd: string, name: string): Promise<MCPServerConfig | undefined> {
+	const [{ readMCPConfigFile }, { getMCPConfigPath }] = await Promise.all([
+		import("../omp/pi-coding-agent/mcp/config-writer"),
+		import("../omp/pi-utils"),
+	]);
 	const [userConfig, projectConfig] = await Promise.all([
 		readMCPConfigFile(getMCPConfigPath("user", cwd)),
 		readMCPConfigFile(getMCPConfigPath("project", cwd)),
@@ -454,6 +494,10 @@ async function findTestTarget(cwd: string, name: string): Promise<MCPServerConfi
 
 /** Probe with a THROWAWAY manager so the shared connection pool is never touched. */
 async function probeServer(session: AgentSession, probeName: string, config: MCPServerConfig, signal: AbortSignal) {
+	const [{ connectToServer, disconnectServer, listTools }, { MCPManager }] = await Promise.all([
+		import("../omp/pi-coding-agent/mcp/client"),
+		import("../omp/pi-coding-agent/mcp/manager"),
+	]);
 	let connection: MCPServerConnection | undefined;
 	try {
 		const manager = new MCPManager(session.sessionManager.getCwd());
@@ -482,7 +526,18 @@ let activeReauth: { name: string; abort: AbortController } | undefined;
 
 async function runReauth(session: AgentSession, env: BridgeEnv, name: string, signal: AbortSignal): Promise<void> {
 	const cwd = session.sessionManager.getCwd();
-	const found = await findMcpServerForAuth(name, cwd, MCPManager.instance() ?? undefined, {
+	const [
+		{ findMcpServerForAuth, MCPOAuthCancelledError, reauthorizeMcpServer },
+		{ cfgMcpEnableProjectConfig },
+		{ Snowflake },
+		manager,
+	] = await Promise.all([
+		import("../omp/pi-coding-agent/mcp/oauth-reauth"),
+		import("../omp/pi-coding-agent/mcp/settings"),
+		import("../omp/pi-utils"),
+		mcpManager(),
+	]);
+	const found = await findMcpServerForAuth(name, cwd, manager, {
 		preferManager: true,
 		enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
 	});
@@ -494,7 +549,7 @@ async function runReauth(session: AgentSession, env: BridgeEnv, name: string, si
 	try {
 		await reauthorizeMcpServer(name, found, {
 			authStorage: session.modelRegistry.authStorage,
-			mcpManager: MCPManager.instance() ?? undefined,
+			mcpManager: manager,
 			cwd,
 			signal,
 			silent: true,
@@ -567,6 +622,10 @@ export const methods: BridgeMethods = {
 			const name = requireString(p, "name");
 			if (!name.trim()) throw new Error("Server name cannot be empty");
 			const session = env.session();
+			const [{ addMCPServer }, { getMCPConfigPath }] = await Promise.all([
+				import("../omp/pi-coding-agent/mcp/config-writer"),
+				import("../omp/pi-utils"),
+			]);
 			const filePath = getMCPConfigPath(optScope(p) ?? "project", session.sessionManager.getCwd());
 			await addMCPServer(filePath, name, inputToServerConfig(p.config));
 			// A server that does not connect (needs a sign-in, offline) was still added: its row says why.
@@ -598,6 +657,7 @@ export const methods: BridgeMethods = {
 					probeName = name;
 				} else {
 					config = inputToServerConfig(p.config);
+					const { validateServerConfig } = await import("../omp/pi-coding-agent/mcp/config");
 					const errors = validateServerConfig("test", config);
 					if (errors.length > 0) return { ok: false, error: `Invalid server config: ${errors.join("; ")}` };
 					probeName = `mcp_test_${Date.now()}`;
@@ -623,6 +683,8 @@ export const methods: BridgeMethods = {
 		mcp_reauth: async (params, env) => {
 			const name = requireString(paramsOf(params), "name");
 			if (!name.trim()) throw new Error("Server name cannot be empty");
+			// Loaded before the claim: nothing awaits between the busy check and the claim.
+			const { MCPOAuthCancelledError } = await import("../omp/pi-coding-agent/mcp/oauth-reauth");
 			if (activeReauth) return { busy: activeReauth.name };
 			const abort = new AbortController();
 			activeReauth = { name, abort };
@@ -659,6 +721,7 @@ export const methods: BridgeMethods = {
 	...guard("mcpReload", {
 		/** `/mcp reload` for the GUI: stock's full rediscovery of this session (MCPCommandController.reloadServers). */
 		mcp_reload: async (_params, env) => {
+			const { clearCache: clearFsCache } = await import("../omp/pi-coding-agent/capability/fs");
 			clearFsCache();
 			await env.session().modelRegistry.authStorage.credentials.reload();
 			const warning = await reloadMcpServers(env.session());
