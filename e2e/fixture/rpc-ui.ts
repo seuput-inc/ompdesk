@@ -448,6 +448,12 @@ export function runRpcUi(): void {
 	}
 	/** Stock `/btw` history, newest first. */
 	const btwRecords: object[] = [];
+	/** The session's todo list and the bridge's reading of it (todo-drift.ts), set by `fixture todo behind`. */
+	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
+	let todoDrift: { changedAt: number | null; stale: "instruction" | "drift" | null } = {
+		changedAt: null,
+		stale: null,
+	};
 	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
 		model,
@@ -474,7 +480,7 @@ export function runRpcUi(): void {
 		hasPendingAsyncWork: false,
 		isSettled: !isStreaming,
 		queuedMessages: { steering: [...lanes.steering], followUp: [...lanes.followUp] },
-		todoPhases: [],
+		todoPhases,
 		fastModeEnabled: false,
 		tokensPerSecond: null,
 		fastModeActive: false,
@@ -2015,6 +2021,7 @@ export function runRpcUi(): void {
 			return null;
 		},
 		model_choice: () => ({ chosen: standIn }),
+		"todoDrift.state": () => todoDrift,
 		"composer.state": () => ({
 			cwd: process.cwd(),
 			autoRetryEnabled: true,
@@ -5805,6 +5812,40 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				Number(process.env.OMP_GUI_TEST_LATER_MS ?? 3000),
 			);
 		} else if (message !== "fixture running") {
+			if (message === "fixture todo behind") {
+				// A list the agent left behind a steered instruction (resources/gui-bridge/todo-drift.ts): the todo call
+				// 12 minutes ago, then the bridge's reading of it, pushed as the bridge pushes it.
+				todoPhases = [
+					{
+						name: "Parser",
+						tasks: [
+							{ content: "Write the parser", status: "completed" },
+							{ content: "Test the parser", status: "in_progress" },
+							{ content: "Document the parser", status: "pending" },
+						],
+					},
+				];
+				const tool = { toolCallId: `todo-behind-${Date.now()}`, toolName: "todo" };
+				write({ type: "tool_execution_start", ...tool, args: { op: "init" } });
+				write({
+					type: "tool_execution_end",
+					...tool,
+					result: {
+						content: [{ type: "text", text: "todo updated" }],
+						details: { op: "init", phases: todoPhases },
+					},
+					isError: false,
+				});
+				todoDrift = { changedAt: Date.now() - 12 * 60_000, stale: "instruction" };
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
+			if (message === "fixture todo clear") {
+				todoPhases = [];
+				todoDrift = { changedAt: null, stale: null };
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
 			if (message === "fixture reply actions") {
 				// Stock auto thinking names the effort it classified for this turn.
 				thinking = { level: "high", configured: "auto" };
