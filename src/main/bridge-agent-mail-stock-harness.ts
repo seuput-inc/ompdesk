@@ -23,7 +23,8 @@ import { removeWhenFree } from "./test-folders";
 /**
  * The installed omp and what a stock-level mail test needs around it: a scripted OpenAI-compatible provider on
  * loopback (no model spend), an omp in rpc-ui mode with the gui bridge extension, and readers for its frames and
- * session files. Shared by `bridge-agent-mail-stock.test.ts` and `bridge-agent-mail-restart-stock.test.ts`.
+ * session files. Shared by `bridge-agent-mail-stock.test.ts`, `bridge-agent-mail-restart-stock.test.ts` and
+ * `bridge-composer-stock.test.ts`.
  */
 export const HOLD = "HOLD-MARK run";
 
@@ -98,13 +99,14 @@ export interface Provider {
 	turns: number;
 	/** The body of every main-agent request, in order. */
 	bodies: string[];
-	/** Resolves once a request of the held prompt arrived; `release` answers it. */
+	/** Resolves once a held request arrived (the `HOLD` prompt's, or a `holdSide` side request); `release` answers it. */
 	held: Promise<void>;
 	release(): void;
 	close(): Promise<void>;
 }
 
-export async function startProvider(): Promise<Provider> {
+/** `holdSide`: a side request (no bash tool: a compaction summary) whose body has this text waits for `release` too. */
+export async function startProvider(options: { holdSide?: string } = {}): Promise<Provider> {
 	const arrived = Promise.withResolvers<void>();
 	const released = Promise.withResolvers<void>();
 	const provider: Provider = {
@@ -170,7 +172,8 @@ export async function startProvider(): Promise<Provider> {
 				);
 				return;
 			}
-			if (main && body.includes(HOLD)) {
+			const side = !main && options.holdSide !== undefined && body.includes(options.holdSide);
+			if ((main && body.includes(HOLD)) || side) {
 				arrived.resolve();
 				await released.promise;
 			}
