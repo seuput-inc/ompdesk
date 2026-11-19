@@ -74,15 +74,17 @@ test("a window whose page stops answering is started again with its tabs and dra
 		for (const win of BrowserWindow.getAllWindows()) win.on("closed", () => say(`window ${win.id} closed`));
 	});
 
-	// Hold the page's main thread for longer than detection and the grace together; never awaited (it cannot answer).
-	void page
-		.evaluate(() => {
+	// Hold the page's main thread for longer than detection and the grace together. The page starts the loop itself
+	// once this call has answered: a Playwright call still waiting when the renderer ends fails the test with "Target
+	// crashed" whatever catches it (run 44578357450).
+	await page.evaluate(() => {
+		setTimeout(() => {
 			const until = Date.now() + 10 * 60_000;
 			while (Date.now() < until) {
 				// busy
 			}
-		})
-		.catch(() => undefined);
+		}, 100);
+	});
 
 	await expect
 		.poll(async () => (await runtimeLog()).map(line => line.message), { timeout: 90_000, intervals: [1_000] })
@@ -91,11 +93,30 @@ test("a window whose page stops answering is started again with its tabs and dra
 		.poll(async () => (await runtimeLog()).some(line => line.source === "renderer-process"), { timeout: 30_000 })
 		.toBe(true);
 
-	// The page loads again in the same window: the same tabs, and what the person had typed. Playwright closes the page
-	// whose renderer ended (`Target crashed`); the reloaded document is the window's app page again.
-	await expect.poll(() => page.isClosed(), { timeout: 30_000 }).toBe(true);
-	const back = await app.firstWindow({ timeout: 60_000 });
-	await back.waitForFunction(() => window.omp?.rpc != null, undefined, { timeout: 60_000 });
+	// The page loads again in the same window: the same tabs, and what the person had typed. Whether Playwright keeps
+	// the Page of the ended renderer or hands a new one, the window's app page that answers is the reloaded document.
+	const answering = async () => {
+		for (const candidate of app.windows()) {
+			const ready = await Promise.race([
+				candidate.evaluate(() => window.omp?.rpc != null).catch(() => false),
+				new Promise<false>(resolve => setTimeout(() => resolve(false), 2_000)),
+			]);
+			if (ready) return candidate;
+		}
+		return undefined;
+	};
+	let found: Page | undefined;
+	await expect
+		.poll(
+			async () => {
+				found = await answering();
+				return found !== undefined;
+			},
+			{ timeout: 60_000, intervals: [1_000] },
+		)
+		.toBe(true);
+	if (!found) throw new Error("no app page answered after the restart");
+	const back = found;
 	await expect
 		.poll(async () => (await back.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId), { timeout: 30_000 })
 		.toEqual(tabsBefore);
