@@ -6,7 +6,7 @@ import * as fs from "node:fs";
  * stock's default, off. `set` answers with the value it saved, as stock does.
  */
 export function runConfig(): void {
-	const [, , action, key, value] = process.argv;
+	const [action, key, value] = process.argv.slice(3);
 	const file = process.env.OMP_GUI_TEST_STOCK_CONFIG;
 	if (key !== "update.auto" || !file || (action !== "get" && action !== "set")) {
 		console.error(`fixture: unsupported config call: ${process.argv.slice(2).join(" ")}`);
