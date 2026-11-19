@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::parse;
 use super::read::resolve;
 use super::run::Git;
+use crate::fs::disk::real;
 use crate::fs::order::js_trim;
 use crate::run::Opts;
 
@@ -32,14 +33,12 @@ impl Facts {
     pub(crate) async fn project_root(&self, git: &Git, timeout_ms: u64) -> Option<PathBuf> {
         let common = Path::new(&self.common_dir);
         if common.file_name() == Some(std::ffi::OsStr::new(".git")) {
-            return tokio::fs::canonicalize(common.parent()?).await.ok();
+            return real(common.parent()?).await;
         }
         let primary = self.primary.as_deref()?;
         let checkout = out(git, primary, &["rev-parse", "--show-toplevel"], timeout_ms).await?;
-        let checkout = tokio::fs::canonicalize(resolve(primary, &checkout))
-            .await
-            .ok()?;
-        let storage = tokio::fs::canonicalize(common).await.ok()?;
+        let checkout = real(resolve(primary, &checkout)).await?;
+        let storage = real(common).await?;
         (checkout != storage).then_some(checkout)
     }
 }

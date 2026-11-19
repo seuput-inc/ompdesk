@@ -66,7 +66,7 @@ async fn folder_below(under: &Path, named: &str) -> Option<PathBuf> {
             } else {
                 path.parent()?.to_path_buf()
             };
-            let dir = tokio::fs::canonicalize(dir).await.ok()?;
+            let dir = crate::fs::disk::real(dir).await?;
             return (dir.starts_with(under) && dir != under).then_some(dir);
         }
         path = path.parent()?.to_path_buf();
