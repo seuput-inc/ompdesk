@@ -22,7 +22,6 @@ import {
 	FileArchive,
 	FolderInput,
 	FolderSearch,
-	Network,
 	PanelRightClose,
 	Pencil,
 	Pin,
@@ -224,7 +223,8 @@ export function sessionMenuItems({
 			id: "session-cross-project",
 			label: t("sidebar.menu.crossProject"),
 			tooltip: t("sidebar.menu.crossProjectTip"),
-			icon: Network,
+			// An icon the menu already loads: the phone's first screen has no bytes to spare (check-main-bundle.ts).
+			icon: FolderSearch,
 			checked: facts.crossProject,
 			onSelect: actions.toggleCrossProject,
 		});
