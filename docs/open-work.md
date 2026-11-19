@@ -98,8 +98,9 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| R1 | A click on a session row's new second line selects nothing (the line paints over the row's click target): e2e mobile-remote-session and mobile-notification-open failed on Windows (44573541689 shards 4, 5). | in progress | rc-0135-phone-remote [Mac mini] | omp/agent/rc-0135-phone-remote-20261120 | flake-probe 44580646695 vs v0.134.1 44580654743, geometry 44581227969 |
-| R2 | mobile-autopilot-rows read the new branch line as a child named after its branch. | test fixed | | `69228ec7e` | spec run 44580343480 |
+| R1 | A click on a session row's new second line selected nothing (the line painted over the row's click target). | release-ready | | omp/agent/rc-0134-2 `a59111ad4` (de0fc9205) | candidate 0/8 vs v0.134.1 8/8 vs fixed 8/8 passing (44580646695, 44580654743, 44581975250); notification-open fixed 8/8 (44581981616); row hit test 6/6 |
+| R2 | mobile-autopilot-rows read the new branch line as a child named after its branch. | release-ready (test) | | `69228ec7e` | spec run 44580343480 |
+| R3 | mobile-remote-session:459 'a host slow to start': the app window never loaded in 30 s once (WebView2 stuck at __profile/migrate). Unconfirmed: v0.134.1 0 of 10 failed, fixed candidate 0 of 10, candidate line 1 of 11. Migrate page leaves no log. | unconfirmed | | | 44584888421, 44584897113, 44581968887 |
 
 ## I. Boundaries
 
