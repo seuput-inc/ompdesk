@@ -14,7 +14,9 @@ import {
 	IPC_EVENTS,
 	type IpcFsReadImageResult,
 	type IpcFsReadPlanResult,
+	type IpcSessionsArtworkPayload,
 	type IpcSessionsListPayload,
+	type IpcSessionsTargetsPayload,
 	type IpcStatsFetchPayload,
 	type SessionInfo,
 } from "../../shared/ipc-types";
@@ -94,6 +96,7 @@ import {
 } from "./fixture-settings";
 import { PLAN_FILE_PATH, PLAN_MARKDOWN, SESSION_TREE } from "./fixture-sheets";
 import { statsAnswer } from "./fixture-stats";
+import { artworkFixture, targetsFixture } from "./fixture-targets";
 import { blockedAccountUsage, manyWindowUsage, usageFigureReports } from "./fixture-usage";
 import { diskCareState, orphanWorktrees, savedWorktreeRestore, savedWorktrees } from "./fixture-work-tree";
 import { createHarnessSummaries, type HarnessSummaries } from "./summaries";
@@ -571,6 +574,10 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 					? { version: `harness.${revision}`, sessions }
 					: sessions;
 			}
+			case IPC_COMMANDS.SESSIONS_TARGETS:
+				return targetsFixture((payload as IpcSessionsTargetsPayload).sessions);
+			case IPC_COMMANDS.SESSIONS_ARTWORK:
+				return artworkFixture((payload as IpcSessionsArtworkPayload).roots);
 			case IPC_COMMANDS.PREFS_GET: {
 				const request = payload as PrefsGetPayload | undefined;
 				return request?.key === undefined ? prefs : prefs[request.key];
