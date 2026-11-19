@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CREDIT_SPEND_ENV } from "../../resources/gui-bridge/credit-spend-core";
+import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
 import { MCP_AUTH_ENV, MCP_CWD_ENV, MCP_HUB_ENV } from "../../resources/gui-bridge/mcp-hub-contracts";
 import type { AutoTitleSettings } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { AGENT_DESKTOP_ENV, COMPUTER_USE_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
@@ -64,6 +65,7 @@ export const SESSION_OWNED_ENV = [
 	MEMORY_ENV,
 	SESSION_TAG_ENV,
 	SCRATCH_ENV,
+	KEEP_CLI_ENV,
 ] as const;
 
 /** `env` without any variable a session owns (`SESSION_OWNED_ENV`). */
@@ -139,6 +141,8 @@ export interface OmpLaunch {
 	readonly processTag?: string;
 	/** The tab's scratch folder (`SCRATCH_ENV`, session-scratch.ts); absent: the agent is told of none. */
 	readonly scratchDir?: string;
+	/** The `ompdesk` CLI a background bash job runs under (`KEEP_CLI_ENV`); absent: such jobs end with omp (tests). */
+	readonly keepCli?: string;
 }
 
 /**
@@ -178,5 +182,6 @@ export function sessionEnv(launch: OmpLaunch): Record<string, string> {
 	if (settings.browser) env[DEFAULT_BROWSER_ENV] = agentBrowserEnv(settings.browser);
 	if (launch.processTag) env[SESSION_TAG_ENV] = launch.processTag;
 	if (launch.scratchDir) env[SCRATCH_ENV] = launch.scratchDir;
+	if (launch.keepCli) env[KEEP_CLI_ENV] = launch.keepCli;
 	return { ...env, ...builtin.env };
 }

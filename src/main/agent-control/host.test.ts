@@ -372,6 +372,21 @@ describe("AgentControlRuntime", () => {
 		expect(spawned[0]).toMatchObject({ task: "Fix the upload test" });
 	});
 
+	it("holds an update restart while a session it opens has not taken its first message, and a moment after", async () => {
+		const { runtime, win, commands } = setup({
+			tabs: [{ tabId: "main0001" }, { tabId: "new00003", status: "ready" }],
+		});
+		expect(runtime.opening()).toBe(false);
+		const opened = await runtime.run(win, "main0001", T.open, {
+			message: "Title: Fix the upload test\nIt times out.",
+		});
+		expect(opened.isError, opened.text).toBe(false);
+		// The first message went to the new session; the hold stays a moment so its turn reaches the relaunch marker.
+		expect(commands.some(entry => entry.tabId === "new00003" && entry.command.type === "prompt")).toBe(true);
+		expect(runtime.opening()).toBe(true);
+		expect(runtime.opening(Date.now() + 3_000)).toBe(false);
+	});
+
 	/** The review frames a window was sent (`AGENT_CONTROL_REVIEW`), as their JSON. */
 	const reviewFrames = (target: { sent: [string, unknown][] }) =>
 		target.sent

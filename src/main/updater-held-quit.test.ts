@@ -105,6 +105,7 @@ async function launch(staged: string, failed?: string) {
 		asking: () => false,
 		planWaiting: () => false,
 		compacting: () => false,
+		opening: () => false,
 		backgroundWork: async () => NO_BACKGROUND_WORK,
 	});
 	const quit = () => {

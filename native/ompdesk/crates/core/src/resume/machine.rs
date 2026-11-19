@@ -567,7 +567,19 @@ impl Inst {
         }
         let exited = self.exited(&current);
         self.settle_retries();
-        let (limited, previous) = {
+        self.write_markers(&current);
+        for (tab, action, since) in exited {
+            if self.should_wait() {
+                self.hold(&tab, action, since);
+            } else {
+                self.start_run(tab, action, since);
+            }
+        }
+    }
+
+    /// The marker file from `current` and what this process holds (its continuations, its armed retries).
+    fn write_markers(self: &Rc<Self>, current: &[Fact]) {
+        let (limited, previous, marked) = {
             let st = self.st.borrow();
             let limited: HashSet<String> = st
                 .scheduled
@@ -577,10 +589,18 @@ impl Inst {
                 .collect();
             let previous: Vec<MarkerData> =
                 st.previous.iter().map(|m| m.borrow().d.clone()).collect();
-            (limited, previous)
+            // A scheduled retry of a transient failure lives in this process only: its marker carries it over a relaunch.
+            let mut marked = current.to_vec();
+            for fact in &mut marked {
+                fact.retry_armed = st
+                    .scheduled
+                    .get(&fact.tab_id)
+                    .is_some_and(|armed| !armed.borrow().limit);
+            }
+            (limited, previous, marked)
         };
         let live: Vec<Mk> = {
-            let derived = derive_markers(&current, &previous, self.now(), &limited);
+            let derived = derive_markers(&marked, &previous, self.now(), &limited);
             let st = self.st.borrow();
             let fresh: Vec<MarkerData> = derived
                 .into_iter()
@@ -599,13 +619,6 @@ impl Inst {
         self.st.borrow_mut().previous = kept;
         self.push(json!({"k": "storeWrite", "markers": rows}));
         self.show_resuming();
-        for (tab, action, since) in exited {
-            if self.should_wait() {
-                self.hold(&tab, action, since);
-            } else {
-                self.start_run(tab, action, since);
-            }
-        }
     }
 
     /// Tabs whose omp died under their work since the last look (`exits` moved; its manager starts the next one): the
@@ -638,7 +651,10 @@ impl Inst {
                 .find(|entry| entry.borrow().d.tab == fact.tab_id)
                 .map(|entry| entry.borrow().d.clone());
             let Some(marker) = marker else { continue };
-            if matches!(marker.reason, Reason::Network | Reason::Limit) {
+            if matches!(
+                marker.reason,
+                Reason::Network | Reason::Limit | Reason::Retry
+            ) {
                 continue;
             }
             let before = self.st.borrow().pending.get(&fact.tab_id).cloned();
@@ -1768,10 +1784,17 @@ impl Inst {
     ) -> R<()> {
         if !limit {
             let on = self.stock_retry_on(&tab).await?;
-            let env = self.look(Some(&tab), &["fact", "now"]).await?;
+            // Every fact, not only the tab's: the stretch rewrites the marker file once it arms the retry.
+            let env = self.look(Some(&tab), ALL).await?;
             self.stretch(env, |me| {
-                if let Some(current) = me.still_owed(&tab, &outcome, false, generation, on) {
-                    me.arm(&current, &outcome, used, None);
+                if let Some(current) = me.still_owed(&tab, &outcome, false, generation, on)
+                    && me.arm(&current, &outcome, used, None)
+                    && me.st.borrow().launched
+                    && !me.frozen()
+                {
+                    // The marker says `retry` now, so a relaunch before the retry's time still retries the turn. Only the
+                    // file: a full sync would judge the armed retry against the fact it was armed from and drop it.
+                    me.write_markers(&me.current_facts());
                 }
             });
             return Ok(());
@@ -2082,6 +2105,25 @@ impl Inst {
         }
         self.st.borrow_mut().scheduled.remove(tab);
         self.push(json!({"k": "setScheduled", "tab": tab, "retry": null}));
+        // Its `retry` marker goes with it at once: no sync may follow (a fired or called-off retry from a timer).
+        let rows = {
+            let mut st = self.st.borrow_mut();
+            let pending: HashSet<u64> = st.pending.values().map(|m| m.borrow().serial).collect();
+            let before = st.previous.len();
+            st.previous.retain(|m| {
+                let m = m.borrow();
+                pending.contains(&m.serial) || m.d.tab != tab || m.d.reason != Reason::Retry
+            });
+            (st.previous.len() != before).then(|| {
+                st.previous
+                    .iter()
+                    .map(|m| m.borrow().d.clone())
+                    .collect::<Vec<MarkerData>>()
+            })
+        };
+        if let Some(rows) = rows {
+            self.push(json!({"k": "storeWrite", "markers": rows}));
+        }
     }
 
     /// Call the tab's armed retry off: its timer, its row, and any attempt already on its way.

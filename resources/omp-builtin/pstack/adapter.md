@@ -13,6 +13,7 @@ The playbooks and skills below were written for Cursor. Read their names this wa
 - `/skill-name` → read `skill://<name>`. When you tell the user, write `/skill:<name>`.
 - Model slugs → roles: `@task` code delegates, `@slow` judgment, prose and the hardest change, `@smol` light research; a judge or cross-check runs on a different family than you (`advisor` role or another configured provider).
 - `/loop` → OMPdesk Goal mode or Autopilot already wakes the session; wait on events with `wait` or `gh_run_watch`; `/loop` exists only in the omp TUI.
+- An OMPdesk restart (an update, a relaunch) → never a reason to pause or to end your turn: the relaunch continues a running turn, its commands and its subagents by itself. Keep working through the countdown; Pause safely is for the person's explicit pause, going offline, an omp restart you start yourself, or a compaction.
 - Transcripts → `~/.omp/agent/sessions/<cwd-slug>/<timestamp>_<id>.jsonl`; `ompdesk_sessions` and `ompdesk_session_read` read them.
 - PRs → `gh` or the `github` tool. A repository that pushes straight to main (its rules say so) gets small ordered commits with conventional messages and no PR.
 - Bugbot, Cursor Automations, cloud agents → skipped: write one line `Skipped: <step>. <reason>.` and continue.

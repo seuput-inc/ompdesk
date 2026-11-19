@@ -193,7 +193,9 @@ export const FEATURES = {
 		"The to-do panel says when the list last changed, which instructions came since, and marks a list behind the work",
 	wasteGuards:
 		"A bash service start whose ready.log cannot match is refused; a polling call or a refused edit is told once what to do instead; a wait returns only with news",
-	quitJournal: "A quit while a tool runs journals the tool's aborted result before the process ends",
+	quitJournal:
+		"A quit lets a running command finish and journals every tool's result before the process ends; a relaunch never runs a command a second time",
+	keptJobs: "A background command keeps running through an app restart, and its result still reaches the agent",
 	exitDrain: "An omp that ends by itself finishes its exit cleanup first (a login refresh being saved)",
 	turnStages: "Turn stages recorded when a turn waits long for the model or ends without output (gui-runtime.jsonl)",
 	askForm: "An ask form's paragraphs, tables and pictures on its question card",
@@ -1118,12 +1120,33 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["WaitTool.prototype.execute()", "Settings.instance"],
 	},
 	/**
-	 * quit-journal.ts: the public `tool_execution_start`, `message_end` and `session_shutdown` hooks, and the
-	 * session's agent loop reached through the registry to abort it a moment before stock's dispose does.
+	 * quit-journal.ts: the public `tool_call` (`block`), `tool_execution_start`, `message_end`, `context` and
+	 * `session_shutdown` hooks with the context's read-only `sessionManager` (`getEntries`, `getBranch`), and the
+	 * session's agent loop reached through the registry to abort it once its running commands finished. Stock caps every
+	 * `session_shutdown` handler at 2 s (`SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS`); its setter raises the cap past the
+	 * stop's wait for commands. The embedded shell's `run`, wrapped once, records that a plain bash call's command
+	 * started (`RAN_COMMANDS_FILE`), so a replay of a call that never ran is let through.
 	 */
 	quitJournal: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
 		session: ["agent.abort()"],
+		modules: {
+			[`${AGENT}/extensibility/extensions/runner`]: ["testSetSessionShutdownHandlerTimeoutMs()"],
+			"@oh-my-pi/pi-natives": ["Shell.prototype.run()"],
+		},
+	},
+	/**
+	 * kept-jobs.ts: the public `tool_call` and `session_shutdown` hooks, the embedded shell's `run` (wrapped once for a
+	 * background job's command, which runs as stock's shell process under `ompdesk keep`), the shell process's command
+	 * line, and the bash tool's job manager, which the relaunch's restore registers a job still running again with.
+	 */
+	keptJobs: {
+		pkg: ["MAIN_AGENT_ID"],
+		session: ["getToolByName()", "sessionManager.getArtifactsDir()"],
+		modules: {
+			"@oh-my-pi/pi-natives": ["Shell.prototype.run()"],
+			[`${AGENT}/exec/shell-process`]: ["shellProcessCommand()"],
+		},
 	},
 	/**
 	 * exit-drain.ts: the public `session_shutdown` hook of the main agent, and stock's `postmortem` for the awaited

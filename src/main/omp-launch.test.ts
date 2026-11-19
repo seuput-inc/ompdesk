@@ -45,6 +45,7 @@ const FULL: OmpLaunch = {
 	origin: { deviceId: "phone", name: "Phone", hostName: "Desk" },
 	processTag: "0123456789abcdef0123456789abcdef",
 	scratchDir: "/home/seu/.cache/ompdesk/scratch/0123456789abcdef0123456789abcdef",
+	keepCli: "/Applications/OMPdesk.app/Contents/Resources/ompdesk-bin/ompdesk",
 };
 
 describe("omp launch", () => {

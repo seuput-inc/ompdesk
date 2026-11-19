@@ -143,6 +143,7 @@ describe("launch rules", () => {
 		expect(launchAction(marker({ reason: "running" }))).toBe("restore");
 		expect(launchAction(marker({ reason: "network" }))).toBe("retry");
 		expect(launchAction(marker({ reason: "limit" }))).toBe("retry");
+		expect(launchAction(marker({ reason: "retry" }))).toBe("retry");
 		expect(launchAction(marker({ reason: "asking" }))).toBe("restore");
 		expect(launchAction(marker({ background: true }))).toBe("revive");
 	});
@@ -2259,9 +2260,20 @@ describe("TurnResume scheduled retry", () => {
 		expect(h.timers.map(timer => timer.ms).at(-1)).toBe(30_000);
 	});
 
-	it("does not touch the marker file: a scheduled retry is not an interrupted turn", async () => {
+	// B4 (4) of the owner's 20 Nov 2026 list: the scheduled retry lived in this process only, so a relaunch before its
+	// time dropped the turn for good. Its marker says `retry` while it waits, and the relaunch retries the turn.
+	it("is in the marker file while it waits, and a relaunch before its time retries the turn", async () => {
 		await failed();
-		expect(h.store.read()).toEqual([]);
+		expect(h.store.read().map(entry => entry.reason)).toEqual(["retry"]);
+		const [saved] = h.store.read();
+		const before = h.dir;
+		h = setup({ answers: { retry: RETRIED } });
+		rmSync(before, { recursive: true, force: true });
+		new InterruptedTurnStore(h.file).write([saved as ResumeMarker]);
+		h.facts.push(fact({ tabId: "restored", running: false }));
+		h.resume.launch();
+		await settle();
+		expect(h.commands.map(command => command.type)).toEqual(["retry"]);
 	});
 });
 

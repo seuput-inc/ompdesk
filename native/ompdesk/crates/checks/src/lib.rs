@@ -6,6 +6,7 @@ pub mod cli;
 mod flaky;
 pub mod heavy;
 mod inputs;
+pub mod keep;
 mod runner;
 mod store;
 mod sys;

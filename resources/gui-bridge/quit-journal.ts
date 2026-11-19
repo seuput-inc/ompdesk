@@ -1,19 +1,42 @@
 /**
- * A quit while a tool runs journals the tool's aborted result before the process ends, whatever else listens to
- * `tool_result` (rules: `.omp/rules/interrupted-work.md` › Quit during a tool).
+ * A stop never cuts a short command and a relaunch never runs one twice (rules: `.omp/rules/interrupted-work.md` ›
+ * Quit during a tool, › A command runs once).
  *
  * Stock's dispose records `session_exit` (with the unfinished calls), emits `session_shutdown`, and only then aborts
  * the agent loop; the aborted call's result is journaled by the unwinding loop while the exit already runs. Each
  * `tool_result` handler on the way costs that unwind a few turns of the event loop (stock awaits the handler runner
  * once any extension subscribes, whatever the handler returns), and from the second subscriber on the exit won in
- * every run: the journal ended on the assistant's tool call. The relaunch's restore then read a different tail than
- * before. The shutdown handler here aborts the loop itself, as dispose does a moment later, and holds dispose until
- * every started call's result message has been emitted (bounded), so the journaled tail no longer depends on how
- * many handlers sit on that path.
+ * every run: the journal ended on the assistant's tool call. The shutdown handler here holds dispose until every
+ * started call's result message has been emitted (bounded), so the journaled tail no longer depends on how many
+ * handlers sit on that path.
+ *
+ * A running command (`bash`, `eval`, `ssh`) is not aborted at first: the stop lets it finish for up to
+ * `QUIT_COMMAND_DRAIN_MS`, announced on stderr so the core's stop waits, while the `context` hook keeps the loop from
+ * its next model request. Its real result reaches the journal and the relaunch continues the turn from it. A command
+ * still running then is aborted as before.
+ *
+ * Stock's restore then `retry`s a batch whose every result is an error with the same call ids and arguments: a cut
+ * command, or one that failed, would run a second time. A `tool_call` of a command whose call an earlier process
+ * journaled is refused with what that process recorded (`replayOfEarlierLife`), except a plain `bash` call whose
+ * command never reached the shell (`RAN_COMMANDS_FILE`): cut while its approval card waited, it asks again and runs once.
  */
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
-import { createPendingToolCalls } from "./quit-journal-core";
+import * as runner from "./omp/pi-coding-agent/extensibility/extensions/runner";
+import { Shell } from "./omp/pi-natives";
+import {
+	commandDrainLine,
+	createPendingToolCalls,
+	isCommandTool,
+	QUIT_COMMAND_DRAIN_MS,
+	RAN_COMMANDS_FILE,
+	ranBefore,
+	replayOfEarlierLife,
+	replayRefusal,
+	startsInShell,
+} from "./quit-journal-core";
 
 /** Longer than a tool needs to see its abort and return; a tool that ignores the abort does not hold the quit past it. */
 export const QUIT_TOOL_SETTLE_MS = 1_500;
@@ -36,20 +59,90 @@ interface RegistryApi {
 	};
 }
 
+/** This process's start: entries journaled before it are an earlier process's. */
+const startedAt = performance.timeOrigin;
+
+/**
+ * Stock gives each `session_shutdown` handler 2 s and then disposes anyway, aborting the commands the stop waits for.
+ * The core's stop still ends an omp 5 s after it began unless omp printed a wait (`commandDrainLine`), so a hung
+ * handler of another extension is not held longer by this.
+ */
+runner.testSetSessionShutdownHandlerTimeoutMs?.(QUIT_COMMAND_DRAIN_MS + QUIT_TOOL_SETTLE_MS + 1_000);
+
+/** Plain bash calls admitted and not yet in the shell, by call id: the artifacts folder their start is recorded in. */
+const shellCalls = new Map<string, string>();
+
+function readRan(artifacts: string): string {
+	try {
+		return readFileSync(join(artifacts, RAN_COMMANDS_FILE), "utf8");
+	} catch {
+		return "";
+	}
+}
+
+// Once per process: a plain bash call's command is recorded as started right before the shell runs it.
+const shellRun = Shell.prototype.run;
+Shell.prototype.run = function (this: Shell, options, onChunk) {
+	const id = options.env?.PI_TOOL_CALL_ID;
+	const artifacts = id ? shellCalls.get(id) : undefined;
+	if (id && artifacts) {
+		shellCalls.delete(id);
+		try {
+			mkdirSync(artifacts, { recursive: true });
+			appendFileSync(join(artifacts, RAN_COMMANDS_FILE), `${id}\n`);
+		} catch {
+			// Unrecorded, a replay of it after a relaunch runs, as stock does: the command itself still runs now.
+		}
+	}
+	return shellRun.call(this, options, onChunk);
+} satisfies typeof shellRun;
+
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: ExtensionAPI): void {
 	const calls = createPendingToolCalls();
+	const commands = createPendingToolCalls();
+	/** Set while a stop lets commands finish; resolved once the loop was aborted. */
+	let draining: PromiseWithResolvers<void> | undefined;
+	pi.on("tool_call", (event, ctx) => {
+		if (!isCommandTool(event.toolName)) return undefined;
+		const sessions = ctx.sessionManager;
+		const artifacts = startsInShell(event.toolName, event.input) ? sessions.getArtifactsDir?.() : undefined;
+		const replay = replayOfEarlierLife(sessions.getEntries(), sessions.getBranch(), event.toolCallId, startedAt);
+		const ran = (): boolean => artifacts == null || ranBefore(readRan(artifacts), event.toolCallId);
+		if (replay && ran()) {
+			pi.logger.debug("gui-bridge: a command an earlier process started was not run again");
+			return { block: true, reason: replayRefusal(event.toolName, replay.earlier) };
+		}
+		if (artifacts) shellCalls.set(event.toolCallId, artifacts);
+		return undefined;
+	});
 	pi.on("tool_execution_start", event => {
-		if (event.toolName !== LEFT_PENDING_TOOL) calls.start(event.toolCallId);
+		if (event.toolName === LEFT_PENDING_TOOL) return;
+		calls.start(event.toolCallId);
+		if (isCommandTool(event.toolName)) commands.start(event.toolCallId);
 	});
 	pi.on("message_end", event => {
-		if (event.message.role === "toolResult") calls.settle(event.message.toolCallId);
+		if (event.message.role !== "toolResult") return;
+		calls.settle(event.message.toolCallId);
+		commands.settle(event.message.toolCallId);
+	});
+	// The finished command's turn makes no model request during the stop: the abort below ends it there.
+	pi.on("context", async () => {
+		if (draining) await draining.promise;
+		return undefined;
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (calls.size === 0) return;
 		const agent = (pi as unknown as RegistryApi).pi.AgentRegistry.global().get(ctx.agent.id)?.session?.agent;
 		if (typeof agent?.abort !== "function") return;
+		if (commands.size > 0) {
+			draining = Promise.withResolvers<void>();
+			process.stderr.write(commandDrainLine(commands.size));
+			const finished = await commands.settled(QUIT_COMMAND_DRAIN_MS);
+			if (!finished) pi.logger.debug("gui-bridge: a command was still running when the stop's wait ended");
+		}
 		agent.abort();
+		draining?.resolve();
 		const settled = await calls.settled(QUIT_TOOL_SETTLE_MS);
 		if (!settled) pi.logger.debug("gui-bridge: a tool call did not return before the quit's wait ended");
 	});

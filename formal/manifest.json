@@ -72,7 +72,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "f094161e3444ba44a4d3b4b0f6894fd13e36f014",
+			"syncCommit": "df9f756aab26a6e4688887ad724e5584d869aeda",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -294,6 +294,20 @@
 				"resources/gui-bridge/agent-control.ts:343-396"
 			],
 			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
+		},
+		{
+			"id": "relaunch-once",
+			"title": "A command across a relaunch runs once and a stop does not cut a short one",
+			"kind": "tla",
+			"dir": "relaunch-once/tla",
+			"spec": "RelaunchOnce.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/quit-journal.ts",
+				"resources/gui-bridge/quit-journal-core.ts#replayOfEarlierLife"
+			],
+			"syncCommit": "df9f756aab26a6e4688887ad724e5584d869aeda"
 		}
 	]
 }

@@ -36,6 +36,7 @@ import { withoutFrameBookkeeping } from "./frame-bookkeeping";
 import { localHandlerFor, runLocalCommand } from "./local";
 import { projectQueueUpdate } from "./local/queue";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError, type OmpRuntime } from "./local/types";
+import { nativeBinPath } from "./native-bin";
 import {
 	type BuiltinLaunch,
 	type OmpLaunch,
@@ -1380,6 +1381,7 @@ export class SidecarManager extends EventEmitter {
 				...(this.#options.promptOrigin ? { origin: this.#options.promptOrigin } : {}),
 				...(this.#processes ? { processTag: this.#processes.tag } : {}),
 				...(this.#processes?.scratch ? { scratchDir: this.#processes.scratch } : {}),
+				...(this.#processes ? { keepCli: nativeBinPath("ompdesk") } : {}),
 			};
 			const args = ompArgs(launch);
 			const bin = runtime.bin;

@@ -191,6 +191,8 @@ export interface AutoInstallProbe {
 	planWaiting: () => boolean;
 	/** A tab compacts its context: a resume-on restart waits for it (a cut compaction does not resume). */
 	compacting: () => boolean;
+	/** An agent is opening a session that has not taken its first message yet: a restart now would lose the message. */
+	opening: () => boolean;
 	/** Running background subagents and jobs of every tab on this computer, asked fresh (`background-work.ts`). */
 	backgroundWork: () => Promise<BackgroundWork>;
 }
@@ -1016,6 +1018,7 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 				asking: probe.asking(),
 				planWaiting: probe.planWaiting(),
 				compacting: probe.compacting(),
+				opening: probe.opening(),
 				focused: BrowserWindow.getAllWindows().some(win => win.isFocused()),
 				idleMs: idleSeconds * 1000,
 			};
