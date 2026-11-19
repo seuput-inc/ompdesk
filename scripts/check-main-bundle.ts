@@ -398,7 +398,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // Session rows read their repository, branch and image (19 Nov 2026, `sessions.targets`/`sessions.artwork` in
 // `shared/omp-api.ts` and the two-line row): measured 2,206,290 with both halves (parity run 44491251735, the API alone
 // 2,206,183 in branch run 44489431846), 298 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_211_293;
+// next-line with 0.135.0 merged (its session rows and bridge-health) and the board's transcript child lines (20 Nov
+// 2026): measured 2,211,541 (branch run 44628708913). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_211_621;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
