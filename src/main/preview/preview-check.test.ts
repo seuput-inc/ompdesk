@@ -14,8 +14,8 @@ import {
 	createTabCheck,
 	judgeImage,
 	PREVIEW_CHECK_BEHIND_MS,
-	PREVIEW_CHECK_CAPTURE_MS,
 	PREVIEW_CHECK_IMAGE_MAX,
+	PREVIEW_CHECK_JUDGE_MS,
 	PREVIEW_CHECK_PROBE_MS,
 	PREVIEW_CHECK_TOTAL_MS,
 	type PreviewCheckDeps,
@@ -84,7 +84,7 @@ describe("Preview check on gui_visualize open", () => {
 		expect(withCheck.text).toBe(`${without.text}\n${HINT_ERROR}`);
 		expect(withCheck.isError).toBe(false);
 		expect(flagged).toEqual([[withCheck.id, 1, "error"]]);
-		expect(deps.capture).toHaveBeenCalledWith(withCheck.id, 1, PREVIEW_CHECK_CAPTURE_MS, PREVIEW_CHECK_CAPTURE_MS);
+		expect(deps.capture).toHaveBeenCalledWith(withCheck.id, 1, expect.any(Number), expect.any(Number));
 		expect(deps.judge).toHaveBeenCalledWith(IMAGE, expect.any(Number));
 		// The page is shown first; the check follows it.
 		expect(withCheck.revealed).toEqual([withCheck.id]);
@@ -204,14 +204,23 @@ describe("Preview check on gui_visualize open", () => {
 		expect(deps.judge).toHaveBeenCalledWith(IMAGE, PREVIEW_CHECK_TOTAL_MS - showsAt);
 	});
 
-	it("waits the whole capture budget for the page of a tab in front, and only a moment for one behind", async () => {
+	it("waits for the page of a tab in front until only the judge's share is left, and a moment for one behind", async () => {
+		vi.useFakeTimers();
+		const probeMs = 300;
+		const pageMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS - probeMs;
 		for (const [inFront, appearMs] of [
-			[true, PREVIEW_CHECK_CAPTURE_MS],
+			[true, pageMs],
 			[false, PREVIEW_CHECK_BEHIND_MS],
 		] as const) {
-			const { deps } = fakeDeps({ inFront: () => inFront });
+			const { deps } = fakeDeps({
+				inFront: () => inFront,
+				available: async () => {
+					await vi.advanceTimersByTimeAsync(probeMs);
+					return true;
+				},
+			});
 			await checkVisualPage(deps, "v", 1);
-			expect(deps.capture).toHaveBeenCalledWith("v", 1, PREVIEW_CHECK_CAPTURE_MS, appearMs);
+			expect(deps.capture).toHaveBeenCalledWith("v", 1, pageMs, appearMs);
 		}
 	});
 });
@@ -410,8 +419,10 @@ describe("createTabCheck", () => {
 	});
 
 	it("tells the capture how long to wait for the page by whether the tab is in front", async () => {
+		vi.useFakeTimers();
+		const pageMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS;
 		for (const [inFront, appearMs] of [
-			[true, PREVIEW_CHECK_CAPTURE_MS],
+			[true, pageMs],
 			[false, PREVIEW_CHECK_BEHIND_MS],
 		] as const) {
 			const { command, capture, pages } = tab({
@@ -426,7 +437,7 @@ describe("createTabCheck", () => {
 				pages,
 				rpc: { command: command as never },
 			})("v", 1);
-			expect(capture).toHaveBeenCalledWith("v", 1, PREVIEW_CHECK_CAPTURE_MS, appearMs);
+			expect(capture).toHaveBeenCalledWith("v", 1, pageMs, appearMs);
 		}
 	});
 });

@@ -24,11 +24,16 @@ export type { PreviewVerdict };
 export const PREVIEW_CHECK_IMAGE_MAX = 1280;
 /** A page that finished loading paints its last frame within this long (late scripts, fonts, layout). */
 export const PREVIEW_CHECK_SETTLE_MS = 300;
-/** Until the page is on screen, loaded and settled; later the capture is given up. */
-export const PREVIEW_CHECK_CAPTURE_MS = 2000;
+/**
+ * What the judge keeps of the total: its answer took p95 0.56 s (judge-assist-contracts.ts). The page gets the rest
+ * to appear, load and settle, because the time a window takes to open its Preview is what varies: on GitHub's Windows
+ * runner the page was asked for 1.2 s after the tool opened the visual and loaded at 1.6 s, and on a run's first open
+ * it was not even asked for at 2 s, so a flat 2 s for the page dropped the check while 1.9 s of the total sat unused.
+ */
+export const PREVIEW_CHECK_JUDGE_MS = 1000;
 /**
  * `reveal` makes a window show the visual only when its tab is the one in front, so a tab behind never gets its page on
- * screen and the capture gives up on it after this long. A tab in front waits the whole `PREVIEW_CHECK_CAPTURE_MS`
+ * screen and the capture gives up on it after this long. A tab in front waits for the page as long as the total allows
  * instead: a busy window mounts its panel late (a renderer 4x slower had the page asked for and still not laid out
  * 450 ms after the tool opened it, and a flat 400 ms dropped the check).
  */
@@ -129,8 +134,9 @@ export async function checkVisualPage(
 		try {
 			const available = await withDeadline(deps.available(PREVIEW_CHECK_PROBE_MS), PREVIEW_CHECK_PROBE_MS);
 			if (available !== true || !open) return null;
-			const appearMs = deps.inFront() ? PREVIEW_CHECK_CAPTURE_MS : PREVIEW_CHECK_BEHIND_MS;
-			const image = await deps.capture(visualId, version, PREVIEW_CHECK_CAPTURE_MS, appearMs);
+			const captureMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS - (Date.now() - started);
+			const appearMs = deps.inFront() ? captureMs : PREVIEW_CHECK_BEHIND_MS;
+			const image = await deps.capture(visualId, version, captureMs, appearMs);
 			if (!image || !open) return null;
 			const result = await deps.judge(image, Math.max(0, PREVIEW_CHECK_TOTAL_MS - (Date.now() - started)));
 			if (!open || !result?.judged || !result.problem) return null;
