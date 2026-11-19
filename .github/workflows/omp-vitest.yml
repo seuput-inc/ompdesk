@@ -5,13 +5,17 @@
 # alone. It never runs on its own.
 #
 # `ref` is checked out before anything else, so the install actions and the
-# scripts a job runs (`.github/actions/install*`, `scripts/omp-bump/latest.ts
-# summary`, `scripts/ci-failure.sh`) are that ref's own: a release is tested
-# with what it shipped. Only this file is the caller's.
+# scripts a job runs (`.github/actions/install*`, `scripts/ci-failure.sh`) are
+# that ref's own: a release is tested with what it shipped.
 #
 # With `report`, every job writes vitest's JSON report, fails on a `*-stock`
 # test that skipped with omp installed (unless EXPECTED_STOCK_SKIPS names why)
-# and uploads its summary as `<artifact-prefix>vitest-<job>`.
+# and uploads its summary as `<artifact-prefix>vitest-<job>`. Which skip is
+# allowed is the caller's rule, not the tested ref's: the summary runs from a
+# second, sparse checkout of the caller's commit (`.omp-latest-rules`, made
+# after vitest so vitest never sees it), so a release tag whose list lacks an
+# entry the caller has since added (a Windows-only stock suite that skips on
+# Linux, run 44613716516) is judged by today's list.
 #
 # The Windows job has 45 minutes: it ran 21 to 30 under the old 30 (runs
 # 44538627025, 44595797074, 44602044583), and a job stopped at its timeout says
@@ -91,13 +95,22 @@ jobs:
           version: ${{ inputs.omp }}
       - id: vitest
         run: bunx vitest run ${{ matrix.args }} ${{ inputs.report && '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=vitest-report.json' || '' }}
+      - if: ${{ !cancelled() && inputs.report }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          path: .omp-latest-rules
+          sparse-checkout: |
+            scripts/omp-bump
+            scripts/omp-boundary
+            src/shared
       - name: Stock tests that skipped
         if: ${{ !cancelled() && inputs.report }}
         env:
           GROUP: check
           JOB: ${{ matrix.id }}
           OUTCOME: ${{ steps.vitest.outcome }}
-        run: bun scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/${{ matrix.id }}.summary.json"
+        run: bun .omp-latest-rules/scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/${{ matrix.id }}.summary.json"
       - if: ${{ !cancelled() && inputs.report }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -134,13 +147,22 @@ jobs:
           version: ${{ inputs.omp }}
       - id: vitest
         run: bun run test:platform ${{ inputs.report && '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=vitest-report.json' || '' }}
+      - if: ${{ !cancelled() && inputs.report }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          path: .omp-latest-rules
+          sparse-checkout: |
+            scripts/omp-bump
+            scripts/omp-boundary
+            src/shared
       - name: Stock tests that skipped
         if: ${{ !cancelled() && inputs.report }}
         env:
           GROUP: windows
           JOB: windows
           OUTCOME: ${{ steps.vitest.outcome }}
-        run: bun scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/windows.summary.json"
+        run: bun .omp-latest-rules/scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/windows.summary.json"
       - if: ${{ !cancelled() && inputs.report }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
