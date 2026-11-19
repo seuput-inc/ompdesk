@@ -83,7 +83,7 @@ export {
 	type ProgressSegment,
 	type SegmentedProgressBarProps,
 } from "./ProgressBar";
-export { artworkLetter, ProjectArtwork, type ProjectArtworkProps } from "./ProjectArtwork";
+export { ProjectArtwork, type ProjectArtworkProps } from "./ProjectArtwork";
 export { isTabbable, popoverTabStops, tabOutOfPopover } from "./popover-focus";
 export { QrCode } from "./QrCode";
 export { RootErrorBoundary } from "./RootErrorBoundary";
