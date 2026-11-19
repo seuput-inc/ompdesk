@@ -503,6 +503,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-restore-subagents-stock.test.ts",
 			"src/main/bridge-jobs-tree-stock.test.ts",
 			"src/main/bridge-job-widgets-stock.test.ts",
+			"src/main/bridge-composer-stock.test.ts",
 			"src/main/local/copy-targets.test.ts",
 		],
 		changes: [
