@@ -159,6 +159,8 @@ interface Omp {
 	send(command: Record<string, unknown>): Promise<Record<string, unknown>>;
 	/** OMPdesk's quit of a tab's omp (sidecar.ts): stdin closes and stock disposes the session. */
 	quit(): Promise<void>;
+	/** A crash, or a computer that went off: the process ends with nothing journaled. */
+	kill(): Promise<void>;
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -225,6 +227,8 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 	});
 	const bridge = new GuiBridgeClient(address);
 	let counter = 0;
+	// A killed omp's stdin fails the cleanup's end with EPIPE.
+	child.stdin.on("error", () => undefined);
 	const quit = async () => {
 		bridge.close();
 		child.stdin.end();
@@ -232,6 +236,12 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 		const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
 		await exited;
 		clearTimeout(timer);
+		removeBridgeAddress(address);
+	};
+	const kill = async () => {
+		bridge.close();
+		child.kill("SIGKILL");
+		await exited;
 		removeBridgeAddress(address);
 	};
 	cleanups.push(() => quit());
@@ -250,6 +260,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 		bridge,
 		frames,
 		quit,
+		kill,
 		send: command => {
 			const id = `c${++counter}`;
 			const { promise, resolve: done, reject: fail } = Promise.withResolvers<Record<string, unknown>>();
@@ -439,3 +450,63 @@ describe.skipIf(!existsSync(omp))(
 		}, 240_000);
 	},
 );
+
+/**
+ * A relaunch never cuts a short command nor runs one a second time (quit-journal.ts). Stock aborts a running command
+ * when its stdin closes, and its restore then replays a batch whose every result is an error with the same call id and
+ * arguments: a cut `git commit` was made twice after an update restart (19 Nov 2026). Each command appends a line to
+ * a counter file, so the counter says how often it ran.
+ */
+describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock omp", () => {
+	async function cutCommand(script: (counter: string) => string, end: "quit" | "kill") {
+		const isolated = mkdtempSync(join(tmpdir(), "ompdesk-once-"));
+		chmodSync(isolated, 0o700);
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-once-repo-")));
+		cleanups.push(() => {
+			rmSync(isolated, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		});
+		const counter = join(root, "counter").replaceAll("\\", "/");
+		const provider = await startProvider([{ tool: "bash", args: { command: script(counter), i: "counted" } }]);
+		cleanups.push(() => provider.close());
+		const { hold } = writeHoldExtension(isolated, "user");
+		rmSync(hold);
+		const first = await startOmp(provider, isolated, root, false);
+		await first.send({ type: "prompt", message: FIRST });
+		await expect.poll(() => first.frames.some(frame => frame.type === "agent_end"), { timeout: 60_000 }).toBe(true);
+		await first.send({ type: "prompt", message: SECOND });
+		await expect.poll(() => existsSync(counter), { timeout: 60_000 }).toBe(true);
+		await (end === "quit" ? first.quit() : first.kill());
+		const runs = () => readFileSync(counter, "utf8").split("\n").filter(Boolean).length;
+		const results = () => messagesOf(journal(isolated)).filter(entry => entry.message?.role === "toolResult");
+		const cut = results();
+		const second = await startOmp(provider, isolated, root, true);
+		const outcome = await second.bridge.request<{ turn: boolean }>("composer.restore_interrupted", {});
+		expect(outcome).toMatchObject({ turn: true });
+		await expect.poll(() => provider.continued, { timeout: 60_000 }).toBe(1);
+		return { cut, results, runs };
+	}
+
+	it("lets the stop finish a running command, and the relaunch goes on from its whole output", async () => {
+		const { cut, results, runs } = await cutCommand(
+			counter => `echo ran >> "${counter}"; sleep 3; echo WHOLE-OUTPUT`,
+			"quit",
+		);
+		expect(cut).toHaveLength(1);
+		expect(textOf(cut[0]?.message?.content)).toContain("WHOLE-OUTPUT");
+		expect(results()).toHaveLength(1);
+		expect(runs()).toBe(1);
+	}, 240_000);
+
+	it("never runs a command again that failed while the stop waited for it", async () => {
+		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 2; exit 3`, "quit");
+		expect(textOf(results().at(-1)?.message?.content)).toContain("Not run again");
+		expect(runs()).toBe(1);
+	}, 240_000);
+
+	it("never runs a command again that a crash cut", async () => {
+		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 30`, "kill");
+		expect(textOf(results().at(-1)?.message?.content)).toContain("Not run again");
+		expect(runs()).toBe(1);
+	}, 240_000);
+});
