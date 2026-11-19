@@ -1690,31 +1690,33 @@ export function runRpcUi(): void {
 	 * boots and leaves every `get_state` unanswered; the held ones are answered as usual once the file no longer says
 	 * so (a spec that writes another script, or removes the file, ends the wait). `{"holdExit": true}` makes an omp that is
 	 * stopped (SIGTERM, or its stdin ending) keep running, as one slow to wind down does, and exit as usual once the file
-	 * no longer says so; a stop that waits too long is SIGKILLed by main, as a real one is.
+	 * no longer says so; a stop that waits too long is SIGKILLed by main, as a real one is. `{"holdResume": true}` keeps
+	 * the turn `composer.restore_interrupted` continues from starting (the tab's "continuing" row stays up) until the
+	 * file no longer says so, so a spec sees the row however late its window mounts.
 	 */
 	const startFile = process.env.OMP_GUI_TEST_START_FILE;
-	const startHeld = (hold: "holdGetState" | "holdExit" = "holdGetState"): boolean => {
+	const startHeld = (hold: "holdGetState" | "holdExit" | "holdResume" = "holdGetState"): boolean => {
 		try {
 			return startFile ? JSON.parse(fs.readFileSync(startFile, "utf8"))[hold] === true : false;
 		} catch {
 			return false;
 		}
 	};
-	/** Runs `stop` now, or once the start file no longer holds the exit. */
-	const stopWhenReleased = (stop: () => void) => {
-		if (!startHeld("holdExit")) {
-			stop();
+	/** Runs `run` now, or once the start file no longer holds `hold`. */
+	const whenReleased = (hold: "holdExit" | "holdResume", run: () => void) => {
+		if (!startHeld(hold)) {
+			run();
 			return;
 		}
 		const timer = setInterval(() => {
-			if (startHeld("holdExit")) return;
+			if (startHeld(hold)) return;
 			clearInterval(timer);
-			stop();
+			run();
 		}, 100);
 	};
 	if (startFile) {
 		process.on("SIGTERM", () =>
-			stopWhenReleased(() => {
+			whenReleased("holdExit", () => {
 				process.removeAllListeners("SIGTERM");
 				process.kill(process.pid, "SIGTERM");
 			}),
@@ -2320,37 +2322,40 @@ export function runRpcUi(): void {
 			if (!cutOff && !followUp)
 				return { turn: false, subagents, jobs, followUp: false, cutBeforeRequest, journal: journalEnd(journal) };
 			// A model that is slow to start (the relaunch's spawn and first request): the tab's "continuing" row stays
-			// up for the whole wait, so a spec observes it instead of racing a resume that finishes in a frame.
-			setTimeout(
-				() => {
-					isStreaming = true;
-					write({ type: "agent_start" });
-					setTimeout(() => {
-						const answer: AgentMessage = {
-							role: "assistant",
-							// After a restart-job notice the answer is tall, so the transcript overflows and "stays at the bottom" means something.
-							content: [
-								{
-									type: "text",
-									text:
-										stopped.length > 0
-											? `Continued after the interruption.\n\n${Array.from({ length: 30 }, (_, index) => `- Checked item ${index + 1}`).join("\n")}`
-											: followUp
-												? "Watcher is still on the release build; I'll report when it is green."
-												: "Continued after the interruption.",
-								},
-							],
-							timestamp: Date.now(),
-							provider: model.provider,
-							model: model.id,
-							stopReason: "stop",
-						};
-						appendMessage(answer);
-						write({ type: "message_end", message: answer });
-						endTurn([answer]);
-					}, 600);
-				},
-				followUp ? 1500 : 0,
+			// up for the whole wait, so a spec observes it instead of racing a resume that finishes in a frame. A spec
+			// that must see the row holds the start with `holdResume` (a loaded runner mounts the window seconds late).
+			whenReleased("holdResume", () =>
+				setTimeout(
+					() => {
+						isStreaming = true;
+						write({ type: "agent_start" });
+						setTimeout(() => {
+							const answer: AgentMessage = {
+								role: "assistant",
+								// After a restart-job notice the answer is tall, so the transcript overflows and "stays at the bottom" means something.
+								content: [
+									{
+										type: "text",
+										text:
+											stopped.length > 0
+												? `Continued after the interruption.\n\n${Array.from({ length: 30 }, (_, index) => `- Checked item ${index + 1}`).join("\n")}`
+												: followUp
+													? "Watcher is still on the release build; I'll report when it is green."
+													: "Continued after the interruption.",
+									},
+								],
+								timestamp: Date.now(),
+								provider: model.provider,
+								model: model.id,
+								stopReason: "stop",
+							};
+							appendMessage(answer);
+							write({ type: "message_end", message: answer });
+							endTurn([answer]);
+						}, 600);
+					},
+					followUp ? 1500 : 0,
+				),
 			);
 			return { turn: cutOff, subagents, jobs, followUp: followUp !== undefined, cutBeforeRequest };
 		},
@@ -7337,7 +7342,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			// Like stock rpc mode: the host closing stdin ends the process (a running stream timer would not), and a
 			// turn in flight is journaled aborted first.
 			.on("close", () =>
-				stopWhenReleased(() => {
+				whenReleased("holdExit", () => {
 					autopilot.hangUp();
 					recordSessionExit();
 					process.exit(0);
