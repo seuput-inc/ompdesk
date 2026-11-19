@@ -1,0 +1,153 @@
+# vitest against one exact omp, on the code of one ref: four Ubuntu shards (node
+# and renderer, two each) and the Windows `test:platform` run, every job with
+# that omp installed. Called by omp-latest.yml, once per target (this ref, and
+# the newest release's tag), so the call's result is that target's verdict
+# alone. It never runs on its own.
+#
+# `ref` is checked out before anything else, so the install actions and the
+# scripts a job runs (`.github/actions/install*`, `scripts/omp-bump/latest.ts
+# summary`, `scripts/ci-failure.sh`) are that ref's own: a release is tested
+# with what it shipped. Only this file is the caller's.
+#
+# With `report`, every job writes vitest's JSON report, fails on a `*-stock`
+# test that skipped with omp installed (unless EXPECTED_STOCK_SKIPS names why)
+# and uploads its summary as `<artifact-prefix>vitest-<job>`.
+#
+# The Windows job has 45 minutes: it ran 21 to 30 under the old 30 (runs
+# 44538627025, 44595797074, 44602044583), and a job stopped at its timeout says
+# nothing about the omp while omp-latest.yml still acts on how the call ended.
+name: omp-vitest
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "The tag, branch or commit to test; empty is the caller's commit"
+        type: string
+        default: ""
+      omp:
+        description: "The exact omp version (X.Y.Z) every job installs"
+        type: string
+        required: true
+      report:
+        description: "Write vitest's JSON report, fail on an unexplained skipped stock test, upload the summaries"
+        type: boolean
+        default: false
+      artifact-prefix:
+        description: "Put before `vitest-<job>` in the artifact names, so two calls in one run do not collide"
+        type: string
+        default: ""
+    outputs:
+      omp:
+        description: "The omp version installed (`omp --version`)"
+        value: ${{ jobs.check.outputs.omp }}
+      check:
+        description: "The result of the Ubuntu shards"
+        value: ${{ jobs.check.result }}
+      windows:
+        description: "The result of the Windows job"
+        value: ${{ jobs.windows.result }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    outputs:
+      omp: ${{ steps.omp.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: node 1/2
+            id: node-1
+            args: --project=node --shard=1/2
+          - name: node 2/2
+            id: node-2
+            args: --project=node --shard=2/2
+          - name: renderer 1/2
+            id: renderer-1
+            args: --project=renderer --shard=1/2
+          - name: renderer 2/2
+            id: renderer-2
+            args: --project=renderer --shard=2/2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+      - id: omp
+        uses: ./.github/actions/install-omp
+        with:
+          version: ${{ inputs.omp }}
+      - id: vitest
+        run: bunx vitest run ${{ matrix.args }} ${{ inputs.report && '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=vitest-report.json' || '' }}
+      - name: Stock tests that skipped
+        if: ${{ !cancelled() && inputs.report }}
+        env:
+          GROUP: check
+          JOB: ${{ matrix.id }}
+          OUTCOME: ${{ steps.vitest.outcome }}
+        run: bun scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/${{ matrix.id }}.summary.json"
+      - if: ${{ !cancelled() && inputs.report }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.artifact-prefix }}vitest-${{ matrix.id }}
+          path: ${{ runner.temp }}/vitest
+          retention-days: 14
+      - if: failure()
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      # See release.yml's win job: bun's cache on the workspace volume.
+      - name: Put bun's cache on the workspace volume
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/install-omp
+        with:
+          version: ${{ inputs.omp }}
+      - id: vitest
+        run: bun run test:platform ${{ inputs.report && '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=vitest-report.json' || '' }}
+      - name: Stock tests that skipped
+        if: ${{ !cancelled() && inputs.report }}
+        env:
+          GROUP: windows
+          JOB: windows
+          OUTCOME: ${{ steps.vitest.outcome }}
+        run: bun scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/windows.summary.json"
+      - if: ${{ !cancelled() && inputs.report }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.artifact-prefix }}vitest-windows
+          path: ${{ runner.temp }}/vitest
+          retention-days: 14
+      - if: failure()
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

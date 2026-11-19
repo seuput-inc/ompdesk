@@ -1,22 +1,55 @@
-# Daily vitest against the newest published omp, so an omp release that breaks
-# what OMPdesk reads from the installed stock omp (its settings and their
-# Korean copy, provider ids, tool renderers, the `*-stock` bridge suites) shows
-# the day it is published, even with no push to main. ci.yml, the e2e runs and
-# release.yml install the tested omp (src/shared/omp-tested.json, through
-# .github/actions/install-omp), so only this workflow meets a newer one first.
-# Their Windows job (`win-platform`) installs none, so the stock suites skip
-# there; the `windows` job here runs `test:platform` with omp installed, so a
-# stock suite that fails only on Windows (a file a live worker still holds, a
-# picture Bun reads only through the OS) shows within a day.
-# `plan` reads npm's newest omp once; every job installs exactly that version.
-# While it fails on main, one issue ("Tests against the latest omp failed")
-# stays open with the omp version and the run; a passing run on main closes it.
-# A run from another ref only tests and touches no issue.
+# Follows stock omp's releases without a person (docs/design/follow-omp.md).
+# Every hour `plan` (one job, seconds) reads npm's newest omp, the newest
+# published OMPdesk release and the verified-omp list (`omp-compat.json` on
+# branch `omp-compat`, src/shared/omp-compat.ts) and decides what the run tests
+# (`planTargets`, scripts/omp-bump/compat-run.ts):
+# - the release target (`release`): the code of the newest release's tag,
+#   `v<app>`, because computers run a released OMPdesk, not main. It runs when
+#   the list has no verdict on that omp for that release yet; on the daily slot
+#   (the 04:47 UTC entry) when the list holds that omp, so a held omp is tried
+#   again once a day; and on a dispatch with recheck=true;
+# - the main target (`main`): this ref's code. It runs on the daily slot, on
+#   every dispatch, and in every run that has a release target, so a new omp
+#   is tested on both within the hour it is published;
+# - neither: the run ends with `plan`.
+# Both targets are omp-vitest.yml (four Ubuntu vitest shards and the Windows
+# `test:platform` job, every job with exactly the omp `plan` read), so each
+# call's result is that target's verdict alone.
 #
-# The bump path (W5 of the omp boundary work), on main when the newest omp is
-# newer than the tested one (scripts/omp-bump/latest-run.ts):
+# `compat` writes the release target's verdict (scripts/omp-bump/compat.ts):
+# - green (every job passed, no stock test skipped unexplained): the omp joins
+#   that release's `verified`, and the computers on that release install
+#   exactly it at their next check. Open hold issues of that omp, and of an
+#   older omp whose hold this lifts, are closed with a comment;
+# - red (a job failed): one issue "omp <version> fails against OMPdesk <app>"
+#   is opened or updated with the failed test files by touchpoint, and the
+#   list holds that omp for that release: no computer installs it unasked;
+# - cancelled or timed out: no verdict, the next hourly run tests it again.
+# The list is one commit per changed verdict, pushed without force by
+# github-actions[bot]; a writer that lost a race reads the branch again.
+# Only a run on main writes. A run from another ref, and any rehearsal, tests,
+# prints the verdict and the list as it would be (the `compat` job's summary)
+# and pushes and opens nothing.
+#
+# The main target is the older daily check: an omp release that breaks what
+# OMPdesk reads from the installed stock omp (its settings and their Korean
+# copy, provider ids, tool renderers, the `*-stock` bridge suites) shows even
+# with no push to main. ci.yml, the e2e runs and release.yml install the tested
+# omp (src/shared/omp-tested.json, through .github/actions/install-omp), so
+# only this workflow meets a newer one first. Their Windows job
+# (`win-platform`) installs none, so the stock suites skip there; the Windows
+# job here has omp installed, so a stock suite that fails only on Windows (a
+# file a live worker still holds, a picture Bun reads only through the OS)
+# shows. While the main target fails on main, or `plan` itself fails there,
+# one issue ("Tests against the latest omp failed") stays open with the omp
+# version and the run; a passing main target on main closes it. A run from
+# another ref only tests and touches no issue.
+#
+# The bump path (W5 of the omp boundary work), in a main target on main when
+# the newest omp is newer than the tested one (scripts/omp-bump/latest-run.ts):
 # - every vitest job writes vitest's JSON report and fails on a `*-stock` test
-#   that skipped with omp installed, unless EXPECTED_STOCK_SKIPS names why;
+#   that skipped with omp installed, unless EXPECTED_STOCK_SKIPS names why
+#   (the release target always does both);
 # - `strings` runs `scripts/omp-bump/extract.ts --check` and keeps the full
 #   diff as the `omp-bump` artifact;
 # - all green: `push` puts branch omp/bump/<version> (only omp-tested.json
@@ -30,7 +63,13 @@
 #   touchpoints.ts), unlisted files apart, and the missing strings.
 # A version whose branch exists is tested again but pushes and opens nothing.
 #
-# Run it now: gh workflow run omp-latest.yml [--ref <branch>]
+# Run it now: gh workflow run omp-latest.yml [--ref <branch>] (the main target;
+# the release target too while the list lacks a verdict). ci-run.ts does not
+# dispatch this workflow: it has no macOS job and no queue gate.
+# Verify a release again: gh workflow run omp-latest.yml -f recheck=true
+# Rehearse the list from any ref, writing nothing:
+#   gh workflow run omp-latest.yml --ref <branch> -f rehearse_app=<X.Y.Z>
+# tests that published release as if it were the newest one.
 # Rehearse the bump path from any ref: add -f pretend_tested=<older X.Y.Z>; it
 # pushes the branch and opens the ready issue (delete both after), never
 # touches the failure issue.
@@ -38,11 +77,20 @@ name: omp-latest
 
 on:
   schedule:
+    # One run an hour. The second entry is the daily slot: DAILY_CRON in scripts/omp-bump/compat-run.ts names it.
+    - cron: "47 0-3,5-23 * * *"
     - cron: "47 4 * * *"
   workflow_dispatch:
     inputs:
       pretend_tested:
         description: "Rehearsal only: treat this X.Y.Z as the tested omp, so this ref takes the bump path"
+        default: ""
+      recheck:
+        description: "Test the newest omp against the newest release again, whatever verdict the list has"
+        type: boolean
+        default: false
+      rehearse_app:
+        description: "Rehearsal only: test against this published OMPdesk release (X.Y.Z) as if it were the newest; nothing is pushed or opened"
         default: ""
 
 permissions:
@@ -62,6 +110,10 @@ jobs:
       bump: ${{ steps.plan.outputs.bump }}
       fresh: ${{ steps.plan.outputs.fresh }}
       branch: ${{ steps.plan.outputs.branch }}
+      app: ${{ steps.plan.outputs.app }}
+      release: ${{ steps.plan.outputs.release }}
+      main: ${{ steps.plan.outputs.main }}
+      write: ${{ steps.plan.outputs.write }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -70,106 +122,41 @@ jobs:
       - id: plan
         env:
           PRETEND_TESTED: ${{ inputs.pretend_tested }}
+          RECHECK: ${{ inputs.recheck }}
+          REHEARSE_APP: ${{ inputs.rehearse_app }}
+          SCHEDULE: ${{ github.event.schedule }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          LATEST=$(npm view @oh-my-pi/pi-coding-agent version) bun scripts/omp-bump/latest.ts plan
+          LATEST=$(npm view @oh-my-pi/pi-coding-agent version)
+          # Published releases only: a draft or a prerelease is on nobody's computer.
+          RELEASES=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select((.draft or .prerelease) | not) | .tag_name]')
+          export LATEST RELEASES
+          bun scripts/omp-bump/latest.ts plan
 
-  check:
-    name: check (${{ matrix.name }})
+  main:
     needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    if: needs.plan.outputs.main == 'true'
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
-    outputs:
-      omp: ${{ steps.omp.outputs.version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: node 1/2
-            id: node-1
-            args: --project=node --shard=1/2
-          - name: node 2/2
-            id: node-2
-            args: --project=node --shard=2/2
-          - name: renderer 1/2
-            id: renderer-1
-            args: --project=renderer --shard=1/2
-          - name: renderer 2/2
-            id: renderer-2
-            args: --project=renderer --shard=2/2
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.4
-      - uses: ./.github/actions/install
-      - id: omp
-        uses: ./.github/actions/install-omp
-        with:
-          version: ${{ needs.plan.outputs.latest }}
-      - id: vitest
-        run: bunx vitest run ${{ matrix.args }} ${{ needs.plan.outputs.bump == 'true' && '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=vitest-report.json' || '' }}
-      - name: Stock tests that skipped
-        if: ${{ !cancelled() && needs.plan.outputs.bump == 'true' }}
-        env:
-          GROUP: check
-          JOB: ${{ matrix.id }}
-          OUTCOME: ${{ steps.vitest.outcome }}
-        run: bun scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/${{ matrix.id }}.summary.json"
-      - if: ${{ !cancelled() && needs.plan.outputs.bump == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: vitest-${{ matrix.id }}
-          path: ${{ runner.temp }}/vitest
-          retention-days: 14
-      - if: failure()
-        run: bash scripts/ci-failure.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
+    uses: ./.github/workflows/omp-vitest.yml
+    with:
+      omp: ${{ needs.plan.outputs.latest }}
+      report: ${{ needs.plan.outputs.bump == 'true' }}
 
-  windows:
+  release:
     needs: plan
-    runs-on: windows-latest
-    timeout-minutes: 30
+    if: needs.plan.outputs.release == 'true'
+    # Read-only: this is the one place a run executes another ref's code.
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.4
-      # See release.yml's win job: bun's cache on the workspace volume.
-      - name: Put bun's cache on the workspace volume
-        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/install
-      - uses: ./.github/actions/install-omp
-        with:
-          version: ${{ needs.plan.outputs.latest }}
-      - id: vitest
-        run: bun run test:platform ${{ needs.plan.outputs.bump == 'true' && '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=vitest-report.json' || '' }}
-      - name: Stock tests that skipped
-        if: ${{ !cancelled() && needs.plan.outputs.bump == 'true' }}
-        env:
-          GROUP: windows
-          JOB: windows
-          OUTCOME: ${{ steps.vitest.outcome }}
-        run: bun scripts/omp-bump/latest.ts summary vitest-report.json "$RUNNER_TEMP/vitest/windows.summary.json"
-      - if: ${{ !cancelled() && needs.plan.outputs.bump == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: vitest-windows
-          path: ${{ runner.temp }}/vitest
-          retention-days: 14
-      - if: failure()
-        run: bash scripts/ci-failure.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
+    uses: ./.github/workflows/omp-vitest.yml
+    with:
+      ref: v${{ needs.plan.outputs.app }}
+      omp: ${{ needs.plan.outputs.latest }}
+      report: true
+      artifact-prefix: release-
 
   strings:
     needs: plan
@@ -209,7 +196,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   push:
-    needs: [plan, check, windows, strings]
+    needs: [plan, main, strings]
     if: needs.plan.outputs.fresh == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -230,8 +217,9 @@ jobs:
           git push origin "HEAD:refs/heads/$BRANCH"
 
   issue:
-    needs: [plan, check, windows, strings, push]
-    if: ${{ !cancelled() }}
+    needs: [plan, main, strings, push]
+    # An hourly run that tested nothing on this ref says nothing about it; a `plan` that failed does.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.main == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -241,8 +229,9 @@ jobs:
     env:
       # A planned bump passes only when its strings check ran green and, for a fresh version, its branch was pushed: a
       # cancelled or failed one must not close the failure issue as "Passing again".
-      RESULT: ${{ needs.plan.result == 'success' && needs.check.result == 'success' && needs.windows.result == 'success' && (needs.plan.outputs.bump != 'true' || needs.strings.result == 'success') && (needs.plan.outputs.fresh != 'true' || needs.push.result == 'success') && 'success' || 'failure' }}
-      OMP: ${{ needs.check.outputs.omp }}
+      RESULT: ${{ needs.plan.result == 'success' && needs.main.result == 'success' && (needs.plan.outputs.bump != 'true' || needs.strings.result == 'success') && (needs.plan.outputs.fresh != 'true' || needs.push.result == 'success') && 'success' || 'failure' }}
+      PLAN: ${{ needs.plan.result }}
+      OMP: ${{ needs.main.outputs.omp }}
     steps:
       - if: needs.plan.outputs.bump == 'true'
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -263,6 +252,7 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.latest }}
           NEEDS: ${{ toJSON(needs) }}
+          TARGET: main
         run: |
           mkdir -p "$RUNNER_TEMP/results"
           bun scripts/omp-bump/latest.ts report "$RUNNER_TEMP/results" > "$RUNNER_TEMP/report.md"
@@ -283,7 +273,9 @@ jobs:
             if (failed) {
               const report = `${process.env.RUNNER_TEMP}/report.md`;
               const body = [
-                `vitest failed on main against ${omp}: ${run}`,
+                process.env.PLAN === "success"
+                  ? `vitest failed on main against ${omp}: ${run}`
+                  : `The plan job failed on main, so nothing was tested (npm's newest omp, the releases or omp-compat.json could not be read): ${run}`,
                 "",
                 "Each failing job's summary names its first errors. A stock test that broke is OMPdesk catching up with this omp (settings copy, provider marks, a bridge internal), never a test to skip.",
                 ...(fs.existsSync(report) ? ["", fs.readFileSync(report, "utf8")] : []),
@@ -354,4 +346,110 @@ jobs:
             } else {
               const created = await github.rest.issues.create({ owner, repo, title: titleOf(VERSION), body });
               core.info(`Opened #${created.data.number}`);
+            }
+
+  compat:
+    needs: [plan, release]
+    # A release target that was cancelled is no verdict: the list stays as it is and the next hourly run tests again.
+    if: ${{ !cancelled() && needs.plan.outputs.release == 'true' && (needs.release.result == 'success' || needs.release.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the omp-compat branch
+      actions: read
+      issues: write
+    env:
+      APP: ${{ needs.plan.outputs.app }}
+      OMP: ${{ needs.plan.outputs.latest }}
+      VERDICT: ${{ needs.release.result == 'success' && 'green' || 'red' }}
+      # false from another ref and in a rehearsal: the steps below print, and push and open nothing.
+      WRITE: ${{ needs.plan.outputs.write }}
+    steps:
+      # This ref's code, never the tested tag's: the only job of the run that can write runs no released code.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - if: env.VERDICT == 'red'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        # A run whose jobs ended before uploading leaves nothing to download; the report still names them.
+        continue-on-error: true
+        with:
+          pattern: release-vitest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/results
+      - name: Failures by touchpoint
+        if: env.VERDICT == 'red'
+        # The verdict below matters more than its report: a report that cannot be written leaves the issue without one.
+        continue-on-error: true
+        env:
+          VERSION: ${{ needs.plan.outputs.latest }}
+          NEEDS: ${{ toJSON(needs) }}
+          TARGET: release
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          bun scripts/omp-bump/latest.ts report "$RUNNER_TEMP/results" > "$RUNNER_TEMP/report.md"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/report.md"
+      - name: Hold issue
+        id: issue
+        if: env.VERDICT == 'red' && env.WRITE == 'true'
+        # The hold is recorded even when no issue could be opened: without it every hourly run tests this omp again.
+        continue-on-error: true
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require("node:fs");
+            const { owner, repo } = context.repo;
+            const { APP, OMP } = process.env;
+            const title = `omp ${OMP} fails against OMPdesk ${APP}`;
+            const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const report = `${process.env.RUNNER_TEMP}/report.md`;
+            const body = [
+              `omp ${OMP} failed the tests of OMPdesk ${APP} (tag \`v${APP}\`): ${run}`,
+              "",
+              `\`omp-compat.json\` on branch \`omp-compat\` holds it, so no computer on OMPdesk ${APP} installs it by itself. The daily run tests it again while ${APP} is the newest release; a green run lifts the hold and closes this issue. The same run tested main (its \`main\` jobs): the fix lands there and reaches those computers as a new OMPdesk release.`,
+              ...(fs.existsSync(report) ? ["", fs.readFileSync(report, "utf8")] : []),
+            ].join("\n");
+            const issues = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "all", per_page: 100 });
+            const existing = issues.find(issue => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body, state: "open" });
+              core.info(`Updated #${existing.number}`);
+              core.setOutput("number", String(existing.number));
+            } else {
+              const created = await github.rest.issues.create({ owner, repo, title, body });
+              core.info(`Opened #${created.data.number}`);
+              core.setOutput("number", String(created.data.number));
+            }
+      - name: Record the verdict
+        id: record
+        env:
+          ISSUE: ${{ steps.issue.outputs.number }}
+        run: bun scripts/omp-bump/compat.ts record
+      - name: Close the hold issues this verdict lifts
+        if: env.VERDICT == 'green' && env.WRITE == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RELEASED: ${{ steps.record.outputs.released_issue }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { APP, OMP, RELEASED } = process.env;
+            const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const pattern = /^omp (\d+\.\d+\.\d+) fails against OMPdesk (\d+\.\d+\.\d+)$/;
+            const open = (await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 }))
+              .filter(issue => !issue.pull_request && pattern.test(issue.title));
+            for (const issue of open) {
+              const [, omp, app] = pattern.exec(issue.title);
+              const reason = omp === OMP
+                ? app === APP
+                  ? `omp ${OMP} passes against OMPdesk ${APP} now: ${run}`
+                  : `omp ${OMP} passes against OMPdesk ${APP}, a newer release: ${run}\n\nOMPdesk ${app} still holds it; its computers get it by updating OMPdesk.`
+                : String(issue.number) === RELEASED
+                  ? `omp ${OMP}, a newer one, passes against OMPdesk ${APP}, which lifts the hold on omp ${omp}: ${run}`
+                  : null;
+              if (!reason) continue;
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: reason });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: "closed" });
+              core.info(`Closed #${issue.number}: ${reason}`);
             }
