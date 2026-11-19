@@ -154,6 +154,12 @@ else {
 	foreach ($wanted in 'check found', 'download verified', 'swap helper', 'swap result') { Check ($events -contains $wanted) "the update log has `"$wanted`"" }
 	$result = $rows | Where-Object { $_.message -eq 'swap' -and $_.details.event -eq 'result' } | Select-Object -Last 1
 	Check ($result.details.outcome -eq 'installed') "the new app logged swap result outcome installed (got '$($result.details.outcome)')"
+	# 0.134.0 and 0.134.1 also got here, one background check (5 min) later: the gate is that the FIRST download succeeds.
+	$downloads = @($rows | Where-Object { $_.message -eq 'download' })
+	Evidence "download rows: $(($downloads | ForEach-Object { "$($_.details.event) $($_.details.version)" }) -join ', ')"
+	Check ($downloads.Count -ge 2 -and $downloads[0].details.event -eq 'started' -and $downloads[1].details.event -eq 'verified' -and $downloads[1].details.version -eq $NewVersion) "the first download of v$NewVersion is verified with nothing in between"
+	Check (-not ($downloads | Where-Object { $_.details.event -eq 'failed' })) 'no download failed'
+	Check (@($downloads | Where-Object { $_.details.event -eq 'started' }).Count -eq 1) 'the update was downloaded once'
 	$entry = Get-Entry
 	Check ($entry -and $entry.DisplayVersion -eq $NewVersion) "the uninstall entry says $NewVersion"
 	Check ($mark.version -eq $NewVersion) "app-started.json names $NewVersion (the relaunched app's first page loaded)"
