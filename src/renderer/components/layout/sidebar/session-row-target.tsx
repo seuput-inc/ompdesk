@@ -5,7 +5,7 @@
  * same way, from `stores/session-targets.ts` (`shared/session-target.ts`), by `resolveRowTarget`.
  */
 import { GitBranch, GitCommitHorizontal, MessageCircle, Rocket } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
 import {
 	AGENT_BRANCH_PREFIX,
 	AUTOPILOT_BRANCH_PREFIX,
@@ -111,44 +111,65 @@ export function shownHead(text: string, head: SessionHead): string {
 /** The fewest characters a branch keeps in view before it goes whole (the owner's "about eight"). */
 const HEAD_FLOOR_CHARS = 8;
 
-/** The longest last segment (its separator included) a cut name keeps whole. */
-const HEAD_TAIL_MAX = 11;
-
-/** Hangul, CJK and fullwidth forms: about 1.75 `ch` each in the sidebar's fonts. */
-const WIDE_CHAR = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/u;
-
-const widthCh = (chars: readonly string[]) => chars.reduce((sum, char) => sum + (WIDE_CHAR.test(char) ? 1.75 : 1), 0);
+/** The longest last segment (its separator included) a cut name keeps whole; a date stamp's is longer and goes. */
+const HEAD_TAIL_MAX = 8;
 
 /**
  * How a name gives way on a short line: the middle goes (the owner's "keep the distinguishing tail", 19 Nov 2026), so
  * `…/settings-panel-dark` and `…/settings-panel-light` read `…/settings-pa…-dark` and `…-light`. `body` ends in the
  * ellipsis, `tail` (the last `-`, `_` or `/` segment with its separator, at most `HEAD_TAIL_MAX`) never shrinks; a name
- * with no such tail ends in the ellipsis. `floorCh` is what the name keeps before the head goes whole: about
- * `HEAD_FLOOR_CHARS` characters (a wide one 1.75 `ch`) and the ellipsis; null for a name no longer than that, which
- * stays whole or goes at its own width.
+ * with no such tail ends in the ellipsis. `floor` is the text the head keeps before it goes whole (about
+ * `HEAD_FLOOR_CHARS` characters with the tail, and the ellipsis); null for a name no longer than that, which stays
+ * whole or goes at its own width.
  */
-export function headParts(shown: string): { body: string; tail: string; floorCh: number | null } {
+export function headParts(shown: string): { body: string; tail: string; floor: string | null } {
 	const chars = [...shown];
-	if (chars.length <= HEAD_FLOOR_CHARS) return { body: shown, tail: "", floorCh: null };
+	if (chars.length <= HEAD_FLOOR_CHARS) return { body: shown, tail: "", floor: null };
 	const cut = Math.max(shown.lastIndexOf("-"), shown.lastIndexOf("_"), shown.lastIndexOf("/"));
 	const tail = cut > 2 && shown.length - cut <= HEAD_TAIL_MAX ? shown.slice(cut) : "";
 	const body = tail ? shown.slice(0, cut) : shown;
-	const tailChars = [...tail];
-	const kept = [...body].slice(0, Math.max(3, HEAD_FLOOR_CHARS - tailChars.length));
-	return { body, tail, floorCh: widthCh(tailChars) + widthCh(kept) + 1 };
+	const kept = [...body].slice(0, Math.max(3, HEAD_FLOOR_CHARS - [...tail].length)).join("");
+	return { body, tail, floor: `${kept}…${tail}` };
+}
+
+let measureContext: CanvasRenderingContext2D | null | undefined;
+
+/** The width of `text` in `font`, by a canvas's text metrics (no layout); null where there is no canvas. */
+function textWidth(font: string, text: string): number | null {
+	if (measureContext === undefined)
+		measureContext =
+			typeof document === "undefined" ? null : (document.createElement("canvas").getContext?.("2d") ?? null);
+	if (!measureContext) return null;
+	measureContext.font = font;
+	return measureContext.measureText(text).width;
 }
 
 /**
  * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name past a
  * shared prefix (`shownHead`), whose middle gives way on a short line (`headParts`: the last segment stays); the whole
  * name is its hover title. Its box (`.omp-session-head-box`, sidebar.css) drops the whole head, mark too, once the line
- * cannot hold its mark and the name's floor. `worktree` names what a linked worktree is for (`data-sidebar-worktree`),
- * absent for a main checkout and a run's child.
+ * cannot hold its mark and the name's floor, measured in the name's own font before the first paint and laid out as the
+ * head's flex basis and minimum (a minimum alone did not wrap it in the Windows runners' Chromium). `worktree` names
+ * what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's child.
  */
 export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktree?: WorktreeKind }) {
 	const t = useT();
 	const { text, tip } = headWords(t, head);
-	const { body, tail, floorCh: floor } = headParts(shownHead(text, head));
+	const { body, tail, floor } = headParts(shownHead(text, head));
+	const ref = useRef<HTMLSpanElement>(null);
+	useLayoutEffect(() => {
+		const element = ref.current;
+		const name = element?.querySelector(".truncate");
+		if (!element || !name) return;
+		const style = floor === null ? null : name.ownerDocument.defaultView?.getComputedStyle?.(name);
+		const width =
+			floor === null || !style
+				? null
+				: textWidth(style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, floor);
+		const size = width === null ? "" : `calc(var(--sc-icon-sm) + 0.25rem + ${Math.ceil(width) + 1}px)`;
+		element.style.flexBasis = size;
+		element.style.minWidth = size;
+	}, [floor]);
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
@@ -159,7 +180,7 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 				data-head-whole={floor === null ? "" : undefined}
 				data-session-head={head.kind}
 				data-sidebar-worktree={worktree}
-				style={floor === null ? undefined : { minWidth: `calc(var(--sc-icon-sm) + 0.25rem + ${floor}ch)` }}
+				ref={ref}
 				title={tip}
 			>
 				<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />

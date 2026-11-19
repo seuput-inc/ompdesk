@@ -250,7 +250,8 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 }
 
 /* The head's own box drops the whole head, mark too, onto an invisible second line once it cannot hold the head's
-   floor (`SessionHeadLabel`'s min-width: the mark and about eight characters, or all of a shorter name): the head is
+   floor (`SessionHeadLabel` measures it and sets it as the head's flex basis and min-width: the mark and about eight
+   characters with the kept tail, or all of a shorter name): the head is
    laid out at that floor after a 1 px first item, so it wraps exactly when the floor does not fit, and grows to its
    whole name when there is room. The first item must be wider than 0: Chromium and WebKit put any item onto a line
    still 0 wide, so a 0 px one kept the head on the line, cut at its edge. It is a line high, so the wrapped head sits
