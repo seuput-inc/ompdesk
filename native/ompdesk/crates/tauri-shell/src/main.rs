@@ -5,6 +5,7 @@ mod assets;
 mod automation;
 mod evaluate;
 mod gpu;
+mod migrate_watch;
 mod native_chrome;
 mod native_services;
 mod network;
@@ -41,7 +42,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -49,6 +50,7 @@ struct Migration {
     profile: profile::Profile,
     targets: HashMap<u64, String>,
     offers: HashMap<u64, (Identity, String, usize)>,
+    watches: migrate_watch::Watches,
 }
 
 type AppInitialization = tokio::sync::watch::Receiver<Option<Result<(), String>>>;
@@ -191,6 +193,13 @@ fn profile_bootstrap(url: &str) -> bool {
     base == "app://ompdesk/__profile/migrate"
         || (cfg!(windows) && base == "http://app.localhost/__profile/migrate")
 }
+fn bootstrap_url() -> &'static str {
+    if cfg!(windows) {
+        "http://app.localhost/__profile/migrate"
+    } else {
+        "app://ompdesk/__profile/migrate"
+    }
+}
 /// Test seam (`OMP_GUI_TEST_SHELL_STALL_MIGRATE=<n>`, test builds only): the first `n` requests for the migration page
 /// are never answered.
 #[cfg(feature = "test-automation")]
@@ -207,6 +216,156 @@ fn stall_bootstrap_request() -> bool {
         .is_ok()
 }
 
+/// Records how far `wc` got through the migration page in tauri-shell.jsonl; `start` begins a timed round when none
+/// runs (`migrate_watch.rs`). The caller holds `migration`.
+fn migration_step(migration: &mut Migration, wc: u64, step: migrate_watch::Step, start: bool) {
+    let now = Instant::now();
+    let (round, attempt) = if start {
+        let (round, attempt) = migration.watches.start(wc, step, now);
+        (round, Some(attempt))
+    } else {
+        (None, migration.watches.step(wc, step, now))
+    };
+    log::log(
+        "profile.migrate",
+        json!({"wcId":wc,"step":step.name(),"attempt":attempt}),
+    );
+    if let Some(round) = round {
+        time_migration(wc, round);
+    }
+}
+
+fn time_migration(wc: u64, round: u64) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let due = runtime().migration.lock().expect("migration").watches.due(
+                wc,
+                round,
+                Instant::now(),
+            );
+            let (after, retry) = match due {
+                migrate_watch::Due::Ended => return,
+                migrate_watch::Due::Wait(wait) => {
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                migrate_watch::Due::Retry { attempt, after } => (after, Some(attempt)),
+                migrate_watch::Due::GiveUp { after } => (after, None),
+            };
+            log::log(
+                "profile.migrate.stalled",
+                json!({"wcId":wc,"step":after.name(),"waitedMs":migrate_watch::STEP_TIMEOUT.as_millis(),"retry":retry}),
+            );
+            let app = runtime().app.clone();
+            let dispatched = match retry {
+                Some(attempt) => app.run_on_main_thread(move || retry_migration(wc, attempt)),
+                None => app.run_on_main_thread(move || give_up_migration(wc, after)),
+            };
+            if let Err(error) = dispatched {
+                log::log(
+                    "profile.migrate.dispatch_failed",
+                    json!({"wcId":wc,"error":error.to_string()}),
+                );
+            }
+            if retry.is_none() {
+                return;
+            }
+        }
+    });
+}
+
+/// Loads the migration page again (the app page once the profile is done), as `loadURL` did.
+fn retry_migration(wc: u64, attempt: u32) {
+    let destination = {
+        let mut migration = runtime().migration.lock().expect("migration");
+        let Some(target) = migration.targets.get(&wc).cloned() else {
+            return;
+        };
+        log::log(
+            "profile.migrate",
+            json!({"wcId":wc,"step":migrate_watch::Step::Navigate.name(),"attempt":attempt}),
+        );
+        if migration.profile.pending() {
+            migration.offers.remove(&wc);
+            bootstrap_url().to_owned()
+        } else {
+            target
+        }
+    };
+    let navigated = window_for_wc(wc)
+        .map_err(|error| error.message)
+        .and_then(|window| {
+            window
+                .navigate(expect_navigation(wc, &destination)?)
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = navigated {
+        log::log(
+            "profile.migrate.retry_failed",
+            json!({"wcId":wc,"error":error}),
+        );
+    }
+}
+
+/// Shows the window with the reason in whatever document it holds (the migration page, or the blank page a request
+/// that never came back left in place) and a Retry that loads the migration page again.
+fn give_up_migration(wc: u64, after: migrate_watch::Step) {
+    let reason = format!(
+        "OMPdesk could not open its window: the profile migration step \"{}\" got no answer in {} s, {} times. Your existing data has not been overwritten.",
+        after.name(),
+        migrate_watch::STEP_TIMEOUT.as_secs(),
+        migrate_watch::ATTEMPTS
+    );
+    log::log(
+        "profile.migrate.gave_up",
+        json!({"wcId":wc,"step":after.name(),"reason":reason}),
+    );
+    let win = runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .page(wc)
+        .and_then(|page| page.identity.win);
+    if let Some(win) = win {
+        win_event(win, "ready-to-show");
+    }
+    wc_event(
+        wc,
+        "preload-error",
+        json!(["profile migration", {"message": reason}]),
+    );
+    let Ok(window) = window_for_wc(wc) else {
+        return;
+    };
+    // The blank page's Retry is a navigation the page starts; the host expects it, so Node's `will-navigate` is not asked.
+    if let Err(error) = expect_navigation(wc, bootstrap_url()) {
+        log::log(
+            "profile.migrate.retry_failed",
+            json!({"wcId":wc,"error":error}),
+        );
+        return;
+    }
+    let script = format!(
+        r#"(() => {{
+  const body = document.body ?? document.documentElement.appendChild(document.createElement("body"));
+  let text = document.getElementById("omp-profile-error");
+  if (!text) {{ text = body.appendChild(document.createElement("p")); text.id = "omp-profile-error"; text.setAttribute("role", "alert"); }}
+  text.textContent = {reason};
+  let retry = document.getElementById("omp-profile-retry");
+  if (!retry) {{ retry = body.appendChild(document.createElement("button")); retry.id = "omp-profile-retry"; retry.textContent = "Retry / 다시 시도"; retry.onclick = () => {{ location.href = {url}; }}; }}
+  retry.hidden = false;
+}})();"#,
+        reason = json!(reason),
+        url = json!(bootstrap_url()),
+    );
+    if let Err(error) = window.eval(script) {
+        log::log(
+            "profile.migrate.show_failed",
+            json!({"wcId":wc,"error":error.to_string()}),
+        );
+    }
+}
+
 fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
     if url == "about:blank" {
         return;
@@ -219,6 +378,18 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
                 .expect("registry")
                 .navigate(wc, url.into());
         }
+        let step = if event == PageLoadEvent::Started {
+            migrate_watch::Step::Loading
+        } else {
+            migrate_watch::Step::Loaded
+        };
+        // A Retry the page itself starts (its button) is a new timed round.
+        migration_step(
+            &mut runtime().migration.lock().expect("migration"),
+            wc,
+            step,
+            event == PageLoadEvent::Started,
+        );
         return;
     }
     if event == PageLoadEvent::Started {
@@ -226,6 +397,12 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
             let mut migration = runtime().migration.lock().expect("migration");
             migration.targets.remove(&wc);
             migration.offers.remove(&wc);
+            if let Some((attempt, _)) = migration.watches.end(wc) {
+                log::log(
+                    "profile.migrate",
+                    json!({"wcId":wc,"step":"app","attempt":attempt}),
+                );
+            }
         }
         let changed = runtime()
             .registry
@@ -337,6 +514,7 @@ fn close_record(wc: u64) {
         let mut migration = runtime().migration.lock().expect("migration");
         migration.targets.remove(&wc);
         migration.offers.remove(&wc);
+        migration.watches.end(wc);
     }
     let page = runtime().registry.lock().expect("registry").remove(wc);
     if let Some(page) = page {
@@ -767,11 +945,8 @@ fn wc_op(call: host::Call) {
                     if migration.profile.pending() {
                         migration.targets.insert(wc, url.to_string());
                         migration.offers.remove(&wc);
-                        if cfg!(windows) {
-                            "http://app.localhost/__profile/migrate".to_owned()
-                        } else {
-                            "app://ompdesk/__profile/migrate".to_owned()
-                        }
+                        migration_step(&mut migration, wc, migrate_watch::Step::Navigate, true);
+                        bootstrap_url().to_owned()
                     } else {
                         url.to_string()
                     }
@@ -1039,9 +1214,11 @@ async fn profile_ipc(
                     let id = offer["id"].as_str().ok_or_else(|| json!({"code":"failed","message":"invalid native migration identity"}))?.to_owned();
                     let count = offer["items"].as_object().ok_or_else(|| json!({"code":"failed","message":"invalid native migration snapshot"}))?.len();
                     migration.offers.insert(identity.wc, (identity, id, count));
+                    migration_step(&mut migration, identity.wc, migrate_watch::Step::Read, false);
                     offer["generation"] = json!(identity.generation);
                     return Ok(offer);
                 }
+                migration_step(&mut migration, identity.wc, migrate_watch::Step::Handover, false);
                 drop(migration);
                 webview.navigate(expect_navigation(identity.wc, &target).map_err(|message| json!({"code":"invalid","message":message}))?)
                     .map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
@@ -1056,11 +1233,15 @@ async fn profile_ipc(
             if migration.profile.pending() {
                 migration.profile.acknowledge(id, count).map_err(|message| json!({"code":"failed","message":message}))?;
             }
+            migration_step(&mut migration, identity.wc, migrate_watch::Step::Handover, false);
             drop(migration);
             webview.navigate(expect_navigation(identity.wc, &target).map_err(|message| json!({"code":"invalid","message":message}))?)
                 .map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
             Ok(json!({"complete":true}))
         })();
+        if let Err(error) = &result {
+            log::log("profile.migrate.refused", json!({"wcId":identity.wc,"kind":kind,"error":error}));
+        }
         let _ = send.send(result);
     }).map_err(|error| json!({"code":"failed","message":error.to_string()}))?;
     receive
@@ -1176,6 +1357,19 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
         }
         "preloadError" => {
             if profile_bootstrap(url.as_str()) {
+                // The page shows its error and Retry; its Retry starts a new round.
+                if let Some((attempt, step)) = runtime()
+                    .migration
+                    .lock()
+                    .expect("migration")
+                    .watches
+                    .end(identity.wc)
+                {
+                    log::log(
+                        "profile.migrate.failed",
+                        json!({"wcId":identity.wc,"step":step.name(),"attempt":attempt,"message":value["message"]}),
+                    );
+                }
                 // Reveal the recovery page without settling Node's original app load promise.
                 if let Some(win) = identity.win {
                     win_event(win, "ready-to-show");
@@ -1398,15 +1592,23 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let builder = preview::media::configure(builder);
     let app = builder
         .invoke_handler(tauri::generate_handler![omp_ipc])
-        .register_asynchronous_uri_scheme_protocol("app", |_context, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
+            let label = context.webview_label().to_owned();
             std::thread::spawn(move || {
+                if !assets::is_bootstrap(request.uri()) {
+                    return responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
+                }
                 #[cfg(feature = "test-automation")]
-                if assets::is_bootstrap(request.uri()) && stall_bootstrap_request() {
+                if stall_bootstrap_request() {
                     // The request stays unanswered, as the Windows runs saw it.
                     std::mem::forget(responder);
                     return;
                 }
-                responder.respond(assets::serve(&runtime().renderer, request,&runtime().content_policy))
+                responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
+                let wc = runtime().registry.lock().expect("registry").by_label(&label).map(|page| page.identity.wc);
+                if let Some(wc) = wc {
+                    migration_step(&mut runtime().migration.lock().expect("migration"), wc, migrate_watch::Step::Served, false);
+                }
             });
         })
         .setup(move |app| {
@@ -1421,6 +1623,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                         profile,
                         targets: HashMap::new(),
                         offers: HashMap::new(),
+                        watches: migrate_watch::Watches::default(),
                     }),
                     app_initializations: Mutex::new(HashMap::new()),
                     navigation_watch: Mutex::new(HashSet::new()),
