@@ -48,29 +48,56 @@ impl Drop for Proc {
     }
 }
 
-/// The pids whose parent is `parent`.
-pub fn children_of(parent: u32) -> Vec<u32> {
+/// Calls `visit` with every entry of one process snapshot (nothing when the snapshot fails).
+fn each_process(mut visit: impl FnMut(&PROCESSENTRY32W)) {
     // SAFETY: a plain snapshot call; the handle is closed below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
-        return Vec::new();
+        return;
     }
-    let mut pids = Vec::new();
     // SAFETY: PROCESSENTRY32W is plain data, all-zero is valid; `dwSize` is set before the first call as the API requires.
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
     // SAFETY: `snapshot` is a live snapshot handle and `entry` a correctly sized, writable entry.
     let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
     while more {
-        if entry.th32ParentProcessID == parent && entry.th32ProcessID != 0 {
-            pids.push(entry.th32ProcessID);
-        }
+        visit(&entry);
         // SAFETY: as above.
         more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
     }
     // SAFETY: the snapshot handle is ours and closed once.
     unsafe { CloseHandle(snapshot) };
+}
+
+/// The pids whose parent is `parent`.
+pub fn children_of(parent: u32) -> Vec<u32> {
+    let mut pids = Vec::new();
+    each_process(|entry| {
+        if entry.th32ParentProcessID == parent && entry.th32ProcessID != 0 {
+            pids.push(entry.th32ProcessID);
+        }
+    });
     pids
+}
+
+/// The parent of `pid` and, while that parent still runs, its executable's file name.
+pub fn parent_of(pid: u32) -> Option<(u32, Option<String>)> {
+    let mut parent = None;
+    each_process(|entry| {
+        if entry.th32ProcessID == pid {
+            parent = Some(entry.th32ParentProcessID);
+        }
+    });
+    let parent = parent?;
+    let mut name = None;
+    each_process(|entry| {
+        if entry.th32ProcessID == parent {
+            let exe = &entry.szExeFile;
+            let end = exe.iter().position(|c| *c == 0).unwrap_or(exe.len());
+            name = Some(String::from_utf16_lossy(&exe[..end]));
+        }
+    });
+    Some((parent, name))
 }
 
 /// A handle that can wait for the process and read its command line and exit code; `None` when it is not ours to open.
