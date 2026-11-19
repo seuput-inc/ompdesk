@@ -146,10 +146,13 @@ async function shownTab(page: Page): Promise<{ tabId: string; status: string } |
 async function promptShownTab(page: Page, message: string): Promise<void> {
 	const tab = await shownTab(page);
 	if (!tab) throw new Error("the view shows no session to prompt");
-	await page.evaluate(([tabId, text]) => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: text }), [
-		tab.tabId,
-		message,
-	] as const);
+	const reply = await page.evaluate(
+		([tabId, text]) => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: text }),
+		[tab.tabId, message] as const,
+	);
+	// A refused prompt (a turn still running, a link not up) says so here, not as a later wait that times out.
+	if (!reply.success)
+		throw new Error(`the prompt was refused on tab ${tab.tabId} (${tab.status}): ${JSON.stringify(reply)}`);
 }
 
 /**

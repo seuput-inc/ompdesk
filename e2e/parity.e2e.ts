@@ -432,6 +432,15 @@ if (dir) {
 						if (!tabId) throw new Error(`the phone could not view ${session}: ${JSON.stringify(viewed)}`);
 					}
 					await phone.goto(`${phoneUrl}/#/open?tab=${tabId}`);
+					// The route switches the page's tab after the load, so wait for it: a surface that prompts the shown tab
+					// must not reach the tab the page opened on (todo-behind's phone prompt never reached the work session
+					// on run 44590307837, while the views before it did).
+					await expect
+						.poll(
+							async () => (await phone.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId,
+							{ timeout: 30_000 },
+						)
+						.toBe(tabId);
 				},
 			};
 
