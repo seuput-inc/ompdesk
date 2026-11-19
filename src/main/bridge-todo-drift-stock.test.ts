@@ -34,7 +34,7 @@ import { INSTALLED_OMP as omp } from "./test-bridge-probe";
  * the bridge's reading (`todoDrift.state`, what get_state carries, and the last `todo_drift` frame) and the panel's
  * "now" (the renderer's todo store fed with get_state and the frames omp sent) against it: a steer during a running
  * turn, the same across a compaction and a relaunch, a child whose list is a playbook's steps (steered, and after a
- * long run of calls).
+ * long run of calls). The agent's reminder is bridge-todo-nudge-stock.test.ts.
  */
 
 const forgets = () => steerAgent(() => false);

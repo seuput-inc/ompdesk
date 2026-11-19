@@ -1,6 +1,7 @@
 /**
- * Shared world of the todo-list-behind-the-work stock tests: a scripted agent, the steer during a running turn, and
- * the journal and the panel read the same way in each.
+ * Shared world of the todo-list-behind-the-work stock tests (bridge-todo-drift-stock.test.ts: the panel's reading;
+ * bridge-todo-nudge-stock.test.ts: the agent's reminder): a scripted agent, the steer during a running turn, and the
+ * journal and the panel read the same way in both.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

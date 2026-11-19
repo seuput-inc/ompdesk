@@ -1456,6 +1456,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"resources/gui-bridge/todo-wait.ts",
 			"resources/gui-bridge/todo-stale.ts",
 			"resources/gui-bridge/todo-drift.ts",
+			"resources/gui-bridge/todo-nudge.ts",
 			"resources/gui-bridge/modes/checkout-peers.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
@@ -1472,6 +1473,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-todo-wait-stock.test.ts",
 			"src/main/bridge-todo-stale-stock.test.ts",
 			"src/main/bridge-todo-drift-stock.test.ts",
+			"src/main/bridge-todo-nudge-stock.test.ts",
 		],
 		changes: [
 			"41312bc8 omp 18.18.4 allows a todo append without a phase, so the refused-call fixture changed (fixture only)",

@@ -93,6 +93,7 @@ export const FEATURES = {
 	todoCompact: "A todo list grown long by appends is asked to fold its finished items",
 	todoDrift:
 		"The to-do panel says when the list last changed, which instructions came since, and marks a list behind the work",
+	todoNudge: "A todo list behind the work (a new instruction or a long run of tool calls) is named to the agent",
 	wasteGuards:
 		"A bash service start whose ready.log cannot match is refused; a polling call or a refused edit is told once what to do instead; a wait returns only with news",
 	quitJournal: "A quit while a tool runs journals the tool's aborted result before the process ends",
@@ -625,6 +626,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"sessionManager.getSessionId()",
 			"sessionManager.appendCustomEntry()",
 		],
+		modules: {
+			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
+		},
+	},
+	/** todo-nudge.ts: todo-drift.ts's reading, returned as the public `tool_result` hook's `additionalContext`. */
+	todoNudge: {
+		session: ["getActiveToolNames()", "getPlanModeState()", "sessionManager.getBranch()"],
 		modules: {
 			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
 		},

@@ -3,8 +3,8 @@
  * call of the main agent the bridge reads the journal from the list's last change and sends the GUI when that was,
  * whether the list is behind the work and which instructions arrived since (get_state `todoDrift` through
  * `todoDrift.state`, and the `todo_drift` frame when it changes). It never touches the agent's list and says nothing
- * to the agent. The first reading in a session journals `TODO_DRIFT_MARKER`, so scripts/todo-truth-stats.ts tells the
- * sessions that ran this bridge from those that did not.
+ * to the agent (todo-nudge.ts does). The first reading in a session journals `TODO_DRIFT_MARKER`, so
+ * scripts/todo-truth-stats.ts tells the sessions that ran this bridge from those that did not.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
