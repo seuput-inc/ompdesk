@@ -33,6 +33,7 @@ import {
 	agentControlEnabled,
 	agentHiddenPaths,
 	isAgentControlTool,
+	parseAgentCloseAnswer,
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
@@ -1754,6 +1755,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const report = parseFileEditReport(args);
 		if (!caller.win || !caller.connId || !report) return;
 		fileEditReports.report(caller.win.webContents.id, caller.connId, report.dirtyTabId);
+	});
+
+	// A window's answer to an agent's close it was asked to make (`AgentControlViewEvent.closeId`).
+	ipc.handle(IPC_COMMANDS.AGENT_CLOSE_ANSWER, (caller, payload: unknown) => {
+		const answer = parseAgentCloseAnswer(payload);
+		if (!caller.win || !answer) return;
+		agentControl.answerClose(caller.win, answer);
 	});
 
 	// The calling window's open `worktree.onStart` / `worktree.onExit` questions.

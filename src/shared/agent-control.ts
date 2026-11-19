@@ -193,6 +193,40 @@ export interface AgentControlViewEvent {
 	how: AgentControlPlacement | "close";
 	/** A close main decided on itself (an opened session's work landed): the window refuses it for a tab the person is using. */
 	auto?: true;
+	/** A close the core waits on: the window answers it with `IPC_COMMANDS.AGENT_CLOSE_ANSWER` carrying this id. */
+	closeId?: number;
+}
+
+/**
+ * What a window did with an agent's close (`AgentControlViewEvent.closeId`): `closing` it released the tab (main's
+ * release follows), `last-tab` it keeps its last tab, `unsaved-edits` the tab's Files editor holds unsaved edits,
+ * `in-use` an automatic close met a tab the person is at, `not-here` the window holds no such tab.
+ */
+export type AgentCloseOutcome = "closing" | "last-tab" | "unsaved-edits" | "in-use" | "not-here";
+
+export const AGENT_CLOSE_OUTCOMES: readonly AgentCloseOutcome[] = [
+	"closing",
+	"last-tab",
+	"unsaved-edits",
+	"in-use",
+	"not-here",
+];
+
+/** The window's answer to one agent close. */
+export interface AgentCloseAnswer {
+	tabId: string;
+	closeId: number;
+	outcome: AgentCloseOutcome;
+}
+
+/** An `AGENT_CLOSE_ANSWER` call's payload exactly as a window sends it, or null for anything else. */
+export function parseAgentCloseAnswer(value: unknown): AgentCloseAnswer | null {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+	if (!("tabId" in value) || !("closeId" in value) || !("outcome" in value)) return null;
+	const { tabId, closeId, outcome } = value;
+	if (typeof tabId !== "string" || typeof closeId !== "number" || !Number.isSafeInteger(closeId)) return null;
+	const known = AGENT_CLOSE_OUTCOMES.find(entry => entry === outcome);
+	return known ? { tabId, closeId, outcome: known } : null;
 }
 
 /** Prefs key (written by main): opened sessions whose tab was closed automatically, so the opener's family still lists them. */

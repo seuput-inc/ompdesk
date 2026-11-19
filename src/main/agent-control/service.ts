@@ -32,6 +32,7 @@
 import type { AutopilotStartOptions, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import type {
 	AgentAppEvent,
+	AgentCloseOutcome,
 	AgentControlToolName,
 	AgentControlViewEvent,
 	AgentReviewItem,
@@ -132,6 +133,8 @@ export interface ControlTab {
 	 * computer runs for a paired device; `SidecarLike.shared`): closing it only leaves, that tab stays open.
 	 */
 	viewing?: true;
+	/** The tab's window's latest answer to an agent close (`AgentControlViewEvent.closeId`). */
+	closeAnswer?: { closeId: number; outcome: AgentCloseOutcome };
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */

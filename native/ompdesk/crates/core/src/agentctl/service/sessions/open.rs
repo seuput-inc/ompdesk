@@ -233,7 +233,7 @@ impl AgentControl {
         if let (Some(show), Some(first)) = (show, first)
             && show != "background"
         {
-            self.host.view(&caller.tab_id, &first.tab_id, show, false);
+            self.host.view(&caller.tab_id, &first.tab_id, show);
         }
         let state = self.host.state();
         let live = state.tabs(&caller.tab_id);

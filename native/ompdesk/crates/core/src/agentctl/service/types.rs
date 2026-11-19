@@ -231,6 +231,9 @@ pub struct ControlTab {
     /// computer runs for a paired device): one omp, shared, and closing the view only leaves it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub viewing: bool,
+    /// The tab's window's latest answer to an agent close (`closeId` of the view event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_answer: Option<CloseAnswer>,
 }
 
 impl ControlTab {
@@ -242,6 +245,30 @@ impl ControlTab {
             &self.title
         }
     }
+}
+
+/// What a window did with an agent's close (`shared/agent-control.ts` `AgentCloseOutcome`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloseOutcome {
+    /// It let go of the tab; main's release follows.
+    Closing,
+    /// It keeps its last tab.
+    LastTab,
+    /// The tab's Files editor holds unsaved edits: the window asked the person first.
+    UnsavedEdits,
+    /// An automatic close met a tab the person is at.
+    InUse,
+    /// The window holds no such tab.
+    NotHere,
+}
+
+/// A window's answer to the agent close `close_id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseAnswer {
+    pub close_id: u64,
+    pub outcome: CloseOutcome,
 }
 
 /// What the tab holding a saved session elsewhere does with it.

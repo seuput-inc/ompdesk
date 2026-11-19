@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutopilotStartOptions, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
-import { type ClosedChild, AGENT_CONTROL_TOOLS as T, wrapAgentMessage } from "../../shared/agent-control";
+import {
+	type AgentCloseOutcome,
+	type ClosedChild,
+	AGENT_CONTROL_TOOLS as T,
+	wrapAgentMessage,
+} from "../../shared/agent-control";
 import type {
 	AgentMessage,
 	ExtensionUIRequest,
@@ -176,13 +181,21 @@ class FakeHost implements AgentControlHost {
 			tab.title = task;
 		}
 	};
-	view = (_caller: string, event: { tabId: string; how: string }) => {
-		this.views.push(event);
+	view = (_caller: string, event: { tabId: string; how: string; auto?: true; closeId?: number }) => {
+		const { closeId, ...shown } = event;
+		this.views.push(shown);
 		this.order.push(`view:${event.how}:${event.tabId}`);
-		if (event.how === "close" && !this.refuseClose.has(event.tabId)) this.tabsById.delete(event.tabId);
+		if (event.how !== "close") return;
+		const refused = this.closeRefusals.get(event.tabId);
+		const tab = this.tabsById.get(event.tabId);
+		// The window answers what it did (`AGENT_CLOSE_ANSWER`), which main lists as the tab's `closeAnswer`.
+		if (refused && tab && closeId !== undefined) tab.closeAnswer = { closeId, outcome: refused };
+		if (!refused && !this.refuseClose.has(event.tabId)) this.tabsById.delete(event.tabId);
 	};
-	/** Tabs whose window keeps them when asked to close (a draft, the window's last tab, unsaved edits). */
+	/** Tabs whose window never answers a close (its page is stuck). */
 	refuseClose = new Set<string>();
+	/** Tabs whose window keeps them when asked to close, and says why (its last tab, unsaved Files edits). */
+	closeRefusals = new Map<string, AgentCloseOutcome>();
 	/** Everything that happened to a closing tab, in order (a view event, a release, a mail). */
 	order: string[] = [];
 	/** Tabs main released itself (`release`): a paired web page's, never asked of its window. */
@@ -4832,13 +4845,32 @@ describe("closing and stopping: ownership after a relaunch, cards by risk", () =
 describe("a close is told only once the tab is gone", () => {
 	const closeArgs = { session: "kid00002", close: true };
 
-	it("sends no close note when the window kept the tab, and says it is still open", async () => {
+	it("sends no close note when the window did not answer, and says its page is not running", async () => {
 		const host = new FakeHost({ tabId: "boss0001", title: "Boss" }, { tabId: "kid00002", title: "Kid" });
 		host.parents.set("kid00002", "boss0001");
 		host.refuseClose.add("kid00002");
 		const result = await shortWaits(() => control(host).run("boss0001", T.stop, closeArgs));
 		expect(result.isError).toBe(true);
-		expect(result.text).toMatch(/still open/);
+		expect(result.text).toMatch(
+			/^"Kid" is still open: its window did not answer the close within [\d.]+ s, so its page is not running/,
+		);
+		expect(host.mails).toEqual([]);
+	});
+
+	// 19 Nov 2026: every close a window kept read "it is that window's last tab, or it holds unsaved Files edits",
+	// also from a window whose page had stopped. A window that keeps a tab now says which of its own rules kept it.
+	it.each([
+		["last-tab", "it is its window's last tab, and a window keeps its last tab"],
+		["unsaved-edits", "its Files editor holds unsaved edits, so its window asked the user to save or discard them"],
+	] as const)("says the window kept the tab for %s, at once and with no close note", async (outcome, words) => {
+		const host = new FakeHost({ tabId: "boss0001", title: "Boss" }, { tabId: "kid00002", title: "Kid" });
+		host.parents.set("kid00002", "boss0001");
+		host.closeRefusals.set("kid00002", outcome);
+		const result = await control(host).run("boss0001", T.stop, closeArgs);
+		expect(result.isError).toBe(true);
+		expect(result.text).toBe(
+			`"Kid" is still open: ${words}${outcome === "last-tab" ? ". Ask the user to close it or open another tab there" : " before the tab closes. Ask the user to answer that"}; its session is saved either way.`,
+		);
 		expect(host.mails).toEqual([]);
 	});
 
