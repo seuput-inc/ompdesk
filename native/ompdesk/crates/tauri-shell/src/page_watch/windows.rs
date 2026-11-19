@@ -66,6 +66,10 @@ fn learn(view: &PlatformWebview, wc: u64) {
         LOOKING.with_borrow_mut(|on| on.remove(&wc));
         match found {
             Ok(pid) => {
+                crate::log::log(
+                    "page.renderer_learned",
+                    serde_json::json!({"wcId": wc, "pid": pid}),
+                );
                 RENDERERS.with_borrow_mut(|known| known.insert(wc, pid));
             }
             Err(error) => crate::log::log(
@@ -104,6 +108,10 @@ fn lookup(view: &PlatformWebview, answer: impl FnOnce(Result<i32, String>) + 'st
     let answered = finish.clone();
     let handler =
         GetProcessExtendedInfosCompletedHandler::create(Box::new(move |result, processes| {
+            crate::log::log(
+                "page.renderer_list",
+                serde_json::json!({"ok": result.is_ok(), "list": processes.is_some()}),
+            );
             answered(
                 result
                     .and_then(|()| match &processes {
@@ -117,8 +125,14 @@ fn lookup(view: &PlatformWebview, answer: impl FnOnce(Result<i32, String>) + 'st
             );
             Ok(())
         }));
+    crate::log::log("page.renderer_lookup", serde_json::json!({"frame": frame}));
     // SAFETY: the live environment on its UI thread; WebView2 retains the handler until the list answers.
-    if let Err(error) = unsafe { environment.GetProcessExtendedInfos(&handler) } {
+    let asked = unsafe { environment.GetProcessExtendedInfos(&handler) };
+    crate::log::log(
+        "page.renderer_asked",
+        serde_json::json!({"frame": frame, "error": asked.as_ref().err().map(|e| e.to_string())}),
+    );
+    if let Err(error) = asked {
         finish(Err(format!("WebView2 process list: {error}")));
     }
 }
