@@ -164,6 +164,54 @@ async fn a_stored_list_refuses_a_status_filter() {
     control.host.port().close();
 }
 
+/// Main's index: the caller, the child it opened whose tab closed, and a session nobody opened.
+fn main_with_saved(method: &str, args: &Value) -> Result<Value, String> {
+    let row = |id: &str, path: &str| {
+        json!({ "id": id, "path": path, "title": id, "cwd": "/w", "modified": "2026-11-20T00:00:00Z", "messages": 2, "status": "complete" })
+    };
+    match method {
+        "stored" => Ok(json!([
+            row("boss1111", "/s/x_boss1111.jsonl"),
+            row("kid22222", "/s/y_kid22222.jsonl"),
+            row("else3333", "/s/z_else3333.jsonl"),
+        ])),
+        other => main_of(other, args),
+    }
+}
+
+#[tokio::test]
+async fn mine_lists_the_sessions_the_caller_opened_whose_tabs_closed_and_open_ones_in_any_window() {
+    let far = tab("far", "/s/w_far44444.jsonl");
+    let (control, _) = rig(
+        7_390,
+        vec![tab("boss", "/s/x_boss1111.jsonl"), far],
+        json!({
+            "windowOf": { "boss": "w", "far": "w2" },
+            "parents": { "far": { "callerTabId": "boss" } },
+            "closedChildren": [{ "path": "/s/y_kid22222.jsonl", "openedBySession": "/s/x_boss1111.jsonl", "title": "kid22222", "cwd": "/w", "closedAt": 5.0 }],
+        }),
+        main_with_saved,
+    );
+    let stored = control
+        .run(
+            "boss",
+            "ompdesk_sessions",
+            json!({ "scope": "stored", "mine": true }),
+            None,
+        )
+        .await;
+    assert!(!stored.is_error, "{}", stored.text);
+    assert!(stored.text.contains("kid22222"), "{}", stored.text);
+    assert!(!stored.text.contains("else3333"), "{}", stored.text);
+    assert!(!stored.text.contains("boss1111"), "{}", stored.text);
+    let open = control
+        .run("boss", "ompdesk_sessions", json!({ "mine": true }), None)
+        .await;
+    assert!(!open.is_error, "{}", open.text);
+    assert!(open.text.contains("- far \"far\""), "{}", open.text);
+    control.host.port().close();
+}
+
 #[tokio::test]
 async fn an_open_marks_the_child_a_worker_and_sends_its_message_wrapped() {
     let (control, asked) = rig(
