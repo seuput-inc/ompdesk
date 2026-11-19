@@ -5,9 +5,9 @@ install.
 
   -Mode break   the old app (-OldSetup, e.g. published v0.134.1) is offered -NewSetup by the stand-in feed; the gate passes
                 when its download fails with "session electron-updater does not exist" (the defect 0.134.2 fixes), and it
-                records every update-log row for seven minutes, so a second check after the failure is seen too.
-  -Mode manual  the old app runs, and -NewSetup is run by hand with /S over it (what a person stuck on the old app does
-                once); the new app starts as -NewVersion with userData, the WebView store and ~\.omp kept.
+                records every update-log row for eight minutes, so what the second check after the failure does is seen too.
+  -Mode manual  the old app runs, and -NewSetup is run by hand with /S --force-run over it (what a person stuck on the old
+                app does once); the setup starts -NewVersion with userData, the WebView store and ~\.omp kept.
   -Mode update  the old app (-OldSetup = the candidate) is offered -NewSetup (a higher build of the same branch) and its
                 own updater checks, downloads, verifies, counts down, starts the setup and quits; the setup installs and
                 starts the new app.
@@ -88,15 +88,17 @@ if ($Mode -eq 'break') {
 	Start-Feed
 	$null = Start-App
 	$failed = $null
-	# The first check runs 3 s after start, the next one 5 minutes later: seven minutes see both.
-	while (((Get-Date) - $t0).TotalMinutes -lt 7) {
+	# The first check runs 3 s after start, the next one 5 minutes later: eight minutes see both and the second download.
+	while (((Get-Date) - $t0).TotalMinutes -lt 8) {
 		Start-Sleep -Seconds 5
 		if (-not $failed) { $failed = Get-UpdateRows | Where-Object { $_.message -eq 'download' -and $_.details.event -eq 'failed' } | Select-Object -First 1 }
 	}
 	Show-Rows
 	Check ($null -ne $failed) "v${OldVersion}'s download of v$NewVersion failed"
 	Check ($failed.details.reason -match 'session electron-updater does not exist') "the failure is the shell's missing partition (reason '$($failed.details.reason)')"
-	Check (-not (Get-UpdateRows | Where-Object { $_.message -eq 'download' -and $_.details.event -eq 'verified' })) 'nothing was downloaded'
+	# Whether the second check's download, on the partition Brave registered meanwhile, gets through is a fact to record.
+	$verified = Get-UpdateRows | Where-Object { $_.message -eq 'download' -and $_.details.event -eq 'verified' } | Select-Object -First 1
+	Evidence "a later download of v$NewVersion was verified: $($null -ne $verified)"
 }
 elseif ($Mode -eq 'manual') {
 	$null = Start-App
@@ -106,14 +108,19 @@ elseif ($Mode -eq 'manual') {
 	$storeBefore = @(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count
 	$prefsBefore = Read-Json (Join-Path $userData 'prefs.json')
 	Evidence "before: WebView store files $storeBefore; prefs keys $(@($prefsBefore.PSObject.Properties.Name) -join ',')"
-	# A person runs the setup while the app is open.
-	$setup = Start-Process -FilePath $NewSetup -ArgumentList '/S' -Wait -PassThru
-	Check ($setup.ExitCode -eq 0) "v$NewVersion's setup /S over the running v$OldVersion exited 0 (exit $($setup.ExitCode))"
+	# A person runs the setup while the app is open. /S alone closes the running app and starts nothing; --force-run starts
+	# the new app (with this script's runner environment: no omp, no machine setup). Only the setup itself is waited for:
+	# Start-Process -Wait would also wait for the app it starts.
+	$env:OMP_GUI_HEADLESS = '1'; $env:OMP_GUI_OMP = $noOmp; $env:OMP_GUI_TEST_INSTALLER = $noInstall
+	$setup = Start-Process -FilePath $NewSetup -ArgumentList '/S', '--force-run' -PassThru
+	Remove-Item Env:OMP_GUI_HEADLESS, Env:OMP_GUI_OMP, Env:OMP_GUI_TEST_INSTALLER -ErrorAction SilentlyContinue
+	$null = $setup.Handle
+	$null = $setup.WaitForExit(600000)
+	Check ($setup.HasExited -and $setup.ExitCode -eq 0) "v$NewVersion's setup /S --force-run over the running v$OldVersion exited 0 (exit $($setup.ExitCode))"
 	$entry = Get-Entry
 	Check ($entry -and $entry.DisplayVersion -eq $NewVersion) "the uninstall entry says $NewVersion"
-	if (-not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count) { $null = Start-App }
 	$mark = Wait-Started $NewVersion 120
-	Check ($mark.version -eq $NewVersion) "v$NewVersion started on the same profile (app-started.json)"
+	Check ($mark.version -eq $NewVersion) "the setup started v$NewVersion on the same profile (app-started.json)"
 	Start-Sleep -Seconds 10
 	$storeAfter = @(Get-ChildItem -LiteralPath $webViewStore -Recurse -File -Force -ErrorAction SilentlyContinue).Count
 	$prefsAfter = Read-Json (Join-Path $userData 'prefs.json')
