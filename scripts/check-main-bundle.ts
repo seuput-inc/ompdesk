@@ -380,6 +380,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // 2,208,877 (branch run 44589770282), 1,027 bytes over. The budget is that measure plus 80 bytes.
 // They lead with their count, say what the count measures, and a tap shows a cut line whole (20 Nov 2026): measured
 // 2,209,713 (branch run 44596214057), 756 bytes over. The budget is that measure plus 80 bytes.
+// A paired host's refusal of a view's return after its window closed it (20 Nov 2026, C2: `view_ended` in
+// `shared/ipc-error-codes.ts`, which the phone's first screen loads): measured 2,206,000 (branch run 44589727329), 8 bytes
+// over. The budget is that measure plus 80 bytes.
 // Those branches together with close-visible B, the page watchdog and the rest of next-line (20 Nov 2026): measured
 // 2,207,805 (branch run 44594625704). The budget is that measure plus 80 bytes.
 const WEB_FIRST_SCREEN_JS_BYTES = 2_207_885;

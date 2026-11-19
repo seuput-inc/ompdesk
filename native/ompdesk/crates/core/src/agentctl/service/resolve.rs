@@ -825,7 +825,19 @@ impl AgentControl {
         verb: &str,
     ) -> R<ControlTab> {
         let now = match self.rejoin(caller, row).await? {
-            Rejoined::Held(tab) | Rejoined::Joined(tab) => return Ok(tab),
+            Rejoined::Held(tab) => return Ok(tab),
+            Rejoined::Joined(joined) => {
+                // A view made only to reach the session for this call closes when the call ends (`let_go_joined`);
+                // one made to show it stays, as does one a caller outside OMPdesk waits on.
+                if matches!(verb, "send to" | "answer" | "report to" | "merge") {
+                    self.mem()
+                        .joined
+                        .entry(caller.tab_id.clone())
+                        .or_default()
+                        .push(joined.tab_id.clone());
+                }
+                return Ok(joined);
+            }
             Rejoined::Nowhere(now) => now,
         };
         // What a computer lists as held is its windows' tabs and the tabs it runs for devices that are attached. A

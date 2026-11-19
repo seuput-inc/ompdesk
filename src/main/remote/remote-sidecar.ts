@@ -37,7 +37,7 @@ import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
 import type { RpcCommand, RpcResponse, SidecarStatus, SidecarStatusPayload } from "../../shared/rpc-types";
 import type { BridgeConnectResult } from "../bridge-health";
 import type { RpcClient } from "../rpc-client";
-import type { SidecarLike } from "../sidecar-types";
+import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import type { SignInCallbackPage } from "../sign-in-callback";
 import {
 	HOST_COMMAND_TIMEOUT_MS,
@@ -646,6 +646,13 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 			if (ipcErrorCode(error) === "session_deleted") {
 				this.#settle(null);
 				this.emit("sessionDeleted", this.#resume);
+				return;
+			}
+			// The host's window closed the tab this one showed while the link was down: it ends as a view does,
+			// never an error tab and never an omp of its own on a session its owner closed.
+			if (ipcErrorCode(error) === "view_ended") {
+				this.#settle(null);
+				this.emit(VIEW_ENDED_EVENT);
 				return;
 			}
 			// Another tab on the host already shows this session (one of this device's, or another device's): the pool

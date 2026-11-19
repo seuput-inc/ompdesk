@@ -1133,6 +1133,7 @@ app.whenReady().then(async () => {
 		// A removed worktree's project, read off its `gui-<name>-<hash7>` folder name (stock's root and repo hash).
 		worktreeLocation: project => stockWorktreeLocation(tablessWorktreeBridge, project),
 		worktreeBindings: () => sidecarPool.worktreeBindings(),
+		scratchSessions: folder => sessionScratch.sessionsOf(folder),
 		onState: state => {
 			const update: IpcSidebarProjects = { state };
 			// Every window and paired phone page: a page that never heard a removal kept the project until a tap.

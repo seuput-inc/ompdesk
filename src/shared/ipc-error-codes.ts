@@ -23,6 +23,7 @@ export const IPC_ERROR_CODES = [
 	"session_owned_elsewhere",
 	"session_kind_mismatch",
 	"session_open_in_tab",
+	"view_ended",
 	"session_hidden",
 	"session_not_open",
 	"no_messages",

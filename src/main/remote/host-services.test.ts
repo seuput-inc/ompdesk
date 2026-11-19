@@ -2780,6 +2780,25 @@ describe("LocalHostServices", () => {
 		expect(a.events.filter(entry => entry.event === "sessions.changed").length).toBeGreaterThan(0);
 	});
 
+	it("a device's folder read (scope local) in the gap does not swallow the close the shared list owes the others", async () => {
+		vi.useFakeTimers();
+		const { services, local } = setup(60_000, {
+			sessionIndex: {
+				list: async () => [{ path: "/s/w.jsonl", id: "w", title: "w", cwd: workDir, firstMessage: "" }],
+			} as unknown as HostServicesDeps["sessionIndex"],
+		});
+		const a = new FakeConnection(peer("device-a"));
+		const b = new FakeConnection(peer("device-b"));
+		local.owned.set("/s/w.jsonl", { tabId: "w1", winId: 1 });
+		await services.call(a.peer, "sessions.list", { scope: "global" }, a);
+		// The window's tab lets go; before it is announced, device B reads one folder's sessions.
+		local.owned.delete("/s/w.jsonl");
+		await services.call(b.peer, "sessions.list", { scope: "local", cwd: workDir }, b);
+		services.listingChanged();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(a.events.filter(entry => entry.event === "sessions.changed").length).toBeGreaterThan(0);
+	});
+
 	it("tells a device which listed children its review list holds failed or unlanded, and forgets what landed", async () => {
 		const paths = ["/s/failed.jsonl", "/s/unmerged.jsonl", "/s/clean.jsonl", "/s/elsewhere.jsonl"];
 		const { services } = setup(60_000, {
@@ -3561,6 +3580,28 @@ describe("LocalHostServices: a device opening a session a window of this compute
 			.call(x.peer, "tab.command", { rtab: "t1", command: { type: "get_state" } }, x)
 			.catch((error: unknown) => error);
 		expect(ipcErrorCode(gone)).toBe("unknown_tab");
+	});
+
+	it("a window's close the device missed while away is not undone when it comes back: no omp of its own", async () => {
+		const { services, sidecars, local, view, x } = await viewing();
+		services.disconnected(x.peer, x);
+		// The window here closes its tab while the device is away: it never hears `viewEnded`.
+		local.views.delete(SESSION);
+		view.emit(VIEW_ENDED_EVENT);
+		const back = new FakeConnection(peer("device-x"));
+		const again = await services
+			.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(again)).toBe("view_ended");
+		expect(sidecars).toHaveLength(0);
+		// Told once: a later open of that rtab (the person reopening the session there) is an open like any other.
+		const later = await services.call(
+			back.peer,
+			"tab.open",
+			{ rtab: "t1", cwd: workDir, sessionPath: SESSION },
+			back,
+		);
+		expect(later).toMatchObject({ attached: false });
 	});
 
 	it("hands the device the asks the window's omp has open when it attaches", async () => {

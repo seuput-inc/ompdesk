@@ -711,6 +711,11 @@ export class LocalHostServices implements HostServices {
 	 */
 	readonly #opening = new Map<string, number>();
 	readonly #closedWhileOpening = new Set<string>();
+	/**
+	 * Views whose window tab closed while their device was away (it never heard `viewEnded`): its return under that
+	 * rtab is told the view ended once, never given an omp of its own on a session its owner closed.
+	 */
+	readonly #endedViews = new Set<string>();
 	readonly #runningListeners = new Set<() => void>();
 	readonly #remoteOpenedListeners = new Set<() => void>();
 	readonly #windowHeldListeners = new Set<() => void>();
@@ -1319,7 +1324,9 @@ export class LocalHostServices implements HostServices {
 				return null;
 			case "sessions.list": {
 				const { scope, cwd, versioned } = parse(SessionsListParams, method, params);
-				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd));
+				// One folder's rows: decorated, but the shared list's snapshot stays what that list last said, or a change
+				// read here first would never reach the devices holding the shared list.
+				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd), false);
 				// Each read decorates the index's copy again (a tab here taking a session moves no journal) and keeps the
 				// version while nothing changed.
 				this.#deviceList.stale();
@@ -1681,10 +1688,13 @@ export class LocalHostServices implements HostServices {
 		return { openers: this.#deps.sessionOpeners?.() ?? new Map<string, string>(), held };
 	}
 
-	/** This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`). */
-	#decorated(rows: readonly SessionInfo[]): SessionInfo[] {
+	/**
+	 * This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`).
+	 * `shared`: the rows are the shared list's, so the listing they show becomes what devices last heard.
+	 */
+	#decorated(rows: readonly SessionInfo[], shared = true): SessionInfo[] {
 		const { openers, held } = this.#listing();
-		this.#listingSnapshot = listingSignature(openers, held);
+		if (shared) this.#listingSnapshot = listingSignature(openers, held);
 		const problems = new Map([...this.#childProblems.values()].flatMap(children => [...children]));
 		// Every row says, even `null` for none: an older host's rows say nothing, and a device lists those as before.
 		return rows.map(row => {
@@ -1776,9 +1786,11 @@ export class LocalHostServices implements HostServices {
 		void this.#deps.machine.abortBenchmark(benchCaller(deviceId));
 		void this.#deps.machine.abortModelSetup(benchCaller(deviceId));
 		for (const [key, tab] of this.#tabs) if (tab.peerId === deviceId) this.#closeTab(key);
+		for (const key of this.#endedViews) if (key.startsWith(this.#key(deviceId, ""))) this.#endedViews.delete(key);
 	}
 
 	disposeAll(): void {
+		this.#endedViews.clear();
 		for (const key of [...this.#tabs.keys()]) this.#closeTab(key);
 		clearTimeout(this.#sessionsTimer);
 		this.#sessionsTimer = undefined;
@@ -2007,6 +2019,8 @@ export class LocalHostServices implements HostServices {
 		const key = this.#key(peer.deviceId, params.rtab);
 		const held = this.#tabs.get(key);
 		const existing = held ?? this.#adopt(peer, params, conn);
+		if (!existing && this.#endedViews.delete(key))
+			throw codedError("view_ended", "The tab this one showed was closed on the host");
 		if (existing) {
 			clearTimeout(existing.graceTimer);
 			existing.graceTimer = undefined;
@@ -2314,7 +2328,11 @@ export class LocalHostServices implements HostServices {
 				this.#emit(tab, "scheduledRetry", scheduledRetryArg(retry));
 			});
 			// The tab it views closed: the device heard `viewEnded` (#wire), and its tab here goes.
-			sidecar.on(VIEW_ENDED_EVENT, () => this.#closeTab(this.#key(tab.peerId, tab.rtab)));
+			sidecar.on(VIEW_ENDED_EVENT, () => {
+				const key = this.#key(tab.peerId, tab.rtab);
+				if (tab.conn === null) this.#endedViews.add(key);
+				this.#closeTab(key);
+			});
 		}
 		return tab;
 	}
