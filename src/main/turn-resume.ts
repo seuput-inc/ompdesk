@@ -56,7 +56,9 @@ export type ResumeReason =
 	/** The turn ended in a network error and was waiting for the connection. */
 	| "network"
 	/** The turn ended at a provider's limit and was waiting for it to lift. */
-	| "limit";
+	| "limit"
+	/** The turn failed and a scheduled retry was waiting for its time (it lives in the process; the marker carries it). */
+	| "retry";
 
 export interface ResumeMarker {
 	/** The window (webContents id) that held the tab. Informational: windows are rebuilt from the saved layout. */
@@ -354,7 +356,11 @@ function sanitizeMarker(value: unknown): ResumeMarker | null {
 		typeof cwd !== "string" ||
 		(kind !== "agent" && kind !== "chat") ||
 		typeof startedAt !== "number" ||
-		(reason !== "running" && reason !== "asking" && reason !== "network" && reason !== "limit") ||
+		(reason !== "running" &&
+			reason !== "asking" &&
+			reason !== "network" &&
+			reason !== "limit" &&
+			reason !== "retry") ||
 		// Written by a client before its host owned the resume: the host has its own marker.
 		device !== undefined
 	)

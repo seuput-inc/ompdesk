@@ -567,7 +567,7 @@ impl Inst {
         }
         let exited = self.exited(&current);
         self.settle_retries();
-        let (limited, previous) = {
+        let (limited, previous, marked) = {
             let st = self.st.borrow();
             let limited: HashSet<String> = st
                 .scheduled
@@ -577,10 +577,18 @@ impl Inst {
                 .collect();
             let previous: Vec<MarkerData> =
                 st.previous.iter().map(|m| m.borrow().d.clone()).collect();
-            (limited, previous)
+            // A scheduled retry of a transient failure lives in this process only: its marker carries it over a relaunch.
+            let mut marked = current.clone();
+            for fact in &mut marked {
+                fact.retry_armed = st
+                    .scheduled
+                    .get(&fact.tab_id)
+                    .is_some_and(|armed| !armed.borrow().limit);
+            }
+            (limited, previous, marked)
         };
         let live: Vec<Mk> = {
-            let derived = derive_markers(&current, &previous, self.now(), &limited);
+            let derived = derive_markers(&marked, &previous, self.now(), &limited);
             let st = self.st.borrow();
             let fresh: Vec<MarkerData> = derived
                 .into_iter()
@@ -638,7 +646,10 @@ impl Inst {
                 .find(|entry| entry.borrow().d.tab == fact.tab_id)
                 .map(|entry| entry.borrow().d.clone());
             let Some(marker) = marker else { continue };
-            if matches!(marker.reason, Reason::Network | Reason::Limit) {
+            if matches!(
+                marker.reason,
+                Reason::Network | Reason::Limit | Reason::Retry
+            ) {
                 continue;
             }
             let before = self.st.borrow().pending.get(&fact.tab_id).cloned();
@@ -1770,8 +1781,11 @@ impl Inst {
             let on = self.stock_retry_on(&tab).await?;
             let env = self.look(Some(&tab), &["fact", "now"]).await?;
             self.stretch(env, |me| {
-                if let Some(current) = me.still_owed(&tab, &outcome, false, generation, on) {
-                    me.arm(&current, &outcome, used, None);
+                if let Some(current) = me.still_owed(&tab, &outcome, false, generation, on)
+                    && me.arm(&current, &outcome, used, None)
+                {
+                    // The marker says `retry` now, so a relaunch before the retry's time still retries the turn.
+                    me.sync_inner();
                 }
             });
             return Ok(());
