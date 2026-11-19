@@ -114,6 +114,9 @@ pub struct Run {
     #[serde(default)]
     pub release: bool,
     pub summary: Option<String>,
+    /// The OMPdesk session that started it, as the tag its omp's processes carry; none from a plain terminal.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 pub struct Store {

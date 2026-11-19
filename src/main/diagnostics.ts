@@ -21,6 +21,15 @@ const MAX_LINE_CHARS = 3_000;
 const MAX_DETAIL_CHARS = 300;
 /** The read window of a log tail: room for RAW_LOG_LINES short lines, or DIAGNOSTICS_LOG_LINES lines of stacks. */
 const LOG_TAIL_BYTES = 1024 * 1024;
+/**
+ * The sources a symptom without a repro writes when it shows again (console-window-watch.ts, slow-steps.ts,
+ * turn-wait-watch.ts). Their lines are few and may be days old, long out of the last entries, so a report carries the
+ * newest of them on their own.
+ */
+const PROBE_SOURCES = ['"source":"console-window"', '"source":"slow-step"', '"source":"turn-wait"'];
+export const DIAGNOSTICS_PROBE_LINES = 30;
+/** The whole of a log file: it is rolled over at 4 MiB (runtime-log-core.ts). */
+const WHOLE_LOG_BYTES = 5 * 1024 * 1024;
 
 export interface DiagnosticsSystem {
 	appVersion: string;
@@ -45,6 +54,8 @@ export interface DiagnosticsInput {
 	setup: SetupState | null;
 	/** Runtime-log lines, oldest first. */
 	logLines: readonly string[];
+	/** The newest probe lines (`readProbeLines`), oldest first; none: the section is left out. */
+	probeLines?: readonly string[];
 	/** The OMPdesk versions of the paired computers connected now, never their names: a mismatch explains a refusal. */
 	paired?: PairedVersions | null;
 	/** How the window draws: a bug seen only in software rendering or under Reduce motion is told apart by it. */
@@ -135,6 +146,13 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
 					"",
 				]
 			: []),
+		...(input.probeLines?.length
+			? [
+					`## Probes (console windows, slow steps, long waits; last ${DIAGNOSTICS_PROBE_LINES})`,
+					...input.probeLines.map(line => clip(redactDiagnosticsText(line), MAX_LINE_CHARS)),
+					"",
+				]
+			: []),
 		`## Runtime log (last ${DIAGNOSTICS_LOG_LINES} entries, repeats folded)`,
 		...(input.logLines.length > 0
 			? input.logLines.map(line => clip(redactDiagnosticsText(line), MAX_LINE_CHARS))
@@ -218,6 +236,17 @@ export async function readDiagnosticsLog(logPath: string): Promise<string[]> {
 	return entryLines(both.slice(-DIAGNOSTICS_LOG_LINES));
 }
 
+/** The newest probe lines of the whole log and, when those are few, of its `.1` archive, oldest first. */
+export async function readProbeLines(logPath: string): Promise<string[]> {
+	const probes = async (file: string) =>
+		(await tailLogLines(file, Number.MAX_SAFE_INTEGER, WHOLE_LOG_BYTES)).filter(line =>
+			PROBE_SOURCES.some(source => line.includes(source)),
+		);
+	const current = await probes(logPath);
+	if (current.length >= DIAGNOSTICS_PROBE_LINES) return current.slice(-DIAGNOSTICS_PROBE_LINES);
+	return [...(await probes(`${logPath}.1`)), ...current].slice(-DIAGNOSTICS_PROBE_LINES);
+}
+
 export interface DiagnosticsDeps {
 	system: () => DiagnosticsSystem;
 	setupState: () => SetupState | null;
@@ -231,11 +260,13 @@ export interface DiagnosticsDeps {
 
 /** The report as of now: what the preview shows and what the diagnostic bundle (diagnostic-bundle.ts) carries. */
 export async function currentDiagnosticsReport(deps: DiagnosticsDeps): Promise<string> {
+	const logPath = deps.runtimeLogPath();
 	return buildDiagnosticsReport({
 		generatedAt: (deps.now ?? (() => new Date()))(),
 		system: deps.system(),
 		setup: deps.setupState(),
-		logLines: await readDiagnosticsLog(deps.runtimeLogPath()),
+		logLines: await readDiagnosticsLog(logPath),
+		probeLines: await readProbeLines(logPath),
 		paired: deps.pairedVersions?.() ?? null,
 		display: deps.display ? await deps.display().catch(() => null) : null,
 	});

@@ -54,7 +54,7 @@ import {
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
 import { REA_PREF, reaEnabled } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF } from "../shared/computer-use";
-import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
+import { CREDIT_SPEND_PREF, creditSpendEnabled } from "../shared/credit-spend";
 import { DEFAULT_BROWSER_PREF } from "../shared/default-browser";
 import {
 	APP_AUTO_UPDATE_PREF,
@@ -97,7 +97,7 @@ import { migrateAgentPowers } from "./agent-power-migration";
 import { lowerAgentPriority } from "./agent-priority";
 import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
-import { ompLaunch } from "./ai-memory/core-asks";
+import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
 import { registerAiMemoryIpc } from "./ai-memory/ipc";
 import { RecallTermsIndex } from "./ai-memory/recall-terms";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
@@ -117,6 +117,7 @@ import {
 	reaches,
 	tcpConnects,
 } from "./connectivity";
+import { CONSOLE_POLL_MS, type ConsoleWindow, ConsoleWindowWatch } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
@@ -168,6 +169,7 @@ import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { followSetupState } from "./omp-availability";
+import { creditSpendRun, SESSION_TAG_ENV } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
 import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
 import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
@@ -186,6 +188,7 @@ import { FileMarks } from "./routines/marks";
 import { filesChanged, githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
 import { RoutineTriggers } from "./routines/triggers";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
+import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
@@ -213,6 +216,7 @@ import { SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
+import { installSlowSteps } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
 import { StatsClient } from "./stats-client";
@@ -229,6 +233,7 @@ import { exitWithLauncher } from "./test-launcher-exit";
 import { createTray, destroyTray, hasTray } from "./tray";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
+import { TurnWaitWatch, WAIT_JOURNAL_BYTES, WAIT_JOURNAL_LINES, WAIT_SWEEP_MS } from "./turn-wait-watch";
 import {
 	appAutoUpdatePrefChanged,
 	appVersion,
@@ -858,6 +863,8 @@ app.whenReady().then(async () => {
 	if (gotLock) {
 		reportPreviousHang();
 		installHangWatchdog();
+		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
+		installSlowSteps({ log: (message, details) => writeRuntimeLog({ source: "slow-step", message, details }) });
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -889,6 +896,8 @@ app.whenReady().then(async () => {
 	const initialCwd = resolveInitialCwd();
 	const explicitStartupCwd = resolveExplicitStartupCwd();
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
+	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
+	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
 	configureNativeBin({
 		packaged: app.isPackaged,
 		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
@@ -2092,6 +2101,7 @@ app.whenReady().then(async () => {
 		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
 		extensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
 		extensionEnv: cwd => mcpHub?.ompEnv(cwd) ?? Promise.resolve({}),
+		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
 	});
 	scheduleService = new ScheduleService({
 		file: join(app.getPath("userData"), "schedules.json"),
@@ -2245,6 +2255,14 @@ app.whenReady().then(async () => {
 			details: { error: error instanceof Error ? error.message : String(error) },
 		}),
 	);
+	// A tab that waits long without a step says what it waits on (turn-wait-watch.ts).
+	const turnWait = new TurnWaitWatch({
+		tabs: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()],
+		facts: tabId => sidecarPool.settleFacts(tabId),
+		status: tabId => sidecarPool.sidecarOf(tabId)?.status,
+		journal: file => tailLogLines(file, WAIT_JOURNAL_LINES, WAIT_JOURNAL_BYTES),
+		log: details => writeRuntimeLog({ source: "turn-wait", message: "still waiting", details }),
+	});
 	const turnResume = new TurnResume({
 		store: interruptedTurns,
 		// This computer's own tabs and the ones it runs for paired devices (host-services.ts): the host
@@ -2263,12 +2281,16 @@ app.whenReady().then(async () => {
 				hostServices.setAwaitingConnection(tabId, awaiting);
 			},
 			// Only this computer's own tabs show the row: a paired device's tab mirrors its host's turn.
-			setResuming: (tabId, resuming) => sidecarPool.setResuming(tabId, resuming),
+			setResuming: (tabId, resuming) => {
+				sidecarPool.setResuming(tabId, resuming);
+				turnWait.noteResuming(tabId, resuming);
+			},
 			resumeRank: tabId => sidecarPool.resumeRank(tabId),
 			// A window's tab shows its retry; a hosted tab's wait for a provider's limit goes to its device.
 			setScheduledRetry: (tabId, retry) => {
 				sidecarPool.setScheduledRetry(tabId, retry);
 				hostServices.setScheduledRetry(tabId, retry);
+				turnWait.noteRetry(tabId, retry);
 			},
 			startTab: tabId => sidecarPool.startTab(tabId) ?? hostServices.startTab(tabId),
 			tabForSession: (sessionPath, peer) =>
@@ -2358,6 +2380,33 @@ app.whenReady().then(async () => {
 		facts: tabId => sidecarPool.settleFacts(tabId),
 		log: details => writeRuntimeLog({ source: "settle-watch", message: "still settling", details }),
 	});
+	sidecarPool.observeTabs(activity => turnWait.activity(activity));
+	setInterval(() => {
+		if (!quitApproved()) turnWait.sweep();
+	}, WAIT_SWEEP_MS).unref();
+	if (process.platform === "win32") {
+		// A console window that shows on the desktop says whose it is (console-window-watch.ts).
+		const consoleWindows = new ConsoleWindowWatch({
+			list: async (known, roots, sinceMs) =>
+				(await core().call<ConsoleWindow[]>("procs.consoles", { known, roots, env: SESSION_TAG_ENV, sinceMs }))
+					.result,
+			own: () => {
+				const corePid = core().pid;
+				return [
+					{ pid: process.pid, role: "main" },
+					// Under the window's shell main is its child (`OMPDESK_SHELL_SOCKET`, crates/shell/src/node.rs).
+					...(process.env.OMPDESK_SHELL_SOCKET ? [{ pid: process.ppid, role: "host" }] : []),
+					...(corePid === null ? [] : [{ pid: corePid, role: "core" }]),
+				];
+			},
+			sessionOf: tag => sessionProcesses.owners().find(owner => owner.tag === tag)?.sessionPath,
+			log: (message, details) => writeRuntimeLog({ source: "console-window", message, details }),
+		});
+		setInterval(() => {
+			// A look never starts a core: it waits for the one the app runs.
+			if (core().pid !== null) void consoleWindows.poll();
+		}, CONSOLE_POLL_MS).unref();
+	}
 	hostServices.attachResume(turnResume);
 	// Disk care: idle worktrees' build output, landed and long-idle worktrees (saved first), the HTTP cache and the
 	// tools' caches.

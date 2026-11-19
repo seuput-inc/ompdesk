@@ -467,19 +467,24 @@ export function ompRunLauncher(options: {
 	extensionArgs?: (cwd: string) => Promise<string[]>;
 	/** What a run with those extensions needs to reach their MCP servers (src/main/mcp-hub.ts `ompEnv`). */
 	extensionEnv?: (cwd: string) => Promise<Record<string, string>>;
+	/** The Credit use switch for this run (omp-launch.ts `creditSpendRun`): a run has no bridge to apply it. */
+	creditSpend?: () => { args: string[]; env: Record<string, string> };
 }): RunLauncher {
 	return async (schedule, files) => {
 		const resolution = await options.omp();
 		if (!resolution.ok) throw new Error(resolution.error);
 		const { bin } = resolution.runtime;
 		const extensions = (await options.extensionArgs?.(schedule.cwd)) ?? [];
+		const creditSpend = options.creditSpend?.();
 		const env = {
 			...(await options.env()),
 			...(extensions.length ? await options.extensionEnv?.(schedule.cwd) : {}),
+			...creditSpend?.env,
 		};
 		const args = [
 			"-p",
 			...extensions,
+			...(creditSpend?.args ?? []),
 			...(schedule.model ? ["--model", schedule.model] : []),
 			...(schedule.autoApprove ? ["--yolo"] : []),
 		];

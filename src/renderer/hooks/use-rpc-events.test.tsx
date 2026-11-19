@@ -1281,7 +1281,7 @@ describe("useRpcEvents awaiting-model marker", () => {
 			emitBatch([{ type: "auto_compaction_start", reason: "overflow", action: "compact" }]);
 		});
 		expect(useSessionStore.getState().isCompacting).toBe(true);
-		expect(useSessionStore.getState().compactionInfo).toEqual({ reason: "overflow", action: "compact" });
+		expect(useSessionStore.getState().compactionInfo).toMatchObject({ reason: "overflow", action: "compact" });
 
 		await act(async () => {
 			emitBatch([
@@ -1290,6 +1290,36 @@ describe("useRpcEvents awaiting-model marker", () => {
 		});
 		expect(useSessionStore.getState().isCompacting).toBe(false);
 		expect(useSessionStore.getState().compactionInfo).toBeNull();
+		// A pass that left no result is no measurement of how long a compaction takes.
+		expect(useSessionStore.getState().compactionRuns).toEqual([]);
+	});
+
+	it("keeps how long a finished compaction took, measured from its start to its end", async () => {
+		const { emitBatch } = installMockOmp();
+		await mount(<RpcEventsProbe />);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+		try {
+			await act(async () => {
+				emitBatch([{ type: "auto_compaction_start", reason: "threshold", action: "compact" }]);
+			});
+			clock.mockReturnValue(1_042_000);
+			await act(async () => {
+				emitBatch([
+					{
+						type: "auto_compaction_end",
+						action: "compact",
+						result: { summary: "Kept the active work." },
+						aborted: false,
+						willRetry: false,
+					},
+				]);
+			});
+		} finally {
+			clock.mockRestore();
+		}
+		expect(useSessionStore.getState().compactionRuns).toEqual([
+			{ action: "compact", startedAt: 1_000_000, endedAt: 1_042_000 },
+		]);
 	});
 
 	it("keeps the marker through the user-prompt echo, clearing only on assistant message_end", async () => {
@@ -1913,10 +1943,14 @@ describe("TurnStatusRow", () => {
 		expect(document.body.textContent).not.toContain("in 9s");
 	});
 
-	it("renders the compaction loader with TUI reason/action text", async () => {
-		useSessionStore.setState({ compactionInfo: { reason: "overflow", action: "handoff" } });
+	it("renders the compaction row in plain words with its elapsed time", async () => {
+		useSessionStore.setState({
+			compactionInfo: { reason: "overflow", action: "handoff", startedAt: Date.now() - 65_000 },
+		});
 		await mount(<TurnStatusRow />);
-		expect(document.body.textContent).toContain("Context overflow: Auto-handoff…");
+		const row = document.querySelector("[data-compaction-status]");
+		expect(row?.textContent).toContain(translate("chat.compaction.running.handoff"));
+		expect(row?.querySelector("[data-compaction-elapsed]")?.textContent).toMatch(/1m [5-7]s/);
 	});
 });
 
@@ -2875,7 +2909,7 @@ describe("useRpcEvents background tabs", () => {
 		const session = sessionRuntimeStore<SessionStore>("t-back", "session")!;
 		session.setState({
 			retryInfo: { attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: "529", startedAt: 1 },
-			compactionInfo: { reason: "threshold", action: "compacting" },
+			compactionInfo: { reason: "threshold", action: "compacting", startedAt: 1 },
 		});
 		await act(async () => {
 			await hydrateTabSession("t-back");

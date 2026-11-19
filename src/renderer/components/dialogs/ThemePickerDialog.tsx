@@ -1,39 +1,36 @@
 /**
- * Theme picker: searchable overlay of the GUI's named themes plus "system".
- * Each card shows a live swatch preview from the theme's token set. Selecting
- * a theme applies it live (inline `--omp-*` tokens), persists the choice, and
- * keeps the legacy dark/light/system store coherent so the App effect and the
- * settings window stay in sync.
+ * Theme picker: searchable overlay of the five theme sets. Each set has three rows: the set itself, which follows
+ * the OS between its halves, then its light and its dark theme, which stay. Each row shows a live swatch preview
+ * from the theme's token set. Selecting a row applies it live (inline `--omp-*` tokens), persists the choice, and
+ * keeps the legacy dark/light/system store coherent so the App effect and the settings window stay in sync.
  */
 
 import { Check } from "lucide-react";
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ThemeScheme } from "../../../shared/theme-names";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { THEME_SETS } from "../../../shared/theme-names";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { listboxTarget } from "../../lib/listbox-nav";
 import {
-	applyThemeByName,
+	applyThemeSet,
 	getPersistedThemeSelection,
-	getSystemThemePair,
 	THEMES,
-	type ThemeName,
-	type ThemeSelection,
+	type ThemeSetChoice,
+	themeSetChoice,
 } from "../../lib/themes";
 import { toast } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
-import { EmptyState, Modal, OptionGroup, OptionRow, SearchField } from "../common";
-import { ThemePreview } from "../settings/ThemePicker";
+import { EmptyState, Modal, OptionRow, SearchField } from "../common";
+import { ThemePreview, ThemeSetPreview } from "../settings/ThemePicker";
 
 interface ThemeEntry {
-	selection: ThemeSelection;
-	group: "system" | ThemeScheme;
+	/** The set's id for the row that follows the OS, the theme's id for a row that stays on one half. */
+	id: string;
+	choice: ThemeSetChoice;
+	preview: ReactNode;
 	label: string;
 	description: string;
 }
-
-/** Catalog themes in picker order; locale keys mirror each stable theme id. */
-const THEME_NAMES_IN_ORDER = Object.keys(THEMES) as ThemeName[];
 
 export function ThemePickerDialog() {
 	const t = useT();
@@ -42,27 +39,30 @@ export function ThemePickerDialog() {
 	const setTheme = useUiStore(s => s.setTheme);
 
 	const [query, setQuery] = useState("");
-	const [current, setCurrent] = useState<ThemeSelection>("system");
+	const [current, setCurrent] = useState<ThemeSetChoice | null>(null);
 	const [active, setActive] = useState(0);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const listboxId = useId();
 
 	const entries = useMemo<ThemeEntry[]>(
-		() => [
-			{
-				selection: "system",
-				group: "system",
-				label: t("themePicker.system"),
-				description: t("themePicker.systemDesc"),
-			},
-			...THEME_NAMES_IN_ORDER.map(name => ({
-				selection: name,
-				group: THEMES[name].scheme,
-				label: t(`themePicker.theme.${name}.label`),
-				description: t(`themePicker.theme.${name}.description`),
-			})),
-		],
+		() =>
+			THEME_SETS.flatMap(set => [
+				{
+					id: set.id,
+					choice: { set: set.id, mode: "system" },
+					preview: <ThemeSetPreview set={set} />,
+					label: t(`themePicker.set.${set.id}.label`),
+					description: t("themePicker.systemDesc"),
+				},
+				...(["light", "dark"] as const).map(mode => ({
+					id: set[mode],
+					choice: { set: set.id, mode },
+					preview: <ThemePreview theme={THEMES[set[mode]]} />,
+					label: t(`themePicker.theme.${set[mode]}.label`),
+					description: t(`themePicker.theme.${set[mode]}.description`),
+				})),
+			]),
 		[t],
 	);
 
@@ -71,16 +71,6 @@ export function ThemePickerDialog() {
 		if (!q) return entries;
 		return entries.filter(e => e.label.toLowerCase().includes(q) || e.description.toLowerCase().includes(q));
 	}, [entries, query]);
-	/** Consecutive entries of one group, each with its index in `filtered` (the option ids and the highlight). */
-	const groups = useMemo(() => {
-		const out: Array<{ group: ThemeEntry["group"]; items: Array<{ entry: ThemeEntry; i: number }> }> = [];
-		filtered.forEach((entry, i) => {
-			const last = out.at(-1);
-			if (last?.group === entry.group) last.items.push({ entry, i });
-			else out.push({ group: entry.group, items: [{ entry, i }] });
-		});
-		return out;
-	}, [filtered]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -89,8 +79,11 @@ export function ThemePickerDialog() {
 		setActive(0);
 		void getPersistedThemeSelection().then(sel => {
 			if (cancelled) return;
-			setCurrent(sel);
-			setActive(sel === "system" ? 0 : Math.max(0, THEME_NAMES_IN_ORDER.indexOf(sel) + 1));
+			const choice = themeSetChoice(sel);
+			setCurrent(choice);
+			// Three rows a set: the set, its light theme, its dark theme.
+			const row = ["system", "light", "dark"].indexOf(choice.mode);
+			setActive(THEME_SETS.findIndex(set => set.id === choice.set) * 3 + row);
 		});
 		requestAnimationFrame(() => inputRef.current?.focus());
 		return () => {
@@ -99,10 +92,9 @@ export function ThemePickerDialog() {
 	}, [open]);
 
 	const select = (entry: ThemeEntry) => {
-		const sel = entry.selection;
-		applyThemeByName(sel);
-		setTheme(sel === "system" ? "system" : THEMES[sel].scheme);
-		setCurrent(sel);
+		applyThemeSet(entry.choice);
+		setTheme(entry.choice.mode);
+		setCurrent(entry.choice);
 		toast({ variant: "success", message: t("themePicker.applied", { name: entry.label }) });
 		close();
 	};
@@ -160,66 +152,41 @@ export function ThemePickerDialog() {
 					role={filtered.length > 0 ? "listbox" : undefined}
 				>
 					{filtered.length === 0 && <EmptyState size="sm" title={t("themePicker.empty")} />}
-					{groups.map(group => {
-						const rows = group.items.map(({ entry, i }) => {
-							const isSystem = entry.selection === "system";
-							const isCurrent = entry.selection === current;
-							const pair = getSystemThemePair();
-							return (
-								<OptionRow
-									key={entry.selection}
-									active={i === active}
-									className="gap-3"
-									data-index={i}
-									data-theme-entry={entry.selection}
-									id={`${listboxId}-option-${i}`}
-									onClick={() => select(entry)}
-									onMouseDown={event => event.preventDefault()}
-									onMouseEnter={() => setActive(i)}
-									pointerMoves
-								>
-									<span
-										aria-hidden="true"
-										className="flex h-14 w-28 shrink-0 overflow-hidden rounded-(--sc-radius-md) border border-(--sc-border-subtle)"
-									>
-										{isSystem ? (
-											<>
-												<span className="w-1/2 overflow-hidden">
-													<ThemePreview theme={THEMES[pair.light]} />
-												</span>
-												<span className="w-1/2 overflow-hidden">
-													<ThemePreview theme={THEMES[pair.dark]} />
-												</span>
-											</>
-										) : (
-											<ThemePreview theme={THEMES[entry.selection as ThemeName]} />
-										)}
-									</span>
-									<span className="min-w-0 flex-1">
-										<span className="flex flex-wrap items-center gap-2 text-sc-md font-medium text-(--sc-text)">
-											{entry.label}
-											{isCurrent && (
-												<>
-													<Check aria-hidden className="size-(--sc-icon-sm) text-(--sc-text-secondary)" />
-													<span className="sr-only">{t("tabSwitcher.current")}</span>
-												</>
-											)}
-										</span>
-										<span className="block text-sc-sm leading-relaxed text-(--sc-text-muted)">
-											{entry.description}
-										</span>
-									</span>
-								</OptionRow>
-							);
-						});
-						if (group.group === "system") return <Fragment key="system">{rows}</Fragment>;
-						const name = t(`themePicker.group.${group.group}`);
-						return (
-							<OptionGroup key={group.group} label={name}>
-								{rows}
-							</OptionGroup>
-						);
-					})}
+					{filtered.map((entry, i) => (
+						<OptionRow
+							key={entry.id}
+							active={i === active}
+							className="gap-3"
+							data-index={i}
+							data-theme-entry={entry.id}
+							id={`${listboxId}-option-${i}`}
+							onClick={() => select(entry)}
+							onMouseDown={event => event.preventDefault()}
+							onMouseEnter={() => setActive(i)}
+							pointerMoves
+						>
+							<span
+								aria-hidden="true"
+								className="flex h-14 w-28 shrink-0 overflow-hidden rounded-(--sc-radius-md) border border-(--sc-border-subtle)"
+							>
+								{entry.preview}
+							</span>
+							<span className="min-w-0 flex-1">
+								<span className="flex flex-wrap items-center gap-2 text-sc-md font-medium text-(--sc-text)">
+									{entry.label}
+									{entry.choice.set === current?.set && entry.choice.mode === current.mode && (
+										<>
+											<Check aria-hidden className="size-(--sc-icon-sm) text-(--sc-text-secondary)" />
+											<span className="sr-only">{t("tabSwitcher.current")}</span>
+										</>
+									)}
+								</span>
+								<span className="block text-sc-sm leading-relaxed text-(--sc-text-muted)">
+									{entry.description}
+								</span>
+							</span>
+						</OptionRow>
+					))}
 				</div>
 			</div>
 		</Modal>

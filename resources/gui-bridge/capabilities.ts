@@ -1044,14 +1044,18 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/**
 	 * credit-spend.ts: while credit use is off, ChatGPT's usage provider is stock's own wrapped as a runtime override
-	 * (`usage.providerFor`, `usage.setProvider`, `usage.removeProvider`), and every request key stock resolves
-	 * (`keys.getWithCredential`) is checked against the account's own report (`credentials.list`, `usage.report`) and
-	 * Claude's last answer for the session's account (`oauth.accounts`); a refusal carries stock's retry hint.
+	 * (`usage.providerFor`, `usage.setProvider`, `usage.removeProvider`), and every account stock hands a request
+	 * (`keys.getWithCredential`, and `oauth.access` for Codex web search and the live transport) is checked against the
+	 * account's own report (`credentials.list`, `usage.report`, the model's own windows through the provider's ranking
+	 * strategy) and Claude's last answer for the session's account (`oauth.accounts`), kept in a file of the agent
+	 * directory (`getAgentDir`); a refusal carries stock's retry hint. `credit_spend_commit_check` asks the same checks
+	 * about the models stock's `omp commit` would pick (`resolvePrimaryModel`, `resolveSmolModel`, `resolveApiKeyOnce`).
 	 */
 	creditSpend: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
 		session: [
 			"modelRegistry.authStorage.keys.getWithCredential()",
+			"modelRegistry.authStorage.oauth.access()",
 			"modelRegistry.authStorage.usage.providerFor()",
 			"modelRegistry.authStorage.usage.setProvider()",
 			"modelRegistry.authStorage.usage.removeProvider()",
@@ -1061,6 +1065,11 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		],
 		modules: {
 			"@oh-my-pi/pi-ai/utils/retry-after": ["appendRetryAfterHint()"],
+			"@oh-my-pi/pi-ai/auth/usage-report": ["scopedUsageLimits()"],
+			"@oh-my-pi/pi-ai/usage/registry": ["defaultRankingStrategy()"],
+			"@oh-my-pi/pi-ai": ["resolveApiKeyOnce()"],
+			[`${AGENT}/commit/model-selection`]: ["resolvePrimaryModel()", "resolveSmolModel()"],
+			[UTILS]: ["getAgentDir()"],
 		},
 	},
 	/** session-dump.ts: the two session methods `/dump all` and `/dump anon` run, called directly for their zip. */

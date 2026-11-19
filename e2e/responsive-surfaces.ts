@@ -86,7 +86,7 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "limit" | "turns";
+export type ParitySession = "work" | "reply" | "steer" | "advisor" | "limit" | "turns" | "long";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -380,6 +380,23 @@ async function endQueuedTurn(page: Page): Promise<void> {
 	await page.locator(".omp-composer-toolbar[data-turn-running]").first().waitFor({ state: "hidden", timeout: 30_000 });
 }
 
+/** One op of the fake omp's `fixture flow` run in the tab the view shows (e2e/fixture/rpc-ui.ts `startFlow`). */
+async function flowOp(page: Page, tabId: string, spec: Record<string, unknown>) {
+	return page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+		tabId,
+		`fixture:flow:${JSON.stringify(spec)}`,
+	] as const);
+}
+
+/** Ends the compaction `turn-compacting` holds the way stock skips one (no entry, nothing said) and answers its turn. */
+async function endCompactingTurn(page: Page): Promise<void> {
+	const tab = await shownTab(page);
+	if (!tab) return;
+	await flowOp(page, tab.tabId, { op: "compact-end", skipped: true });
+	await flowOp(page, tab.tabId, { op: "reply", text: "Compaction shown." });
+	await page.locator("[data-compaction-status]").first().waitFor({ state: "hidden", timeout: 30_000 });
+}
+
 /** The work session's family open, with every other computer's section folded to its count. */
 async function openRemoteFamily(page: Page, look: Look): Promise<void> {
 	await openDrawer(page, look);
@@ -618,6 +635,16 @@ async function openSettingsGeneral(page: Page, look: Look): Promise<void> {
 	await page.locator("[data-settings-page] #setting-gui-language").waitFor({ state: "visible", timeout: 30_000 });
 }
 
+/** Settings › Appearance through the sidebar's Settings entry and the section's own nav entry: the five theme sets and the light or dark choice under them. */
+async function openSettingsAppearance(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="appearance"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+	await page.locator("[data-settings-page] #setting-gui-themeMode").waitFor({ state: "visible", timeout: 30_000 });
+}
+
 /** The model setup dialog through Settings › Models & accounts and its "Set up automatically" button, as a person opens it. */
 async function openModelSetup(page: Page, look: Look): Promise<void> {
 	await openSettingsModels(page, look);
@@ -792,6 +819,48 @@ async function showTranscriptStart(page: Page): Promise<void> {
 			await mounted.promise;
 		});
 	await holdAtTop(first);
+}
+
+/**
+ * Reads the `long` session back to its first turn. A transcript opens on its newest page and asks for the page before
+ * each time the reader's view comes to the top of what is loaded (ChatStream `handleScroll`), so the view goes to the
+ * top again and again, seven pages of the fake omp's 250 turns, until the first turn is mounted. A window's reader
+ * turns a wheel first (see `showTurn`); a phone's flicks, and its view scrolls on after the finger lifted. The
+ * newest page is on screen before either: a view sent to the top of an empty transcript scrolls nothing afterwards.
+ * It ends on the first turn's row at the top, the session's start: the bubble's text there instead (what
+ * `holdAtTop` of the text does) cuts the bubble by its own 10 px of padding.
+ */
+async function showSessionStart(page: Page, look: Look): Promise<void> {
+	const scroller = page.locator(".omp-transcript-scroll").first();
+	const first = page.locator(".omp-user-bubble").getByText("Long session turn 000", { exact: true });
+	await scroller.getByText("Long session answer 249", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+	// The reader's gesture, taken in by the page (two frames) before the view moves: a wheel, or a finger's move.
+	const touch = touchLook(look);
+	await scroller.evaluate(async (element, finger) => {
+		element.dispatchEvent(
+			finger
+				? new TouchEvent("touchmove", { bubbles: true })
+				: new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true }),
+		);
+		const taken = Promise.withResolvers<void>();
+		requestAnimationFrame(() => requestAnimationFrame(() => taken.resolve()));
+		await taken.promise;
+	}, touch);
+	// A flick: the finger lifts as the view starts to move, so every scroll event comes after it.
+	if (touch)
+		await scroller.evaluate(element => {
+			element.scrollTop = 0;
+			element.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
+		});
+	const until = Date.now() + 30_000;
+	while ((await first.count()) === 0 && Date.now() < until)
+		await scroller.evaluate(async element => {
+			element.scrollTop = 0;
+			const mounted = Promise.withResolvers<void>();
+			requestAnimationFrame(() => requestAnimationFrame(() => mounted.resolve()));
+			await mounted.promise;
+		});
+	await holdAtTop(scroller.locator("[data-index]").filter({ has: first }).first());
 }
 
 /** What the turn rail draws: its ticks, the number of the first one, the ticks marked as the turn in view, the earlier item's name. */
@@ -1297,6 +1366,17 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "turns" },
 	},
+	// A session longer than the page a transcript opens with: the pages before it load as the reader comes to the top.
+	{
+		id: "transcript-older-history",
+		area: "A",
+		title: "A 250-turn session read back to its first turn: every page before its newest loaded on the way up",
+		open: showSessionStart,
+		ready: '.omp-transcript-scroll .omp-user-bubble:has-text("Long session turn 000")',
+		settle: 900,
+		when: () => false,
+		parity: { session: "long", inView: '.omp-user-bubble:has-text("Long session turn 000")' },
+	},
 	{
 		id: "image-viewer",
 		area: "A",
@@ -1458,11 +1538,16 @@ export const SURFACES: readonly Surface[] = [
 			id: `settings-${section}`,
 			area: "B",
 			title: `Settings › ${section}`,
-			// General opens through real controls (the sidebar's Settings, then its section), so the parity sheet takes it.
-			open: section === "general" ? openSettingsGeneral : page => openSettings(page, section),
+			// General and Appearance open through real controls (the sidebar's Settings, then the section), so the parity sheet takes them.
+			open:
+				section === "general"
+					? openSettingsGeneral
+					: section === "appearance"
+						? openSettingsAppearance
+						: page => openSettings(page, section),
 			ready: "[data-settings-page]",
 			settle: 900,
-			...(section === "general" ? { parity: { session: "work" } } : {}),
+			...(section === "general" || section === "appearance" ? { parity: { session: "work" } } : {}),
 		}),
 	),
 	{
@@ -1513,6 +1598,25 @@ export const SURFACES: readonly Surface[] = [
 				process.env.OMP_GUI_TEST_LOGIN === "1" &&
 				process.env.OMP_GUI_TEST_MODELS === "1" &&
 				process.env.OMP_GUI_TEST_RESET_TICKETS === "1",
+		},
+	},
+	{
+		id: "settings-credit-use",
+		area: "B",
+		title: "Settings › Models & accounts at the Credit use row: the switch, and the auto top-up line with its two links",
+		open: async (page, look) => {
+			await openSettingsModels(page, look);
+			const row = page.locator("[data-settings-page] [data-credit-spend]");
+			await row.waitFor({ state: "visible", timeout: 30_000 });
+			await row.scrollIntoViewIfNeeded();
+		},
+		ready: "[data-settings-page] [data-credit-spend] [data-credit-top-up-link]",
+		settle: 600,
+		// Parity only, and only over a host with a signed-in subscription: the row stands under account rotation.
+		when: () => false,
+		parity: {
+			session: "work",
+			available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
 		},
 	},
 	{
@@ -1988,6 +2092,27 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-queue-policy]",
 		when: () => false,
 		parity: { session: "work", after: endQueuedTurn },
+	},
+	{
+		id: "turn-compacting",
+		area: "A",
+		title: "Status row of a running compaction: what happens to the conversation in plain words, the time it has run and its (i)",
+		// The host's fake omp starts a `fixture flow` turn and holds its mid-turn compaction open (`compact-start`), as
+		// stock's automatic one runs; ready once the row counts its first second.
+		open: async page => {
+			const tab = await shownTab(page);
+			if (!tab) throw new Error("the view shows no session to compact");
+			await page.evaluate(
+				tabId => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: "fixture flow" }),
+				tab.tabId,
+			);
+			const started = await flowOp(page, tab.tabId, { op: "compact-start" });
+			if (!started.success) throw new Error(`the compaction did not start: ${started.error}`);
+		},
+		ready: "[data-compaction-status] [data-compaction-elapsed]",
+		// The audits' harness page has no such turn.
+		when: () => false,
+		parity: { session: "work", after: endCompactingTurn, inView: "[data-compaction-status]" },
 	},
 	{
 		id: "turn-limit-wait",

@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
+	CreditSpendRefusal,
+	creditSpendRun,
 	type OmpLaunch,
 	ompArgs,
 	SESSION_OWNED_ENV,
 	type SessionOpen,
 	sessionEnv,
 	sessionOpen,
+	withCreditSpendRuns,
 	withoutSessionEnv,
 } from "./omp-launch";
 
@@ -70,6 +74,74 @@ describe("omp launch", () => {
 		const bare: OmpLaunch = { open: "default", builtin: { args: [] }, userFlags: [], settings: {} };
 		expect(sessionEnv({ ...bare, settings: { creditSpend: false } })).toEqual({ OMP_GUI_CREDIT_SPEND: "0" });
 		expect(sessionEnv({ ...bare, settings: { creditSpend: true } })).toEqual({ OMP_GUI_CREDIT_SPEND: "1" });
+	});
+
+	const recorded = () => {
+		const calls: Array<{ args: string[]; env?: Record<string, string> }> = [];
+		const runtime = {
+			bin: "/bin/omp",
+			version: "19.0.0",
+			run: async (args: string[], opts?: { env?: Record<string, string> }) => {
+				calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
+				return { code: 0, stdout: "", stderr: "" };
+			},
+		};
+		return { calls, runtime };
+	};
+
+	it("gives an `omp -p` run beside the sessions the credit-use extension and the switch, and no other omp command", async () => {
+		const { calls, runtime } = recorded();
+		let enabled = false;
+		const commitCheck = vi.fn(async () => ({}));
+		const omp = withCreditSpendRuns(runtime, { bridgeDir: "/bridge", enabled: () => enabled, commitCheck });
+		await omp.run(["-p", "--no-session"], { env: { PI_NOTIFICATIONS: "off" } });
+		// The switch is read at each run, as the person left it.
+		enabled = true;
+		await omp.run(["-p"]);
+		await omp.run(["commit", "--dry-run"], { env: { A: "1" } });
+		await omp.run(["plugin", "list"]);
+		const entry = ["-e", join("/bridge", "credit-spend-run.ts")];
+		expect(calls).toEqual([
+			{ args: ["-p", "--no-session", ...entry], env: { PI_NOTIFICATIONS: "off", OMP_GUI_CREDIT_SPEND: "0" } },
+			{ args: ["-p", ...entry], env: { OMP_GUI_CREDIT_SPEND: "1" } },
+			{ args: ["commit", "--dry-run"], env: { A: "1" } },
+			{ args: ["plugin", "list"] },
+		]);
+		expect(creditSpendRun("/bridge", false)).toEqual({ args: entry, env: { OMP_GUI_CREDIT_SPEND: "0" } });
+		// On: `omp commit` runs as stock does, unasked.
+		expect(commitCheck).not.toHaveBeenCalled();
+	});
+
+	it("with the switch off runs `omp commit` only after the tab's omp checked the plan, and never past a refusal or a check that could not run", async () => {
+		const refusal =
+			"usage_limit_reached: this ChatGPT account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on credits. retry-after-ms=10800000";
+		const answers: Array<() => Promise<unknown>> = [
+			async () => ({}),
+			async () => {
+				throw new Error(refusal);
+			},
+			async () => {
+				throw new Error("Unknown bridge method: credit_spend_commit_check");
+			},
+		];
+		const { calls, runtime } = recorded();
+		const commitCheck = vi.fn(() => (answers.shift() ?? (async () => ({})))());
+		const omp = withCreditSpendRuns(runtime, { bridgeDir: "/bridge", enabled: () => false, commitCheck });
+		await omp.run(["commit", "--dry-run"]);
+		expect(calls).toEqual([{ args: ["commit", "--dry-run"] }]);
+		const refused = await omp.run(["commit", "--dry-run"]).catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(CreditSpendRefusal);
+		expect((refused as Error).message).toBe(
+			"Commit message not generated: this ChatGPT account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on credits.",
+		);
+		const unchecked = await omp.run(["commit", "--dry-run"]).catch((error: unknown) => error);
+		expect(unchecked).toBeInstanceOf(CreditSpendRefusal);
+		expect((unchecked as Error).message).toMatch(
+			/could not check the account's plan first\. Write the message yourself/,
+		);
+		// Neither refused press started omp.
+		expect(calls).toHaveLength(1);
+		expect(commitCheck).toHaveBeenCalledTimes(3);
 	});
 
 	it("opens a tab's session by the one rule, for every combination of what the tab knows", () => {

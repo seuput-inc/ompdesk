@@ -509,25 +509,25 @@ async fn a_change_is_journaled_toasted_and_undone() {
         .run(
             "tab",
             Some(&json!("settings.theme")),
-            Some(&json!({"value": "nord"})),
+            Some(&json!({"value": "github-dark"})),
         )
         .await
         .unwrap();
-    assert_eq!(said, "Theme is now nord.");
+    assert_eq!(said, "Theme is now github-dark.");
     {
         let world = fake.world();
-        assert_eq!(world.prefs["themeName"], "nord");
+        assert_eq!(world.prefs["themeName"], "github-dark");
         assert_eq!(world.prefs["theme"], "dark");
-        assert_eq!(world.notes, ["Agent changed: Theme → nord"]);
+        assert_eq!(world.notes, ["Agent changed: Theme → github-dark"]);
         assert!(world.cards.is_empty());
         assert!(
             world
                 .events
-                .contains(&json!({"kind": "pref", "key": "themeName", "value": "nord"}))
+                .contains(&json!({"kind": "pref", "key": "themeName", "value": "github-dark"}))
         );
         assert!(world.events.contains(&json!({
             "kind": "toast",
-            "message": "Agent changed: Theme → nord",
+            "message": "Agent changed: Theme → github-dark",
             "undo": {"kind": "pref", "key": "themeName", "value": "dark"}
         })));
     }
@@ -639,11 +639,11 @@ async fn an_unknown_never_or_ill_formed_call_is_refused_before_anything_runs() {
                 "light",
                 "github-light",
                 "solarized-light",
-                "sepia",
+                "gruvbox-light",
                 "hc-light",
                 "dark",
-                "nord",
-                "tokyo-night",
+                "github-dark",
+                "solarized-dark",
                 "gruvbox-dark",
                 "hc-dark"
             ]

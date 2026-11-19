@@ -388,6 +388,36 @@ if (dir) {
 						`Answer to Parity turn ${index + 1}`,
 					]),
 				);
+			/**
+			 * A session longer than the page a transcript opens with, for `transcript-older-history`: the fake omp's own
+			 * long session (`fixture:long-session`: 250 turns of six messages, "Long session turn 000" to "Long session
+			 * answer 249", written to its file at once), of which a view first reads the newest 200 messages.
+			 */
+			const longSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity long");
+				if (made) return made;
+				const tabId = await titledTab("Parity long");
+				const seeded = await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:long-session" }),
+					tabId,
+				);
+				expect(seeded, "the fake omp seeds its long session").toMatchObject({ success: true });
+				let sessionPath = "";
+				await expect
+					.poll(
+						async () =>
+							(sessionPath = await b.evaluate(async id => {
+								// Main learns a tab's session file from a `get_state` that passes through it.
+								await window.omp.rpc.commandForTab(id, { type: "get_state" });
+								return (await window.omp.tabs.list()).find(entry => entry.tabId === id)?.sessionPath ?? "";
+							}, tabId)),
+						{ timeout: 30_000 },
+					)
+					.not.toBe("");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity long", session);
+				return session;
+			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> =>
 				session === "work"
@@ -401,7 +431,9 @@ if (dir) {
 									answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
 								: session === "turns"
 									? turnsSession()
-									: limitSession();
+									: session === "long"
+										? longSession()
+										: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

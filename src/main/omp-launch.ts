@@ -22,11 +22,15 @@ import type { UserProfile } from "../../resources/gui-bridge/modes/user-profile-
 import { OMPDESK_ROLES_ENV } from "../../resources/gui-bridge/ompdesk-role-contracts";
 import type { PromptOriginEnv } from "../../resources/gui-bridge/prompt-origin-contracts";
 import type { AccountRotationMode } from "../shared/account-rotation";
+import { CREDIT_SPEND_OFF_WORDING } from "../shared/credit-spend";
 import { type AgentBrowser, DEFAULT_BROWSER_ENV } from "../shared/default-browser";
 import { stripDenylistedFlags } from "../shared/launch-profile";
+import type { OmpRuntime } from "./local/types";
 
 /** The bridge extension's entry in the gui-bridge directory. */
 const BRIDGE_ENTRY = "index.ts";
+/** The extension an omp run without the bridge loads for the Credit use switch alone. */
+const CREDIT_SPEND_RUN_ENTRY = "credit-spend-run.ts";
 /** `--config` overlay pinning `autoResume: false`, so a new tab never reopens the last session. */
 const FRESH_LAUNCH_CONFIG = "fresh-launch.yml";
 /**
@@ -184,4 +188,64 @@ export function sessionEnv(launch: OmpLaunch): Record<string, string> {
 	if (launch.scratchDir) env[SCRATCH_ENV] = launch.scratchDir;
 	if (launch.keepCli) env[KEEP_CLI_ENV] = launch.keepCli;
 	return { ...env, ...builtin.env };
+}
+
+/** What an `omp -p` run OMPdesk starts beside its sessions carries, so the Credit use switch holds there too. */
+export interface CreditSpendRun {
+	args: string[];
+	env: Record<string, string>;
+}
+
+/**
+ * A scheduled run and a PR draft are `omp -p` with no bridge, so nothing applied the switch to them: stock alone
+ * serves a spent plan from credits. They load the extension that installs the bridge's check
+ * (resources/gui-bridge/credit-spend-run.ts) and get the switch as a tab's spawn does.
+ */
+export function creditSpendRun(bridgeDir: string, enabled: boolean): CreditSpendRun {
+	return {
+		args: ["-e", join(bridgeDir, CREDIT_SPEND_RUN_ENTRY)],
+		env: { [CREDIT_SPEND_ENV]: enabled ? "1" : "0" },
+	};
+}
+
+/** Why the commit-message run was not started: with Credit use off, the plan is spent or could not be checked. */
+export class CreditSpendRefusal extends Error {}
+
+const UNCHECKED_COMMIT =
+	"Commit message not generated: Credit use is off and this session's omp could not check the account's plan first. Write the message yourself, or turn Credit use on in Settings › Models & accounts.";
+
+/**
+ * `runtime` as a tab's local commands run omp beside the session, so the Credit use switch holds there too:
+ * - `omp -p` (a PR draft) carries `creditSpendRun`'s extension and switch.
+ * - `omp commit` (the commit-message button) takes no extension and builds its own AuthStorage (stock
+ *   commit/pipeline.ts), so with the switch off the tab's omp checks first (`commitCheck`: gui-bridge
+ *   `credit_spend_commit_check`) and a refusal, or a check that could not run, ends it before it starts.
+ * Every other omp command calls no model and runs as it was.
+ */
+export function withCreditSpendRuns(
+	runtime: OmpRuntime,
+	guard: { bridgeDir: string; enabled: () => boolean; commitCheck: () => Promise<unknown> },
+): OmpRuntime {
+	return {
+		...runtime,
+		run: async (args, opts) => {
+			const enabled = guard.enabled();
+			if (args[0] === "-p") {
+				const run = creditSpendRun(guard.bridgeDir, enabled);
+				return runtime.run([...args, ...run.args], { ...opts, env: { ...opts?.env, ...run.env } });
+			}
+			if (args[0] === "commit" && !enabled) {
+				try {
+					await guard.commitCheck();
+				} catch (error) {
+					const text = error instanceof Error ? error.message : String(error);
+					if (!CREDIT_SPEND_OFF_WORDING.test(text)) throw new CreditSpendRefusal(UNCHECKED_COMMIT);
+					// The check's own words, without stock's error code and retry hint.
+					const reason = text.replace(/^usage_limit_reached: /, "").replace(/ retry-after-ms=\d+$/, "");
+					throw new CreditSpendRefusal(`Commit message not generated: ${reason}`);
+				}
+			}
+			return runtime.run(args, opts);
+		},
+	};
 }

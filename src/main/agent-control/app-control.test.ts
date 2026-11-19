@@ -167,14 +167,16 @@ describe("ompdesk_app tiers", () => {
 		const ports = new FakePorts();
 		const control = new AppControl(ports);
 		expect(await control.run(CALLER, "settings.get", { ids: ["theme"] })).toContain("theme: dark");
-		expect(await control.run(CALLER, "settings.theme", { value: "nord" })).toContain("Theme is now nord");
+		expect(await control.run(CALLER, "settings.theme", { value: "github-dark" })).toContain(
+			"Theme is now github-dark",
+		);
 		expect(ports.cards).toEqual([]);
-		expect(ports.prefs).toMatchObject({ themeName: "nord", theme: "dark" });
-		expect(ports.notes).toEqual(["Agent changed: Theme → nord"]);
-		expect(ports.events).toContainEqual({ kind: "pref", key: "themeName", value: "nord" });
+		expect(ports.prefs).toMatchObject({ themeName: "github-dark", theme: "dark" });
+		expect(ports.notes).toEqual(["Agent changed: Theme → github-dark"]);
+		expect(ports.events).toContainEqual({ kind: "pref", key: "themeName", value: "github-dark" });
 		expect(ports.events).toContainEqual({
 			kind: "toast",
-			message: "Agent changed: Theme → nord",
+			message: "Agent changed: Theme → github-dark",
 			undo: { kind: "pref", key: "themeName", value: "dark" },
 		});
 	});
@@ -354,7 +356,7 @@ describe("ompdesk_app tiers", () => {
 		const control = new AppControl(new FakePorts());
 		expect(await refusal(control.run(CALLER, "settings.theme", { value: "neon" }))).toContain("must be one of");
 		expect(await refusal(control.run(CALLER, "settings.fontSize", { value: 99 }))).toContain("at most");
-		expect(await refusal(control.run(CALLER, "settings.theme", { value: "nord", extra: 1 }))).toContain(
+		expect(await refusal(control.run(CALLER, "settings.theme", { value: "github-dark", extra: 1 }))).toContain(
 			"unknown argument",
 		);
 		expect(await refusal(control.run(CALLER, "settings.theme", {}))).toContain("required");
@@ -374,7 +376,7 @@ describe("undo", () => {
 	it("puts back the previous value of the last change, once", async () => {
 		const ports = new FakePorts();
 		const control = new AppControl(ports);
-		await control.run(CALLER, "settings.theme", { value: "nord" });
+		await control.run(CALLER, "settings.theme", { value: "github-dark" });
 		expect(await control.run(CALLER, "app.undo", {})).toContain("Restored Theme to dark");
 		expect(ports.prefs).toMatchObject({ themeName: "dark", theme: "dark" });
 		expect(await refusal(control.run(CALLER, "app.undo", {}))).toContain("Nothing to undo");

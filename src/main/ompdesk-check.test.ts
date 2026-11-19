@@ -37,23 +37,23 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
-function check(...flags: string[]) {
-	const result = spawnSync(
-		join(stagedDir(), binaryFile("ompdesk")),
-		["check", "--light", ...flags, "--", PLAYWRIGHT, "test", "--config", "playwright.config.cjs"],
-		{
-			cwd: project,
-			encoding: "utf8",
-			timeout: 120_000,
-			env: {
-				...process.env,
-				OMPDESK_CHECKS_DIR: join(dir, "store"),
-				OMPDESK_HEAVY_DIR: join(dir, "heavy"),
-				OMPDESK_HEAVY_HELD: "",
-				OMPDESK_CHECK_RUN: "",
-			},
+function ompdesk(...args: string[]) {
+	return spawnSync(join(stagedDir(), binaryFile("ompdesk")), args, {
+		cwd: project,
+		encoding: "utf8",
+		timeout: 120_000,
+		env: {
+			...process.env,
+			OMPDESK_CHECKS_DIR: join(dir, "store"),
+			OMPDESK_HEAVY_DIR: join(dir, "heavy"),
+			OMPDESK_HEAVY_HELD: "",
+			OMPDESK_CHECK_RUN: "",
 		},
-	);
+	});
+}
+
+function check(...flags: string[]) {
+	const result = ompdesk("check", "--light", ...flags, "--", PLAYWRIGHT, "test", "--config", "playwright.config.cjs");
 	const output = `${result.stdout}${result.stderr}`;
 	const verdict = /verdict (\S+verdict\.txt)/.exec(output)?.[1];
 	return { status: result.status, output, verdict: verdict ? readFileSync(verdict, "utf8") : "" };
@@ -79,6 +79,27 @@ describe.skipIf(process.platform === "win32")("ompdesk check with Playwright", (
 		);
 		expect(again.verdict).toMatch(/passed +a\.spec\.cjs › group › inner — reused from run/);
 		expect(again.verdict).toMatch(/failed +b\.spec\.cjs › breaks — run now/);
+	}, 300_000);
+
+	it("`checks wait` answers with the judgment: the failed test, its first error and what to do next", () => {
+		expect(check().status).toBe(1);
+		const waited = ompdesk("checks", "wait");
+		expect(waited.status).toBe(1);
+		const answer = JSON.parse(waited.stdout);
+		expect(answer).toMatchObject({
+			verdict: "red",
+			counts: { passed: 2, failed: 1 },
+			next: "fix",
+			blocksRelease: false,
+		});
+		expect(answer.failed).toHaveLength(1);
+		expect(answer.failed[0].test).toContain("breaks");
+		expect(answer.failed[0].firstError).toContain("expect(");
+		expect(answer.failed[0].knownFlaky).toBe(false);
+
+		// The same inputs again: the test fails again, nothing flaked, so the answer is still to fix it.
+		expect(check().status).toBe(1);
+		expect(JSON.parse(ompdesk("checks", "wait").stdout).next).toBe("fix");
 	}, 300_000);
 
 	it("runs only a changed test file, and everything once anything else changed", () => {

@@ -183,6 +183,9 @@ pub struct Record {
     pub abs: String,
     pub titles: Vec<String>,
     pub config: String,
+    /// The first line of what failed, where the reporter knows it (a failed test's first error).
+    #[serde(default)]
+    pub error: String,
 }
 
 /// Results in the order written; the last line for a key wins where they are merged. Two Vitest or Jest tests with
@@ -250,6 +253,7 @@ pub fn read_results(path: &Path) -> (Vec<Record>, Option<String>) {
             abs: s("abs"),
             titles,
             config,
+            error: s("error"),
         });
     }
     (out, end)
@@ -336,6 +340,7 @@ pub fn cargo_results(log: &str) -> (Vec<Record>, bool) {
             abs: String::new(),
             titles: vec![name.to_string()],
             config: String::new(),
+            error: String::new(),
         });
     }
     let complete = !announced.is_empty() && announced.iter().all(|(n, seen)| n == seen);
@@ -718,6 +723,7 @@ mod tests {
             abs: format!("/r/{file}"),
             titles: titles.iter().map(|t| t.to_string()).collect(),
             config: "/r/playwright.config.ts".into(),
+            error: String::new(),
         }
     }
 

@@ -86,8 +86,10 @@ const ALLOW_IDENTICAL: Record<string, true> = {
 	"chat.exec.shell": true, // Shell — universal term in dev UIs
 	"tools.label.github": true, // GitHub — brand name
 	"tools.label.vibe": true, // Vibe — feature name
-	"themePicker.theme.nord.label": true, // Nord — theme name
-	"themePicker.theme.tokyo-night.label": true, // Tokyo Night — theme name
+	"themePicker.set.ompdesk.label": true, // OMPdesk — product name
+	"themePicker.set.github.label": true, // GitHub — theme name
+	"themePicker.set.solarized.label": true, // Solarized — theme name
+	"themePicker.set.gruvbox.label": true, // Gruvbox — theme name
 	"sessionTree.head": true, // HEAD — git term
 	"themePicker.theme.solarized.label": true, // Solarized — theme name
 	"themePicker.theme.latte.label": true, // Latte — theme name

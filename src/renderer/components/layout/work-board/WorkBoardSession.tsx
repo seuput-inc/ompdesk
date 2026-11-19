@@ -373,11 +373,14 @@ export function useSessionBoard(turn: TurnWindow | null = null): SessionBoard {
 const plural = (count: number) => (count === 1 ? "" : "s");
 
 function checkWords(t: (key: string, params?: Record<string, string | number>) => string, check: LastCheck): string {
-	if (check.state === "running") return t(`workBoard.session.check.${check.kind}.running`);
 	const verdict = check.state === "passed" ? "passed" : "failed";
-	return check.count !== undefined
-		? t(`chat.work.check.${check.kind}.${verdict}Count`, { count: check.count })
-		: t(`chat.work.check.${check.kind}.${verdict}`);
+	const words =
+		check.state === "running"
+			? t(`workBoard.session.check.${check.kind}.running`)
+			: check.count !== undefined
+				? t(`chat.work.check.${check.kind}.${verdict}Count`, { count: check.count })
+				: t(`chat.work.check.${check.kind}.${verdict}`);
+	return check.release ? `${words} · ${t("workBoard.session.check.release")}` : words;
 }
 
 function rowWords(t: (key: string, params?: Record<string, string | number>) => string, row: SessionRowModel): string {
@@ -444,7 +447,11 @@ function CheckRow({ check }: { check: LastCheck }) {
 			: undefined;
 	return (
 		<BoardRow
-			data={{ "data-board-session": "check", "data-state": check.state }}
+			data={{
+				"data-board-session": "check",
+				"data-state": check.state,
+				...(check.release ? { "data-release": "" } : {}),
+			}}
 			flipKey="session:check"
 			label={label}
 			lead={
@@ -452,7 +459,7 @@ function CheckRow({ check }: { check: LastCheck }) {
 			}
 			meta={meta}
 			onClick={check.state === "failed" && tabId && key ? () => requestRevealStep({ tabId, key }) : undefined}
-			title={check.command}
+			title={check.wakes ? `${check.command}\n${t("workBoard.session.check.wakes")}` : check.command}
 		/>
 	);
 }

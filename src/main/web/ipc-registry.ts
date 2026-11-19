@@ -15,6 +15,7 @@
  */
 import { BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { CoreAnswer, CoreCallOptions } from "../core/process";
+import { tookIpc } from "../slow-steps";
 import type { ClientWindow } from "./client-window";
 
 /** The page that made the call: Electron's `event.sender`. */
@@ -68,6 +69,19 @@ class ElectronCaller implements IpcCaller {
 	get browserWindow(): BrowserWindow | null {
 		return BrowserWindow.fromWebContents(this.sender);
 	}
+}
+
+/** `handler`, with the slow-step probe told how long its answer took and how much of that held main's thread. */
+function timed(channel: string, handler: IpcHandler): IpcHandler {
+	return (caller, ...args) => {
+		const started = performance.now();
+		const result = handler(caller, ...args);
+		const syncMs = performance.now() - started;
+		const done = () => tookIpc(channel, performance.now() - started, syncMs);
+		if (result instanceof Promise) void result.then(done, done);
+		else done();
+		return result;
+	};
 }
 
 export class IpcRegistry {
@@ -172,7 +186,7 @@ export class IpcRegistry {
 	/** An invoke channel's handler; its result (or rejection) is the caller's. A second one for a channel throws, as in Electron. */
 	handle<A extends unknown[]>(channel: string, handler: (caller: IpcCaller, ...args: A) => unknown): void {
 		// The IPC boundary is untyped: each handler checks the arguments it declares.
-		const run = handler as IpcHandler;
+		const run = timed(channel, handler as IpcHandler);
 		this.#ipcMain.handle(channel, (event, ...args: unknown[]) => run(new ElectronCaller(event.sender), ...args));
 		this.#invokeHandlers.set(channel, run);
 	}
@@ -180,7 +194,7 @@ export class IpcRegistry {
 	/** A fire-and-forget channel's handler (the renderer's `send`). One per channel. */
 	on<A extends unknown[]>(channel: string, handler: (caller: IpcCaller, ...args: A) => void): void {
 		if (this.#sendHandlers.has(channel)) throw new Error(`Attempted to register a second listener for '${channel}'`);
-		const run = handler as IpcHandler;
+		const run = timed(channel, handler as IpcHandler);
 		this.#ipcMain.on(channel, (event, ...args: unknown[]) => run(new ElectronCaller(event.sender), ...args));
 		this.#sendHandlers.set(channel, run);
 	}

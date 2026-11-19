@@ -31,10 +31,14 @@ import {
 	isThemeName,
 	migrateThemeName,
 	type SystemThemePair,
+	schemeOfTheme,
 	systemThemeFor,
+	THEME_SETS,
 	type ThemeName,
 	type ThemeScheme,
 	type ThemeSelection,
+	type ThemeSetId,
+	themeSetOf,
 } from "../../shared/theme-names";
 import { saveGuiPreference } from "./display-preferences";
 import { acceptsActiveTabEvents, onActiveTabRouteSettled, onActiveTabRouteState } from "./tab-routing";
@@ -48,14 +52,14 @@ import {
 } from "./theme";
 import { ANSI_KEYS, ansiRow, buildTheme, CHART_KEYS } from "./theme-builder";
 import {
+	githubDark,
 	githubLight,
 	gruvboxDark,
+	gruvboxLight,
 	highContrastDark,
 	highContrastLight,
-	nord as nordPalette,
-	sepia,
+	solarizedDark,
 	solarizedLight,
-	tokyoNight,
 } from "./theme-palettes";
 
 /** Canonical token keys, in stylesheet order. Every theme defines all of them. */
@@ -490,24 +494,24 @@ const light: ThemeDefinition = {
 const customThemes = {
 	"github-light": buildTheme(githubLight),
 	"solarized-light": buildTheme(solarizedLight),
-	sepia: buildTheme(sepia),
+	"gruvbox-light": buildTheme(gruvboxLight),
 	"hc-light": buildTheme(highContrastLight),
-	nord: buildTheme(nordPalette),
-	"tokyo-night": buildTheme(tokyoNight),
+	"github-dark": buildTheme(githubDark),
+	"solarized-dark": buildTheme(solarizedDark),
 	"gruvbox-dark": buildTheme(gruvboxDark),
 	"hc-dark": buildTheme(highContrastDark),
 } as const;
 
-/** Every theme by id, in picker order (the light group, then the dark group). */
+/** Every theme by id: the light half of each set in picker order, then the dark halves. */
 export const THEMES = {
 	light,
 	"github-light": customThemes["github-light"],
 	"solarized-light": customThemes["solarized-light"],
-	sepia: customThemes.sepia,
+	"gruvbox-light": customThemes["gruvbox-light"],
 	"hc-light": customThemes["hc-light"],
 	dark,
-	nord: customThemes.nord,
-	"tokyo-night": customThemes["tokyo-night"],
+	"github-dark": customThemes["github-dark"],
+	"solarized-dark": customThemes["solarized-dark"],
 	"gruvbox-dark": customThemes["gruvbox-dark"],
 	"hc-dark": customThemes["hc-dark"],
 } as const satisfies Record<ThemeName, ThemeDefinition>;
@@ -519,9 +523,14 @@ export function isThemeSelection(value: unknown): value is ThemeSelection {
 	return value === "system" || isThemeName(value);
 }
 
-/** What System shows per OS scheme; set from the prefs at boot and by {@link setSystemThemePair}. */
+/** What System shows per OS scheme, which is the set last chosen; set from the prefs at boot and by {@link applyThemeSet}. */
 let systemPair: SystemThemePair = { ...DEFAULT_SYSTEM_THEMES };
-let currentSelection: ThemeSelection = "system";
+
+/** A selection as the picker shows it: the set of the theme it shows now, and whether it follows the OS or stays on one half. */
+export interface ThemeSetChoice {
+	set: ThemeSetId;
+	mode: ThemeMode;
+}
 
 export function getSystemThemePair(): SystemThemePair {
 	return systemPair;
@@ -574,7 +583,6 @@ function paintBackgrounds(selection: ThemeSelection): Partial<Record<ThemeScheme
  */
 export function applyThemeByName(selection: ThemeSelection, opts: { persist?: boolean } = {}): void {
 	themeSelectionVersion++;
-	currentSelection = selection;
 	const { persist = true } = opts;
 	const name = resolveThemeName(selection);
 	const theme = THEMES[name];
@@ -606,22 +614,25 @@ function storePaint(selection: ThemeSelection, mode: ThemeMode): void {
 	}
 }
 
-/**
- * Chooses the light and dark theme System shows, then re-applies System when it is the
- * selection. A name of the wrong scheme falls back to the OMPdesk default of that scheme.
- * `persist: false` is for a host's pair shown without saving it.
- */
-export function setSystemThemePair(next: Partial<SystemThemePair>, opts: { persist?: boolean } = {}): void {
-	const { persist = true } = opts;
-	systemPair = {
-		light: systemThemeFor("light", next.light ?? systemPair.light),
-		dark: systemThemeFor("dark", next.dark ?? systemPair.dark),
+/** How the picker reads a selection. A pair that mixes two sets (stored before the sets) reads as the set of the half on screen. */
+export function themeSetChoice(selection: ThemeSelection): ThemeSetChoice {
+	return {
+		set: themeSetOf(resolveThemeName(selection)).id,
+		mode: selection === "system" ? "system" : schemeOfTheme(selection),
 	};
-	if (persist) {
-		if (next.light !== undefined) void saveGuiPreference("systemLightTheme", systemPair.light, () => {});
-		if (next.dark !== undefined) void saveGuiPreference("systemDarkTheme", systemPair.dark, () => {});
-	}
-	if (currentSelection === "system") applyThemeByName("system", { persist });
+}
+
+/**
+ * Chooses a set and how it shows: `system` follows the OS between the set's halves, `light` or `dark` stays on one.
+ * The set is saved as the System pair either way, so System always means the set last chosen; `themeName` holds
+ * `system` or the half.
+ */
+export function applyThemeSet({ set, mode }: ThemeSetChoice): void {
+	const { light, dark } = THEME_SETS.find(entry => entry.id === set)!;
+	systemPair = { light, dark };
+	void saveGuiPreference("systemLightTheme", light, () => {});
+	void saveGuiPreference("systemDarkTheme", dark, () => {});
+	applyThemeByName(mode === "system" ? "system" : systemPair[mode]);
 }
 
 /**

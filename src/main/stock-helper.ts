@@ -12,6 +12,7 @@ import { CoreError, core } from "./core/process";
 import { OmpUnavailableError, ompAvailability, refuseWithoutOmp } from "./omp-availability";
 import { ompPackageRoot, ompPathEnv, systemOmp } from "./omp-runtime";
 import { spawnPath } from "./shell-env";
+import { tookStep } from "./slow-steps";
 
 /** How long one request may wait (queued behind others included) before only that request fails. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -144,6 +145,7 @@ export class StockHelper {
 		// The params and the result cross the core as the JSON text main and the worker wrote, in the frame's bytes: the
 		// core passes them on unread (a terminal's scrollback is a megabyte). No bytes is JavaScript's `undefined`.
 		const text: string | undefined = JSON.stringify(params);
+		const started = performance.now();
 		try {
 			const { bin } = await core().call(
 				"stock.request",
@@ -157,6 +159,8 @@ export class StockHelper {
 			if (!(error instanceof CoreError)) throw error;
 			if (error.code === "omp_unavailable") throw new OmpUnavailableError(error.message);
 			throw error.code.startsWith("stock_") ? new Error(error.message) : error;
+		} finally {
+			tookStep("stock", method, performance.now() - started);
 		}
 	}
 

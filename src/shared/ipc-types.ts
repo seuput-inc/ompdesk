@@ -685,6 +685,25 @@ export type RuntimeErrorSource =
 	 */
 	| "chain-stall"
 	/**
+	 * A console window that opened on Windows (src/main/console-window-watch.ts): `details` is the window's class and
+	 * title, its process (`pid`, `exe`, `cmd`, `ageMs`), `ours` (it descends from OMPdesk or carries a session's tag),
+	 * `via` (the OMPdesk process that started it), `chain` (it and its ancestors) and `recent` (the processes OMPdesk
+	 * started just before, for a window another program hosts).
+	 */
+	| "console-window"
+	/**
+	 * A step that was slow (src/main/slow-steps.ts): `details.kind` is `loop` (main's thread was blocked), `ipc` (a
+	 * handler), `hub` (main waited on the core), `stock` (a stock helper request) or `tab-open` (an omp's start),
+	 * `name` which one, `ms` how long; `again` and `worstMs` count what the rate limit kept out since the line before.
+	 */
+	| "slow-step"
+	/**
+	 * A tab that has waited long without a step (src/main/turn-wait-watch.ts), again at doubling intervals: `details.on`
+	 * is what it waits on (ask, connection, limit, retry, stock-retry, resuming, background, turn), `waitedMs` how long,
+	 * `tools` the tool calls still running, and what its omp answered (`omp`, `streaming`, `queued`).
+	 */
+	| "turn-wait"
+	/**
 	 * A routine's trigger (src/main/routines): a source that could not read what it watches (GitHub through `gh`, a
 	 * path that does not exist, a branch or repository git cannot read). Told once per distinct failure; `message`
 	 * names the routine and the source.

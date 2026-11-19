@@ -11,6 +11,9 @@
 //! a protected one), a zombie and one that exited have no readable environment and so no tag: never a target, and a
 //! target that becomes one counts as gone. macOS and Linux show the environment a process was started with, Windows
 //! the one it holds now.
+//!
+//! `procs.consoles` (Windows) lists the console windows a person sees and whose each new one is: OMPdesk starts every
+//! program without a window, so one that shows is a start that missed that, a tool's own doing, or not OMPdesk's.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -113,6 +116,13 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let params: EndParams = call.params()?;
             Reply::json(&end(params, call.scope).await?)
+        })
+    });
+    #[cfg(windows)]
+    registry.add("procs.consoles", |call| {
+        Box::pin(async move {
+            let params: ConsolesParams = call.params()?;
+            Reply::json(&consoles(params).await?)
         })
     });
 }
@@ -343,6 +353,150 @@ fn orphans(rows: &[Row], pid: u32, started_ms: u64) -> Vec<usize> {
                     .any(|holder| holder.pid == pid && begot(holder, row))
         })
         .collect()
+}
+
+/// How many of the processes OMPdesk started just before a console window showed are named beside it.
+#[cfg(any(windows, test))]
+const RECENT_NAMED: usize = 8;
+/// How much of a command line is named: enough to tell the program and what it was asked.
+#[cfg(windows)]
+const COMMAND_LINE_UNITS: usize = 1_024;
+
+/// What the processes `roots` started, and so on down, that began at or after `since_ms`: by index, the newest first,
+/// `RECENT_NAMED` at most. A start that could not be read is not among them.
+#[cfg(any(windows, test))]
+fn recent_starts(rows: &[Row], roots: &[u32], since_ms: u64) -> Vec<usize> {
+    let roots: Vec<usize> = (0..rows.len())
+        .filter(|&index| roots.contains(&rows[index].pid))
+        .collect();
+    let mut recent: Vec<usize> = descendants(rows, &roots)
+        .into_iter()
+        .filter(|index| {
+            !roots.contains(index)
+                && rows[*index]
+                    .started_ms
+                    .is_some_and(|started| started >= since_ms)
+        })
+        .collect();
+    recent.sort_by_key(|&index| std::cmp::Reverse(rows[index].started_ms));
+    recent.truncate(RECENT_NAMED);
+    recent
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConsolesParams {
+    /// The windows the caller was told of before: each comes back without whose it is.
+    known: Vec<u64>,
+    /// OMPdesk's own processes (main, its host, this core).
+    roots: Vec<u32>,
+    env: String,
+    /// From when a start counts as just before the window, in ms since the epoch on the caller's clock.
+    since_ms: u64,
+}
+
+/// One process named beside a console window.
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Link {
+    pid: u32,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_line: Option<String>,
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConsoleRow {
+    window: u64,
+    pid: u32,
+    class: &'static str,
+    title: String,
+    /// The window's process and its ancestors, nearest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chain: Option<Vec<Link>>,
+    /// The session tag in that process's environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
+    /// What `roots` started since `sinceMs`, the newest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recent: Option<Vec<Link>>,
+}
+
+/// `procs.consoles`: the visible console windows of this desktop. A window not in `known` comes with whose it is: its
+/// process and that one's ancestors, the tag in its environment, and what `roots` started just before (Windows
+/// Terminal shows the console of another program, so its window's own process says nothing of who opened it). The
+/// processes are listed only when a window is new: the list costs a handle a process.
+#[cfg(windows)]
+async fn consoles(params: ConsolesParams) -> Result<Vec<ConsoleRow>, Fault> {
+    check_env(&params.env)?;
+    blocking(move || {
+        let windows = crate::sys::console_windows();
+        let known =
+            |window: &crate::sys::ConsoleWindow| params.known.contains(&(window.window as u64));
+        let rows = if windows.iter().all(known) {
+            Vec::new()
+        } else {
+            Snapshot::take()?.rows
+        };
+        let env: Vec<u16> = params.env.encode_utf16().collect();
+        let link = |index: usize, with_line: bool| {
+            let row = &rows[index];
+            let line = with_line
+                .then(|| row.process.as_ref()?.command_line())
+                .flatten();
+            Link {
+                pid: row.pid,
+                name: row.name.clone(),
+                started_ms: row.started_ms,
+                command_line: line.map(|line| {
+                    String::from_utf16_lossy(&line[..line.len().min(COMMAND_LINE_UNITS)])
+                }),
+            }
+        };
+        Ok(windows
+            .into_iter()
+            .map(|window| {
+                let fresh = !known(&window);
+                let chain = if fresh {
+                    lineage(&rows, window.pid)
+                } else {
+                    Vec::new()
+                };
+                ConsoleRow {
+                    window: window.window as u64,
+                    pid: window.pid,
+                    class: window.class,
+                    title: window.title,
+                    tag: chain
+                        .first()
+                        .and_then(|&index| rows[index].process.as_ref()?.environment())
+                        .and_then(|block| block_tag(&block, &env)),
+                    recent: fresh.then(|| {
+                        recent_starts(&rows, &params.roots, params.since_ms)
+                            .into_iter()
+                            .filter(|&index| rows[index].pid != window.pid)
+                            .map(|index| link(index, true))
+                            .collect()
+                    }),
+                    // Who started it reads off the window's process and its parent; further up the names do.
+                    chain: fresh.then(|| {
+                        chain
+                            .iter()
+                            .enumerate()
+                            .map(|(depth, &index)| link(index, depth < 2))
+                            .collect()
+                    }),
+                }
+            })
+            .collect())
+    })
+    .await
 }
 
 /// Every process of this computer at one moment, each opened to end it where this user may: what `taskkill /t`
@@ -1434,6 +1588,51 @@ mod tests {
 
     fn at(rows: &[Row], indices: &[usize]) -> Vec<u32> {
         indices.iter().map(|&index| rows[index].pid).collect()
+    }
+
+    #[test]
+    fn names_what_the_roots_started_lately_the_newest_first() {
+        let rows = [
+            row(10, 1, 1_000, None),
+            row(11, 10, 1_100, None),
+            row(12, 11, 9_500, None),
+            row(13, 10, 9_800, None),
+            row(14, 13, 9_900, None),
+            // Somebody else's.
+            row(20, 1, 9_950, None),
+            // Took the id of a dead child of 10's: it started before 10, so 10 did not start it.
+            row(15, 10, 900, None),
+        ];
+        assert_eq!(
+            at(&rows, &recent_starts(&rows, &[10, 99], 9_000)),
+            [14, 13, 12]
+        );
+        assert!(recent_starts(&rows, &[20], 0).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn says_whose_a_console_window_is_only_while_it_is_new() {
+        let ask = |known| ConsolesParams {
+            known,
+            roots: vec![std::process::id()],
+            env: new_env(),
+            since_ms: 0,
+        };
+        let first = consoles(ask(Vec::new())).await.unwrap();
+        assert!(
+            first
+                .iter()
+                .all(|row| row.chain.is_some() && row.recent.is_some())
+        );
+        let known: Vec<u64> = first.iter().map(|row| row.window).collect();
+        let again = consoles(ask(known.clone())).await.unwrap();
+        assert!(
+            again
+                .iter()
+                .filter(|row| known.contains(&row.window))
+                .all(|row| row.chain.is_none() && row.tag.is_none() && row.recent.is_none())
+        );
     }
 
     #[test]

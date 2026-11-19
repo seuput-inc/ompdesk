@@ -59,6 +59,7 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/capability/hook": () => import("@oh-my-pi/pi-coding-agent/capability/hook"),
 	"@oh-my-pi/pi-coding-agent/capability/ssh": () => import("@oh-my-pi/pi-coding-agent/capability/ssh"),
 	"@oh-my-pi/pi-coding-agent/commands/settings": () => import("@oh-my-pi/pi-coding-agent/commands/settings"),
+	"@oh-my-pi/pi-coding-agent/commit/model-selection": () => import("@oh-my-pi/pi-coding-agent/commit/model-selection"),
 	"@oh-my-pi/pi-coding-agent/config": () => import("@oh-my-pi/pi-coding-agent/config"),
 	"@oh-my-pi/pi-coding-agent/config/all-settings": () => import("@oh-my-pi/pi-coding-agent/config/all-settings"),
 	"@oh-my-pi/pi-coding-agent/config/compaction-threshold": () =>

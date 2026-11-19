@@ -37,7 +37,8 @@ export const methods: BridgeMethods = {
 			const session = env.session();
 			const { describeRedeemOutcome } = await import("./omp/pi-coding-agent/slash-commands/helpers/reset-usage");
 			const storage = session.modelRegistry.authStorage;
-			return redeemResetPass(
+			const provider = getOAuthCredentialProvider(providerId);
+			const result = await redeemResetPass(
 				{
 					redeem: target => session.redeemResetCredit(target),
 					describe: (outcome, label) => describeRedeemOutcome(outcome, label),
@@ -76,13 +77,18 @@ export const methods: BridgeMethods = {
 					},
 					settle: provider => storage.usage.invalidate(provider),
 				},
-				{
-					provider: getOAuthCredentialProvider(providerId),
-					credentialId,
-					...(creditId ? { creditId } : {}),
-				},
+				{ provider, credentialId, ...(creditId ? { creditId } : {}) },
 				claims,
 			);
+			// The plan is back, so what the account's answers said before no longer holds. Loaded here like the stock
+			// helpers above: a credit-spend.ts this omp cannot load must not take reset passes with it.
+			if (result.ok) {
+				await import("./credit-spend").then(
+					spend => spend.forgetLimited(provider, credentialId),
+					() => undefined,
+				);
+			}
+			return result;
 		},
 	}),
 };

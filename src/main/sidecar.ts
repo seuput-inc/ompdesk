@@ -44,6 +44,7 @@ import {
 	type SessionOpen,
 	type SessionSettings,
 	sessionEnv,
+	withCreditSpendRuns,
 	withoutSessionEnv,
 } from "./omp-launch";
 import { ompLogTail } from "./omp-log-tail";
@@ -52,6 +53,7 @@ import { VISUALIZE_DEFINITION } from "./preview/visuals";
 import { createLinkEventDecoder } from "./remote/link-events";
 import { RpcClient, RpcTimeoutError } from "./rpc-client";
 import type { SessionProcesses, SessionProcessHandle } from "./session-processes";
+import { tookStep } from "./slow-steps";
 import { needsShell, spawnArgs, spawnCommand } from "./spawn";
 import { TERMINAL_READ_DEFINITION } from "./terminal/agent-tool";
 
@@ -710,6 +712,8 @@ export class SidecarManager extends EventEmitter {
 	#lostAt: number | null = null;
 	/** `RECOVERY_NOTICE_MS` after a loss that started this tab again (`#armStuck`). */
 	#stuckTimer: NodeJS.Timeout | undefined;
+	/** The start under way since the lane asked for its inputs, and when each stage of it was reached (`#startStep`). */
+	#opening: { at: number; steps: string[] } | null = null;
 
 	constructor(options: SidecarOptions) {
 		super();
@@ -847,6 +851,17 @@ export class SidecarManager extends EventEmitter {
 			ms: Date.now() - lostAt,
 			...details,
 		});
+	}
+
+	/** A stage of the start under way; at `ready` the whole start goes to the slow-step probe (`tab-open`). */
+	#startStep(step: string): void {
+		const opening = this.#opening;
+		if (!opening) return;
+		const ms = Date.now() - opening.at;
+		opening.steps.push(`${step} ${ms}ms`);
+		if (step !== "ready") return;
+		this.#opening = null;
+		tookStep("tab-open", "start", ms, { lane: this.#tab, stages: opening.steps.join(" > ") });
 	}
 
 	/** The way back after a lost core is over: the next omp spawned, or the tab shows why it waits. */
@@ -1007,6 +1022,7 @@ export class SidecarManager extends EventEmitter {
 		const { status, cwd, ...detail } = event.payload;
 		this.#status = status;
 		this.#statusDetail = detail;
+		if (status === "ready") this.#startStep("ready");
 		// The way back ends when the tab can work again: a spawned omp that never answers is still a tab not back.
 		if (status === "ready" && this.#lostAt !== null) {
 			this.#recovered("ready");
@@ -1057,6 +1073,7 @@ export class SidecarManager extends EventEmitter {
 		});
 		this.#rpcClient = client;
 		this.#recovered("spawned");
+		this.#startStep("spawned");
 		this.emit("spawned");
 	}
 
@@ -1240,6 +1257,7 @@ export class SidecarManager extends EventEmitter {
 	 * keeps the results for the spawn's launch ask.
 	 */
 	#onResolve(ask: ResolveAsk): void {
+		this.#opening = { at: Date.now(), steps: [] };
 		const { omp, proxyEnv, shellEnv } = this.#options;
 		const fallback = () => ({}) as Record<string, string>;
 		const bound = this.#options.startInputMs ?? START_INPUT_MS;
@@ -1333,6 +1351,7 @@ export class SidecarManager extends EventEmitter {
 			this.#defaultBrowser = defaultBrowser;
 			this.#egoBrowserDir = egoBrowserDir;
 			this.#recovered("resolved", { outcome: "ok" });
+			this.#startStep("resolved");
 			this.#answer("sidecar.resolved", ask, { outcome: "ok" });
 		});
 	}
@@ -1411,6 +1430,7 @@ export class SidecarManager extends EventEmitter {
 				hostTools: this.#hostTools(),
 			});
 			this.#recovered("launch", { ok: true });
+			this.#startStep("launch");
 		} catch (err) {
 			this.#recovered("launch", { ok: false });
 			this.#answer("sidecar.launched", ask, { error: err instanceof Error ? err.message : String(err) });
@@ -1484,10 +1504,19 @@ export class SidecarManager extends EventEmitter {
 	async #localContext(client: RpcClient, runtime: OmpRuntime, bridge: BridgeRelay): Promise<LocalCommandContext> {
 		const send = stockSender(client, LOCAL_SEND_TIMEOUT_MS);
 		if (!this.#session) await client.stock({ type: "get_state" }).catch(() => undefined);
+		const { bridgeDir, creditSpend } = this.#options;
 		return {
 			cwd: this.#options.cwd,
 			sessionFile: this.#session?.sessionFile,
-			omp: runtime,
+			// A PR draft and the commit-message button run an omp beside the session, with no bridge: the Credit use
+			// switch goes with the first and is checked by this tab's omp before the second.
+			omp: bridgeDir
+				? withCreditSpendRuns(runtime, {
+						bridgeDir,
+						enabled: () => creditSpend?.() ?? false,
+						commitCheck: () => bridge.request("credit_spend_commit_check"),
+					})
+				: runtime,
 			send,
 			bridge,
 		};

@@ -1205,42 +1205,31 @@ export default function StyleGuide() {
 								value={scope}
 							/>
 						</Block>
-						<Block label="ChoiceCards with previews, in parts">
+						<Block label="ChoiceCards with previews">
 							<ChoiceCards
 								aria-label="Theme"
-								gridClassName="grid-cols-3"
-								groups={[
+								className="grid-cols-3"
+								options={[
 									{
-										key: "system",
-										options: [
-											{
-												value: "system",
-												title: "System",
-												preview: (
-													<>
-														<span className="w-1/2 bg-(--sc-bg)" />
-														<span className="w-1/2 bg-(--sc-text)" />
-													</>
-												),
-											},
-										],
+										value: "system",
+										title: "System",
+										preview: (
+											<>
+												<span className="w-1/2 bg-(--sc-bg)" />
+												<span className="w-1/2 bg-(--sc-text)" />
+											</>
+										),
 									},
 									{
-										key: "themes",
-										label: "Themes",
-										options: [
-											{
-												value: "paper",
-												title: "Paper",
-												preview: <span className="w-full bg-(--sc-surface-1)" />,
-												tooltip: "Warm white, low glare",
-											},
-											{
-												value: "night",
-												title: "Night",
-												preview: <span className="w-full bg-(--sc-text)" />,
-											},
-										],
+										value: "paper",
+										title: "Paper",
+										preview: <span className="w-full bg-(--sc-surface-1)" />,
+										tooltip: "Warm white, low glare",
+									},
+									{
+										value: "night",
+										title: "Night",
+										preview: <span className="w-full bg-(--sc-text)" />,
 									},
 								]}
 								onChange={setThemePick}
