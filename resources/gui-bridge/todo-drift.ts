@@ -19,6 +19,7 @@ import {
 	type TodoDrift,
 	type TodoDriftEntry,
 	type TodoDriftEvent,
+	todoCallInFlight,
 	todoDrift,
 	todoDriftState,
 	todoNudge,
@@ -60,6 +61,8 @@ export function install(pi: ExtensionAPI): void {
 				push({ changedAt: Date.now(), stale: null });
 			return undefined;
 		}
+		// A todo call in the same batch is changing the list now: no word, and no reading until it lands.
+		if (todoCallInFlight(branch as TodoDriftEntry[])) return undefined;
 		const drift = driftOf(branch, [{ kind: "call", at: Date.now() }]);
 		push(drift ? todoDriftState(drift) : NO_LIST);
 		const kind = drift && todoNudge(drift);

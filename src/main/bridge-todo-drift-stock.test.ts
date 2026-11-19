@@ -251,6 +251,42 @@ describe.skipIf(!existsSync(omp))("a todo list behind the work, on stock omp", (
 		expect(lastDriftFrame(session)).toEqual(drift);
 	}, 180_000);
 
+	it("an agent that adds the row beside its first call for the instruction gets no reminder", async () => {
+		const both = (calls: Array<[string, Record<string, unknown>]>) =>
+			sse(
+				[
+					{
+						tool_calls: calls.map(([name, args], index) => ({
+							index,
+							id: `call_${name}_${index}`,
+							type: "function",
+							function: { name, arguments: JSON.stringify(args) },
+						})),
+					},
+				],
+				"tool_calls",
+			);
+		let answered = false;
+		const respond = (step: number, body: string): string => {
+			if (step === 1) return reply.todo({ op: "init", list: [{ phase: PHASE, items: [A, A2] }] });
+			if (step === 2) return reply.bash("sleep 3; echo parsed");
+			if (body.includes(STEER) && !answered) {
+				answered = true;
+				return both([
+					["bash", { command: "echo the > README.md" }],
+					["todo", { op: "append", phase: PHASE, items: [B] }],
+				]);
+			}
+			return reply.text("Done.");
+		};
+		const { provider, session } = await start(respond);
+		await steeredTurn(session);
+
+		expect(provider.bodies.some(body => body.includes(INSTRUCTION_LEAD))).toBe(false);
+		expect(Object.keys(statuses(await journalList(session)))).toContain(B);
+		expect((await driftState(session)).stale).toBeNull();
+	}, 180_000);
+
 	it("after a compaction the instruction still without a row is named again, and the list catches up", async () => {
 		let compacted = false;
 		const agent = steerAgent(fresh => compacted && fresh);

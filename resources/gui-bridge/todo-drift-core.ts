@@ -237,6 +237,32 @@ function entryAt(entry: TodoDriftEntry): number {
 }
 
 /**
+ * Whether the newest assistant message calls `todo` (not a view) and that call's result is not journaled yet: the
+ * list is changing in this very batch of calls, so a call beside it says nothing about a list left behind. Seen with
+ * a real model (20 Nov 2026): a steer answered by `write` and `todo append` in one message got the instruction
+ * reminder after the `write`.
+ */
+export function todoCallInFlight(branch: readonly TodoDriftEntry[]): boolean {
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const message = branch[index].type === "message" ? branch[index].message : undefined;
+		if (message?.role === "toolResult" && message.toolName === "todo") return false;
+		if (message?.role !== "assistant") continue;
+		return (
+			Array.isArray(message.content) &&
+			message.content.some(
+				part =>
+					typeof part === "object" &&
+					part !== null &&
+					part.type === "toolCall" &&
+					part.name === "todo" &&
+					part.arguments?.op !== "view",
+			)
+		);
+	}
+	return false;
+}
+
+/**
  * The steps after the journal entry at `listAt` that holds `phases` (stock's latest todo snapshot), in order. A view,
  * a refused todo call and a todo call that changed nothing count as neither a change nor work.
  */
