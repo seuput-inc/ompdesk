@@ -329,4 +329,40 @@ describe("BridgeHealth record", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("an omp lacking most features still logs a parseable list, the first whole entries and how many were left out", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const dir = mkdtempSync(join(tmpdir(), "ompdesk-bridge-health-"));
+		try {
+			const file = join(dir, "gui-runtime.jsonl");
+			const health = new BridgeHealth(vi.fn(), () => {}, {
+				log: report => appendRuntimeLogAtPath(file, report, { appVersion: "1", platform: "darwin", pid: 1 }),
+			});
+			const unavailable = Array.from({ length: 120 }, (_, index) => ({
+				feature: `feature${index}`,
+				missing: [`@oh-my-pi/pi-coding-agent/session/agent-session#AgentSession.method${index}`],
+			}));
+			const broken = fakeBridge(async () => ({ ompVersion: "20.0.0", unavailable }));
+			await health.observe({ connected: true, ompVersion: "20.0.0", bridge: broken.bridge }, { processAlive: true });
+			const [line] = readFileSync(file, "utf8")
+				.trim()
+				.split("\n")
+				.map(
+					text =>
+						JSON.parse(text) as {
+							details: { ok: boolean; unavailable: unknown; unavailableOmitted?: number };
+						},
+				);
+			const logged = line?.details.unavailable;
+			expect(line?.details.ok).toBe(false);
+			expect(Array.isArray(logged)).toBe(true);
+			const kept = logged as typeof unavailable;
+			expect(kept.length).toBeGreaterThan(0);
+			expect(kept).toEqual(unavailable.slice(0, kept.length));
+			expect(line?.details.unavailableOmitted).toBe(unavailable.length - kept.length);
+			expect(health.report().results[0]?.unavailable).toHaveLength(unavailable.length);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

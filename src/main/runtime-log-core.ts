@@ -116,27 +116,25 @@ function details(value: unknown): Record<string, string | number | boolean | nul
 }
 
 /**
- * Main's own details: what `details` keeps, plus an array or object a source records on purpose (the bridge self-check's
- * `unavailable` list), as JSON when it serializes within MAX_DETAIL_VALUE_LENGTH and as that JSON cut to the bound
- * when longer, so a line stays bounded and parseable.
+ * The one structured detail a main source may log, by source: an array kept as an array. Its source bounds the list
+ * (`bridge-health.ts` drops whole entries and counts them); a list that still serializes past MAX_DETAIL_VALUE_LENGTH
+ * is left out, never cut into a string. Every other detail stays flat, as `details` keeps it.
  */
-function mainDetails(value: unknown): Record<string, unknown> | undefined {
-	const input = record(value);
-	if (!input) return undefined;
-	const output: Record<string, unknown> = { ...details(input) };
-	for (const [key, detail] of Object.entries(input).slice(0, MAX_DETAIL_KEYS)) {
-		if (typeof detail !== "object" || detail === null) continue;
-		let json: string | undefined;
-		try {
-			json = JSON.stringify(detail);
-		} catch {
-			continue;
-		}
-		if (json === undefined) continue;
-		output[key] =
-			json.length <= MAX_DETAIL_VALUE_LENGTH ? JSON.parse(json) : boundedString(json, MAX_DETAIL_VALUE_LENGTH);
+const STRUCTURED_DETAIL: Partial<Record<RuntimeErrorSource, string>> = { "bridge-health": "unavailable" };
+
+function mainDetails(source: RuntimeErrorSource, value: unknown): Record<string, unknown> | undefined {
+	const flat = details(value);
+	const key = STRUCTURED_DETAIL[source];
+	const list = key === undefined ? undefined : record(value)?.[key];
+	if (key === undefined || !Array.isArray(list)) return flat;
+	let json: string;
+	try {
+		json = JSON.stringify(list);
+	} catch {
+		return flat;
 	}
-	return Object.keys(output).length > 0 ? output : undefined;
+	if (json.length > MAX_DETAIL_VALUE_LENGTH) return flat;
+	return { ...flat, [key]: JSON.parse(json) as unknown };
 }
 
 /** Validate and bound an IPC payload before it reaches disk. */
@@ -174,13 +172,13 @@ export function appendRuntimeLogAtPath(filePath: string, report: RuntimeLogRepor
 		}
 
 		// The renderer's reports reach here already through `normalizeRuntimeErrorReport` (ipc.ts); main's own keep
-		// their structured details, bounded.
+		// their source's one structured detail.
 		const normalized = normalizeRuntimeErrorReport(report);
 		const entry = {
 			timestamp: new Date().toISOString(),
 			...context,
 			...normalized,
-			details: mainDetails(report.details),
+			details: mainDetails(normalized.source, report.details),
 		};
 		fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, "utf8");
 	} catch {

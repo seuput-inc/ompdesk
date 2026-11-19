@@ -183,7 +183,7 @@ export class BridgeHealth {
 				? {
 						source: "bridge-health",
 						message: "probed",
-						details: { ompVersion, ok, unavailable, ...(ok ? {} : { level: "warn" }) },
+						details: { ompVersion, ok, ...loggedUnavailable(unavailable), ...(ok ? {} : { level: "warn" }) },
 					}
 				: {
 						source: "bridge-health",
@@ -204,4 +204,27 @@ export class BridgeHealth {
 		this.#repaired.add(ompVersion);
 		this.#onIncompatible(ompVersion);
 	}
+}
+
+/** Room for the `unavailable` list on one log line: runtime-log-core's 4 096-character detail bound, less a margin. */
+const UNAVAILABLE_LOG_BUDGET = 4_000;
+
+/**
+ * The `unavailable` entries that fit one log line, whole and in order, and how many were left out, so a widespread
+ * incompatibility still logs a list a reader can parse rather than a cut string.
+ */
+function loggedUnavailable(entries: BridgeHealthResult["unavailable"]): {
+	unavailable: BridgeHealthResult["unavailable"];
+	unavailableOmitted?: number;
+} {
+	const kept: BridgeHealthResult["unavailable"] = [];
+	let size = 2;
+	for (const entry of entries) {
+		const add = JSON.stringify(entry).length + (kept.length > 0 ? 1 : 0);
+		if (size + add > UNAVAILABLE_LOG_BUDGET) break;
+		kept.push(entry);
+		size += add;
+	}
+	const omitted = entries.length - kept.length;
+	return omitted > 0 ? { unavailable: kept, unavailableOmitted: omitted } : { unavailable: kept };
 }
