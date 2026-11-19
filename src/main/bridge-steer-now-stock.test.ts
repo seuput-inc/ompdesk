@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { wrapAgentMessage } from "../shared/agent-control";
 import {
 	atEnd,
+	CLEANUP_MS,
 	type Frame,
 	HELD_SHELL,
 	mail,
@@ -15,7 +16,7 @@ import {
 } from "./bridge-agent-mail-stock-harness";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
-afterAll(runCleanups);
+afterAll(runCleanups, CLEANUP_MS);
 
 /**
  * A message reaches a working session now, not when the shell command it runs ends (the owner, 11, 14 and 18 Nov
