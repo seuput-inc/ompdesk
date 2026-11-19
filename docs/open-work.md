@@ -21,10 +21,10 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| B1 | A relaunch does not cut a running command: it keeps running outside the session and reattaches, or resumes exactly where it stopped. | in progress | relaunch-keeps-work [desktop] | | |
-| B2 | A command does not run twice after a relaunch (seen: an empty commit made twice). | in progress | relaunch-keeps-work [desktop] | | |
-| B3 | A session opened during the restart countdown keeps its first message. | in progress | relaunch-keeps-work [desktop] | | |
-| B4 | A session that paused waiting for the restart starts again by itself. | in progress | relaunch-keeps-work [desktop] | | |
+| B1 | A relaunch does not cut a running command: it keeps running outside the session and reattaches, or resumes exactly where it stopped. Foreground commands now finish on a stop (up to 20 s); async jobs surviving a relaunch (`ompdesk keep` runner) is next. | foreground done, async in progress | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
+| B2 | A command does not run twice after a relaunch (seen: an empty commit made twice). Cause: stock retry replays a cut batch whose results are all errors. Fixed: a call an earlier process started is answered, never run again (real omp, counter file: before 2 runs in 3 of 3, after 1 run in 6 of 6; formal relaunch-once green). | fixed on branch, ci running | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
+| B3 | A session opened during the restart countdown keeps its first message: the automatic restart holds until the opened session has taken its first message. | fixed on branch, ci running | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
+| B4 | A session that paused waiting for the restart starts again by itself. Fixed: agents are told a relaunch continues their turn (catalog, pstack adapter); an idle goal tab, an armed backoff retry and a deferred Autopilot tab are revived at relaunch. A turn an agent ends anyway is not woken. | fixed on branch, ci running | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
 | B5 | A session another computer opened keeps working when that computer goes off (away-opener). | on branch | next-line [desktop] | omp/agent/next-0134-1 (`e82d28e1f`) | |
 
 ## C. Sessions and tabs
@@ -78,13 +78,13 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 |---|---|---|---|---|---|
 | G1 | The pre-push guard blocks a test branch that sits on released commits; block only commits reachable from probe/* alone. | green, into next-line | test-tools [desktop] | | |
 | G2 | Windows e2e: rmdir of the test project fails EBUSY for ~3.5 s after omp exits. Cause measured: omp 19's per-config daemon (spawned detached, no cwd, so it inherits the project folder) lives 3 s after its last client. The shipped retry (5.5 s) covers it; recorded in e2e-ci-windows rule. | closed (cause found) | test-tools [desktop] | omp/agent/test-tools-20261120 `4e0ac505f` | |
-| G3 | The Preview check ends "could not check" on a real Windows desktop: measure the rate, warm it if frequent. | in progress | test-tools [desktop] | | |
-| G4 | No test drives the real app with real omp for `!`, `!!`, `$`, the Plan card, cancelling a compaction, dequeue. | in progress | test-tools [desktop] | | |
+| G3 | The Preview check ends "could not check" on a real Windows desktop: measure the rate, warm it if frequent. | green on test-tools (ci 44612596843) | test-tools [desktop] | | |
+| G4 | No test drives the real app with real omp for `!`, `!!`, `$`, the Plan card, cancelling a compaction, dequeue. | green on test-tools (ci 44612596843) | test-tools [desktop] | | |
 | G6 | ci installer-check could never pass since the Tauri move (it waited for an Electron DevTools port, then looked for an Electron GPU process). Fixed: proves the first window by app-started.json + renderer-mounted; crashes this app's WebView2 GPU process twice and asserts the app survives with its window. A fresh release install starts (silent and double-click). | green, into next-line | test-tools [desktop] | omp/agent/installer-check-tauri-20261120 `88b97858d` | 44609251808 |
 | G10 | 'The app survives a GPU process crash and does not fall into safe mode' has never been checked on the Tauri shell: the installer check's injection looks for the GPU process under OMPdesk.exe (WebView2's is msedgewebview2.exe --type=gpu-process) and drops the kill result. No test today. | in progress | test-tools [desktop] | omp/agent/installer-check-tauri-20261120 | |
 | G11 | Two worktree sessions opened in one ompdesk_session_open call ran .ompdesk/worktree-setup at the same moment; one failed 'could not lock config file …/.git/config: File exists' (exit 255) after packages and Electron were in place, so its later steps (core.hooksPath) did not run until rerun by hand. Setups that write the shared checkout's config must not race (serialize them, or retry the lock). | open | | | |
 | G12 | GPU fallback is dead on the Tauri shell: tauri-shell never reports a WebView2 process failure to main, so gpu-fallback.ts never fires (a black window stays black). Decision: report WebView2 ProcessFailed as app.childProcessGone; relaunch only when WebView2's own GPU restart does not repaint. | queued after G3/G4 | test-tools [desktop] | | |
-| G13 | Product risk, unverified: on Windows the omp daemon keeps the working folder of the omp that first started it while any omp stays connected, so that folder (a worktree) may not be deletable until the daemon idles. Check worktree removal and disk care on Windows for EBUSY handling. | open | test-tools [desktop] | | |
+| G13 | Worktree removal on Windows while omp's daemon holds the folder as cwd: no defect. The core's git_remove records the empty leftover and disk care removes it later (real omp on the desktop; runner 5 of 5; omp-latest Windows daily). | closed (no defect) | test-tools [desktop] | | 44614315383 |
 | G7 | The pre-push check does not run the Rust/TS table comparisons, so a merge that reorders captured/meta.json reached ci red (44569228302). | green, into next-line | test-tools [desktop] | | |
 | G8 | e2e agent-control-across 'shows, notifies and reports…' reads the board row right after the child's done report, but auto-close may close the child first (board shows '1 done'): a race in the test; passed on reruns, not counted as proof. | not started | | | 44579634026 |
 | G9 | ci batch on todo-truth-panel-2 (44598135849): session-launch-parity.test.ts failed once on Windows and passed on rerun; not diagnosed, not counted as proof. | not started | | | |
@@ -94,7 +94,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| H13 | Check control (the checks view). | in progress | earlier-list [desktop] | | |
+| H13 | Check control (the checks view). | local half green (ci 44612708554), hub parts open | earlier-list [desktop] | | |
 | H23 | The line and card shown during a compaction. | in progress | earlier-list [desktop] | | |
 | H24 | Themes: default plus four light/dark pairs (eleven themes exist today; first list what is left). | in progress | earlier-list [desktop] | | |
 | H26 | Credits are never used while their switch is off (no first-call or refresh exception); at the limit stop and tell. | in progress | earlier-list [desktop] | | |
