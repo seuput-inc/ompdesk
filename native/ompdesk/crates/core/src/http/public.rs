@@ -132,7 +132,14 @@ fn redirect(url: &Url, location: &str) -> Result<Url, Failure> {
     checked_url(next.as_str()).map_err(|_| Failure::Redirect)
 }
 
-async fn fetch(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
+/// How a body past the cap ends: refused whole, or read up to the cap and the rest dropped unread.
+#[derive(Clone, Copy, PartialEq)]
+enum Past {
+    Refuse,
+    Cut,
+}
+
+async fn fetch(input: &str, max_bytes: usize, past: Past) -> Result<PublicResponse, Failure> {
     let mut url = checked_url(input)?;
     for hop in 0..=REDIRECTS {
         let pinned = addresses(&url).await?;
@@ -157,22 +164,41 @@ async fn fetch(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure>
         {
             return Err(Failure::Request);
         }
-        let bytes = Limited::new(response.into_body(), max_bytes.min(MAX_BYTES))
-            .collect()
-            .await
-            .map_err(|_| Failure::TooLarge)?;
-        return Ok(PublicResponse {
-            status,
-            body: bytes.to_bytes().to_vec(),
-            url,
-        });
+        let cap = max_bytes.min(MAX_BYTES);
+        let body = if past == Past::Cut {
+            let mut body = response.into_body();
+            let mut kept = Vec::new();
+            while kept.len() < cap
+                && let Some(frame) = body.frame().await
+            {
+                if let Ok(data) = frame.map_err(|_| Failure::Request)?.into_data() {
+                    kept.extend_from_slice(&data[..data.len().min(cap - kept.len())]);
+                }
+            }
+            kept
+        } else {
+            Limited::new(response.into_body(), cap)
+                .collect()
+                .await
+                .map_err(|_| Failure::TooLarge)?
+                .to_bytes()
+                .to_vec()
+        };
+        return Ok(PublicResponse { status, body, url });
     }
     Err(Failure::Redirect)
 }
 
 /// A credential-free, bounded public GET. No caller headers, cookies, proxies or referrer cross this boundary.
 pub(crate) async fn public_get(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
-    tokio::time::timeout(TIMEOUT, fetch(input, max_bytes))
+    tokio::time::timeout(TIMEOUT, fetch(input, max_bytes, Past::Refuse))
+        .await
+        .map_err(|_| Failure::Connect)?
+}
+
+/// `public_get` that keeps a long page's first `max_bytes` (a page's `<head>`) instead of refusing it.
+pub(crate) async fn public_head(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
+    tokio::time::timeout(TIMEOUT, fetch(input, max_bytes, Past::Cut))
         .await
         .map_err(|_| Failure::Connect)?
 }
