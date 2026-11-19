@@ -1,6 +1,6 @@
 /**
  * The composer's run-state wiring: the Esc hints under the field (Esc again to stop, deciding), Stop busy while a stop is
- * in flight, the placeholder priority (blocked > editing queued > follow-up > steer > idle) and Edit queued, where the
+ * in flight, the placeholder priority (blocked > editing queued > steer > idle) and Edit queued, where the
  * field holds a queued message and Cancel / Esc restore the exact previous draft and pictures.
  */
 import { parseHTML } from "linkedom";

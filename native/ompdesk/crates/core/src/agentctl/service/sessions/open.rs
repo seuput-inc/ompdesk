@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use super::{CloseHow, TabClose};
-use crate::agentctl::journal::send_outbox::{OutboxSend, StreamingBehavior, receiver_key};
+use crate::agentctl::journal::send_outbox::{OutboxSend, receiver_key};
 use crate::agentctl::service::AgentControl;
 use crate::agentctl::service::fail::{Fail, R, fail};
 use crate::agentctl::service::host::Deadline;
@@ -620,7 +620,6 @@ impl AgentControl {
                             .unwrap_or_else(|| caller.tab_id.clone()),
                         message.to_owned(),
                         command["message"].as_str().unwrap_or(message).to_owned(),
-                        StreamingBehavior::FollowUp,
                         self.now(),
                     );
                     entry.from_device = caller.device.clone().filter(|device| !device.is_empty());

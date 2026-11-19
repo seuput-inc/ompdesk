@@ -1,10 +1,10 @@
 /**
  * A message sent while a turn runs is a steer (stock `steer`), whichever way it is sent:
- * plain Enter, the Send button, and the platform's send chord (⌘↵ on macOS, Ctrl+Enter on
- * Windows, the chord the expanded composer advertises). Only the follow-up chord (⌃↵ on
- * macOS, Alt+Enter on Windows) queues a `follow_up` for after the turn. On Windows,
- * Ctrl+Enter used to read as the follow-up chord, so a Windows user's "추가 지시" waited
- * in the follow-up lane until the turn ended.
+ * plain Enter, the Send button, the platform's send chord (⌘↵ on macOS, Ctrl+Enter on
+ * Windows, the chord the expanded composer advertises) and the chord that used to queue a
+ * follow-up (⌃↵ on macOS, Alt+Enter on Windows). The composer has no way to pick the
+ * follow-up lane (the owner, 15 Nov 2026: "지금지시 말고는 없애버려"); only the `->` list
+ * shorthand still queues for after the turn.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -14,7 +14,10 @@ import { exitApp, launchApp } from "./harness";
 
 const WINDOWS = process.platform === "win32";
 const SEND_CHORD = WINDOWS ? "Control+Enter" : "Meta+Enter";
-const FOLLOW_UP_CHORD = WINDOWS ? "Alt+Enter" : "Control+Enter";
+/** The chord that queued a follow-up until 19 Nov 2026: it sends like Enter now. */
+const RETIRED_FOLLOW_UP_CHORD = WINDOWS ? "Alt+Enter" : "Control+Enter";
+/** The composer's toolbar while a turn runs (before it, Stop only withdraws the pending prompt). */
+const RUNNING = ".omp-composer-toolbar[data-turn-running]";
 
 async function frames(file: string): Promise<Array<{ type: string; message?: unknown }>> {
 	const text = await fs.readFile(file, "utf8").catch(() => "");
@@ -37,7 +40,7 @@ async function lanes(page: Page): Promise<{ steering: string[]; followUp: string
 	});
 }
 
-test("@smoke a message sent while a turn runs steers it from Enter, the Send button and the send chord; only the follow-up chord queues", async () => {
+test("@smoke a message sent while a turn runs steers it from Enter, the Send button, the send chord and the retired follow-up chord", async () => {
 	test.setTimeout(90_000);
 	const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-steer-send-")));
 	const desktop = path.join(profile, "desktop");
@@ -68,11 +71,10 @@ test("@smoke a message sent while a turn runs steers it from Enter, the Send but
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
-		// The turn itself runs once the send-mode chip shows (it shows only while a turn runs; before it, Stop only
-		// withdraws the pending prompt, and a message sent now is a prompt, not a steer).
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
-		// The chip reads Steer: nothing has switched it to follow-ups.
-		await expect(page.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer");
+		// The turn itself runs: before it, Stop only withdraws the pending prompt, and a message sent now is a prompt,
+		// not a steer. No control offers another lane.
+		await expect(page.locator(RUNNING)).toBeVisible();
+		await expect(page.locator("[data-send-mode]")).toHaveCount(0);
 
 		/**
 		 * Type `message` once the composer takes it. Send stays disabled while the previous message is still being
@@ -105,16 +107,15 @@ test("@smoke a message sent while a turn runs steers it from Enter, the Send but
 		await input.press(SEND_CHORD);
 		await sentAs("steer by chord", "steer");
 
+		await draft("steer by old chord");
+		await input.press(RETIRED_FOLLOW_UP_CHORD);
+		await sentAs("steer by old chord", "steer");
+
 		// Every steer waits in stock's steering lane for the loop's next step; none is a follow-up.
 		expect(await lanes(page)).toEqual({
-			steering: ["steer by enter", "steer by button", "steer by chord"],
+			steering: ["steer by enter", "steer by button", "steer by chord", "steer by old chord"],
 			followUp: [],
 		});
-
-		await draft("later by chord");
-		await input.press(FOLLOW_UP_CHORD);
-		await sentAs("later by chord", "follow_up");
-		expect((await lanes(page)).followUp).toEqual(["later by chord"]);
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);
@@ -145,9 +146,7 @@ for (const language of ["en", "ko"] as const) {
 			const input = page.locator("textarea").first();
 			await input.fill("fixture running");
 			await input.press("Enter");
-			// The turn itself runs once the send-mode chip shows (it shows only while a turn runs).
-			await expect(page.locator("[data-send-mode]")).toBeVisible();
-			await expect(page.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer");
+			await expect(page.locator(RUNNING)).toBeVisible();
 
 			const rows = page.locator("[data-queue-row]");
 			const queued = async () =>
@@ -219,9 +218,7 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
-		// The turn itself runs once the send-mode chip shows (it shows only while a turn runs).
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
-		await expect(page.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer");
+		await expect(page.locator(RUNNING)).toBeVisible();
 
 		const pane = page.locator('.omp-session-pane[data-active="true"]');
 		/** The transcript's height and the composer's box, in px: what queuing must leave alone. */
@@ -240,12 +237,13 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 				const data = (await window.omp.rpc.getQueue()).data as { steering: unknown[]; followUp: unknown[] };
 				return data.steering.length + data.followUp.length;
 			});
-		const queue = async (text: string, chord?: string) => {
+		/** Send `text` while the turn runs: a steer, or with `later` a follow-up through the `->` shorthand. */
+		const queue = async (text: string, later = false) => {
 			const before = await queueCount();
-			await input.fill(text);
+			await input.fill(later ? `-> ${text}` : text);
 			// Send stays disabled while the previous message is being delivered, and Enter and the chords read the same state.
 			await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
-			await input.press(chord ?? "Enter");
+			await input.press("Enter");
 			await expect(input).toHaveValue("");
 			await expect.poll(queueCount).toBe(before + 1);
 		};
@@ -256,12 +254,12 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 		// The first message adds nothing above, under or inside the box.
 		expect(await geometry()).toEqual(empty);
 		expect(await page.locator(".omp-composer-queue").count()).toBe(0);
-		await queue("later one", FOLLOW_UP_CHORD);
-		await queue("later two", FOLLOW_UP_CHORD);
+		await queue("later one", true);
+		await queue("later two", true);
 		await queue("steer two");
 		await expect(page.locator("[data-queue-pill]")).toContainText("4 queued");
 		expect(await geometry()).toEqual(empty);
-		for (let index = 3; index <= 8; index++) await queue(`more ${index}`, FOLLOW_UP_CHORD);
+		for (let index = 3; index <= 8; index++) await queue(`more ${index}`, true);
 		await expect(page.locator("[data-queue-pill]")).toContainText("10 queued");
 		expect(await geometry()).toEqual(empty);
 
@@ -299,9 +297,8 @@ test("queued messages sit in one toolbar pill: the transcript and the composer n
 		await input.press("Escape");
 		await expect(page.locator("[data-queue-edit-banner]")).toHaveCount(0);
 		await expect(input).toHaveValue("my half-typed draft");
-		// The turn went on: Esc in the edit never reached the app-wide Stop (the lane chip shows only while it runs; with
-		// a draft the one action button is Send).
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
+		// The turn went on: Esc in the edit never reached the app-wide Stop (with a draft the one action button is Send).
+		await expect(page.locator(RUNNING)).toBeVisible();
 		await expect(page.locator('[data-slot="send"] button')).toHaveAttribute("data-send-state", "send");
 		expect(await geometry()).toEqual(empty);
 

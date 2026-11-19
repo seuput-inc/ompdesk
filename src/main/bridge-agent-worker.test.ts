@@ -10,11 +10,12 @@ import type { JournalEntry, PromptSectionContext, PromptSectionHost } from "../.
 type BridgeEnv = Parameters<NonNullable<(typeof methods)[string]>>[1];
 type Handler = Parameters<PromptSectionHost["on"]>[1];
 
+/** Every `before_agent_start` hook `install` adds, run in order as stock runs them; the last answer wins. */
 function hook(): Handler {
 	const handlers: Handler[] = [];
 	install({ on: (_event, handler) => handlers.push(handler) });
-	expect(handlers).toHaveLength(1);
-	return handlers[0] as Handler;
+	return (event, ctx) =>
+		handlers.reduce<ReturnType<Handler>>((answer, handler) => handler(event, ctx) ?? answer, undefined);
 }
 
 function session(entries: JournalEntry[], kind = "main"): PromptSectionContext {

@@ -36,7 +36,7 @@ test("a message a paired computer's tab sends into a running host turn is noted 
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(a.getByRole("button", { name: "Stop", exact: true })).toBeVisible({ timeout: 30_000 });
-		await expect(a.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", { timeout: 30_000 });
+		await expect(a.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible({ timeout: 30_000 });
 
 		await input.fill(QUESTION);
 		await expect(a.getByRole("button", { name: "Send", exact: true })).toBeEnabled();

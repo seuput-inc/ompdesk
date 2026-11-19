@@ -319,6 +319,10 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
                 Ok(json!({ "instance": "omp-2", "journaled": args["marks"] }))
             }
             "sentMarks" => Ok(json!({ "instance": "omp-2", "journaled": [] })),
+            // A new omp has no turn running: its bridge sends nothing and says so, and main prompts it.
+            "command" if args["command"]["type"] == "agent_control_aside" => {
+                Ok(json!({ "success": true, "data": { "idle": true } }))
+            }
             other => main_of(other, args),
         },
     );
@@ -333,13 +337,13 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
         vec![
             json!("agent_control_worker"),
             json!("set_plan_mode"),
+            json!("agent_control_aside"),
             json!("prompt")
         ]
     );
-    let message = commands[2]["message"].as_str().unwrap();
+    let message = commands[3]["message"].as_str().unwrap();
     assert!(message.contains("[ompdesk dispatch d1:"), "{message}");
     assert!(message.contains("Title: do it"), "{message}");
-    assert_eq!(commands[2]["streamingBehavior"], "followUp");
 
     // The same omp holds it now: never again, and once its journal has it the record goes.
     after.redeliver_sends().await.unwrap();

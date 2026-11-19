@@ -19,8 +19,6 @@ import { unavailableSkillTokens } from "./skill-tokens";
 import { parseSlashCommand } from "./slash-command";
 import type { TabRpc } from "./tab-rpc";
 
-export type ComposerSendMode = "prompt" | "steer" | "followUp";
-
 /** Builtin slash commands that replace the session server-side. */
 const SESSION_REPLACING_COMMANDS: Record<string, true> = { new: true, clear: true };
 // The desktop requires a visible preview/start step even when Core exposes a
@@ -128,21 +126,20 @@ export function planComposerSubmit(input: {
 	typed?: string;
 	images: ImageContent[];
 	isStreaming: boolean;
-	mode: ComposerSendMode;
 	commands: AvailableCommand[];
-	rpc?: Pick<TabRpc, "compact" | "followUp" | "prompt" | "steer">;
+	rpc?: Pick<TabRpc, "compact" | "prompt" | "steer">;
 	/** Runs just before a plain (non-slash, non-streaming) prompt is sent: the automatic mode choice. */
 	beforePrompt?: () => Promise<AutoModeDecision | null | undefined>;
 	/** Aborted before the prompt leaves (Stop or Esc during the mode choice): nothing is sent. */
 	signal?: AbortSignal;
 	/**
 	 * Other devices may send to this tab (a shared tab, or a page on a phone), so this window's idea of
-	 * "running" can be a beat stale: a plain message goes as a prompt carrying how to join a run
-	 * (steer / follow-up) and the host, which holds the one authoritative run state, decides.
+	 * "running" can be a beat stale: a plain message goes as a prompt that steers a run still going,
+	 * and the host, which holds the one authoritative run state, decides.
 	 */
 	hostDecides?: boolean;
 }): ComposerSubmit {
-	const { message, images, isStreaming, mode, commands, rpc = window.omp.rpc } = input;
+	const { message, images, isStreaming, commands, rpc = window.omp.rpc } = input;
 	const isSlashCommand = (input.typed ?? message).startsWith("/");
 	if (isSlashCommand && isStreaming) {
 		const commandName = parseSlashCommand(message)?.name;
@@ -186,16 +183,11 @@ export function planComposerSubmit(input: {
 			request: async () => {
 				if (!isStreaming) await input.beforePrompt?.();
 				if (input.signal?.aborted) return cancelledSubmit;
-				return rpc.prompt(message, images, mode === "followUp" ? "followUp" : "steer");
+				return rpc.prompt(message, images, "steer");
 			},
 		};
 	}
-	if (!isSlashCommand && isStreaming) {
-		return {
-			kind: "send",
-			request: () => (mode === "followUp" ? rpc.followUp(message, images) : rpc.steer(message, images)),
-		};
-	}
+	if (!isSlashCommand && isStreaming) return { kind: "send", request: () => rpc.steer(message, images) };
 	return {
 		kind: "send",
 		request: async () => {

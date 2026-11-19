@@ -2,8 +2,8 @@
  * The composer toolbar, measured (Run chip + one Send/Stop button + toolbar-owned label ladder):
  * - the toolbar is the same height idle, running and running with a draft, at 1000/760/560/420 px windows;
  * - nothing moves on a turn starting, a draft being typed, or the turn ending: +, the Run chip, the model chip, the
- *   context ring and the one action button keep their boxes (the lane chip takes the free room before the cluster);
- * - while idle nothing waits beside the action button (no gap held for Stop or the lane chip);
+ *   context ring and the one action button keep their boxes;
+ * - while idle nothing waits beside the action button (no gap held for Stop);
  * - an active mode paints the Run chip accent (`--sc-accent-on-soft`, computed, light and dark), a quiet chip does not;
  * - Tab leaves a popover: it closes and focus moves on (never to the top of the app);
  * - the context ring opens on click/Enter, never on keyboard focus.
@@ -62,7 +62,7 @@ async function startTurn(page: Page): Promise<void> {
 
 async function stopTurn(page: Page): Promise<void> {
 	await slot(page, "send").getByRole("button").click();
-	await expect(page.locator("[data-send-mode]")).toHaveCount(0);
+	await expect(page.locator(".omp-composer-toolbar[data-turn-running]")).toHaveCount(0);
 	await expect(slot(page, "send").getByRole("button")).toHaveAttribute("data-send-state", "send");
 }
 
