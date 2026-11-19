@@ -38,6 +38,7 @@ Reflect.set(window, "omp", { rpc: { getJobs }, prefs: { get: vi.fn(async () => u
 
 const { createRoot } = await import("react-dom/client");
 const { WorkBoardChip } = await import("./WorkBoardChip");
+const { TodoReceived, useTodoFreshness } = await import("../../chat/dock/TodoFreshness");
 
 let container: HTMLElement;
 let root: Root;
@@ -332,6 +333,26 @@ describe("WorkBoardChip, the phone's work strip", () => {
 			expect(expands).toHaveBeenCalledOnce();
 			expect(panel()).not.toBeNull();
 			expect(strip()?.getAttribute("aria-expanded")).toBe("true");
+		});
+
+		it("stays open for a tap on a received instruction, which shows that line whole", async () => {
+			// The strip panel's plan zone lists them (WorkBoard's TodoReceived); the board itself is not mounted here.
+			function Received() {
+				return <TodoReceived freshness={useTodoFreshness()} list />;
+			}
+			const changedAt = Date.now() - 12 * 60_000 - 5000;
+			useTodoStore.getState().setPhases([{ name: "Fix", tasks: [{ content: "Reproduce", status: "in_progress" }] }]);
+			useTodoStore.getState().setDrift({
+				changedAt,
+				stale: null,
+				received: [{ at: changedAt + 60_000, text: "Then rename parse() to parseConfig() everywhere" }],
+				receivedCount: 1,
+			});
+			await mount(<Received />);
+			await click(strip());
+			await click(container.querySelector("[data-todo-received-line]"));
+			expect(panel()).not.toBeNull();
+			expect(container.querySelector("[data-todo-received-line]")?.getAttribute("aria-expanded")).toBe("true");
 		});
 
 		it("collapses on a tap outside, and on the back gesture's layer", async () => {

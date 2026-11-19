@@ -166,7 +166,8 @@ export function TodoReceived({ freshness, list = false }: { freshness: TodoFresh
 				const whole = opened.has(key);
 				return (
 					<BoardRow
-						data={{ "data-todo-received-line": "", "aria-expanded": String(whole) }}
+						// A tap opens the line in place, so the phone's strip panel stays open for it.
+						data={{ "data-todo-received-line": "", "data-board-expands": "", "aria-expanded": String(whole) }}
 						flipKey={`todo-received:${key}`}
 						key={key}
 						label={<span className="text-(--sc-text-subtle)">{line.text}</span>}
