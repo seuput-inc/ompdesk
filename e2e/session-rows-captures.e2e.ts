@@ -135,6 +135,12 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	await expect(long).toHaveAttribute("title", new RegExp(LONG_BRANCH));
 	const cut = await long.locator(".truncate").evaluate(text => text.scrollWidth > text.clientWidth);
 	expect(cut).toBe(true);
+	// No branch shrinks to its mark alone: beside a family chip, in a 220 px sidebar and on a phone it keeps letters.
+	const widths = await list
+		.locator("[data-session-head] .truncate:visible")
+		.evaluateAll(texts => texts.map(text => text.getBoundingClientRect().width));
+	expect(widths.length).toBeGreaterThan(2);
+	for (const width of widths) expect(width).toBeGreaterThanOrEqual(16);
 
 	// Every session row: two lines, the picture first, the ⋯ under the title's line, nothing past the row's edge.
 	const rows = list.locator(".omp-sidebar-session-row:visible");

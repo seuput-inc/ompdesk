@@ -91,7 +91,8 @@ export function headWords(
 
 /**
  * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name, which
- * gives way to an ellipsis before anything else on the line; the whole name is its hover title. `worktree` names
+ * gives way to an ellipsis before anything else on the line, never below its mark and a few characters (beside a
+ * family chip in a narrow sidebar it shrank to its mark alone); the whole name is its hover title. `worktree` names
  * what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's child.
  */
 export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktree?: WorktreeKind }) {
@@ -101,7 +102,7 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
 		<span
-			className="inline-flex min-w-0 flex-[0_100_auto] items-center gap-1"
+			className="inline-flex min-w-[min(4em,max-content)] flex-[0_100_auto] items-center gap-1"
 			data-session-head={head.kind}
 			data-sidebar-worktree={worktree}
 			title={tip}
