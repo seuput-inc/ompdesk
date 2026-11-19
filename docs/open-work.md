@@ -41,6 +41,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | C8 | A paired computer's sidebar differs from the host's real state. | on branch (green), goes with next-line | next-line [desktop] | omp/agent/tabs-tidy-20261120 `066a1a38a` | ci 44595185047, full e2e 44595192521, omp-latest 44595212063 |
 | C9 | A tab another tab holds open on a frozen window cannot be closed (live repro on the Mac mini). | on branch (green), goes with next-line | next-line [desktop] | omp/agent/page-watch-20261119 `b8d7d9d5d` | ci+mac 44584807280, tauri-native 44582180703, e2e 44582021779; a real stuck WKWebView restart not run on a macOS runner |
 | C10 | After a messageless session's omp was killed, its restarted omp got a new saved id (01a1f4bf → 01a1f4ca) and the empty session file was not resumed. Because of it the opener's 'closed it' referred to the old id and the tab under the new id stayed open. | not started | | | |
+| C11 | Whether a person saw or touched a tab is known only inside the auto-close pass (AutoCloseFacts.looked / user_touched, agentctl/rules/auto_close.rs); no agent tool or log shows it, so an agent cannot check 'no sign the person saw or touched it' before closing a tab, and asks the owner. Add per tab the last time it was shown and the last time the person typed into it (times only, no content) to ompdesk_sessions and one gui-runtime line per change. | not started | | | |
 
 ## D. Silently stale or stopped
 
