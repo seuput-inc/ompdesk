@@ -94,6 +94,13 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | H31 | An 18-hour wait, cause unknown. | blocked: no repro; add a probe | earlier-list [desktop] | | |
 | H32 | release.yml: hold only the publish step (draft release, approval); workflow commits separate. | not started | | | |
 
+## R. Candidate 0.135.0 findings
+
+| id | item | status | owner | branch | proof |
+|---|---|---|---|---|---|
+| R1 | A click on a session row's new second line selects nothing (the line paints over the row's click target): e2e mobile-remote-session and mobile-notification-open failed on Windows (44573541689 shards 4, 5). | in progress | rc-0135-phone-remote [Mac mini] | omp/agent/rc-0135-phone-remote-20261120 | flake-probe 44580646695 vs v0.134.1 44580654743, geometry 44581227969 |
+| R2 | mobile-autopilot-rows read the new branch line as a child named after its branch. | test fixed | | `69228ec7e` | spec run 44580343480 |
+
 ## I. Boundaries
 
 | id | item | status | owner | branch | proof |
