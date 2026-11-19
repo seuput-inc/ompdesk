@@ -482,21 +482,121 @@ describe("WorkBoard sections", () => {
 				],
 			},
 		]);
-		useTodoStore.getState().setDrift({ changedAt: Date.now() - 12 * 60_000 - 5000, stale: "instruction" });
+		const changedAt = Date.now() - 12 * 60_000 - 5000;
+		useTodoStore.getState().setDrift({ changedAt, stale: "drift", received: [], receivedCount: 0 });
 		await mount();
 		const plan = section("plan");
 		const head = plan?.querySelector(".omp-work-board-aside");
-		expect(head?.textContent).toBe("A new instruction has no row on this list12m ago");
+		expect(head?.textContent).toBe("Not updated while the agent kept working12m ago");
 		expect(head?.querySelector("svg")).not.toBeNull();
 		const rows = [...(plan?.querySelectorAll(".omp-work-board-row") ?? [])].map(row => row.textContent);
-		expect(rows).toEqual(["A new instruction has no row on this list", "Write the board", "Test it"]);
+		expect(rows).toEqual(["Not updated while the agent kept working", "Write the board", "Test it"]);
 
 		// A list that follows the work has no such row: its head only says when it last changed.
 		await act(async () =>
-			useTodoStore.getState().setDrift({ changedAt: Date.now() - 12 * 60_000 - 5000, stale: null }),
+			useTodoStore.getState().setDrift({ changedAt, stale: null, received: [], receivedCount: 0 }),
 		);
 		expect(section("plan")?.querySelector(".omp-work-board-aside")?.textContent).toBe("12m ago");
 		expect(section("plan")?.querySelector("[data-board-todo-stale]")).toBeNull();
+	});
+
+	describe("the instructions received since the todo list last changed", () => {
+		const changedAt = () => Date.now() - 12 * 60_000 - 5000;
+		const planRows = () =>
+			[...(section("plan")?.querySelectorAll(".omp-work-board-list > li") ?? [])].map(row => row.textContent);
+		beforeEach(() => {
+			useTodoStore.getState().setPhases([
+				{
+					name: "Work",
+					tasks: [
+						{ content: "Write the board", status: "in_progress" },
+						{ content: "Test it", status: "pending" },
+					],
+				},
+			]);
+		});
+
+		it("counts them and lists each on one line over the list, in place of the reason's row", async () => {
+			const at = changedAt();
+			useTodoStore.getState().setDrift({
+				changedAt: at,
+				stale: "instruction",
+				received: [
+					{ at: at + 60_000, text: "Also add a strip for the phone" },
+					{ at: at + 120_000, text: "And never widen the board" },
+				],
+				receivedCount: 2,
+			});
+			await mount();
+
+			expect(planRows()).toEqual([
+				"2 instructions received since the list last changed",
+				"Also add a strip for the phone",
+				"And never widen the board",
+				"Write the board",
+				"Test it",
+			]);
+			const plan = section("plan");
+			// The head keeps its warning mark; the count line carries it in place of the reason's row.
+			expect(plan?.querySelector(".omp-work-board-aside svg")).not.toBeNull();
+			expect(plan?.querySelector("[data-board-todo-stale]")).toBeNull();
+			expect(plan?.querySelector('[data-todo-received] [data-tone="warning"]')).not.toBeNull();
+			// A clipped line's tooltip says when it came and the whole line.
+			const tooltip = plan?.querySelector("[data-todo-received-line]")?.getAttribute("title")?.split("\n");
+			expect(tooltip?.[0]).toMatch(/\d{2}:\d{2}/);
+			expect(tooltip?.[1]).toBe("Also add a strip for the phone");
+		});
+
+		it("says one in the singular, with no warning while the agent has not worked past it", async () => {
+			const at = changedAt();
+			useTodoStore.getState().setDrift({
+				changedAt: at,
+				stale: null,
+				received: [{ at: at + 60_000, text: "Also add a strip for the phone" }],
+				receivedCount: 1,
+			});
+			await mount();
+
+			expect(planRows().slice(0, 2)).toEqual([
+				"1 instruction received since the list last changed",
+				"Also add a strip for the phone",
+			]);
+			expect(section("plan")?.querySelector('[data-todo-received] [data-tone="warning"]')).toBeNull();
+		});
+
+		it("names how many more came than the lines it was given", async () => {
+			const at = changedAt();
+			useTodoStore.getState().setDrift({
+				changedAt: at,
+				stale: "instruction",
+				received: Array.from({ length: 5 }, (_, index) => ({
+					at: at + (index + 1) * 60_000,
+					text: `Instruction ${index + 2}`,
+				})),
+				receivedCount: 6,
+			});
+			await mount();
+
+			expect(planRows()).toEqual([
+				"6 instructions received since the list last changed",
+				"Instruction 2",
+				"Instruction 3",
+				"Instruction 4",
+				"Instruction 5",
+				"Instruction 6",
+				"+1 more",
+				"Write the board",
+				"Test it",
+			]);
+		});
+
+		it("shows nothing while none came", async () => {
+			useTodoStore.getState().setDrift({ changedAt: changedAt(), stale: null, received: [], receivedCount: 0 });
+			await mount();
+
+			expect(planRows()).toEqual(["Write the board", "Test it"]);
+			expect(section("plan")?.querySelector("[data-todo-received]")).toBeNull();
+		});
 	});
 
 	it("shows the turn's token speed beside its elapsed time only while the turn streams", async () => {

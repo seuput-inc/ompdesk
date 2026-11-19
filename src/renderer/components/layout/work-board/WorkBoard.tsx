@@ -46,7 +46,7 @@ import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
 import { type ToolEntry, useToolsStore } from "../../../stores/tools";
 import { useUiStore } from "../../../stores/ui";
 import { useWorkBoardStore } from "../../../stores/work-board";
-import { TodoFreshnessMark, TodoStaleIcon, useTodoFreshness } from "../../chat/dock/TodoFreshness";
+import { TodoFreshnessMark, TodoReceived, TodoStaleIcon, useTodoFreshness } from "../../chat/dock/TodoFreshness";
 import { formatTokenRate } from "../../chat/TurnOutputMeter";
 import { useRunStores } from "../../chat/work/use-work-run";
 import { resumedAgents } from "../../chat/work/work-run";
@@ -722,7 +722,8 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 								.join("\n")}
 						/>
 					)}
-					{freshness?.reason && (
+					{/* The instructions the agent worked past say why themselves: their lines stand for the reason's row. */}
+					{freshness?.reason && (freshness.stale !== "instruction" || freshness.receivedCount === 0) && (
 						<BoardRow
 							data={{ "data-board-todo-stale": freshness.stale ?? "" }}
 							flipKey="plan-stale"
@@ -731,6 +732,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 							title={freshness.title}
 						/>
 					)}
+					<TodoReceived freshness={freshness} />
 					{plan && plan.done > 0 && (
 						<BoardRow
 							data={{ "data-board-done-folded": "" }}

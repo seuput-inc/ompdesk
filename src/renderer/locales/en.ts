@@ -3767,6 +3767,7 @@ export const en: Record<string, string> = {
 	"todoPanel.updated": "Updated {ago}",
 	"todoPanel.stale.instruction": "A new instruction has no row on this list",
 	"todoPanel.stale.drift": "Not updated while the agent kept working",
+	"todoPanel.received": "{count} instruction{plural} received since the list last changed",
 
 	// Log panel
 	"logPanel.title": "Logs",
@@ -4470,7 +4471,8 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.todoWait": "No todo reminder while a session waits for a reply",
 	"bridgeHealth.feature.todoStale": "Old todo list shown to the agent on a new request",
 	"bridgeHealth.feature.todoCompact": "Long todo list folded by the agent",
-	"bridgeHealth.feature.todoDrift": "Todo list behind the work named to the agent and marked on the panel",
+	"bridgeHealth.feature.todoNudge": "Todo list behind the work named to the agent",
+	"bridgeHealth.feature.todoDrift": "To-do panel shows the list's last change, instructions since, and a stale mark",
 	"bridgeHealth.feature.wasteGuards": "Refusing a bash ready.log that cannot match, and a hint against polling",
 	"bridgeHealth.feature.quitJournal": "Aborted tool result kept when the app quits during a tool",
 	"bridgeHealth.feature.exitDrain": "A login refresh saved before a stopped session's omp ends",

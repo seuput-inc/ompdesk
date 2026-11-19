@@ -48,6 +48,7 @@ import {
 	stoppedSubagents,
 } from "../../resources/gui-bridge/restart-core";
 import { type ForkEntry, forkCut } from "../../resources/gui-bridge/session-fork-core";
+import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import { transcriptPageMessages, transcriptRunStart } from "../../resources/gui-bridge/transcript-page";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
@@ -450,10 +451,8 @@ export function runRpcUi(): void {
 	const btwRecords: object[] = [];
 	/** The session's todo list and the bridge's reading of it (todo-drift.ts), set by `fixture todo behind`. */
 	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
-	let todoDrift: { changedAt: number | null; stale: "instruction" | "drift" | null } = {
-		changedAt: null,
-		stale: null,
-	};
+	const noDrift: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
+	let todoDrift = noDrift;
 	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
 		model,
@@ -5836,13 +5835,22 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					},
 					isError: false,
 				});
-				todoDrift = { changedAt: Date.now() - 12 * 60_000, stale: "instruction" };
+				const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
+				todoDrift = {
+					changedAt: minutesAgo(12),
+					stale: "instruction",
+					received: [
+						{ at: minutesAgo(9), text: "Also fix the README typo on line 3" },
+						{ at: minutesAgo(4), text: "Then rename parse() to parseConfig() everywhere" },
+					],
+					receivedCount: 2,
+				};
 				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
 				for (const socket of bridgeClients) socket.write(frame);
 			}
 			if (message === "fixture todo clear") {
 				todoPhases = [];
-				todoDrift = { changedAt: null, stale: null };
+				todoDrift = noDrift;
 				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
 				for (const socket of bridgeClients) socket.write(frame);
 			}

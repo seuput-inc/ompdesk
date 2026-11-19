@@ -92,7 +92,8 @@ export const FEATURES = {
 	todoStale: "A todo list left from earlier work is named to the agent when a new request starts a turn",
 	todoCompact: "A todo list grown long by appends is asked to fold its finished items",
 	todoDrift:
-		"A todo list behind the work (a new instruction or a run of tool calls with no change) is named to the agent and marked on the panel",
+		"The to-do panel says when the list last changed, which instructions came since, and marks a list behind the work",
+	todoNudge: "A todo list behind the work (a new instruction or a long run of tool calls) is named to the agent",
 	wasteGuards:
 		"A bash service start whose ready.log cannot match is refused; a polling call or a refused edit is told once what to do instead; a wait returns only with news",
 	quitJournal: "A quit while a tool runs journals the tool's aborted result before the process ends",
@@ -614,10 +615,23 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** todo-compact.ts: the public `tool_result` hook and its `additionalContext` only. Imports nothing from omp. */
 	todoCompact: {},
 	/**
-	 * todo-drift.ts: the public `tool_result` hook with `additionalContext`, stock's journal todo readers, the session's
-	 * active tools and plan state after each tool call, and the live session's branch for the panel's reading.
+	 * todo-drift.ts: the public `tool_result` hook, stock's journal todo readers, the session's active tools and plan
+	 * state after each tool call, its branch for the panel's reading, and one journaled marker per session.
 	 */
 	todoDrift: {
+		session: [
+			"getActiveToolNames()",
+			"getPlanModeState()",
+			"sessionManager.getBranch()",
+			"sessionManager.getSessionId()",
+			"sessionManager.appendCustomEntry()",
+		],
+		modules: {
+			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
+		},
+	},
+	/** todo-nudge.ts: todo-drift.ts's reading, returned as the public `tool_result` hook's `additionalContext`. */
+	todoNudge: {
 		session: ["getActiveToolNames()", "getPlanModeState()", "sessionManager.getBranch()"],
 		modules: {
 			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],

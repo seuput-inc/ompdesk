@@ -167,7 +167,7 @@ export const createTodoStore = () =>
 				previous?.id === snapshot.id ? [...state.history.slice(0, -1), snapshot] : [...state.history, snapshot];
 			if (history.length > HISTORY_LIMIT) history.shift();
 			// A person's edit or an agent's todo call: fresh at once; the bridge's next reading confirms it.
-			set({ ...live, history, drift: { changedAt: Date.now(), stale: null } });
+			set({ ...live, history, drift: { changedAt: Date.now(), stale: null, received: [], receivedCount: 0 } });
 		},
 		setDrift: drift => set({ drift }),
 		setTurnActive: (active, sourceTimestamp) =>

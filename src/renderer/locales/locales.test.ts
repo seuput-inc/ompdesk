@@ -246,6 +246,7 @@ describe("en counts of one", () => {
 			["modelSetup.review.dropped", { count: 1, failed: 1, skipped: 1 }],
 			["modelSetup.apply.partial", { count: 1, failed: 1, skipped: 1 }],
 			["todoPanel.reminderCount", { count: 1, failed: 1, skipped: 1 }],
+			["todoPanel.received", { count: 1 }],
 		];
 		for (const [key, params] of cases) {
 			expect(en[key], key).toBeDefined();

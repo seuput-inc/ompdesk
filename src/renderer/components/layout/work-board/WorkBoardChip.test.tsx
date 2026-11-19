@@ -188,7 +188,12 @@ describe("WorkBoardChip, the phone's work strip", () => {
 				],
 			},
 		]);
-		useTodoStore.getState().setDrift({ changedAt: Date.now() - 58 * 60_000 - 5000, stale: "drift" });
+		useTodoStore.getState().setDrift({
+			changedAt: Date.now() - 58 * 60_000 - 5000,
+			stale: "drift",
+			received: [],
+			receivedCount: 0,
+		});
 		await mount();
 		const strip = container.querySelector("[data-work-chip]");
 		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe(
@@ -200,7 +205,9 @@ describe("WorkBoardChip, the phone's work strip", () => {
 
 		// A list that follows the work keeps its current task and only says when it last changed.
 		await act(async () =>
-			useTodoStore.getState().setDrift({ changedAt: Date.now() - 3 * 60_000 - 5000, stale: null }),
+			useTodoStore
+				.getState()
+				.setDrift({ changedAt: Date.now() - 3 * 60_000 - 5000, stale: null, received: [], receivedCount: 0 }),
 		);
 		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Wait for the row3m ago");
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done");

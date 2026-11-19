@@ -138,11 +138,12 @@ describe("TodoDockCard", () => {
 		];
 		const peekText = () => container.querySelector('[data-testid="dock-peek-todo"]')?.textContent;
 		const twelveMinutesAgo = () => Date.now() - 12 * 60_000 - 5000;
+		const NONE_RECEIVED = { received: [], receivedCount: 0 };
 
 		it("marks the collapsed line when a new instruction has no row, with when the list last changed", async () => {
 			useUiStore.setState({ dockCollapsed: {} });
 			useTodoStore.getState().setPhases(open);
-			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "instruction" });
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "instruction", ...NONE_RECEIVED });
 			await mount();
 
 			expect(peekText()).toBe(
@@ -160,7 +161,7 @@ describe("TodoDockCard", () => {
 		it("says why a list went unchanged through a long run of work", async () => {
 			useUiStore.setState({ dockCollapsed: {} });
 			useTodoStore.getState().setPhases(open);
-			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "drift" });
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "drift", ...NONE_RECEIVED });
 			await mount();
 
 			expect(peekText()).toContain("Not updated while the agent kept working");
@@ -169,7 +170,7 @@ describe("TodoDockCard", () => {
 		it("shows only when a list that follows the work last changed, with no mark", async () => {
 			useUiStore.setState({ dockCollapsed: {} });
 			useTodoStore.getState().setPhases(open);
-			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: null });
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: null, ...NONE_RECEIVED });
 			await mount();
 
 			expect(peekText()).toBe("1/2Wire the peek into the headerUpdated 12m ago");
@@ -179,7 +180,7 @@ describe("TodoDockCard", () => {
 		it("says nothing while the list's last change is unknown", async () => {
 			useUiStore.setState({ dockCollapsed: {} });
 			useTodoStore.getState().setPhases(open);
-			useTodoStore.getState().setDrift({ changedAt: null, stale: null });
+			useTodoStore.getState().setDrift({ changedAt: null, stale: null, ...NONE_RECEIVED });
 			await mount();
 
 			expect(peekText()).toBe("1/2Wire the peek into the header");
@@ -187,7 +188,7 @@ describe("TodoDockCard", () => {
 
 		it("clears the mark the moment a person changes the list", async () => {
 			useTodoStore.getState().setPhases(open);
-			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "instruction" });
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "instruction", ...NONE_RECEIVED });
 			await mount();
 			expect(container.textContent).toContain("A new instruction has no row on this list");
 
@@ -198,7 +199,7 @@ describe("TodoDockCard", () => {
 		});
 
 		it("keeps the mark when the person's change was refused: the list did not change", async () => {
-			const behind = { changedAt: twelveMinutesAgo(), stale: "instruction" as const };
+			const behind = { changedAt: twelveMinutesAgo(), stale: "instruction" as const, ...NONE_RECEIVED };
 			// The session refuses the write, then answers with the list as it was, still behind the work.
 			const commandForTab = vi.fn(
 				async (_tabId: string, command: RpcCommand): Promise<RpcResponse> =>
@@ -257,6 +258,36 @@ describe("TodoDockCard", () => {
 				useTabsStore.getState().reset();
 				Reflect.deleteProperty(window.omp.rpc, "commandForTab");
 			}
+		});
+
+		it("lists the instructions received since the list last changed over the opened list", async () => {
+			const changedAt = twelveMinutesAgo();
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({
+				changedAt,
+				stale: "instruction",
+				received: [
+					{ at: changedAt + 60_000, text: "Also wire the footer" },
+					{ at: changedAt + 120_000, text: "And rename the peek to glance" },
+				],
+				receivedCount: 2,
+			});
+			await mount();
+
+			const card = container.querySelector('section[aria-label="Todos"]');
+			expect(card?.querySelector("[data-todo-received]")?.textContent).toBe(
+				"2 instructions received since the list last changed",
+			);
+			const lines = [...(card?.querySelectorAll("[data-todo-received-line]") ?? [])];
+			expect(lines.map(line => line.textContent)).toEqual(["Also wire the footer", "And rename the peek to glance"]);
+			// Over the list: the received lines come before the first task.
+			const text = card?.textContent ?? "";
+			expect(text.indexOf("And rename the peek to glance")).toBeLessThan(text.indexOf("Sketch the peek"));
+
+			// A change to the list answers them: the lines go with the mark.
+			await act(async () => statusCycleButton().click());
+			expect(container.querySelector("[data-todo-received]")).toBeNull();
+			expect(container.querySelector("[data-todo-received-line]")).toBeNull();
 		});
 	});
 

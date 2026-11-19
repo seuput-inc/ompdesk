@@ -118,6 +118,7 @@ const AREAS: readonly Area[] = [
 	{ name: "todo-stale", features: ["todoStale"], load: () => import("./todo-stale") },
 	{ name: "todo-compact", features: ["todoCompact"], load: () => import("./todo-compact") },
 	{ name: "todo-drift", features: ["todoDrift"], load: () => import("./todo-drift") },
+	{ name: "todo-nudge", features: ["todoNudge"], load: () => import("./todo-nudge") },
 	{ name: "waste-guards", features: ["wasteGuards"], load: () => import("./waste-guards") },
 	{ name: "quit-journal", features: ["quitJournal"], load: () => import("./quit-journal") },
 	{ name: "exit-drain", features: ["exitDrain"], load: () => import("./exit-drain") },

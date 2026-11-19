@@ -1540,17 +1540,24 @@ describe("useRpcEvents todo lifecycle", () => {
 		const { omp, emitBatch } = installMockOmp();
 		const open: TodoPhase[] = [{ name: "Build", tasks: [{ content: "scaffold", status: "in_progress" }] }];
 		const changedAt = Date.now() - 12 * 60_000;
+		const following = { changedAt, stale: null, received: [], receivedCount: 0 };
 		omp.rpc.getState.mockImplementation(async () =>
-			settledState({ isStreaming: true, todoPhases: open, todoDrift: { changedAt, stale: null } }),
+			settledState({ isStreaming: true, todoPhases: open, todoDrift: following }),
 		);
 		await mount(<RpcEventsProbe />);
 		await flush();
 		// What get_state reported: the list last changed twelve minutes ago and still follows the work.
-		expect(useTodoStore.getState().drift).toEqual({ changedAt, stale: null });
+		expect(useTodoStore.getState().drift).toEqual(following);
 
-		// A steer got no row and the agent worked on: the bridge says so after that tool call.
-		await act(async () => emitBatch([{ type: "todo_drift", state: { changedAt, stale: "instruction" } }]));
-		expect(useTodoStore.getState().drift).toEqual({ changedAt, stale: "instruction" });
+		// A steer got no row and the agent worked on: the bridge says so after that tool call, with the steer's line.
+		const behind = {
+			changedAt,
+			stale: "instruction" as const,
+			received: [{ at: changedAt + 60_000, text: "Also wire the footer" }],
+			receivedCount: 1,
+		};
+		await act(async () => emitBatch([{ type: "todo_drift", state: behind }]));
+		expect(useTodoStore.getState().drift).toEqual(behind);
 
 		// The agent adds the row: the list is current again at once, before the bridge's next frame.
 		const before = Date.now();
@@ -1564,7 +1571,12 @@ describe("useRpcEvents todo lifecycle", () => {
 			},
 		];
 		await act(async () => emitBatch([todoResult("todo-steer", next)]));
-		expect(useTodoStore.getState().drift?.stale).toBeNull();
+		expect(useTodoStore.getState().drift).toEqual({
+			changedAt: expect.any(Number),
+			stale: null,
+			received: [],
+			receivedCount: 0,
+		});
 		expect(useTodoStore.getState().drift?.changedAt).toBeGreaterThanOrEqual(before);
 	});
 

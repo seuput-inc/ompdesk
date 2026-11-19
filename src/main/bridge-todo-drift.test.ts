@@ -2,15 +2,46 @@ import { describe, expect, it } from "vitest";
 import {
 	DRIFT_CALLS,
 	journalDriftEvents,
+	RECEIVED_SHOWN,
 	type TodoDriftEntry,
 	type TodoDriftEvent,
 	type TodoDriftPhase,
 	todoDrift,
+	todoDriftState,
 	todoNudge,
 	todoNudgeText,
 } from "../../resources/gui-bridge/todo-drift-core";
 
 const MIN = 60_000;
+describe("the panel's received instructions", () => {
+	const at = (n: number) => ({ kind: "instruction", at: n, text: `Instruction ${n}\nwith detail` }) as const;
+	const listAt = (n: number): TodoDriftEvent => ({
+		kind: "list",
+		at: n,
+		phases: [{ name: "Parser", tasks: [{ content: "Write the parser", status: "in_progress" }] }],
+	});
+
+	it("lists every instruction since the list's last change by its first line, the newest five, and clears on a change", () => {
+		const received = todoDriftState(todoDrift([listAt(0), ...Array.from({ length: 7 }, (_, i) => at(i + 1))]));
+		expect(received.receivedCount).toBe(7);
+		expect(received.received.map(item => item.text)).toEqual(
+			Array.from({ length: RECEIVED_SHOWN }, (_, i) => `Instruction ${i + 3}`),
+		);
+		expect(todoDriftState(todoDrift([listAt(0), at(1), listAt(2)]))).toMatchObject({
+			received: [],
+			receivedCount: 0,
+		});
+	});
+
+	it("shows an opening agent's message by its title, without the wrapper", () => {
+		const text =
+			'<ompdesk-agent-message from="Main" session="01a1">\nTitle: Fix the parser\n\nDetails…\n</ompdesk-agent-message>';
+		expect(todoDriftState(todoDrift([listAt(0), { kind: "instruction", at: 1, text }])).received).toEqual([
+			{ at: 1, text: "Fix the parser" },
+		]);
+	});
+});
+
 const LIST: TodoDriftPhase[] = [
 	{
 		name: "Parser",

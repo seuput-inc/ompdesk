@@ -88,7 +88,7 @@ export const EXPECTED_STOCK_SKIPS: readonly ExpectedSkip[] = [
 		reason: "runs the person's real model (OMP_GUI_REAL_WORK)",
 	},
 	{
-		file: "src/main/bridge-todo-drift-stock.test.ts",
+		file: "src/main/bridge-todo-nudge-stock.test.ts",
 		test: "a steer into a listed task, on the user's real smol model",
 		reason: "runs the person's real model (OMP_GUI_REAL_WORK)",
 	},

@@ -3,8 +3,9 @@
  * work card carries it (idle sessions, a turn that is only writing text). It
  * starts collapsed to one line (progress, the current task, and how current
  * the list is: TodoFreshness); expanding shows the shared TodoListEditor under
- * the same freshness line. Renders nothing when the session has no open todos
- * and no reminder pending.
+ * the same freshness line and the instructions received since the list last
+ * changed. Renders nothing when the session has no open todos and no reminder
+ * pending.
  */
 
 import { ListTodo } from "lucide-react";
@@ -13,7 +14,7 @@ import { useT } from "../../../lib/i18n";
 import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
 import { DockCard } from "./DockCard";
 import { buildTodoDockPeek } from "./dock-summary";
-import { TodoFreshnessMark, useTodoFreshness } from "./TodoFreshness";
+import { TodoFreshnessMark, TodoReceived, useTodoFreshness } from "./TodoFreshness";
 import { TodoListEditor, useTodoTaskSummary } from "./TodoListEditor";
 import { useWorkspaceDockFocus } from "./WorkspaceDockFocus";
 
@@ -69,6 +70,7 @@ export function TodoDockCard({ exiting = false }: { exiting?: boolean }) {
 		>
 			<div className="px-2 py-1.5">
 				<TodoFreshnessMark className="mb-1 px-1 text-sc-xs text-(--sc-text-subtle)" freshness={freshness} />
+				<TodoReceived freshness={freshness} list />
 				<TodoListEditor />
 			</div>
 		</DockCard>

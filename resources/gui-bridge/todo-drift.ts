@@ -1,19 +1,17 @@
 /**
- * A todo list that stopped following the work (rules and text: todo-drift-core.ts). After each tool call of the main
- * agent the bridge reads the journal from the list's last change: a new instruction since then (a steer included) is
- * named once after the first call that follows it, and a list unchanged for `DRIFT_CALLS` calls is named with
- * backoff. Stock's public `tool_result` hook with `additionalContext` (as todo-compact.ts): the line rides the next
- * request of the same run and stock journals it, which is how the rule knows it was given. The same reading goes to
- * the GUI as `TodoDriftState` (get_state `todoDrift` through `todoDrift.state`, and the `todo_drift` frame when it
- * changes), so the panel says when the list last changed and marks one behind the work even when the agent ignores
- * the reminder.
+ * The panel's reading of the todo list (rules: todo-drift-core.ts; contract: todo-drift-contracts.ts). After each tool
+ * call of the main agent the bridge reads the journal from the list's last change and sends the GUI when that was,
+ * whether the list is behind the work and which instructions arrived since (get_state `todoDrift` through
+ * `todoDrift.state`, and the `todo_drift` frame when it changes). It never touches the agent's list and says nothing
+ * to the agent (todo-nudge.ts does). The first reading in a session journals `TODO_DRIFT_MARKER`, so
+ * scripts/todo-truth-stats.ts tells the sessions that ran this bridge from those that did not.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
 import { autopilotRunning } from "./modes/autopilot-core";
 import { emit } from "./modes/shared";
 import { getLatestTodoPhasesFromEntries, getLatestTodoSnapshotIdentity } from "./omp/pi-coding-agent/tools/todo";
-import { TODO_DRIFT_EVENT, type TodoDriftState } from "./todo-drift-contracts";
+import { TODO_DRIFT_EVENT, TODO_DRIFT_MARKER, type TodoDriftState } from "./todo-drift-contracts";
 import {
 	journalDriftEvents,
 	type TodoDrift,
@@ -22,14 +20,12 @@ import {
 	todoCallInFlight,
 	todoDrift,
 	todoDriftState,
-	todoNudge,
-	todoNudgeText,
 } from "./todo-drift-core";
 
 type Branch = Parameters<typeof getLatestTodoSnapshotIdentity>[0];
 
 /** The drift the journal shows, plus `extra` steps not journaled yet; undefined without a list. */
-function driftOf(branch: Branch, extra: readonly TodoDriftEvent[] = []): TodoDrift | undefined {
+export function driftOf(branch: Branch, extra: readonly TodoDriftEvent[] = []): TodoDrift | undefined {
 	const snapshot = getLatestTodoSnapshotIdentity(branch);
 	const listAt = snapshot ? branch.findIndex(entry => entry.id === snapshot.sourceEntryId) : -1;
 	if (listAt < 0) return undefined;
@@ -37,11 +33,29 @@ function driftOf(branch: Branch, extra: readonly TodoDriftEvent[] = []): TodoDri
 	return todoDrift([...events, ...extra]);
 }
 
-const NO_LIST: TodoDriftState = { changedAt: null, stale: null };
+/**
+ * Whether a main-agent tool call is one the todo rules read: `todo` active, not Plan mode, not an Autopilot run, and no
+ * `todo` call beside it in the same message (that one is changing the list now; its result lands after).
+ */
+export function readsTodo(pi: ExtensionAPI, kind: string, branch: Branch): boolean {
+	if (kind !== "main") return false;
+	const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
+	if (!session?.getActiveToolNames().includes("todo") || session.getPlanModeState()?.enabled) return false;
+	return !autopilotRunning(branch) && !todoCallInFlight(branch as TodoDriftEntry[]);
+}
+
+const NO_LIST: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
 let sent: TodoDriftState | undefined;
+const marked = new Set<string>();
 
 function push(state: TodoDriftState): void {
-	if (sent && sent.changedAt === state.changedAt && sent.stale === state.stale) return;
+	if (
+		sent &&
+		sent.changedAt === state.changedAt &&
+		sent.stale === state.stale &&
+		sent.receivedCount === state.receivedCount
+	)
+		return;
 	sent = state;
 	emit({ type: TODO_DRIFT_EVENT, state });
 }
@@ -49,26 +63,20 @@ function push(state: TodoDriftState): void {
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: ExtensionAPI): void {
 	pi.on("tool_result", (event, ctx) => {
-		if (ctx.agent.kind !== "main") return undefined;
-		const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
-		if (!session?.getActiveToolNames().includes("todo") || session.getPlanModeState()?.enabled) return undefined;
+		// A todo call's own reading comes with the next call: its result is journaled after this hook, and the GUI
+		// marks a changed list fresh as it draws it.
+		if (event.toolName === "todo") return undefined;
 		const branch = ctx.sessionManager.getBranch();
-		if (autopilotRunning(branch)) return undefined;
-		if (event.toolName === "todo") {
-			const details = event.details as { op?: unknown; phases?: unknown } | undefined;
-			// This call's result is not journaled yet: a change starts the count again now.
-			if (!event.isError && details?.op !== "view" && Array.isArray(details?.phases))
-				push({ changedAt: Date.now(), stale: null });
-			return undefined;
+		if (!readsTodo(pi, ctx.agent.kind, branch)) return undefined;
+		const id = ctx.sessionManager.getSessionId();
+		if (!marked.has(id)) {
+			marked.add(id);
+			if (!branch.some(entry => entry.type === "custom" && entry.customType === TODO_DRIFT_MARKER))
+				ctx.sessionManager.appendCustomEntry(TODO_DRIFT_MARKER, { version: 1 });
 		}
-		// A todo call in the same batch is changing the list now: no word, and no reading until it lands.
-		if (todoCallInFlight(branch as TodoDriftEntry[])) return undefined;
 		const drift = driftOf(branch, [{ kind: "call", at: Date.now() }]);
 		push(drift ? todoDriftState(drift) : NO_LIST);
-		const kind = drift && todoNudge(drift);
-		if (!drift || !kind) return undefined;
-		pi.logger.debug("gui-bridge: todo list behind the work named", { kind, calls: drift.callsSince });
-		return { additionalContext: todoNudgeText(kind, drift) };
+		return undefined;
 	});
 }
 

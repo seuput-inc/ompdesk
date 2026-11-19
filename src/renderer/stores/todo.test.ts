@@ -190,6 +190,7 @@ describe("todo dock card visibility", () => {
 
 describe("todo list freshness", () => {
 	const tenMinutesAgo = () => Date.now() - 10 * 60_000;
+	const NONE_RECEIVED = { received: [], receivedCount: 0 };
 
 	it("knows nothing about the list's last change until the session says", () => {
 		useTodoStore.getState().setPhases([phase("Build", ["scaffold", "in_progress"])]);
@@ -198,20 +199,26 @@ describe("todo list freshness", () => {
 
 	it("reads a list the agent or a person just changed as fresh, whatever it was marked", () => {
 		useTodoStore.getState().setPhases([phase("Build", ["scaffold", "in_progress"], ["wire", "pending"])]);
-		useTodoStore.getState().setDrift({ changedAt: tenMinutesAgo(), stale: "instruction" });
+		useTodoStore.getState().setDrift({
+			changedAt: tenMinutesAgo(),
+			stale: "instruction",
+			received: [{ at: tenMinutesAgo() + 60_000, text: "Also wire the footer" }],
+			receivedCount: 1,
+		});
 		const before = Date.now();
 
 		useTodoStore.getState().setPhases([phase("Build", ["scaffold", "completed"], ["wire", "in_progress"])]);
 
+		// The instructions counted since the last change start again with this one.
 		const drift = useTodoStore.getState().drift;
-		expect(drift?.stale).toBeNull();
+		expect(drift).toEqual({ changedAt: expect.any(Number), stale: null, ...NONE_RECEIVED });
 		expect(drift?.changedAt).toBeGreaterThanOrEqual(before);
 	});
 
 	it("keeps a list marked behind the work when the same list is read again", () => {
 		const list = [phase("Build", ["scaffold", "in_progress"])];
 		useTodoStore.getState().setPhases(list);
-		const behind = { changedAt: tenMinutesAgo(), stale: "drift" as const };
+		const behind = { changedAt: tenMinutesAgo(), stale: "drift" as const, ...NONE_RECEIVED };
 		useTodoStore.getState().setDrift(behind);
 
 		useTodoStore.getState().setPhases(list);
@@ -220,7 +227,7 @@ describe("todo list freshness", () => {
 	});
 
 	it("forgets the reading with the session", () => {
-		useTodoStore.getState().setDrift({ changedAt: tenMinutesAgo(), stale: "drift" });
+		useTodoStore.getState().setDrift({ changedAt: tenMinutesAgo(), stale: "drift", ...NONE_RECEIVED });
 		useTodoStore.getState().reset();
 		expect(useTodoStore.getState().drift).toBeNull();
 	});

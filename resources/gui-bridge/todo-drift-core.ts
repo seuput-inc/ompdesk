@@ -56,9 +56,31 @@ export interface TodoDriftPhase {
 
 export type NudgeKind = "instruction" | "drift" | "stale" | "compact" | "stock-mid-run" | "stock-completion";
 
+/** Instructions the panel lists by their first line (the newest; `receivedCount` says how many came). */
+export const RECEIVED_SHOWN = 5;
+const RECEIVED_LINE_CHARS = 120;
+
+/** An instruction's first line as the panel lists it: no agent-message wrapper, no `Title:` lead, at most 120 chars. */
+export function instructionLine(text: string): string {
+	const line =
+		text
+			.replace(/^\s*<ompdesk-agent-message\b[^>]*>/, "")
+			.replace(/<\/ompdesk-agent-message>\s*$/, "")
+			.split("\n")
+			.map(part => part.trim())
+			.find(part => part !== "") ?? "";
+	const chars = [...line.replace(/^Title:\s*/, "")];
+	return chars.length > RECEIVED_LINE_CHARS ? `${chars.slice(0, RECEIVED_LINE_CHARS).join("")}…` : chars.join("");
+}
+
 /** The part of the reading the GUI shows (todo-drift-contracts.ts). */
 export function todoDriftState(drift: TodoDrift): TodoDriftState {
-	return { changedAt: drift.changedAt ?? null, stale: drift.stale ?? null };
+	return {
+		changedAt: drift.changedAt ?? null,
+		stale: drift.stale ?? null,
+		received: drift.received.slice(-RECEIVED_SHOWN).map(item => ({ at: item.at, text: instructionLine(item.text) })),
+		receivedCount: drift.received.length,
+	};
 }
 
 export interface TodoDrift {
@@ -74,6 +96,8 @@ export interface TodoDrift {
 	activeMsSince: number;
 	/** The newest new request after the list's last change, with the calls since it and whether it was named. */
 	instruction: { text: string; callsSince: number; nudged: boolean } | undefined;
+	/** Every new request since the list's last change, oldest first. */
+	received: Array<{ at: number; text: string }>;
 	/** Drift reminders since the list's last change, and calls since the newest one. */
 	driftNudges: number;
 	callsSinceDriftNudge: number;
@@ -92,6 +116,7 @@ export function todoDrift(events: readonly TodoDriftEvent[]): TodoDrift {
 	let activeMsSince = 0;
 	let lastAt: number | undefined;
 	let instruction: TodoDrift["instruction"];
+	let received: TodoDrift["received"] = [];
 	let driftNudges = 0;
 	let callsSinceDriftNudge = 0;
 	for (const event of events) {
@@ -102,6 +127,7 @@ export function todoDrift(events: readonly TodoDriftEvent[]): TodoDrift {
 			activeMsSince = 0;
 			lastAt = event.at;
 			instruction = undefined;
+			received = [];
 			driftNudges = 0;
 			callsSinceDriftNudge = 0;
 		} else if (event.kind === "call") {
@@ -112,6 +138,7 @@ export function todoDrift(events: readonly TodoDriftEvent[]): TodoDrift {
 			lastAt = event.at;
 		} else if (event.kind === "instruction") {
 			instruction = { text: event.text, callsSince: 0, nudged: false };
+			received.push({ at: event.at, text: event.text });
 		} else if (event.kind === "compaction") {
 			if (instruction) instruction.nudged = false;
 			driftNudges = 0;
@@ -142,6 +169,7 @@ export function todoDrift(events: readonly TodoDriftEvent[]): TodoDrift {
 		callsSince,
 		activeMsSince,
 		instruction,
+		received,
 		driftNudges,
 		callsSinceDriftNudge,
 		stale,
