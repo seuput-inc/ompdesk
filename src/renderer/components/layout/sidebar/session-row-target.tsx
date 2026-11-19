@@ -112,6 +112,19 @@ export function shownHead(text: string, head: SessionHead): string {
 /** The fewest characters a branch keeps in view before it goes whole (the owner's "about eight"). */
 const HEAD_FLOOR_CHARS = 8;
 
+/** Hangul, CJK and fullwidth forms: about 1.75 `ch` each in the sidebar's fonts. */
+const WIDE_CHAR = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/u;
+
+/**
+ * The head's floor in `ch` when the name may be cut: its first `HEAD_FLOOR_CHARS` characters (a wide one 1.75) and 1 for
+ * the ellipsis. Null for a name no longer than that: it stays whole or goes, at its own width.
+ */
+function headFloorCh(shown: string): number | null {
+	const chars = [...shown];
+	if (chars.length <= HEAD_FLOOR_CHARS) return null;
+	return chars.slice(0, HEAD_FLOOR_CHARS).reduce((sum, char) => sum + (WIDE_CHAR.test(char) ? 1.75 : 1), 1);
+}
+
 /**
  * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name past a
  * shared prefix (`shownHead`), which ends in an ellipsis when the line is short; the whole name is its hover title.
@@ -123,7 +136,7 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 	const t = useT();
 	const { text, tip } = headWords(t, head);
 	const shown = shownHead(text, head);
-	const floor = shown.length > HEAD_FLOOR_CHARS ? HEAD_FLOOR_CHARS + 1 : shown.length;
+	const floor = headFloorCh(shown);
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
@@ -131,9 +144,10 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 			<span aria-hidden className="omp-session-head-sentinel" />
 			<span
 				className="inline-flex items-center gap-1"
+				data-head-whole={floor === null ? "" : undefined}
 				data-session-head={head.kind}
 				data-sidebar-worktree={worktree}
-				style={{ minWidth: `calc(var(--sc-icon-sm) + 0.25rem + ${floor}ch)` }}
+				style={floor === null ? undefined : { minWidth: `calc(var(--sc-icon-sm) + 0.25rem + ${floor}ch)` }}
 				title={tip}
 			>
 				<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />
