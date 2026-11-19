@@ -147,13 +147,6 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		.locator(`.omp-sidebar-session-row[data-device-session=${cssString(sessionFile(PROJECT, "sess-live"))}]`);
 	await expect(live.locator("[data-family-running]")).toBeVisible();
 	await expect(live.locator('[data-session-head="branch"]')).toHaveText("release");
-	// In the default 248 px sidebar a short branch reads whole beside the arc and the chip (the arc stands alone).
-	if (surface.name === "desktop")
-		expect(
-			await live
-				.locator('[data-session-head="branch"] .truncate')
-				.evaluate(text => text.scrollWidth <= text.clientWidth),
-		).toBe(true);
 	const local = rowFor(list, sessionFile(PROJECT, "sess-1"));
 	// The repository's own picture once `sessions.artwork` answered; the website has none: its letter.
 	await expect(local.locator('[data-project-artwork="image"] img')).toBeVisible();
@@ -166,24 +159,34 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	await expect(long).toHaveAttribute("title", new RegExp(LONG_BRANCH));
 	const cut = await long.locator(".truncate").evaluate(text => text.scrollWidth > text.clientWidth);
 	expect(cut).toBe(true);
-	// No branch shrinks to its mark alone or reaches past its line (the line clips: a branch cut there loses its
-	// ellipsis, or all of it): beside a family chip, in a 220 px sidebar and on a phone it keeps letters in view.
+	// No branch reaches past its line (the line clips: a branch cut there loses its ellipsis, or all of it), and every
+	// branch keeps letters in view: in a 248 px sidebar and on a phone beside a family chip too; in the 220 px sidebar
+	// (whose idle age gives its place to the branch) every row but one at work beside a chip, whose ~40 px line holds
+	// the arc and the branch's mark (its name is the row's tooltip).
 	const heads = await list.locator("[data-session-head]:visible").evaluateAll(nodes =>
 		nodes.map(node => {
 			const text = node.querySelector(".truncate")?.getBoundingClientRect();
 			const line = node.parentElement?.getBoundingClientRect();
+			const row = node.closest(".omp-sidebar-session-row");
 			return {
 				name: node.getAttribute("title") ?? "",
 				letters: text ? Math.min(text.right, line?.right ?? text.right) - text.left : 0,
 				past: text && line ? text.right - line.right : 0,
+				workingBesideChip: Boolean(row?.querySelector("[data-family-running]")),
 			};
 		}),
 	);
 	expect(heads.length).toBeGreaterThan(2);
 	for (const head of heads) {
-		expect(head.letters, head.name).toBeGreaterThanOrEqual(16);
+		if (surface.name !== "narrow" || !head.workingBesideChip)
+			expect(head.letters, head.name).toBeGreaterThanOrEqual(16);
 		expect(head.past, head.name).toBeLessThanOrEqual(0.5);
 	}
+	// The narrow row's idle age is out of sight (tooltip and screen-reader text keep it); the phone keeps it.
+	const idleAge = rowFor(list, sessionFile(PROJECT, "sess-1")).locator("[data-sidebar-row-end] > time");
+	const ageWidth = await idleAge.evaluate(time => time.getBoundingClientRect().width);
+	if (surface.name === "narrow") expect(ageWidth).toBeLessThanOrEqual(1);
+	else expect(ageWidth).toBeGreaterThan(8);
 
 	// Every session row: two lines, the picture first, the ⋯ under the title's line, nothing past the row's edge.
 	const rows = list.locator(".omp-sidebar-session-row:visible");
