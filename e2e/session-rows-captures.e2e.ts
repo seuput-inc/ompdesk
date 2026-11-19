@@ -147,6 +147,11 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		.locator(`.omp-sidebar-session-row[data-device-session=${cssString(sessionFile(PROJECT, "sess-live"))}]`);
 	await expect(live.locator("[data-family-running]")).toBeVisible();
 	await expect(live.locator('[data-session-head="branch"]')).toHaveText("release");
+	// At work beside its chip a short name stays whole in a 248 px sidebar and on a phone (it once read "rel…", then
+	// nothing but its mark); in the 220 px one it is whole or gone, never cut.
+	const liveHead = await live.locator('[data-session-head="branch"]').evaluate(readHeadIn);
+	if (surface.name !== "narrow") expect(liveHead).toMatchObject({ onLine: true, visible: "release" });
+	else if (liveHead.onLine) expect(liveHead.visible).toBe("release");
 	// Its title's faded letters are a frame of the moving light, never a still dim state: the light's window runs
 	// (components.css `omp-live-shine-text`, whose holds put the band off the title) and is further on two frames later.
 	const motion = await live.locator(".omp-live-shine-window").evaluate(async node => {
@@ -227,7 +232,7 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	const heads = await Promise.all(
 		(await list.locator("[data-session-head]:visible").all()).map(head => head.evaluate(readHeadIn)),
 	);
-	for (const head of heads) {
+	for (const head of heads.filter(head => head.onLine)) {
 		expect(head.visible.length, `${head.title}: eight characters or none`).toBeGreaterThanOrEqual(
 			Math.min(8, head.shown.length),
 		);
@@ -277,14 +282,16 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 }
 
 /**
- * A branch label as the eye reads it: the characters fully left of its ellipsis, all it shows, its title, how far it
- * reaches past its line. Runs in the page (Playwright serializes it whole).
+ * A branch label as the eye reads it: whether it sits on its line (not wrapped out of sight), the characters fully
+ * left of its ellipsis, all it shows, its title, how far it reaches past its line. Runs in the page (Playwright
+ * serializes it whole).
  */
-function readHeadIn(node: Element): { title: string; shown: string; visible: string; past: number } {
+function readHeadIn(node: Element): { title: string; onLine: boolean; shown: string; visible: string; past: number } {
 	const text = node.querySelector(".truncate");
 	const line = node.closest(".omp-session-row-give")?.getBoundingClientRect();
 	const title = node.getAttribute("title") ?? "";
-	if (!text?.firstChild) return { title, shown: "", visible: "", past: 0 };
+	const onLine = Boolean(line && node.getBoundingClientRect().top < line.bottom - 1);
+	if (!text?.firstChild || !onLine) return { title, onLine, shown: text?.textContent ?? "", visible: "", past: 0 };
 	const box = text.getBoundingClientRect();
 	const cut = text.scrollWidth > text.clientWidth + 0.5;
 	const style = getComputedStyle(text);
@@ -300,7 +307,7 @@ function readHeadIn(node: Element): { title: string; shown: string; visible: str
 		if (range.getBoundingClientRect().right > limit + 0.5) break;
 		visible += source[index];
 	}
-	return { title, shown: source, visible, past: line ? box.right - line.right : 0 };
+	return { title, onLine, shown: source, visible, past: line ? box.right - line.right : 0 };
 }
 
 for (const surface of SURFACES)

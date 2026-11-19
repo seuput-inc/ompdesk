@@ -109,26 +109,36 @@ export function shownHead(text: string, head: SessionHead): string {
 	return prefix ? `…/${text.slice(prefix.length)}` : text;
 }
 
+/** The fewest characters a branch keeps in view before it goes whole (the owner's "about eight"). */
+const HEAD_FLOOR_CHARS = 8;
+
 /**
  * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name past a
  * shared prefix (`shownHead`), which ends in an ellipsis when the line is short; the whole name is its hover title.
- * `worktree` names what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's
- * child.
+ * Its box (`.omp-session-head-box`, sidebar.css) drops the whole head, mark too, once the line cannot hold its mark and
+ * `HEAD_FLOOR_CHARS` characters (a shorter name: all of it; one more `ch` is the ellipsis). `worktree` names what a
+ * linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's child.
  */
 export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktree?: WorktreeKind }) {
 	const t = useT();
 	const { text, tip } = headWords(t, head);
+	const shown = shownHead(text, head);
+	const floor = shown.length > HEAD_FLOOR_CHARS ? HEAD_FLOOR_CHARS + 1 : shown.length;
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
-		<span
-			className="inline-flex min-w-0 flex-[0_1_auto] items-center gap-1"
-			data-session-head={head.kind}
-			data-sidebar-worktree={worktree}
-			title={tip}
-		>
-			<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />
-			<span className="min-w-0 truncate">{shownHead(text, head)}</span>
+		<span className="omp-session-head-box">
+			<span aria-hidden className="omp-session-head-sentinel" />
+			<span
+				className="inline-flex items-center gap-1"
+				data-session-head={head.kind}
+				data-sidebar-worktree={worktree}
+				style={{ minWidth: `calc(var(--sc-icon-sm) + 0.25rem + ${floor}ch)` }}
+				title={tip}
+			>
+				<Mark aria-hidden className="size-(--sc-icon-sm) shrink-0" />
+				<span className="min-w-0 truncate">{shown}</span>
+			</span>
 		</span>
 	);
 }

@@ -212,7 +212,6 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 }
 
 .omp-session-row-give {
-	container: omp-row-give / inline-size;
 	position: relative;
 	display: flex;
 	flex: 1 1 0;
@@ -250,13 +249,28 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	translate: 0 -50%;
 }
 
-/* Under about eight characters of branch (its mark, the gap, 9ch with the ellipsis) the branch goes whole, and an idle
-   age with it: the age gives way before the branch, never after. A working arc stays. */
-@container omp-row-give (width < calc(1.125rem + 9ch)) {
-	[data-session-head],
-	.omp-session-row-age:not(:has(> .omp-live-age)) {
-		display: none;
-	}
+/* The head's own box drops the whole head, mark too, onto an invisible second line once it cannot hold the head's
+   floor (`SessionHeadLabel`'s min-width: the mark and about eight characters, or all of a shorter name): the head is
+   laid out at that floor beside a zero-wide first item, so it wraps exactly when the floor does not fit, and grows to
+   its whole name when there is room. The box itself sizes by the whole name, so the age above wraps first. */
+.omp-session-head-box {
+	display: flex;
+	flex: 0 1 auto;
+	flex-wrap: wrap;
+	align-content: flex-start;
+	align-items: center;
+	min-width: 0;
+	height: 1lh;
+	overflow: hidden;
+}
+
+.omp-session-head-sentinel {
+	width: 0;
+}
+
+.omp-session-head-box > [data-session-head] {
+	flex: 1 1 0;
+	max-width: max-content;
 }
 
 .omp-sidebar-controls {
