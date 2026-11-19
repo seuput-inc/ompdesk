@@ -38,6 +38,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"ai-memory": true,
 	"disk-care": true,
 	"main-thread-hang": true,
+	"preview-check": true,
 	"web-reload": true,
 	"remote-tab": true,
 	"session-delete": true,

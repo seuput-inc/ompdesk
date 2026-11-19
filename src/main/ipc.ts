@@ -451,6 +451,8 @@ const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "follow_
 const liveNotifications = new Set<Notification>();
 /** Windows whose close already cancels their pending notification summary. */
 const notifyBatchedWindows = new Set<number>();
+/** Preview checks that asked a judge in this launch: the first one meets a cold Preview (G3 of docs/open-work.md). */
+let previewChecks = 0;
 
 /** One OS notification; one about a tab switches to it on click. */
 function showNotification(windowId: number, notice: ShownNotice): { close: () => void } {
@@ -631,6 +633,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 					inFront: () => sidecarPool.activeTabForWindow(tab.win) === tab.tabId,
 					pages: visualPages,
 					rpc: sidecar.rpcClient,
+					report: record =>
+						writeRuntimeLog({
+							source: "preview-check",
+							message: record.outcome,
+							details: { ...record, nth: ++previewChecks },
+						}),
 				}),
 			};
 			void runVisualizeTool(context, request.arguments).then(result => reply(result.text, result.isError));

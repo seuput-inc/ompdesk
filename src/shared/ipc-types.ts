@@ -596,6 +596,11 @@ export type RuntimeErrorSource =
 	/** A previous run's main-thread stall (src/main/hang-watchdog.ts): `details.unresponsiveMs`, `selfRecovered`. */
 	| "main-thread-hang"
 	/**
+	 * A Preview check that asked a native judge (src/main/preview/preview-check.ts): `message` is error, blank, ok or
+	 * unchecked; `details` the phase it ended in, its phase times and `nth` (its number in this launch).
+	 */
+	| "preview-check"
+	/**
 	 * A paired web page reloaded itself, or was about to (src/renderer/web/reload-reason.ts): `message` is the reason
 	 * (`update`, `outdated`, `resync-failed`, `chunk-load-failed`, `error-boundary`, …), sent on the next connect.
 	 */

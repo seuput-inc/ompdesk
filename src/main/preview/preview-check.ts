@@ -74,6 +74,24 @@ export interface PreviewCheckDeps {
 	judge(image: PreviewImage, budgetMs: number): Promise<PreviewCheckResult | null>;
 	/** Show the quiet notice on the page that shows `version` of the visual. */
 	flag(visualId: string, version: number, problem: PreviewVerdict): void;
+	/** Told once per check that asked a native judge, when it ends (the launch's runtime log keeps it). */
+	report?(record: PreviewCheckRecord): void;
+}
+
+/**
+ * One check that asked a native judge (`gui-runtime.jsonl`, `source: "preview-check"`), so how often a page goes
+ * unjudged on a computer, and in which phase, is read from that computer's own log.
+ */
+export interface PreviewCheckRecord {
+	outcome: PreviewVerdict | "ok" | "unchecked";
+	/** The phase the check was in when it ended: an unchecked page that never showed ends in `capture`. */
+	stage: "capture" | "judge" | "done";
+	inFront: boolean;
+	probeMs: number;
+	/** Null: the phase never ended. */
+	captureMs: number | null;
+	judgeMs: number | null;
+	totalMs: number;
 }
 
 /** What the judge saw, or `"unchecked"`: a native judge was there, but the page went unjudged. */
@@ -141,17 +159,30 @@ export async function checkVisualPage(
 	let asked = false;
 	// After the deadline nothing more happens: the tool has replied, so no model call and no notice.
 	let open = true;
+	const record: Omit<PreviewCheckRecord, "outcome" | "totalMs"> = {
+		stage: "capture",
+		inFront: false,
+		probeMs: 0,
+		captureMs: null,
+		judgeMs: null,
+	};
 	const decide = async (): Promise<{ outcome: PreviewCheckOutcome | null }> => {
 		try {
 			const available = await withDeadline(deps.available(PREVIEW_CHECK_PROBE_MS), PREVIEW_CHECK_PROBE_MS);
 			if (available !== true) return { outcome: null };
 			asked = true;
+			record.probeMs = Date.now() - started;
+			record.inFront = deps.inFront();
 			const captureMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS - (Date.now() - started);
-			const appearMs = deps.inFront() ? captureMs : PREVIEW_CHECK_BEHIND_MS;
+			const appearMs = record.inFront ? captureMs : PREVIEW_CHECK_BEHIND_MS;
 			const image = await deps.capture(visualId, version, captureMs, appearMs);
+			record.captureMs = Date.now() - started - record.probeMs;
 			if (!image || !open) return { outcome: "unchecked" };
+			record.stage = "judge";
 			const result = await deps.judge(image, Math.max(0, PREVIEW_CHECK_TOTAL_MS - (Date.now() - started)));
+			record.judgeMs = Date.now() - started - record.probeMs - record.captureMs;
 			if (!result?.judged) return { outcome: "unchecked" };
+			record.stage = "done";
 			if (!result.problem || !open) return { outcome: null };
 			deps.flag(visualId, version, result.problem);
 			return { outcome: result.problem };
@@ -159,11 +190,14 @@ export async function checkVisualPage(
 			return { outcome: asked ? "unchecked" : null };
 		}
 	};
+	let outcome: PreviewCheckOutcome | null = null;
 	try {
 		const decided = await withDeadline(decide(), PREVIEW_CHECK_TOTAL_MS);
-		return decided ? decided.outcome : asked ? "unchecked" : null;
+		outcome = decided ? decided.outcome : asked ? "unchecked" : null;
+		return outcome;
 	} finally {
 		open = false;
+		if (asked) deps.report?.({ ...record, outcome: outcome ?? "ok", totalMs: Date.now() - started });
 	}
 }
 
@@ -177,13 +211,15 @@ export function createTabCheck(options: {
 	inFront: () => boolean;
 	pages: Pick<VisualPages, "capture" | "flag">;
 	rpc: Pick<RpcClient, "command"> | null;
+	report?: PreviewCheckDeps["report"];
 }): (visualId: string, version: number) => Promise<PreviewCheckOutcome | null> {
-	const { enabled, inFront, pages, rpc } = options;
+	const { enabled, inFront, pages, rpc, report } = options;
 	return (visualId, version) =>
 		checkVisualPage(
 			{
 				enabled,
 				inFront,
+				report,
 				available: async budgetMs => {
 					const response = await rpc?.command({ type: "judge_available" }, budgetMs);
 					return (

@@ -258,6 +258,25 @@ describe("Preview check on gui_visualize open", () => {
 			expect(deps.capture).toHaveBeenCalledWith("v", 1, pageMs, appearMs);
 		}
 	});
+
+	it("records each check that asked a judge, with the phase an unchecked page stopped in", async () => {
+		vi.useFakeTimers();
+		const records: unknown[] = [];
+		const report = (record: unknown) => records.push(record);
+		const never = Promise.withResolvers<PreviewImage>();
+		await Promise.all([
+			checkVisualPage(fakeDeps({ report, capture: () => never.promise }).deps, "v", 1),
+			vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS),
+		]);
+		await checkVisualPage(fakeDeps({ report, judge: judgedAs("error") }).deps, "v", 2);
+		await checkVisualPage(fakeDeps({ report, judge: async () => ({ problem: null, judged: false }) }).deps, "v", 3);
+		await checkVisualPage(fakeDeps({ report, available: async () => false }).deps, "v", 4);
+		expect(records).toEqual([
+			expect.objectContaining({ outcome: "unchecked", stage: "capture", captureMs: null, judgeMs: null }),
+			expect.objectContaining({ outcome: "error", stage: "done", inFront: true }),
+			expect.objectContaining({ outcome: "unchecked", stage: "judge" }),
+		]);
+	});
 });
 
 describe("previewHint", () => {
