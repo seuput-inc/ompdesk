@@ -132,6 +132,14 @@ const git = (cwd: string, args: string[]): Buffer =>
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 const gitText = (cwd: string, args: string[]): string => git(cwd, args).toString("utf8").trim();
+const gitInput = (cwd: string, args: string[], input: string): string =>
+	execFileSync("git", args, {
+		cwd,
+		env: withoutGitSelectors(process.env),
+		input,
+		encoding: "utf8",
+		maxBuffer: 1 << 30,
+	}).trim();
 const hasCommit = (cwd: string, sha: string): boolean => {
 	try {
 		git(cwd, ["cat-file", "-e", `${sha}^{commit}`]);
@@ -152,29 +160,57 @@ export function rangeBase(cwd: string, ref: PushRef): string {
 }
 
 /**
- * The probe branches (`probe/*`, here or as origin's) whose commits a push to `main` would carry: a probe holds what
+ * The probe branches (`probe/*`, here or as origin's) whose own commits a push to `main` would carry: a probe holds what
  * main must not (a test alone that fails before its fix, an old commit rerun), so its commits never reach main by a
  * merge or a fast-forward. Its fix carries the test again in a commit of its own.
+ *
+ * A probe's own commits are those of it in the push that no other ref reaches (`refs/heads`, origin's branches, tags;
+ * not the probes and not the pushed branch itself), apart from the pushed branch's own first-parent line: a probe
+ * that sits on a branch or a release candidate shares their commits, and those land as theirs. Pushing a probe (or a
+ * detached HEAD at a probe's tip) to main carries all of its commits. Limit: a probe merged into a branch that is
+ * already on origin reads as that branch's.
  */
 export function probesInPush(cwd: string, ref: PushRef, base: string): string[] {
 	if (ref.remoteRef !== "refs/heads/main") return [];
-	const probes = gitText(cwd, [
+	const isProbe = (name: string) => /^refs\/(?:heads|remotes\/origin)\/probe\//.test(name);
+	const refs = gitText(cwd, [
 		"for-each-ref",
-		"--format=%(refname)",
-		"refs/heads/probe/",
-		"refs/remotes/origin/probe/",
+		"--format=%(objectname) %(refname)",
+		"refs/heads/",
+		"refs/remotes/",
+		"refs/tags/",
 	])
 		.split("\n")
-		.filter(Boolean);
-	return probes.filter(probe => {
-		let shared: string;
+		.filter(Boolean)
+		.map(line => line.split(" ") as [string, string]);
+	const probes = refs.filter(([, name]) => isProbe(name));
+	if (probes.length === 0) return [];
+	let source: string | null = ref.localRef;
+	if (source === "HEAD") {
 		try {
-			shared = gitText(cwd, ["merge-base", probe, ref.localSha]);
+			source = gitText(cwd, ["symbolic-ref", "-q", "HEAD"]);
 		} catch {
-			return false;
+			source = null;
 		}
-		return gitText(cwd, ["rev-list", "--count", `${base}..${shared}`]) !== "0";
-	});
+	}
+	const pushesProbe = source ? isProbe(source) : probes.some(([sha]) => sha === ref.localSha);
+	const ownLine = new Set(
+		pushesProbe ? [] : gitText(cwd, ["rev-list", "--first-parent", `${base}..${ref.localSha}`]).split("\n"),
+	);
+	const others = refs.filter(([, name]) => !isProbe(name) && name !== source).map(([sha]) => `^${sha}`);
+	return probes
+		.filter(([, probe]) => {
+			let shared: string;
+			try {
+				shared = gitText(cwd, ["merge-base", probe, ref.localSha]);
+			} catch {
+				return false;
+			}
+			// --stdin: a checkout's refs run past Windows' command-line length.
+			const alone = gitInput(cwd, ["rev-list", "--stdin"], [shared, `^${base}`, ...others].join("\n"));
+			return alone.split("\n").some(sha => sha && !ownLine.has(sha));
+		})
+		.map(([, probe]) => probe);
 }
 
 function extract(cwd: string, tree: string, sha: string, paths: string[]): void {
