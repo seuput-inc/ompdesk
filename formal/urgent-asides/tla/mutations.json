@@ -31,6 +31,20 @@
 			"search": "Answer == marks # {} /\\ queue # {}",
 			"replace": "Answer == FALSE",
 			"breaks": "UrgentInterrupts"
+		},
+		{
+			"name": "subagent-turn-end-clears",
+			"why": "the agent_end hook clears the marks for any agent: a subagent ending its turn takes the main agent's pending report down (the advisory of 19 Nov 2026)",
+			"search": "ChildTurnEnd ==\n    /\\ marks' = marks",
+			"replace": "ChildTurnEnd ==\n    /\\ marks' = {}",
+			"breaks": "UrgentInterrupts"
+		},
+		{
+			"name": "subagent-message-end-unmarks",
+			"why": "the message_end hook acts for any agent: a subagent's message with the same key takes the main agent's mark down",
+			"search": "ChildMessageEnd(m) ==\n    /\\ marks' = marks",
+			"replace": "ChildMessageEnd(m) ==\n    /\\ marks' = marks \\ {m}",
+			"breaks": "UrgentInterrupts"
 		}
 	]
 }
