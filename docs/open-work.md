@@ -76,7 +76,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| G1 | The pre-push guard blocks a test branch that sits on released commits; block only commits reachable from probe/* alone. | green, into next-line | test-tools [desktop] | | |
+| G1 | The pre-push guard blocks a test branch that sits on released commits; block only commits reachable from probe/* alone. Seen at the 0.135.0 push (20 Nov 07:2x): the old guard refused main's push because probe branches sat on the candidate; the same commit was pushed from a checkout whose guard has this fix (one time only; once the fix ships, a refusal is fixed at its cause, never pushed around). | green, into next-line | test-tools [desktop] | | |
 | G2 | Windows e2e: rmdir of the test project fails EBUSY for ~3.5 s after omp exits. Cause measured: omp 19's per-config daemon (spawned detached, no cwd, so it inherits the project folder) lives 3 s after its last client. The shipped retry (5.5 s) covers it; recorded in e2e-ci-windows rule. | closed (cause found) | test-tools [desktop] | omp/agent/test-tools-20261120 `4e0ac505f` | |
 | G3 | The Preview check ends "could not check" on a real Windows desktop: measure the rate, warm it if frequent. | green on test-tools (ci 44612596843) | test-tools [desktop] | | |
 | G4 | No test drives the real app with real omp for `!`, `!!`, `$`, the Plan card, cancelling a compaction, dequeue. | green on test-tools (ci 44612596843) | test-tools [desktop] | | |
