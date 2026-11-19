@@ -1598,8 +1598,10 @@ impl Inst {
                     json!("the tab has no omp connection"),
                 );
             }
+            // A local handler's `bridge_unavailable` is main saying the tab's bridge is gone (its omp restarting under
+            // the command, as an omp update's restart at launch does): no omp answered, so the try failed.
             Cmd::Response(reply) => {
-                *answered = true;
+                *answered |= reply["code"] != "bridge_unavailable";
                 if reply["success"] != true {
                     failures.insert(format!("{key}Error"), reply["error"].clone());
                     if reply["code"].as_str().is_some_and(|code| !code.is_empty()) {
