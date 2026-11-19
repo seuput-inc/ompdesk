@@ -285,6 +285,39 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		const overflow = await row.evaluate(element => element.scrollWidth - element.clientWidth);
 		expect(overflow, `row ${index} overflow`).toBeLessThanOrEqual(1);
 	}
+
+	// The whole row selects its session, its second line too (the marks, the age, the branch and the room between):
+	// only the family chip and the ⋯ beside that line take a click of their own. The line's give-way box is positioned,
+	// so it once painted over the row button's stretched click target: a click on the age or the branch, or a phone's
+	// tap at the middle of a 48 px row, opened nothing (the Windows e2e of 19 Nov 2026).
+	expect(await list.evaluate(rowsMissingClicks)).toEqual([]);
+}
+
+/**
+ * Where a click on a session row in view lands that does not reach its button: the row's centre and points every 6 px
+ * across the middle of its second line (`data-sidebar-row-end`, which ends before the chip and the ⋯). Runs in the
+ * page; `elementFromPoint` is the hit test a click takes.
+ */
+function rowsMissingClicks(list: Element): string[] {
+	const view = (list.querySelector(".omp-sidebar-list") ?? list).getBoundingClientRect();
+	const misses: string[] = [];
+	for (const row of list.querySelectorAll(".omp-sidebar-session-row")) {
+		const box = row.getBoundingClientRect();
+		const button = row.querySelector("button[data-roving-item]");
+		const line = row.querySelector("[data-sidebar-row-end]")?.getBoundingClientRect();
+		if (!button || !line || box.height === 0 || box.top < view.top || box.bottom > view.bottom) continue;
+		const points: [string, number, number][] = [["centre", box.left + box.width / 2, box.top + box.height / 2]];
+		for (let x = line.left + 1; x < line.right - 1; x += 6) points.push(["line 2", x, line.top + line.height / 2]);
+		for (const [where, x, y] of points) {
+			const hit = document.elementFromPoint(x, y);
+			if (hit && button.contains(hit)) continue;
+			const name = button.textContent?.trim() ?? "";
+			misses.push(
+				`${name} ${where} at ${Math.round(x - box.left)},${Math.round(y - box.top)}: ${hit?.className ?? hit}`,
+			);
+		}
+	}
+	return misses;
 }
 
 /**
@@ -369,5 +402,27 @@ for (const surface of SURFACES)
 				await expect(branch).toContainText("main");
 				if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `desktop-board-${theme}-${lang}.png`) });
 			}
+
+			// A real click on the middle of a row's second line, its branch (a tap on a phone), selects its session, as a
+			// click on its title does.
+			const target = rowFor(sidebar(page), sessionFile(PROJECT, "sess-2"));
+			await target.scrollIntoViewIfNeeded();
+			await expect(target).not.toHaveAttribute("data-current", /.*/);
+			const line = await target.locator("[data-sidebar-row-end]").boundingBox();
+			if (!line) throw new Error("the row has no second line");
+			const [x, y] = [line.x + line.width / 2, line.y + line.height / 2];
+			if (surface.name === "phone") await page.touchscreen.tap(x, y);
+			else await page.mouse.click(x, y);
+			await expect
+				.poll(() =>
+					page.evaluate(() =>
+						(window.__harness?.calls ?? [])
+							.filter(call => call.channel === "runtime:error-report")
+							.map(call => call.args[0] as { source?: string; message?: string; details?: { file?: string } })
+							.filter(report => report.source === "sidebar" && report.message === "select")
+							.map(report => report.details?.file),
+					),
+				)
+				.toContain("sess-2.jsonl");
 			await page.context().close();
 		});
