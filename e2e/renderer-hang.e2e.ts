@@ -68,8 +68,10 @@ test("a window whose page stops answering is started again with its tabs and dra
 		.poll(async () => (await runtimeLog()).some(line => line.source === "renderer-process"), { timeout: 30_000 })
 		.toBe(true);
 
-	// The page loads again in the same window: the same tabs, and what the person had typed.
-	const back = app.windows().at(-1) ?? page;
+	// The page loads again in the same window: the same tabs, and what the person had typed. Playwright closes the page
+	// whose renderer ended (`Target crashed`); the reloaded document is the window's app page again.
+	await expect.poll(() => page.isClosed(), { timeout: 30_000 }).toBe(true);
+	const back = await app.firstWindow({ timeout: 60_000 });
 	await back.waitForFunction(() => window.omp?.rpc != null, undefined, { timeout: 60_000 });
 	await expect
 		.poll(async () => (await back.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId), { timeout: 30_000 })
