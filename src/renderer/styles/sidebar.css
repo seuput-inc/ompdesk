@@ -251,8 +251,10 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 
 /* The head's own box drops the whole head, mark too, onto an invisible second line once it cannot hold the head's
    floor (`SessionHeadLabel`'s min-width: the mark and about eight characters, or all of a shorter name): the head is
-   laid out at that floor beside a zero-wide first item, so it wraps exactly when the floor does not fit, and grows to
-   its whole name when there is room. The box itself sizes by the whole name, so the age above wraps first. */
+   laid out at that floor after a 1 px first item, so it wraps exactly when the floor does not fit, and grows to its
+   whole name when there is room. The first item must be wider than 0: Chromium and WebKit put any item onto a line
+   still 0 wide, so a 0 px one kept the head on the line, cut at its edge. It is a line high, so the wrapped head sits
+   below the box's clip. The box itself sizes by the whole name, so the age above wraps first. */
 .omp-session-head-box {
 	display: flex;
 	flex: 0 1 auto;
@@ -265,12 +267,25 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 }
 
 .omp-session-head-sentinel {
-	width: 0;
+	flex: none;
+	width: 1px;
+	height: 1lh;
 }
 
 .omp-session-head-box > [data-session-head] {
 	flex: 1 1 0;
 	max-width: max-content;
+}
+
+/* A name no longer than the floor is laid out at its own width: whole, or wrapped out of sight. */
+.omp-session-head-box > [data-head-whole] {
+	flex: none;
+}
+
+/* The family chip on a session row gives its button's sides before the branch gives a letter (the owner's order: the
+   chip's room before the branch); its pill keeps the glyph and the count. */
+.omp-session-sidebar .omp-sidebar-session-row .omp-family-chip {
+	padding-inline: 0;
 }
 
 .omp-sidebar-controls {
