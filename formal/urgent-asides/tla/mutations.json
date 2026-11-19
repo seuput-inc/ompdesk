@@ -1,0 +1,36 @@
+{
+	"checker": {
+		"kind": "tlc",
+		"config": "MC.cfg"
+	},
+	"mutations": [
+		{
+			"name": "keep-mark-at-handover",
+			"why": "message_end no longer takes the mark down: a quiet report after the handover reads as urgent",
+			"search": "    /\\ marks' = IF Design = \"handover\" THEN marks \\ {m} ELSE marks",
+			"replace": "    /\\ marks' = marks",
+			"breaks": "QuietNeverInterrupts"
+		},
+		{
+			"name": "quiet-report-armed",
+			"why": "a progress report or note raises a mark (interruptFor called for any report), leaving the set of marks TypeOK allows",
+			"search": "/\\ turn = \"running\" /\\ m \\in Urgent /\\ m \\notin sentEver /\\ m \\notin armed",
+			"replace": "/\\ turn = \"running\" /\\ m \\notin sentEver /\\ m \\notin armed",
+			"breaks": "TypeOK"
+		},
+		{
+			"name": "peek-ignores-marks",
+			"why": "the peek says yes for any queued aside, as if every report were urgent",
+			"search": "Answer == marks # {} /\\ queue # {}",
+			"replace": "Answer == queue # {}",
+			"breaks": "QuietNeverInterrupts"
+		},
+		{
+			"name": "peek-stock-only",
+			"why": "the bridge's peek never answers for our marks (stock's plain aside): an urgent message waits behind a running shell",
+			"search": "Answer == marks # {} /\\ queue # {}",
+			"replace": "Answer == FALSE",
+			"breaks": "UrgentInterrupts"
+		}
+	]
+}

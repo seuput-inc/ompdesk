@@ -63,13 +63,21 @@ async function inShell(): Promise<{ provider: Provider; session: Omp }> {
 	return { provider, session };
 }
 
-/** Resolves once a main-agent request carries `text`, with the result of shell call `id` beside it. */
+/**
+ * Resolves once a main-agent request carries `text` and the shell call `id` it answers ended early. The request reaches
+ * the provider over HTTP and the call's `tool_execution_end` reaches us over omp's stdout: either can come first (the
+ * frame came later on a Windows runner, omp-latest 44508947951), so each is waited for. `sleep 300` cannot end on its
+ * own inside the test's time, and the early-background text says the message moved it. Then the omp quits, inside the
+ * test's own time: ending one with a background `sleep 300` takes seconds on Windows, and five of them in `afterAll`
+ * ran past its 20 s (omp-latest 44513848781).
+ */
 async function readWith(provider: Provider, session: Omp, text: string, id: string): Promise<void> {
 	await expect.poll(() => provider.bodies.some(body => body.includes(text)), { timeout: 30_000 }).toBe(true);
-	expect(resultOf(session.frames, id)).toContain(EARLY);
+	await expect.poll(() => resultOf(session.frames, id), { timeout: 30_000 }).toContain(EARLY);
 	expect(session.frames.find(frame => frame.type === "tool_execution_end" && frame.toolCallId === id)?.isError).toBe(
 		false,
 	);
+	await session.stop();
 }
 
 const aside = async (session: Omp, text: string) =>

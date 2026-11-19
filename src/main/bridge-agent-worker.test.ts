@@ -13,7 +13,10 @@ type Handler = Parameters<PromptSectionHost["on"]>[1];
 /** Every `before_agent_start` hook `install` adds, run in order as stock runs them; the last answer wins. */
 function hook(): Handler {
 	const handlers: Handler[] = [];
-	install({ on: (_event, handler) => handlers.push(handler) });
+	const on = (event: string, handler: Handler) => {
+		if (event === "before_agent_start") handlers.push(handler);
+	};
+	install({ on: on as Parameters<typeof install>[0]["on"] });
 	return (event, ctx) =>
 		handlers.reduce<ReturnType<Handler>>((answer, handler) => handler(event, ctx) ?? answer, undefined);
 }
