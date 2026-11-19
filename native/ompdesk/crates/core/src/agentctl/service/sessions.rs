@@ -122,7 +122,8 @@ impl AgentControl {
         let wanted: Vec<&ControlTab> = tabs
             .iter()
             .filter(|tab| {
-                (app || tab.here)
+                // Mine is every session the caller opened, in whichever window it went to.
+                (app || mine || tab.here)
                     && match &device {
                         None => true,
                         Some(None) => tab.device.as_deref().is_none_or(str::is_empty),
@@ -413,8 +414,9 @@ impl AgentControl {
         {
             return fail("status filters open sessions; leave it out with scope stored.");
         }
+        let state = self.host.state();
         let opened: HashSet<String> = self
-            .opened_by(&self.host.state(), &caller.tab_id, tabs)
+            .opened_by(&state, &caller.tab_id, tabs)
             .into_iter()
             .collect();
         let held: HashSet<&str> = tabs
@@ -433,7 +435,11 @@ impl AgentControl {
             .into_iter()
             .filter(|row| {
                 folder.is_none_or(|folder| row.cwd.contains(folder))
-                    && (args.mine != Some(true) || held.contains(row.path.as_str()))
+                    // Mine: open in a tab the caller opened, or a child of its whose tab closed (the same rule as a
+                    // delete of its own needing no card).
+                    && (args.mine != Some(true)
+                        || held.contains(row.path.as_str())
+                        || self.own_closed(&state, caller, &row.path, row.device.as_deref()))
             })
             .collect();
         // Newest first; the sort is stable, as `Array.prototype.sort` is.
