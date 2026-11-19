@@ -178,6 +178,26 @@ describe.skipIf(!existsSync(omp))("several messages other sessions send one busy
 		expect(queued(session.frames)).toBe(0);
 	}, 180_000);
 
+	it("as asides sent one by one during a running shell step, each reaches the model once, in order", async () => {
+		const { provider, session } = await busyOmp();
+		const texts = [1, 2, 3].map(n => `live-aside-${n}`);
+		for (const text of texts) await aside(session, text);
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(2);
+		// Whatever batches they ride (each may background the running shell): the order they first reached the model,
+		// and each once in what the model read last.
+		const arrivals = provider.bodies.flatMap((body, i) =>
+			texts
+				.filter(text => body.includes(text) && !provider.bodies[i - 1]?.includes(text))
+				.sort((a, b) => body.indexOf(a) - body.indexOf(b)),
+		);
+		expect(arrivals).toEqual(texts);
+		const last = provider.bodies.at(-1) ?? "";
+		expect(texts.map(text => last.split(text).length - 1)).toEqual([1, 1, 1]);
+		const ends = session.frames.filter(frame => frame.type === "tool_execution_end");
+		expect(ends.map(frame => frame.toolCallId)).toEqual(["call_s1", "call_s2", "call_s3"]);
+		expect(queued(session.frames)).toBe(0);
+	}, 180_000);
+
 	it("sends an idle receiver nothing and says so, so main starts its turn with a prompt", async () => {
 		const provider = await startProvider();
 		provider.release();
