@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
@@ -413,31 +413,48 @@ const real =
 const RUNS = Number(process.env.TODO_DRIFT_REAL_RUNS ?? 3);
 /**
  * `plain`: a short listed task and a steer that says it is separate work. `casual`: a longer task the model plans
- * itself, and a steer in a person's offhand words several calls in (the shape the owner's sessions show).
+ * itself, and a steer in a person's offhand words several calls in (the shape the owner's sessions show). `long`: a
+ * playbook's steps as the list and thirty reads, one per call, with no steer: where a list sits unchanged.
  */
-const REAL_SCENARIOS = {
+interface RealScenario {
+	task: string;
+	steer?: string;
+	/** Words of the steer, to find it in the journal. */
+	marker: string;
+	seed?: (root: string) => void;
+}
+const REAL_SCENARIOS: Record<string, RealScenario> = {
 	plain: {
 		task: "Create notes.md with three short facts about Bun, then count.txt holding the number 3. Track these steps in your todo list before you start. Then run `sleep 10 && echo ready` once, and only after that write the files.",
 		steer: "Also, as separate work: create b.txt containing the single word B. Do it now, then continue.",
 		marker: "b.txt",
-		seed: undefined,
 	},
 	casual: {
 		task: "Plan this in your todo list, then do it: create src/math.ts exporting add, sub, mul and div (div throws on division by zero), then src/math.test.ts with one bun test per function, run `bun test`, and write NOTES.md with two lines on what you built. After writing src/math.ts, run `sleep 15 && echo warm` once before you write the tests.",
 		steer: "oh and the readme says teh instead of the, fix that too",
 		marker: "readme says teh",
-		seed: { file: "README.md", text: "# Math\n\nA small library for teh basic operations.\n" },
+		seed: root => writeFileSync(join(root, "README.md"), "# Math\n\nA small library for teh basic operations.\n"),
 	},
-} as const;
+	long: {
+		task: "Follow the bug fix playbook and put its steps in your todo list first: 1. Reproduce, 2. Find the cause, 3. Fix, 4. Verify, 5. Report. The report says the total in data/ is wrong. Read every file in data/ with the read tool, one file per call (never several files in one call), then write SUM.md with the total of the numbers they hold.",
+		marker: "\u0000",
+		seed: root => {
+			mkdirSync(join(root, "data"));
+			for (let index = 1; index <= 30; index++)
+				writeFileSync(join(root, "data", `f${String(index).padStart(2, "0")}.txt`), `${index}\n`);
+		},
+	},
+};
 const SCENARIO_NAMES = (process.env.TODO_DRIFT_REAL_SCENARIOS ?? "plain")
 	.split(",")
-	.filter((name): name is keyof typeof REAL_SCENARIOS => name in REAL_SCENARIOS);
+	.filter(name => REAL_SCENARIOS[name]);
 
 /**
  * Opt-in (`OMP_GUI_REAL_WORK=1`, `TODO_DRIFT_BEFORE_REF=<commit before todo-drift.ts>`, `TODO_DRIFT_REAL_SCENARIOS`
- * of `plain,casual`): the user's real `smol` model gets a task and, while its `sleep` runs, a steer naming more work;
- * on the bridge of that commit and on this one. Prints `TODO_DRIFT_REAL` lines: whether the list got a row for the
- * steer, whether the reminder came, and whether a row came after it. Only measures; asserts nothing about the model.
+ * of `plain,casual,long`): the user's real `smol` model gets a task and, while its `sleep` runs, a steer naming more
+ * work; on the bridge of that commit and on this one. Prints `TODO_DRIFT_REAL` lines: whether the list got a row for
+ * the steer, and each reminder with whether the list changed within 3 calls after it. Only measures; asserts nothing
+ * about the model.
  */
 describe.skipIf(!real)("a steer into a listed task, on the user's real smol model", () => {
 	it("measures how often the list gets a row for the steer", async () => {
@@ -450,7 +467,7 @@ describe.skipIf(!real)("a steer into a listed task, on the user's real smol mode
 					const { task, steer, marker, seed } = REAL_SCENARIOS[scenario];
 					const { agentDir, isolated, smol } = realAgent();
 					const session = await startOmp({ agentDir, isolated, model: smol, bridge });
-					if (seed) writeFileSync(join(session.root, seed.file), seed.text);
+					seed?.(session.root);
 					const from = session.frames.length;
 					const turn = session.turn(task, 900_000);
 					const sleeping = () =>
@@ -462,8 +479,10 @@ describe.skipIf(!real)("a steer into a listed task, on the user's real smol mode
 									frame.toolName === "bash" &&
 									String((frame.args as { command?: unknown } | undefined)?.command ?? "").includes("sleep"),
 							);
-					await expect.poll(sleeping, { timeout: 300_000, interval: 200 }).toBe(true);
-					await session.send({ type: "steer", message: steer });
+					if (steer) {
+						await expect.poll(sleeping, { timeout: 300_000, interval: 200 }).toBe(true);
+						await session.send({ type: "steer", message: steer });
+					}
 					await turn;
 					// Journal order: the steer, then (after the bridge's change) the reminder, and the first list with a new row.
 					const branch = await journalBranch(session);
@@ -495,18 +514,33 @@ describe.skipIf(!real)("a steer into a listed task, on the user's real smol mode
 						reminded: reminderAt >= 0,
 						rowAdded: rowAt >= 0,
 						rowAfterReminder: reminderAt >= 0 && rowAt > reminderAt,
-						// What the journal held from the steer to the reminder: a reminder after the row means something
-						// after it read as a new instruction.
-						path:
-							reminderAt < 0
-								? []
-								: branch
-										.slice(steerAt, reminderAt + 1)
-										.map(entry =>
-											[entry.type, entry.message?.role, entry.message?.toolName, text(entry).slice(0, 60)]
-												.filter(Boolean)
-												.join(":"),
-										),
+						// The longest run of work calls between two todo calls that changed the list, while it had open items.
+						longestUnchanged: branch.reduce(
+							(run, entry) => {
+								const list = listIn(entry);
+								if (list) {
+									const open = list.some(phase =>
+										phase.tasks.some(task => /pending|in_progress/.test(task.status)),
+									);
+									return { open, now: 0, max: run.max };
+								}
+								if (entry.message?.role !== "toolResult" || !run.open) return run;
+								return { open: true, now: run.now + 1, max: Math.max(run.max, run.now + 1) };
+							},
+							{ open: false, now: 0, max: 0 },
+						).max,
+						// Each of the bridge's reminders, and whether a todo call changed the list within the 3 calls after it.
+						nudges: branch.flatMap((entry, at) => {
+							const words = entry.message?.role === "developer" ? text(entry) : "";
+							const kind = words.includes(INSTRUCTION_LEAD)
+								? "instruction"
+								: words.includes(DRIFT_LEAD)
+									? "drift"
+									: undefined;
+							if (!kind) return [];
+							const next = branch.slice(at + 1).filter(later => later.message?.role === "toolResult");
+							return [{ kind, corrected: next.slice(0, 3).some(later => listIn(later) !== undefined) }];
+						}),
 						final: statuses(branch.map(listIn).findLast(Boolean) ?? []),
 					};
 					console.log(`TODO_DRIFT_REAL=${JSON.stringify(line)}`);
