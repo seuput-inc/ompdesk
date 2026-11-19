@@ -32,7 +32,9 @@ async function send(page: Page, text: string): Promise<void> {
 }
 
 async function menuLabels(page: Page): Promise<string[]> {
-	return (await page.getByRole("menu").getByRole("menuitem").allTextContents()).map(label => label.trim());
+	// A switch in the menu ("May work across projects") is a menuitemcheckbox, in the same order as the rest.
+	const items = page.getByRole("menu").locator('[role="menuitem"], [role="menuitemcheckbox"]');
+	return (await items.allTextContents()).map(label => label.trim());
 }
 
 /** The open menu with the row it belongs to, once its fade-in ended. */
@@ -161,7 +163,7 @@ for (const language of ["en", "ko"] as const)
 			await client.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(720, 560));
 			await expect.poll(() => a.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(720);
 			await openMenu(localRow);
-			const item = a.getByRole("menuitem", { name: text("sidebar.menu.crossProject") });
+			const item = a.getByRole("menuitemcheckbox", { name: text("sidebar.menu.crossProject") });
 			await expect(item).toBeVisible();
 			const viewport = await a.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
 			const menuBox = await a.getByRole("menu").boundingBox();
