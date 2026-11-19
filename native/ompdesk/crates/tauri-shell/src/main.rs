@@ -191,6 +191,21 @@ fn profile_bootstrap(url: &str) -> bool {
     base == "app://ompdesk/__profile/migrate"
         || (cfg!(windows) && base == "http://app.localhost/__profile/migrate")
 }
+/// Test seam (`OMP_GUI_TEST_SHELL_STALL_MIGRATE=<n>`, test builds only): the first `n` requests for the migration page
+/// are never answered.
+#[cfg(feature = "test-automation")]
+fn stall_bootstrap_request() -> bool {
+    static STALLED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let wanted = std::env::var("OMP_GUI_TEST_SHELL_STALL_MIGRATE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    STALLED
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            (n < wanted).then_some(n + 1)
+        })
+        .is_ok()
+}
 
 fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
     if url == "about:blank" {
@@ -1383,9 +1398,14 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let builder = preview::media::configure(builder);
     let app = builder
         .invoke_handler(tauri::generate_handler![omp_ipc])
-        .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
-            let _app = context.app_handle();
+        .register_asynchronous_uri_scheme_protocol("app", |_context, request, responder| {
             std::thread::spawn(move || {
+                #[cfg(feature = "test-automation")]
+                if assets::is_bootstrap(request.uri()) && stall_bootstrap_request() {
+                    // The request stays unanswered, as the Windows runs saw it.
+                    std::mem::forget(responder);
+                    return;
+                }
                 responder.respond(assets::serve(&runtime().renderer, request,&runtime().content_policy))
             });
         })
