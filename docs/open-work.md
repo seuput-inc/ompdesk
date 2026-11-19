@@ -46,11 +46,11 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 |---|---|---|---|---|---|
 | D1 | Follow a new omp by itself: verified list, one owner of omp updates, stock `update.auto` taken over and given back, a held version told and retold after 24 h, the list file guarded (`docs/design/follow-omp.md`). | in progress | follow-omp [desktop] | | |
 | D2 | Repair path for an omp installed with npm (installs the newest today). | in progress | follow-omp [desktop] | | |
-| D3 | Windows: the first update download after a release fails and the next check 5 min later works; a failed download reads "failed". | release-ready |  | omp/agent/rc-0134-2 `81a3856c4` | fix 7c3632ca2; gate 44567381628 (a)(b real omp)(c)+mac(c), ci 44567117321 on 23ef5665c |
-| D4 | Release gate: the previous release updates itself to the candidate (and the candidate to a next build). | release-ready |  | omp/agent/rc-0134-2 `81a3856c4` | same gate run; future gates keep (c) and previous-release→candidate |
+| D3 | Windows: the first update download after a release fails and the next check 5 min later works; a failed download reads "failed". | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | fix 7c3632ca2; gate 44567381628 (a)(b real omp)(c)+mac(c), ci 44567117321 on 23ef5665c |
+| D4 | Release gate: the previous release updates itself to the candidate (and the candidate to a next build). | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | same gate run; future gates keep (c) and previous-release→candidate |
 | D5 | A frozen shell or page stops update lookups (Mac mini page frozen since 09:12 on 19 Nov). | in progress | 01a1f2ea [Mac mini] | omp/agent/page-watch-20261119 | |
-| D6 | Why the app ended is never logged (shell, node, quit source). Also: SIGINT/SIGTERM/SIGHUP now quit through the quit guard. | release-ready |  | omp/agent/rc-0134-2 `81a3856c4` | ci 44552014530, mac 44564510088 on ed3b3001a |
-| D7 | The bridge self-check result cannot be read afterwards. | release-ready |  | omp/agent/rc-0134-2 `81a3856c4` | ci 44566470675 on 6e943272e |
+| D6 | Why the app ended is never logged (shell, node, quit source). Also: SIGINT/SIGTERM/SIGHUP now quit through the quit guard. | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | ci 44552014530, mac 44564510088 on ed3b3001a |
+| D7 | The bridge self-check result cannot be read afterwards. | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | ci 44566470675 on 6e943272e |
 | D8 | A message a paired computer never answered reads "not sent". | shipped 0.134.1 | | | |
 
 ## E. A whole feature group turns off
@@ -72,11 +72,12 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
 | G1 | The pre-push guard blocks a test branch that sits on released commits; block only commits reachable from probe/* alone. | in progress | test-tools [desktop] | | |
-| G2 | agent-studio cleanup EBUSY on Windows: retry shipped in the test; the holding process is still unknown. | release-ready (test retry) / root not started | test-tools [desktop] | omp/agent/rc-0134-2 `81a3856c4` | failed 0 of 80 under load (44544819346) |
+| G2 | agent-studio cleanup EBUSY on Windows: retry shipped in the test; the holding process is still unknown. | release-ready (test retry) / root not started | test-tools [desktop] | omp/agent/rc-0134-2 `e3eb65db5` | failed 0 of 80 under load (44544819346) |
 | G3 | The Preview check ends "could not check" on a real Windows desktop: measure the rate, warm it if frequent. | in progress | test-tools [desktop] | | |
 | G4 | No test drives the real app with real omp for `!`, `!!`, `$`, the Plan card, cancelling a compaction, dequeue. | in progress | test-tools [desktop] | | |
 | G6 | shell-batch-checks `installer-check` fails on main 72d081111 (run 44561065983); not on the release path, cause unknown. One Windows e2e SIGKILL-resume case failed once in 44554809040 (passed on rerun: not counted as proof). | in progress | test-tools [desktop] | | |
-| G5 | turn-stages test counted the next-prompt suggestion request. | release-ready |  | omp/agent/rc-0134-2 `81a3856c4` | failed 0 of 40 under load |
+| G7 | The pre-push check does not run the Rust/TS table comparisons, so a merge that reorders captured/meta.json reached ci red (44569228302). | in progress | test-tools [desktop] | | |
+| G5 | turn-stages test counted the next-prompt suggestion request. | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | failed 0 of 40 under load |
 
 ## H. Earlier list
 
