@@ -61,8 +61,10 @@ const PROBE = `
 import { methods } from "./settings";
 const PATHS = ${JSON.stringify(PATHS)};
 const WRITES = ${JSON.stringify(WRITES)};
-export default function (pi) {
+// Awaited in the factory, as index.ts does: stock builds the first session's tool set right after the factories return.
+export default async function (pi) {
  const ready = import("./thinking-default").then(module => module.applyGuiThinkingDefault(pi));
+ await ready;
  pi.on("session_start", async () => {
   try {
    await ready;
