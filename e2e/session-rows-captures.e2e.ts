@@ -291,6 +291,18 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	// so it once painted over the row button's stretched click target: a click on the age or the branch, or a phone's
 	// tap at the middle of a 48 px row, opened nothing (the Windows e2e of 19 Nov 2026).
 	expect(await list.evaluate(rowsMissingClicks)).toEqual([]);
+	// A hover on line 2 shows the row's tooltip, so whatever a part of that line names on its own (the branch's whole
+	// name, the exact time, a waiting badge's word) is in the row's tooltip too.
+	const tips = await list.locator(".omp-sidebar-session-row:visible").evaluateAll(rows =>
+		rows.flatMap(row => {
+			const tooltip = row.querySelector("button[data-roving-item]")?.getAttribute("title") ?? "";
+			return [...row.querySelectorAll("[data-sidebar-row-end] [title]")]
+				.map(part => part.getAttribute("title") ?? "")
+				.filter(part => !tooltip.includes(part))
+				.map(part => `${tooltip.split("\n")[0]}: ${part}`);
+		}),
+	);
+	expect(tips).toEqual([]);
 }
 
 /**
