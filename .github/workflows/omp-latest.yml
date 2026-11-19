@@ -26,10 +26,13 @@
 #   list holds that omp for that release: no computer installs it unasked;
 # - cancelled or timed out: no verdict, the next hourly run tests it again.
 # The list is one commit per changed verdict, pushed without force by
-# github-actions[bot]; a writer that lost a race reads the branch again.
-# Only a run on main writes. A run from another ref, and any rehearsal, tests,
-# prints the verdict and the list as it would be (the `compat` job's summary)
-# and pushes and opens nothing.
+# github-actions[bot]; a writer that lost a race reads the branch again, and a
+# push is read back and parsed as the app parses it.
+# Only a run on main writes the list. A run from another ref, and any
+# rehearsal, tests, prints the verdict and the list as it would be (the `compat`
+# job's summary) and opens nothing; with rehearse_branch=probe/omp-compat-<name>
+# it also writes the verdict to that probe branch (delete it after), never to
+# `omp-compat`.
 #
 # The main target is the older daily check: an omp release that breaks what
 # OMPdesk reads from the installed stock omp (its settings and their Korean
@@ -69,7 +72,8 @@
 # Verify a release again: gh workflow run omp-latest.yml -f recheck=true
 # Rehearse the list from any ref, writing nothing:
 #   gh workflow run omp-latest.yml --ref <branch> -f rehearse_app=<X.Y.Z>
-# tests that published release as if it were the newest one.
+# tests that published release as if it were the newest one; add
+# -f rehearse_branch=probe/omp-compat-<name> to prove the write on that branch.
 # Rehearse the bump path from any ref: add -f pretend_tested=<older X.Y.Z>; it
 # pushes the branch and opens the ready issue (delete both after), never
 # touches the failure issue.
@@ -91,6 +95,9 @@ on:
         default: false
       rehearse_app:
         description: "Rehearsal only: test against this published OMPdesk release (X.Y.Z) as if it were the newest; nothing is pushed or opened"
+        default: ""
+      rehearse_branch:
+        description: "Rehearsal only, off main's real runs: write the verdict to this probe/omp-compat-<name> branch instead of nowhere"
         default: ""
 
 permissions:
@@ -425,6 +432,9 @@ jobs:
         id: record
         env:
           ISSUE: ${{ steps.issue.outputs.number }}
+          # A real run on main always writes `omp-compat`; only a run that would write nothing takes a probe branch.
+          COMPAT_BRANCH: ${{ needs.plan.outputs.write != 'true' && inputs.rehearse_branch || '' }}
+          WRITE: ${{ (needs.plan.outputs.write == 'true' || inputs.rehearse_branch != '') && 'true' || 'false' }}
         run: bun scripts/omp-bump/compat.ts record
       - name: Close the hold issues this verdict lifts
         if: env.VERDICT == 'green' && env.WRITE == 'true'
