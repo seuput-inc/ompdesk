@@ -331,4 +331,27 @@ describe("work board opened sessions", () => {
 		);
 		expect(applyAgentView).toHaveBeenCalledWith({ tabId: "c1", how: "focus" });
 	});
+
+	it("offers a paired host's child as a button only once its session file is known, then opens that file there", async () => {
+		const openTab = vi.fn(async () => "view-1");
+		useTabsStore.setState({ openTab } as never);
+		await mount();
+		const remote = (patch: Partial<AgentReviewItem>) =>
+			item({ tabId: "h1", title: "Remote child", state: "running", foreign: true, device: "host-1", ...patch });
+		const row = () => opened()?.querySelector('[data-board-opened="h1"]') as unknown as HTMLElement | null;
+		// Still starting on its host: no file yet, and the host's tab id is no tab here, so nothing could open it.
+		await act(async () => useAgentReviewStore.getState().apply({ tabId: "t1", items: [remote({})] }));
+		expect(row()?.textContent).toContain("Remote child");
+		expect(row()?.tagName).not.toBe("BUTTON");
+		await act(async () => row()?.click());
+		expect(openTab).not.toHaveBeenCalled();
+		await act(async () =>
+			useAgentReviewStore.getState().apply({ tabId: "t1", items: [remote({ sessionPath: "/host/s/h1.jsonl" })] }),
+		);
+		expect(row()?.tagName).toBe("BUTTON");
+		await act(async () => row()?.click());
+		expect(openTab).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionPath: "/host/s/h1.jsonl", device: "host-1", kind: "agent" }),
+		);
+	});
 });
