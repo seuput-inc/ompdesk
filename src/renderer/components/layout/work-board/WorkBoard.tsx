@@ -459,9 +459,9 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 			: (presentedJobs[0]?.item.label ??
 				(nowChildren[0] ? nowChildren[0].title || t("workBoard.review.untitled") : ""));
 	const nowFigure = counts.running + counts.childrenRunning;
-	// A list behind the work leads with why: its "now" row is the part in doubt.
+	// Instructions since the list changed, or a list behind the work, lead: its "now" row is the part in doubt.
 	const planLead =
-		freshness?.reason ??
+		freshness?.summary ??
 		plan?.active ??
 		plan?.rows[0]?.content ??
 		(showsGoal && goal

@@ -24,9 +24,10 @@
  * - `nudge`: a reminder already given (journaled; `nudgeKindOf`);
  * - `compaction`: the reminders before it left the model's context.
  *
- * A list with open items is behind the work when an instruction came after its last change and a tool call followed
- * (the agent works on something the list may not name), or when `DRIFT_CALLS` tool calls or `DRIFT_ACTIVE_MS` of work
- * went by without a change. No omp imports: the GUI's vitest runs it.
+ * A list with open items is behind the work (the panel's warning, `stale`) when `DRIFT_CALLS` tool calls or
+ * `DRIFT_ACTIVE_MS` of work went by without a change, or when `RECEIVED_WARN` instructions piled up after its last
+ * change and a tool call followed. One or two fresh instructions are news the panel lists without a warning: the
+ * reading knows when they arrived, never whether the list already covers them. No omp imports: the GUI's vitest runs it.
  */
 import { COMPACT_LEAD } from "./todo-compact-core";
 import type { TodoDriftState } from "./todo-drift-contracts";
@@ -58,6 +59,8 @@ export type NudgeKind = "instruction" | "drift" | "stale" | "compact" | "stock-m
 
 /** Instructions the panel lists by their first line (the newest; `receivedCount` says how many came). */
 export const RECEIVED_SHOWN = 5;
+/** Instructions since the list's last change, with work after the newest, before the panel warns: fewer are news. */
+export const RECEIVED_WARN = 3;
 const RECEIVED_LINE_CHARS = 120;
 
 /** An instruction's first line as the panel lists it: no agent-message wrapper, no `Title:` lead, at most 120 chars. */
@@ -153,12 +156,13 @@ export function todoDrift(events: readonly TodoDriftEvent[]): TodoDrift {
 	const tasks = phases.flatMap(phase => phase.tasks).filter(task => task.status !== "abandoned");
 	const open = tasks.some(task => OPEN[task.status]);
 	const now = tasks.find(task => task.status === "in_progress") ?? tasks.find(task => OPEN[task.status]);
+	// Old (a long run of work since the change) warns whatever came; fresh instructions warn only once they pile up.
 	const stale = !open
 		? undefined
-		: instruction && instruction.callsSince > 0
-			? "instruction"
-			: callsSince >= DRIFT_CALLS || activeMsSince >= DRIFT_ACTIVE_MS
-				? "drift"
+		: callsSince >= DRIFT_CALLS || activeMsSince >= DRIFT_ACTIVE_MS
+			? "drift"
+			: instruction && instruction.callsSince > 0 && received.length >= RECEIVED_WARN
+				? "instruction"
 				: undefined;
 	return {
 		changedAt,

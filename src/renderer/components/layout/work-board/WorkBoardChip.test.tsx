@@ -38,6 +38,7 @@ Reflect.set(window, "omp", { rpc: { getJobs }, prefs: { get: vi.fn(async () => u
 
 const { createRoot } = await import("react-dom/client");
 const { WorkBoardChip } = await import("./WorkBoardChip");
+const { TodoReceived, useTodoFreshness } = await import("../../chat/dock/TodoFreshness");
 
 let container: HTMLElement;
 let root: Root;
@@ -197,7 +198,7 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		await mount();
 		const strip = container.querySelector("[data-work-chip]");
 		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe(
-			"1/2Not updated while the agent kept working58m ago",
+			"1/2Not updated while the agent kept working·58m ago",
 		);
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe(
 			"1 of 2 done · Not updated while the agent kept working",
@@ -211,6 +212,23 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		);
 		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Wait for the row3m ago");
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done");
+
+		// Instructions since the list changed lead with their count in place of the current task, as news.
+		const changedAt = Date.now() - 12 * 60_000 - 5000;
+		await act(async () =>
+			useTodoStore.getState().setDrift({
+				changedAt,
+				stale: null,
+				received: [
+					{ at: changedAt + 60_000, text: "Also fix the README typo on line 3" },
+					{ at: changedAt + 120_000, text: "Then rename parse() to parseConfig() everywhere" },
+				],
+				receivedCount: 2,
+			}),
+		);
+		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Since list change: 2·12m ago");
+		expect(strip?.querySelector('.omp-work-chip-plan [data-status-dot="neutral"]')).not.toBeNull();
+		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done · Since list change: 2");
 	});
 
 	it("says the figure Needs you counts, ahead of the plan's progress", async () => {
@@ -315,6 +333,26 @@ describe("WorkBoardChip, the phone's work strip", () => {
 			expect(expands).toHaveBeenCalledOnce();
 			expect(panel()).not.toBeNull();
 			expect(strip()?.getAttribute("aria-expanded")).toBe("true");
+		});
+
+		it("stays open for a tap on a received instruction, which shows that line whole", async () => {
+			// The strip panel's plan zone lists them (WorkBoard's TodoReceived); the board itself is not mounted here.
+			function Received() {
+				return <TodoReceived freshness={useTodoFreshness()} list />;
+			}
+			const changedAt = Date.now() - 12 * 60_000 - 5000;
+			useTodoStore.getState().setPhases([{ name: "Fix", tasks: [{ content: "Reproduce", status: "in_progress" }] }]);
+			useTodoStore.getState().setDrift({
+				changedAt,
+				stale: null,
+				received: [{ at: changedAt + 60_000, text: "Then rename parse() to parseConfig() everywhere" }],
+				receivedCount: 1,
+			});
+			await mount(<Received />);
+			await click(strip());
+			await click(container.querySelector("[data-todo-received-line]"));
+			expect(panel()).not.toBeNull();
+			expect(container.querySelector("[data-todo-received-line]")?.getAttribute("aria-expanded")).toBe("true");
 		});
 
 		it("collapses on a tap outside, and on the back gesture's layer", async () => {

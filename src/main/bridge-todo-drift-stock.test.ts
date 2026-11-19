@@ -46,7 +46,7 @@ async function markers(session: Parameters<typeof journalBranch>[0]): Promise<nu
 }
 
 describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind the work, on stock omp", () => {
-	it("lists an instruction steered into a running turn and marks the list behind once the agent works on", async () => {
+	it("lists an instruction steered into a running turn as news, with no warning for one", async () => {
 		const { session } = await start(forgets().respond);
 		await steeredTurn(session);
 
@@ -54,7 +54,7 @@ describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind th
 		expect(Object.keys(statuses(journal))).not.toContain(B);
 		expect(await panel(session)).toEqual({ hydrated: nowOf(journal), live: nowOf(journal) });
 		const drift = await driftState(session);
-		expect(drift).toMatchObject({ stale: "instruction", receivedCount: 1, received: [{ text: STEER }] });
+		expect(drift).toMatchObject({ stale: null, receivedCount: 1, received: [{ text: STEER }] });
 		expect(drift.changedAt).toBeGreaterThan(0);
 		expect(lastDriftFrame(session)).toEqual(drift);
 		// Journaled once, so the stats script can tell sessions on this bridge from the rest.
@@ -95,7 +95,7 @@ describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind th
 		await session.turn("Where were we?");
 
 		expect(await driftState(session)).toMatchObject({
-			stale: "instruction",
+			stale: null,
 			receivedCount: 1,
 			received: [{ text: STEER }],
 		});
@@ -111,7 +111,7 @@ describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind th
 		const session = await startOmp({ ...first.agent, model: "fake/m1", bridge: BRIDGE, resume: first.session.root });
 		// A window opened after the relaunch: get_state's reading.
 		expect(await driftState(session)).toMatchObject({
-			stale: "instruction",
+			stale: null,
 			receivedCount: 1,
 			received: [{ text: STEER }],
 		});
@@ -135,7 +135,7 @@ describe.skipIf(!existsSync(omp))("the to-do panel's reading of a list behind th
 		const journal = await journalList(session);
 		// The opening agent's message made the list, so it is not one received since.
 		expect(await driftState(session)).toMatchObject({
-			stale: "instruction",
+			stale: null,
 			receivedCount: 1,
 			received: [{ text: STEER }],
 		});

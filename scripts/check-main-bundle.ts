@@ -378,6 +378,8 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // 1,778 bytes over. The budget is that measure plus 80 bytes.
 // It also lists the instructions received since that change (20 Nov 2026, `TodoReceived` with the board's rows): measured
 // 2,208,877 (branch run 44589770282), 1,027 bytes over. The budget is that measure plus 80 bytes.
+// They lead with their count, say what the count measures, and a tap shows a cut line whole (20 Nov 2026): measured
+// 2,209,713 (branch run 44596214057), 756 bytes over. The budget is that measure plus 80 bytes.
 // Those branches together with close-visible B, the page watchdog and the rest of next-line (20 Nov 2026): measured
 // 2,207,805 (branch run 44594625704). The budget is that measure plus 80 bytes.
 const WEB_FIRST_SCREEN_JS_BYTES = 2_207_885;
