@@ -118,6 +118,61 @@ impl AgentControl {
         swept
     }
 
+    /// The tabs `opener_tab_id` opened, read as its tab goes (`released`), before that forgets them.
+    pub fn opened_of(&self, opener_tab_id: &str) -> Vec<String> {
+        self.mem()
+            .opened
+            .get(opener_tab_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter(|id| !id.starts_with("pending:"))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// An opener's tab closed: each child it opened that rests (no turn, nothing waiting, not the person's, not in
+    /// view) closes too, its session saved. Nobody is left to read it, and a test tab would otherwise stay open for
+    /// good (no answer, no verdict line). A child still working is left to finish.
+    pub async fn close_orphans(&self, children: Vec<String>, opener_session: Option<String>) {
+        for child in children {
+            let Some(tab) = self
+                .host
+                .state()
+                .tabs
+                .iter()
+                .find(|tab| tab.tab_id == child)
+                .cloned()
+            else {
+                continue;
+            };
+            if tab.busy
+                || tab.resuming
+                || waits(&tab)
+                || tab.looked
+                || tab.user_touched
+                || tab.hidden
+                || !tab.auto_closable
+                || !self.mem().closing.insert(child.clone())
+            {
+                continue;
+            }
+            let how = CloseHow {
+                auto: true,
+                wait_ms: self.tuning.auto_close_wait_ms,
+                cleared: false,
+            };
+            // The opener is gone: the child names its own window.
+            let closed = self.close_tab(&child, &child, how).await;
+            self.mem().closing.remove(&child);
+            if matches!(closed, Ok(TabClose::Closed)) {
+                let fated = self.fated(&tab, opener_session.as_deref());
+                self.fates().closed(fated, fate_by::ORPHAN);
+            }
+        }
+    }
+
     async fn auto_close_pass(&self, caller: &ControlTab, tabs: &[ControlTab]) -> R<()> {
         let opener_idle = !caller.busy && !caller.resuming && !waits(caller);
         for tab in tabs {

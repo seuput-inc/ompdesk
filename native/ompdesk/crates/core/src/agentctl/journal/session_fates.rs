@@ -318,6 +318,8 @@ pub mod fate_by {
     pub const AUTO_CLOSE: &str = "OMPdesk (its result had reached the session that opened it)";
     /// The control tools' own delete of a throwaway session.
     pub const THROWAWAY: &str = "OMPdesk (it was opened as throwaway, and its Result: ok answer had reached the session that opened it)";
+    /// The control tools' close of a resting child whose opener's tab closed.
+    pub const ORPHAN: &str = "OMPdesk (the session that opened it had closed, and it was resting)";
     /// A delete the control tools did not make: only its tombstone tells of it.
     pub const APP: &str = "someone in OMPdesk (the sidebar's Delete, /delete or a paired device)";
 }
