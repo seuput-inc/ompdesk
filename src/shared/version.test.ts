@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareVersions, isNewer } from "./version";
+import { compareVersions, isNewer, majorOf } from "./version";
 
 describe("isNewer", () => {
 	it("orders dotted numbers numerically, not as text", () => {
@@ -64,5 +64,20 @@ describe("compareVersions", () => {
 	it("is null when either side is not a dotted-number version", () => {
 		expect(compareVersions("main", "1.0.0")).toBeNull();
 		expect(compareVersions("1.0rc2", "1.0rc1")).toBeNull();
+	});
+});
+
+describe("majorOf", () => {
+	it("reads the first number of a release, a `v` tag and a prerelease", () => {
+		expect(majorOf("18.22.2")).toBe(18);
+		expect(majorOf("v19.0.0")).toBe(19);
+		expect(majorOf("19.0.0-canary.3")).toBe(19);
+		expect(majorOf(" 0.9.1 ")).toBe(0);
+	});
+
+	it("is null for a version without one", () => {
+		expect(majorOf("main")).toBeNull();
+		expect(majorOf("")).toBeNull();
+		expect(majorOf("1.0rc1")).toBeNull();
 	});
 });

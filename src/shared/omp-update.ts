@@ -1,12 +1,27 @@
 /**
  * omp keeps itself current (src/main/omp-updater.ts): while OMPdesk runs it
- * looks up npm's latest `@oh-my-pi/pi-coding-agent` and, when that is newer
- * than the installed omp, runs stock `omp update` on its own. OMPdesk's own
- * updates stay manual (Settings › Updates & about). Each computer — a paired
- * host included — updates its own omp under its own pref, always through its
- * own updater: a client only asks the host to run it (`host.ompUpdate.now`)
- * and follows the state the host pushes; it never runs `omp update` there.
+ * asks stock `omp update --check` for the newest omp and, when that is newer
+ * than the installed omp, installs it on its own, but never an omp whose major
+ * is above the one this OMPdesk was tested with: that one waits for a person's
+ * "Update now" (`held`). OMPdesk's own updates stay manual (Settings › Updates &
+ * about). Each computer — a paired host included — updates its own omp under
+ * its own pref, always through its own updater: a client only asks the host to
+ * run it (`host.ompUpdate.now`) and follows the state the host pushes; it never
+ * runs `omp update` there.
  */
+
+/**
+ * Who started a pass. `launch` and `scheduled` are the timer's, `repair` is the bridge compatibility check's
+ * (an omp that lacks what the bridge needs): nobody asked for those, so they run only under the pref and never
+ * install above the tested major. `manual` is a person's "Update now", here or from a paired device.
+ */
+export type OmpUpdateTrigger = "launch" | "scheduled" | "repair" | "manual";
+
+/** A newer omp OMPdesk does not install on its own. `untested-major`: its major is above the tested omp's. */
+export interface OmpUpdateHold {
+	version: string;
+	reason: "untested-major";
+}
 
 /**
  * - `check`: the registry lookup failed (`detail` is the reason).
@@ -42,9 +57,14 @@ export interface OmpUpdateState {
 	failure: OmpUpdateFailure | null;
 	/**
 	 * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`). Settings names it beside the
-	 * installed omp when they differ; it never holds an update back. Absent from a host whose OMPdesk predates it.
+	 * installed omp when they differ. Absent from a host whose OMPdesk predates it.
 	 */
 	tested?: string;
+	/**
+	 * The newest omp is newer than the installed one and held back: only "Update now" installs it. Null while
+	 * nothing is held; absent from a host whose OMPdesk predates it.
+	 */
+	held?: OmpUpdateHold | null;
 }
 
 /** What the renderer toasts once an update has been installed ("omp updated to X"). */
