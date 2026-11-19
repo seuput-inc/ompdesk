@@ -171,9 +171,6 @@ export async function startOmp(options: {
 }): Promise<Omp> {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-todo-stock-repo-")));
 	execFileSync("git", ["init", "--quiet"], { cwd: root });
-	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs; omp's service broker
-	// is one, and ends with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`).
-	cleanups.push(() => rmSync(root, RM_TEMP));
 	const address = newBridgeAddress();
 	const env: Record<string, string | undefined> = {
 		...process.env,
@@ -188,6 +185,26 @@ export async function startOmp(options: {
 		Reflect.deleteProperty(env, key);
 	for (const key of Object.keys(env))
 		if (key.startsWith("OMP_GUI_") && key !== "OMP_GUI_BRIDGE") Reflect.deleteProperty(env, key);
+	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs. omp 18's service
+	// broker was one and ended with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`); a failed removal names what
+	// omp's daemon still runs.
+	cleanups.push(() => {
+		try {
+			rmSync(root, RM_TEMP);
+		} catch (error) {
+			let units: string;
+			try {
+				units = execFileSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "ps", "--json"], {
+					env: env as NodeJS.ProcessEnv,
+					encoding: "utf8",
+					timeout: 30_000,
+				});
+			} catch (psError) {
+				units = String(psError);
+			}
+			throw new Error(`${root} stayed busy; omp ps --json:\n${units.slice(0, 4000)}`, { cause: error });
+		}
+	});
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
 		[
