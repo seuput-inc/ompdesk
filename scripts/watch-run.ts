@@ -6,7 +6,8 @@
  *
  * `gh run watch --exit-status` returns only when the whole run ends, so a 90 s lint failure cost the
  * ~9 minutes the slowest job needs before anyone could start the fix. This polls
- * `gh run view --json jobs,status,conclusion` every 15 s (`--interval <s>`), prints one line per job
+ * `gh run view --json jobs,status,conclusion` every 60 s (`--interval <s>`, never less: each look reads the run and its
+ * jobs from the GitHub account's hourly quota, which every session and project of the account shares), prints one line per job
  * state change, and on the first job that concludes `failure` or `timed_out` prints that job, its failed
  * step and the first error lines of its log, then exits 1 while the other jobs still run. A run that
  * ends in success exits 0; one that ends otherwise (cancelled) exits 1.
@@ -16,8 +17,9 @@
  * pass `--sha` (the pushed commit) and it waits for that commit's run to show.
  */
 import { spawnSync } from "node:child_process";
+import { realGh, wideRefusal } from "../resources/gui-bridge/gh-guard";
+import { WATCH_MIN_INTERVAL_S } from "../resources/gui-bridge/gh-guard-core";
 
-const DEFAULT_INTERVAL_S = 15;
 const LOOKUP_ATTEMPTS = 20;
 const LOOKUP_INTERVAL_MS = 3_000;
 const ERROR_LINES = 15;
@@ -151,7 +153,7 @@ async function main(argv: string[]): Promise<number> {
 	let runId: number | undefined;
 	let release = false;
 	let sha: string | undefined;
-	let intervalS = DEFAULT_INTERVAL_S;
+	let intervalS = WATCH_MIN_INTERVAL_S;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--release") release = true;
@@ -161,8 +163,16 @@ async function main(argv: string[]): Promise<number> {
 		else usage(`unknown argument ${arg}`);
 	}
 	if (!Number.isFinite(intervalS) || intervalS <= 0) usage("--interval needs seconds above 0");
+	intervalS = Math.max(intervalS, WATCH_MIN_INTERVAL_S);
 	if (sha && !release) usage("--sha goes with --release");
 	if (release === (runId !== undefined)) usage("give a run id or --release, not both or neither");
+	// A watch is a wide read: an agent's starts only while the quota is above its floor (gh-guard.ts; a person's always).
+	const gh = process.env.PI_TOOL_CALL_ID ? realGh() : undefined;
+	const refused = gh ? wideRefusal(["run", "watch", String(runId ?? "--release")], "core", gh) : undefined;
+	if (refused) {
+		console.error(`watch-run: ${refused}`);
+		return 2;
+	}
 	const id = runId ?? (await findReleaseRun(sha));
 	say(`watching run ${id}`);
 

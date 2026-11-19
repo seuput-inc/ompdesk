@@ -3,6 +3,7 @@ import {
 	createHints,
 	createPollTracker,
 	EDIT_HINT,
+	GH_BURST_HINT,
 	POLL_HINT,
 	READY_LOG_REASON,
 	readyLogCannotMatch,
@@ -314,6 +315,33 @@ describe("poll hints", () => {
 		expect(first.note("bash", { command: "pgrep x" })).toBe(POLL_HINT);
 		expect(second.note("bash", { command: "pgrep x" })).toBeUndefined();
 		expect(second.note("bash", { command: "pgrep x" })).toBe(POLL_HINT);
+	});
+
+	it("speak once at a burst of gh commands in ten minutes, async ones counted, and not at the same count spread out", () => {
+		const minute = 60_000;
+		const hints = createHints();
+		// 14 commands in seven calls within ten minutes: quiet; the 15th, in a backgrounded call, is the burst.
+		for (let i = 0; i < 7; i++)
+			expect(
+				hints.note(
+					"bash",
+					{ command: `gh run view ${i} --log-failed | tail; gh api rate_limit` },
+					undefined,
+					i * minute,
+				),
+			).toBeUndefined();
+		expect(hints.note("bash", { command: "gh pr view 1", async: true }, undefined, 8 * minute)).toBe(GH_BURST_HINT);
+		// Told once per process.
+		for (let i = 0; i < 20; i++)
+			expect(hints.note("bash", { command: "gh run view 9 --log" }, undefined, 9 * minute)).toBeUndefined();
+		// Twenty commands, one every minute: never fifteen within ten minutes.
+		const spread = createHints();
+		for (let i = 0; i < 20; i++)
+			expect(spread.note("bash", { command: `gh run view ${i} --log` }, undefined, i * minute)).toBeUndefined();
+		// A mention is no command.
+		const quoted = createHints();
+		for (let i = 0; i < 20; i++)
+			expect(quoted.note("bash", { command: 'grep -c "gh run watch" notes.md' }, undefined, 0)).toBeUndefined();
 	});
 });
 

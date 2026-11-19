@@ -209,7 +209,7 @@ export function pace(lines: Iterable<string>): Pace {
 					const target = readTarget(part);
 					if (target !== undefined) reads.set(target, (reads.get(target) ?? 0) + 1);
 					if (part.type !== "toolCall" || !part.name || !part.arguments) continue;
-					const kind = pollTracker.observe(part.name, part.arguments)[0];
+					const kind = pollTracker.observe(part.name, part.arguments, at * 1000)[0];
 					if (kind) polled(kind);
 					if (
 						part.name === "bash" &&

@@ -6,8 +6,9 @@
  * src/main/session-launch-parity.test.ts drives every start path and compares what they launch.
  */
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { CREDIT_SPEND_ENV } from "../../resources/gui-bridge/credit-spend-core";
+import { GH_BIN_DIR, GH_GUARD_ENV } from "../../resources/gui-bridge/gh-guard-core";
 import { MCP_AUTH_ENV, MCP_CWD_ENV, MCP_HUB_ENV } from "../../resources/gui-bridge/mcp-hub-contracts";
 import type { AutoTitleSettings } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { AGENT_DESKTOP_ENV, COMPUTER_USE_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
@@ -64,6 +65,7 @@ export const SESSION_OWNED_ENV = [
 	MEMORY_ENV,
 	SESSION_TAG_ENV,
 	SCRATCH_ENV,
+	GH_GUARD_ENV,
 ] as const;
 
 /** `env` without any variable a session owns (`SESSION_OWNED_ENV`). */
@@ -178,5 +180,17 @@ export function sessionEnv(launch: OmpLaunch): Record<string, string> {
 	if (settings.browser) env[DEFAULT_BROWSER_ENV] = agentBrowserEnv(settings.browser);
 	if (launch.processTag) env[SESSION_TAG_ENV] = launch.processTag;
 	if (launch.scratchDir) env[SCRATCH_ENV] = launch.scratchDir;
+	// The gh guard's launchers (gh-guard.ts): `sessionPath` puts their folder first on the session's PATH.
+	if (launch.bridge) env[GH_GUARD_ENV] = join(launch.bridge.dir, GH_BIN_DIR);
 	return { ...env, ...builtin.env };
+}
+
+/**
+ * The session's PATH: `path` with the gh guard's folder (`GH_GUARD_ENV` of `owned`, the spawn's `sessionEnv`) first, so
+ * every `gh` the session's commands and scripts start reaches the guard before the real gh.
+ */
+export function sessionPath(path: string, owned: Readonly<Record<string, string>>): string {
+	const guard = owned[GH_GUARD_ENV];
+	if (!guard) return path;
+	return [guard, ...path.split(delimiter).filter(entry => entry && entry !== guard)].join(delimiter);
 }
