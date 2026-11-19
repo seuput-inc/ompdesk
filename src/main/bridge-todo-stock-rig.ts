@@ -22,7 +22,7 @@ import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, expect } from "vitest";
 import { newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { RM_TEMP } from "./test-fake-omp";
 
 export type Frame = {
@@ -185,25 +185,11 @@ export async function startOmp(options: {
 		Reflect.deleteProperty(env, key);
 	for (const key of Object.keys(env))
 		if (key.startsWith("OMP_GUI_") && key !== "OMP_GUI_BRIDGE") Reflect.deleteProperty(env, key);
-	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs. omp 18's service
-	// broker was one and ended with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`); a failed removal names what
-	// omp's daemon still runs.
+	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs: omp 18's service
+	// broker, which ended with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`), and omp 19's daemon, which does not.
 	cleanups.push(() => {
-		try {
-			rmSync(root, RM_TEMP);
-		} catch (error) {
-			let units: string;
-			try {
-				units = execFileSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "ps", "--json"], {
-					env: env as NodeJS.ProcessEnv,
-					encoding: "utf8",
-					timeout: 30_000,
-				});
-			} catch (psError) {
-				units = String(psError);
-			}
-			throw new Error(`${root} stayed busy; omp ps --json:\n${units.slice(0, 4000)}`, { cause: error });
-		}
+		stopOmpDaemon(options.isolated);
+		rmSync(root, RM_TEMP);
 	});
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
