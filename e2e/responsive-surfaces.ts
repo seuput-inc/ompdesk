@@ -809,6 +809,18 @@ async function showTranscriptStart(page: Page): Promise<void> {
 }
 
 /**
+ * Brings the transcript back to its end the way a reader does, with "Jump to latest": a surface before may have
+ * scrolled this same session up, and a window keeps its view of a session between surfaces (only the phone's page
+ * loads afresh). A scroll of our own would leave the pill over the transcript and the view unpinned. The pill stays
+ * in the page while the view follows its end, hidden from the pointer and the accessibility tree.
+ */
+async function showTranscriptEnd(page: Page): Promise<void> {
+	const latest = page.locator("[data-jump-to-latest]:not([aria-hidden])").first();
+	if ((await latest.count()) > 0) await latest.click();
+	await latest.waitFor({ state: "detached", timeout: 15_000 });
+}
+
+/**
  * Reads the `long` session back to its first turn. A transcript opens on its newest page and asks for the page before
  * each time the reader's view comes to the top of what is loaded (ChatStream `handleScroll`), so the view goes to the
  * top again and again, seven pages of the fake omp's 250 turns, until the first turn is mounted. A window's reader
@@ -1123,12 +1135,8 @@ export const SURFACES: readonly Surface[] = [
 		title: "The usage row under a reply: model, tokens, cache, cost, duration, first token, speed and time on one line",
 		// The fake omp's agent-desktop run (`tool-agent-desktop`) ends on a reply carrying every segment.
 		open: async page => {
-			// A surface before may have scrolled the transcript up: back to its end, where this reply is, as a reader
-			// does (a scroll of our own would leave "Jump to latest" over the row).
-			// The pill stays in the page while pinned, hidden from the pointer and the accessibility tree.
-			const latest = page.locator("[data-jump-to-latest]:not([aria-hidden])").first();
-			if ((await latest.count()) > 0) await latest.click();
-			await latest.waitFor({ state: "detached", timeout: 15_000 });
+			// A surface before may have scrolled the transcript up: back to its end, where this reply is.
+			await showTranscriptEnd(page);
 			await page.getByText("agent-desktop run finished.", { exact: true }).last().waitFor({ timeout: 15_000 });
 		},
 		ready: ".omp-usage-row",
@@ -1334,7 +1342,12 @@ export const SURFACES: readonly Surface[] = [
 		id: "transcript-turn-rail",
 		area: "A",
 		title: "Transcript of a 44-turn session at its newest turn, with the turn rail in the left gutter",
-		open: page => expectTurnRail(page, { first: 25 }),
+		// `transcript-turn-rail-scrolled` leaves this session at its third turn: captured after it, the rail's window
+		// stayed on turns 1 to 20 in the two views that keep their tab.
+		open: async page => {
+			await showTranscriptEnd(page);
+			await expectTurnRail(page, { first: 25 });
+		},
 		ready: ".omp-transcript-scroll",
 		settle: 600,
 		when: () => false,
