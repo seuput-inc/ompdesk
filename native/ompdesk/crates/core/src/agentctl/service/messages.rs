@@ -153,6 +153,45 @@ impl OwedDeps for Owed<'_> {
     }
 
     async fn prompt(&self, tab_id: &str, entry: &OutboxSend) -> HandOver {
+        // An open's first message to an omp that never had it (a relaunch cut the open short): its setup first, then
+        // a goal's objective or the prompt. A step the child refuses keeps it queued and tells the opener once.
+        let mut steps: Vec<Value> = entry.before.clone();
+        if entry.goal {
+            steps.push(json!({ "type": "set_goal", "objective": entry.body }));
+        }
+        for command in &steps {
+            let deadline = Deadline::Ms(self.ctl.tuning.prompt_ms);
+            let refused = match self.ctl.host.command(tab_id, command, deadline).await {
+                Ok(answer) if answer.success => continue,
+                // Not answered yet (its omp starting, a slow command): the next pass tries again, nothing to tell.
+                Ok(answer) if answer.unanswered() => return HandOver::Refused,
+                Err(error) if error.unanswered() => return HandOver::Refused,
+                Ok(answer) => answer.error.unwrap_or_else(|| "no reason given".to_owned()),
+                Err(error) => error.message(),
+            };
+            self.ctl
+                .host
+                .trouble(
+                    &entry.from,
+                    entry.from_device.as_deref(),
+                    &format!("open-{}-{}", entry.mark, entry.session_path),
+                    &format!(
+                        "The session you opened ({}) lost its first message when OMPdesk quit before it got it, and setting it up again failed ({}: {refused}). OMPdesk keeps trying; if it stays stuck, send it your brief again with ompdesk_session_send.",
+                        saved_id_of_path(Some(&entry.session_path))
+                            .unwrap_or_else(|| "its session".to_owned()),
+                        command["type"].as_str().unwrap_or("a command"),
+                    ),
+                )
+                .await;
+            return HandOver::Refused;
+        }
+        if entry.goal {
+            // Stock's goal entry carries no marker the journal check could find: done once stock took it.
+            if let Some(outbox) = &self.ctl.send_outbox {
+                outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
+            }
+            return HandOver::Handed;
+        }
         let Ok(command) = self.ctl.owed_command(tab_id, entry).await else {
             return HandOver::Refused;
         };
@@ -195,7 +234,7 @@ impl OwedDeps for Owed<'_> {
     }
 }
 
-fn sent_answer(value: &Value) -> Option<SentAnswer> {
+pub(in crate::agentctl::service) fn sent_answer(value: &Value) -> Option<SentAnswer> {
     Some(SentAnswer {
         instance: value.get("instance")?.as_str()?.to_owned(),
         journaled: value

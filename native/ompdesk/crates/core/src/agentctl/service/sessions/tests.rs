@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::agentctl::journal::system_clock;
 use crate::agentctl::service::host::{Caps, HostState};
 use crate::agentctl::service::tuning::Tuning;
-use crate::agentctl::service::{AgentControl, Files};
+use crate::agentctl::service::{AgentControl, Files, JournalFile};
 use crate::ports::Port;
 
 type Asked = Arc<Mutex<Vec<(String, Value)>>>;
@@ -35,6 +35,8 @@ fn play_main(
             if let Some(ask) = data["ask"].as_u64() {
                 match answer {
                     Ok(value) => crate::ports::apply_answer(&port, ask, Ok(&value.to_string())),
+                    // Main never answers: the app quit while the core waited.
+                    Err(message) if message == NO_ANSWER => {}
                     Err(message) => crate::ports::apply_answer(&port, ask, Err((&message, None))),
                 }
             }
@@ -46,6 +48,9 @@ fn play_main(
 fn tab(id: &str, path: &str) -> Value {
     json!({ "tabId": id, "title": id, "cwd": "/w", "status": "ready", "busy": false, "asks": [], "hidden": false, "sessionPath": path })
 }
+
+/// An ask main leaves unanswered (`play_main`).
+const NO_ANSWER: &str = "<no answer>";
 
 fn rig(
     id: u64,
@@ -76,6 +81,17 @@ fn rig_with(
     state: Value,
     reply: impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
+    rig_files(id, state, Caps::default(), &Files::default(), reply)
+}
+
+/// `rig_with` with the host's optional methods and the journal files the service keeps.
+fn rig_files(
+    id: u64,
+    state: Value,
+    caps: Caps,
+    files: &Files,
+    reply: impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static,
+) -> (AgentControl, Asked) {
     let (writer, reader) = tokio::io::duplex(1 << 20);
     let (tx, _task) = crate::wire::spawn_writer(writer);
     let events = crate::server::test_events(&tx);
@@ -91,13 +107,7 @@ fn rig_with(
         ..Tuning::default()
     };
     (
-        AgentControl::new(
-            port,
-            Caps::default(),
-            &Files::default(),
-            tuning,
-            system_clock(),
-        ),
+        AgentControl::new(port, caps, files, tuning, system_clock()),
         asked,
     )
 }
@@ -222,6 +232,137 @@ async fn an_open_marks_the_child_a_worker_and_sends_its_message_wrapped() {
     assert_eq!(spawn["request"]["folder"], "/w");
     assert_eq!(spawn["request"]["task"], "do it");
     control.host.port().close();
+}
+
+/// The commands main was asked to run on `tab_id`, in order.
+fn child_commands(asked: &Asked, tab_id: &str) -> Vec<Value> {
+    names(asked, "command")
+        .into_iter()
+        .filter(|args| args["tabId"] == tab_id)
+        .map(|args| args["command"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_once_after_the_relaunch()
+ {
+    // 19 Nov 2026: a child opened during the update's restart countdown came back "not started", untitled and
+    // without its brief; the opener had to send it again by hand.
+    let dir = std::env::temp_dir().join(format!("open-first-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let files = Files {
+        send_outbox: Some(JournalFile {
+            file: Some(dir.join("send-outbox.json")),
+        }),
+        ..Files::default()
+    };
+    let caps = Caps {
+        sent_marks: true,
+        ..Caps::default()
+    };
+    let brief = json!({ "message": "Title: do it\nbody", "folder": "/w", "mode": "plan" });
+
+    // Quit while the first message is on its way: main never answers it, and the core goes with the app.
+    let (before, asked_before) = rig_files(
+        7_310,
+        state_of(
+            vec![tab("a", "/s/x_1.jsonl"), tab("c1", "/s/c_1.jsonl")],
+            json!({}),
+        ),
+        caps,
+        &files,
+        |method, args, _| match method {
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            "sentMarks" => Ok(json!({ "instance": "omp-1", "journaled": [] })),
+            "command" if args["command"]["type"] == "prompt" => Err(NO_ANSWER.to_owned()),
+            other => main_of(other, args),
+        },
+    );
+    let open = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        before.run("a", "ompdesk_session_open", brief.clone(), None),
+    )
+    .await;
+    assert!(
+        open.is_err(),
+        "the open was cut off while its first message was on its way"
+    );
+    let sent_before: Vec<Value> = child_commands(&asked_before, "c1")
+        .into_iter()
+        .map(|command| command["type"].clone())
+        .collect();
+    assert_eq!(
+        sent_before,
+        vec![
+            json!("agent_control_worker"),
+            json!("set_plan_mode"),
+            json!("prompt")
+        ]
+    );
+    before.host.port().close();
+    drop(before);
+
+    // The relaunch restores the child under another tab id, a new omp that never had the message.
+    let journaled = Arc::new(Mutex::new(false));
+    let journal = journaled.clone();
+    let (after, asked) = rig_files(
+        7_311,
+        state_of(
+            vec![tab("a", "/s/x_1.jsonl"), tab("c9", "/s/c_1.jsonl")],
+            json!({}),
+        ),
+        caps,
+        &files,
+        move |method, args, _| match method {
+            "sentMarks" if *journal.lock().unwrap() => {
+                Ok(json!({ "instance": "omp-2", "journaled": args["marks"] }))
+            }
+            "sentMarks" => Ok(json!({ "instance": "omp-2", "journaled": [] })),
+            other => main_of(other, args),
+        },
+    );
+    after.redeliver_sends().await.unwrap();
+    let commands = child_commands(&asked, "c9");
+    let kinds: Vec<Value> = commands
+        .iter()
+        .map(|command| command["type"].clone())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            json!("agent_control_worker"),
+            json!("set_plan_mode"),
+            json!("prompt")
+        ]
+    );
+    let message = commands[2]["message"].as_str().unwrap();
+    assert!(message.contains("[ompdesk dispatch d1:"), "{message}");
+    assert!(message.contains("Title: do it"), "{message}");
+    assert_eq!(commands[2]["streamingBehavior"], "followUp");
+
+    // The same omp holds it now: never again, and once its journal has it the record goes.
+    after.redeliver_sends().await.unwrap();
+    assert_eq!(
+        child_commands(&asked, "c9")
+            .iter()
+            .filter(|c| c["type"] == "prompt")
+            .count(),
+        1
+    );
+    *journaled.lock().unwrap() = true;
+    after.redeliver_sends().await.unwrap();
+    assert_eq!(
+        child_commands(&asked, "c9")
+            .iter()
+            .filter(|c| c["type"] == "prompt")
+            .count(),
+        1
+    );
+    let left = std::fs::read_to_string(dir.join("send-outbox.json")).unwrap_or_default();
+    assert!(!left.contains("dispatch d1"), "{left}");
+    after.host.port().close();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

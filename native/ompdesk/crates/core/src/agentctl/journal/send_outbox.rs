@@ -66,6 +66,13 @@ pub struct OutboxSend {
     /// Its record of attachments was damaged: it is never delivered as text alone.
     pub attachments_corrupt: bool,
     pub streaming_behavior: StreamingBehavior,
+    /// An open's first message: the commands that set its new child up (`agent_control_worker`, `set_model`,
+    /// `set_plan_mode`), sent again, before the message, to an omp other than the one first handed it (a relaunch
+    /// between the open's tab and its first message). Each is idempotent.
+    pub before: Vec<Value>,
+    /// An open's first message in goal mode: handed over as stock's `set_goal {objective: body}`, settled once stock
+    /// took it (its goal entry carries no marker the journal check could find).
+    pub goal: bool,
     /// The receiver omp it was handed to, or `tab:<tab id>`; absent: not handed to any omp yet.
     pub instance: Option<String>,
     pub at: f64,
@@ -99,6 +106,8 @@ impl OutboxSend {
             attachments: None,
             attachments_corrupt: false,
             streaming_behavior,
+            before: Vec::new(),
+            goal: false,
             instance: None,
             at,
             instance_last: false,
@@ -131,6 +140,12 @@ impl OutboxSend {
             "streamingBehavior".into(),
             self.streaming_behavior.as_str().into(),
         );
+        if !self.before.is_empty() {
+            map.insert("before".into(), Value::Array(self.before.clone()));
+        }
+        if self.goal {
+            map.insert("goal".into(), true.into());
+        }
         if let Some(instance) = self.instance.as_ref().filter(|_| !self.instance_last) {
             map.insert("instance".into(), instance.clone().into());
         }
@@ -201,6 +216,18 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
         attachments_corrupt: corrupt
             || fields.get("attachmentsCorrupt") == Some(&Value::Bool(true)),
         streaming_behavior,
+        before: fields
+            .get("before")
+            .and_then(Value::as_array)
+            .map(|commands| {
+                commands
+                    .iter()
+                    .filter(|command| command.is_object())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default(),
+        goal: fields.get("goal") == Some(&Value::Bool(true)),
         instance: string(fields, "instance")
             .filter(|i| !i.is_empty())
             .map(str::to_owned),

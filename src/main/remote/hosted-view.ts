@@ -6,7 +6,8 @@
  * gets the multi-viewer rules over one omp:
  *
  * - the omp's stream reaches the window, except its host tool calls and URI reads, which the device
- *   answers (a second answer from here would race it);
+ *   answers (a second answer from here would race it), unless the device is away and was never handed
+ *   one: LocalHostServices then hands it to a window's view (`carryOut`);
  * - the window's commands go to the same omp; a prompt, steer or follow-up typed here is journaled as
  *   the viewer's (`prompt_origin_set` with `promptOrigin`) unless a paired web page that views this
  *   window's tab named its own device first, and a transcript page is relabelled for the viewer
@@ -43,7 +44,7 @@ import type { RunReading } from "../sidecar-run-state";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { STOP_COMMANDS } from "../turn-stop-log";
 
-/** The hosted omp's events a window shows. `hostToolCall` and `hostUriRequest` stay the device's to answer. */
+/** The hosted omp's events a window shows. `hostToolCall` and `hostUriRequest` stay the device's to answer (`carryOut`). */
 const VIEW_EVENTS = [
 	"status",
 	"events",
@@ -208,6 +209,17 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		if (this.#left) return;
 		this.emit(VIEW_ENDED_EVENT);
 		this.dispose();
+	}
+
+	/**
+	 * The device is away and was never handed this call of its omp's: the window this view is a tab of carries it out
+	 * as its own tab's (its pool's `hostToolCall`/`hostUriRequest` listener) and answers through `sendSideChannel`.
+	 * False while no window listens yet (the view is still being added): the call stays the host's to hand out.
+	 */
+	carryOut(name: "hostToolCall" | "hostUriRequest", request: { id: string }): boolean {
+		if (this.#left || this.listenerCount(name) === 0) return false;
+		this.emit(name, request);
+		return true;
 	}
 
 	async #command(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {

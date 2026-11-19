@@ -1390,6 +1390,8 @@ app.whenReady().then(async () => {
 			}).show(),
 		// Autopilot runs paired devices started here, charged to them until they end (remote/hosted-autopilot.ts).
 		runChargesFile: join(app.getPath("userData"), "autopilot-device-runs.json"),
+		// A device's session here keeps its reports and notices while the device is away, until it is back.
+		keptCallsFile: join(app.getPath("userData"), "kept-host-calls.json"),
 	});
 	// Orphaned worktrees (worktree-orphans.ts): a folder is open when a tab of this computer or a tab it hosts for a
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
