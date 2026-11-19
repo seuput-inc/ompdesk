@@ -31,13 +31,13 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
 | C1 | A finished tab closes by tool; a close is never refused with a made-up reason (close-visible). | on branch | next-line [desktop] | omp/agent/next-0134-1 (`b24ab49ba`) | |
-| C2 | One session's tab stays open on every device after its owner closed it. Case 20 Nov: the Mac mini closed its child "Persistent bridge health" (01a1f309) at ~01:40; the desktop's window kept its tab for that Mac mini session, idle. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
-| C3 | Reading another session opens a tab in the reader's window and leaves it. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
-| C4 | A scratch folder shows as a sidebar project. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
-| C5 | A test tab an agent opens stays after the test. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C2 | One session's tab stays open on every device after its owner closed it. Case 20 Nov: the Mac mini closed its child "Persistent bridge health" (01a1f309) at ~01:40; the desktop's window kept its tab for that Mac mini session, idle. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
+| C3 | Reading another session opens a tab in the reader's window and leaves it. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
+| C4 | A scratch folder shows as a sidebar project. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
+| C5 | A test tab an agent opens stays after the test. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
 | C6 | An open to a never-started start tab never answers (fix `3d135b59e`); a call to a tab whose omp cleanup ended never answers. | start-tab fix on next-line; cleanup-ended call: not reproduced (only open/join/reopen wait unbounded on when_ready), needs a captured hang | next-line (3d135b59e), tabs-tidy (cleanup-ended calls) [desktop] | omp/agent/close-web-rc-20261119 (`3d135b59e`) | |
-| C7 | `ompdesk_sessions` with `mine: true` lists nothing. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
-| C8 | A paired computer's sidebar differs from the host's real state. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `6e1883a83` | ci 44576978842, formal session-listing 44576986560; e2e pending |
+| C7 | `ompdesk_sessions` with `mine: true` lists nothing. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
+| C8 | A paired computer's sidebar differs from the host's real state. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
 | C9 | A tab another tab holds open on a frozen window cannot be closed (live repro on the Mac mini). | in progress | 01a1f2ea [Mac mini] | omp/agent/page-watch-20261119 | |
 | C10 | After a messageless session's omp was killed, its restarted omp got a new saved id (01a1f4bf → 01a1f4ca) and the empty session file was not resumed. | not started | | | |
 
@@ -78,6 +78,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | G4 | No test drives the real app with real omp for `!`, `!!`, `$`, the Plan card, cancelling a compaction, dequeue. | in progress | test-tools [desktop] | | |
 | G6 | shell-batch-checks `installer-check` fails on main 72d081111 (run 44561065983); not on the release path, cause unknown. One Windows e2e SIGKILL-resume case failed once in 44554809040 (passed on rerun: not counted as proof). | in progress | test-tools [desktop] | | |
 | G7 | The pre-push check does not run the Rust/TS table comparisons, so a merge that reorders captured/meta.json reached ci red (44569228302). | in progress | test-tools [desktop] | | |
+| G8 | e2e agent-control-across 'shows, notifies and reports…' reads the board row right after the child's done report, but auto-close may close the child first (board shows '1 done'): a race in the test; passed on reruns, not counted as proof. | not started | | | 44579634026 |
 | G5 | turn-stages test counted the next-prompt suggestion request. | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | failed 0 of 40 under load |
 
 ## H. Earlier list
