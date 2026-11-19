@@ -4,6 +4,7 @@
 use serde_json::Value;
 
 use super::super::AgentControl;
+use super::super::boundary::OTHER_SCHEDULE;
 use super::super::fail::{Fail, R, fail};
 use super::super::host::HostState;
 use super::super::js::len16;
@@ -77,10 +78,25 @@ impl AgentControl {
         let Some(source) = self.schedule_source(device_id) else {
             return fail(format!("Scheduled runs are not available {where_}."));
         };
-        let rows = source.list().await?;
+        let (listed, outside) = source.listed().await?;
+        let (rows, hidden) = self.schedules_in_scope(caller, device_id, listed).await?;
+        // Another project's schedules, here or left out by their own computer: a count, never a name or a folder.
+        let others = hidden.len() + outside;
+        let counted = if others == 0 {
+            String::new()
+        } else {
+            format!(
+                "{others} scheduled run{} {where_} in other projects (another project's schedules show as a count only)",
+                if others == 1 { "" } else { "s" }
+            )
+        };
         if args.action == "list" {
             if rows.is_empty() {
-                return Ok(format!("No scheduled runs {where_}."));
+                return Ok(if others == 0 {
+                    format!("No scheduled runs {where_}.")
+                } else {
+                    format!("No scheduled runs {where_} in this project.\n{counted}")
+                });
             }
             let mut lines = vec![format!("Scheduled runs {where_}:")];
             for row in &rows {
@@ -107,6 +123,9 @@ impl AgentControl {
                     }
                 ));
             }
+            if others > 0 {
+                lines.push(counted);
+            }
             return Ok(lines.join("\n"));
         }
         let device_arg = match &device {
@@ -127,6 +146,12 @@ impl AgentControl {
                 })
                 .cloned();
             let Some(row) = row else {
+                if hidden.iter().any(|entry| {
+                    entry.id == id
+                        || (len16(&id) >= SESSION_PREFIX_MIN && entry.id.starts_with(&id))
+                }) {
+                    return fail(OTHER_SCHEDULE);
+                }
                 return fail(format!(
                     "No scheduled run \"{id}\" {where_}. ompdesk_schedule {{\"action\":\"list\"{device_arg}}} shows them."
                 ));
@@ -164,6 +189,8 @@ impl AgentControl {
                 }
                 "update" => {
                     let frequency = self.frequency_of(caller, &args, device.as_ref())?;
+                    self.trigger_check(caller, frequency.as_ref(), device_id)
+                        .await?;
                     let name = args.name.clone().filter(|name| !name.is_empty());
                     let prompt = args.prompt.clone().filter(|prompt| !prompt.is_empty());
                     let model = args.model.clone().filter(|model| !model.is_empty());
@@ -197,6 +224,8 @@ impl AgentControl {
             }
         }
         let frequency = self.frequency_of(caller, &args, device.as_ref())?;
+        self.trigger_check(caller, frequency.as_ref(), device_id)
+            .await?;
         let Some(frequency) = frequency else {
             return fail(
                 "create needs exactly one of every_minutes, daily_at, at, in_minutes or on.",
@@ -319,6 +348,37 @@ impl AgentControl {
             row.id,
             webhook_line(&row)
         ))
+    }
+
+    /// A trigger that watches a git repository or a folder's sessions watches one of the caller's own project, and
+    /// a session trigger names its folder: without one it fires on every project's sessions.
+    async fn trigger_check(
+        &self,
+        caller: &ControlTab,
+        frequency: Option<&ScheduleFrequency>,
+        device: Option<&str>,
+    ) -> R<()> {
+        let Some(ScheduleFrequency::Event { event }) = frequency else {
+            return Ok(());
+        };
+        match event {
+            ScheduleEvent::Git { repo, .. } => {
+                self.folder_check(caller, Some(repo), Some(device)).await?;
+            }
+            ScheduleEvent::Session {
+                folder: Some(folder),
+                ..
+            } if is_absolute(folder) => {
+                self.folder_check(caller, Some(folder), Some(device)).await?;
+            }
+            ScheduleEvent::Session { .. } => self.every_project(
+                caller,
+                "on: session events of every folder",
+                "A session trigger needs on.folder: an absolute folder of this session's own project. Without one it fires on every project's sessions. The user can allow this session to work across projects in its sidebar menu.",
+            )?,
+            _ => {}
+        }
+        Ok(())
     }
 
     /// `#frequencyOf`: the one start `args` names, or None when it names none (an update that keeps the timing).

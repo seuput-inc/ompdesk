@@ -1216,6 +1216,7 @@ export class AgentControlRuntime {
 							...(tab ? { tabId: tab } : open ? { elsewhere: open } : {}),
 							...(snippet ? { snippet } : {}),
 							...(project ? { project } : {}),
+							...(row.outsideProject ? { outside: true as const } : {}),
 						},
 					];
 				});

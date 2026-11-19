@@ -47,8 +47,10 @@ import {
 	AGENT_CLOSED_CHILDREN_PREF,
 	AGENT_CONTROL_PREF,
 	AGENT_HIDDEN_PREFS_KEY,
+	AGENT_PROJECT_BOUNDARY_PREF,
 	agentHiddenPaths,
 	parseClosedChildren,
+	projectBoundaryOf,
 	sidebarViewOf,
 } from "../shared/agent-control";
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
@@ -209,7 +211,7 @@ import {
 	safeStorageUnavailableReason,
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
-import { SidebarProjects } from "./sidebar-projects";
+import { projectOfFolder, SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
@@ -1354,6 +1356,13 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
+		// What a paired device's agent asks through the control tools is judged by this computer's own setting too.
+		boundary: {
+			mode: () => projectBoundaryOf(prefs.get(AGENT_PROJECT_BOUNDARY_PREF)).mode,
+			projectOf: async folder =>
+				(await projectOfFolder(folder)) ?? sidebarProjects.state().worktrees[folder] ?? null,
+			log: report => writeRuntimeLog(report),
+		},
 		renameStoredSession: async (sessionPath, name) => {
 			const omp = await systemOmp();
 			if (!omp.ok) throw new Error(omp.error);

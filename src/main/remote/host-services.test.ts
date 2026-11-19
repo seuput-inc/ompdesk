@@ -38,6 +38,7 @@ import type {
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { applySummaryChange, type SummaryDelta, type VersionedSummaries } from "../../shared/session-summary";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
+import { withCallerClaim, withHostClaim } from "../agent-control/boundary-claim";
 import { branchEvidence, branchFacts, landingFacts, type WorktreeRef } from "../agent-control/branches";
 import type { MemoryPageCopy } from "../ai-memory/client";
 import { serveMemoryStore } from "../ai-memory/memory-store-test-rig";
@@ -2483,6 +2484,51 @@ describe("LocalHostServices", () => {
 		await expect(services.call(x.peer, "sessions.pace", { sessionPath: "/hidden/session.jsonl" }, x)).rejects.toThrow(
 			"hid that session",
 		);
+	});
+
+	it("judges what a device's agent asks through the control tools by this computer's own project boundary", async () => {
+		const row = (id: string, cwd: string) => ({
+			path: `/s/${id}.jsonl`,
+			id,
+			title: `Title ${id}`,
+			cwd,
+			firstMessage: "",
+		});
+		const read: string[] = [];
+		const { services } = setup(60_000, {
+			sessionIndex: {
+				list: async () => [row("mine", "/repo/app"), row("theirs", "/repo/b")],
+				recordedCwd: async (path: string) => (path === "/s/mine.jsonl" ? "/repo/app" : "/repo/b"),
+				readMessages: async (path: string) => {
+					read.push(path);
+					return [];
+				},
+			} as unknown as HostServicesDeps["sessionIndex"],
+			boundary: { mode: () => "enforce", projectOf: async folder => folder, log: () => {} },
+		});
+		const x = new FakeConnection(peer("device-x"));
+		// What the device's link client sends for a control-tool call by a session that runs here, in /repo/app.
+		const asked = (params: object) =>
+			withCallerClaim(
+				{ caller: "/s/caller.jsonl", device: "this-host", cwd: "/repo/app", granted: false, own: [] },
+				() => withHostClaim("this-host", params),
+			);
+		await expect(
+			services.call(x.peer, "sessions.messages", asked({ sessionPath: "/s/theirs.jsonl" }), x),
+		).rejects.toThrow("other_project");
+		expect(read).toEqual([]);
+		await services.call(x.peer, "sessions.messages", asked({ sessionPath: "/s/mine.jsonl" }), x);
+		expect(read).toEqual(["/s/mine.jsonl"]);
+		const rows = (await services.call(x.peer, "sessions.list", asked({ scope: "global" }), x)) as SessionInfo[];
+		expect(rows.map(entry => [entry.path, entry.title, entry.cwd])).toEqual([
+			["/s/mine.jsonl", "Title mine", "/repo/app"],
+			["outside:1", null, ""],
+		]);
+		// A request that names no caller is the device's person or its own app: served as before.
+		await services.call(x.peer, "sessions.messages", { sessionPath: "/s/theirs.jsonl" }, x);
+		expect(read).toEqual(["/s/mine.jsonl", "/s/theirs.jsonl"]);
+		const all = (await services.call(x.peer, "sessions.list", { scope: "global" }, x)) as SessionInfo[];
+		expect(all.map(entry => entry.path)).toEqual(["/s/mine.jsonl", "/s/theirs.jsonl"]);
 	});
 
 	it("names who opened each session it lists to a device, and says null where it knows none", async () => {

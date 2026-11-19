@@ -24,6 +24,8 @@ export const IPC_ERROR_CODES = [
 	"session_kind_mismatch",
 	"session_open_in_tab",
 	"session_hidden",
+	// A paired device's agent asked for a session or folder of another project while this computer's project boundary enforces.
+	"other_project",
 	"session_not_open",
 	"no_messages",
 	"sidecar_not_connected",

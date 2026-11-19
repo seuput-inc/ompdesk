@@ -7,6 +7,7 @@
  * event on a link is main's.
  */
 import { EventEmitter } from "node:events";
+import { withHostClaim } from "../agent-control/boundary-claim";
 import { CORE_EXITED, core } from "../core/process";
 import { openAgain } from "../core/reopen";
 import type { HostHello } from "./host-server";
@@ -381,7 +382,8 @@ export class RemoteClient {
 		}, timeoutMs);
 		this.#pending.set(id, { resolve, reject, timer });
 		try {
-			link.send({ t: "req", id, method, params });
+			// A request an agent's control-tool call makes names its caller: the host judges it by its own project boundary.
+			link.send({ t: "req", id, method, params: withHostClaim(this.deviceId, params) });
 		} catch (error) {
 			clearTimeout(timer);
 			this.#pending.delete(id);

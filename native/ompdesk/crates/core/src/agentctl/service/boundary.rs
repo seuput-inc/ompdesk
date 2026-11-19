@@ -3,17 +3,18 @@
 //! Main names every project (`project` of a tab, a stored row and a summary, and the `project` ask for a folder); the
 //! core never reads a folder.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use super::AgentControl;
 use super::fail::{R, fail};
 use super::host::HostState;
 use super::text::waits;
 use super::types::{
-    ControlTab, SessionSummary, StoredSession, StoredWork, TabStatus, Target, Tool,
+    ControlTab, ScheduleRow, SessionSummary, StoredSession, StoredWork, TabStatus, Target, Tool,
 };
 use crate::agentctl::journal::send_outbox::receiver_key;
 use crate::agentctl::rules::boundary::{
@@ -22,12 +23,41 @@ use crate::agentctl::rules::boundary::{
 
 pub const OTHER_PROJECT: &str = "That session is in another project; another project's sessions show counts only. The user can allow this session to work across projects in its sidebar menu.";
 const OTHER_FOLDER: &str = "That folder is in another project, or OMPdesk cannot tell its project yet; this session starts work only in its own project. The user can allow this session to work across projects in its sidebar menu.";
-const APP_SESSIONS: &str = "ompdesk_app's sessions.* actions read and change every project's saved sessions; use ompdesk_sessions and the ompdesk_session_* tools, which keep to this project. The user can allow this session to work across projects in its sidebar menu.";
+const APP_SESSIONS: &str = "ompdesk_app's sessions.saved and sessions.search list every project's saved sessions; use ompdesk_sessions, which keeps to this project. The user can allow this session to work across projects in its sidebar menu.";
+pub const OTHER_SCHEDULE: &str = "That scheduled run is in another project; another project's schedules show as a count only. The user can allow this session to work across projects in its sidebar menu.";
 
-/// The tool call the running work belongs to, for the one line `log` mode writes of it.
+/// The asks whose work main may hand to a paired host over the link: each carries who is asking (`claim`), so the
+/// host judges the request by its own project boundary too.
+const CLAIMED_ASKS: [&str; 21] = [
+    "command",
+    "spawn",
+    "stored",
+    "storedMessages",
+    "sessionPace",
+    "answer",
+    "land",
+    "deleteSession",
+    "deleteStored",
+    "branchFacts",
+    "branchEvidence",
+    "mergeBranch",
+    "landing",
+    "removeSafeWorktree",
+    "discardWorktree",
+    "schedules.command",
+    "schedules.create",
+    "autopilot.plan",
+    "autopilot.start",
+    "autopilot.status",
+    "autopilot.stop",
+];
+
+/// The tool call the running work belongs to: the one line `log` mode writes of it, and who is calling.
 pub(super) struct Call {
     tool: &'static str,
     logged: AtomicBool,
+    /// Set once the call's caller is known (`AgentControl::claim`).
+    claim: OnceLock<Value>,
 }
 
 impl Call {
@@ -35,8 +65,19 @@ impl Call {
         Call {
             tool: tool.name(),
             logged: AtomicBool::new(false),
+            claim: OnceLock::new(),
         }
     }
+}
+
+/// Who is calling, for an ask of `method` made inside a tool call; None outside one and for an ask that stays here.
+pub(super) fn claim_for(method: &str) -> Option<Value> {
+    if !CLAIMED_ASKS.contains(&method) {
+        return None;
+    }
+    CALL.try_with(|call| call.claim.get().cloned())
+        .ok()
+        .flatten()
 }
 
 tokio::task_local! {
@@ -224,6 +265,10 @@ impl AgentControl {
         caller: &ControlTab,
         row: &StoredSession,
     ) -> BoundaryVerdict {
+        // Its own computer already left it out (a paired host that enforces): whatever this computer's mode says.
+        if row.outside {
+            return BoundaryVerdict::Refuse;
+        }
         let own = row.device == caller.device
             && caller.session_path.as_deref() == Some(row.path.as_str());
         if state.boundary.mode == BoundaryMode::Off || own {
@@ -321,17 +366,8 @@ impl AgentControl {
         if own || Self::granted(&state, caller) {
             return Ok(true);
         }
-        // A tab so new that main has not placed its own folder yet: asked now instead of refused.
-        let placed;
-        let caller = if caller.project.is_none() {
-            placed = ControlTab {
-                project: self.host.project(&caller.tab_id, None, None).await?,
-                ..caller.clone()
-            };
-            &placed
-        } else {
-            caller
-        };
+        let placed = self.placed(caller).await?;
+        let caller = &placed;
         let project = self.host.project(&caller.tab_id, folder, device).await?;
         match self.verdict(&state, caller, project.as_deref(), false, false) {
             BoundaryVerdict::Allow => Ok(true),
@@ -358,26 +394,182 @@ impl AgentControl {
         }
     }
 
-    /// `ompdesk_app`'s `sessions.*` actions name any project's saved sessions by file: refused whole while the
-    /// boundary filters, since they have no project filter of their own.
-    pub fn app_sessions_check(
+    /// `caller` with its project: a tab so new that main has not placed its folder yet is asked about now.
+    async fn placed(&self, caller: &ControlTab) -> R<ControlTab> {
+        if caller.project.is_some() {
+            return Ok(caller.clone());
+        }
+        Ok(ControlTab {
+            project: self.host.project(&caller.tab_id, None, None).await?,
+            ..caller.clone()
+        })
+    }
+
+    /// Who is calling, as a paired host reads it when a request of this call reaches it (`claim_for`): where the
+    /// caller runs and works, whether the person allowed it across projects, and the sessions and folders it opened.
+    pub(super) fn claim(&self, state: &HostState, caller: &ControlTab, tabs: &[ControlTab]) {
+        let mut own: Vec<String> = Vec::new();
+        {
+            let mem = self.mem();
+            let opened = mem.opened.get(&caller.tab_id);
+            for tab in tabs {
+                if state.parent_of(&tab.tab_id) == Some(caller.tab_id.as_str())
+                    || opened.is_some_and(|opened| opened.contains(&tab.tab_id))
+                {
+                    own.push(tab.cwd.clone());
+                    own.extend(tab.session_path.clone());
+                }
+            }
+            for key in mem.checked.get(&caller.tab_id).into_iter().flatten() {
+                own.extend(key.split_once('\n').map(|(_, path)| path.to_owned()));
+            }
+        }
+        if let Some(session) = caller.session_path.as_deref() {
+            for child in &state.closed_children {
+                if child.opened_by_session == session {
+                    own.push(child.path.clone());
+                    own.push(child.cwd.clone());
+                }
+            }
+        }
+        own.sort_unstable();
+        own.dedup();
+        let claim = json!({
+            "caller": caller.session_path.as_deref().unwrap_or(&caller.tab_id),
+            "device": caller.device,
+            "cwd": caller.cwd,
+            "granted": Self::granted(state, caller),
+            "own": own,
+        });
+        let _ = CALL.try_with(|call| call.claim.set(claim));
+    }
+
+    /// The schedules of one computer as `caller` may see them: those of its project (and its own wake-ups), and the
+    /// ones left out. Each is judged by the project of the folder it runs in.
+    pub async fn schedules_in_scope(
         &self,
         caller: &ControlTab,
-        action: &str,
-        names_session: bool,
-    ) -> R<()> {
-        let all = matches!(
-            action,
-            "sessions.saved" | "sessions.search" | "sessions.rename" | "sessions.delete"
-        ) || (action == "sessions.dump_bundle" && names_session);
+        device: Option<&str>,
+        rows: Vec<ScheduleRow>,
+    ) -> R<(Vec<ScheduleRow>, Vec<ScheduleRow>)> {
         let state = self.host.state();
-        if !all || state.boundary.mode == BoundaryMode::Off || Self::granted(&state, caller) {
+        if state.boundary.mode == BoundaryMode::Off || Self::granted(&state, caller) {
+            return Ok((rows, Vec::new()));
+        }
+        let caller = self.placed(caller).await?;
+        let mut projects: HashMap<String, Option<String>> = HashMap::new();
+        let (mut seen, mut hidden) = (Vec::new(), Vec::new());
+        for row in rows {
+            let own = device == caller.device.as_deref()
+                && row.wake_session.is_some()
+                && row.wake_session == caller.session_path;
+            if own {
+                seen.push(row);
+                continue;
+            }
+            let project = match projects.get(&row.cwd) {
+                Some(project) => project.clone(),
+                None => {
+                    let project = self
+                        .host
+                        .project(&caller.tab_id, Some(&row.cwd), Some(device))
+                        .await?;
+                    projects.insert(row.cwd.clone(), project.clone());
+                    project
+                }
+            };
+            match self.verdict(&state, &caller, project.as_deref(), false, false) {
+                BoundaryVerdict::Allow => seen.push(row),
+                BoundaryVerdict::Log => {
+                    self.log_crossing(&caller, &row.cwd, project.as_deref());
+                    seen.push(row);
+                }
+                BoundaryVerdict::Refuse => hidden.push(row),
+            }
+        }
+        Ok((seen, hidden))
+    }
+
+    /// Something that reaches every project at once (`what`): refused with `refusal` while the boundary keeps the
+    /// caller to its project, written down under `log`.
+    pub fn every_project(&self, caller: &ControlTab, what: &str, refusal: &str) -> R<()> {
+        let state = self.host.state();
+        if state.boundary.mode == BoundaryMode::Off || Self::granted(&state, caller) {
             return Ok(());
         }
         if state.boundary.mode == BoundaryMode::Log {
-            self.log_crossing(caller, action, None);
+            self.log_crossing(caller, what, None);
             return Ok(());
         }
-        fail(APP_SESSIONS)
+        fail(refusal)
+    }
+
+    /// `ompdesk_app` actions that reach saved sessions. `sessions.saved` and `sessions.search` list every project's
+    /// and are refused whole. An action that names sessions by file (`sessions.rename`, `.delete`, `.dump_bundle`,
+    /// `sidebar.pin_session`, `.archive_sessions`) is judged file by file, and a file no list knows is refused.
+    pub async fn app_check(
+        &self,
+        caller: &ControlTab,
+        action: &str,
+        args: Option<&Map<String, Value>>,
+    ) -> R<()> {
+        let state = self.host.state();
+        if state.boundary.mode == BoundaryMode::Off || Self::granted(&state, caller) {
+            return Ok(());
+        }
+        let text = |key: &str| -> Vec<String> {
+            args.and_then(|args| args.get(key))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        };
+        // The sessions.* actions act on the computer the caller runs on, the sidebar's on this one.
+        let (paths, device) = match action {
+            "sessions.saved" | "sessions.search" => {
+                return self.every_project(caller, action, APP_SESSIONS);
+            }
+            "sessions.rename" | "sessions.delete" => (text("sessionPath"), caller.device.clone()),
+            "sessions.dump_bundle" => (text("session"), caller.device.clone()),
+            "sidebar.pin_session" => (text("sessionPath"), None),
+            "sidebar.archive_sessions" => (
+                args.and_then(|args| args.get("sessionPaths"))
+                    .and_then(Value::as_array)
+                    .map(|paths| {
+                        paths
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                None,
+            ),
+            _ => return Ok(()),
+        };
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let rows = self.host.stored(device.as_deref(), None).await?;
+        for path in paths {
+            let unlisted;
+            let row = match rows.iter().find(|row| row.path == path) {
+                Some(row) => row,
+                None => {
+                    unlisted = StoredSession {
+                        path: path.clone(),
+                        device: device.clone(),
+                        ..StoredSession::default()
+                    };
+                    &unlisted
+                }
+            };
+            match self.row_verdict(&state, caller, row) {
+                BoundaryVerdict::Allow => {}
+                BoundaryVerdict::Log => self.log_crossing(caller, &path, row.project.as_deref()),
+                BoundaryVerdict::Refuse => return fail(OTHER_PROJECT),
+            }
+        }
+        Ok(())
     }
 }

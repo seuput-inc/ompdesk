@@ -70,6 +70,7 @@ import { failureOf, type SummaryAsk, type SummaryDelta, unsavedSessionKey } from
 import type { SidebarProjectsState } from "../../shared/sidebar-projects";
 import type { TerminalOperation } from "../../shared/terminal-types";
 import { isApprovalSelect } from "../../shared/tool-approval";
+import { hostClaimOf } from "../agent-control/boundary-claim";
 import { branchEvidence, branchFacts, landingFacts, mergeBranch, removeSafeWorktree } from "../agent-control/branches";
 import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
@@ -207,6 +208,13 @@ import {
 	type TabSignInArg,
 	type TabStatusArg,
 } from "./app-protocol";
+import {
+	type HostBoundaryDeps,
+	hostBoundary,
+	type RequestTarget,
+	scopedSchedules,
+	scopedSessions,
+} from "./host-boundary";
 import type { HostConnection, HostServices } from "./host-server";
 import { HostedTabView, labelForViewer } from "./hosted-view";
 import { createLinkEventSender, createReadEncoder, encodedReadKey, type LinkEventSender } from "./link-events";
@@ -275,6 +283,11 @@ export interface HostServicesDeps {
 		Partial<Pick<SessionIndex, "pace">>;
 	/** Session files this computer's user hid from agents (Sidebar › Hide from other agents); a device's agent never reads them. */
 	agentHidden?: () => ReadonlySet<string>;
+	/**
+	 * This computer's project boundary for what a paired device's agent asks through the control tools
+	 * (`host-boundary.ts`); absent: nothing is judged here.
+	 */
+	boundary?: HostBoundaryDeps;
 	/** Stored-file rename for a session no live tab holds (`omp` on this machine). */
 	renameStoredSession: (sessionPath: string, name: string) => Promise<void>;
 	/** The GUI-owned Work workspace, created on demand. */
@@ -597,6 +610,8 @@ export class LocalHostServices implements HostServices {
 	readonly #deps: HostServicesDeps;
 	readonly #graceMs: number;
 	readonly #tabs = new Map<string, HostTab>();
+	/** The hosted tabs a device's agent opened through the control tools (tab key → the calling session): its own. */
+	readonly #claimedOpens = new Map<string, string>();
 	/** Moves a device's command has on its way, by `resumeId` (turn-resume.ts `trackMove`). */
 	readonly #moves = new MovesInFlight();
 	/** Files a device sends in parts (`host.files.uploadPart`), by device and upload id, until the last part lands. */
@@ -1191,6 +1206,24 @@ export class LocalHostServices implements HostServices {
 		}
 		this.#conns.add(conn);
 		this.#connOf.set(peer.deviceId, conn);
+		// A request a device's agent made through the control tools names its caller: this computer's own project
+		// boundary judges what it reads or acts on before anything below serves it.
+		const boundary = this.#deps.boundary;
+		const claim = boundary ? hostClaimOf(params) : null;
+		const inScope =
+			boundary && claim
+				? await hostBoundary(
+						boundary,
+						peer.deviceId,
+						method,
+						params,
+						await this.#requestTarget(peer, method, params, claim.caller),
+					)
+				: null;
+		if (claim && method === "tab.open") {
+			const opened = this.#key(peer.deviceId, parse(RtabParams, method, params).rtab);
+			if (!this.#tabs.has(opened)) this.#claimedOpens.set(opened, claim.caller);
+		}
 		switch (method) {
 			case "tab.open":
 				return this.#open(peer, parse(OpenParams, method, params), conn);
@@ -1212,6 +1245,7 @@ export class LocalHostServices implements HostServices {
 			case "tab.close": {
 				const key = this.#key(peer.deviceId, parse(RtabParams, method, params).rtab);
 				if (!this.#tabs.has(key) && this.#opening.has(key)) this.#closedWhileOpening.add(key);
+				this.#claimedOpens.delete(key);
 				this.#closeTab(key);
 				return null;
 			}
@@ -1248,16 +1282,24 @@ export class LocalHostServices implements HostServices {
 				return null;
 			case "sessions.list": {
 				const { scope, cwd, versioned } = parse(SessionsListParams, method, params);
-				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd));
+				if (scope === "local") {
+					const rows = this.#decorated(await this.#deps.sessionIndex.list(scope, cwd));
+					return inScope ? scopedSessions(rows, inScope) : rows;
+				}
 				// Each read decorates the index's copy again (a tab here taking a session moves no journal) and keeps the
 				// version while nothing changed.
 				this.#deviceList.stale();
 				const list = await this.#deviceList.current();
-				return versioned ? list : list.sessions;
+				// The versioned list is the copy every window of the device shares: never one caller's cut of it.
+				if (versioned) return list;
+				return inScope ? scopedSessions(list.sessions, inScope) : list.sessions;
 			}
 			case "sessions.search": {
 				const { query, scope, cwd } = parse(SessionsSearchParams, method, params);
-				const candidates = await this.#deps.sessionIndex.list(scope, cwd);
+				const listed = await this.#deps.sessionIndex.list(scope, cwd);
+				const candidates: SessionInfo[] = [];
+				for (const info of listed)
+					if (!inScope || (await inScope({ session: info.path, folder: info.cwd }))) candidates.push(info);
 				return this.#deps.sessionIndex.searchContent(
 					query,
 					candidates.map(info => info.path),
@@ -1486,12 +1528,22 @@ export class LocalHostServices implements HostServices {
 			// Settings › Schedules and `ompdesk_schedule` of a device: this computer's own service checks the draft
 			// (folder, interval, time) and runs the schedule here, while this OMPdesk is open. A schedule the device
 			// saves is the device's: each of its runs, timed or run now, counts against its daily model limit here.
-			case "host.schedules.command":
-				return this.#deps.machine.schedules(parse(SchedulesCommandParams, method, params).request, peer.deviceId);
+			case "host.schedules.command": {
+				const state = await this.#deps.machine.schedules(
+					parse(SchedulesCommandParams, method, params).request,
+					peer.deviceId,
+				);
+				return inScope ? scopedSchedules(state, inScope) : state;
+			}
 			case "host.schedules.log":
 				return this.#deps.machine.scheduleLog(parse(SchedulesLogParams, method, params).runId);
-			case "host.schedules.create":
-				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
+			case "host.schedules.create": {
+				const created = await this.#deps.machine.createSchedule(
+					parse(SchedulesCreateParams, method, params).draft,
+					peer.deviceId,
+				);
+				return inScope ? { ...created, state: await scopedSchedules(created.state, inScope) } : created;
+			}
 			case "host.projects.command":
 				return this.#deps.machine.sidebarProjects(parse(ProjectsCommandParams, method, params).request);
 			// Agent control of a session this computer runs for the device: the git it would run on its own checkout.
@@ -1540,6 +1592,49 @@ export class LocalHostServices implements HostServices {
 			default:
 				throw codedError("unsupported", `Unknown method ${method}`);
 		}
+	}
+
+	/**
+	 * What a request reads or acts on, for the project boundary: the hosted tab it names, else a session file, else a
+	 * folder (a checkout, a worktree's base, a schedule's). Null for a list, which is filtered with its answer, and for
+	 * a request that names none of these.
+	 */
+	async #requestTarget(
+		peer: PeerInfo,
+		method: string,
+		params: unknown,
+		caller: string,
+	): Promise<RequestTarget | null> {
+		if (method === "sessions.list" || method === "sessions.search") return null;
+		const record = (value: unknown): Record<string, unknown> =>
+			typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+		const text = (value: unknown): string | undefined =>
+			typeof value === "string" && value.length > 0 ? value : undefined;
+		const given = record(params);
+		const rtab = text(given.rtab);
+		const key = rtab ? this.#key(peer.deviceId, rtab) : undefined;
+		const tab = key ? this.#tabs.get(key) : undefined;
+		if (tab)
+			return {
+				folder: tab.sidecar.cwd,
+				...(tab.sessionFile ? { session: tab.sessionFile } : {}),
+				...(key && this.#claimedOpens.get(key) === caller ? { opened: true } : {}),
+			};
+		const session = text(given.sessionPath);
+		if (session) return { session, folder: await this.#deps.sessionIndex.recordedCwd(session).catch(() => null) };
+		const request = record(given.request);
+		const folder =
+			text(given.cwd) ??
+			text(record(given.worktree).path) ??
+			text(given.baseCwd) ??
+			text(record(given.draft).cwd) ??
+			text(record(request.draft).cwd);
+		if (folder) return { folder };
+		// A schedule named by its id is judged by the folder it runs in.
+		const id = method === "host.schedules.command" ? text(request.id) : undefined;
+		if (!id) return null;
+		const held = await this.#deps.machine.schedules({ action: "get" }, peer.deviceId);
+		return { folder: held.schedules.find(schedule => schedule.id === id)?.cwd ?? null };
 	}
 
 	disconnected(peer: PeerInfo, conn: HostConnection): void {

@@ -783,7 +783,10 @@ impl AgentControl {
             };
             let mut mem = self.mem();
             for row in rows {
-                mem.stored.set(&row.id.clone(), row);
+                // A row its own computer left out names nothing a call could reach.
+                if !row.outside {
+                    mem.stored.set(&row.id.clone(), row);
+                }
             }
             Ok(())
         };

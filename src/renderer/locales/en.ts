@@ -6241,7 +6241,7 @@ export const en: Record<string, string> = {
 		"On by default: agents may stop or close sessions they did not open, merge a session's branch, schedule runs and start Autopilot (not a release or main) without asking. Deleting a saved session they did not open still asks. Off: all of these ask first.",
 	"settings.gui.projectBoundary": "Keep agents to their own project",
 	"settings.gui.projectBoundaryDesc":
-		"Enforce: an agent's OMPdesk tools reach only its own project's sessions, and other projects' sessions show as counts. Log only: nothing is blocked, and each call that would be is written to the runtime log. To let one session work across projects, allow it from its sidebar menu. This prevents accidents and is not a security boundary: session files stay readable on disk.",
+		"Enforce: an agent's OMPdesk tools reach only its own project's sessions, schedules and folders, and other projects' show as counts. Log only: nothing is blocked, and each call that would be is written to the runtime log. To let one session work across projects, allow it from its sidebar menu. Not blocked even in Enforce: reading session files on disk (bash or any program), a schedule's file-watch trigger, the sidebar's project list in app actions, and on a paired computer what the other computer's person, its app actions or its background passes ask. This prevents accidents and is not a security boundary.",
 	"settings.gui.projectBoundary.off": "Off",
 	"settings.gui.projectBoundary.log": "Log only",
 	"settings.gui.projectBoundary.enforce": "Enforce",

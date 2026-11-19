@@ -61,9 +61,28 @@ import { CoreError, core } from "../core/process";
 import { RpcTimeoutError } from "../rpc-client";
 import type { Pace } from "../session-pace";
 import type { FileEdits } from "../web/file-edit-reports";
+import { withCallerClaim } from "./boundary-claim";
 import type { BranchEvidence, BranchFacts, LandingFacts, MergeOutcome, WorktreeRef, WorktreeRemoval } from "./branches";
 import type { MailDelivery } from "./mail";
 import { ARGS, looseArgs, type OpenOne } from "./tools";
+
+/**
+ * Every handler, run as the caller the core named with its ask (`boundaryCaller`): a request main sends a paired host
+ * while it answers carries that caller (`boundary-claim.ts`).
+ */
+function claimed<H extends Record<string, (args: never) => unknown>>(handlers: H): H {
+	const wrapped = { ...handlers };
+	const slots: Record<string, unknown> = wrapped;
+	for (const [method, handler] of Object.entries(handlers)) {
+		const run = handler as (args: unknown) => unknown;
+		slots[method] = (args: unknown) =>
+			withCallerClaim(
+				typeof args === "object" && args !== null && "boundaryCaller" in args ? args.boundaryCaller : undefined,
+				() => run(args),
+			);
+	}
+	return wrapped;
+}
 
 export interface ControlAsk {
 	id: string;
@@ -164,6 +183,8 @@ export interface StoredSession {
 	snippet?: string;
 	/** The project its folder belongs to, as `ControlTab.project`; absent while unknown (a folder that is gone). */
 	project?: string;
+	/** Its own computer left it out of what the caller may reach (`SessionInfo.outsideProject`): counted, never named. */
+	outside?: true;
 }
 
 /** Where a saved session no tab of this app holds is open (`StoredSession.elsewhere`). */
@@ -743,7 +764,7 @@ export class AgentControl {
 	constructor(host: AgentControlHost, options: AgentControlOptions = {}) {
 		this.#host = host;
 		this.#options = options;
-		this.#port = new CorePort<HostSnapshot>(this.#handlers(), () => this.#snapshot());
+		this.#port = new CorePort<HostSnapshot>(claimed(this.#handlers()), () => this.#snapshot());
 		this.#unobserve = host.observe(() => this.#port.push());
 		// The core's runtime has timers of its own (the sweep of the opened sessions, redelivery): it runs from the
 		// start, not from the first call.

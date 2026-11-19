@@ -1973,6 +1973,12 @@ export interface SessionInfo {
 	 * and from an older host.
 	 */
 	heldOnHost?: true;
+	/**
+	 * Only in a paired host's answer to an agent's control-tool call while that host's project boundary enforces: a
+	 * session of another project than the caller's, with nothing of it in the row (its id and path are placeholders).
+	 * The control tools count it and never name it.
+	 */
+	outsideProject?: true;
 }
 
 // ============================================================================

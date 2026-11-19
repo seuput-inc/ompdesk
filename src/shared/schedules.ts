@@ -117,6 +117,11 @@ export interface SchedulesState {
 	runs: ScheduleRun[];
 	/** Next start per schedule id (ISO); null when it will not run (disabled or paused). */
 	nextRuns: Record<string, string | null>;
+	/**
+	 * Only in a paired host's answer to an agent's control-tool call while that host's project boundary enforces: how
+	 * many more schedules it holds that the calling session may not reach (they are left out of `schedules`).
+	 */
+	outside?: number;
 }
 
 export type SchedulesRequest =

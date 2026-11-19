@@ -677,7 +677,10 @@ async fn autopilot_stop_ends_a_run_after_its_cycle_and_refuses_what_is_no_run() 
         .find(|(method, _)| method == "autopilot.stop")
         .cloned()
         .unwrap();
-    assert_eq!(stop.1, json!({ "tabId": "run00001", "now": false }));
+    assert_eq!(stop.1["tabId"], "run00001");
+    assert_eq!(stop.1["now"], false);
+    // The ask names its caller, so a paired host judges what the stop sends it.
+    assert_eq!(stop.1["boundaryCaller"]["caller"], "/s/boss.jsonl");
     // Nothing stays marked as closing once it returned.
     assert!(!control.mem().closing.contains("run00001"));
     let (text, is_error) = run(

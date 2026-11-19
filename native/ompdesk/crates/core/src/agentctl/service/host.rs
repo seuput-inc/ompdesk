@@ -413,8 +413,13 @@ impl Host {
     pub(super) async fn ask<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
-        args: Value,
+        mut args: Value,
     ) -> R<T> {
+        if let Some(claim) = super::boundary::claim_for(method)
+            && let Some(args) = args.as_object_mut()
+        {
+            args.insert("boundaryCaller".to_owned(), claim);
+        }
         Ok(self.port.ask(method, &args).await?)
     }
 

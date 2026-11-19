@@ -842,6 +842,7 @@ export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({
 	),
 	runs: z.array(ScheduleRunSchema),
 	nextRuns: z.record(z.string(), z.string().nullable()),
+	outside: z.number().int().nonnegative().optional(),
 });
 
 /** `host.schedules.create` reply: the id this save made and the state after it. */

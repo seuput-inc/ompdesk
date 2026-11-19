@@ -841,6 +841,7 @@ impl AgentControl {
         let Some(caller) = self.caller_of(&state, caller_tab_id, tabs) else {
             return fail(TAB_GONE);
         };
+        self.claim(&state, &caller, tabs);
         let args = |_: Tool| -> R<Value> { Ok(parsed.clone()) };
         fn typed<T: serde::de::DeserializeOwned>(value: Value, tool: Tool) -> R<T> {
             serde_json::from_value(value).map_err(|error| {

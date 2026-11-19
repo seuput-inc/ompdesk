@@ -51,6 +51,17 @@ fn rig(
     extra: Value,
     reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
+    rig_with(id, tabs, extra, Caps::default(), reply)
+}
+
+/// `rig` over a main that has what `caps` names (Autopilot's coordinator).
+fn rig_with(
+    id: u64,
+    tabs: Vec<Value>,
+    extra: Value,
+    caps: Caps,
+    reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
+) -> (AgentControl, Asked) {
     let windows: Map<String, Value> = tabs
         .iter()
         .map(|tab| (tab["tabId"].as_str().unwrap().to_owned(), json!("w")))
@@ -74,13 +85,7 @@ fn rig(
         ..Tuning::default()
     };
     (
-        AgentControl::new(
-            port,
-            Caps::default(),
-            &Files::default(),
-            tuning,
-            system_clock(),
-        ),
+        AgentControl::new(port, caps, &Files::default(), tuning, system_clock()),
         asked,
     )
 }
@@ -749,6 +754,11 @@ async fn a_caller_the_person_allowed_across_projects_reaches_another_project() {
         .run("a", "ompdesk_session_read", json!({ "session": "b" }), None)
         .await;
     assert!(!read.is_error, "{}", read.text);
+    // What main may hand to a paired host says who asks: a host that enforces judges the request too.
+    assert_eq!(
+        names(&asked, "command")[0]["boundaryCaller"],
+        json!({ "caller": "/s/a_aaaa.jsonl", "device": null, "cwd": "/pa", "granted": true, "own": [] })
+    );
     let list = control.run("a", "ompdesk_sessions", json!({}), None).await;
     assert!(list.text.contains("Secret plan"), "{}", list.text);
     // The grant is that session's alone: another caller of the same project is still kept out.
@@ -879,6 +889,370 @@ async fn a_schedule_in_another_project_s_folder_and_the_app_s_session_actions_ar
         )
         .await;
     assert!(app.is_error);
-    assert!(app.text.contains("sessions.* actions"), "{}", app.text);
+    assert!(
+        app.text.contains("sessions.saved and sessions.search"),
+        "{}",
+        app.text
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn an_autopilot_start_on_another_project_s_repository_is_refused_and_starts_nothing() {
+    let (control, asked) = rig_with(
+        7_330,
+        vec![tab_in("a", "/pa")],
+        json!({ "boundary": { "mode": "enforce" } }),
+        Caps {
+            autopilot: true,
+            ..Caps::default()
+        },
+        |method, args| match method {
+            "project" => Ok(json!("/pb")),
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            other => main_of(other, args),
+        },
+    );
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_autopilot",
+            json!({ "action": "start", "folder": "/pb" }),
+            None,
+        )
+        .await;
+    assert!(outcome.is_error);
+    assert!(
+        outcome.text.contains("That folder is in another project"),
+        "{}",
+        outcome.text
+    );
+    // No session to start from, no card, no plan and no run: main was asked for the folder's project alone.
+    assert_eq!(methods(&asked), ["args.parse", "project"]);
+    // The caller's own repository goes on to the coordinator.
+    let own = control
+        .run("a", "ompdesk_autopilot", json!({ "action": "start" }), None)
+        .await;
+    assert!(!own.text.contains("another project"), "{}", own.text);
+    assert_eq!(names(&asked, "autopilot.plan").len(), 1);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_snapshot_that_names_no_project_fails_closed() {
+    // Main's cache is empty (no tab carries a project) and main can place no folder.
+    let bare = |id: &str| tab(id, &format!("/s/{id}_{}.jsonl", id.repeat(4)));
+    let (control, asked) = rig(
+        7_331,
+        vec![bare("a"), titled(bare("b"), "Secret plan")],
+        json!({ "boundary": { "mode": "enforce" } }),
+        |method, args| match method {
+            "project" => Ok(Value::Null),
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            "stored" => Ok(
+                json!([{ "id": "zq9x", "path": "/s/z_zq9x.jsonl", "title": "Old secret", "cwd": "/w", "modified": "2026-11-01", "messages": 2, "status": "idle" }]),
+            ),
+            other => main_of(other, args),
+        },
+    );
+    for session in ["b", "Secret plan", "zq9x"] {
+        let read = control
+            .run(
+                "a",
+                "ompdesk_session_read",
+                json!({ "session": session }),
+                None,
+            )
+            .await;
+        assert_eq!(read.text, OTHER_PROJECT, "{session}");
+    }
+    let open = control.run("a", "ompdesk_sessions", json!({}), None).await;
+    assert!(
+        open.text
+            .contains("\n1 session in 1 other project: 0 running, 0 waiting for the user, 1 idle"),
+        "{}",
+        open.text
+    );
+    assert!(!open.text.contains("ecret"), "{}", open.text);
+    let stored = control
+        .run("a", "ompdesk_sessions", json!({ "scope": "stored" }), None)
+        .await;
+    assert!(
+        stored
+            .text
+            .starts_with("0 sessions saved on this computer:"),
+        "{}",
+        stored.text
+    );
+    assert!(!stored.text.contains("ecret"), "{}", stored.text);
+    // The same folder as the caller's is still not known to be the same project: refused, and nothing is made.
+    let opened = control
+        .run(
+            "a",
+            "ompdesk_session_open",
+            json!({ "message": "x", "folder": "/w" }),
+            None,
+        )
+        .await;
+    assert!(
+        opened.text.contains("cannot tell its project yet"),
+        "{}",
+        opened.text
+    );
+    assert!(names(&asked, "spawn").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn another_project_s_schedules_are_a_count_and_refuse_every_change() {
+    let schedule = |id: &str, name: &str, cwd: &str| json!({ "id": id, "createdAt": "", "name": name, "prompt": "p", "cwd": cwd, "frequency": { "kind": "interval", "minutes": 30 }, "enabled": true });
+    let mut wake = schedule("s-wake-3333", "[agent] wake me", "/elsewhere");
+    wake["wakeSession"] = json!("/s/a_aaaa.jsonl");
+    let state = json!({
+        "schedules": [
+            schedule("s-own-1111", "[agent] mine", "/pa/sub"),
+            schedule("s-oth-2222", "[agent] theirs", "/pb"),
+            wake
+        ],
+        "outside": 2
+    });
+    let (control, asked) = rig(
+        7_332,
+        vec![tab_in("a", "/pa")],
+        json!({ "boundary": { "mode": "enforce" }, "scheduleDevices": [""], "manageEnabled": true }),
+        move |method, args| match method {
+            "project" => Ok(json!(
+                if args["folder"].as_str().unwrap_or("").starts_with("/pa") {
+                    "/pa"
+                } else {
+                    "/other"
+                }
+            )),
+            "schedules.command" => Ok(state.clone()),
+            other => main_of(other, args),
+        },
+    );
+    let list = control
+        .run("a", "ompdesk_schedule", json!({ "action": "list" }), None)
+        .await;
+    assert!(!list.is_error, "{}", list.text);
+    // Its own project's schedule and its own wake-up (whatever folder that names) are listed.
+    assert!(list.text.contains("- s-own-1111 "), "{}", list.text);
+    assert!(list.text.contains("- s-wake-3333 "), "{}", list.text);
+    // The other project's, and the two their own computer left out, are a count.
+    assert!(
+        list.text.ends_with("\n3 scheduled runs on this computer in other projects (another project's schedules show as a count only)"),
+        "{}",
+        list.text
+    );
+    for named in ["s-oth-2222", "theirs", "/pb"] {
+        assert!(!list.text.contains(named), "{named}: {}", list.text);
+    }
+    for action in ["runs", "update", "pause", "resume", "run", "cancel"] {
+        let outcome = control
+            .run(
+                "a",
+                "ompdesk_schedule",
+                json!({ "action": action, "id": "s-oth-2222", "name": "renamed" }),
+                None,
+            )
+            .await;
+        assert!(outcome.is_error, "{action}");
+        assert_eq!(
+            outcome.text,
+            crate::agentctl::service::boundary::OTHER_SCHEDULE,
+            "{action}"
+        );
+    }
+    // Nothing but reads reached the Schedules service.
+    assert!(
+        names(&asked, "schedules.command")
+            .iter()
+            .all(|sent| sent["request"]["action"] == "get")
+    );
+    let cancelled = control
+        .run(
+            "a",
+            "ompdesk_schedule",
+            json!({ "action": "cancel", "id": "s-own-1111" }),
+            None,
+        )
+        .await;
+    assert!(!cancelled.is_error, "{}", cancelled.text);
+    assert!(
+        names(&asked, "schedules.command")
+            .iter()
+            .any(|sent| sent["request"]["id"] == "s-own-1111")
+    );
+    // A trigger that watches another project's repository, or every project's sessions, is refused before a save.
+    let triggers = [
+        (
+            json!({ "source": "git", "repo": "/pb", "branch": "main" }),
+            "That folder is in another project",
+        ),
+        (
+            json!({ "source": "session", "events": ["idle"], "folder": "/pb" }),
+            "That folder is in another project",
+        ),
+        (
+            json!({ "source": "session", "events": ["idle"] }),
+            "A session trigger needs on.folder",
+        ),
+    ];
+    for (on, refusal) in triggers {
+        let outcome = control
+            .run(
+                "a",
+                "ompdesk_schedule",
+                json!({ "action": "create", "name": "n", "prompt": "p", "on": on }),
+                None,
+            )
+            .await;
+        assert!(outcome.is_error, "{on}");
+        assert!(outcome.text.contains(refusal), "{on}: {}", outcome.text);
+    }
+    assert!(names(&asked, "schedules.create").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_report_to_another_project_s_session_is_refused() {
+    let (control, asked) = rig(
+        7_333,
+        vec![
+            tab_in("a", "/pa"),
+            titled(tab_in("b", "/pb"), "Secret plan"),
+        ],
+        json!({ "boundary": { "mode": "enforce" } }),
+        main_of,
+    );
+    for to in ["b", "bbbb", "Secret plan"] {
+        let outcome = control
+            .run(
+                "a",
+                "ompdesk_report",
+                json!({ "kind": "note", "text": "hello", "to": to }),
+                None,
+            )
+            .await;
+        assert!(outcome.is_error, "{to}");
+        assert_eq!(outcome.text, OTHER_PROJECT, "{to}");
+    }
+    assert!(names(&asked, "mail").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn the_app_s_sidebar_and_session_actions_refuse_another_project_s_session_file() {
+    let (control, asked) = rig(
+        7_334,
+        vec![tab_in("a", "/pa")],
+        json!({ "boundary": { "mode": "enforce" } }),
+        |method, args| match method {
+            "stored" => Ok(json!([
+                saved_in("own1", "Mine", "/pa"),
+                saved_in("zq9x", "Old secret", "/pb")
+            ])),
+            other => main_of(other, args),
+        },
+    );
+    let theirs = "/s/z_zq9x.jsonl";
+    let calls = [
+        (
+            "sidebar.pin_session",
+            json!({ "sessionPath": theirs, "pinned": true }),
+        ),
+        (
+            "sidebar.archive_sessions",
+            json!({ "sessionPaths": ["/s/z_own1.jsonl", theirs], "archived": true }),
+        ),
+        (
+            "sidebar.archive_sessions",
+            json!({ "sessionPaths": ["/s/no_such.jsonl"], "archived": true }),
+        ),
+        (
+            "sessions.rename",
+            json!({ "sessionPath": theirs, "name": "x" }),
+        ),
+        ("sessions.delete", json!({ "sessionPath": theirs })),
+    ];
+    for (action, args) in calls {
+        let outcome = control
+            .run(
+                "a",
+                "ompdesk_app",
+                json!({ "action": action, "args": args }),
+                None,
+            )
+            .await;
+        assert!(outcome.is_error, "{action}");
+        assert_eq!(outcome.text, OTHER_PROJECT, "{action} {args}");
+    }
+    // The app was asked for nothing: each refusal came before the action ran.
+    assert!(
+        methods(&asked)
+            .iter()
+            .all(|method| !method.starts_with("appPorts"))
+    );
+    // A session of the caller's own project passes the boundary (this rig has no app to run the action in).
+    let own = control
+        .run(
+            "a",
+            "ompdesk_app",
+            json!({ "action": "sidebar.pin_session", "args": { "sessionPath": "/s/z_own1.jsonl", "pinned": true } }),
+            None,
+        )
+        .await;
+    assert!(!own.text.contains("another project"), "{}", own.text);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_row_its_own_computer_left_out_is_counted_and_never_named_whatever_the_mode_here() {
+    // A paired host that enforces answers a blank row for a session the caller may not reach there.
+    let (control, _) = rig(
+        7_335,
+        vec![tab_in("a", "/pa")],
+        json!({}),
+        |method, args| match method {
+            "stored" => Ok(json!([
+                saved_in("own1", "Mine", "/pa"),
+                { "id": "outside:1", "path": "outside:1", "title": "", "cwd": "", "modified": "", "messages": 0, "status": "unknown", "outside": true }
+            ])),
+            other => main_of(other, args),
+        },
+    );
+    let stored = control
+        .run("a", "ompdesk_sessions", json!({ "scope": "stored" }), None)
+        .await;
+    assert!(
+        stored
+            .text
+            .starts_with("1 session saved on this computer:\n- own1 \"Mine\""),
+        "{}",
+        stored.text
+    );
+    assert!(
+        stored
+            .text
+            .contains("\n1 session in 1 other project: 0 running, 0 waiting for the user, 1 idle"),
+        "{}",
+        stored.text
+    );
+    assert!(!stored.text.contains("outside:1"), "{}", stored.text);
+    let read = control
+        .run(
+            "a",
+            "ompdesk_session_read",
+            json!({ "session": "outside:1" }),
+            None,
+        )
+        .await;
+    assert!(read.is_error);
+    assert!(
+        read.text.starts_with("No session \"outside:1\""),
+        "{}",
+        read.text
+    );
     control.host.port().close();
 }

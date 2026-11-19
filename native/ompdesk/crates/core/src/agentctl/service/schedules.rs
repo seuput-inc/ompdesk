@@ -28,6 +28,7 @@ fn row_of(state: &SchedulesState, schedule: &Schedule) -> ScheduleRow {
             .find(|run| run.schedule_id == schedule.id)
             .map(|run| run.status.clone()),
         wakes: schedule.draft.wake_session.is_some(),
+        wake_session: schedule.draft.wake_session.clone(),
     }
 }
 
@@ -39,12 +40,18 @@ impl ScheduleSource<'_> {
     }
 
     pub async fn list(&self) -> R<Vec<ScheduleRow>> {
+        Ok(self.listed().await?.0)
+    }
+
+    /// The schedules, and how many more their own computer left out of what the caller may reach.
+    pub async fn listed(&self) -> R<(Vec<ScheduleRow>, usize)> {
         let state = self.command(json!({ "action": "get" })).await?;
-        Ok(state
+        let rows = state
             .schedules
             .iter()
             .map(|schedule| row_of(&state, schedule))
-            .collect())
+            .collect();
+        Ok((rows, state.outside))
     }
 
     /// The id comes from the save itself: a diff against an earlier read would hand a concurrent create's schedule to

@@ -296,6 +296,10 @@ pub struct StoredSession {
     /// The project its folder belongs to; None while main has not resolved it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Its own computer left it out of what this caller may reach (a paired host that enforces its project
+    /// boundary): a row with nothing in it, counted and never named.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub outside: bool,
 }
 
 /// `ControlTab | StoredSession`: what a name resolves to (`"busy" in target` is `Tab`).
@@ -758,6 +762,9 @@ pub struct ScheduleRow {
     /// A wake-up of a session on this computer (`target: "self"`), not a fresh run.
     #[serde(default, skip_serializing_if = "is_false")]
     pub wakes: bool,
+    /// The session a wake-up wakes: the caller's own schedule when it is the caller's session.
+    #[serde(skip)]
+    pub wake_session: Option<String>,
 }
 
 /// One kept run of a schedule (`ScheduleRun`).
@@ -826,6 +833,10 @@ pub struct SchedulesState {
     pub runs: Vec<ScheduleRun>,
     #[serde(default)]
     pub next_runs: HashMap<String, Option<String>>,
+    /// Schedules its own computer left out of what this caller may reach (a paired host that enforces its project
+    /// boundary): a count only.
+    #[serde(default, skip_serializing)]
+    pub outside: usize,
 }
 
 /// `schedules.create`'s answer: the new id and the state after it.
