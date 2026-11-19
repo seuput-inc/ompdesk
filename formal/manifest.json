@@ -260,7 +260,7 @@
 				"resources/gui-bridge/quit-journal.ts",
 				"resources/gui-bridge/quit-journal-core.ts#replayOfEarlierLife"
 			],
-			"syncCommit": "c1c9a8279310ab758ceea0a13b1d98919b5448dc"
+			"syncCommit": "43a02f00fb460ea023311d5e43922c33cb5f5eaa"
 		}
 	]
 }
