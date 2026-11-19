@@ -328,21 +328,24 @@ function Assert-NoGpuRelaunchLoop {
 	}
 }
 
-# Headless (no tray, no automatic machine setup); the CDP page list proves the window loaded its renderer.
-function Assert-Launches {
+# Headless (no tray, no automatic machine setup). A release build of the Tauri shell opens no DevTools port (only the
+# test-automation build does), so the window is proven the way the installer's own start check proves it
+# (installer.nsh ompStartAndVerify): main writes <userData>\app-started.json with this version once its first window's
+# page loaded (update-log-core.ts START_MARK_FILE).
+function Assert-Launches([string] $Version) {
+	$mark = Join-Path $env:APPDATA 'ompdesk\app-started.json'
+	Remove-Item -LiteralPath $mark -Force -ErrorAction SilentlyContinue
 	$env:OMP_GUI_HEADLESS = '1'
-	Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9333' | Out-Null
+	Start-Process -FilePath $exe | Out-Null
 	Remove-Item Env:OMP_GUI_HEADLESS
-	$script:page = $null
+	$script:started = $null
 	Wait-Until {
 		try {
-			$script:page = Invoke-RestMethod -Uri 'http://127.0.0.1:9333/json/list' -TimeoutSec 2 |
-				Where-Object { $_.type -eq 'page' -and $_.url -like '*index.html*' } |
-				Select-Object -First 1
-		} catch { $script:page = $null }
-		$null -ne $script:page
-	} 120 'the installed app to load its window'
-	Ok "the installed app opened its window: '$($script:page.title)' $($script:page.url)"
+			$script:started = Get-Content -LiteralPath $mark -Raw -ErrorAction Stop | ConvertFrom-Json
+		} catch { $script:started = $null }
+		$null -ne $script:started -and $script:started.version -eq $Version
+	} 120 'the installed app to load its first window'
+	Ok "the installed app loaded its first window: version $($script:started.version), pid $($script:started.pid)"
 	Stop-App
 }
 
@@ -412,7 +415,7 @@ switch ($Mode) {
 	'silent' {
 		Invoke-SilentSetup $Setup @('/S')
 		$entry = Assert-PerUserInstall
-		Assert-Launches
+		Assert-Launches $entry.DisplayVersion
 		Assert-AiMemoryService
 		try {
 			# The staged ai-memory.exe is running from the tools dir, not the install folder: the uninstaller must not care.
