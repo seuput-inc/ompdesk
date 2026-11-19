@@ -82,6 +82,7 @@ allow-list beside the marker.
 | A title editor's ask-for-a-title button | `AutoTitleButton` | a sparkle button of your own |
 | A code a phone camera reads (pairing) | `QrCode` (drawn locally, never by an image service) | an image URL |
 | The app's mark | `BrandMark` | an inline copy of the π |
+| The picture of a repository a row works in (a session row's leading mark) | `ProjectArtwork` (`src`: the repository's image or its owner's avatar, a `data:` URI or a URL the app serves; with none, or one that fails, the name's letter on a hue from the name; decorative, the row says the name in words) | an `<img>` of your own, a letter in a coloured span |
 | The UI language switch | `LangSwitcher` | a language select of your own |
 
 ## Layer plumbing
