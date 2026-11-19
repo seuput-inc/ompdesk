@@ -259,8 +259,15 @@ async function testSshHost(params: unknown) {
 	}
 }
 
-export const methods: BridgeMethods = guard("ssh", {
-	ssh_hosts: async (_params, env) => sshHosts(env.session()),
-	ssh_manage: async (params, env) => manageSshHost(env.session(), params),
-	ssh_test: async params => testSshHost(params),
-});
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("ssh", {
+		ssh_hosts: async (_params, env) => sshHosts(env.session()),
+	}),
+	...guard("sshManage", {
+		ssh_manage: async (params, env) => manageSshHost(env.session(), params),
+	}),
+	...guard("sshTest", {
+		ssh_test: async params => testSshHost(params),
+	}),
+};

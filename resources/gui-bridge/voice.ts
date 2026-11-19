@@ -108,11 +108,17 @@ const dictation = new SttDictation<AgentSession>(sttSetup, {
 	download: (key, onProgress) => downloadSttModel(key, progress => onProgress(progress.loaded, progress.total)),
 });
 
-export const methods: BridgeMethods = guard("voice", {
-	transcribe_audio: async (params, env) => transcribe(env.session(), params),
-	synthesize_speech: async (params, env) => {
-		const text = asRecord(params).text;
-		return synthesize(env.session(), typeof text === "string" ? text : "");
-	},
-	stt_prepare: async (params, env) => dictation.sttPrepare(params, env.session()),
-});
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	// One id for both: `stt_prepare` gets the model `transcribe_audio` runs on.
+	...guard("dictation", {
+		transcribe_audio: async (params, env) => transcribe(env.session(), params),
+		stt_prepare: async (params, env) => dictation.sttPrepare(params, env.session()),
+	}),
+	...guard("readAloud", {
+		synthesize_speech: async (params, env) => {
+			const text = asRecord(params).text;
+			return synthesize(env.session(), typeof text === "string" ? text : "");
+		},
+	}),
+};

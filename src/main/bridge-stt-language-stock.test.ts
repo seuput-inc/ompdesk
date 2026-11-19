@@ -24,7 +24,7 @@ export default function (pi) {
   try {
    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
    const env = { pi, session: () => session, context: () => undefined, emit: () => {} };
-   out.unavailable = await probe(env, ["voice"]);
+   out.unavailable = await probe(env, ["dictation", "readAloud"]);
    out.cached = await isSttModelCached(DEFAULT_STT_MODEL_KEY);
    out.catalog = STT_MODELS.map(model => ({ key: model.key, englishOnly: model.englishOnly, description: model.description }));
    if (out.cached && out.unavailable.length === 0) out.preparedEn = await methods.stt_prepare({ language: "en" }, env);

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
 	ALL_FEATURES,
@@ -21,6 +22,79 @@ import {
 import { en } from "../renderer/locales/en";
 
 const BRIDGE_DIR = path.join(__dirname, "..", "..", "resources", "gui-bridge");
+
+function parseBridgeFile(relative: string): ts.SourceFile {
+	const text = fs.readFileSync(path.join(BRIDGE_DIR, relative), "utf8");
+	return ts.createSourceFile(relative, text, ts.ScriptTarget.Latest, true);
+}
+
+/** A property's key as written: `transcribe_audio`, `"sessions.tree"`, `[M.arm]`. */
+const propertyName = (property: ts.ObjectLiteralElementLike): string => property.name?.getText() ?? "…";
+
+interface GuardCall {
+	file: string;
+	/** The capability ids the guard names, the action's own first. */
+	ids: string[];
+	/** The method keys, or the expression itself when the methods are not a plain object literal. */
+	methods: string[];
+	/** More than one method, or a table the audit cannot count (a variable, a spread): both need a stated reason. */
+	several: boolean;
+}
+
+/** Every `guard(ids, { … })` call in the bridge's source, read from the syntax tree (quoted and bare keys alike). */
+function guardCalls(): GuardCall[] {
+	const calls: GuardCall[] = [];
+	const files = fs
+		.readdirSync(BRIDGE_DIR, { recursive: true, encoding: "utf8" })
+		.filter(entry => entry.endsWith(".ts") && !entry.endsWith(".d.ts"));
+	for (const file of files) {
+		const visit = (node: ts.Node): void => {
+			if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "guard") {
+				const [features, methods] = node.arguments;
+				const literals = ts.isArrayLiteralExpression(features) ? [...features.elements] : [features];
+				if (!literals.every(ts.isStringLiteral)) throw new Error(`${file}: guard() takes literal capability ids`);
+				const counted =
+					ts.isObjectLiteralExpression(methods) && !methods.properties.some(ts.isSpreadAssignment)
+						? methods.properties.map(propertyName)
+						: undefined;
+				calls.push({
+					file,
+					ids: literals.map(literal => literal.text),
+					methods: counted ?? [methods.getText()],
+					several: counted === undefined || counted.length > 1,
+				});
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(parseBridgeFile(file));
+	}
+	return calls;
+}
+
+/** The REQUIREMENTS entries that carry a doc comment (`/** … *\/` right above the entry). */
+function documentedRequirements(): Set<string> {
+	const source = parseBridgeFile("capabilities.ts");
+	const documented = new Set<string>();
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === "REQUIREMENTS" &&
+			node.initializer &&
+			ts.isObjectLiteralExpression(node.initializer)
+		) {
+			for (const property of node.initializer.properties) {
+				const comments = ts.getLeadingCommentRanges(source.text, property.getFullStart()) ?? [];
+				if (comments.some(range => source.text.startsWith("/**", range.pos))) {
+					documented.add(propertyName(property));
+				}
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	return documented;
+}
 
 /** The stock specifier of every adapter under resources/gui-bridge/omp (`omp/pi-ai.ts` → `@oh-my-pi/pi-ai`). */
 function adapterSpecifiers(): string[] {
@@ -205,6 +279,17 @@ describe("one capability per action", () => {
 		).toEqual(["pluginInstall"]);
 		expect(turnedOffBy("AgentSession.refreshScopedModels")).toEqual(["providerLogout"]);
 		expect(turnedOffBy("AgentSession.sessionManager.removeWorkspaceDirectory")).toEqual(["workspaceEdit"]);
+		expect(turnedOffBy(`${AGENT}/tts/tts-client#ttsClient.synthesize`)).toEqual(["readAloud"]);
+		expect(turnedOffBy(`${AGENT}/stt/asr-client#sttClient.transcribe`)).toEqual(["dictation"]);
+		expect(turnedOffBy(`${AGENT}/ssh/connection-manager#ensureConnection`)).toEqual(["sshTest"]);
+		expect(turnedOffBy(`${AGENT}/security/store#SecurityStore.prototype.updateDisposition`)).toEqual([
+			"securityDisposition",
+		]);
+		expect(turnedOffBy(`${AGENT}/tools/gh-pr-checkout#checkoutPullRequest`)).toEqual(["prCheckout"]);
+		expect(turnedOffBy("@oh-my-pi/pi-ai/utils/schema#toolWireSchema")).toEqual(["contextEntry"]);
+		expect(turnedOffBy(`${AGENT}/config/compaction-threshold#parseCompactionPointInput`)).toEqual([
+			"compactionLimits",
+		]);
 	});
 
 	it("keeps what only the stock helper loads out of the bridge's own actions", () => {
@@ -215,6 +300,7 @@ describe("one capability per action", () => {
 		expect(turnedOffBy(`${AGENT}/session/session-manager#SessionManager.prototype.moveTo`)).toEqual([
 			"moveStoredSession",
 		]);
+		expect(turnedOffBy(`${AGENT}/task/settings#cfgWorktreeBase.get`)).toEqual(["worktreeBase"]);
 	});
 
 	it("lists a shared helper's internals under every action that runs it", () => {
@@ -231,18 +317,35 @@ describe("one capability per action", () => {
 			"transcript",
 		]);
 	});
+
+	it("gives every guard that holds several methods a stated reason on its capability", () => {
+		// A group shares one id only on purpose (a getter and its setter, a start and its stop): the doc comment on
+		// the id's REQUIREMENTS entry says why. Without one, each method gets an id of its own.
+		const calls = guardCalls();
+		expect(calls.length).toBeGreaterThan(0);
+		const documented = documentedRequirements();
+		const unexplained = calls
+			.filter(call => call.several && !documented.has(call.ids[0]))
+			.map(call => `${call.file}: ${call.ids[0]} (${call.methods.join(", ")})`);
+		expect(unexplained).toEqual([]);
+	});
+
+	it("guards only with capabilities the table knows", () => {
+		const unknown = guardCalls().flatMap(call => call.ids.filter(id => !Object.hasOwn(FEATURES, id)));
+		expect(unknown).toEqual([]);
+	});
 });
 
 describe("mergeAreaFailures", () => {
 	it("marks every feature of a module that failed to load", () => {
 		expect(
 			mergeAreaFailures(
-				[{ feature: "voice", missing: ["@x/stt#sttClient"] }],
-				[{ area: "misc", features: ["voice", "ssh"], error: "Export named 'sttClient' not found" }],
+				[{ feature: "dictation", missing: ["@x/stt#sttClient"] }],
+				[{ area: "misc", features: ["dictation", "ssh"], error: "Export named 'sttClient' not found" }],
 			),
 		).toEqual([
 			{
-				feature: "voice",
+				feature: "dictation",
 				missing: ["@x/stt#sttClient", "gui-bridge/misc.ts failed to load: Export named 'sttClient' not found"],
 			},
 			{ feature: "ssh", missing: ["gui-bridge/misc.ts failed to load: Export named 'sttClient' not found"] },

@@ -180,6 +180,8 @@ export function sessionSpend(session: AgentSession, now: number): SessionSpend {
 export const methods: BridgeMethods = {
 	...guard("modelSetupFacts", {
 		model_setup_facts: async (_params, env) => modelSetupFacts(env.session()),
+	}),
+	...guard("sessionSpend", {
 		session_spend: async (_params, env) => sessionSpend(env.session(), Date.now()),
 	}),
 };

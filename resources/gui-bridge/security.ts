@@ -222,32 +222,44 @@ async function setDisposition(session: AgentSession, params: unknown) {
 	return projectFinding(finding);
 }
 
-export const methods: BridgeMethods = guard("security", {
-	security_dashboard: async (_params, env) => securityDashboard(env.session()),
-	security_scan: async (params, env) => securityScan(env.session(), requiredString(params, "scanId")),
-	security_start: async (params, env) =>
-		projectOperation(await startOperation(env.session(), asRecord(params).target as SecurityTargetRequest)),
-	security_cancel: async (params, env) => ({
-		cancelled:
-			(
-				await runSecurityTool(env.session(), {
-					action: "cancel",
-					operation_id: requiredString(params, "operationId"),
-				})
-			).cancelled === true,
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("security", {
+		security_dashboard: async (_params, env) => securityDashboard(env.session()),
 	}),
-	security_set_disposition: async (params, env) => setDisposition(env.session(), params),
-	security_validation_prompt: async (params, env) => {
-		const scanId = requiredString(params, "scanId");
-		const findingId = requiredString(params, "findingId");
-		const store = await SecurityStore.openForCwd(env.session().sessionManager.getCwd());
-		if (!(await store.getFinding(scanId, findingId))) throw new Error(`Unknown security finding: ${findingId}`);
-		return {
-			prompt: prompt.render(ompPrompt("security/validate-request.md"), {
-				findingUri: `security://scans/${scanId}/findings/${findingId}`,
-				scanId,
-				findingId,
-			}),
-		};
-	},
-});
+	...guard("securityScanDetail", {
+		security_scan: async (params, env) => securityScan(env.session(), requiredString(params, "scanId")),
+	}),
+	// One id for both: each is one call of stock's tool, and a scan that cannot be cancelled is not started.
+	...guard("securityRun", {
+		security_start: async (params, env) =>
+			projectOperation(await startOperation(env.session(), asRecord(params).target as SecurityTargetRequest)),
+		security_cancel: async (params, env) => ({
+			cancelled:
+				(
+					await runSecurityTool(env.session(), {
+						action: "cancel",
+						operation_id: requiredString(params, "operationId"),
+					})
+				).cancelled === true,
+		}),
+	}),
+	...guard("securityDisposition", {
+		security_set_disposition: async (params, env) => setDisposition(env.session(), params),
+	}),
+	...guard("securityValidation", {
+		security_validation_prompt: async (params, env) => {
+			const scanId = requiredString(params, "scanId");
+			const findingId = requiredString(params, "findingId");
+			const store = await SecurityStore.openForCwd(env.session().sessionManager.getCwd());
+			if (!(await store.getFinding(scanId, findingId))) throw new Error(`Unknown security finding: ${findingId}`);
+			return {
+				prompt: prompt.render(ompPrompt("security/validate-request.md"), {
+					findingUri: `security://scans/${scanId}/findings/${findingId}`,
+					scanId,
+					findingId,
+				}),
+			};
+		},
+	}),
+};
