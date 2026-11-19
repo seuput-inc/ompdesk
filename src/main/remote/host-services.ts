@@ -1253,7 +1253,9 @@ export class LocalHostServices implements HostServices {
 				return null;
 			case "sessions.list": {
 				const { scope, cwd, versioned } = parse(SessionsListParams, method, params);
-				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd));
+				// One folder's rows: decorated, but the shared list's snapshot stays what that list last said, or a change
+				// read here first would never reach the devices holding the shared list.
+				if (scope === "local") return this.#decorated(await this.#deps.sessionIndex.list(scope, cwd), false);
 				// Each read decorates the index's copy again (a tab here taking a session moves no journal) and keeps the
 				// version while nothing changed.
 				this.#deviceList.stale();
@@ -1615,10 +1617,13 @@ export class LocalHostServices implements HostServices {
 		return { openers: this.#deps.sessionOpeners?.() ?? new Map<string, string>(), held };
 	}
 
-	/** This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`). */
-	#decorated(rows: readonly SessionInfo[]): SessionInfo[] {
+	/**
+	 * This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`).
+	 * `shared`: the rows are the shared list's, so the listing they show becomes what devices last heard.
+	 */
+	#decorated(rows: readonly SessionInfo[], shared = true): SessionInfo[] {
 		const { openers, held } = this.#listing();
-		this.#listingSnapshot = listingSignature(openers, held);
+		if (shared) this.#listingSnapshot = listingSignature(openers, held);
 		const problems = new Map([...this.#childProblems.values()].flatMap(children => [...children]));
 		// Every row says, even `null` for none: an older host's rows say nothing, and a device lists those as before.
 		return rows.map(row => {
