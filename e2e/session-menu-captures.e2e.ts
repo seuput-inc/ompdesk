@@ -148,11 +148,43 @@ for (const language of ["en", "ko"] as const)
 				text("sidebar.openInNewWindow"),
 				...edits,
 				text("sidebar.menu.hideFromAgents"),
+				// This computer's desktop window only: a paired host's rows below and the phone page have no such item.
+				text("sidebar.menu.crossProject"),
 				text("sidebar.menu.reveal"),
 				text("common.delete"),
 			]);
 			await captureMenu(a, `local-stored-${language}`);
 			await a.keyboard.press("Escape");
+
+			// A narrow window: the menu with the new item stays whole on screen and its item never lies over the row it
+			// belongs to, whose click opens the session.
+			await client.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(720, 560));
+			await expect.poll(() => a.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(720);
+			await openMenu(localRow);
+			const item = a.getByRole("menuitem", { name: text("sidebar.menu.crossProject") });
+			await expect(item).toBeVisible();
+			const viewport = await a.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+			const menuBox = await a.getByRole("menu").boundingBox();
+			const rowBox = await localRow.boundingBox();
+			const itemBox = await item.boundingBox();
+			if (!menuBox || !rowBox || !itemBox) throw new Error("no menu, row or item box");
+			expect(menuBox.x).toBeGreaterThanOrEqual(0);
+			expect(menuBox.y).toBeGreaterThanOrEqual(0);
+			expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.width);
+			expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(viewport.height);
+			// The item's box and the row's share no point.
+			expect(
+				itemBox.x < rowBox.x + rowBox.width &&
+					rowBox.x < itemBox.x + itemBox.width &&
+					itemBox.y < rowBox.y + rowBox.height &&
+					rowBox.y < itemBox.y + itemBox.height,
+			).toBe(false);
+			await test.info().attach(`narrow-local-stored-${language}`, {
+				body: await a.screenshot({ animations: "disabled" }),
+				contentType: "image/png",
+			});
+			await a.keyboard.press("Escape");
+			await client.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 860));
 
 			// The window's last tab cannot be closed from a menu: a new session beside the host's first.
 			await a.locator("[data-sidebar-group-new]").first().click();
