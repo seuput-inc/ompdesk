@@ -14,8 +14,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isNewRequest } from "../resources/gui-bridge/todo-stale-core";
 import { nudgeKindOf } from "../resources/gui-bridge/todo-drift-core";
+import { isNewRequest } from "../resources/gui-bridge/todo-stale-core";
 
 const IDLE_CAP_MS = 5 * 60_000;
 const NUDGE_WINDOW = 3;
