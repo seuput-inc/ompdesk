@@ -116,10 +116,22 @@ async function openPhone(desktop: Page, options: { spawn: boolean }): Promise<Pa
 	await phone.goto(`${proxy.url}/`);
 	await phonePaired(phone);
 	if (options.spawn) {
-		// A web window starts with no tab: the phone opens one in the project.
-		await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), profile.project);
+		// A paired web window with no tab opens the empty start tab in the host's default workspace (stores/tabs.ts,
+		// 140c6b709). The page does that on its own first tab list, which may come before or after a spawn made here:
+		// in e2e 44516012533 it came first, the start tab stayed the active one, and the agent the spec drove was that
+		// unstarted tab's, not the project's. So wait for the start tab, open the project tab, and close the start tab.
+		await expect
+			.poll(async () => (await phoneTabs(phone)).map(tab => tab.placeholder === true), { timeout: 30_000 })
+			.toEqual([true]);
+		const [start] = await phoneTabs(phone);
+		const spawned = await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), profile.project);
+		expect(await phone.evaluate(id => window.omp.tabs.close(id), start?.tabId ?? "")).toBe(true);
 		await phone.reload();
 		await expect(phone.locator("[data-composer-input]").first()).toBeVisible({ timeout: 60_000 });
+		const tabs = await phoneTabs(phone);
+		expect(tabs.map(tab => [tab.tabId, tab.cwd, tab.active === true])).toEqual([
+			[spawned?.tabId, profile.project, true],
+		]);
 	}
 	return phone;
 }
