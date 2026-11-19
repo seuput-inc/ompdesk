@@ -622,12 +622,17 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/**
 	 * quit-journal.ts: the public `tool_call` (`block`), `tool_execution_start`, `message_end`, `context` and
-	 * `session_shutdown` hooks with the context's read-only `sessionManager` (`getEntries`, `getLeafEntry`), and the
-	 * session's agent loop reached through the registry to abort it once its running commands finished.
+	 * `session_shutdown` hooks with the context's read-only `sessionManager` (`getEntries`, `getBranch`), and the
+	 * session's agent loop reached through the registry to abort it once its running commands finished. Stock caps every
+	 * `session_shutdown` handler at 2 s (`SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS`); its setter raises the cap past the
+	 * stop's wait for commands.
 	 */
 	quitJournal: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
 		session: ["agent.abort()"],
+		modules: {
+			[`${AGENT}/extensibility/extensions/runner`]: ["testSetSessionShutdownHandlerTimeoutMs()"],
+		},
 	},
 	/**
 	 * exit-drain.ts: the public `session_shutdown` hook of the main agent, and stock's `postmortem` for the awaited

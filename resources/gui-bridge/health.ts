@@ -73,6 +73,8 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/config/settings": () => import("@oh-my-pi/pi-coding-agent/config/settings"),
 	"@oh-my-pi/pi-coding-agent/discovery": () => import("@oh-my-pi/pi-coding-agent/discovery"),
 	"@oh-my-pi/pi-coding-agent/discovery/helpers": () => import("@oh-my-pi/pi-coding-agent/discovery/helpers"),
+	"@oh-my-pi/pi-coding-agent/extensibility/extensions/runner": () =>
+		import("@oh-my-pi/pi-coding-agent/extensibility/extensions/runner"),
 	"@oh-my-pi/pi-coding-agent/export/share": () => import("@oh-my-pi/pi-coding-agent/export/share"),
 	"@oh-my-pi/pi-coding-agent/extensibility/plugins/loader": () =>
 		import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader"),

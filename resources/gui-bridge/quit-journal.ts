@@ -21,6 +21,7 @@
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
+import * as runner from "./omp/pi-coding-agent/extensibility/extensions/runner";
 import {
 	commandDrainLine,
 	createPendingToolCalls,
@@ -54,6 +55,13 @@ interface RegistryApi {
 /** This process's start: entries journaled before it are an earlier process's. */
 const startedAt = performance.timeOrigin;
 
+/**
+ * Stock gives each `session_shutdown` handler 2 s and then disposes anyway, aborting the commands the stop waits for.
+ * The core's stop still ends an omp 5 s after it began unless omp printed a wait (`commandDrainLine`), so a hung
+ * handler of another extension is not held longer by this.
+ */
+runner.testSetSessionShutdownHandlerTimeoutMs?.(QUIT_COMMAND_DRAIN_MS + QUIT_TOOL_SETTLE_MS + 1_000);
+
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: ExtensionAPI): void {
 	const calls = createPendingToolCalls();
@@ -63,7 +71,7 @@ export function install(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event, ctx) => {
 		if (!isCommandTool(event.toolName)) return undefined;
 		const sessions = ctx.sessionManager;
-		const replay = replayOfEarlierLife(sessions.getEntries(), sessions.getLeafEntry(), event.toolCallId, startedAt);
+		const replay = replayOfEarlierLife(sessions.getEntries(), sessions.getBranch(), event.toolCallId, startedAt);
 		if (!replay) return undefined;
 		pi.logger.debug("gui-bridge: a command an earlier process started was not run again");
 		return { block: true, reason: replayRefusal(event.toolName, replay.earlier) };

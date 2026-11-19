@@ -1494,9 +1494,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"In-memory monkey patch of shutdown and turn tracing: wraps `agent.abort`, `prompt`, `extensionRunner.emitBeforeAgentStart` and `agent.streamFn`, and drives `postmortem.quit`/`exitProcess`.",
+			"In-memory monkey patch of shutdown and turn tracing: wraps `agent.abort`, `prompt`, `extensionRunner.emitBeforeAgentStart` and `agent.streamFn`, drives `postmortem.quit`/`exitProcess`, and raises stock's `session_shutdown` handler cap so a stop lets a running command finish.",
 		files: [
 			"resources/gui-bridge/quit-journal.ts",
+			"resources/gui-bridge/quit-journal-core.ts",
+			"resources/gui-bridge/omp/pi-coding-agent/extensibility/extensions/runner.ts",
 			"resources/gui-bridge/exit-drain.ts",
 			"resources/gui-bridge/exit-drain-core.ts",
 			"resources/gui-bridge/turn-stages.ts",
@@ -1511,11 +1513,14 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"postmortem.quit",
 			"postmortem.exitProcess",
 			"NATIVE_PROCESS_EXIT",
+			"@oh-my-pi/pi-coding-agent/extensibility/extensions/runner",
+			"testSetSessionShutdownHandlerTimeoutMs",
 		],
 		tests: [
 			"src/main/bridge-exit-drain-stock.test.ts",
 			"src/main/bridge-turn-stages-stock.test.ts",
 			"src/main/bridge-agent-mail-restart-stock.test.ts",
+			"src/main/bridge-restore-request-stock.test.ts",
 		],
 	},
 	{

@@ -16,7 +16,8 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon } from "./test-bridge-probe";
+import { RM_TEMP } from "./test-fake-omp";
 
 /**
  * A relaunch continues a turn that OMPdesk's quit cut while omp was preparing its next model request (bridge
@@ -463,8 +464,10 @@ describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock om
 		chmodSync(isolated, 0o700);
 		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-once-repo-")));
 		cleanups.push(() => {
-			rmSync(isolated, { recursive: true, force: true });
-			rmSync(root, { recursive: true, force: true });
+			// omp 19's daemon for this config folder keeps it and the repository busy on Windows.
+			stopOmpDaemon(isolated);
+			rmSync(isolated, RM_TEMP);
+			rmSync(root, RM_TEMP);
 		});
 		const counter = join(root, "counter").replaceAll("\\", "/");
 		const provider = await startProvider([{ tool: "bash", args: { command: script(counter), i: "counted" } }]);
@@ -505,7 +508,8 @@ describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock om
 	}, 240_000);
 
 	it("never runs a command again that a crash cut", async () => {
-		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 30`, "kill");
+		// The killed omp leaves its command running on Windows: a short one, so it lets the test's folders go.
+		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 8`, "kill");
 		expect(textOf(results().at(-1)?.message?.content)).toContain("Not run again");
 		expect(runs()).toBe(1);
 	}, 240_000);

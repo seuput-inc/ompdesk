@@ -80,8 +80,7 @@ function hasCall(entry: CallEntry, toolCallId: string): boolean {
 	return (
 		Array.isArray(content) &&
 		content.some(
-			block =>
-				typeof block === "object" && block !== null && block.type === "toolCall" && block.id === toolCallId,
+			block => typeof block === "object" && block !== null && block.type === "toolCall" && block.id === toolCallId,
 		)
 	);
 }
@@ -100,21 +99,21 @@ function textOf(content: unknown): string {
  * arguments, after moving the journal's leaf back to the batch's assistant message (`#stripForToolReplay`). After a
  * relaunch that batch is a cut call (`Command aborted`, or stock's "outcome unknown" for a killed process) or one that
  * ran to a failing exit, and a command with an effect would make it twice (the same commit made twice, 19 Nov 2026).
- * So: the leaf is an assistant message holding `toolCallId` that was journaled before `startedAt` (this process's
- * start, epoch ms). A first run never matches: the loop dispatches a call before its assistant message is journaled.
- * `earlier` is the result the earlier process journaled for it after that message (the abort's partial output, a real
- * failure), absent when it journaled none.
+ * So: the last message of the current branch is an assistant message holding `toolCallId` journaled before `startedAt`
+ * (this process's start, epoch ms). Entries that are no message may follow it: other `tool_call` hooks journal their
+ * own (`ompdesk.checkout-claims`), and stock journals `tool_execution_start`. A first run never matches: the loop
+ * dispatches a call before its assistant message is journaled. `earlier` is the result the earlier process journaled
+ * for it after that message (the abort's partial output, a real failure), absent when it journaled none.
  */
 export function replayOfEarlierLife(
 	entries: readonly CallEntry[],
-	leaf: CallEntry | undefined,
+	branch: readonly CallEntry[],
 	toolCallId: string,
 	startedAt: number,
 ): { earlier?: string } | undefined {
-	if (!leaf || leaf.type !== "message" || !hasCall(leaf, toolCallId) || !journaledBefore(leaf, startedAt)) {
-		return undefined;
-	}
-	const anchor = entries.findIndex(entry => entry === leaf || (leaf.id !== undefined && entry.id === leaf.id));
+	const last = branch.findLast(entry => entry.type === "message");
+	if (!last || !hasCall(last, toolCallId) || !journaledBefore(last, startedAt)) return undefined;
+	const anchor = entries.findIndex(entry => entry === last || (last.id !== undefined && entry.id === last.id));
 	const result = entries
 		.slice(anchor + 1)
 		.find(
