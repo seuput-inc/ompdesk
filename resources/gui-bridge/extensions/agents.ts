@@ -37,8 +37,9 @@ async function discover(session: AgentSession) {
 	return agents;
 }
 
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
-	...guard("agents", {
+	...guard("agentValidate", {
 		/** Same field/YAML parser as stock task agents; never writes a file. */
 		validate_agent_definition: async params => {
 			const p = paramsOf(params);
@@ -51,6 +52,8 @@ export const methods: BridgeMethods = {
 			}
 			return { fields, body };
 		},
+	}),
+	...guard("agents", {
 		/** Workspace-visible definitions plus the TUI control center's model/prewalk projection. */
 		get_agent_definitions: async (_params, env) => {
 			const session = env.session();
@@ -109,7 +112,8 @@ export const methods: BridgeMethods = {
 				}),
 			};
 		},
-
+	}),
+	...guard("agentDefinition", {
 		/** One discovered definition with its system prompt (the editor's Duplicate of bundled/extension agents). */
 		get_agent_definition: async (params, env) => {
 			const name = requireString(paramsOf(params), "name");
@@ -133,7 +137,8 @@ export const methods: BridgeMethods = {
 				advisor: agent.advisor,
 			};
 		},
-
+	}),
+	...guard("agentAuthoring", {
 		/** Agent directories discovery reads, plus omp's tool names for the editor's tool picker. */
 		get_agent_authoring: async (_params, env) => {
 			const session = env.session();
@@ -145,7 +150,8 @@ export const methods: BridgeMethods = {
 				registeredTools: registered.filter(name => !hidden.has(name)),
 			};
 		},
-
+	}),
+	...guard("reviveSubagent", {
 		/** AgentLifecycleManager.ensureLive: idempotent for live agents, revives parked ones (Agent Hub `r`). */
 		revive_subagent: async params => {
 			const agentId = requireString(paramsOf(params), "agentId");
@@ -161,7 +167,8 @@ export const methods: BridgeMethods = {
 				return { ok: false, reason: "not_parked" };
 			}
 		},
-
+	}),
+	...guard("subagentTranscript", {
 		/**
 		 * A settled subagent's transcript after a relaunch. Stock's RPC registry learns
 		 * session files only from live lifecycle frames, while the executor writes every
@@ -179,7 +186,8 @@ export const methods: BridgeMethods = {
 				throw new Error(`Unknown subagent or session file unavailable: ${subagentId}`);
 			return readRpcSubagentTranscript(sessionFile, typeof p.fromByte === "number" ? p.fromByte : 0);
 		},
-
+	}),
+	...guard("imageBlob", {
 		/**
 		 * The bytes behind one persisted image reference (`blob:sha256:<hex>`), base64, or
 		 * `null` once the blob is gone. Stock externalizes image data to its blob store and
@@ -193,7 +201,6 @@ export const methods: BridgeMethods = {
 			return { data: bytes ? bytes.toString("base64") : null };
 		},
 	}),
-
 	...guard("themes", {
 		/** Resolved CSS colors (variable refs and ANSI-256 indices resolved) keyed by theme token. */
 		get_theme_colors: async params => {

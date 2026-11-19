@@ -298,34 +298,39 @@ async function approve(session: AgentSession, params: Record<string, unknown>): 
 	return { approved: true, dispatched: true };
 }
 
-export const methods: BridgeMethods = guard("planMode", {
-	"modes.get_plan_mode": async (_params, env) => {
-		const session = attach(env);
-		// A resumed or switched-to session may already carry plan mode.
-		if (session.getPlanModeState()?.enabled) arm(session);
-		// `proposal`: the emitted proposal still awaiting `plan_approval`, if any.
-		return { ...planState(session), proposal: pending?.frame };
-	},
-	/** `auto: true` (main's automatic choice): plan mode for this one request, ended with its plan (auto-mode-state). */
-	"modes.set_plan_mode": async (params, env) => {
-		const session = attach(env);
-		const enabled = record(params).enabled === true;
-		const sessionId = session.sessionManager.getSessionId();
-		if (enabled === (session.getPlanModeState()?.enabled === true)) {
-			if (enabled) {
-				arm(session);
-				// The user turned on the plan mode an automatic plan holds: it is theirs now.
-				if (record(params).auto !== true) setAutoPlan(sessionId, false);
+export const methods: BridgeMethods = {
+	// One id for both: each arms the proposal handler, and the state one reads is what the other writes.
+	...guard("planMode", {
+		"modes.get_plan_mode": async (_params, env) => {
+			const session = attach(env);
+			// A resumed or switched-to session may already carry plan mode.
+			if (session.getPlanModeState()?.enabled) arm(session);
+			// `proposal`: the emitted proposal still awaiting `plan_approval`, if any.
+			return { ...planState(session), proposal: pending?.frame };
+		},
+		/** `auto: true` (main's automatic choice): plan mode for this one request, ended with its plan (auto-mode-state). */
+		"modes.set_plan_mode": async (params, env) => {
+			const session = attach(env);
+			const enabled = record(params).enabled === true;
+			const sessionId = session.sessionManager.getSessionId();
+			if (enabled === (session.getPlanModeState()?.enabled === true)) {
+				if (enabled) {
+					arm(session);
+					// The user turned on the plan mode an automatic plan holds: it is theirs now.
+					if (record(params).auto !== true) setAutoPlan(sessionId, false);
+				}
+				return planState(session);
 			}
+			if (enabled) {
+				await enterPlanMode(session);
+				setAutoPlan(sessionId, record(params).auto === true);
+			} else await exitPlanMode(session);
 			return planState(session);
-		}
-		if (enabled) {
-			await enterPlanMode(session);
-			setAutoPlan(sessionId, record(params).auto === true);
-		} else await exitPlanMode(session);
-		return planState(session);
-	},
-	"modes.plan_approval": async (params, env) => {
-		return approve(attach(env), record(params));
-	},
-});
+		},
+	}),
+	...guard("planApproval", {
+		"modes.plan_approval": async (params, env) => {
+			return approve(attach(env), record(params));
+		},
+	}),
+};

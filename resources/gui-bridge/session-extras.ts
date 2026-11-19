@@ -157,7 +157,7 @@ export const methods: BridgeMethods = {
 	}),
 
 	/** Usage totals across the whole live journal (pre-compaction history and sibling branches included). */
-	...guard("usage", {
+	...guard("usageHistory", {
 		"sessions.usage_history": async (_params, env) => {
 			const sessionManager = env.session().sessionManager;
 			return {

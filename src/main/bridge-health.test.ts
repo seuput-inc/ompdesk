@@ -41,7 +41,7 @@ describe("BridgeHealth", () => {
 			ompVersion: "19.0.0",
 			unavailable: [
 				{ feature: "planMode", missing: ["AgentSession.setPlanModeState"] },
-				{ feature: "goalMode", missing: ["@oh-my-pi/pi-coding-agent/goals/settings"] },
+				{ feature: "guidedGoal", missing: ["@oh-my-pi/pi-coding-agent/goals/settings"] },
 			],
 		}));
 
@@ -52,7 +52,7 @@ describe("BridgeHealth", () => {
 		expect(broken.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(health.take()).toEqual([
-			{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["planMode", "goalMode"] },
+			{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["planMode", "guidedGoal"] },
 		]);
 		expect(health.take()).toEqual([]);
 

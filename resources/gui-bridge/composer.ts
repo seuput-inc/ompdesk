@@ -616,7 +616,7 @@ export const methods: BridgeMethods = {
 			return result.truncated || prepared.truncated ? { url: result.url, truncated: true } : { url: result.url };
 		},
 	}),
-	...guard(["copyTargets", "sessionTree"], {
+	...guard("copyTargets", {
 		"composer.copy_targets": async (_params, env) => {
 			// Late imports isolate moved stock internals from the other composer adapters.
 			const stock = await import("./omp/pi-tui/overlays/copy-targets");
@@ -631,7 +631,7 @@ export const methods: BridgeMethods = {
 			};
 		},
 	}),
-	...guard(["lastLink", "sessionTree"], {
+	...guard("lastLink", {
 		/** `/open`: stock's TUI command opens the newest http(s) link of an assistant message.
 		 * Late imports for the same reason as `composer.copy_targets`. */
 		"composer.last_link": async (_params, env) => {

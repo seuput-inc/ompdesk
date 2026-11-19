@@ -75,10 +75,11 @@ function blobStore(): BlobStore {
 	return blobs;
 }
 
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
 	// stream-metadata is imported per call, not statically: a vanished read/URL
-	// export then fails only these two (feature streamMetadata), not the tree.
-	...guard(["sessionTree", "streamMetadata"], {
+	// export then fails only these two, not the tree.
+	...guard("transcript", {
 		"sessions.transcript": async (params, env) => {
 			const { decorateMessages } = await import("./stream-metadata");
 			const { leafId, version, messages } = transcriptSnapshot(env.session().sessionManager);
@@ -98,6 +99,8 @@ export const methods: BridgeMethods = {
 				messages: decorateMessages(shown),
 			};
 		},
+	}),
+	...guard("entryIds", {
 		"sessions.attach_entry_ids": async (params, env) => {
 			const messages = param(params, "messages");
 			if (
@@ -122,7 +125,8 @@ export const methods: BridgeMethods = {
 				entryId => manager.getLabel(entryId),
 			);
 		},
-
+	}),
+	...guard("entryLabel", {
 		/** Set (non-empty `label`) or clear a label on any entry; TUI tree-selector Shift+L. */
 		"sessions.set_entry_label": async (params, env) => {
 			const entryId = entryIdParam(params);
@@ -131,7 +135,8 @@ export const methods: BridgeMethods = {
 			manager.appendLabelChange(entryId, label);
 			return null;
 		},
-
+	}),
+	...guard("switchLeaf", {
 		/** Move the active leaf in place (TUI tree-selector Enter); optionally summarize the abandoned branch. */
 		"sessions.switch_leaf": async (params, env) => {
 			const entryId = entryIdParam(params);
@@ -156,7 +161,8 @@ export const methods: BridgeMethods = {
 				activeLeafId: session.sessionManager.getLeafId() ?? undefined,
 			};
 		},
-
+	}),
+	...guard("forkFrom", {
 		/**
 		 * Write a new, independent session holding only the root→`entryId` path and
 		 * leave the live session where it is (omp's own `fork`/`branch` move the live
@@ -198,7 +204,8 @@ export const methods: BridgeMethods = {
 				await copy.close();
 			}
 		},
-
+	}),
+	...guard("sessionPins", {
 		"sessions.set_pinned": async params => {
 			const sessionId = optionalString(params, "sessionId")?.trim();
 			if (!sessionId) throw new Error("Session id cannot be empty");

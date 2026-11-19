@@ -23,13 +23,13 @@ function serverNames(params: unknown): string[] {
 }
 
 export const methods: BridgeMethods = {
-	...guard("plugins", {
+	...guard("pluginReload", {
 		"extension_update.reload": async (_params, env) => {
 			await reloadPluginState(env.session());
 			return { ok: true };
 		},
 	}),
-	...guard("mcp", {
+	...guard("mcpUpdateReconnect", {
 		/**
 		 * Reconnects each named server the live manager knows and the user's config still enables (a disabled
 		 * server has no connection to refresh and must stay down), serialized with the other MCP mutations, then
