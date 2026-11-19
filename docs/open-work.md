@@ -38,7 +38,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | C6 | An open to a never-started start tab never answers (fix `3d135b59e`); a call to a tab whose omp cleanup ended never answers. | start-tab fix on next-line; cleanup-ended call: not reproduced (only open/join/reopen wait unbounded on when_ready), needs a captured hang | next-line (3d135b59e), tabs-tidy (cleanup-ended calls) [desktop] | omp/agent/close-web-rc-20261119 (`3d135b59e`) | |
 | C7 | `ompdesk_sessions` with `mine: true` lists nothing. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
 | C8 | A paired computer's sidebar differs from the host's real state. | on branch | tabs-tidy [desktop] | omp/agent/tabs-tidy-20261120 `28ea4c5f4` | ci 44576978842, formal 44576986560, e2e 44579634026 + 44587674163; needs main merged (base predates 0.134.1) |
-| C9 | A tab another tab holds open on a frozen window cannot be closed (live repro on the Mac mini). | in progress | 01a1f2ea [Mac mini] | omp/agent/page-watch-20261119 | |
+| C9 | A tab another tab holds open on a frozen window cannot be closed (live repro on the Mac mini). | on branch (green), goes with next-line | next-line [desktop] | omp/agent/page-watch-20261119 `b8d7d9d5d` | ci+mac 44584807280, tauri-native 44582180703, e2e 44582021779; a real stuck WKWebView restart not run on a macOS runner |
 | C10 | After a messageless session's omp was killed, its restarted omp got a new saved id (01a1f4bf → 01a1f4ca) and the empty session file was not resumed. | not started | | | |
 
 ## D. Silently stale or stopped
@@ -49,7 +49,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | D2 | Repair path for an omp installed with npm (installs the newest today). | in progress | follow-omp [desktop] | | |
 | D3 | Windows: the first update download after a release fails and the next check 5 min later works; a failed download reads "failed". | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | fix 7c3632ca2; gate 44567381628 (a)(b real omp)(c)+mac(c), ci 44567117321 on 23ef5665c |
 | D4 | Release gate: the previous release updates itself to the candidate (and the candidate to a next build). | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | same gate run; future gates keep (c) and previous-release→candidate |
-| D5 | A frozen shell or page stops update lookups (Mac mini page frozen since 09:12 on 19 Nov). | in progress | 01a1f2ea [Mac mini] | omp/agent/page-watch-20261119 | |
+| D5 | A frozen shell or page stops update lookups (Mac mini page frozen since 09:12 on 19 Nov). | on branch (green), goes with next-line | next-line [desktop] | omp/agent/page-watch-20261119 `b8d7d9d5d` | ci+mac 44584807280, tauri-native 44582180703, e2e 44582021779; a real stuck WKWebView restart not run on a macOS runner |
 | D6 | Why the app ended is never logged (shell, node, quit source). Also: SIGINT/SIGTERM/SIGHUP now quit through the quit guard. | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | ci 44552014530, mac 44564510088 on ed3b3001a |
 | D7 | The bridge self-check result cannot be read afterwards. | release-ready |  | omp/agent/rc-0134-2 `e3eb65db5` | ci 44566470675 on 6e943272e |
 | D8 | A message a paired computer never answered reads "not sent". | shipped 0.134.1 | | | |
