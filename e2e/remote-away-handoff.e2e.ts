@@ -17,14 +17,16 @@ import {
 // away. A is the client, B the host, paired through a relay whose link the test cuts (`linkProxy`).
 //
 // 1. A session A opened on B (`ompdesk_session_open {device}`) is A's tab: B's omp sends each host tool call to A
-//    (`LocalHostServices` keeps it in `HostTab.hostCalls` and hands it to A's connection), and B's own window
-//    viewing that session does not carry it out (`HostedTabView` forwards no `hostToolCall`). So a call made while
-//    A is away gets no result until A is back; then A runs it once. A fix that lets B run it flips this case.
+//    (`LocalHostServices` keeps it in `HostTab.hostCalls` and hands it to A's connection). Once A has been away past
+//    the notice (`OMP_GUI_TEST_HOST_WAIT_MS`), B answers each call A was never handed: a window of B's viewing the
+//    session carries it out as its own tab's (children open on B), a report to A's side is kept on disk and handed to
+//    A once it is back, where it reaches the opener once. Nothing runs on both computers.
 // 2. A session B's own window holds (here one a session of B's window opened) is B's: its host tool calls run in B's
 //    main, so it opens children on B and messages them while A is away. A hands it work with
 //    `ompdesk_session_send`, which joins it as a view.
-// The rules behind each step are unit-tested in src/main/remote/host-services.test.ts ("re-sends the host tool
-// calls"), src/main/sidecar-pool.test.ts (hosted views) and src/main/agent-control/service.test.ts.
+// The rules behind each step are unit-tested in src/main/remote/host-services.test.ts ("carries out here the calls",
+// "re-sends the host tool calls"), src/main/sidecar-pool.test.ts (hosted views), src/main/agent-control/service.test.ts
+// and model-checked in formal/away-calls.
 
 let parent: string;
 let host: RemoteInstance | undefined;
@@ -43,8 +45,8 @@ test.afterEach(async () => {
 });
 
 /** A (client) paired to B (host, "PC-B") through a relay the test can cut; `call` runs a tool as A's focused tab. */
-async function pairApps() {
-	const hostProfile = await makeRemoteProfile(parent, "host", { language: "en", theme: "light" });
+async function pairApps(hostEnv: Record<string, string> = {}) {
+	const hostProfile = await makeRemoteProfile(parent, "host", { language: "en", theme: "light", env: hostEnv });
 	const link: LinkProxy = await linkProxy(hostProfile.port);
 	const clientProfile = await makeRemoteProfile(parent, "client", {
 		language: "en",
@@ -78,9 +80,11 @@ async function resultsOn(profile: RemoteProfile): Promise<{ text: string; isErro
 
 const tabIds = async (page: Page) => (await page.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId);
 
-test("a session A opened on B waits for A to come back before its control tools run, then runs each once", async () => {
+test("a session A opened on B keeps working while A is away: B carries out its calls, keeps its report for A and hands it over once", async () => {
 	test.setTimeout(240_000);
-	const { hostProfile, link, linkState, a, b, call } = await pairApps();
+	const { hostProfile, link, linkState, a, b, call } = await pairApps({ OMP_GUI_TEST_HOST_WAIT_MS: "3000" });
+	const hub = (await a.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId ?? "";
+	expect(hub).not.toBe("");
 
 	// A's hub opens the coordinator on B: A's tab, B's omp.
 	const open = await call("ompdesk_session_open", { device: "PC-B", message: "Title: coordinator\nCoordinate" });
@@ -106,37 +110,60 @@ test("a session A opened on B waits for A to come back before its control tools 
 		})
 		.toEqual({ shared: true, status: "ready" });
 
-	// A goes away. The coordinator's turn goes on on B and calls ompdesk_session_open (driven here from B's view, as
-	// its own turn would: the fake emits the host tool call from B's omp).
+	// A goes away. The coordinator's turn goes on on B (driven here from B's view, as its own turn would: the fake emits
+	// each host tool call from B's omp).
 	const aTabsBefore = await tabIds(a);
-	const bTabsBefore = await tabIds(b);
 	const resultsBefore = (await resultsOn(hostProfile)).length;
 	await link.drop();
 	await expect.poll(linkState, { timeout: 30_000 }).not.toBe("online");
-	const sent = await b.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
-		view,
-		`fixture:host-tool:ompdesk_session_open ${JSON.stringify({ message: "Title: worker one\nPart one" })}`,
-	] as const);
-	expect(sent).toMatchObject({ success: true });
+	const asCoordinator = async (tool: string, args: Record<string, unknown>) => {
+		const before = (await resultsOn(hostProfile)).length;
+		const sent = await b.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+			view,
+			`fixture:host-tool:${tool} ${JSON.stringify(args)}`,
+		] as const);
+		expect(sent).toMatchObject({ success: true });
+		await expect.poll(async () => (await resultsOn(hostProfile)).length, { timeout: 60_000 }).toBe(before + 1);
+		return (await resultsOn(hostProfile))[before];
+	};
 
-	// No result while A is away: nothing on B carries the call out. A real wait, past the 15 s an agent tool waits for a
-	// paired device's link (`LINK_WAIT_MS`), since absence has no event to wait on.
-	await b.waitForTimeout(20_000);
-	expect(await resultsOn(hostProfile)).toHaveLength(resultsBefore);
-	expect(await tabIds(b)).toEqual(bTabsBefore);
+	// Past the notice B's window carries the open out: the worker is a tab on B, and the coordinator is told so.
+	const opening = await asCoordinator("ompdesk_session_open", { message: "Title: worker one\nPart one" });
+	expect(opening?.isError, opening?.text).toBe(false);
+	expect(opening?.text).toContain("PC-B carried this out");
+	const children = opened(opening?.text ?? "");
+	expect(children).toHaveLength(1);
+	await untilAnswered(b, children[0] as string);
+	expect(await tabIds(b)).toContain(children[0]);
 
-	// A is back: its tab re-attaches, gets the call it missed and runs it once.
+	// A report for A's hub is kept on B, and the coordinator goes on at once.
+	const report = await asCoordinator("ompdesk_report", { kind: "note", text: "Worker one started while A was away" });
+	expect(report?.isError, report?.text).toBe(false);
+	expect(report?.text).toContain("Kept for");
+	expect(await linkState()).not.toBe("online");
+
+	// A is back: the kept report reaches its hub once, and A runs none of the calls B answered.
 	await link.restore();
 	await expect.poll(linkState, { timeout: 30_000 }).toBe("online");
-	await expect.poll(async () => (await resultsOn(hostProfile)).length, { timeout: 90_000 }).toBe(resultsBefore + 1);
-	const result = (await resultsOn(hostProfile))[resultsBefore];
-	expect(result?.isError, result?.text).toBe(false);
-	const children = opened(result?.text ?? "");
-	expect(children).toHaveLength(1);
-	await untilAnswered(a, children[0] as string);
-	const aTabsAfter = await tabIds(a);
-	expect(aTabsAfter.filter(id => !aTabsBefore.includes(id))).toEqual(children);
-	expect(await resultsOn(hostProfile)).toHaveLength(resultsBefore + 1);
+	const hubMail = async () => {
+		const page = await a.evaluate(
+			id => window.omp.rpc.commandForTab(id, { type: "get_transcript_page", fromEnd: true, limit: 50 }),
+			hub,
+		);
+		const messages = (page.data as { messages?: { customType?: string }[] } | undefined)?.messages ?? [];
+		return messages.filter(
+			message => message.customType === "ompdesk.mail" && JSON.stringify(message).includes("while A was away"),
+		).length;
+	};
+	await expect.poll(hubMail, { timeout: 60_000 }).toBe(1);
+	// Past the next re-attach's hand-over: still one.
+	await link.drop();
+	await expect.poll(linkState, { timeout: 30_000 }).not.toBe("online");
+	await link.restore();
+	await expect.poll(linkState, { timeout: 30_000 }).toBe("online");
+	expect(await hubMail()).toBe(1);
+	expect((await tabIds(a)).filter(id => !aTabsBefore.includes(id))).toEqual([]);
+	expect(await resultsOn(hostProfile)).toHaveLength(resultsBefore + 2);
 	await link.close();
 });
 

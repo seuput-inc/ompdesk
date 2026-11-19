@@ -71,10 +71,14 @@ export type SetupMethod =
 	| "bun-script"
 	/** `<bun> upgrade`: a Bun older than the omp package's `engines.bun` (bun renames its own running exe on Windows). */
 	| "bun-upgrade"
-	/** `<bun> install -g @oh-my-pi/pi-coding-agent`, with a compiled omp in the launcher's place moved aside first. */
+	/**
+	 * `<bun> install -g @oh-my-pi/pi-coding-agent@<version>`: the tested omp for setup's own install (a compiled omp
+	 * in the launcher's place moved aside first), an update's target for an omp Bun manages.
+	 */
 	| "bun-global"
 	/** agent-desktop's release archive (GitHub), verified against its published checksums, into `<tools>/agent-desktop`. */
 	| "agent-desktop-archive"
+	/** Stock `omp update`, which picks its own version: an omp Bun does not manage. */
 	| "omp-update"
 	| "portable-git"
 	| "xcode-select"

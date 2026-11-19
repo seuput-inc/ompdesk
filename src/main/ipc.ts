@@ -262,6 +262,7 @@ export interface IpcDeps {
 	hostedTabs: Pick<
 		LocalHostServices,
 		| "viewSession"
+		| "showAway"
 		| "summariesChanged"
 		| "remoteOpened"
 		| "onRemoteOpenedChange"
@@ -587,6 +588,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Sidecar → owning-window event forwarding is wired by SidecarPool at
 	// acquire time. GUI host tools need Electron, so the pool calls this
 	// executor (set once at startup); unknown tools fail with stock's wording.
+	// The control calls being carried out, by device and call id.
+	const runningControlCalls = new Set<string>();
 	sidecarPool.hostToolExecutor = (sidecar, request, tab) => {
 		const reply = (text: string, isError: boolean) =>
 			sidecar.sendSideChannel({
@@ -637,12 +640,18 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return;
 		}
 		if (isAgentControlTool(request.toolName)) {
+			// A paired host re-sends every call still open when its link comes back (host-services.ts `#open`); one this
+			// computer is still carrying out answers when it ends, so the re-send runs nothing.
+			const running = `${sidecar.device ?? ""}\n${request.id}`;
+			if (request.resent === true && runningControlCalls.has(running)) return;
+			runningControlCalls.add(running);
 			void agentControl
 				.run(tab.win, tab.tabId, request.toolName, request.arguments, {
 					id: request.id,
 					resent: request.resent === true,
 				})
 				.then(outcome => {
+					runningControlCalls.delete(running);
 					reply(outcome.text, outcome.isError);
 					// A local omp never re-sends a call; a paired host's result counts once it reached the host
 					// (`hostReplyDelivered`, wired below).
@@ -709,6 +718,26 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				{ sessionPath, restore },
 				restore ? WORKTREE_PREPARE_BUDGET_MS : undefined,
 			),
+	};
+	/** An agent's open, and a session shown for its absent device, spawn into a window the same way (tab-spawn.ts). */
+	const agentSpawnDeps: Parameters<typeof spawnTabForWindow>[0] = {
+		sidecarPool: deps.sidecarPool,
+		sessionIndex,
+		fallbackCwd: () => null,
+		initialCwd: deps.initialCwd,
+		defaultWorkspace: ensureDefaultWorkspace,
+		remote: spawnRemote,
+		hosted: deps.hostedTabs,
+		savedWorktrees: savedWorktreesForSpawn,
+	};
+	// A device's session this computer runs, whose device has been away past the notice, shows in the front window in
+	// the background, so that window carries out the calls the device was never handed (host-services.ts `#takeOver`).
+	deps.hostedTabs.showAway = sessionPath => {
+		const win = windowManager.getTargetWindow();
+		if (!win) return;
+		void spawnTabForWindow(agentSpawnDeps, win, { sessionPath }).catch((error: unknown) =>
+			console.warn(`[host-services] showing a session for its absent device failed: ${String(error)}`),
+		);
 	};
 
 	// Log lines (batched by LogWatcher)
@@ -1236,21 +1265,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) =>
-			spawnTabForWindow(
-				{
-					sidecarPool: deps.sidecarPool,
-					sessionIndex,
-					fallbackCwd: () => null,
-					initialCwd: deps.initialCwd,
-					defaultWorkspace: ensureDefaultWorkspace,
-					remote: spawnRemote,
-					hosted: deps.hostedTabs,
-					savedWorktrees: savedWorktreesForSpawn,
-				},
-				win,
-				payload,
-			),
+		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
 		// The host's own banner (batched like any tab notification, notification-batch.ts; a click opens the tab), the
 		// paired device that started the run or shows it (`host.autopilotNotice`) and paired phones (Web Push).
 		notify: (tabId, notice) => {
@@ -1400,21 +1415,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) =>
-			spawnTabForWindow(
-				{
-					sidecarPool: deps.sidecarPool,
-					sessionIndex,
-					fallbackCwd: () => null,
-					initialCwd: deps.initialCwd,
-					defaultWorkspace: ensureDefaultWorkspace,
-					remote: spawnRemote,
-					hosted: deps.hostedTabs,
-					savedWorktrees: savedWorktreesForSpawn,
-				},
-				win,
-				payload,
-			),
+		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
 		prefs: {
 			get: key => prefsStore.get(key),
 			set: (key, value) => prefsStore.set(key, value),

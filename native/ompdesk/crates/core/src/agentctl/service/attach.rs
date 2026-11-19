@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::AgentControl;
-use super::fail::{Fail, R, fail, unanswered_text};
+use super::fail::{Fail, R, fail};
 use super::host::{Deadline, Host};
 use super::js::one_line;
 use super::text::saved_id_of_path;
@@ -347,7 +347,7 @@ impl Host {
         };
         match self.command(tab_id, &command, Deadline::Ms(60_000)).await {
             Ok(response) if response.success => Ok(()),
-            Ok(response) if unanswered_text(response.error.as_deref()) => Err(lost()),
+            Ok(response) if response.unanswered() => Err(lost()),
             Ok(response) => Err(Fail::Tool(format!(
                 "Not answered: {}",
                 failure_text(response.error.as_deref())

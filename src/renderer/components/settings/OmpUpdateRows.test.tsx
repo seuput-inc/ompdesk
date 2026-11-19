@@ -10,6 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OmpUpdateState } from "../../../shared/omp-update";
 import { I18nProvider, translate } from "../../lib/i18n";
+import { ko } from "../../locales/ko";
 import { useOmpUpdateStore } from "../../stores/omp-update";
 import { OmpUpdateNowButton, OmpUpdateRows, OmpUpdateStatus } from "./OmpUpdateRows";
 
@@ -81,6 +82,7 @@ const push = (state: OmpUpdateState) =>
 const toggle = () => document.body.querySelector("#setting-gui-toolsAutoUpdate [role='switch']") as HTMLElement;
 const nowButton = () => document.body.querySelector("[data-testid='omp-update-now']") as HTMLButtonElement;
 const status = () => document.body.querySelector("[data-testid='omp-update-status']")?.textContent;
+const testedNote = () => document.body.querySelector("[data-testid='omp-tested']")?.textContent;
 
 afterEach(async () => {
 	await act(async () => root?.unmount());
@@ -143,5 +145,50 @@ describe("OmpUpdateRows", () => {
 		expect(document.body.querySelector("[data-testid='omp-tested']")?.textContent).toBe(
 			translate("ompUpdate.tested", { version: "18.22.0" }),
 		);
+	});
+
+	it("says a newer major is held and why, keeps Update now as the way to install it, and goes quiet once it is installed", async () => {
+		const held = { version: "19.0.0", reason: "untested-major" } as const;
+		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
+		await mount(ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", held }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.untested-major", { latest: "19.0.0", tested: "18.22.2" }));
+		expect(heldNote()).toContain("19.0.0");
+		expect(heldNote()).toContain("18.22.2");
+		// One line says it: no "is available" beside it.
+		expect(status()).toBeUndefined();
+		expect(nowButton().disabled).toBe(false);
+		await act(async () => nowButton().click());
+		expect(api.now).toHaveBeenCalledTimes(1);
+		// The person's update runs: the status line speaks, the held line steps back.
+		await push(
+			ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", held, phase: "updating" }),
+		);
+		expect(status()).toBe(translate("ompUpdate.status.updating"));
+		expect(heldNote()).toBeUndefined();
+		await push(ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", held: null }));
+		expect(heldNote()).toBeUndefined();
+		expect(testedNote()).toBe(translate("ompUpdate.untested", { version: "19.0.0", tested: "18.22.2" }));
+	});
+
+	it("says an installed omp above the tested major may not work with every feature, in English and Korean, whatever else the row says", async () => {
+		const onNewerMajor = { installed: "19.0.0", tested: "18.22.2" };
+		await mount(ompUpdateState({ ...onNewerMajor, latest: "19.0.0" }));
+		expect(testedNote()).toBe(
+			"omp 19.0.0 is newer than the omp this OMPdesk was tested with (18.22.2). Some features may not work.",
+		);
+		expect(ko["ompUpdate.untested"]).toBe(
+			"설치된 버전: omp {version}. 이 OMPdesk를 검증한 omp {tested}보다 주 버전이 높아서 일부 기능이 동작하지 않을 수 있어요.",
+		);
+		// A newer release of that major is held: the held line and this one both stay.
+		const held = { version: "19.0.1", reason: "untested-major" } as const;
+		await push(ompUpdateState({ ...onNewerMajor, latest: "19.0.1", held }));
+		expect(document.body.querySelector("[data-testid='omp-update-held']")?.textContent).toBe(
+			translate("ompUpdate.held.untested-major", { latest: "19.0.1", tested: "18.22.2" }),
+		);
+		expect(testedNote()).toBe(translate("ompUpdate.untested", { version: "19.0.0", tested: "18.22.2" }));
+		expect(status()).toBeUndefined();
+		// Inside the tested major the line stays the plain fact.
+		await push(ompUpdateState({ installed: "18.23.0", latest: "18.23.0", tested: "18.22.2" }));
+		expect(testedNote()).toBe(translate("ompUpdate.tested", { version: "18.22.2" }));
 	});
 });

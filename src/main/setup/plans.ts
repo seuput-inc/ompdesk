@@ -3,12 +3,40 @@
  * the exact process that runs. Everything here is fixed by main; the renderer
  * can name an item, never a command.
  */
+import { readFileSync } from "node:fs";
 import { join, win32 } from "node:path";
 import type { SetupItemId, SetupMethod, SetupPlatform, SetupPresence } from "../../shared/setup";
 import { needsShell, spawnArgs, spawnCommand } from "../spawn";
 import { managedAgentDesktopDir, managedGitRoot } from "./paths";
 
 export const OMP_PACKAGE = "@oh-my-pi/pi-coding-agent";
+
+/** The natives packages stock's own update installs beside the agent, at the agent's version (`buildVersionedPackageInstallArgs`). */
+const OMP_NATIVES = /^@oh-my-pi\/pi-natives(?:-[a-z0-9-]+)?$/;
+
+/**
+ * What a package install of omp `version` names under Bun root `root`: the omp package and, with it, every natives
+ * package that root's global manifest pins, all at that one version. `version` is always exact: OMPdesk installs
+ * the omp it judged, never "the newest" (the registry's newest may be a major this OMPdesk was never tested with),
+ * and Bun keeps an installed version a range still allows. The natives move in step because stock's update pins
+ * them beside the agent and Bun leaves a pinned one where it is when only the agent moves (measured 19 Nov 2026,
+ * Bun 1.4.4: the agent alone from 18.22.0 to 18.22.2 kept natives 18.22.0 on top and nested a second copy under
+ * every package that needs it). A root without such pins (a first install) names the agent alone: there Bun moves
+ * the natives with the agent, as its dependencies (measured the same day, macOS arm64).
+ */
+export function ompInstallSpecs(root: string, version: string): string[] {
+	let natives: string[] = [];
+	try {
+		const manifest: unknown = JSON.parse(readFileSync(join(root, "install", "global", "package.json"), "utf8"));
+		const pinned = typeof manifest === "object" && manifest !== null ? Reflect.get(manifest, "dependencies") : null;
+		if (typeof pinned === "object" && pinned !== null) {
+			natives = Object.keys(pinned).filter(name => OMP_NATIVES.test(name));
+		}
+	} catch {
+		// No global manifest (Bun installed nothing there yet): nothing is pinned.
+	}
+	return [OMP_PACKAGE, ...natives].map(name => `${name}@${version}`);
+}
 
 /**
  * Git for Windows' PortableGit, pinned with the SHA-256 its release notes
@@ -83,6 +111,8 @@ export interface PlanContext {
 	/** Detected executables; null when absent. */
 	bun: string | null;
 	omp: string | null;
+	/** What a package install of omp names (`ompInstallSpecs`): the tested omp for setup's own install, an update's target for an update. */
+	ompSpecs: readonly string[];
 	brew: string | null;
 	winget: string | null;
 	/** Windows: `%SystemRoot%`. */
@@ -133,7 +163,10 @@ export function selectMethod(item: SetupItemId, presence: SetupPresence, ctx: Pl
 		case "bun":
 			return presence.kind === "outdated" && ctx.bun ? "bun-upgrade" : "bun-script";
 		case "omp":
-			return presence.kind === "outdated" && ctx.omp ? "omp-update" : "bun-global";
+			// Always the tested omp as Bun's package, also for a too-old omp Bun does not manage (npm's, another root's):
+			// stock `omp update` picks its own target, the registry's newest whatever its major, so setup never runs it.
+			// The lookup then runs Bun's omp past the too-old one (`resolveOmpAmong`).
+			return "bun-global";
 		case "git":
 			return mac ? "xcode-select" : "portable-git";
 		case "gh":
@@ -470,8 +503,8 @@ export function buildPlan(
 			return {
 				item,
 				method,
-				spawn: { file: ctx.bun, args: ["install", "-g", OMP_PACKAGE], shell: false },
-				command: `"${ctx.bun}" install -g ${OMP_PACKAGE}`,
+				spawn: { file: ctx.bun, args: ["install", "-g", ...ctx.ompSpecs], shell: false },
+				command: `"${ctx.bun}" install -g ${ctx.ompSpecs.join(" ")}`,
 				location: join(ctx.bunInstall, "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent"),
 				prompt: null,
 				download: null,

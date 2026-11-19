@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import ompTested from "../../shared/omp-tested.json";
 import type { SetupItemId, SetupPlatform, SetupPresence, SetupState } from "../../shared/setup";
 import { RM_TEMP, writeFakeOmp } from "../test-fake-omp";
 import type { Detection } from "./detect";
@@ -106,6 +107,8 @@ function harness(
 	mirror.asked.length = 0;
 	const spawned: { spec: SpawnSpec; env: NodeJS.ProcessEnv }[] = [];
 	const states: SetupState[] = [];
+	/** Every gui-runtime line setup wrote about an omp install of its own: its step and details. */
+	const ompInstalls: [string, Record<string, unknown>][] = [];
 	const onOmpReady = vi.fn();
 	const itemOf = (spec: SpawnSpec): SetupItemId | "tool" => {
 		const id = spec.args[0];
@@ -185,13 +188,22 @@ function harness(
 		refreshPath: async () => {},
 		mirror: mirror.url,
 		ompRelease: options.ompRelease ?? (async () => null),
+		logOmpInstall: (step, details) => ompInstalls.push([step, details]),
 		...(options.testDownload ? { testDownload: options.testDownload } : {}),
 		...(options.now ? { now: options.now } : {}),
 		...(options.beforeOptional ? { beforeOptional: options.beforeOptional } : {}),
 	};
 	const service = new SetupService(deps);
 	const phase = (id: SetupItemId) => service.state().items.find(item => item.id === id)?.phase;
-	return { service, spawned, states, onOmpReady, phase, items: () => spawned.map(entry => itemOf(entry.spec)) };
+	return {
+		service,
+		spawned,
+		states,
+		ompInstalls,
+		onOmpReady,
+		phase,
+		items: () => spawned.map(entry => itemOf(entry.spec)),
+	};
 }
 
 function machine(partial: Partial<Record<SetupItemId, SetupPresence>>, managers: Partial<Machine> = {}): Machine {
@@ -351,7 +363,11 @@ describe("SetupService", () => {
 		// The fake spawner records the spec, then cannot map the real one to an item and fails the spawn.
 		await h.service.start();
 		expect(h.spawned.map(entry => entry.spec)).toEqual([
-			{ file: "/home/u/.bun/bin/omp", args: ["update"], shell: false },
+			{
+				file: "/home/u/.bun/bin/bun",
+				args: ["install", "-g", `@oh-my-pi/pi-coding-agent@${ompTested.version}`],
+				shell: false,
+			},
 		]);
 		expect(h.service.state().items.find(item => item.id === "omp")?.failure).toMatchObject({ reason: "spawn" });
 	});
@@ -761,6 +777,194 @@ describe("SetupService", () => {
 		await expect(h.service.retry("rm -rf /")).rejects.toThrow(/Unknown setup item/);
 		await expect(h.service.retry(undefined)).rejects.toThrow(/Unknown setup item/);
 		expect(h.spawned).toEqual([]);
+	});
+
+	describe("the omp it installs is the one it names (19 Nov 2026: omp 19.0.0 came out on an OMPdesk tested with 18)", () => {
+		const AGENT = "@oh-my-pi/pi-coding-agent";
+		/** A Bun root on disk as `bun install -g` leaves it: its global omp package, the launcher's place, its pins. */
+		async function bunRoot(pins: Record<string, string> = {}): Promise<{ root: string; omp: string }> {
+			const root = join(dir, "bun");
+			const global = join(root, "install", "global");
+			await mkdir(join(global, "node_modules", "@oh-my-pi", "pi-coding-agent"), { recursive: true });
+			await writeFile(join(global, "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json"), "{}");
+			await writeFile(join(global, "package.json"), JSON.stringify({ dependencies: pins }));
+			return { root, omp: join(root, "bin", "omp") };
+		}
+
+		it("installs the tested omp for a missing omp, never whatever the registry calls newest", async () => {
+			const h = harness(machine({ omp: missing }), { testInstaller: null });
+			// The fake spawner records the spec, then cannot map the real one to an item and fails the spawn.
+			await h.service.start();
+			expect(h.spawned.map(entry => entry.spec)).toEqual([
+				{ file: "/home/u/.bun/bin/bun", args: ["install", "-g", `${AGENT}@${ompTested.version}`], shell: false },
+			]);
+		});
+
+		it("brings a too-old omp Bun manages to the tested omp as a package, with the natives its manifest pins", async () => {
+			const { root, omp } = await bunRoot({
+				[AGENT]: "18.0.0",
+				"@oh-my-pi/pi-natives": "18.0.0",
+				"@oh-my-pi/pi-natives-darwin-arm64": "18.0.0",
+			});
+			const h = harness(machine({ omp: { kind: "outdated", version: "18.0.0", minimum: "18.18.9", path: omp } }), {
+				testInstaller: null,
+				bunInstall: root,
+				ompBin: omp,
+			});
+			await h.service.start();
+			expect(h.spawned.map(entry => entry.spec.args)).toEqual([
+				[
+					"install",
+					"-g",
+					`${AGENT}@${ompTested.version}`,
+					`@oh-my-pi/pi-natives@${ompTested.version}`,
+					`@oh-my-pi/pi-natives-darwin-arm64@${ompTested.version}`,
+				],
+			]);
+		});
+
+		it("updates an omp Bun manages to exactly the target, in that omp's own Bun root", async () => {
+			const { root, omp } = await bunRoot({ [AGENT]: "18.22.0", "@oh-my-pi/pi-natives": "18.22.0" });
+			const h = harness(machine({ omp: present("18.22.0") }), { testInstaller: null, ompBin: omp });
+			const hook = vi.fn(async () => {});
+			await h.service.updateOmp("18.22.2", hook, true);
+			expect(hook).toHaveBeenCalledTimes(1);
+			expect(h.spawned.map(entry => entry.spec)).toEqual([
+				{
+					file: "/home/u/.bun/bin/bun",
+					args: ["install", "-g", `${AGENT}@18.22.2`, "@oh-my-pi/pi-natives@18.22.2"],
+					shell: false,
+				},
+			]);
+			expect(h.spawned[0]?.env.BUN_INSTALL).toBe(root);
+		});
+
+		it("reports the version a package update left, and what it ran", async () => {
+			const { omp } = await bunRoot();
+			const h = harness(machine({ omp: present("18.22.0") }), { ompBin: omp, installedVersion: "18.22.2" });
+			expect(await h.service.updateOmp("18.22.2")).toEqual({ kind: "updated", version: "18.22.2" });
+			expect(h.spawned.map(entry => entry.spec.args)).toEqual([["omp", "bun-global"]]);
+			const item = h.service.state().items.find(entry => entry.id === "omp");
+			expect(item).toMatchObject({ phase: "present", method: "bun-global", failure: null });
+			expect(item?.command).toContain(`install -g ${AGENT}@18.22.2`);
+		});
+
+		it("leaves an omp Bun does not manage alone when only a named version may be installed", async () => {
+			// Stock `omp update` takes no version: it would install the registry's newest, here a major nobody asked for.
+			const h = harness(machine({ omp: present("18.22.0") }));
+			const hook = vi.fn(async () => {});
+			expect(await h.service.updateOmp("18.22.2", hook, true)).toEqual({ kind: "skipped" });
+			expect(hook).not.toHaveBeenCalled();
+			expect(h.spawned).toEqual([]);
+		});
+
+		it("finds the newest release of one major in the update's registry, for an omp it can install by name", async () => {
+			const { root, omp } = await bunRoot();
+			const asked: { bun: string; version: string; bunInstall?: string }[] = [];
+			let answer: unknown = { version: "18.22.2" };
+			const h = harness(machine({ omp: present("18.22.0") }), {
+				automatic: false,
+				ompBin: omp,
+				ompRelease: async (bun, version, env) => {
+					asked.push({ bun, version, bunInstall: env.BUN_INSTALL });
+					if (answer instanceof Error) throw answer;
+					return answer;
+				},
+			});
+			await h.service.start();
+			await expect(h.service.newestOmpIn(18)).resolves.toBe("18.22.2");
+			expect(asked).toEqual([{ bun: "/home/u/.bun/bin/bun", version: "18", bunInstall: root }]);
+			// A registry that answers another major, or nothing, has no release to install.
+			answer = { version: "19.0.0" };
+			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
+			answer = null;
+			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
+			answer = new Error("503 Service Unavailable");
+			await expect(h.service.newestOmpIn(18)).rejects.toThrow("503 Service Unavailable");
+		});
+
+		it("names no release for an omp Bun does not manage, without asking the registry", async () => {
+			const ompRelease = vi.fn(async () => ({ version: "18.22.2" }));
+			const h = harness(machine({ omp: present("18.22.0") }), { automatic: false, ompRelease });
+			await h.service.start();
+			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
+			expect(ompRelease).not.toHaveBeenCalled();
+		});
+
+		it("writes a line when its own omp install starts and when it ends, with the version that landed or the reason", async () => {
+			const ok = harness(machine({ omp: missing }), { installed: { omp: "18.22.2" } });
+			await ok.service.start();
+			const command = `"/home/u/.bun/bin/bun" install -g ${AGENT}@${ompTested.version}`;
+			expect(ok.ompInstalls).toEqual([
+				["started", { path: "setup", method: "bun-global", command }],
+				["finished", { path: "setup", method: "bun-global", command, version: "18.22.2" }],
+			]);
+			const failed = harness(machine({ omp: missing }), { exits: { omp: 1 } });
+			await failed.service.start();
+			expect(failed.ompInstalls).toEqual([
+				["started", { path: "setup", method: "bun-global", command }],
+				["failed", { path: "setup", method: "bun-global", command, reason: "exit" }],
+			]);
+			// Another item's install is not omp's: no line.
+			const other = harness(machine({ bun: missing }));
+			await other.service.start();
+			expect(other.ompInstalls).toEqual([]);
+		});
+
+		it("for a too-old omp Bun does not manage (npm's), launch setup and the repair path install the tested omp with Bun and never run stock `omp update`", async () => {
+			const npmOmp: SetupPresence = {
+				kind: "outdated",
+				version: "18.0.0",
+				minimum: "18.18.9",
+				path: "/usr/local/bin/omp",
+			};
+			const tested = {
+				file: "/home/u/.bun/bin/bun",
+				args: ["install", "-g", `${AGENT}@${ompTested.version}`],
+				shell: false,
+			};
+			// The real plan: the fake spawner records it and fails the spawn, so the repair path's retry plans it again.
+			const real = harness(machine({ omp: npmOmp }), { testInstaller: null, ompBin: "/usr/local/bin/omp" });
+			await real.service.start();
+			await real.service.retry("omp");
+			expect(real.spawned.map(entry => entry.spec)).toEqual([tested, tested]);
+
+			// The fake installer: the install lands, the lookup then answers Bun's omp, and the line names what ran.
+			const h = harness(machine({ omp: npmOmp }), {
+				ompBin: "/usr/local/bin/omp",
+				installed: { omp: ompTested.version },
+			});
+			await h.service.start();
+			expect(h.spawned.map(entry => entry.spec.args)).toEqual([["omp", "bun-global"]]);
+			expect(h.service.state().items.find(item => item.id === "omp")).toMatchObject({
+				phase: "present",
+				method: "bun-global",
+				presence: { kind: "present", version: ompTested.version },
+			});
+			expect(h.ompInstalls.map(([step, details]) => [step, details.method])).toEqual([
+				["started", "bun-global"],
+				["finished", "bun-global"],
+			]);
+			expect(h.onOmpReady).toHaveBeenCalledTimes(1);
+		});
+
+		it("holds a too-old omp while Bun cannot be installed: no install of omp, one line saying why, and the setup state says omp needs Bun", async () => {
+			const h = harness(
+				machine({
+					bun: missing,
+					omp: { kind: "outdated", version: "18.0.0", minimum: "18.18.9", path: "/usr/local/bin/omp" },
+				}),
+				{ exits: { bun: 6 }, ompBin: "/usr/local/bin/omp" },
+			);
+			await h.service.start();
+			expect(h.items()).toEqual(["bun"]);
+			expect(h.ompInstalls).toEqual([["skipped", { path: "setup", method: "bun-global", reason: "no-bun" }]]);
+			expect(h.service.state().items.find(item => item.id === "omp")).toMatchObject({
+				phase: "failed",
+				failure: { reason: "prerequisite", detail: "bun" },
+				presence: { kind: "outdated", version: "18.0.0" },
+			});
+		});
 	});
 
 	describe("updateOmp", () => {

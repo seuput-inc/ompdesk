@@ -246,6 +246,12 @@ export class CoreProcess {
 	 * console only gets these where nothing keeps main's output (a packaged app).
 	 */
 	report: ((step: CoreLossStep, details: Record<string, string | number | boolean>) => void) | null = null;
+	/**
+	 * The file in which a worktree removal on Windows writes down an empty folder some process still held
+	 * (`OMPDESK_LEFT_BEHIND`, `crates/core/src/git/left_behind.rs`; `index.ts` sets `<userData>/left-behind-worktrees.json`
+	 * before the first start). Unset, the core leaves nothing behind and such a removal keeps git's failure.
+	 */
+	leftBehindFile: string | null = null;
 
 	constructor(options: CoreProcessOptions) {
 		this.#binary = options.binary;
@@ -422,7 +428,12 @@ export class CoreProcess {
 		// detached process has none: `ensure_console` in crates/core/src/sys.rs). It still ends with stdin's end
 		// (main's), and it is never `unref`ed.
 		this.#hub = hubPlace(++this.#starts);
-		const env = { ...process.env, OMPDESK_HUB: this.#hub.address, OMPDESK_HUB_TOKEN: this.#hub.token };
+		const env = {
+			...process.env,
+			OMPDESK_HUB: this.#hub.address,
+			OMPDESK_HUB_TOKEN: this.#hub.token,
+			...(this.leftBehindFile ? { OMPDESK_LEFT_BEHIND: this.leftBehindFile } : {}),
+		};
 		const child = spawn(this.#binary(), [], {
 			stdio: ["pipe", "pipe", "pipe"],
 			windowsHide: true,

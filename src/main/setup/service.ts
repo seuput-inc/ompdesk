@@ -1,7 +1,7 @@
 /**
  * This machine's automatic setup. At launch it detects every item; when
  * automatic, it installs the missing required items in order (Bun, Git for
- * Windows on Windows, omp; `omp update` for a too-old omp), then the missing
+ * Windows on Windows, omp at the tested version), then the missing
  * optional ones in the background. Nothing asks first: the renderer only
  * shows the state, and may retry or cancel by item id.
  *
@@ -30,8 +30,8 @@ import {
 	setupItemAutomatic,
 	setupItemRequired,
 } from "../../shared/setup";
-import { isNewer } from "../../shared/version";
-import { manifestBunMinimum, ompUpdateEnv, parseUpdateCheck } from "../omp-runtime";
+import { isNewer, majorOf } from "../../shared/version";
+import { manifestBunMinimum, ompBunRoot, ompUpdateEnv, parseUpdateCheck, TESTED_OMP_VERSION } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { SerialChain, stepStalled, throwIfStepStalled } from "../serial-chain";
 import { needsShell, spawnArgs, spawnCommand } from "../spawn";
@@ -57,6 +57,7 @@ import {
 	buildPlan,
 	manualSteps,
 	OMP_PACKAGE,
+	ompInstallSpecs,
 	type PlanContext,
 	type PlanDownload,
 	type SpawnSpec,
@@ -122,6 +123,12 @@ export interface SetupServiceDeps {
 	 * without one, no release names a Bun requirement.
 	 */
 	ompRelease?: (bun: string, version: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
+	/**
+	 * One gui-runtime.jsonl line (source `omp-update`) per step of an omp install setup runs on its own account
+	 * (a missing, broken or too-old omp): `started`, then `finished` or `failed`, or `skipped` with the reason when
+	 * nothing could run (`no-bun`), each with `path: "setup"`.
+	 */
+	logOmpInstall?: (step: "started" | "finished" | "failed" | "skipped", details: Record<string, unknown>) => void;
 	now?: () => number;
 }
 
@@ -141,6 +148,11 @@ function presenceOf(item: SetupItemState): SetupPresence | null {
 /** An item's phase as it is now, after the awaits since it was last set. */
 function phaseOf(item: SetupItemState): SetupItemState["phase"] {
 	return item.phase;
+}
+
+/** Why an item's install failed, as it is now, after the awaits since it was cleared. */
+function failureOf(item: SetupItemState): SetupFailure | null {
+	return item.failure;
 }
 
 const CSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, "g");
@@ -351,18 +363,23 @@ export class SetupService {
 	}
 
 	/**
-	 * Stock `omp update` (the omp item's `omp-update` plan) under the supervisor,
-	 * in the background, queued behind any install that runs now. It never asks
-	 * and never looks at what omp is doing: running omp processes keep the code
-	 * they loaded. `beforeInstall` runs once omp is known to be present, just
-	 * before the installer starts (main stops the helpers that read omp's files
-	 * from disk). After it, omp is detected again; `target` is the version the
-	 * registry announced, and an omp still older than it is a failure.
+	 * Move omp to `target` under the supervisor, in the background, queued behind any install that runs now. It
+	 * never asks and never looks at what omp is doing: running omp processes keep the code they loaded.
+	 *
+	 * An omp Bun manages (`ompBunRoot`) is installed as a package at exactly `target` (`bun install -g`, the natives
+	 * its manifest pins in step: `ompInstallSpecs`), so the version that lands is the one the caller judged. Any
+	 * other omp can only be moved by stock `omp update` (the `omp-update` plan), which takes no version and installs
+	 * whatever the registry calls newest when it runs: with `exactOnly` (the caller's `target` is not that newest)
+	 * such an omp is left alone and the outcome is `skipped`.
+	 *
+	 * `beforeInstall` runs once omp is known to be present, just before the installer starts (main stops the helpers
+	 * that read omp's files from disk). After it, omp is detected again, and an omp still older than `target` is a
+	 * failure.
 	 */
-	updateOmp(target: string, beforeInstall?: () => Promise<void>): Promise<OmpUpdateOutcome> {
+	updateOmp(target: string, beforeInstall?: () => Promise<void>, exactOnly = false): Promise<OmpUpdateOutcome> {
 		const { promise, resolve } = Promise.withResolvers<OmpUpdateOutcome>();
 		const settled = this.#enqueue(async () => {
-			resolve(await this.#updateOmp(target, beforeInstall));
+			resolve(await this.#updateOmp(target, beforeInstall, exactOnly));
 		});
 		// A disposed service runs no task: settle as skipped. After a normal finish this resolve is a no-op.
 		settled.then(
@@ -370,6 +387,20 @@ export class SetupService {
 			error => resolve({ kind: "failed", failure: { reason: "install", detail: String(error) } }),
 		);
 		return promise;
+	}
+
+	/**
+	 * The newest omp release of `major` in the registry the update installs from (`bun pm view <omp>@<major>`, in
+	 * the update's environment), for a pass that may not go above that major. Null when nothing here can install a
+	 * named version (no omp, or one Bun does not manage) or the registry has none; rejects when the lookup fails.
+	 */
+	async newestOmpIn(major: number): Promise<string | null> {
+		const omp = this.#detection?.omp;
+		const bun = this.#detection?.bun;
+		if (!omp || !bun || this.#items.omp.presence?.kind !== "present" || !ompBunRoot(omp)) return null;
+		const manifest = await this.#viewRelease(bun, String(major), await this.#updateEnv(omp));
+		const version = typeof manifest === "object" && manifest !== null ? Reflect.get(manifest, "version") : null;
+		return typeof version === "string" && majorOf(version) === major ? version : null;
 	}
 
 	/**
@@ -666,7 +697,11 @@ export class SetupService {
 		this.#emit();
 	}
 
-	async #updateOmp(target: string, beforeInstall?: () => Promise<void>): Promise<OmpUpdateOutcome> {
+	async #updateOmp(
+		target: string,
+		beforeInstall: (() => Promise<void>) | undefined,
+		exactOnly: boolean,
+	): Promise<OmpUpdateOutcome> {
 		await this.#detect();
 		const item = this.#items.omp;
 		const detection = this.#detection;
@@ -676,12 +711,21 @@ export class SetupService {
 			unsupported ||
 			this.#disposed ||
 			item.presence?.kind !== "present" ||
-			item.phase === "running"
+			item.phase === "running" ||
+			!detection.omp
 		) {
 			return { kind: "skipped" };
 		}
-		const plan = buildPlan("omp", "omp-update", this.#planContext(detection));
-		if (!plan || !detection.omp) return { kind: "skipped" };
+		const root = detection.bun ? ompBunRoot(detection.omp) : null;
+		if (!root && exactOnly) return { kind: "skipped" };
+		const method: SetupMethod = root ? "bun-global" : "omp-update";
+		const ctx = this.#planContext(detection);
+		const plan = buildPlan(
+			"omp",
+			method,
+			root ? { ...ctx, bunInstall: root, ompSpecs: ompInstallSpecs(root, target) } : ctx,
+		);
+		if (!plan) return { kind: "skipped" };
 		const env = await this.#updateEnv(detection.omp);
 		throwIfStepStalled();
 		const blocked = await this.#readyForRelease(target, env, detection.bun);
@@ -689,7 +733,7 @@ export class SetupService {
 		if (blocked) return { kind: "failed", failure: blocked };
 		await beforeInstall?.().catch(() => undefined);
 		throwIfStepStalled();
-		item.method = "omp-update";
+		item.method = method;
 		item.command = plan.command;
 		item.location = plan.location;
 		item.prompt = null;
@@ -700,7 +744,7 @@ export class SetupService {
 		this.#emit();
 		let outcome: RunOutcome;
 		try {
-			outcome = await this.#runner.run(this.#spec(plan.spawn, "omp", "omp-update"), env, chunk => {
+			outcome = await this.#runner.run(this.#spec(plan.spawn, "omp", method), env, chunk => {
 				item.output = (item.output + chunk).slice(-SETUP_OUTPUT_TAIL);
 				this.#emitSoon();
 			});
@@ -739,14 +783,21 @@ export class SetupService {
 		return { kind: "failed", failure: { reason: "not-updated", detail: detail(reason) } };
 	}
 
+	/** The registry's manifest of `<omp>@<version>` (an exact version, or a major for its newest release). */
+	#viewRelease(bun: string, version: string, env: NodeJS.ProcessEnv): Promise<unknown> {
+		const view = this.#deps.ompRelease ?? (this.#deps.testInstaller ? async () => null : viewOmpRelease);
+		return view(bun, version, env);
+	}
+
 	/**
-	 * What must hold before stock `omp update` installs `target`, or why it must not run. Stock installs the
-	 * release and then runs its launcher to verify it; a launcher that does not answer is "repaired" with the
-	 * compiled omp, which the bridge cannot load into (28 Oct 2026: omp 18.13.3 names `engines.bun` >=1.4.4,
-	 * this Mac's Bun was 1.4.2, and `~/.bun/bin/omp` became a 217 MB binary; every bridge feature then read
-	 * "Unavailable"). So the release's manifest is read from the registry the update installs from, a Bun
-	 * below its `engines.bun` is upgraded first (the bun item's `bun upgrade`), and a release published as a
-	 * standalone build only (`omp.dist` "binary", which stock never installs as a package) is not installed.
+	 * What must hold before `target` is installed, or why it must not be. Stock's update installs the release and
+	 * then runs its launcher to verify it; a launcher that does not answer is "repaired" with the compiled omp,
+	 * which the bridge cannot load into (28 Oct 2026: omp 18.13.3 names `engines.bun` >=1.4.4, this Mac's Bun was
+	 * 1.4.2, and `~/.bun/bin/omp` became a 217 MB binary; every bridge feature then read "Unavailable"), and a
+	 * package installed under a too-old Bun does not start at all. So the release's manifest is read from the
+	 * registry the update installs from, a Bun below its `engines.bun` is upgraded first (the bun item's
+	 * `bun upgrade`), and a release published as a standalone build only (`omp.dist` "binary", which is never a
+	 * package) is not installed.
 	 */
 	async #readyForRelease(
 		target: string,
@@ -754,10 +805,9 @@ export class SetupService {
 		bun: string | null,
 	): Promise<OmpUpdateFailure | null> {
 		if (!bun) return null;
-		const view = this.#deps.ompRelease ?? (this.#deps.testInstaller ? async () => null : viewOmpRelease);
 		let manifest: unknown;
 		try {
-			manifest = await view(bun, target, env);
+			manifest = await this.#viewRelease(bun, target, env);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			return { reason: "check", detail: `omp ${target}'s requirements: ${message}` };
@@ -906,7 +956,8 @@ export class SetupService {
 		}
 		const plan = buildPlan(id, method, ctx, release, tailscale);
 		if (!plan) {
-			// Only omp has a prerequisite (Bun).
+			// Only omp has a prerequisite (Bun). Without Bun omp stays as it is: nothing else installs a named version.
+			if (id === "omp") this.#deps.logOmpInstall?.("skipped", { path: "setup", method, reason: "no-bun" });
 			this.#fail(id, { reason: "prerequisite", detail: "bun" });
 			return;
 		}
@@ -944,6 +995,8 @@ export class SetupService {
 			if (download && !(await this.#fetch(id, download))) return;
 			const installEnv = await this.#installEnv();
 			throwIfStepStalled();
+			const target = id === "omp" ? { method, command: plan.command } : null;
+			if (target) this.#deps.logOmpInstall?.("started", { path: "setup", ...target });
 			const outcome = await this.#runner.run(this.#spec(plan.spawn, id, method), installEnv, chunk => {
 				if (stepStalled()) return;
 				item.output = (item.output + chunk).slice(-SETUP_OUTPUT_TAIL);
@@ -953,6 +1006,15 @@ export class SetupService {
 			item.progress = null;
 			await putBack();
 			await this.#settle(id, outcome);
+			if (target) {
+				const presence = presenceOf(item);
+				const landed = presence?.kind === "present";
+				this.#deps.logOmpInstall?.(landed ? "finished" : "failed", {
+					path: "setup",
+					...target,
+					...(landed ? { version: presence.version } : { reason: failureOf(item)?.reason ?? outcome.kind }),
+				});
+			}
 		} finally {
 			await putBack();
 			if (!stepStalled()) {
@@ -1097,6 +1159,9 @@ export class SetupService {
 			toolsDir: this.#deps.toolsDir,
 			bun: detection.bun,
 			omp: detection.omp,
+			// Setup's own install is the omp this OMPdesk was tested with, never the registry's newest, which may be a
+			// major nothing here was tested on (19 Nov 2026: omp 19.0.0 came out while OMPdesk was tested with 18).
+			ompSpecs: ompInstallSpecs(this.#deps.bunInstall, TESTED_OMP_VERSION),
 			brew: detection.brew,
 			winget: detection.winget,
 			systemRoot: this.#deps.systemRoot,

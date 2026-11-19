@@ -108,13 +108,13 @@ describe("SetupTakeover", () => {
 		expect(document.activeElement).toBe(query('[data-testid="setup-takeover"]'));
 	});
 
-	it("says an install is running while it runs, and an update when omp is below the minimum", async () => {
+	it("says an install is running while it runs, and an update when the tested omp goes over an omp below the minimum", async () => {
 		fake.current.state = setupState(
 			"darwin",
 			{
 				omp: {
 					phase: "running",
-					method: "omp-update",
+					method: "bun-global",
 					presence: { kind: "outdated", version: "18.0.0", minimum: "18.11.0", path: "/x" },
 				},
 			},

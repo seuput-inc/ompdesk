@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
 use super::AgentControl;
-use super::fail::{Fail, R, fail, unanswered_text};
+use super::fail::{Fail, R, fail};
 use super::host::{Deadline, HostState};
 use super::js::{number, one_line, trim, trim_start};
 use super::pace::pace_line;
@@ -158,15 +158,51 @@ impl OwedDeps for Owed<'_> {
     }
 
     async fn prompt(&self, tab_id: &str, entry: &OutboxSend) -> HandOver {
+        // An open's first message to an omp that never had it (a relaunch cut the open short): its setup first, then
+        // a goal's objective or the prompt. A step the child refuses keeps it queued and tells the opener once.
+        let mut steps: Vec<Value> = entry.before.clone();
+        if entry.goal {
+            steps.push(json!({ "type": "set_goal", "objective": entry.body }));
+        }
+        for command in &steps {
+            let deadline = Deadline::Ms(self.ctl.tuning.prompt_ms);
+            let refused = match self.ctl.host.command(tab_id, command, deadline).await {
+                Ok(answer) if answer.success => continue,
+                // Not answered yet (its omp starting, a slow command): the next pass tries again, nothing to tell.
+                Ok(answer) if answer.unanswered() => return HandOver::Refused,
+                Err(error) if error.unanswered() => return HandOver::Refused,
+                Ok(answer) => answer.error.unwrap_or_else(|| "no reason given".to_owned()),
+                Err(error) => error.message(),
+            };
+            self.ctl
+                .host
+                .trouble(
+                    &entry.from,
+                    entry.from_device.as_deref(),
+                    &format!("open-{}-{}", entry.mark, entry.session_path),
+                    &format!(
+                        "The session you opened ({}) lost its first message when OMPdesk quit before it got it, and setting it up again failed ({}: {refused}). OMPdesk keeps trying; if it stays stuck, send it your brief again with ompdesk_session_send.",
+                        saved_id_of_path(Some(&entry.session_path))
+                            .unwrap_or_else(|| "its session".to_owned()),
+                        command["type"].as_str().unwrap_or("a command"),
+                    ),
+                )
+                .await;
+            return HandOver::Refused;
+        }
+        if entry.goal {
+            // Stock's goal entry carries no marker the journal check could find: done once stock took it.
+            if let Some(outbox) = &self.ctl.send_outbox {
+                outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
+            }
+            return HandOver::Handed;
+        }
         let Ok(command) = self.ctl.owed_command(tab_id, entry).await else {
             return HandOver::Refused;
         };
         let sent = self.ctl.hand_over(tab_id, &command, true).await;
         let (handed, taken) = match sent {
-            Ok(response) => (
-                response.success || unanswered_text(response.error.as_deref()),
-                response.success,
-            ),
+            Ok(response) => (response.success || response.unanswered(), response.success),
             Err(error) => (error.unanswered(), false),
         };
         // As a fresh send: a blocking ompdesk_session_result wait the receiver stands in returns, so it reads the
@@ -202,7 +238,7 @@ impl OwedDeps for Owed<'_> {
     }
 }
 
-fn sent_answer(value: &Value) -> Option<SentAnswer> {
+pub(in crate::agentctl::service) fn sent_answer(value: &Value) -> Option<SentAnswer> {
     Some(SentAnswer {
         instance: value.get("instance")?.as_str()?.to_owned(),
         journaled: value
@@ -412,7 +448,7 @@ impl AgentControl {
                         return Ok(answer);
                     }
                 }
-                Ok(answer) if unanswered_text(answer.error.as_deref()) => return Ok(answer),
+                Ok(answer) if answer.unanswered() => return Ok(answer),
                 Err(error) if error.unanswered() => return Err(error),
                 _ => {}
             }
@@ -638,10 +674,16 @@ impl AgentControl {
             );
         }
         let held;
+        // No answer from a paired host's link (`rpc_delivery_unknown`): the host may have delivered it. Never "nothing
+        // was sent" (the hub got three copies of one request on 19 Nov 2026): it is kept as handed, with a receipt.
+        let mut unconfirmed = None;
         let mut response: Option<RpcResponse> = None;
         match self.hand_over(&target.tab_id, &command, running).await {
             Ok(answer) => {
-                held = !answer.success && unanswered_text(answer.error.as_deref());
+                held = answer.unanswered();
+                if answer.unconfirmed() {
+                    unconfirmed = Some(answer.error.clone().unwrap_or_default());
+                }
                 response = Some(answer);
             }
             Err(error) => {
@@ -673,7 +715,12 @@ impl AgentControl {
             self.arrive(&target.tab_id);
         }
         let started = !running && !held && self.turn_starts(&caller.tab_id, &target.tab_id).await;
-        let how = if held {
+        let how = if let Some(why) = &unconfirmed {
+            format!(
+                "{} did not answer in time ({why}), so it may already have arrived or still arrive, and runs once; this receipt answers a resend with the same request_id, so do not send it again: check with ompdesk_session_result",
+                named(target)
+            )
+        } else if held {
             "queued: its omp is busy with another command (a provider sign-in, for one), and the message runs once that ends, so do not send it again".to_owned()
         } else if !running {
             if started {
@@ -697,8 +744,13 @@ impl AgentControl {
                 .to_owned()
         };
         let receipt = format!(
-            "Sent to {}: accepted{}; {how}.{dispatch_note}{attached_note}",
+            "Sent to {}: {}{}; {how}.{dispatch_note}{attached_note}",
             named(target),
+            if unconfirmed.is_some() {
+                "not confirmed"
+            } else {
+                "accepted"
+            },
             if started { ", turn started" } else { "" },
         );
         if let Some(key) = receipt_key {
@@ -895,39 +947,42 @@ impl AgentControl {
                 .await?,
             )
         };
-        let id = match &args.id {
-            Some(id) => id.clone(),
-            None => {
-                // The same report from the same session file is the same id, so a call stock re-runs after a relaunch
-                // (its result lost in the crash) is recognized by the receiver's journal instead of arriving twice.
-                let receiver = tabs
-                    .iter()
-                    .find(|tab| tab.tab_id == to)
-                    .and_then(|tab| tab.session_path.clone())
-                    .unwrap_or_else(|| to.clone());
-                let sender = caller
-                    .session_path
-                    .clone()
-                    .unwrap_or_else(|| caller.tab_id.clone());
-                let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
-                let mut parts = vec![
-                    sender.as_str(),
-                    receiver.as_str(),
-                    args.kind.as_str(),
-                    args.dispatch.as_deref().unwrap_or(""),
-                    args.text.as_str(),
-                ];
-                if !resolved.is_empty() {
-                    parts.push(sig.as_str());
+        // The id names a report among its sender's own reports to this receiver: the same report re-run (a call stock
+        // repeats after a relaunch, its result lost in the crash) has the same id, so the receiver's journal knows it, while
+        // another session's report never does, whatever id it chose (every child's first dispatch is d1, and two children
+        // that both said `d1-done` lost the second report on 18 Nov 2026: "Delivered.", and nothing arrived).
+        let id = {
+            let receiver = tabs
+                .iter()
+                .find(|tab| tab.tab_id == to)
+                .and_then(|tab| tab.session_path.clone())
+                .unwrap_or_else(|| to.clone());
+            let sender = caller
+                .session_path
+                .clone()
+                .unwrap_or_else(|| caller.tab_id.clone());
+            let sig = shas_sig(resolved.iter().map(|item| item.file.sha256.as_str()));
+            let mut parts = vec![sender.as_str(), receiver.as_str()];
+            match &args.id {
+                Some(id) => parts.extend(["id", id.as_str()]),
+                None => {
+                    parts.extend([
+                        args.kind.as_str(),
+                        args.dispatch.as_deref().unwrap_or(""),
+                        args.text.as_str(),
+                    ]);
+                    if !resolved.is_empty() {
+                        parts.push(sig.as_str());
+                    }
                 }
-                let joined = parts.join("\u{0}");
-                let digest = Sha256::digest(joined.as_bytes());
-                digest
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()[..24]
-                    .to_owned()
             }
+            let joined = parts.join("\u{0}");
+            let digest = Sha256::digest(joined.as_bytes());
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()[..24]
+                .to_owned()
         };
         let text = [
             Some(args.text.clone()),
@@ -1010,7 +1065,7 @@ impl AgentControl {
         Ok(match outcome {
             Posted::Duplicate => format!(
                 "Report {} was already delivered; nothing sent again.{waiting}",
-                mail.id
+                args.id.as_deref().unwrap_or(&mail.id)
             ),
             Posted::Stale => format!(
                 "Ignored: dispatch {} is no longer current (the session that opened you has since sent dispatch {}). Work on its latest message.{waiting}",

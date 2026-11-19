@@ -320,11 +320,14 @@ pub async fn removal(git: &Git, path: &str, force: bool) -> Result<Removal, Faul
 const HELD_FOLDER_MS: u64 = 10_000;
 
 /// `git worktree remove <flags> <target>`, every removal of a session's checkout. On Windows git cannot delete a folder
-/// some process still has as its working folder (omp's service broker in the moments after its tab closed): it empties
-/// the folder, drops the worktree from its list ("there's no going back from here", builtin/worktree.c) and fails with
-/// `failed to delete '<folder>': Permission denied` after well under a second. The folder left behind, no longer a
-/// worktree, is then removed once its holder lets go (within `HELD_FOLDER_MS`), and the answer is git's success; a
-/// holder that stays past that keeps git's failure. A worktree git still lists is never touched here.
+/// some process still has as its working folder (omp's service broker in the moments after its tab closed; omp 19's
+/// per-user daemon, which takes the folder of the session that first needed it, for as long as any omp is connected):
+/// it empties the folder, drops the worktree from its list ("there's no going back from here", builtin/worktree.c)
+/// and fails with `failed to delete '<folder>': Permission denied` after well under a second. The folder left behind,
+/// no longer a worktree, is then removed once its holder lets go (within `HELD_FOLDER_MS`), and the answer is git's
+/// success. A holder that stays past that leaves only an empty folder, written down for disk care's later pass
+/// (`left_behind.rs`), and the answer is success too; a folder with anything still in it, or one the core cannot
+/// write down, keeps git's failure. A worktree git still lists is never touched here.
 pub(crate) async fn git_remove(
     git: &Git,
     primary: &str,
@@ -338,14 +341,33 @@ pub(crate) async fn git_remove(
     let output = git.run(primary, &args, opts).await?;
     #[cfg(windows)]
     if output.code != 0 && left_behind(git, primary, target).await? {
+        let succeeded = || Output {
+            code: 0,
+            stdout: Vec::new(),
+            stderr: String::new(),
+            truncated: false,
+        };
         let folder = std::path::PathBuf::from(target);
+        let held = folder.clone();
         if blocking(move || remove_when_free(&folder)).await? {
-            return Ok(Output {
-                code: 0,
-                stdout: Vec::new(),
-                stderr: String::new(),
-                truncated: false,
-            });
+            return Ok(succeeded());
+        }
+        if let Some(file) = super::left_behind::file()
+            && blocking(move || super::left_behind::is_empty_folder(&held)).await?
+        {
+            let entry = super::left_behind::Entry {
+                path: target.to_owned(),
+                primary: primary.to_owned(),
+            };
+            match super::left_behind::record(&file, entry) {
+                Ok(()) => {
+                    eprintln!(
+                        "[left-behind] {target}: removed for git; its empty folder is still some process's working folder and is left for disk care"
+                    );
+                    return Ok(succeeded());
+                }
+                Err(error) => eprintln!("[left-behind] {target} not written down: {error}"),
+            }
         }
     }
     Ok(output)

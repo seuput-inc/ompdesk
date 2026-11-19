@@ -1,66 +1,57 @@
 /**
- * omp's update for real: a fake registry (127.0.0.1) serves two releases of
+ * omp's update for real: a fake registry (127.0.0.1) serves releases of
  * `@oh-my-pi/pi-coding-agent`, the real `bun install -g` puts the older one in
  * two Bun roots under a temp HOME — the default `~/.bun`, whose `bin` comes
  * first on the user's PATH, and a custom BUN_INSTALL whose omp is the one
  * OMPdesk runs — and SetupService's `latestOmp` + `updateOmp` (the code behind
- * omp-updater.ts, real supervisor) check and update. The stand-in launcher's
- * `update` resolves its target the way stock's `resolveUpdateTarget` does: the
- * first `omp` on PATH, a Bun install only inside `bun pm bin -g`, then
- * `bun install -g` of the release. The update must land in the omp OMPdesk
- * runs and leave the other one alone. Nothing outside the temp root is
- * written: HOME, BUN_INSTALL and Bun's cache all point into it.
+ * omp-updater.ts, real supervisor) check and update. The check is the stand-in
+ * launcher's `update --check`; the update is `bun install -g` of the named
+ * release in the Bun root of the omp OMPdesk runs. It must land there and
+ * leave the other one alone, and it must be the version OMPdesk named even
+ * while the registry's newest is a major above the tested omp. Nothing outside
+ * the temp root is written: HOME, BUN_INSTALL and Bun's cache all point into it.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SetupPresence } from "../../shared/setup";
-import { isCompiledOmp, MIN_OMP_VERSION, parseOmpVersion } from "../omp-runtime";
-import { type OmpRegistry, ompRegistry, ompRelease } from "../test-omp-registry";
+import { isCompiledOmp, MIN_OMP_VERSION, parseOmpVersion, resolveOmpAmong, TESTED_OMP_VERSION } from "../omp-runtime";
+import { writeFakeOmp } from "../test-fake-omp";
+import { type OmpRegistry, type OmpRelease, ompRegistry, ompRelease } from "../test-omp-registry";
 import type { Detection } from "./detect";
 import { OMP_PACKAGE } from "./plans";
 import { SetupService } from "./service";
 
 const windows = process.platform === "win32";
 
-/** Stock's update on a Bun install, reduced to what decides where it lands. */
+/** Stock's `omp update --check` on a Bun install, reduced to what it answers; OMPdesk installs the release itself. */
 const CLI = `#!/usr/bin/env bun
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const args = process.argv.slice(2);
-const same = (a, b) => (process.platform === "win32" ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
 if (args[0] === "--version") {
 	console.log("omp/" + pkg.version);
 	process.exit(0);
 }
-if (args[0] !== "update") process.exit(2);
+if (args[0] !== "update" || !args.includes("--check")) process.exit(2);
 console.log("Current version: " + pkg.version);
 const registry = (process.env.BUN_CONFIG_REGISTRY ?? "").replace(/\\/+$/, "");
 const latest = (await (await fetch(registry + "/" + pkg.name)).json())["dist-tags"].latest;
-if (latest === pkg.version) {
-	console.log("Already up to date");
-	process.exit(0);
-}
-console.log("New version available: " + latest);
-if (args.includes("--check")) process.exit(0);
-const target = Bun.which("omp");
-const pm = Bun.spawn([process.execPath, "pm", "bin", "-g"], { stdout: "pipe", env: process.env });
-const binDir = (await new Response(pm.stdout).text()).trim();
-if (!target || !same(dirname(target), binDir)) {
-	console.error("Update failed: " + target + " is not in bun's global bin " + binDir);
-	process.exit(1);
-}
-const install = Bun.spawn([process.execPath, "install", "-g", "--no-cache", pkg.name + "@" + latest], {
-	stdout: "inherit",
-	stderr: "inherit",
-	env: process.env,
-});
-process.exit(await install.exited);
+console.log(latest === pkg.version ? "Already up to date" : "New version available: " + latest);
 `;
 
 const bunProbe = spawnSync("bun", ["-e", "console.log(process.execPath + '\\n' + Bun.version)"], { encoding: "utf8" });
@@ -96,17 +87,28 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 		return typeof manifest === "object" && manifest !== null && "version" in manifest ? manifest.version : undefined;
 	};
 	const [major = 0, minor = 0] = MIN_OMP_VERSION.split(".").map(Number);
-	const older = ompRelease(MIN_OMP_VERSION, CLI);
-	// The release names the running Bun as its oldest (stock's `engines.bun`): OMPdesk reads it from the registry
-	// before `omp update` (real `bun pm view`) and finds nothing to upgrade.
-	const newer = ompRelease(`${major}.${minor + 1}.0`, CLI, {}, { bun: `>=${bunVersion}` });
+	const testedMajor = Number(TESTED_OMP_VERSION.split(".")[0]);
+	// One release per version (the tested omp may be the floor or its next minor). Each names the running Bun as its
+	// oldest (stock's `engines.bun`): OMPdesk reads it from the registry before an update (real `bun pm view`) and
+	// finds nothing to upgrade.
+	const releases = new Map<string, OmpRelease>();
+	const release = (version: string): OmpRelease => {
+		const made = releases.get(version) ?? ompRelease(version, CLI, {}, { bun: `>=${bunVersion}` });
+		releases.set(version, made);
+		return made;
+	};
+	const older = release(MIN_OMP_VERSION);
+	const newer = release(`${major}.${minor + 1}.0`);
+	const tested = release(TESTED_OMP_VERSION);
+	/** A major this OMPdesk was never tested with. */
+	const beyond = release(`${testedMajor + 1}.0.0`);
 	let latest = older.version;
 	let registry: OmpRegistry | undefined;
 	let env: NodeJS.ProcessEnv;
 
 	beforeAll(async () => {
 		mkdirSync(home, { recursive: true });
-		const served = await ompRegistry([older, newer], () => latest);
+		const served = await ompRegistry([...releases.values()], () => latest);
 		registry = served;
 		const systemDirs = windows
 			? [join(process.env.SystemRoot ?? "C:\\Windows", "System32"), process.env.SystemRoot ?? "C:\\Windows"]
@@ -191,6 +193,18 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 		expect((await run(shellOmp, ["--version"], env)).output.trim()).toBe(`omp/${older.version}`);
 		// Up to date now: the next check says so.
 		await expect(service.latestOmp()).resolves.toBe(newer.version);
+
+		// The registry's newest becomes a major above the tested omp: the check names it, the tested major's newest
+		// release is found beside it, and an update that names that release installs exactly it.
+		latest = beyond.version;
+		await expect(service.latestOmp()).resolves.toBe(beyond.version);
+		await expect(service.newestOmpIn(testedMajor)).resolves.toBe(tested.version);
+		expect(await service.updateOmp(tested.version, undefined, true)).toEqual({
+			kind: "updated",
+			version: tested.version,
+		});
+		expect(installedVersion(ownBun)).toBe(tested.version);
+		expect(installedVersion(shellBun)).toBe(older.version);
 		service.dispose();
 	}, 120_000);
 
@@ -250,10 +264,89 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 			refreshPath: async () => undefined,
 		});
 		await service.start();
+		// The registry's newest is a major above the tested omp: the repair installs the tested omp all the same.
+		latest = beyond.version;
 		await service.retry("omp");
 		const item = service.state().items.find(entry => entry.id === "omp");
-		expect(item?.presence, item?.output).toEqual({ kind: "present", version: newer.version, path: shellOmp });
+		expect(item?.presence, item?.output).toEqual({ kind: "present", version: tested.version, path: shellOmp });
 		expect(readdirSync(dirname(shellOmp)).filter(name => name.includes(".ompdesk-compiled-"))).toEqual([]);
 		service.dispose();
 	}, 120_000);
+
+	for (const path of ["launch setup", "the repair path"] as const) {
+		it(`${path} leaves npm's too-old omp alone and installs the tested omp with Bun while the registry's newest is a higher major; OMPdesk then runs the tested one`, async () => {
+			// 19 Nov 2026: stock `omp update` on such an omp takes no version and would install the registry's newest.
+			latest = beyond.version;
+			const slug = path === "launch setup" ? "launch" : "repair";
+			const npmOmp = await writeFakeOmp(join(root, `npm-${slug}`), 'console.log("omp/18.0.0");\n');
+			const bunRoot = join(root, `bun-${slug}`);
+			const bunOmp = join(bunRoot, "bin", windows ? "omp.exe" : "omp");
+			// OMPdesk's lookup: npm's omp comes first on PATH, Bun's own folder after it.
+			const lookup = () => resolveOmpAmong([npmOmp, bunOmp].filter(existsSync), env.PATH ?? "");
+			const present: SetupPresence = { kind: "present", version: bunVersion, path: bun ?? "" };
+			const detect = async (): Promise<Detection> => {
+				const resolution = await lookup();
+				const reason = resolution?.ok === false ? resolution.reason : undefined;
+				const omp: SetupPresence = resolution?.ok
+					? { kind: "present", version: resolution.runtime.version, path: resolution.runtime.bin }
+					: reason?.kind === "too-old"
+						? { kind: "outdated", version: reason.version, minimum: reason.minimum, path: reason.bin }
+						: { kind: "missing" };
+				return {
+					presence: {
+						bun: present,
+						git: present,
+						gh: present,
+						node: present,
+						"agent-desktop": present,
+						tailscale: present,
+						omp,
+					},
+					bun,
+					omp: omp.kind === "missing" ? null : omp.path,
+					brew: null,
+					winget: null,
+				};
+			};
+			const lines: [string, Record<string, unknown>][] = [];
+			const service = new SetupService({
+				platform: windows ? "win32" : "darwin",
+				arch: process.arch,
+				systemRoot: process.env.SystemRoot ?? "C:\\Windows",
+				toolsDir: join(root, "tools"),
+				bunInstall: bunRoot,
+				statePath: join(root, `setup-state-${slug}.json`),
+				// Launch setup installs on its own; the repair path is `retry("omp")` (BridgeHealth's `onIncompatible`).
+				automatic: path === "launch setup",
+				testInstaller: null,
+				spawnEnv: async () => ({ ...env }),
+				onState: () => undefined,
+				onOmpReady: () => undefined,
+				detect,
+				refreshPath: async () => undefined,
+				logOmpInstall: (step, details) => lines.push([step, details]),
+			});
+			await service.start();
+			if (path === "the repair path") {
+				expect(lines).toEqual([]);
+				await service.retry("omp");
+			}
+			const item = service.state().items.find(entry => entry.id === "omp");
+			expect(item?.presence, item?.output).toEqual({ kind: "present", version: tested.version, path: bunOmp });
+			expect(installedVersion(bunRoot)).toBe(tested.version);
+			// Exactly one install ran, Bun's, and it named the tested omp.
+			const command = `"${bun}" install -g ${OMP_PACKAGE}@${tested.version}`;
+			expect(lines).toEqual([
+				["started", { path: "setup", method: "bun-global", command }],
+				["finished", { path: "setup", method: "bun-global", command, version: tested.version }],
+			]);
+			// npm's omp was never run to update itself: it is what it was, and the lookup passes over it.
+			expect(await resolveOmpAmong([npmOmp], env.PATH ?? "")).toMatchObject({
+				ok: false,
+				reason: { kind: "too-old", version: "18.0.0", bin: npmOmp },
+			});
+			expect(await lookup()).toMatchObject({ ok: true, runtime: { bin: bunOmp, version: tested.version } });
+			service.dispose();
+		}, 120_000);
+	}
 });
