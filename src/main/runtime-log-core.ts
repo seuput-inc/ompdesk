@@ -99,6 +99,7 @@ function source(value: unknown): RuntimeErrorSource {
 		: "unknown";
 }
 
+/** Untrusted input only: flat details (a string, number, boolean or null per key); anything nested is dropped. */
 function details(value: unknown): Record<string, string | number | boolean | null> | undefined {
 	const input = record(value);
 	if (!input) return undefined;
@@ -110,6 +111,30 @@ function details(value: unknown): Record<string, string | number | boolean | nul
 			const text = boundedString(detail, MAX_DETAIL_VALUE_LENGTH);
 			if (text !== undefined) output[key] = text;
 		}
+	}
+	return Object.keys(output).length > 0 ? output : undefined;
+}
+
+/**
+ * Main's own details: what `details` keeps, plus an array or object a source records on purpose (the bridge self-check's
+ * `unavailable` list), as JSON when it serializes within MAX_DETAIL_VALUE_LENGTH and as that JSON cut to the bound
+ * when longer, so a line stays bounded and parseable.
+ */
+function mainDetails(value: unknown): Record<string, unknown> | undefined {
+	const input = record(value);
+	if (!input) return undefined;
+	const output: Record<string, unknown> = { ...details(input) };
+	for (const [key, detail] of Object.entries(input).slice(0, MAX_DETAIL_KEYS)) {
+		if (typeof detail !== "object" || detail === null) continue;
+		let json: string | undefined;
+		try {
+			json = JSON.stringify(detail);
+		} catch {
+			continue;
+		}
+		if (json === undefined) continue;
+		output[key] =
+			json.length <= MAX_DETAIL_VALUE_LENGTH ? JSON.parse(json) : boundedString(json, MAX_DETAIL_VALUE_LENGTH);
 	}
 	return Object.keys(output).length > 0 ? output : undefined;
 }
@@ -148,10 +173,14 @@ export function appendRuntimeLogAtPath(filePath: string, report: RuntimeLogRepor
 			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 		}
 
+		// The renderer's reports reach here already through `normalizeRuntimeErrorReport` (ipc.ts); main's own keep
+		// their structured details, bounded.
+		const normalized = normalizeRuntimeErrorReport(report);
 		const entry = {
 			timestamp: new Date().toISOString(),
 			...context,
-			...normalizeRuntimeErrorReport(report),
+			...normalized,
+			details: mainDetails(report.details),
 		};
 		fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, "utf8");
 	} catch {

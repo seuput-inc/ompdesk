@@ -55,6 +55,37 @@ describe("runtime crash log", () => {
 		expect(report.details).toEqual({ kept: 3 });
 	});
 
+	it("writes main's structured details as JSON, bounded, while a renderer report stays flat", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-runtime-log-"));
+		tempDirs.push(dir);
+		const filePath = path.join(dir, "gui-runtime.jsonl");
+		const context = { appVersion: "1", platform: "darwin", pid: 1 };
+		appendRuntimeLogAtPath(
+			filePath,
+			{
+				source: "bridge-health",
+				message: "probed",
+				details: { ok: false, unavailable: [{ feature: "jobs", missing: ["a#b"] }], huge: ["x".repeat(10_000)] },
+			},
+			context,
+		);
+		const renderer = normalizeRuntimeErrorReport({
+			source: "react-render",
+			message: "m",
+			details: { list: [1], n: 2 },
+		});
+		appendRuntimeLogAtPath(filePath, renderer, context);
+		const [main, page] = (await fs.readFile(filePath, "utf8"))
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as { details: Record<string, unknown> });
+		expect(main?.details.ok).toBe(false);
+		expect(main?.details.unavailable).toEqual([{ feature: "jobs", missing: ["a#b"] }]);
+		expect(typeof main?.details.huge).toBe("string");
+		expect(String(main?.details.huge).length).toBeLessThan(4_200);
+		expect(page?.details).toEqual({ n: 2 });
+	});
+
 	it("preserves packaged resource replacement reports", () => {
 		const report = normalizeRuntimeErrorReport({
 			source: "application-resources",

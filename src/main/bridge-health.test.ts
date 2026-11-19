@@ -1,5 +1,9 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BridgeHealth, unavailableFeatures } from "./bridge-health";
+import { appendRuntimeLogAtPath } from "./runtime-log-core";
 
 function fakeBridge(result: () => Promise<unknown>) {
 	const request = vi.fn((_method: string) => result());
@@ -279,5 +283,50 @@ describe("BridgeHealth record", () => {
 			["19.0.1", 1],
 			["19.0.0", 0],
 		]);
+	});
+
+	it("lands in gui-runtime.jsonl with each missing label, healthy and degraded alike", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const dir = mkdtempSync(join(tmpdir(), "ompdesk-bridge-health-"));
+		try {
+			const file = join(dir, "gui-runtime.jsonl");
+			const health = new BridgeHealth(vi.fn(), () => {}, {
+				log: report => appendRuntimeLogAtPath(file, report, { appVersion: "1", platform: "darwin", pid: 1 }),
+			});
+			await health.observe(
+				{ connected: true, ompVersion: "19.0.1", bridge: healthy.bridge },
+				{ processAlive: true },
+			);
+			await health.observe(
+				{ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge },
+				{ processAlive: true },
+			);
+			const lines = readFileSync(file, "utf8")
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line) as { source: string; message: string; details: unknown });
+			expect(lines.map(({ source, message, details }) => ({ source, message, details }))).toEqual([
+				{
+					source: "bridge-health",
+					message: "probed",
+					details: { ompVersion: "19.0.1", ok: true, unavailable: [] },
+				},
+				{
+					source: "bridge-health",
+					message: "probed",
+					details: {
+						ompVersion: "19.0.0",
+						ok: false,
+						level: "warn",
+						unavailable: [
+							{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
+							{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+						],
+					},
+				},
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
