@@ -1673,7 +1673,11 @@ describe("closing a child a paired web page owns", () => {
 		});
 		const closing = runtime.run(win, "main0001", T.stop, { session: "desk0002", close: true });
 		await vi.waitFor(
-			() => expect(win.sent).toContainEqual([AGENT_CONTROL_VIEW, { tabId: "desk0002", how: "close" }]),
+			() =>
+				expect(win.sent).toContainEqual([
+					AGENT_CONTROL_VIEW,
+					expect.objectContaining({ tabId: "desk0002", how: "close" }),
+				]),
 			{ timeout: 5_000 },
 		);
 		expect(log).toEqual([]);

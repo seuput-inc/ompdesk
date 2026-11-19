@@ -550,11 +550,13 @@ async fn closing_a_resting_session_needs_no_card_and_a_tab_the_window_keeps_is_r
     assert!(outcome.is_error);
     assert_eq!(
         outcome.text,
-        "\"b\" is still open: its window did not close the tab. A window keeps its last tab and a tab with unsaved Files edits; when neither applies, the window is not answering. Ask the user to close it; its session is saved either way."
+        "\"b\" is still open: its window did not answer the close within 0.03 s, so its page is not running (a stuck window closes nothing and shows nothing new). Ask the user to look at that window; its session is saved either way."
     );
     assert!(names(&asked, "confirm").is_empty());
     let view = &names(&asked, "view")[0];
-    assert_eq!(view["event"], json!({ "tabId": "b", "how": "close" }));
+    assert_eq!(view["event"]["tabId"], "b");
+    assert_eq!(view["event"]["how"], "close");
+    assert!(view["event"]["closeId"].is_u64());
     // The tab is marked closing only while the call runs.
     assert!(!control.mem().closing.contains("b"));
     control.host.port().close();
@@ -686,7 +688,8 @@ async fn closing_a_saved_session_a_paired_host_still_runs_for_this_computer_clos
     assert_eq!(spawn["join"], true);
     let views = names(&asked, "view");
     assert_eq!(views.len(), 1);
-    assert_eq!(views[0]["event"], json!({ "tabId": "j", "how": "close" }));
+    assert_eq!(views[0]["event"]["tabId"], "j");
+    assert_eq!(views[0]["event"]["how"], "close");
     control.host.port().close();
 }
 

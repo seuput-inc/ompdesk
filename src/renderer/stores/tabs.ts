@@ -33,7 +33,7 @@ export type { SplitAxis, SplitLayout, SplitPlacement } from "../../shared/split-
 
 import { useEffect } from "react";
 import { create, type StoreApi } from "zustand";
-import type { AgentControlViewEvent } from "../../shared/agent-control";
+import type { AgentCloseOutcome, AgentControlViewEvent } from "../../shared/agent-control";
 import type {
 	IpcOpenExtensionRequest,
 	IpcRetrySaga,
@@ -241,6 +241,22 @@ const closedTabIds = new Set<string>();
 
 export function isTabClosed(tabId: string): boolean {
 	return closedTabIds.has(tabId);
+}
+
+/**
+ * Why this window keeps tab `id` when asked to close it, or null when it closes it: a window keeps its last tab, a
+ * tab it does not hold (a ghost is a picture of last time's tab), and a tab whose Files editor holds unsaved edits.
+ * The one guard of the person's close and an agent's (`applyAgentView`, which tells the agent which it was).
+ */
+function closeRefusal(
+	state: { tabs: readonly SessionTab[] },
+	id: string,
+): Exclude<AgentCloseOutcome, "closing" | "in-use"> | null {
+	if (state.tabs.length <= 1) return "last-tab";
+	const tab = state.tabs.find(entry => entry.id === id);
+	if (!tab || tab.ghost) return "not-here";
+	const ui = useUiStore.getState();
+	return ui.fileEditDirty && ui.fileEditTabId === id ? "unsaved-edits" : null;
 }
 
 /** TAB_STATUS pushes applied in this window so far, and the count when each tab's latest one was applied. */
@@ -1215,16 +1231,12 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 
 	closeTab: async id => {
 		const state = get();
-		if (state.tabs.length <= 1) return;
-		const index = state.tabs.findIndex(tab => tab.id === id);
-		if (index === -1 || state.tabs[index]?.ghost) return;
+		const refusal = closeRefusal(state, id);
 		// Unsaved Files edits belong to this tab: closing it would drop them, so the editor's discard confirm asks first
 		// and the side panel closes the tab once the user agrees.
-		const ui = useUiStore.getState();
-		if (ui.fileEditDirty && ui.fileEditTabId === id) {
-			ui.holdTabClose(id);
-			return;
-		}
+		if (refusal === "unsaved-edits") useUiStore.getState().holdTabClose(id);
+		if (refusal) return;
+		const index = state.tabs.findIndex(tab => tab.id === id);
 		if (state.split && splitTabIds(state.split).includes(id)) {
 			await get().removePane(id);
 		} else if (id === state.activeTabId) {
@@ -1465,15 +1477,24 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		toast({ variant: "info", message: translate("tabs.openElsewhere", { device }) });
 	},
 
-	applyAgentView: async ({ tabId, how, auto }) => {
+	applyAgentView: async ({ tabId, how, auto, closeId }) => {
 		// Main announces a tab it just spawned (TAB_LIST_CHANGED) and then asks to show it; the list may not
 		// have been applied yet, so an unknown tab is reconciled first. Still unknown afterwards: nothing to show.
 		if (!get().tabs.some(tab => tab.id === tabId)) await get().reconcileTabs();
 		const known = get().tabs.some(tab => tab.id === tabId);
-		if (!known || isTabClosed(tabId)) return;
+		if (how !== "close" && (!known || isTabClosed(tabId))) return;
 		if (how === "close") {
-			if (auto && autoCloseHeld(tabId, visibleTabIds(get()))) return;
-			await get().closeTab(tabId);
+			const outcome: AgentCloseOutcome =
+				!known || isTabClosed(tabId)
+					? "not-here"
+					: auto && autoCloseHeld(tabId, visibleTabIds(get()))
+						? "in-use"
+						: (closeRefusal(get(), tabId) ?? "closing");
+			// The answer goes first: the close it starts may wait on a neighbor's switch, and the agent is told what this
+			// window did, not left to read a tab that stayed as a window that never heard it.
+			if (closeId !== undefined)
+				void window.omp.tabs.answerAgentClose({ tabId, closeId, outcome }).catch(() => undefined);
+			if (outcome === "closing" || outcome === "unsaved-edits") await get().closeTab(tabId);
 			return;
 		}
 		useUiStore.getState().closeDestination();

@@ -895,12 +895,23 @@ impl Host {
             .tell("setTask", &json!({ "tabId": tab_id, "task": task }));
     }
 
-    /// `view(callerTabId, event)`: show or close a tab in the caller's window (`AgentControlViewEvent`).
-    pub fn view(&self, caller_tab_id: &str, tab_id: &str, how: &str, auto: bool) {
-        let mut event = json!({ "tabId": tab_id, "how": how });
+    /// `view(callerTabId, event)`: show a tab in the caller's window (`AgentControlViewEvent`).
+    pub fn view(&self, caller_tab_id: &str, tab_id: &str, how: &str) {
+        self.tell_view(caller_tab_id, json!({ "tabId": tab_id, "how": how }));
+    }
+
+    /// `view(callerTabId, event)` with `how: "close"`: the window holding the tab closes it as the person's close
+    /// would and answers `close_id` with what it did (main's `answerClose`, read back as `ControlTab.close_answer`).
+    /// `auto`: a close the app decided on itself, which the window refuses for a tab the person is at.
+    pub fn close_view(&self, caller_tab_id: &str, tab_id: &str, auto: bool, close_id: u64) {
+        let mut event = json!({ "tabId": tab_id, "how": "close", "closeId": close_id });
         if auto {
             event["auto"] = json!(true);
         }
+        self.tell_view(caller_tab_id, event);
+    }
+
+    fn tell_view(&self, caller_tab_id: &str, event: Value) {
         self.port.tell(
             "view",
             &json!({ "callerTabId": caller_tab_id, "event": event }),

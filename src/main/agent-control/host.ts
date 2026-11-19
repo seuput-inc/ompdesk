@@ -22,6 +22,8 @@ import {
 	AGENT_CONTROL_VIEW,
 	AGENT_HIDDEN_PREFS_KEY,
 	AGENT_SCHEDULE_PREFIX,
+	type AgentCloseAnswer,
+	type AgentCloseOutcome,
 	type AgentControlToolName,
 	type AgentControlViewEvent,
 	type AgentReviewEvent,
@@ -335,6 +337,8 @@ export class AgentControlRuntime {
 	readonly #outsideCards = new Map<string, Promise<void>>();
 	/** The routines' wake-ups waiting for their turn, by run: how each ended is what the core tells (`wakeDone`). */
 	readonly #wakes = new Map<string, (result: { code: number | null; error?: string }) => void>();
+	/** Each tab's window's latest answer to an agent close (`AGENT_CLOSE_ANSWER`), read by the core's close. */
+	readonly #closeAnswers = new Map<string, { closeId: number; outcome: AgentCloseOutcome }>();
 
 	constructor(deps: AgentControlHostDeps) {
 		this.#deps = deps;
@@ -485,6 +489,16 @@ export class AgentControlRuntime {
 	/** The person typed a prompt to `tabId` in a window, on the phone page or on a paired device (main's word, not the text). */
 	personTyped(tabId: string): void {
 		void this.control.personTyped(tabId).catch(() => undefined);
+	}
+
+	/**
+	 * The window that holds `tabId` answered the agent close `closeId` (its own `applyAgentView`). Only the window that
+	 * owns the tab may answer for it; the core reads the answer with the next snapshot.
+	 */
+	answerClose(win: ClientWindow, answer: AgentCloseAnswer): void {
+		if (this.#deps.pool.windowOfTab(answer.tabId) !== win) return;
+		this.#closeAnswers.set(answer.tabId, { closeId: answer.closeId, outcome: answer.outcome });
+		this.control.changed();
 	}
 
 	/**
@@ -740,6 +754,7 @@ export class AgentControlRuntime {
 			...(facts?.runningSince !== undefined ? { busySince: facts.runningSince } : {}),
 			...(formerIds.length > 0 ? { formerIds } : {}),
 			...(webEdits ? { webEdits } : {}),
+			...(this.#closeAnswers.has(info.tabId) ? { closeAnswer: this.#closeAnswers.get(info.tabId) } : {}),
 		};
 	}
 

@@ -892,7 +892,7 @@ impl AgentControl {
                     .await?;
                 self.refuse_hidden(&target, &caller)?;
                 let how = args.how.as_deref().unwrap_or("focus");
-                self.host.view(&caller.tab_id, &target.tab_id, how, false);
+                self.host.view(&caller.tab_id, &target.tab_id, how);
                 Ok(format!("Showing {} ({how}).", text::label(&target)))
             }
             Tool::Notify => {
