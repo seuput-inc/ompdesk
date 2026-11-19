@@ -26,6 +26,8 @@ import { runVisualizeTool, type VisualPages, VisualStore } from "./visuals";
 
 const IMAGE: PreviewImage = { data: "cG5n", mimeType: "image/png" };
 const HINT_ERROR = "Preview check: the page shows an error message. Look at it with gui_visualize or fix the page.";
+const HINT_UNCHECKED =
+	"Preview check: could not check the page in time, so nobody has seen how it looks. Look at it with gui_visualize before you rely on it.";
 const HINT_BLANK =
 	"Preview check: the page looks blank (nothing rendered). Look at it with gui_visualize or fix the page.";
 
@@ -98,8 +100,16 @@ describe("Preview check on gui_visualize open", () => {
 		expect(flagged).toEqual([[withCheck.id, 1, "blank"]]);
 	});
 
-	const quiet: Array<[string, Partial<PreviewCheckDeps>]> = [
-		["a page the judge finds fine", { judge: async () => ({ problem: null, judged: true }) }],
+	it("answers exactly as before, with no notice, for a page the judge finds fine", async () => {
+		const { deps, flagged } = fakeDeps({ judge: async () => ({ problem: null, judged: true }) });
+		const withCheck = await open((id, version) => checkVisualPage(deps, id, version));
+		const without = await open();
+		expect(withCheck.text).toBe(without.text);
+		expect(withCheck.isError).toBe(false);
+		expect(flagged).toEqual([]);
+	});
+
+	const unseen: Array<[string, Partial<PreviewCheckDeps>]> = [
 		["a judge that did not decide", { judge: async () => ({ problem: "error", judged: false }) }],
 		["a failed judge request", { judge: async () => null }],
 		[
@@ -120,11 +130,11 @@ describe("Preview check on gui_visualize open", () => {
 			},
 		],
 	];
-	it.each(quiet)("answers exactly as before, with no notice, for %s", async (_name, overrides) => {
+	it.each(unseen)("tells the agent the page went unchecked, with no notice, for %s", async (_name, overrides) => {
 		const { deps, flagged } = fakeDeps(overrides);
 		const withCheck = await open((id, version) => checkVisualPage(deps, id, version));
 		const without = await open();
-		expect(withCheck.text).toBe(without.text);
+		expect(withCheck.text).toBe(`${without.text}\n${HINT_UNCHECKED}`);
 		expect(withCheck.isError).toBe(false);
 		expect(flagged).toEqual([]);
 	});
@@ -142,7 +152,7 @@ describe("Preview check on gui_visualize open", () => {
 		expect(flagged).toEqual([]);
 	});
 
-	it("gives up at the total bound with no verdict, and drops a verdict that comes later", async () => {
+	it("calls the page unchecked when the judge runs past the total, and drops its late verdict", async () => {
 		vi.useFakeTimers();
 		const late = Promise.withResolvers<PreviewCheckResult>();
 		const { deps, flagged } = fakeDeps({ judge: () => late.promise });
@@ -153,13 +163,13 @@ describe("Preview check on gui_visualize open", () => {
 		await vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS - 1);
 		expect(verdict).toBeUndefined();
 		await vi.advanceTimersByTimeAsync(1);
-		expect(verdict).toBeNull();
+		expect(verdict).toBe("unchecked");
 		late.resolve({ problem: "error", judged: true });
 		await vi.advanceTimersByTimeAsync(0);
 		expect(flagged).toEqual([]);
 	});
 
-	it("gives up on a page that never shows, and drops a picture that comes later", async () => {
+	it("calls a page that never shows unchecked, and drops a picture that comes later", async () => {
 		vi.useFakeTimers();
 		const never = Promise.withResolvers<PreviewImage>();
 		const { deps } = fakeDeps({ capture: () => never.promise });
@@ -168,10 +178,34 @@ describe("Preview check on gui_visualize open", () => {
 			verdict = result;
 		});
 		await vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS);
-		expect(verdict).toBeNull();
+		expect(verdict).toBe("unchecked");
 		never.resolve(IMAGE);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(deps.judge).not.toHaveBeenCalled();
+	});
+
+	it("judges a page ready late with a judge slower than its usual answer", async () => {
+		vi.useFakeTimers();
+		// The page ready as the Windows runner had it (1.2 s), the judge at 1.5 s, well past its 409 ms p50 on the 22 pages.
+		const { deps, flagged } = fakeDeps({
+			capture: () => {
+				const { promise, resolve } = Promise.withResolvers<PreviewImage>();
+				setTimeout(() => resolve(IMAGE), 1200);
+				return promise;
+			},
+			judge: () => {
+				const { promise, resolve } = Promise.withResolvers<PreviewCheckResult>();
+				setTimeout(() => resolve({ problem: "error", judged: true }), 1500);
+				return promise;
+			},
+		});
+		let verdict: string | null | undefined;
+		void checkVisualPage(deps, "v", 1).then(result => {
+			verdict = result;
+		});
+		await vi.advanceTimersByTimeAsync(PREVIEW_CHECK_TOTAL_MS);
+		expect(verdict).toBe("error");
+		expect(flagged).toEqual([["v", 1, "error"]]);
 	});
 
 	it("gives the judge only what is left of the total bound", async () => {
@@ -345,24 +379,30 @@ describe("createTabCheck", () => {
 	});
 
 	it.each([
-		["a failed command", { type: "response", command: "judge_preview_check", success: false, error: "x" }],
+		[
+			"a failed command",
+			{ type: "response", command: "judge_preview_check", success: false, error: "x" },
+			"unchecked",
+		],
 		[
 			"an answer that did not decide",
 			{ type: "response", command: "judge_preview_check", success: true, data: { problem: null, judged: false } },
+			"unchecked",
 		],
 		[
 			"an unknown problem",
 			{ type: "response", command: "judge_preview_check", success: true, data: { problem: "bad", judged: true } },
+			null,
 		],
-		["no data", { type: "response", command: "judge_preview_check", success: true }],
-	])("keeps today's behaviour for %s", async (_name, response) => {
+		["no data", { type: "response", command: "judge_preview_check", success: true }, "unchecked"],
+	])("reads %s as %s, with no notice", async (_name, response, outcome) => {
 		const { flagged, pages, command } = tab(response);
 		expect(
 			await createTabCheck({ enabled: () => true, inFront: () => true, pages, rpc: { command: command as never } })(
 				"v",
 				1,
 			),
-		).toBeNull();
+		).toBe(outcome);
 		expect(flagged).toEqual([]);
 	});
 

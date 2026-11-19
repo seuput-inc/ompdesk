@@ -4,8 +4,10 @@
  * 22 agent-made pages, error ≥ 0.5 or empty ≥ 0.8 found 13/13 broken pages with 0 false alarms, p50 409 ms).
  *
  * Only an addition: the judge answers while stock's `judge` role chain resolves first to a native decision model
- * and the `judgeAssist` pref is on. A switch that is off, no native judge, an error, a timeout or an answer of
- * "did not decide" all end as `null` here, so the tool answers byte for byte as it did before and no notice shows.
+ * and the `judgeAssist` pref is on. A switch that is off or no native judge ends as `null` here, so the tool answers
+ * byte for byte as it did before and no notice shows. Once a native judge was there to ask, every way the page goes
+ * unjudged (it never showed, the judge failed, did not decide or ran out of time) ends as `"unchecked"`, and the tool
+ * says so: an agent never reads a page nobody looked at as a page with no problem.
  *
  * Privacy: the capture is `capturePage()` of the one preview page that shows the visual (main/preview/host.ts),
  * never the app window, another preview tab or a window of the user, and only while that page is on screen. It is
@@ -25,10 +27,11 @@ export const PREVIEW_CHECK_IMAGE_MAX = 1280;
 /** A page that finished loading paints its last frame within this long (late scripts, fonts, layout). */
 export const PREVIEW_CHECK_SETTLE_MS = 300;
 /**
- * What the judge keeps of the total: its answer took p95 0.56 s (judge-assist-contracts.ts). The page gets the rest
- * to appear, load and settle, because the time a window takes to open its Preview is what varies: on GitHub's Windows
- * runner the page was asked for 1.2 s after the tool opened the visual and loaded at 1.6 s, and on a run's first open
- * it was not even asked for at 2 s, so a flat 2 s for the page dropped the check while 1.9 s of the total sat unused.
+ * What the judge keeps of the total, and the page gets the rest to appear, load and settle, because how long a window
+ * takes to open its Preview is what varies: on GitHub's Windows runner the page was asked for 1.2 s after the tool
+ * opened the visual and loaded at 1.6 s, and on a run's first open it was not even asked for at 2 s, so a flat 2 s for
+ * the page dropped the check while 1.9 s of the total sat unused. The judge's real time on a picture is the 22 pages'
+ * p50 of 409 ms above; a judge that needs longer than what is left makes the check `"unchecked"`, never silent.
  */
 export const PREVIEW_CHECK_JUDGE_MS = 1000;
 /**
@@ -73,9 +76,14 @@ export interface PreviewCheckDeps {
 	flag(visualId: string, version: number, problem: PreviewVerdict): void;
 }
 
+/** What the judge saw, or `"unchecked"`: a native judge was there, but the page went unjudged. */
+export type PreviewCheckOutcome = PreviewVerdict | "unchecked";
+
 /** What the agent reads under the tool result; English because tool results are model-facing. */
-export function previewHint(problem: PreviewVerdict): string {
-	const seen = problem === "error" ? "the page shows an error message." : "the page looks blank (nothing rendered).";
+export function previewHint(outcome: PreviewCheckOutcome): string {
+	if (outcome === "unchecked")
+		return "Preview check: could not check the page in time, so nobody has seen how it looks. Look at it with gui_visualize before you rely on it.";
+	const seen = outcome === "error" ? "the page shows an error message." : "the page looks blank (nothing rendered).";
 	return `Preview check: ${seen} Look at it with gui_visualize or fix the page.`;
 }
 
@@ -118,36 +126,42 @@ export function judgeImage(image: CapturedImage): PreviewImage | null {
 }
 
 /**
- * Whether the page of `version` of `visualId` shows an error or nothing, within `PREVIEW_CHECK_TOTAL_MS`; on a
- * problem the page also gets its notice. Never rejects and never takes longer: every other outcome is `null`.
+ * What the judge saw on the page of `version` of `visualId`, within `PREVIEW_CHECK_TOTAL_MS`; on a problem the page
+ * also gets its notice. Never rejects and never takes longer. `null`: no check was made (switch off, no native judge,
+ * no answer from the probe in time) or the judge saw no problem; `"unchecked"`: a native judge was there, but the page
+ * went unjudged.
  */
 export async function checkVisualPage(
 	deps: PreviewCheckDeps,
 	visualId: string,
 	version: number,
-): Promise<PreviewVerdict | null> {
+): Promise<PreviewCheckOutcome | null> {
 	if (!deps.enabled()) return null;
 	const started = Date.now();
-	// An answer after the deadline is dropped: the tool has replied, and the code-rule path shows no notice.
+	let asked = false;
+	// After the deadline nothing more happens: the tool has replied, so no model call and no notice.
 	let open = true;
-	const decide = async (): Promise<PreviewVerdict | null> => {
+	const decide = async (): Promise<{ outcome: PreviewCheckOutcome | null }> => {
 		try {
 			const available = await withDeadline(deps.available(PREVIEW_CHECK_PROBE_MS), PREVIEW_CHECK_PROBE_MS);
-			if (available !== true || !open) return null;
+			if (available !== true) return { outcome: null };
+			asked = true;
 			const captureMs = PREVIEW_CHECK_TOTAL_MS - PREVIEW_CHECK_JUDGE_MS - (Date.now() - started);
 			const appearMs = deps.inFront() ? captureMs : PREVIEW_CHECK_BEHIND_MS;
 			const image = await deps.capture(visualId, version, captureMs, appearMs);
-			if (!image || !open) return null;
+			if (!image || !open) return { outcome: "unchecked" };
 			const result = await deps.judge(image, Math.max(0, PREVIEW_CHECK_TOTAL_MS - (Date.now() - started)));
-			if (!open || !result?.judged || !result.problem) return null;
+			if (!result?.judged) return { outcome: "unchecked" };
+			if (!result.problem || !open) return { outcome: null };
 			deps.flag(visualId, version, result.problem);
-			return result.problem;
+			return { outcome: result.problem };
 		} catch {
-			return null;
+			return { outcome: asked ? "unchecked" : null };
 		}
 	};
 	try {
-		return await withDeadline(decide(), PREVIEW_CHECK_TOTAL_MS);
+		const decided = await withDeadline(decide(), PREVIEW_CHECK_TOTAL_MS);
+		return decided ? decided.outcome : asked ? "unchecked" : null;
 	} finally {
 		open = false;
 	}
@@ -163,7 +177,7 @@ export function createTabCheck(options: {
 	inFront: () => boolean;
 	pages: Pick<VisualPages, "capture" | "flag">;
 	rpc: Pick<RpcClient, "command"> | null;
-}): (visualId: string, version: number) => Promise<PreviewVerdict | null> {
+}): (visualId: string, version: number) => Promise<PreviewCheckOutcome | null> {
 	const { enabled, inFront, pages, rpc } = options;
 	return (visualId, version) =>
 		checkVisualPage(
