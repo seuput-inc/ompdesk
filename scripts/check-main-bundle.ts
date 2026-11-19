@@ -373,6 +373,11 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // A window answers an agent's close with what it did (19 Nov 2026, `stores/tabs.ts` `closeRefusal` and
 // `applyAgentView`; the tab store is on the phone's first screen): measured 2,206,451 (branch run 44519094423), 459
 // bytes over. The budget is that measure plus 80 bytes.
+// A todo list says when it last changed and why it is behind the work (20 Nov 2026, `chat/dock/TodoFreshness.tsx`; the
+// work strip and the dock's todo card are on the phone's first screen): measured 2,207,770 (branch run 44579782922),
+// 1,778 bytes over. The budget is that measure plus 80 bytes.
+// It also lists the instructions received since that change (20 Nov 2026, `TodoReceived` with the board's rows): measured
+// 2,208,877 (branch run 44589770282), 1,027 bytes over. The budget is that measure plus 80 bytes.
 const WEB_FIRST_SCREEN_JS_BYTES = 2_206_531;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that

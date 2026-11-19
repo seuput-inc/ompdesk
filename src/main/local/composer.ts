@@ -11,6 +11,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { BridgeJobItem, BridgeJobRow } from "../../../resources/gui-bridge/jobs-contracts";
+import type { TodoDriftState } from "../../../resources/gui-bridge/todo-drift-contracts";
 import type {
 	ModelInfo,
 	RpcActiveTool,
@@ -122,12 +123,14 @@ function briefState(state: RpcSessionState): RpcSessionState {
 
 export const handlers: Record<string, LocalHandler> = {
 	get_state: async (command, ctx) => {
-		const [whole, levels, extras, choice] = await Promise.all([
+		const [whole, levels, extras, choice, todoDrift] = await Promise.all([
 			ctx.send<RpcSessionState>({ type: "get_state" }),
 			ctx.send<{ levels?: string[] }>({ type: "get_available_thinking_levels" }).catch(() => undefined),
 			stateRead<StateExtras>(ctx, "composer.state"),
 			// The person's model while a fallback answers (bridge model-choice.ts): what the composer shows as chosen.
 			stateRead<{ chosen: ModelInfo | null }>(ctx, "model_choice"),
+			// When the todo list last changed and whether it is behind the work (bridge todo-drift.ts).
+			stateRead<TodoDriftState>(ctx, "todoDrift.state"),
 		]);
 		const state = command.brief === true ? briefState(whole) : whole;
 		const result: RpcSessionState = {
@@ -144,6 +147,7 @@ export const handlers: Record<string, LocalHandler> = {
 		};
 		if (extras?.agentsPausedAt !== undefined) result.agentsPausedAt = extras.agentsPausedAt;
 		if (choice?.chosen) result.chosenModel = choice.chosen;
+		if (todoDrift) result.todoDrift = todoDrift;
 		return result;
 	},
 

@@ -142,6 +142,19 @@ async function shownTab(page: Page): Promise<{ tabId: string; status: string } |
 	return tab ? { tabId: tab.tabId, status: String(tab.status) } : undefined;
 }
 
+/** Sends the view's shown tab a prompt through the view's own rpc (a paired computer's and the phone's reach the host). */
+async function promptShownTab(page: Page, message: string): Promise<void> {
+	const tab = await shownTab(page);
+	if (!tab) throw new Error("the view shows no session to prompt");
+	const reply = await page.evaluate(
+		([tabId, text]) => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: text }),
+		[tab.tabId, message] as const,
+	);
+	// A refused prompt (a turn still running, a link not up) says so here, not as a later wait that times out.
+	if (!reply.success)
+		throw new Error(`the prompt was refused on tab ${tab.tabId} (${tab.status}): ${JSON.stringify(reply)}`);
+}
+
 /**
  * Restarts the host's omp for the session the view shows. No control restarts a ready session (the banner and Settings
  * offer Restart only on a session that is not), so it is `window.omp.sidecar.restart`, the call that Restart makes,
@@ -1918,6 +1931,23 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-ask-context] [data-figure-row] figure:nth-child(3) img",
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "todo-behind",
+		area: "A",
+		title: "A todo list behind the work: the plan zone, the strip or the dock's todo card says when it last changed and that a new instruction has no row",
+		// The host's fake omp lists three items and reports the bridge's reading (e2e/fixture/rpc-ui.ts "fixture todo
+		// behind", as resources/gui-bridge/todo-drift.ts pushes it): changed 12 minutes ago, behind an instruction.
+		open: page => promptShownTab(page, "fixture todo behind"),
+		ready: "[data-todo-freshness='instruction']",
+		when: () => false,
+		parity: {
+			session: "work",
+			after: async page => {
+				await promptShownTab(page, "fixture todo clear");
+				await page.locator("[data-todo-freshness]").first().waitFor({ state: "detached", timeout: 15_000 });
+			},
+		},
 	},
 	{
 		id: "composer-queue",
