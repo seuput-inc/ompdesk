@@ -55,7 +55,8 @@ export const FEATURES = {
 	omfg: "/omfg rule forging",
 	agentPause: "Agent pause",
 	replyLanguage: "Reply language",
-	nextPrompt: "Prompt suggestions (next message, inline completion)",
+	nextPrompt: "Prompt suggestions (next message)",
+	inlineCompletion: "Inline completion while typing in the composer",
 	autoTitle: "Automatic session titles (first message, as the work changes, regenerate)",
 	autoMode: "Automatic mode choice (Plan or Goal for a prompt)",
 	autoModeUndo: "Undoing an automatic mode choice",
@@ -120,11 +121,19 @@ export const FEATURES = {
 	modelRoleSet: "Changing a model role",
 	ompdeskRoles: "OMPdesk's own model roles and agent tiers (held at runtime)",
 	modelSetupFacts: "Model setup (billing and model facts)",
+	sessionSpend: "Session spend per provider (work board)",
 	usage: "Usage (per-account reports and session totals)",
 	usageHistory: "Usage totals across a session's whole journal",
-	security: "Security scans",
-	ssh: "SSH hosts",
-	voice: "Voice input & speech",
+	security: "Security dashboard (scans, findings, running operations)",
+	securityScanDetail: "One security scan's findings",
+	securityRun: "Starting and cancelling a security scan",
+	securityDisposition: "Marking a security finding (false positive, accepted risk, fixed)",
+	securityValidation: "Validation request for a security finding",
+	ssh: "SSH hosts list",
+	sshManage: "Adding, editing and deleting an SSH host",
+	sshTest: "SSH connection test",
+	dictation: "Dictation (speech to text)",
+	readAloud: "Read aloud (text to speech)",
 	debug: "Debug console",
 	transcript: "Session transcript",
 	entryIds: "Journal entry ids for live messages",
@@ -138,9 +147,11 @@ export const FEATURES = {
 	resolvePath: "Resolving the folder a session moves to (/move)",
 	workspaceEdit: "Adding and removing a workspace directory",
 	moveStoredSession: "Moving a stored session to another project",
-	compactionLimits: "Per-model compaction limits",
+	compactionPoints: "Where compaction triggers for each model (context ring, roles)",
+	compactionLimits: "Per-model compaction limits (checking and formatting an entry)",
 	idleMaintenance: "Idle compaction and recap (compaction.idleEnabled, recap.enabled)",
 	contextInspector: "Context inspector (per-entry tokens)",
+	contextEntry: "Context inspector entry preview",
 	promptOrigin: "Prompt origins (from another device)",
 	typedPrompts: "Prompts a person typed, told to the omp (memory recall, answering first)",
 	answerFirst: "A person's message that joins a running turn is answered in text before the next tool call",
@@ -148,7 +159,10 @@ export const FEATURES = {
 	modelChoice: "The person's model on the composer while a fallback model runs the session",
 	inputHistory: "Shared prompt history",
 	accountPools: "Agent account pools",
+	worktreeLocation: "Where a repository's worktrees are kept",
+	prCheckout: "Checking out a pull request into a worktree",
 	worktreeLifecycle: "Per-session worktrees (worktree.onStart / onExit)",
+	worktreeBase: "Worktree folder read outside a session (for a paired device's agent)",
 	resetPasses: "Saved rate-limit resets (reset passes)",
 	streamMetadata: "Stock read grouping and live token rate",
 	agentBrowser: "Agent browsing in the Preview panel (stock browser relay)",
@@ -476,6 +490,57 @@ const ROLE_METADATA: FeatureRequirement = union(ROLE_SETTLE, {
 	},
 });
 
+/**
+ * security.ts `runSecurityTool`: stock's `security_scan` tool over this session, which holds the session's
+ * coordinator (`security/coordinator` is not in omp's bundle: an import of it is a second copy with its own
+ * settings registry).
+ */
+const SECURITY_TOOL: FeatureRequirement = {
+	session: [
+		"getAgentId()",
+		"asyncJobManager",
+		"sessionId",
+		"model",
+		"settings",
+		"modelRegistry.authStorage",
+		"sessionManager.getCwd()",
+	],
+	modules: { [`${AGENT}/tools/security-scan`]: ["SecurityScanTool.prototype.execute()"] },
+};
+
+/** model-setup-facts.ts `providerBillings`: each provider's billing class, from stock's own auth data. */
+const PROVIDER_BILLING: FeatureRequirement = {
+	session: [
+		"modelRegistry.getDiscoverableProviders()",
+		"modelRegistry.authStorage.credentials.list()",
+		"modelRegistry.authStorage.keys.source()",
+		"modelRegistry.authStorage.keys.keyless()",
+	],
+	modules: {
+		"@oh-my-pi/pi-ai": ["getEnvApiKey()", "getProviderDefinition()"],
+		[`${AGENT}/config/models-config`]: ["ModelsConfigFile.relocate()"],
+		[UTILS]: ["getAgentDir()"],
+	},
+};
+
+/** next-prompt-engine.ts `resolveModel` and `ask`: the cheap request suggestions and inline completion both make. */
+const NEXT_PROMPT_REQUEST: FeatureRequirement = {
+	session: [
+		"messages",
+		"settings",
+		"sessionId",
+		"modelRegistry.getApiKey()",
+		"modelRegistry.resolver()",
+		"sessionManager.getSessionId()",
+		"sessionManager.getLeafId()",
+	],
+	modules: {
+		"@oh-my-pi/pi-ai": ["completeSimple()"],
+		[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
+		[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
+	},
+};
+
 export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	core: {
 		pkg: ["VERSION", "AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
@@ -483,8 +548,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** stream_metadata.start: the live read grouping and the token rate, pushed while the session runs. */
 	streamMetadata: union(READ_GROUPS, { session: ["subscribe()", "tokenRate.rate()"] }),
 	/**
-	 * browser-relay.ts: stock's `omp browser-relay` server inside the session, with
-	 * `browser.relay`/`browser.relayUrl` held as runtime overrides (handles via `lookup`).
+	 * browser.relay_start and browser.relay_stop (browser-relay.ts): stock's `omp browser-relay` server inside the
+	 * session, with `browser.relay`/`browser.relayUrl` held as runtime overrides (handles via `lookup`). A relay that
+	 * can be started but not stopped is not offered, and the session's shutdown hook stops it the same way.
 	 */
 	agentBrowser: {
 		session: ["settings"],
@@ -614,6 +680,10 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[UTILS]: ["getProjectDir()"],
 		},
 	},
+	/**
+	 * composer.share_preview and composer.share: the upload sends the snapshot the preview showed (its digest binds
+	 * the two), so an upload nobody could preview is not offered.
+	 */
 	share: {
 		session: ["state", "obfuscator", "settings", "sessionManager"],
 		modules: {
@@ -808,7 +878,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/**
 	 * modes/autopilot.ts: the tool set (`ask`/`eval`/`debug` off, the `autopilot` tool on), the session-only
 	 * `tools.approvalMode` override, the cycle ledger in the journal, usage from the session stats, the todo
-	 * list for stall classification, and the extension API's zod for the tool schema.
+	 * list for stall classification, and the extension API's zod for the tool schema. One id for every run control
+	 * (arm, configure, note, ship actions, cycle amendments, disarm): they write and read one run's ledger, and an
+	 * unattended run is not armed on an omp where any of them (its stop included) cannot answer.
 	 */
 	autopilot: {
 		pkg: ["AgentRegistry.global()", "MAIN_AGENT_ID", "z.object()", "z.enum()", "z.array()", "z.literal()"],
@@ -837,7 +909,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/**
 	 * modes/checkout-peers.ts: public hooks (`before_agent_start`, `tool_call`, `tool_result`, `session_start`) and the
 	 * journal. Stock's todo reader (`tools/todo` `getLatestTodoPhasesFromEntries`, for the session's current task) is
-	 * feature-detected inside the module: a missing one only drops the task line, never the guard.
+	 * feature-detected inside the module: a missing one only drops the task line, never the guard. One id for main's
+	 * four calls (peers set and read back, status, retire): they are one ledger's two ends, and none of them calls an
+	 * omp internal the others do not.
 	 */
 	checkoutPeers: {
 		session: ["sessionManager.getBranch()"],
@@ -1072,7 +1146,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	/** modes/delegation.ts: runtime overrides of stock's task settings; each handle is reached through `lookup`. */
+	/**
+	 * modes.get_delegation and modes.set_delegation (modes/delegation.ts): runtime overrides of stock's task settings,
+	 * each handle reached through `lookup`. The chip reads the strength the setter holds, so a strength nobody can
+	 * change is not shown. `Settings.instance` is the startup hold's (index.ts, before the first session), which
+	 * nothing guards.
+	 */
 	delegation: {
 		pkg: ["Settings.instance"],
 		session: ["settings"],
@@ -1514,34 +1593,22 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/task/discovery`]: ["discoverAgents()", "getAgent()"],
 		},
 	}),
-	modelSetupFacts: {
-		// model_setup_facts (model-setup-facts.ts): billing from stock's auth data, the models of every role's pool,
-		// what config.yml persists per role (`getGlobalModelRole`: its absence would let full auto overwrite a hand-set
-		// role, so it is required, not feature-detected) and stock's judge defaults. session_spend: the live journal's
-		// spend per provider with that billing (work board: a metered charge apart from a subscription's estimate).
-		session: [
-			"settings.getGlobalModelRole()",
-			"sessionManager.getEntries()",
-			"modelRegistry",
-			"modelRegistry.getAll()",
-			"modelRegistry.getDiscoverableProviders()",
-			"modelRegistry.authStorage.credentials.list()",
-			"modelRegistry.authStorage.keys.source()",
-			"modelRegistry.authStorage.keys.keyless()",
-		],
+	/**
+	 * model_setup_facts (model-setup-facts.ts): the models of every role's pool, each provider's billing, what
+	 * config.yml persists per role (`getGlobalModelRole`: its absence would let full auto overwrite a hand-set role, so
+	 * it is required, not feature-detected) and stock's judge defaults.
+	 */
+	modelSetupFacts: union(ROLE_METADATA, PROVIDER_BILLING, {
 		modules: {
-			"@oh-my-pi/pi-ai": ["getEnvApiKey()", "getProviderDefinition()"],
-			"@oh-my-pi/pi-catalog/types": ["modelKind()"],
-			[`${AGENT}/config/model-resolver`]: ["resolveModelOverride()", "rolePriorityDefaults()"],
-			[`${AGENT}/config/model-roles`]: [
-				"getKnownRoleIds()",
-				"getRoleInfo()",
-				"roleCandidatePool()",
-				"MODEL_ROLE_IDS",
-			],
-			[`${AGENT}/config/models-config`]: ["ModelsConfigFile.relocate()"],
+			[`${AGENT}/config/model-resolver`]: ["resolveModelOverride()"],
+			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
 		},
-	},
+	}),
+	/**
+	 * session_spend: the live journal's spend per provider with that provider's billing (work board: a metered charge
+	 * apart from a subscription's estimate).
+	 */
+	sessionSpend: union(PROVIDER_BILLING, { session: ["sessionManager.getEntries()", "modelRegistry.getAll()"] }),
 	/** usage: one report per stored account and the session's own tallies; `refresh` is stock's `omp usage invalidate`. */
 	usage: {
 		session: [
@@ -1562,55 +1629,79 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** sessions.usage_history: totals across the whole live journal, with every compaction it records. */
 	usageHistory: { session: ["sessionManager.getUsageStatistics()", "sessionManager.getEntries()"] },
-	security: {
-		session: [
-			"getAgentId()",
-			"asyncJobManager",
-			"sessionId",
-			"model",
-			"settings",
-			"modelRegistry.authStorage",
-			"sessionManager.getCwd()",
-		],
+	/** security_dashboard: the stored scans, the repository's revision and each operation's status from stock's tool. */
+	security: union(SECURITY_TOOL, {
 		modules: {
 			"@oh-my-pi/pi-natives/vcs": ["git()"],
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			// Operations through stock's tool, which holds the session's coordinator (`security/coordinator` is not
-			// in omp's bundle: an import of it is a second copy with its own settings registry).
-			[`${AGENT}/tools/security-scan`]: ["SecurityScanTool.prototype.execute()"],
 			[`${AGENT}/security/store`]: [
 				"SecurityStore.openForCwd()",
 				"SecurityStore.prototype.listScans()",
 				"SecurityStore.prototype.getBundle()",
-				"SecurityStore.prototype.getFinding()",
-				"SecurityStore.prototype.updateDisposition()",
 			],
+		},
+	}),
+	securityScanDetail: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/security/store`]: ["SecurityStore.openForCwd()", "SecurityStore.prototype.getBundle()"],
+		},
+	},
+	/** security_start and security_cancel: both through stock's tool; a scan that cannot be cancelled is not started. */
+	securityRun: SECURITY_TOOL,
+	securityDisposition: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/security/store`]: ["SecurityStore.openForCwd()", "SecurityStore.prototype.updateDisposition()"],
+		},
+	},
+	securityValidation: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/security/store`]: ["SecurityStore.openForCwd()", "SecurityStore.prototype.getFinding()"],
 			[UTILS]: ["prompt.render()"],
 		},
 		prompts: ["security/validate-request.md"],
 	},
+	/** ssh_hosts: stock's discovery, with the host facts its connection manager has cached. */
 	ssh: {
 		session: ["sessionManager.getCwd()"],
 		modules: {
 			[`${AGENT}/capability/ssh`]: ["sshCapability.id"],
-			[`${AGENT}/discovery`]: ["loadCapability()", "reset()"],
+			[`${AGENT}/discovery`]: ["loadCapability()"],
+			[`${AGENT}/ssh/connection-manager`]: ["getHostInfoForHost()"],
+			[UTILS]: ["$which()"],
+		},
+	},
+	/** ssh_manage create, update and delete: one method, and a host that can be added but not removed is not offered. */
+	sshManage: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/discovery`]: ["reset()"],
 			[`${AGENT}/ssh/config-writer`]: [
 				"readSSHConfigFile()",
 				"removeSSHHost()",
 				"updateSSHHost()",
 				"validateHostName()",
 			],
-			[`${AGENT}/ssh/connection-manager`]: [
-				"ensureConnection()",
-				"ensureHostInfo()",
-				"getHostInfoForHost()",
-				"invalidateHostMetadata()",
-			],
-			[`${AGENT}/ssh/utils`]: ["buildSshTarget()"],
-			[UTILS]: ["$which()", "getSSHConfigPath()", "ptree.exec()"],
+			[`${AGENT}/ssh/connection-manager`]: ["invalidateHostMetadata()"],
+			[UTILS]: ["getSSHConfigPath()"],
 		},
 	},
-	voice: {
+	/** ssh_test: stock's connection, and after a failure the OpenSSH client's own verbose trace. */
+	sshTest: {
+		modules: {
+			[`${AGENT}/ssh/config-writer`]: ["validateHostName()"],
+			[`${AGENT}/ssh/connection-manager`]: ["ensureConnection()", "ensureHostInfo()"],
+			[`${AGENT}/ssh/utils`]: ["buildSshTarget()"],
+			[UTILS]: ["$which()", "ptree.exec()"],
+		},
+	},
+	/**
+	 * transcribe_audio and stt_prepare: prepare is dictation's own setup (it gets the model the speech's language
+	 * needs, and transcription waits on the same download), so dictation that cannot be prepared is not offered.
+	 */
+	dictation: {
 		session: ["settings", "modelRegistry"],
 		modules: {
 			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
@@ -1619,6 +1710,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()"],
 			[`${AGENT}/stt/downloader`]: ["downloadSttModel()", "isSttModelCached()"],
 			[`${AGENT}/stt/models`]: ["resolveSttModelSpec()"],
+		},
+	},
+	/** synthesize_speech: the only action that evaluates the `tts/*` source copies (HEAVY_COPIES). */
+	readAloud: {
+		session: ["settings", "modelRegistry"],
+		modules: {
+			[`${AGENT}/config/registry`]: ["lookup()"],
 			[`${AGENT}/tts/models`]: ["DEFAULT_TTS_VOICE", "TTS_LOCAL_MODELS"],
 			[`${AGENT}/tts/tts-client`]: ["ttsClient.synthesize()"],
 			[`${AGENT}/tools/tts`]: ["resolveSpeechCandidates()"],
@@ -1688,6 +1786,10 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[UTILS]: ["getAgentDir()", "withFileLock()"],
 		},
 	},
+	/**
+	 * sessions.foreign_list and sessions.foreign_import: the list is the import's own picker (an import reads the same
+	 * listing), so a list nobody can import from is not shown.
+	 */
 	sessionImport: {
 		session: ["sessionManager.getCwd()"],
 		modules: {
@@ -1750,28 +1852,17 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * session's credentials through `modelRegistry.resolver`, `completeSimple`); `runEphemeralTurn` cannot take another
 	 * model. Reads of the todo, plan and goal state, the running async jobs (`getAsyncJobTree`), the usage ledger
 	 * (`appendModelUsage`) and the loaded-extension list are feature-detected inside the module (they only enrich the
-	 * request).
+	 * request). One id for the settings, state, draft, refresh, children and cancel calls: they drive one scheduler,
+	 * whose requests the `agent_end`, compaction and session-switch hooks start, and nothing guards a hook.
 	 */
-	nextPrompt: {
-		session: [
-			"messages",
-			"settings",
-			"isStreaming",
-			"isCompacting",
-			"queuedMessageCount",
-			"sessionId",
-			"modelRegistry.getApiKey()",
-			"modelRegistry.resolver()",
-			"sessionManager.getSessionId()",
-			"sessionManager.getLeafId()",
-		],
-		modules: {
-			"@oh-my-pi/pi-ai": ["completeSimple()"],
-			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
-			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
-			[`${AGENT}/modes/controllers/input-controller`]: ["shouldSkipHistory()"],
-		},
-	},
+	nextPrompt: union(NEXT_PROMPT_REQUEST, { session: ["isStreaming", "isCompacting", "queuedMessageCount"] }),
+	/**
+	 * next_prompt_inline: the same cheap request for the draft being typed. It alone reads stock's secret-draft rule
+	 * (`shouldSkipHistory`: such a draft never leaves the machine), so it is refused, never run, without it.
+	 */
+	inlineCompletion: union(NEXT_PROMPT_REQUEST, {
+		modules: { [`${AGENT}/modes/controllers/input-controller`]: ["shouldSkipHistory()"] },
+	}),
 	/**
 	 * modes/auto-title.ts: stock's own title machinery on the live session: `generateTitle` (the title model
 	 * roles, `title-generator.ts`), `renameTitle` (`/rename` without a title: the card per `title.icons`),
@@ -1781,7 +1872,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * (rendered with `prompt.render`) plus one language line; `title-card` splits a card off a title cut to length,
 	 * and `title.icons` (`cfgTitleIcons`) says whether a fresh title drops the card stock's retitle kept. A title over
 	 * the limits gets one retry on the `default` role's model (`roleCandidatePool`, `resolveRoleChain`, the session's
-	 * credentials, `completeSimple`), its answer checked by stock's `normalizeGeneratedTitle`.
+	 * credentials, `completeSimple`), its answer checked by stock's `normalizeGeneratedTitle`. One id for
+	 * auto_title_set and regenerate_title: both attach the session's title listener, and the ✨ button asks for the
+	 * title that listener makes, with the same machinery.
 	 */
 	autoTitle: {
 		session: [
@@ -1817,6 +1910,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		},
 		prompts: ["system/title-system.md"],
 	},
+	/**
+	 * modes/judge-assist.ts: one switch (judge_assist_set) and three questions asked of stock's judge through one
+	 * loader and one gate (available, needs_user, preview_check). One id: every stock call sits in the engine's `try`,
+	 * so a missing internal already means "the judge did not decide" for that question alone, and this guard only
+	 * names the judge when main asks it directly.
+	 */
 	judgeAssist: {
 		session: ["settings", "sessionId", "modelRegistry", "sessionManager", "messages"],
 		modules: {
@@ -1874,17 +1973,23 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** modes.auto_mode_undo: leaves the plan mode an automatic decision entered (modes/plan.ts `exitPlanMode`). */
 	autoModeUndo: union(PLAN_EXIT, { session: ["subscribe()", "getPlanModeState()"] }),
-	compactionLimits: {
+	/** compaction_points: where auto-compaction triggers for each model and each role's model, by stock's hub code. */
+	compactionPoints: {
 		session: ["settings", "getAvailableModels()", "modelRegistry.getAll()", "modelRegistry.getAvailable()"],
+		modules: {
+			[`${AGENT}/session/model-compaction-threshold`]: ["describeModelCompactionPoint()"],
+			[`${AGENT}/modes/model-browser-source`]: ["createModelBrowserSource()"],
+			"@oh-my-pi/pi-tui/overlays/model-browser": ["resolveRoleAssignments()"],
+		},
+	},
+	/** compaction_limits: a typed limit checked and formatted by stock's own parser, before `settings_set` writes it. */
+	compactionLimits: {
 		modules: {
 			[`${AGENT}/config/compaction-threshold`]: [
 				"parseCompactionPointInput()",
 				"validateModelCompactionThresholds()",
 				"formatCompactionPointInput()",
 			],
-			[`${AGENT}/session/model-compaction-threshold`]: ["describeModelCompactionPoint()"],
-			[`${AGENT}/modes/model-browser-source`]: ["createModelBrowserSource()"],
-			"@oh-my-pi/pi-tui/overlays/model-browser": ["resolveRoleAssignments()"],
 		},
 	},
 	/**
@@ -1917,7 +2022,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 		session: ["agent.state"],
 	},
-	/** context-inspect.ts: every tool, skill, instruction file, prompt block and message, counted as stock counts them. */
+	/** context.inspect: every tool, skill, instruction file, prompt block and message, counted as stock counts them. */
 	contextInspector: {
 		session: [
 			"getContextBreakdown()",
@@ -1936,6 +2041,20 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		modules: {
 			[`${AGENT}/session/messages`]: ["convertToLlm()"],
 			"@oh-my-pi/pi-tui/status-line/context-usage": ["estimateToolSchemaTokens()", "claimPromptSources()"],
+		},
+	},
+	/** context.entry: one entry's text as the provider gets it (a tool's schema as stock serializes it). */
+	contextEntry: {
+		session: [
+			"systemPrompt",
+			"systemPromptSources",
+			"extensionRunner.createContext()",
+			"getXdevToolEntries()",
+			"agent.state",
+		],
+		modules: {
+			[`${AGENT}/session/messages`]: ["convertToLlm()"],
+			"@oh-my-pi/pi-tui/status-line/context-usage": ["claimPromptSources()"],
 			"@oh-my-pi/pi-ai/utils/schema": ["toolWireSchema()"],
 		},
 	},
@@ -1968,21 +2087,39 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"@oh-my-pi/pi-ai": ["resolveCredentialIdentityKey()"],
 		},
 	},
-	worktreeLifecycle: {
-		// worktree-lifecycle.ts: the `worktree.onStart` / `worktree.onExit` settings and
-		// stock's start condition and creation for them. stock-helper/worktrees.ts reads the same worktree
-		// location without a session (`worktree.base` read-only, applied as stock's effect does) for a worktree
-		// a paired device's agent makes here.
+	/** git.worktree_location: naming and authorization by the running omp's `worktree.base` and its path hash. */
+	worktreeLocation: { modules: { [UTILS]: ["getWorktreesDir()", "hashPath()"] } },
+	/** git.pr_checkout: stock's own checkout of a pull request into a worktree. */
+	prCheckout: {
 		session: ["settings", "sessionManager.getCwd()", "sessionManager.getSessionFile()"],
+		modules: { [`${AGENT}/tools/gh-pr-checkout`]: ["checkoutPullRequest()"] },
+	},
+	/**
+	 * worktree_lifecycle_settings and worktree_lifecycle_create (worktree-lifecycle.ts): main reads the
+	 * `worktree.onStart` / `worktree.onExit` policies and stock's start condition, then has stock create the worktree.
+	 * One id: a policy whose worktree cannot be made is not read, so the tab starts where it is instead of asking the
+	 * person and then failing.
+	 */
+	worktreeLifecycle: {
+		session: ["settings", "sessionManager.getCwd()"],
 		modules: {
-			[`${AGENT}/task/settings`]: ["cfgWorktreeOnStart.get()", "cfgWorktreeOnExit.get()", "cfgWorktreeBase.get()"],
-			[`${AGENT}/config/settings`]: ["Settings.loadReadOnly()"],
+			[`${AGENT}/task/settings`]: ["cfgWorktreeOnStart.get()", "cfgWorktreeOnExit.get()"],
 			[`${AGENT}/session/session-worktree`]: [
 				"canAutoCreateWorktree()",
 				"createSessionWorktree()",
 				"defaultSessionWorktreeBranch()",
 			],
-			[`${AGENT}/tools/gh-pr-checkout`]: ["checkoutPullRequest()"],
+			[UTILS]: ["getWorktreesDir()"],
+		},
+	},
+	/**
+	 * No bridge method uses these: stock-helper/worktrees.ts reads the worktree location without a session
+	 * (`worktree.base` read-only, applied as stock's effect does) for a worktree a paired device's agent makes here.
+	 */
+	worktreeBase: {
+		modules: {
+			[`${AGENT}/task/settings`]: ["cfgWorktreeBase.get()"],
+			[`${AGENT}/config/settings`]: ["Settings.loadReadOnly()"],
 			[UTILS]: ["getWorktreesDir()", "hashPath()", "setWorktreesDir()"],
 		},
 	},

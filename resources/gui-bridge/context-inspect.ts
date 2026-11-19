@@ -185,18 +185,22 @@ function preview(session: AgentSession, id: string): Preview {
 	throw new Error(`context_entry: ${id} is no longer in the context`);
 }
 
-export const methods: BridgeMethods = guard("contextInspector", {
-	/** `{entries?: boolean}` (default true): every entry of the live context with its estimated tokens, plus stock's anchored totals. */
-	"context.inspect": async (params, env) =>
-		inspect(
-			env.session(),
-			!(typeof params === "object" && params !== null && "entries" in params && params.entries === false),
-		),
-
-	/** `{id}` from `context.inspect` → the entry's text as the provider gets it, capped at 32k characters. */
-	"context.entry": async (params, env) => {
-		const id = typeof params === "object" && params !== null && "id" in params ? params.id : undefined;
-		if (typeof id !== "string" || !id.includes(":")) throw new Error("context.entry needs {id: string}");
-		return preview(env.session(), id);
-	},
-});
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("contextInspector", {
+		/** `{entries?: boolean}` (default true): every entry of the live context with its estimated tokens, plus stock's anchored totals. */
+		"context.inspect": async (params, env) =>
+			inspect(
+				env.session(),
+				!(typeof params === "object" && params !== null && "entries" in params && params.entries === false),
+			),
+	}),
+	...guard("contextEntry", {
+		/** `{id}` from `context.inspect` → the entry's text as the provider gets it, capped at 32k characters. */
+		"context.entry": async (params, env) => {
+			const id = typeof params === "object" && params !== null && "id" in params ? params.id : undefined;
+			if (typeof id !== "string" || !id.includes(":")) throw new Error("context.entry needs {id: string}");
+			return preview(env.session(), id);
+		},
+	}),
+};

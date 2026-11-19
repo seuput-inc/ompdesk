@@ -117,7 +117,14 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
 
 /** The live session's view: the bridge's row for `name` and the session's tools that name it. */
 const PROBE_HELPERS = `
+import { renameSync } from "node:fs";
 import { methods as mcp } from "./extensions/mcp";
+// The test reads the report as soon as it exists: Bun.write creates the file before it writes it, and on Windows the
+// test read it empty (omp-latest 44511132073), so a report appears only whole.
+const writeReport = async (file, out) => {
+	await Bun.write(file + ".tmp", JSON.stringify(out));
+	renameSync(file + ".tmp", file);
+};
 const until = async (check, ms) => {
 	const end = Date.now() + ms;
 	while (Date.now() < end) {
@@ -151,7 +158,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -196,7 +203,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -242,7 +249,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -285,7 +292,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
