@@ -3,6 +3,7 @@ import { createStore } from "zustand/vanilla";
 import type { CheckoutPeers } from "../../../resources/gui-bridge/modes/checkout-peers-contracts";
 import type { NextPromptState, NextPromptUnavailable } from "../../../resources/gui-bridge/modes/next-prompt-contracts";
 import type { ContextUsage, RpcSessionState, SidecarRestartProgress, SidecarStatus } from "../../shared/rpc-types";
+import type { CompactionRun } from "../lib/compaction-action";
 import { createScopedStoreHook } from "./session-runtime-context";
 
 export interface TranscriptView {
@@ -56,14 +57,18 @@ export interface SessionStore {
 	 * at event time so the countdown survives re-renders. */
 	retryInfo: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; startedAt: number } | null;
 	/** Live compaction window: auto (auto_compaction_start → auto_compaction_end) carries the TUI
-	 * loader's reason/action text for the inline status row; `manual` is a /compact (`compact`) or
+	 * loader's reason/action for the inline status row; `manual` is a /compact (`compact`) or
 	 * handoff (`handoff`) the GUI started, held for as long as its request runs, and `cancelling`
-	 * once the reader stopped it. */
+	 * once the reader stopped it. `startedAt` is the client clock when it opened: the row's elapsed time. */
 	compactionInfo: {
 		reason: "threshold" | "overflow" | "idle" | "incomplete" | "manual";
 		action: string;
 		cancelling?: boolean;
+		startedAt: number;
 	} | null;
+	/** The compactions of this session this window watched run to their end, oldest first: the finished
+	 * card's duration and the row's "last time" (`lib/compaction-action.ts`). */
+	compactionRuns: CompactionRun[];
 	status: SidecarStatus;
 	contextUsage: ContextUsage | null;
 	/** Bumped every time a get_state snapshot actually carries fresh context
@@ -123,6 +128,7 @@ const initialState = {
 	awaitingModelSince: null,
 	retryInfo: null,
 	compactionInfo: null,
+	compactionRuns: [] as CompactionRun[],
 	status: "starting" as SidecarStatus,
 	contextUsage: null,
 	statsPulse: 0,

@@ -367,6 +367,23 @@ async function endQueuedTurn(page: Page): Promise<void> {
 	await page.locator("[data-send-mode]").first().waitFor({ state: "hidden", timeout: 30_000 });
 }
 
+/** One op of the fake omp's `fixture flow` run in the tab the view shows (e2e/fixture/rpc-ui.ts `startFlow`). */
+async function flowOp(page: Page, tabId: string, spec: Record<string, unknown>) {
+	return page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+		tabId,
+		`fixture:flow:${JSON.stringify(spec)}`,
+	] as const);
+}
+
+/** Ends the compaction `turn-compacting` holds the way stock skips one (no entry, nothing said) and answers its turn. */
+async function endCompactingTurn(page: Page): Promise<void> {
+	const tab = await shownTab(page);
+	if (!tab) return;
+	await flowOp(page, tab.tabId, { op: "compact-end", skipped: true });
+	await flowOp(page, tab.tabId, { op: "reply", text: "Compaction shown." });
+	await page.locator("[data-compaction-status]").first().waitFor({ state: "hidden", timeout: 30_000 });
+}
+
 /** The work session's family open, with every other computer's section folded to its count. */
 async function openRemoteFamily(page: Page, look: Look): Promise<void> {
 	await openDrawer(page, look);
@@ -1955,6 +1972,27 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-queue-policy]",
 		when: () => false,
 		parity: { session: "work", after: endQueuedTurn },
+	},
+	{
+		id: "turn-compacting",
+		area: "A",
+		title: "Status row of a running compaction: what happens to the conversation in plain words, the time it has run and its (i)",
+		// The host's fake omp starts a `fixture flow` turn and holds its mid-turn compaction open (`compact-start`), as
+		// stock's automatic one runs; ready once the row counts its first second.
+		open: async page => {
+			const tab = await shownTab(page);
+			if (!tab) throw new Error("the view shows no session to compact");
+			await page.evaluate(
+				tabId => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: "fixture flow" }),
+				tab.tabId,
+			);
+			const started = await flowOp(page, tab.tabId, { op: "compact-start" });
+			if (!started.success) throw new Error(`the compaction did not start: ${started.error}`);
+		},
+		ready: "[data-compaction-status] [data-compaction-elapsed]",
+		// The audits' harness page has no such turn.
+		when: () => false,
+		parity: { session: "work", after: endCompactingTurn, inView: "[data-compaction-status]" },
 	},
 	{
 		id: "turn-limit-wait",

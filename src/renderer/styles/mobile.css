@@ -1665,6 +1665,13 @@ html[data-input="touch"] [data-stats-sync] > [data-setting-info] {
 	--hit-gap-y: 20px;
 }
 
+/* The compaction row's (i) follows its words, with a manual pass's Cancel on the line under it (6 px): on touch it
+   reaches 10 px sideways and 6 px up and down (a 36 px wide target), so it never takes Cancel's taps. */
+html[data-input="touch"] [data-compaction-status] [data-setting-info] {
+	--hit-gap-x: 20px;
+	--hit-gap-y: 12px;
+}
+
 /* Tabs (common/Tabs.tsx): on touch a tab is a row tall and its reach stays inside its own bar. An underline bar's tabs
    sat 4 px apart over the content below, a segmented bar's 2 px, so each took its neighbour's taps and the next row's. */
 html[data-input="touch"] [role="tablist"] {

@@ -408,6 +408,8 @@ export function runRpcUi(): void {
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
 	let isStreaming = false;
+	/** A `fixture flow` run's compaction is under way (`compact-start` until `compact-end` or the turn's end). */
+	let isCompacting = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
 	let thinking = { level: "medium", configured: "medium" };
 	/** `fixture usage limit` and `fixture rate limit` stop a turn on the provider's quota; its account resets at this time. */
@@ -453,7 +455,7 @@ export function runRpcUi(): void {
 		model,
 		thinkingLevel: thinking.level,
 		isStreaming,
-		isCompacting: false,
+		isCompacting,
 		steeringMode: "all",
 		followUpMode: "all",
 		interruptMode: "immediate",
@@ -3957,6 +3959,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 		};
 		const finish = (last: AgentMessage) => {
 			say(last);
+			isCompacting = false;
 			endTurn([...turn]);
 			flow = undefined;
 		};
@@ -4041,11 +4044,24 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						write({ type: "extension_ui_request", id: askId, method: "ask", questions });
 						return undefined;
 					}
-					// Stock's mid-turn maintenance: start, the compaction entry, end (the loop goes on).
+					// Stock's mid-turn maintenance: start, the compaction entry, end (the loop goes on). `skipped` ends it
+					// as stock's benign skip does: no entry, nothing said.
 					case "compact-start":
+						isCompacting = true;
 						write({ type: "auto_compaction_start", reason: "threshold", action: "context-full" });
 						return undefined;
 					case "compact-end": {
+						isCompacting = false;
+						if (spec.skipped === true) {
+							write({
+								type: "auto_compaction_end",
+								action: "context-full",
+								aborted: false,
+								willRetry: false,
+								skipped: true,
+							});
+							return undefined;
+						}
 						const kept = entries.find(entry => entry.message === user)?.id;
 						const compaction = {
 							summary: "Compacted the run so far.",

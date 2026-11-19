@@ -1676,7 +1676,10 @@ describe("tabs store background tab signals", () => {
 		seedTabs();
 		const session = sessionRuntimeStore<SessionStore>("t1", "session")!;
 		const shown = { attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: "529", startedAt: 1 };
-		session.setState({ retryInfo: shown, compactionInfo: { reason: "threshold", action: "compacting" } });
+		session.setState({
+			retryInfo: shown,
+			compactionInfo: { reason: "threshold", action: "compacting", startedAt: 1 },
+		});
 		const saga = { ...shown, startedAt: 5 };
 		const status = (retrySaga?: typeof saga) =>
 			useTabsStore

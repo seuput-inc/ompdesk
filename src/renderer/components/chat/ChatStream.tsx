@@ -16,12 +16,13 @@ import { memo, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo,
 import type { AgentMessage, MessagesPage } from "../../../shared/rpc-types";
 import { hydrateTabSession, loadOlderTranscript } from "../../hooks/session-hydration";
 import { currentShellMode } from "../../hooks/use-shell-mode";
-import { compactionActionKey } from "../../lib/compaction-action";
+import { compactionRunningKey } from "../../lib/compaction-action";
 import { useDisplayPreference } from "../../lib/display-preferences";
-import { cx, formatClock } from "../../lib/format";
+import { cx, formatClock, formatDuration, formatElapsed } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { prewarmMarkdown } from "../../lib/markdown";
 import { abortActiveTurn, describeTurnError, isRenderableMessageText } from "../../lib/messages";
+import { useNowTick } from "../../lib/now-tick";
 import { pointerFocusMark } from "../../lib/pointer-focus";
 import { collapsibleReadTarget, groupReadRows, type ReadGroupEntry } from "../../lib/read-group";
 import { useTabRpc } from "../../lib/tab-rpc";
@@ -36,7 +37,18 @@ import { toastError } from "../../stores/toast";
 import { type TodoSnapshot, useTodoStore } from "../../stores/todo";
 import { type ToolEntry, toolEntryKey, useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
-import { BrandMark, Button, Card, Collapse, DisclosureButton, JumpToLatest, Kbd, Skeleton, Spinner } from "../common";
+import {
+	BrandMark,
+	Button,
+	Card,
+	Collapse,
+	DisclosureButton,
+	JumpToLatest,
+	Kbd,
+	SettingInfo,
+	Skeleton,
+	Spinner,
+} from "../common";
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
@@ -1490,8 +1502,9 @@ export function StreamingRows() {
  *   with the humanized reason ("Can't connect") and the raw failure detail.
  *   Enhancement over the TUI: N counts down live instead of freezing at the
  *   initial delay.
- * - compaction: `{reason}{action}…` for auto-maintenance, same
- *   reason/action vocabulary as the TUI loader.
+ * - compaction: what is happening to the conversation in plain words and
+ *   how long it has run ("Summarizing the conversation so far · 42s"), with
+ *   the why, what stays and how long the last one took behind its (i).
  * - waiting: between turn_start and the first streamed event, only a
  *   spinner — on the turn's last work row when there is one (`attached`, so
  *   this row renders nothing), else in place of the reply about to stream.
@@ -1511,8 +1524,11 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	const waitHost = useHostView(useTabsStore(s => s.tabs.find(tab => tab.id === awaitingConnection)?.device));
 	const awaitingModelSince = useSessionStore(s => s.awaitingModelSince);
 	const now = Date.now();
-	// Clock for the retry countdown only; it never runs for compaction or a
-	// model wait (the row is mounted for the whole session).
+	// The shared once-a-second clock, only while a compaction runs: its elapsed time.
+	const compactingNow = useNowTick(compactionInfo != null);
+	const compactionRuns = useSessionStore(s => s.compactionRuns);
+	// Clock for the retry countdown only; it never runs for a model wait (the row
+	// is mounted for the whole session).
 	const [, setNowTick] = useState(0);
 	useEffect(() => {
 		if (!retryInfo) return;
@@ -1523,6 +1539,8 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	let text: string;
 	let reason: string | null = null;
 	let detail: string | null = null;
+	let elapsed = "";
+	let about: string | null = null;
 	let announcement: string;
 
 	// A turn that ended on a network error while offline (or just after a wake) is not a failure:
@@ -1609,16 +1627,27 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 		reason = cause.kind === "unknown" ? null : t(cause.titleKey);
 		detail = retryInfo.errorMessage || null;
 		announcement = t("chat.retry.inflight", { attempt: retryInfo.attempt, maxAttempts: retryInfo.maxAttempts });
-	} else if (compactionInfo?.reason === "manual") {
-		text = compactionInfo.cancelling
-			? t("chat.compaction.cancelling")
-			: `${t(compactionInfo.action === "handoff" ? "chat.compaction.manual.handoff" : "chat.compaction.manual.compact")}…`;
+	} else if (compactionInfo?.cancelling) {
+		text = t("chat.compaction.cancelling");
 		announcement = text;
 	} else if (compactionInfo) {
-		const compactionReason =
-			compactionInfo.reason === "threshold" ? "" : t(`chat.compaction.reason.${compactionInfo.reason}`);
-		text = `${compactionReason}${t(compactionActionKey(compactionInfo.action))}…`;
-		announcement = text;
+		const kind = compactionRunningKey(compactionInfo.action);
+		const what = t(kind);
+		elapsed = formatElapsed(compactingNow - compactionInfo.startedAt);
+		text = elapsed ? what : `${what}…`;
+		// Announced once: the ticking time stays out of the live region.
+		announcement = `${what}…`;
+		// A manual /compact (`compact`) and stock's automatic one (`context-full`, `remote`) are the same kind of pass.
+		const last = compactionRuns.findLast(run => compactionRunningKey(run.action) === kind);
+		about = [
+			compactionInfo.reason === "manual" ? null : t("chat.compaction.detail.auto"),
+			t("chat.compaction.detail.kept"),
+			last
+				? t("chat.compaction.detail.lastTook", { duration: formatDuration(last.endedAt - last.startedAt) })
+				: null,
+		]
+			.filter(Boolean)
+			.join(" ");
 	} else if (awaitingModelSince != null) {
 		if (attached) return null;
 		// The card's own head in the exact frame the work card mounts in (the work row's
@@ -1638,7 +1667,10 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	}
 
 	return (
-		<div className="omp-status-turn flex flex-col gap-1.5 ps-(--omp-editorial-inset) pe-(--omp-editorial-edge) py-4 text-sc-md text-(--sc-text-muted)">
+		<div
+			className="omp-status-turn flex flex-col gap-1.5 ps-(--omp-editorial-inset) pe-(--omp-editorial-edge) py-4 text-sc-md text-(--sc-text-muted)"
+			data-compaction-status={compactionInfo && !retryInfo ? "" : undefined}
+		>
 			<span aria-atomic="true" aria-live="polite" className="sr-only" role="status">
 				{announcement}
 			</span>
@@ -1647,6 +1679,12 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 					<Spinner size="sm" />
 				</span>
 				<span className="text-(--sc-text-secondary)">{text}</span>
+				{elapsed ? (
+					<span className="tabular-nums" data-compaction-elapsed>
+						· {elapsed}
+					</span>
+				) : null}
+				{about ? <SettingInfo label={t("chat.compaction.about")} text={about} /> : null}
 				{reason ? <span>· {reason}</span> : null}
 				{compactionInfo?.cancelling ? null : (
 					<span className="flex items-center gap-1.5 text-sc-sm text-(--sc-text-subtle)">

@@ -20,6 +20,7 @@ import { ensureTabRuntime } from "../stores/tab-runtime";
 import { useTabsStore } from "../stores/tabs";
 import { toast, toastError } from "../stores/toast";
 import { endAutoGoal } from "./auto-mode-client";
+import { withCompactionRun } from "./compaction-action";
 import { translate } from "./i18n";
 import { promptDisplayText } from "./prompt-text";
 import { IMAGE_ONLY_CHIP } from "./queue-chip";
@@ -331,10 +332,15 @@ export async function runManualMaintenance(
 	tabId?: string | null,
 ): Promise<{ response: RpcResponse; cancelled: boolean }> {
 	const session = sessionRuntimeStore<SessionStore>(tabId ?? focusedRuntimeTabId(), "session") ?? useSessionStore;
-	session.setState({ isCompacting: true, compactionInfo: { reason: "manual", action } });
+	session.setState({ isCompacting: true, compactionInfo: { reason: "manual", action, startedAt: Date.now() } });
 	try {
 		const response = await request();
-		return { response, cancelled: session.getState().compactionInfo?.cancelling === true };
+		const info = session.getState().compactionInfo;
+		const cancelled = info?.cancelling === true;
+		// A handoff leaves no compaction card and is no measure of the next compaction.
+		if (action === "compact" && response.success && !cancelled)
+			session.setState({ compactionRuns: withCompactionRun(session.getState().compactionRuns, info) });
+		return { response, cancelled };
 	} finally {
 		if (session.getState().compactionInfo?.reason === "manual")
 			session.setState({ isCompacting: false, compactionInfo: null });

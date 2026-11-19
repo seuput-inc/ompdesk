@@ -35,7 +35,7 @@ import {
 	type TodoPhase,
 } from "../../shared/rpc-types";
 import { messageSourceTimestamp } from "../components/chat/work/work-turn";
-import { compactionActionKey } from "../lib/compaction-action";
+import { compactionActionKey, withCompactionRun } from "../lib/compaction-action";
 import { errorDetail } from "../lib/error-detail";
 import { formatClock } from "../lib/format";
 import { translate } from "../lib/i18n";
@@ -440,12 +440,25 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 							// for the whole compaction window, not just a flag.
 							useSessionStore.setState({
 								isCompacting: true,
-								compactionInfo: { reason: event.reason, action: event.action },
+								compactionInfo: { reason: event.reason, action: event.action, startedAt: Date.now() },
 							});
 							break;
 						}
 						case "auto_compaction_end": {
-							useSessionStore.setState({ isCompacting: false, compactionInfo: null });
+							// Only a pass that ran to its end is a measurement (the card's duration, the row's "last time"):
+							// the outcomes worded below as a result or as completed.
+							const ran =
+								!event.aborted &&
+								!event.skipped &&
+								!event.errorMessage &&
+								(event.result != null || event.action === "shake" || event.action === "handoff");
+							useSessionStore.setState(state => ({
+								isCompacting: false,
+								compactionInfo: null,
+								...(ran
+									? { compactionRuns: withCompactionRun(state.compactionRuns, state.compactionInfo) }
+									: {}),
+							}));
 							if (!event.aborted) {
 								void (tabId && sessionRuntime(tabId) ? hydrateTabSession(tabId) : hydrateSession());
 								bumpVersion = true;
