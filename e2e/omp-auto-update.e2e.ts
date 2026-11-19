@@ -3,16 +3,20 @@
  * fake installer (`OMP_GUI_TEST_OMP_UPDATES=1`, `OMP_GUI_TEST_INSTALLER`; both are
  * needed for a test launch to check at all). The check runs on the fixture omp
  * with that omp's folder first on PATH and reports a newer release
- * (`OMP_GUI_TEST_LATEST_OMP`, `NEWER`) than the fixture (`FLOOR`), so main runs the
+ * (`OMP_GUI_TEST_LATEST_OMP`, `NEWER`) than the fixture (`FLOOR`); the verified
+ * list (`OMP_GUI_TEST_OMP_COMPAT`, a file in place of the repository's
+ * `omp-compat` branch) names it for this OMPdesk release, so main runs the
  * omp-update plan on its own while the tab keeps its process and its draft; once
  * the installer reports the new version, main re-detects omp, restarts the idle
  * tab on it (the boot log shows the floor then the newer one), shows one "omp updated to
  * …" toast, and the restarted bridge's capabilities probe names a feature
- * the new omp lacks. With the pref off nothing checks on its own, and "Update
- * now" still works. A release whose major is above the omp OMPdesk was tested
- * with (`UNTESTED_MAJOR`) is never installed on its own: Settings says it is held
- * and why, "Update now" installs it, and gui-runtime.jsonl says who did what.
+ * the new omp lacks. A release runners have not verified (`UNVERIFIED`) is never
+ * installed on its own: Settings says it waits for the checks, "Update now"
+ * installs it, and gui-runtime.jsonl says who did what. Stock's own
+ * `update.auto` (`OMP_GUI_TEST_STOCK_CONFIG`) is turned off while the switch is
+ * on and given back when it goes off.
  */
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,8 +26,10 @@ import { writeFakeOmp } from "../src/main/test-fake-omp";
 import { FIXTURE_MIN_OMP_VERSION as FLOOR, FIXTURE_NEWER_OMP_VERSION as NEWER } from "./fixture/version";
 import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible } from "./harness";
 
-/** A major above any omp an OMPdesk release was tested with (`src/shared/omp-tested.json`). */
-const UNTESTED_MAJOR = "99.0.0";
+/** A release far above anything a run has verified for this OMPdesk. */
+const UNVERIFIED = "99.0.0";
+/** This OMPdesk release: the verified list's key. */
+const APP_VERSION: string = JSON.parse(readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8")).version;
 
 /** The fake installer: logs each call; the omp update waits for the test's `go` file, then "installs" the launch's newest omp. */
 const INSTALLER = `
@@ -71,14 +77,30 @@ async function updateLog(launched: Launched): Promise<string[]> {
 		.map(entry => `${entry.message} ${entry.details?.path}`);
 }
 
-/** `latest`: what the fixture omp's `update --check` calls the newest release, and what the fake installer installs. */
-async function launch(name: string, prefs: Record<string, unknown>, latest = NEWER): Promise<Launched> {
+interface LaunchOptions {
+	/** What the fixture omp's `update --check` calls the newest release, and what the fake installer installs. */
+	latest?: string;
+	/** The verified list's entry for this release; default: `latest` verified. */
+	verified?: string[];
+	/** Stock's global config (`update.auto`); absent: no config file. */
+	stockConfig?: Record<string, boolean>;
+}
+
+async function launch(name: string, prefs: Record<string, unknown>, options: LaunchOptions = {}): Promise<Launched> {
+	const latest = options.latest ?? NEWER;
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), `omp-gui-update-${name}-`));
 	const project = path.join(root, "project");
 	const desktop = path.join(root, "desktop");
 	const agent = path.join(root, "agent");
 	const installerDir = path.join(root, "installer");
 	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent), fs.mkdir(installerDir)]);
+	const compat = path.join(root, "omp-compat.json");
+	await fs.writeFile(
+		compat,
+		JSON.stringify({ [APP_VERSION]: { verified: options.verified ?? [latest], holding: null } }),
+	);
+	const stockConfig = path.join(root, "stock-config.json");
+	if (options.stockConfig) await fs.writeFile(stockConfig, JSON.stringify(options.stockConfig));
 	await fs.writeFile(
 		path.join(desktop, "prefs.json"),
 		JSON.stringify({ firstRunComplete: true, language: "en", ...prefs }),
@@ -94,6 +116,8 @@ async function launch(name: string, prefs: Record<string, unknown>, latest = NEW
 			OMP_GUI_OMP: omp,
 			OMP_GUI_TEST_INSTALLER: installer,
 			OMP_GUI_TEST_OMP_UPDATES: "1",
+			OMP_GUI_TEST_OMP_COMPAT: compat,
+			OMP_GUI_TEST_STOCK_CONFIG: stockConfig,
 			OMP_GUI_TEST_LATEST_OMP: latest,
 			OMPDESK_FAKE_NEW_VERSION: latest,
 			OMP_GUI_TEST_UPDATE_CHECK_LOG: path.join(root, "update-checks.log"),
@@ -197,53 +221,71 @@ test("a newer omp installs on its own; the idle tab restarts on it with its draf
 	}
 });
 
-test("a newer major waits for the person: nothing installs on its own, Settings says why, and Update now installs it", async () => {
+test("an omp runners have not verified waits: nothing installs on its own, Settings says why, Update now installs it; stock's own update is taken and given back", async () => {
 	test.setTimeout(120_000);
-	const launched = await launch("held", {}, UNTESTED_MAJOR);
+	const launched = await launch(
+		"held",
+		{},
+		{ latest: UNVERIFIED, verified: [], stockConfig: { "update.auto": true } },
+	);
 	try {
 		const { page } = launched;
 		const state = () => page.evaluate(() => window.omp.ompUpdate.getState());
+		const stockAuto = async () =>
+			JSON.parse(await fs.readFile(path.join(launched.root, "stock-config.json"), "utf8"))["update.auto"];
 		await expect.poll(() => sidecarStatus(page), { timeout: 30_000 }).toBe("ready");
-		// The launch check found the newer major and left it alone: no installer ran, the tab keeps its omp.
+		// The launch check found the unverified release and left it alone: no installer ran, the tab keeps its omp.
 		await expect.poll(state, { timeout: 30_000 }).toMatchObject({
 			phase: "idle",
 			installed: FLOOR,
-			latest: UNTESTED_MAJOR,
-			held: { version: UNTESTED_MAJOR, reason: "untested-major" },
+			latest: UNVERIFIED,
+			verified: [],
+			held: { version: UNVERIFIED, reason: "verifying" },
 			updatedTo: null,
 			failure: null,
 		});
 		expect(await installs(launched)).toEqual([]);
 		expect(await boots(launched)).toEqual([FLOOR]);
+		// OMPdesk is the one owner of omp updates: stock's own background update went off.
+		await expect.poll(stockAuto, { timeout: 30_000 }).toBe(false);
+		await expect.poll(async () => (await state()).stockAutoTaken, { timeout: 30_000 }).toBe(true);
 		// Settings › Updates & about › This computer: omp's row says what is held and why, and keeps Update now.
 		const settings = page.locator("[data-settings-page]");
 		await pressShortcutUntilVisible(page, "ControlOrMeta+Comma", settings);
 		await settings.locator('[data-settings-section="updates"]').click();
 		const held = settings.getByTestId("omp-update-held");
-		await expect(held).toContainText(`omp ${UNTESTED_MAJOR} is available`);
-		await expect(held).toContainText("tested with omp");
+		await expect(held).toContainText(`omp ${UNVERIFIED} is out`);
+		await expect(held).toContainText("passes OMPdesk's checks");
 		await expect(settings.getByTestId("omp-update-status")).toHaveCount(0);
+		await expect(settings.getByTestId("omp-stock-auto-taken")).toBeVisible();
 		// The person's click is the ask: the same update now runs.
 		await settings.locator('[data-setup-item="omp"]').getByTestId("omp-update-now").click();
 		await expect.poll(() => installs(launched), { timeout: 30_000 }).toEqual(["omp omp-update"]);
 		await releaseInstaller(launched);
 		await expect.poll(state, { timeout: 30_000 }).toMatchObject({
 			phase: "idle",
-			installed: UNTESTED_MAJOR,
-			updatedTo: UNTESTED_MAJOR,
+			installed: UNVERIFIED,
+			updatedTo: UNVERIFIED,
 			held: null,
 			failure: null,
 		});
-		await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, UNTESTED_MAJOR]);
+		await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, UNVERIFIED]);
 		await expect(held).toHaveCount(0);
-		// Who installed what: the launch's check held it, the person's pass installed it (a later repair check may follow).
-		expect((await updateLog(launched)).slice(0, 5)).toEqual([
+		// Who installed what: the launch's check held it (and tried the tested omp, which only Bun or npm can install by
+		// name, so nothing ran), the person's pass installed it (a later repair check may follow).
+		expect((await updateLog(launched)).slice(0, 7)).toEqual([
 			"checked launch",
 			"held launch",
+			"started launch",
+			"skipped launch",
 			"checked manual",
 			"started manual",
 			"finished manual",
 		]);
+		// Turning "Keep tools up to date" off gives stock's own update back.
+		await settings.locator("#setting-gui-toolsAutoUpdate [role='switch']").click();
+		await expect.poll(stockAuto, { timeout: 30_000 }).toBe(true);
+		await expect(settings.getByTestId("omp-stock-auto-taken")).toHaveCount(0);
 	} finally {
 		await close(launched);
 	}

@@ -184,11 +184,10 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 		// Up to date now: the next check says so.
 		await expect(service.latestOmp()).resolves.toBe(newer.version);
 
-		// The registry's newest becomes a major above the tested omp: the check names it, the tested major's newest
-		// release is found beside it, and an update that names that release installs exactly it.
+		// The registry's newest becomes a major above the tested omp: the check names it, and an update that names an
+		// older release (what the verified list allows) installs exactly that one.
 		latest = beyond.version;
 		await expect(service.latestOmp()).resolves.toBe(beyond.version);
-		await expect(service.newestOmpIn(testedMajor)).resolves.toBe(tested.version);
 		expect(await service.updateOmp(tested.version, undefined, true)).toEqual({
 			kind: "updated",
 			version: tested.version,

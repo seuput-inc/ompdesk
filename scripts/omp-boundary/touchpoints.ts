@@ -151,7 +151,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "launch",
 		contract: "internal",
 		summary:
-			"Updates and installs omp through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (an exact version, with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) and, for an omp Bun does not manage, `omp update`; including launcher repair, install-kind detection, the newest release of one major (`bun pm view`) and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
+			"Updates and installs omp at an exact version through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) or, for an omp npm owns, `npm install -g --prefix <prefix> @oh-my-pi/pi-coding-agent@<version>`, and only for an omp neither owns `omp update`; including launcher repair, install-kind detection and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
 		files: [
 			"src/main/omp-updater.ts",
 			"src/main/setup/plans.ts",
@@ -163,6 +163,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		stock: [
 			"omp update",
 			"bun install -g @oh-my-pi/pi-coding-agent",
+			"npm install -g --prefix <prefix> @oh-my-pi/pi-coding-agent",
 			"@oh-my-pi/pi-coding-agent",
 			"@oh-my-pi/pi-natives* pinned in <BUN_INSTALL>/install/global/package.json",
 		],
@@ -204,6 +205,21 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"omp ps --json",
 		],
 		tests: ["src/main/omp-daemon-folder-stock.test.ts"],
+	},
+	{
+		id: "L13",
+		area: "launch",
+		contract: "public",
+		summary:
+			"OMPdesk is the one owner of omp updates: it reads stock's `update.auto` with `omp config get update.auto --json`, turns it off with `omp config set update.auto false --json` while it keeps omp current, and sets it back to true when the person turns that off (an `overriddenBy` in set's reply counts as not written).",
+		files: ["src/main/index.ts", "src/main/omp-auto-takeover.ts"],
+		stock: [
+			"omp config get <key> --json",
+			"omp config set <key> <value> --json",
+			"update.auto (default false)",
+			"omp://settings.md",
+		],
+		tests: ["src/main/omp-auto-takeover.test.ts", "src/main/omp-config-stock.test.ts", "e2e/omp-auto-update.e2e.ts"],
 	},
 	{
 		id: "Q01",

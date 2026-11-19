@@ -18,6 +18,16 @@ export const MAIN_TEXT = {
 		en: "OMPdesk couldn't save {what}; it will retry.",
 		ko: "디스크가 가득 차서 {what} 저장에 실패했어요. 자동으로 다시 시도할게요.",
 	},
+	// An omp runners found breaking this release, which OMPdesk holds back (omp-hold-notice.ts): once, then after a day.
+	"ompHold.title": { en: "omp {version} is on hold", ko: "omp {version} 판을 보류하고 있어요" },
+	"ompHold.body": {
+		en: "It failed OMPdesk's checks, so this computer stays on omp {installed}. OMPdesk moves on by itself once a fix is out.",
+		ko: "OMPdesk 검사를 통과하지 못해서 이 컴퓨터는 omp {installed} 판을 그대로 써요. 고친 판이 나오면 저절로 올라가요.",
+	},
+	"ompHold.bodyDays": {
+		en: "On hold for {days} day(s): it failed OMPdesk's checks, so this computer stays on omp {installed}. OMPdesk moves on by itself once a fix is out.",
+		ko: "{days}일째 보류 중이에요. OMPdesk 검사를 통과하지 못해서 이 컴퓨터는 omp {installed} 판을 그대로 써요. 고친 판이 나오면 저절로 올라가요.",
+	},
 	// Tabs a lost core took that have no omp again minutes later (sidecar.ts `onRecoveryStuck`): one notice per loss.
 	"recovery.stuckTitle": { en: "Sessions did not come back", ko: "세션이 다시 열리지 않았어요" },
 	"recovery.stuckBody": {

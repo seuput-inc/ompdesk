@@ -78,7 +78,12 @@ export type SetupMethod =
 	| "bun-global"
 	/** agent-desktop's release archive (GitHub), verified against its published checksums, into `<tools>/agent-desktop`. */
 	| "agent-desktop-archive"
-	/** Stock `omp update`, which picks its own version: an omp Bun does not manage. */
+	/**
+	 * `<npm> install -g --prefix <prefix> @oh-my-pi/pi-coding-agent@<version>`: an omp npm owns, at one exact version
+	 * (the tested omp for setup's own install, an update's target for an update).
+	 */
+	| "npm-global"
+	/** Stock `omp update`, which picks its own version: the last resort, for an omp neither Bun nor npm owns. */
 	| "omp-update"
 	| "portable-git"
 	| "xcode-select"

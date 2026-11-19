@@ -136,7 +136,7 @@ describe("OmpUpdateRows", () => {
 		expect(nowButton().disabled).toBe(false);
 	});
 
-	it("names the tested omp only while another omp is installed", async () => {
+	it("names the tested omp only while another omp is installed (a host that sends no verified list)", async () => {
 		await mount(ompUpdateState({ installed: "18.22.0", latest: "18.22.0", tested: "18.22.0" }));
 		expect(document.body.querySelector("[data-testid='omp-tested']")).toBeNull();
 		await push(ompUpdateState({ installed: "18.23.0", latest: "18.23.0", tested: "18.22.0" }));
@@ -145,13 +145,21 @@ describe("OmpUpdateRows", () => {
 		);
 	});
 
-	it("says a newer major is held and why, keeps Update now as the way to install it, and goes quiet once it is installed", async () => {
-		const held = { version: "19.0.0", reason: "untested-major" } as const;
+	it("says nothing for a verified omp, and says when the running omp has not passed this release's checks", async () => {
+		const tested = document.body.querySelector.bind(document.body, "[data-testid='omp-tested']");
+		await mount(ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", verified: ["19.0.0"] }));
+		expect(tested()).toBeNull();
+		// A person ran `omp update` in a terminal: the omp that runs is on no list.
+		await push(ompUpdateState({ installed: "19.1.0", latest: "19.1.0", tested: "18.22.2", verified: ["19.0.0"] }));
+		expect(tested()?.textContent).toBe(translate("ompUpdate.unverified", { version: "19.1.0", tested: "18.22.2" }));
+	});
+
+	it("says a newer omp waits for the checks, keeps Update now as the way to install it, and goes quiet once it is installed", async () => {
+		const held = { version: "19.0.0", reason: "verifying" } as const;
 		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
-		await mount(ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", held }));
-		expect(heldNote()).toBe(translate("ompUpdate.held.untested-major", { latest: "19.0.0", tested: "18.22.2" }));
+		await mount(ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", verified: [], held }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.verifying", { latest: "19.0.0" }));
 		expect(heldNote()).toContain("19.0.0");
-		expect(heldNote()).toContain("18.22.2");
 		// One line says it: no "is available" beside it.
 		expect(status()).toBeUndefined();
 		expect(nowButton().disabled).toBe(false);
@@ -163,10 +171,34 @@ describe("OmpUpdateRows", () => {
 		);
 		expect(status()).toBe(translate("ompUpdate.status.updating"));
 		expect(heldNote()).toBeUndefined();
-		await push(ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", held: null }));
+		await push(
+			ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", verified: [], held: null }),
+		);
 		expect(heldNote()).toBeUndefined();
 		expect(document.body.querySelector("[data-testid='omp-tested']")?.textContent).toBe(
-			translate("ompUpdate.tested", { version: "18.22.2" }),
+			translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }),
 		);
+	});
+
+	it("says an omp the checks failed stays held, and for how many days", async () => {
+		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
+		const state = { installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", verified: [] };
+		const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - 60_000).toISOString();
+		await mount(ompUpdateState({ ...state, held: { version: "19.0.0", reason: "failed", since } }));
+		expect(heldNote()).toBe(
+			translate("ompUpdate.held.failedDays", { latest: "19.0.0", installed: "18.22.2", days: 3 }),
+		);
+		await push(
+			ompUpdateState({ ...state, held: { version: "19.0.0", reason: "failed", since: new Date().toISOString() } }),
+		);
+		expect(heldNote()).toBe(translate("ompUpdate.held.failed", { latest: "19.0.0", installed: "18.22.2" }));
+	});
+
+	it("says omp's own auto-update is off only while OMPdesk holds it", async () => {
+		const note = () => document.body.querySelector("[data-testid='omp-stock-auto-taken']")?.textContent;
+		await mount(ompUpdateState({ stockAutoTaken: false }));
+		expect(note()).toBeUndefined();
+		await push(ompUpdateState({ stockAutoTaken: true }));
+		expect(note()).toBe(translate("ompUpdate.stockAutoTaken"));
 	});
 });
