@@ -842,9 +842,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"MCP inventory, mutations and reauth through stock's capability, mcp client/config/config-writer/manager/oauth modules and the MCP command and runtime modules.",
+			"MCP inventory, mutations and reauth through stock's capability, mcp client/config/config-writer/manager/oauth modules and the MCP command and runtime modules. In-memory patch (Windows): the omp's fs.promises.rename retries a refused rename onto an MCP config file, which stock's config writer does not.",
 		files: [
 			"resources/gui-bridge/extensions/mcp.ts",
+			"resources/gui-bridge/extensions/mcp-config-rename.ts",
 			"resources/gui-bridge/extensions/update.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",

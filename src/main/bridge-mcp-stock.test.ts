@@ -379,7 +379,17 @@ async function runLive(profile: Profile, extension: string, report: string, duri
 		await during();
 	}
 	await waitFor(report);
-	const out = JSON.parse(fs.readFileSync(report, "utf8")) as Record<string, unknown>;
+	// Bun.write fills the file in place: a read right after it appears can see it empty ("Unexpected end of JSON input",
+	// omp-latest 44492095193 on Windows).
+	let out: Record<string, unknown> | undefined;
+	while (!out) {
+		try {
+			out = JSON.parse(fs.readFileSync(report, "utf8")) as Record<string, unknown>;
+		} catch (error) {
+			if (Date.now() > deadline) throw error;
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+	}
 	expect(out.error, stderr.slice(-2000)).toBeUndefined();
 	return out;
 }

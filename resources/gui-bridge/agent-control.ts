@@ -117,44 +117,62 @@ interface AsidePeeks {
 	hasQueuedAsides?: () => boolean | Promise<boolean>;
 }
 
-/** Per agent: an urgent aside of ours is queued or about to be; `seen` once stock's aside queue was found holding it. */
-const urgentAsides = new WeakMap<AsidePeeks, { seen: boolean }>();
+/**
+ * Urgent asides of ours stock has not handed to the model yet, by key (`urgentKey`). A mark goes at the `message_end`
+ * stock emits as it hands that message over at a step boundary, before the next model request and so before the next
+ * tool batch peeks, or at `agent_end`; never because a peek found the queue empty, which a progress report that lands
+ * after the handover but before the next peek would read as still urgent (formal/urgent-asides).
+ */
+const urgent = new Set<string>();
 const ownPeeks = new WeakSet<object>();
+
+/** Stock's message as `message_end` carries it: a report (custom `ompdesk.mail`) or a message from another session (user). */
+function urgentKey(message: unknown): string | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const record = message as { role?: unknown; customType?: unknown; details?: unknown; content?: unknown };
+	if (record.role === "custom" && record.customType === MAIL_CUSTOM_TYPE) {
+		const id = (record.details as { id?: unknown } | undefined)?.id;
+		return typeof id === "string" ? `mail:${id}` : undefined;
+	}
+	if (record.role !== "user") return undefined;
+	const text =
+		typeof record.content === "string"
+			? record.content
+			: Array.isArray(record.content)
+				? record.content
+						.filter((block): block is { type: "text"; text: string } => block?.type === "text")
+						.map(block => block.text)
+						.join("")
+				: "";
+	return `aside:${text}`;
+}
 
 /**
  * Puts OMPdesk's peek in front of stock's `hasIrcInterrupts` on the main agent, once: it answers true also while an
- * urgent aside of ours waits in stock's aside queue (`urgentAsides`). Stock copies the peek into each run's loop config
- * when the run starts (`Agent` `#runLoop`), so it is put there at every main run's `before_agent_start` and kept: a
- * run already going when the first message comes still reads the plain aside.
+ * urgent aside of ours is pending (`urgent`) and stock's aside queue holds anything. Stock copies the peek into each
+ * run's loop config when the run starts (`Agent` `#runLoop`), so it is put there at every main run's
+ * `before_agent_start` and kept: a run already going when the first message comes still reads the plain aside.
  */
 function watchAsides(agent: AsidePeeks | undefined): void {
 	if (!agent || typeof agent.hasQueuedAsides !== "function") return;
 	const stock = agent.hasIrcInterrupts;
 	if (stock && ownPeeks.has(stock)) return;
-	const peek = async (): Promise<boolean> => {
-		if ((await stock?.()) === true) return true;
-		const current = urgentAsides.get(agent);
-		if (!current) return false;
-		const waiting = (await agent.hasQueuedAsides?.()) === true;
-		if (waiting) current.seen = true;
-		else if (current.seen) urgentAsides.delete(agent);
-		return waiting;
-	};
+	const peek = async (): Promise<boolean> =>
+		(await stock?.()) === true || (urgent.size > 0 && (await agent.hasQueuedAsides?.()) === true);
 	ownPeeks.add(peek);
 	agent.hasIrcInterrupts = peek;
 }
 
 /**
- * Makes the aside just handed to stock urgent: another session's message (`ompdesk_session_send`) or a report that asks
- * for a turn reaches a working session at its next step even while a shell runs, where a plain aside waits for the
- * running call or its 60 s auto-background (measured 58.6 s on omp 18.22.2, `bridge-steer-now-stock.test.ts`). Stock's
- * aside queue is drained whole at a step boundary, so the mark holds while that queue holds anything after it was seen
- * there; a progress or note report never arms it. `queued` says the aside is already in the queue (`onPromptAdmitted`);
- * `sendMessage` queues after its own awaits, so a report is marked seen at the first peek that finds it.
+ * Makes an aside handed to stock urgent: another session's message (`ompdesk_session_send`) or a report that asks for a
+ * turn reaches a working session at its next step even while a shell runs, where a plain aside waits for the running
+ * call or its 60 s auto-background (measured 58.6 s on omp 18.22.2, `bridge-steer-now-stock.test.ts`). A progress or
+ * note report never arms it. A report is armed before `sendMessage`'s own awaits queue it, so for that moment a quiet
+ * aside already queued can cut a shell for it; the urgent one is read at the same step.
  */
-function interruptFor(agent: AsidePeeks | undefined, queued: boolean): void {
+function interruptFor(agent: AsidePeeks | undefined, key: string): void {
 	if (!agent) return;
-	urgentAsides.set(agent, { seen: queued });
+	urgent.add(key);
 	watchAsides(agent);
 }
 
@@ -174,7 +192,13 @@ interface RegistryHost {
 	};
 }
 
-export function install(pi: PromptSectionHost & Partial<MailHost> & RegistryHost): void {
+/** The stock events agent-control listens to besides its prompt section. */
+type ControlHost = PromptSectionHost & {
+	on(event: "message_end", handler: (event: { message?: unknown }) => void): void;
+	on(event: "agent_end", handler: () => void): void;
+};
+
+export function install(pi: ControlHost & Partial<MailHost> & RegistryHost): void {
 	if (!mailHost && typeof pi.sendMessage === "function") mailHost = pi as MailHost;
 	// The main agent only: its own subagents are briefed by it, not by this contract.
 	registerPromptSection(pi, "ompdesk-worker", ctx =>
@@ -185,6 +209,13 @@ export function install(pi: PromptSectionHost & Partial<MailHost> & RegistryHost
 			watchAsides(pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session?.agent);
 		return undefined;
 	});
+	pi.on("message_end", event => {
+		const key = urgentKey(event.message);
+		if (key) urgent.delete(key);
+	});
+	// A mark whose aside stock never handed over (dropped with its turn) must not make later quiet ones urgent; one
+	// still queued starts the next turn, whose first step reads it before any tool runs.
+	pi.on("agent_end", () => urgent.clear());
 }
 
 const EXTENSION_TYPES: Record<string, string> = {
@@ -322,9 +353,9 @@ export const methods: BridgeMethods = {
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
 		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;
 		const triggerTurn = record.triggerTurn === true;
-		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
 		// A report that asks for a turn (question, blocked, done, review) is read at once; progress and notes wait.
-		if (triggerTurn && session.isStreaming) interruptFor(session.agent, false);
+		if (id && triggerTurn && session.isStreaming) interruptFor(session.agent, `mail:${id}`);
+		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
 		return {};
 	},
 	/**
@@ -354,7 +385,7 @@ export const methods: BridgeMethods = {
 				throwOnDrop: true,
 				...(images.length > 0 ? { images } : {}),
 				onPromptAdmitted: () => {
-					interruptFor(session.agent, true);
+					interruptFor(session.agent, `aside:${message}`);
 					admitted.resolve();
 				},
 			})

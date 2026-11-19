@@ -18,10 +18,14 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { Component } from "@oh-my-pi/pi-tui";
 import { guard } from "../health";
 import type { BridgeEnv, BridgeMethod, BridgeMethods } from "../types";
+import { installMcpConfigRenameRetry } from "./mcp-config-rename";
 import type { McpSyncResult } from "./mcp-contracts";
 import { adoptedEntry, authStateOf, offReasonOf } from "./mcp-core";
 import { OAUTH_PASTE_PROMPT } from "./oauth-contracts";
 import { errorMessage, optScope, optString, paramsOf, requireString } from "./shared";
+
+// Every write below that changes mcp.json is stock's; on Windows its rename is tried again while the file is held.
+installMcpConfigRenameRetry();
 
 const MCP_TEST_TIMEOUT_MS = 30_000;
 

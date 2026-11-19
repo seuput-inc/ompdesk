@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 import {
 	atEnd,
+	CLEANUP_MS,
 	type Frame,
 	HOLD,
 	journaledMail,
@@ -17,7 +18,7 @@ import {
 } from "./bridge-agent-mail-stock-harness";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
-afterAll(runCleanups);
+afterAll(runCleanups, CLEANUP_MS);
 
 /**
  * A report another session sends (`ompdesk_report`) reaches a busy receiver between its steps, not after its turn:
