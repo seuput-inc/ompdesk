@@ -814,10 +814,12 @@ async function showTranscriptStart(page: Page): Promise<void> {
  * top again and again, seven pages of the fake omp's 250 turns, until the first turn is mounted. A window's reader
  * turns a wheel first (see `showTurn`); a phone's flicks, and its view scrolls on after the finger lifted. The
  * newest page is on screen before either: a view sent to the top of an empty transcript scrolls nothing afterwards.
+ * It ends on the first turn's row at the top, the session's start: the bubble's text there instead (what
+ * `holdAtTop` of the text does) cuts the bubble by its own 10 px of padding.
  */
 async function showSessionStart(page: Page, look: Look): Promise<void> {
 	const scroller = page.locator(".omp-transcript-scroll").first();
-	const first = scroller.locator(".omp-user-bubble").getByText("Long session turn 000", { exact: true });
+	const first = page.locator(".omp-user-bubble").getByText("Long session turn 000", { exact: true });
 	await scroller.getByText("Long session answer 249", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
 	// The reader's gesture, taken in by the page (two frames) before the view moves: a wheel, or a finger's move.
 	const touch = touchLook(look);
@@ -845,7 +847,7 @@ async function showSessionStart(page: Page, look: Look): Promise<void> {
 			requestAnimationFrame(() => requestAnimationFrame(() => mounted.resolve()));
 			await mounted.promise;
 		});
-	await holdAtTop(first);
+	await holdAtTop(scroller.locator("[data-index]").filter({ has: first }).first());
 }
 
 /** What the turn rail draws: its ticks, the number of the first one, the ticks marked as the turn in view, the earlier item's name. */
