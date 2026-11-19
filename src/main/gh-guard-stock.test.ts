@@ -1,42 +1,48 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
 import { type Frame, fakeAgent, type Omp, sse, startOmp, startProvider, toolCall } from "./bridge-todo-stock-rig";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
 /**
  * The gh guard (resources/gui-bridge/gh-guard.ts) in a stock omp session, as main launches one: the launchers' folder
  * first on PATH, a fake gh after it that counts its calls and serves `rate_limit`, run and job facts and logs. No
- * GitHub request is made.
+ * GitHub request is made. The fake is a compiled executable, as the real gh is (`gh.exe` on Windows, which is all the
+ * guard takes for the real one there).
  */
 
 const GUARD_DIR = resolve("resources/gui-bridge/gh-bin");
 const RUN = "44587803757";
 
-/** A fake gh: records each call's arguments, answers from files in its folder. */
-const FAKE_GH = `#!/bin/sh
-echo "$*" >> "$FAKE_GH_DIR/calls.log"
-if [ "$1" = api ]; then
-	case "$2" in
-	rate_limit) cat "$FAKE_GH_DIR/rate.json"; exit 0 ;;
-	*/actions/runs/*) cat "$FAKE_GH_DIR/run-\${2##*/}.tsv"; exit 0 ;;
-	esac
-fi
-if [ "$1 $2" = "run list" ]; then echo "RUNS LISTED"; exit 0; fi
-if [ "$1 $2" = "run watch" ]; then echo "WATCHED $*"; exit 0; fi
-if [ "$1 $2" = "run view" ]; then
-	attempt=none
-	while [ $# -gt 0 ]; do
-		if [ "$1" = --attempt ]; then attempt=$2; fi
-		shift
-	done
-	printf 'build\\tRun tests\\tRESULT %s of attempt %s\\n' "$(cat "$FAKE_GH_DIR/result-$attempt" 2>/dev/null)" "$attempt"
-	exit 0
-fi
-echo "unexpected: $*" >&2
-exit 1
+/** A fake gh: records each call's arguments, answers from files in `FAKE_GH_DIR`. */
+const FAKE_GH = `
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const dir = process.env.FAKE_GH_DIR ?? "";
+const args = process.argv.slice(2);
+appendFileSync(join(dir, "calls.log"), args.join(" ") + "\\n");
+const [command, sub] = args;
+const read = (name) => readFileSync(join(dir, name), "utf8");
+if (command === "api" && sub === "rate_limit") process.stdout.write(read("rate.json"));
+else if (command === "api" && /\\/actions\\/runs\\/\\d+$/.test(sub ?? "")) process.stdout.write(read("run-" + sub.split("/").pop() + ".tsv"));
+else if (command === "run" && sub === "list") process.stdout.write("RUNS LISTED\\n");
+else if (command === "run" && sub === "watch") process.stdout.write("WATCHED " + args.join(" ") + "\\n");
+else if (command === "run" && sub === "view") {
+	const at = args.indexOf("--attempt");
+	const attempt = at >= 0 ? args[at + 1] : "none";
+	let result = "";
+	try { result = read("result-" + attempt); } catch {}
+	process.stdout.write("build\\tRun tests\\tRESULT " + result + " of attempt " + attempt + "\\n");
+} else {
+	process.stderr.write("unexpected: " + args.join(" ") + "\\n");
+	process.exit(1);
+}
 `;
+
+/** The folder of the compiled fake gh, built once per file with the Bun beside the installed omp. */
+let fakeBin = "";
 
 interface Rig {
 	fake: string;
@@ -48,8 +54,6 @@ function rig(core: number): Rig {
 	const root = mkdtempSync(join(tmpdir(), "ompdesk-gh-guard-"));
 	const fake = join(root, "fake");
 	mkdirSync(fake);
-	writeFileSync(join(fake, "gh"), FAKE_GH);
-	chmodSync(join(fake, "gh"), 0o755);
 	const reset = Math.floor(Date.now() / 1000) + 1800;
 	writeFileSync(
 		join(fake, "rate.json"),
@@ -69,7 +73,7 @@ function rig(core: number): Rig {
 	return {
 		fake,
 		env: {
-			PATH: [GUARD_DIR, fake, process.env.PATH ?? ""].join(delimiter),
+			PATH: [GUARD_DIR, fakeBin, process.env.PATH ?? ""].join(delimiter),
 			OMP_GUI_GH_GUARD: GUARD_DIR,
 			OMP_GUI_SCRATCH: scratch,
 			OMPDESK_GH_BUDGET_DIR: join(root, "budget"),
@@ -118,7 +122,17 @@ async function session(
 
 const views = (calls: string[]) => calls.filter(call => call.startsWith("run view"));
 
-describe.skipIf(!existsSync(omp) || process.platform === "win32")("gh guard, on stock omp", () => {
+describe.skipIf(!existsSync(omp))("gh guard, on stock omp", () => {
+	beforeAll(() => {
+		const dir = mkdtempSync(join(tmpdir(), "ompdesk-fake-gh-"));
+		writeFileSync(join(dir, "fake-gh.ts"), FAKE_GH);
+		fakeBin = join(dir, "bin");
+		const beside = join(dirname(omp), process.platform === "win32" ? "bun.exe" : "bun");
+		const bun = existsSync(beside) ? beside : "bun";
+		const outfile = join(fakeBin, process.platform === "win32" ? "gh.exe" : "gh");
+		execFileSync(bun, ["build", "--compile", join(dir, "fake-gh.ts"), "--outfile", outfile], { stdio: "pipe" });
+	}, 120_000);
+
 	it("serves a finished attempt's log from the cache, by attempt, and slows a watch to a minute", async () => {
 		const setup = rig(4000);
 		const {
