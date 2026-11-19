@@ -133,10 +133,10 @@ describe("deriveUnavailable", () => {
 	it("groups missing internals by feature, in the order asked, omitting satisfied features", () => {
 		const requirements = {
 			planMode: { session: ["setPlanModeState()", "getPlanModeState()"] },
-			goalMode: { modules: { "mod/btw": ["BtwHistoryStore.open()"] } },
+			guidedGoal: { modules: { "mod/btw": ["BtwHistoryStore.open()"] } },
 			workspace: { session: ["sessionManager.addWorkspaceDirectory()"] },
 		};
-		expect(deriveUnavailable(["workspace", "goalMode", "planMode"], sources(), requirements)).toEqual([
+		expect(deriveUnavailable(["workspace", "guidedGoal", "planMode"], sources(), requirements)).toEqual([
 			{ feature: "workspace", missing: ["AgentSession.sessionManager.addWorkspaceDirectory"] },
 			{ feature: "planMode", missing: ["AgentSession.getPlanModeState"] },
 		]);
@@ -147,23 +147,89 @@ describe("deriveUnavailable", () => {
 		for (const feature of ALL_FEATURES) expect(en[`bridgeHealth.feature.${feature}`], feature).toBeTruthy();
 	});
 
-	it("reports composer unavailable on an omp without the session members its methods read", () => {
-		const members = [
-			"AgentSession.disarmPrewalk",
-			"AgentSession.autoRetryEnabled",
-			"AgentSession.configuredThinkingLevel",
-		];
-		const composer = { session: REQUIREMENTS.composer.session };
-		expect(missingFor(composer, sources({ session: {} }))).toEqual(expect.arrayContaining(members));
+	it("reports composer status unavailable on an omp without the session members it reads", () => {
+		const members = ["AgentSession.autoRetryEnabled", "AgentSession.configuredThinkingLevel"];
+		const status = { session: REQUIREMENTS.composerState.session };
+		expect(missingFor(status, sources({ session: {} }))).toEqual(expect.arrayContaining(members));
 		const current = {
-			disarmPrewalk() {},
 			get autoRetryEnabled() {
 				return true;
 			},
 			configuredThinkingLevel() {},
 		};
-		const missing = missingFor(composer, sources({ session: current }));
+		const missing = missingFor(status, sources({ session: current }));
 		for (const member of members) expect(missing).not.toContain(member);
+	});
+
+	it("marks only the core capabilities core, so main repairs omp for those alone", () => {
+		const requirements = {
+			relaunchResume: { session: ["restoreInterruptedTurn()"] },
+			abortCompaction: { session: ["abortCompaction()"] },
+		};
+		expect(deriveUnavailable(["relaunchResume", "abortCompaction"], sources({ session: {} }), requirements)).toEqual([
+			{ feature: "relaunchResume", missing: ["AgentSession.restoreInterruptedTurn"], core: true },
+			{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
+		]);
+		expect(
+			mergeAreaFailures([], [{ area: "composer", features: ["relaunchResume", "jobs"], error: "x" }]).map(
+				entry => entry.core === true,
+			),
+		).toEqual([true, false]);
+	});
+});
+
+describe("one capability per action", () => {
+	const AGENT = "@oh-my-pi/pi-coding-agent";
+
+	/** The capabilities a missing internal turns off: every id whose requirements name `label`. */
+	function turnedOffBy(label: string): string[] {
+		const specifiers = Object.values(REQUIREMENTS).flatMap(requirement => Object.keys(requirement.modules ?? {}));
+		const bare = sources({
+			session: {},
+			pkg: {},
+			api: {},
+			modules: new Map(specifiers.map(specifier => [specifier, {}])),
+			hasPrompt: () => false,
+		});
+		return ALL_FEATURES.filter(feature => missingFor(REQUIREMENTS[feature], bare).includes(label));
+	}
+
+	it("turns off only the action that uses a missing internal, never its whole area", () => {
+		expect(turnedOffBy("AgentSession.navigateTree")).toEqual(["switchLeaf"]);
+		expect(turnedOffBy("AgentSession.sessionManager.appendLabelChange")).toEqual(["entryLabel"]);
+		expect(turnedOffBy("AgentSession.compact")).toEqual(["planApproval"]);
+		expect(turnedOffBy("AgentSession.goalRuntime.onBudgetMutated")).toEqual(["goalBudget"]);
+		expect(turnedOffBy(`${AGENT}/mcp/config-writer#setMcpServerEnabled`)).toEqual(["mcpToggle"]);
+		expect(
+			turnedOffBy(`${AGENT}/extensibility/plugins/marketplace#MarketplaceManager.prototype.upgradePlugin`),
+		).toEqual(["pluginInstall"]);
+		expect(turnedOffBy("AgentSession.refreshScopedModels")).toEqual(["providerLogout"]);
+		expect(turnedOffBy("AgentSession.sessionManager.removeWorkspaceDirectory")).toEqual(["workspaceEdit"]);
+	});
+
+	it("keeps what only the stock helper loads out of the bridge's own actions", () => {
+		expect(turnedOffBy(`${AGENT}/extensibility/plugins/manager#PluginManager.prototype.upgrade`)).toEqual([
+			"extensionUpdates",
+		]);
+		expect(turnedOffBy(`${AGENT}/sdk#discoverAuthStorage`)).toEqual(["storedCredentials"]);
+		expect(turnedOffBy(`${AGENT}/session/session-manager#SessionManager.prototype.moveTo`)).toEqual([
+			"moveStoredSession",
+		]);
+	});
+
+	it("lists a shared helper's internals under every action that runs it", () => {
+		// Stock's MCP reload runs after a remove, an add, a sign-in and a reload; /copy and /open replay the transcript.
+		expect(turnedOffBy("AgentSession.setMCPPromptCommands")).toEqual([
+			"mcpRemove",
+			"mcpAdd",
+			"mcpReauth",
+			"mcpReload",
+		]);
+		expect(turnedOffBy(`${AGENT}/session/session-context#buildSessionContext`)).toEqual([
+			"copyTargets",
+			"lastLink",
+			"transcript",
+		]);
 	});
 });
 
@@ -197,7 +263,7 @@ describe("UnsupportedOmpError / requireFn", () => {
 
 	it("throws only when the method is absent", () => {
 		expect(() => requireFn(fakeSession(), "setPlanModeState", "planMode")).not.toThrow();
-		expect(() => requireFn(fakeSession(), "navigateTree", "sessionTree")).toThrow(
+		expect(() => requireFn(fakeSession(), "navigateTree", "switchLeaf")).toThrow(
 			expect.objectContaining({
 				code: "unsupported_omp",
 				message: expect.stringContaining("AgentSession.navigateTree"),
