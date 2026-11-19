@@ -182,7 +182,7 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	container-type: inline-size;
 }
 
-@container (max-width: 15rem) {
+@container (max-width: 13rem) {
 	.omp-sidebar-session-row [data-sidebar-row-end] > time {
 		position: absolute;
 		width: 1px;
