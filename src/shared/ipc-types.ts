@@ -66,6 +66,7 @@ import type {
 import type { SchedulesApi, SchedulesState } from "./schedules";
 import type { SessionListDelta, VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
+import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
 import type { GitAslrAction, GitAslrResult, SetupItemId, SetupState } from "./setup";
 import type { SidebarChange } from "./sidebar-prefs";
 import type { SidebarProjectsApi } from "./sidebar-projects";
@@ -264,6 +265,10 @@ export const IPC_COMMANDS = {
 	SESSIONS_MESSAGES: "sessions:messages",
 	/** Move a stored session (no tab holds it) to another project folder */
 	SESSIONS_MOVE: "sessions:move",
+	/** What each listed session works in: repository, HEAD, cached image (`SessionTargetQuery[]` → `SessionTargets`) */
+	SESSIONS_TARGETS: "sessions:targets",
+	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
+	SESSIONS_ARTWORK: "sessions:artwork",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -1220,6 +1225,18 @@ export interface IpcSessionsMovePayload {
 	sessionPath: string;
 	/** Absolute target project folder on the session's device. */
 	cwd: string;
+	device?: string;
+}
+
+export interface IpcSessionsTargetsPayload {
+	/** At most `SESSION_TARGET_BATCH` rows. */
+	sessions: SessionTargetQuery[];
+	device?: string;
+}
+
+export interface IpcSessionsArtworkPayload {
+	/** Repository roots (`SessionTargetRepository.root`), at most `SESSION_TARGET_BATCH`. */
+	roots: string[];
 	device?: string;
 }
 
@@ -2425,6 +2442,13 @@ export interface OmpApi {
 		messages(sessionPath: string, device?: string): Promise<AgentMessage[]>;
 		/** Move a stored session to `cwd`; resolves with its new path. */
 		move(sessionPath: string, cwd: string, device?: string): Promise<string>;
+		/**
+		 * What each listed session works in (`session-target.ts`), resolved on the computer that runs it (`device`),
+		 * keyed by session file. Answers from cached facts: an image not looked up yet is left absent.
+		 */
+		targets(sessions: SessionTargetQuery[], device?: string): Promise<SessionTargets>;
+		/** Repository images by root, looked up where missing (bounded and cached there); null where none. */
+		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
 		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.
