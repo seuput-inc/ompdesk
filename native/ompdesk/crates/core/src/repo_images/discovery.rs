@@ -97,24 +97,24 @@ async fn fetch_image(url: &Url, source: Source) -> Option<Artwork> {
     raster(response.body, source).await
 }
 
-// Only icon links are considered. OpenGraph/social-preview metadata is not a repository logo.
-fn icon_links(html: &str) -> Vec<String> {
+/// Each `<name …>` tag's attribute text, in page order, quotes respected.
+fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
     let lower = html.to_ascii_lowercase();
-    let mut rest = lower.as_str();
+    let open = format!("<{name}");
     let mut offset = 0;
-    let mut links = Vec::new();
-    while let Some(start) = rest.find("<link") {
+    let mut found = Vec::new();
+    while let Some(start) = lower[offset..].find(&open) {
         let start = offset + start;
-        let Some(next) = lower.as_bytes().get(start + 5) else {
+        let inner = start + open.len();
+        let Some(next) = lower.as_bytes().get(inner) else {
             break;
         };
         if !next.is_ascii_whitespace() && *next != b'/' {
-            offset = start + 5;
-            rest = &lower[offset..];
+            offset = inner;
             continue;
         }
         let mut quote = None;
-        let mut end = start + 5;
+        let mut end = inner;
         for byte in lower.as_bytes().iter().skip(end) {
             if quote == Some(*byte) {
                 quote = None;
@@ -128,22 +128,44 @@ fn icon_links(html: &str) -> Vec<String> {
         if end == lower.len() {
             break;
         }
-        let tag = &html[start + 5..end];
-        if attribute(tag, "rel").is_some_and(|rel| {
-            rel.split_ascii_whitespace().any(|part| {
-                part.eq_ignore_ascii_case("icon") || part.eq_ignore_ascii_case("apple-touch-icon")
-            })
-        }) && let Some(href) = attribute(tag, "href")
-        {
-            links.push(href.replace("&amp;", "&"));
-        }
-        if links.len() == 4 {
-            break;
-        }
+        found.push(&html[inner..end]);
         offset = end + 1;
-        rest = &lower[offset..];
     }
-    links
+    found
+}
+
+// Only icon links are considered. OpenGraph/social-preview metadata is not a repository logo.
+fn icon_links(html: &str) -> Vec<String> {
+    tags(html, "link")
+        .into_iter()
+        .filter(|tag| {
+            attribute(tag, "rel").is_some_and(|rel| {
+                rel.split_ascii_whitespace().any(|part| {
+                    part.eq_ignore_ascii_case("icon")
+                        || part.eq_ignore_ascii_case("apple-touch-icon")
+                })
+            })
+        })
+        .filter_map(|tag| attribute(tag, "href"))
+        .map(|href| href.replace("&amp;", "&"))
+        .take(4)
+        .collect()
+}
+
+/// Where GitHub keeps a social preview the repository's owner uploaded. The one GitHub draws for every repository
+/// (`opengraph.githubassets.com`) is not the repository's own picture.
+const UPLOADED_PREVIEWS: &str = "repository-images.githubusercontent.com";
+
+/// A repository page's uploaded social preview, from its `og:image`.
+fn uploaded_preview(html: &str) -> Option<Url> {
+    let content = tags(html, "meta").into_iter().find_map(|tag| {
+        attribute(tag, "property")
+            .is_some_and(|property| property.eq_ignore_ascii_case("og:image"))
+            .then(|| attribute(tag, "content"))
+            .flatten()
+    })?;
+    let url = external_url(&content.replace("&amp;", "&"))?;
+    (url.scheme() == "https" && url.host_str() == Some(UPLOADED_PREVIEWS)).then_some(url)
 }
 
 fn attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
@@ -194,8 +216,9 @@ fn attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
     None
 }
 
-/// Extract only github.com's public owner name. Neither a repository path, token nor raw origin becomes a request.
-pub(super) fn github_owner(remote: &str) -> Option<String> {
+/// github.com's owner and repository name of `remote`, when it is one. Neither a token nor the raw origin becomes a
+/// request: only these two names, each checked against GitHub's own spelling rules.
+fn github_repository(remote: &str) -> Option<(String, String)> {
     if let Ok(url) = Url::parse(remote)
         && (url.password().is_some()
             || !(url.username().is_empty() || url.scheme() == "ssh" && url.username() == "git"))
@@ -215,7 +238,16 @@ pub(super) fn github_owner(remote: &str) -> Option<String> {
     let mut parts = web.path_segments()?;
     let owner = parts.next()?;
     let repository = parts.next()?;
-    if repository.is_empty() || parts.next().is_some() {
+    let repository = repository.strip_suffix(".git").unwrap_or(repository);
+    if parts.next().is_some()
+        || repository.is_empty()
+        || repository.len() > 100
+        || repository == "."
+        || repository == ".."
+        || !repository
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
         return None;
     }
     if owner.is_empty()
@@ -228,7 +260,26 @@ pub(super) fn github_owner(remote: &str) -> Option<String> {
     {
         return None;
     }
-    Some(owner.to_owned())
+    Some((owner.to_owned(), repository.to_owned()))
+}
+
+/// github.com's owner name of `remote`.
+pub(super) fn github_owner(remote: &str) -> Option<String> {
+    github_repository(remote).map(|(owner, _)| owner)
+}
+
+/// The social preview the owner uploaded for a public github.com repository. Only the page's head is read (its
+/// `og:image` sits about 24 KB in); a private repository's page answers 404 and the owner's avatar follows.
+async fn github_preview(owner: &str, repository: &str) -> Option<Artwork> {
+    let page = Url::parse(&format!("https://github.com/{owner}/{repository}")).ok()?;
+    let response = crate::http::public_head(page.as_str(), 64 * 1024)
+        .await
+        .ok()?;
+    if response.status != 200 {
+        return None;
+    }
+    let html = String::from_utf8_lossy(&response.body);
+    fetch_image(&uploaded_preview(&html)?, Source::Repository).await
 }
 
 pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwork> {
@@ -268,17 +319,22 @@ pub(super) async fn discover(root: &Path, remote: Option<&str>) -> Option<Artwor
         }
         None
     };
-    // Reserve a separate attempt for the owner fallback when a homepage is offline or slow.
+    // Each step keeps its own bound, so the owner fallback still has time when a homepage or GitHub is slow.
     if let Ok(Some(image)) = tokio::time::timeout(std::time::Duration::from_secs(4), homepage).await
     {
         return Some(image);
     }
-    if let Some(owner) = remote.and_then(github_owner)
-        && let Ok(url) = Url::parse(&format!("https://github.com/{owner}.png"))
+    let (owner, repository) = github_repository(remote?)?;
+    if let Ok(Some(image)) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        github_preview(&owner, &repository),
+    )
+    .await
     {
-        return fetch_image(&url, Source::Owner).await;
+        return Some(image);
     }
-    None
+    let url = Url::parse(&format!("https://github.com/{owner}.png")).ok()?;
+    fetch_image(&url, Source::Owner).await
 }
 
 #[cfg(test)]
@@ -298,6 +354,34 @@ mod tests {
         assert!(homepage_url("https://github.com/synthetic-owner/project#readme").is_none());
         assert!(homepage_url("https://WWW.GitHub.com/synthetic-owner/project").is_none());
         assert!(homepage_url("https://synthetic-owner.github.io/project/").is_some());
+    }
+
+    #[test]
+    fn only_a_social_preview_the_owner_uploaded_counts_as_the_repository_image() {
+        let uploaded =
+            "https://repository-images.githubusercontent.com/1406736637/2fda291f-b0a0-4798";
+        assert_eq!(
+            uploaded_preview(&format!(
+                r#"<meta name="viewport" content="x"><META content='{uploaded}' Property="og:image">"#
+            ))
+            .map(String::from),
+            Some(uploaded.to_owned())
+        );
+        for page in [
+            r#"<meta property="og:image" content="https://opengraph.githubassets.com/e1ce/owner/project">"#,
+            r#"<meta property="og:image" content="http://repository-images.githubusercontent.com/1/2">"#,
+            r#"<meta property="og:image" content="https://repository-images.githubusercontent.com.evil.invalid/1">"#,
+            r#"<meta property="twitter:image" content="https://repository-images.githubusercontent.com/1/2">"#,
+            "<meta property='og:image' content='/relative.png'>",
+        ] {
+            assert!(uploaded_preview(page).is_none(), "{page}");
+        }
+        assert_eq!(
+            github_repository("git@github.com:synthetic-owner/private.project-1.git"),
+            Some(("synthetic-owner".into(), "private.project-1".into()))
+        );
+        assert!(github_repository("https://github.com/synthetic-owner/..").is_none());
+        assert!(github_repository("https://github.com/synthetic-owner/a%2Fb").is_none());
     }
 
     #[test]
