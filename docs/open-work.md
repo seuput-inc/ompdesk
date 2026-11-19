@@ -21,10 +21,10 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
-| B1 | A relaunch does not cut a running command: it keeps running outside the session and reattaches, or resumes exactly where it stopped. Foreground commands now finish on a stop (up to 20 s); async jobs surviving a relaunch (`ompdesk keep` runner) is next. | foreground done, async in progress | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
-| B2 | A command does not run twice after a relaunch (seen: an empty commit made twice). Cause: stock retry replays a cut batch whose results are all errors. Fixed: a call an earlier process started is answered, never run again (real omp, counter file: before 2 runs in 3 of 3, after 1 run in 6 of 6; formal relaunch-once green). | fixed on branch, ci running | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
-| B3 | A session opened during the restart countdown keeps its first message: the automatic restart holds until the opened session has taken its first message. | fixed on branch, ci running | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
-| B4 | A session that paused waiting for the restart starts again by itself. Fixed: agents are told a relaunch continues their turn (catalog, pstack adapter); an idle goal tab, an armed backoff retry and a deferred Autopilot tab are revived at relaunch. A turn an agent ends anyway is not woken. | fixed on branch, ci running | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `7ecd7fc33` | 44615185097 |
+| B1 | A relaunch does not cut a running command. Done: foreground commands finish on a stop (up to 20 s); background jobs (async:true, main agent) run under `ompdesk keep` and reattach with their id. Still cut: subagents' jobs, pty/named services, commands naming session URLs, stock's 60 s auto-backgrounded calls (never run twice). eval/ssh cut at an approval card end as 'not run again' instead of asking again. | green, into next-line | done | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
+| B2 | A command does not run twice after a relaunch (seen: an empty commit made twice). Cause: stock retry replays a cut batch whose results are all errors. Fixed: a call an earlier process started is answered, never run again (real omp, counter file: before 2 runs in 3 of 3, after 1 run in 6 of 6; formal relaunch-once green). | green, into next-line | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
+| B3 | A session opened during the restart countdown keeps its first message: the automatic restart holds until the opened session has taken its first message. | green, into next-line | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
+| B4 | A session that paused waiting for the restart starts again by itself. Fixed: agents are told a relaunch continues their turn (catalog, pstack adapter); an idle goal tab, an armed backoff retry and a deferred Autopilot tab are revived at relaunch. A turn an agent ends anyway is not woken. | green, into next-line | relaunch-keeps-work [desktop] | omp/agent/relaunch-keeps-work-20261120 `1f39a6e95` | 44622247982 |
 | B5 | A session another computer opened keeps working when that computer goes off (away-opener). | on branch | next-line [desktop] | omp/agent/next-0134-1 (`e82d28e1f`) | |
 
 ## C. Sessions and tabs
@@ -97,12 +97,12 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
 | H13 | Check control (the checks view). | local half green (ci 44612708554), hub parts open | earlier-list [desktop] | | |
-| H23 | The line and card shown during a compaction. | in progress | earlier-list [desktop] | | |
-| H24 | Themes: default plus four light/dark pairs (eleven themes exist today; first list what is left). | in progress | earlier-list [desktop] | | |
+| H23 | The line and card shown during a compaction. | green (ci 44616085064, parity 44616997735), into next-line | earlier-list [desktop] | | |
+| H24 | Themes: default plus four light/dark pairs (eleven themes exist today; first list what is left). | green (ci 44616085064, parity 44616997735), into next-line | earlier-list [desktop] | | |
 | H26 | Credits are never used while their switch is off (no first-call or refresh exception); at the limit stop and tell. | in progress | earlier-list [desktop] | | |
 | H27 | A black terminal window appears (Windows). | blocked: no repro; add a probe | earlier-list [desktop] | | |
 | H28 | Windows feels slow. | blocked: no repro; add a probe | earlier-list [desktop] | | |
-| H30 | The phone page cannot load older messages. | in progress | earlier-list [desktop] | | |
+| H30 | The phone page cannot load older messages. | green (ci 44616085064, parity 44616997735), into next-line | earlier-list [desktop] | | |
 | H31 | An 18-hour wait, cause unknown. | blocked: no repro; add a probe | earlier-list [desktop] | | |
 | H32 | release.yml: hold only the publish step (draft release, approval); workflow commits separate. | not started | | | |
 
@@ -114,7 +114,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | R2 | mobile-autopilot-rows read the new branch line as a child named after its branch. | release-ready (test) | | `69228ec7e` | spec run 44580343480 |
 | R3 | mobile-remote-session:459 'a host slow to start': the app window never loaded in 30 s once (WebView2 stuck at __profile/migrate). Unconfirmed: v0.134.1 0 of 10 failed, fixed candidate 0 of 10, candidate line 1 of 11. Migrate page leaves no log. | unconfirmed (recorded): 0 stops in 300 Windows launches | | | launch probe through migrate: candidate clean 0/50, Electron-era 0/50, update path 0/50 (never on migrate); v0.134.1 the same 0/50 ×3 (44589743856, 44589750606, 44589755913, 44589858476, 44589864938, 44589871995); the failing spec itself not yet run 50× with the recorder |
 | R4 | The shell's profile-migration page (/__profile/migrate, only while tauri-local-storage-import.json is missing: a new profile's first launch, the first launch after the Electron→Tauri move) shows an error and Retry when it throws, but has no timeout, no automatic retry and no log line when profileRead/profileAck never answer: the window just stays. | next release: retry on a timeout and log why (a new install's first screen) | | | |
-| R5 | e2e remote-autopilot-board:46 failed on Windows on a59111ad4 (44587803757 shard 2): a paired device's click on the board's opened-child row opened no tab in 10 s; passed on e3eb65db5. Shard 1 of the same run lost its runner (no log). | in progress | rc-0135-board [Mac mini] | | |
+| R5 | e2e remote-autopilot-board:46 failed on Windows on a59111ad4 (44587803757 shard 2): a paired device's click on the board's opened-child row opened no tab in 10 s; passed on e3eb65db5. Shard 1 of the same run lost its runner (no log). | cause explained, being confirmed: at the click the child row on A had no session file (B's tab still starting); forced on the candidate 1 of 4 failed the same way (click log sessionPath=none). Original failure's trace shows no file id (no DOM, no click log). v0.134.1 forced x10 running (44622257822). Fix: rc-0135-board `b4c47932a`. | rc-0135-board [Mac mini] | | |
 | N1 | next-line e2e (566af6e9f, shard 4): a11y-audit's first launch 'WebView2 opened no DevTools port within 60000 ms'; tauri-shell.jsonl has node.spawned and host.hello only, no window. page-watch (new on next-line) touches window creation, so not ruled out. | unconfirmed, watching the full e2e on f298d0185 | next-line [desktop] | omp/agent/next-line-20261120 | |
 
 ## I. Boundaries
