@@ -245,7 +245,8 @@ impl Service {
                     let git = Git::new(runner, Scope::detached());
                     let remote = remote_url(&git, &root).await;
                     let image = tokio::time::timeout(
-                        Duration::from_secs(10),
+                        // Homepage 4 s, GitHub's social preview 3 s, the owner's avatar 4 s, and a second to spare.
+                        Duration::from_secs(12),
                         discovery::discover(&root, remote.as_deref()),
                     )
                     .await
