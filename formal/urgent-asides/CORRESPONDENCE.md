@@ -12,8 +12,9 @@
 
 ## Assumptions
 
-- **A1** Stock emits `message_end` for every message a boundary drained before the model request that follows, so before
-  the next tool batch (`BatchStart` needs `handing = {}`). Mutation `batch-before-message-end` shows P1 depends on it.
+- **A1** A message stays pending from its arm until its `message_end`: a peek while the boundary is still emitting
+  `message_end`s (none runs then: tool batches start after the model request) would answer for a message the model
+  has not got yet, which P1 allows. The model lets a batch start only after them (`BatchStart` needs `handing = {}`).
 - **A2** A message from another session is armed in `onPromptAdmitted`, synchronously after `queueAside`; the model lets
   any arm precede its enqueue, which covers both orders.
 - **A3** The key of a message (`mail:<id>`, `aside:<text>`) is the key its `message_end` yields. Two asides with the same

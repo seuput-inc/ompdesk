@@ -12,11 +12,11 @@
 			"breaks": "QuietNeverInterrupts"
 		},
 		{
-			"name": "batch-before-message-end",
-			"why": "a tool batch peeks before stock emitted message_end for what the boundary drained",
-			"search": "    /\\ turn = \"running\" /\\ ~batch /\\ handing = {}\n    /\\ batch' = TRUE",
-			"replace": "    /\\ turn = \"running\" /\\ ~batch\n    /\\ batch' = TRUE",
-			"breaks": "QuietNeverInterrupts"
+			"name": "quiet-report-armed",
+			"why": "a progress report or note raises a mark (interruptFor called for any report), leaving the set of marks TypeOK allows",
+			"search": "/\\ turn = \"running\" /\\ m \\in Urgent /\\ m \\notin sentEver /\\ m \\notin armed",
+			"replace": "/\\ turn = \"running\" /\\ m \\notin sentEver /\\ m \\notin armed",
+			"breaks": "TypeOK"
 		},
 		{
 			"name": "peek-ignores-marks",
