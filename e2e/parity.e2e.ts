@@ -464,6 +464,14 @@ if (dir) {
 						if (!tabId) throw new Error(`the phone could not view ${session}: ${JSON.stringify(viewed)}`);
 					}
 					await phone.goto(`${phoneUrl}/#/open?tab=${tabId}`);
+					// As `openRow`: shown only once it is the page's active tab. A tab spawned just now is listed a moment
+					// later, and a surface's `open` asks which tab is active (`shownTab`) to send its turn there.
+					await expect
+						.poll(
+							async () => (await phone.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId,
+							{ timeout: 30_000 },
+						)
+						.toBe(tabId);
 				},
 			};
 
