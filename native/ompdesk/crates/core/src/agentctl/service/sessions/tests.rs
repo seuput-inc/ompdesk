@@ -213,6 +213,52 @@ async fn mine_lists_the_sessions_the_caller_opened_whose_tabs_closed_and_open_on
 }
 
 #[tokio::test]
+async fn a_view_a_call_joined_to_reach_a_session_held_elsewhere_closes_when_the_call_ends_and_one_to_show_stays() {
+    // The view main makes is already in the window (no session file yet), ready.
+    let mut view = tab("view1", "");
+    view.as_object_mut().unwrap().remove("sessionPath");
+    let (control, asked) = rig(
+        7_391,
+        vec![tab("boss", "/s/x_boss1111.jsonl"), view],
+        json!({}),
+        |method, args| match method {
+            "stored" => Ok(json!([{ "id": "far55555", "path": "/s/far_far55555.jsonl", "title": "Far", "cwd": "/w", "elsewhere": { "work": "idle" } }])),
+            "spawn" => Ok(json!({ "tabId": "view1" })),
+            other => main_of(other, args),
+        },
+    );
+    let closes = |asked: &Asked| {
+        names(asked, "view")
+            .into_iter()
+            .filter(|view| view["event"]["how"] == "close")
+            .map(|view| view["event"]["tabId"].clone())
+            .collect::<Vec<_>>()
+    };
+    let answered = control
+        .run(
+            "boss",
+            "ompdesk_session_answer",
+            json!({ "session": "far55555", "choice": "yes" }),
+            None,
+        )
+        .await;
+    assert_eq!(names(&asked, "spawn").len(), 1, "{}", answered.text);
+    assert_eq!(closes(&asked), vec![json!("view1")], "{}", answered.text);
+    // A show joins to be seen: that view stays.
+    control
+        .run(
+            "boss",
+            "ompdesk_tab_focus",
+            json!({ "session": "far55555" }),
+            None,
+        )
+        .await;
+    assert_eq!(names(&asked, "spawn").len(), 2);
+    assert_eq!(closes(&asked).len(), 1);
+    control.host.port().close();
+}
+
+#[tokio::test]
 async fn an_open_marks_the_child_a_worker_and_sends_its_message_wrapped() {
     let (control, asked) = rig(
         7_303,
