@@ -1,14 +1,19 @@
 /**
- * The claims journal as deltas (resources/gui-bridge/modes/checkout-claims.ts `claimsDelta`, `replayClaims`): whatever
- * a real `ClaimBook` does, the journal replays to exactly its files, in order, so a restart restores what it held.
+ * The claims journal as deltas (resources/gui-bridge/modes/checkout-claims.ts `nextClaimsEntry`, `journaledClaims`):
+ * whatever a real `ClaimBook` does, the journal replays to exactly its files, in order, so a restart restores what it
+ * held.
  */
 import { describe, expect, it } from "vitest";
 import {
 	CLAIMS_FULL_EVERY,
 	ClaimBook,
 	claimsDelta,
+	journaledClaims,
+	nextClaimsEntry,
 	replayClaims,
 } from "../../resources/gui-bridge/modes/checkout-claims";
+
+const ENTRY = "ompdesk.checkout-claims";
 
 /** mulberry32: a seeded generator, so a failing sequence is replayed by its seed. */
 function random(seed: number): () => number {
@@ -60,20 +65,19 @@ describe("the claims journal", () => {
 					book.agentEnded(owner);
 					open.splice(0, open.length, ...open.filter(call => call.owner !== owner));
 				} else {
-					// A move in the session tree: the next entry is whole.
+					// A move in the session tree: the writer's base is what the branch's journal holds, the next entry whole.
 					deltas = CLAIMS_FULL_EVERY;
-					written = [];
+					written = journaledClaims(journal, ENTRY)?.files ?? [];
 				}
-				const delta = claimsDelta(written, book.files);
-				if (!delta) continue;
-				const whole = deltas >= CLAIMS_FULL_EVERY || delta.front.length + delta.removed.length >= book.files.length;
-				journal.push(whole ? book.snapshot() : delta);
+				const entry = nextClaimsEntry(written, book, deltas);
+				if (!entry) continue;
+				journal.push({ customType: ENTRY, data: entry.data });
 				written = [...book.files];
-				deltas = whole ? 0 : deltas + 1;
-				expect(replayClaims(journal)?.files, `seed ${seed} step ${step}`).toEqual(book.files);
+				deltas = entry.whole ? 0 : deltas + 1;
+				expect(journaledClaims(journal, ENTRY)?.files, `seed ${seed} step ${step}`).toEqual(book.files);
 			}
 			const restored = new ClaimBook();
-			restored.restore(replayClaims(journal));
+			restored.restore(journaledClaims(journal, ENTRY));
 			expect(restored.files, `seed ${seed}`).toEqual(book.files);
 		}
 	});

@@ -397,8 +397,23 @@ export function claimsDelta(prev: readonly string[], next: readonly string[]): C
 	return cut === 0 && removed.length === 0 ? undefined : { front: next.slice(0, cut), removed };
 }
 
-/** A journal entry that is a whole set. */
-export function isWholeClaims(data: unknown): data is { files: unknown[] } {
+/**
+ * The journal's next entry for `book` (modes/checkout-peers.ts `writeJournal`): the change since `base` (what the
+ * branch's journal replays to) as a delta, or the whole set when `deltas` since the last whole one reached
+ * `CLAIMS_FULL_EVERY` or the change is no smaller than the set; none when the set is what the journal holds.
+ */
+export function nextClaimsEntry(
+	base: readonly string[],
+	book: Pick<ClaimBook<unknown>, "files" | "snapshot">,
+	deltas: number,
+): { data: ClaimsDelta | { files: string[]; stamps: number[] }; whole: boolean } | undefined {
+	const delta = claimsDelta(base, book.files);
+	if (!delta) return undefined;
+	const whole = deltas >= CLAIMS_FULL_EVERY || delta.front.length + delta.removed.length >= book.files.length;
+	return { data: whole ? book.snapshot() : delta, whole };
+}
+
+function isWholeClaims(data: unknown): data is { files: unknown[] } {
 	return typeof data === "object" && data !== null && "files" in data && Array.isArray(data.files);
 }
 
@@ -428,4 +443,21 @@ export function replayClaims(entries: readonly unknown[]): { files: string[] } |
 		}
 	}
 	return files === undefined ? undefined : { files };
+}
+
+/**
+ * What a session branch's claims journal holds, as `ClaimBook.restore` takes it: the branch's entries of `customType`
+ * walked back to the newest whole set, then replayed (`replayClaims`). Before deltas a load read the newest entry
+ * alone; read that way a delta restores nothing and a relaunch would lose every claim.
+ */
+export function journaledClaims(branch: readonly unknown[], customType: string): { files: string[] } | undefined {
+	const newestFirst: unknown[] = [];
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (typeof entry !== "object" || entry === null || !("customType" in entry) || !("data" in entry)) continue;
+		if (entry.customType !== customType) continue;
+		newestFirst.push(entry.data);
+		if (isWholeClaims(entry.data)) break;
+	}
+	return replayClaims(newestFirst.reverse());
 }

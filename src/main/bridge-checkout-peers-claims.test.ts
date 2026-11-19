@@ -458,7 +458,12 @@ describe("modes/checkout-peers.ts: the hooks and the journal", () => {
 		expect(after.files).toEqual([]);
 	});
 
-	it("writes only what changed once the set is large, nothing when nothing did, and a new load restores the set", async () => {
+	const files = async (loaded: Awaited<ReturnType<typeof load>>) =>
+		((await loaded.methods.checkout_status({}, loaded.env as never)) as { files: string[] }).files;
+	const asBranch = (entries: Array<{ type: string; data: unknown }>) =>
+		entries.map(entry => ({ type: "custom", customType: entry.type, data: entry.data }));
+
+	it("writes only what changed once the set is large, and a relaunch on a delta keeps every claim", async () => {
 		const first = await load();
 		const edit = async (name: string, id: string) => {
 			await first.fire("tool_call", { toolName: "edit", toolCallId: id, input: { path: name } }, ctx());
@@ -472,19 +477,50 @@ describe("modes/checkout-peers.ts: the hooks and the journal", () => {
 			await edit("src/f7.ts", `m${run}`);
 			await first.fire("agent_end", {}, ctx());
 		}
+		// Nothing changed: nothing is written.
 		await first.fire("agent_end", {}, ctx());
 		const later = first.entries.slice(large);
 		expect(later).toHaveLength(5);
 		// A whole set of 300 files is about 9 KB; each run changed two.
 		for (const entry of later) expect(JSON.stringify(entry.data).length).toBeLessThan(200);
+		expect(first.entries.at(-1)?.data).toMatchObject({ front: [file("src/f7.ts"), file("src/new4.ts")] });
 
-		const files = async (loaded: Awaited<ReturnType<typeof load>>) =>
-			((await loaded.methods.checkout_status({}, loaded.env as never)) as { files: string[] }).files;
+		// The relaunch: the newest entry is a delta, and every uncommitted file is claimed again, in order.
 		const second = await load();
-		const branch = first.entries.map(entry => ({ type: "custom", customType: entry.type, data: entry.data }));
-		await second.fire("session_start", {}, ctx(branch));
+		await second.fire("session_start", {}, ctx(asBranch(first.entries)));
 		expect(await files(second)).toEqual(await files(first));
 		expect(await files(second)).toHaveLength(305);
+	});
+
+	it("writes a claim retired right after a relaunch as gone, so the next relaunch does not bring it back", async () => {
+		const first = await load();
+		for (const name of ["a", "b"]) {
+			await first.fire(
+				"tool_call",
+				{ toolName: "edit", toolCallId: name, input: { path: `src/${name}.ts` } },
+				ctx(),
+			);
+			await first.fire("tool_result", { toolName: "edit", toolCallId: name, isError: false, content: [] }, ctx());
+		}
+		await first.fire("agent_end", {}, ctx());
+
+		const second = await load();
+		await second.fire("session_start", {}, ctx(asBranch(first.entries)));
+		const status = (await second.methods.checkout_status({}, second.env as never)) as {
+			files: string[];
+			stamps: number[];
+			instance: string;
+		};
+		const a = status.files.indexOf(file("src/a.ts"));
+		await second.methods.checkout_retire(
+			{ instance: status.instance, files: [{ file: file("src/a.ts"), stamp: status.stamps[a] }] },
+			second.env as never,
+		);
+		await second.fire("agent_end", {}, ctx());
+
+		const third = await load();
+		await third.fire("session_start", {}, ctx(asBranch([...first.entries, ...second.entries])));
+		expect(await files(third)).toEqual([file("src/b.ts")]);
 	});
 
 	it("keeps a backgrounded bash call pending until its job's update says it ended", async () => {
