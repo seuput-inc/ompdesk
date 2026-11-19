@@ -19,6 +19,7 @@ import {
 	PREVIEW_CHECK_PROBE_MS,
 	PREVIEW_CHECK_TOTAL_MS,
 	type PreviewCheckDeps,
+	type PreviewCheckOutcome,
 	type PreviewImage,
 	previewHint,
 } from "./preview-check";
@@ -60,7 +61,7 @@ function fakeDeps(overrides: Partial<PreviewCheckDeps> = {}) {
 }
 
 /** What `gui_visualize open` answers for a fresh visual, the id masked; `check` is the context's (none = no check). */
-async function open(check?: (id: string, version: number) => Promise<"error" | "blank" | null>) {
+async function open(check?: (id: string, version: number) => Promise<PreviewCheckOutcome | null>) {
 	const store = new VisualStore(path.join(root, `visuals-${++stores}`));
 	const pages: VisualPages = {
 		close: () => {},
