@@ -15,6 +15,7 @@
 pub mod branches;
 mod checkout;
 pub(crate) mod freshness;
+pub(crate) mod left_behind;
 mod origin;
 mod orphans;
 pub(crate) mod parse;
@@ -221,6 +222,13 @@ struct RemoveParams {
     primary: String,
     path: String,
     timeout_ms: u64,
+}
+
+/// `git.leftBehindRemove`: one folder `left_behind.rs` wrote down, under main's removal claim for it.
+#[derive(Deserialize)]
+struct LeftBehindParams {
+    git: Runner,
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -749,6 +757,26 @@ pub fn register(registry: &mut Registry) {
             let RemovalParams { git, path, force } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&worktree::removal(&git, &path, force).await?)
+        })
+    });
+    registry.add("git.leftBehind", |_call| {
+        Box::pin(async move {
+            let entries = left_behind::file()
+                .map(|file| left_behind::list(&file))
+                .unwrap_or_default();
+            Reply::json(&entries)
+        })
+    });
+    registry.add("git.leftBehindRemove", |call| {
+        Box::pin(async move {
+            let LeftBehindParams { git, path } = call.params()?;
+            let git = Git::new(git, call.scope);
+            let Some(file) = left_behind::file() else {
+                return Reply::json(&left_behind::Swept::Kept {
+                    reason: "nothing is written down".into(),
+                });
+            };
+            Reply::json(&left_behind::sweep_one(&git, &file, &path).await?)
         })
     });
     registry.add("git.worktreeRemove", |call| {

@@ -800,6 +800,10 @@ export const OmpUpdateStateSchema: z.ZodType<OmpUpdateState> = z.object({
 	updatedTo: z.string().nullable(),
 	failure: z.object({ reason: z.enum(OMP_UPDATE_FAILURE_REASONS), detail: z.string().optional() }).nullable(),
 	tested: z.string().optional(),
+	held: z
+		.object({ version: z.string(), reason: z.literal("untested-major") })
+		.nullable()
+		.optional(),
 });
 
 const ScheduleDraftSchema = z.object({

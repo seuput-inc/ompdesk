@@ -582,6 +582,13 @@ export type RuntimeErrorSource =
 	 * `message` is check, download, scheduler or swap and `details.event` the step (never a token or a URL).
 	 */
 	| "app-update"
+	/**
+	 * Every omp install OMPdesk makes (src/main/omp-updater.ts, and machine setup's own omp install): `message` is
+	 * checked (`details.installed`, `latest`, `tested`), held (`version`, `reason`), started (`from`, `target`),
+	 * finished (`version`), failed (`reason`, `detail`) or skipped (`reason`); `details.path` says who started it:
+	 * launch, scheduled, repair, manual or setup.
+	 */
+	| "omp-update"
 	/** ai-memory's service (src/main/ai-memory/service.ts `log`): `message` is launch, binary, phase or failed. */
 	| "ai-memory"
 	/**

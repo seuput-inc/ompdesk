@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { deliveryFor, type MailKind } from "./agent-control/mail";
 import {
 	atEnd,
+	CLEANUP_MS,
 	HOLD,
 	journaledMail,
 	mail,
@@ -27,7 +28,7 @@ import { INSTALLED_OMP as omp } from "./test-bridge-probe";
  * (the core's `agentctl/journal/mail_outbox.rs`) until the receiver's journal holds its id and sends it again, with the same id, to
  * the omp that replaces the killed one; the bridge answers whether an id is journaled or only queued.
  */
-afterAll(runCleanups);
+afterAll(runCleanups, CLEANUP_MS);
 
 async function busyOmp(prompt: string): Promise<{ provider: Provider; session: Omp }> {
 	const provider = await startProvider();

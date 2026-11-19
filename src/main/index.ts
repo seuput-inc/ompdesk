@@ -895,6 +895,7 @@ app.whenReady().then(async () => {
 	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
 	core().report = (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details });
+	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
 	const remoteIdentity = loadIdentity(app.getPath("userData")).catch((error: unknown): Identity => {
@@ -932,10 +933,11 @@ app.whenReady().then(async () => {
 		},
 		() => {
 			// One attempt per omp version (BridgeHealth). An omp setup calls missing or broken (a compiled omp, a Bun
-			// below its engines.bun) is repaired by setup; a usable one by the omp updater, a no-op when it is newest.
+			// below its engines.bun) is repaired by setup, with the tested omp; a usable one by the omp updater's
+			// repair pass, which runs under "Keep tools up to date" and stays within the tested major like the timer's.
 			const presence = setupService?.state().items.find(item => item.id === "omp")?.presence;
 			if (presence && presence.kind !== "present") void setupService?.retry("omp").catch(() => undefined);
-			else void ompUpdater?.updateNow().catch(() => undefined);
+			else void ompUpdater?.repair().catch(() => undefined);
 		},
 	);
 	// Every IPC handler registers once, here and in what this hands it to: on ipcMain for the app's windows,
@@ -1609,6 +1611,13 @@ app.whenReady().then(async () => {
 	// install what is missing on its own (src/main/setup/). Tests opt in with a
 	// fake installer (OMP_GUI_TEST_INSTALLER); headless test runs never install.
 	const testInstaller = process.env.OMP_GUI_TEST_INSTALLER || null;
+	// Who installed which omp, and when: one line per step of the updater's passes and of setup's own omp installs.
+	const logOmpUpdate = (step: string, details: Record<string, unknown>) =>
+		writeRuntimeLog({
+			source: "omp-update",
+			message: step,
+			details: { level: step === "failed" ? "warn" : "info", ...details },
+		});
 	const setup = new SetupService({
 		platform,
 		arch: process.arch,
@@ -1646,6 +1655,7 @@ app.whenReady().then(async () => {
 			if (usable.refused) sessionIndex.relist();
 		},
 		beforeOptional: afterFirstTab,
+		logOmpInstall: logOmpUpdate,
 		onOmpReady: () => {
 			markStartup("omp-ready");
 			void launchStats();
@@ -1722,11 +1732,13 @@ app.whenReady().then(async () => {
 			: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
 		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
 		fetchLatest: () => setup.latestOmp(),
+		newestWithin: major => setup.newestOmpIn(major),
 		installed: () => {
 			const presence = setup.state().items.find(item => item.id === "omp")?.presence;
 			return presence?.kind === "present" ? presence.version : null;
 		},
-		update: (target, beforeInstall) => setup.updateOmp(target, beforeInstall),
+		update: (target, beforeInstall, exactOnly) => setup.updateOmp(target, beforeInstall, exactOnly),
+		log: logOmpUpdate,
 		releaseHelpers: async () => {
 			const stats = statsServer;
 			statsServer = null;

@@ -448,6 +448,18 @@ impl RpcResponse {
             ..RpcResponse::default()
         }
     }
+
+    /// No answer came, so the command may still run: a local omp's `RPC timeout (…)`, or main's
+    /// `rpc_delivery_unknown`, which a paired host's tab gets when `tab.command` timed out on the link (the host may
+    /// have delivered it and answered too late).
+    pub fn unanswered(&self) -> bool {
+        !self.success && (super::fail::unanswered_text(self.error.as_deref()) || self.unconfirmed())
+    }
+
+    /// The unanswered case where the command left this computer and its fate is unknown (`rpc_delivery_unknown`).
+    pub fn unconfirmed(&self) -> bool {
+        !self.success && self.code.as_deref() == Some("rpc_delivery_unknown")
+    }
 }
 
 // ---- messages ---------------------------------------------------------------------------------------------------

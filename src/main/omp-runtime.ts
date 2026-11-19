@@ -19,6 +19,7 @@ import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import ompTested from "../shared/omp-tested.json";
 import { isNewer } from "../shared/version";
 import type { OmpRuntime } from "./local/types";
 import { bunInstallDir } from "./setup/paths";
@@ -54,6 +55,14 @@ import {
  * identity keys (18.8.7), stock's project-scoped memory backend call (18.11.0).
  */
 export const MIN_OMP_VERSION = "18.18.9";
+
+/**
+ * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`, moved by the omp bump). OMPdesk
+ * installs this one where it installs omp itself (machine setup), and nothing it installs unasked goes above its
+ * major (omp-updater.ts): 19 Nov 2026, omp 19.0.0 came out and reached two computers within hours, on an OMPdesk
+ * that had only ever run against 18.
+ */
+export const TESTED_OMP_VERSION: string = ompTested.version;
 
 const VERSION_TIMEOUT_MS = 15_000;
 const DEFAULT_RUN_TIMEOUT_MS = 60_000;
@@ -136,23 +145,33 @@ export function ompBunDefaults(platform: NodeJS.Platform = process.platform): Re
 }
 
 /**
+ * Bun's root when `bin` is the launcher of its global omp package (`<root>/bin/omp` beside
+ * `<root>/install/global/node_modules/@oh-my-pi/pi-coding-agent`); null for any other omp (npm's, a checkout's).
+ * Only that omp can be installed at a version OMPdesk names: `bun install -g <package>@<version>` under
+ * `BUN_INSTALL=<root>` replaces it in place.
+ */
+export function ompBunRoot(bin: string): string | null {
+	const root = dirname(dirname(bin));
+	return existsSync(join(root, "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json"))
+		? root
+		: null;
+}
+
+/**
  * What points stock `omp update` (and `--check`) at `bin`'s own install. Stock updates the first `omp` on PATH
  * (`resolveOmpPath` = `$which("omp")`) and calls it a Bun install only when that launcher sits in `bun pm bin -g`
  * (BUN_INSTALL's `bin`); otherwise it routes through npm, Homebrew or a standalone-binary replacement. So `bin`'s
- * directory goes first on `basePath`, and a `bun install -g` launcher (`<root>/bin/omp` beside
- * `<root>/install/global/node_modules/@oh-my-pi/pi-coding-agent`) gets `BUN_INSTALL=<root>`; without these an
- * update could install into another omp than the one OMPdesk runs, or judge the wrong one up to date.
+ * directory goes first on `basePath`, and a `bun install -g` launcher (`ompBunRoot`) gets `BUN_INSTALL=<root>`;
+ * without these an update could install into another omp than the one OMPdesk runs, or judge the wrong one up to
+ * date.
  */
 export function ompUpdateEnv(bin: string, basePath: string): { PATH: string; BUN_INSTALL?: string } {
 	const own = dirname(bin);
 	const rest = basePath.split(delimiter).filter(entry => entry && entry !== own);
-	const root = dirname(own);
-	const bunGlobal = existsSync(
-		join(root, "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json"),
-	);
+	const root = ompBunRoot(bin);
 	return {
 		PATH: ompPathEnv(bin, [own, ...rest].join(delimiter)),
-		...(bunGlobal ? { BUN_INSTALL: root } : {}),
+		...(root ? { BUN_INSTALL: root } : {}),
 	};
 }
 

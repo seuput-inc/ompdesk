@@ -327,17 +327,14 @@ export const methods: BridgeMethods = {
 		/**
 		 * Esc during a manual `/compact` or handoff, as stock's input-controller does it: stock's
 		 * serial RPC queue is still awaiting that command, so a queued `abort` frame would only run
-		 * once it finished. `aborted` is false when no maintenance was running.
+		 * once it finished. Stock's `abortCompaction` cancels whichever runs (a handoff is a compaction
+		 * mode from omp 19; 18.22's also aborts its handoff) and does nothing when none does.
 		 */
 		"composer.abort_maintenance": async (_params, env) => {
 			const session = env.session() as Session;
 			requireFn(session, "abortCompaction", "composer");
-			requireFn(session, "abortHandoff", "composer");
-			const compacting = session.isCompacting === true;
-			const handingOff = session.isGeneratingHandoff === true;
-			if (compacting) session.abortCompaction();
-			if (handingOff) session.abortHandoff();
-			return { aborted: compacting || handingOff };
+			session.abortCompaction();
+			return null;
 		},
 
 		/** Bash whose output stays out of model context (`!!`). */

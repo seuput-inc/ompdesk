@@ -53,7 +53,7 @@ import { DeviceChip } from "../remote/DeviceChip";
 import { HostScoped } from "../remote/HostScope";
 import { AppAutoUpdateRow } from "./AppAutoUpdateRow";
 import { DiagnosticsRow } from "./DiagnosticsRow";
-import { OmpTestedNote, OmpUpdateFailureNotice } from "./OmpUpdateRows";
+import { OmpHeldNote, OmpTestedNote, OmpUpdateFailureNotice } from "./OmpUpdateRows";
 import { ProductStar } from "./ProductStar";
 import { SettingsRow, SettingsSection } from "./SettingsLayout";
 
@@ -444,6 +444,7 @@ export function HostOmpUpdateRow({
 						{" · "}
 						{t("updates.latest")} <span className="font-mono text-(--sc-text)">{core?.latestVersion ?? "—"}</span>
 					</p>
+					{state && <OmpHeldNote className="mt-1" state={state} />}
 					{state && <OmpTestedNote className="mt-1" state={state} />}
 					{state && <OmpUpdateFailureNotice state={state} />}
 				</>

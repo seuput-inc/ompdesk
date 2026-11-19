@@ -152,7 +152,8 @@ function stripLastOccurrence(text: string, re: RegExp): string {
 	return (text.slice(0, index) + text.slice(index + last[0].length)).trimEnd();
 }
 
-const RAW_ARTIFACT_RE = /\n?\[raw output: artifact:\/\/(\d+)\]\s*$/;
+/** The raw-output footer: `artifact://N` up to omp 18, the `local://N.log` spill from omp 19. */
+const RAW_ARTIFACT_RE = /\n?\[raw output: (?:artifact:\/\/(\d+)|local:\/\/(\d+)\.log)\]\s*$/;
 
 function parseBashResult(result: unknown): BashParsed {
 	const details = resultDetails(result);
@@ -188,7 +189,7 @@ function parseBashResult(result: unknown): BashParsed {
 				: undefined;
 	const artifactMatch = artifactId ? text.match(RAW_ARTIFACT_RE) : null;
 	if (artifactMatch) {
-		artifactId = artifactMatch[1];
+		artifactId = artifactMatch[1] ?? artifactMatch[2];
 		text = text.slice(0, artifactMatch.index).trimEnd();
 	}
 	if (timedOut) text = stripTrailer(text, TIMED_OUT_NOTICE_RE);
