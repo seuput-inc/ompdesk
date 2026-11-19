@@ -6,9 +6,9 @@
  * the session).
  *
  * Groups, each set apart: open and view (split, new window, the open tab's split and close) · edit (rename, pin,
- * move up and down, move to project, archive, hide from agents) · show in folder · diagnostics (one item; Option/Alt
- * while choosing it saves the anonymized bundle) · delete, last. Clicking a row already opens it, so the menu has no
- * "Open" or "Open in new tab".
+ * move up and down, move to project, archive, hide from agents, may work across projects) · show in folder ·
+ * diagnostics (one item; Option/Alt while choosing it saves the anonymized bundle) · delete, last. Clicking a row
+ * already opens it, so the menu has no "Open" or "Open in new tab".
  */
 import {
 	Archive,
@@ -22,6 +22,7 @@ import {
 	FileArchive,
 	FolderInput,
 	FolderSearch,
+	Network,
 	PanelRightClose,
 	Pencil,
 	Pin,
@@ -54,6 +55,8 @@ export interface SessionMenuFacts {
 	pinned: boolean;
 	archived: boolean;
 	agentHidden: boolean;
+	/** The person allowed this session to work across projects (`agentCrossProject`, control-tools.md › Project boundary). */
+	crossProject: boolean;
 	canMoveUp: boolean;
 	canMoveDown: boolean;
 }
@@ -77,6 +80,8 @@ export interface SessionMenuActions {
 	/** Archives it, or restores it when archived. */
 	toggleArchive?: () => void;
 	toggleAgentHidden?: () => void;
+	/** Only a desktop window's list of this computer's sessions offers it: the grant is a person's own action there. */
+	toggleCrossProject?: () => void;
 	reveal?: () => void;
 	/** Saves the open tab's diagnostic bundle; `anonymized` when Option/Alt was held. */
 	saveBundle?: (anonymized: boolean) => void;
@@ -212,6 +217,16 @@ export function sessionMenuItems({
 			label: facts.agentHidden ? t("sidebar.menu.showToAgents") : t("sidebar.menu.hideFromAgents"),
 			icon: facts.agentHidden ? Eye : EyeOff,
 			onSelect: actions.toggleAgentHidden,
+		});
+	// The grant is keyed by the session's file: a row with none yet cannot hold it.
+	if (actions.toggleCrossProject && facts.stored)
+		edit.push({
+			id: "session-cross-project",
+			label: t("sidebar.menu.crossProject"),
+			tooltip: t("sidebar.menu.crossProjectTip"),
+			icon: Network,
+			checked: facts.crossProject,
+			onSelect: actions.toggleCrossProject,
 		});
 
 	const other: ContextMenuItem[] =

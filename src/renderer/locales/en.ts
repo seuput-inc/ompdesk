@@ -916,6 +916,10 @@ export const en: Record<string, string> = {
 	"sidebar.menu.hideFromAgents": "Hide from other agents",
 	"sidebar.menu.showToAgents": "Show to other agents",
 	"sidebar.agentHiddenFailed": "Couldn't save the agent visibility",
+	"sidebar.menu.crossProject": "May work across projects",
+	"sidebar.menu.crossProjectTip":
+		"Lets this session's agent read and drive other projects' sessions with OMPdesk's tools. Sessions it opens do not get this.",
+	"sidebar.crossProjectFailed": "Couldn't save the cross-project setting",
 	"sidebar.pin.usage": "Usage limits",
 	"sidebar.pin.usageOpen": "Open accounts in Settings",
 	"sidebar.pin.unpin": "Unpin from sidebar",
@@ -6235,6 +6239,14 @@ export const en: Record<string, string> = {
 	"settings.gui.agentControlManage": "Let agents manage other sessions",
 	"settings.gui.agentControlManageDesc":
 		"On by default: agents may stop or close sessions they did not open, merge a session's branch, schedule runs and start Autopilot (not a release or main) without asking. Deleting a saved session they did not open still asks. Off: all of these ask first.",
+	"settings.gui.projectBoundary": "Keep agents to their own project",
+	"settings.gui.projectBoundaryDesc":
+		"Enforce: an agent's OMPdesk tools reach only its own project's sessions, and other projects' sessions show as counts. Log only: nothing is blocked, and each call that would be is written to the runtime log. To let one session work across projects, allow it from its sidebar menu. This prevents accidents and is not a security boundary: session files stay readable on disk.",
+	"settings.gui.projectBoundary.off": "Off",
+	"settings.gui.projectBoundary.log": "Log only",
+	"settings.gui.projectBoundary.enforce": "Enforce",
+	"settings.gui.projectBoundaryFailed": "Couldn't change the project boundary",
+	"settings.gui.projectBoundaryDesktopOnly": "Change this on the computer itself",
 	"settings.gui.nextPromptSuggestions": "Suggest my next message",
 	"settings.gui.nextPromptSuggestionsDesc":
 		"After each reply, offers what you might say next: the best guess as the composer's placeholder (Tab accepts it), the others as chips above it.",

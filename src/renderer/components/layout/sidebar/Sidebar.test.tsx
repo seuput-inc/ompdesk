@@ -1545,6 +1545,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Move to project…",
 			"Archive",
 			"Hide from other agents",
+			"May work across projects",
 			"Show in folder",
 			"Delete",
 		]);
@@ -1958,6 +1959,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Move to project…",
 			"Archive",
 			"Hide from other agents",
+			"May work across projects",
 			"Show in folder",
 			"Delete",
 		]);
@@ -6661,6 +6663,8 @@ describe("Sidebar on a touch screen", () => {
 			"Move to project…",
 			"Archive",
 			"Hide from other agents",
+			// A touch sheet has no hover: the item's tooltip is its last line.
+			"May work across projectsLets this session's agent read and drive other projects' sessions with OMPdesk's tools. Sessions it opens do not get this.",
 			"Show in folder",
 			"Delete",
 		]);

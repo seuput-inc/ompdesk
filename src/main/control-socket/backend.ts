@@ -16,6 +16,11 @@ export interface SessionView {
 	session: string;
 	title: string;
 	state: SessionState;
+	/**
+	 * While the project boundary enforces: the outside callers that may hear of it on the event stream
+	 * (`AgentControlRuntime.heardBy`); absent: every subscriber.
+	 */
+	only?: string[];
 }
 
 export interface ControlBackend {
@@ -61,7 +66,7 @@ export function sessionView(tab: ControlTab): SessionView {
 export function createControlBackend(
 	runtime: Pick<
 		AgentControlRuntime,
-		"runOutside" | "resolveOutside" | "controlTabs" | "onOutsideMail" | "releaseOutside"
+		"runOutside" | "resolveOutside" | "controlTabs" | "onOutsideMail" | "releaseOutside" | "heardBy"
 	>,
 	pool: Pick<SidecarPool, "observeTabs">,
 ): ControlBackend {
@@ -73,7 +78,11 @@ export function createControlBackend(
 			const tab = visible().find(entry => entry.tabId === session);
 			return tab ? sessionView(tab) : null;
 		},
-		views: () => visible().map(sessionView),
+		views: () =>
+			visible().map(tab => {
+				const only = runtime.heardBy(tab);
+				return only ? { ...sessionView(tab), only } : sessionView(tab);
+			}),
 		observe: listener => pool.observeTabs(listener),
 		onOutsideMail: listener => runtime.onOutsideMail(listener),
 		release: caller => runtime.releaseOutside(caller),

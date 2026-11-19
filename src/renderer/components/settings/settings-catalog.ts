@@ -502,7 +502,7 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		sub: "mcp",
 		labelKey: "settings.gui.agentControl",
 		aliases:
-			"ompdesk control tools agent sessions open message result notify tabs orchestrate 조작 도구 세션 에이전트 알림 탭",
+			"ompdesk control tools agent sessions open message result notify tabs orchestrate project boundary 조작 도구 세션 에이전트 알림 탭 프로젝트 경계",
 	},
 	{
 		id: "ssh",

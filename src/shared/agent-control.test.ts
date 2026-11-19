@@ -8,9 +8,15 @@ import {
 	agentHiddenPaths,
 	agentMessageSender,
 	agentTaskTitle,
+	crossProjectSessions,
+	PERSON_ONLY_PREFS,
+	PROJECT_BOUNDARY_DEFAULT_EARLIER,
+	PROJECT_BOUNDARY_DEFAULT_MODE,
 	parseAgentMessage,
 	parseWorkerResult,
 	privacyPaneUrl,
+	projectBoundaryOf,
+	projectBoundaryWithMode,
 	sidebarViewOf,
 	wrapAgentMessage,
 } from "./agent-control";
@@ -147,5 +153,46 @@ describe("sidebar view for agents", () => {
 			"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
 		);
 		expect(privacyPaneUrl("screen_recording")).toContain("Privacy_ScreenCapture");
+	});
+});
+
+describe("project boundary prefs", () => {
+	it("resolves a missing or invalid value to the defaults, field by field", () => {
+		const defaults = { mode: PROJECT_BOUNDARY_DEFAULT_MODE, earlierOpened: PROJECT_BOUNDARY_DEFAULT_EARLIER };
+		// The release's transition flips these two constants and nothing else: off, and visible, until it is chosen.
+		expect(defaults).toEqual({ mode: "off", earlierOpened: "visible" });
+		for (const stored of [undefined, null, "enforce", 7, [], {}, { mode: "strict", earlierOpened: true }])
+			expect(projectBoundaryOf(stored), JSON.stringify(stored)).toEqual(defaults);
+		expect(projectBoundaryOf({ mode: "enforce" })).toEqual({ ...defaults, mode: "enforce" });
+		expect(projectBoundaryOf({ mode: "log", earlierOpened: "grant" })).toEqual({
+			mode: "log",
+			earlierOpened: "grant",
+		});
+		expect(projectBoundaryOf({ mode: "bogus", earlierOpened: "grant" })).toEqual({
+			...defaults,
+			earlierOpened: "grant",
+		});
+	});
+
+	it("stores a chosen mode without freezing an option nobody chose", () => {
+		expect(projectBoundaryWithMode(undefined, "enforce")).toEqual({ mode: "enforce" });
+		expect(projectBoundaryWithMode({ mode: "off", earlierOpened: "grant" }, "log")).toEqual({
+			mode: "log",
+			earlierOpened: "grant",
+		});
+		expect(projectBoundaryWithMode({ earlierOpened: "sometimes" }, "off")).toEqual({ mode: "off" });
+	});
+
+	it("reads the granted session files and ignores anything malformed", () => {
+		expect(crossProjectSessions({ sessions: ["/s/a.jsonl", 3, null, "/s/b.jsonl"] })).toEqual([
+			"/s/a.jsonl",
+			"/s/b.jsonl",
+		]);
+		for (const stored of [undefined, null, "x", ["/s/a.jsonl"], { sessions: "all" }, {}])
+			expect(crossProjectSessions(stored), JSON.stringify(stored)).toEqual([]);
+	});
+
+	it("names both keys as ones no generic write reaches", () => {
+		expect([...PERSON_ONLY_PREFS].sort()).toEqual(["agentCrossProject", "agentProjectBoundary"]);
 	});
 });

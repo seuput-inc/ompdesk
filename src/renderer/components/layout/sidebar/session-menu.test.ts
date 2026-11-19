@@ -16,6 +16,7 @@ const stored: SessionMenuFacts = {
 	pinned: false,
 	archived: false,
 	agentHidden: false,
+	crossProject: false,
 	canMoveUp: true,
 	canMoveDown: true,
 };
@@ -185,5 +186,23 @@ describe("sessionMenuItems", () => {
 		expect(ids({ hasTab: true, tabFocused: true })).not.toContain("session-split-right");
 		expect(ids({ hasTab: true, tabInSplit: true, splitShown: true })).not.toContain("session-split-right");
 		expect(ids({ hasTab: true, canCloseTab: false })).not.toContain("session-close-tab");
+	});
+
+	it("offers May work across projects only where the list supports it, as a checkbox after Hide from agents", () => {
+		// A paired host's list and a paired page pass no such action: the item is absent, never disabled.
+		expect(ids({})).not.toContain("session-cross-project");
+		const toggleCrossProject = vi.fn();
+		const desktop = { ...every, toggleCrossProject };
+		const list = ids({}, desktop);
+		expect(list.indexOf("session-cross-project")).toBe(list.indexOf("session-agent-hidden") + 1);
+		const item = (crossProject: boolean) =>
+			build({ crossProject }, desktop).find(entry => entry.id === "session-cross-project");
+		expect(item(false)?.checked).toBe(false);
+		expect(item(true)?.checked).toBe(true);
+		expect(item(true)?.label).toBe("sidebar.menu.crossProject");
+		item(false)?.onSelect();
+		expect(toggleCrossProject).toHaveBeenCalledTimes(1);
+		// The grant is keyed by the session's file: a row with none yet has no item.
+		expect(ids({ stored: false, hasTab: true }, desktop)).not.toContain("session-cross-project");
 	});
 });

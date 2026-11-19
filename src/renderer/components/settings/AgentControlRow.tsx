@@ -21,10 +21,11 @@ import {
 } from "../../../shared/agent-control";
 import { useT } from "../../lib/i18n";
 import { useMainPreference } from "./GeneralSection";
+import { ProjectBoundaryRow } from "./ProjectBoundaryRow";
 import { SettingsSwitchRow } from "./SettingsLayout";
 
 const SEARCH =
-	"ompdesk agent control tools sessions approve approval manage close delete full 조작 도구 세션 승인 닫기 삭제 모든 권한";
+	"ompdesk agent control tools sessions approve approval manage close delete full project boundary cross 조작 도구 세션 승인 닫기 삭제 모든 권한 프로젝트 경계";
 
 export function AgentControlRow({ query = "" }: { query?: string }) {
 	const t = useT();
@@ -78,6 +79,7 @@ export function AgentControlRow({ query = "" }: { query?: string }) {
 				label={t("settings.gui.agentControlManage")}
 				onCheckedChange={setManage}
 			/>
+			<ProjectBoundaryRow />
 		</>
 	);
 }

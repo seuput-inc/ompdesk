@@ -18,6 +18,7 @@
 //! `tokio::spawn`, which would drop the scope).
 
 pub mod attach;
+pub mod boundary;
 pub mod fail;
 pub mod host;
 pub mod js;
@@ -112,6 +113,9 @@ pub type Shared<T> = Flight<Result<T, Fail>>;
 pub struct Mem {
     /// Tabs each calling tab opened, for the "opened by you" marks (`#opened`).
     pub opened: HashMap<String, Vec<String>>,
+    /// What each calling tab opened through a project-boundary check that passed: tab ids, and session files as
+    /// `device\npath` (`rules/boundary.rs` `opened_through_check`). This launch only.
+    pub checked: HashMap<String, HashSet<String>>,
     /// Tabs whose stop or close is in flight (`#closing`).
     pub closing: HashSet<String>,
     /// Children whose review item the person settled (`#reviewed`).
@@ -411,6 +415,7 @@ impl AgentControl {
         {
             let mut mem = self.mem();
             mem.opened.remove(tab_id);
+            mem.checked.remove(tab_id);
             mem.collected.remove(tab_id);
             mem.sweeping.remove(tab_id);
             mem.closing.remove(tab_id);
@@ -587,7 +592,9 @@ impl AgentControl {
         tool: Tool,
         args: Value,
     ) -> ToolOutcome {
-        match self.dispatch(caller_tab_id, tabs, tool, args).await {
+        let call = boundary::Call::new(tool);
+        let dispatched = boundary::CALL.scope(call, self.dispatch(caller_tab_id, tabs, tool, args));
+        match dispatched.await {
             Ok(text) => ToolOutcome {
                 text,
                 is_error: false,

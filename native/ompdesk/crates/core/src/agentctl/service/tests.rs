@@ -825,7 +825,8 @@ async fn a_name_finds_a_session_every_way_the_tools_read_one() {
         let control = control.clone();
         let tabs = tabs.clone();
         async move {
-            match control.find(&tabs, name, None).await {
+            let caller = tabs.iter().find(|tab| tab.tab_id == "caller").unwrap();
+            match control.find(caller, &tabs, name, None).await {
                 Ok(found) => match found.target {
                     Some(Target::Tab(tab)) => format!("tab {}", tab.tab_id),
                     Some(Target::Stored(row)) => format!("stored {}", row.path),
@@ -880,7 +881,8 @@ async fn a_closed_tab_s_id_keeps_naming_its_session_and_a_delete_says_so() {
         }),
     );
     let tabs = control.host.state().tabs("caller").unwrap();
-    let found = control.find(&tabs, "older", None).await.unwrap();
+    let caller = tabs.iter().find(|tab| tab.tab_id == "caller").unwrap();
+    let found = control.find(caller, &tabs, "older", None).await.unwrap();
     assert!(
         matches!(found.target, Some(Target::Stored(row)) if row.path == "/s/2026_sid-gone.jsonl" && row.title == "Done work")
     );

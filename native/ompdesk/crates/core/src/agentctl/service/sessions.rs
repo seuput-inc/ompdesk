@@ -25,6 +25,7 @@ pub use open::OpenResult;
 pub(super) use stop::{CloseHow, TabClose};
 
 use super::AgentControl;
+use super::boundary::{Doing, Outside};
 use super::fail::{R, fail};
 use super::host::Deadline;
 use super::js::{cut, number, one_line};
@@ -119,6 +120,9 @@ impl AgentControl {
         let folder = args.folder.as_deref().filter(|folder| !folder.is_empty());
         let app = args.scope.as_deref() == Some("app") || device.is_some();
         let mine = args.mine == Some(true);
+        // Another project's sessions are counted and left out before a folder or a title is compared.
+        let bounds = self.host.state();
+        let mut outside = Outside::default();
         let wanted: Vec<&ControlTab> = tabs
             .iter()
             .filter(|tab| {
@@ -128,8 +132,16 @@ impl AgentControl {
                         Some(None) => tab.device.as_deref().is_none_or(str::is_empty),
                         Some(Some(device)) => tab.device.as_deref() == Some(device.id.as_str()),
                     }
-                    && folder.is_none_or(|folder| tab.cwd.contains(folder))
                     && (!mine || opened.contains(&tab.tab_id))
+                    && self.listed(
+                        caller,
+                        self.tab_verdict(&bounds, caller, tab),
+                        &mut outside,
+                        tab.session_path.as_deref().unwrap_or(&tab.cwd),
+                        tab.project.as_deref(),
+                        Doing::of_tab(tab),
+                    )
+                    && folder.is_none_or(|folder| tab.cwd.contains(folder))
                     && query.as_ref().is_none_or(|query| {
                         !tab.hidden && tab.title.to_lowercase().contains(query.as_str())
                     })
@@ -166,6 +178,16 @@ impl AgentControl {
         if app && !mine {
             let state = self.host.state();
             for (summary, computer) in self.open_elsewhere(&state, &tabs, device.as_ref()) {
+                if !self.listed(
+                    caller,
+                    self.summary_verdict(&state, caller, &summary),
+                    &mut outside,
+                    &summary.session_path,
+                    summary.project.as_deref(),
+                    Doing::of_summary(&summary),
+                ) {
+                    continue;
+                }
                 if folder.is_some_and(|folder| !summary.cwd.contains(folder)) {
                     continue;
                 }
@@ -289,9 +311,10 @@ impl AgentControl {
             .collect::<Vec<_>>()
             .join("\n");
         Ok(format!(
-            "{} session{} {where_}:\n{shown}{more}{others}\n{}",
+            "{} session{} {where_}:\n{shown}{more}{}{others}\n{}",
             kept.len(),
             if kept.len() == 1 { "" } else { "s" },
+            outside.line(),
             self.devices_line(&state)
         ))
     }
@@ -427,13 +450,26 @@ impl AgentControl {
             .map(|device| device.id.as_str());
         let query = args.query.as_deref();
         let folder = args.folder.as_deref().filter(|folder| !folder.is_empty());
+        let bounds = self.host.state();
+        let mut outside = Outside::default();
         let mut rows: Vec<StoredSession> = self
             .over_link(device_id, || self.host.stored(device_id, query))
             .await?
             .into_iter()
             .filter(|row| {
-                folder.is_none_or(|folder| row.cwd.contains(folder))
-                    && (args.mine != Some(true) || held.contains(row.path.as_str()))
+                (args.mine != Some(true) || held.contains(row.path.as_str()))
+                    && self.listed(
+                        caller,
+                        self.row_verdict(&bounds, caller, row),
+                        &mut outside,
+                        &row.path,
+                        row.project.as_deref(),
+                        match self.live_tab(tabs, row) {
+                            Some(tab) => Doing::of_tab(&tab),
+                            None => Doing::of_row(row),
+                        },
+                    )
+                    && folder.is_none_or(|folder| row.cwd.contains(folder))
             })
             .collect();
         // Newest first; the sort is stable, as `Array.prototype.sort` is.
@@ -519,7 +555,7 @@ impl AgentControl {
             String::new()
         };
         Ok(format!(
-            "{} session{} {where_}{}:\n{}{more}\nRead one with ompdesk_session_read; open it again with ompdesk_session_open {{\"reopen\":\"<id>\"}}.\n{}",
+            "{} session{} {where_}{}:\n{}{more}{}\nRead one with ompdesk_session_read; open it again with ompdesk_session_open {{\"reopen\":\"<id>\"}}.\n{}",
             rows.len(),
             if rows.len() == 1 { "" } else { "s" },
             args.query
@@ -527,6 +563,7 @@ impl AgentControl {
                 .filter(|query| !query.is_empty())
                 .map_or_else(String::new, |query| format!(" matching \"{query}\"")),
             lines.join("\n"),
+            outside.line(),
             self.devices_line(&self.host.state())
         ))
     }

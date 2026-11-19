@@ -70,6 +70,71 @@ export function agentControlApproveEnabled(value: unknown): boolean {
 	return value !== false;
 }
 
+/**
+ * The project boundary of the control tools (control-tools.md › Project boundary): prefs key, stored as
+ * `{ mode, earlierOpened }`. `off` checks nothing, `log` refuses nothing and writes down what `enforce` would refuse,
+ * `enforce` keeps an agent to its own project's sessions unless the person allowed its session across projects.
+ * `earlierOpened`: whether the sessions a caller opened before a check ran stay in its reach (`visible`) or need
+ * the grant like any other (`grant`). Changed only by a person in a desktop window (`AGENT_PROJECT_BOUNDARY_SET`).
+ */
+export const AGENT_PROJECT_BOUNDARY_PREF = "agentProjectBoundary";
+
+export const PROJECT_BOUNDARY_MODES = ["off", "log", "enforce"] as const;
+export type ProjectBoundaryMode = (typeof PROJECT_BOUNDARY_MODES)[number];
+export type ProjectBoundaryEarlier = "visible" | "grant";
+
+export interface ProjectBoundary {
+	mode: ProjectBoundaryMode;
+	earlierOpened: ProjectBoundaryEarlier;
+}
+
+/** What an unset or invalid value resolves to. The release's transition flips these and nothing else. */
+export const PROJECT_BOUNDARY_DEFAULT_MODE: ProjectBoundaryMode = "off";
+export const PROJECT_BOUNDARY_DEFAULT_EARLIER: ProjectBoundaryEarlier = "visible";
+
+export function isProjectBoundaryMode(value: unknown): value is ProjectBoundaryMode {
+	return PROJECT_BOUNDARY_MODES.includes(value as ProjectBoundaryMode);
+}
+
+function isProjectBoundaryEarlier(value: unknown): value is ProjectBoundaryEarlier {
+	return value === "visible" || value === "grant";
+}
+
+/** `agentProjectBoundary` as stored: each missing or invalid field is its default. */
+export function projectBoundaryOf(stored: unknown): ProjectBoundary {
+	const record = stored && typeof stored === "object" ? (stored as Record<string, unknown>) : {};
+	return {
+		mode: isProjectBoundaryMode(record.mode) ? record.mode : PROJECT_BOUNDARY_DEFAULT_MODE,
+		earlierOpened: isProjectBoundaryEarlier(record.earlierOpened)
+			? record.earlierOpened
+			: PROJECT_BOUNDARY_DEFAULT_EARLIER,
+	};
+}
+
+/** What a person's choice of `mode` stores: the mode, and `earlierOpened` only where one was stored before. */
+export function projectBoundaryWithMode(stored: unknown, mode: ProjectBoundaryMode): Partial<ProjectBoundary> {
+	const record = stored && typeof stored === "object" ? (stored as Record<string, unknown>) : {};
+	return {
+		mode,
+		...(isProjectBoundaryEarlier(record.earlierOpened) ? { earlierOpened: record.earlierOpened } : {}),
+	};
+}
+
+/**
+ * Prefs key, stored as `{ sessions: string[] }`: the session files the person allowed to work across projects
+ * (Sidebar session menu › May work across projects; this computer's sessions). Keyed by the exact file, so a session
+ * a granted one opens starts without it. Changed only by a person in a desktop window (`AGENT_CROSS_PROJECT_SET`).
+ */
+export const AGENT_CROSS_PROJECT_PREF = "agentCrossProject";
+
+export function crossProjectSessions(stored: unknown): string[] {
+	const list = stored && typeof stored === "object" && "sessions" in stored ? stored.sessions : [];
+	return Array.isArray(list) ? list.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/** The prefs no generic write reaches (`PREFS_SET`, and so `ompdesk_app` and a paired page): each has its own channel. */
+export const PERSON_ONLY_PREFS: readonly string[] = [AGENT_PROJECT_BOUNDARY_PREF, AGENT_CROSS_PROJECT_PREF];
+
 /** Tool names (stock mounts each as `xd://<name>`). */
 export const AGENT_CONTROL_TOOLS = {
 	list: "ompdesk_sessions",

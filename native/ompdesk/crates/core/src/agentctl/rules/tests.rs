@@ -9,6 +9,9 @@ use serde_json::{Map, Value, json};
 use super::auto_close::{
     AutoCloseDecision, AutoCloseFacts, BranchLanding, Ended, Verdict, auto_close_decision,
 };
+use super::boundary::{
+    BoundaryFacts, BoundaryMode, BoundaryVerdict, EarlierOpened, boundary_verdict,
+};
 use super::custody::{BranchFacts, FileChange, custody_of};
 use super::mail::{
     Deliver, MAIL_KINDS, Mail, MailCheck, MailKind, Mailbox, Posted, delivery_for, mail_details,
@@ -872,5 +875,94 @@ fn a_paired_pages_clean_or_unreported_tab_is_released_unless_the_person_is_at_it
             );
             assert_eq!(tab_close_step(&at, true), TabCloseStep::Release);
         }
+    }
+}
+
+#[test]
+fn the_project_boundary_allows_the_same_project_a_grant_and_what_the_caller_opened() {
+    use BoundaryMode::{Enforce, Log, Off};
+    use BoundaryVerdict::{Allow, Refuse};
+    let facts = |mode, caller, target| BoundaryFacts {
+        mode,
+        caller_project: caller,
+        target_project: target,
+        ..Default::default()
+    };
+    let (a, b) = (Some("/repo/a"), Some("/repo/b"));
+    let table: [(BoundaryFacts, BoundaryVerdict, &str); 14] = [
+        (facts(Off, a, b), Allow, "off checks nothing"),
+        (facts(Off, None, None), Allow, "off, nothing known"),
+        (facts(Log, a, a), Allow, "log, same project"),
+        (
+            facts(Log, a, b),
+            BoundaryVerdict::Log,
+            "log blocks nothing and writes it down",
+        ),
+        (facts(Enforce, a, a), Allow, "enforce, same project"),
+        (facts(Enforce, a, b), Refuse, "enforce, another project"),
+        (
+            facts(Enforce, a, None),
+            Refuse,
+            "a target whose project is unknown is out of scope",
+        ),
+        (
+            facts(Enforce, None, None),
+            Refuse,
+            "two unknown projects are never the same one",
+        ),
+        (
+            BoundaryFacts {
+                granted: true,
+                ..facts(Enforce, a, b)
+            },
+            Allow,
+            "a granted caller",
+        ),
+        (
+            BoundaryFacts {
+                opened_through_check: true,
+                ..facts(Enforce, a, b)
+            },
+            Allow,
+            "a child opened through a check that passed",
+        ),
+        (
+            BoundaryFacts {
+                opened_through_check: true,
+                earlier_opened: EarlierOpened::Grant,
+                ..facts(Enforce, a, None)
+            },
+            Allow,
+            "such a child, whatever the earlier-opened option says",
+        ),
+        (
+            BoundaryFacts {
+                opened_earlier: true,
+                ..facts(Enforce, a, b)
+            },
+            Allow,
+            "opened earlier stays visible by default",
+        ),
+        (
+            BoundaryFacts {
+                opened_earlier: true,
+                earlier_opened: EarlierOpened::Grant,
+                ..facts(Enforce, a, b)
+            },
+            Refuse,
+            "opened earlier is any other target once the option says grant",
+        ),
+        (
+            BoundaryFacts {
+                opened_earlier: true,
+                earlier_opened: EarlierOpened::Grant,
+                ..facts(Log, a, b)
+            },
+            BoundaryVerdict::Log,
+            "and is logged under log",
+        ),
+    ];
+    for (facts, verdict, what) in table {
+        assert_eq!(boundary_verdict(&facts), verdict, "{what}: {facts:?}");
     }
 }

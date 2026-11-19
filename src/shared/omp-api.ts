@@ -708,6 +708,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			updateLaunchProfile: (cwd, patch, device) =>
 				transport.invoke(IPC_COMMANDS.PREFS_UPDATE_LAUNCH_PROFILE, { cwd, patch, device }),
 			updateSidebar: change => transport.invoke(IPC_COMMANDS.PREFS_UPDATE_SIDEBAR, change),
+			setCrossProject: (sessionPath, on) =>
+				transport.invoke(IPC_COMMANDS.AGENT_CROSS_PROJECT_SET, { sessionPath, on }),
+			setProjectBoundary: mode => transport.invoke(IPC_COMMANDS.AGENT_PROJECT_BOUNDARY_SET, { mode }),
 			onChanged: callback => subscribe<IpcPrefsChangedPayload>(IPC_EVENTS.PREFS_CHANGED, callback),
 		},
 

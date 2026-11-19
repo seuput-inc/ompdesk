@@ -435,3 +435,450 @@ async fn a_delete_of_an_own_idle_child_removes_it_journals_it_and_remembers_the_
     assert!(!control.mem().closing.contains("c1"));
     control.host.port().close();
 }
+
+// ---- the project boundary (`rules/boundary.rs`, `service/boundary.rs`) ------------------------------------------------
+
+use crate::agentctl::service::boundary::OTHER_PROJECT;
+
+/// A tab `id` whose folder is the project itself; its session file is `/s/<id>_<id x4>.jsonl`.
+fn tab_in(id: &str, project: &str) -> Value {
+    let mut tab = tab(id, &format!("/s/{id}_{}.jsonl", id.repeat(4)));
+    tab["cwd"] = json!(project);
+    tab["project"] = json!(project);
+    tab
+}
+
+fn titled(mut tab: Value, title: &str) -> Value {
+    tab["title"] = json!(title);
+    tab
+}
+
+fn saved_in(id: &str, title: &str, project: &str) -> Value {
+    json!({ "id": id, "path": format!("/s/z_{id}.jsonl"), "title": title, "cwd": project, "project": project, "modified": "2026-11-01", "messages": 2, "status": "idle" })
+}
+
+/// Main's snapshot as `rig` builds it, to push another one later.
+fn snapshot(tabs: &[Value], extra: Value) -> String {
+    let windows: Map<String, Value> = tabs
+        .iter()
+        .map(|tab| (tab["tabId"].as_str().unwrap().to_owned(), json!("w")))
+        .collect();
+    let mut state = json!({ "enabled": true, "tabs": tabs, "windowOf": windows });
+    for (key, value) in extra.as_object().cloned().unwrap_or_default() {
+        state[key] = value;
+    }
+    state.to_string()
+}
+
+/// A transcript page for a read, on top of `main_of`.
+fn reading_main(method: &str, args: &Value) -> Result<Value, String> {
+    match method {
+        "command" if args["command"]["type"] == "get_transcript_page" => Ok(json!({
+            "success": true,
+            "data": { "messages": [{ "role": "user", "content": "hello" }], "totalMessages": 1 }
+        })),
+        other => main_of(other, args),
+    }
+}
+
+/// What main was told under `method`, once `count` of them arrived (a tell is written after the call answers).
+async fn told(asked: &Asked, method: &str, count: usize) -> Vec<Value> {
+    for _ in 0..200 {
+        if names(asked, method).len() >= count {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    names(asked, method)
+}
+
+fn methods(asked: &Asked) -> Vec<String> {
+    asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(method, _)| method.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_open_in_another_project_s_folder_is_refused_before_anything_is_made() {
+    let (control, asked) = rig(
+        7_320,
+        vec![tab_in("a", "/pa"), tab_in("c1", "/pa")],
+        json!({ "boundary": { "mode": "enforce" } }),
+        |method, args| match method {
+            "project" => Ok(json!(
+                if args["folder"].as_str().unwrap_or("").starts_with("/pa") {
+                    "/pa"
+                } else {
+                    "/pb"
+                }
+            )),
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            other => main_of(other, args),
+        },
+    );
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_session_open",
+            json!({ "message": "x", "folder": "/pb/sub", "worktree": true }),
+            None,
+        )
+        .await;
+    assert!(outcome.is_error);
+    assert!(
+        outcome.text.contains("That folder is in another project"),
+        "{}",
+        outcome.text
+    );
+    // No spawn, so no worktree and no tab: main was asked for the folder's project and nothing else.
+    assert_eq!(methods(&asked), ["args.parse", "project"]);
+    assert_eq!(
+        names(&asked, "project")[0],
+        json!({ "callerTabId": "a", "folder": "/pb/sub" })
+    );
+    // A folder of the caller's own project opens as before.
+    let own = control
+        .run(
+            "a",
+            "ompdesk_session_open",
+            json!({ "message": "x", "folder": "/pa/sub" }),
+            None,
+        )
+        .await;
+    assert!(!own.is_error, "{}", own.text);
+    assert_eq!(names(&asked, "spawn").len(), 1);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_reopen_of_another_project_s_saved_session_is_refused_with_no_spawn() {
+    let (control, asked) = rig(
+        7_321,
+        vec![tab_in("a", "/pa")],
+        json!({ "boundary": { "mode": "enforce" } }),
+        |method, args| match method {
+            "stored" => Ok(json!([saved_in("zq9x", "Old secret", "/pb")])),
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            other => main_of(other, args),
+        },
+    );
+    for name in ["zq9x", "Old secret"] {
+        let outcome = control
+            .run("a", "ompdesk_session_open", json!({ "reopen": name }), None)
+            .await;
+        assert!(outcome.is_error);
+        assert!(outcome.text.contains(OTHER_PROJECT), "{}", outcome.text);
+    }
+    assert!(names(&asked, "spawn").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn another_project_s_open_tab_and_saved_session_are_refused_by_every_name() {
+    let (control, asked) = rig(
+        7_322,
+        vec![
+            tab_in("a", "/pa"),
+            titled(tab_in("b", "/pb"), "Secret plan"),
+        ],
+        json!({ "boundary": { "mode": "enforce" } }),
+        |method, args| match method {
+            "stored" => Ok(json!([saved_in("zq9x", "Old secret", "/pb")])),
+            other => main_of(other, args),
+        },
+    );
+    let calls = [
+        ("ompdesk_session_read", json!({ "session": "b" })),
+        ("ompdesk_session_read", json!({ "session": "bbbb" })),
+        ("ompdesk_session_read", json!({ "session": "Secret plan" })),
+        ("ompdesk_session_read", json!({ "session": "secret" })),
+        ("ompdesk_session_read", json!({ "session": "zq9x" })),
+        ("ompdesk_session_read", json!({ "session": "old secret" })),
+        ("ompdesk_session_result", json!({ "session": "b" })),
+        ("ompdesk_session_result", json!({ "session": "zq9x" })),
+        (
+            "ompdesk_session_send",
+            json!({ "session": "b", "message": "hi" }),
+        ),
+        (
+            "ompdesk_session_stop",
+            json!({ "session": "b", "close": true }),
+        ),
+    ];
+    for (tool, args) in calls {
+        let outcome = control.run("a", tool, args.clone(), None).await;
+        assert!(outcome.is_error, "{tool} {args}");
+        assert_eq!(outcome.text, OTHER_PROJECT, "{tool} {args}");
+    }
+    // Nothing was read, sent or closed.
+    for method in ["command", "storedMessages", "view", "mail"] {
+        assert!(names(&asked, method).is_empty(), "{method}");
+    }
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_list_shows_another_project_s_sessions_as_counts_and_names_none() {
+    let mut running = titled(tab_in("b", "/pb"), "Secret plan");
+    running["busy"] = json!(true);
+    let (control, _) = rig(
+        7_323,
+        vec![
+            tab_in("a", "/pa"),
+            running,
+            titled(tab_in("c", "/pb"), "Other secret"),
+        ],
+        json!({ "boundary": { "mode": "enforce" } }),
+        |method, args| match method {
+            "stored" => Ok(json!([
+                saved_in("own1", "Mine", "/pa"),
+                saved_in("zq9x", "Old secret", "/pb")
+            ])),
+            other => main_of(other, args),
+        },
+    );
+    let counts = "another project's sessions show counts only)\n";
+    let open = control.run("a", "ompdesk_sessions", json!({}), None).await;
+    assert!(!open.is_error, "{}", open.text);
+    assert!(
+        open.text.starts_with("1 session in this window:\n- a "),
+        "{}",
+        open.text
+    );
+    assert!(
+        open.text.contains(&format!(
+            "\n2 sessions in 1 other project: 1 running, 0 waiting for the user, 1 idle ({counts}"
+        )),
+        "{}",
+        open.text
+    );
+    for named in ["ecret", "/pb", "bbbb", "cccc", "- b ", "- c "] {
+        assert!(!open.text.contains(named), "{named}: {}", open.text);
+    }
+    let stored = control
+        .run("a", "ompdesk_sessions", json!({ "scope": "stored" }), None)
+        .await;
+    assert!(
+        stored
+            .text
+            .starts_with("1 session saved on this computer:\n- own1 \"Mine\""),
+        "{}",
+        stored.text
+    );
+    assert!(
+        stored.text.contains(&format!(
+            "\n1 session in 1 other project: 0 running, 0 waiting for the user, 1 idle ({counts}"
+        )),
+        "{}",
+        stored.text
+    );
+    for named in ["ecret", "/pb", "zq9x"] {
+        assert!(!stored.text.contains(named), "{named}: {}", stored.text);
+    }
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn under_log_nothing_is_refused_and_each_crossing_call_writes_one_line() {
+    let (control, asked) = rig(
+        7_324,
+        vec![
+            tab_in("a", "/pa"),
+            titled(tab_in("b", "/pb"), "Secret plan"),
+            tab_in("c1", "/pb"),
+        ],
+        json!({ "boundary": { "mode": "log" } }),
+        |method, args| match method {
+            "project" => Ok(json!("/pb")),
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            other => reading_main(other, args),
+        },
+    );
+    let read = control
+        .run("a", "ompdesk_session_read", json!({ "session": "b" }), None)
+        .await;
+    assert!(!read.is_error, "{}", read.text);
+    assert!(read.text.contains("hello"));
+    assert_eq!(
+        told(&asked, "boundaryLog", 1).await,
+        [json!({
+            "tool": "ompdesk_session_read",
+            "caller": "/s/a_aaaa.jsonl",
+            "target": "/s/b_bbbb.jsonl",
+            "callerProject": "/pa",
+            "targetProject": "/pb"
+        })]
+    );
+    // A list names both sessions of the other project and writes one line for the call, not one per row.
+    let list = control.run("a", "ompdesk_sessions", json!({}), None).await;
+    assert!(list.text.contains("Secret plan"), "{}", list.text);
+    assert!(!list.text.contains("other project"), "{}", list.text);
+    let opened = control
+        .run(
+            "a",
+            "ompdesk_session_open",
+            json!({ "message": "x", "folder": "/pb" }),
+            None,
+        )
+        .await;
+    assert!(!opened.is_error, "{}", opened.text);
+    assert_eq!(names(&asked, "spawn").len(), 1);
+    let lines = told(&asked, "boundaryLog", 3).await;
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[1]["tool"], "ompdesk_sessions");
+    assert_eq!(lines[2]["tool"], "ompdesk_session_open");
+    assert_eq!(lines[2]["target"], "/pb");
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_caller_the_person_allowed_across_projects_reaches_another_project() {
+    let (control, asked) = rig(
+        7_325,
+        vec![
+            tab_in("a", "/pa"),
+            titled(tab_in("b", "/pb"), "Secret plan"),
+        ],
+        json!({ "boundary": { "mode": "enforce", "granted": ["/s/a_aaaa.jsonl"] } }),
+        reading_main,
+    );
+    let read = control
+        .run("a", "ompdesk_session_read", json!({ "session": "b" }), None)
+        .await;
+    assert!(!read.is_error, "{}", read.text);
+    let list = control.run("a", "ompdesk_sessions", json!({}), None).await;
+    assert!(list.text.contains("Secret plan"), "{}", list.text);
+    // The grant is that session's alone: another caller of the same project is still kept out.
+    let (other, _) = rig(
+        7_326,
+        vec![tab_in("a", "/pa"), tab_in("d", "/pa"), tab_in("b", "/pb")],
+        json!({ "boundary": { "mode": "enforce", "granted": ["/s/a_aaaa.jsonl"] } }),
+        reading_main,
+    );
+    let refused = other
+        .run("d", "ompdesk_session_read", json!({ "session": "b" }), None)
+        .await;
+    assert_eq!(refused.text, OTHER_PROJECT);
+    assert!(names(&asked, "boundaryLog").is_empty());
+    control.host.port().close();
+    other.host.port().close();
+}
+
+#[tokio::test]
+async fn a_child_opened_through_the_check_stays_in_scope_once_the_grant_is_gone() {
+    let tabs = vec![tab_in("a", "/pa"), tab_in("b", "/pb"), tab_in("c1", "/pb")];
+    let (control, _) = rig(
+        7_327,
+        tabs.clone(),
+        json!({ "boundary": { "mode": "enforce", "granted": ["/s/a_aaaa.jsonl"] } }),
+        |method, args| match method {
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            other => reading_main(other, args),
+        },
+    );
+    let opened = control
+        .run(
+            "a",
+            "ompdesk_session_open",
+            json!({ "message": "x", "folder": "/pb" }),
+            None,
+        )
+        .await;
+    assert!(!opened.is_error, "{}", opened.text);
+    // The grant goes, and what was opened earlier now needs one: only the check the child passed keeps it.
+    let without = snapshot(
+        &tabs,
+        json!({
+            "boundary": { "mode": "enforce", "earlierOpened": "grant" },
+            "parents": { "c1": { "callerTabId": "a" } }
+        }),
+    );
+    crate::ports::apply_state(control.host.port(), 1, &without).unwrap();
+    let child = control
+        .run(
+            "a",
+            "ompdesk_session_read",
+            json!({ "session": "c1" }),
+            None,
+        )
+        .await;
+    assert!(!child.is_error, "{}", child.text);
+    let stranger = control
+        .run("a", "ompdesk_session_read", json!({ "session": "b" }), None)
+        .await;
+    assert_eq!(stranger.text, OTHER_PROJECT);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_session_opened_before_the_boundary_stays_visible_unless_the_option_says_grant() {
+    let tabs = vec![tab_in("a", "/pa"), tab_in("c1", "/pb")];
+    let parents = json!({ "c1": { "callerTabId": "a" } });
+    let (control, _) = rig(
+        7_328,
+        tabs.clone(),
+        json!({ "boundary": { "mode": "enforce" }, "parents": parents }),
+        reading_main,
+    );
+    let read = || {
+        control.run(
+            "a",
+            "ompdesk_session_read",
+            json!({ "session": "c1" }),
+            None,
+        )
+    };
+    let visible = read().await;
+    assert!(!visible.is_error, "{}", visible.text);
+    let grant = snapshot(
+        &tabs,
+        json!({ "boundary": { "mode": "enforce", "earlierOpened": "grant" }, "parents": parents }),
+    );
+    crate::ports::apply_state(control.host.port(), 1, &grant).unwrap();
+    assert_eq!(read().await.text, OTHER_PROJECT);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_schedule_in_another_project_s_folder_and_the_app_s_session_actions_are_refused() {
+    let (control, asked) = rig(
+        7_329,
+        vec![tab_in("a", "/pa")],
+        json!({ "boundary": { "mode": "enforce" }, "scheduleDevices": [""], "manageEnabled": true }),
+        |method, args| match method {
+            "project" => Ok(json!("/pb")),
+            "schedules.command" => Ok(json!({})),
+            other => main_of(other, args),
+        },
+    );
+    let schedule = control
+        .run(
+            "a",
+            "ompdesk_schedule",
+            json!({ "action": "create", "name": "n", "prompt": "p", "folder": "/pb/x", "every_minutes": 30 }),
+            None,
+        )
+        .await;
+    assert!(schedule.is_error);
+    assert!(
+        schedule.text.contains("That folder is in another project"),
+        "{}",
+        schedule.text
+    );
+    assert!(names(&asked, "schedules.create").is_empty());
+    assert!(names(&asked, "confirm").is_empty());
+    let app = control
+        .run(
+            "a",
+            "ompdesk_app",
+            json!({ "action": "sessions.saved" }),
+            None,
+        )
+        .await;
+    assert!(app.is_error);
+    assert!(app.text.contains("sessions.* actions"), "{}", app.text);
+    control.host.port().close();
+}

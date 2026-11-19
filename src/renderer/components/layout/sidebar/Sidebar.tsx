@@ -67,6 +67,7 @@ import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useTabListRows } from "../../../hooks/use-tab-list-rows";
 import { ATTENTION_LABEL_KEY, type AttentionKind, isAsk } from "../../../lib/attention";
 import { activeComposerInput } from "../../../lib/composer-focus";
+import { useCrossProjectSessions } from "../../../lib/cross-project";
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { hideNativeDragImage } from "../../../lib/drag-image";
 import { cx, formatClock } from "../../../lib/format";
@@ -110,6 +111,7 @@ import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tab
 import { toast, toastError } from "../../../stores/toast";
 import { type PageDestination, type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
+import { webRuntime } from "../../../web/runtime";
 import {
 	anchorFromEvent,
 	Badge,
@@ -552,6 +554,7 @@ export function Sidebar() {
 	const sessionOrder = useSidebarPrefs(s => s.sessionOrder);
 	const pinnedSessions = useSidebarPrefs(s => s.pinnedSessions);
 	const agentHidden = useSidebarPrefs(s => s.agentHidden);
+	const crossProject = useCrossProjectSessions();
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
 	const archivedSessions = useSidebarPrefs(s => s.archivedSessions);
 	// The projects this computer lists apart from its sessions: an empty one keeps its group (src/main/sidebar-projects.ts).
@@ -2437,6 +2440,7 @@ export function Sidebar() {
 							pinned: pinnedSessions.includes(session.path),
 							archived: archivedIds.has(session.id),
 							agentHidden: agentHidden.includes(session.path),
+							crossProject: crossProject.includes(session.path),
 							canMoveUp: canMoveWithin(list, session.path, -1),
 							canMoveDown: canMoveWithin(list, session.path, 1),
 						},
@@ -2478,6 +2482,19 @@ export function Sidebar() {
 								? {
 										toggleAgentHidden: then(
 											() => void useSidebarPrefs.getState().toggleAgentHidden(session.path),
+										),
+									}
+								: {}),
+							// A person's own action in a desktop window: a paired page has no such item (main refuses it too).
+							...(session.device === undefined && webRuntime() === null
+								? {
+										toggleCrossProject: then(
+											() =>
+												void window.omp.prefs
+													.setCrossProject(session.path, !crossProject.includes(session.path))
+													.catch(() =>
+														toast({ variant: "warning", message: t("sidebar.crossProjectFailed") }),
+													),
 										),
 									}
 								: {}),

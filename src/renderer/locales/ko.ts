@@ -904,6 +904,10 @@ export const ko: Record<string, string> = {
 	"sidebar.menu.hideFromAgents": "다른 에이전트에게 숨기기",
 	"sidebar.menu.showToAgents": "다른 에이전트에게 보이기",
 	"sidebar.agentHiddenFailed": "에이전트 공개 설정을 저장하지 못했어요",
+	"sidebar.menu.crossProject": "여러 프로젝트에서 작업 허용",
+	"sidebar.menu.crossProjectTip":
+		"이 세션의 에이전트가 OMPdesk 도구로 다른 프로젝트의 세션을 읽고 조작할 수 있어요. 이 세션이 여는 세션에는 적용되지 않아요.",
+	"sidebar.crossProjectFailed": "프로젝트 간 작업 설정을 저장하지 못했어요",
 	"sidebar.pin.usage": "사용 한도",
 	"sidebar.pin.usageOpen": "설정에서 계정 열기",
 	"sidebar.pin.unpin": "사이드바에서 고정 해제",
@@ -6227,6 +6231,14 @@ export const ko: Record<string, string> = {
 	"settings.gui.agentControlManage": "에이전트가 다른 세션 관리하기",
 	"settings.gui.agentControlManageDesc":
 		"기본값은 켜짐: 에이전트가 열지 않은 세션을 중단하거나 닫고, 세션의 브랜치를 병합하고, 예약 실행을 만들고, 오토파일럿(릴리스·main 제외)을 시작할 때 묻지 않아요. 에이전트가 열지 않은 저장된 세션의 삭제는 계속 물어봐요. 끄면 이 모두를 먼저 물어봐요.",
+	"settings.gui.projectBoundary": "에이전트를 자기 프로젝트 안에 두기",
+	"settings.gui.projectBoundaryDesc":
+		"적용: 에이전트의 OMPdesk 도구가 자기 프로젝트의 세션에만 닿고, 다른 프로젝트의 세션은 개수만 보여요. 기록만: 아무것도 막지 않고, 막혔을 호출을 런타임 로그에 남겨요. 한 세션만 여러 프로젝트에서 일하게 하려면 사이드바의 세션 메뉴에서 허용하세요. 실수를 막는 장치이고 보안 경계는 아니에요. 세션 파일은 디스크에서 그대로 읽을 수 있어요.",
+	"settings.gui.projectBoundary.off": "끔",
+	"settings.gui.projectBoundary.log": "기록만",
+	"settings.gui.projectBoundary.enforce": "적용",
+	"settings.gui.projectBoundaryFailed": "프로젝트 경계를 바꾸지 못했어요",
+	"settings.gui.projectBoundaryDesktopOnly": "이 컴퓨터에서 직접 바꿔 주세요",
 	"settings.gui.nextPromptSuggestions": "다음 메시지 제안",
 	"settings.gui.nextPromptSuggestionsDesc":
 		"답이 끝날 때마다 이어서 보낼 만한 말을 제안해요. 가장 알맞은 제안은 입력창 안내 문구로, 나머지는 입력창 위 칩으로 보여 줘요. Tab으로 받아들일 수 있어요.",

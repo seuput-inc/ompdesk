@@ -55,6 +55,10 @@ pub struct View {
     pub session: String,
     pub title: String,
     pub state: SessionState,
+    /// The outside callers that may hear of it on the event stream, while the project boundary enforces (main names
+    /// the callers of its project); None: everyone.
+    #[serde(default)]
+    pub only: Option<Vec<String>>,
 }
 
 /// What a tab did, as main's pool tells it (`TabActivity`): `busy`, `ask`, `idle`, `released`, and others that only

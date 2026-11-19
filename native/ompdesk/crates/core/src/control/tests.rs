@@ -38,6 +38,7 @@ impl Sessions {
             session: session.to_owned(),
             title: format!("title of {session}"),
             state,
+            only: None,
         });
     }
 
@@ -574,6 +575,7 @@ async fn applies_pushes_in_the_order_main_sent_them() {
             session: "t1".into(),
             title: "t".into(),
             state,
+            only: None,
         }])
     };
     let activity = |kind: &str| {

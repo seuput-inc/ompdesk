@@ -61,8 +61,8 @@ struct Entry {
     seq: u64,
     /// The event as JSON.
     event: String,
-    /// A report's addressee: only that caller hears it.
-    to: Option<String>,
+    /// The only callers that hear it: a report's addressee, or the callers a session's `View.only` names.
+    to: Option<Vec<String>>,
 }
 
 struct Subscription {
@@ -81,8 +81,8 @@ pub struct Hub {
     ring: VecDeque<Entry>,
     next_seq: u64,
     subscriptions: Vec<Subscription>,
-    /// Each visible session's state as last told, while somebody listens.
-    known: HashMap<String, SessionState>,
+    /// Each visible session's state as last told and who may hear of it, while somebody listens.
+    known: HashMap<String, (SessionState, Option<Vec<String>>)>,
     /// Whether `known` was read since the first subscriber came: until then nothing is compared.
     attached: bool,
 }
@@ -142,7 +142,7 @@ impl Hub {
         } else {
             self.known = views
                 .iter()
-                .map(|view| (view.session.clone(), view.state))
+                .map(|view| (view.session.clone(), (view.state, view.only.clone())))
                 .collect();
             self.attached = true;
         }
@@ -161,12 +161,12 @@ impl Hub {
         };
         match activity.kind.as_str() {
             "released" => {
-                if self.known.remove(&activity.tab_id).is_some() {
+                if let Some((_, only)) = self.known.remove(&activity.tab_id) {
                     self.publish(
                         &Event::SessionClosed {
                             session: &activity.tab_id,
                         },
-                        None,
+                        only,
                     );
                 }
             }
@@ -180,7 +180,7 @@ impl Hub {
                             request_id: activity.request_id.as_deref().unwrap_or_default(),
                             text: activity.text.as_deref().unwrap_or_default(),
                         },
-                        None,
+                        view.only.clone(),
                     );
                 }
             }
@@ -193,7 +193,7 @@ impl Hub {
                             title: &view.title,
                             stop_reason: activity.stop_reason.as_deref().unwrap_or("stop"),
                         },
-                        None,
+                        view.only.clone(),
                     );
                 }
             }
@@ -204,7 +204,7 @@ impl Hub {
     /// A report addressed to the outside caller `to`.
     pub fn mail(&mut self, to: &str, text: &str) {
         if self.listening() {
-            self.publish(&Event::Report { to, text }, Some(to));
+            self.publish(&Event::Report { to, text }, Some(vec![to.to_owned()]));
         }
     }
 
@@ -226,11 +226,13 @@ impl Hub {
 
     fn sync(&mut self, views: &[View]) {
         for view in views {
-            let previous = self.known.get(&view.session).copied();
+            let previous = self
+                .known
+                .insert(view.session.clone(), (view.state, view.only.clone()))
+                .map(|(state, _)| state);
             if previous == Some(view.state) {
                 continue;
             }
-            self.known.insert(view.session.clone(), view.state);
             self.publish(
                 &Event::SessionState {
                     session: &view.session,
@@ -238,7 +240,7 @@ impl Hub {
                     state: view.state,
                     previous,
                 },
-                None,
+                view.only.clone(),
             );
         }
         // A session that left the views without a release was hidden: it vanishes without a word.
@@ -246,13 +248,13 @@ impl Hub {
             .retain(|session, _| views.iter().any(|view| &view.session == session));
     }
 
-    fn publish(&mut self, event: &Event, to: Option<&str>) {
+    fn publish(&mut self, event: &Event, to: Option<Vec<String>>) {
         // Strings, enums and options of them: serializing cannot fail.
         let event = serde_json::to_string(event).unwrap_or_default();
         self.ring.push_back(Entry {
             seq: self.next_seq,
             event,
-            to: to.map(str::to_owned),
+            to,
         });
         self.next_seq += 1;
         while self.ring.len() > self.capacity {
@@ -303,8 +305,8 @@ impl Hub {
             subscription.cursor += 1;
             if entry
                 .to
-                .as_deref()
-                .is_some_and(|to| to != subscription.caller)
+                .as_ref()
+                .is_some_and(|to| !to.contains(&subscription.caller))
             {
                 continue;
             }
@@ -354,6 +356,7 @@ mod tests {
                     session: session.to_owned(),
                     title: format!("title of {session}"),
                     state,
+                    only: None,
                 }),
             }
         }
@@ -445,5 +448,43 @@ mod tests {
                 assert_eq!(*recording.lines.lock().unwrap(), expected, "{name}: {sink}");
             }
         }
+    }
+
+    /// While the project boundary enforces, main names who may hear of a session: nobody else is told of it, its
+    /// close included.
+    #[test]
+    fn a_session_of_another_project_is_told_only_to_the_callers_main_names() {
+        let mut hub = Hub::new(16);
+        let (inside, outside) = (
+            Arc::new(Recording::default()),
+            Arc::new(Recording::default()),
+        );
+        for sink in [&inside, &outside] {
+            sink.accepting.store(true, Ordering::SeqCst);
+        }
+        hub.subscribe(1, "outside:in#1", "1", inside.clone());
+        hub.subscribe(2, "outside:out#2", "2", outside.clone());
+        let view = |state| View {
+            session: "t1".into(),
+            title: "Secret plan".into(),
+            state,
+            only: Some(vec!["outside:in#1".to_owned()]),
+        };
+        hub.views(&[view(SessionState::Idle)]);
+        hub.views(&[view(SessionState::Working)]);
+        let released = Activity {
+            kind: "released".to_owned(),
+            tab_id: "t1".to_owned(),
+            request_id: None,
+            text: None,
+            stop_reason: None,
+        };
+        hub.activity(&released, &[]);
+        let heard = inside.lines.lock().unwrap().join("");
+        assert!(
+            heard.contains("Secret plan") && heard.contains("session_closed"),
+            "{heard}"
+        );
+        assert!(outside.lines.lock().unwrap().is_empty());
     }
 }

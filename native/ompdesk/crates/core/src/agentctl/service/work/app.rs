@@ -309,6 +309,11 @@ impl AgentControl {
             .entry(caller.tab_id.clone())
             .or_insert(0) += 1;
         let result = async {
+            let names_session = args
+                .args
+                .as_ref()
+                .is_some_and(|given| given.contains_key("session"));
+            self.app_sessions_check(caller, &args.action, names_session)?;
             let app = self.app_control()?;
             let raw = args.args.map(Value::Object);
             app.run(&caller.tab_id, Some(&json!(args.action)), raw.as_ref())

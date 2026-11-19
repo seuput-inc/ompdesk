@@ -28,7 +28,9 @@ import { ACCOUNT_ROTATION_PREF, isAccountRotationMode } from "../shared/account-
 import {
 	AGENT_CLOSED_CHILDREN_PREF,
 	AGENT_CONTROL_PREF,
+	AGENT_CROSS_PROJECT_PREF,
 	AGENT_HIDDEN_PREFS_KEY,
+	AGENT_PROJECT_BOUNDARY_PREF,
 	type AgentReviewResult,
 	agentControlEnabled,
 	agentHiddenPaths,
@@ -130,7 +132,11 @@ import type {
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
-import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../shared/sidebar-projects";
+import {
+	SIDEBAR_PROJECTS_COMMAND,
+	type SidebarProjectsRequest,
+	type SidebarProjectsState,
+} from "../shared/sidebar-projects";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -138,6 +144,13 @@ import {
 	openExtensionsPage,
 	reprobeAgentBrowserStatus,
 } from "./agent-browsers";
+import {
+	boundaryLogLine,
+	projectInList,
+	refusePersonOnlyPref,
+	setCrossProject,
+	setProjectBoundary,
+} from "./agent-control/boundary-prefs";
 import { AgentControlRuntime, CARD_TIMEOUT_MS } from "./agent-control/host";
 import type { AnswerStep } from "./agent-control/target-answer";
 import { appNotification } from "./app-icon";
@@ -179,7 +192,12 @@ import { openLocalPath } from "./open-path";
 import { registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
-import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, ModelOverrideInputSchema } from "./remote/app-protocol";
+import {
+	decodeBinaryRead,
+	HOST_FS_READ_BINARY_TIMEOUT_MS,
+	ModelOverrideInputSchema,
+	SidebarProjectsStateSchema,
+} from "./remote/app-protocol";
 import type { RemoteDevices } from "./remote/devices";
 import type { LocalHostServices } from "./remote/host-services";
 import { uploadToHost } from "./remote/host-upload";
@@ -196,7 +214,7 @@ import type { SessionSummaries } from "./session-summaries";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { readClipboardText } from "./shell-host/shell-calls";
 import { updateSidebarPrefs } from "./sidebar-prefs";
-import type { SidebarProjects } from "./sidebar-projects";
+import { projectOfFolder, type SidebarProjects } from "./sidebar-projects";
 import { deviceLanguage } from "./sidecar-factory";
 import type { SidecarPool } from "./sidecar-pool";
 import type { SidecarLike } from "./sidecar-types";
@@ -307,7 +325,7 @@ export interface IpcDeps {
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
-	sidebarProjects?: Pick<SidebarProjects, "schedule">;
+	sidebarProjects?: Pick<SidebarProjects, "schedule" | "state">;
 	/**
 	 * Who typed a prompt, for the tabs several windows show (bridge prompt-origin.ts): `of` is the paired
 	 * device a window belongs to (null for a desktop window, whose prompts are the host's own), `hostName`
@@ -1379,6 +1397,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		closeTabTerminals,
 	};
 	const fileEditReports = deps.fileEditReports;
+	// A paired host's project list as it last told it: where the project boundary reads a host folder's project.
+	const hostProjects = new Map<string, SidebarProjectsState>();
+	remoteDevices.onHostProjects((device, state) => hostProjects.set(device, state));
 	// OMPdesk control tools (src/main/agent-control): the same pool, dispatcher, spawn path and notifications the GUI uses.
 	const agentControl: AgentControlRuntime = new AgentControlRuntime({
 		fileEdits: fileEditReports,
@@ -1458,6 +1479,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		deleteSession: deleteStoredSession,
 		checkoutPeers: tabId => checkoutPeers.peersOf(tabId),
 		text: (key, params) => mainT(`agentControl.${key}` as MainTextKey, undefined, params),
+		// The sidebar's own rule; a worktree that is gone still names the project the sidebar's list kept for it.
+		projectOf: async (folder, device) => {
+			if (!device) return (await projectOfFolder(folder)) ?? deps.sidebarProjects?.state().worktrees[folder] ?? null;
+			let listed = hostProjects.get(device);
+			if (!listed) {
+				listed = SidebarProjectsStateSchema.parse(
+					await remoteDevices.request(device, "host.projects.command", { request: { action: "get" } }),
+				);
+				hostProjects.set(device, listed);
+			}
+			return projectInList(listed, folder);
+		},
+		boundaryLog: entry => writeRuntimeLog(boundaryLogLine(entry)),
 		// `ompdesk_app` runs the app's own handlers as the calling session's window would.
 		app: {
 			invoke: (win, channel, args) => ipc.invoke(channel, agentCaller(win), args),
@@ -2079,6 +2113,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (typeof payload.key !== "string") {
 			throw codedError("invalid_preference_key", "Invalid preference key");
 		}
+		// The project boundary and its grant have their own channels, a desktop window's alone (below).
+		refusePersonOnlyPref(payload.key);
 		// The stored `sidebar` blob has one owner (`PREFS_UPDATE_SIDEBAR`): a whole blob from a page's own copy would
 		// put an older order back over a newer one.
 		if (payload.key === SIDEBAR_PREFS_KEY) {
@@ -2185,6 +2221,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const from = caller.win && isWebWindow(caller.win.webContents.id) ? "web" : "window";
 		updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
 		prefChanged(caller.win, SIDEBAR_PREFS_KEY);
+	});
+	// The project boundary: only a desktop window's own page is a person. A paired page and an agent's `ompdesk_app`
+	// call carry no native window. Every window hears the change, the writer too (it shows what main stored).
+	ipc.handle(IPC_COMMANDS.AGENT_CROSS_PROJECT_SET, (caller, payload: unknown) => {
+		if (setCrossProject(prefsStore, payload, caller.browserWindow !== null, writeRuntimeLog))
+			prefChanged(null, AGENT_CROSS_PROJECT_PREF);
+	});
+	ipc.handle(IPC_COMMANDS.AGENT_PROJECT_BOUNDARY_SET, (caller, payload: unknown) => {
+		if (setProjectBoundary(prefsStore, payload, caller.browserWindow !== null, writeRuntimeLog))
+			prefChanged(null, AGENT_PROJECT_BOUNDARY_PREF);
 	});
 
 	// Launch profiles live with the machine that spawns omp: a tab's paired

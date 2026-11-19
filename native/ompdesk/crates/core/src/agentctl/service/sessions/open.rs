@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use super::{CloseHow, TabClose};
+use crate::agentctl::rules::boundary::{BoundaryMode, BoundaryVerdict};
 use crate::agentctl::service::AgentControl;
 use crate::agentctl::service::fail::{Fail, R, fail};
 use crate::agentctl::service::host::Deadline;
@@ -291,8 +292,10 @@ impl AgentControl {
         let mut reopened: Option<StoredSession> = None;
         // A reopen of a session open in a tab elsewhere: where, as the lists say it. It joins that tab (`join`).
         let mut joined: Option<String> = None;
+        // The project boundary let this open through with a check (`Mem.checked` keeps the child in scope).
+        let checked;
         if let Some(reopen) = args.reopen.as_deref().filter(|reopen| !reopen.is_empty()) {
-            let (found, unreached) = self.stored_session(reopen, target.as_ref()).await?;
+            let (found, unreached) = self.stored_for(caller, reopen, target.as_ref()).await?;
             let Some(row) = found else {
                 return fail(format!(
                     "No saved session \"{reopen}\" {}{}. List them with ompdesk_sessions {{\"scope\":\"stored\"}} (with device for a paired device's).",
@@ -307,6 +310,13 @@ impl AgentControl {
             if row.hidden {
                 return fail("The user hid that session from other agents.");
             }
+            let bounds = self.host.state();
+            let verdict = self.row_verdict(&bounds, caller, &row);
+            if verdict == BoundaryVerdict::Log {
+                self.log_crossing(caller, &row.path, row.project.as_deref());
+            }
+            checked =
+                verdict == BoundaryVerdict::Allow && bounds.boundary.mode != BoundaryMode::Off;
             let now = self.current_row(&row).await;
             let open = self.live_tab(
                 &self.host.state().tabs(&caller.tab_id).unwrap_or_default(),
@@ -356,6 +366,11 @@ impl AgentControl {
             session_path = Some(row.path.clone());
             device = Some(row.device.clone());
             reopened = Some(row);
+        } else {
+            let device = device.as_ref().map(|device| device.as_deref());
+            checked = self
+                .folder_check(caller, args.folder.as_deref(), device)
+                .await?;
         }
         // Its row reads as the work it was opened for from its first frame, not "New session" until stock names it.
         let task = match (&args.message, &session_path) {
@@ -410,6 +425,12 @@ impl AgentControl {
         // A session joined where it is open stays whoever's it was: never "opened by you".
         if joined.is_none() {
             self.opened_add(&caller.tab_id, &tab_id);
+            if checked {
+                let saved = reopened
+                    .as_ref()
+                    .map(|row| (row.path.as_str(), row.device.as_deref()));
+                self.checked_add(caller, &tab_id, saved);
+            }
         }
         if let Some(key) = crate::agentctl::service::call_key()
             && let Some(mut journal) = self.calls()

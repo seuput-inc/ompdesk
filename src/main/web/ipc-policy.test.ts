@@ -95,9 +95,14 @@ describe("IPC channel policy", () => {
 		expect(subscribedChannels()).toEqual(policyChannels("push"));
 	});
 
-	it("refuses only the pairing boundary, and grants pairing-admin nowhere else", () => {
+	it("refuses only the pairing boundary and the project boundary's own channels, and grants pairing-admin nowhere else", () => {
 		const boundary = Object.entries(IPC_POLICY).filter(([, policy]) => policy.mode === "boundary");
-		const expected = [...mobileWeb.MOBILE_WEB_ADMIN_CHANNELS].sort();
+		// Besides pairing: what only a person in a desktop window changes (control-tools.md › Project boundary).
+		const expected = [
+			...mobileWeb.MOBILE_WEB_ADMIN_CHANNELS,
+			IPC_COMMANDS.AGENT_CROSS_PROJECT_SET,
+			IPC_COMMANDS.AGENT_PROJECT_BOUNDARY_SET,
+		].sort();
 		expect(boundary.map(([channel]) => channel).sort()).toEqual(expected);
 		const pairing = Object.entries(IPC_POLICY).filter(
 			([, policy]) => policy.dir !== "push" && policy.permission === "pairing-admin",

@@ -229,6 +229,12 @@ impl AgentControl {
                 }
             }
         }
+        // A run in another project's folder is refused before the card and before anything is saved; a wake-up is
+        // the caller's own session.
+        if wake_session.is_none() {
+            self.folder_check(caller, args.folder.as_deref(), Some(device_id))
+                .await?;
+        }
         let name = format!(
             "{AGENT_SCHEDULE_PREFIX}{}",
             args.name.as_deref().unwrap_or("")
@@ -524,6 +530,9 @@ impl AgentControl {
             device = found.as_ref().map(|found| found.id.clone());
             device_name = found.map(|found| found.name);
         }
+        // Another project's repository is refused before a session is opened there and before the card.
+        self.folder_check(caller, start.folder.as_deref(), Some(device.as_deref()))
+            .await?;
         let candidates: Vec<&ControlTab> = std::iter::once(caller)
             .chain(tabs)
             .filter(|tab| {

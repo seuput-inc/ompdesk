@@ -38,6 +38,7 @@ import type {
 	AgentReviewResult,
 	ClosedChild,
 	PrivacyPane,
+	ProjectBoundary,
 	SidebarView,
 } from "../../shared/agent-control";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
@@ -127,6 +128,11 @@ export interface ControlTab {
 	 * (`tabCloseStep` decides what a close does with it).
 	 */
 	webEdits?: FileEdits;
+	/**
+	 * The project its folder belongs to (the sidebar's rule: a linked worktree's main checkout, else the folder), for
+	 * the project boundary; absent while main has not resolved it, and while the boundary is off.
+	 */
+	project?: string;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */
@@ -156,6 +162,8 @@ export interface StoredSession {
 	elsewhere?: OpenElsewhere;
 	/** Text around a search hit. */
 	snippet?: string;
+	/** The project its folder belongs to, as `ControlTab.project`; absent while unknown (a folder that is gone). */
+	project?: string;
 }
 
 /** Where a saved session no tab of this app holds is open (`StoredSession.elsewhere`). */
@@ -323,6 +331,19 @@ export interface AgentControlHost {
 	 * as this computer holds them): its windows' tabs and the ones it runs for paired devices. Empty while not known.
 	 */
 	summaries(device?: string): readonly SessionSummary[];
+	/**
+	 * The project boundary (`shared/agent-control.ts`): its mode, what becomes of sessions opened before it checked,
+	 * and the session files the person allowed across projects. Absent: off.
+	 */
+	boundary?(): ProjectBoundary & { granted: string[] };
+	/**
+	 * The project of the folder a spawn by `callerTabId` with this `folder` and `device` (as `SpawnRequest` reads
+	 * them) would work in; null when it cannot be told. The core asks before an open, a schedule or an Autopilot
+	 * start in a folder that is not the caller's own.
+	 */
+	projectOf?(callerTabId: string, request: Pick<SpawnRequest, "folder" | "device">): Promise<string | null>;
+	/** One call the project boundary would refuse once it enforces (`log` mode), for the runtime log. */
+	boundaryLog?(entry: unknown): void;
 	/** `agentControlManage` (default on) or full control: an agent may stop or close sessions it did not open, merge, schedule and start Autopilot without a card; deleting a saved session it did not open asks unless full control is on. */
 	manageEnabled(): boolean;
 	/** The session that opened `tabId` (`ompdesk_session_open`), if any. */
@@ -600,6 +621,7 @@ interface HostSnapshot {
 	deleted: Tombstones;
 	scheduleDevices: string[];
 	texts: Record<string, string>;
+	boundary?: ProjectBoundary & { granted: string[] };
 	app?: {
 		manage: boolean;
 		full: boolean;
@@ -986,6 +1008,7 @@ export class AgentControl {
 				device => host.hasSchedules?.(device === "" ? undefined : device) === true,
 			),
 			texts,
+			...(host.boundary ? { boundary: host.boundary() } : {}),
 			...(app
 				? {
 						app: {
@@ -1097,6 +1120,22 @@ export class AgentControl {
 			}) => coded(async () => (await host.answer(tabId, requestId, response)) ?? null),
 			stored: ({ device: where, query }: { device?: string | null; query?: string | null }) =>
 				coded(() => host.stored(device(where), query ?? undefined)),
+			project: ({
+				callerTabId,
+				folder,
+				...where
+			}: {
+				callerTabId: string;
+				folder?: string | null;
+				device?: string | null;
+			}) =>
+				coded(
+					async () =>
+						(await host.projectOf?.(callerTabId, {
+							...(folder ? { folder } : {}),
+							...("device" in where ? { device: where.device } : {}),
+						})) ?? null,
+				),
 			storedMessages: ({ session }: { session: StoredSession }) => coded(() => host.storedMessages(session)),
 			sessionPace: ({ path, device: where }: { path: string; device?: string | null }) =>
 				coded(async () => (await host.sessionPace?.({ path, ...(where ? { device: where } : {}) })) ?? null),
@@ -1176,6 +1215,7 @@ export class AgentControl {
 				told(() => host.notify(callerTabId, title, body)),
 			reviewChanged: ({ parentTabId }: { parentTabId: string }) => told(() => host.reviewChanged?.(parentTabId)),
 			recordClosed: ({ child }: { child: ClosedChild }) => tell(() => host.recordClosed(child)),
+			boundaryLog: (entry: unknown) => told(() => host.boundaryLog?.(entry)),
 			"appPorts.fire": ({ tabId, channel, args }: { tabId: string; channel: string; args: unknown[] }) =>
 				tell(() => apps().fire(tabId, channel, args)),
 			"appPorts.send": ({ tabId, event }: { tabId: string; event: Parameters<AppPortsLike["send"]>[1] }) =>

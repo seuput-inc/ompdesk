@@ -12,6 +12,7 @@ use serde_json::json;
 use tokio::time::Instant;
 
 use super::AgentControl;
+use super::boundary::OTHER_PROJECT;
 use super::fail::{Fail, R, SavedFolder, fail, session_deleted};
 use super::host::HostState;
 use super::js::{len16, one_line, trim};
@@ -25,6 +26,7 @@ use super::types::{
 };
 use crate::agentctl::journal::send_outbox::receiver_key;
 use crate::agentctl::journal::session_fates::{FateState, FatedSession, SessionFate, fate_by};
+use crate::agentctl::rules::boundary::BoundaryVerdict;
 
 /// Which computer a lookup is about: `None` any, `Some(None)` this one (`null`), `Some(Some(device))` that host.
 pub type DeviceScope = Option<Option<ControlDevice>>;
@@ -396,16 +398,50 @@ impl AgentControl {
         rows
     }
 
+    /// `#find` for `caller`: under the project boundary a name resolves among what the caller may reach, and one
+    /// that names only another project's session is refused without naming it (a title or prefix match too).
+    pub async fn find(
+        &self,
+        caller: &ControlTab,
+        tabs: &[ControlTab],
+        session: &str,
+        device: Option<&Option<ControlDevice>>,
+    ) -> R<Found> {
+        let state = self.host.state();
+        if !Self::bounded(&state, caller) {
+            let found = self.find_in(tabs, session, device, None).await?;
+            if let Some(target) = &found.target {
+                self.note_target(&state, caller, target);
+            }
+            return Ok(found);
+        }
+        let inside: Vec<ControlTab> = tabs
+            .iter()
+            .filter(|tab| self.tab_verdict(&state, caller, tab) != BoundaryVerdict::Refuse)
+            .cloned()
+            .collect();
+        let found = self.find_in(&inside, session, device, Some(caller)).await?;
+        if found.target.is_some() || found.gone.is_some() {
+            return Ok(found);
+        }
+        match self.find_in(tabs, session, device, None).await {
+            Ok(Found { target: None, .. }) => Ok(found),
+            _ => fail(OTHER_PROJECT),
+        }
+    }
+
     /// `#find`: every way an agent names a session, the first match wins: a tab id; an id the tab had before a
     /// relaunch; the saved (stock) id of the session a tab holds; a unique prefix of a tab id or of that saved id;
     /// the id of a tab that closed, in any launch (`fate_of`); the title, exactly or by a unique prefix in any case
     /// (a hidden session's title is private and never matched); then a saved session no tab holds (`stored_session`).
-    /// An ambiguous name fails, naming the candidates.
-    pub async fn find(
+    /// An ambiguous name fails, naming the candidates. `scope`: the caller whose project boundary leaves out every
+    /// saved session and every session open elsewhere it may not reach (`tabs` are already the ones it may).
+    async fn find_in(
         &self,
         tabs: &[ControlTab],
         session: &str,
         device: Option<&Option<ControlDevice>>,
+        scope: Option<&ControlTab>,
     ) -> R<Found> {
         let name = unquoted(session);
         let state = self.host.state();
@@ -482,7 +518,7 @@ impl AgentControl {
                 .values()
                 .find(|row| row.path == path && row.device == fate.session.device)
                 .cloned();
-            let closed = held.unwrap_or_else(|| StoredSession {
+            let mut closed = held.unwrap_or_else(|| StoredSession {
                 id: name.clone(),
                 path: path.to_owned(),
                 title: fate.session.title.clone(),
@@ -502,7 +538,27 @@ impl AgentControl {
             });
             let target = match self.live_tab(tabs, &closed) {
                 Some(tab) => Target::Tab(Box::new(tab)),
-                None => Target::Stored(Box::new(closed)),
+                None => {
+                    if let Some(caller) = scope {
+                        // A session closed before any list named it carries no project: main names its folder's.
+                        if closed.project.is_none() {
+                            closed.project = self
+                                .host
+                                .project(
+                                    &caller.tab_id,
+                                    Some(&closed.cwd),
+                                    Some(closed.device.as_deref()),
+                                )
+                                .await
+                                .ok()
+                                .flatten();
+                        }
+                        if self.row_verdict(&state, caller, &closed) == BoundaryVerdict::Refuse {
+                            return Ok(Found::default());
+                        }
+                    }
+                    Target::Stored(Box::new(closed))
+                }
             };
             return Ok(Found {
                 target: Some(target),
@@ -524,6 +580,11 @@ impl AgentControl {
         let away: Vec<(String, String)> = self
             .open_elsewhere(&state, tabs, None)
             .into_iter()
+            .filter(|(summary, _)| {
+                scope.is_none_or(|caller| {
+                    self.summary_verdict(&state, caller, summary) != BoundaryVerdict::Refuse
+                })
+            })
             .map(|(summary, computer)| {
                 let title = summary
                     .title
@@ -600,7 +661,7 @@ impl AgentControl {
                 ..Found::default()
             });
         }
-        let (row, unreached) = self.stored_session(&name, device).await?;
+        let (row, unreached) = self.stored_session(&name, device, scope).await?;
         let target = row.map(|row| match self.live_tab(tabs, &row) {
             Some(tab) => Target::Tab(Box::new(tab)),
             None => Target::Stored(Box::new(row)),
@@ -612,25 +673,51 @@ impl AgentControl {
         })
     }
 
+    /// `#storedSession` for `caller` (a reopen): another project's saved session is refused, never named.
+    pub async fn stored_for(
+        &self,
+        caller: &ControlTab,
+        session: &str,
+        device: Option<&Option<ControlDevice>>,
+    ) -> R<(Option<StoredSession>, Vec<String>)> {
+        if !Self::bounded(&self.host.state(), caller) {
+            return self.stored_session(session, device, None).await;
+        }
+        let found = self.stored_session(session, device, Some(caller)).await?;
+        if found.0.is_some() {
+            return Ok(found);
+        }
+        match self.stored_session(session, device, None).await {
+            Ok((None, _)) => Ok(found),
+            _ => fail(OTHER_PROJECT),
+        }
+    }
+
     /// `#storedSession`: a saved session by stock id, unique id prefix or exact title: the rows the last stored
     /// lists printed first, then a fresh read of the index of `device` (this computer when `Some(None)`). With
     /// `device` None, a name not saved here is looked up on every paired device too. `unreached` names the devices
-    /// whose index could not be read.
+    /// whose index could not be read. `scope`: the caller whose project boundary leaves out the rows it may not reach.
     pub async fn stored_session(
         &self,
         session: &str,
         device: Option<&Option<ControlDevice>>,
+        scope: Option<&ControlTab>,
     ) -> R<(Option<StoredSession>, Vec<String>)> {
         let where_: Option<Option<String>> =
             device.map(|device| device.as_ref().map(|device| device.id.clone()));
         let find = || -> R<Option<StoredSession>> {
-            let rows: Vec<StoredSession> = self
+            let mut rows: Vec<StoredSession> = self
                 .mem()
                 .stored
                 .values()
                 .filter(|row| where_.as_ref().is_none_or(|wanted| row.device == *wanted))
                 .cloned()
                 .collect();
+            // After the lock is let go: a verdict reads `Mem` itself.
+            if let Some(caller) = scope {
+                let state = self.host.state();
+                rows.retain(|row| self.row_verdict(&state, caller, row) != BoundaryVerdict::Refuse);
+            }
             if let Some(exact) = rows.iter().find(|row| row.id == session) {
                 return Ok(Some(exact.clone()));
             }
@@ -738,7 +825,7 @@ impl AgentControl {
         verb: &str,
         device: DeviceScope,
     ) -> R<Target> {
-        let found = self.find(tabs, session, device.as_ref()).await?;
+        let found = self.find(caller, tabs, session, device.as_ref()).await?;
         if let Some(gone) = found.gone {
             return Err(session_deleted(&unquoted(session), gone));
         }
@@ -778,7 +865,7 @@ impl AgentControl {
         verb: &str,
         options: OpenOptions,
     ) -> R<ControlTab> {
-        let found = self.find(tabs, session, None).await?;
+        let found = self.find(caller, tabs, session, None).await?;
         if let Some(gone) = found.gone {
             return Err(session_deleted(&unquoted(session), gone));
         }
@@ -1010,7 +1097,7 @@ impl AgentControl {
         tabs: &[ControlTab],
         session: &str,
     ) -> R<ControlTab> {
-        let found = self.find(tabs, session, None).await?.target;
+        let found = self.find(caller, tabs, session, None).await?.target;
         let row = match found {
             Some(Target::Stored(row))
                 if !row.hidden

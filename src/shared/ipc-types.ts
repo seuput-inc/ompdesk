@@ -4,7 +4,7 @@
  */
 
 import type { AccountRotationMode, AccountRotationState } from "./account-rotation";
-import type { AgentAppEvent, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
+import type { AgentAppEvent, AgentControlViewEvent, AgentReviewEvent, ProjectBoundaryMode } from "./agent-control";
 import type {
 	AiMemoryCareSummary,
 	AiMemoryDeleted,
@@ -299,6 +299,10 @@ export const IPC_COMMANDS = {
 	PREFS_SET: "prefs:set",
 	/** Apply one change (`SidebarChange`) to the stored `sidebar` prefs in main, then push PREFS_CHANGED to every other window and page */
 	PREFS_UPDATE_SIDEBAR: "prefs:update-sidebar",
+	/** A person allows one of this computer's sessions to work across projects, or takes it back (`{sessionPath, on}`); a desktop window only */
+	AGENT_CROSS_PROJECT_SET: "prefs:agent-cross-project-set",
+	/** A person sets the control tools' project boundary (`{mode}`); a desktop window only */
+	AGENT_PROJECT_BOUNDARY_SET: "prefs:agent-project-boundary-set",
 	PREFS_UPDATE_LAUNCH_PROFILE: "prefs:update-launch-profile",
 	/** One workspace's launch profile, from the machine that spawns its omp */
 	PREFS_GET_LAUNCH_PROFILE: "prefs:get-launch-profile",
@@ -696,6 +700,13 @@ export type RuntimeErrorSource =
 	 * `details` the list (local or device), focus/reroot/open, whether it was archived and whether a tab held it.
 	 */
 	| "sidebar"
+	/**
+	 * The control tools' project boundary, info level (src/main/agent-control/boundary-prefs.ts): `message` is
+	 * `project boundary would refuse` (log mode: `details` the tool, the caller's session file, the target folder or
+	 * session file and both projects), `cross-project grant` (`details` the session file and `on`) or
+	 * `project boundary mode` (`details.mode`).
+	 */
+	| "agent-control"
 	| "unknown";
 
 /** Bounded, serializable renderer/main failure payload written as JSONL. */
@@ -2542,6 +2553,10 @@ export interface OmpApi {
 		updateLaunchProfile(cwd: string, patch: Partial<LaunchProfile>, device?: string): Promise<LaunchProfile>;
 		/** One change to the saved sidebar order, pins, aliases or archive, applied by main to what is stored now (never a whole blob). */
 		updateSidebar(change: SidebarChange): Promise<void>;
+		/** Allow one of this computer's sessions to work across projects, or take it back. A desktop window only; refused for a paired page and every agent path. */
+		setCrossProject(sessionPath: string, on: boolean): Promise<void>;
+		/** Set the control tools' project boundary. A desktop window only; refused for a paired page and every agent path. */
+		setProjectBoundary(mode: ProjectBoundaryMode): Promise<void>;
 		/** What this computer has for the Default browser setting: ego-browser, and each Chromium browser with its relay state. Probes again. */
 		defaultBrowserStatus(): Promise<AgentBrowserStatus>;
 		/** Write the omp Browser Relay extension to disk, open the browser's extensions page and show the folder. */

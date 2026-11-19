@@ -20,7 +20,9 @@ import {
 	AGENT_CONTROL_PREF,
 	AGENT_CONTROL_REVIEW,
 	AGENT_CONTROL_VIEW,
+	AGENT_CROSS_PROJECT_PREF,
 	AGENT_HIDDEN_PREFS_KEY,
+	AGENT_PROJECT_BOUNDARY_PREF,
 	AGENT_SCHEDULE_PREFIX,
 	type AgentControlToolName,
 	type AgentControlViewEvent,
@@ -32,10 +34,13 @@ import {
 	agentControlManageEnabled,
 	agentHiddenPaths,
 	type ClosedChild,
+	crossProjectSessions,
 	isAgentControlTool,
 	MAX_CLOSED_CHILDREN,
 	type PrivacyPane,
+	type ProjectBoundary,
 	parseClosedChildren,
+	projectBoundaryOf,
 	sidebarViewOf,
 } from "../../shared/agent-control";
 import type {
@@ -269,6 +274,14 @@ export interface AgentControlHostDeps {
 	outsideWindow?: () => ClientWindow | null;
 	/** A confirmation card for a caller outside OMPdesk, which has no session of its own to show one in. */
 	confirmOutside?: (win: ClientWindow, caller: OutsideCaller, title: string, message: string) => Promise<boolean>;
+	/**
+	 * The project a folder belongs to for the project boundary, as the sidebar groups it: on this computer
+	 * (`projectOfFolder`), or on the paired host `device` by that host's own project list. Null when it cannot be told.
+	 * Absent: no folder has a project, so under `enforce` only a grant reaches anything.
+	 */
+	projectOf?: (folder: string, device?: string) => Promise<string | null>;
+	/** What the core tells of a call the project boundary would refuse once it enforces (`log` mode): one runtime-log line. */
+	boundaryLog?: (entry: unknown) => void;
 }
 
 function askOf(request: ControlAsk["request"]): boolean {
@@ -282,6 +295,9 @@ type WorktreeInput = { name: string; baseCwd: string; baseRef: string; branchPre
 function gitRef(worktree: WorktreeRef): WorktreeRef {
 	return { path: worktree.path, branch: worktree.branch, baseCwd: worktree.baseCwd };
 }
+
+/** A folder whose project could not be told is asked about again after this long (it may exist by then). */
+const PROJECT_RETRY_MS = 30_000;
 
 /** `omp/agent/<name>` from a branch the agent chose: the prefix (through the last `/`) and the name. */
 export function splitBranch(branch: string | undefined, slug: string): { branchPrefix: string; name: string } {
@@ -335,6 +351,13 @@ export class AgentControlRuntime {
 	readonly #outsideCards = new Map<string, Promise<void>>();
 	/** The routines' wake-ups waiting for their turn, by run: how each ended is what the core tells (`wakeDone`). */
 	readonly #wakes = new Map<string, (result: { code: number | null; error?: string }) => void>();
+	/**
+	 * The project of each session folder (`device\nfolder`) for the project boundary, filled as lookups answer: the
+	 * snapshot is built synchronously, so a folder not yet known reads as no project and the snapshot is pushed again
+	 * once it is. A known project stays (whether a folder is a linked worktree does not change).
+	 */
+	readonly #projects = new Map<string, { project: string | null; at: number }>();
+	readonly #projectLookups = new Map<string, Promise<string | null>>();
 
 	constructor(deps: AgentControlHostDeps) {
 		this.#deps = deps;
@@ -710,6 +733,7 @@ export class AgentControlRuntime {
 			owner && isWebWindow(owner.webContents.id)
 				? this.#deps.fileEdits.edits(owner.webContents.id, info.tabId)
 				: undefined;
+		const project = this.#projectNow(info.cwd, info.device);
 		return {
 			tabId: info.tabId,
 			// Until stock names an opened session, it reads as the work it was opened for (`IpcTabInfo.task`).
@@ -739,6 +763,7 @@ export class AgentControlRuntime {
 			...(facts?.runningSince !== undefined ? { busySince: facts.runningSince } : {}),
 			...(formerIds.length > 0 ? { formerIds } : {}),
 			...(webEdits ? { webEdits } : {}),
+			...(project ? { project } : {}),
 		};
 	}
 
@@ -752,12 +777,67 @@ export class AgentControlRuntime {
 		return target;
 	}
 
-	async #spawn(
+	#boundary(): ProjectBoundary {
+		return projectBoundaryOf(this.#deps.prefs.get(AGENT_PROJECT_BOUNDARY_PREF));
+	}
+
+	/**
+	 * The project `folder` belongs to on `device` (this computer when undefined), as the sidebar groups it; null when
+	 * it cannot be told. A paired host's is prefixed with its device, so two computers' projects never read as one.
+	 */
+	#projectOf(folder: string, device: string | undefined): Promise<string | null> {
+		const key = `${device ?? ""}\n${folder}`;
+		const known = this.#projects.get(key)?.project;
+		if (known != null) return Promise.resolve(known);
+		const running = this.#projectLookups.get(key);
+		if (running) return running;
+		const lookup = Promise.resolve()
+			.then(() => this.#deps.projectOf?.(folder, device) ?? null)
+			.catch(() => null)
+			.then(found => {
+				const project = found === null ? null : device ? `device:${device}:${found}` : found;
+				this.#projectLookups.delete(key);
+				this.#projects.set(key, { project, at: Date.now() });
+				if (project !== null) this.control.changed();
+				return project;
+			});
+		this.#projectLookups.set(key, lookup);
+		return lookup;
+	}
+
+	/** What a snapshot says of a folder's project now: nothing while it is unknown, and the lookup is started. */
+	#projectNow(folder: string, device: string | undefined): string | undefined {
+		if (!folder || this.#boundary().mode === "off") return undefined;
+		const known = this.#projects.get(`${device ?? ""}\n${folder}`);
+		if (known?.project != null) return known.project;
+		if (!known || Date.now() - known.at > PROJECT_RETRY_MS) void this.#projectOf(folder, device);
+		return undefined;
+	}
+
+	/**
+	 * Under `enforce`, the outside callers that may hear of `tab` on the control socket's event stream: those of its
+	 * project, and the one that opened it. Undefined: everyone (the boundary does not filter).
+	 */
+	heardBy(tab: ControlTab): string[] | undefined {
+		if (this.#boundary().mode !== "enforce") return undefined;
+		const opener = this.#parents.get(tab.tabId)?.callerTabId;
+		return [...this.#outside.values()]
+			.filter(
+				caller =>
+					caller.id === opener ||
+					(tab.project !== undefined && this.#projectNow(caller.cwd, undefined) === tab.project),
+			)
+			.map(caller => caller.id);
+	}
+
+	/**
+	 * Where a spawn would work: the computer, and the folder (undefined: a saved session's own folder, or another
+	 * computer's default workspace).
+	 */
+	async #spawnTarget(
 		callerTabId: string,
-		request: SpawnRequest,
-	): Promise<{ tabId: string; worktree?: IpcTabWorktree; prepared?: string }> {
-		const win = this.#win(callerTabId);
-		if (!win) throw new Error("This session's window is gone.");
+		request: Pick<SpawnRequest, "folder" | "device" | "sessionPath" | "worktree">,
+	): Promise<{ outside: OutsideCaller | undefined; device: string | undefined; elsewhere: boolean; cwd?: string }> {
 		// A caller outside OMPdesk runs on this computer and has no tab: its folder is where it was started.
 		const outside = this.#outside.get(callerTabId);
 		const caller = outside ? { cwd: outside.cwd, device: undefined } : this.#sidecar(callerTabId);
@@ -778,6 +858,16 @@ export class AgentControlRuntime {
 			throw new Error(
 				"A worktree on another device needs that device's repository: pass its absolute folder (the checkout to branch from).",
 			);
+		return { outside, device, elsewhere, ...(cwd === undefined ? {} : { cwd }) };
+	}
+
+	async #spawn(
+		callerTabId: string,
+		request: SpawnRequest,
+	): Promise<{ tabId: string; worktree?: IpcTabWorktree; prepared?: string }> {
+		const win = this.#win(callerTabId);
+		if (!win) throw new Error("This session's window is gone.");
+		const { outside, device, elsewhere, cwd } = await this.#spawnTarget(callerTabId, request);
 		let worktree: IpcTabWorktree | undefined;
 		let prepared: string | null = null;
 		if (request.worktree && cwd !== undefined) {
@@ -974,7 +1064,24 @@ export class AgentControlRuntime {
 			enabled: () => this.#controlEnabled(),
 			fullEnabled: () => agentControlFullEnabled(deps.prefs.get(AGENT_CONTROL_FULL_PREF)),
 			approveEnabled: () => this.#approveEnabled(),
-			summaries: device => deps.summaries?.(device)?.sessions ?? [],
+			summaries: device => {
+				const sessions = deps.summaries?.(device)?.sessions ?? [];
+				if (this.#boundary().mode === "off") return sessions;
+				return sessions.map(session => {
+					const project = this.#projectNow(session.cwd, device);
+					return project ? { ...session, project } : session;
+				});
+			},
+			boundary: () => ({
+				...this.#boundary(),
+				granted: crossProjectSessions(deps.prefs.get(AGENT_CROSS_PROJECT_PREF)),
+			}),
+			// The folder a spawn with this `folder` and `device` would work in; one that cannot be resolved has no project.
+			projectOf: async (callerTabId, request) => {
+				const target = await this.#spawnTarget(callerTabId, request).catch(() => null);
+				return target?.cwd === undefined ? null : this.#projectOf(target.cwd, target.device);
+			},
+			boundaryLog: entry => deps.boundaryLog?.(entry),
 			manageEnabled: () =>
 				agentControlFullEnabled(deps.prefs.get(AGENT_CONTROL_FULL_PREF)) ||
 				agentControlManageEnabled(deps.prefs.get(AGENT_CONTROL_MANAGE_PREF)),
@@ -1013,18 +1120,22 @@ export class AgentControlRuntime {
 			tabs: () => this.#hostTabs(),
 			outsideCallers: () =>
 				Object.fromEntries(
-					[...this.#outside].map(([id, caller]) => [
-						id,
-						{
-							tabId: caller.id,
-							title: caller.title,
-							cwd: caller.cwd,
-							status: "ready",
-							busy: false,
-							asks: [],
-							hidden: false,
-						} satisfies ControlTab,
-					]),
+					[...this.#outside].map(([id, caller]) => {
+						const project = this.#projectNow(caller.cwd, undefined);
+						return [
+							id,
+							{
+								tabId: caller.id,
+								title: caller.title,
+								cwd: caller.cwd,
+								status: "ready",
+								busy: false,
+								asks: [],
+								hidden: false,
+								...(project ? { project } : {}),
+							} satisfies ControlTab,
+						];
+					}),
 				),
 			outsideWindow: () => {
 				const win = deps.outsideWindow?.();
@@ -1076,6 +1187,12 @@ export class AgentControlRuntime {
 					const work = summaryWork(summary);
 					return { holder: summary.openFor, ...(work ? { work } : {}) };
 				};
+				// Each row's project, one folder at a time (a lookup may run git, and a list names hundreds of folders);
+				// none while the boundary is off, when nothing reads it.
+				const projects = new Map<string, string | null>();
+				if (this.#boundary().mode !== "off")
+					for (const cwd of new Set(rows.map(row => row.cwd)))
+						projects.set(cwd, cwd ? await this.#projectOf(cwd, device) : null);
 				return rows.flatMap(row => {
 					const named =
 						needle !== undefined && `${row.title ?? ""} ${row.firstMessage}`.toLowerCase().includes(needle);
@@ -1083,6 +1200,7 @@ export class AgentControlRuntime {
 					const tab = deps.pool.sessionOwner(row.path, device)?.tabId;
 					const open = tab ? undefined : elsewhere(row);
 					const snippet = snippets.get(row.path);
+					const project = projects.get(row.cwd);
 					return [
 						{
 							id: row.id,
@@ -1097,6 +1215,7 @@ export class AgentControlRuntime {
 							...(device ? { device, deviceName: deps.deviceName(device) } : {}),
 							...(tab ? { tabId: tab } : open ? { elsewhere: open } : {}),
 							...(snippet ? { snippet } : {}),
+							...(project ? { project } : {}),
 						},
 					];
 				});

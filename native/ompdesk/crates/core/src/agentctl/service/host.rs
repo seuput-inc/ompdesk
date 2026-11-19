@@ -26,6 +26,7 @@ use crate::agentctl::app::AppState;
 use crate::agentctl::journal::Clock;
 use crate::agentctl::journal::attachments::{AttachedSet, AttachmentStore, LandedCache};
 use crate::agentctl::journal::mail_outbox::{MailAnswer, MailOutbox, OutboxMail};
+use crate::agentctl::rules::boundary::{BoundaryMode, EarlierOpened};
 use crate::agentctl::rules::mail::MailDelivery;
 use crate::ports::Port;
 
@@ -53,6 +54,16 @@ pub struct DeletedPath {
 pub struct Tombstones {
     pub by_path: Vec<DeletedPath>,
     pub by_id: HashMap<String, f64>,
+}
+
+/// The project boundary as main reads it (`agentProjectBoundary`, `agentCrossProject`); absent: off.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Boundary {
+    pub mode: BoundaryMode,
+    pub earlier_opened: EarlierOpened,
+    /// The session files the person allowed to work across projects (this computer's sessions).
+    pub granted: HashSet<String>,
 }
 
 /// What main's synchronous reads came to at the moment it pushed (`AgentControlHost`'s sync methods).
@@ -97,6 +108,8 @@ pub struct HostState {
     /// control, as `manageEnabled()` is), `full` the raw `agentControlFull`, `korean` the app's language, `sidebar`.
     /// `device(caller)` and `callerTitle(caller)` are lookups in `tabs` and `outside_callers`.
     pub app: AppState,
+    /// The project boundary (`rules/boundary.rs`); each tab, stored row and summary carries its own `project`.
+    pub boundary: Boundary,
 }
 
 /// `fillText` (`src/shared/fill-text.ts`): `{name}` replaced by its parameter; a count-like parameter also fills
@@ -793,6 +806,26 @@ impl Host {
     pub async fn autopilot_stop(&self, tab_id: &str, now: bool) -> R<super::types::RunStatus> {
         self.ask("autopilot.stop", json!({ "tabId": tab_id, "now": now }))
             .await
+    }
+
+    /// `project {callerTabId, folder, device}`: the project of the folder a spawn with this `folder` and `device`
+    /// (as `SpawnRequest` reads them) would work in; None when main cannot tell.
+    pub async fn project(
+        &self,
+        caller_tab_id: &str,
+        folder: Option<&str>,
+        device: Option<Option<&str>>,
+    ) -> R<Option<String>> {
+        let mut args = json!({ "callerTabId": caller_tab_id, "folder": folder });
+        if let Some(device) = device {
+            args["device"] = json!(device);
+        }
+        self.ask("project", args).await
+    }
+
+    /// `boundaryLog(entry)`: one line of what the project boundary would refuse once it enforces.
+    pub fn boundary_log(&self, entry: &Value) {
+        self.port.tell("boundaryLog", entry);
     }
 
     /// The Schedules service of `device` (None: this computer): `command(request)` of `SchedulesApi`, the one entry

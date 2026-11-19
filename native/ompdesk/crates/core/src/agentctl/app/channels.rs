@@ -25,6 +25,7 @@ const CREDENTIALS: &str = "reveals a password or opens the person's private data
 const DENY: &str = "no agent action for this channel; refused by default";
 const SPEND: &str = "whether an account runs on paid credits is the person's money: only they switch it in Settings";
 const SIDEBAR_UPDATE: &str = "the sidebar.* actions arrange the sidebar through the window's own store; no action sends this";
+const PERSON_ONLY: &str = "the project boundary and its per-session grant change only by the person's own action in a desktop window";
 
 use Tier::{Change, Read, Sensitive};
 
@@ -115,6 +116,8 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("prefs:mac-permissions-request", Risk::Never(OPERATOR)),
     ("prefs:update-launch-profile", Risk::Never(OPERATOR)),
     ("prefs:update-sidebar", Risk::Never(SIDEBAR_UPDATE)),
+    ("prefs:agent-cross-project-set", Risk::Never(PERSON_ONLY)),
+    ("prefs:agent-project-boundary-set", Risk::Never(PERSON_ONLY)),
     ("models:providers-list", Risk::Never(DENY)),
     ("models:signed-in", Risk::Never(DENY)),
     ("models:provider-upsert", Risk::Never(OPERATOR)),

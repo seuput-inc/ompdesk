@@ -227,6 +227,9 @@ pub struct ControlTab {
     pub former_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_edits: Option<FileEdits>,
+    /// The project its folder belongs to, as main names it (`projectOfFolder`); None while main has not resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 impl ControlTab {
@@ -290,6 +293,9 @@ pub struct StoredSession {
     pub elsewhere: Option<OpenElsewhere>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
+    /// The project its folder belongs to; None while main has not resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// `ControlTab | StoredSession`: what a name resolves to (`"busy" in target` is `Tab`).
@@ -614,6 +620,9 @@ pub struct SessionSummary {
     pub open_for: Option<String>,
     #[serde(default)]
     pub agents: Vec<SummaryAgent>,
+    /// The project its folder belongs to, added by main to its snapshot; None while it has not resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 impl SessionSummary {

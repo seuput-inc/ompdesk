@@ -265,6 +265,9 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "Appearance and layout keys (shared/device-prefs.ts) are written by the page's shim to web:device.uiPrefs.set and never reach here; other keys write here and push PREFS_CHANGED, except `sidebar`, which only PREFS_UPDATE_SIDEBAR changes",
 	},
 	[C.PREFS_UPDATE_SIDEBAR]: { dir: "invoke", permission: "settings-write", mode: "pass" },
+	// The project boundary and its grant change by a person's action in a desktop window, never from a paired page.
+	[C.AGENT_CROSS_PROJECT_SET]: { dir: "invoke", permission: "pairing-admin", mode: "boundary" },
+	[C.AGENT_PROJECT_BOUNDARY_SET]: { dir: "invoke", permission: "pairing-admin", mode: "boundary" },
 	[C.PREFS_GET_LAUNCH_PROFILE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DEFAULT_BROWSER_STATUS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DEFAULT_BROWSER_INSTALL_RELAY]: { dir: "invoke", permission: "desktop-control", mode: "pass" },
