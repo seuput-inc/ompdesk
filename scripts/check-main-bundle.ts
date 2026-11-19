@@ -383,9 +383,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // A paired host's refusal of a view's return after its window closed it (20 Nov 2026, C2: `view_ended` in
 // `shared/ipc-error-codes.ts`, which the phone's first screen loads): measured 2,206,000 (branch run 44589727329), 8 bytes
 // over. The budget is that measure plus 80 bytes.
-// Those branches together with close-visible B, the page watchdog and the rest of next-line (20 Nov 2026): measured
-// 2,207,805 (branch run 44594625704). The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_207_885;
+// Those branches together with close-visible B, the page watchdog, the to-do panel's wording, the C fixes and the rest
+// of next-line (20 Nov 2026): measured 2,208,648 (branch run 44601435767). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_208_728;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
