@@ -10,14 +10,14 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  * subagent owns is listed by `getAsyncJobTree` under that subagent, `inspectAsyncJob` answers for it,
  * `cancelAsyncJob` refuses it (stock cancels only the jobs the session's own agent owns, and its jobs sheet offers
  * Cancel on those alone), and the bridge's `composer.jobs` turns stock's `buildJobTree` into rows that say the same:
- * nested one level under the task job that runs the subagent, `cancellable` false. The composer feature stays
- * available, so `pi-tui/overlays/job-tree` is this omp's own module and not a separate copy.
+ * nested one level under the task job that runs the subagent, `cancellable` false. The jobs actions stay available, so
+ * `pi-tui/overlays/job-tree` is this omp's own module and not a separate copy.
  */
 
 const HELPER = `
 import { probe } from "./health";
 export async function capabilitiesFor(env) {
- return (await probe(env, ["composer", "autoMode"])).map(entry => ({ feature: entry.feature, missing: entry.missing }));
+ return (await probe(env, ["jobs", "cancelJob", "autoMode"])).map(entry => ({ feature: entry.feature, missing: entry.missing }));
 }
 `;
 
@@ -166,7 +166,7 @@ describe.skipIf(!existsSync(omp))("background jobs tree on stock omp", () => {
 		expect(probe.cancelShell).toEqual({ cancelled: true });
 	}, 130_000);
 
-	it("keeps the composer and auto mode features available: every internal they read, job-tree included, is this omp's", () => {
+	it("keeps the jobs actions and auto mode available: every internal they read, job-tree included, is this omp's", () => {
 		expect(run().unavailable).toEqual([]);
 	}, 130_000);
 });

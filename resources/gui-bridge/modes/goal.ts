@@ -125,56 +125,69 @@ async function guidedGoal(session: AgentSession, initial: string | undefined): P
 	return { started: true };
 }
 
-export const methods: BridgeMethods = guard("goalMode", {
-	"modes.guided_goal": async (params, env) => {
-		const initial = record(params).initial;
-		return guidedGoal(attach(env), typeof initial === "string" ? initial : undefined);
-	},
-	/** TUI `#replaceGoalFromObjective`: keep the goal's accounting, swap its objective. */
-	"modes.goal_replace": async (params, env) => {
-		const session = attach(env);
-		const { objective, tokenBudget } = record(params);
-		if (typeof objective !== "string" || !objective.trim()) throw new Error("objective is required");
-		activeGoal(session);
-		const state = await session.goalRuntime.replaceGoal({
-			objective: objective.trim(),
-			tokenBudget: typeof tokenBudget === "number" ? tokenBudget : undefined,
-		});
-		session.setGoalModeState(state);
-		if (session.isStreaming) await session.sendGoalModeContext({ deliverAs: "steer" });
-		return { goal: state.goal, state };
-	},
-	/** TUI `#handleGoalBudgetCommand`; `null` clears the budget. */
-	"modes.goal_set_budget": async (params, env) => {
-		const session = attach(env);
-		const { tokenBudget } = record(params);
-		const state = activeGoal(session);
-		if (state.goal.status === "complete") throw new Error("Goal is already complete.");
-		if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || (tokenBudget as number) <= 0)) {
-			throw new Error("Goal budget must be a positive integer or null.");
-		}
-		await session.goalRuntime.onBudgetMutated(tokenBudget === null ? undefined : (tokenBudget as number));
-		const next = session.getGoalModeState() ?? null;
-		return { goal: next?.goal ?? null, state: next };
-	},
-	/** The current goal's OMPdesk time limit (attaches the watcher, e.g. after an omp restart). */
-	"modes.goal_time_limit": async (_params, env) => timeLimitState(attach(env)),
-	/** Before stock resumes a paused goal: one more span when it has used its time, so it does not pause at once. */
-	"modes.goal_resume_time_limit": async (_params, env) => {
-		const session = attach(env);
-		const goal = session.getGoalModeState()?.goal;
-		const entry = goal?.status === "paused" ? resumedTimeLimit(session.sessionManager.getBranch(), goal) : undefined;
-		if (entry) session.sessionManager.appendCustomEntry(GOAL_TIME_ENTRY_TYPE, entry);
-		return timeLimitState(session);
-	},
-	/** `{minutes: number | null}` for the current (active or paused) goal; `null`/0 clears it. */
-	"modes.goal_set_time_limit": async (params, env) => {
-		const session = attach(env);
-		const goal = session.getGoalModeState()?.goal;
-		if (!goal || goal.status === "complete" || goal.status === "dropped") throw new Error("No active goal.");
-		const entry: GoalTimeLimitEntry = { goalId: goal.id, seconds: parseTimeLimitMinutes(record(params).minutes) };
-		session.sessionManager.appendCustomEntry(GOAL_TIME_ENTRY_TYPE, entry);
-		enforceTimeLimit(session);
-		return timeLimitState(session);
-	},
-});
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("guidedGoal", {
+		"modes.guided_goal": async (params, env) => {
+			const initial = record(params).initial;
+			return guidedGoal(attach(env), typeof initial === "string" ? initial : undefined);
+		},
+	}),
+	...guard("goalReplace", {
+		/** TUI `#replaceGoalFromObjective`: keep the goal's accounting, swap its objective. */
+		"modes.goal_replace": async (params, env) => {
+			const session = attach(env);
+			const { objective, tokenBudget } = record(params);
+			if (typeof objective !== "string" || !objective.trim()) throw new Error("objective is required");
+			activeGoal(session);
+			const state = await session.goalRuntime.replaceGoal({
+				objective: objective.trim(),
+				tokenBudget: typeof tokenBudget === "number" ? tokenBudget : undefined,
+			});
+			session.setGoalModeState(state);
+			if (session.isStreaming) await session.sendGoalModeContext({ deliverAs: "steer" });
+			return { goal: state.goal, state };
+		},
+	}),
+	...guard("goalBudget", {
+		/** TUI `#handleGoalBudgetCommand`; `null` clears the budget. */
+		"modes.goal_set_budget": async (params, env) => {
+			const session = attach(env);
+			const { tokenBudget } = record(params);
+			const state = activeGoal(session);
+			if (state.goal.status === "complete") throw new Error("Goal is already complete.");
+			if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || (tokenBudget as number) <= 0)) {
+				throw new Error("Goal budget must be a positive integer or null.");
+			}
+			await session.goalRuntime.onBudgetMutated(tokenBudget === null ? undefined : (tokenBudget as number));
+			const next = session.getGoalModeState() ?? null;
+			return { goal: next?.goal ?? null, state: next };
+		},
+	}),
+	...guard("goalTimeLimit", {
+		/** The current goal's OMPdesk time limit (attaches the watcher, e.g. after an omp restart). */
+		"modes.goal_time_limit": async (_params, env) => timeLimitState(attach(env)),
+		/** Before stock resumes a paused goal: one more span when it has used its time, so it does not pause at once. */
+		"modes.goal_resume_time_limit": async (_params, env) => {
+			const session = attach(env);
+			const goal = session.getGoalModeState()?.goal;
+			const entry =
+				goal?.status === "paused" ? resumedTimeLimit(session.sessionManager.getBranch(), goal) : undefined;
+			if (entry) session.sessionManager.appendCustomEntry(GOAL_TIME_ENTRY_TYPE, entry);
+			return timeLimitState(session);
+		},
+		/** `{minutes: number | null}` for the current (active or paused) goal; `null`/0 clears it. */
+		"modes.goal_set_time_limit": async (params, env) => {
+			const session = attach(env);
+			const goal = session.getGoalModeState()?.goal;
+			if (!goal || goal.status === "complete" || goal.status === "dropped") throw new Error("No active goal.");
+			const entry: GoalTimeLimitEntry = {
+				goalId: goal.id,
+				seconds: parseTimeLimitMinutes(record(params).minutes),
+			};
+			session.sessionManager.appendCustomEntry(GOAL_TIME_ENTRY_TYPE, entry);
+			enforceTimeLimit(session);
+			return timeLimitState(session);
+		},
+	}),
+};

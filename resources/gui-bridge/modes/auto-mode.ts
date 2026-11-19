@@ -318,18 +318,23 @@ async function decide(env: BridgeEnv, params: unknown): Promise<AutoModeDecision
 	}
 }
 
-export const methods: BridgeMethods = guard("autoMode", {
-	"modes.auto_mode_decide": (params, env) => decide(env, params),
-	/**
-	 * While the user types: asks the question the decision at Enter will ask for `{message}` (its answer is cached).
-	 * Changes nothing; answers whether a request was made.
-	 */
-	"modes.auto_mode_prefetch": (params, env) => prefetch(env, params),
-	/** The user undid an automatic decision: leave plan mode if it is the mode, and stop deciding for this session. */
-	"modes.auto_mode_undo": async (params, env) => {
-		const session = attach(env);
-		markSuppressed(session.sessionManager.getSessionId());
-		if (record(params).mode === "plan" && session.getPlanModeState()?.enabled) await exitPlanMode(session);
-		return { suppressed: true };
-	},
-});
+export const methods: BridgeMethods = {
+	// One id for both: the prefetch asks the decision's own question, and the decision reads its cached answer.
+	...guard("autoMode", {
+		"modes.auto_mode_decide": (params, env) => decide(env, params),
+		/**
+		 * While the user types: asks the question the decision at Enter will ask for `{message}` (its answer is cached).
+		 * Changes nothing; answers whether a request was made.
+		 */
+		"modes.auto_mode_prefetch": (params, env) => prefetch(env, params),
+	}),
+	...guard("autoModeUndo", {
+		/** The user undid an automatic decision: leave plan mode if it is the mode, and stop deciding for this session. */
+		"modes.auto_mode_undo": async (params, env) => {
+			const session = attach(env);
+			markSuppressed(session.sessionManager.getSessionId());
+			if (record(params).mode === "plan" && session.getPlanModeState()?.enabled) await exitPlanMode(session);
+			return { suppressed: true };
+		},
+	}),
+};
