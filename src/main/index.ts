@@ -2247,7 +2247,14 @@ app.whenReady().then(async () => {
 		// This computer's own tabs and the ones it runs for paired devices (host-services.ts): the host
 		// owns those turns, so their markers, waits and continuations are this computer's.
 		pool: {
-			resumeFacts: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()],
+			// A run's own tab stays revivable between its cycles and in its quota wait, when no turn and no goal may be on:
+			// restored deferred, its omp would never start and the run would wait until someone opened the tab.
+			resumeFacts: () => [
+				...sidecarPool
+					.resumeFacts()
+					.map(fact => (autopilotRef.current?.runsOn(fact.tabId) ? { ...fact, autopilotActive: true } : fact)),
+				...hostServices.resumeFacts(),
+			],
 			setAwaitingConnection: (tabId, awaiting) => {
 				sidecarPool.setAwaitingConnection(tabId, awaiting);
 				hostServices.setAwaitingConnection(tabId, awaiting);

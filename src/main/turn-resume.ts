@@ -104,6 +104,8 @@ export interface ResumeFact {
 	settling?: boolean;
 	/** The session's goal is active (stock's last `goal_updated`): idle between its turns, a relaunch revives it. */
 	goalActive?: boolean;
+	/** The tab is an active Autopilot run's own (main's mirror, `Autopilot.runsOn`): revived like an active goal. */
+	autopilotActive?: boolean;
 	/** The user pressed Stop since the run began. */
 	stopped: boolean;
 	/** An ask or approval is open on this tab. */

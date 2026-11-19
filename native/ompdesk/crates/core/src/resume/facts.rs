@@ -54,6 +54,9 @@ pub struct Fact {
     /// The session's goal is active: between its turns (no run on) the relaunch revives it, which resumes the goal
     /// stock paused when the session loaded.
     pub goal_active: bool,
+    /// The tab is an active Autopilot run's own (main's mirror of the run): revived like an active goal, so a run whose
+    /// tab a relaunch restored deferred still goes on.
+    pub autopilot_active: bool,
     /// A scheduled retry of the tab's transient failure is armed (set by the resume machine, never by the pool): it lives
     /// in this process only, so its marker carries it over a relaunch.
     #[serde(skip)]
@@ -147,7 +150,7 @@ pub fn derive_markers(
             Some(Reason::Limit)
         } else if fact.retry_armed {
             Some(Reason::Retry)
-        } else if fact.goal_active {
+        } else if fact.goal_active || fact.autopilot_active {
             // Between a goal's turns: no turn to restore, so the relaunch revives it (`background`) and resumes the goal.
             Some(Reason::Running)
         } else {
@@ -168,7 +171,8 @@ pub fn derive_markers(
             peer: truthy(&fact.peer).then(|| fact.peer.clone().unwrap_or_default()),
             prompt: truthy(&fact.unsaved_prompt)
                 .then(|| fact.unsaved_prompt.clone().unwrap_or_default()),
-            background: (fact.settling || (!fact.running && fact.goal_active))
+            background: (fact.settling
+                || (!fact.running && (fact.goal_active || fact.autopilot_active)))
                 && reason != Reason::Network,
         });
     }
@@ -353,6 +357,27 @@ mod tests {
         );
         armed.stopped = true;
         assert!(derive_markers(&[armed], &[], 500.0, &HashSet::new()).is_empty());
+    }
+
+    /// B4 (2): an Autopilot run's tab a relaunch restored deferred never started its omp, so the run (between cycles, in
+    /// its quota wait) waited until someone opened the tab. Its marker makes the launch start and revive it.
+    #[test]
+    fn an_active_autopilot_runs_tab_is_revived_between_its_cycles() {
+        let markers = derive_markers(
+            &[fact(json!({"autopilotActive": true}))],
+            &[],
+            500.0,
+            &HashSet::new(),
+        );
+        assert_eq!(launch_action(&markers[0]), Action::Revive);
+        assert!(
+            reasons(
+                &[fact(json!({"autopilotActive": true, "stopped": true}))],
+                &[],
+                &[]
+            )
+            .is_empty()
+        );
     }
 
     /// B4 (1): a goal session idle between its turns at a quit came back paused (stock pauses an active goal when its
