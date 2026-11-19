@@ -51,6 +51,8 @@ struct Migration {
     targets: HashMap<u64, String>,
     offers: HashMap<u64, (Identity, String, usize)>,
     watches: migrate_watch::Watches,
+    /// A given-up migration's reason, until the blank page that shows it has loaded.
+    failures: HashMap<u64, String>,
 }
 
 type AppInitialization = tokio::sync::watch::Receiver<Option<Result<(), String>>>;
@@ -307,8 +309,9 @@ fn retry_migration(wc: u64, attempt: u32) {
     }
 }
 
-/// Shows the window with the reason in whatever document it holds (the migration page, or the blank page a request
-/// that never came back left in place) and a Retry that loads the migration page again.
+/// Shows the window with the reason and a Retry that loads the migration page again. The reason goes on a fresh blank
+/// page: the document a request that never came back leaves in place answers no script (Playwright's evaluate timed
+/// out on it), so it is navigated away from first and the text is written once the blank page has loaded.
 fn give_up_migration(wc: u64, after: migrate_watch::Step) {
     let reason = format!(
         "OMPdesk could not open its window: the profile migration step \"{}\" got no answer in {} s, {} times. Your existing data has not been overwritten.",
@@ -334,40 +337,72 @@ fn give_up_migration(wc: u64, after: migrate_watch::Step) {
         "preload-error",
         json!(["profile migration", {"message": reason}]),
     );
-    let Ok(window) = window_for_wc(wc) else {
-        return;
-    };
-    // The blank page's Retry is a navigation the page starts; the host expects it, so Node's `will-navigate` is not asked.
-    if let Err(error) = expect_navigation(wc, bootstrap_url()) {
-        log::log(
-            "profile.migrate.retry_failed",
-            json!({"wcId":wc,"error":error}),
-        );
-        return;
-    }
-    let script = format!(
-        r#"(() => {{
-  const body = document.body ?? document.documentElement.appendChild(document.createElement("body"));
-  let text = document.getElementById("omp-profile-error");
-  if (!text) {{ text = body.appendChild(document.createElement("p")); text.id = "omp-profile-error"; text.setAttribute("role", "alert"); }}
-  text.textContent = {reason};
-  let retry = document.getElementById("omp-profile-retry");
-  if (!retry) {{ retry = body.appendChild(document.createElement("button")); retry.id = "omp-profile-retry"; retry.textContent = "Retry / 다시 시도"; retry.onclick = () => {{ location.href = {url}; }}; }}
-  retry.hidden = false;
-}})();"#,
-        reason = json!(reason),
-        url = json!(bootstrap_url()),
-    );
-    if let Err(error) = window.eval(script) {
+    runtime()
+        .migration
+        .lock()
+        .expect("migration")
+        .failures
+        .insert(wc, reason);
+    let navigated = window_for_wc(wc)
+        .map_err(|error| error.message)
+        .and_then(|window| {
+            window
+                .navigate("about:blank".parse().map_err(|_| "invalid blank URL")?)
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = navigated {
         log::log(
             "profile.migrate.show_failed",
-            json!({"wcId":wc,"error":error.to_string()}),
+            json!({"wcId":wc,"error":error}),
+        );
+    }
+}
+
+/// Writes a given-up migration's reason and its Retry into the blank page `give_up_migration` loaded.
+fn show_migration_failure(wc: u64) {
+    let Some(reason) = runtime()
+        .migration
+        .lock()
+        .expect("migration")
+        .failures
+        .remove(&wc)
+    else {
+        return;
+    };
+    // The Retry is a navigation the page starts; the host expects it, so Node's `will-navigate` is not asked.
+    let shown = expect_navigation(wc, bootstrap_url()).and_then(|_| {
+        let script = format!(
+            r#"(() => {{
+  const text = document.body.appendChild(document.createElement("p"));
+  text.id = "omp-profile-error";
+  text.setAttribute("role", "alert");
+  text.textContent = {reason};
+  const retry = document.body.appendChild(document.createElement("button"));
+  retry.id = "omp-profile-retry";
+  retry.textContent = "Retry / 다시 시도";
+  retry.onclick = () => {{ location.href = {url}; }};
+}})();"#,
+            reason = json!(reason),
+            url = json!(bootstrap_url()),
+        );
+        window_for_wc(wc)
+            .map_err(|error| error.message)?
+            .eval(script)
+            .map_err(|error| error.to_string())
+    });
+    if let Err(error) = shown {
+        log::log(
+            "profile.migrate.show_failed",
+            json!({"wcId":wc,"error":error}),
         );
     }
 }
 
 fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
     if url == "about:blank" {
+        if event == PageLoadEvent::Finished {
+            show_migration_failure(wc);
+        }
         return;
     }
     if profile_bootstrap(url) {
@@ -515,6 +550,7 @@ fn close_record(wc: u64) {
         migration.targets.remove(&wc);
         migration.offers.remove(&wc);
         migration.watches.end(wc);
+        migration.failures.remove(&wc);
     }
     let page = runtime().registry.lock().expect("registry").remove(wc);
     if let Some(page) = page {
@@ -1624,6 +1660,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                         targets: HashMap::new(),
                         offers: HashMap::new(),
                         watches: migrate_watch::Watches::default(),
+                        failures: HashMap::new(),
                     }),
                     app_initializations: Mutex::new(HashMap::new()),
                     navigation_watch: Mutex::new(HashSet::new()),
