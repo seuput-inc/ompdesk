@@ -633,6 +633,11 @@ export type RuntimeErrorSource =
 	| "gpu-fallback"
 	/** The crash-loop guard (src/main/launch-guard.ts): this launch starts in safe mode. */
 	| "launch-guard"
+	/**
+	 * Why the app ends or relaunches (src/main/quit-log.ts): who asked to quit or relaunch, the exit itself
+	 * (`details.end: true`), and at start a previous run that left no end line (killed, crashed, power lost).
+	 */
+	| "app-quit"
 	/** The pre-rename profile moved into userData (src/main/legacy-user-data.ts). */
 	| "user-data-migration"
 	/**

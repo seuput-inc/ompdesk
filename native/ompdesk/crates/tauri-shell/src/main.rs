@@ -918,6 +918,7 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
                     }
                 }
             };
+            log::log("relaunch.stored", json!({"args":args}));
             *runtime().relaunch.lock().expect("relaunch") = Some(args);
         }
         "wc.send" => {
@@ -982,12 +983,19 @@ fn exit_after_preview(code: i32) {
                 if code == 0 { 1 } else { code }
             }
         };
+        log::log("exit", json!({"code":code}));
         runtime().app.exit(code);
     });
 }
-fn node_gone(code: Option<i32>) {
+/// Node is gone: `via` says how the shell learned it (`exited`: its process ended, `closed`: its connection did).
+fn node_gone(via: &str, code: Option<i32>) {
     sessions::protocol::disconnected();
-    if !lifecycle::EXITING.swap(true, Ordering::SeqCst) {
+    let quitting = lifecycle::EXITING.swap(true, Ordering::SeqCst);
+    log::log(
+        "node.gone",
+        json!({"via":via,"code":code,"quitting":quitting}),
+    );
+    if !quitting {
         exit_after_preview(code.filter(|c| *c != 0).unwrap_or(1));
     }
 }
@@ -1216,10 +1224,53 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
     }
 }
 
+/// `startup::RELAUNCHED_BY_ENV` as this shell was started with, removed so Node and what it starts never inherit it.
+#[allow(unsafe_code)]
+fn take_relaunch_marker() -> Option<String> {
+    let value = std::env::var(startup::RELAUNCHED_BY_ENV).ok();
+    // SAFETY: called as run's first statements, before any other thread exists to read the environment.
+    unsafe { std::env::remove_var(startup::RELAUNCHED_BY_ENV) };
+    value
+}
+/// The log's first line: who started this shell and how (`startup::started_line`).
+fn log_start(argv: &[String], relaunched_by: Option<&str>) {
+    #[cfg(target_os = "macos")]
+    let (parent_pid, parent) = {
+        let ppid = std::os::unix::process::parent_id();
+        let exe =
+            shell_core::sys_mac::childproc::arguments(ppid).and_then(|a| a.into_iter().next());
+        (Some(ppid), exe)
+    };
+    #[cfg(windows)]
+    let (parent_pid, parent) = match shell_core::sys::childproc::parent_of(std::process::id()) {
+        Some((ppid, exe)) => (Some(ppid), exe),
+        None => (None, None),
+    };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let (parent_pid, parent): (Option<u32>, Option<String>) =
+        (Some(std::os::unix::process::parent_id()), None);
+    let xpc_service = std::env::var("XPC_SERVICE_NAME").ok();
+    let at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    log::log(
+        "shell.started",
+        startup::started_line(&startup::Started {
+            pid: std::process::id(),
+            parent_pid,
+            parent: parent.as_deref(),
+            relaunched_by,
+            xpc_service: xpc_service.as_deref(),
+            argv,
+            at_ms,
+        }),
+    );
+}
 fn main() {
     match run() {
         Ok(code) => std::process::exit(code),
         Err(error) => {
+            log::log("shell.failed", json!({"error":error.to_string()}));
             eprintln!("[tauri-shell] {error}");
             std::process::exit(1);
         }
@@ -1227,6 +1278,7 @@ fn main() {
 }
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let argv: Vec<String> = std::env::args().collect();
+    let relaunched_by = take_relaunch_marker();
     // WebView2's loader reads these for any app: a release host must not open DevTools or another profile on request.
     #[cfg(all(windows, not(feature = "test-automation")))]
     #[allow(unsafe_code)]
@@ -1261,6 +1313,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&user_data)?;
     log::start_clock();
     log::open_file(&user_data.join("tauri-shell.jsonl"));
+    log_start(&argv, relaunched_by.as_deref());
     #[cfg(windows)]
     let instance_name = startup::pipe_name(&user_data);
     #[cfg(not(windows))]
@@ -1273,6 +1326,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 &argv,
                 &std::env::current_dir()?.to_string_lossy(),
             )?;
+            log::log("shell.handedOver", json!({"to":"the running shell"}));
             return Ok(0);
         }
     };
@@ -1438,18 +1492,27 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 host::Handlers {
                     request: dispatch,
                     event: node_event,
-                    closed: || node_gone(None),
+                    closed: || node_gone("closed", None),
                 },
             );
             node::spawn(&program, &entry, &args, &socket, &token)?;
-            node::watch(node_gone);
+            node::watch(|code| node_gone("exited", code));
             Ok(())
         })
         .build(context)?;
     let code = app.run_return(|_, event| match event {
-        RunEvent::ExitRequested { api, .. } if !lifecycle::EXITING.load(Ordering::SeqCst) => {
-            api.prevent_exit();
-            host::event("app.quitRequested", json!({}));
+        // `code`: None when the system or the last window asked (the Dock's Quit, ⌘Q handled by macOS, a logout),
+        // Some when this shell's own `exit` did.
+        RunEvent::ExitRequested { code, api, .. } => {
+            let forward = !lifecycle::EXITING.load(Ordering::SeqCst);
+            log::log(
+                "exit.requested",
+                json!({"code":code,"forwardedToNode":forward}),
+            );
+            if forward {
+                api.prevent_exit();
+                host::event("app.quitRequested", json!({}));
+            }
         }
         RunEvent::Exit => node::stop(Duration::from_secs(5)),
         #[cfg(target_os = "macos")]
@@ -1471,8 +1534,19 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         thread.join().map_err(|_| "instance listener panicked")?;
     }
     if let Some(args) = runtime().relaunch.lock().expect("relaunch").take() {
-        std::process::Command::new(exe).args(args).spawn()?;
+        match std::process::Command::new(exe)
+            .args(&args)
+            .env(startup::RELAUNCHED_BY_ENV, std::process::id().to_string())
+            .spawn()
+        {
+            Ok(child) => log::log("relaunch.spawned", json!({"pid":child.id()})),
+            Err(error) => {
+                log::log("relaunch.failed", json!({"error":error.to_string()}));
+                return Err(error.into());
+            }
+        }
     }
+    log::log("shell.ended", json!({"code":code}));
     Ok(code)
 }
 

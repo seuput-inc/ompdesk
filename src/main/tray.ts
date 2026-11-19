@@ -10,6 +10,7 @@ import winTray from "../../resources/brand/tray.png?inline";
 import macTemplate2x from "../../resources/brand/trayTemplate@2x.png?inline";
 import macTemplate from "../../resources/brand/trayTemplate.png?inline";
 import type { TrayState, UpdateStatus } from "../shared/ipc-types";
+import { askQuit } from "./app-quit";
 import { getMainLanguage } from "./i18n";
 import {
 	menuSignature,
@@ -82,7 +83,7 @@ function menuActions(windowManager: WindowManager): TrayMenuActions {
 			else if (action === "download") void downloadUpdate();
 			else void applyUpdate();
 		},
-		quit: () => app.quit(),
+		quit: () => askQuit("tray"),
 	};
 }
 
