@@ -206,9 +206,11 @@ function Get-MainPids {
 			ForEach-Object { $_.ProcessId })
 }
 
+# OMPdesk.exe and this app's WebView2 processes (their command lines carry its <userData>\tauri-webview folder).
 function Show-AppProcesses {
-	Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue |
-		ForEach-Object { Write-Host "     pid $($_.ProcessId) parent $($_.ParentProcessId): $($_.CommandLine)" }
+	Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe' or Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+		Where-Object { $_.Name -eq 'OMPdesk.exe' -or $_.CommandLine -match 'ompdesk\\tauri-webview' } |
+		ForEach-Object { Write-Host "     $($_.Name) pid $($_.ProcessId) parent $($_.ParentProcessId): $($_.CommandLine)" }
 }
 
 function Show-GpuEvidence {
@@ -253,9 +255,19 @@ function Assert-StaysUp([int] $Seconds = 60) {
 	Ok "no GPU relaunch and no safe mode in gui-runtime.jsonl ($($lines.Count) lines)"
 }
 
-# Ends the app's GPU process the way a driver crash does (exit code 0xC0000005, which Chromium reports as
-# "crashed"; Stop-Process's exit code 1 reads as "killed", which the fallback ignores).
-function Stop-GpuProcessAsCrash([int] $MainId) {
+# This app's WebView2 GPU process: msedgewebview2.exe --type=gpu-process under the WebView2 browser process the main
+# OMPdesk.exe started (its --user-data-dir is <userData>\tauri-webview), never another app's WebView2 or Edge.
+function Get-WebViewGpuPids([int] $MainId) {
+	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue)
+	$browsers = @($all | Where-Object { $_.ParentProcessId -eq $MainId -and $_.CommandLine -notmatch '--type=' } |
+			ForEach-Object { $_.ProcessId })
+	@($all | Where-Object { $browsers -contains $_.ParentProcessId -and $_.CommandLine -match '--type=gpu-process' } |
+			ForEach-Object { $_.ProcessId })
+}
+
+# Ends a process the way a driver crash does (exit code 0xC0000005, which Chromium reports as "crashed";
+# Stop-Process's exit code 1 reads as "killed"). Throws with the Win32 error when it cannot.
+function Stop-ProcessAsCrash([int] $ProcessId) {
 	if (-not ('GpuCrash' -as [type])) {
 		Add-Type -TypeDefinition @'
 using System;
@@ -275,53 +287,61 @@ public static class GpuCrash {
 }
 '@
 	}
-	$gpu = @(Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue |
-			Where-Object { $_.ParentProcessId -eq $MainId -and $_.ExecutablePath -eq $exe -and $_.CommandLine -match '--type=gpu-process' })
-	if ($gpu.Count -eq 0) { return $false }
-	Write-Host "     crashing GPU pid $($gpu[0].ProcessId), parent $MainId"
-	[GpuCrash]::Crash([int] $gpu[0].ProcessId)
-	return $true
+	[GpuCrash]::Crash($ProcessId)
 }
 
-# The loop a laptop hit on v0.44.0: a GPU crash in a hardware launch relaunches once into software rendering;
-# GPU crashes in that software launch must leave it running (Chromium restarts its GPU process itself).
-function Assert-NoGpuRelaunchLoop {
-	$first = Get-MainPids
-	if ($first.Count -ne 1) { Fail "expected one OMPdesk main process, found $($first.Count)" }
+# The loop a laptop hit on v0.44.0 (Electron): a GPU crash relaunched into software rendering, and crashes there
+# relaunched again, so the app opened and closed forever. The Tauri host has no such relaunch: nothing in it reports
+# a WebView2 process failure to main (`app.childProcessGone` came only from the retired CEF shell), so
+# src/main/gpu-fallback.ts never fires, and WebView2 restarts its own GPU process. What stays to prove: crashes of
+# this app's WebView2 GPU process leave the same main process up with its window, with no relaunch and no safe mode.
+# Each failure says which of the three went wrong: no GPU process of this app found, the crash request failed, or
+# the app did not survive it.
+function Assert-SurvivesGpuCrashes {
+	$main = Get-MainPids
+	if ($main.Count -ne 1) { Fail "expected one OMPdesk main process, found $($main.Count)" }
+	$main = [int] $main[0]
+	$crashed = @()
 	try {
-		Wait-Until { Stop-GpuProcessAsCrash $first[0] } 30 'a GPU process to crash'
-		Wait-Until {
+		for ($i = 0; $i -lt 2; $i++) {
+			$gpu = @()
+			$deadline = (Get-Date).AddSeconds(30)
+			while ((Get-Date) -lt $deadline) {
+				$gpu = @(Get-WebViewGpuPids $main | Where-Object { $crashed -notcontains $_ })
+				if ($gpu.Count -gt 0) { break }
+				Start-Sleep -Milliseconds 500
+			}
+			if ($gpu.Count -eq 0) {
+				$previous = if ($crashed.Count -gt 0) { " after crashing $($crashed -join ', ') (WebView2 did not start a new one)" } else { '' }
+				Fail "no WebView2 GPU process of OMPdesk $main within 30 s$previous"
+			}
+			try { Stop-ProcessAsCrash $gpu[0] } catch { Fail "the crash request for GPU pid $($gpu[0]) failed: $($_.Exception.Message)" }
+			Write-Host "     crashed WebView2 GPU pid $($gpu[0]) of OMPdesk $main"
+			$crashed += $gpu[0]
+			Start-Sleep -Seconds 5
+		}
+		$deadline = (Get-Date).AddSeconds(30)
+		while ((Get-Date) -lt $deadline) {
 			$now = Get-MainPids
-			$now.Count -eq 1 -and $now[0] -ne $first[0]
-		} 60 'the one relaunch into software rendering'
+			if ($now.Count -ne 1 -or $now[0] -ne $main) {
+				Save-Screen 'gpu-crash'
+				Fail "the app did not survive the GPU crashes: main was $main, now $($now -join ', ')"
+			}
+			Start-Sleep -Seconds 2
+		}
+		if (@(Get-Process -Id $main -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count -eq 0) {
+			Fail "OMPdesk $main has no window after the GPU crashes"
+		}
+		$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+		$lines = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() }
+		if (@($lines | Where-Object { $_ -match 'relaunching with software rendering' }).Count -ne 0) { Fail 'a GPU crash relaunched the app' }
+		if (@($lines | Where-Object { $_ -match '"source":"launch-guard"' }).Count -ne 0) { Fail 'the app went into safe mode' }
 	} catch {
 		Show-GpuEvidence
 		throw
 	}
-	$second = (Get-MainPids)[0]
-	Ok "a GPU crash in the hardware launch relaunched it once ($($first[0]) -> $second)"
-	Wait-Until { @(Get-Process OMPdesk -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count -gt 0 } 60 'the relaunched window'
-	$crashes = 0
-	for ($i = 0; $i -lt 2; $i++) {
-		Start-Sleep -Seconds 5
-		if (Stop-GpuProcessAsCrash $second) { $crashes++ }
-	}
-	if ($crashes -eq 0) { Fail 'the software launch runs no GPU process to crash: the check proves nothing' }
-	Write-Host "     crashed the software launch's GPU process $crashes times"
-	$deadline = (Get-Date).AddSeconds(30)
-	while ((Get-Date) -lt $deadline) {
-		$now = Get-MainPids
-		if ($now.Count -eq 0) {
-			Fail "the software launch ($second) exited after $crashes GPU process crashes (Chromium gave up?)"
-		}
-		if ($now.Count -ne 1 -or $now[0] -ne $second) {
-			Save-Screen 'gpu-loop'
-			Show-AppProcesses
-			Fail "the software launch relaunched after a GPU crash ($second -> $($now -join ', ')): the relaunch loop"
-		}
-		Start-Sleep -Seconds 2
-	}
-	Ok "the software launch ($second) stayed up through $crashes GPU process crashes"
+	$now = @(Get-WebViewGpuPids $main)
+	Ok "OMPdesk $main stayed up with its window through $($crashed.Count) WebView2 GPU crashes ($($crashed -join ', ')); GPU now: $(if ($now.Count) { $now -join ', ' } else { 'none running' })"
 	Stop-App
 	foreach ($file in 'gpu-fallback.json', 'launch-history.json') {
 		Remove-Item -LiteralPath (Join-Path $env:APPDATA "ompdesk\$file") -Force -ErrorAction SilentlyContinue
@@ -490,7 +510,7 @@ switch ($Mode) {
 		Save-Screen 'app-started'
 		Assert-StaysUp 60
 		Save-Screen 'app-after-60s'
-		Assert-NoGpuRelaunchLoop
+		Assert-SurvivesGpuCrashes
 		Uninstall-PerUser $entry
 	}
 	'legacy' {
