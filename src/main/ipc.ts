@@ -85,12 +85,14 @@ import type {
 	IpcRpcCommandPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
+	IpcSessionsArtworkPayload,
 	IpcSessionsDeletePayload,
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
 	IpcSessionsRenamePayload,
 	IpcSessionsSearchPayload,
+	IpcSessionsTargetsPayload,
 	IpcSetActiveTabPayload,
 	IpcSetTabViewPayload,
 	IpcSidecarRestartPayload,
@@ -193,6 +195,7 @@ import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
 import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
+import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { readClipboardText } from "./shell-host/shell-calls";
 import { updateSidebarPrefs } from "./sidebar-prefs";
@@ -1641,6 +1644,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			remoteDevices.hostSessionsStale(device);
 			return moved;
 		});
+	});
+
+	// What each row's session works in, read on the computer that runs it (session-targets.ts).
+	ipc.handle(IPC_COMMANDS.SESSIONS_TARGETS, async (_caller, payload: IpcSessionsTargetsPayload) => {
+		const params = SessionTargetsParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.targets", params) : sessionTargets(params);
+	});
+
+	ipc.handle(IPC_COMMANDS.SESSIONS_ARTWORK, async (_caller, payload: IpcSessionsArtworkPayload) => {
+		const params = SessionArtworkParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.artwork", params) : sessionArtwork(params);
 	});
 
 	// Open a session (or a fresh project window) in a NEW parallel window with
