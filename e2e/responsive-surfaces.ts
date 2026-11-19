@@ -622,6 +622,16 @@ async function openSettingsGeneral(page: Page, look: Look): Promise<void> {
 	await page.locator("[data-settings-page] #setting-gui-language").waitFor({ state: "visible", timeout: 30_000 });
 }
 
+/** Settings › Appearance through the sidebar's Settings entry and the section's own nav entry: the five theme sets and the light or dark choice under them. */
+async function openSettingsAppearance(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="appearance"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+	await page.locator("[data-settings-page] #setting-gui-themeMode").waitFor({ state: "visible", timeout: 30_000 });
+}
+
 /** The model setup dialog through Settings › Models & accounts and its "Set up automatically" button, as a person opens it. */
 async function openModelSetup(page: Page, look: Look): Promise<void> {
 	await openSettingsModels(page, look);
@@ -1513,11 +1523,16 @@ export const SURFACES: readonly Surface[] = [
 			id: `settings-${section}`,
 			area: "B",
 			title: `Settings › ${section}`,
-			// General opens through real controls (the sidebar's Settings, then its section), so the parity sheet takes it.
-			open: section === "general" ? openSettingsGeneral : page => openSettings(page, section),
+			// General and Appearance open through real controls (the sidebar's Settings, then the section), so the parity sheet takes them.
+			open:
+				section === "general"
+					? openSettingsGeneral
+					: section === "appearance"
+						? openSettingsAppearance
+						: page => openSettings(page, section),
 			ready: "[data-settings-page]",
 			settle: 900,
-			...(section === "general" ? { parity: { session: "work" } } : {}),
+			...(section === "general" || section === "appearance" ? { parity: { session: "work" } } : {}),
 		}),
 	),
 	{

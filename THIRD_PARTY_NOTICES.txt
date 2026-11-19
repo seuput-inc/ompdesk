@@ -6897,16 +6897,12 @@ SOFTWARE.
 ------------------------------------------------------------------------------
 
 Theme palettes (src/renderer/lib/theme-palettes.ts)
-The Solarized Light, Nord, Tokyo Night, Gruvbox Dark and GitHub Light themes start from the
+The Solarized, Gruvbox and GitHub themes (each a light and a dark one) start from the
 colors their authors publish; where a published color fails WCAG AA for text on its own
 background it is replaced by a shade of the same hue (see the header of that file). Each
 palette is credited below with its license; every one is MIT.
 
 - Solarized, https://github.com/altercation/solarized, Copyright (c) 2011 Ethan Schoonover
-- Nord, https://github.com/nordtheme/nord, Copyright (c) 2016-present Sven Greb
-  <development@svengreb.de> (https://www.svengreb.de)
-- Tokyo Night, https://github.com/tokyo-night/tokyo-night-vscode-theme,
-  Copyright (c) 2018-present Enkia
 - Gruvbox, https://github.com/morhetz/gruvbox, by Pavel Pertsev (morhetz), licensed MIT
   (package.json; the repository ships no separate license file)
 - GitHub Primer primitives, https://github.com/primer/primitives, Copyright (c) 2018 GitHub Inc.

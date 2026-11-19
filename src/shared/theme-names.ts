@@ -1,24 +1,39 @@
 /**
- * Theme ids, their schemes and the migration from retired ids. Dependency-free
+ * Theme ids, the sets they pair into, their schemes and the migration from retired ids. Dependency-free
  * so the main process (`nativeTheme.themeSource`), the renderer's registry
  * (lib/themes.ts) and the tests read one list.
  *
  * Stored preferences (`themeName` on the desktop and in a paired device's
  * uiPrefs, `systemLightTheme` / `systemDarkTheme`) hold these ids. An id the
- * app no longer ships is migrated by {@link migrateThemeName} to the nearest new
+ * app no longer ships is migrated by {@link migrateThemeName} to the nearest
  * theme of the same scheme, never to nothing.
  */
 
 export type ThemeScheme = "light" | "dark";
 
-/** Picker order: the light group, then the dark group; the first of each is the OMPdesk default. */
-export const LIGHT_THEME_NAMES = ["light", "github-light", "solarized-light", "sepia", "hc-light"] as const;
+/**
+ * The five sets the app ships, in picker order: the OMPdesk default, then four published pairs. A set is one light
+ * and one dark theme. A person chooses a set and whether it follows the OS between its halves or stays on one:
+ * the set is stored as the System pair (`systemLightTheme` / `systemDarkTheme`), and `themeName` is `system` or
+ * the pinned half.
+ */
+export const THEME_SETS = [
+	{ id: "ompdesk", light: "light", dark: "dark" },
+	{ id: "github", light: "github-light", dark: "github-dark" },
+	{ id: "solarized", light: "solarized-light", dark: "solarized-dark" },
+	{ id: "gruvbox", light: "gruvbox-light", dark: "gruvbox-dark" },
+	{ id: "hc", light: "hc-light", dark: "hc-dark" },
+] as const;
 
-export const DARK_THEME_NAMES = ["dark", "nord", "tokyo-night", "gruvbox-dark", "hc-dark"] as const;
-
-export type LightThemeName = (typeof LIGHT_THEME_NAMES)[number];
-export type DarkThemeName = (typeof DARK_THEME_NAMES)[number];
+export type ThemeSet = (typeof THEME_SETS)[number];
+export type ThemeSetId = ThemeSet["id"];
+export type LightThemeName = ThemeSet["light"];
+export type DarkThemeName = ThemeSet["dark"];
 export type ThemeName = LightThemeName | DarkThemeName;
+
+export const LIGHT_THEME_NAMES: readonly LightThemeName[] = THEME_SETS.map(set => set.light);
+
+export const DARK_THEME_NAMES: readonly DarkThemeName[] = THEME_SETS.map(set => set.dark);
 
 export const THEME_NAMES: readonly ThemeName[] = [...LIGHT_THEME_NAMES, ...DARK_THEME_NAMES];
 
@@ -48,21 +63,28 @@ export function schemeOfTheme(name: ThemeName): ThemeScheme {
 	return isLightThemeName(name) ? "light" : "dark";
 }
 
+/** The set a theme is a half of. */
+export function themeSetOf(name: ThemeName): ThemeSet {
+	return THEME_SETS.find(set => set.light === name || set.dark === name)!;
+}
+
 /**
- * Ids of the eleven themes the app shipped before the curated set, each with the nearest theme of
- * the same scheme (CIE Lab distance of the page background and the accent; where two are within a
- * few ΔE of each other the warmer or cooler one that matches the old palette's feel). Graphite and
- * Porcelain kept their ids: they are OMPdesk Dark and OMPdesk Light. themes.migration.test.ts checks
- * every entry exists, keeps the scheme and stays near the best match.
+ * Ids the app no longer ships, each with the nearest theme of the same scheme (CIE Lab distance of the page
+ * background and the accent): the nine retired with the curated set, and Sepia and Tokyo Night, retired when the
+ * themes became five sets. `nord` named two palettes over time (Deep Sea, then the published Nord); both are
+ * nearest Solarized Dark. Graphite and Porcelain kept their ids: they are OMPdesk Dark and OMPdesk Light.
+ * themes.migration.test.ts checks every entry exists, keeps the scheme and stays near the best match.
  */
 export const LEGACY_THEME_NAMES: Readonly<Record<string, ThemeName>> = {
-	titanium: "nord", // Slate: silver-blue charcoal
-	nord: "nord", // Deep Sea: petrol blue (the id now names the published Nord palette)
+	titanium: "solarized-dark", // Slate: silver-blue charcoal
+	nord: "solarized-dark", // Deep Sea (petrol blue), then Nord (arctic blue-gray)
 	latte: "gruvbox-dark", // Espresso: roasted brown with caramel
 	gruvbox: "gruvbox-dark", // Ember: warm charcoal with copper
-	paper: "sepia", // Ivory: warm pages, copper accent
-	solarized: "sepia", // Sand: pale sand, ochre accent
-	dawn: "sepia", // Rose Quartz: warm off-white, dusty accent
+	"tokyo-night": "github-dark", // Tokyo Night: midnight blue, blue accent
+	paper: "gruvbox-light", // Ivory: warm pages, copper accent
+	solarized: "gruvbox-light", // Sand: pale sand, ochre accent
+	sepia: "gruvbox-light", // Sepia: warm paper, rust accent
+	dawn: "solarized-light", // Rose Quartz: warm off-white, dusty accent
 	frost: "solarized-light", // Glacier: pale page, steel-blue accent
 	matcha: "solarized-light", // Sage: pale page, muted green accent
 };

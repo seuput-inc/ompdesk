@@ -83,7 +83,13 @@ impl Setting {
 
     /// The value a mirrored key takes when this row's value is `value`.
     pub fn mirrored(&self, value: &Value) -> Value {
-        const DARK: [&str; 5] = ["dark", "nord", "tokyo-night", "gruvbox-dark", "hc-dark"];
+        const DARK: [&str; 5] = [
+            "dark",
+            "github-dark",
+            "solarized-dark",
+            "gruvbox-dark",
+            "hc-dark",
+        ];
         match value.as_str() {
             Some("system") => json!("system"),
             Some(name) if DARK.contains(&name) => json!("dark"),
@@ -185,7 +191,7 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
         pref("autoTitle", "autoTitle", "agent", "Automatic session titles", "세션 제목 자동 생성", boolean()),
         pref("autoTitleEvolve", "autoTitleEvolve", "agent", "Keep titles current", "제목 최신으로 유지", boolean()),
         pref("judgeAssist", "judgeAssist", "agent", "Use the judge model for small decisions", "작은 판단에 판정 모델 쓰기", boolean()),
-        pref("theme", "themeName", "appearance", "Theme", "테마", options(&["system", "light", "github-light", "solarized-light", "sepia", "hc-light", "dark", "nord", "tokyo-night", "gruvbox-dark", "hc-dark"])).mirror_theme(),
+        pref("theme", "themeName", "appearance", "Theme", "테마", options(&["system", "light", "github-light", "solarized-light", "gruvbox-light", "hc-light", "dark", "github-dark", "solarized-dark", "gruvbox-dark", "hc-dark"])).mirror_theme(),
         pref("followAgentTheme", "followAgentTheme", "appearance", "Follow the agent's theme", "에이전트 테마 따르기", boolean()),
         pref("fontSize", "fontSize", "appearance", "Font size", "글꼴 크기", json!({"type":"integer","minimum":12,"maximum":20})),
         pref("compactDensity", "compactDensity", "appearance", "Compact density", "촘촘한 간격", boolean()),

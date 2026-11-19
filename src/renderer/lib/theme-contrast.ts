@@ -123,7 +123,7 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 	add("text over selection", surface(theme, "--omp-text"), selected, text);
 
 	// The sidebar's current session sits on a 9 % text wash (global.css `--sc-sidebar-row-selected`); there its quiet
-	// text reads at secondary (`--sc-text-subtle` and `--sc-text-muted` are lifted to it; muted alone fell under 4.5:1 on solarized-light and sepia) and a waiting title's warning is mixed a fifth toward
+	// text reads at secondary (`--sc-text-subtle` and `--sc-text-muted` are lifted to it; muted alone fell under 4.5:1 on solarized-light) and a waiting title's warning is mixed a fifth toward
 	// the text color (`SELECTED_WARNING_MIX`).
 	const sidebarSelected = flatten(withAlpha(surface(theme, "--omp-text"), 0.09), surface(theme, "--omp-sidebar-bg"));
 	add(

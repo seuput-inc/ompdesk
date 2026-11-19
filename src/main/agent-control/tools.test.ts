@@ -125,9 +125,9 @@ describe("arguments a model wrote as JSON text", () => {
 		);
 		expect(read.limit).toBe(5);
 		const app = ARGS[AGENT_CONTROL_TOOLS.app].parse(
-			looseArgs(AGENT_CONTROL_TOOLS.app, { action: "settings.theme", args: '{"value":"nord"}' }),
+			looseArgs(AGENT_CONTROL_TOOLS.app, { action: "settings.theme", args: '{"value":"github-dark"}' }),
 		);
-		expect(app.args).toEqual({ value: "nord" });
+		expect(app.args).toEqual({ value: "github-dark" });
 	});
 
 	it("leaves text fields as typed, and still refuses text that spells no value of the field", () => {

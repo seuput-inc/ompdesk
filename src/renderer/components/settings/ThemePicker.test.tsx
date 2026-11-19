@@ -1,13 +1,14 @@
 /**
- * Settings › Appearance › Theme: System first, the light group, the dark group, each card previewing its
- * own colors; a choice applies and saves at once; System pairs a light and a dark theme the user picks.
+ * Settings › Appearance › Theme: exactly five sets, each card previewing its light and dark half; a set follows
+ * the OS between its halves unless the person keeps it light or dark; every press applies and saves at once, and
+ * what older versions stored (one theme id, or System with a pair) reads as a set and a mode.
  */
 
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DARK_THEME_NAMES, LIGHT_THEME_NAMES } from "../../../shared/theme-names";
+import { THEME_SETS } from "../../../shared/theme-names";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { applyThemeByName, loadSystemThemePair, THEMES } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui";
@@ -41,14 +42,6 @@ async function settle(): Promise<void> {
 	});
 }
 
-/** linkedom's `select.value` has no setter: mark the option the way a pick does. */
-function selectOption(select: HTMLSelectElement, value: string): void {
-	for (const item of Array.from(select.querySelectorAll("option")) as HTMLOptionElement[]) {
-		if (item.value === value) item.setAttribute("selected", "");
-		else item.removeAttribute("selected");
-	}
-}
-
 async function mount(): Promise<void> {
 	root = createRoot(document.body as unknown as globalThis.Element);
 	await act(async () => {
@@ -61,15 +54,28 @@ async function mount(): Promise<void> {
 	await settle();
 }
 
-const options = () => Array.from(document.body.querySelectorAll("[data-theme-option]")) as HTMLButtonElement[];
-const option = (name: string) => document.body.querySelector(`[data-theme-option="${name}"]`) as HTMLButtonElement;
+const values = (attr: string) =>
+	Array.from(document.body.querySelectorAll(`[${attr}]`)).map(button => button.getAttribute(attr));
+const card = (id: string) => document.body.querySelector(`[data-theme-set="${id}"]`) as HTMLButtonElement;
+const segment = (mode: string) => document.body.querySelector(`[data-theme-mode="${mode}"]`) as HTMLButtonElement;
+const held = (attr: string) =>
+	Array.from(document.body.querySelectorAll(`[${attr}][aria-checked="true"]`)).map(button =>
+		button.getAttribute(attr),
+	);
 const root_ = () => document.documentElement;
+const shown = () => ({ name: root_().getAttribute("data-theme-name"), scheme: root_().getAttribute("data-theme") });
 
-async function choose(name: string): Promise<void> {
+async function press(button: HTMLButtonElement): Promise<void> {
 	await act(async () => {
-		option(name).click();
+		button.click();
 	});
 	await settle();
+}
+
+/** The OS changes scheme: the watcher in App re-applies System (lib/theme.ts `watchSystemTheme`). */
+function flipOs(dark: boolean): void {
+	osDark = dark;
+	if (useUiStore.getState().theme === "system") applyThemeByName("system", { persist: false });
 }
 
 beforeEach(() => {
@@ -90,144 +96,167 @@ afterEach(async () => {
 });
 
 describe("ThemePicker", () => {
-	it("lists System, then the light themes, then the dark themes, with System selected by default", async () => {
+	it("offers exactly five sets and three modes, the OMPdesk set following the OS by default", async () => {
 		await mount();
-		expect(options().map(button => button.getAttribute("data-theme-option"))).toEqual([
-			"system",
-			...LIGHT_THEME_NAMES,
-			...DARK_THEME_NAMES,
-		]);
-		const inGroup = (scheme: string) =>
-			Array.from(document.body.querySelectorAll(`[data-theme-group="${scheme}"] [data-theme-option]`)).map(button =>
-				button.getAttribute("data-theme-option"),
-			);
-		expect(inGroup("light")).toEqual([...LIGHT_THEME_NAMES]);
-		expect(inGroup("dark")).toEqual([...DARK_THEME_NAMES]);
-		expect(option("system").getAttribute("aria-checked")).toBe("true");
-		expect(options().filter(button => button.getAttribute("aria-checked") === "true")).toHaveLength(1);
+		expect(values("data-theme-set")).toEqual(["ompdesk", "github", "solarized", "gruvbox", "hc"]);
+		expect(values("data-theme-mode")).toEqual(["system", "light", "dark"]);
+		expect(held("data-theme-set")).toEqual(["ompdesk"]);
+		expect(held("data-theme-mode")).toEqual(["system"]);
+		// The pair selects and the per-theme cards are gone: a set is the only way to a theme.
+		expect(document.body.querySelector("select")).toBeNull();
+		expect(document.body.querySelectorAll("[role=radio]")).toHaveLength(8);
 	});
 
-	it("labels each card with its theme name and previews its own surface and accent", async () => {
+	it("names each card after its set and previews its light half, then its dark half", async () => {
 		await mount();
-		for (const name of [...LIGHT_THEME_NAMES, ...DARK_THEME_NAMES]) {
-			expect(option(name).textContent, name).toContain(translate(`themePicker.theme.${name}.label`));
-			const preview = option(name).querySelector("[data-theme-preview]") as HTMLElement | null;
-			expect(preview, name).not.toBeNull();
-			expect(preview?.getAttribute("style") ?? "", name).toContain(THEMES[name].tokens["--omp-bg-primary"]);
-			// A line of code in the theme's syntax colors sits in the preview.
-			expect(preview?.innerHTML ?? "", name).toContain(THEMES[name].tokens["--omp-syntax-keyword"]);
+		for (const { id, light, dark } of THEME_SETS) {
+			expect(card(id).textContent, id).toContain(translate(`themePicker.set.${id}.label`));
+			const previews = Array.from(card(id).querySelectorAll("[data-theme-preview]")) as HTMLElement[];
+			expect(previews.map(node => node.getAttribute("data-theme-preview"))).toEqual([
+				THEMES[light].label,
+				THEMES[dark].label,
+			]);
+			for (const [index, name] of [light, dark].entries()) {
+				expect(previews[index]?.getAttribute("style") ?? "", name).toContain(
+					THEMES[name].tokens["--omp-bg-primary"],
+				);
+				expect(previews[index]?.innerHTML ?? "", name).toContain(THEMES[name].tokens["--omp-syntax-keyword"]);
+			}
 		}
 	});
 
-	it("applies and saves a chosen theme, and moves the selection to it", async () => {
+	// OMPdesk is held at mount, so it is pressed last: pressing the held card changes nothing.
+	it.each([...THEME_SETS.slice(1), THEME_SETS[0]])(
+		"pressing the $id set shows its light half under a light OS and its dark half under a dark one",
+		async ({ id, light, dark }) => {
+			await mount();
+			if (id === "ompdesk") await press(card("hc"));
+			await press(card(id));
+			expect(shown()).toEqual({ name: light, scheme: "light" });
+			expect(root_().style.getPropertyValue("--omp-bg-primary")).toBe(THEMES[light].tokens["--omp-bg-primary"]);
+			expect(root_().style.getPropertyValue("--omp-ansi-red")).toBe(THEMES[light].ansi[1]);
+			expect(prefs).toMatchObject({
+				themeName: "system",
+				theme: "system",
+				systemLightTheme: light,
+				systemDarkTheme: dark,
+			});
+			expect(useUiStore.getState().theme).toBe("system");
+			expect(held("data-theme-set")).toEqual([id]);
+			expect(held("data-theme-mode")).toEqual(["system"]);
+			flipOs(true);
+			expect(shown()).toEqual({ name: dark, scheme: "dark" });
+			expect(root_().style.getPropertyValue("--omp-accent")).toBe(THEMES[dark].tokens["--omp-accent"]);
+		},
+	);
+
+	it.each(
+		THEME_SETS.flatMap(entry => [
+			{ ...entry, mode: "light" as const },
+			{ ...entry, mode: "dark" as const },
+		]),
+	)(
+		"pressing $mode keeps the $id set on that half whatever the OS says, and Follow system gives it back",
+		async ({ id, mode, ...halves }) => {
+			// The OS says the opposite of the half pressed.
+			osDark = mode === "light";
+			applyThemeByName("system", { persist: false });
+			await mount();
+			if (id !== "ompdesk") await press(card(id));
+			await press(segment(mode));
+			expect(shown()).toEqual({ name: halves[mode], scheme: mode });
+			expect(prefs).toMatchObject({
+				themeName: halves[mode],
+				theme: mode,
+				systemLightTheme: halves.light,
+				systemDarkTheme: halves.dark,
+			});
+			expect(useUiStore.getState().theme).toBe(mode);
+			expect(held("data-theme-set")).toEqual([id]);
+			expect(held("data-theme-mode")).toEqual([mode]);
+			flipOs(!osDark);
+			expect(shown().name).toBe(halves[mode]);
+
+			await press(segment("system"));
+			const other = mode === "light" ? "dark" : "light";
+			expect(prefs.themeName).toBe("system");
+			expect(shown()).toEqual({ name: halves[osDark ? "dark" : "light"], scheme: osDark ? "dark" : "light" });
+			flipOs(!osDark);
+			expect(shown()).toEqual({ name: halves[other], scheme: other });
+		},
+	);
+
+	it("keeps the half a person stays on when another set is pressed", async () => {
 		await mount();
-		await choose("nord");
-		expect(root_().getAttribute("data-theme")).toBe("dark");
-		expect(root_().getAttribute("data-theme-name")).toBe("nord");
-		expect(root_().style.getPropertyValue("--omp-bg-primary")).toBe(THEMES.nord.tokens["--omp-bg-primary"]);
-		expect(root_().style.getPropertyValue("--omp-ansi-red")).toBe(THEMES.nord.ansi[1]);
-		expect(set).toHaveBeenCalledWith("themeName", "nord");
-		expect(set).toHaveBeenCalledWith("theme", "dark");
-		expect(useUiStore.getState().theme).toBe("dark");
-		expect(option("nord").getAttribute("aria-checked")).toBe("true");
-		expect(option("system").getAttribute("aria-checked")).toBe("false");
+		await press(segment("dark"));
+		expect(shown().name).toBe("dark");
+		await press(card("gruvbox"));
+		expect(shown()).toEqual({ name: "gruvbox-dark", scheme: "dark" });
+		expect(prefs.themeName).toBe("gruvbox-dark");
+		expect(held("data-theme-mode")).toEqual(["dark"]);
+	});
+
+	it.each([
+		{ stored: { themeName: "github-dark" }, reads: ["github", "dark"], why: "one theme id" },
+		{
+			stored: { themeName: "system", systemLightTheme: "gruvbox-light", systemDarkTheme: "gruvbox-dark" },
+			reads: ["gruvbox", "system"],
+			why: "System with a pair",
+		},
+		{ stored: { themeName: "sepia" }, reads: ["gruvbox", "light"], why: "a retired light theme" },
+		{ stored: { themeName: "nord" }, reads: ["solarized", "dark"], why: "a retired dark theme" },
+		{
+			stored: { themeName: "system", systemLightTheme: "sepia", systemDarkTheme: "tokyo-night" },
+			reads: ["gruvbox", "system"],
+			why: "System with a retired pair, the light half on screen",
+		},
+		{ stored: { theme: "light" }, reads: ["ompdesk", "light"], why: "the legacy scheme pref" },
+	])("reads $why as a set and a mode", async ({ stored, reads }) => {
+		Object.assign(prefs, stored);
+		loadSystemThemePair(prefs);
+		await mount();
+		expect([held("data-theme-set"), held("data-theme-mode")]).toEqual([[reads[0]], [reads[1]]]);
 	});
 
 	it("keeps a choice made while its stored-theme read is still in flight", async () => {
 		// Each read answers with the prefs as they were when it was sent; the second one (the legacy `theme`
-		// pref, read because `themeName` is unset) is sent before the click and answered after it.
+		// pref, read because `themeName` is unset) is sent before the press and answered after it.
 		const stored = prefsApi.get;
-		const held = Promise.withResolvers<void>();
+		const pending = Promise.withResolvers<void>();
 		prefsApi.get = key => {
 			const sent = prefs[key];
-			return key === "theme" ? held.promise.then(() => sent) : Promise.resolve(sent);
+			return key === "theme" ? pending.promise.then(() => sent) : Promise.resolve(sent);
 		};
 		try {
 			await mount();
-			await choose("light");
-			await act(async () => held.resolve());
+			await press(card("solarized"));
+			await press(segment("light"));
+			await act(async () => pending.resolve());
 			await settle();
 			await settle();
-			expect(option("light").getAttribute("aria-checked")).toBe("true");
-			expect(option("system").getAttribute("aria-checked")).toBe("false");
+			expect(shown().name).toBe("solarized-light");
+			expect(held("data-theme-set")).toEqual(["solarized"]);
+			expect(held("data-theme-mode")).toEqual(["light"]);
 		} finally {
 			prefsApi.get = stored;
 		}
 	});
 
-	it("moves with the arrow keys across the groups and applies each stop", async () => {
+	it("moves with the arrow keys across the sets and applies each stop", async () => {
 		await mount();
-		await choose("hc-light");
-		const press = async (key: string) => {
+		const arrow = async (key: string) => {
 			const event = new Event("keydown", { bubbles: true, cancelable: true });
 			Object.assign(event, { key });
-			const held = options().find(button => button.getAttribute("aria-checked") === "true");
+			const at = document.body.querySelector('[data-theme-set][aria-checked="true"]');
 			await act(async () => {
-				held?.dispatchEvent(event);
+				at?.dispatchEvent(event);
 			});
 			await settle();
 		};
-		await press("ArrowRight");
-		expect(root_().getAttribute("data-theme-name")).toBe("dark");
-		await press("ArrowLeft");
-		expect(root_().getAttribute("data-theme-name")).toBe("hc-light");
-	});
-
-	it("System pairs a chosen light and a chosen dark theme: each select lists only its scheme", async () => {
-		await mount();
-		const lightSelect = document.body.querySelector("#setting-gui-systemLightTheme select") as HTMLSelectElement;
-		const darkSelect = document.body.querySelector("#setting-gui-systemDarkTheme select") as HTMLSelectElement;
-		const values = (select: HTMLSelectElement) =>
-			Array.from(select.querySelectorAll("option")).map(item => (item as HTMLOptionElement).value);
-		expect(values(lightSelect)).toEqual([...LIGHT_THEME_NAMES]);
-		expect(values(darkSelect)).toEqual([...DARK_THEME_NAMES]);
-		expect(lightSelect.value).toBe("light");
-		expect(darkSelect.value).toBe("dark");
-	});
-
-	it("shows the chosen dark theme under System while the OS is dark, and the chosen light one while it is light", async () => {
-		osDark = true;
-		await mount();
-		const darkSelect = document.body.querySelector("#setting-gui-systemDarkTheme select") as HTMLSelectElement;
-		selectOption(darkSelect, "tokyo-night");
-		await act(async () => {
-			darkSelect.dispatchEvent(new Event("change", { bubbles: true }));
-		});
-		await settle();
-		expect(set).toHaveBeenCalledWith("systemDarkTheme", "tokyo-night");
-		expect(root_().getAttribute("data-theme-name")).toBe("tokyo-night");
-		expect(root_().style.getPropertyValue("--omp-accent")).toBe(THEMES["tokyo-night"].tokens["--omp-accent"]);
-
-		const lightSelect = document.body.querySelector("#setting-gui-systemLightTheme select") as HTMLSelectElement;
-		selectOption(lightSelect, "sepia");
-		await act(async () => {
-			lightSelect.dispatchEvent(new Event("change", { bubbles: true }));
-		});
-		await settle();
-		expect(set).toHaveBeenCalledWith("systemLightTheme", "sepia");
-		// The OS is dark: the dark half still shows; the light half waits for the OS to flip.
-		expect(root_().getAttribute("data-theme-name")).toBe("tokyo-night");
-		osDark = false;
-		applyThemeByName("system", { persist: false });
-		expect(root_().getAttribute("data-theme-name")).toBe("sepia");
-		expect(root_().getAttribute("data-theme")).toBe("light");
-	});
-
-	it("previews both halves of the pair on the System card", async () => {
-		await mount();
-		const previews = Array.from(option("system").querySelectorAll("[data-theme-preview]")).map(node =>
-			node.getAttribute("data-theme-preview"),
-		);
-		expect(previews).toEqual([THEMES.light.label, THEMES.dark.label]);
-	});
-
-	it("shows the light/dark pair only while System is the theme", async () => {
-		await mount();
-		expect(document.body.querySelector("#setting-gui-systemLightTheme")).not.toBeNull();
-		await choose("nord");
-		expect(document.body.querySelector("#setting-gui-systemLightTheme")).toBeNull();
-		expect(document.body.querySelector("#setting-gui-systemDarkTheme")).toBeNull();
-		await choose("system");
-		expect(document.body.querySelector("#setting-gui-systemDarkTheme")).not.toBeNull();
+		await arrow("ArrowRight");
+		expect(shown().name).toBe("github-light");
+		await arrow("ArrowLeft");
+		await arrow("ArrowLeft");
+		expect(shown().name).toBe("hc-light");
 	});
 });

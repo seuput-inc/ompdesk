@@ -6,7 +6,7 @@
  * THIRD_PARTY_NOTICES.txt, section 2) for the roles their own ports give them:
  * the files read are named above each palette, the published color per role is
  * in theme-sources.ts. A published color that fails its contrast floor on the app's surfaces
- * (Solarized's accents, Nord's red, Tokyo Night's comment gray, Gruvbox's red)
+ * (Solarized's accents and red, Gruvbox's red, yellow and green, GitHub's disabled gray)
  * is mixed toward the theme's text by the smallest 0.01 step that passes, and
  * no further (theme-fidelity.test.ts); roles a source does not define (hover
  * tones, scrims) are the theme's own. themes.contrast.test.ts holds every theme
@@ -67,6 +67,57 @@ export const githubLight: ThemePalette = {
 };
 
 /**
+ * GitHub Dark, from:
+ * - https://unpkg.com/@primer/primitives@11.10.0/dist/css/functional/themes/dark.css
+ */
+export const githubDark: ThemePalette = {
+	label: "GitHub Dark",
+	description: "GitHub's dark canvas with its blue, green and red.",
+	origin: "GitHub Primer",
+	scheme: "dark",
+	bg: "#0d1117",
+	sunken: "#010409",
+	secondary: "#151b23",
+	tertiary: "#262c36",
+	elevated: "#010409",
+	text: "#f0f6fc",
+	textSecondary: "#d1d7e0",
+	muted: "#9198a1",
+	dim: "#8c939c",
+	border: "#3d444d",
+	borderMuted: "#2f353d",
+	borderStrong: "#656c76",
+	accent: "#4493f8",
+	accentBright: "#79c0ff",
+	onAccent: "#0d1117",
+	success: "#3fb950",
+	warning: "#d29922",
+	error: "#f76059",
+	info: "#4493f8",
+	onError: "#0d1117",
+	inlineCode: "#f0f6fc",
+	syntax: {
+		comment: "#9198a1",
+		keyword: "#ff7b72",
+		function: "#d2a8ff",
+		variable: "#ffa657",
+		string: "#a5d6ff",
+		number: "#79c0ff",
+		type: "#79c0ff",
+		operator: "#ff7b72",
+		punctuation: "#f0f6fc",
+	},
+	ansi: ["#717881", "#ff7b72", "#3fb950", "#d29922", "#58a6ff", "#be8fff", "#39c5cf", "#f0f6fc"],
+	ansiBright: ["#707781", "#ffa198", "#56d364", "#e3b341", "#79c0ff", "#d2a8ff", "#56d4dd", "#ffffff"],
+	chart: ["#0576ff", "#35733d", "#8c5e0d", "#eb3342", "#975bf1", "#197276"],
+	selection: "rgba(31, 111, 235, 0.7)",
+	diffAddedBg: "rgba(46, 160, 67, 0.15)",
+	diffRemovedBg: "rgba(248, 81, 73, 0.1)",
+	overlay: "rgba(33, 40, 48, 0.4)",
+	shadow: "1, 4, 9",
+};
+
+/**
  * Gruvbox Dark, from:
  * - https://raw.githubusercontent.com/morhetz/gruvbox/master/colors/gruvbox.vim
  */
@@ -113,6 +164,55 @@ export const gruvboxDark: ThemePalette = {
 	selection: "#665c54",
 	overlay: "rgba(0, 0, 0, 0.62)",
 	shadow: "0, 0, 0",
+};
+
+/**
+ * Gruvbox Light, from:
+ * - https://raw.githubusercontent.com/morhetz/gruvbox/master/colors/gruvbox.vim
+ */
+export const gruvboxLight: ThemePalette = {
+	label: "Gruvbox Light",
+	description: "Retro warm cream with rust orange and olive.",
+	origin: "Gruvbox",
+	scheme: "light",
+	bg: "#fbf1c7",
+	sunken: "#f2e5bc",
+	secondary: "#f2e5bc",
+	tertiary: "#ebdbb2",
+	elevated: "#f9f5d7",
+	text: "#3c3836",
+	textSecondary: "#504945",
+	muted: "#665c54",
+	dim: "#695f57",
+	border: "#d5c4a1",
+	borderMuted: "#ebdbb2",
+	borderStrong: "#8f8172",
+	accent: "#ad3a04",
+	accentBright: "#96390e",
+	onAccent: "#fbf1c7",
+	success: "#65601b",
+	warning: "#7f5a23",
+	error: "#9d0006",
+	info: "#076678",
+	onError: "#fbf1c7",
+	inlineCode: "#417153",
+	syntax: {
+		comment: "#70655b",
+		keyword: "#9d0006",
+		function: "#6e6915",
+		variable: "#076678",
+		string: "#6e6915",
+		number: "#8f3f71",
+		type: "#885f21",
+		operator: "#3c3836",
+		punctuation: "#af3a03",
+	},
+	ansi: ["#6c665a", "#c6251e", "#6c6927", "#7f622d", "#426e6f", "#8e556e", "#536d51", "#70655c"],
+	ansiBright: ["#70655b", "#9d0006", "#6e6915", "#885f21", "#076678", "#8f3f71", "#417153", "#3c3836"],
+	chart: ["#af3a03", "#076678", "#79740e", "#b57614", "#9d0006", "#8f3f71"],
+	selection: "#bdae93",
+	overlay: "rgba(60, 56, 54, 0.34)",
+	shadow: "60, 56, 54",
 };
 
 export const highContrastDark: ThemePalette = {
@@ -202,99 +302,6 @@ export const highContrastLight: ThemePalette = {
 };
 
 /**
- * Nord, from:
- * - https://www.nordtheme.com/docs/colors-and-palettes/
- * - https://raw.githubusercontent.com/nordtheme/nord/develop/src/nord.css
- * - https://raw.githubusercontent.com/nordtheme/visual-studio-code/develop/themes/nord-color-theme.json
- */
-export const nord: ThemePalette = {
-	label: "Nord",
-	description: "Arctic blue-gray with frost-blue highlights.",
-	origin: "Nord",
-	scheme: "dark",
-	bg: "#2e3440",
-	sunken: "#2e3440",
-	secondary: "#3b4252",
-	tertiary: "#3b4252",
-	elevated: "#3b4252",
-	text: "#eceff4",
-	textSecondary: "#d8dee9",
-	muted: "#a7afbe",
-	dim: "#a9afba",
-	border: "#434c5e",
-	borderMuted: "#3b4252",
-	borderStrong: "#868d9c",
-	accent: "#88c0d0",
-	accentBright: "#9fd0dd",
-	onAccent: "#2e3440",
-	success: "#a3be8c",
-	warning: "#ebcb8b",
-	error: "#d3a1a8",
-	info: "#99b2cc",
-	onError: "#2e3440",
-	inlineCode: "#8fbcbb",
-	syntax: {
-		comment: "#939caf",
-		keyword: "#81a1c1",
-		function: "#88c0d0",
-		variable: "#d8dee9",
-		string: "#a3be8c",
-		number: "#b691af",
-		type: "#8fbcbb",
-		operator: "#81a1c1",
-		punctuation: "#eceff4",
-	},
-	ansi: ["#979ca6", "#cc8a92", "#a3be8c", "#ebcb8b", "#81a1c1", "#b691af", "#88c0d0", "#e5e9f0"],
-	ansiBright: ["#969ca9", "#cc8a92", "#a3be8c", "#ebcb8b", "#81a1c1", "#b691af", "#8fbcbb", "#eceff4"],
-	chart: ["#88c0d0", "#a3be8c", "#ebcb8b", "#c6767f", "#b48ead", "#d08770"],
-	selection: "rgba(67, 76, 94, 0.8)",
-	overlay: "rgba(20, 24, 31, 0.6)",
-	shadow: "0, 0, 0",
-};
-
-export const sepia: ThemePalette = {
-	label: "Sepia",
-	description: "Warm paper tones for long reading, with a rust accent.",
-	scheme: "light",
-	bg: "#f4ecd8",
-	sunken: "#ebe1c8",
-	secondary: "#efe5cf",
-	tertiary: "#e4d8bc",
-	elevated: "#faf4e4",
-	text: "#3b2f20",
-	textSecondary: "#55452f",
-	muted: "#6b5a43",
-	dim: "#6d5c45",
-	border: "#d8c9a6",
-	borderMuted: "#e4d8bc",
-	borderStrong: "#8e7a56",
-	accent: "#91471b",
-	accentBright: "#823a0f",
-	onAccent: "#fff8ea",
-	success: "#3f652a",
-	warning: "#805102",
-	error: "#a13629",
-	info: "#2d5f86",
-	onError: "#fff8ea",
-	inlineCode: "#8a3a1e",
-	syntax: {
-		comment: "#736149",
-		keyword: "#9b3d22",
-		function: "#2d5f86",
-		variable: "#3b2f20",
-		string: "#4f6a1c",
-		number: "#7b4a7d",
-		type: "#1f6b5c",
-		operator: "#6b5a43",
-		punctuation: "#736149",
-	},
-	ansi: ["#3b2f20", "#a8362a", "#3f6b2b", "#855400", "#2d5f86", "#7b4a7d", "#1f6b5c", "#55452f"],
-	chart: ["#9c4a1a", "#3f6b2b", "#aa7611", "#a8362a", "#2d5f86", "#7b4a7d"],
-	overlay: "rgba(59, 47, 32, 0.34)",
-	shadow: "59, 47, 32",
-};
-
-/**
  * Solarized Light, from:
  * - https://ethanschoonover.com/solarized/
  * - https://raw.githubusercontent.com/altercation/vim-colors-solarized/master/colors/solarized.vim
@@ -345,54 +352,51 @@ export const solarizedLight: ThemePalette = {
 };
 
 /**
- * Tokyo Night, from:
- * - https://raw.githubusercontent.com/enkia/tokyo-night-vscode-theme/master/themes/tokyo-night-color-theme.json
- * - https://raw.githubusercontent.com/folke/tokyonight.nvim/main/lua/tokyonight/colors/storm.lua
- * - https://raw.githubusercontent.com/folke/tokyonight.nvim/main/lua/tokyonight/colors/night.lua
+ * Solarized Dark, from:
+ * - https://ethanschoonover.com/solarized/
+ * - https://raw.githubusercontent.com/altercation/vim-colors-solarized/master/colors/solarized.vim
+ * - https://raw.githubusercontent.com/microsoft/vscode/main/extensions/theme-solarized-dark/themes/solarized-dark-color-theme.json
  */
-export const tokyoNight: ThemePalette = {
-	label: "Tokyo Night",
-	description: "Deep midnight blue with neon blue, violet and green.",
-	origin: "Tokyo Night",
+export const solarizedDark: ThemePalette = {
+	label: "Solarized Dark",
+	description: "Ethan Schoonover's deep teal with a calm cyan accent.",
+	origin: "Solarized",
 	scheme: "dark",
-	bg: "#1a1b26",
-	sunken: "#16161e",
-	secondary: "#202330",
-	tertiary: "#292e42",
-	elevated: "#16161e",
-	text: "#c0caf5",
-	textSecondary: "#a9b1d6",
-	muted: "#8e94b6",
-	dim: "#8b94bb",
-	border: "#3b4261",
-	borderMuted: "#292e42",
-	borderStrong: "#737aa2",
-	accent: "#7aa2f7",
-	accentBright: "#9bb8fa",
-	onAccent: "#16161e",
-	success: "#9ece6a",
-	warning: "#e0af68",
-	error: "#f7768e",
-	info: "#7dcfff",
-	onError: "#16161e",
-	inlineCode: "#bb9af7",
+	bg: "#002b36",
+	sunken: "#00212b",
+	secondary: "#073642",
+	tertiary: "#003847",
+	elevated: "#073642",
+	text: "#eee8d5",
+	textSecondary: "#b6bcb5",
+	muted: "#8f9d9d",
+	dim: "#939e9a",
+	border: "#23464f",
+	borderMuted: "#073642",
+	borderStrong: "#6a7d81",
+	accent: "#47aca1",
+	accentBright: "#5fbdb3",
+	onAccent: "#002b36",
+	success: "#93a31c",
+	warning: "#bd961e",
+	error: "#e47e75",
+	info: "#5ea5d3",
+	onError: "#002b36",
+	inlineCode: "#2aa198",
 	syntax: {
-		comment: "#767ea5",
-		keyword: "#bb9af7",
-		function: "#7aa2f7",
-		variable: "#c0caf5",
-		string: "#9ece6a",
-		number: "#ff9e64",
-		type: "#0db9d7",
-		operator: "#89ddff",
-		punctuation: "#89ddff",
+		comment: "#788889",
+		keyword: "#859900",
+		function: "#268bd2",
+		variable: "#268bd2",
+		string: "#2aa198",
+		number: "#d85691",
+		type: "#d16636",
+		operator: "#859900",
+		punctuation: "#839496",
 	},
-	ansi: ["#777ea0", "#f7768e", "#73daca", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#797e9b"],
-	ansiBright: ["#777ea0", "#f7768e", "#73daca", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#acb0d0"],
-	chart: ["#7aa2f7", "#41a6b5", "#e0af68", "#f7768e", "#9d7cd8", "#ff9e64"],
-	selection: "rgba(81, 92, 126, 0.3)",
-	diffAddedBg: "rgba(65, 166, 181, 0.125)",
-	diffRemovedBg: "rgba(219, 75, 75, 0.133)",
-	overlay: "rgba(8, 8, 14, 0.62)",
+	ansi: ["#748a87", "#e05852", "#859900", "#b58900", "#268bd2", "#d85691", "#2aa198", "#eee8d5"],
+	ansiBright: ["#778a86", "#d16636", "#788889", "#75888d", "#839496", "#7c7fc6", "#93a1a1", "#fdf6e3"],
+	chart: ["#268bd2", "#859900", "#b58900", "#dd3f3b", "#6d72c4", "#2aa198"],
+	overlay: "rgba(0, 20, 26, 0.62)",
 	shadow: "0, 0, 0",
 };
