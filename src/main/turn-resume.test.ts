@@ -1297,6 +1297,44 @@ describe("TurnResume launch", () => {
 			expect(h.store.read()).toEqual([]);
 		});
 
+		it("a restore an omp update's restart cuts (the bridge closed under it) keeps the marker and goes again at the new omp's ready", async () => {
+			// The Mac mini, 19 Nov 2026: the launch's omp update restarted the idle tab while its restore ran. The local
+			// handler's failure reaches the core as a response (`runLocalCommand`), not a throw; no omp answered it.
+			const cut: RpcResponse = {
+				type: "response",
+				command: "restore_interrupted",
+				success: false,
+				error: "GUI bridge closed",
+				code: "bridge_unavailable",
+			};
+			let restores = 0;
+			h = setup({
+				answers: {
+					restore_interrupted: () => {
+						if (++restores > 1) return Promise.resolve(RESTORED);
+						h.setStatus("starting");
+						return Promise.resolve(cut);
+					},
+					retry: closed,
+				},
+			});
+			new InterruptedTurnStore(h.file).write([marker()]);
+			h.facts.push(fact({ tabId: "restored", running: false }));
+			h.resume.launch();
+			await settle();
+			expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
+			expect(h.goals).toEqual([]);
+			expect(h.logs.at(-1)).toEqual([
+				"continue",
+				expect.objectContaining({ restoreCode: "bridge_unavailable", started: false, attempt: 1, retrying: true }),
+			]);
+
+			h.setStatus("ready");
+			await settle();
+			expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted", "retry", "restore_interrupted"]);
+			expect(h.logs.at(-1)).toEqual(["continue", expect.objectContaining({ restored: "turn", started: true })]);
+		});
+
 		it("stops after the bounded attempts: nothing more is sent in this launch, the marker stays for the next one", async () => {
 			h = setup({ answers: { restore_interrupted: closed, retry: closed } });
 			new InterruptedTurnStore(h.file).write([marker()]);
