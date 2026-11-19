@@ -1,10 +1,10 @@
 /**
  * The GPU fallback marker's rules (`<userData>/gpu-fallback.json`, wired in gpu-fallback.ts). A GPU that keeps
- * crashing writes the marker with the GPU it crashed on (`gpuCrashDecision`, launch-guard-core.ts; the running launch
- * is never relaunched); later launches render in software until the GPU or its driver changed (a software launch
- * records the GPU it sees) or `HARDWARE_RETRY_AFTER_MS` passed, then one launch tries hardware again. That trial is
- * recorded in the marker before it runs, so it happens once; it clears the marker when it stays up, and a crash in it
- * writes a fresh marker.
+ * crashing writes the marker with the GPU it crashed on; later launches render in software until the GPU or its
+ * driver changed (a software launch records the GPU it sees) or `HARDWARE_RETRY_AFTER_MS` passed, then one launch
+ * tries hardware again. That trial is recorded in the marker before it runs, so it happens once; it clears the marker
+ * when it stays up, and a crash in it writes a fresh marker. Whether a crash may relaunch is `gpuRelaunchDecision`'s
+ * (launch-guard-core.ts), so a trial can never start a cycle.
  */
 
 /** The adapter Chromium names in `app.getGPUInfo("basic").gpuDevice`. */

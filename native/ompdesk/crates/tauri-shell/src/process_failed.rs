@@ -24,14 +24,14 @@ fn reason(code: i32) -> &'static str {
         3 => "crashed",
         4 => "launch-failed",
         5 => "oom",
-        // UNEXPECTED, UNRESPONSIVE (a hung renderer WebView2 ended), PROFILE_DELETED.
+        // UNEXPECTED, UNRESPONSIVE (a hung renderer), PROFILE_DELETED.
         _ => "abnormal-exit",
     }
 }
 
 /// The report for a failure of `kind` (and `reason`, `exit_code` where WebView2 gave them), or none for a process the
-/// app has no event for (a subframe's renderer, utility and plugin processes) and for a renderer that is only
-/// unresponsive: WebView2 raises that while the process still runs, and Electron's `unresponsive` is no exit.
+/// app has no event for (a subframe's renderer, utility and plugin processes, the browser). A renderer WebView2 calls
+/// unresponsive is reported as gone too: the page shows nothing new until it is loaded again.
 pub fn report(kind: i32, reason_code: Option<i32>, exit_code: Option<i32>) -> Option<Report> {
     let details = |extra: Value| {
         let mut value = json!({"reason": reason(reason_code.unwrap_or(0)), "exitCode": exit_code});
@@ -41,7 +41,7 @@ pub fn report(kind: i32, reason_code: Option<i32>, exit_code: Option<i32>) -> Op
         value
     };
     match kind {
-        1 => Some(Report::Render(details(json!({})))),
+        1 | 2 => Some(Report::Render(details(json!({})))),
         6 => Some(Report::Gpu(details(json!({"type": "GPU"})))),
         _ => None,
     }
@@ -146,12 +146,19 @@ mod tests {
                 json!({"reason": "abnormal-exit", "exitCode": null})
             ))
         );
+        // A hung renderer: main reloads the page as for one that exited.
+        assert_eq!(
+            report(2, Some(1), Some(0)),
+            Some(Report::Render(
+                json!({"reason": "abnormal-exit", "exitCode": 0})
+            ))
+        );
     }
 
     #[test]
     fn processes_the_app_has_no_event_for_report_nothing() {
-        // Unresponsive renderer (still running), subframe renderer, utility, browser, unknown.
-        for kind in [2, 3, 4, 0, 9] {
+        // Subframe renderer, utility, browser, unknown.
+        for kind in [3, 4, 0, 9] {
             assert_eq!(report(kind, Some(3), Some(1)), None, "kind {kind}");
         }
     }
