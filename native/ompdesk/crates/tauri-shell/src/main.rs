@@ -8,6 +8,7 @@ mod gpu;
 mod native_chrome;
 mod native_services;
 mod network;
+mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
 mod preview;
@@ -462,6 +463,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         runtime().registry.lock().expect("registry").remove(wc);
         return Err(failed(error));
     }
+    #[cfg(windows)]
+    page_watch::attach(&window, wc);
     if !options["useContentSize"].as_bool().unwrap_or(false) {
         apply_size(
             &window,
@@ -719,6 +722,11 @@ fn dimension(v: &Value, key: &str) -> Result<f64, WireError> {
         }
     })
 }
+/// A `wc.op` the engine answers later.
+enum Later {
+    Evaluate(WebviewWindow, String),
+    Crash(WebviewWindow, u64),
+}
 fn wc_op(call: host::Call) {
     let Some(call) = defer_app_load(call) else {
         return;
@@ -803,7 +811,10 @@ fn wc_op(call: host::Call) {
                     )));
                 }
             }
-            "executeJavaScript" => return Ok(Some((window, string(a, "code")?.to_owned()))),
+            "executeJavaScript" => {
+                return Ok(Some(Later::Evaluate(window, string(a, "code")?.to_owned())));
+            }
+            "forcefullyCrashRenderer" => return Ok(Some(Later::Crash(window, wc))),
             _ => return Err(unsupported(&format!("wc.op {op}"))),
         }
         Ok(None)
@@ -811,10 +822,9 @@ fn wc_op(call: host::Call) {
     match result {
         Err(error) => call.err(&error.code, error.message),
         Ok(None) => call.ok(json!({})),
-        Ok(Some((window, code))) => {
-            // The engine's own evaluation, outside the page's CSP (evaluate.rs).
-            evaluate::run(&window, call, code);
-        }
+        // The engine's own evaluation, outside the page's CSP (evaluate.rs).
+        Ok(Some(Later::Evaluate(window, code))) => evaluate::run(&window, call, code),
+        Ok(Some(Later::Crash(window, wc))) => page_watch::crash(&window, wc, call),
     }
 }
 fn dispatch(call: host::Call) {
@@ -1354,6 +1364,19 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let content_policy =
         assets::content_policy(Some(&media_origin)).map_err(std::io::Error::other)?;
     let builder = tauri::Builder::default();
+    // WebKit reports a page's content process ending here; Node reloads the page (page_watch).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(page_watch::content_process_ended);
+    // macOS: IPC calls go through `window.ipc.postMessage`, not Tauri's stock `fetch` to ipc://localhost. WebKit logs
+    // every resource load a page starts over one stream to this process, and a page whose main thread waited on that
+    // stream froze for hours (19 Nov 2026); a script message is no resource load. OMPDESK_TAURI_IPC_FETCH=1 keeps the
+    // stock transport, for comparison.
+    #[cfg(target_os = "macos")]
+    let builder = if std::env::var("OMPDESK_TAURI_IPC_FETCH").as_deref() == Ok("1") {
+        builder
+    } else {
+        builder.invoke_system(include_str!("ipc_post_message.js"))
+    };
     #[cfg(feature = "test-automation")]
     let builder = automation::install(builder, &user_data).map_err(std::io::Error::other)?;
     #[cfg(windows)]
@@ -1431,6 +1454,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 }
             });
             *runtime().instance_thread.lock().expect("instance thread") = Some(instance_thread);
+            page_watch::run();
             host::serve(
                 listener,
                 token.clone(),
