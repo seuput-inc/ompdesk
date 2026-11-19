@@ -33,7 +33,7 @@ const FILES: &[&str] = &[
 ];
 
 async fn read(root: &Path, relative: &str, limit: usize) -> Option<Vec<u8>> {
-    let path = tokio::fs::canonicalize(root.join(relative)).await.ok()?;
+    let path = crate::fs::disk::real(root.join(relative)).await?;
     if !path.starts_with(root) {
         return None;
     }
