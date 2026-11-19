@@ -36,6 +36,7 @@ for (const judge of ["error", "none"] as const) {
 			JSON.stringify({ language: "en", themeName: "light", firstRunComplete: true }),
 		);
 		await fs.writeFile(path.join(project, "page.html"), "<!doctype html><title>Page</title><h1>Hello</h1>");
+		await fs.writeFile(path.join(project, "page2.html"), "<!doctype html><title>Second</title><h1>Later</h1>");
 		const env = {
 			...process.env,
 			OMP_GUI_HEADLESS: "1",
@@ -67,12 +68,17 @@ for (const judge of ["error", "none"] as const) {
 				.poll(async () => (await shell.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 				.toBe("ready");
 			const composer = shell.locator("textarea").first();
-			const open = async () => {
-				await composer.fill(
-					`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "page.html" })}`,
-				);
+			const open = async (target = "page.html") => {
+				await composer.fill(`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target })}`);
 				await composer.press("Enter");
 			};
+			// What each check came to, for `bun run flake` counts (G3: how often a check reads "could not check").
+			const outcome = (result: string) =>
+				/Preview check: the page shows an error message\./.test(result)
+					? "error"
+					: /could not check the page in time/.test(result)
+						? "unchecked"
+						: "none";
 			await open();
 			await expect.poll(async () => (await results()).length, { timeout: 20_000 }).toBe(1);
 			const [cold = ""] = await results();
@@ -80,6 +86,7 @@ for (const judge of ["error", "none"] as const) {
 			const aside = shell.locator("aside[data-docked]");
 			const notice = aside.locator("[data-preview-check]");
 			if (judge === "error") {
+				console.log(`[preview-check-rate] first-after-launch=${outcome(cold)}`);
 				expect(cold).toMatch(
 					/Preview check: the page shows an error message\.|Preview check: could not check the page in time/,
 				);
@@ -91,6 +98,13 @@ for (const judge of ["error", "none"] as const) {
 				expect(warm).toContain("version 1 (unchanged)");
 				expect(warm).toContain("Preview check: the page shows an error message.");
 				await expect(notice).toHaveAttribute("data-preview-check", "error");
+				// A later page of the same launch: a new visual on the warm Preview. Never silent; its verdict counted.
+				await open("page2.html");
+				await expect.poll(async () => (await results()).length, { timeout: 20_000 }).toBe(3);
+				const later = (await results())[2] ?? "";
+				console.log(`[preview-check-rate] later-new-visual=${outcome(later)}`);
+				expect(later).toContain("Showing");
+				expect(outcome(later)).not.toBe("none");
 			} else {
 				expect(cold).not.toContain("Preview check");
 				await expect(aside).toBeVisible();
