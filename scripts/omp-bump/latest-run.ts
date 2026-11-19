@@ -93,6 +93,13 @@ export const EXPECTED_STOCK_SKIPS: readonly ExpectedSkip[] = [
 		test: "a todo list left from earlier work, on the user's real smol model",
 		reason: "runs the person's real model (OMP_GUI_REAL_WORK)",
 	},
+	{
+		file: "src/main/omp-daemon-folder-stock.test.ts",
+		test: "a worktree a session's omp ran in",
+		platforms: ["linux", "darwin"],
+		reason:
+			"Windows' own folder lock (a running process's working folder cannot be removed); the windows job runs it",
+	},
 ];
 
 /** The part of vitest's JSON reporter output read here. */

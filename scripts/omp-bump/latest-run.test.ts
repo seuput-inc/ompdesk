@@ -143,6 +143,22 @@ describe("summarize", () => {
 			test: "a c",
 		});
 	});
+
+	it("lets the Windows-only daemon-folder suite skip on a Linux shard and never on the Windows job", () => {
+		const daemon = (root: string) =>
+			report({
+				[`${root}/src/main/omp-daemon-folder-stock.test.ts`]: {
+					status: "skipped",
+					tests: {
+						"a worktree a session's omp ran in is removed once that omp ended, while another session's omp keeps running":
+							"skipped",
+					},
+				},
+			});
+		const linux = { ...meta, group: "check", job: "node-2", root: "/home/runner/work/ompdesk/ompdesk" };
+		expect(summarize(daemon(linux.root), { ...linux, platform: "linux" }).skipped).toEqual([]);
+		expect(summarize(daemon("D:/a/ompdesk/ompdesk"), { ...meta, platform: "win32" }).skipped).toHaveLength(1);
+	});
 });
 
 describe("renderReport", () => {
