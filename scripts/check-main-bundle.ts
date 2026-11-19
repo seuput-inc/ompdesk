@@ -378,7 +378,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // 1,778 bytes over. The budget is that measure plus 80 bytes.
 // It also lists the instructions received since that change (20 Nov 2026, `TodoReceived` with the board's rows): measured
 // 2,208,877 (branch run 44589770282), 1,027 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_206_531;
+// Those branches together with close-visible B, the page watchdog and the rest of next-line (20 Nov 2026): measured
+// 2,207,805 (branch run 44594625704). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_207_885;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
