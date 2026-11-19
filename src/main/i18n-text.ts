@@ -18,6 +18,12 @@ export const MAIN_TEXT = {
 		en: "OMPdesk couldn't save {what}; it will retry.",
 		ko: "디스크가 가득 차서 {what} 저장에 실패했어요. 자동으로 다시 시도할게요.",
 	},
+	// A window whose page stopped answering a second time within the hour and was started again (window.ts).
+	"rendererHang.title": { en: "OMPdesk's window stopped responding again", ko: "OMPdesk 창이 또 멈췄어요" },
+	"rendererHang.body": {
+		en: "Its page was started again by itself, with its tabs and sessions. Nothing was lost.",
+		ko: "창의 화면을 자동으로 다시 띄웠어요. 탭과 세션은 그대로예요.",
+	},
 	// Tabs a lost core took that have no omp again minutes later (sidecar.ts `onRecoveryStuck`): one notice per loss.
 	"recovery.stuckTitle": { en: "Sessions did not come back", ko: "세션이 다시 열리지 않았어요" },
 	"recovery.stuckBody": {

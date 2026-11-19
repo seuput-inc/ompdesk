@@ -1,0 +1,105 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { expect, test } from "@playwright/test";
+import { chromium, type ElectronApplication, type Page } from "playwright";
+import { exitApp, launchApp } from "./harness";
+
+// 19 Nov 2026, the Mac mini: the window's page sat in a WebKit log-stream wait from 09:12 for hours; it showed the same
+// frame, closed no tab an agent asked it to and nothing noticed. The shell probes each app page (page_watch.rs), main
+// gives a page that stopped answering RENDERER_HANG_RESTART_MS (window.ts) and then ends its process; the page loads
+// again with its tabs and the draft the person had typed. Here the page's main thread is held by a busy loop.
+
+let app: ElectronApplication;
+let page: Page;
+let profile: string;
+let desktop: string;
+
+test.beforeEach(async () => {
+	profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-renderer-hang-"));
+	const project = path.join(profile, "project");
+	desktop = path.join(profile, "desktop");
+	const agent = path.join(profile, "agent");
+	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
+	await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
+	app = await launchApp({
+		project,
+		desktop,
+		agent,
+		profile,
+		env: { OMP_GUI_HEADLESS: "1" },
+	});
+	page = await app.firstWindow();
+	await page.waitForFunction(() => window.omp?.rpc != null);
+	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
+});
+
+test.afterEach(async () => {
+	if (app) await exitApp(app);
+	if (profile) await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
+
+async function runtimeLog(): Promise<{ source: string; message: string }[]> {
+	const text = await fs.readFile(path.join(desktop, "logs", "gui-runtime.jsonl"), "utf8").catch(() => "");
+	return text
+		.split("\n")
+		.filter(Boolean)
+		.map(line => JSON.parse(line) as { source: string; message: string });
+}
+
+test("a window whose page stops answering is started again with its tabs and draft", async () => {
+	test.setTimeout(180_000);
+	const tabsBefore = (await page.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId);
+	const input = page.locator(".omp-composer-input").first();
+	await input.fill("half-written thought");
+	// The draft is filed under its session before the page is held (draft-persistence.ts saves it after a pause).
+	await expect
+		.poll(() => page.evaluate(() => localStorage.getItem("omp.composerDrafts") ?? ""))
+		.toContain("half-written thought");
+
+	// Hold the page's main thread for longer than detection and the grace together. The page starts the loop itself
+	// once this call has answered: a Playwright call still pending when the renderer ended came back as an unhandled
+	// "Target crashed" (run 44578357450).
+	await page.evaluate(() => {
+		setTimeout(() => {
+			const until = Date.now() + 10 * 60_000;
+			while (Date.now() < until) {
+				// busy
+			}
+		}, 100);
+	});
+
+	await expect
+		.poll(async () => (await runtimeLog()).map(line => line.message), { timeout: 90_000, intervals: [1_000] })
+		.toEqual(expect.arrayContaining(["Renderer stopped responding", "Restarting the stuck page"]));
+	await expect
+		.poll(async () => (await runtimeLog()).some(line => line.source === "renderer-process"), { timeout: 30_000 })
+		.toBe(true);
+
+	// The page loads again in the same window: the same tabs, and what the person had typed. Playwright closes the Page
+	// of a renderer that ended and never hands the reloaded document back (run 44579406111), so a new connection reads it.
+	const port = (app as unknown as { devToolsPort(): number }).devToolsPort();
+	const again = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+	try {
+		const appPage = () =>
+			again
+				.contexts()
+				.flatMap(context => context.pages())
+				.find(candidate => candidate.url().startsWith("http://app.localhost/"));
+		await expect.poll(() => appPage() !== undefined, { timeout: 30_000 }).toBe(true);
+		const reloaded = appPage();
+		if (!reloaded) throw new Error("no app page after the restart");
+		await reloaded.waitForFunction(() => window.omp?.rpc != null, undefined, { timeout: 60_000 });
+		await expect
+			.poll(async () => (await reloaded.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId), {
+				timeout: 30_000,
+			})
+			.toEqual(tabsBefore);
+		await expect(reloaded.locator(".omp-composer-input").first()).toHaveValue("half-written thought", {
+			timeout: 30_000,
+		});
+		await expect(reloaded.getByText("Something went wrong")).toHaveCount(0);
+	} finally {
+		await again.close();
+	}
+});

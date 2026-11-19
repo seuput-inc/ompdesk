@@ -400,6 +400,11 @@ export class ShellApplication extends EventEmitter {
 		return this.#child;
 	}
 
+	/** WebView2's DevTools port: a spec connects there again once Playwright dropped a page whose renderer ended. */
+	devToolsPort(): number {
+		return this.#debugPort;
+	}
+
 	/** The pages' default CDP browser context. */
 	context(): BrowserContext {
 		const [context] = this.#browser.contexts();
