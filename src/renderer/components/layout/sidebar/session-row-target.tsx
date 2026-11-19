@@ -91,10 +91,9 @@ export function headWords(
 
 /**
  * The head on a row's second line: its mark (an Autopilot branch's rocket, a branch, a commit) and its name, which
- * ends in an ellipsis when the line is short (a long name shrinks most, by its width), never below its mark and a few
- * characters (beside a family chip in a narrow sidebar it shrank to its mark alone); the whole name is its hover
- * title. `worktree` names what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a
- * run's child.
+ * ends in an ellipsis when the line is short, never cut by the line's edge; the whole name is its hover title.
+ * `worktree` names what a linked worktree is for (`data-sidebar-worktree`), absent for a main checkout and a run's
+ * child.
  */
 export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktree?: WorktreeKind }) {
 	const t = useT();
@@ -103,7 +102,7 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
 	return (
 		<span
-			className="inline-flex min-w-[4em] flex-[0_1_auto] items-center gap-1"
+			className="inline-flex min-w-0 flex-[0_1_auto] items-center gap-1"
 			data-session-head={head.kind}
 			data-sidebar-worktree={worktree}
 			title={tip}
@@ -127,12 +126,11 @@ export function SessionRowArtwork({ target }: { target: SessionRowTarget | null 
 }
 
 /**
- * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age),
- * then the checkout's branch, which gives way first when the line is short. The state keeps its width down to
- * `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css). While the session
- * works the slot still holds its hidden age (composer.md › The age slot) but may give that hidden part up from its
- * start, the arc staying whole at its end: beside a family chip in a 248 px sidebar the reserved age left the branch
- * nothing but its mark.
+ * A session row's second line before its controls: the state (a mark, the waiting badge, the working arc or the age)
+ * and the checkout's branch, the branch's mark between them (a `·` too cost a narrow line its branch). The state keeps
+ * its width down to `--row-meta-min` as the row's end did (an age whole, a waiting badge down to its ⚠, sidebar.css).
+ * While the session works the slot still holds its hidden age (composer.md › The age slot) but gives that hidden part
+ * up first, from its start, the arc staying whole at its end; then the branch ends in an ellipsis.
  */
 export function SessionRowLine({
 	state,
@@ -146,19 +144,12 @@ export function SessionRowLine({
 	return (
 		<>
 			<span
-				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center justify-end gap-1.5 overflow-hidden has-[.omp-live-age]:min-w-(--sc-icon-md)"
+				className="inline-flex min-w-(--row-meta-min,min-content) flex-[0_1_auto] items-center justify-end gap-1.5 overflow-hidden has-[.omp-live-age]:min-w-(--sc-icon-md) has-[.omp-live-age]:shrink-[100]"
 				data-sidebar-row-end
 			>
 				{state}
 			</span>
-			{head && (
-				<>
-					<span aria-hidden className="shrink-0">
-						·
-					</span>
-					<SessionHeadLabel head={head} worktree={worktree} />
-				</>
-			)}
+			{head && <SessionHeadLabel head={head} worktree={worktree} />}
 		</>
 	);
 }
