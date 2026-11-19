@@ -73,7 +73,7 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | F3 | Ends with no known cause (MacBook 23:28, Mac mini 23:33 force quit on 19 Nov). | blocked on D6 | | | |
 | F4 | ompdesk.checkout-claims writes a full snapshot of every claimed file every 15 s while editing (up to 951 files, 116 KB per entry); Main's journal held 951 claims for about a day. Claims that never retired, or snapshots that should be deltas. | in progress | memory-mini [Mac mini] | | |
 | F5 | A long-lived orchestrator session grows its omp with its journal (stock keeps every entry). Product lever: hand it to a fresh session past some journal size. Not started. | open | | | |
-| F6 | 2,860 main-unhandled-rejection lines 'ompdesk-core is shutting down' (CoreProcess #start) within one second on the Mac mini, 0.134.0 pid 90451, 19 Nov 14:12:18Z: calls into the core during its shutdown reject unhandled in a loop. | open | | | |
+| F6 | Unhandled-rejection storm 'ompdesk-core is shutting down' (CoreProcess #start) on the Mac mini, 0.134.0 pid 90451, 19 Nov 14:12:18.590-.821Z: 6,175 lines (~7.8 MB) in 0.23 s, unhandled in a loop while the core shut down. gui-runtime.jsonl rotates at ~4 MB and keeps two files, so the storm filled all of gui-runtime.jsonl.1 (3,314 lines, 100%) and 96% of the next file (2,861 lines): nothing before 14:12:18 on 19 Nov survives on the Mac mini, including the run up to that quit. Fix: the rejection handled once per shutdown; the log rate-limits a repeated line. | open | | | |
 
 ## G. Tests and tools
 
