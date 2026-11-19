@@ -367,7 +367,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // measure plus 80 bytes.
 // The title bar says a paired device's session waits on that device (18 Nov 2026, `TitleBar.tsx`, on the phone's first
 // screen): measured 2,205,912 (branch run 44261937715), 87 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_205_992;
+// The page's API names the session targets and their images (19 Nov 2026, `sessions.targets`/`sessions.artwork` in
+// `shared/omp-api.ts`): measured 2,206,183 (branch run 44489431846), 191 bytes over. The budget is that measure plus
+// 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_206_263;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
