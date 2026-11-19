@@ -184,6 +184,46 @@ describe("a window that views the parent", () => {
 		);
 		expect(rows()).toHaveLength(0);
 	});
+
+	it("offers a paired host's child as a button only once its session file is known, then opens it there", async () => {
+		const openTab = vi.fn(async () => "view-1");
+		const original = useTabsStore.getState().openTab;
+		await act(async () => useTabsStore.setState({ tabs: [tab({ id: "p", title: "Boss" })], openTab }));
+		const remote = (over: Partial<AgentReviewItem>) =>
+			item({
+				tabId: "h1",
+				title: "Remote child",
+				foreign: true,
+				device: "host-1",
+				runningSince: NOW - 9_000,
+				...over,
+			});
+		try {
+			await act(async () => useAgentReviewStore.getState().apply({ tabId: "p", items: [remote({})] }));
+			await act(async () =>
+				root.render(
+					<I18nProvider>
+						<ChildrenAtWork />
+					</I18nProvider>,
+				),
+			);
+			await rowsLoaded();
+			// Still starting on its host: no file yet, and the host's tab id is no tab here, so nothing could open it.
+			expect(rows()[0]?.tagName).not.toBe("BUTTON");
+			await act(async () => (rows()[0] as HTMLElement | undefined)?.click());
+			expect(openTab).not.toHaveBeenCalled();
+			await act(async () =>
+				useAgentReviewStore.getState().apply({ tabId: "p", items: [remote({ sessionPath: "/host/s/h1.jsonl" })] }),
+			);
+			expect(rows()[0]?.tagName).toBe("BUTTON");
+			await act(async () => (rows()[0] as HTMLElement | undefined)?.click());
+			expect(openTab).toHaveBeenCalledWith(
+				expect.objectContaining({ sessionPath: "/host/s/h1.jsonl", device: "host-1", kind: "agent" }),
+			);
+		} finally {
+			useTabsStore.setState({ openTab: original });
+		}
+	});
 });
 
 describe("between the parent's turns", () => {
