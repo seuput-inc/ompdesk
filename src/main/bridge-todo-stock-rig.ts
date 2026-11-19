@@ -22,7 +22,7 @@ import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, expect } from "vitest";
 import { newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { RM_TEMP } from "./test-fake-omp";
 
 export type Frame = {
@@ -171,9 +171,6 @@ export async function startOmp(options: {
 }): Promise<Omp> {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-todo-stock-repo-")));
 	execFileSync("git", ["init", "--quiet"], { cwd: root });
-	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs; omp's service broker
-	// is one, and ends with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`).
-	cleanups.push(() => rmSync(root, RM_TEMP));
 	const address = newBridgeAddress();
 	const env: Record<string, string | undefined> = {
 		...process.env,
@@ -188,6 +185,12 @@ export async function startOmp(options: {
 		Reflect.deleteProperty(env, key);
 	for (const key of Object.keys(env))
 		if (key.startsWith("OMP_GUI_") && key !== "OMP_GUI_BRIDGE") Reflect.deleteProperty(env, key);
+	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs: omp 18's service
+	// broker, which ended with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`), and omp 19's daemon, which does not.
+	cleanups.push(() => {
+		stopOmpDaemon(options.isolated);
+		rmSync(root, RM_TEMP);
+	});
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
 		[

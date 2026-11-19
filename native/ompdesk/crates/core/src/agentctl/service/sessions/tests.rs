@@ -482,7 +482,7 @@ async fn closing_a_resting_session_needs_no_card_and_a_tab_the_window_keeps_is_r
     assert!(outcome.is_error);
     assert_eq!(
         outcome.text,
-        "\"b\" is still open: its window kept the tab (it is that window's last tab, or it holds unsaved Files edits). Ask the user to close it; its session is saved either way."
+        "\"b\" is still open: its window did not close the tab. A window keeps its last tab and a tab with unsaved Files edits; when neither applies, the window is not answering. Ask the user to close it; its session is saved either way."
     );
     assert!(names(&asked, "confirm").is_empty());
     let view = &names(&asked, "view")[0];

@@ -4,8 +4,8 @@
  * stock layout: `bin: dist/cli.js`, `src/`, a hashed lazy asset), the real
  * `bun install -g` puts the old one in a throwaway BUN_INSTALL, one `omp hold`
  * process keeps its files open, and the app's own update path
- * (`SetupService.updateOmp`, the code behind omp-updater.ts) runs the stand-in's
- * `omp update`, which is `bun install -g` like stock's. Windows locks files a
+ * (`SetupService.updateOmp`, the code behind omp-updater.ts) installs the new
+ * release with `bun install -g`, as stock's update does. Windows locks files a
  * running process holds (the launcher image, the package tree), so this is the
  * check that the update there ends in a defined state:
  *
@@ -92,7 +92,7 @@ function tarEntry(name: string, data: Buffer, mode: number): Buffer[] {
 	return [header, data, Buffer.alloc((512 - (data.length % 512)) % 512)];
 }
 
-/** The stand-in CLI: stock's file layout and the four commands the check needs. */
+/** The stand-in CLI: stock's file layout and the commands the check needs (the update itself is OMPdesk's `bun install -g`). */
 const CLI = `#!/usr/bin/env bun
 import { closeSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -103,16 +103,6 @@ const [command] = process.argv.slice(2);
 if (command === "--version") {
 	console.log("omp/" + pkg.version);
 	process.exit(0);
-}
-if (command === "update") {
-	// Stock's \`omp update\` on a Bun install: \`bun install -g\` of the package's latest release (no cache: Bun
-	// keeps a manifest fresh for minutes, and \`latest\` moves within seconds here).
-	const child = Bun.spawn([process.execPath, "install", "-g", "--no-cache", pkg.name + "@latest"], {
-		stdout: "inherit",
-		stderr: "inherit",
-		env: process.env,
-	});
-	process.exit(await child.exited);
 }
 if (command === "hold") {
 	// A running omp: every file of the package open, its code loaded, a lazy asset not yet loaded.

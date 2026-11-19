@@ -2091,4 +2091,32 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "제목 생성 방식",
 		description: "제목 없는 세션에 사용자의 메시지를 바탕으로 이름을 붙이는 방식이에요",
 	},
+	// ── omp 19.0 업스트림 신규 설정 ──────────────────────────────────────────────
+	"mcp.builtinTransforms": {
+		label: "MCP 내장 변환",
+		description: "omp 자체 도구가 대신하는 MCP 서버는 건너뛰어요(eval이 JavaScript를 실행할 때 Codex의 node_repl)",
+	},
+	"mcp.evalNamespaces": {
+		label: "MCP eval 네임스페이스",
+		description: "각 MCP 서버를 최상위 도구나 xd:// 도구 대신 eval 전역(github.create_issue(...))으로 노출해요",
+	},
+	"providers.cacheWarmingCompactPercent": {
+		label: "캐시 브리지 압축 비율",
+		description:
+			"긴 도구 호출을 압축으로 이어 주려면 프롬프트가 컨텍스트 창의 이 비율에 닿아야 해요. 이 값과 토큰 한도 중 낮은 쪽을 적용해요",
+	},
+	"providers.cacheWarmingCompactTokens": {
+		label: "캐시 브리지 압축 토큰 수",
+		description:
+			"프롬프트가 이 토큰 수부터 긴 도구 호출을 압축으로 이어 줄 수 있어요. 이 값과 창 비율 중 낮은 쪽을 적용해요",
+	},
+	"providers.cacheWarmingStrategy": {
+		label: "캐시 워밍 방식",
+		description:
+			"갱신이 더는 이득이 아닐 때 긴 도구 호출을 잇는 방식이에요. 캐시가 만료되기 전에 기록을 압축하거나 그대로 만료되게 둬요",
+	},
+	"task.crossInstance": {
+		label: "인스턴스 간 에이전트 메시지",
+		description: "이 폴더의 다른 omp 인스턴스가 에이전트 출력을 읽고, 에이전트를 깨울 수 있는 메시지를 보내게 해요",
+	},
 };

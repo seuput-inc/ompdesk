@@ -26,7 +26,7 @@ import {
 } from "../../shared/preview";
 import type { HostToolDefinition } from "../../shared/rpc-types";
 import { writeFileAtomic } from "../atomic-file";
-import { type PreviewImage, type PreviewVerdict, previewHint } from "./preview-check";
+import { type PreviewCheckOutcome, type PreviewImage, type PreviewVerdict, previewHint } from "./preview-check";
 import { parseVisualUrl } from "./visual-navigation";
 
 export const VISUALIZE_TOOL = "gui_visualize";
@@ -480,10 +480,11 @@ export interface VisualizeContext {
 	/** Ask the tab's window to show the visual (it opens when the tab is in front, or when the user goes there). */
 	reveal(visualId: string): void;
 	/**
-	 * The Preview check of the page just opened (preview-check.ts): what the judge model saw on it, or null. Never
-	 * rejects and answers within a few seconds. Unset (a test) = no check and no hint.
+	 * The Preview check of the page just opened (preview-check.ts): what the judge model saw on it, `"unchecked"` when
+	 * a native judge was there but the page went unjudged, or null (no check, or nothing wrong seen). Never rejects and
+	 * answers within a few seconds. Unset (a test) = no check and no hint.
 	 */
-	check?(visualId: string, version: number): Promise<PreviewVerdict | null>;
+	check?(visualId: string, version: number): Promise<PreviewCheckOutcome | null>;
 }
 
 /** Run one `gui_visualize` call: the text the agent reads, and whether it failed. */

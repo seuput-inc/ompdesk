@@ -151,7 +151,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "launch",
 		contract: "internal",
 		summary:
-			"Updates and installs omp through `omp update` and `bun install -g @oh-my-pi/pi-coding-agent`, including launcher repair, install-kind detection and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
+			"Updates and installs omp through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (an exact version, with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) and, for an omp Bun does not manage, `omp update`; including launcher repair, install-kind detection, the newest release of one major (`bun pm view`) and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
 		files: [
 			"src/main/omp-updater.ts",
 			"src/main/setup/plans.ts",
@@ -160,11 +160,17 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"scripts/omp-update-lock-check.ts",
 			"scripts/setup-install-check.ts",
 		],
-		stock: ["omp update", "bun install -g @oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-coding-agent"],
+		stock: [
+			"omp update",
+			"bun install -g @oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-natives* pinned in <BUN_INSTALL>/install/global/package.json",
+		],
 		tests: [
 			"src/main/setup/omp-update-install.test.ts",
 			"src/main/setup/plans.test.ts",
 			"src/main/setup/service.test.ts",
+			"src/main/omp-updater.test.ts",
 		],
 	},
 	{
@@ -180,6 +186,24 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"worktree kinds pr-checkout, task-isolation, empty, stray",
 		],
 		tests: ["src/main/agent-worktrees.test.ts"],
+	},
+	{
+		id: "L12",
+		area: "launch",
+		contract: "internal",
+		summary:
+			"On Windows a worktree removal outlasts what stock leaves holding the folder as its working folder (omp 18's project broker for 3 s; omp 19's per-user daemon, started by the first session's omp, for as long as any omp is connected): an empty folder git already dropped is written down and removed by disk care later.",
+		files: [
+			"native/ompdesk/crates/core/src/git/worktree.rs",
+			"native/ompdesk/crates/core/src/git/left_behind.rs",
+			"src/main/worktree-orphans.ts",
+		],
+		stock: [
+			"__omp_worker_daemon (daemon/client.ts spawnDaemon, no cwd)",
+			"__omp_worker_daemon_broker (omp 18 launch/broker.ts)",
+			"omp ps --json",
+		],
+		tests: ["src/main/omp-daemon-folder-stock.test.ts"],
 	},
 	{
 		id: "Q01",
@@ -815,9 +839,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"MCP inventory, mutations and reauth through stock's capability, mcp client/config/config-writer/manager/oauth modules and the MCP command and runtime modules.",
+			"MCP inventory, mutations and reauth through stock's capability, mcp client/config/config-writer/manager/oauth modules and the MCP command and runtime modules. In-memory patch (Windows): the omp's fs.promises.rename retries a refused rename onto an MCP config file, which stock's config writer does not.",
 		files: [
 			"resources/gui-bridge/extensions/mcp.ts",
+			"resources/gui-bridge/extensions/mcp-config-rename.ts",
 			"resources/gui-bridge/extensions/update.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",

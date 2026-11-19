@@ -45,10 +45,14 @@ import { MCPCommandController } from "../omp/pi-coding-agent/modes/controllers/m
 import { inferMcpTransport } from "../omp/pi-tui/overlays/extensions/mcp-runtime";
 import { getMCPConfigPath, Snowflake } from "../omp/pi-utils";
 import type { BridgeEnv, BridgeMethods } from "../types";
+import { installMcpConfigRenameRetry } from "./mcp-config-rename";
 import type { McpSyncResult } from "./mcp-contracts";
 import { adoptedEntry, authStateOf, offReasonOf } from "./mcp-core";
 import { OAUTH_PASTE_PROMPT } from "./oauth-contracts";
 import { errorMessage, optScope, optString, paramsOf, requireString } from "./shared";
+
+// Every write below that changes mcp.json is stock's; on Windows its rename is tried again while the file is held.
+installMcpConfigRenameRetry();
 
 const MCP_TEST_TIMEOUT_MS = 30_000;
 
