@@ -6,6 +6,7 @@ import {
 	CARD,
 	CLEANUP_MS,
 	type Frame,
+	HELD_STEPS,
 	HOLD,
 	type Omp,
 	type Provider,
@@ -154,8 +155,17 @@ describe.skipIf(!existsSync(omp))("several messages other sessions send one busy
 	}, 180_000);
 
 	it("as asides during a turn of tool steps, are read together at the next step, and no call is skipped", async () => {
-		const { provider, session } = await busyOmp();
+		// An urgent aside backgrounds a running shell at the tool batch's next 250 ms peek, so asides sent one by one
+		// during a shell call can straddle a step boundary: all three are queued while the step's model request is held.
+		const provider = await startProvider();
+		atEnd(() => provider.close());
+		const session = await startOmp(provider);
+		await session.send({ type: "prompt", message: "first" });
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
+		await session.send({ type: "prompt", message: HELD_STEPS });
+		await provider.held;
 		for (const n of [1, 2, 3]) await aside(session, `step-aside-${n}`);
+		provider.release();
 		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(2);
 		expect(firsts(provider, "step-aside")).toEqual([2, 2, 2]);
 		expect(provider.turns).toBe(5);

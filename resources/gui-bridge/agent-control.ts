@@ -369,8 +369,9 @@ export const methods: BridgeMethods = {
 	 * (`ompdesk_session_send`), as stock's `aside` (`AgentSession.prompt`, `streamingBehavior: "aside"`). Stock hands
 	 * over every aside waiting at a step boundary together, where its steering queue hands over one steer per boundary
 	 * (`steeringMode` one-at-a-time, the default), so six messages cost six model requests; an aside sits in no queue the
-	 * person sees, cuts no tool and leaves a question card open (stock's `ask` closes only for a user steer). An idle
-	 * session gets main's plain prompt instead, which starts its turn as before. Answers once stock admitted it.
+	 * person sees, is urgent (`interruptFor`: a running shell backgrounds, no call is killed) and leaves a question card
+	 * open (stock's `ask` closes only for a user steer). An idle session gets main's plain prompt instead, which starts
+	 * its turn as before. Answers once stock admitted it.
 	 */
 	"agent_control.aside": async (params, env) => {
 		const record = (params ?? {}) as Record<string, unknown>;
