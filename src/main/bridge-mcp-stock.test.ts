@@ -153,6 +153,7 @@ export default function (pi) {
 			await Bun.write(${JSON.stringify(`${report}.ready`)}, "1");
 			await until(() => Bun.file(${JSON.stringify(go)}).exists(), 60_000);
 			out.sync = await mcp.mcp_sync({ names: ["fake"] }, env);
+			out.synced = await view(env, session, "fake");
 			await until(async () => (await view(env, session, "fake")).row?.status === "connected", 15_000);
 			out.after = await view(env, session, "fake");
 		} catch (error) {
@@ -420,7 +421,10 @@ describe.skipIf(!installed)("MCP servers on the installed omp", () => {
 		expect(before.row).toMatchObject({ enabled: true, status: "disconnected", authState: "required" });
 		expect(String(before.row.lastError)).toContain("401");
 		expect(before.tools).toEqual([]);
-		expect(out.sync).toMatchObject({ connected: ["fake"], failed: [] });
+		expect(out.sync, JSON.stringify({ synced: out.synced, after: out.after })).toMatchObject({
+			connected: ["fake"],
+			failed: [],
+		});
 		const after = out.after as { row: Record<string, unknown>; tools: string[] };
 		expect(after.row).toMatchObject({ status: "connected", authState: "authorized", toolCount: 1 });
 		expect(after.row.lastError).toBeUndefined();
