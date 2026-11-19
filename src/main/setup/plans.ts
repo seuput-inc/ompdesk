@@ -3,9 +3,12 @@
  * the exact process that runs. Everything here is fixed by main; the renderer
  * can name an item, never a command.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join, win32 } from "node:path";
 import type { SetupItemId, SetupMethod, SetupPlatform, SetupPresence } from "../../shared/setup";
+import type { CliToolSpec } from "../cli-tools/catalog";
+import { classifyInstall, cmdShimTarget } from "../cli-tools/detect";
+import { npmFor } from "../cli-tools/plans";
 import { needsShell, spawnArgs, spawnCommand } from "../spawn";
 import { managedAgentDesktopDir, managedGitRoot } from "./paths";
 
@@ -36,6 +39,54 @@ export function ompInstallSpecs(root: string, version: string): string[] {
 		// No global manifest (Bun installed nothing there yet): nothing is pinned.
 	}
 	return [OMP_PACKAGE, ...natives].map(name => `${name}@${version}`);
+}
+
+/** An npm global install of omp: the prefix its package sits under and the npm that installs into that prefix. */
+export interface OmpNpmOwner {
+	npm: string;
+	prefix: string;
+}
+
+/** omp as `classifyInstall` reads a tool: no updater of its own to defer to, nothing machine setup manages. */
+const OMP_INSTALL: CliToolSpec = { bin: "omp", providers: [], lazyLoads: true };
+
+/**
+ * The npm install that owns the omp launcher `bin`, or null for any other omp (Bun's, a checkout's, a compiled
+ * one) and for an npm install no npm can be found for. Only npm's own layout counts, by the rules the vendor CLIs
+ * are classified with (`classifyInstall`): on POSIX the launcher is a link into
+ * `<prefix>/lib/node_modules/@oh-my-pi/pi-coding-agent`, on Windows a `.cmd` shim whose text names
+ * `<prefix>\node_modules\…` (`cmdShimTarget`). On Windows the shim must sit in the prefix itself, as a global
+ * install's does: a project's `node_modules\.bin\omp.cmd` names a package too, and `npm install -g --prefix`
+ * there would write into that project.
+ */
+export function ompNpmOwner(
+	bin: string,
+	where: { platform: SetupPlatform; toolsDir: string; pathEnv: string },
+): OmpNpmOwner | null {
+	if (where.platform === "other") return null;
+	const win = where.platform === "win32";
+	let launcher = bin;
+	let real = bin;
+	try {
+		launcher = realpathSync(bin);
+		real =
+			win && /\.cmd$/i.test(launcher)
+				? (cmdShimTarget(launcher, readFileSync(launcher, "utf8")) ?? launcher)
+				: launcher;
+	} catch {
+		// A dangling link or an unreadable shim names no package: its own path is classified, which owns nothing.
+	}
+	const { owner } = classifyInstall(real, OMP_INSTALL, {
+		platform: where.platform,
+		toolsDir: where.toolsDir,
+		brew: null,
+	});
+	if (owner?.method !== "npm" || owner.name !== OMP_PACKAGE) return null;
+	if (win && win32.normalize(win32.dirname(launcher)).toLowerCase() !== win32.normalize(owner.prefix).toLowerCase()) {
+		return null;
+	}
+	const npm = npmFor(owner.prefix, { platform: where.platform, pathEnv: where.pathEnv });
+	return npm ? { npm, prefix: owner.prefix } : null;
 }
 
 /**
@@ -111,8 +162,16 @@ export interface PlanContext {
 	/** Detected executables; null when absent. */
 	bun: string | null;
 	omp: string | null;
-	/** What a package install of omp names (`ompInstallSpecs`): the tested omp for setup's own install, an update's target for an update. */
+	/** What a Bun package install of omp names (`ompInstallSpecs`): the tested omp for setup's own install, an update's target for an update. */
 	ompSpecs: readonly string[];
+	/** The npm install that owns the detected omp (`ompNpmOwner`); null for an omp Bun manages and for any other. */
+	ompNpm: OmpNpmOwner | null;
+	/**
+	 * The one exact version an npm install of omp names (`npm-global`): the tested omp for setup's own install, an
+	 * update's target for an update. npm gets the agent alone: it installs the natives as the agent's own
+	 * dependencies, nested under it, so no pin beside the agent can hold them back as Bun's global manifest does.
+	 */
+	ompVersion: string;
 	brew: string | null;
 	winget: string | null;
 	/** Windows: `%SystemRoot%`. */
@@ -155,7 +214,10 @@ export interface InstallPlan {
 	download: PlanDownload | null;
 }
 
-/** How `item` installs here, or null when nothing can install it automatically. */
+/**
+ * How `item` installs here, or null when nothing can install it automatically. omp is always installed at a version
+ * OMPdesk names (`bun-global`, `npm-global`); machine setup never runs stock `omp update`.
+ */
 export function selectMethod(item: SetupItemId, presence: SetupPresence, ctx: PlanContext): SetupMethod | null {
 	if (presence.kind === "present" || ctx.platform === "other") return null;
 	const mac = ctx.platform === "darwin";
@@ -163,10 +225,11 @@ export function selectMethod(item: SetupItemId, presence: SetupPresence, ctx: Pl
 		case "bun":
 			return presence.kind === "outdated" && ctx.bun ? "bun-upgrade" : "bun-script";
 		case "omp":
-			// Always the tested omp as Bun's package, also for a too-old omp Bun does not manage (npm's, another root's):
-			// stock `omp update` picks its own target, the registry's newest whatever its major, so setup never runs it.
-			// The lookup then runs Bun's omp past the too-old one (`resolveOmpAmong`).
-			return "bun-global";
+			// The tested omp, always at that exact version: through npm for an omp npm owns, else as Bun's package, also for a
+			// too-old omp of another Bun root. Stock `omp update` picks its own target, the registry's newest whatever its
+			// major, and its launcher repair can leave a compiled omp, so setup never runs it. After a Bun install the
+			// lookup runs Bun's omp past the too-old one (`resolveOmpAmong`).
+			return ctx.ompNpm ? "npm-global" : "bun-global";
 		case "git":
 			return mac ? "xcode-select" : "portable-git";
 		case "gh":
@@ -509,6 +572,28 @@ export function buildPlan(
 				prompt: null,
 				download: null,
 			};
+		case "npm-global": {
+			if (!ctx.ompNpm) return null;
+			const { npm, prefix } = ctx.ompNpm;
+			const target = win ? "win32" : "darwin";
+			// One exact version, never a range or a tag: npm then installs that release whatever is there now.
+			const args = ["install", "-g", "--prefix", prefix, `${OMP_PACKAGE}@${ctx.ompVersion}`];
+			return {
+				item,
+				method,
+				spawn: {
+					file: spawnCommand(npm, target),
+					args: spawnArgs(npm, args, target),
+					shell: needsShell(npm, target),
+				},
+				command: `"${npm}" install -g --prefix "${prefix}" ${OMP_PACKAGE}@${ctx.ompVersion}`,
+				location: win
+					? win32.join(prefix, "node_modules", "@oh-my-pi", "pi-coding-agent")
+					: join(prefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent"),
+				prompt: null,
+				download: null,
+			};
+		}
 		case "omp-update":
 			if (!ctx.omp) return null;
 			return {

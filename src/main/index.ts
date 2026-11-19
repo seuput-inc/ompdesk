@@ -5,6 +5,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir, release } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -77,6 +78,7 @@ import {
 } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
 import { MODEL_SETUP_RESEARCH_PICK_PREF } from "../shared/model-setup";
+import { compatEntry } from "../shared/omp-compat";
 import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
@@ -168,7 +170,10 @@ import { startMemoryWatch } from "./memory-watch";
 import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
+import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
 import { followSetupState } from "./omp-availability";
+import { OmpCompatSource } from "./omp-compat-source";
+import { holdNotice, OMP_HOLD_TOLD_PREF, parseHoldTold } from "./omp-hold-notice";
 import { creditSpendRun, SESSION_TAG_ENV } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
 import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
@@ -1744,13 +1749,45 @@ app.whenReady().then(async () => {
 	// omp keeps itself current (src/main/omp-updater.ts): a packaged app checks on its own; a test
 	// launch only with a fake installer and OMP_GUI_TEST_OMP_UPDATES=1 (the fake omp's `update --check`
 	// answers). OMPdesk's own update stays manual. It starts once machine setup's first pass has detected omp.
+	// It installs unasked only what the verified list names for this release (omp-compat-source.ts); a test launch
+	// reads that list from the file OMP_GUI_TEST_OMP_COMPAT names, and never from the network.
+	const testCompat = app.isPackaged ? undefined : process.env.OMP_GUI_TEST_OMP_COMPAT;
+	const compatSource = new OmpCompatSource({
+		file: join(app.getPath("userData"), "omp-compat.json"),
+		fetch:
+			testCompat !== undefined || testInstaller
+				? async () =>
+						testCompat && existsSync(testCompat)
+							? new Response(await readFile(testCompat, "utf8"))
+							: new Response(null, { status: 404 })
+				: (url, init) => net.fetch(url, init),
+	});
+	// OMPdesk is the one owner of omp updates: stock's own `update.auto` is taken while the switch is on and given
+	// back when it goes off (omp-auto-takeover.ts), through stock's settings command on the omp OMPdesk runs. Only a
+	// launch that updates omp on its own touches it (never a dev run or a test that did not opt in).
+	const ompUpdatesScheduled = testInstaller
+		? process.env.OMP_GUI_TEST_OMP_UPDATES === "1"
+		: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1";
+	const runOmpCli: OmpCliRun = async args => {
+		const omp = await systemOmp();
+		if (!omp.ok) throw new Error(omp.error);
+		return omp.runtime.run(args, { timeoutMs: 30_000, env: { NO_COLOR: "1", FORCE_COLOR: "0" } });
+	};
+	const stockAuto = new OmpAutoTakeover({
+		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
+		read: () => readStockAuto(runOmpCli),
+		write: value => writeStockAuto(runOmpCli, value),
+		file: join(app.getPath("userData"), "omp-auto-takeover.json"),
+		app: appVersion(),
+		log: logOmpUpdate,
+		onChanged: () => ompUpdater?.changed(),
+	});
 	const updater = new OmpUpdater({
-		scheduled: testInstaller
-			? process.env.OMP_GUI_TEST_OMP_UPDATES === "1"
-			: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
+		scheduled: ompUpdatesScheduled,
 		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
 		fetchLatest: () => setup.latestOmp(),
-		newestWithin: major => setup.newestOmpIn(major),
+		compat: async () => compatEntry((await compatSource.read()) ?? {}, appVersion()),
+		stockAutoTaken: () => stockAuto.taken(),
 		installed: () => {
 			const presence = setup.state().items.find(item => item.id === "omp")?.presence;
 			return presence?.kind === "present" ? presence.version : null;
@@ -1780,6 +1817,16 @@ app.whenReady().then(async () => {
 			}
 			// Devices that use this computer as their host show the same state.
 			devices.hostOmpUpdateChanged(state);
+			// An omp runners found breaking this release is told once, and once more after a day (omp-hold-notice.ts).
+			const hold = holdNotice(state.held, parseHoldTold(prefs.get(OMP_HOLD_TOLD_PREF)), Date.now());
+			if (hold.notice) {
+				prefs.set(OMP_HOLD_TOLD_PREF, hold.told);
+				const params = { version: hold.notice.version, installed: state.installed ?? "", days: hold.notice.days };
+				appNotification({
+					title: mainT("ompHold.title", undefined, params),
+					body: mainT(hold.notice.days > 0 ? "ompHold.bodyDays" : "ompHold.body", undefined, params),
+				}).show();
+			}
 		},
 		// One quiet toast, in one window.
 		onUpdated: notice => {
@@ -2082,6 +2129,7 @@ app.whenReady().then(async () => {
 		.catch(() => undefined)
 		.then(() => {
 			updater.start();
+			if (ompUpdatesScheduled) void stockAuto.sync();
 			cliToolUpdater.start();
 			extensionToolUpdater.start();
 		});
@@ -2505,6 +2553,7 @@ app.whenReady().then(async () => {
 			if (key === APP_AUTO_UPDATE_PREF) void appAutoUpdatePrefChanged();
 			if (key === TOOLS_AUTO_UPDATE_PREF) {
 				updater.prefChanged();
+				if (ompUpdatesScheduled) void stockAuto.sync();
 				cliToolUpdater.prefChanged();
 				extensionToolUpdater.prefChanged();
 			}

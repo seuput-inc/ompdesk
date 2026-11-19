@@ -138,7 +138,7 @@ describe("OmpUpdateRows", () => {
 		expect(nowButton().disabled).toBe(false);
 	});
 
-	it("names the tested omp only while another omp is installed", async () => {
+	it("names the tested omp only while another omp is installed (a host that sends no verified list)", async () => {
 		await mount(ompUpdateState({ installed: "18.22.0", latest: "18.22.0", tested: "18.22.0" }));
 		expect(document.body.querySelector("[data-testid='omp-tested']")).toBeNull();
 		await push(ompUpdateState({ installed: "18.23.0", latest: "18.23.0", tested: "18.22.0" }));
@@ -147,13 +147,21 @@ describe("OmpUpdateRows", () => {
 		);
 	});
 
-	it("says a newer major is held and why, keeps Update now as the way to install it, and goes quiet once it is installed", async () => {
-		const held = { version: "19.0.0", reason: "untested-major" } as const;
+	it("says nothing for a verified omp, and says when the running omp has not passed this release's checks", async () => {
+		const tested = document.body.querySelector.bind(document.body, "[data-testid='omp-tested']");
+		await mount(ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", verified: ["19.0.0"] }));
+		expect(tested()).toBeNull();
+		// A person ran `omp update` in a terminal: the omp that runs is on no list.
+		await push(ompUpdateState({ installed: "19.1.0", latest: "19.1.0", tested: "18.22.2", verified: ["19.0.0"] }));
+		expect(tested()?.textContent).toBe(translate("ompUpdate.unverified", { version: "19.1.0", tested: "18.22.2" }));
+	});
+
+	it("says a newer omp waits for the checks, keeps Update now as the way to install it, and goes quiet once it is installed", async () => {
+		const held = { version: "19.0.0", reason: "verifying" } as const;
 		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
-		await mount(ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", held }));
-		expect(heldNote()).toBe(translate("ompUpdate.held.untested-major", { latest: "19.0.0", tested: "18.22.2" }));
+		await mount(ompUpdateState({ installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", verified: [], held }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.verifying", { latest: "19.0.0" }));
 		expect(heldNote()).toContain("19.0.0");
-		expect(heldNote()).toContain("18.22.2");
 		// One line says it: no "is available" beside it.
 		expect(status()).toBeUndefined();
 		expect(nowButton().disabled).toBe(false);
@@ -165,30 +173,64 @@ describe("OmpUpdateRows", () => {
 		);
 		expect(status()).toBe(translate("ompUpdate.status.updating"));
 		expect(heldNote()).toBeUndefined();
-		await push(ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", held: null }));
+		await push(
+			ompUpdateState({ installed: "19.0.0", latest: "19.0.0", tested: "18.22.2", verified: [], held: null }),
+		);
 		expect(heldNote()).toBeUndefined();
-		expect(testedNote()).toBe(translate("ompUpdate.untested", { version: "19.0.0", tested: "18.22.2" }));
+		expect(testedNote()).toBe(translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }));
 	});
 
-	it("says an installed omp above the tested major may not work with every feature, in English and Korean, whatever else the row says", async () => {
-		const onNewerMajor = { installed: "19.0.0", tested: "18.22.2" };
-		await mount(ompUpdateState({ ...onNewerMajor, latest: "19.0.0" }));
+	it("says an unverified omp may not work with every feature, in English and Korean, beside a held line too", async () => {
+		const unverified = { installed: "19.0.0", tested: "18.22.2", verified: [] };
+		await mount(ompUpdateState({ ...unverified, latest: "19.0.0" }));
 		expect(testedNote()).toBe(
-			"omp 19.0.0 is newer than the omp this OMPdesk was tested with (18.22.2). Some features may not work.",
+			"omp 19.0.0 hasn't passed OMPdesk's checks for this release (tested with omp 18.22.2). Some features may not work.",
 		);
-		expect(ko["ompUpdate.untested"]).toBe(
-			"설치된 버전: omp {version}. 이 OMPdesk를 검증한 omp {tested}보다 주 버전이 높아서 일부 기능이 동작하지 않을 수 있어요.",
+		expect(ko["ompUpdate.unverified"]).toBe(
+			"지금 쓰는 omp {version} 판은 이 OMPdesk에서 아직 검사를 통과하지 않았어요(omp {tested}에서 검증됨). 일부 기능이 동작하지 않을 수 있어요.",
 		);
-		// A newer release of that major is held: the held line and this one both stay.
+		// A newer release is held as well: the held line and this one both stay.
+		const held = { version: "19.0.1", reason: "verifying" } as const;
+		await push(ompUpdateState({ ...unverified, latest: "19.0.1", held }));
+		expect(document.body.querySelector("[data-testid='omp-update-held']")?.textContent).toBe(
+			translate("ompUpdate.held.verifying", { latest: "19.0.1" }),
+		);
+		expect(testedNote()).toBe(translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }));
+		expect(status()).toBeUndefined();
+	});
+
+	it("reads a host on OMPdesk 0.134, which sends no verified list, by the tested major", async () => {
+		const onNewerMajor = { installed: "19.0.0", tested: "18.22.2" };
 		const held = { version: "19.0.1", reason: "untested-major" } as const;
-		await push(ompUpdateState({ ...onNewerMajor, latest: "19.0.1", held }));
+		await mount(ompUpdateState({ ...onNewerMajor, latest: "19.0.1", held }));
 		expect(document.body.querySelector("[data-testid='omp-update-held']")?.textContent).toBe(
 			translate("ompUpdate.held.untested-major", { latest: "19.0.1", tested: "18.22.2" }),
 		);
-		expect(testedNote()).toBe(translate("ompUpdate.untested", { version: "19.0.0", tested: "18.22.2" }));
-		expect(status()).toBeUndefined();
+		expect(testedNote()).toBe(translate("ompUpdate.unverified", { version: "19.0.0", tested: "18.22.2" }));
 		// Inside the tested major the line stays the plain fact.
 		await push(ompUpdateState({ installed: "18.23.0", latest: "18.23.0", tested: "18.22.2" }));
 		expect(testedNote()).toBe(translate("ompUpdate.tested", { version: "18.22.2" }));
+	});
+
+	it("says an omp the checks failed stays held, and for how many days", async () => {
+		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
+		const state = { installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", verified: [] };
+		const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - 60_000).toISOString();
+		await mount(ompUpdateState({ ...state, held: { version: "19.0.0", reason: "failed", since } }));
+		expect(heldNote()).toBe(
+			translate("ompUpdate.held.failedDays", { latest: "19.0.0", installed: "18.22.2", days: 3 }),
+		);
+		await push(
+			ompUpdateState({ ...state, held: { version: "19.0.0", reason: "failed", since: new Date().toISOString() } }),
+		);
+		expect(heldNote()).toBe(translate("ompUpdate.held.failed", { latest: "19.0.0", installed: "18.22.2" }));
+	});
+
+	it("says omp's own auto-update is off only while OMPdesk holds it", async () => {
+		const note = () => document.body.querySelector("[data-testid='omp-stock-auto-taken']")?.textContent;
+		await mount(ompUpdateState({ stockAutoTaken: false }));
+		expect(note()).toBeUndefined();
+		await push(ompUpdateState({ stockAutoTaken: true }));
+		expect(note()).toBe(translate("ompUpdate.stockAutoTaken"));
 	});
 });

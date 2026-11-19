@@ -1,26 +1,36 @@
 /**
  * omp keeps itself current (src/main/omp-updater.ts): while OMPdesk runs it
- * asks stock `omp update --check` for the newest omp and, when that is newer
- * than the installed omp, installs it on its own, but never an omp whose major
- * is above the one this OMPdesk was tested with: that one waits for a person's
- * "Update now" (`held`). OMPdesk's own updates stay manual (Settings › Updates &
- * about). Each computer — a paired host included — updates its own omp under
- * its own pref, always through its own updater: a client only asks the host to
- * run it (`host.ompUpdate.now`) and follows the state the host pushes; it never
- * runs `omp update` there.
+ * asks stock `omp update --check` for the newest omp and installs, on its own,
+ * only an omp runners verified against this OMPdesk release (the verified list,
+ * src/shared/omp-compat.ts) or the omp it was tested with; a newer one waits
+ * (`held`) until runners verify it, or for a person's "Update now". Each
+ * computer, a paired host included, updates its own omp under its own pref,
+ * always through its own updater: a client only asks the host to run it
+ * (`host.ompUpdate.now`) and follows the state the host pushes; it never runs
+ * `omp update` there.
  */
 
 /**
  * Who started a pass. `launch` and `scheduled` are the timer's, `repair` is the bridge compatibility check's
- * (an omp that lacks what the bridge needs): nobody asked for those, so they run only under the pref and never
- * install above the tested major. `manual` is a person's "Update now", here or from a paired device.
+ * (an omp that lacks what the bridge needs): nobody asked for those, so they run only under the pref and install
+ * only a verified omp. `manual` is a person's "Update now", here or from a paired device.
  */
 export type OmpUpdateTrigger = "launch" | "scheduled" | "repair" | "manual";
 
-/** A newer omp OMPdesk does not install on its own. `untested-major`: its major is above the tested omp's. */
+/**
+ * Why a newer omp is not installed on its own:
+ * - `verifying`: runners have not verified it against this OMPdesk release yet; it installs once they have.
+ * - `failed`: runners found it breaks this OMPdesk release; it stays held until a fixed OMPdesk release verifies it.
+ * - `untested-major`: said only by a paired host on OMPdesk 0.134, which held a major above its tested omp.
+ */
+export type OmpUpdateHoldReason = "verifying" | "failed" | "untested-major";
+
+/** A newer omp OMPdesk does not install on its own. */
 export interface OmpUpdateHold {
 	version: string;
-	reason: "untested-major";
+	reason: OmpUpdateHoldReason;
+	/** `failed`: when runners first failed it (ISO 8601), so Settings can say for how long it has been held. */
+	since?: string;
 }
 
 /**
@@ -56,15 +66,25 @@ export interface OmpUpdateState {
 	/** Why the last attempt failed; cleared by the next success. Kept until then. */
 	failure: OmpUpdateFailure | null;
 	/**
-	 * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`). Settings names it beside the
-	 * installed omp when they differ. Absent from a host whose OMPdesk predates it.
+	 * The omp this OMPdesk release was tested with (`src/shared/omp-tested.json`). Absent from a host whose OMPdesk
+	 * predates it.
 	 */
 	tested?: string;
+	/**
+	 * Every omp runners verified against this OMPdesk release, as the last check read the verified list; with `tested`,
+	 * what a pass nobody asked for may install. Absent before the first check, and from a host whose OMPdesk predates it.
+	 */
+	verified?: string[];
 	/**
 	 * The newest omp is newer than the installed one and held back: only "Update now" installs it. Null while
 	 * nothing is held; absent from a host whose OMPdesk predates it.
 	 */
 	held?: OmpUpdateHold | null;
+	/**
+	 * omp's own background update (stock `update.auto`) was on and OMPdesk turned it off while it keeps omp current
+	 * (`omp-auto-takeover.ts`); turning "Keep tools up to date" off gives it back. Absent from older hosts.
+	 */
+	stockAutoTaken?: boolean;
 }
 
 /** What the renderer toasts once an update has been installed ("omp updated to X"). */

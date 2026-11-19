@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -858,38 +858,55 @@ describe("SetupService", () => {
 			expect(h.spawned).toEqual([]);
 		});
 
-		it("finds the newest release of one major in the update's registry, for an omp it can install by name", async () => {
-			const { root, omp } = await bunRoot();
-			const asked: { bun: string; version: string; bunInstall?: string }[] = [];
-			let answer: unknown = { version: "18.22.2" };
-			const h = harness(machine({ omp: present("18.22.0") }), {
-				automatic: false,
-				ompBin: omp,
-				ompRelease: async (bun, version, env) => {
-					asked.push({ bun, version, bunInstall: env.BUN_INSTALL });
-					if (answer instanceof Error) throw answer;
-					return answer;
-				},
-			});
-			await h.service.start();
-			await expect(h.service.newestOmpIn(18)).resolves.toBe("18.22.2");
-			expect(asked).toEqual([{ bun: "/home/u/.bun/bin/bun", version: "18", bunInstall: root }]);
-			// A registry that answers another major, or nothing, has no release to install.
-			answer = { version: "19.0.0" };
-			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
-			answer = null;
-			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
-			answer = new Error("503 Service Unavailable");
-			await expect(h.service.newestOmpIn(18)).rejects.toThrow("503 Service Unavailable");
-		});
+		/** An npm prefix on disk as `npm install -g` leaves it on POSIX: the package, its linked launcher, the prefix's npm. */
+		async function npmPrefix(): Promise<{ prefix: string; omp: string; npm: string }> {
+			const prefix = join(await realpath(dir), "npm");
+			const pkg = join(prefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent");
+			await mkdir(join(pkg, "src"), { recursive: true });
+			await writeFile(join(pkg, "src", "cli.ts"), "");
+			await mkdir(join(prefix, "bin"));
+			await writeFile(join(prefix, "bin", "npm"), "");
+			await symlink(join(pkg, "src", "cli.ts"), join(prefix, "bin", "omp"));
+			return { prefix, omp: join(prefix, "bin", "omp"), npm: join(prefix, "bin", "npm") };
+		}
 
-		it("names no release for an omp Bun does not manage, without asking the registry", async () => {
-			const ompRelease = vi.fn(async () => ({ version: "18.22.2" }));
-			const h = harness(machine({ omp: present("18.22.0") }), { automatic: false, ompRelease });
-			await h.service.start();
-			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
-			expect(ompRelease).not.toHaveBeenCalled();
-		});
+		it.skipIf(process.platform === "win32")(
+			"updates an omp npm owns to exactly the target through that npm, also when only a named version may be installed",
+			async () => {
+				const { prefix, omp, npm } = await npmPrefix();
+				const h = harness(machine({ omp: present("18.22.0") }), { testInstaller: null, ompBin: omp });
+				const hook = vi.fn(async () => {});
+				await h.service.updateOmp("18.22.2", hook, true);
+				expect(hook).toHaveBeenCalledTimes(1);
+				expect(h.spawned.map(entry => entry.spec)).toEqual([
+					{ file: npm, args: ["install", "-g", "--prefix", prefix, `${AGENT}@18.22.2`], shell: false },
+				]);
+				// Its own folder leads PATH, so the prefix's npm starts the node beside it.
+				expect(h.spawned[0]?.env.PATH?.split(delimiter)[0]).toBe(dirname(omp));
+			},
+		);
+
+		it.skipIf(process.platform === "win32")(
+			"brings a too-old omp npm owns to the tested omp through that npm, never stock's own pick",
+			async () => {
+				const { prefix, omp, npm } = await npmPrefix();
+				const h = harness(
+					machine({ omp: { kind: "outdated", version: "18.0.0", minimum: "18.18.9", path: omp } }),
+					{
+						testInstaller: null,
+						ompBin: omp,
+					},
+				);
+				await h.service.start();
+				expect(h.spawned.map(entry => entry.spec)).toEqual([
+					{
+						file: npm,
+						args: ["install", "-g", "--prefix", prefix, `${AGENT}@${ompTested.version}`],
+						shell: false,
+					},
+				]);
+			},
+		);
 
 		it("writes a line when its own omp install starts and when it ends, with the version that landed or the reason", async () => {
 			const ok = harness(machine({ omp: missing }), { installed: { omp: "18.22.2" } });
@@ -911,7 +928,7 @@ describe("SetupService", () => {
 			expect(other.ompInstalls).toEqual([]);
 		});
 
-		it("for a too-old omp Bun does not manage (npm's), launch setup and the repair path install the tested omp with Bun and never run stock `omp update`", async () => {
+		it("for a too-old omp neither Bun nor npm owns, launch setup and the repair path install the tested omp with Bun and never run stock `omp update`", async () => {
 			const npmOmp: SetupPresence = {
 				kind: "outdated",
 				version: "18.0.0",

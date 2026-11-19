@@ -1,15 +1,30 @@
 /**
- * omp-latest.yml's steps on the bump path (rules in latest-run.ts).
+ * omp-latest.yml's steps: what a run tests (rules in compat-run.ts) and its bump path (rules in latest-run.ts).
  *
- *   bun scripts/omp-bump/latest.ts plan                        env LATEST, PRETEND_TESTED, GITHUB_REF; writes GITHUB_OUTPUT
+ *   bun scripts/omp-bump/latest.ts plan                        env LATEST, RELEASES (JSON array of release tags),
+ *                                                              PRETEND_TESTED, RECHECK, REHEARSE_APP, SCHEDULE,
+ *                                                              GITHUB_REF, GITHUB_EVENT_NAME; writes GITHUB_OUTPUT
  *   bun scripts/omp-bump/latest.ts summary <vitest.json> <out> env GROUP, JOB, OUTCOME; exit 1 on an unexplained stock skip
- *   bun scripts/omp-bump/latest.ts report <dir>                env VERSION, NEEDS (toJSON(needs)); markdown on stdout
+ *   bun scripts/omp-bump/latest.ts report <dir>                env VERSION, NEEDS (toJSON(needs)), TARGET (the job in
+ *                                                              it that calls omp-vitest.yml); markdown on stdout
  */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { OMP_COMPAT_BRANCH, OMP_COMPAT_FILE, type OmpCompatList, parseOmpCompat } from "../../src/shared/omp-compat";
 import { TOUCHPOINTS } from "../omp-boundary/touchpoints";
-import { bumpBranch, type JobSummary, planBump, renderReport, summarize, type VitestReport } from "./latest-run";
+import { gitIn, readCompat } from "./compat";
+import { DAILY_CRON, planTargets } from "./compat-run";
+import {
+	bumpBranch,
+	type JobSummary,
+	jobResults,
+	type Need,
+	planBump,
+	renderReport,
+	summarize,
+	type VitestReport,
+} from "./latest-run";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const [command, ...args] = process.argv.slice(2);
@@ -30,16 +45,43 @@ if (command === "plan") {
 	});
 	// 2: no such ref; anything else but 0 is a git failure, which must not read as "not handled yet".
 	if (remote.status !== 0 && remote.status !== 2) throw new Error(`git ls-remote failed: ${remote.stderr}`);
+	const releases: unknown = JSON.parse(env("RELEASES"));
+	if (!Array.isArray(releases) || !releases.every(tag => typeof tag === "string")) {
+		throw new Error(`RELEASES is not a JSON array of tags: ${env("RELEASES")}`);
+	}
+	const compat = readCompat(gitIn(ROOT)).text;
+	const list: OmpCompatList | null = compat === null ? {} : parseOmpCompat(compat);
+	// A list the apps refuse too: nothing can be verified into it until someone repairs the file.
+	if (!list) throw new Error(`${OMP_COMPAT_FILE} on ${OMP_COMPAT_BRANCH} is not a verified-omp list:\n${compat}`);
+	const onMain = process.env.GITHUB_REF === "refs/heads/main";
+	const targets = planTargets({
+		dispatch: process.env.GITHUB_EVENT_NAME === "workflow_dispatch",
+		daily: process.env.SCHEDULE === DAILY_CRON,
+		recheck: process.env.RECHECK === "true",
+		rehearseApp: (process.env.REHEARSE_APP ?? "").trim(),
+		onMain,
+		latest,
+		releases,
+		list,
+	});
 	const plan = planBump({
 		latest,
 		fileTested,
 		pretendTested: (process.env.PRETEND_TESTED ?? "").trim(),
-		onMain: process.env.GITHUB_REF === "refs/heads/main",
+		onMain,
+		runs: targets.main,
 		branchExists: remote.status === 0,
 	});
-	const lines = Object.entries(plan).map(([key, value]) => `${key}=${value}`);
+	const lines = Object.entries({ ...plan, ...targets }).map(([key, value]) => `${key}=${value}`);
 	console.log(lines.join("\n"));
 	if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join("\n")}\n`);
+	if (process.env.GITHUB_STEP_SUMMARY) {
+		const tests = [targets.release && `release v${targets.app}`, targets.main && "this ref"].filter(Boolean);
+		appendFileSync(
+			process.env.GITHUB_STEP_SUMMARY,
+			`omp ${latest}: ${tests.length > 0 ? `testing ${tests.join(" and ")}` : "nothing to test"} (${targets.why})\n`,
+		);
+	}
 } else if (command === "summary" && args.length === 2) {
 	const [input, output] = args;
 	const meta = { group: env("GROUP"), job: env("JOB"), outcome: env("OUTCOME") };
@@ -63,8 +105,7 @@ if (command === "plan") {
 	}
 } else if (command === "report" && args.length === 1) {
 	const dir = args[0];
-	const needs = JSON.parse(env("NEEDS")) as Record<string, { result: string }>;
-	const jobs = Object.fromEntries(Object.entries(needs).map(([job, need]) => [job, need.result]));
+	const jobs = jobResults(JSON.parse(env("NEEDS")) as Record<string, Need>, env("TARGET"));
 	const summaries = readdirSync(dir)
 		.filter(name => name.endsWith(".summary.json"))
 		.sort()

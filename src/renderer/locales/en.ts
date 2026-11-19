@@ -6838,9 +6838,17 @@ export const en: Record<string, string> = {
 	"ompUpdate.status.available": "omp {latest} is available. Installed: {version}.",
 	"ompUpdate.held.untested-major":
 		"omp {latest} is available, but this OMPdesk was tested with omp {tested}, so it isn't installed automatically. Press the update button to install it anyway.",
+	"ompUpdate.held.verifying":
+		"omp {latest} is out. OMPdesk installs it by itself once it passes OMPdesk's checks, usually within the hour. Press the update button to install it now anyway.",
+	"ompUpdate.held.failed":
+		"omp {latest} failed OMPdesk's checks, so omp {installed} stays. It installs by itself once a fixed OMPdesk is out. Press the update button to install it anyway.",
+	"ompUpdate.held.failedDays":
+		"omp {latest} failed OMPdesk's checks {days} day(s) ago, so omp {installed} stays. It installs by itself once a fixed OMPdesk is out. Press the update button to install it anyway.",
+	"ompUpdate.unverified":
+		"omp {version} hasn't passed OMPdesk's checks for this release (tested with omp {tested}). Some features may not work.",
+	"ompUpdate.stockAutoTaken":
+		"omp's own auto-update is off: OMPdesk keeps omp current with checked versions only. Turning this switch off turns it back on.",
 	"ompUpdate.tested": "Tested with omp {version}",
-	"ompUpdate.untested":
-		"omp {version} is newer than the omp this OMPdesk was tested with ({tested}). Some features may not work.",
 	"ompUpdate.failure.check": "Couldn't check npm for a newer omp.",
 	"ompUpdate.failure.install": "The omp update failed.",
 	"ompUpdate.failure.not-updated": "The omp update finished, but omp is still older than {latest}.",
