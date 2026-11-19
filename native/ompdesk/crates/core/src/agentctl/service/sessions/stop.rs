@@ -180,18 +180,15 @@ impl AgentControl {
         }
     }
 
-    /// `#whenGone`: resolves once the tab is out of the caller's window and its omp has exited, or after a few
-    /// seconds. The omp outlives its tab by a moment, and where it works is no folder to remove or hand on while it
-    /// does (Windows).
-    async fn when_gone(&self, caller_tab_id: &str, tab_id: &str, wait_ms: u64) {
+    /// `#whenGone`: resolves once no window of the app lists the tab and its omp has exited, or after a few seconds.
+    /// The omp outlives its tab by a moment, and where it works is no folder to remove or hand on while it does
+    /// (Windows).
+    async fn when_gone(&self, tab_id: &str, wait_ms: u64) {
         // Every snapshot main pushes is looked at, so a tab that was gone only between two pushes counts.
         let gone = self
             .host
             .wait_for(Some(wait_ms), |state| {
-                (!state
-                    .tabs(caller_tab_id)
-                    .is_some_and(|tabs| tabs.iter().any(|tab| tab.tab_id == tab_id)))
-                .then_some(())
+                (!state.tabs.iter().any(|tab| tab.tab_id == tab_id)).then_some(())
             })
             .await;
         // The window kept the tab: its omp runs on.
@@ -233,12 +230,15 @@ impl AgentControl {
                 }
             }
         }
-        self.when_gone(caller_tab_id, tab_id, how.wait_ms).await;
+        self.when_gone(tab_id, how.wait_ms).await;
+        // Read from every tab of the app, not the caller's view of them: a caller that went meanwhile (its window
+        // closed, its tab released) has no view, and that says nothing of whether the target closed.
         let still = self
             .host
             .state()
-            .tabs(caller_tab_id)
-            .is_some_and(|tabs| tabs.iter().any(|entry| entry.tab_id == tab_id));
+            .tabs
+            .iter()
+            .any(|entry| entry.tab_id == tab_id);
         Ok(if still {
             TabClose::Kept
         } else {
@@ -255,10 +255,7 @@ impl AgentControl {
             .close_view(caller_tab_id, tab_id, how.auto, close_id);
         let answer_of =
             |state: &crate::agentctl::service::host::HostState| -> Option<Option<CloseOutcome>> {
-                let Some(tab) = state
-                    .tabs(caller_tab_id)
-                    .and_then(|tabs| tabs.into_iter().find(|entry| entry.tab_id == tab_id))
-                else {
+                let Some(tab) = state.tabs.iter().find(|entry| entry.tab_id == tab_id) else {
                     return Some(None);
                 };
                 tab.close_answer

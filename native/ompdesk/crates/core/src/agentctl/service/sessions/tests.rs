@@ -563,6 +563,46 @@ async fn closing_a_resting_session_needs_no_card_and_a_tab_the_window_keeps_is_r
 }
 
 #[tokio::test]
+async fn a_caller_that_goes_while_its_close_waits_never_makes_the_open_target_read_closed() {
+    // The caller's own tab leaves (its window closed) right after it asked; the target stays open and its window
+    // never answers. Only the target's own row says whether it closed, not the caller's view of the tabs.
+    let (control, asked) = rig_with(
+        7_314,
+        state_of(
+            vec![tab("a", "/s/x_1.jsonl"), tab("b", "/s/y_2.jsonl")],
+            json!({}),
+        ),
+        |method, args, port| match method {
+            "view" if args["event"]["how"] == "close" => {
+                let only_target = state_of(vec![tab("b", "/s/y_2.jsonl")], json!({}));
+                crate::ports::apply_state(port, 10, &only_target.to_string()).unwrap();
+                Ok(Value::Null)
+            }
+            other => main_of(other, args),
+        },
+    );
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_session_stop",
+            json!({ "session": "b", "close": true }),
+            None,
+        )
+        .await;
+    assert!(outcome.is_error, "{}", outcome.text);
+    assert!(
+        outcome
+            .text
+            .starts_with("\"b\" is still open: its window did not answer the close"),
+        "{}",
+        outcome.text
+    );
+    assert!(names(&asked, "mail").is_empty());
+    assert!(control.fates().find("b").is_none());
+    control.host.port().close();
+}
+
+#[tokio::test]
 async fn a_delete_of_an_own_idle_child_removes_it_journals_it_and_remembers_the_fate() {
     let mut child = tab("c1", "/s/c_cccc3333.jsonl");
     child["title"] = json!("Child");
