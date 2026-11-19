@@ -135,13 +135,14 @@ describe("BridgeHealth", () => {
 describe("BridgeHealth self-repair", () => {
 	const lacking = (version: string) =>
 		fakeBridge(async () => ({ ompVersion: version, unavailable: [{ feature: "planMode", missing: ["x"] }] }));
+	const omp = { processAlive: true };
 
 	it("newest omp still incompatible: one repair attempt, the toast still shows", async () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 		const onIncompatible = vi.fn();
 		const notify = vi.fn();
 		const health = new BridgeHealth(notify, onIncompatible);
-		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge });
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge }, omp);
 		expect(onIncompatible).toHaveBeenCalledExactlyOnceWith("19.0.1");
 		expect(health.take()).toHaveLength(1);
 	});
@@ -150,11 +151,11 @@ describe("BridgeHealth self-repair", () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 		const onIncompatible = vi.fn();
 		const health = new BridgeHealth(vi.fn(), onIncompatible);
-		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge });
-		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge });
-		await health.observe({ connected: false, ompVersion: "19.0.1", error: "x" });
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge }, omp);
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge }, omp);
+		await health.observe({ connected: false, ompVersion: "19.0.1", error: "x" }, omp);
 		expect(onIncompatible).toHaveBeenCalledTimes(1);
-		await health.observe({ connected: false, ompVersion: "19.0.2", error: "x" });
+		await health.observe({ connected: false, ompVersion: "19.0.2", error: "x" }, omp);
 		expect(onIncompatible).toHaveBeenCalledTimes(2);
 	});
 
@@ -162,7 +163,121 @@ describe("BridgeHealth self-repair", () => {
 		const onIncompatible = vi.fn();
 		const health = new BridgeHealth(vi.fn(), onIncompatible);
 		const ok = fakeBridge(async () => ({ ompVersion: "19.0.2", unavailable: [] }));
-		await health.observe({ connected: true, ompVersion: "19.0.2", bridge: ok.bridge });
+		await health.observe({ connected: true, ompVersion: "19.0.2", bridge: ok.bridge }, omp);
 		expect(onIncompatible).not.toHaveBeenCalled();
+	});
+
+	it("a paired host's incompatible omp is toasted here but never repairs this computer's omp", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const onIncompatible = vi.fn();
+		const health = new BridgeHealth(vi.fn(), onIncompatible);
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: lacking("19.0.1").bridge });
+		await health.observe({ connected: false, ompVersion: "19.0.3", error: "x" });
+		expect(health.take()).toHaveLength(2);
+		expect(onIncompatible).not.toHaveBeenCalled();
+	});
+});
+
+describe("BridgeHealth record", () => {
+	const lacking = fakeBridge(async () => ({
+		ompVersion: "19.0.0",
+		unavailable: [
+			{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
+			{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+		],
+	}));
+	const healthy = fakeBridge(async () => ({ ompVersion: "19.0.1", unavailable: [] }));
+	const clock = (start: number) => {
+		let now = start;
+		return () => now++;
+	};
+
+	it("writes one line per omp version this computer runs, however many tabs connect", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const log = vi.fn();
+		const health = new BridgeHealth(vi.fn(), () => {}, { log });
+		for (let tab = 0; tab < 3; tab++) {
+			await health.observe(
+				{ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge },
+				{ processAlive: true },
+			);
+		}
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: healthy.bridge }, { processAlive: true });
+		await health.observe({ connected: false, ompVersion: "19.0.2", error: "no socket" }, { processAlive: true });
+		await health.observe({ connected: false, ompVersion: "19.0.2", error: "no socket" }, { processAlive: true });
+		expect(log.mock.calls.map(([line]) => line)).toEqual([
+			{
+				source: "bridge-health",
+				message: "probed",
+				details: {
+					ompVersion: "19.0.0",
+					ok: false,
+					unavailable: [
+						{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
+						{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+					],
+					level: "warn",
+				},
+			},
+			{ source: "bridge-health", message: "probed", details: { ompVersion: "19.0.1", ok: true, unavailable: [] } },
+			{
+				source: "bridge-health",
+				message: "unreachable",
+				details: { ompVersion: "19.0.2", ok: false, reason: "no socket", level: "warn" },
+			},
+		]);
+	});
+
+	it("keeps and logs nothing for a paired host's omp, and still records the same version run here", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const log = vi.fn();
+		const health = new BridgeHealth(vi.fn(), () => {}, { log });
+		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge });
+		expect(log).not.toHaveBeenCalled();
+		expect(health.report()).toEqual({ results: [] });
+		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge }, { processAlive: true });
+		expect(log).toHaveBeenCalledTimes(1);
+		expect(health.report().results.map(result => result.ompVersion)).toEqual(["19.0.0"]);
+	});
+
+	it("reports the latest result per version, running versions first, counting the omps that still run", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const health = new BridgeHealth(vi.fn(), () => {}, { now: clock(1_000) });
+		const first = { processAlive: true };
+		const second = { processAlive: true };
+		const gone = { processAlive: true };
+		await health.observe({ connected: false, ompVersion: "18.22.2", error: "no socket" }, gone);
+		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge }, first);
+		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge }, second);
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: healthy.bridge }, { processAlive: false });
+		gone.processAlive = false;
+		expect(health.report()).toEqual({
+			results: [
+				{
+					ompVersion: "19.0.0",
+					at: 1_001,
+					ok: false,
+					running: 2,
+					unavailable: [
+						{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
+						{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+					],
+				},
+				{ ompVersion: "19.0.1", at: 1_002, ok: true, running: 0, unavailable: [] },
+				{ ompVersion: "18.22.2", at: 1_000, ok: false, running: 0, unavailable: [], unreachable: "no socket" },
+			],
+		});
+	});
+
+	it("counts an omp under the version it restarted on, not the one it ran before", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const health = new BridgeHealth(vi.fn(), () => {}, { now: clock(1) });
+		const tab = { processAlive: true };
+		await health.observe({ connected: true, ompVersion: "19.0.0", bridge: lacking.bridge }, tab);
+		await health.observe({ connected: true, ompVersion: "19.0.1", bridge: healthy.bridge }, tab);
+		expect(health.report().results.map(({ ompVersion, running }) => [ompVersion, running])).toEqual([
+			["19.0.1", 1],
+			["19.0.0", 0],
+		]);
 	});
 });

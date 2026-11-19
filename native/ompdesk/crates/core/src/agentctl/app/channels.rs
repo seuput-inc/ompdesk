@@ -37,6 +37,10 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("log:snapshot", Risk::Never(DENY)),
     ("app:quit", Risk::Tier(Sensitive, &["app.quit"])),
     ("bridge-health:take", Risk::Never(DENY)),
+    (
+        "bridge-health:get",
+        Risk::Tier(Read, &["omp.bridge_health"]),
+    ),
     ("disk-full:get", Risk::Never(DENY)),
     ("rpc:command", Risk::Never(RAW_RPC)),
     ("rpc:command-for-tab", Risk::Never(RAW_RPC)),

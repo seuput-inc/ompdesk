@@ -54,6 +54,8 @@
  * - The host's sidebar project list (sidebar-projects.ts): `host.projects.command {request: SidebarProjectsRequest}`
  *   → SidebarProjectsState (get, add a folder the person opened there, remove one from the sidebar); the host pushes
  *   every change as the `host.projects.changed` event
+ * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
+ *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
  * - Agent control on a session the host runs (agent-control/branches.ts and local/git/worktree.ts on the host's
  *   own checkout; `worktree` = `{path, branch, baseCwd}` of the tab's binding): `host.git.facts {worktree}` →
  *   BranchFacts, `host.git.evidence {worktree, diffChars}` → BranchEvidence (the child's diff cut to `diffChars`
@@ -107,6 +109,7 @@ import type { BuiltinReaState } from "../../shared/builtin-mcp";
 import type { CreditSpendState } from "../../shared/credit-spend";
 import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import type {
+	BridgeHealthReport,
 	CustomModelEffort,
 	CustomModelThinkingMode,
 	CustomProviderApi,
@@ -870,6 +873,20 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTy
 	worktreeKinds: z.record(ProjectPath, z.enum(["autopilot", "agent", "other"])).optional(),
 	autopilotRuns: z.record(ProjectPath, z.object({ run: z.string().min(1), child: z.boolean() })).optional(),
 	gone: z.array(ProjectPath).optional(),
+});
+
+/** `host.bridgeHealth.get` reply: the host's bridge self-check per omp version (bridge-health.ts `report`). */
+export const BridgeHealthReportSchema: z.ZodType<BridgeHealthReport> = z.object({
+	results: z.array(
+		z.object({
+			ompVersion: z.string(),
+			at: z.number(),
+			ok: z.boolean(),
+			running: z.number().int().nonnegative(),
+			unavailable: z.array(z.object({ feature: z.string(), missing: z.array(z.string()) })),
+			unreachable: z.string().optional(),
+		}),
+	),
 });
 
 /** A host-level stats read waits for the host's own stats request (15 s) plus the link. */

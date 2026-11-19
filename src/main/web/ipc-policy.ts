@@ -125,6 +125,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "Restart or quit from a confirmation sheet that counts the running turns",
 	},
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.BRIDGE_HEALTH_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DISK_FULL_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 
 	// Sessions and their tabs.
