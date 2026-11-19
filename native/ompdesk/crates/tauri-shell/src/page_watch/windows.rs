@@ -1,40 +1,55 @@
-//! WebView2. The probe is DevTools `Runtime.evaluate` of an empty script, which the browser carries to the renderer:
-//! no page IPC, no resource load. It also keeps this host's DevTools session attached to the page's renderer, and the
-//! kill needs that: it is DevTools `Page.crash`, which the browser sends to the renderer's IO thread, so it ends a
-//! renderer whose main thread is held; but a session first used after the hang never reached the renderer (19 Nov
-//! 2026, the Windows runner: `ExecuteScript` probes, then `Page.crash` with no answer and no process end). Ending the
-//! process `GetProcessExtendedInfos` names took the shell down there as soon as its list answered. `ProcessFailed`
+//! WebView2. The probe is `ExecuteScript`, which the browser process carries to the renderer: no page IPC, no
+//! resource load. The kill ends the renderer process that runs the page's main frame, learned from
+//! `ICoreWebView2Environment13::GetProcessExtendedInfos` right after the page answered a probe (a renderer whose main
+//! thread is held may answer nothing), and checked against the environment's live renderers (`GetProcessInfos`)
+//! before it is ended. DevTools `Page.crash` ended nothing there (19 Nov 2026, the Windows runner). `ProcessFailed`
 //! reports a renderer that ended, and one the engine itself found unresponsive.
 #![allow(unsafe_code)]
 
 use crate::host::Call;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use tauri::WebviewWindow;
-use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+use tauri::webview::PlatformWebview;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
-    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
-    ICoreWebView2ProcessFailedEventArgs2,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, COREWEBVIEW2_PROCESS_KIND,
+    COREWEBVIEW2_PROCESS_KIND_RENDERER, ICoreWebView2_20, ICoreWebView2Environment13,
+    ICoreWebView2FrameInfo2, ICoreWebView2ProcessExtendedInfo,
+    ICoreWebView2ProcessExtendedInfoCollection, ICoreWebView2ProcessFailedEventArgs2,
 };
-use webview2_com::ProcessFailedEventHandler;
-use windows::core::{HSTRING, Interface};
+use webview2_com::{
+    ExecuteScriptCompletedHandler, GetProcessExtendedInfosCompletedHandler,
+    ProcessFailedEventHandler,
+};
+use windows::core::{BOOL, HSTRING, Interface};
+use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+
+thread_local! {
+    /// Each app page's main-frame renderer, learned while it answered. UI thread only, where every WebView2 call and
+    /// answer runs.
+    static RENDERERS: RefCell<HashMap<u64, i32>> = RefCell::new(HashMap::new());
+    /// Pages whose renderer lookup is under way.
+    static LOOKING: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+}
 
 pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
-    let started = window.with_webview(move |view| {
-        let handler =
-            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, _json| {
-                super::settled(wc, probe, result.is_ok());
-                Ok(())
-            }));
-        let params = serde_json::json!({"expression": super::PROBE}).to_string();
+    let window = window.clone();
+    let started = window.clone().with_webview(move |view| {
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, _value| {
+            super::settled(wc, probe, result.is_ok());
+            // The renderer is learned right after the page answered, while it runs script.
+            if result.is_ok() {
+                let _ = window.with_webview(move |view| learn(&view, wc));
+            }
+            Ok(())
+        }));
         // SAFETY: Tauri hands this closure the live controller on the owning UI thread; WebView2 retains the handler
-        // until the protocol call answers.
-        let sent = unsafe { view.controller().CoreWebView2() }.and_then(|core| unsafe {
-            core.CallDevToolsProtocolMethod(
-                &HSTRING::from("Runtime.evaluate"),
-                &HSTRING::from(params),
-                &handler,
-            )
-        });
+        // until the script answers.
+        let sent = unsafe { view.controller().CoreWebView2() }
+            .and_then(|core| unsafe { core.ExecuteScript(&HSTRING::from(super::PROBE), &handler) });
         if sent.is_err() {
             super::settled(wc, probe, false);
         }
@@ -44,34 +59,230 @@ pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
     }
 }
 
-/// Answered once `Page.crash` is sent: the renderer it ends answers nothing, and its end comes as `ProcessFailed`.
+/// Looks up the page's renderer once per renderer: again only after it ended.
+fn learn(view: &PlatformWebview, wc: u64) {
+    if RENDERERS.with_borrow(|known| known.contains_key(&wc))
+        || !LOOKING.with_borrow_mut(|on| on.insert(wc))
+    {
+        return;
+    }
+    lookup(view, move |found| {
+        LOOKING.with_borrow_mut(|on| on.remove(&wc));
+        match found {
+            Ok(pid) => {
+                crate::log::log(
+                    "page.renderer_learned",
+                    serde_json::json!({"wcId": wc, "pid": pid}),
+                );
+                RENDERERS.with_borrow_mut(|known| known.insert(wc, pid));
+            }
+            Err(error) => crate::log::log(
+                "page.renderer_unknown",
+                serde_json::json!({"wcId": wc, "error": error}),
+            ),
+        }
+    });
+}
+
+/// The renderer process that runs the page's main frame, answered on the UI thread (or never, while it is stuck).
+fn lookup(view: &PlatformWebview, answer: impl FnOnce(Result<i32, String>) + 'static) {
+    let answer = Rc::new(RefCell::new(Some(answer)));
+    let finish = move |result: Result<i32, String>| {
+        if let Some(answer) = answer.borrow_mut().take() {
+            answer(result);
+        }
+    };
+    let found = (|| {
+        // SAFETY: Tauri hands the caller the live controller on the owning UI thread; `frame` outlives the call.
+        unsafe {
+            let mut frame = 0;
+            view.controller()
+                .CoreWebView2()?
+                .cast::<ICoreWebView2_20>()?
+                .FrameId(&mut frame)?;
+            let environment = view.environment().cast::<ICoreWebView2Environment13>()?;
+            windows::core::Result::Ok((environment, frame))
+        }
+    })();
+    let (environment, frame) = match found {
+        Ok(found) => found,
+        Err(error) => return finish(Err(format!("WebView2 process list: {error}"))),
+    };
+    let finish = Rc::new(finish);
+    let answered = finish.clone();
+    let handler =
+        GetProcessExtendedInfosCompletedHandler::create(Box::new(move |result, processes| {
+            crate::log::log(
+                "page.renderer_list",
+                serde_json::json!({"ok": result.is_ok(), "list": processes.is_some()}),
+            );
+            answered(
+                result
+                    .and_then(|()| match &processes {
+                        Some(processes) => renderer(processes, frame),
+                        None => Ok(None),
+                    })
+                    .map_err(|error| format!("WebView2 process list: {error}"))
+                    .and_then(|pid| {
+                        pid.ok_or_else(|| "the page's renderer process was not found".to_owned())
+                    }),
+            );
+            Ok(())
+        }));
+    crate::log::log("page.renderer_lookup", serde_json::json!({"frame": frame}));
+    // SAFETY: the live environment on its UI thread; WebView2 retains the handler until the list answers.
+    let asked = unsafe { environment.GetProcessExtendedInfos(&handler) };
+    crate::log::log(
+        "page.renderer_asked",
+        serde_json::json!({"frame": frame, "error": asked.as_ref().err().map(|e| e.to_string())}),
+    );
+    if let Err(error) = asked {
+        finish(Err(format!("WebView2 process list: {error}")));
+    }
+}
+
+/// Whether `pid` is one of the environment's renderers now (a pid of a renderer that ended may name another process).
+fn live_renderer(view: &PlatformWebview, pid: i32) -> windows::core::Result<bool> {
+    // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call.
+    unsafe {
+        let processes = view
+            .environment()
+            .cast::<ICoreWebView2Environment13>()?
+            .GetProcessInfos()?;
+        let mut count = 0;
+        processes.Count(&mut count)?;
+        for index in 0..count {
+            let info = processes.GetValueAtIndex(index)?;
+            let (mut kind, mut id) = (COREWEBVIEW2_PROCESS_KIND::default(), 0);
+            info.Kind(&mut kind)?;
+            info.ProcessId(&mut id)?;
+            if kind == COREWEBVIEW2_PROCESS_KIND_RENDERER && id == pid {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// One step of the renderer lookup, logged before it runs: the shell ended inside this walk on the Windows runner
+/// (19 Nov 2026) with nothing on stderr, and these lines name the call it ended in.
+fn step(what: &str, detail: serde_json::Value) {
+    crate::log::log(
+        "page.renderer_step",
+        serde_json::json!({"step": what, "detail": detail}),
+    );
+}
+
+/// Whether the renderer `process` runs the frame `frame`. The walk follows `MoveNext`'s own answer and stops at
+/// [`FRAMES_PER_RENDERER`].
+fn runs_frame(
+    process: &ICoreWebView2ProcessExtendedInfo,
+    frame: u32,
+) -> windows::core::Result<bool> {
+    // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call.
+    unsafe {
+        step("AssociatedFrameInfos", serde_json::Value::Null);
+        let collection = process.AssociatedFrameInfos()?;
+        step("GetIterator", serde_json::Value::Null);
+        let frames = collection.GetIterator()?;
+        let mut more = BOOL::default();
+        step("HasCurrent", serde_json::Value::Null);
+        frames.HasCurrent(&mut more)?;
+        let mut seen = Vec::new();
+        while more.as_bool() && seen.len() < FRAMES_PER_RENDERER {
+            step("GetCurrent", serde_json::json!(seen.len()));
+            let current = frames.GetCurrent()?;
+            step("FrameInfo2", serde_json::Value::Null);
+            let current = current.cast::<ICoreWebView2FrameInfo2>()?;
+            let mut id = 0;
+            step("FrameId", serde_json::Value::Null);
+            current.FrameId(&mut id)?;
+            if id == frame {
+                return Ok(true);
+            }
+            seen.push(id);
+            step("MoveNext", serde_json::json!(id));
+            frames.MoveNext(&mut more)?;
+        }
+        crate::log::log(
+            "page.renderer_frames",
+            serde_json::json!({"frame": frame, "seen": seen, "more": more.as_bool()}),
+        );
+        Ok(false)
+    }
+}
+
+/// More frames than any app page has; the walk stops there.
+const FRAMES_PER_RENDERER: usize = 256;
+
+/// The renderer process that runs the frame `frame`.
+fn renderer(
+    processes: &ICoreWebView2ProcessExtendedInfoCollection,
+    frame: u32,
+) -> windows::core::Result<Option<i32>> {
+    // SAFETY: live WebView2 objects on their UI thread, with out-parameters that outlive each call.
+    unsafe {
+        let mut count = 0;
+        step("Count", serde_json::Value::Null);
+        processes.Count(&mut count)?;
+        for index in 0..count {
+            step("GetValueAtIndex", serde_json::json!(index));
+            let process = processes.GetValueAtIndex(index)?;
+            step("ProcessInfo", serde_json::json!(index));
+            let info = process.ProcessInfo()?;
+            let mut kind = COREWEBVIEW2_PROCESS_KIND::default();
+            step("Kind", serde_json::json!(index));
+            info.Kind(&mut kind)?;
+            step("kind", serde_json::json!(kind.0));
+            if kind == COREWEBVIEW2_PROCESS_KIND_RENDERER && runs_frame(&process, frame)? {
+                let mut pid = 0;
+                info.ProcessId(&mut pid)?;
+                return Ok(Some(pid));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn end_process(pid: i32) -> Result<(), String> {
+    let id = u32::try_from(pid).map_err(|_| format!("invalid renderer process id {pid}"))?;
+    // SAFETY: plain Win32 calls; the handle is checked before use and closed here.
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE, 0, id);
+        if process.is_null() {
+            return Err(format!(
+                "OpenProcess {pid}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let ended = TerminateProcess(process, 1);
+        let error = std::io::Error::last_os_error();
+        CloseHandle(process);
+        if ended == 0 {
+            return Err(format!("TerminateProcess {pid}: {error}"));
+        }
+    }
+    Ok(())
+}
+
 pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
     // A view that is gone drops the closure, and the call with it: that answers `failed`.
     let asked = window.with_webview(move |view| {
-        // The renderer it ends never answers; an answer means it did not end, and says why.
-        let handler =
-            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+        let known = RENDERERS.with_borrow_mut(|known| known.remove(&wc));
+        match known.map(|pid| (pid, live_renderer(&view, pid))) {
+            Some((pid, Ok(true))) => end(wc, call, Ok(pid), "learned"),
+            known => {
+                // Not learned (the page never answered), or that renderer is gone: ask now, which a stuck renderer
+                // may never answer.
                 crate::log::log(
-                    "page.kill_answer",
-                    serde_json::json!({"wcId": wc, "ok": result.is_ok(), "answer": json}),
+                    "page.kill_lookup",
+                    serde_json::json!({"wcId": wc, "learned": known.map(|(pid, live)| {
+                        serde_json::json!({"pid": pid, "live": live.map_err(|e| e.to_string())})
+                    })}),
                 );
-                Ok(())
-            }));
-        super::killing(wc, true);
-        // SAFETY: Tauri hands this closure the live controller on the owning UI thread; WebView2 retains the handler
-        // until the protocol call answers.
-        let sent = unsafe { view.controller().CoreWebView2() }.and_then(|core| unsafe {
-            core.CallDevToolsProtocolMethod(
-                &HSTRING::from("Page.crash"),
-                &HSTRING::from("{}"),
-                &handler,
-            )
-        });
-        let sent = sent.map_err(|error| {
-            super::killing(wc, false);
-            crate::failed(format!("Page.crash: {error}"))
-        });
-        super::crash_answer(wc, call, sent);
+                lookup(&view, move |found| end(wc, call, found, "looked up"));
+            }
+        }
     });
     if let Err(error) = asked {
         crate::log::log(
@@ -79,6 +290,18 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
             serde_json::json!({"wcId": wc, "error": format!("with_webview: {error}")}),
         );
     }
+}
+
+fn end(wc: u64, call: Call, renderer: Result<i32, String>, how: &str) {
+    let ended = renderer.and_then(|pid| {
+        crate::log::log(
+            "page.kill_pid",
+            serde_json::json!({"wcId": wc, "pid": pid, "found": how}),
+        );
+        super::killing(wc, true);
+        end_process(pid).inspect_err(|_| super::killing(wc, false))
+    });
+    super::crash_answer(wc, call, ended.map_err(crate::failed));
 }
 
 /// Reports the page's renderer ending, and WebView2's own verdict that it is unresponsive. A subframe's renderer and
@@ -92,11 +315,8 @@ pub fn watch_failures(window: &WebviewWindow, wc: u64) -> tauri::Result<()> {
             let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
             // SAFETY: WebView2 hands the handler live event arguments on the UI thread.
             unsafe { failure.ProcessFailedKind(&mut kind) }?;
-            crate::log::log(
-                "page.process_failed",
-                serde_json::json!({"wcId": wc, "kind": kind.0}),
-            );
             if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED {
+                RENDERERS.with_borrow_mut(|known| known.remove(&wc));
                 let mut code = 0;
                 let exit = failure
                     .cast::<ICoreWebView2ProcessFailedEventArgs2>()
