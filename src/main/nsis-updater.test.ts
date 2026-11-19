@@ -3,6 +3,8 @@
  * runs. A quit before that would end the process while the installer was still being started.
  */
 
+import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import { DownloadedUpdateHelper } from "electron-updater/out/DownloadedUpdateHelper";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OmpNsisUpdater } from "./nsis-updater";
@@ -10,10 +12,39 @@ import { OmpNsisUpdater } from "./nsis-updater";
 const mocks = vi.hoisted(() => ({
 	order: [] as string[],
 	start: vi.fn<(command: string, args: readonly string[]) => Promise<number>>(),
+	appSession: { partition: "app" },
+	requests: [] as Array<{ session?: unknown }>,
 }));
 
-vi.mock("electron", () => ({ autoUpdater: { emit: (event: string) => mocks.order.push(event) } }));
+vi.mock("electron", () => ({
+	autoUpdater: { emit: (event: string) => mocks.order.push(event) },
+	session: { defaultSession: mocks.appSession },
+}));
 vi.mock("./installer-spawn", () => ({ spawnDetachedOffThread: mocks.start }));
+
+// electron-updater is loaded by Node, not Vite, so its lazy `require("electron")` gets this stand-in of the shim.
+const nodeRequire = createRequire(import.meta.url);
+nodeRequire.cache[nodeRequire.resolve("electron")] = {
+	exports: {
+		app: {
+			getVersion: () => "0.134.1",
+			getName: () => "OMPdesk",
+			isPackaged: true,
+			getPath: () => "",
+			once: () => {},
+		},
+		session: {
+			defaultSession: mocks.appSession,
+			fromPartition: (partition: string) => ({ partition }),
+		},
+		net: {
+			request: (options: { session?: unknown }) => {
+				mocks.requests.push(options);
+				return new EventEmitter();
+			},
+		},
+	},
+} as NodeJS.Module;
 
 const app = {
 	version: "0.44.0",
@@ -100,5 +131,20 @@ describe("OmpNsisUpdater.quitAndInstall", () => {
 		updater.install(true, false);
 
 		expect(mocks.start).not.toHaveBeenCalled();
+	});
+});
+
+describe("OmpNsisUpdater's download", () => {
+	it("goes out on the app session, never on a partition the shell has to create first", () => {
+		const updater = new OmpNsisUpdater();
+		// electron-updater's executor is not in its typings: the field this fix sets is what the test pins.
+		const internals = updater as unknown as {
+			httpExecutor: { createRequest(options: object, callback: () => void): unknown };
+		};
+		const executor = internals.httpExecutor;
+
+		executor.createRequest({ protocol: "https:", hostname: "api.github.com", path: "/asset" }, () => {});
+
+		expect(mocks.requests.map(request => request.session)).toEqual([mocks.appSession]);
 	});
 });
