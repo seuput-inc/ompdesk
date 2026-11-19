@@ -467,6 +467,7 @@ jobs:
           set -euo pipefail
           bun native/ompdesk/crates/tauri-shell/tests/preload.ts
           bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/ipc-post-message.ts
       - name: Test and lint the test-only WebDriver build
         shell: bash
         if: inputs.only == 'tauri-native'
