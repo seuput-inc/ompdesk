@@ -175,6 +175,24 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	display: none;
 }
 
+/* A narrow row (the 220 px sidebar) gives its idle age's place to the branch, as a tablet's docked sidebar gave it to
+   the title: the age stays in the row's tooltip (its exact time) and its screen-reader text. The ✓, a waiting badge
+   and a working arc stay. */
+.omp-session-sidebar .omp-sidebar-session-row {
+	container-type: inline-size;
+}
+
+@container (max-width: 15rem) {
+	.omp-sidebar-session-row [data-sidebar-row-end] > time {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+}
+
 .omp-sidebar-controls {
 	padding-bottom: var(--sc-space-3);
 }
