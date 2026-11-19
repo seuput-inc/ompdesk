@@ -175,8 +175,8 @@ instead of resizing a bitmap), `Page.printToPDF` (`transferMode: "ReturnAsBase64
 `delete`, `replaceMisspelling {text}`, `copyImageAt {x, y}`, `setWebRTCIPHandlingPolicy {policy}`,
 `setFrameRate {fps}`, `invalidate`, `startPainting`, `stopPainting`, `focus`, `setAudioMuted {muted}`,
 `setBackgroundThrottling {allowed}`, `ignoreBeforeUnload`, `close` (destroys the page), `watchEvents {names}`,
-`forcefullyCrashRenderer` (ends the page's content process: macOS `_killWebContentProcessAndResetState`, Windows the
-renderer's `TerminateProcess`; `render-process-gone` `{reason: "killed"}` follows, and Node loads the page again).
+`forcefullyCrashRenderer` (ends the page's content process: macOS `_killWebContentProcessAndResetState`, Windows DevTools
+`Page.crash`; `render-process-gone` `{reason: "killed"}` follows, and Node loads the page again).
 
 `wc.event` names and `args` (all the page-level events the app listens to):
 
