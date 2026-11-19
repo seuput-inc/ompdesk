@@ -341,7 +341,10 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 				["finished", { path: "setup", method: "bun-global", command, version: tested.version }],
 			]);
 			// npm's omp was never run to update itself: it is what it was, and the lookup passes over it.
-			expect((await run(npmOmp, ["--version"], env)).output.trim()).toBe("omp/18.0.0");
+			expect(await resolveOmpAmong([npmOmp], env.PATH ?? "")).toMatchObject({
+				ok: false,
+				reason: { kind: "too-old", version: "18.0.0", bin: npmOmp },
+			});
 			expect(await lookup()).toMatchObject({ ok: true, runtime: { bin: bunOmp, version: tested.version } });
 			service.dispose();
 		}, 120_000);
