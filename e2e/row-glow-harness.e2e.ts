@@ -317,7 +317,7 @@ if (SHOTS)
 				});
 
 for (const surface of SURFACES)
-	test(`a session title starts at its group's content edge; a child sits one step in (${surface.name})`, async () => {
+	test(`a session row's picture starts at its group's content edge, its title after it; a child sits one step in (${surface.name})`, async () => {
 		test.setTimeout(120_000);
 		const page = await openHarness(surface, "light", false);
 		await seedRunning(page);
@@ -336,25 +336,32 @@ for (const surface of SURFACES)
 			};
 			const rows = [...root.querySelectorAll(".omp-sidebar-session-row")].map(row => {
 				const header = headerOf(row);
+				const picture = row.querySelector("[data-project-artwork]")?.getBoundingClientRect();
 				return {
 					text: (row.textContent ?? "").slice(0, 20),
+					picture: picture ? Math.round(picture.left) : null,
+					pictureEnd: picture ? Math.round(picture.right) : null,
 					title: Math.round((row.querySelector("button") as Element).getBoundingClientRect().left),
 					group: header ? Math.round(contentLeft(header)) : null,
 				};
 			});
-			const parent = root.querySelector(".omp-sidebar-session-row[data-signal='running'] button");
+			const parent = root.querySelector(".omp-sidebar-session-row[data-signal='running'] [data-project-artwork]");
 			const child = root.querySelector("[data-sidebar-subagent] [data-family-glyph]");
 			return {
 				rows,
-				parentTitle: parent ? Math.round(parent.getBoundingClientRect().left) : null,
+				parentPicture: parent ? Math.round(parent.getBoundingClientRect().left) : null,
 				childGlyph: child ? Math.round(child.getBoundingClientRect().left) : null,
 			};
 		});
-		// Local rows and a paired host's rows alike: nothing leads a title.
+		// Local rows and a paired host's rows alike: the repository's picture leads, at the group's content edge, and
+		// the title follows it (the approved two-line row, panels-sidebar.md › Session targets).
 		expect(geometry.rows.length).toBeGreaterThan(3);
-		for (const row of geometry.rows) expect(row, row.text).toMatchObject({ title: row.group });
-		// A family child's glyph starts 6 px past its parent's title (its own title one step further in).
-		expect(geometry.childGlyph).toBe((geometry.parentTitle ?? 0) + 6);
+		for (const row of geometry.rows) {
+			expect(row, row.text).toMatchObject({ picture: row.group });
+			expect(row.title, row.text).toBeGreaterThan(row.pictureEnd ?? Number.POSITIVE_INFINITY);
+		}
+		// A family child's glyph starts 6 px past its parent's picture (its own title one step further in).
+		expect(geometry.childGlyph).toBe((geometry.parentPicture ?? 0) + 6);
 		// The unseen-finish mark, when a row has one, sits at its end.
 		for (const mark of await sidebar.locator("[data-sidebar-done]").all())
 			await expect(mark.locator("xpath=ancestor::*[@data-sidebar-row-end]")).toHaveCount(1);

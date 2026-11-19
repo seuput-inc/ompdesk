@@ -2386,10 +2386,10 @@ html[data-shell] .omp-session-sidebar [data-sidebar-row-menu][data-sidebar-row-m
 }
 
 /* A session row's ⋯ and family chip sit on its second line (sidebar.css): they stay line-high under a finger and
-   reach past it by their invisible hit area, which the row's paint containment bounds to the row, so the row stays
-   two lines. The ⋯ keeps a 36 px slot across; the chip's reach stops half way to it. */
+   reach past it by their invisible hit area (44 px tall, bounded by the row), so the row stays two lines. The ⋯
+   keeps its 44 px slot across; the chip's reach stops half way to it. */
 html[data-shell] .omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-menu][data-sidebar-row-menu][data-sidebar-row-menu] {
-	min-width: 36px;
+	min-width: 44px;
 	min-height: 0;
 	--hit-gap-x: 0px;
 	--hit-gap-y: 200vmax;
