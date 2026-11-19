@@ -1,12 +1,22 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { initRepo, pathExists, stockShapedWorktree } from "./local/git/test-repos";
+import { core } from "./core/process";
+import { gitSync, initRepo, pathExists, stockShapedWorktree } from "./local/git/test-repos";
 import { removeWorktree } from "./local/git/worktree";
 import type { BridgeClient } from "./local/types";
 import {
@@ -17,12 +27,15 @@ import {
 	withoutAwsCredentials,
 } from "./test-bridge-probe";
 import { RM_TEMP } from "./test-fake-omp";
+import { sweepLeftBehind } from "./worktree-orphans";
 
 /**
  * A worktree a session ran in can be removed once that session's omp is gone, while other sessions' omps still run.
  * omp 19 starts one daemon per config folder from whichever omp first needs it; the daemon takes that omp's working
  * folder and outlives it while any omp stays connected, and Windows refuses to remove a folder a running process has
- * as its working folder. Installed omp, scripted loopback provider (one `bash` call per prompt), no spend.
+ * as its working folder. git then empties the worktree and drops it from its list; the removal succeeds and leaves the
+ * empty folder, written down, for disk care's later pass (`sweepLeftBehind`), which removes it only while it is still
+ * empty and no worktree. Installed omp, scripted loopback provider (one `bash` call per prompt), no spend.
  */
 
 type Frame = { type: string; [key: string]: unknown };
@@ -227,6 +240,7 @@ describe.skipIf(process.platform !== "win32" || !existsSync(omp))("a worktree a 
 		const elsewhere = join(isolated, "elsewhere");
 		mkdirSync(join(isolated, "agent"), { recursive: true });
 		mkdirSync(elsewhere);
+		core().leftBehindFile = join(isolated, "left-behind-worktrees.json");
 		cleanups.push(() => {
 			stopOmpDaemon(isolated);
 			rmSync(isolated, RM_TEMP);
@@ -255,27 +269,28 @@ describe.skipIf(process.platform !== "win32" || !existsSync(omp))("a worktree a 
 		try {
 			await removeWorktree({ path: worktree.path }, bridge, repo);
 		} catch (error) {
-			// git emptied the folder and dropped it from its list; what frees what is left is ending the daemon (with its
-			// units) while the second omp still runs.
-			if (daemon !== undefined) stopOmpDaemon(isolated);
-			let after: string;
-			try {
-				rmSync(worktree.path, RM_TEMP);
-				after = "the folder left behind was removable once the daemon ended";
-			} catch (again) {
-				after = `the folder left behind stayed busy after the daemon ended: ${String(again)}`;
-			}
 			throw new Error(
 				[
 					`removal refused: ${String(error)}`,
 					`daemon after the first omp's prompt: ${firstDaemon ?? "none"}; after it ended: ${daemon ?? "none"}`,
 					held,
-					after,
 				].join("\n"),
 				{ cause: error },
 			);
 		}
-		expect(await pathExists(worktree.path)).toBe(false);
+		expect(gitSync(repo, "worktree", "list", "--porcelain")).not.toContain("session-1234567");
+		if (await pathExists(worktree.path)) {
+			// Still the daemon's working folder: empty, and the pass leaves it while the daemon holds it.
+			expect(readdirSync(worktree.path)).toEqual([]);
+			expect(await sweepLeftBehind(() => [])).toEqual([{ path: worktree.path, outcome: "held" }]);
+			// By the next pass the path holds something else: it stays, and is no longer tracked.
+			writeFileSync(join(worktree.path, "sentinel.txt"), "user work");
+			expect(await sweepLeftBehind(() => [])).toEqual([
+				{ path: worktree.path, outcome: "kept", reason: "not empty" },
+			]);
+			expect(readFileSync(join(worktree.path, "sentinel.txt"), "utf8")).toBe("user work");
+			expect(await sweepLeftBehind(() => [])).toEqual([]);
+		}
 		await second.stop();
 	}, 300_000);
 });

@@ -895,6 +895,7 @@ app.whenReady().then(async () => {
 	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
 	core().report = (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details });
+	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
 	const remoteIdentity = loadIdentity(app.getPath("userData")).catch((error: unknown): Identity => {
