@@ -104,7 +104,7 @@ import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
 import { appIconPath, appNotification, holdTestNotifications } from "./app-icon";
-import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes } from "./app-quit";
+import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
@@ -326,6 +326,8 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
 	app.quit();
 }
+// Before anything else is logged: how the last run ended, and this run's end line when it exits.
+if (gotLock) startQuitLog();
 
 // Crash-loop guard (launch-guard-core.ts): when the last launches all ended within seconds, this one starts in
 // safe mode (software rendering, no automatic relaunch, machine setup and memory setup paused). Packaged runs
@@ -948,6 +950,8 @@ app.whenReady().then(async () => {
 			if (presence && presence.kind !== "present") void setupService?.retry("omp").catch(() => undefined);
 			else void ompUpdater?.repair().catch(() => undefined);
 		},
+		// One gui-runtime line per omp version this computer runs, read back by `omp.bridge_health`.
+		{ log: writeRuntimeLog },
 	);
 	// Every IPC handler registers once, here and in what this hands it to: on ipcMain for the app's windows,
 	// and in the table a paired web device's calls are dispatched from (web/ipc-registry.ts).
@@ -1158,8 +1162,8 @@ app.whenReady().then(async () => {
 	});
 	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web) => {
 		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web);
-		// The host runs its own health check, session-kind record and bridge
-		// probe; only the probe's verdict comes back, for this machine's toast.
+		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
+		// back, for this machine's toast (no record and no repair here: the host keeps and repairs its own).
 		const sc = devices.createSidecar(device, tabId, cwd, kind, fresh);
 		sc.on("bridge", (result: BridgeConnectResult) => void bridgeHealth.observe(result));
 		return sc;
@@ -1280,6 +1284,7 @@ app.whenReady().then(async () => {
 		},
 		schedules: () => scheduleService,
 		sidebarProjects: () => sidebarProjects,
+		bridgeHealth: () => bridgeHealth.report(),
 		accountRotation: accountRotationDeps({
 			prefs: { get: key => prefsStore().get(key), set: (key, value) => prefsStore().set(key, value) },
 			tabs: () => sidecarPool.allSidecars(),
@@ -2736,7 +2741,7 @@ app.on("activate", () => {
 // Quit on all windows closed (except macOS)
 app.on("window-all-closed", () => {
 	if (process.platform !== "darwin") {
-		requestQuit();
+		requestQuit("last-window");
 	}
 });
 

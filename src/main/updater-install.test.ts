@@ -99,6 +99,7 @@ vi.mock("./app-quit", () => ({
 	confirmUpdateRestart: mocks.confirmUpdateRestart,
 	disarmQuitWatchdog: () => {},
 	onQuitForcedExit: () => {},
+	logQuitAsked: () => {},
 	requestQuit: () => {},
 }));
 vi.mock("./hang-watchdog", () => ({ markMainStep: () => {} }));

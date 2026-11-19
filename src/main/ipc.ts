@@ -37,6 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
+import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { REA_PREF } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -86,12 +87,14 @@ import type {
 	IpcRpcCommandPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
+	IpcSessionsArtworkPayload,
 	IpcSessionsDeletePayload,
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
 	IpcSessionsRenamePayload,
 	IpcSessionsSearchPayload,
+	IpcSessionsTargetsPayload,
 	IpcSetActiveTabPayload,
 	IpcSetTabViewPayload,
 	IpcSidecarRestartPayload,
@@ -194,6 +197,7 @@ import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
 import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
+import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { readClipboardText } from "./shell-host/shell-calls";
 import { updateSidebarPrefs } from "./sidebar-prefs";
@@ -1648,6 +1652,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		});
 	});
 
+	// What each row's session works in, read on the computer that runs it (session-targets.ts).
+	ipc.handle(IPC_COMMANDS.SESSIONS_TARGETS, async (_caller, payload: IpcSessionsTargetsPayload) => {
+		const params = SessionTargetsParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.targets", params) : sessionTargets(params);
+	});
+
+	ipc.handle(IPC_COMMANDS.SESSIONS_ARTWORK, async (_caller, payload: IpcSessionsArtworkPayload) => {
+		const params = SessionArtworkParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.artwork", params) : sessionArtwork(params);
+	});
+
 	// Open a session (or a fresh project window) in a NEW parallel window with
 	// its own sidecar. The calling window's sidecar is left running untouched —
 	// this is the explicit parallel action. Returns false when the window's
@@ -1934,8 +1951,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Renderer-initiated quit (the `quit` command). Straight to the guard, never
 	// `window.close()`: closing the focused window only hides the rest of the
 	// session behind it.
-	ipc.on(IPC_COMMANDS.APP_QUIT, () => {
-		requestQuit();
+	ipc.on(IPC_COMMANDS.APP_QUIT, caller => {
+		requestQuit("command", caller.connId ? { detail: "from a paired device" } : undefined);
 	});
 
 	// System
@@ -2415,6 +2432,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.HOST_OMP_UPDATE_NOW, (caller, device?: unknown) =>
 		machineFor(caller, device).startOmpUpdate(),
 	);
+	// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
+	ipc.handle(BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
 	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");

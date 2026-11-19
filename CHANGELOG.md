@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.135.0] - 2026-11-20
+
+사이드바의 세션 목록이 새로 바뀌었어요: 세션마다 저장소 그림과 작업 중인 가지를 보여 주고, 줄은 더 얇아졌어요.
+
+- 세션 줄이 두 줄이 돼요. 윗줄은 제목, 아랫줄은 저장소 그림(또는 글자 표시)과 그 세션의 가지예요. 컴퓨터에서는 줄 높이가 40px, 터치 화면에서는 48px이에요.
+- 저장소 그림은 GitHub에 올린 대표 이미지, 없으면 주인 프로필 사진, 데스크톱 앱이면 그 앱의 아이콘을 써요. 받아 오는 크기와 시간에는 한도가 있어요.
+- 가지 이름이 길면 가운데를 줄여(`…/끝부분`) 끝이 다른 두 가지도 구별돼요. 좁은 사이드바에서는 쉬는 시간 표시가 먼저 빠지고, 그다음 가지가 줄어요.
+- 같은 화면이 이 컴퓨터의 창, 연결한 다른 컴퓨터의 창, 폰에서 똑같이 보여요.
+- omp가 OMPdesk에 필요한 기능을 갖췄는지 점검한 결과가 이제 로그(gui-runtime.jsonl)에 omp 판마다 한 줄 남고, 에이전트가 `ompdesk_app`의 `omp.bridge_health`로 이 컴퓨터와 연결한 컴퓨터의 결과를 읽을 수 있어요. 빠진 기능이 많아도 목록은 읽을 수 있는 모양으로 남고, 남기지 못한 개수도 적혀요.
+- 연결한 컴퓨터의 omp에 빠진 기능이 있어도 이 컴퓨터의 omp를 고치려 들지 않아요(알림은 그대로 보여요).
+- Windows에서 새 판이 나오면 첫 확인에서 바로 내려받아요. 지금까지는 첫 내려받기가 실패하고 5분 뒤 다음 확인에서 받았어요. 이 고침은 이 판을 깐 뒤부터 효과가 있어요(0.134.0·0.134.1은 이 판을 5분 늦게 받아요).
+- 앱이 끝날 때마다 까닭을 로그에 남겨요: 누가 끝냈는지(트레이, 메뉴, 마지막 창, 업데이트, 다른 컴퓨터의 요청, 시스템 신호), 다시 떴는지, 그리고 앞선 실행이 까닭 없이 끝났으면(강제 종료나 충돌) 다음에 켤 때 그렇게 적어요. 시스템이 보낸 종료 신호도 이제 일반 종료처럼 처리해요.
+- 알려진 것: 작업판에 방금 생긴 자식 세션 줄을 바로 누르면 열리지 않을 수 있어요(다시 누르면 열려요). 다음 판에서 고쳐요.
+
+<!-- en -->
+
+The sidebar's session list is new: each session shows its repository's picture and the branch it works on, in slimmer rows.
+
+- A session row has two lines: the title, then the repository's picture (or letter mark) and the session's branch. Rows are 40 px tall on a computer and 48 px on a touch screen.
+- The repository picture is the social preview uploaded to GitHub, else the owner's avatar, or a desktop app's own icon. What is fetched is bounded in size and time.
+- A long branch name gives way in the middle (`…/tail`), so two branches that differ only at the end still read apart. In a narrow sidebar the idle age goes first, then the branch shortens.
+- The same rows show in this computer's window, a paired computer's window and on the phone.
+- The check of whether omp has everything OMPdesk needs now leaves one line per omp version in the log (gui-runtime.jsonl), and an agent can read it for this computer and a paired one with `ompdesk_app` `omp.bridge_health`. When many features are missing the list stays readable, with a count of the entries left out.
+- A paired computer's omp missing features no longer starts a repair of this computer's omp (its notice still shows).
+- On Windows a new release now downloads at the first check. Until now the first download failed and the next check 5 minutes later fetched it. The fix works once this release is installed (0.134.0 and 0.134.1 still get this one 5 minutes late).
+- Every time the app ends it logs why: who ended it (tray, menu, last window, update, a paired computer's request, a system signal), whether it comes back, and, at the next launch, that the previous run ended without a reason (a force quit or a crash). A system quit signal now quits the app the normal way.
+- Known: clicking a child session's row on the work board right after it appears may not open it (a second click does). The next release fixes it.
+
 ## [0.134.1] - 2026-11-19
 
 OMPdesk가 omp 19.0.0을 지원합니다. 이 판은 omp 19.0.0으로 시험했어요.

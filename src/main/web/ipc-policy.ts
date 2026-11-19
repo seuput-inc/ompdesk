@@ -10,6 +10,7 @@
  * unchanged; `transform` = the host rewrites it for a web page; `client` = the page makes it itself.
  */
 import { AGENT_CONTROL_APP, AGENT_CONTROL_REVIEW, AGENT_CONTROL_VIEW } from "../../shared/agent-control";
+import { BRIDGE_HEALTH_GET } from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { MAIL_ACCOUNTS_COMMAND } from "../../shared/mail-accounts";
 import {
@@ -73,6 +74,7 @@ export type IpcChannel =
 	| typeof SCHEDULES_STATE
 	| typeof SIDEBAR_PROJECTS_COMMAND
 	| typeof SIDEBAR_PROJECTS_STATE
+	| typeof BRIDGE_HEALTH_GET
 	| typeof SSH_TOOLS_COMMAND
 	| typeof SSH_TOOLS_AGENT
 	| typeof SSH_TOOLS_PROMPTS
@@ -125,6 +127,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "Restart or quit from a confirmation sheet that counts the running turns",
 	},
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[BRIDGE_HEALTH_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DISK_FULL_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 
 	// Sessions and their tabs.
@@ -140,6 +143,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SESSIONS_SEARCH]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_MESSAGES]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_MOVE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_TARGETS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_ARTWORK]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_DUMP_BUNDLE]: {
 		dir: "invoke",
 		permission: "workspace",

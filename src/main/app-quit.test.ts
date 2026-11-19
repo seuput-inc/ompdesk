@@ -6,7 +6,7 @@
 import type { MessageBoxOptions } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fillText } from "../shared/fill-text";
-import { confirmQuit, confirmUpdateRestart, installQuitGuard, requestQuit, setQuitResumes } from "./app-quit";
+import { askQuit, confirmQuit, confirmUpdateRestart, installQuitGuard, requestQuit, setQuitResumes } from "./app-quit";
 import { MAIN_TEXT, type MainTextKey } from "./i18n-text";
 import { QUIT_EXIT_TIMEOUT_MS } from "./quit-watchdog";
 
@@ -62,6 +62,39 @@ beforeEach(() => {
 	electron.quit.mockReset();
 	electron.exit.mockReset();
 	electron.log.mockReset();
+});
+
+// First: the "⌘Q" case below approves the module's one quit latch for the rest of the file.
+describe("who asked to quit, in gui-runtime.jsonl", () => {
+	const keepWorking = async () => {
+		electron.showMessageBox.mockResolvedValueOnce({ response: 1 });
+		for (const listener of electron.beforeQuit) listener({ preventDefault: () => {} });
+		await vi.waitFor(() => expect(electron.showMessageBox).toHaveBeenCalled());
+		electron.showMessageBox.mockClear();
+	};
+
+	it("a quit main asks for is logged with its asker before the quit starts, and only once", async () => {
+		askQuit("tray");
+		expect(electron.log).toHaveBeenCalledTimes(1);
+		expect(electron.log).toHaveBeenCalledWith(
+			expect.objectContaining({ source: "app-quit", message: "Quit asked by the tray menu's Quit" }),
+		);
+		expect(electron.log.mock.invocationCallOrder[0]).toBeLessThan(electron.quit.mock.invocationCallOrder[0] ?? 0);
+		await keepWorking();
+		expect(electron.log).toHaveBeenCalledTimes(1);
+	});
+
+	it("a quit nobody in main asked for is the shell's (the Dock's Quit, a logout)", async () => {
+		await keepWorking();
+		expect(electron.log).toHaveBeenCalledTimes(1);
+		expect(electron.log).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: "app-quit",
+				message: "Quit asked by the shell (Dock Quit, logout or the system)",
+				details: { asker: "shell", relaunch: false },
+			}),
+		);
+	});
 });
 
 describe("confirmQuit", () => {
@@ -173,7 +206,7 @@ describe("quit watchdog wiring", () => {
 		const fire = () => {
 			for (const listener of electron.beforeQuit) listener({ preventDefault: () => {} });
 		};
-		requestQuit();
+		requestQuit("command");
 		// The first pass runs finalize and re-quits; only the committed pass arms the watchdog.
 		fire();
 		await vi.waitFor(() => expect(electron.quit).toHaveBeenCalledTimes(2));

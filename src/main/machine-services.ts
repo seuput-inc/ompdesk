@@ -19,6 +19,7 @@ import type { BuiltinReaState } from "../shared/builtin-mcp";
 import { type CreditSpendState, creditSpendEnabled } from "../shared/credit-spend";
 import { codedError, type IpcErrorCode, ipcErrorCode } from "../shared/ipc-error-codes";
 import type {
+	BridgeHealthReport,
 	CustomProviderInput,
 	CustomProvidersConfig,
 	HostDesktopState,
@@ -50,6 +51,7 @@ import type { OmpResolution } from "./omp-runtime";
 import type { OmpUpdater } from "./omp-updater";
 import {
 	AccountRotationStateSchema,
+	BridgeHealthReportSchema,
 	BuiltinReaStateSchema,
 	CreditSpendStateSchema,
 	HOST_STATS_TIMEOUT_MS,
@@ -125,6 +127,8 @@ export interface MachineServices {
 	createSchedule(draft: ScheduleDraft, origin?: string): Promise<ScheduleCreated>;
 	/** The sidebar's project list on that machine (sidebar-projects.ts): read it, add a folder, remove one. */
 	sidebarProjects(request: SidebarProjectsRequest): Promise<SidebarProjectsState>;
+	/** The bridge self-check's latest result per omp version that machine ran in its launch (bridge-health.ts). */
+	bridgeHealth(): Promise<BridgeHealthReport>;
 }
 
 /** The stats server's down-state texts, in this computer's UI language. */
@@ -201,6 +205,8 @@ export interface LocalMachineDeps {
 	schedules: () => Pick<ScheduleService, "command" | "create" | "readLog"> | null;
 	/** This computer's sidebar project list; it exists once startup has built it. */
 	sidebarProjects: () => Pick<SidebarProjects, "command"> | null;
+	/** This computer's bridge self-check results (`BridgeHealth.report`). */
+	bridgeHealth: () => BridgeHealthReport;
 }
 
 export interface AccountRotationDeps {
@@ -462,6 +468,10 @@ export class LocalMachine implements MachineServices {
 		return projects.command(request);
 	}
 
+	async bridgeHealth(): Promise<BridgeHealthReport> {
+		return this.#deps.bridgeHealth();
+	}
+
 	#scheduleService(): Pick<ScheduleService, "command" | "create" | "readLog"> {
 		const service = this.#deps.schedules();
 		if (!service) throw new Error("Scheduled runs are not available yet");
@@ -623,6 +633,10 @@ export class RemoteMachine implements MachineServices {
 
 	async sidebarProjects(request: SidebarProjectsRequest): Promise<SidebarProjectsState> {
 		return SidebarProjectsStateSchema.parse(await this.#request<unknown>("host.projects.command", { request }));
+	}
+
+	async bridgeHealth(): Promise<BridgeHealthReport> {
+		return BridgeHealthReportSchema.parse(await this.#request<unknown>("host.bridgeHealth.get", {}));
 	}
 }
 

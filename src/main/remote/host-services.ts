@@ -102,6 +102,7 @@ import {
 	sessionDeleteInProgress,
 } from "../session-mutations";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "../session-summaries";
+import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "../session-targets";
 import type { SidecarSessionIdentity } from "../sidecar";
 import { type SidecarPool, STOP_SESSION_WAIT_MS } from "../sidecar-pool";
 import {
@@ -1387,6 +1388,10 @@ export class LocalHostServices implements HostServices {
 					this.#deps.sessionIndex.moveSession(sessionPath, cwd),
 				);
 			}
+			case "sessions.targets":
+				return sessionTargets(parse(SessionTargetsParams, method, params));
+			case "sessions.artwork":
+				return sessionArtwork(parse(SessionArtworkParams, method, params));
 			// C114: the tab's terminals run here, in the tab's folder, with this machine's shells.
 			case "terminal.shells":
 				return detectShells();
@@ -1572,6 +1577,8 @@ export class LocalHostServices implements HostServices {
 				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
 			case "host.projects.command":
 				return this.#deps.machine.sidebarProjects(parse(ProjectsCommandParams, method, params).request);
+			case "host.bridgeHealth.get":
+				return this.#deps.machine.bridgeHealth();
 			// Agent control of a session this computer runs for the device: the git it would run on its own checkout.
 			case GIT_METHODS.facts:
 				return branchFacts(parse(GitWorktreeParams, method, params).worktree);

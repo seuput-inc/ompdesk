@@ -319,7 +319,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 		sc.on("spawned", () => markStartup("omp-spawned"));
 		sc.on("bridge", (result: BridgeConnectResult) => {
 			markStartup("bridge-connected");
-			void bridgeHealth.observe(result);
+			void bridgeHealth.observe(result, sc);
 		});
 		// The bridge's goal time limit ran out (resources/gui-bridge/modes/goal.ts): pause through stock RPC `goal`
 		// `pause`, the path that also gives back the pre-goal tool set and resets continuation (RpcGoalController

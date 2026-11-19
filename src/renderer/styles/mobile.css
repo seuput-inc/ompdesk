@@ -2379,21 +2379,18 @@ html[data-shell] .omp-session-sidebar [data-sidebar-row-menu][data-sidebar-row-m
 	min-width: 44px;
 }
 
-/* A docked sidebar on a tablet is 248 px wide, and a finger has no hover to keep the 44 px ⋯ off the row: beside the
-   ⋯ and the age the title kept ~13 characters ("Fix the flaky s…") with the age beside it saying the same date on every
-   row. The idle age (still read aloud) gives its place to the title; the ✓, a waiting badge and a working arc stay.
-   The drawer on a phone is wider and keeps it. */
-html[data-input="touch"]
-	.omp-session-sidebar:not(.omp-drawer .omp-session-sidebar)
-	.omp-sidebar-session-row
-	[data-sidebar-row-end]
-	> time {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	overflow: hidden;
-	clip-path: inset(50%);
-	white-space: nowrap;
+/* A session row's ⋯ and family chip sit on its second line (sidebar.css): they stay line-high under a finger and
+   reach past it by their invisible hit area (44 px tall, bounded by the row), so the row stays two lines. The ⋯
+   keeps its 44 px slot across; the chip's reach stops half way to it. */
+html[data-shell] .omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-menu][data-sidebar-row-menu][data-sidebar-row-menu] {
+	min-width: 44px;
+	min-height: 0;
+	--hit-gap-x: 0px;
+	--hit-gap-y: 200vmax;
+}
+
+html[data-shell] .omp-session-sidebar .omp-sidebar-session-row .omp-family-chip {
+	--hit-gap-y: 200vmax;
 }
 
 /* With a mouse, the project row's ⋯ appears on hover over the title's faded end and shares the row's end with "new

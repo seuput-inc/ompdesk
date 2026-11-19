@@ -39,7 +39,7 @@ import pkg from "electron-updater";
 import type { UpdateAuthTestResult, UpdateInstallMode, UpdateStatus } from "../shared/ipc-types";
 import { IPC_COMMANDS, IPC_EVENTS } from "../shared/ipc-types";
 import { AutoInstallScheduler, type InstallTrigger } from "./app-auto-update";
-import { confirmUpdateRestart, disarmQuitWatchdog, onQuitForcedExit, requestQuit } from "./app-quit";
+import { confirmUpdateRestart, disarmQuitWatchdog, logQuitAsked, onQuitForcedExit, requestQuit } from "./app-quit";
 import { writeFileAtomicSync } from "./atomic-file";
 import { type BackgroundWork, NO_BACKGROUND_WORK } from "./background-work";
 import { markMainStep } from "./hang-watchdog";
@@ -965,7 +965,7 @@ export function restartIntoUpdate(trigger: InstallTrigger): void {
 		markMainStep("update", "relaunch-swap: quit");
 		beginInstall(trigger);
 		relaunchAfterSwap = true;
-		requestQuit();
+		requestQuit("update", { relaunch: true, detail: trigger });
 		return;
 	}
 	// quitAndInstall() starts the installer (off the main thread on Windows), then emits before-quit-for-update
@@ -974,10 +974,11 @@ export function restartIntoUpdate(trigger: InstallTrigger): void {
 		markMainStep("update", "quit-and-install");
 		beginInstall(trigger);
 		if (devDryInstall) {
-			requestQuit();
+			requestQuit("update", { detail: `${trigger}, dry run` });
 			return;
 		}
 		noteInstallHelper("nsis", trigger);
+		logQuitAsked("update", { relaunch: true, detail: `${trigger}, installer` });
 		autoUpdater.quitAndInstall();
 	}
 }

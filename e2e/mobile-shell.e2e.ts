@@ -509,7 +509,7 @@ for (const { engine, device } of variants(
 					(await sidebar.locator("[data-device-session]").count()),
 			);
 			for (const { visual, hit } of await hitSizes(menus)) {
-				// Rows are flush: a row's ⋯ owns a slot of the row's height (36) × 44 px, growing sideways only.
+				// A row's ⋯ sits on its second line: a 44 px wide slot whose hit area reaches past the line's height.
 				expect(hit.width).toBeGreaterThanOrEqual(43.5);
 				expect(hit.height).toBeGreaterThanOrEqual(35.5);
 				expect(Math.max(visual.width, visual.height)).toBeLessThanOrEqual(44);

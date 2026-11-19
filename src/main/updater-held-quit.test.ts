@@ -53,6 +53,7 @@ vi.mock("./app-quit", () => ({
 	confirmUpdateRestart: async () => true,
 	disarmQuitWatchdog: () => {},
 	onQuitForcedExit: (listener: () => void) => mocks.forcedExit.push(listener),
+	logQuitAsked: () => {},
 	requestQuit: () => {},
 }));
 vi.mock("./hang-watchdog", () => ({ markMainStep: () => {} }));

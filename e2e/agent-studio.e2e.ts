@@ -258,6 +258,8 @@ test("agent editor and template gallery write definitions omp discovers", async 
 		}
 	} finally {
 		await exitApp(app);
-		await fs.rm(profile, { recursive: true, force: true });
+		// A process of the app's tree can still hold the project folder for a moment after exit on Windows (EBUSY in
+		// e2e-nightly 44516012533; gone within a second in rc4-probe 44537366784).
+		await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });

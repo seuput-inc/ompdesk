@@ -66,6 +66,7 @@ import type {
 import type { SchedulesApi, SchedulesState } from "./schedules";
 import type { SessionListDelta, VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
+import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
 import type { GitAslrAction, GitAslrResult, SetupItemId, SetupState } from "./setup";
 import type { SidebarChange } from "./sidebar-prefs";
 import type { SidebarProjectsApi } from "./sidebar-projects";
@@ -264,6 +265,10 @@ export const IPC_COMMANDS = {
 	SESSIONS_MESSAGES: "sessions:messages",
 	/** Move a stored session (no tab holds it) to another project folder */
 	SESSIONS_MOVE: "sessions:move",
+	/** What each listed session works in: repository, HEAD, cached image (`SessionTargetQuery[]` → `SessionTargets`) */
+	SESSIONS_TARGETS: "sessions:targets",
+	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
+	SESSIONS_ARTWORK: "sessions:artwork",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -630,6 +635,11 @@ export type RuntimeErrorSource =
 	| "gpu-fallback"
 	/** The crash-loop guard (src/main/launch-guard.ts): this launch starts in safe mode. */
 	| "launch-guard"
+	/**
+	 * Why the app ends or relaunches (src/main/quit-log.ts): who asked to quit or relaunch, the exit itself
+	 * (`details.end: true`), and at start a previous run that left no end line (killed, crashed, power lost).
+	 */
+	| "app-quit"
 	/** The pre-rename profile moved into userData (src/main/legacy-user-data.ts). */
 	| "user-data-migration"
 	/**
@@ -671,6 +681,12 @@ export type RuntimeErrorSource =
 	 * whether it was let go or the wait ran out, `details` the session file's name and the wait.
 	 */
 	| "session-owner"
+	/**
+	 * The bridge's compatibility self-check of an omp this computer runs (src/main/bridge-health.ts), one line per omp
+	 * version and launch, never per tab: `message` is `probed` (details `ompVersion`, `ok`, `unavailable` with each
+	 * capability's missing labels) or `unreachable` (the bridge never connected; details `reason`).
+	 */
+	| "bridge-health"
 	/** A goal's time-limit update that failed (src/main/sidecar-factory.ts): `message` is the error. */
 	| "goal-time-limit"
 	/**
@@ -827,6 +843,26 @@ export interface UpdateAuthTestResult {
 export type BridgeHealthWarning =
 	| { kind: "unsupported" | "unsupportedOptional"; ompVersion: string; features: string[] }
 	| { kind: "unavailable"; ompVersion: string; reason: string };
+
+/** One omp version's latest bridge self-check on a computer (`BRIDGE_HEALTH_GET`, `host.bridgeHealth.get`). */
+export interface BridgeHealthResult {
+	ompVersion: string;
+	/** When the check answered (ms). */
+	at: number;
+	/** Every capability is present and the bridge connected. */
+	ok: boolean;
+	/** omps of this version that run on that computer now; 0 = none any more. */
+	running: number;
+	/** Capability ids it lacks, each with the missing omp internals as `capabilities` labels them. */
+	unavailable: Array<{ feature: string; missing: string[] }>;
+	/** Why the bridge never connected; absent when it answered. */
+	unreachable?: string;
+}
+
+/** The latest result per omp version checked in this launch: running versions first, then the newest. */
+export interface BridgeHealthReport {
+	results: BridgeHealthResult[];
+}
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */
 export interface DiskFullState {
@@ -1243,6 +1279,18 @@ export interface IpcSessionsMovePayload {
 	sessionPath: string;
 	/** Absolute target project folder on the session's device. */
 	cwd: string;
+	device?: string;
+}
+
+export interface IpcSessionsTargetsPayload {
+	/** At most `SESSION_TARGET_BATCH` rows. */
+	sessions: SessionTargetQuery[];
+	device?: string;
+}
+
+export interface IpcSessionsArtworkPayload {
+	/** Repository roots (`SessionTargetRepository.root`), at most `SESSION_TARGET_BATCH`. */
+	roots: string[];
 	device?: string;
 }
 
@@ -2448,6 +2496,13 @@ export interface OmpApi {
 		messages(sessionPath: string, device?: string): Promise<AgentMessage[]>;
 		/** Move a stored session to `cwd`; resolves with its new path. */
 		move(sessionPath: string, cwd: string, device?: string): Promise<string>;
+		/**
+		 * What each listed session works in (`session-target.ts`), resolved on the computer that runs it (`device`),
+		 * keyed by session file. Answers from cached facts: an image not looked up yet is left absent.
+		 */
+		targets(sessions: SessionTargetQuery[], device?: string): Promise<SessionTargets>;
+		/** Repository images by root, looked up where missing (bounded and cached there); null where none. */
+		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
 		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.

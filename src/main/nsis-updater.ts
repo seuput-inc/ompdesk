@@ -6,11 +6,23 @@
  * `before-quit-for-update` that app-quit.ts tears down on, then `app.quit()`.
  */
 import type { StdioOptions } from "node:child_process";
-import { autoUpdater as nativeAutoUpdater } from "electron";
+import { autoUpdater as nativeAutoUpdater, session } from "electron";
 import { NsisUpdater } from "electron-updater";
 import { spawnDetachedOffThread } from "./installer-spawn";
 
 export class OmpNsisUpdater extends NsisUpdater {
+	constructor(...args: ConstructorParameters<typeof NsisUpdater>) {
+		super(...args);
+		// electron-updater downloads on `session.fromPartition("electron-updater")`. Under the Tauri shell a partition that
+		// is neither `app` nor `persist:` is a Preview (Brave) context the shell registers only once Brave has launched,
+		// so the download's first `net.fetch` failed with "session electron-updater does not exist" (Windows,
+		// 0.132.0-0.134.1). The app session is the one the update check and the macOS download already use.
+		// `httpExecutor.cachedSession` is not in electron-updater's typings; nsis-updater.test.ts pins it.
+		const executor: unknown = Reflect.get(this, "httpExecutor");
+		if (executor && typeof executor === "object" && "cachedSession" in executor)
+			executor.cachedSession = session.defaultSession;
+	}
+
 	/** Only the spawn `quitAndInstall()` makes leaves the thread: the one at app quit (`autoInstallOnAppQuit`) must finish before the process does. */
 	#offThread = false;
 	#installerStart: Promise<unknown> | undefined;

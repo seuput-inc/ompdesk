@@ -6,7 +6,7 @@
 
 1. `ompdesk_app_list` with `area` (`settings`, `omp`, `ui`, `usage`, `models`, `sessions`, `sidebar`, `updates`, `accounts`, `mobile_web`, `extensions`, `memory`, `connections`, `autopilot`, `permissions`) or `query` (words from an id or description). It prints each matching action with its tier and argument schema; with many matches it prints names only, so narrow the filter.
 2. `ompdesk_app` with `action` (an id from the list, e.g. `settings.theme`) and `args` as the schema says. Arguments are checked in the app; an unknown action or argument is refused.
-3. Read before you change: `settings.get` shows current values, `usage.read` the provider quota windows (each window under its own label, so an account's general 7-day window and its per-model 7-day window read apart, with percent used, its reset time in UTC and how far away, and the account's saved resets), `models.list` the model role assignments and the models you can use, `omp_settings.get` any omp setting.
+3. Read before you change: `settings.get` shows current values, `usage.read` the provider quota windows (each window under its own label, so an account's general 7-day window and its per-model 7-day window read apart, with percent used, its reset time in UTC and how far away, and the account's saved resets), `models.list` the model role assignments and the models you can use, `omp_settings.get` any omp setting, `omp.bridge_health` which OMPdesk actions each running omp version cannot serve and the omp internals they miss (the computer your session runs on).
 
 ## Tiers
 

@@ -97,7 +97,7 @@ pub async fn primary_root(git: &Git, cwd: &str) -> Result<String, Fault> {
     })
 }
 
-async fn head_sha(git: &Git, cwd: &str) -> Result<Option<String>, Fault> {
+pub(crate) async fn head_sha(git: &Git, cwd: &str) -> Result<Option<String>, Fault> {
     let output = git
         .raw(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"])
         .await?;

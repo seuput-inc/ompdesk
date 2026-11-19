@@ -350,6 +350,7 @@ function fakeMachine() {
 				worktrees: {},
 			}),
 		),
+		bridgeHealth: vi.fn(async () => ({ results: [] })),
 	} satisfies MachineServices;
 }
 

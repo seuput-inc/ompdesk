@@ -395,6 +395,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // that measure plus 80 bytes.
 // next-line with relaunch-keeps-work, the board fix, earlier-list's compaction line, theme sets and limit card, and G12
 // (20 Nov 2026): measured 2,211,213 (branch run 44627539158). The budget is that measure plus 80 bytes.
+// Session rows read their repository, branch and image (19 Nov 2026, `sessions.targets`/`sessions.artwork` in
+// `shared/omp-api.ts` and the two-line row): measured 2,206,290 with both halves (parity run 44491251735, the API alone
+// 2,206,183 in branch run 44489431846), 298 bytes over. The budget is that measure plus 80 bytes.
 const WEB_FIRST_SCREEN_JS_BYTES = 2_211_293;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
