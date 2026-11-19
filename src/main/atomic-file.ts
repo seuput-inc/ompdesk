@@ -9,6 +9,7 @@ import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isRenameBlocked, RENAME_RETRY_MS } from "../../resources/gui-bridge/rename-retry";
 import { diskFull, isDiskFull } from "./disk-full";
 
 export interface AtomicWriteOptions {
@@ -20,20 +21,11 @@ export interface AtomicWriteOptions {
 
 /** Waits of the blocking variant: the caller needs the file now, so the whole wait stays under a second. */
 const SYNC_RETRY_MS: readonly number[] = [10, 20, 40, 80, 160, 320];
-/** Waits of the variants that do not block: 20 ms doubling, about 5 s in all. */
-const RETRY_MS: readonly number[] = [20, 40, 80, 160, 320, 640, 1_280, 2_560];
 /** Waits of a write that found the disk full: 5 s doubling up to a minute, for as long as the disk stays full. */
 export const DISK_FULL_RETRY_MS: readonly number[] = [5_000, 10_000, 20_000, 40_000, 60_000];
 
 let counter = 0;
 const tempFor = (file: string): string => `${file}.${process.pid}-${counter++}.tmp`;
-
-/** The rename a held target makes fail: Windows only (elsewhere EPERM is a real refusal, and retrying cannot help). */
-export function isRenameBlocked(error: unknown): boolean {
-	if (process.platform !== "win32" || !(error instanceof Error)) return false;
-	const code = (error as NodeJS.ErrnoException).code;
-	return code === "EPERM" || code === "EACCES" || code === "EBUSY";
-}
 
 function stageSync(file: string, data: string, options: AtomicWriteOptions): string {
 	mkdirSync(dirname(file), { recursive: true, ...(options.dirMode === undefined ? {} : { mode: options.dirMode }) });
@@ -98,7 +90,7 @@ export async function writeFileAtomic(
 				await rename(temp, file);
 				return;
 			} catch (error) {
-				const wait = RETRY_MS[attempt];
+				const wait = RENAME_RETRY_MS[attempt];
 				if (wait === undefined || !isRenameBlocked(error)) throw error;
 				await sleep(wait);
 			}
@@ -151,7 +143,7 @@ export function writeFileAtomicDeferred(
 				wait(delay, () => attempt(n));
 				return;
 			}
-			const retryIn = temp !== undefined && isRenameBlocked(error) ? RETRY_MS[n] : undefined;
+			const retryIn = temp !== undefined && isRenameBlocked(error) ? RENAME_RETRY_MS[n] : undefined;
 			if (retryIn === undefined) {
 				dropTemp();
 				diskFull.clear(file);

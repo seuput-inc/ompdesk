@@ -17,7 +17,7 @@ import { expect } from "vitest";
 import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
 import { deliveryFor, type MailKind } from "./agent-control/mail";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { removeWhenFree } from "./test-folders";
 
 /**
@@ -222,6 +222,8 @@ export async function startOmp(
 	const root = again?.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-mail-repo-")));
 	if (!again)
 		atEnd(async () => {
+			// omp 19's daemon has the first omp's folder (`root`) as its working folder and outlives it (Windows: EBUSY).
+			stopOmpDaemon(isolated);
 			await removeWhenFree(isolated);
 			await removeWhenFree(root);
 		});
