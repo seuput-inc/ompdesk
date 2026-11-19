@@ -54,6 +54,13 @@ interface Scenario {
 	 * account as Codex web search asks for it (`oauth.access`).
 	 */
 	refresh?: boolean;
+	/**
+	 * No turn and no bridge hooks of the probe's own: omp also loads `credit-spend-run.ts` before the probe, as the
+	 * memory judge's host is started (core `care/judge.rs` `run_host`), and one request goes out after `session_start`.
+	 */
+	host?: boolean;
+	/** No turn: main's question before the commit-message button's `omp commit` (`credit_spend_commit_check`). */
+	commitCheck?: boolean;
 }
 
 const codexSpent = (credits: boolean, used = 100) => ({
@@ -131,7 +138,7 @@ import { install, methods as credit } from "./credit-spend";
 import { methods as settings } from "./settings";
 export default function (pi) {
  const scenario = JSON.parse(process.env.OMPDESK_CREDIT_SCENARIO);
- if (scenario.mode !== "none" && !scenario.oneShot) install(pi);
+ if (scenario.mode !== "none" && !scenario.oneShot && !scenario.host) install(pi);
  pi.on("session_start", () => {
   void (async () => {
    try {
@@ -160,9 +167,21 @@ export default function (pi) {
     }
     await session.setModel(models.find(candidate => candidate.provider === scenario.provider && (!scenario.model || candidate.id.includes(scenario.model))));
     if (scenario.oneShot) install(pi);
-    else if (scenario.mode !== "none") await credit.credit_spend_set({ enabled: scenario.mode === "on" }, env);
+    else if (scenario.mode !== "none" && !scenario.host) await credit.credit_spend_set({ enabled: scenario.mode === "on" }, env);
     const turns = [];
-    if (scenario.oneShot) {
+    if (scenario.commitCheck) {
+     // Stock's commit selection reads the commit and smol roles: the scenario's account answers for both.
+     const selector = scenario.provider + "/" + session.model.id;
+     lookup("modelRoles").set(session.settings, { commit: selector, smol: selector });
+     let thrown;
+     try {
+      await credit.credit_spend_commit_check({}, env);
+     } catch (error) {
+      thrown = String((error && error.message) || error);
+     }
+     turns.push({ thrown, text: thrown ? undefined : "checked" });
+    }
+    if (scenario.oneShot || scenario.host) {
      let thrown, reply;
      try {
       reply = await completeSimple(
@@ -439,6 +458,7 @@ function runProbe(fake: string, scenario: Scenario, home?: string): Promise<Prob
 		"--no-extensions",
 		"--no-skills",
 		"--no-rules",
+		...(scenario.host ? creditSpendRun(bridge, false).args : []),
 		"-e",
 		join(bridge, "credit-spend-probe.ts"),
 	];
@@ -458,25 +478,33 @@ function runProbe(fake: string, scenario: Scenario, home?: string): Promise<Prob
 	return promise;
 }
 
+/** A scheduled run's and a PR draft's own arguments (schedules.ts `ompRunLauncher`, local/git/pr.ts). */
+const PRINT_RUN = ["--no-session", "--no-tools", "--no-lsp", "--no-extensions", "--no-skills", "--no-rules"];
+/** The core's for memory's upkeep and curation (native/ompdesk/crates/core/src/upkeep/model.rs `run_smol`). */
+const UPKEEP_RUN = [
+	"--mode",
+	"json",
+	"--no-tools",
+	"--no-session",
+	"--no-extensions",
+	"--no-skills",
+	"--no-rules",
+	"--no-title",
+	"--thinking",
+	"off",
+	"--system-prompt",
+	"Answer briefly.",
+];
+
 /**
- * `omp -p` in `home` as OMPdesk starts a scheduled run or a PR draft: no bridge, only what `creditSpendRun`
- * (omp-launch.ts) gives every such run, the prompt on stdin.
+ * `omp -p` in `home` as OMPdesk starts it without a bridge: only what `creditSpendRun` (omp-launch.ts) gives every
+ * such run right after `-p`, then the run's `own` arguments, the prompt on stdin.
  */
-function runPrint(fake: string, home: string, model: string, enabled: boolean): Promise<string> {
+function runPrint(fake: string, home: string, model: string, enabled: boolean, own = PRINT_RUN): Promise<string> {
 	const { cli, bridge } = stage(home);
 	const run = creditSpendRun(bridge, enabled);
-	const args = [
-		...cli,
-		"-p",
-		"--no-session",
-		"--no-tools",
-		"--no-lsp",
-		"--no-extensions",
-		"--no-skills",
-		"--no-rules",
-	];
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
-	const child = spawn("bun", [...args, ...run.args, "--model", model], {
+	const child = spawn("bun", [...cli, "-p", ...run.args, ...own, "--model", model], {
 		env: ompEnv(home, fake, run.env),
 		stdio: ["pipe", "pipe", "pipe"],
 		timeout: 60_000,
@@ -649,8 +677,9 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("credit spend on the installed omp",
 		quiet(probe);
 	}, 60_000);
 
-	// A scheduled run and a PR draft are `omp -p` with no bridge, so stock alone served them from credits. With what
-	// main gives every such run (omp-launch.ts `creditSpendRun`) the run's first request is refused.
+	// A scheduled run, a PR draft and memory's own model calls are `omp -p` with no bridge, so stock alone served
+	// them from credits. With what main gives every such run (omp-launch.ts `creditSpendRun`) the run's first request
+	// is refused.
 	it("an omp -p run beside the sessions follows the switch: off sends a spent account nothing, on sends it", async () => {
 		const home = mkdtempSync(join(tmpdir(), "ompdesk-credit-spend-home-"));
 		try {
@@ -662,16 +691,46 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("credit spend on the installed omp",
 				received
 					.filter(entry => entry.method === "POST" && entry.path.includes("/responses"))
 					.map(entry => entry.account);
-			received.length = 0;
-			const off = await runPrint(base, home, model, false);
-			expect(posts(), off.slice(-800)).toEqual([]);
-			expect(off).toContain("Credit use setting is off");
+			for (const own of [PRINT_RUN, UPKEEP_RUN]) {
+				received.length = 0;
+				const off = await runPrint(base, home, model, false, own);
+				expect(posts(), off.slice(-800)).toEqual([]);
+				expect(off).toContain("Credit use setting is off");
+			}
 			received.length = 0;
 			const on = await runPrint(base, home, model, true);
 			expect(posts(), on.slice(-800)).toEqual(["spent"]);
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}
+	}, 180_000);
+
+	it("off: an omp that loads the check alone and never runs a turn (the memory judge's host) sends a spent account nothing", async () => {
+		const { probe, sent } = await run(codexSingle("off", { prompts: 0, host: true }));
+		expect(probe.error).toBeUndefined();
+		expect(sent).toEqual([]);
+		const [turn] = probe.turns ?? [];
+		expect(turn?.error ?? turn?.thrown).toMatch(
+			/usage_limit_reached: this ChatGPT account reached its plan's usage limit/,
+		);
+		quiet(probe);
+	}, 60_000);
+
+	// `omp commit` takes no extension, so main asks the tab's omp first (`credit_spend_commit_check`): it resolves the
+	// models stock's commit pipeline would pick through the checks.
+	it("the commit-message check: off refuses for a spent account and sends nothing, passes with plan left, and on never asks", async () => {
+		const spent = await run(codexSingle("off", { prompts: 0, commitCheck: true }));
+		expect(spent.probe.error).toBeUndefined();
+		expect(spent.sent).toEqual([]);
+		expect(spent.probe.turns).toMatchObject([
+			{ thrown: expect.stringMatching(/^usage_limit_reached: this ChatGPT account reached its plan's usage limit/) },
+		]);
+		const fresh = { fresh: { usage: codexSpent(false, 20), headers: codexHeaders(20) } };
+		const room = await run(codexSingle("off", { prompts: 0, commitCheck: true, accounts: fresh }));
+		expect(room.probe.turns).toEqual([{ text: "checked" }]);
+		expect(room.sent).toEqual([]);
+		const on = await run(codexSingle("on", { prompts: 0, commitCheck: true }));
+		expect(on.probe.turns).toEqual([{ text: "checked" }]);
 	}, 180_000);
 
 	it("Claude at 100 %: stock and on send both requests, off sends none", async () => {

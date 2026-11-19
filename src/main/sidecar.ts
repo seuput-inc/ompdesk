@@ -38,7 +38,6 @@ import { projectQueueUpdate } from "./local/queue";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError, type OmpRuntime } from "./local/types";
 import {
 	type BuiltinLaunch,
-	creditSpendRun,
 	type OmpLaunch,
 	ompArgs,
 	type SessionOpen,
@@ -1488,9 +1487,14 @@ export class SidecarManager extends EventEmitter {
 		return {
 			cwd: this.#options.cwd,
 			sessionFile: this.#session?.sessionFile,
-			// A PR draft is an `omp -p` beside the session, with no bridge: the Credit use switch goes with it.
+			// A PR draft and the commit-message button run an omp beside the session, with no bridge: the Credit use
+			// switch goes with the first and is checked by this tab's omp before the second.
 			omp: bridgeDir
-				? withCreditSpendRuns(runtime, () => creditSpendRun(bridgeDir, creditSpend?.() ?? false))
+				? withCreditSpendRuns(runtime, {
+						bridgeDir,
+						enabled: () => creditSpend?.() ?? false,
+						commitCheck: () => bridge.request("credit_spend_commit_check"),
+					})
 				: runtime,
 			send,
 			bridge,

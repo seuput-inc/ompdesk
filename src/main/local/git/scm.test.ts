@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CreditSpendRefusal } from "../../omp-launch";
 import { RM_TEMP } from "../../test-fake-omp";
 import type { OmpRuntime } from "../types";
 import { getGitChanges, repoRoot } from "./changes";
@@ -216,6 +217,20 @@ describe("commit", () => {
 			code: "commit_message_failed",
 			message: expect.stringContaining("No model available"),
 		});
+	});
+
+	it("says credit use is off when the run was refused for it, instead of a failed message", async () => {
+		await fs.writeFile(path.join(root, "a.txt"), "a\n");
+		await scm.stage(root, ["a.txt"]);
+		const refusal = "Commit message not generated: this ChatGPT account reached its plan's usage limit.";
+		const omp: OmpRuntime = {
+			bin: "omp",
+			version: "19.0.0",
+			run: async () => {
+				throw new CreditSpendRefusal(refusal);
+			},
+		};
+		await expect(scm.commitMessage(root, omp)).rejects.toMatchObject({ code: "credit_spend_off", message: refusal });
 	});
 });
 

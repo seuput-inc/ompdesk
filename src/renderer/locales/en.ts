@@ -1754,6 +1754,8 @@ export const en: Record<string, string> = {
 	"ipcError.detached_head": "HEAD is detached. Switch to a branch first.",
 	"ipcError.nothing_staged": "Nothing is staged. Stage the changes you want first.",
 	"ipcError.commit_message_failed": "omp couldn't write a commit message.",
+	"ipcError.credit_spend_off":
+		"Credit use is off and the account's plan limit is used up or couldn't be checked, so no commit message was generated. Write it yourself, or turn Credit use on in Models & accounts.",
 	"ipcError.branch_checked_out": "That branch is checked out in another worktree.",
 	"ipcError.unsupported": "omp doesn't support this action.",
 	"ipcError.no_window": "This window isn't available anymore. Try again from another window.",

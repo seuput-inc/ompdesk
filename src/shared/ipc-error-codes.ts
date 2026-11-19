@@ -88,6 +88,8 @@ export const IPC_ERROR_CODES = [
 	"detached_head",
 	"nothing_staged",
 	"commit_message_failed",
+	// The commit-message button with Credit use off: the plan is spent, or the tab's omp could not check it.
+	"credit_spend_off",
 	"branch_checked_out",
 	"unsupported",
 	"invalid_content",

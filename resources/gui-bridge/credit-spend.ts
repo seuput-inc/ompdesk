@@ -333,9 +333,13 @@ export function install(pi: ExtensionAPI): void {
 			});
 		}
 	};
+	const mainStorage = () => pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session?.modelRegistry.authStorage;
 	// At once, not at the next turn start: the areas load at the omp's first use (main's connection, or the first
 	// prompt's `input`), and a one-shot request (a title, a judge, a suggestion) resolves its key with no turn at all.
-	applyTo(pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session?.modelRegistry.authStorage);
+	applyTo(mainStorage());
+	// An omp started without the bridge loads this before its session exists (credit-spend-run.ts), and one of them
+	// never runs a turn (the memory judge's host asks its model right after `session_start`).
+	pi.on("session_start", () => applyTo(mainStorage()));
 	pi.on("before_agent_start", async (_event, ctx) => {
 		// A subagent in a worker thread holds a proxy of the main thread's AuthStorage, which already carries it.
 		if (ctx.agent.kind === "main") applyTo(ctx.modelRegistry.authStorage);
@@ -362,5 +366,24 @@ export const methods = guard("creditSpend", {
 		const state = setCreditSpend(params);
 		apply(env.session().modelRegistry.authStorage);
 		return state;
+	},
+	/**
+	 * `{}`, asked by main before it runs stock's `omp commit` for the commit-message button (omp-launch.ts
+	 * `withCreditSpendRuns`). That run builds an AuthStorage of its own and loads no extension hook (stock
+	 * commit/pipeline.ts), so the switch cannot ride along. This omp, which carries the checks, picks the models the
+	 * run will pick (stock's own selection) and resolves each one's key as a request of this omp would: the refusal
+	 * is what main shows instead of running it. Every area module loads at startup, so the two stock modules load here.
+	 */
+	credit_spend_commit_check: async (_params, env) => {
+		const session = env.session();
+		apply(session.modelRegistry.authStorage);
+		if (creditSpendEnabled()) return {};
+		const { resolvePrimaryModel, resolveSmolModel } = await import("./omp/pi-coding-agent/commit/model-selection");
+		const { resolveApiKeyOnce } = await import("./omp/pi-ai");
+		const primary = await resolvePrimaryModel(undefined, session.settings, session.modelRegistry);
+		const smol = await resolveSmolModel(session.settings, session.modelRegistry, primary.model, primary.apiKey);
+		await resolveApiKeyOnce(primary.apiKey);
+		if (smol.model !== primary.model) await resolveApiKeyOnce(smol.apiKey);
+		return {};
 	},
 });

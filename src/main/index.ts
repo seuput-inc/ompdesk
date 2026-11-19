@@ -97,7 +97,7 @@ import { migrateAgentPowers } from "./agent-power-migration";
 import { lowerAgentPriority } from "./agent-priority";
 import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
-import { ompLaunch } from "./ai-memory/core-asks";
+import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
 import { registerAiMemoryIpc } from "./ai-memory/ipc";
 import { RecallTermsIndex } from "./ai-memory/recall-terms";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
@@ -890,6 +890,8 @@ app.whenReady().then(async () => {
 	const initialCwd = resolveInitialCwd();
 	const explicitStartupCwd = resolveExplicitStartupCwd();
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
+	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
+	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
 	configureNativeBin({
 		packaged: app.isPackaged,
 		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,

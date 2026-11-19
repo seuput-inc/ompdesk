@@ -564,7 +564,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * (`keys.getWithCredential`, and `oauth.access` for Codex web search and the live transport) is checked against the
 	 * account's own report (`credentials.list`, `usage.report`, the model's own windows through the provider's ranking
 	 * strategy) and Claude's last answer for the session's account (`oauth.accounts`), kept in a file of the agent
-	 * directory (`getAgentDir`); a refusal carries stock's retry hint.
+	 * directory (`getAgentDir`); a refusal carries stock's retry hint. `credit_spend_commit_check` asks the same checks
+	 * about the models stock's `omp commit` would pick (`resolvePrimaryModel`, `resolveSmolModel`, `resolveApiKeyOnce`).
 	 */
 	creditSpend: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
@@ -582,6 +583,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"@oh-my-pi/pi-ai/utils/retry-after": ["appendRetryAfterHint()"],
 			"@oh-my-pi/pi-ai/auth/usage-report": ["scopedUsageLimits()"],
 			"@oh-my-pi/pi-ai/usage/registry": ["defaultRankingStrategy()"],
+			"@oh-my-pi/pi-ai": ["resolveApiKeyOnce()"],
+			[`${AGENT}/commit/model-selection`]: ["resolvePrimaryModel()", "resolveSmolModel()"],
 			[UTILS]: ["getAgentDir()"],
 		},
 	},

@@ -1745,6 +1745,8 @@ export const ko: Record<string, string> = {
 	"ipcError.detached_head": "HEAD가 분리되어 있어요. 먼저 브랜치로 전환해 주세요.",
 	"ipcError.nothing_staged": "스테이징한 변경 사항이 없어요. 먼저 원하는 변경 사항을 스테이징해 주세요.",
 	"ipcError.commit_message_failed": "omp가 커밋 메시지를 쓰지 못했어요.",
+	"ipcError.credit_spend_off":
+		"크레딧 사용이 꺼져 있고 계정의 요금제 한도를 다 썼거나 확인하지 못해서 커밋 메시지를 만들지 않았어요. 직접 쓰거나 모델 및 계정에서 크레딧 사용을 켜세요.",
 	"ipcError.branch_checked_out": "다른 워크트리에서 체크아웃한 브랜치예요.",
 	"ipcError.unsupported": "omp에서 지원하지 않는 작업이에요.",
 	"ipcError.no_window": "이 창은 더 이상 쓸 수 없어요. 다른 창에서 다시 시도해 보세요.",
