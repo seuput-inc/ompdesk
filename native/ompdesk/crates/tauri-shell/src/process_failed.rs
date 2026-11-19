@@ -1,21 +1,12 @@
 //! A process of an app page's WebView2 ended (`ICoreWebView2::ProcessFailed`), told to Node as Electron tells it: the
-//! page's renderer as `wc.event render-process-gone` (src/main/window.ts reloads the page), the GPU process as
-//! `app.childProcessGone` (src/main/gpu-fallback.ts logs it; WebView2 restarts the GPU process and repaints by itself).
-//! Without it a crashed renderer left WebView2's "This page is having a problem" page up for good, and nothing reached
-//! main's log (installer-check run 44616509774, open-work G12). macOS (WKWebView) has no such event: only the mapping
-//! and its tests build there.
+//! GPU process as `app.childProcessGone` (src/main/gpu-fallback.ts logs it; WebView2 restarts the GPU process and
+//! repaints by itself). The page's own renderer, its end and its hang, is page_watch's (`render-process-gone`,
+//! `unresponsive`): it knows whether the host ended it, and a second report here reloaded the page twice. Without the
+//! GPU report nothing of a GPU crash reached main's log (installer-check run 44616509774, open-work G12). macOS
+//! (WKWebView) has no such event: only the mapping and its tests build there.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use serde_json::{Value, json};
-
-/// What one `ProcessFailed` is, from WebView2's raw `COREWEBVIEW2_PROCESS_FAILED_KIND` and `_REASON` values.
-#[derive(Debug, PartialEq)]
-pub enum Report {
-    /// The page's own renderer: `render-process-gone` with Electron's details.
-    Render(Value),
-    /// The GPU process: `app.childProcessGone` with Electron's details.
-    Gpu(Value),
-}
 
 /// Electron's `reason` for WebView2's `COREWEBVIEW2_PROCESS_FAILED_REASON`.
 fn reason(code: i32) -> &'static str {
@@ -24,33 +15,23 @@ fn reason(code: i32) -> &'static str {
         3 => "crashed",
         4 => "launch-failed",
         5 => "oom",
-        // UNEXPECTED, UNRESPONSIVE (a hung renderer), PROFILE_DELETED.
+        // UNEXPECTED, UNRESPONSIVE, PROFILE_DELETED.
         _ => "abnormal-exit",
     }
 }
 
-/// The report for a failure of `kind` (and `reason`, `exit_code` where WebView2 gave them), or none for a process the
-/// app has no event for (a subframe's renderer, utility and plugin processes, the browser). A renderer WebView2 calls
-/// unresponsive is reported as gone too: the page shows nothing new until it is loaded again.
-pub fn report(kind: i32, reason_code: Option<i32>, exit_code: Option<i32>) -> Option<Report> {
-    let details = |extra: Value| {
-        let mut value = json!({"reason": reason(reason_code.unwrap_or(0)), "exitCode": exit_code});
-        if let (Some(object), Value::Object(extra)) = (value.as_object_mut(), extra) {
-            object.extend(extra);
-        }
-        value
-    };
-    match kind {
-        1 | 2 => Some(Report::Render(details(json!({})))),
-        6 => Some(Report::Gpu(details(json!({"type": "GPU"})))),
-        _ => None,
-    }
+/// `app.childProcessGone`'s details for a failure of `kind` (and `reason`, `exit_code` where WebView2 gave them): the
+/// GPU process only; none for the page's renderer (page_watch) or a process the app has no event for.
+pub fn report(kind: i32, reason_code: Option<i32>, exit_code: Option<i32>) -> Option<Value> {
+    (kind == 6).then(|| {
+        json!({"reason": reason(reason_code.unwrap_or(0)), "exitCode": exit_code, "type": "GPU"})
+    })
 }
 
 #[cfg(windows)]
 mod windows {
     #![allow(unsafe_code)]
-    use super::{Report, report};
+    use super::report;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_REASON,
         ICoreWebView2ProcessFailedEventArgs2,
@@ -90,14 +71,8 @@ mod windows {
                         }
                         Err(_) => (None, None),
                     };
-                    match report(kind.0, reason, exit) {
-                        Some(Report::Render(details)) => {
-                            crate::wc_event(wc, "render-process-gone", serde_json::json!([details]))
-                        }
-                        Some(Report::Gpu(details)) => {
-                            crate::host::event("app.childProcessGone", details)
-                        }
-                        None => {}
+                    if let Some(details) = report(kind.0, reason, exit) {
+                        crate::host::event("app.childProcessGone", details);
                     }
                     Ok(())
                 }));
@@ -117,48 +92,29 @@ pub use windows::watch;
 
 #[cfg(test)]
 mod tests {
-    use super::{Report, report};
+    use super::report;
     use serde_json::json;
 
     #[test]
-    fn a_crashed_renderer_and_gpu_process_read_as_electron_reports_them() {
-        assert_eq!(
-            report(1, Some(3), Some(-1073741819)),
-            Some(Report::Render(
-                json!({"reason": "crashed", "exitCode": -1073741819})
-            ))
-        );
+    fn a_crashed_gpu_process_reads_as_electron_reports_it() {
         assert_eq!(
             report(6, Some(3), Some(-1073741819)),
-            Some(Report::Gpu(
-                json!({"reason": "crashed", "exitCode": -1073741819, "type": "GPU"})
-            ))
+            Some(json!({"reason": "crashed", "exitCode": -1073741819, "type": "GPU"}))
         );
         assert_eq!(
             report(6, Some(2), Some(1)),
-            Some(Report::Gpu(
-                json!({"reason": "killed", "exitCode": 1, "type": "GPU"})
-            ))
+            Some(json!({"reason": "killed", "exitCode": 1, "type": "GPU"}))
         );
         assert_eq!(
-            report(1, None, None),
-            Some(Report::Render(
-                json!({"reason": "abnormal-exit", "exitCode": null})
-            ))
-        );
-        // A hung renderer: main reloads the page as for one that exited.
-        assert_eq!(
-            report(2, Some(1), Some(0)),
-            Some(Report::Render(
-                json!({"reason": "abnormal-exit", "exitCode": 0})
-            ))
+            report(6, None, None),
+            Some(json!({"reason": "abnormal-exit", "exitCode": null, "type": "GPU"}))
         );
     }
 
     #[test]
-    fn processes_the_app_has_no_event_for_report_nothing() {
-        // Subframe renderer, utility, browser, unknown.
-        for kind in [3, 4, 0, 9] {
+    fn the_page_renderer_and_processes_the_app_has_no_event_for_report_nothing() {
+        // The page's renderer exited or hung (page_watch reports both), subframe renderer, utility, browser, unknown.
+        for kind in [1, 2, 3, 4, 0, 9] {
             assert_eq!(report(kind, Some(3), Some(1)), None, "kind {kind}");
         }
     }
