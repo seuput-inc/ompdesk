@@ -273,6 +273,10 @@ describe.skipIf(!existsSync(omp))("turn stages on stock omp", () => {
 		const flag = join(isolated, "slow");
 		const run = await startOmp(provider, isolated, slowHandlerExtension(isolated, flag));
 		expect((await run.send({ type: "set_auto_retry", enabled: false })).success).toBe(true);
+		// A named session gets no title request: stock names a new one with a side request to the same provider once
+		// the first reply arrives, which landed 1.3 s after the turn's own and made `arrivals` two (omp-latest run
+		// 44615080026, Windows).
+		expect((await run.send({ type: "set_session_name", name: "turn stages" })).success).toBe(true);
 		// The omp internals the tracing uses are all there (capabilities.ts `turnStages`).
 		const { unavailable } = await run.bridge.request<{ unavailable: Array<{ feature: string }> }>("capabilities", {});
 		expect(unavailable.map(entry => entry.feature)).not.toContain("turnStages");
