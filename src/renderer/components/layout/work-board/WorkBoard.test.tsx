@@ -472,6 +472,33 @@ describe("WorkBoard sections", () => {
 		expect(scroll).toHaveBeenCalled();
 	});
 
+	it("marks a todo list behind the work in its head and says why in its first row", async () => {
+		useTodoStore.getState().setPhases([
+			{
+				name: "Work",
+				tasks: [
+					{ content: "Write the board", status: "in_progress" },
+					{ content: "Test it", status: "pending" },
+				],
+			},
+		]);
+		useTodoStore.getState().setDrift({ changedAt: Date.now() - 12 * 60_000 - 5000, stale: "instruction" });
+		await mount();
+		const plan = section("plan");
+		const head = plan?.querySelector(".omp-work-board-aside");
+		expect(head?.textContent).toBe("A new instruction has no row on this list12m ago");
+		expect(head?.querySelector("svg")).not.toBeNull();
+		const rows = [...(plan?.querySelectorAll(".omp-work-board-row") ?? [])].map(row => row.textContent);
+		expect(rows).toEqual(["A new instruction has no row on this list", "Write the board", "Test it"]);
+
+		// A list that follows the work has no such row: its head only says when it last changed.
+		await act(async () =>
+			useTodoStore.getState().setDrift({ changedAt: Date.now() - 12 * 60_000 - 5000, stale: null }),
+		);
+		expect(section("plan")?.querySelector(".omp-work-board-aside")?.textContent).toBe("12m ago");
+		expect(section("plan")?.querySelector("[data-board-todo-stale]")).toBeNull();
+	});
+
 	it("shows the turn's token speed beside its elapsed time only while the turn streams", async () => {
 		await mount();
 		await act(async () => {

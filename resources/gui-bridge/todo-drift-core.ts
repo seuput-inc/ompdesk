@@ -1,5 +1,5 @@
 /**
- * A todo list that stopped following the work (rules; wiring: todo-drift.ts; the panel: renderer `lib/todo-drift.ts`).
+ * A todo list that stopped following the work (rules; wiring and the panel's reading: todo-drift.ts).
  * The owner's report (20 Nov 2026): sessions kept a "now" row from hours ago through several releases, a child that
  * worked 58 min showed 0/16 with its first playbook step as "now", and an instruction sent while a turn ran never got
  * a row. Stock reminds an agent only to finish open items (completion reminder) and, inside a turn, after 12 edits or
@@ -8,19 +8,29 @@
  * "now", and nothing speaks when a new instruction arrives inside a running turn (a steer), where OMPdesk's stale-list
  * rule (todo-stale-core.ts, at a turn's start only) never runs.
  *
- * One rule read two ways: the bridge reads the journal and tells the agent (`todoNudge`), the panel reads the
- * transcript and tells the person (`todoDrift(…).stale`). Both see the same steps:
+ * Measured on the Mac mini's sessions since 6 Nov (scripts/todo-truth-stats.ts; 54 sessions with a list): 952 steers
+ * met an open list and 30.6% of them got a row before the next instruction; after stock's mid-run nudge the list
+ * changed within 3 calls 17.9% of the time; 258 spans of 15+ active minutes went without a change. Lists made of a
+ * playbook's copied steps changed as often as others (median 11 vs 10 calls between changes, p90 54 vs 52), so the
+ * copied steps are not why lists stall; while one was open its "now" row was a playbook step in 80% of the calls.
+ *
+ * The bridge reads the journal after each tool call and tells the agent (`todoNudge`) and the panel
+ * (`todoDriftState`). Both see the same steps:
  *
  * - `list`: a todo call that changed the list (not a view, not a refused call);
  * - `call`: any other finished tool call;
  * - `instruction`: a new request from the person or an opening agent (todo-stale-core `isNewRequest`), at a turn's
  *   start or delivered into a running turn;
- * - `nudge`: a reminder already given (journaled; `nudgeKindOf`).
+ * - `nudge`: a reminder already given (journaled; `nudgeKindOf`);
+ * - `compaction`: the reminders before it left the model's context.
  *
  * A list with open items is behind the work when an instruction came after its last change and a tool call followed
- * (the agent works on something the list may not name), or when `DRIFT_CALLS` tool calls went by without a change.
- * No omp imports: the GUI's vitest and the renderer run it.
+ * (the agent works on something the list may not name), or when `DRIFT_CALLS` tool calls or `DRIFT_ACTIVE_MS` of work
+ * went by without a change. No omp imports: the GUI's vitest runs it.
  */
+import { COMPACT_LEAD } from "./todo-compact-core";
+import type { TodoDriftState } from "./todo-drift-contracts";
+import { isNewRequest, STALE_TODO_MESSAGE_TYPE } from "./todo-stale-core";
 
 /** Tool calls without a list change before an open list counts as behind the work. */
 export const DRIFT_CALLS = 20;
@@ -35,7 +45,9 @@ export type TodoDriftEvent =
 	| { kind: "list"; at: number; phases: readonly TodoDriftPhase[] }
 	| { kind: "call"; at: number }
 	| { kind: "instruction"; at: number; text: string }
-	| { kind: "nudge"; at: number; nudge: NudgeKind };
+	| { kind: "nudge"; at: number; nudge: NudgeKind }
+	/** A compaction: the reminders before it left the model's context, so they count as never given. */
+	| { kind: "compaction"; at: number };
 
 export interface TodoDriftPhase {
 	name: string;
@@ -43,6 +55,11 @@ export interface TodoDriftPhase {
 }
 
 export type NudgeKind = "instruction" | "drift" | "stale" | "compact" | "stock-mid-run" | "stock-completion";
+
+/** The part of the reading the GUI shows (todo-drift-contracts.ts). */
+export function todoDriftState(drift: TodoDrift): TodoDriftState {
+	return { changedAt: drift.changedAt ?? null, stale: drift.stale ?? null };
+}
 
 export interface TodoDrift {
 	/** When the list last changed; undefined when no change is in what was read. */
@@ -95,6 +112,9 @@ export function todoDrift(events: readonly TodoDriftEvent[]): TodoDrift {
 			lastAt = event.at;
 		} else if (event.kind === "instruction") {
 			instruction = { text: event.text, callsSince: 0, nudged: false };
+		} else if (event.kind === "compaction") {
+			if (instruction) instruction.nudged = false;
+			driftNudges = 0;
 		} else if (event.nudge === "drift" || event.nudge === "stock-mid-run") {
 			// Stock's own mid-run nudge spaces the next one too, so the agent never reads two at once; only ours back off.
 			if (event.nudge === "drift") driftNudges++;
@@ -140,8 +160,9 @@ export function todoNudge(drift: TodoDrift): "instruction" | "drift" | undefined
 	return drift.callsSinceDriftNudge >= needed ? "drift" : undefined;
 }
 
-const INSTRUCTION_LEAD = "A new instruction arrived after your todo list last changed";
-const DRIFT_LEAD = "Your todo list has not changed for";
+/** How each reminder opens: `nudgeKindOf` finds a journaled one by it. */
+export const INSTRUCTION_LEAD = "A new instruction arrived after your todo list last changed";
+export const DRIFT_LEAD = "Your todo list has not changed for";
 const MAX_QUOTE_CHARS = 100;
 
 function clip(text: string): string {
@@ -163,7 +184,7 @@ export function todoNudgeText(kind: "instruction" | "drift", drift: TodoDrift): 
 	const figure = `${drift.done}/${drift.total} done`;
 	const body =
 		kind === "instruction"
-			? `${INSTRUCTION_LEAD}: "${clip(drift.instruction?.text ?? "")}". The list still shows ${nowPhrase(drift)} (${figure}). If that instruction is work of its own, add it as an item and start it now (todo append, then start), mark it done when it is finished, then start the item you return to. If it only continues the current item, leave the list as it is.`
+			? `${INSTRUCTION_LEAD}: "${clip(drift.instruction?.text ?? "")}". The list still shows ${nowPhrase(drift)} (${figure}). If that instruction is work of its own, add it as an item and start it now (todo append, then start), mark it done when it is finished, then start the item you return to. If it only continues the current item, say so with todo start on that item, so the list shows it is current.`
 			: `${DRIFT_LEAD} ${drift.callsSince} tool calls (${Math.round(drift.activeMsSince / 60_000)} min of work); it shows ${nowPhrase(drift)}, ${figure}. Bring it up to date beside your next call: mark what you finished done, start the item you are working on now, and add an item for work the list does not name.`;
 	return `<system-reminder>\n${body}\n</system-reminder>`;
 }
@@ -228,6 +249,10 @@ export function journalDriftEvents(
 	for (let index = listAt + 1; index < branch.length; index++) {
 		const entry = branch[index];
 		const at = entryAt(entry);
+		if (entry.type === "compaction") {
+			events.push({ kind: "compaction", at });
+			continue;
+		}
 		const nudge = nudgeKindOf(entry);
 		if (nudge) {
 			events.push({ kind: "nudge", at, nudge });

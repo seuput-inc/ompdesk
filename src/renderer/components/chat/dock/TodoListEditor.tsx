@@ -1,6 +1,7 @@
 import { AlertTriangle, X } from "lucide-react";
 import { Suspense, useCallback, useMemo, useState } from "react";
 import type { TodoPhase } from "../../../../shared/rpc-types";
+import { refreshSessionState } from "../../../hooks/session-hydration";
 import { lazyChunk } from "../../../lib/chunk-load";
 import { useT } from "../../../lib/i18n";
 import { type OptimisticTarget, optimisticWrite } from "../../../lib/optimistic";
@@ -84,9 +85,12 @@ export function TodoListEditor() {
 				mutate: () => ({ phases: next }),
 				persist: () => rpc.setTodos(todoPayload(next)),
 				onFailure: failure => toastError({ title: t("todoPanel.updateFailed"), error: failure }),
+				// The rollback went through setPhases, which read it as a change just made: the session says when the
+				// list really changed last.
+				resync: () => refreshSessionState(tabId ?? undefined),
 			});
 		},
-		[rpc, t, writes],
+		[rpc, t, tabId, writes],
 	);
 
 	const patchTask = useCallback(

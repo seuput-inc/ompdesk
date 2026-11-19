@@ -1536,6 +1536,38 @@ describe("useRpcEvents todo lifecycle", () => {
 		expect(visible()).toBe(true);
 	});
 
+	it("follows the session's reading of a list behind the work, and a todo call clears it", async () => {
+		const { omp, emitBatch } = installMockOmp();
+		const open: TodoPhase[] = [{ name: "Build", tasks: [{ content: "scaffold", status: "in_progress" }] }];
+		const changedAt = Date.now() - 12 * 60_000;
+		omp.rpc.getState.mockImplementation(async () =>
+			settledState({ isStreaming: true, todoPhases: open, todoDrift: { changedAt, stale: null } }),
+		);
+		await mount(<RpcEventsProbe />);
+		await flush();
+		// What get_state reported: the list last changed twelve minutes ago and still follows the work.
+		expect(useTodoStore.getState().drift).toEqual({ changedAt, stale: null });
+
+		// A steer got no row and the agent worked on: the bridge says so after that tool call.
+		await act(async () => emitBatch([{ type: "todo_drift", state: { changedAt, stale: "instruction" } }]));
+		expect(useTodoStore.getState().drift).toEqual({ changedAt, stale: "instruction" });
+
+		// The agent adds the row: the list is current again at once, before the bridge's next frame.
+		const before = Date.now();
+		const next: TodoPhase[] = [
+			{
+				name: "Build",
+				tasks: [
+					{ content: "scaffold", status: "in_progress" },
+					{ content: "the steer's row", status: "pending" },
+				],
+			},
+		];
+		await act(async () => emitBatch([todoResult("todo-steer", next)]));
+		expect(useTodoStore.getState().drift?.stale).toBeNull();
+		expect(useTodoStore.getState().drift?.changedAt).toBeGreaterThanOrEqual(before);
+	});
+
 	it("does not resurface a finished list restored from session history", async () => {
 		const { omp } = installMockOmp();
 		const done: TodoPhase[] = [{ name: "Build", tasks: [{ content: "scaffold", status: "completed" }] }];

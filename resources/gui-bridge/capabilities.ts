@@ -91,6 +91,8 @@ export const FEATURES = {
 		"A session waiting on another session's reply, or whose open todo items are all written as waiting, is not woken by stock's todo reminder",
 	todoStale: "A todo list left from earlier work is named to the agent when a new request starts a turn",
 	todoCompact: "A todo list grown long by appends is asked to fold its finished items",
+	todoDrift:
+		"A todo list behind the work (a new instruction or a run of tool calls with no change) is named to the agent and marked on the panel",
 	wasteGuards:
 		"A bash service start whose ready.log cannot match is refused; a polling call or a refused edit is told once what to do instead; a wait returns only with news",
 	quitJournal: "A quit while a tool runs journals the tool's aborted result before the process ends",
@@ -611,6 +613,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** todo-compact.ts: the public `tool_result` hook and its `additionalContext` only. Imports nothing from omp. */
 	todoCompact: {},
+	/**
+	 * todo-drift.ts: the public `tool_result` hook with `additionalContext`, stock's journal todo readers, the session's
+	 * active tools and plan state after each tool call, and the live session's branch for the panel's reading.
+	 */
+	todoDrift: {
+		session: ["getActiveToolNames()", "getPlanModeState()", "sessionManager.getBranch()"],
+		modules: {
+			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
+		},
+	},
 	/**
 	 * waste-guards.ts: the public `tool_call` (`block`) and `tool_result` (`content`) hooks, `registerTool` over the
 	 * built-in `wait` with the same-tool `ctx.invokeTool` (present since before 18.18.2), and on Windows stock's

@@ -421,6 +421,10 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 							if (phases) useTodoStore.getState().setPhases(phases);
 							break;
 						}
+						case "todo_drift": {
+							useTodoStore.getState().setDrift(event.state);
+							break;
+						}
 						case "agent_end": {
 							useSessionStore.setState({ isStreaming: false, awaitingModelSince: null });
 							// Releases a todo list this turn finished — the dock card goes away.

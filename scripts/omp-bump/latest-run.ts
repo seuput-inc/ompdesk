@@ -87,6 +87,11 @@ export const EXPECTED_STOCK_SKIPS: readonly ExpectedSkip[] = [
 		test: "a todo list left from earlier work, on the user's real smol model",
 		reason: "runs the person's real model (OMP_GUI_REAL_WORK)",
 	},
+	{
+		file: "src/main/bridge-todo-drift-stock.test.ts",
+		test: "a steer into a listed task, on the user's real smol model",
+		reason: "runs the person's real model (OMP_GUI_REAL_WORK)",
+	},
 ];
 
 /** The part of vitest's JSON reporter output read here. */

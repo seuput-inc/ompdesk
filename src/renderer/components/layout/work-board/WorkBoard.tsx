@@ -46,6 +46,7 @@ import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
 import { type ToolEntry, useToolsStore } from "../../../stores/tools";
 import { useUiStore } from "../../../stores/ui";
 import { useWorkBoardStore } from "../../../stores/work-board";
+import { TodoFreshnessMark, TodoStaleIcon, useTodoFreshness } from "../../chat/dock/TodoFreshness";
 import { formatTokenRate } from "../../chat/TurnOutputMeter";
 import { useRunStores } from "../../chat/work/use-work-run";
 import { resumedAgents } from "../../chat/work/work-run";
@@ -284,6 +285,9 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	const phases = useTodoStore(state => state.phases);
 	const planVisible = useTodoStore(selectTodoCardVisible);
 	const plan = useMemo(() => (planVisible ? todoBoard(phases) : null), [phases, planVisible]);
+	// How current the list is (when it last changed, whether it is behind the work); nothing without a list.
+	const listFreshness = useTodoFreshness();
+	const freshness = plan ? listFreshness : null;
 
 	const goal = useSessionStore(state => state.goal);
 	const goalState = useSessionStore(state => state.goalState);
@@ -455,7 +459,9 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 			: (presentedJobs[0]?.item.label ??
 				(nowChildren[0] ? nowChildren[0].title || t("workBoard.review.untitled") : ""));
 	const nowFigure = counts.running + counts.childrenRunning;
+	// A list behind the work leads with why: its "now" row is the part in doubt.
 	const planLead =
+		freshness?.reason ??
 		plan?.active ??
 		plan?.rows[0]?.content ??
 		(showsGoal && goal
@@ -658,6 +664,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 
 			{(plan || showsGoal) && (
 				<BoardSection
+					aside={freshness ? <TodoFreshnessMark form="figure" freshness={freshness} /> : undefined}
 					id="plan"
 					summary={{ lead: planLead, count: planFigure }}
 					mid={
@@ -713,6 +720,15 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 							]
 								.filter(Boolean)
 								.join("\n")}
+						/>
+					)}
+					{freshness?.reason && (
+						<BoardRow
+							data={{ "data-board-todo-stale": freshness.stale ?? "" }}
+							flipKey="plan-stale"
+							label={freshness.reason}
+							lead={<KindMark icon={TodoStaleIcon} tone="warning" />}
+							title={freshness.title}
 						/>
 					)}
 					{plan && plan.done > 0 && (

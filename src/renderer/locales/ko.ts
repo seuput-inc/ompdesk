@@ -3758,6 +3758,9 @@ export const ko: Record<string, string> = {
 	"todoPanel.reminderCount": "확인이 필요한 할 일 {count}개",
 	"todoPanel.reminderRepeat": "같은 답이 한 번 더 나와 접어 뒀어요",
 	"todoPanel.dismissReminder": "알림 닫기",
+	"todoPanel.updated": "{ago} 갱신",
+	"todoPanel.stale.instruction": "새 지시가 목록에 없음",
+	"todoPanel.stale.drift": "작업이 계속되는 동안 갱신되지 않음",
 
 	// Log panel
 	"logPanel.title": "로그",
@@ -4462,6 +4465,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.todoWait": "답을 기다리는 세션에는 할 일 알림 안 보냄",
 	"bridgeHealth.feature.todoStale": "새 요청에 지난 할 일 목록 전달",
 	"bridgeHealth.feature.todoCompact": "길어진 할 일 목록을 에이전트가 접기",
+	"bridgeHealth.feature.todoDrift": "작업에 뒤처진 할 일 목록을 에이전트에게 알리고 패널에 표시",
 	"bridgeHealth.feature.wasteGuards": "일치할 수 없는 bash ready.log 거부와 폴링 방지 안내",
 	"bridgeHealth.feature.quitJournal": "도구 실행 중 종료해도 중단된 도구 결과 기록",
 	"bridgeHealth.feature.exitDrain": "세션의 omp가 끝나기 전에 로그인 갱신 저장",

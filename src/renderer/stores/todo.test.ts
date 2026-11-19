@@ -187,3 +187,41 @@ describe("todo dock card visibility", () => {
 		expect(visible()).toBe(false);
 	});
 });
+
+describe("todo list freshness", () => {
+	const tenMinutesAgo = () => Date.now() - 10 * 60_000;
+
+	it("knows nothing about the list's last change until the session says", () => {
+		useTodoStore.getState().setPhases([phase("Build", ["scaffold", "in_progress"])]);
+		expect(useTodoStore.getState().drift).toBeNull();
+	});
+
+	it("reads a list the agent or a person just changed as fresh, whatever it was marked", () => {
+		useTodoStore.getState().setPhases([phase("Build", ["scaffold", "in_progress"], ["wire", "pending"])]);
+		useTodoStore.getState().setDrift({ changedAt: tenMinutesAgo(), stale: "instruction" });
+		const before = Date.now();
+
+		useTodoStore.getState().setPhases([phase("Build", ["scaffold", "completed"], ["wire", "in_progress"])]);
+
+		const drift = useTodoStore.getState().drift;
+		expect(drift?.stale).toBeNull();
+		expect(drift?.changedAt).toBeGreaterThanOrEqual(before);
+	});
+
+	it("keeps a list marked behind the work when the same list is read again", () => {
+		const list = [phase("Build", ["scaffold", "in_progress"])];
+		useTodoStore.getState().setPhases(list);
+		const behind = { changedAt: tenMinutesAgo(), stale: "drift" as const };
+		useTodoStore.getState().setDrift(behind);
+
+		useTodoStore.getState().setPhases(list);
+
+		expect(useTodoStore.getState().drift).toEqual(behind);
+	});
+
+	it("forgets the reading with the session", () => {
+		useTodoStore.getState().setDrift({ changedAt: tenMinutesAgo(), stale: "drift" });
+		useTodoStore.getState().reset();
+		expect(useTodoStore.getState().drift).toBeNull();
+	});
+});

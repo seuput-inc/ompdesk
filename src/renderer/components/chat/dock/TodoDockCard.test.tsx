@@ -2,8 +2,17 @@ import { parseHTML } from "linkedom";
 import { act, type ReactElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { RpcResponse } from "../../../../shared/rpc-types";
+import type { RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../../lib/i18n";
+import type { SessionStore } from "../../../stores/session";
+import {
+	deleteSessionRuntime,
+	SessionRuntimeProvider,
+	sessionRuntimeStore,
+	setFocusedSessionRuntime,
+} from "../../../stores/session-runtime-context";
+import { ensureTabRuntime } from "../../../stores/tab-runtime";
+import { useTabsStore } from "../../../stores/tabs";
 import { useToastStore } from "../../../stores/toast";
 import { useTodoStore } from "../../../stores/todo";
 import { useUiStore } from "../../../stores/ui";
@@ -115,6 +124,140 @@ describe("TodoDockCard", () => {
 		await mount();
 
 		expect(container.querySelector('[data-testid="dock-peek-todo"]')?.textContent).toBe("1/2Next: Run visual QA");
+	});
+
+	describe("how current the list is", () => {
+		const open = [
+			{
+				name: "Implementation",
+				tasks: [
+					{ content: "Sketch the peek", status: "completed" as const },
+					{ content: "Wire the peek into the header", status: "in_progress" as const },
+				],
+			},
+		];
+		const peekText = () => container.querySelector('[data-testid="dock-peek-todo"]')?.textContent;
+		const twelveMinutesAgo = () => Date.now() - 12 * 60_000 - 5000;
+
+		it("marks the collapsed line when a new instruction has no row, with when the list last changed", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "instruction" });
+			await mount();
+
+			expect(peekText()).toBe(
+				"1/2Wire the peek into the headerA new instruction has no row on this listUpdated 12m ago",
+			);
+			expect(container.querySelector('[data-todo-freshness="instruction"] svg')).not.toBeNull();
+
+			// The opened list says it too, above its rows.
+			const toggle = container.querySelector<HTMLButtonElement>('section[aria-label="Todos"] button[aria-expanded]');
+			await act(async () => toggle?.click());
+			expect(peekText()).toBeUndefined();
+			expect(container.textContent).toContain("A new instruction has no row on this listUpdated 12m ago");
+		});
+
+		it("says why a list went unchanged through a long run of work", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "drift" });
+			await mount();
+
+			expect(peekText()).toContain("Not updated while the agent kept working");
+		});
+
+		it("shows only when a list that follows the work last changed, with no mark", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: null });
+			await mount();
+
+			expect(peekText()).toBe("1/2Wire the peek into the headerUpdated 12m ago");
+			expect(container.querySelector("[data-todo-freshness] svg")).toBeNull();
+		});
+
+		it("says nothing while the list's last change is unknown", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: null, stale: null });
+			await mount();
+
+			expect(peekText()).toBe("1/2Wire the peek into the header");
+		});
+
+		it("clears the mark the moment a person changes the list", async () => {
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "instruction" });
+			await mount();
+			expect(container.textContent).toContain("A new instruction has no row on this list");
+
+			await act(async () => statusCycleButton().click());
+
+			expect(container.textContent).not.toContain("A new instruction has no row on this list");
+			expect(container.textContent).toContain("Updated just now");
+		});
+
+		it("keeps the mark when the person's change was refused: the list did not change", async () => {
+			const behind = { changedAt: twelveMinutesAgo(), stale: "instruction" as const };
+			// The session refuses the write, then answers with the list as it was, still behind the work.
+			const commandForTab = vi.fn(
+				async (_tabId: string, command: RpcCommand): Promise<RpcResponse> =>
+					command.type === "set_todos"
+						? { type: "response", command: "set_todos", success: false, error: "session is read-only" }
+						: {
+								type: "response",
+								command: command.type,
+								success: true,
+								data: {
+									sessionId: "s1",
+									sessionName: null,
+									sessionFile: null,
+									cwd: "/w",
+									isStreaming: false,
+									isCompacting: false,
+									messageCount: 2,
+									queuedMessageCount: 0,
+									planModeEnabled: false,
+									todoPhases: open,
+									todoDrift: behind,
+								},
+							},
+			);
+			Object.assign(window.omp.rpc, { commandForTab });
+			useTabsStore.setState({
+				tabs: [{ kind: "agent", id: "t1", cwd: "/w", status: "ready", unreadDone: false }],
+				activeTabId: "t1",
+			});
+			const runtime = ensureTabRuntime("t1");
+			setFocusedSessionRuntime("t1");
+			sessionRuntimeStore<SessionStore>("t1", "session")?.setState({ sessionId: "s1", status: "ready" });
+			try {
+				useTodoStore.getState().setPhases(open);
+				useTodoStore.getState().setDrift(behind);
+				await mount(
+					<SessionRuntimeProvider runtime={runtime}>
+						<TodoDockCard />
+					</SessionRuntimeProvider>,
+				);
+
+				await act(async () => statusCycleButton().click());
+				await act(async () => {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					setTimeout(resolve, 0);
+					await promise;
+				});
+
+				expect(commandForTab).toHaveBeenCalledWith("t1", expect.objectContaining({ type: "set_todos" }), undefined);
+				expect(useTodoStore.getState().phases[0]?.tasks[0]?.status).toBe("completed");
+				expect(container.textContent).toContain("A new instruction has no row on this listUpdated 12m ago");
+			} finally {
+				await act(async () => root?.unmount());
+				setFocusedSessionRuntime(null);
+				deleteSessionRuntime("t1");
+				useTabsStore.getState().reset();
+				Reflect.deleteProperty(window.omp.rpc, "commandForTab");
+			}
+		});
 	});
 
 	it("renders a single phase as a flat compact task list with live counts", async () => {
