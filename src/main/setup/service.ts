@@ -12,7 +12,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { dirname, join } from "node:path";
 import type { OmpUpdateFailure } from "../../shared/omp-update";
 import {
 	type GitAslrAction,
@@ -125,9 +125,10 @@ export interface SetupServiceDeps {
 	ompRelease?: (bun: string, version: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
 	/**
 	 * One gui-runtime.jsonl line (source `omp-update`) per step of an omp install setup runs on its own account
-	 * (a missing, broken or too-old omp): `started`, then `finished` or `failed`, each with `path: "setup"`.
+	 * (a missing, broken or too-old omp): `started`, then `finished` or `failed`, or `skipped` with the reason when
+	 * nothing could run (`no-bun`), each with `path: "setup"`.
 	 */
-	logOmpInstall?: (step: "started" | "finished" | "failed", details: Record<string, unknown>) => void;
+	logOmpInstall?: (step: "started" | "finished" | "failed" | "skipped", details: Record<string, unknown>) => void;
 	now?: () => number;
 }
 
@@ -955,7 +956,8 @@ export class SetupService {
 		}
 		const plan = buildPlan(id, method, ctx, release, tailscale);
 		if (!plan) {
-			// Only omp has a prerequisite (Bun).
+			// Only omp has a prerequisite (Bun). Without Bun omp stays as it is: nothing else installs a named version.
+			if (id === "omp") this.#deps.logOmpInstall?.("skipped", { path: "setup", method, reason: "no-bun" });
 			this.#fail(id, { reason: "prerequisite", detail: "bun" });
 			return;
 		}
@@ -1150,7 +1152,6 @@ export class SetupService {
 	}
 
 	#planContext(detection: Detection): PlanContext {
-		const root = detection.omp ? ompBunRoot(detection.omp) : null;
 		return {
 			platform: this.#deps.platform,
 			arch: this.#deps.arch,
@@ -1158,7 +1159,6 @@ export class SetupService {
 			toolsDir: this.#deps.toolsDir,
 			bun: detection.bun,
 			omp: detection.omp,
-			ompManaged: root !== null && resolvePath(root) === resolvePath(this.#deps.bunInstall),
 			// Setup's own install is the omp this OMPdesk was tested with, never the registry's newest, which may be a
 			// major nothing here was tested on (19 Nov 2026: omp 19.0.0 came out while OMPdesk was tested with 18).
 			ompSpecs: ompInstallSpecs(this.#deps.bunInstall, TESTED_OMP_VERSION),

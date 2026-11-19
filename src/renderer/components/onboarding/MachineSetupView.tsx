@@ -88,9 +88,13 @@ export function setupPhaseText(t: Translate, item: SetupItemState): string {
 		const version = item.presence?.kind === "present" ? item.presence.version : null;
 		return version ? t("machineSetup.phase.presentVersion", { version }) : t("machineSetup.phase.present");
 	}
-	if (item.phase === "running" && (item.method === "omp-update" || item.method === "bun-upgrade")) {
-		return t("machineSetup.phase.updating");
-	}
+	// A too-old omp is being updated whatever installs over it: Bun's package (setup) or stock `omp update` (a
+	// person's "Update now" on an omp Bun does not manage).
+	const updating =
+		item.method === "omp-update" ||
+		item.method === "bun-upgrade" ||
+		(item.id === "omp" && item.presence?.kind === "outdated");
+	if (item.phase === "running" && updating) return t("machineSetup.phase.updating");
 	if (item.phase === "running" && item.progress?.download) return t("machineSetup.phase.downloading");
 	return t(`machineSetup.phase.${item.phase}`);
 }
@@ -412,8 +416,8 @@ function focusItem(required: SetupItemState[]): SetupItemState | null {
 
 /**
  * What the full-window screen's heading says. The screen is up while setup runs
- * ("installing", or "updating" when omp is below the minimum and `omp update`
- * runs) and also while it has stopped without omp (failed, stopped by the user,
+ * ("installing", or "updating" when omp is below the minimum and the tested omp
+ * is being installed over it) and also while it has stopped without omp (failed, stopped by the user,
  * paused, unavailable): then the heading names the item that is missing and the
  * text asks for a retry instead of promising that nothing is left to do.
  */
@@ -424,7 +428,9 @@ export type SetupScreen =
 export function setupScreen(state: SetupState | null): SetupScreen {
 	if (!state) return { kind: "installing" };
 	const focus = focusItem(state.items.filter(item => item.required));
-	if (focus?.phase === "running") return { kind: focus.method === "omp-update" ? "updating" : "installing" };
+	if (focus?.phase === "running") {
+		return { kind: focus.id === "omp" && focus.presence?.kind === "outdated" ? "updating" : "installing" };
+	}
 	if (!focus || state.requiredRunning) return { kind: "installing" };
 	return { kind: "stopped", item: focus.id, outdated: focus.presence?.kind === "outdated" };
 }
