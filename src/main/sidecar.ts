@@ -44,8 +44,8 @@ import {
 	type SessionOpen,
 	type SessionSettings,
 	sessionEnv,
-	withCreditSpendRuns,
 	sessionPath,
+	withCreditSpendRuns,
 	withoutSessionEnv,
 } from "./omp-launch";
 import { ompLogTail } from "./omp-log-tail";

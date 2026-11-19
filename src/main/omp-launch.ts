@@ -8,8 +8,8 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { CREDIT_SPEND_ENV } from "../../resources/gui-bridge/credit-spend-core";
-import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
 import { GH_BIN_DIR, GH_GUARD_ENV } from "../../resources/gui-bridge/gh-guard-core";
+import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
 import { MCP_AUTH_ENV, MCP_CWD_ENV, MCP_HUB_ENV } from "../../resources/gui-bridge/mcp-hub-contracts";
 import type { AutoTitleSettings } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { AGENT_DESKTOP_ENV, COMPUTER_USE_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
