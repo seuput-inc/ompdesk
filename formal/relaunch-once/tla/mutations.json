@@ -1,0 +1,42 @@
+{
+	"checker": {
+		"kind": "tlc",
+		"config": "MC.cfg",
+		"workers": 2,
+		"timeoutSec": 300,
+		"deadlock": false
+	},
+	"properties": ["TypeOK", "AtMostOnce", "ShortCommandNotCut"],
+	"waive": {
+		"TypeOK": "Shape check only: no behaviour change breaks it without also breaking a property above it."
+	},
+	"mutations": [
+		{
+			"name": "replay-runs-the-command-again",
+			"why": "Stock's own rule (v0.134.1 and before): the relaunch's retry runs a cut or failed command again with the same arguments, so a commit that already happened is made twice.",
+			"file": "RelaunchOnce.tla",
+			"search": "IF Guard /\\ callLife < life",
+			"replace": "IF FALSE",
+			"breaks": "AtMostOnce",
+			"config": "MC.cfg"
+		},
+		{
+			"name": "guard-looks-at-this-life-only",
+			"why": "The guard refuses a call journaled by this process instead of an earlier one: the relaunch's replay runs through.",
+			"file": "RelaunchOnce.tla",
+			"search": "IF Guard /\\ callLife < life",
+			"replace": "IF Guard /\\ callLife = life",
+			"breaks": "AtMostOnce",
+			"config": "MC.cfg"
+		},
+		{
+			"name": "stop-aborts-at-once",
+			"why": "session_shutdown aborts the loop before the running command returns (v0.134.1 and before): a short command is cut and its output lost.",
+			"file": "RelaunchOnce.tla",
+			"search": "/\\ ~(Drain /\\ Short)",
+			"replace": "/\\ TRUE",
+			"breaks": "ShortCommandNotCut",
+			"config": "MC.cfg"
+		}
+	]
+}

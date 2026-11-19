@@ -247,6 +247,20 @@
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
 			"syncCommit": "5c502f9a208886c32caef2c7fdc95e6a4ce1bdc0"
+		},
+		{
+			"id": "relaunch-once",
+			"title": "A command across a relaunch runs once and a stop does not cut a short one",
+			"kind": "tla",
+			"dir": "relaunch-once/tla",
+			"spec": "RelaunchOnce.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/quit-journal.ts",
+				"resources/gui-bridge/quit-journal-core.ts#replayOfEarlierLife"
+			],
+			"syncCommit": "c1c9a8279310ab758ceea0a13b1d98919b5448dc"
 		}
 	]
 }
