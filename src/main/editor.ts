@@ -31,6 +31,8 @@ export async function openInExternalEditor(content: string): Promise<EditorRound
 		const child = spawn(editor, [...editorArgs, tmpFile], {
 			stdio: ["ignore", "ignore", "ignore"],
 			shell: process.platform === "win32",
+			// The shell that starts the editor on Windows shows no console window of its own; the editor's window is its own.
+			windowsHide: true,
 			// Bare editor names (code, zed, subl) resolve via the login-shell PATH.
 			env: { ...process.env, PATH: await spawnPath() },
 		});

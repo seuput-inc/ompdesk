@@ -761,7 +761,10 @@ pub fn physical_memory() -> std::io::Result<(u64, u64)> {
 }
 
 #[cfg(windows)]
-pub use process_list::{Process, ask_to_close, process_started_ms, processes, resume_process};
+pub use process_list::{
+    ConsoleWindow, Process, ask_to_close, console_windows, process_started_ms, processes,
+    resume_process,
+};
 
 /// This computer's processes: a Toolhelp32 snapshot with each one's working set (`memory.processes`) and, for
 /// `procs.*`, its start and a handle to read its environment and command line and to end it.
@@ -931,6 +934,8 @@ mod process_list {
         fn GetWindowThreadProcessId(window: Handle, process_id: *mut u32) -> u32;
         fn GetClassNameW(window: Handle, name: *mut u16, capacity: i32) -> i32;
         fn PostMessageW(window: Handle, message: u32, wparam: usize, lparam: isize) -> i32;
+        fn IsWindowVisible(window: Handle) -> i32;
+        fn GetWindowTextW(window: Handle, text: *mut u16, capacity: i32) -> i32;
     }
 
     /// One process of the list: `working_set` in bytes, 0 for the idle process and for one this user may not open;
@@ -1306,13 +1311,76 @@ mod process_list {
 
     /// Whether `window` is a console's: conhost's, or a pseudoconsole's hidden one.
     fn console(window: Handle) -> bool {
+        class_among(window, &["ConsoleWindowClass", "PseudoConsoleWindow"]).is_some()
+    }
+
+    /// Which of `names` is the window's class, if any.
+    fn class_among(window: Handle, names: &[&'static str]) -> Option<&'static str> {
         let mut class = [0u16; 32];
         // SAFETY: `class` is valid for writes of the 32 units the call is told, which it does not exceed.
         let length = unsafe { GetClassNameW(window, class.as_mut_ptr(), 32) };
         let class = &class[..usize::try_from(length).unwrap_or(0).min(class.len())];
-        ["ConsoleWindowClass", "PseudoConsoleWindow"]
+        names
             .iter()
-            .any(|name| name.encode_utf16().eq(class.iter().copied()))
+            .copied()
+            .find(|name| name.encode_utf16().eq(class.iter().copied()))
+    }
+
+    /// A console window a person sees.
+    pub struct ConsoleWindow {
+        pub window: usize,
+        /// The process Windows names for the window: the program whose console a conhost window shows, and for a
+        /// Windows Terminal window the terminal itself, whatever runs in it.
+        pub pid: u32,
+        pub class: &'static str,
+        pub title: String,
+    }
+
+    /// The classes of a shown console: conhost's own window, and Windows Terminal's, which shows the console of a
+    /// program started without one wherever it is the default terminal.
+    const SHOWN_CONSOLES: [&str; 2] = ["ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"];
+
+    /// Every visible console window of this process's desktop (`procs.consoles`). A console that is never shown (the
+    /// one a program started with `CREATE_NO_WINDOW` gets) is not among them.
+    pub fn console_windows() -> Vec<ConsoleWindow> {
+        extern "system" fn visit(window: Handle, data: isize) -> i32 {
+            // SAFETY: `data` is the address of the `Vec` that `console_windows` lends EnumWindows, which calls this on
+            // the same thread, one window at a time, before it returns; nothing else touches it meanwhile.
+            let found = unsafe {
+                &mut *std::ptr::with_exposed_provenance_mut::<Vec<ConsoleWindow>>(data as usize)
+            };
+            let Some(class) = class_among(window, &SHOWN_CONSOLES) else {
+                return 1;
+            };
+            // SAFETY: `window` is a handle EnumWindows passed (a window gone since only fails the call).
+            if unsafe { IsWindowVisible(window) } == 0 {
+                return 1;
+            }
+            let mut pid = 0;
+            let mut title = [0u16; 256];
+            // SAFETY: as above; `pid` is a live u32, and `title` is valid for writes of the 256 units the call is told,
+            // which it does not exceed. Another process's title is read from the window, never asked of that process.
+            let length = unsafe {
+                GetWindowThreadProcessId(window, &raw mut pid);
+                GetWindowTextW(window, title.as_mut_ptr(), 256)
+            };
+            let title = &title[..usize::try_from(length).unwrap_or(0).min(title.len())];
+            found.push(ConsoleWindow {
+                window: window.addr(),
+                pid,
+                class,
+                title: String::from_utf16_lossy(title),
+            });
+            1
+        }
+
+        let mut found: Vec<ConsoleWindow> = Vec::new();
+        // SAFETY: `visit` has the callback's signature, and `data` is the address of `found`, which lives and is used
+        // by nothing else until EnumWindows returns.
+        unsafe {
+            EnumWindows(visit, (&raw mut found).expose_provenance() as isize);
+        }
+        found
     }
 }
 

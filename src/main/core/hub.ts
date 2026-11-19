@@ -15,6 +15,7 @@
  * re-seeds itself there. Main's thread is never held longer than the deadline per wait.
  */
 import { Worker } from "node:worker_threads";
+import { tookHub } from "../slow-steps";
 import { CoreError, core } from "./process";
 
 /**
@@ -281,7 +282,13 @@ export class Hub {
 	/** A synchronous call of instance `to`'s `method`: its value, after every item it made was handled. */
 	call<T>(to: number, method: string, params: unknown = {}): T {
 		if (this.measuring) this.stats.methods.set(method, (this.stats.methods.get(method) ?? 0) + 1);
-		return this.#call("hub.call", { to, method, params }) as T;
+		const started = performance.now();
+		try {
+			return this.#call("hub.call", { to, method, params }) as T;
+		} finally {
+			// With the items the call made handled: all of it held main's thread.
+			tookHub(method, performance.now() - started);
+		}
 	}
 
 	/**
