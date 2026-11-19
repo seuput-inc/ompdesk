@@ -49,7 +49,7 @@ Last rewritten: 2026-11-20 02:10 KST.
 | D3 | Windows: the first update download after a release fails and the next check 5 min later works; a failed download reads "failed". | in progress | 01a1f42b [Mac mini] | omp/agent/win-update-session-20261119 | gate (a)(b real omp)(c) + mac (c) |
 | D4 | Release gate: the previous release updates itself to the candidate (and the candidate to a next build). | in progress | 01a1f42b [Mac mini] | omp/agent/win-update-session-20261119 | |
 | D5 | A frozen shell or page stops update lookups (Mac mini page frozen since 09:12 on 19 Nov). | in progress | 01a1f2ea [Mac mini] | omp/agent/page-watch-20261119 | |
-| D6 | Why the app ended is never logged (shell, node, quit source). | in progress | 01a1f44d [Mac mini] | omp/agent/exit-reason-log-20261119 | ci green Linux+Windows; macOS pending |
+| D6 | Why the app ended is never logged (shell, node, quit source). Also: SIGINT/SIGTERM/SIGHUP now quit through the quit guard. | release-ready (next candidate) | | omp/agent/exit-reason-log-20261119 `ed3b3001a` | ci 44552014530, mac 44564510088 |
 | D7 | The bridge self-check result cannot be read afterwards. | release-ready | | omp/agent/rc-0134-2 | ci 44566470675 |
 | D8 | A message a paired computer never answered reads "not sent". | shipped 0.134.1 | | | |
 
@@ -75,6 +75,7 @@ Last rewritten: 2026-11-20 02:10 KST.
 | G2 | agent-studio cleanup EBUSY on Windows: retry shipped in the test; the holding process is still unknown. | release-ready / not started | | omp/agent/rc-0134-2 | failed 0 of 80 under load (44544819346) |
 | G3 | The Preview check ends "could not check" on a real Windows desktop: measure the rate, warm it if frequent. | not started | new [desktop] | | |
 | G4 | No test drives the real app with real omp for `!`, `!!`, `$`, the Plan card, cancelling a compaction, dequeue. | not started | new [desktop] | | |
+| G6 | shell-batch-checks `installer-check` fails on main 72d081111 (run 44561065983); not on the release path, cause unknown. One Windows e2e SIGKILL-resume case failed once in 44554809040 (passed on rerun: not counted as proof). | not started | | | |
 | G5 | turn-stages test counted the next-prompt suggestion request. | release-ready | | omp/agent/rc-0134-2 | failed 0 of 40 under load |
 
 ## H. Earlier list
