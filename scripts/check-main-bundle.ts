@@ -372,7 +372,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // 2,207,914 (branch run 44612367045), 1,922 bytes over. The budget is that measure plus 80 bytes.
 // Five theme sets, each light and dark (20 Nov 2026, 7d7e723de: `lib/theme-palettes.ts`, the set picker's model in
 // `lib/themes.ts`): measured 2,208,335 (branch run 44615749422), 341 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_208_415;
+// A turn refused because credits are off reads as the plan's limit, not a failed response (20 Nov 2026, f8aedbc24:
+// `lib/messages.ts`, `TurnErrorNotice.tsx`): measured 2,208,473 (branch run 44622480250), 58 bytes over. The budget is
+// that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_208_553;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
