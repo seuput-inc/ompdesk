@@ -29,6 +29,18 @@ child.unref();
 process.stdout.write(String(child.pid));
 `;
 
+/**
+ * A chatty server whose output has nowhere to go, as Next's dev server runs: an uncaught error is logged, so once the
+ * reader of its output is gone every write fails and logging that failure fails again (the owner's report, 20 Nov
+ * 2026: next-server at 100 % CPU after a relaunch).
+ */
+const CHATTY = `
+process.on("uncaughtException", error => console.error("uncaught", error && error.code));
+setInterval(() => console.log("tick"), 100);
+setTimeout(() => process.exit(0), 120000);
+process.stdout.write("up");
+`;
+
 const SLOW = 60_000;
 let dir: string;
 let file: string;
@@ -210,6 +222,40 @@ describe("a session's processes, on this computer", () => {
 		);
 		expect(after.owners().map(owner => owner.tag)).toEqual([keptTab.tag]);
 	});
+
+	// Linux (tests and CI only, no product) does not tell a closed pipe's writer from any other: not checked there.
+	it.skipIf(process.platform === "linux")(
+		"whose output has nowhere to go end at the launch that keeps their session; the others stay",
+		{ timeout: SLOW },
+		async () => {
+			const session = path.join(dir, "kept.jsonl");
+			const before = registry(true);
+			const tab = before.open({ cwd: dir, sessionPath: session });
+			// What read its output (the omp, or a Playwright run between them) went with the quit.
+			const deaf = spawn(process.execPath, ["-e", CHATTY], {
+				env: env(tab.tag),
+				stdio: ["ignore", "pipe", "pipe"],
+				windowsHide: true,
+			});
+			children.push(deaf);
+			const out = deaf.stdout as NonNullable<typeof deaf.stdout>;
+			await once(out, "data");
+			out.destroy();
+			deaf.stderr?.destroy();
+			// Its output still read, and one writing to nothing that reads (the null device, as after `nohup … &>/dev/null`).
+			const heard = await running(tab.tag);
+			const quiet = orphan(tab.tag);
+			await tab.close();
+
+			const after = registry();
+			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
+			await after.settled();
+
+			await vi.waitFor(() => expect(ended(deaf)).toBe(true));
+			expect([ended(heard), alive(quiet)]).toEqual([false, true]);
+			expect(after.owners().map(owner => owner.tag)).toEqual([tab.tag]);
+		},
+	);
 });
 
 describe("which tags end, and when", () => {
