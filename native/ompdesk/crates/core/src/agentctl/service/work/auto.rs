@@ -186,7 +186,9 @@ impl AgentControl {
                     continue;
                 }
             }
-            if tab.busy || waits(tab) {
+            // A child a relaunch owes a continuation (its marker still waits: for its omp, the network, a limit) is
+            // about to run: its transcript ends where the cut left it, not where its work ends.
+            if tab.busy || tab.resuming || waits(tab) {
                 let mut mem = self.mem();
                 mem.collected.remove(&tab.tab_id);
                 if tab.busy
