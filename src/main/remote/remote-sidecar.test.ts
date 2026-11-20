@@ -9,7 +9,7 @@ import type { RemoteLinkState } from "../../shared/ipc-types";
 import type { RpcResponse, SidecarStatusPayload } from "../../shared/rpc-types";
 import type { BridgeConnectResult } from "../bridge-health";
 import { VIEW_ENDED_EVENT } from "../sidecar-types";
-import { SIGN_IN_CALLBACK_METHOD, type TabEventMessage, type TabStatusArg } from "./app-protocol";
+import { SIGN_IN_CALLBACK_METHOD, TabEventMessage, type TabStatusArg } from "./app-protocol";
 import { ImageBlobCache } from "./image-blob-cache";
 import { createReadEncoder } from "./link-events";
 import { PendingTabCloses, type RemoteLink, RemoteSidecar, type RemoteSidecarOptions } from "./remote-sidecar";
@@ -514,6 +514,15 @@ describe("RemoteSidecar", () => {
 		await settle();
 		expect(deleted).toEqual(["/s/gone.jsonl"]);
 		expect(statuses.map(entry => entry.status)).not.toContain("error");
+	});
+
+	it("ends the paired view on the host's payloadless close notification", () => {
+		const { sidecar } = setup();
+		const ended = vi.fn();
+		sidecar.on(VIEW_ENDED_EVENT, ended);
+		sidecar.handleEvent(TabEventMessage.parse({ rtab: "tab-1", name: "viewEnded" }));
+		expect(ended).toHaveBeenCalledOnce();
+		expect(TabEventMessage.safeParse({ rtab: "tab-1", name: "events" }).success).toBe(false);
 	});
 
 	it("ends as a view whose window closed when the host says so on its return, never an error tab", async () => {

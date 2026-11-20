@@ -501,11 +501,13 @@ export type MemoryConclusionPushReply = z.infer<typeof MemoryConclusionPushReply
 
 const SessionKind = z.enum(["agent", "chat"]);
 
-export const TabEventMessage = z.object({
-	rtab: z.string().min(1),
-	name: z.enum(TAB_EVENT_NAMES),
-	arg: z.unknown(),
-});
+export const TabEventMessage = z
+	.object({
+		rtab: z.string().min(1),
+		name: z.enum(TAB_EVENT_NAMES),
+		arg: z.unknown().optional(),
+	})
+	.refine(event => event.name === "viewEnded" || event.arg !== undefined);
 export type TabEventMessage = z.infer<typeof TabEventMessage>;
 
 /** `status` event argument: the payload plus what A cannot observe itself. */
