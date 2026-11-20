@@ -2182,6 +2182,15 @@ mod tests {
     }
 
     #[test]
+    fn reads_each_process_s_listening_ports_once_from_lsof() {
+        let ports = crate::sys::parse_lsof_ports(
+            "p12\nf20\nn*:3000\nf21\nn[::1]:3000\nn127.0.0.1:9229\np40\nf7\nn*:5173\n",
+        );
+        assert_eq!(ports.get(&12), Some(&vec![3000, 9229]));
+        assert_eq!(ports.get(&40), Some(&vec![5173]));
+    }
+
+    #[test]
     fn reads_ps_lines() {
         let text = "  612     1  20480    01:02:03 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome  \n\
                     45 612 8 00:05 sleep\n\

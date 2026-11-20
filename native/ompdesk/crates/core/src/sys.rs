@@ -379,7 +379,7 @@ pub fn listening_ports(pids: &[u32]) -> std::collections::HashMap<u32, Vec<u16>>
 /// `lsof -Fn`: a `p<pid>` line starts each process, an `n<address>:<port>` line names each socket (`*:3000`,
 /// `127.0.0.1:3000`, `[::1]:3000`). Each port once per process.
 #[cfg(any(target_os = "macos", test))]
-fn parse_lsof_ports(text: &str) -> std::collections::HashMap<u32, Vec<u16>> {
+pub(crate) fn parse_lsof_ports(text: &str) -> std::collections::HashMap<u32, Vec<u16>> {
     let mut ports: std::collections::HashMap<u32, Vec<u16>> = std::collections::HashMap::new();
     let mut pid = None;
     for line in text.lines() {
@@ -398,18 +398,6 @@ fn parse_lsof_ports(text: &str) -> std::collections::HashMap<u32, Vec<u16>> {
         }
     }
     ports
-}
-
-#[cfg(test)]
-mod lsof_ports_tests {
-    #[test]
-    fn reads_each_process_s_ports_once() {
-        let ports = super::parse_lsof_ports(
-            "p12\nf20\nn*:3000\nf21\nn[::1]:3000\nn127.0.0.1:9229\np40\nf7\nn*:5173\n",
-        );
-        assert_eq!(ports.get(&12), Some(&vec![3000, 9229]));
-        assert_eq!(ports.get(&40), Some(&vec![5173]));
-    }
 }
 
 /// Linux runs OMPdesk's tests and CI only: no CPU measure.
