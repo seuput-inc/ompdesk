@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 5ec29f5c73432ae122d6f34c6487d5f954b28c8f
+          ref: 29449fe7c96773e9e7431d631a9a347f6e219556
           path: subject
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -64,3 +64,14 @@ jobs:
           path: renderer-graph.json
           retention-days: 2
           if-no-files-found: error
+      - name: Verify the first-screen and session-list gates
+        run: |
+          node - <<'JS'
+          const {bytes, chunks, sessionList} = require('./renderer-graph.json');
+          if (bytes > 2212359 || chunks.some(c => c.eager && c.name.startsWith('assets/PanelViews-')) || sessionList.split(' ').filter(p => p.endsWith('.js')).length !== 1) process.exitCode = 1;
+          JS
+      - name: Verify the affected renderer behaviors
+        if: ${{ !cancelled() }}
+        working-directory: subject
+        run: |
+          bunx --no-install vitest run --project renderer src/renderer/hooks/use-auto-title.test.ts src/renderer/stores/input-history.test.ts src/renderer/components/layout/composer/ContextSizeField.test.tsx src/renderer/components/layout/composer/ContextUsagePopover.test.tsx src/renderer/components/panels/viewers/FileViewer.test.tsx
