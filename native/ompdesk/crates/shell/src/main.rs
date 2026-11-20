@@ -53,6 +53,19 @@ use crate::lifecycle::Boot;
 use crate::log::log;
 use crate::state::{PATHS, Paths};
 
+#[cfg(target_os = "macos")]
+fn set_tray_image(
+    tray: &tray_icon::TrayIcon,
+    icon: Option<tray_icon::Icon>,
+    template: bool,
+) -> tray_icon::Result<()> {
+    if template {
+        tray.set_icon_templated(icon)
+    } else {
+        tray.set_icon(icon)
+    }
+}
+
 /// A panic is logged where it can be read after the process is gone (`<temp>/ompdesk-shell-panic.log`, the shell log, stderr):
 /// most panics happen inside CEF callbacks, which cannot unwind, so the process aborts right after this hook.
 fn install_panic_hook() {

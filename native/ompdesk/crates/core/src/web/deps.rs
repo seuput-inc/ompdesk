@@ -171,7 +171,7 @@ impl Outbox {
     pub fn taken(&self, bytes: usize) {
         let _ = self
             .queued
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                 Some(queued.saturating_sub(bytes))
             });
     }
