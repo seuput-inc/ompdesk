@@ -1158,6 +1158,79 @@ describe("usage.read", () => {
 		expect(text).toContain("Week [x:1]: 10% used");
 		expect(text).toContain("Week [x:2]: 20% used");
 	});
+
+	it("limits an account only by what the reading omp would refuse, and says where, when and under which Credit use", async () => {
+		const ports = new FakePorts();
+		const week = Date.now() + 100 * HOUR;
+		const window = (id: string, label: string, usedFraction: number, status: string) => ({
+			id,
+			label,
+			usedFraction,
+			windowId: "7d",
+			resetsAt: week,
+			status,
+		});
+		const usage = {
+			creditSpend: true,
+			reports: [
+				{
+					// Only the model's own week is spent: Opus and Sonnet still run on this account.
+					provider: "anthropic",
+					account: "claude@example.test",
+					fetchedAt: Date.now() - 3 * 60_000,
+					resetAt: week,
+					limits: [
+						window("anthropic:7d", "Claude 7 Day", 0.94, "warning"),
+						window("anthropic:7d:fable", "Claude 7 Day (Fable)", 1, "exhausted"),
+					],
+				},
+				{
+					// The plan is used up and ChatGPT still serves it, on the credits it holds.
+					provider: "openai-codex",
+					account: "gpt@example.test (pro)",
+					fetchedAt: Date.now(),
+					planSpentUntil: week,
+					credits: { kind: "balance", limitId: "openai-codex:credits", remaining: 500, unit: "credits" },
+					limits: [window("openai-codex:secondary", "7 days", 1, "warning")],
+				},
+			],
+		};
+		ports.deviceData.Studio = { get_usage: usage };
+		const text = await new AppControl(ports).run(CALLER, "usage.read", { device: "Studio" });
+		const [header, claude] = text.split("\n");
+		expect(header).toMatch(/^Read by an omp on "Studio" at \d{4}-\d\d-\d\dT[\d:]+Z; Credit use on there/);
+		expect(claude).toContain("claude@example.test");
+		expect(claude).not.toContain("limited until");
+		expect(claude).toMatch(/read \d{4}-\d\d-\d\dT[\d:]+Z \(3m ago\)/);
+		expect(text).toContain("Claude 7 Day (Fable): 100% used");
+		const gpt = text.split("\n").find(line => line.includes("gpt@example.test"));
+		expect(gpt).toMatch(/plan used up until [\dT:-]+Z \(in 4d\dh\); running past it on credits/);
+		expect(gpt).toContain("credits: 500 credits left");
+		expect(gpt).not.toContain("limited until");
+	});
+
+	it("limits a used-up plan where Credit use is off, as that computer's omp refuses it", async () => {
+		const ports = new FakePorts();
+		const week = Date.now() + 30 * HOUR;
+		ports.rpcData.get_usage = {
+			creditSpend: false,
+			reports: [
+				{
+					provider: "openai-codex",
+					account: "gpt@example.test (pro)",
+					fetchedAt: Date.now(),
+					limitedUntil: week,
+					planSpentUntil: week,
+					limits: [{ id: "openai-codex:secondary", label: "7 days", usedFraction: 1, resetsAt: week }],
+				},
+			],
+		};
+		const text = await new AppControl(ports).run(CALLER, "usage.read", {});
+		expect(text).toContain("Read by an omp on your session's computer");
+		expect(text).toContain("Credit use off there");
+		expect(text).toMatch(/limited until [\dT:-]+Z \(in 1d\dh\)/);
+		expect(text).toContain("plan used up; Credit use is off here, so not run on credits");
+	});
 });
 
 describe("models.list", () => {
