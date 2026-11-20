@@ -404,7 +404,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // branches merged with it add types only). Its report now loads by import() when a pane shows no rows; what stays is
 // the per-tab seeded/written record and that import: measured 2,212,013 (branch run 44656064987), 392 bytes over. The
 // budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_212_093;
+// The first-run gate deciding from omp's catalog before the stock helper answers (G22, `servingVerdict` and the split
+// wait in `FirstRunGate`, 20 Nov 2026), which runs on every first screen: measured 2,212,279 (branch run 44673408959),
+// 266 bytes over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_212_359;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
