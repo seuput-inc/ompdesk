@@ -6,11 +6,12 @@
  * subagent's own journal; the `<task-result>` its parent reads names no model (seen 20 Nov 2026: seven `reviewer`
  * subagents on openai-codex ran on Claude after their first answer, and their parent counted a cross-family review).
  *
- * - **A review subagent keeps its model.** A review is worth what its model is: the review role exists to read a
- *   change with another family's model. Stock keeps a per-call `model` subagent on its model (`disableModelFallback`:
- *   no retry fallback, no usage-aware fallback, no context promotion) but offers no setting for an agent or a role, so
- *   the same three settings are turned off on the review subagent's own settings overlay, as stock's security
- *   coordinator does for its scan sessions (`security/coordinator.ts` `createDefaultSecuritySession`). It then fails
+ * - **A review subagent keeps its model.** A review is worth what its model is: the review role names the model the
+ *   person chose for reviews, whatever its provider. Stock keeps a per-call `model` subagent on its model
+ *   (`disableModelFallback`: no retry fallback, no usage-aware fallback, no context promotion) but offers no setting
+ *   for an agent or a role, so the same three settings are turned off on the review subagent's own settings overlay,
+ *   as stock's security coordinator does for its scan sessions (`security/coordinator.ts`
+ *   `createDefaultSecuritySession`). It then fails
  *   with its model's limit, which its task result quotes. A review subagent: its spawn resolved its model through the
  *   `review` role (`session_init.modelRole`), or it is one of stock's review agents, whatever its model.
  * - **Any other subagent's fallback is named to its parent** in the tool result that carries its `<task-result>` (the

@@ -2,7 +2,9 @@
  * A session that runs without stock's advisor (control-tools › Tools: `ompdesk_session_open` `advisor: false`, and by
  * default a session opened on the review role). C17, 20 Nov 2026: a review session another project opened on
  * openai-codex had its advisor (the advisor role, Claude) interject, and the reviewer turned its "needs fix" into
- * "ok" 18 s later; a review read by another family's model is worth what that model alone says.
+ * "ok" 18 s later; a review is worth what the model the person chose for it says, with no second model steering it.
+ * `advisor: true`, or no option on another role, runs the session as the person's settings say: the advisor role's
+ * model, whatever its family (no same-family or cross-family guarantee either way).
  *
  * Stock's `AgentSession.setAdvisorEnabled(false)` is session-only (what `/advisor off` calls; no setting is written),
  * so the bridge calls it, journals one entry so the omp that continues the session after a relaunch turns it off

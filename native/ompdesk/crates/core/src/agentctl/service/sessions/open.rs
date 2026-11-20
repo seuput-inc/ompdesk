@@ -560,9 +560,9 @@ impl AgentControl {
             ));
             notes.push(format!("model {}/{}", model.provider, model.id));
         }
-        // A review read by another family's model is worth what that model alone says: stock's advisor (the advisor
-        // role, often the reviewed model's own family) interjecting pulled a reviewer's "needs fix" to "ok" (C17,
-        // 20 Nov 2026). Session-only: the bridge turns it off for this session and writes no setting.
+        // A review is worth what the model the person chose for it says: stock's advisor (the advisor role's model,
+        // any family) interjecting pulled a reviewer's "needs fix" to "ok" (C17, 20 Nov 2026). Keyed to the role,
+        // never to a provider. Session-only: the bridge turns it off for this session and writes no setting.
         let on_review_role = args
             .model
             .as_deref()
