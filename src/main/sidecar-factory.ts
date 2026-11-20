@@ -206,6 +206,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				const ecc = deps.eccPref && eccEnabled(deps.eccPref()) ? ["-e", join(deps.builtinDir, "ecc")] : [];
 				// The formal-verification skill (resources/omp-builtin/formal): no switch, every spawn, skill only.
 				const formal = ["-e", join(deps.builtinDir, "formal")];
+				const ponytail = ["-e", join(bridgeDir, "ponytail.ts")];
 				const memory = (await deps.aiMemoryExtensionArgs?.(cwd)) ?? [];
 				const hub = rea.length || memory.length ? ((await deps.mcpHubEnv?.(cwd)) ?? {}) : {};
 				// One table for this computer's tabs and the tabs it hosts for a paired device.
@@ -217,7 +218,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 						})
 					: undefined;
 				return {
-					args: [...own, ...rea, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...memory],
+					args: [...own, ...rea, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...ponytail, ...memory],
 					...(rea.length ? { root: reaRoot } : {}),
 					// A chat (no project) keeps the packs' roots but not their section texts.
 					env: {

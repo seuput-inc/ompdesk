@@ -10,8 +10,7 @@ import { SessionKindStore } from "./session-kinds";
 import type { SidecarOptions } from "./sidecar";
 import { localSidecarFactory } from "./sidecar-factory";
 
-/** The formal-verification skill root rides on every spawn, after the switchable packs. */
-const FORMAL = ["-e", path.join("/builtin", "formal")];
+const ALWAYS = ["-e", path.join("/builtin", "formal"), "-e", path.join("/bridge", "ponytail.ts")];
 const created = vi.hoisted(() => [] as SidecarOptions[]);
 const reaProbes = vi.hoisted(() => ({ count: 0 }));
 const sidecars = vi.hoisted(() => [] as Array<{ listeners: Map<string, Array<(arg: unknown) => void>> }>);
@@ -230,7 +229,7 @@ describe("localSidecarFactory", () => {
 		});
 		create("/w/alpha", kind, false);
 		const mcp = await created[0]?.builtinMcp?.();
-		expect(mcp?.args).toEqual([...(on ? ["-e", path.join("/builtin", "pstack")] : []), ...FORMAL]);
+		expect(mcp?.args).toEqual([...(on ? ["-e", path.join("/builtin", "pstack")] : []), ...ALWAYS]);
 		expect(mcp?.env).toEqual({ OMP_GUI_PSTACK: flag, OMP_GUI_ECC: "0" });
 	});
 
@@ -263,7 +262,7 @@ describe("localSidecarFactory", () => {
 			});
 			create("/w/alpha", kind, false);
 			const mcp = await created[0]?.builtinMcp?.();
-			expect(mcp?.args).toEqual([...(on ? ["-e", path.join("/builtin", "ecc")] : []), ...FORMAL]);
+			expect(mcp?.args).toEqual([...(on ? ["-e", path.join("/builtin", "ecc")] : []), ...ALWAYS]);
 			expect(mcp?.env).toEqual({ OMP_GUI_PSTACK: "0", OMP_GUI_ECC: flag });
 		},
 	);
@@ -297,9 +296,9 @@ describe("localSidecarFactory", () => {
 		create("/w/alpha", "agent", false);
 		create("/w/alpha", "agent", true, { deviceId: "peer-1", name: "Laptop", hostName: "Desk" });
 		for (const options of created) {
-			expect((await options.builtinMcp?.())?.args).toEqual([...FORMAL, "-e", "/ud/ai-memory/omp-ext"]);
+			expect((await options.builtinMcp?.())?.args).toEqual([...ALWAYS, "-e", "/ud/ai-memory/omp-ext"]);
 			args = [];
-			expect((await options.builtinMcp?.())?.args).toEqual(FORMAL);
+			expect((await options.builtinMcp?.())?.args).toEqual(ALWAYS);
 			args = ["-e", "/ud/ai-memory/omp-ext"];
 		}
 		// The extension flags depend on the folder (a project's own disabled list), so each spawn names its own.
@@ -343,13 +342,13 @@ describe("localSidecarFactory", () => {
 		reaProbes.count = 0;
 
 		const off = await options?.builtinMcp?.();
-		expect(off?.args).toEqual(FORMAL);
+		expect(off?.args).toEqual(ALWAYS);
 		expect(off?.env).not.toHaveProperty("OMP_GUI_MCP_HUB");
 		expect(reaProbes.count).toBe(0);
 		expect(hubAsked).toEqual([]);
 		rea = true;
 		const on = await options?.builtinMcp?.();
-		expect(on?.args).toEqual(["-e", path.join("/builtin", "rea"), ...FORMAL]);
+		expect(on?.args).toEqual(["-e", path.join("/builtin", "rea"), ...ALWAYS]);
 		expect(on?.env).toMatchObject({ OMP_GUI_MCP_HUB: "http://127.0.0.1:7", OMP_GUI_MCP_AUTH: "Bearer s" });
 		expect(reaProbes.count).toBe(1);
 		rea = false;
@@ -389,7 +388,7 @@ describe("localSidecarFactory", () => {
 			// Picked (the default), with no managed copy and no bundled one (a dev run): nothing mounted, the bridge is told.
 			for (const options of created) {
 				const missing = await options.builtinMcp?.();
-				expect(missing?.args).toEqual(FORMAL);
+				expect(missing?.args).toEqual(ALWAYS);
 				expect(missing?.env).toMatchObject({ OMP_GUI_COMPUTER_USE: "missing" });
 				expect(missing?.env).not.toHaveProperty("OMP_GUI_AGENT_DESKTOP");
 			}
@@ -399,7 +398,7 @@ describe("localSidecarFactory", () => {
 			fs.writeFileSync(path.join(bundle, "agent-desktop.build.json"), JSON.stringify({ version: "1.2.0" }));
 			for (const options of created) {
 				const mounted = await options.builtinMcp?.();
-				expect(mounted?.args).toEqual(["-e", path.join("/builtin", "agent-desktop"), ...FORMAL]);
+				expect(mounted?.args).toEqual(["-e", path.join("/builtin", "agent-desktop"), ...ALWAYS]);
 				expect(mounted?.env).toMatchObject({
 					OMP_GUI_COMPUTER_USE: "agent-desktop",
 					OMP_GUI_AGENT_DESKTOP: executable,
@@ -409,7 +408,7 @@ describe("localSidecarFactory", () => {
 			pick = "builtin";
 			for (const options of created) {
 				const builtin = await options.builtinMcp?.();
-				expect(builtin?.args).toEqual(FORMAL);
+				expect(builtin?.args).toEqual(ALWAYS);
 				expect(builtin?.env).toMatchObject({ OMP_GUI_COMPUTER_USE: "builtin" });
 			}
 		} finally {

@@ -4491,6 +4491,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.pluginReload": "Plugin changes after an update",
 	"bridgeHealth.feature.extensionUpdates": "Extension updates",
 	"bridgeHealth.feature.skills": "Skills",
+	"bridgeHealth.feature.ponytail": "Built-in Ponytail skills",
 	"bridgeHealth.feature.skillDetail": "Skill preview",
 	"bridgeHealth.feature.skillToggle": "Turn a skill on or off",
 	"bridgeHealth.feature.manageSkill": "Create, edit or delete a skill",

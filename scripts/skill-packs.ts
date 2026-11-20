@@ -1,5 +1,5 @@
 /**
- * The three vendored skill packs (pstack, ECC, REA) and how each one is kept current. One table, one rule:
+ * The vendored skill packs and how each one is kept current. One table, one rule:
  *
  *   bun scripts/skill-packs.ts check [<name>] [--github-output]  pin vs newest eligible upstream (no files written)
  *   bun scripts/skill-packs.ts bump <name>    move <name>'s pin to its newest eligible upstream, resync, regenerate
@@ -36,8 +36,8 @@ interface PackBase {
 interface GitPack extends PackBase {
 	kind: "git";
 	repo: string;
-	/** The upstream folder the pack is copied from; only commits touching it count. */
-	path: string;
+	/** Commits touching these upstream inputs (including release metadata) count. */
+	paths: string[];
 	/** Upstream JSON file whose `version` names the release at a commit. */
 	versionFile: string;
 }
@@ -63,7 +63,7 @@ const PACKS: Pack[] = [
 		name: "pstack",
 		config: "resources/omp-builtin/pstack/pstack-config.json",
 		repo: "cursor/plugins",
-		path: "pstack",
+		paths: ["pstack"],
 		versionFile: "pstack/plugin.json",
 		sync: "sync:pstack",
 		tests: [
@@ -79,10 +79,26 @@ const PACKS: Pack[] = [
 		name: "ecc",
 		config: "resources/omp-builtin/ecc/ecc-config.json",
 		repo: "affaan-m/ECC",
-		path: "pi/core",
+		paths: ["pi/core"],
 		versionFile: "pi/core/package.json",
 		sync: "sync:ecc",
 		tests: ["src/main/ecc/pack-drift.test.ts", "src/main/ecc/ecc-stock.test.ts", ...PACKAGING_TESTS, ...FORMAL_TESTS],
+		needsOmp: true,
+	},
+	{
+		kind: "git",
+		name: "ponytail",
+		config: "resources/omp-builtin/ponytail/ponytail-config.json",
+		repo: "DietrichGebert/ponytail",
+		paths: ["skills", "LICENSE", "package.json"],
+		versionFile: "package.json",
+		sync: "sync:ponytail",
+		tests: [
+			"src/main/ponytail/pack-drift.test.ts",
+			"src/main/ponytail/ponytail-stock.test.ts",
+			...PACKAGING_TESTS,
+			...FORMAL_TESTS,
+		],
 		needsOmp: true,
 	},
 	{
@@ -185,8 +201,16 @@ function gitStatus(pack: GitPack, cutoff: Date): Status {
 	};
 	try {
 		execFileSync("git", ["clone", "-q", "--filter=blob:none", "--bare", `https://github.com/${pack.repo}`, dir]);
-		const eligibleRef = git("log", "-1", "--format=%H", `--until=${cutoff.toISOString()}`, "HEAD", "--", pack.path);
-		const headRef = git("log", "-1", "--format=%H", "HEAD", "--", pack.path);
+		const eligibleRef = git(
+			"log",
+			"-1",
+			"--format=%H",
+			`--until=${cutoff.toISOString()}`,
+			"HEAD",
+			"--",
+			...pack.paths,
+		);
+		const headRef = git("log", "-1", "--format=%H", "HEAD", "--", ...pack.paths);
 		return {
 			pack,
 			pinned: { ref: pinned, version: pin.version, at: new Date(git("show", "-s", "--format=%cI", pinned)) },

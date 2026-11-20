@@ -435,6 +435,7 @@ describe("mac bundle configs", () => {
 				"ecc/skills/ecc/SKILL.md",
 				"ecc/skills/golang-patterns/SKILL.md",
 				"ecc/commands/code-review.md",
+				"ponytail/skills/ponytail/SKILL.md",
 				"skills/ompdesk/SKILL.md",
 				"formal/skills/ompdesk-formal-verify/SKILL.md",
 				"formal/skills/ompdesk-formal-verify/assets/toolchain.json",
@@ -487,7 +488,15 @@ describe("mac bundle configs", () => {
 	it("keeps OMPdesk's own extension root to its skill, so loading it never starts REA", () => {
 		// The control tools load `-e omp-builtin` on their own switch; REA is the separate `-e omp-builtin/rea`.
 		const root = path.join(PACKAGE_ROOT, "resources/omp-builtin");
-		expect(fs.readdirSync(root).sort()).toEqual(["agent-desktop", "ecc", "formal", "pstack", "rea", "skills"]);
+		expect(fs.readdirSync(root).sort()).toEqual([
+			"agent-desktop",
+			"ecc",
+			"formal",
+			"ponytail",
+			"pstack",
+			"rea",
+			"skills",
+		]);
 		expect(fs.readdirSync(path.join(root, "skills"))).toEqual(["ompdesk"]);
 		const skill = fs.readFileSync(path.join(root, "skills/ompdesk/SKILL.md"), "utf8");
 		expect(skill).toMatch(/^---\nname: ompdesk\ndescription: \S/);

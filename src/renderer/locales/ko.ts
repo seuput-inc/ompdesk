@@ -4485,6 +4485,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.pluginReload": "업데이트 뒤 플러그인 변경 반영",
 	"bridgeHealth.feature.extensionUpdates": "확장 업데이트",
 	"bridgeHealth.feature.skills": "스킬",
+	"bridgeHealth.feature.ponytail": "내장 Ponytail 스킬",
 	"bridgeHealth.feature.skillDetail": "스킬 미리보기",
 	"bridgeHealth.feature.skillToggle": "스킬 켜고 끄기",
 	"bridgeHealth.feature.manageSkill": "스킬 만들기·수정·삭제",

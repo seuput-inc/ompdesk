@@ -50,9 +50,13 @@ export function configDirName(folder: string, home = homedir()): string {
  * on Windows the test's folders stay busy (EBUSY) while they run. Older omps have none (`omp ps --json` names no
  * daemon), and nothing is done.
  */
-export function stopOmpDaemon(folder: string): void {
+export function stopOmpDaemon(folder: string, privateEnv?: NodeJS.ProcessEnv): void {
 	const ps = spawnSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "ps", "--json"], {
-		env: { ...process.env, PI_CONFIG_DIR: configDirName(folder) },
+		env: {
+			...(privateEnv ?? process.env),
+			PI_CONFIG_DIR: configDirName(folder, privateEnv?.[process.platform === "win32" ? "USERPROFILE" : "HOME"]),
+		},
+		cwd: privateEnv ? folder : undefined,
 		encoding: "utf8",
 		timeout: 30_000,
 	});
