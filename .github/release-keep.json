@@ -4,7 +4,7 @@
 		"v0.127.0": "scripts/shell-move/keychain-ci.sh downloads its DMG; shell-batch-checks.yml's move-mac run starts from it (OMP_MOVE_RELEASED_TAG)",
 		"v0.128.0": "shell-batch-checks.yml's move matrix (released-tag) starts from it",
 		"v0.131.0": "native/ompdesk/crates/shell/last-electron.json: the last Electron release that win-update-real, release-update-mac and the move runs install",
-		"v0.132.0": "shell-batch-checks.yml's `tag` input default (release-verify, win-update-real)",
+		"v0.132.0": "shell-batch-checks.yml's `tag` input default (release-verify, win-update-real); scripts/shell-move/webkit-store-mac.sh's released Tauri app with no CFBundleIdentifier (mac-checks.yml mac-smoke)",
 		"v0.134.1": "shell-batch-checks.yml's `old_tag` input default (win-update-gate break and manual: the release whose updater cannot download)"
 	}
 }

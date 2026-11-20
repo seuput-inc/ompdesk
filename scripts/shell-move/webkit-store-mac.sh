@@ -17,7 +17,8 @@ APP=$(cd "${1:?usage: webkit-store-mac.sh <OMPdesk.app>}" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../.." && pwd)
 . "$HERE/check-lib.sh"
 . "$HERE/mac-processes.sh"
-TAG=${OMP_STORE_RELEASED_TAG:-v0.133.0}
+# v0.132.0: a kept release (.github/release-keep.json) whose shell embeds no CFBundleIdentifier; v0.133.0 was pruned.
+TAG=${OMP_STORE_RELEASED_TAG:-v0.132.0}
 ID=com.seuput.ompdesk; OLD_NAME=ompdesk-shell; PORT=19233; MARKER=ompdesk.webkitStoreMove
 W=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/webkit-store.XXXXXX")
 UD=$W/profile; OLD_STORES=$HOME/Library/WebKit/$OLD_NAME/WebsiteDataStore; NEW_STORES=$HOME/Library/WebKit/$ID/WebsiteDataStore
