@@ -206,7 +206,8 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(reply).toBeVisible({ timeout: 30_000 });
 				const playerNamed = (name: string) => reply.locator(".omp-chat-media").filter({ hasText: name });
 				const replyVideo = playerNamed("clip.webm").locator("video");
-				// Players mount near the viewport, and the cards under them push the first ones up: bring each in.
+				// Release tail-follow as a reader would; scrollIntoView alone is undone when later cards resize.
+				await page.locator(".omp-transcript-scroll").press("ArrowUp");
 				await playerNamed("clip.webm")
 					.scrollIntoViewIfNeeded()
 					.catch(async (error: Error) => {
@@ -226,7 +227,7 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(gone.locator("video")).toHaveCount(0);
 				// 40 MB: over any IPC cap, it streams with range requests and seeks.
 				const long = playerNamed("long.mp4").locator("video");
-				await long.scrollIntoViewIfNeeded();
+				await playerNamed("long.mp4").scrollIntoViewIfNeeded();
 				await expectLoadedAndIdle(long, "video");
 				await long.evaluate(element => {
 					(element as HTMLVideoElement).currentTime = 1;
