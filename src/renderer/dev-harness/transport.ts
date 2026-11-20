@@ -540,6 +540,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	/** The machine's research pick (`MODEL_SETUP_PICK_*`), as the host's pref would hold it. */
 	let researchPick: string | null = null;
 	let creditSpend = false;
+	let remoteState = REMOTE_STATE;
 	const invoke = async (channel: string, ...args: unknown[]): Promise<unknown> => {
 		calls.push({ channel, args });
 		// Each case reads the one payload shape its channel carries.
@@ -662,7 +663,13 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case IPC_COMMANDS.SETUP_GET_STATE:
 				return SETUP_STATE;
 			case IPC_COMMANDS.REMOTE_GET_STATE:
-				return REMOTE_STATE;
+				return remoteState;
+			case IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER:
+				if (!Array.isArray(payload) || !payload.every((id): id is string => typeof id === "string"))
+					throw new Error("Expected device ids");
+				remoteState = { ...remoteState, deviceSectionOrder: [...payload] };
+				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
+				return undefined;
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;
 			case SIDEBAR_PROJECTS_COMMAND:

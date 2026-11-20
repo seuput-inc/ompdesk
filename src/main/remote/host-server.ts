@@ -8,7 +8,14 @@
 import { EventEmitter } from "node:events";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { core } from "../core/process";
-import { DEVICE_RENAME_EVENT, HOST_NAME_EVENT, NAME_METHODS, NameParams } from "./app-protocol";
+import {
+	DEVICE_ORDER_CHANGED,
+	DEVICE_ORDER_EXCHANGE,
+	DEVICE_RENAME_EVENT,
+	HOST_NAME_EVENT,
+	NAME_METHODS,
+	NameParams,
+} from "./app-protocol";
 import { type CoreAsk, onCoreAsk } from "./core-asks";
 import type { PeerInfo } from "./peers-store";
 import {
@@ -78,6 +85,7 @@ export interface RemoteHostOptions {
 	 * error the device shows.
 	 */
 	renameSelf?: (name: string, by: PeerInfo) => void;
+	exchangeDeviceOrder?: (peer: PeerInfo, ranks: unknown) => unknown;
 	/**
 	 * A device's connection opened or closed (`open`, `closed` with why and how long), or moved a lot in the last
 	 * minute (`traffic`: bytes and frames by kind, never a payload), for the runtime log (`remote-link`).
@@ -349,6 +357,13 @@ export class RemoteHost {
 		for (const conn of this.#connections) conn.emit(HOST_NAME_EVENT, { name });
 	}
 
+	/** Invalidate only. A fresh, authorized exchange supplies the ranks. */
+	deviceOrderChanged(except?: string): void {
+		for (const conn of this.#connections) {
+			if (conn.peer.deviceId !== except) conn.emit(DEVICE_ORDER_CHANGED, null);
+		}
+	}
+
 	/** Ask a connected device to rename itself (`device.rename`); false while it is not connected. */
 	askPeerRename(deviceId: string, name: string): boolean {
 		const conns = [...this.#connections].filter(conn => conn.peer.deviceId === deviceId);
@@ -359,7 +374,10 @@ export class RemoteHost {
 	async #serve(conn: PeerConnection, id: number, method: string, params: unknown): Promise<void> {
 		let reply: object;
 		try {
-			const result = await this.#opts.services.call(conn.peer, method, params, conn);
+			const result =
+				method === DEVICE_ORDER_EXCHANGE && this.#opts.exchangeDeviceOrder
+					? this.#opts.exchangeDeviceOrder(conn.peer, params)
+					: await this.#opts.services.call(conn.peer, method, params, conn);
 			reply = { t: "res", id, ok: true, result };
 		} catch (error) {
 			reply = { t: "res", id, ok: false, error: errorPayload(error) };

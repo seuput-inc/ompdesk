@@ -484,6 +484,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 
 	// Desktop-to-desktop remote devices.
 	[C.REMOTE_GET_STATE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.REMOTE_SET_DEVICE_SECTION_ORDER]: { dir: "invoke", permission: "settings-write", mode: "pass" },
 	[C.REMOTE_SET_HOST_ENABLED]: {
 		dir: "invoke",
 		permission: "host-admin",

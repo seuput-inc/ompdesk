@@ -386,6 +386,8 @@ export class WsRouter {
 		}
 		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
 		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
+		if (channel === IPC_EVENTS.REMOTE_STATE && !this.#deps.devices.get(deviceId)?.grants.includes("workspace"))
+			return;
 		if (!this.#open()) return;
 		if (!this.#connections.has(deviceId)) {
 			// Counted, so a page that comes back is not told it missed nothing; its data would reach no socket.
@@ -516,6 +518,8 @@ export class WsRouter {
 		const { device: deviceId, ch: channel, dir } = event;
 		const device = devices.get(deviceId);
 		if (!device) throw codedError("web_forbidden", "This device is no longer paired");
+		if (channel === IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER && !device.grants.includes("workspace"))
+			throw codedError("web_forbidden", "Moving device sections requires workspace access");
 		const win = windows.windowFor(deviceId);
 		const own = Object.hasOwn(webChannels, channel) ? webChannels[channel] : undefined;
 		if (own) return own.handler({ deviceId, device, win }, args);

@@ -280,6 +280,7 @@ export const WEB_BLOCKS: WebBlockedInfo[] = [
 // ── Remote devices (Settings › Devices & connections › Share this computer) ───────────────────────────────────
 export const REMOTE_STATE: RemoteState = {
 	tailnet: "ready",
+	deviceSectionOrder: [],
 	host: {
 		enabled: true,
 		name: "Studio Mac",

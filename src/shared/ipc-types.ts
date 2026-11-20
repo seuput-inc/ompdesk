@@ -506,6 +506,7 @@ export const IPC_COMMANDS = {
 	GITHUB_PRODUCT_STAR: "github-auth:product-star",
 	/** Remote devices: whole RemoteState snapshot */
 	REMOTE_GET_STATE: "remote:get-state",
+	REMOTE_SET_DEVICE_SECTION_ORDER: "remote:set-device-section-order",
 	/** Turn the host role (other devices may use this computer) on or off; persisted in prefs */
 	REMOTE_SET_HOST_ENABLED: "remote:set-host-enabled",
 	REMOTE_SET_DEVICE_NAME: "remote:set-device-name",
@@ -2162,6 +2163,8 @@ export interface RemoteState {
 	tailnet: RemoteTailnetPhase;
 	host: RemoteHostState;
 	hosts: HostView[];
+	/** Ranked sections on this sidebar only; `local` means its serving computer. */
+	deviceSectionOrder?: string[];
 	/** Computers paired by code with an older release that could not be found on the tailnet and were forgotten. */
 	forgotten: string[];
 	/** This computer's OMPdesk version, beside which each connected computer's reads as older or newer. */
@@ -2560,6 +2563,7 @@ export interface OmpApi {
 	};
 	remote: {
 		getState(): Promise<RemoteState>;
+		setDeviceSectionOrder(order: readonly string[]): Promise<void>;
 		setHostEnabled(enabled: boolean): Promise<RemoteState>;
 		setDeviceName(name: string): Promise<RemoteState>;
 		/** Forget a device that uses this computer; it may connect again while its account is allowed. */

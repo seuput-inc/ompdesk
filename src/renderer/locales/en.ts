@@ -5032,6 +5032,7 @@ export const en: Record<string, string> = {
 	"sidebar.deviceOrder.over": "Over {name}.",
 	"sidebar.deviceOrder.moved": "Moved {name}.",
 	"sidebar.deviceOrder.cancelled": "{name} stays where it was.",
+	"sidebar.deviceOrder.failed": "Couldn't save the device order",
 	"sidebar.sessionOrder.moved": "Moved {name} to position {position} of {count}.",
 	"sidebar.reorderFailed": "Couldn't save the project order",
 	"titlebar.breadcrumb": "Project and session",

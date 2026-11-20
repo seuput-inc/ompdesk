@@ -5027,6 +5027,7 @@ export const ko: Record<string, string> = {
 	"sidebar.deviceOrder.over": "{name} 묶음 위에 있어요.",
 	"sidebar.deviceOrder.moved": "{name} 묶음을 옮겼어요.",
 	"sidebar.deviceOrder.cancelled": "{name} 묶음은 그대로예요.",
+	"sidebar.deviceOrder.failed": "기기 순서를 저장하지 못했어요",
 	"sidebar.sessionOrder.moved": "{name} 세션을 {count}개 중 {position}번째로 옮겼어요.",
 	"sidebar.reorderFailed": "프로젝트 순서를 저장하지 못했어요",
 	"titlebar.breadcrumb": "프로젝트와 세션",

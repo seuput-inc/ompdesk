@@ -14,6 +14,8 @@
  * - `tab.cancelWait {rtab}`: Cancel on the tab's connection wait or scheduled retry
  * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|readPlan|listDirs`,
  *   `workspace.default`, `launchProfile.get|update`
+ * - `sidebar.deviceOrder.exchange` → the merged device ranks, keyed only by hashes of OMPdesk device identities.
+ *   `sidebar.deviceOrder.changed` carries no data: the device exchanges again, as it does on every link-up.
  * - `sessions.targets {sessions: SessionTargetQuery[]}` → SessionTargets, `sessions.artwork {roots}` → SessionArtworks
  *   (`shared/session-target.ts`, answered by session-targets.ts); an older host answers `unsupported`
  * - `host.fs.readBinary {rtab?, cwd?, path, maxBytes?}` → HostFsReadBinaryReply: the file
@@ -192,6 +194,8 @@ export const AGENT_REVIEW_EVENT = "agentReview" satisfies TabEventName;
 
 export const TAB_EVENT = "tab.event";
 export const SESSIONS_CHANGED_EVENT = "sessions.changed";
+export const DEVICE_ORDER_EXCHANGE = "sidebar.deviceOrder.exchange";
+export const DEVICE_ORDER_CHANGED = "sidebar.deviceOrder.changed";
 /** The host's omp update changed (data: OmpUpdateState); sent to every connected device. */
 export const OMP_UPDATE_EVENT = "host.ompUpdate.changed";
 /**

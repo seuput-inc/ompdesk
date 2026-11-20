@@ -632,6 +632,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 
 		remote: {
 			getState: () => transport.invoke(IPC_COMMANDS.REMOTE_GET_STATE) as Promise<RemoteState>,
+			setDeviceSectionOrder: async order => {
+				await transport.invoke(IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER, order);
+			},
 			setHostEnabled: (enabled: boolean) =>
 				transport.invoke(IPC_COMMANDS.REMOTE_SET_HOST_ENABLED, enabled) as Promise<RemoteState>,
 			setDeviceName: (name: string) =>
