@@ -4,9 +4,10 @@
  * browsers, a cargo build).
  *
  * The reads and their rules are the core process's (`native/ompdesk/crates/core/src/memory/`): macOS one `sysctl`
- * for the kernel's pressure level, its free percentage and `hw.memsize`, and one `ps` for the processes; Windows
- * `GlobalMemoryStatusEx` with the share of RAM still available, and a Toolhelp32 snapshot with each process's working
- * set. This file is their client, plus the sum over a tree that idle release takes synchronously per sample.
+ * for the kernel's pressure level, its free percentage, `hw.memsize` and the swap, and one `ps` for the processes;
+ * Windows `GlobalMemoryStatusEx` with the share of RAM still available and the commit charge, its processor and disk
+ * queues (PDH), and a Toolhelp32 snapshot with each process's working set and processor time. This file is their
+ * client, plus the sum over a tree that idle release takes synchronously per sample.
  */
 import { readFileSync } from "node:fs";
 import { core } from "./core/process";
@@ -18,15 +19,28 @@ export interface MemoryReading {
 	/** What the OS can hand out without paging: macOS `kern.memorystatus_level` % of RAM, Windows' available physical memory. */
 	availableBytes: number;
 	pressure: MemoryPressure;
+	/** Windows: the memory promised to processes, and the most that can be (RAM plus page files). */
+	commitBytes?: number;
+	commitLimitBytes?: number;
+	/** macOS: the swap in use, and its size now. */
+	swapBytes?: number;
+	swapTotalBytes?: number;
+	/** Windows: threads ready to run with no processor free, requests waiting on the disks, and the share of time the
+	 * disks were busy since the reading before. Absent while Windows has no value for one. */
+	runQueue?: number;
+	diskQueue?: number;
+	diskBusyPct?: number;
 }
 
 export interface ProcessRow {
 	pid: number;
 	ppid: number;
-	/** Resident bytes. */
+	/** Resident bytes; on macOS the footprint (compressed and swapped pages too) of a process this user may read. */
 	bytes: number;
 	/** Image name (`conhost.exe`), Windows only: `ps` names none. */
 	name?: string;
+	/** Processor time used so far, kernel and user, in ms; absent for a process this user may not ask. */
+	cpuMs?: number;
 }
 
 /** Bytes of `root` and every process below it, from one listing; 0 when `root` is not in it. */

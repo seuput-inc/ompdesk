@@ -559,6 +559,11 @@ export type RuntimeErrorSource =
 	| "error-toast"
 	/** A background task failed without interrupting the user (e.g. saving prompt history). */
 	| "background-task"
+	/**
+	 * A call that reached the core after the quit or the shell's end shut it down (src/main/main-failures.ts): nothing
+	 * was left for it to do. `stack` names the caller; repeats of one caller fold into a count line.
+	 */
+	| "core-shutdown"
 	/** A launch timing mark (src/main/startup-timing.ts): `message` names it, `details.sinceLaunchMs` is when. */
 	| "startup-timing"
 	/** A relaunch's resume decision (src/main/turn-resume.ts `log`): `message` is launch, marker or continue. */
@@ -721,6 +726,13 @@ export type RuntimeErrorSource =
 	 */
 	| "turn-wait"
 	/**
+	 * How the computer and OMPdesk's own processes stood around a stall (src/main/machine-state.ts): `details.trigger`
+	 * is `core-loss`, `loop`, `hub` or `hang`, `when` the sample (`before`, `after`, or `during` a hang), then memory
+	 * (`availMB`, `commitPct`, `swapMB`, `pressure`), the processors (`cpuBusyPct`, `runQueue`, `load1`), the disks
+	 * (`diskQueue`, `diskBusyPct`) and OMPdesk's own share (`appCpuPct` and one per kind of process, `appMB`).
+	 */
+	| "machine-state"
+	/**
 	 * A routine's trigger (src/main/routines): a source that could not read what it watches (GitHub through `gh`, a
 	 * path that does not exist, a branch or repository git cannot read). Told once per distinct failure; `message`
 	 * names the routine and the source.
@@ -741,6 +753,13 @@ export type RuntimeErrorSource =
 	 * `details` the list (local or device), focus/reroot/open, whether it was archived and whether a tab held it.
 	 */
 	| "sidebar"
+	/**
+	 * A known session's pane shown with no rows, info level (src/renderer/hooks/session-hydration.ts
+	 * `reportEmptyTranscript`): `key` the transcript snapshot key looked up and whether the cache has it (`found`,
+	 * `foundAgeMs`), the key the tab was seeded under (`seeded`, `seededFound`, `seededAgoMs`) and the one its snapshot
+	 * was last written under (`written`, `writtenAgoMs`); a path key carries the file's name only.
+	 */
+	| "transcript-seed"
 	| "unknown";
 
 /** Bounded, serializable renderer/main failure payload written as JSONL. */

@@ -86,9 +86,13 @@ export function reuseSeededRows(fetched: AgentMessage[], current: readonly Agent
 	});
 }
 
-/** Coalesced, idle-time write of the tab's newest rows; the key is read when it runs (the path may be new by then). */
-export function writeTranscriptSnapshot(tab: TabIdentity, messages: readonly AgentMessage[]): void {
+/**
+ * Coalesced, idle-time write of the tab's newest rows; the key is read when it runs (the path may be new by then).
+ * Returns the key written under, or null when nothing was written.
+ */
+export function writeTranscriptSnapshot(tab: TabIdentity, messages: readonly AgentMessage[]): string | null {
 	const key = transcriptKey(tab);
-	if (!key || messages.length === 0 || seeded.has(messages)) return;
+	if (!key || messages.length === 0 || seeded.has(messages)) return null;
 	snapshots().write("transcript", snapshotNs(tab.device), key, trimForSnapshot(messages));
+	return key;
 }

@@ -62,6 +62,7 @@ import {
 	CLOSE_TO_TRAY_NOTICE_PREF,
 	CLOSE_TO_TRAY_PREF,
 	closeToTrayEnabled,
+	END_SPINNING_ON_CLOSED_OUTPUT_PREF,
 	KEEP_AWAKE_WORKING_PREF,
 	OMP_FOLLOW_VERIFIED_PREF,
 	RESUME_INTERRUPTED_PREF,
@@ -163,11 +164,13 @@ import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./lo
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
+import { MachineState } from "./machine-state";
 import { MailAccounts, plainImapConnect } from "./mail-accounts";
+import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
-import { testMemoryReading } from "./memory-sampler";
+import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
@@ -224,7 +227,7 @@ import { SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
-import { installSlowSteps } from "./slow-steps";
+import { installSlowSteps, loopMaxMs } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
 import { StatsClient } from "./stats-client";
@@ -639,16 +642,6 @@ let connectivityMonitor: ConnectivityMonitor | null = null;
 /** The 3 s link sampling of `connectivityMonitor`. */
 let connectivityPoll: ReturnType<typeof setInterval> | null = null;
 
-function errorMessage(value: unknown): { message: string; stack?: string } {
-	if (value instanceof Error) return { message: value.message, stack: value.stack };
-	if (typeof value === "string") return { message: value };
-	try {
-		return { message: JSON.stringify(value) ?? String(value) };
-	} catch {
-		return { message: String(value) };
-	}
-}
-
 function installMainRuntimeLogging(): void {
 	// A console line to a stdout/stderr whose reader is gone (the terminal or test runner that started this copy
 	// closed) fails with EPIPE on the stream; with no listener that is an uncaught exception and a crash dialog.
@@ -658,12 +651,7 @@ function installMainRuntimeLogging(): void {
 			if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error;
 		});
 	}
-	process.on("uncaughtExceptionMonitor", (error, origin) => {
-		writeRuntimeLog({ source: "main-uncaught", ...errorMessage(error), details: { origin } });
-	});
-	process.on("unhandledRejection", reason => {
-		writeRuntimeLog({ source: "main-unhandled-rejection", ...errorMessage(reason) });
-	});
+	installMainFailureLogging(process, report => writeRuntimeLog(report));
 	app.on("child-process-gone", (_event, details) => {
 		writeRuntimeLog({
 			source: "child-process",
@@ -869,12 +857,33 @@ app.whenReady().then(async () => {
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
 	markStartup("app-ready");
+	// A stall says how the computer and OMPdesk's own processes stood around it (machine-state.ts).
+	const machineState = new MachineState({
+		log: (message, details) => writeRuntimeLog({ source: "machine-state", message, details }),
+		read: () => Promise.all([readMemory(), listProcesses()]),
+		timeoutMs: SAMPLE_TIMEOUT_MS,
+		pids: () => {
+			const corePid = core().pid;
+			return {
+				main: process.pid,
+				// Under the window's shell main is its child (`OMPDESK_SHELL_SOCKET`, crates/shell/src/node.rs).
+				...(process.env.OMPDESK_SHELL_SOCKET ? { host: process.ppid } : {}),
+				...(corePid === null ? {} : { core: corePid }),
+			};
+		},
+		loopMaxMs,
+	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
 		reportPreviousHang();
 		installHangWatchdog();
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
-		installSlowSteps({ log: (message, details) => writeRuntimeLog({ source: "slow-step", message, details }) });
+		installSlowSteps({
+			log: (message, details) => {
+				writeRuntimeLog({ source: "slow-step", message, details });
+				machineState.slowStep(details);
+			},
+		});
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -913,7 +922,10 @@ app.whenReady().then(async () => {
 		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
 	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
-	core().report = (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details });
+	core().report = (step, details) => {
+		writeRuntimeLog({ source: "core-loss", message: step, details });
+		if (step === "abandoned") machineState.stalled("core-loss");
+	};
 	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
@@ -1085,13 +1097,28 @@ app.whenReady().then(async () => {
 		frozen: () => quitApproved(),
 		log: (message, details) => writeRuntimeLog({ source: "session-processes", message, details }),
 		scratch: sessionScratch,
+		endSpinning: () => prefsStore().get(END_SPINNING_ON_CLOSED_OUTPUT_PREF) !== false,
 	});
 	const createLocalSidecar = localSidecarFactory({
 		bridgeDir,
 		builtinDir,
 		sessionFree: async sessionPath => {
 			const started = Date.now();
-			const outcome = await whenSessionFree(sessionPath, { owned: path => sessionIndex.ownedElsewhere(path) });
+			const outcome = await whenSessionFree(sessionPath, {
+				owned: path => sessionIndex.ownedElsewhere(path),
+				// Fail-open: a stock helper that does not answer must not hold every start for a minute, so the start goes
+				// on; the line says a second owner was not ruled out.
+				unknown: error =>
+					writeRuntimeLog({
+						source: "session-owner",
+						message: "ownership unknown; opened anyway",
+						details: {
+							level: "info",
+							session: basename(sessionPath),
+							error: error instanceof Error ? error.message : String(error),
+						},
+					}),
+			});
 			if (outcome === "owned" || Date.now() - started > 1_000)
 				writeRuntimeLog({
 					source: "session-owner",
@@ -1349,6 +1376,13 @@ app.whenReady().then(async () => {
 		tabs: () => [...sidecarPool.memoryTabs(), ...hostServices.memoryTabs()],
 		owners: () => sessionProcesses.owners(),
 		log: (message, details) => writeRuntimeLog({ source: "memory", message, details }),
+		sampled: (reading, rows, tabs, readAt) =>
+			void machineState.sample(
+				reading,
+				rows,
+				tabs.flatMap(tab => (tab.pid === undefined ? [] : [tab.pid])),
+				readAt,
+			),
 		...(testMemory ? { testReading: () => testMemoryReading(testMemory) } : {}),
 		...(ampleTestMemory
 			? {

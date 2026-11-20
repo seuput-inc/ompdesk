@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { restartFollowUp } from "../../resources/gui-bridge/restart-core";
 import { SESSION_TAG_ENV } from "./omp-launch";
 import {
 	type EndResult,
@@ -11,8 +12,10 @@ import {
 	RETRY_REMAINING_MS,
 	SESSION_PROCESSES_FILE,
 	SessionProcesses,
+	type SessionProcessesDeps,
 	type SessionProcessLogDetails,
 	STOCK_WORKER_ARG,
+	type TaggedProcess,
 } from "./session-processes";
 
 // Real processes through the real core (native/ompdesk/crates/core/src/procs): what a session's omp started is found by
@@ -27,6 +30,29 @@ const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSO
 });
 child.unref();
 process.stdout.write(String(child.pid));
+`;
+
+/**
+ * A chatty server whose output has nowhere to go, as Next's dev server runs: an uncaught error is logged, so once the
+ * reader of its output is gone every write fails and logging that failure fails again (the owner's report, 20 Nov
+ * 2026: next-server at 100 % CPU after a relaunch).
+ */
+const CHATTY = `
+process.on("uncaughtException", error => console.error("uncaught", error && error.code));
+setInterval(() => console.log("tick"), 100);
+setTimeout(() => process.exit(0), 120000);
+process.stdout.write("up");
+`;
+/** A quiet server: listens, says on which port, then writes nothing. */
+const QUIET_SERVER = `
+const server = require("node:net").createServer().listen(0, "127.0.0.1", () => process.stdout.write(String(server.address().port)));
+setTimeout(() => process.exit(0), 120000);
+`;
+/** A process busy computing whose output goes to a file: its output has a reader, however much CPU it uses. */
+const BUSY = `
+process.stdout.write("up");
+const end = Date.now() + 120000;
+while (Date.now() < end) {}
 `;
 
 const SLOW = 60_000;
@@ -74,10 +100,11 @@ function orphan(tag: string | undefined): number {
 /** Whether a direct child has ended (its exit event, never the pid: a reaped pid may name another process). */
 const ended = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
 
-function registry(frozen = false): SessionProcesses {
+function registry(frozen = false, deps: Partial<SessionProcessesDeps> = {}): SessionProcesses {
 	return new SessionProcesses(file, {
 		frozen: () => frozen,
 		log: (message, details) => logs.push({ message, details }),
+		...deps,
 	});
 }
 
@@ -87,13 +114,16 @@ beforeEach(() => {
 	logs.length = 0;
 });
 
-afterEach(() => {
-	for (const child of children.splice(0)) child.kill("SIGKILL");
+afterEach(async () => {
+	const killed = children.splice(0);
+	for (const child of killed) child.kill("SIGKILL");
 	for (const pid of orphans.splice(0)) {
 		try {
 			process.kill(pid, "SIGKILL");
 		} catch {}
 	}
+	// Windows refuses to remove a folder a running process has as its working folder.
+	await Promise.all(killed.map(child => (ended(child) ? undefined : once(child, "exit"))));
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -210,6 +240,129 @@ describe("a session's processes, on this computer", () => {
 		);
 		expect(after.owners().map(owner => owner.tag)).toEqual([keptTab.tag]);
 	});
+
+	/**
+	 * Starts `script` with its output piped to this test, waits for its first output, then closes the test's end, as the
+	 * quit took the omp (or a Playwright run between) that read it. `args` stand in for a command line's secrets.
+	 */
+	async function deafened(tag: string, script: string, cwd: string, args: string[] = []) {
+		const child = spawn(process.execPath, ["-e", script, "--", ...args], {
+			env: env(tag),
+			cwd,
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: true,
+		});
+		children.push(child);
+		const out = child.stdout as NonNullable<typeof child.stdout>;
+		const [first] = (await Promise.race([
+			once(out, "data"),
+			once(child, "exit").then(([code]) => {
+				throw new Error(`exited (${code}) before its first output`);
+			}),
+		])) as [Buffer];
+		out.destroy();
+		child.stderr?.destroy();
+		return { child, said: first.toString() };
+	}
+
+	// Linux (tests and CI only, no product) does not tell a closed pipe's writer from any other: not checked there.
+	it.skipIf(process.platform === "linux")(
+		"whose output path is closed stay at the launch that keeps their session when the automatic end is off, and the launch reports them",
+		{ timeout: SLOW },
+		async () => {
+			const folder = fs.realpathSync(dir);
+			const session = path.join(folder, "kept.jsonl");
+			const before = registry(true);
+			const tab = before.open({ cwd: folder, sessionPath: session });
+			const secret = `--token=SYNTH-${Math.random().toString(36).slice(2)}`;
+			const chatty = await deafened(tab.tag, CHATTY, path.dirname(folder), [secret]);
+			const quiet = await deafened(tab.tag, QUIET_SERVER, folder);
+			const logFile = path.join(folder, "busy.log");
+			const sink = fs.openSync(logFile, "w");
+			const busy = spawn(process.execPath, ["-e", BUSY], {
+				env: env(tab.tag),
+				cwd: folder,
+				stdio: ["ignore", sink, sink],
+				windowsHide: true,
+			});
+			children.push(busy);
+			fs.closeSync(sink);
+			await vi.waitFor(() => expect(fs.readFileSync(logFile, "utf8")).toContain("up"));
+			await tab.close();
+
+			const after = registry(false, { endSpinning: () => false });
+			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
+			await after.settled();
+
+			expect([ended(chatty.child), ended(quiet.child), ended(busy)]).toEqual([false, false, false]);
+			const reports = logs.filter(entry => entry.message === "output path closed");
+			expect(reports).toHaveLength(1);
+			const found = JSON.parse(String(reports[0]?.details.found)) as Array<Record<string, unknown>>;
+			const by = (pid: number | undefined) => found.find(item => item.pid === pid);
+			expect(found.map(item => item.pid).sort()).toEqual([chatty.child.pid, quiet.child.pid].sort());
+			expect(by(chatty.child.pid)).toMatchObject({ outputClosed: "closed", spinning: true, outside: true });
+			expect(by(quiet.child.pid)).toMatchObject({
+				outputClosed: "closed",
+				folder: ".",
+				ports: [Number(quiet.said)],
+			});
+			expect(by(quiet.child.pid)?.spinning).toBeUndefined();
+			expect(JSON.stringify(logs)).not.toContain("SYNTH-");
+
+			// The tab back on the session takes the tag over; its continuation names what still runs.
+			const back = after.open({ cwd: folder, sessionPath: session });
+			const left = await back.leftover();
+			const named = (pid: number | undefined) => left?.running.find(item => item.pid === pid);
+			expect(named(chatty.child.pid)).toMatchObject({ outputClosed: "closed", spinning: true });
+			expect(named(quiet.child.pid)).toMatchObject({ outputClosed: "closed", ports: [Number(quiet.said)] });
+			expect(named(busy.pid)).toMatchObject({ folder: "." });
+			expect(named(busy.pid)?.outputClosed).toBeUndefined();
+			expect(left?.ended).toEqual([]);
+			const notice = restartFollowUp([], [], "restored", [], left)?.content ?? "";
+			expect(notice).toContain(`- ${chatty.child.pid} `);
+			expect(notice).toContain("spinning: ");
+			expect(notice).toContain(`listening on ${quiet.said}`);
+			expect(notice).toContain("outside the session folder");
+			expect(`${notice}${JSON.stringify(left)}`).not.toContain("SYNTH-");
+		},
+	);
+
+	it.skipIf(process.platform === "linux")(
+		"by default end at the launch only those that keep spinning on an output path whose other end closed",
+		{ timeout: SLOW },
+		async () => {
+			const folder = fs.realpathSync(dir);
+			const session = path.join(folder, "kept.jsonl");
+			const before = registry(true);
+			const tab = before.open({ cwd: folder, sessionPath: session });
+			const chatty = await deafened(tab.tag, CHATTY, folder);
+			const quiet = await deafened(tab.tag, QUIET_SERVER, folder);
+			await tab.close();
+
+			// The samples a minute apart run back to back here: the CPU each measures is real.
+			const after = registry(false, { later: run => void setImmediate(run) });
+			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
+			await after.settled();
+
+			await vi.waitFor(() => expect(ended(chatty.child)).toBe(true));
+			expect(ended(quiet.child)).toBe(false);
+			const end = logs.find(entry => entry.message === "ended");
+			expect(end?.details).toMatchObject({
+				reason: "kept spinning on a closed output path whose other end is closed",
+				processes: 1,
+			});
+			const found = JSON.parse(String(end?.details.found)) as Array<Record<string, unknown>>;
+			expect(found).toEqual([
+				expect.objectContaining({ pid: chatty.child.pid, outputClosed: "closed", sustained: expect.anything() }),
+			]);
+			const left = await after.open({ cwd: folder, sessionPath: session }).leftover();
+			expect(left?.ended.map(item => item.pid)).toEqual([chatty.child.pid]);
+			expect(left?.ended[0]?.sustained?.percents.every(percent => percent >= 50)).toBe(true);
+			expect(left?.running.map(item => item.pid)).toEqual([quiet.child.pid]);
+			// The tag stays: its tab is open and a process of it still runs.
+			expect(after.owners().map(owner => owner.tag)).toEqual([tab.tag]);
+		},
+	);
 });
 
 describe("which tags end, and when", () => {
@@ -225,6 +378,8 @@ describe("which tags end, and when", () => {
 			log: (message, details) => logs.push({ message, details }),
 			newTag: () => (++made).toString(16).padStart(32, "0"),
 			later: (run, ms) => timers.push({ run, ms }),
+			// What a kept tag left is looked at, never ended here (the cases above run it on real processes).
+			survey: async () => [],
 			end: tags => {
 				const { promise, resolve, reject } = Promise.withResolvers<EndResult>();
 				calls.push({
@@ -335,5 +490,95 @@ describe("which tags end, and when", () => {
 	it("drops a damaged file's records instead of ending by them", () => {
 		fs.writeFileSync(file, JSON.stringify({ tags: [{ tag: "not-a-tag", cwd: "/w", since: 1 }, { cwd: "/w" }, 7] }));
 		expect(held().sessions.owners()).toEqual([]);
+	});
+
+	// The hub's finding of 20 Nov 2026: a closed output path (macOS SS_CANTSENDMORE) is also what a process's own
+	// shutdown(SHUT_WR) leaves, with its peer alive and reading. Only a peer seen closed may let the switch end it.
+	it("with the switch on, ends a spinning process only once its output's peer is seen closed", async () => {
+		const spinner = (pid: number, extra: Partial<TaggedProcess> = {}): TaggedProcess => ({
+			pid,
+			ppid: 1,
+			bytes: 0,
+			startedMs: 1,
+			name: "node",
+			tag: "1".padStart(32, "0"),
+			outputClosed: "unknown",
+			cpuPercent: 99,
+			...extra,
+		});
+		const ended = async (rows: TaggedProcess[]) => {
+			fs.rmSync(file, { force: true });
+			held().sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+			const pids: number[] = [];
+			const sessions = new SessionProcesses(file, {
+				frozen: () => false,
+				log: (message, details) => logs.push({ message, details }),
+				endSpinning: () => true,
+				// Every later sample answers the same rows at once.
+				later: run => void setImmediate(run),
+				survey: async () => rows,
+				endOnly: async (_tags, only) => {
+					pids.push(...only.map(process => process.pid));
+					return { ended: [], left: [], kept: [], own: [] };
+				},
+			});
+			await sessions.sweep({ keep: new Set(["/s/a.jsonl"]), hostedHeld: () => false, hostedGraceMs: 0 });
+			await sessions.settled();
+			return pids;
+		};
+		// Shut down for writing by itself (macOS: still connected), or a socket that does not say.
+		expect(await ended([spinner(10, { outputClosed: "open" }), spinner(11)])).toEqual([]);
+		expect(await ended([spinner(12, { outputClosed: "closed" }), spinner(13, { outputClosed: "open" })])).toEqual([
+			12,
+		]);
+	});
+
+	// The owner's answer of 20 Nov 2026: OMPdesk ends by itself a process whose output's other end is confirmed closed
+	// and that keeps using CPU; a compiling dev server, busy for a while, must never be taken for one.
+	it("by default ends a process whose output's peer is closed once it spins in every sample over a minute", async () => {
+		const row = (pid: number, cpuPercent: number, startedMs = 1): TaggedProcess => ({
+			pid,
+			ppid: 1,
+			bytes: 0,
+			startedMs,
+			name: "next-server",
+			tag: "1".padStart(32, "0"),
+			outputClosed: "closed",
+			cpuPercent,
+		});
+		held().sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+		// 20 spins throughout; 21 stops (a compile that finished); 22's pid names a later process by the last sample.
+		const samples = [
+			[row(20, 99), row(21, 100), row(22, 98)],
+			[row(20, 100), row(21, 100), row(22, 99)],
+			[row(20, 99), row(21, 3), row(22, 99, 2)],
+		];
+		const waits: Array<() => void> = [];
+		const pids: number[] = [];
+		const sessions = new SessionProcesses(file, {
+			frozen: () => false,
+			log: (message, details) => logs.push({ message, details }),
+			later: run => waits.push(run),
+			survey: async () => samples.shift() ?? [],
+			endOnly: async (_tags, only) => {
+				pids.push(...only.map(process => process.pid));
+				return {
+					ended: only.map(({ pid }) => ({ pid, name: "next-server", bytes: 0, forced: false })),
+					left: [],
+					kept: [],
+					own: [],
+				};
+			},
+		});
+		const swept = sessions.sweep({ keep: new Set(["/s/a.jsonl"]), hostedHeld: () => false, hostedGraceMs: 0 });
+		for (let turn = 0; turn < 20 && samples.length > 0; turn++) {
+			await new Promise(resolve => setImmediate(resolve));
+			for (const run of waits.splice(0)) run();
+		}
+		await swept;
+		await sessions.settled();
+		expect(pids).toEqual([20]);
+		const end = logs.find(entry => entry.message === "ended");
+		expect(String(end?.details.found)).toContain('"pid":20');
 	});
 });

@@ -245,12 +245,16 @@ describe("readProbeLines", () => {
 		const file = path.join(dir, "gui-runtime.jsonl");
 		const noise = Array.from({ length: 500 }, (_, n) => JSON.stringify({ source: "remote-link", message: `n${n}` }));
 		await fs.writeFile(`${file}.1`, `${[probe("console-window", 1), ...noise].join("\n")}\n`);
-		await fs.writeFile(file, `${[probe("slow-step", 2), ...noise, probe("turn-wait", 3), ...noise].join("\n")}\n`);
+		await fs.writeFile(
+			file,
+			`${[probe("slow-step", 2), ...noise, probe("turn-wait", 3), probe("machine-state", 4), ...noise].join("\n")}\n`,
+		);
 
 		expect(await readProbeLines(file)).toEqual([
 			probe("console-window", 1),
 			probe("slow-step", 2),
 			probe("turn-wait", 3),
+			probe("machine-state", 4),
 		]);
 		expect(await readDiagnosticsLog(file)).not.toContain(probe("turn-wait", 3));
 		const report = await currentDiagnosticsReport({
@@ -258,7 +262,9 @@ describe("readProbeLines", () => {
 			setupState: () => null,
 			runtimeLogPath: () => file,
 		});
-		expect(report).toContain(`## Probes (console windows, slow steps, long waits; last ${DIAGNOSTICS_PROBE_LINES})`);
+		expect(report).toContain(
+			`## Probes (console windows, slow steps, long waits, stalls; last ${DIAGNOSTICS_PROBE_LINES})`,
+		);
 		const at = report.indexOf(probe("turn-wait", 3));
 		expect(at).toBeGreaterThan(-1);
 		expect(at).toBeLessThan(report.indexOf("## Runtime log"));

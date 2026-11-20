@@ -89,6 +89,25 @@ async function journaled(sessionPath: string): Promise<string[]> {
 	return (await userTexts(sessionPath)).flatMap(text => /\[ompdesk dispatch (d\d+):/.exec(text)?.[1] ?? []);
 }
 
+/**
+ * Waits until the journal holds `expected`; a miss says which fake omps loaded or left that file and with how many
+ * entries (`fixture.journal` records), so a second writer across a relaunch is named.
+ */
+async function untilJournaled(profile: RemoteProfile, sessionPath: string, expected: string[], timeout: number) {
+	await expect
+		.poll(() => journaled(sessionPath), { timeout })
+		.toEqual(expected)
+		.catch(async (error: Error) => {
+			const file = path.basename(sessionPath);
+			const lines = (await readRecords(profile.record)).filter(
+				frame => frame.type === "fixture.journal" && frame.file === file,
+			);
+			throw new Error(
+				`${error.message}\n${file}'s loads and exits:\n${lines.map(line => JSON.stringify(line)).join("\n") || "(none)"}`,
+			);
+		});
+}
+
 /** How many times B's omps were handed the message that carries `dispatch` (the aside each hand-over starts with). */
 async function handed(profile: RemoteProfile, dispatch: string): Promise<number> {
 	return (await readRecords(profile.record)).filter(
@@ -195,7 +214,7 @@ test("the host relaunches: the device hands the messages its omp had not read to
 	host = await launchRemote(hostProfile, { ready: false });
 
 	// B's new omp got each once (the old one's queue went with it), d2 before d3, and ran them.
-	await expect.poll(() => journaled(childPath), { timeout: 90_000 }).toEqual(["d1", "d2", "d3"]);
+	await untilJournaled(hostProfile, childPath, ["d1", "d2", "d3"], 90_000);
 	expect([await handed(hostProfile, "d2"), await handed(hostProfile, "d3")]).toEqual([2, 2]);
 	await expect.poll(() => doneReports(a, opener), { timeout: 60_000 }).toEqual(["d3"]);
 
@@ -207,7 +226,7 @@ test("the host relaunches: the device hands the messages its omp had not read to
 	const next = await call("ompdesk_session_send", { session: kid, message: "And E" });
 	expect(next.isError, next.text).toBe(false);
 	expect(next.text).toContain("Sent to");
-	await expect.poll(() => journaled(childPath), { timeout: 60_000 }).toEqual(["d1", "d2", "d3", "d4"]);
+	await untilJournaled(hostProfile, childPath, ["d1", "d2", "d3", "d4"], 60_000);
 	expect(client?.errors).toEqual([]);
 });
 
@@ -268,7 +287,7 @@ for (const resume of [true, false])
 		}
 		// Without it the quit stopped the child (its omp and what it held went): A hands both to B's new omp once.
 		const times = resume ? 1 : 2;
-		await expect.poll(() => journaled(childPath), { timeout: 60_000 }).toEqual(["d1", "d2", "d3"]);
+		await untilJournaled(hostProfile, childPath, ["d1", "d2", "d3"], 60_000);
 		await expect.poll(() => doneReports(a, opener), { timeout: 60_000 }).toEqual(["d3"]);
 
 		await a.waitForTimeout(3_000);
@@ -282,6 +301,6 @@ for (const resume of [true, false])
 		const next = await call("ompdesk_session_send", { session: oldId, message: "And E" });
 		expect(next.isError, next.text).toBe(false);
 		expect(next.text).toContain("Sent to");
-		await expect.poll(() => journaled(childPath), { timeout: 60_000 }).toEqual(["d1", "d2", "d3", "d4"]);
+		await untilJournaled(hostProfile, childPath, ["d1", "d2", "d3", "d4"], 60_000);
 		expect(client.errors).toEqual([]);
 	});

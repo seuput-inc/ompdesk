@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeErrorSource } from "../shared/ipc-types";
 import { appendRuntimeLogAtPath, normalizeRuntimeErrorReport, tailLogLines } from "./runtime-log-core";
 
@@ -132,6 +132,7 @@ describe("runtime crash log", () => {
 		"console-window",
 		"slow-step",
 		"turn-wait",
+		"machine-state",
 		"sidebar",
 	])("writes a main-side line under its own source %s, not unknown", async source => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-runtime-log-"));
@@ -142,6 +143,106 @@ describe("runtime crash log", () => {
 
 		const entry = JSON.parse((await fs.readFile(filePath, "utf8")).trim()) as { source: string };
 		expect(entry.source).toBe(source);
+	});
+});
+
+describe("a line that repeats", () => {
+	const context = { appVersion: "0.134.0", platform: "darwin", pid: 90451 };
+	const storm = {
+		source: "main-unhandled-rejection",
+		message: "ompdesk-core is shutting down",
+		stack: "CoreError: ompdesk-core is shutting down\n    at #start (out/main/index.js:8:41)",
+	} as const;
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	async function logFile(): Promise<string> {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-runtime-log-"));
+		tempDirs.push(dir);
+		return path.join(dir, "gui-runtime.jsonl");
+	}
+
+	async function entries(filePath: string): Promise<Array<Record<string, unknown>>> {
+		const text = await fs.readFile(filePath, "utf8");
+		return text
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as Record<string, unknown>);
+	}
+
+	// The 0.134.0 quit: 6,175 of one rejection in 0.23 s pushed every earlier line out of both files.
+	it("is written once and folded into one count line, so what came before it stays", async () => {
+		vi.useFakeTimers({ now: Date.parse("2026-11-19T14:12:18.590Z") });
+		const filePath = await logFile();
+		appendRuntimeLogAtPath(filePath, { source: "turn-stop", message: "what led to the quit" }, context);
+		for (let i = 0; i < 6175; i++) {
+			appendRuntimeLogAtPath(filePath, storm, context);
+			if (i % 27 === 26) vi.advanceTimersByTime(1);
+		}
+		appendRuntimeLogAtPath(filePath, { source: "main-uncaught", message: "the end" }, context);
+
+		const lines = await entries(filePath);
+		expect(lines.map(line => [line.source, line.message])).toEqual([
+			["turn-stop", "what led to the quit"],
+			["main-unhandled-rejection", "ompdesk-core is shutting down"],
+			["main-unhandled-rejection", "repeated 6174 times in 228 ms"],
+			["main-uncaught", "the end"],
+		]);
+		expect(lines[1]?.stack).toBe(storm.stack);
+		expect(lines[2]?.details).toMatchObject({ count: 6174, spanMs: 228, repeatOf: "ompdesk-core is shutting down" });
+	});
+
+	it("writes its count once the repeats stop, with no other line after them", async () => {
+		vi.useFakeTimers({ now: Date.parse("2026-11-19T14:12:18.590Z") });
+		const filePath = await logFile();
+		for (let i = 0; i < 3; i++) {
+			appendRuntimeLogAtPath(filePath, storm, context);
+			vi.advanceTimersByTime(100);
+		}
+		await vi.runAllTimersAsync();
+
+		expect((await entries(filePath)).map(line => line.message)).toEqual([
+			"ompdesk-core is shutting down",
+			"repeated 2 times in 200 ms",
+		]);
+	});
+
+	it("writes the count of an endless storm every minute instead of holding it back", async () => {
+		vi.useFakeTimers({ now: Date.parse("2026-11-19T14:12:18.590Z") });
+		const filePath = await logFile();
+		for (let i = 0; i <= 130; i++) {
+			appendRuntimeLogAtPath(filePath, storm, context);
+			vi.advanceTimersByTime(1_000);
+		}
+
+		const counts = (await entries(filePath)).slice(1).map(line => line.message);
+		expect(counts).toEqual(["repeated 60 times in 60000 ms", "repeated 60 times in 60000 ms"]);
+	});
+
+	it("is written again after a quiet moment, and lines that differ only in details are each written", async () => {
+		vi.useFakeTimers({ now: Date.parse("2026-11-19T14:12:18.590Z") });
+		const filePath = await logFile();
+		appendRuntimeLogAtPath(filePath, storm, context);
+		vi.advanceTimersByTime(30_000);
+		appendRuntimeLogAtPath(filePath, storm, context);
+		for (const tab of ["a", "b", "c"])
+			appendRuntimeLogAtPath(filePath, { source: "turn-resume", message: "marker", details: { tab } }, context);
+
+		const lines = await entries(filePath);
+		expect(lines.map(line => line.message)).toEqual([
+			"ompdesk-core is shutting down",
+			"ompdesk-core is shutting down",
+			"marker",
+			"marker",
+			"marker",
+		]);
+		expect(lines.slice(2)).toMatchObject([
+			{ details: { tab: "a" } },
+			{ details: { tab: "b" } },
+			{ details: { tab: "c" } },
+		]);
 	});
 });
 

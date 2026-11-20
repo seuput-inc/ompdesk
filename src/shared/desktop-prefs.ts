@@ -49,6 +49,14 @@ export const TOOLS_AUTO_UPDATE_PREF = "toolsAutoUpdate";
  */
 export const OMP_FOLLOW_VERIFIED_PREF = "ompFollowVerified";
 
+/**
+ * A launch ends by itself a restored session's process whose output path is closed with its other end closed and that
+ * keeps spinning (`session-processes.ts`; the owner's answer of 20 Nov 2026). Hidden, default on: only a stored `false`
+ * turns it off, and then such a process is only reported. No Settings row: Settings has no home for session
+ * processes and the minimal-settings rule keeps it out of a section of its own.
+ */
+export const END_SPINNING_ON_CLOSED_OUTPUT_PREF = "endSpinningOnClosedOutput";
+
 /** A dev server's address in a bash result opens the Preview for the focused tab (default off; only `true` turns it on). */
 export const AUTO_PREVIEW_DEV_SERVER_PREF = "autoPreviewDevServer";
 

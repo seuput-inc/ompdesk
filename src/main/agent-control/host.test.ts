@@ -893,6 +893,56 @@ describe("AgentControlRuntime", () => {
 			expect(text).toMatch(/plain "plain"\n {2}folder \/s;[^\n]*changed [^;\n]*\n/);
 		});
 
+		it("reads a tab here not started since a relaunch as what the host's own tab on its session does", async () => {
+			// 20 Nov 2026 (C12): the MacBook's list and result read SeuOffice's main tab, which the Mac mini's window ran,
+			// as "not started" for 26 minutes: the MacBook's own tab on that session was restored asleep.
+			let live = summariesOf([{ sessionPath: "/far/seu.jsonl", status: "running" }]);
+			const request = vi.fn(async (_device: string, method: string) =>
+				method === "sessions.messages"
+					? [
+							{ role: "user", content: "go", timestamp: 1 },
+							{
+								role: "assistant",
+								content: [{ type: "text", text: "shipped" }],
+								stopReason: "stop",
+								timestamp: 2,
+							},
+						]
+					: null,
+			);
+			const { runtime, win } = setup({
+				tabs: [
+					{ tabId: "main0001" },
+					{
+						tabId: "seu00002",
+						title: "SeuOffice",
+						device: "dev-1",
+						status: "asleep",
+						sessionPath: "/far/seu.jsonl",
+					},
+				],
+				remote: {
+					hosts: () => [{ deviceId: "dev-1", name: "Mac mini", state: "online" }],
+					request: request as never,
+				},
+				summaries: device => (device === "dev-1" ? live : null),
+			});
+			const hint = "this app's tab on it starts when shown or messaged";
+			const list = (await runtime.run(win, "main0001", T.list, { status: "running" })).text;
+			expect(list).toContain(
+				`seu00002 "SeuOffice"\n  running (open in a tab on device dev-1; ${hint}); folder /repo`,
+			);
+			// Its turn there ended: the result is settled and answers from the saved file on the host.
+			live = summariesOf([{ sessionPath: "/far/seu.jsonl", status: "ready" }]);
+			const result = (await runtime.run(win, "main0001", T.result, { session: "seu00002", wait: true })).text;
+			expect(result).toContain(`"SeuOffice" [seu00002]: idle (open in a tab on device dev-1; ${hint}).`);
+			expect(result).toMatch(/Last answer:\nshipped$/);
+			// The host holds it in no tab: as before, it is a tab that has not started.
+			live = summariesOf([]);
+			const gone = (await runtime.run(win, "main0001", T.result, { session: "seu00002" })).text;
+			expect(gone).toContain('"SeuOffice" [seu00002]: not started (it starts when shown or messaged).');
+		});
+
 		it("reads a saved session's header as the stored list says it, as of the read", async () => {
 			let rows = [row("/far", "there", { heldOnHost: true })];
 			let live = summariesOf([]);

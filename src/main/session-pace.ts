@@ -158,7 +158,19 @@ function readTarget(part: ToolCallPart): string | undefined {
 	return part.arguments.path.replace(/(?<=.):[^\\/]*$/, "");
 }
 
+/** A pace read line by line: `add` each journal line in order; `result` answers at any point and changes nothing. */
+interface PaceFold {
+	add(line: string): void;
+	result(): Pace;
+}
+
 export function pace(lines: Iterable<string>): Pace {
+	const fold = paceFold();
+	for (const line of lines) fold.add(line);
+	return fold.result();
+}
+
+function paceFold(): PaceFold {
 	const starts = new Map<string, number>();
 	const tools: Record<string, ToolRow> = {};
 	const intervals: [number, number][] = [];
@@ -181,20 +193,20 @@ export function pace(lines: Iterable<string>): Pace {
 	const checkSaved = new Map<string, number>();
 	let prev: number | undefined;
 	const gaps: [number, number][] = [];
-	for (const line of lines) {
+	const add = (line: string): void => {
 		let entry: Entry;
 		try {
 			entry = JSON.parse(line) as Entry;
 		} catch {
-			continue;
+			return;
 		}
 		const at = seconds(entry);
-		if (at === undefined) continue;
+		if (at === undefined) return;
 		if (entry.type === "custom" && entry.customType === "tool_execution_start") {
 			if (entry.data?.toolCallId) starts.set(entry.data.toolCallId, at);
-			continue;
+			return;
 		}
-		if (entry.type !== "message" || !entry.message) continue;
+		if (entry.type !== "message" || !entry.message) return;
 		first ??= at;
 		if (prev !== undefined && at - prev > IDLE_S) gaps.push([prev, at]);
 		const since = prev !== undefined ? at - prev : undefined;
@@ -251,37 +263,42 @@ export function pace(lines: Iterable<string>): Pace {
 			}
 			tools[name] = row;
 		}
-	}
-	const wallS = first !== undefined && prev !== undefined ? prev - first : 0;
-	let savedS = 0;
-	for (const saved of checkSaved.values()) savedS += saved;
-	const toolS = unionSeconds(intervals);
-	// A long gap is idle only where no tool ran through it (a `wait` that returned after 20 min is that tool's time).
-	const idleS = gaps.reduce((sum, [from, to]) => sum + (to - from) - unionSeconds(clip(intervals, from, to)), 0);
-	let repeatRead: Pace["repeatRead"];
-	for (const [path, count] of reads) if (count > 1 && count > (repeatRead?.count ?? 0)) repeatRead = { path, count };
-	return {
-		wallS,
-		toolS,
-		modelS: Math.max(0, wallS - toolS - idleS),
-		idleS,
-		modelCalls,
-		outputTokens,
-		tools,
-		thinkGaps,
-		polls,
-		...(repeatRead ? { repeatRead } : {}),
-		...(polls > 0 ? { pollKinds } : {}),
-		...(checkCalls.size > 0
-			? {
-					checks: {
-						runs: checkCalls.size,
-						seconds: unionSeconds(checkIntervals),
-						...(savedS > 0 ? { savedS } : {}),
-					},
-				}
-			: {}),
 	};
+	const result = (): Pace => {
+		const wallS = first !== undefined && prev !== undefined ? prev - first : 0;
+		let savedS = 0;
+		for (const saved of checkSaved.values()) savedS += saved;
+		const toolS = unionSeconds(intervals);
+		// A long gap is idle only where no tool ran through it (a `wait` that returned after 20 min is that tool's time).
+		const idleS = gaps.reduce((sum, [from, to]) => sum + (to - from) - unionSeconds(clip(intervals, from, to)), 0);
+		let repeatRead: Pace["repeatRead"];
+		for (const [path, count] of reads)
+			if (count > 1 && count > (repeatRead?.count ?? 0)) repeatRead = { path, count };
+		// Copies: the fold goes on adding lines after this answer was handed out (readPace).
+		return {
+			wallS,
+			toolS,
+			modelS: Math.max(0, wallS - toolS - idleS),
+			idleS,
+			modelCalls,
+			outputTokens,
+			tools: Object.fromEntries(Object.entries(tools).map(([name, row]) => [name, { ...row }])),
+			thinkGaps: [...thinkGaps],
+			polls,
+			...(repeatRead ? { repeatRead } : {}),
+			...(polls > 0 ? { pollKinds: { ...pollKinds } } : {}),
+			...(checkCalls.size > 0
+				? {
+						checks: {
+							runs: checkCalls.size,
+							seconds: unionSeconds(checkIntervals),
+							...(savedS > 0 ? { savedS } : {}),
+						},
+					}
+				: {}),
+		};
+	};
+	return { add, result };
 }
 
 function clip(intervals: readonly [number, number][], from: number, to: number): [number, number][] {
@@ -354,21 +371,125 @@ export function paceLine(result: Pace): string {
 	return `Pace: ${parts.join(" · ")}`;
 }
 
-const cache = new Map<string, { size: number; mtimeMs: number; pace: Pace }>();
+/** Sessions whose fold is kept, the least recently read dropped first; a fold of 60,000 entries is a few MB. */
+const CACHED_SESSIONS = 64;
+/** Bytes read at a time: a journal is never read whole, only this and the line under way are in memory. */
+const CHUNK_BYTES = 1 << 20;
+/** The bytes just before a fold's offset, which must read the same for the file to be the one folded so far. */
+const SEAM_BYTES = 256;
+
+interface Folded {
+	dev: number;
+	ino: number;
+	size: number;
+	mtimeMs: number;
+	/** Every whole line before this byte is folded. */
+	offset: number;
+	seam: Buffer;
+	fold: PaceFold;
+	pace: Pace;
+}
+
+const cache = new Map<string, Folded>();
+const reading = new Map<string, Promise<Pace | undefined>>();
 
 /**
- * The pace of a session file, read once per change (a list of 50 sessions asks for each on every call). Undefined
- * when the file cannot be read: a pace never keeps a report or a list from going out.
+ * The pace of a session file (a list of 50 sessions asks for each on every call). Undefined when the file cannot be
+ * read: a pace never keeps a report or a list from going out.
+ *
+ * A journal only grows while its omp runs, so the lines folded last time are kept and only what was appended since
+ * is read; a file replaced (another inode, shorter, other bytes before the offset) is read again from the start.
+ * Never the whole file at once: `readFile` + `split` of the 367 MB journal of an orchestrator session held 1.3 GB in
+ * main per call, and `ompdesk_sessions` asks for every listed tab together (2.5 GB peak, Mac mini, 20 Nov 2026).
  */
-export async function readPace(sessionPath: string): Promise<Pace | undefined> {
+export function readPace(sessionPath: string): Promise<Pace | undefined> {
+	// One read of a file at a time: two at once would fold the same appended lines twice.
+	const run = (reading.get(sessionPath) ?? Promise.resolve(undefined)).then(() => readPaceNow(sessionPath));
+	reading.set(sessionPath, run);
+	void run.then(() => {
+		if (reading.get(sessionPath) === run) reading.delete(sessionPath);
+	});
+	return run;
+}
+
+async function readPaceNow(sessionPath: string): Promise<Pace | undefined> {
+	const kept = cache.get(sessionPath);
+	// Out of the cache while it is read: a fold a failed read left half-advanced is never used again.
+	cache.delete(sessionPath);
+	let handle: fs.FileHandle | undefined;
 	try {
-		const info = await fs.stat(sessionPath);
-		const hit = cache.get(sessionPath);
-		if (hit && hit.size === info.size && hit.mtimeMs === info.mtimeMs) return hit.pace;
-		const result = pace((await fs.readFile(sessionPath, "utf8")).split("\n"));
-		cache.set(sessionPath, { size: info.size, mtimeMs: info.mtimeMs, pace: result });
-		return result;
+		handle = await fs.open(sessionPath, "r");
+		const info = await handle.stat();
+		let folded =
+			kept && kept.dev === info.dev && kept.ino === info.ino && kept.offset <= info.size ? kept : undefined;
+		if (folded && folded.size === info.size && folded.mtimeMs === info.mtimeMs) {
+			cache.set(sessionPath, folded);
+			return folded.pace;
+		}
+		if (folded && !(await readAt(handle, folded.offset - folded.seam.length, folded.seam.length)).equals(folded.seam))
+			folded = undefined;
+		const fold = folded?.fold ?? paceFold();
+		let offset = folded?.offset ?? 0;
+		let position = offset;
+		let rest = Buffer.alloc(0);
+		const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
+		while (position < info.size) {
+			const { bytesRead } = await handle.read(chunk, 0, Math.min(CHUNK_BYTES, info.size - position), position);
+			if (bytesRead === 0) break;
+			position += bytesRead;
+			const data =
+				rest.length > 0 ? Buffer.concat([rest, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
+			let start = 0;
+			for (let newline = data.indexOf(10); newline !== -1; newline = data.indexOf(10, start)) {
+				fold.add(data.toString("utf8", start, newline));
+				start = newline + 1;
+			}
+			offset = position - (data.length - start);
+			// A copy: `chunk` is read into again.
+			rest = Buffer.from(data.subarray(start));
+		}
+		// A last line without its newline counts once it is whole JSON; one still being written is read next time.
+		if (rest.length > 0 && wholeJson(rest.toString("utf8"))) {
+			fold.add(rest.toString("utf8"));
+			offset = position;
+		}
+		const seam = await readAt(handle, Math.max(0, offset - SEAM_BYTES), Math.min(offset, SEAM_BYTES));
+		const next: Folded = {
+			dev: info.dev,
+			ino: info.ino,
+			size: info.size,
+			mtimeMs: info.mtimeMs,
+			offset,
+			seam,
+			fold,
+			pace: fold.result(),
+		};
+		cache.set(sessionPath, next);
+		if (cache.size > CACHED_SESSIONS) cache.delete(cache.keys().next().value as string);
+		return next.pace;
 	} catch {
 		return undefined;
+	} finally {
+		await handle?.close().catch(() => undefined);
+	}
+}
+
+async function readAt(handle: fs.FileHandle, position: number, length: number): Promise<Buffer> {
+	const buffer = Buffer.alloc(length);
+	let read = 0;
+	while (read < length) {
+		const { bytesRead } = await handle.read(buffer, read, length - read, position + read);
+		if (bytesRead === 0) break;
+		read += bytesRead;
+	}
+	return buffer.subarray(0, read);
+}
+
+function wholeJson(line: string): boolean {
+	try {
+		JSON.parse(line);
+		return true;
+	} catch {
+		return false;
 	}
 }

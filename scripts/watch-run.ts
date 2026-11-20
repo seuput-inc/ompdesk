@@ -16,9 +16,9 @@
  * `--release` alone takes the newest run, which right after a push can still be the previous release's:
  * pass `--sha` (the pushed commit) and it waits for that commit's run to show.
  */
-import { spawnSync } from "node:child_process";
-import { realGh, wideRefusal } from "../resources/gui-bridge/gh-guard";
+
 import { WATCH_MIN_INTERVAL_S } from "../resources/gui-bridge/gh-guard-core";
+import { gh, wideReadRefusal } from "./gh-run";
 
 const LOOKUP_ATTEMPTS = 20;
 const LOOKUP_INTERVAL_MS = 3_000;
@@ -71,11 +71,6 @@ export function errorLines(log: string, limit = ERROR_LINES): string[] {
 	const verdicts = clean.filter(line => VERDICT_LINE.test(line));
 	const hits = verdicts.length > 0 ? verdicts : clean.filter(line => ERROR_LINE.test(line));
 	return (hits.length > 0 ? hits : clean.filter(line => line.trim() !== "").slice(-limit)).slice(0, limit);
-}
-
-function gh(args: string[]): { ok: boolean; out: string; err: string } {
-	const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-	return { ok: result.status === 0, out: result.stdout ?? "", err: (result.stderr ?? "").trim() };
 }
 
 function usage(message: string): never {
@@ -167,8 +162,7 @@ async function main(argv: string[]): Promise<number> {
 	if (sha && !release) usage("--sha goes with --release");
 	if (release === (runId !== undefined)) usage("give a run id or --release, not both or neither");
 	// A watch is a wide read: an agent's starts only while the quota is above its floor (gh-guard.ts; a person's always).
-	const gh = process.env.PI_TOOL_CALL_ID ? realGh() : undefined;
-	const refused = gh ? wideRefusal(["run", "watch", String(runId ?? "--release")], "core", gh) : undefined;
+	const refused = wideReadRefusal(["run", "watch", String(runId ?? "--release")]);
 	if (refused) {
 		console.error(`watch-run: ${refused}`);
 		return 2;

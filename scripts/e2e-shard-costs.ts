@@ -7,9 +7,10 @@
  * and keeps the files of `MIN_SECONDS` or more. A file the run did not reach keeps the cost it had while its spec
  * still exists. Run it on a nightly when its shards drift apart (their Playwright steps differ by minutes).
  */
-import { spawnSync } from "node:child_process";
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { gh as ghRun } from "./gh-run";
 
 /** Shorter files are dealt by their test count (`TEST_SECONDS` in e2e-shard.ts). */
 const MIN_SECONDS = 8;
@@ -42,9 +43,9 @@ if (import.meta.main) {
 		process.exit(2);
 	}
 	const gh = (...args: string[]) => {
-		const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 512 << 20 });
-		if (result.status !== 0) throw new Error(`gh ${args.join(" ")} failed: ${result.stderr}`);
-		return result.stdout;
+		const result = ghRun(args, { maxBuffer: 512 << 20 });
+		if (!result.ok) throw new Error(`gh ${args.join(" ")} failed: ${result.err}`);
+		return result.out;
 	};
 	const jobs: Array<{ name: string; databaseId: number }> = JSON.parse(gh("run", "view", run, "--json", "jobs")).jobs;
 	const measured = new Map<string, number>();

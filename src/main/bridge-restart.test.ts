@@ -254,6 +254,28 @@ describe("restartFollowUp", () => {
 		expect(restartFollowUp([], [])).toBeUndefined();
 	});
 
+	it("names what the session's commands left running only to a turn that goes on, never starting one for it", () => {
+		const processes = {
+			running: [{ pid: 4321, name: "next-server", outputClosed: "closed" as const }],
+			ended: [],
+		};
+		expect(restartFollowUp([], [], "idle", [], processes)).toBeUndefined();
+		const followUp = restartFollowUp([], [], "restored", [], processes);
+		expect(followUp?.content).toContain("- 4321 next-server; output path closed (peer closed)");
+		// The transcript shows no line for it: no job, subagent or cut turn.
+		expect(followUp?.details).toEqual({ jobs: [] });
+	});
+
+	it("says only what was seen of a closed output path: a peer still open is never called gone", () => {
+		const processes = {
+			running: [{ pid: 7, name: "node", outputClosed: "open" as const, cpu: { percent: 0, seconds: 3 } }],
+			ended: [],
+		};
+		const content = restartFollowUp([], [], "restored", [], processes)?.content ?? "";
+		expect(content).toContain("- 7 node; output path closed (peer open); 0% of a core for 3 s");
+		expect(content).not.toMatch(/nowhere to go|reader (is )?gone|no reader|stopped with the restart/);
+	});
+
 	it("names each stopped job with its intent first, then its command, and asks for a quiet re-run of what is needed", () => {
 		const followUp = restartFollowUp(
 			[

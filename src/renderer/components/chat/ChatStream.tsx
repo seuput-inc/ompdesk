@@ -192,6 +192,15 @@ function SessionTranscript() {
 		const tab = state.tabs.find(entry => entry.id === tabId);
 		return Boolean(tab?.sessionPath ?? tab?.pendingSessionPath);
 	});
+	const shownEmpty = knownSession && displayMessages.length === 0;
+	useEffect(() => {
+		if (!shownEmpty || !tabId) return;
+		// A diagnostic line only: a chunk that fails to load loses the line, never the pane.
+		import("../../hooks/empty-transcript-probe").then(
+			probe => probe.reportEmptyTranscript(tabId),
+			() => {},
+		);
+	}, [shownEmpty, tabId]);
 	const savedView = useSessionStore(s => s.transcriptView);
 	const saveView = useSessionStore(s => s.saveTranscriptView);
 	const [restoreView] = useState(() => (savedView?.sessionId === sessionId ? savedView : null));

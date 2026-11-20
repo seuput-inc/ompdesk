@@ -178,6 +178,34 @@ export function runRpcUi(): void {
 	 * cut off): stock's SessionManager keeps writing that file, under its own header, never a second one.
 	 */
 	let resumed: { id: string; file: string; created?: string; cwd?: string } | undefined;
+	/**
+	 * The journal is rewritten whole on every entry, so it goes through a temp file and a rename: stock appends, and a
+	 * reader (another omp opening the session across a relaunch) never sees an emptied file, which a plain truncating
+	 * write let it load as a session with no entries (send-outbox-remote, e2e run 44656382129: d1 erased). Windows
+	 * refuses the rename while a reader has the file open: retried briefly.
+	 */
+	const writeJournal = (file: string, text: string) => {
+		const temp = `${file}.${process.pid}.tmp`;
+		fs.writeFileSync(temp, text);
+		for (let attempt = 0; ; attempt++) {
+			try {
+				fs.renameSync(temp, file);
+				return;
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (attempt >= 50 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw error;
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+			}
+		}
+	};
+	/** Which process loaded or wrote which journal, with how many entries: a spec names a second writer with it. */
+	const journalTrace = (op: "load" | "exit", file: string) => {
+		if (process.env.OMP_GUI_TEST_RECORD)
+			fs.appendFileSync(
+				process.env.OMP_GUI_TEST_RECORD,
+				`${JSON.stringify({ type: "fixture.journal", op, file: nodePath.basename(file), entries: entries.length, at: Date.now(), recordedBy: sessionId })}\n`,
+			);
+	};
 	const persistSession = () => {
 		const file = fresh ? fresh.file : resumed && sessionFile ? resumed.file : sessionFile;
 		if (!file || entries.length === 0) return;
@@ -193,7 +221,7 @@ export function runRpcUi(): void {
 			...entries,
 		];
 		fs.mkdirSync(nodePath.dirname(file), { recursive: true });
-		fs.writeFileSync(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+		writeJournal(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
 	};
 	const append = (fields: { type: string; [key: string]: unknown }, time: number | string, persist = true) => {
 		entries.push({
@@ -241,6 +269,8 @@ export function runRpcUi(): void {
 			},
 			recordedAt,
 		);
+		const file = fresh ? fresh.file : resumed && sessionFile ? resumed.file : sessionFile;
+		if (file) journalTrace("exit", file);
 	};
 	const seedLongSession = () => {
 		entries.length = 0;
@@ -325,6 +355,7 @@ export function runRpcUi(): void {
 			});
 		}
 		activeLeafId = entries.at(-1)?.id ?? null;
+		journalTrace("load", file);
 		return header;
 	};
 	// A seeded session is a stock file from the start, as a real session with a transcript is: the index lists it.

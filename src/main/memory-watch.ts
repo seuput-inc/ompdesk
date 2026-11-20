@@ -5,7 +5,7 @@
  */
 import { IdleRelease, memoryShort } from "./idle-release";
 import { memoryRecord, RecordClock } from "./memory-record";
-import { listProcesses, type MemoryReading, readMemory, treeBytes } from "./memory-sampler";
+import { listProcesses, type MemoryReading, type ProcessRow, readMemory, treeBytes } from "./memory-sampler";
 import { listTaggedProcesses, type TagOwner } from "./session-processes";
 
 /** How often memory is read. */
@@ -32,6 +32,9 @@ export interface MemoryWatchDeps {
 	release?(tabId: string): void;
 	/** How long a tab stays quiet before it may be released (`IDLE_RELEASE_QUIET_MS`). */
 	releaseQuietMs?: number;
+	/** Every sample as the core read it, null for what it did not answer, with the tabs a listing was read for and
+	 * when it was asked for, the moment its processor times stand for (machine-state.ts keeps the last ones). */
+	sampled?(reading: MemoryReading | null, rows: ProcessRow[] | null, tabs: readonly MemoryTab[], readAt: number): void;
 }
 
 /** Bytes as GB with one decimal, for log lines. */
@@ -70,15 +73,16 @@ export function startMemoryWatch(deps: MemoryWatchDeps): void {
 		if (sampling) return;
 		sampling = true;
 		try {
-			const [reading, rows] = await Promise.all([
-				deps.testReading ? Promise.resolve(deps.testReading()) : readMemory(),
-				listProcesses(),
-			]);
+			// The OS is read in a test launch too: what a stall writes down is the real computer's state.
+			const readAt = Date.now();
+			const [real, rows] = await Promise.all([readMemory(), listProcesses()]);
+			const reading = deps.testReading ? deps.testReading() : real;
 			const owners = deps.owners;
 			if (owners && reading && clock.due(Date.now(), memoryShort(reading))) await recordShort(deps, owners, reading);
 			const release = deps.release;
+			const tabs = rows ? deps.tabs() : [];
+			deps.sampled?.(real, rows, tabs, readAt);
 			if (rows && release) {
-				const tabs = deps.tabs();
 				const tabId = idle.pick(
 					Date.now(),
 					reading,

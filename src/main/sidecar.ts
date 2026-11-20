@@ -1527,6 +1527,7 @@ export class SidecarManager extends EventEmitter {
 				: runtime,
 			send,
 			bridge,
+			...(this.#processes ? { leftProcesses: this.#processes.leftover } : {}),
 		};
 	}
 
