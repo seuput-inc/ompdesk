@@ -67,6 +67,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"console-window": true,
 	"slow-step": true,
 	"turn-wait": true,
+	"machine-state": true,
 	routines: true,
 	memory: true,
 	sidebar: true,

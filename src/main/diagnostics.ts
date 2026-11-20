@@ -23,10 +23,15 @@ const MAX_DETAIL_CHARS = 300;
 const LOG_TAIL_BYTES = 1024 * 1024;
 /**
  * The sources a symptom without a repro writes when it shows again (console-window-watch.ts, slow-steps.ts,
- * turn-wait-watch.ts). Their lines are few and may be days old, long out of the last entries, so a report carries the
- * newest of them on their own.
+ * turn-wait-watch.ts, machine-state.ts). Their lines are few and may be days old, long out of the last entries, so a
+ * report carries the newest of them on their own.
  */
-const PROBE_SOURCES = ['"source":"console-window"', '"source":"slow-step"', '"source":"turn-wait"'];
+const PROBE_SOURCES = [
+	'"source":"console-window"',
+	'"source":"slow-step"',
+	'"source":"turn-wait"',
+	'"source":"machine-state"',
+];
 export const DIAGNOSTICS_PROBE_LINES = 30;
 /** The whole of a log file: it is rolled over at 4 MiB (runtime-log-core.ts). */
 const WHOLE_LOG_BYTES = 5 * 1024 * 1024;
@@ -148,7 +153,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
 			: []),
 		...(input.probeLines?.length
 			? [
-					`## Probes (console windows, slow steps, long waits; last ${DIAGNOSTICS_PROBE_LINES})`,
+					`## Probes (console windows, slow steps, long waits, stalls; last ${DIAGNOSTICS_PROBE_LINES})`,
 					...input.probeLines.map(line => clip(redactDiagnosticsText(line), MAX_LINE_CHARS)),
 					"",
 				]

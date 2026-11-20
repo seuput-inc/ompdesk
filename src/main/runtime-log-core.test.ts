@@ -132,6 +132,7 @@ describe("runtime crash log", () => {
 		"console-window",
 		"slow-step",
 		"turn-wait",
+		"machine-state",
 		"sidebar",
 	])("writes a main-side line under its own source %s, not unknown", async source => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-runtime-log-"));

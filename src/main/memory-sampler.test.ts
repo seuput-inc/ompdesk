@@ -19,6 +19,13 @@ describe("the core's reading of this computer", () => {
 		// Windows: the available physical memory node reads too, a moment apart.
 		if (process.platform === "win32")
 			expect(Math.abs((reading?.availableBytes ?? 0) - os.freemem())).toBeLessThan(os.totalmem() / 4);
+		// What a stall's record reads beside it (machine-state.ts): Windows' commit charge and run queue, macOS' swap.
+		if (process.platform === "win32") {
+			expect(reading?.commitLimitBytes).toBeGreaterThan(0);
+			expect(reading?.commitBytes).toBeLessThanOrEqual(reading?.commitLimitBytes ?? 0);
+			expect(reading?.runQueue).toBeGreaterThanOrEqual(0);
+		}
+		if (process.platform === "darwin") expect(reading?.swapBytes).toBeLessThanOrEqual(reading?.swapTotalBytes ?? -1);
 	});
 
 	it("lists this process under its parent, and a child it starts under it", async () => {
@@ -41,6 +48,8 @@ describe("the core's reading of this computer", () => {
 			expect(own?.bytes).toBeLessThan(rss * 4);
 			expect(started?.bytes).toBeGreaterThan(1024 ** 2);
 			expect(treeBytes(rows, process.pid)).toBeGreaterThanOrEqual((own?.bytes ?? 0) + (started?.bytes ?? 0));
+			// Processor time so far: more for the process that runs vitest than for a child a moment old.
+			expect(own?.cpuMs).toBeGreaterThanOrEqual(started?.cpuMs ?? Number.NaN);
 			// Windows names each image (idle release tells conhost.exe from work by it); ps names none.
 			expect(own?.name?.toLowerCase()).toBe(
 				process.platform === "win32" ? path.basename(process.execPath).toLowerCase() : undefined,

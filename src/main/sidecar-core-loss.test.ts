@@ -93,7 +93,7 @@ describe("tabs whose core ended under them", () => {
 			expect(reports).toHaveLength(TABS * 5);
 			await vi.waitFor(() => expect(lossReports.map(report => report.step)).toEqual(["abandoned", "ended"]));
 			expect(lossReports[0]?.details).toMatchObject({ reason: "a test ends the core" });
-			expect(lossReports[1]?.details).toMatchObject({ abandoned: true, answered: true });
+			expect(lossReports[1]?.details).toMatchObject({ abandoned: true, answered: true, exitMs: expect.any(Number) });
 		} finally {
 			core().report = null;
 			for (const sidecar of sidecars) sidecar.dispose();
