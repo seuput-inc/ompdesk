@@ -366,9 +366,11 @@ test("system omp persists settings and sessions and serves every stats route", a
 		await page.keyboard.press("ControlOrMeta+Comma");
 		const freshSettings = page.locator("[data-settings-page]");
 		await freshSettings.locator('[data-settings-section="appearance"]').click();
-		const freshThemes = freshSettings.getByRole("radiogroup", { name: "테마" });
-		await freshThemes.getByRole("radio", { name: "OMPdesk 라이트" }).click();
-		await expect(freshThemes.getByRole("radio", { name: "OMPdesk 라이트" })).toHaveAttribute("aria-checked", "true");
+		// The OMPdesk set's light mode: the set's card, then the mode's segment.
+		await freshSettings.locator('[data-theme-set="ompdesk"]').click();
+		const freshLight = freshSettings.locator('[data-theme-mode="light"]');
+		await freshLight.click();
+		await expect(freshLight).toHaveAttribute("aria-checked", "true");
 		const chosenBackground = await page.evaluate(() =>
 			getComputedStyle(document.documentElement).getPropertyValue("--omp-bg-primary"),
 		);
