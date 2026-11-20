@@ -2393,7 +2393,15 @@ app.whenReady().then(async () => {
 		resumeGoal: async tabId => {
 			await autopilotRef.current?.resumeGoal(tabId);
 		},
-		goalSettled: (tabId, outcome) => autopilotRef.current?.resumeSettled(tabId, outcome),
+		goalSettled: (tabId, outcome) => {
+			autopilotRef.current?.resumeSettled(tabId, outcome);
+			// The continuation is over: an omp update's restart that waited for it goes now (a tick later, outside the
+			// core's own call).
+			setImmediate(() => {
+				sidecarPool.ompRestartIfWaiting(tabId);
+				hostServices.ompRestartIfWaiting(tabId);
+			});
+		},
 		log: (message, details) => writeRuntimeLog({ source: "turn-resume", message, details }),
 	});
 	ipc.handle(IPC_COMMANDS.RESUME_CANCEL_WAIT, async (_caller, tabId: unknown) => {
@@ -2461,6 +2469,8 @@ app.whenReady().then(async () => {
 		}, CONSOLE_POLL_MS).unref();
 	}
 	hostServices.attachResume(turnResume);
+	// An omp update never restarts a tab under its relaunch continuation (omp-restart.ts).
+	sidecarPool.continuationOwed = tabId => turnResume.relaunchContinuation(tabId) === "after_restore";
 	// Disk care: idle worktrees' build output, landed and long-idle worktrees (saved first), the HTTP cache and the
 	// tools' caches.
 	// Automatic only in the packaged app outside a test run: a dev or test instance sees none of the real app's open

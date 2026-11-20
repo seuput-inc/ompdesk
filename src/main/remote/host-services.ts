@@ -2525,11 +2525,21 @@ export class LocalHostServices implements HostServices {
 	 */
 	restartOnNewOmp(): void {
 		for (const tab of this.#tabs.values()) {
-			const decision = ompRestartDecision({ status: tab.sidecar.status, busy: runBusy(tab.run) });
+			const decision = ompRestartDecision({
+				status: tab.sidecar.status,
+				busy: runBusy(tab.run),
+				resuming: this.#resume?.relaunchContinuation(tab.resumeId) === "after_restore",
+			});
 			if (decision === "skip" || tab.viewing) continue;
 			if (decision === "wait") tab.ompRestartPending = true;
 			else tab.sidecar.restart(undefined, tab.sessionFile);
 		}
+	}
+
+	/** The hosted tab's relaunch continuation ended: a restart for the new omp that waited on it runs now. */
+	ompRestartIfWaiting(resumeId: string): void {
+		const tab = this.#byResume(resumeId);
+		if (tab && this.#resume?.relaunchContinuation(resumeId) !== "after_restore") this.#scheduleOmpRestart(tab);
 	}
 
 	/** A hosted turn ended on a tab that waits for the new omp (a tick later: see SidecarPool). */

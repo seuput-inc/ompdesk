@@ -493,6 +493,10 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "memoryTabs" => later(async move { ctx.memory_tabs().await }),
         "workspaceDirs" => later(async move { ctx.workspace_dirs().await }),
         "restartOnNewOmp" => later(async move { Ok(Value::from(ctx.restart_on_new_omp().await?)) }),
+        "ompRestartIfWaiting" => later(async move {
+            ctx.schedule_omp_restart(&p.s("tab")?);
+            Ok(Value::Null)
+        }),
         "applyExtensionUpdate" => {
             later(async move { Ok(Value::from(ctx.apply_extension_update(&p.v("plan")).await?)) })
         }

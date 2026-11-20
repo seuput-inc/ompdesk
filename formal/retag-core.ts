@@ -65,7 +65,7 @@ const LABELS: Record<string, Find> = {
 	"ends::applies[busy]": { file: E, arm: "busy" },
 	"Tracking::track": { file: R, fn: "track" },
 	"Tracking::track[agent_start]": { file: R, after: "track", block: 'Some("agent_start") => {' },
-	"Tracking::track[agent_end]": { file: R, after: "track", block: 'Some("agent_end") if ended => {' },
+	"Tracking::track[agent_end]": { file: R, after: "track", block: 'Some("agent_end")' },
 	"RunState::settle": { file: R, fn: "settle" },
 	"Ctx::note_stopped": { file: `${CORE}pool/api.rs`, fn: "note_stopped" },
 	"Ctx::note_counter": { file: `${CORE}pool/api.rs`, fn: "note_counter" },

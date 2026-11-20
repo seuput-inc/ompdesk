@@ -258,25 +258,27 @@ type Answer = RpcResponse | Error | (() => Promise<RpcResponse>);
 
 /**
  * A tab's sidecar: records the commands main sends (and the timeout each was given) and answers them as scripted;
- * an `Error` answer rejects like the RPC client's timeout; `setStatus` moves it like a spawn.
+ * an `Error` answer rejects like the RPC client's timeout; `setStatus` moves it like a spawn; `setConnected(false)`
+ * drops its RPC client as a restart does until the next omp is up.
  */
 function fakeSidecar(answers: Partial<Record<string, Answer>> = {}, status = "ready") {
 	const commands: RpcCommand[] = [];
 	const timeouts: Array<[string, number | undefined]> = [];
 	const events = new EventEmitter();
+	const client = {
+		command: async (cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> => {
+			commands.push(cmd);
+			timeouts.push([cmd.type, timeoutMs]);
+			const answer = answers[cmd.type];
+			if (answer instanceof Error) throw answer;
+			if (typeof answer === "function") return answer();
+			return answer ?? { type: "response", command: cmd.type, success: true, data: {} };
+		},
+	};
 	const sidecar = Object.assign(events, {
 		status,
 		statusPayload: { status } as { status: string; sessionHeld?: true },
-		rpcClient: {
-			command: async (cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> => {
-				commands.push(cmd);
-				timeouts.push([cmd.type, timeoutMs]);
-				const answer = answers[cmd.type];
-				if (answer instanceof Error) throw answer;
-				if (typeof answer === "function") return answer();
-				return answer ?? { type: "response", command: cmd.type, success: true, data: {} };
-			},
-		},
+		rpcClient: client as typeof client | null,
 	});
 	const setStatus = (next: string, detail: { sessionHeld?: true } = {}) => {
 		sidecar.status = next;
@@ -288,6 +290,9 @@ function fakeSidecar(answers: Partial<Record<string, Answer>> = {}, status = "re
 		commands,
 		timeouts,
 		setStatus,
+		setConnected: (connected: boolean) => {
+			sidecar.rpcClient = connected ? client : null;
+		},
 		listeners: () => events.listenerCount("status"),
 	};
 }
@@ -316,6 +321,8 @@ interface Harness {
 	pool: ResumePool;
 	/** Moves the tab's sidecar to another status (a spawn becoming ready, a crash). */
 	setStatus: (status: string, detail?: { sessionHeld?: true }) => void;
+	/** Drops or gives back the sidecar's RPC client (a restart drops it until the next omp is up). */
+	setConnected: (connected: boolean) => void;
 	/** How many `status` listeners the resume left on the sidecar. */
 	statusListeners: () => number;
 	/** Every `setScheduledRetry` call the resume made, in order (`undefined` = cleared). */
@@ -368,7 +375,10 @@ function setup(
 	const logs: Array<[string, ResumeLogDetails]> = [];
 	const moves = new MovesInFlight();
 	const goals: Array<[string, GoalSettlement]> = [];
-	const { sidecar, commands, timeouts, setStatus, listeners } = fakeSidecar(options.answers, options.status);
+	const { sidecar, commands, timeouts, setStatus, setConnected, listeners } = fakeSidecar(
+		options.answers,
+		options.status,
+	);
 	const net = {
 		online: options.online ?? true,
 		wake: options.waitAfterWake ?? false,
@@ -462,6 +472,7 @@ function setup(
 		resume,
 		pool,
 		setStatus,
+		setConnected,
 		statusListeners: listeners,
 		retries,
 		timers,
@@ -1290,6 +1301,63 @@ describe("TurnResume launch", () => {
 			expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
 			expect(h.goals).toEqual([["restored", "none"]]);
 
+			h.facts[0] = fact({ tabId: "restored", running: true });
+			h.resume.sync();
+			h.facts[0] = fact({ tabId: "restored", running: false });
+			h.resume.sync();
+			expect(h.store.read()).toEqual([]);
+		});
+
+		it("a restore an omp update's restart cuts (the bridge closed under it) keeps the marker and goes again at the new omp's ready", async () => {
+			// The Mac mini, 19 Nov 2026: the launch's omp update restarted the idle tab while its restore ran. The local
+			// handler's failure reaches the core as a response (`runLocalCommand`), not a throw; no omp answered it.
+			const cut: RpcResponse = {
+				type: "response",
+				command: "restore_interrupted",
+				success: false,
+				error: "GUI bridge closed",
+				code: "bridge_unavailable",
+			};
+			let restores = 0;
+			h = setup({
+				answers: {
+					restore_interrupted: () => {
+						if (++restores > 1) return Promise.resolve(RESTORED);
+						// The update finishes while the restore is on its way: the tab's omp is replaced under it, and the
+						// sidecar has no RPC client until the next omp is up.
+						h.setStatus("starting");
+						h.setConnected(false);
+						return Promise.resolve(cut);
+					},
+				},
+			});
+			new InterruptedTurnStore(h.file).write([marker()]);
+			h.facts.push(fact({ tabId: "restored", running: false }));
+			h.resume.launch();
+			await settle();
+			// Only the restore reached the omp; stock's retry found no connection.
+			expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+			expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
+			expect(h.goals).toEqual([]);
+			expect(h.logs.at(-1)).toEqual([
+				"continue",
+				expect.objectContaining({
+					restoreCode: "bridge_unavailable",
+					retryError: "the tab has no omp connection",
+					started: false,
+					attempt: 1,
+					retrying: true,
+				}),
+			]);
+
+			// The new omp is up: the continuation goes again on it.
+			h.setConnected(true);
+			h.setStatus("ready");
+			await settle();
+			expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted", "restore_interrupted"]);
+			expect(h.logs.at(-1)).toEqual(["continue", expect.objectContaining({ restored: "turn", started: true })]);
+			// The marker leaves only once the restored turn really runs.
+			expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
 			h.facts[0] = fact({ tabId: "restored", running: true });
 			h.resume.sync();
 			h.facts[0] = fact({ tabId: "restored", running: false });

@@ -1164,6 +1164,41 @@ describe("SidecarPool restartOnNewOmp (omp updated on this computer)", () => {
 		await tick();
 		expect(b.restartArgs).toHaveLength(before);
 	});
+
+	it("waits for a tab whose relaunch continuation is owed, and restarts it once the continuation ended without a turn", async () => {
+		const { pool, a } = tabs();
+		let owed = true;
+		pool.continuationOwed = tab => tab === "tab-a" && owed;
+		const before = a.restartArgs.length;
+		expect(pool.restartOnNewOmp()).toBe(1);
+		// Still owed: nothing restarts the omp its restore may be on its way to.
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs).toHaveLength(before);
+		owed = false;
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs.slice(before)).toEqual([{ cwd: undefined, sessionPath: "/sessions/a.jsonl" }]);
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs).toHaveLength(before + 1);
+	});
+
+	it("restarts a tab whose restored turn started only once that turn ends", async () => {
+		const { pool, a } = tabs();
+		let owed = true;
+		pool.continuationOwed = tab => tab === "tab-a" && owed;
+		const before = a.restartArgs.length;
+		pool.restartOnNewOmp();
+		a.emitAgentEvents(["agent_start"]);
+		owed = false;
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs).toHaveLength(before);
+		a.emitAgentEvents(["agent_end"]);
+		await tick();
+		expect(a.restartArgs.slice(before)).toEqual([{ cwd: undefined, sessionPath: "/sessions/a.jsonl" }]);
+	});
 });
 
 describe("SidecarPool releaseIdle (a quiet tab gives its omp back while memory is short)", () => {
