@@ -11,6 +11,15 @@ pub mod notification;
 #[path = "../../shell/src/tray.rs"]
 pub mod tray;
 
+#[cfg(target_os = "macos")]
+fn set_tray_image(
+    tray: &tray_icon::TrayIcon,
+    icon: Option<tray_icon::Icon>,
+    template: bool,
+) -> tray_icon::Result<()> {
+    tray.set_icon_with_as_template(icon, template)
+}
+
 pub fn dispatch(call: Call) -> Option<Call> {
     let handler: fn(Call) = match call.method.split_once('.').map(|(namespace, _)| namespace) {
         Some("menu") => menu::handle,

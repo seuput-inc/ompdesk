@@ -11,7 +11,7 @@ use std::sync::Once;
 use serde_json::{Value, json};
 use shell_core::menu_model::{self, Item};
 use shell_core::tray_image;
-use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconAttributes, TrayIconEvent};
 
 use crate::host::{self, Call};
 use crate::menu;
@@ -84,22 +84,19 @@ fn create(call: Call) {
         return call.err("invalid", format!("tray.create: tray {id} exists"));
     }
     ensure_handler();
-    let mut builder = TrayIconBuilder::new().with_id(id.to_string());
-    builder = match icon {
+    let attrs = TrayIconAttributes {
         #[cfg(target_os = "macos")]
-        Some(icon) if call.params["template"] == true => builder.with_icon_templated(icon),
-        Some(icon) => builder.with_icon(icon),
-        None => builder,
+        icon_is_template: icon.is_some() && call.params["template"] == true,
+        icon,
+        tooltip: call
+            .params
+            .get("tooltip")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned),
+        ..Default::default()
     };
-    if let Some(tooltip) = call
-        .params
-        .get("tooltip")
-        .and_then(Value::as_str)
-        .filter(|t| !t.is_empty())
-    {
-        builder = builder.with_tooltip(tooltip);
-    }
-    match builder.build() {
+    match TrayIcon::with_id(id.to_string(), attrs) {
         Ok(icon) => {
             TRAYS.with(|t| t.borrow_mut().insert(id, Tray { icon, menu: None }));
             call.ok(json!({}));
@@ -127,13 +124,10 @@ fn op(call: Call) {
         "setImage" => icon_of(args.get("images").unwrap_or(&Value::Null)).and_then(|icon| {
             with_tray(id, |tray| {
                 #[cfg(target_os = "macos")]
-                if args["template"] == true {
-                    return tray
-                        .icon
-                        .set_icon_templated(icon)
-                        .map_err(|e| e.to_string());
-                }
-                tray.icon.set_icon(icon).map_err(|e| e.to_string())
+                let result = super::set_tray_image(&tray.icon, icon, args["template"] == true);
+                #[cfg(not(target_os = "macos"))]
+                let result = tray.icon.set_icon(icon);
+                result.map_err(|e| e.to_string())
             })
         }),
         "setContextMenu" => set_context_menu(id, &args),

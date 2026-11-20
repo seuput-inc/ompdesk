@@ -17,9 +17,9 @@ fn ico_payload(bytes: &[u8]) -> Option<(&[u8], ImageFormat)> {
         return None;
     }
     let table_end = 6 + count * 16;
-    bytes.get(..table_end)?;
+    let (entries, _) = bytes.get(6..table_end)?.as_chunks::<16>();
     let mut best = None;
-    for (index, entry) in bytes[6..table_end].chunks_exact(16).enumerate() {
+    for (index, entry) in entries.iter().enumerate() {
         let width = if entry[0] == 0 {
             256
         } else {

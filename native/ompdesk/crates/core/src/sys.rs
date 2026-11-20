@@ -1374,10 +1374,8 @@ mod process_list {
 
     /// UTF-16 units out of little-endian bytes (Windows runs little-endian only).
     fn units(bytes: &[u8]) -> Vec<u16> {
-        bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect()
+        let (pairs, _) = bytes.as_chunks::<2>();
+        pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect()
     }
 
     fn word(bytes: &[u8], at: usize) -> Option<usize> {
