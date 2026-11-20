@@ -48,7 +48,14 @@ export default function (pi) {
    // The parent session's model: one no role here resolves to, so inheriting it would show.
    const PARENT = sel(chat.find(model => ![A, B, SLOW].includes(sel(model))));
    const roles = async () => Object.fromEntries((await methods.model_roles({}, env)).roles.map(role => [role.id, role]));
-   const set = (role, value) => methods.model_role_set({ role, modelId: value }, env);
+   const set = async (role, value) => {
+    try {
+     await methods.model_role_set({ role, modelId: value }, env);
+     return null;
+    } catch (error) {
+     return error instanceof Error ? error.message : String(error);
+    }
+   };
    const picks = () => (fs.existsSync(process.env.OMP_GUI_OMPDESK_ROLES) ? JSON.parse(fs.readFileSync(process.env.OMP_GUI_OMPDESK_ROLES, "utf8")) : null);
    const security = () => {
     const overrides = lookup("task.agentModelOverrides").get(settings);
@@ -75,7 +82,7 @@ export default function (pi) {
    out.knownHasReview = getKnownRoleIds(settings).includes("review");
    out.securityEmpty = security();
 
-   await set("review", A);
+   out.setError = await set("review", A);
    all = await roles();
    out.picked = row(all);
    out.pickedReview = resolve(["@review"]);
@@ -88,7 +95,7 @@ export default function (pi) {
    out.configUnchanged = bytes() === configBefore;
    out.globalReview = settings.getGlobalModelRole("review") ?? null;
 
-   await set("review", null);
+   out.clearError = await set("review", null);
    all = await roles();
    out.cleared = row(all);
    out.clearedReview = resolve(["@review"]);
@@ -158,6 +165,8 @@ interface Probe {
 	hook: string;
 	hookBundled: unknown;
 	hookOwn: unknown;
+	setError: string | null;
+	clearError: string | null;
 }
 
 /** The private agent dir's environment: a throwaway OpenAI key is the only credential. */
@@ -346,6 +355,7 @@ describe.skipIf(!existsSync(omp))("OMPdesk roles on stock omp", () => {
 		expect(probe.pickedReview).toBe(A);
 		expect(probe.pickedChild).toBe(A);
 		expect(probe.securityPicked).toEqual({ model: probe.SLOW, role: "slow" });
+		expect(probe.setError).toBeNull();
 		expect(probe.picks).toEqual({ review: A });
 		expect(probe.configUnchanged).toBe(true);
 		expect(probe.globalReview).toBeNull();
@@ -354,6 +364,7 @@ describe.skipIf(!existsSync(omp))("OMPdesk roles on stock omp", () => {
 		// Cleared: back on the chain, the pick gone from the file.
 		expect(probe.cleared).toMatchObject({ model: null, effective: { source: "fallback", via: "advisor" } });
 		expect(probe.clearedReview).toBe(probe.emptyReview);
+		expect(probe.clearError).toBeNull();
 		expect(probe.clearedPicks).toEqual({});
 
 		// The held tier yields to a user's own agent file of that name.
@@ -375,14 +386,16 @@ describe.skipIf(!existsSync(omp))("OMPdesk roles on stock omp", () => {
 		});
 		expect(probe.emptyReview).toBe(own);
 		expect(probe.securityEmpty.model).toBe(own);
-		// Setting and clearing the role never rewrite config.yml: the pick waits in the picks file while the user's
-		// own value stays in force.
+		// Setting and clearing the role never rewrite config.yml and never claim a change that config.yml overrides:
+		// both are refused with the value in force and where it is set, and no pick is stored to wait behind it.
+		expect(probe.setError).toContain(`modelRoles.review is set to ${own} in config.yml`);
+		expect(probe.clearError).toContain(`modelRoles.review is set to ${own} in config.yml`);
 		expect(probe.pickedReview).toBe(own);
-		expect(probe.picks).toEqual({ review: probe.A });
+		expect(probe.picks).toBeNull();
 		expect(probe.configUnchanged).toBe(true);
 		expect(probe.globalReview).toBe(own);
 		expect(probe.clearedReview).toBe(own);
-		expect(probe.clearedPicks).toEqual({});
+		expect(probe.clearedPicks).toBeNull();
 		expect(probe.configUnchangedAfterClear).toBe(true);
 		expect(probe.clearedGlobalReview).toBe(own);
 	}, 260_000);

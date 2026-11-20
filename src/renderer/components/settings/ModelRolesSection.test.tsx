@@ -217,6 +217,26 @@ describe("ModelRolesSection", () => {
 		expect(selected?.getAttribute("title")).toContain("anthropic/claude");
 	});
 
+	it("names a saved selector with a thinking suffix by its model, not as a raw custom value", async () => {
+		const roles = [{ ...ROLES[0], model: "anthropic/claude:high" }];
+		const { setModelRole } = installRpc(async () => ({ success: true, data: { roles } }));
+		useSessionStore.getState().setStatus("ready", "/repo");
+
+		await mount(<ModelRolesSection />);
+
+		const trigger = roleTrigger("Default");
+		expect(trigger?.textContent).toContain("Claude");
+		expect(trigger?.textContent).not.toContain("anthropic/claude:high");
+		await act(async () => trigger?.click());
+		const listbox = document.body.querySelector('[role="listbox"]');
+		const selected = listbox?.querySelector('[role="option"][aria-selected="true"]');
+		expect(selected?.getAttribute("title")).toBe("Claude · anthropic/claude");
+		expect(listbox?.textContent).not.toContain("anthropic/claude:high");
+		// Choosing the selected model again keeps the saved thinking level: nothing is written.
+		await act(async () => (selected as HTMLButtonElement | null | undefined)?.click());
+		expect(setModelRole).not.toHaveBeenCalled();
+	});
+
 	it("says why the list cannot refresh instead of claiming no roles are configured", async () => {
 		const { getModelRoles } = installRpc();
 		// No ready sidecar: the read never happens, which is a different answer
