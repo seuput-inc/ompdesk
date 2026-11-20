@@ -817,7 +817,7 @@ export const en: Record<string, string> = {
 	"input.more.interruptImmediate": "Interrupt",
 	"input.more.interruptImmediateDesc":
 		"Interrupt running tools as soon as a steer arrives, instead of waiting for them.",
-	"input.modelLabelThinking": "Model: {model}, thinking {level}. Change model",
+	"input.modelLabelThinking": "Model and thinking level: {model} · {level}. Change model",
 	"input.modelStandIn": "This turn runs on {model} in place of {chosen}",
 	"input.modelStoodIn": "The last turn ran on {model} in place of {chosen}",
 	"input.runChip.chords": "Plan {plan} · Cycle thinking {thinking}",

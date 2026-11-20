@@ -94,8 +94,8 @@ function buttonWithLabel(label: string): HTMLButtonElement | undefined {
 }
 
 function roleTrigger(role: string): HTMLButtonElement | undefined {
-	return [...document.body.querySelectorAll("button")].find(
-		button => button.getAttribute("aria-label") === `Model for ${role}`,
+	return [...document.body.querySelectorAll("button")].find(button =>
+		button.textContent?.endsWith(` Model for ${role}`),
 	) as HTMLButtonElement | undefined;
 }
 
@@ -185,11 +185,10 @@ describe("ModelRolesSection", () => {
 			if (original) Object.defineProperty(globalThis, "navigator", original);
 		}
 
-		// Each role's picker is named after the role.
-		const pickers = [...document.body.querySelectorAll("button[aria-label]")].map(
-			button => button.getAttribute("aria-label") ?? "",
+		const pickers = [...document.body.querySelectorAll("button[aria-haspopup=listbox]")].map(
+			button => button.textContent,
 		);
-		expect(pickers).toEqual(expect.arrayContaining(["기본 모델", "이미지 생성 모델"]));
+		expect(pickers).toEqual(expect.arrayContaining(["Claude 기본 모델", "기본값(카탈로그) 이미지 생성 모델"]));
 		expect(document.body.textContent).not.toContain("Image generation");
 	});
 

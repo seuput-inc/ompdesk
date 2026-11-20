@@ -198,6 +198,8 @@ interface ModelValueSelectBaseProps {
 	noun?: string;
 	/** Accessible name of the trigger when no visible label names it. */
 	ariaLabel?: string;
+	/** Context appended to the trigger's visible value in its accessible name. */
+	labelSuffix?: string;
 	/** id of the trigger, so a field's `<label htmlFor>` names and focuses it. */
 	id?: string;
 	/** Trigger tooltip (e.g. why it is disabled). */
@@ -237,6 +239,7 @@ export function ModelValueSelect({
 	allowCustom,
 	noun: nounOverride,
 	ariaLabel,
+	labelSuffix,
 	id,
 	title,
 	clearLabel,
@@ -518,6 +521,7 @@ export function ModelValueSelect({
 						<OptionLabel option={shownOption ?? { value }} />
 					</span>
 				)}
+				{labelSuffix && <span className="sr-only"> {labelSuffix}</span>}
 				{notice !== undefined && (
 					<TriangleAlert aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-warning)" />
 				)}

@@ -1266,8 +1266,8 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 			await dialog.getByRole("option", { name: /Sonnet 4\.5/ }).click();
 			await expect(dialog).toBeHidden();
 			// Beside the provider's mark the chip drops the brand word the mark draws (`chipModelName`).
-			await expect(page.locator("[data-model-chip]")).toContainText("Sonnet 4.5");
-			await expect(page.locator("[data-model-chip]")).toHaveAttribute("aria-label", /Claude Sonnet 4\.5/);
+			await expect(page.locator("[data-model-chip] .omp-composer-model-label")).toHaveText("Sonnet 4.5");
+			await expect(page.locator("[data-model-chip]")).toHaveAccessibleName(/Claude Sonnet 4\.5/);
 			await expect.poll(() => flowFModelId(page, tabId)).toBe("claude-sonnet-4-5");
 		});
 

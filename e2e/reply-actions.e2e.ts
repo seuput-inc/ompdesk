@@ -110,7 +110,9 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(page.locator("[data-model-chip] .omp-composer-effort")).toHaveText(
 					`· ${text.autoHigh.split(" · ")[0]}`,
 				);
-				await expect(page.locator("[data-model-chip]")).toHaveAttribute("aria-label", new RegExp(text.autoHigh));
+				await expect(page.locator("[data-model-chip]")).toHaveAccessibleName(
+					new RegExp(`Local fixture · ${text.autoHigh}`),
+				);
 
 				// CJK: the bold survives glued Korean; the bare URL stops before it.
 				await expect(reply.locator("strong", { hasText: "0.118%" })).toHaveCount(1);
