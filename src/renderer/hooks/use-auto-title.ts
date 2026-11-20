@@ -6,10 +6,10 @@
  * inline sentence under the field, never a toast.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { z } from "zod";
 import type { RpcResponse } from "../../shared/rpc-types";
 import { inlineFailure } from "../lib/error-detail";
 import { translate } from "../lib/i18n";
+import { z } from "../lib/rpc-schema";
 
 export interface AutoTitle {
 	/** A request is running: the button shows a spinner and the editor stays put. */
@@ -22,7 +22,7 @@ export interface AutoTitle {
 }
 
 /** `regenerate_session_title` response data (resources/gui-bridge/modes/auto-title-contracts.ts `TitleRegenerateResult`). */
-const regeneration = z.object({ title: z.string().nullable(), reason: z.enum(["none", "superseded"]).optional() });
+const regeneration = z.object({ title: z.nullable(z.string()), reason: z.optional(z.enum(["none", "superseded"])) });
 
 /** What a response holds: the saved title, or the localized sentence for why there is none. */
 export function regenerationOutcome(response: RpcResponse): { title: string } | { failure: string } {
