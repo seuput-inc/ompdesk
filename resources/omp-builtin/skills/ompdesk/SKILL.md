@@ -10,8 +10,8 @@ Each OMPdesk session is a tab in one of the user's windows, on this computer or 
 ## Tools
 
 - `ompdesk_sessions` — `scope` (`window` default, `app`, `stored`), `device`, `folder`, `status`, `mine`, `query`, `limit`: state, step, subagents, todos, your own marked, and paired devices.
-- `ompdesk_session_open` — `message`, `folder`, `device`, `model`, `mode`, `worktree`, `throwaway` (a one-off: closed and deleted once its Result: ok answer reaches you), `advisor` (`false`: no advisor for that session; default off on `model: review`), `reopen` (`restore` with it); `sessions` for several at once; `show`.
-- `ompdesk_session_send` — `session`, `message` (a running session reads it at its next step; nothing holds it until the turn ends; a message starting with `/` goes as text, never as a command), `request_id`, `attachments` (pictures and files along with it: skill://ompdesk/references/orchestration.md).
+- `ompdesk_session_open` — `message`, `folder`, `device`, `model`, `mode`, `worktree`, `throwaway` (a one-off: closed and deleted once its Result: ok answer reaches you), `advisor` (false: no advisor for that session; off by default when `model` is the review role), `reopen` (`restore` with it); `sessions` for several at once; `show`.
+- `ompdesk_session_send` — `session`, `message` (a running session reads it at its next step; nothing holds it until the turn ends; a message starting with a slash goes as text, never as a command), `request_id`, `attachments` (pictures and files along with it: skill://ompdesk/references/orchestration.md).
 - `ompdesk_session_result` — `session` or `sessions`, `wait`, `until` (`all`, `any`), `timeout_seconds`.
 - `ompdesk_session_read` — `session` (open or saved), `limit`, `before`: transcript pages, newest first.
 - `ompdesk_session_answer` — `session`, `request`, `choice` / `approve` / `text` / `answers`, `attachments` (reach it first as a note, then the answer).
