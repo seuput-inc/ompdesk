@@ -1249,7 +1249,14 @@ async fn while_off_every_cross_project_call_answers_as_it_did_before_the_boundar
         // Each crosses into another project and goes through, as it always did.
         assert!(!new.is_error, "{tool} {args}: {}", new.text);
     }
-    let (old, new) = (methods(&asked_before), methods(&asked_now));
+    // A wait reads main's state as often as its clock lets it (`state`, 6 or 7 times on a runner): not compared.
+    let asks = |asked: &Asked| -> Vec<String> {
+        methods(asked)
+            .into_iter()
+            .filter(|method| method != "state")
+            .collect()
+    };
+    let (old, new) = (asks(&asked_before), asks(&asked_now));
     assert_eq!(new, old);
     for method in ["project", "boundaryLog"] {
         assert!(!new.iter().any(|asked| asked == method), "{method}");
