@@ -4,8 +4,7 @@
  * click still folds the section; on touch a long press arms it, so a tap folds and a swipe scrolls. Nothing moves while
  * dragging: an accent line marks where the section lands and a chip with its name follows the pointer, with no drop
  * animation. The keyboard path is Alt+↑/↓ on a focused header, and the header's context menu (right click, Shift+F10)
- * has Move up / Move down. The order lives in the device-local `sidebarFolds` record (`deviceOrder`), so a paired web
- * page keeps its own order and the first frame paints it from the mirror.
+ * has Move up / Move down. Only an explicit move sends a command. The host's next state supplies the order.
  */
 import {
 	type CollisionDetection,
@@ -44,7 +43,10 @@ import { moveDevice, orderDevices } from "../../../lib/device-order";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { reorderProjects } from "../../../lib/project-order";
-import { useSidebarFolds } from "../../../stores/sidebar-folds";
+import { readCachedDeviceOrder } from "../../../lib/sidebar-memory";
+import { type RemoteStore, useRemoteStore } from "../../../stores/remote";
+import { toastError } from "../../../stores/toast";
+import { pageMayUse, webRuntime } from "../../../web/runtime";
 import { anchorFromEvent, ContextMenu, type ContextMenuAnchor } from "../../common";
 
 export interface DeviceSection {
@@ -102,46 +104,74 @@ class MouseOrPenSensor extends PointerSensor {
 	];
 }
 
+function canMoveDevice(store: RemoteStore): boolean {
+	return (
+		store.state?.deviceSectionOrder !== undefined &&
+		!store.awaitingReconnectState &&
+		(webRuntime()?.connectionState() ?? "open") === "open" &&
+		pageMayUse("workspace") &&
+		pageMayUse("settings-write")
+	);
+}
+
 export function SidebarDeviceSections({ sections }: { sections: readonly DeviceSection[] }) {
 	const t = useT();
 	const touch = useShellInput() === "touch";
-	const saved = useSidebarFolds(s => s.deviceOrder);
+	const projected = useRemoteStore(s => (s.state === null ? null : s.state.deviceSectionOrder));
+	const editable = useRemoteStore(canMoveDevice);
+	const [firstOrder] = useState(() => (projected === null ? readCachedDeviceOrder() : []));
 	const byId = new Map(sections.map(section => [section.id, section]));
-	const order = orderDevices(
-		sections.map(section => section.id),
-		saved,
-	);
+	const order =
+		projected === null
+			? orderDevices([...byId.keys()], firstOrder)
+			: projected?.length
+				? projected
+				: [...byId.keys()];
 	const [active, setActive] = useState<string | null>(null);
 	const [drop, setDrop] = useState<Drop | null>(null);
 	const [menu, setMenu] = useState<{ id: string; anchor: ContextMenuAnchor } | null>(null);
-	// What a keyboard or menu move tells a screen reader (dnd-kit announces only pointer drags).
+	// Announce a move only once main accepts it, including one made by dragging.
 	const [announcement, setAnnouncement] = useState("");
 	const listRef = useRef<HTMLDivElement>(null);
 	// The header a keyboard move left focused: re-focused and kept in view, since moving a node can drop its focus.
-	const refocus = useRef<string | null>(null);
+	const refocus = useRef<{ id: string; index: number } | null>(null);
 	const sensors = useSensors(
 		useSensor(MouseOrPenSensor, { activationConstraint: { distance: 6 } }),
 		useSensor(TouchSensor, { activationConstraint: { delay: TOUCH_HOLD_MS, tolerance: TOUCH_TOLERANCE_PX } }),
 	);
 
 	useLayoutEffect(() => {
-		const id = refocus.current;
-		if (id === null) return;
+		const pending = refocus.current;
+		if (!pending || order[pending.index] !== pending.id) return;
 		refocus.current = null;
 		const header = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-device-drag-handle]") ?? [])].find(
-			element => element.dataset.deviceDragHandle === id,
+			element => element.dataset.deviceDragHandle === pending.id,
 		);
+		if (document.activeElement && document.activeElement !== document.body && document.activeElement !== header)
+			return;
 		header?.scrollIntoView?.({ block: "nearest" });
 		if (header && document.activeElement !== header) header.focus({ preventScroll: true });
 	});
 
-	const move = (id: string, delta: number) => {
-		const next = moveDevice(order, id, delta);
-		if (next.join("\n") === order.join("\n")) return;
-		refocus.current = id;
-		setAnnouncement(t("sidebar.deviceOrder.moved", { name: label(id) }));
-		useSidebarFolds.getState().setDeviceOrder(next);
+	const saveMove = async (id: string, next: string[], focusHeader: boolean) => {
+		const store = useRemoteStore.getState();
+		if (
+			!canMoveDevice(store) ||
+			projected !== store.state?.deviceSectionOrder ||
+			next.every((item, i) => item === order[i])
+		)
+			return;
+		const focus = focusHeader ? { id, index: next.indexOf(id) } : null;
+		refocus.current = focus;
+		try {
+			await window.omp.remote.setDeviceSectionOrder(next);
+			setAnnouncement(t("sidebar.deviceOrder.moved", { name: label(id) }));
+		} catch (error) {
+			if (refocus.current === focus) refocus.current = null;
+			toastError({ title: t("sidebar.deviceOrder.failed"), error });
+		}
 	};
+	const move = (id: string, delta: number) => void saveMove(id, moveDevice(order, id, delta), true);
 
 	const onDragStart = ({ active: dragged }: DragStartEvent) => {
 		setActive(String(dragged.id));
@@ -159,7 +189,7 @@ export function SidebarDeviceSections({ sections }: { sections: readonly DeviceS
 	const onDragEnd = ({ active: dragged, over }: DragEndEvent) => {
 		finish();
 		if (over && over.id !== dragged.id)
-			useSidebarFolds.getState().setDeviceOrder(reorderProjects(order, String(dragged.id), String(over.id)));
+			void saveMove(String(dragged.id), reorderProjects(order, String(dragged.id), String(over.id)), false);
 	};
 
 	const label = (id: unknown) => byId.get(String(id))?.label ?? String(id);
@@ -178,7 +208,7 @@ export function SidebarDeviceSections({ sections }: { sections: readonly DeviceS
 							over ? t("sidebar.deviceOrder.over", { name: label(over.id) }) : undefined,
 						onDragEnd: ({ active: item, over }) =>
 							over && over.id !== item.id
-								? t("sidebar.deviceOrder.moved", { name: label(item.id) })
+								? undefined
 								: t("sidebar.deviceOrder.cancelled", { name: label(item.id) }),
 						onDragCancel: ({ active: item }) => t("sidebar.deviceOrder.cancelled", { name: label(item.id) }),
 					},
@@ -199,6 +229,7 @@ export function SidebarDeviceSections({ sections }: { sections: readonly DeviceS
 							dragging={active === id}
 							drop={drop?.over === id ? drop.edge : undefined}
 							first={index === 0}
+							enabled={editable}
 							id={id}
 							key={id}
 							onKeyMove={delta => move(id, delta)}
@@ -211,7 +242,7 @@ export function SidebarDeviceSections({ sections }: { sections: readonly DeviceS
 				})}
 				<DragChip label={label} />
 			</DndContext>
-			{menu && (
+			{menu && editable && (
 				<ContextMenu
 					ariaLabel={t("sidebar.deviceOrder.menu", { name: label(menu.id) })}
 					items={[
@@ -248,6 +279,7 @@ export function SidebarDeviceSections({ sections }: { sections: readonly DeviceS
 function DeviceSlot({
 	id,
 	first,
+	enabled,
 	dragging,
 	drop,
 	touch,
@@ -257,6 +289,7 @@ function DeviceSlot({
 }: {
 	id: string;
 	first: boolean;
+	enabled: boolean;
 	dragging: boolean;
 	drop: Drop["edge"] | undefined;
 	touch: boolean;
@@ -264,8 +297,8 @@ function DeviceSlot({
 	onMenu: (anchor: ContextMenuAnchor) => void;
 	children: ReactNode;
 }) {
-	const { setNodeRef: setDragRef, listeners, attributes } = useDraggable({ id });
-	const { setNodeRef: setDropRef } = useDroppable({ id });
+	const { setNodeRef: setDragRef, listeners, attributes } = useDraggable({ id, disabled: !enabled });
+	const { setNodeRef: setDropRef } = useDroppable({ id, disabled: !enabled });
 	const handle: DeviceHeaderHandle = {
 		ref: setDragRef,
 		...(listeners as Pick<DeviceHeaderHandle, "onPointerDown" | "onTouchStart">),
@@ -312,7 +345,7 @@ function DeviceSlot({
 					data-device-drop-indicator={drop}
 				/>
 			)}
-			<HeaderHandleContext.Provider value={handle}>{children}</HeaderHandleContext.Provider>
+			<HeaderHandleContext.Provider value={enabled ? handle : undefined}>{children}</HeaderHandleContext.Provider>
 		</div>
 	);
 }

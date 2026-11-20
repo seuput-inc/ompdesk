@@ -37,13 +37,10 @@ interface SidebarFoldsStore extends SidebarFolds {
 	setUsageCollapsed: (collapsed: boolean) => void;
 	/** One provider's accounts in the usage block, folded or open. */
 	setUsageGroupFolded: (providerId: string, folded: boolean) => void;
-	/** Remembers the device sections' order (top first). */
-	setDeviceOrder: (order: readonly string[]) => void;
 	/** Drops the folds of groups `exists` refuses. Call only once the folders are known (a live read answered). */
 	pruneGroups: (exists: (cwd: string) => boolean) => void;
 	/**
-	 * Takes the host list a read just gave: remembers it for the next first frame and drops the folds and order entries
-	 * of hosts it no longer names (this device always stays). Call only once the host list has loaded.
+	 * Remembers the latest live host list for first paint and drops folds of hosts it no longer names.
 	 */
 	syncHosts: (hosts: readonly KnownHost[]) => void;
 	/** Reads the saved pref once; the mirror painted the first frame, the pref wins when it differs. */
@@ -63,7 +60,6 @@ function saved(state: SidebarFolds): SidebarFolds {
 		starterOpen: state.starterOpen,
 		usageCollapsed: state.usageCollapsed,
 		usageGroups: state.usageGroups,
-		deviceOrder: state.deviceOrder,
 		knownHosts: state.knownHosts,
 	};
 }
@@ -99,9 +95,6 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 		},
 		setUsageGroupFolded: (providerId, folded) =>
 			edit({ usageGroups: withFlag(get().usageGroups, providerId, folded) }),
-		setDeviceOrder: order => {
-			if (order.join("\n") !== get().deviceOrder.join("\n")) edit({ deviceOrder: [...order] });
-		},
 		pruneGroups: exists => {
 			const { groups } = get();
 			const kept = Object.entries(groups).filter(([cwd]) => exists(cwd));
@@ -110,12 +103,11 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 			writeSidebarFolds(saved(get()));
 		},
 		syncHosts: hosts => {
-			const { devices, deviceGroups, deviceOrder, knownHosts, chats, deviceColors, deviceArchived } = get();
+			const { devices, deviceGroups, knownHosts, chats, deviceColors, deviceArchived } = get();
 			const ids = new Set(hosts.map(host => host.id));
 			const known = (deviceId: string) => deviceId === LOCAL_DEVICE || ids.has(deviceId);
 			const keptDevices = Object.entries(devices).filter(([deviceId]) => known(deviceId));
 			const keptGroups = Object.entries(deviceGroups).filter(([key]) => known(key.slice(0, key.indexOf("\n"))));
-			const keptOrder = deviceOrder.filter(known);
 			const keptChats = Object.entries(chats).filter(([deviceId]) => known(deviceId));
 			const keptColors = Object.entries(deviceColors).filter(([deviceId]) => known(deviceId));
 			const keptArchived = Object.entries(deviceArchived).filter(([deviceId]) => known(deviceId));
@@ -125,7 +117,6 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 				keptColors.length === Object.keys(deviceColors).length &&
 				keptArchived.length === Object.keys(deviceArchived).length &&
 				keptGroups.length === Object.keys(deviceGroups).length &&
-				keptOrder.length === deviceOrder.length &&
 				JSON.stringify(hosts) === JSON.stringify(knownHosts)
 			)
 				return;
@@ -135,7 +126,6 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 				deviceColors: Object.fromEntries(keptColors),
 				deviceArchived: Object.fromEntries(keptArchived),
 				deviceGroups: Object.fromEntries(keptGroups),
-				deviceOrder: keptOrder,
 				knownHosts: [...hosts],
 			});
 			writeSidebarFolds(saved(get()));

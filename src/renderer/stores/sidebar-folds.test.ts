@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LOCAL_DEVICE } from "../lib/sidebar-memory";
+import { cacheDeviceOrder, LOCAL_DEVICE, readCachedDeviceOrder } from "../lib/sidebar-memory";
 
 const saved = new Map<string, unknown>();
 const local = new Map<string, string>();
@@ -111,29 +111,23 @@ describe("remembered folds", () => {
 		expect(next.folds.getState().devices).toEqual({ [LOCAL_DEVICE]: true, "dev-live": true });
 	});
 
-	it("keeps the device order across a relaunch, first frame included, and drops an unpaired device", async () => {
+	it("keeps the last shared order for first paint, independent of fold hydration and host discovery", async () => {
+		cacheDeviceOrder(["dev-b", LOCAL_DEVICE]);
+		expect(set).not.toHaveBeenCalled();
+		saved.set("sidebarFolds", { deviceOrder: [LOCAL_DEVICE, "dev-b"], starterOpen: true });
 		const { folds } = await launch();
-		folds.getState().setDeviceOrder(["dev-b", LOCAL_DEVICE, "dev-gone"]);
-		expect(set).toHaveBeenLastCalledWith(
-			"sidebarFolds",
-			expect.objectContaining({ deviceOrder: ["dev-b", LOCAL_DEVICE, "dev-gone"] }),
-		);
-
-		// Before any pref read, the mirror already paints the order.
-		let next = await launch();
-		expect(next.folds.getState().deviceOrder).toEqual(["dev-b", LOCAL_DEVICE, "dev-gone"]);
-
-		next.folds.getState().syncHosts([{ id: "dev-b", name: "b" }]);
-		expect(next.folds.getState().deviceOrder).toEqual(["dev-b", LOCAL_DEVICE]);
-		next = await launch();
-		expect(next.folds.getState().deviceOrder).toEqual(["dev-b", LOCAL_DEVICE]);
+		await folds.getState().hydrate();
+		folds.getState().syncHosts([{ id: "dev-c", name: "new" }]);
+		expect(folds.getState().starterOpen).toBe(true);
+		expect(saved.get("sidebarFolds")).not.toHaveProperty("deviceOrder");
+		expect(readCachedDeviceOrder()).toEqual(["dev-b", LOCAL_DEVICE]);
 	});
 
-	it("reads a malformed saved order as no order", async () => {
+	it("reads a legacy first-paint order until even an empty shared order replaces it", () => {
 		local.set("omp.sidebarFolds", JSON.stringify({ deviceOrder: ["dev-a", 3, "", "dev-a", null] }));
-		expect((await launch()).folds.getState().deviceOrder).toEqual(["dev-a"]);
-		local.set("omp.sidebarFolds", JSON.stringify({ deviceOrder: "dev-a" }));
-		expect((await launch()).folds.getState().deviceOrder).toEqual([]);
+		expect(readCachedDeviceOrder()).toEqual(["dev-a"]);
+		cacheDeviceOrder([]);
+		expect(readCachedDeviceOrder()).toEqual([]);
 	});
 });
 

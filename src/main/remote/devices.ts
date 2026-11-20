@@ -34,6 +34,7 @@ import {
 	type SessionInfo,
 	type TailnetComputer,
 } from "../../shared/ipc-types";
+import { allowedLogin } from "../../shared/mobile-web";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import type { SchedulesState } from "../../shared/schedules";
 import type { VersionedSessionList } from "../../shared/session-list-delta";
@@ -55,6 +56,8 @@ import type { WebBlocks } from "../web/blocks-store";
 import {
 	AUTOPILOT_NOTICE_EVENT,
 	AutopilotNoticeEvent,
+	DEVICE_ORDER_CHANGED,
+	DEVICE_ORDER_EXCHANGE,
 	DEVICE_RENAME_EVENT,
 	DeviceNameSchema,
 	HOST_NAME_EVENT,
@@ -93,6 +96,7 @@ import {
 	VersionedSummariesSchema,
 } from "./app-protocol";
 import { HELLO_CAPABILITIES, RemoteClient, RemoteError, type WakeTrigger } from "./client";
+import { DeviceSectionOrder } from "./device-section-order";
 import { type HostMachineInfo, RemoteHost } from "./host-server";
 import type { LocalHostServices } from "./host-services";
 import { HostSessionList } from "./host-session-list";
@@ -265,6 +269,7 @@ class PeerMirror implements QuotaStore {
 export class RemoteDevices {
 	readonly #deps: RemoteDevicesDeps;
 	readonly #identity: Identity;
+	readonly #deviceOrder: DeviceSectionOrder;
 	readonly #sharing: Promise<SharingCore>;
 	/** The core's devices instance once open; its snapshot is what the synchronous readers here read. */
 	#core: SharingCore | null = null;
@@ -290,6 +295,7 @@ export class RemoteDevices {
 	constructor(deps: RemoteDevicesDeps) {
 		this.#deps = deps;
 		this.#identity = deps.identity;
+		this.#deviceOrder = new DeviceSectionOrder(this.deviceId, deps.prefs);
 		this.#imageBlobs = new ImageBlobCache(path.join(deps.userData, "remote-image-blobs"));
 		this.#transcripts = new TranscriptCache(path.join(deps.userData, "remote-transcripts"));
 		this.#keepAwake = new KeepAwakePolicy({
@@ -324,6 +330,11 @@ export class RemoteDevices {
 			onReopened: () => this.#peers.resend(),
 		}).then(sharing => {
 			this.#core = sharing;
+			try {
+				this.#deviceOrder.migrate(sharing.snapshot.hosts.map(host => host.deviceId));
+			} catch (error) {
+				console.warn("[remote] could not migrate the sidebar device order", error);
+			}
 			this.#told(sharing.snapshot);
 			return sharing;
 		});
@@ -403,6 +414,7 @@ export class RemoteDevices {
 		const using = new Set([...online, ...this.#deps.services.runningPeers()]);
 		const peers = this.#peers.list();
 		const forgotten = this.#deps.prefs.get(FORGOTTEN_KEY);
+		const hosts = this.#snapshot()?.hosts ?? [];
 		return {
 			tailnet: this.#snapshot()?.phase ?? "not-running",
 			host: {
@@ -425,9 +437,8 @@ export class RemoteDevices {
 				keepingAwake: this.#keepAwake.held,
 				usedBy: peers.filter(peer => using.has(peer.deviceId)).map(peer => peer.name),
 			},
-			hosts: (this.#snapshot()?.hosts ?? []).map(
-				paired => this.#hostView(paired.deviceId) ?? toHostView(paired.deviceId, paired.name),
-			),
+			...(this.#core ? { deviceSectionOrder: this.#deviceOrder.view(hosts.map(paired => paired.deviceId)) } : {}),
+			hosts: hosts.map(paired => this.#hostView(paired.deviceId) ?? toHostView(paired.deviceId, paired.name)),
 			forgotten: Array.isArray(forgotten) ? forgotten.filter(name => typeof name === "string") : [],
 			appVersion: this.#deps.appVersion,
 		};
@@ -479,6 +490,30 @@ export class RemoteDevices {
 		if (enabled === true) await this.#startHost();
 		else await this.#stopHost();
 		return this.#broadcastState();
+	}
+
+	setDeviceSectionOrder(order: unknown): void {
+		const visible = (this.#snapshot()?.hosts ?? []).map(host => host.deviceId);
+		if (this.#deviceOrder.set(order, visible)) this.#deviceOrderChanged();
+	}
+
+	#deviceOrderChanged(except?: string): void {
+		this.#broadcastState();
+		this.#host?.deviceOrderChanged(except);
+		for (const [id, link] of this.#links) {
+			if (id !== except && link.client.state === "online") void this.#exchangeDeviceOrder(id, link);
+		}
+	}
+
+	async #exchangeDeviceOrder(id: string, link: HostLink): Promise<void> {
+		try {
+			const reply = await link.client.request(DEVICE_ORDER_EXCHANGE, this.#deviceOrder.wire());
+			if (this.#links.get(id) === link && link.client.state === "online" && this.#deviceOrder.merge(reply))
+				this.#deviceOrderChanged(id);
+		} catch (error) {
+			// An older host does not exchange ranks; a dropped link exchanges on reconnect.
+			if (!(error instanceof RemoteError)) console.warn("[remote] could not apply the sidebar device order", error);
+		}
 	}
 
 	/**
@@ -887,6 +922,13 @@ export class RemoteDevices {
 				appVersion: this.#deps.appVersion,
 				hello: this.#deps.machineInfo,
 				logLink: this.#deps.logLink,
+				exchangeDeviceOrder: (peer, ranks) => {
+					const allowed = this.#deps.allowedUsers();
+					if (!this.allowsPeer(peer.deviceId) || (allowed.length > 0 && !allowedLogin(allowed, peer.login)))
+						throw codedError("remote_blocked", "This device may not exchange sidebar order");
+					if (this.#deviceOrder.merge(ranks)) this.#deviceOrderChanged(peer.deviceId);
+					return this.#deviceOrder.wire();
+				},
 				renameSelf: (name, by) => {
 					console.info(`[remote] ${by.name} (${by.deviceId}) renamed this computer to "${name}"`);
 					this.setDeviceName(name);
@@ -950,6 +992,7 @@ export class RemoteDevices {
 			}
 			this.#broadcastState();
 			if (state !== "online") return;
+			void this.#exchangeDeviceOrder(deviceId, link);
 			link.closes.flush(rtab => client.request("tab.close", { rtab }));
 			void this.#readSummaries(deviceId, link);
 			void this.#readRemoteOpened(link);
@@ -959,6 +1002,10 @@ export class RemoteDevices {
 			for (const listener of this.#hostOnline) listener(deviceId);
 		});
 		client.on("event", (event, data) => {
+			if (event === DEVICE_ORDER_CHANGED) {
+				void this.#exchangeDeviceOrder(deviceId, link);
+				return;
+			}
 			if (event === SESSIONS_CHANGED_EVENT) {
 				link.sessions.hostChanged(data);
 				return;

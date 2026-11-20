@@ -13,6 +13,7 @@ import type { SessionSummary } from "../../shared/session-summary";
 import { stopCore } from "../core/process";
 import { advanceCoreTimers, fakeCoreTimers, realCoreTimers } from "../core/test-clock";
 import {
+	DEVICE_ORDER_EXCHANGE,
 	MOBILE_WEB_LINK_EVENT,
 	MODELS_CHANGED_EVENT,
 	PREVIEW_RELAY_EVENT,
@@ -180,6 +181,40 @@ describe("connecting again to a host already paired", () => {
 		await vi.waitFor(() =>
 			expect(b.services.call.mock.calls.find(call => call[1] === "tab.close")?.[3]).toBe(conns[1]),
 		);
+	});
+});
+
+describe("shared sidebar device order", () => {
+	it("exchanges offline edits on reconnect and follows a host edit over that same one-way link", async () => {
+		const { a, b, hostId } = await rig.connected();
+		const clientId = a.devices.deviceId;
+		await b.devices.setHostEnabled(false);
+		await until(a, state => state.hosts[0]?.state !== "online");
+		a.devices.setDeviceSectionOrder([hostId, "local"]);
+
+		// B learns A's order while A is only an inbound peer, not a section on B's sidebar.
+		await b.devices.setHostEnabled(true);
+		await until(b, state => state.deviceSectionOrder?.[0] === "local");
+		expect(b.devices.state().deviceSectionOrder).toEqual(["local"]);
+
+		// B now also pairs A. It can render the retained position without another reorder.
+		a.fake.whois.set(LOOPBACK, { nodeId: "nSTUDIO", nodeName: "studio", login: LOGIN });
+		b.fake.peers.push(studioNode({ nodeId: "nLAPTOP", name: "laptop" }));
+		await a.devices.setHostEnabled(true);
+		await b.devices.connect("nLAPTOP");
+		await until(b, state => state.hosts[0]?.state === "online");
+		expect(b.devices.state().deviceSectionOrder).toEqual(["local", clientId]);
+		await a.devices.setHostEnabled(false);
+		await until(b, state => state.hosts[0]?.state !== "online");
+		b.devices.setDeviceSectionOrder([clientId, "local"]);
+		await until(a, state => state.deviceSectionOrder?.[0] === "local");
+		expect(a.devices.state().deviceSectionOrder).toEqual(["local", hostId]);
+	}, 20_000);
+
+	it("refuses order exchange when a connected device's login loses access", async () => {
+		const { a, b, hostId } = await rig.connected();
+		b.allowed.splice(0, 1, "other@example.com");
+		await expect(a.devices.request(hostId, DEVICE_ORDER_EXCHANGE, [])).rejects.toThrow(/remote_blocked/);
 	});
 });
 

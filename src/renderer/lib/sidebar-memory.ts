@@ -23,6 +23,7 @@ export const SIDEBAR_FOLDS_PREF = "sidebarFolds";
 export const SIDEBAR_FAMILIES_PREF = "sidebarFamilies";
 export const SIDEBAR_FOLDS_STORAGE_KEY = "omp.sidebarFolds";
 export const SIDEBAR_FAMILIES_STORAGE_KEY = "omp.sidebarFamilies";
+const DEVICE_ORDER_STORAGE_KEY = "omp.deviceSectionOrder";
 
 /**
  * Entries each fold record (and each family list) keeps, the oldest-touched going first, and the longest key kept.
@@ -56,8 +57,6 @@ export interface SidebarFolds {
 	usageCollapsed: boolean;
 	/** A provider's id → its accounts folded in the footer usage block (`SidebarUsage`). Absent = open. */
 	usageGroups: Record<string, boolean>;
-	/** Device section order the user set (`LOCAL_DEVICE` or a host's deviceId), top first; `lib/device-order.ts`. */
-	deviceOrder: string[];
 	/** The paired hosts the last host-list read named, so the first frame draws their sections before the next read. */
 	knownHosts: KnownHost[];
 }
@@ -87,7 +86,6 @@ export const EMPTY_FOLDS: SidebarFolds = {
 	starterOpen: false,
 	usageCollapsed: false,
 	usageGroups: {},
-	deviceOrder: [],
 	knownHosts: [],
 };
 
@@ -125,7 +123,6 @@ export function parseSidebarFolds(value: unknown): SidebarFolds {
 		starterOpen: record.starterOpen === true,
 		usageCollapsed: record.usageCollapsed === true,
 		usageGroups: parseFlags(record.usageGroups),
-		deviceOrder: parseDeviceOrder(record.deviceOrder),
 		knownHosts: parseKnownHosts(record.knownHosts),
 	};
 }
@@ -147,6 +144,20 @@ function parseDeviceOrder(value: unknown): string[] {
 		(id): id is string => typeof id === "string" && id.length > 0 && id.length <= KEY_MAX_CHARS,
 	);
 	return [...new Set(ids)].slice(0, FOLD_LIMIT);
+}
+
+/** First paint only. Older windows kept their last order inside the folds mirror. */
+export function readCachedDeviceOrder(): string[] {
+	const cached = readMirror(DEVICE_ORDER_STORAGE_KEY);
+	if (cached !== null) return parseDeviceOrder(cached);
+	const legacy = readMirror(SIDEBAR_FOLDS_STORAGE_KEY);
+	return parseDeviceOrder(
+		typeof legacy === "object" && legacy !== null && "deviceOrder" in legacy ? legacy.deviceOrder : null,
+	);
+}
+
+export function cacheDeviceOrder(order: readonly string[]): void {
+	writeMirror(DEVICE_ORDER_STORAGE_KEY, order);
 }
 
 function parseKnownHosts(value: unknown): KnownHost[] {
@@ -197,7 +208,7 @@ function writeMirror(key: string, value: unknown): void {
 	try {
 		localStorage.setItem(key, JSON.stringify(value));
 	} catch {
-		// No storage: the pref still carries it.
+		// First paint can fall back to defaults when storage is unavailable.
 	}
 }
 

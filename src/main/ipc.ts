@@ -2816,6 +2816,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Remote devices — this computer as a host, and the hosts it is paired with.
 	// ========================================================================
 	ipc.handle(IPC_COMMANDS.REMOTE_GET_STATE, () => remoteDevices.state());
+	ipc.handle(IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER, (_caller, order: unknown) =>
+		remoteDevices.setDeviceSectionOrder(order),
+	);
 	ipc.handle(IPC_COMMANDS.REMOTE_SET_HOST_ENABLED, (_caller, enabled: unknown) =>
 		remoteDevices.setHostEnabled(enabled === true),
 	);

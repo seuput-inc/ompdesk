@@ -406,7 +406,12 @@ describe("channel policy and grants", () => {
 		expect(channels.length).toBeGreaterThan(100);
 		for (const [channel, policy] of channels) {
 			if (policy.dir === "push" || policy.mode === "boundary") continue;
-			const only = await rig({ grants: [policy.permission] });
+			const only = await rig({
+				grants:
+					channel === IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER
+						? [policy.permission, "workspace"]
+						: [policy.permission],
+			});
 			const allowed = await call(only, channel, policy.dir === "invoke" ? "inv" : "snd");
 			if (policy.dir === "invoke") expect(allowed, channel).toMatchObject({ t: "res", ok: true });
 			else expect(only.send, channel).toHaveBeenCalledOnce();
@@ -418,6 +423,15 @@ describe("channel policy and grants", () => {
 				expect(refused, channel).toMatchObject({ ok: false, e: { code: "web_forbidden" } });
 			expect(without.send, channel).not.toHaveBeenCalled();
 		}
+	});
+
+	it("refuses device moves without access to the workspace whose sections would move", async () => {
+		const r = await rig({ grants: ["settings-write"] });
+		expect(await call(r, IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER)).toMatchObject({
+			ok: false,
+			e: { code: "web_forbidden" },
+		});
+		expect(r.invoke).not.toHaveBeenCalled();
 	});
 
 	it("never serves pairing-admin, even to a device that somehow holds it", async () => {
@@ -680,6 +694,13 @@ describe("events", () => {
 		win.webContents.send(IPC_EVENTS.REMOTE_STATE, state);
 		await r.host.flush();
 		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: IPC_EVENTS.REMOTE_STATE, d: state }]);
+	});
+
+	it("does not push the remote sidebar or its device IDs without the workspace grant needed to read it", async () => {
+		const r = await rig({ grants: ["device-self"] });
+		r.windows.windowFor("dev1").webContents.send(IPC_EVENTS.REMOTE_STATE, { deviceSectionOrder: ["local", "peer"] });
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toEqual([]);
 	});
 
 	it("goes to every connection of the device, and not to another device's", async () => {
