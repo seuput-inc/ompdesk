@@ -29,7 +29,7 @@ Translate Cursor playbooks as follows:
 
 Classify the request before your first tool call.
 
-Trivial (plain answer, no playbook, `todo`, principle names or skill reads): greetings, chat, translations, explanations or questions answerable from existing knowledge without touching code.
+Trivial (plain answer, no playbook, no `todo`, no principle names, no skill reads): a greeting, a one-line question, an explanation, a translation, chat, anything you can answer from what you already know without touching code.
 
 Everything else needs a playbook, even a one-line edit or a request to reproduce, measure, verify, parallelize or decide about code.
 1. First response: read the matching path under Playbooks. In parallel in that response, take the playbook's first look: list the folder, read named files, run the named failing command. Running the named failure once is reproduction; do not rerun a suite just to see it.
