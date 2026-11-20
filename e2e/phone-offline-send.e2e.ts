@@ -115,6 +115,7 @@ for (const engine of ENGINES)
 			const loads = recordPhoneLoads(phone);
 			const t0 = Date.now();
 			const workerEvents: string[] = [];
+			phone.on("pageerror", error => workerEvents.push(`+${Date.now() - t0}ms page error: ${error.message}`));
 			context.on("serviceworker", worker =>
 				workerEvents.push(`+${Date.now() - t0}ms serviceworker ${worker.url()}`),
 			);
@@ -158,6 +159,7 @@ for (const engine of ENGINES)
 						.evaluate(() => navigator.serviceWorker?.controller != null)
 						.catch(failure => String(failure));
 					await loads.attach("phone-loads");
+					await test.info().attach("serve-requests.txt", { body: link.requestLog() });
 					throw new Error(
 						[
 							String(error),
@@ -178,6 +180,10 @@ for (const engine of ENGINES)
 			// the worker's install and its activation, the worker listed the page as a client and a claim made 30 s later
 			// took it at once), and no page the person reloads that early is the point of this test.
 			await expectControlled();
+			// Successful shards keep no attachments. Print the worker and its shell responses at the first claim.
+			console.log(
+				`[${engine.name} first claim] ${await phone.evaluate(() => sessionStorage.getItem("omp.test.sw-log"))}\n${link.requestLog()}`,
+			);
 			const tabId = (await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), project))?.tabId;
 			if (!tabId) throw new Error("no tab on the phone");
 			await phone.reload({ timeout: 60_000 });
