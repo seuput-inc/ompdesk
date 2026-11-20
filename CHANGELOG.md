@@ -2,7 +2,10 @@
 
 ## [0.136.0] - 2026-11-20
 
-OMPdesk가 다시 떠도(업데이트, 재시작) 에이전트의 일이 끊기거나 두 번 돌지 않아요.
+OMPdesk가 다시 뜰 때(업데이트, 재시작) 끊기던 일 가운데 많은 것이 이제 이어져요: 앞에서 돌던 명령은 20초까지 끝을 보고 다시 실행되지 않으며, `async` 백그라운드 작업, 카운트다운 중 보낸 첫 메시지, 쉬던 탭, 켤 때 omp 업데이트와 겹친 이어 하기가 이어져요.
+
+- 아직 끊기는 것: 하위 에이전트의 작업, pty와 이름 붙은 서비스, 세션 주소(`local://` 등)를 쓰는 명령, 60초가 지나 자동으로 뒤로 넘어간 명령. 다시 뜬 뒤 그 전 세션이 남긴 프로세스가 출력할 곳을 잃고 CPU를 쓰며 계속 도는 경우도 아직 고쳐지지 않았어요.
+- 알려진 것: 숨겨 둔 탭으로 돌아왔을 때 대화가 늦게 보일 수 있어요(조사 중).
 
 - 멈출 때 실행 중인 명령은 20초까지 끝을 보고, 다시 뜬 뒤 같은 명령을 다시 실행하지 않아요(빈 커밋이 두 번 생기던 문제).
 - `async` 백그라운드 bash 작업은 재시작 뒤에도 계속 돌고, 그 결과가 같은 작업으로 전달돼요.
@@ -28,7 +31,10 @@ OMPdesk가 다시 떠도(업데이트, 재시작) 에이전트의 일이 끊기�
 
 <!-- en -->
 
-Agents' work is no longer cut or run twice when OMPdesk starts again (an update or a restart).
+Much of the work an OMPdesk relaunch (an update or a restart) used to cut now continues: a running foreground command gets up to 20 s to finish and never runs again, and `async` background jobs, a first message sent during the countdown, idle tabs and a resume that overlaps a launch-time omp update continue.
+
+- Still cut: subagents' work, pty and named services, commands that use a session URL (`local://` and the like), and commands stock moved to the background after 60 s. A process a session left that lost its output can still keep spinning on the CPU after a relaunch; not fixed yet.
+- Known: returning to a hidden tab can show its conversation late (being investigated).
 
 - On a stop, a running command gets up to 20 s to finish, and after the relaunch the same command never runs again (the empty commit made twice).
 - `async` background bash jobs keep running through a relaunch and deliver their result as the same job.
