@@ -100,14 +100,11 @@ function whyNoPlayer(page: Page, file: string, reply: Locator): Promise<string> 
 		.catch((error: Error) => `probe failed: ${error.message}`);
 }
 
-/**
- * Why a player that mounted never loaded its metadata: the element's own error and states, the CSP violations the
- * page reported since `watchViolations`, and the page's resource timing for the media request (status, redirects).
- */
+/** Read from the document: a failed player can already have been replaced by its fallback. */
 async function whyNotLoaded(player: Locator): Promise<string> {
 	const detail = await player
-		.evaluate(element => {
-			const media = element as HTMLMediaElement;
+		.page()
+		.evaluate(() => {
 			const timing = performance
 				.getEntriesByType("resource")
 				.filter(entry => (entry as PerformanceResourceTiming).initiatorType !== "script")
@@ -123,11 +120,21 @@ async function whyNotLoaded(player: Locator): Promise<string> {
 					};
 				});
 			return {
-				error: media.error && { code: media.error.code, message: media.error.message },
-				networkState: media.networkState,
-				readyState: media.readyState,
-				duration: media.duration,
-				src: media.currentSrc,
+				cards: Array.from(document.querySelectorAll(".omp-chat-media"), card => ({
+					text: card.textContent?.slice(0, 120),
+					top: Math.round(card.getBoundingClientRect().top),
+					player: card.querySelector("video, audio")?.tagName ?? null,
+				})),
+				players: Array.from(document.querySelectorAll("video, audio"), element => {
+					const media = element as HTMLMediaElement;
+					return {
+						kind: media.tagName,
+						ready: media.readyState,
+						network: media.networkState,
+						error: media.error?.code,
+					};
+				}),
+				events: Reflect.get(window, "mediaEvents"),
 				violations: Reflect.get(window, "mediaViolations"),
 				timing,
 			};
@@ -165,6 +172,27 @@ for (const language of variants(["en", "ko"] as const))
 				await page.evaluate(() => {
 					const seen: string[] = [];
 					Reflect.set(window, "mediaViolations", seen);
+					const events: unknown[] = [];
+					Reflect.set(window, "mediaEvents", events);
+					for (const type of ["loadstart", "loadedmetadata", "error", "abort", "emptied"]) {
+						document.addEventListener(
+							type,
+							event => {
+								const media = event.target;
+								if (!(media instanceof HTMLMediaElement) || events.length >= 64) return;
+								events.push({
+									type,
+									at: Math.round(performance.now()),
+									kind: media.tagName,
+									card: media.closest(".omp-chat-media")?.textContent?.slice(0, 120),
+									ready: media.readyState,
+									code: media.error?.code,
+									message: media.error?.message,
+								});
+							},
+							true,
+						);
+					}
 					document.addEventListener("securitypolicyviolation", event =>
 						seen.push(`${event.violatedDirective} ${event.blockedURI}`),
 					);
@@ -186,7 +214,11 @@ for (const language of variants(["en", "ko"] as const))
 							`${error.message}\nwhy the clip has no player: ${await whyNoPlayer(page, path.join(project, "out", "clip.webm"), reply)}`,
 						);
 					});
-				await expectLoadedAndIdle(replyVideo, "video");
+				await expectLoadedAndIdle(replyVideo, "video").catch(async (error: Error) => {
+					throw new Error(
+						`${error.message}\nstream probe: ${await whyNoPlayer(page, path.join(project, "out", "clip.webm"), reply)}`,
+					);
+				});
 				await playerNamed("tone.mp3").scrollIntoViewIfNeeded();
 				await expectLoadedAndIdle(playerNamed("tone.mp3").locator("audio"), "audio");
 				const gone = reply.locator("[data-chat-media-unavailable='video']");

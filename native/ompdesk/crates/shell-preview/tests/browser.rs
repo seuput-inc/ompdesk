@@ -39,6 +39,16 @@ const HTML: &str = r##"<!doctype html>
   window.clicks = 0;
   window.trustedClick = false;
   window.trustedInput = false;
+  window.clickTrace = [];
+  window.traceClick = (type, event) => {
+    if (window.clickTrace.length >= 24) return;
+    const hit = document.elementFromPoint(50, 95);
+    window.clickTrace.push({type, at: performance.now(), hit: hit?.id || hit?.tagName,
+      target: event?.target?.id || event?.target?.tagName, trusted: event?.isTrusted,
+      x: event?.clientX, y: event?.clientY, viewport: [innerWidth, innerHeight]});
+  };
+  for (const type of ['beforeprint', 'afterprint', 'mousedown', 'mouseup', 'click'])
+    window.addEventListener(type, event => traceClick(type, event), true);
   document.querySelector('#button').addEventListener('click', e => {
     window.clicks++;
     window.trustedClick = e.isTrusted;
@@ -304,11 +314,12 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .map_err(|e| format!("PDF: {e:?}"))?;
     check!(pdf.starts_with(b"%PDF-"), "capture is not a PDF");
 
+    let submitted = std::time::Instant::now();
     let listener = page
         .submit_command(
             "Runtime.evaluate",
             json!({
-                "expression": "new Promise(resolve => document.querySelector('#button').addEventListener('click', e => resolve({trusted: e.isTrusted}), {once: true}))",
+                "expression": "new Promise(resolve => { document.querySelector('#button').addEventListener('click', e => resolve({trusted: e.isTrusted}), {once: true}); traceClick('armed'); })",
                 "awaitPromise": true,
                 "returnByValue": true,
             }),
@@ -322,10 +333,17 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
         .await
         .map_err(|e| format!("ordered mouse input: {e:?}"))?;
     }
-    let clicked = listener
-        .receive()
-        .await
-        .map_err(|e| format!("click listener result: {e:?}"))?;
+    let before_receive = submitted.elapsed();
+    let clicked = match listener.receive().await {
+        Ok(value) => value,
+        Err(error) => {
+            let elapsed = submitted.elapsed();
+            let trace = page.evaluate("window.clickTrace", false).await;
+            return Err(format!(
+                "click listener result: {error:?}; submit to receive: {before_receive:?}, to error: {elapsed:?}; document: {trace:?}"
+            ));
+        }
+    };
     check!(
         clicked["result"]["value"] == json!({"trusted": true}),
         "submitted listener missed the later trusted click: {clicked}"
