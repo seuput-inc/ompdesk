@@ -17,6 +17,7 @@ import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICE_CONNECTED, WEB_DEVICES_CHANGED, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
+import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import {
 	holdsBlock,
 	isWebUploadedImage,
@@ -386,6 +387,7 @@ export class WsRouter {
 		}
 		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
 		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
+		if (channel === SIDEBAR_PROJECTS_STATE && !this.#deps.devices.get(deviceId)?.grants.includes("workspace")) return;
 		if (!this.#open()) return;
 		if (!this.#connections.has(deviceId)) {
 			// Counted, so a page that comes back is not told it missed nothing; its data would reach no socket.
@@ -516,6 +518,16 @@ export class WsRouter {
 		const { device: deviceId, ch: channel, dir } = event;
 		const device = devices.get(deviceId);
 		if (!device) throw codedError("web_forbidden", "This device is no longer paired");
+		const request = args[0];
+		if (
+			channel === SIDEBAR_PROJECTS_COMMAND &&
+			request &&
+			typeof request === "object" &&
+			"action" in request &&
+			request.action === "layout" &&
+			!device.grants.includes("settings-write")
+		)
+			throw codedError("web_forbidden", "Changing sidebar preferences requires settings-write");
 		const win = windows.windowFor(deviceId);
 		const own = Object.hasOwn(webChannels, channel) ? webChannels[channel] : undefined;
 		if (own) return own.handler({ deviceId, device, win }, args);

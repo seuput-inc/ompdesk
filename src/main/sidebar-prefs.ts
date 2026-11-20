@@ -12,6 +12,7 @@ import {
 	type SidebarChange,
 	sidebarPatch,
 } from "../shared/sidebar-prefs";
+import type { SidebarLayoutChange } from "../shared/sidebar-projects";
 import type { RuntimeLogReport } from "./runtime-log-core";
 
 export interface SidebarPrefsStorage {
@@ -21,21 +22,27 @@ export interface SidebarPrefsStorage {
 
 const path = z.string().min(1);
 
+const layoutPath = z.string().min(1).max(4096);
+const ordered = z.array(layoutPath);
+export const SidebarLayoutChangeSchema = z.discriminatedUnion("op", [
+	z.object({ op: z.literal("set-group-pinned"), cwd: layoutPath, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-session-pinned"), path: layoutPath, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-group-order"), order: ordered }),
+	z.object({ op: z.literal("set-session-order"), list: layoutPath, order: ordered }),
+	z.object({ op: z.literal("set-sessions-archived"), ids: ordered, archived: z.boolean() }),
+]) satisfies z.ZodType<SidebarLayoutChange>;
+
 /** What a page may send, checked here: a page is not trusted to send a well-formed change. */
 const SidebarChangeSchema = z.discriminatedUnion("op", [
-	z.object({ op: z.literal("set-group-pinned"), cwd: path, pinned: z.boolean() }),
-	z.object({ op: z.literal("set-session-pinned"), path, pinned: z.boolean() }),
+	...SidebarLayoutChangeSchema.options,
 	z.object({ op: z.literal("set-agent-hidden"), path, hidden: z.boolean() }),
 	z.object({ op: z.literal("set-group-alias"), cwd: path, alias: z.string().nullable() }),
-	z.object({ op: z.literal("set-group-order"), order: z.array(z.string()) }),
-	z.object({ op: z.literal("set-session-order"), list: path, order: z.array(z.string()) }),
-	z.object({ op: z.literal("set-sessions-archived"), ids: z.array(z.string()), archived: z.boolean() }),
 	z.object({ op: z.literal("set-rail-pin"), pin: z.enum(RAIL_PINS), pinned: z.boolean() }),
 	z.object({ op: z.literal("touch-workspace"), cwd: path }),
 ]) satisfies z.ZodType<SidebarChange>;
 
 /** The runtime log's line for a change that moved what the sidebar remembers in order; the workspace clock fires on every switch and says nothing. */
-function logLine(change: SidebarChange, from: "window" | "web"): RuntimeLogReport | null {
+function logLine(change: SidebarChange, from: "window" | "web" | "host"): RuntimeLogReport | null {
 	const line = (details: { list?: string; count: number; on?: boolean }): RuntimeLogReport => ({
 		source: "sidebar",
 		message: change.op,
@@ -63,9 +70,9 @@ function logLine(change: SidebarChange, from: "window" | "web"): RuntimeLogRepor
 export function updateSidebarPrefs(
 	storage: SidebarPrefsStorage,
 	payload: unknown,
-	from: "window" | "web",
+	from: "window" | "web" | "host",
 	log: (report: RuntimeLogReport) => void,
-): void {
+): SidebarChange | undefined {
 	const parsed = SidebarChangeSchema.safeParse(payload);
 	if (!parsed.success) throw codedError("invalid_preference_key", "Invalid sidebar change");
 	const current = readSidebarPrefs(storage.get(SIDEBAR_PREFS_KEY));
@@ -74,4 +81,15 @@ export function updateSidebarPrefs(
 	storage.set(SIDEBAR_PREFS_KEY, { ...current, ...patch });
 	const line = logLine(parsed.data, from);
 	if (line) log(line);
+	return parsed.data;
+}
+
+/** A peer moved the host's session file. Transfer the host's pin in one write, never consult the viewer's copy. */
+export function moveSidebarPin(storage: SidebarPrefsStorage, from: string, to: string): boolean {
+	if (from === to) return false;
+	const prefs = readSidebarPrefs(storage.get(SIDEBAR_PREFS_KEY));
+	if (!prefs.pinnedSessions.includes(from)) return false;
+	const pinnedSessions = [...new Set(prefs.pinnedSessions.map(path => (path === from ? to : path)))];
+	storage.set(SIDEBAR_PREFS_KEY, { ...prefs, pinnedSessions });
+	return true;
 }
