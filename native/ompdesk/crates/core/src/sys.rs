@@ -252,6 +252,24 @@ pub fn procargs(pid: u32, buffer: &mut [u8]) -> Option<&[u8]> {
     (read == 0).then(|| &buffer[..size.min(buffer.len())])
 }
 
+/// `phys_footprint` of `pid` (`proc_pid_rusage`, `RUSAGE_INFO_V4`): what Activity Monitor's Memory column and
+/// `footprint` show, its compressed and swapped pages included. None for a process this user may not read (another
+/// user's, as launchd) and one that is gone.
+#[cfg(target_os = "macos")]
+pub fn footprint(pid: u32) -> Option<u64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+    // SAFETY: `info` is a live `rusage_info_v4`, the struct `RUSAGE_INFO_V4` tells the call to write, and it writes
+    // no more than that.
+    let read =
+        unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V4, info.as_mut_ptr().cast()) };
+    if read != 0 {
+        return None;
+    }
+    // SAFETY: all of `rusage_info_v4` is integers, zeroed was already a valid value, and a zero status filled it.
+    Some(unsafe { info.assume_init() }.ri_phys_footprint)
+}
+
 /// Whether this process may execute `path`, as node's `accessSync(path, X_OK)` answers: `access(2)`, which follows
 /// links and asks with the real user.
 #[cfg(unix)]

@@ -6,7 +6,8 @@
 //! macOS reads through the two programs the TypeScript ran: one `sysctl` for `kern.memorystatus_vm_pressure_level`
 //! (1 normal, 2 warn, 4 critical: the level `memory_pressure` and the kernel's jetsam act on),
 //! `kern.memorystatus_level` (the "memory free percentage" `memory_pressure` prints) and `hw.memsize`, and one
-//! `ps -axo pid=,ppid=,rss=`. Windows has no pressure level: `GlobalMemoryStatusEx`'s available physical memory and
+//! `ps -axo pid=,ppid=,rss=`, each process this user may read then counted by its `phys_footprint` (`sys.rs`), not its
+//! rss. Windows has no pressure level: `GlobalMemoryStatusEx`'s available physical memory and
 //! the share of RAM still available decide it, and the processes come from a Toolhelp32 snapshot with each one's
 //! working set (`sys.rs`; no WMI, which answers "call cancelled" on a loaded machine). Any other system (the Linux
 //! that runs the tests) reads `/proc/meminfo` under the Windows rule and runs `ps`.
@@ -43,7 +44,7 @@ pub struct Reading {
 pub struct ProcessRow {
     pid: u32,
     ppid: u32,
-    /// Resident bytes.
+    /// Resident bytes; on macOS the footprint of a process this user may read (`with_footprints`).
     bytes: u64,
     /// Image name (`conhost.exe`), Windows only: `ps` names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,7 +240,7 @@ async fn reading(_timeout_ms: u64, _scope: Scope) -> Result<Option<Reading>, Fau
     Ok(share_reading(total_kb, free_kb))
 }
 
-/// Every process with its parent and resident bytes.
+/// Every process with its parent and resident bytes (on macOS its footprint, `with_footprints`).
 #[cfg(unix)]
 async fn processes(timeout_ms: u64, scope: Scope) -> Result<Vec<ProcessRow>, Fault> {
     let text = program(
@@ -250,7 +251,27 @@ async fn processes(timeout_ms: u64, scope: Scope) -> Result<Vec<ProcessRow>, Fau
         scope,
     )
     .await?;
-    Ok(parse_ps(&text))
+    Ok(with_footprints(parse_ps(&text)))
+}
+
+/// macOS: each process this user may read counts its `phys_footprint` instead of `ps`'s resident size. As macOS
+/// compresses a process's pages its rss drops and its footprint does not: the `memory short` lines named Main's omp
+/// at 136 to 486 MB in hours it held about 1.9 GB (Mac mini, 19-20 Nov 2026), so they pointed elsewhere and idle
+/// release took a smaller quiet tab first. Another user's process keeps its rss. About 1 ms for 500 processes.
+#[cfg(target_os = "macos")]
+fn with_footprints(mut rows: Vec<ProcessRow>) -> Vec<ProcessRow> {
+    for row in &mut rows {
+        if let Some(bytes) = crate::sys::footprint(row.pid) {
+            row.bytes = bytes;
+        }
+    }
+    rows
+}
+
+/// Any other system: `ps`'s resident size.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn with_footprints(rows: Vec<ProcessRow>) -> Vec<ProcessRow> {
+    rows
 }
 
 /// Every process with its parent, working set and image name. A process this user may not open counts 0 bytes.
@@ -368,5 +389,19 @@ mod tests {
             );
             assert!(rows.iter().any(|row| row.pid == own.ppid), "{own:?}");
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn counts_a_footprint_and_keeps_the_rss_of_a_process_it_cannot_read() {
+        let row = |pid, bytes| ProcessRow {
+            pid,
+            ppid: 0,
+            bytes,
+            name: None,
+        };
+        let rows = with_footprints(vec![row(std::process::id(), 1), row(1, 7)]);
+        assert!(rows[0].bytes >= 1 << 20, "{rows:?}");
+        assert_eq!(rows[1].bytes, 7, "launchd is root's: {rows:?}");
     }
 }

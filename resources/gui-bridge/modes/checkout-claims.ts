@@ -362,3 +362,102 @@ export function judgeClaim(facts: ClaimFacts): ClaimVerdict {
 	// Unlisted without a stamp: an older bridge, which cannot be told to retire.
 	return facts.stamped ? { kind: "committed", retire: true } : { kind: "hidden" };
 }
+
+/**
+ * The claims journal (`ompdesk.checkout-claims`, written by modes/checkout-peers.ts): an entry is either the whole set
+ * (`{files, stamps}`, `ClaimBook.snapshot`; every entry before 20 Nov 2026 is one) or what changed since the entry
+ * before it (`{front, removed}`). A whole set every write repeated what had not changed: Main's 367 MB journal held
+ * 1,461 entries of up to 1,236 files, 35 MB of it, all parsed in its omp for the session's life (Mac mini, 20 Nov 2026).
+ */
+export interface ClaimsDelta {
+	/** Files that joined the claims or were claimed again, newest first: they lead the set. */
+	front: string[];
+	/** Files that left. */
+	removed: string[];
+}
+
+/** A whole set at least every this many deltas, so a restore replays at most this many. */
+export const CLAIMS_FULL_EVERY = 64;
+
+/**
+ * `next` as a delta from `prev` (both newest first), or undefined when they are the same. A claim only ever joins at
+ * the front, moves to the front or leaves, so `next` is its shortest new front followed by `prev`'s other files in
+ * their order (at worst all of `next` is front).
+ */
+export function claimsDelta(prev: readonly string[], next: readonly string[]): ClaimsDelta | undefined {
+	const inNext = new Set(next);
+	const removed = prev.filter(file => !inNext.has(file));
+	const kept = prev.filter(file => inNext.has(file));
+	let cut = 0;
+	for (; cut < next.length; cut++) {
+		const front = new Set(next.slice(0, cut));
+		const rest = kept.filter(file => !front.has(file));
+		if (rest.length === next.length - cut && rest.every((file, index) => file === next[cut + index])) break;
+	}
+	return cut === 0 && removed.length === 0 ? undefined : { front: next.slice(0, cut), removed };
+}
+
+/**
+ * The journal's next entry for `book` (modes/checkout-peers.ts `writeJournal`): the change since `base` (what the
+ * branch's journal replays to) as a delta, or the whole set when `deltas` since the last whole one reached
+ * `CLAIMS_FULL_EVERY` or the change is no smaller than the set; none when the set is what the journal holds.
+ */
+export function nextClaimsEntry(
+	base: readonly string[],
+	book: Pick<ClaimBook<unknown>, "files" | "snapshot">,
+	deltas: number,
+): { data: ClaimsDelta | { files: string[]; stamps: number[] }; whole: boolean } | undefined {
+	const delta = claimsDelta(base, book.files);
+	if (!delta) return undefined;
+	const whole = deltas >= CLAIMS_FULL_EVERY || delta.front.length + delta.removed.length >= book.files.length;
+	return { data: whole ? book.snapshot() : delta, whole };
+}
+
+function isWholeClaims(data: unknown): data is { files: unknown[] } {
+	return typeof data === "object" && data !== null && "files" in data && Array.isArray(data.files);
+}
+
+function isDelta(data: unknown): data is ClaimsDelta {
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		"front" in data &&
+		"removed" in data &&
+		Array.isArray(data.front) &&
+		Array.isArray(data.removed)
+	);
+}
+
+/**
+ * The claims a branch's journal holds, from its entries oldest first: the newest whole set (none: empty) with every
+ * delta after it applied in order. Undefined without any entry, as `ClaimBook.restore` reads none.
+ */
+export function replayClaims(entries: readonly unknown[]): { files: string[] } | undefined {
+	let files: string[] | undefined;
+	for (const data of entries) {
+		if (isWholeClaims(data)) files = data.files.filter((file): file is string => typeof file === "string");
+		else if (isDelta(data)) {
+			const front = data.front.filter((file): file is string => typeof file === "string");
+			const out = new Set([...front, ...data.removed.filter((file): file is string => typeof file === "string")]);
+			files = [...front, ...(files ?? []).filter(file => !out.has(file))];
+		}
+	}
+	return files === undefined ? undefined : { files };
+}
+
+/**
+ * What a session branch's claims journal holds, as `ClaimBook.restore` takes it: the branch's entries of `customType`
+ * walked back to the newest whole set, then replayed (`replayClaims`). Before deltas a load read the newest entry
+ * alone; read that way a delta restores nothing and a relaunch would lose every claim.
+ */
+export function journaledClaims(branch: readonly unknown[], customType: string): { files: string[] } | undefined {
+	const newestFirst: unknown[] = [];
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (typeof entry !== "object" || entry === null || !("customType" in entry) || !("data" in entry)) continue;
+		if (entry.customType !== customType) continue;
+		newestFirst.push(entry.data);
+		if (isWholeClaims(entry.data)) break;
+	}
+	return replayClaims(newestFirst.reverse());
+}
