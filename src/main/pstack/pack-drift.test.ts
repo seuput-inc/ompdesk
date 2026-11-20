@@ -230,9 +230,17 @@ describe("always-on section", () => {
 	});
 
 	it("stays under its size cap (cost and prompt-cache stability)", () => {
-		expect(Buffer.byteLength(sections.full)).toBeLessThanOrEqual(24 * 1024);
-		expect(Buffer.byteLength(sections.solo)).toBeLessThanOrEqual(24 * 1024);
-		expect(Buffer.byteLength(sections.autopilot)).toBeLessThanOrEqual(3 * 1024);
+		expect(Buffer.byteLength(sections.full)).toBeLessThanOrEqual(21 * 1024);
+		expect(Buffer.byteLength(sections.solo)).toBeLessThanOrEqual(21 * 1024);
+		expect(Buffer.byteLength(sections.autopilot)).toBeLessThanOrEqual(2304);
+	});
+
+	it("lists a direct route for every bundled playbook in both interactive modes", () => {
+		const files = readdirSync(path.join(SKILLS, "poteto-mode/playbooks")).filter(name => name.endsWith(".md"));
+		for (const text of [sections.full, sections.solo]) {
+			const index = text.split("\n## Playbooks\n")[1];
+			for (const file of files) expect(index).toContain(`skill://poteto-mode/playbooks/${file}`);
+		}
 	});
 
 	it("indexes every principle skill the pack has and no other", () => {
