@@ -8,6 +8,7 @@ import { restartFollowUp } from "../../resources/gui-bridge/restart-core";
 import { SESSION_TAG_ENV } from "./omp-launch";
 import {
 	type EndResult,
+	type TaggedProcess,
 	listTaggedProcesses,
 	RETRY_REMAINING_MS,
 	SESSION_PROCESSES_FILE,
@@ -475,5 +476,36 @@ describe("which tags end, and when", () => {
 	it("drops a damaged file's records instead of ending by them", () => {
 		fs.writeFileSync(file, JSON.stringify({ tags: [{ tag: "not-a-tag", cwd: "/w", since: 1 }, { cwd: "/w" }, 7] }));
 		expect(held().sessions.owners()).toEqual([]);
+	});
+
+	// The hub's finding of 20 Nov 2026: a closed output path (macOS SS_CANTSENDMORE) is also what a process's own
+	// shutdown(SHUT_WR) leaves, with its peer alive and reading. Only a peer seen closed may let the switch end it.
+	it("with the switch on, ends a spinning process only once its output's peer is seen closed", async () => {
+		const spinner = (pid: number, extra: Partial<TaggedProcess> = {}): TaggedProcess => ({
+			pid,
+			ppid: 1,
+			bytes: 0,
+			startedMs: 1,
+			name: "node",
+			tag: "1".padStart(32, "0"),
+			deadOutput: true,
+			cpuPercent: 99,
+			...extra,
+		});
+		held().sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+		const ended: number[] = [];
+		const sessions = new SessionProcesses(file, {
+			frozen: () => false,
+			log: (message, details) => logs.push({ message, details }),
+			endSpinning: true,
+			survey: async () => [spinner(10)],
+			endOnly: async (_tags, only) => {
+				ended.push(...only.map(process => process.pid));
+				return { ended: [], left: [], kept: [], own: [] };
+			},
+		});
+		await sessions.sweep({ keep: new Set(["/s/a.jsonl"]), hostedHeld: () => false, hostedGraceMs: 0 });
+		await sessions.settled();
+		expect(ended).toEqual([]);
 	});
 });
