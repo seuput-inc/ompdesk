@@ -9,7 +9,7 @@
 - 앱에 포함된 Node.js를 26.13.1 LTS로, 미리보기 브라우저를 Chromium 158 기반 Brave로 올렸어요. 수식은 KaTeX 0.19.1로 표시해요. 컴퓨터에 설치된 Node.js나 omp는 이 변경으로 교체하지 않아요.
 - 휴대폰 미리보기에서 정지한 페이지의 첫 화면이 사라지던 문제를 고쳤어요. 메모리는 3.4.7로 올랐고, 직전 버전의 데이터베이스는 변환 전에 복구용 사본을 남겨요. 사본을 검증할 수 없으면 변환하지 않아요.
 - 대화 압축 뒤 탭으로 돌아오거나 저장된 세션을 다시 열어 입력란을 비워도, 유효한 다음 질문 추천은 모델을 다시 호출하지 않고 그대로 표시해요. 대화가 바뀌거나 직접 새로고침하면 다시 추천해요.
-- 엔지니어링 모드가 매 요청에 보내는 지침을 줄였어요. 일반 모드의 해당 지침은 5,509→4,847토큰이며 플레이북 22개의 경로와 설명은 그대로예요. 자동 제목을 짧게 다시 쓸 때도 같은 후보와 예시를 두 번 보내지 않아요.
+- 엔지니어링 모드가 매 요청에 보내는 지침을 줄였어요. 일반 모드의 해당 지침은 5,509→4,861토큰이며 플레이북 22개의 경로와 설명은 그대로예요. 자동 제목을 짧게 다시 쓸 때도 같은 후보와 예시를 두 번 보내지 않아요.
 - 다른 컴퓨터의 탭이 잠들어 있어도 세션 목록과 결과 조회는 호스트의 실행 상태를 보여줘요. 처음 모델을 연결할 때는 공급자 목록 전체를 기다리지 않고 설정을 시작해요.
 - 재시작 뒤 출력 경로가 닫힌 프로세스를 알려요. 기본값은 출력 상대가 닫혔고 같은 프로세스가 30초 간격으로 세 번 모두 한 코어의 50% 이상을 쓴 경우에만 자동 종료해요. 하위 에이전트 작업·PTY·이름 붙인 서비스까지 복원하는 것은 아니에요.
 - 긴 세션의 작업 속도는 새로 추가된 기록만 읽어 계산해요. 반복 로그는 횟수로 묶고 macOS 메모리는 footprint로 측정해요. 숨긴 탭의 대화가 잠시 비거나 코어 응답이 끊길 때 진단할 기록을 추가했어요.
@@ -24,7 +24,7 @@ A host’s project order, pinned session positions and archived sessions now mat
 - The app now ships Node.js 26.13.1 LTS and a Chromium 158-based Brave for Preview. Math uses KaTeX 0.19.1. These changes do not replace the Node.js or omp installed on your computer.
 - Phone Preview no longer loses the first frame when a static page refreshes. Memory 3.4.7 keeps a recovery copy before migrating the previous version’s database and stops if it cannot verify that copy.
 - Returning to a tab after compaction or clearing the draft in a reopened session keeps valid prompt suggestions without another model call. Changes to the conversation and manual refresh still generate new suggestions.
-- Engineering mode sends shorter standing instructions. Its standard section drops from 5,509 to 4,847 tokens with all 22 playbook paths and descriptions intact. Automatic title retries no longer send the same candidate and examples twice.
+- Engineering mode sends shorter standing instructions. Its standard section drops from 5,509 to 4,861 tokens with all 22 playbook paths and descriptions intact. Automatic title retries no longer send the same candidate and examples twice.
 - The session list and result lookup show whether a session is running on its host, even if the viewing computer’s tab is asleep. First-run model setup no longer waits for the entire provider list.
 - After a relaunch, OMPdesk reports processes with a closed output path. By default it ends one only when the output peer is confirmed closed and the same process uses at least 50% of one CPU core in three samples 30 seconds apart. A relaunch still does not restore subagent jobs, PTYs or named services.
 - Long sessions read only newly appended records to calculate pace. Repeated log lines are counted together, and macOS memory is measured by footprint. New diagnostics cover briefly empty transcripts on reopened tabs and lost core responses.
