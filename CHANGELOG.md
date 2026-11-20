@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.136.0] - 2026-11-20
+
+OMPdesk가 다시 떠도(업데이트, 재시작) 에이전트의 일이 끊기거나 두 번 돌지 않아요.
+
+- 멈출 때 실행 중인 명령은 20초까지 끝을 보고, 다시 뜬 뒤 같은 명령을 다시 실행하지 않아요(빈 커밋이 두 번 생기던 문제).
+- `async` 백그라운드 bash 작업은 재시작 뒤에도 계속 돌고, 그 결과가 같은 작업으로 전달돼요.
+- 재시작 카운트다운 중에 연 세션은 첫 메시지를 잃지 않아요: 자동 재시작이 그 메시지를 기다려요.
+- 켤 때 omp 업데이트가 끝나는 순간 이어 하기가 끊기지 않아요. 쉬던 goal 세션, 걸어 둔 다시 시도, 화면에 없던 Autopilot 실행도 다시 뜬 뒤 이어지고, 에이전트에게는 재시작이 턴을 이어 간다고 알려요.
+- 할 일 판이 목록을 마지막으로 고친 때와 그 뒤에 받은 지시를 보여 주고, 목록이 일보다 뒤처지면 표시해요. "배포 중단", "되돌려" 같은 짧은 지시도 세요.
+- 테마가 다섯 벌이 됐어요: OMPdesk, GitHub, Solarized, Gruvbox, High Contrast, 각각 밝게와 어둡게. Sepia, Nord, Tokyo Night는 가장 가까운 것으로 옮겨져요.
+- 압축 중에는 무엇을 하는지와 얼마나 걸렸는지 쉬운 말로 보여 줘요.
+- 크레딧 쓰기를 끄면 메모리 정리, 판정 도우미, 커밋 메시지 버튼까지 어떤 경로도 크레딧을 쓰지 않아요.
+- 실행 중에 보내기를 누르면 언제나 그 턴에 바로 끼워 넣어요(후속 전환 단추는 없어졌어요).
+- 폰에서 대화 맨 위까지 빠르게 밀면 이전 메시지를 불러와요.
+- 다른 컴퓨터가 이 컴퓨터에 연 세션은 그 컴퓨터가 꺼져 있어도 계속 일해요.
+- 작업판에서 방금 생긴 자식 세션의 줄을 눌러도 열리지 않던 문제를 고쳤어요(0.135.0에서 알린 것).
+- Windows에서 화면을 그리는 프로세스가 죽으면 앱이 다시 불러오고, GPU 프로세스가 한 번 죽은 것으로는 앱을 다시 띄우지 않아요. 응답이 멈춘 페이지는 다시 띄우고, 되풀이될 때만 알려요.
+- 첫 실행의 프로필 옮기기 화면이 멈추면 다시 불러오고, 세 번 실패하면 까닭과 다시 시도 단추를 보여 줘요.
+- 기계 설정이 stock `omp update`를 쓰지 않고, npm으로 깐 omp는 정확한 판으로 올려요. 설치된 omp가 시험한 주 판보다 높으면 설정에 그렇게 보여요. omp에 내부 기능 하나가 빠지면 그 기능을 쓰는 동작만 꺼져요.
+- Windows에서 mcp.json이 잠깐 잡혀 있어도 로그인과 MCP 변경이 사라지지 않아요.
+- 다른 세션의 메시지나 보고가 오면 돌고 있던 셸을 바로 백그라운드로 돌려요. 닫기는 창의 답을 기다려 그 결과를 말하고, 연 쪽 탭이 닫히면 쉬던 자식도 함께 닫혀요.
+- 에이전트의 gh 호출이 GitHub 계정의 공유 한도를 바닥내지 못해요: 끝난 실행의 로그는 한 번만 받고, 남은 한도가 적으면 넓은 조회를 거절하고, watch는 1분 간격 이상이에요.
+- `ompdesk checks wait`와 `ompdesk checks status`로 점검 결과를 기다리고 볼 수 있어요.
+- 콘솔 창이 뜨거나, 한 단계가 오래 걸리거나, 턴이 오래 기다리면 진단 기록에 남겨요.
+- 시작 탭에서 친 셸이나 eval 줄은 그 탭을 제 탭으로 만들어, 정리가 그 탭을 닫지 않아요. 임시 폴더는 사이드바 프로젝트가 되지 않아요.
+
+<!-- en -->
+
+Agents' work is no longer cut or run twice when OMPdesk starts again (an update or a restart).
+
+- On a stop, a running command gets up to 20 s to finish, and after the relaunch the same command never runs again (the empty commit made twice).
+- `async` background bash jobs keep running through a relaunch and deliver their result as the same job.
+- A session opened during the restart countdown keeps its first message: the automatic restart waits for it.
+- A launch-time omp update finishing no longer cuts a resumed turn. An idle goal session, an armed retry and an Autopilot run whose tab was not shown also continue after the relaunch, and agents are told a relaunch continues their turn.
+- The to-do panel shows when the list last changed and the instructions received since, and marks a list that is behind the work. Short orders such as "stop the deploy" count too.
+- Five theme sets: OMPdesk, GitHub, Solarized, Gruvbox and High Contrast, each light and dark. Sepia, Nord and Tokyo Night move to the closest one.
+- A compaction says in plain words what it does and how long it has run.
+- With credit use off, no path spends credits, memory upkeep, the judge helper and the commit-message button included.
+- Send during a run always steers into that turn (the follow-up toggle is gone).
+- On the phone, a fling to the top of a transcript loads its older messages.
+- A session another computer opened on this one keeps working while that computer is away.
+- A child session's row on the work board that did nothing on its first click right after it appeared now opens (the known issue of 0.135.0).
+- On Windows a crashed renderer reloads the app, and one GPU process crash no longer relaunches it. A page that stops answering is restarted, and you are told only when it repeats.
+- A first-launch profile migration page that stops answering is loaded again; after three tries it shows the reason and a Retry button.
+- Machine setup never runs stock `omp update`, and an omp installed with npm is updated to an exact version. Settings says when the installed omp is above the tested major. When an omp internal is missing, only the action that uses it turns off.
+- On Windows a sign-in or MCP change survives a briefly held mcp.json.
+- Another session's message or report backgrounds a running shell at once. A close waits for the window's answer and says it, and a resting child closes with its opener's tab.
+- Agents' gh calls can no longer empty the GitHub account's shared quota: a finished run's log is fetched once, wide reads are refused when little is left, and watches poll at most once a minute.
+- `ompdesk checks wait` and `ompdesk checks status` wait for and show a check run's verdict.
+- Diagnostics record a console window that appears, a slow step and a long turn wait.
+- A shell or eval line typed in the start tab makes it a tab of its own, so housekeeping never closes it. A scratch folder never becomes a sidebar project.
+
 ## [0.135.0] - 2026-11-20
 
 사이드바의 세션 목록이 새로 바뀌었어요: 세션마다 저장소 그림과 작업 중인 가지를 보여 주고, 줄은 더 얇아졌어요.
