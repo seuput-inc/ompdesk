@@ -145,6 +145,12 @@ afterEach(async () => {
 describe("older history at the top of a transcript", () => {
 	it("is asked for when a touch fling reaches the top after the finger lifted", async () => {
 		const scroller = await mountTranscript();
+		// Linkedom's stylesheet declarations preserve !important; its inline style proxy does not.
+		const sheet = document.createElement("style");
+		sheet.textContent = ".scroller { overflow-y: auto; }";
+		const rule = sheet.sheet?.cssRules[0];
+		if (!rule || !("style" in rule)) throw new Error("missing scroller declaration");
+		Object.defineProperty(scroller, "style", { value: rule.style });
 		// The thumb drags the view off the tail and lifts; the fling carries the view on.
 		await fire(scroller, "touchmove");
 		await scrollTo(scroller, 3000);
@@ -154,6 +160,8 @@ describe("older history at the top of a transcript", () => {
 		await scrollTo(scroller, 120);
 		expect(pagesAsked()).toMatchObject([{ cursor: "page-above" }]);
 		await paint();
+		expect(scroller.style.getPropertyValue("overflow-y")).toBe("auto");
+		expect(scroller.style.getPropertyPriority("overflow-y")).toBe("");
 		expect(useMessagesStore.getState().messages.map(message => message.entryId)).toEqual([
 			"older",
 			"newer",
