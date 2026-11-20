@@ -139,7 +139,7 @@ export class PageStream {
 		this.#page.setFrameRate(options.geometry.profile.maxFps);
 		this.#stopPaint = this.#page.onPaint(image => {
 			// A paint between a resize and the next layout can be an empty image: there is nothing to show in it.
-			if (image.isEmpty()) return;
+			if (!this.#visible || !this.#painting || image.isEmpty()) return;
 			this.#painted += 1;
 			this.#latest = image;
 			this.#pacer.markDirty();
@@ -173,7 +173,7 @@ export class PageStream {
 		if (visible === this.#visible) return;
 		this.#visible = visible;
 		this.#applyPainting();
-		if (visible) this.refresh();
+		this.refresh();
 	}
 
 	/** The viewer needs a frame now (a navigation, a tab switch, a resize, a new viewer): repaint, skip the interval. */
@@ -183,7 +183,7 @@ export class PageStream {
 		this.#parked = null;
 		this.#epoch += 1;
 		this.#pacer.markUrgent();
-		if (!this.#page.isDestroyed()) this.#page.invalidate();
+		if (this.#painting && this.#visible && !this.#page.isDestroyed()) this.#page.invalidate();
 	}
 
 	/** The viewer acknowledges `request.ack` and waits for the next frame or dialog. */
@@ -218,7 +218,15 @@ export class PageStream {
 
 	/** Takes what may go now and gives it to the waiting poll; with nothing to send, waits for the pacer. */
 	async #kick(): Promise<void> {
+		const epoch = this.#epoch;
 		const ready = await this.#take();
+		if (ready?.frame && epoch !== this.#epoch) {
+			ready.frame = null;
+			if (!ready.dialogs.length) {
+				this.#arm();
+				return;
+			}
+		}
 		if (!ready) {
 			this.#arm();
 			return;

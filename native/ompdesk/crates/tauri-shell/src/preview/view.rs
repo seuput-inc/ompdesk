@@ -106,24 +106,9 @@ async fn resize(
 }
 
 async fn painting(entry: &Entry, key: native::SurfaceKey, visible: bool) -> Result<(), WireError> {
-    let running = entry.document.lock().expect("Preview document").painting;
-    if running == visible {
-        return Ok(());
-    }
     check(key)?;
-    if visible {
-        entry
-            .page
-            .start_screencast(json!({"format":"png","everyNthFrame":1}))
-            .await
-            .map_err(super::wire)?;
-    } else {
-        super::ack_retained(entry).await;
-        entry.page.stop_screencast().await.map_err(super::wire)?;
-    }
-    check(key)?;
-    entry.document.lock().expect("Preview document").painting = visible;
-    Ok(())
+    super::set_painting(entry, visible).await?;
+    check(key)
 }
 
 async fn detach(entry: &Entry, key: native::SurfaceKey) -> Result<(), WireError> {

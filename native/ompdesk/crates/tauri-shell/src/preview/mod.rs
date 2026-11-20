@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 
 struct Document {
@@ -42,7 +42,9 @@ struct Document {
     viewport: Viewport,
     painting: bool,
     fps: u32,
-    frame_pixels: Option<frames::Frame>,
+    frame_pixels: Option<frames::Pixels>,
+    /// CDP frame swap time (seconds since Unix epoch) before which a cast predates our refresh.
+    paint_after: Option<f64>,
     native_geometry: Option<native::FrameGeometry>,
     last_paint: Option<Instant>,
     pending_ack: Option<i64>,
@@ -1026,12 +1028,15 @@ async fn execute(
                 .ok_or_else(|| WireError::new("empty", "Preview has no painted frame"))?;
             let (bytes, width, height) = frame.encode(params)?;
             original(identity)?;
-            let ack = entry
-                .document
-                .lock()
-                .expect("Preview document")
-                .pending_ack
-                .take_if(|ack| *ack == frame.ack());
+            let ack = {
+                let _submitting = entry.submitting.lock().expect("native frame submission");
+                let mut doc = entry.document.lock().expect("Preview document");
+                if doc.frame_pixels.as_ref().is_some_and(|p| p.same(&frame)) {
+                    doc.pending_ack.take()
+                } else {
+                    None
+                }
+            };
             return Ok(Execution::Complete(Answer::Binary(
                 json!({"width":width,"height":height}),
                 bytes,
@@ -1140,17 +1145,43 @@ async fn execute(
                     json!({})
                 }
                 "startPainting" | "stopPainting" | "invalidate" => {
-                    if op == "stopPainting" {
-                        ack_retained(&entry).await;
-                        entry.page.stop_screencast().await.map_err(wire)?;
-                        entry.document.lock().expect("Preview document").painting = false;
-                    } else {
-                        entry
-                            .page
-                            .start_screencast(json!({"format":"png","everyNthFrame":1}))
-                            .await
-                            .map_err(wire)?;
-                        entry.document.lock().expect("Preview document").painting = true;
+                    set_painting(&entry, op != "stopPainting").await?;
+                    if op == "invalidate" {
+                        // A still page has no reason to send another screencast event.
+                        let after = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(crate::failed)?
+                            .as_secs_f64();
+                        {
+                            let mut doc = entry.document.lock().expect("Preview document");
+                            doc.paint_after = Some(after);
+                            doc.frame_pixels = None;
+                            doc.last_paint = None;
+                        }
+                        let pixels = frames::Pixels::new(
+                            entry.page.capture(json!({})).await.map_err(wire)?,
+                        )?;
+                        let (width, height) = pixels.size();
+                        let _submitting = entry.submitting.lock().expect("native frame submission");
+                        original(identity)?;
+                        let mut doc = entry.document.lock().expect("Preview document");
+                        if !frames::pictures_window(&pixels, doc.viewport) {
+                            return Err(WireError::new(
+                                "stale",
+                                "Preview capture did not match the current viewport",
+                            ));
+                        }
+                        let ack = doc.pending_ack.take();
+                        let scale = doc.viewport.device_scale_factor;
+                        doc.frame_pixels = Some(pixels);
+                        drop(doc);
+                        if let Some(ack) = ack {
+                            schedule_frame_ack(&entry, ack);
+                        }
+                        host::event(
+                            "wc.paint",
+                            json!({"wcId":wc,"width":width,"height":height,"scale":scale}),
+                        );
                     }
                     json!({})
                 }
@@ -1283,6 +1314,7 @@ async fn create(
                 painting: false,
                 fps: 60,
                 frame_pixels: None,
+                paint_after: None,
                 native_geometry: None,
                 last_paint: None,
                 pending_ack: None,
@@ -1566,7 +1598,7 @@ async fn offscreen_operation(pages: &Pages, wc: u64, params: &Value) -> Result<V
                 .map(|page| page.zoom)
                 .ok_or_else(|| WireError::new("gone", "Preview window ended"))?;
             let layout = layout_metrics(viewport, zoom)?;
-            // Frames are matched against this size from the moment Chromium may paint at it (`deliverable`).
+            // Reject paints of the old size from the moment Chromium may paint at the new one.
             let previous = std::mem::replace(
                 &mut entry.document.lock().expect("Preview document").viewport,
                 viewport,
@@ -1702,6 +1734,36 @@ fn schedule_frame_ack(entry: &Entry, ack: i64) {
         let _ = done.send(result);
     });
 }
+async fn set_painting(entry: &Entry, on: bool) -> Result<(), WireError> {
+    {
+        let _submitting = entry.submitting.lock().expect("native frame submission");
+        let mut doc = entry.document.lock().expect("Preview document");
+        if doc.painting == on {
+            return Ok(());
+        }
+        // observe() may receive the first (and only) frame before startScreencast replies.
+        doc.painting = on;
+        doc.last_paint = None;
+        if !on {
+            doc.frame_pixels = None;
+        }
+    }
+    let result = if on {
+        entry
+            .page
+            .start_screencast(json!({"format":"png","everyNthFrame":1}))
+            .await
+    } else {
+        ack_retained(entry).await;
+        entry.page.stop_screencast().await
+    };
+    if let Err(error) = result {
+        entry.document.lock().expect("Preview document").painting = !on;
+        return Err(wire(error));
+    }
+    Ok(())
+}
+
 async fn ack_retained(entry: &Entry) {
     let ack = entry
         .document
@@ -1714,21 +1776,6 @@ async fn ack_retained(entry: &Entry) {
     {
         crate::log::log("preview.frame.ack", json!({"error":error.to_string()}));
     }
-}
-/// An offscreen page's frame goes to its stream only when it pictures the window's current size
-/// (`frames::pictures_window`); a view's frames are placed by their own metadata.
-fn deliverable(entry: &Entry, wc: u64, frame: &frames::Frame) -> bool {
-    let offscreen = runtime()
-        .registry
-        .lock()
-        .expect("registry")
-        .page(wc)
-        .is_some_and(|page| page.kind == Kind::PreviewOffscreen);
-    !offscreen
-        || frames::pictures_window(
-            frame,
-            entry.document.lock().expect("Preview document").viewport,
-        )
 }
 fn unmap_urls<'a>(
     partition: &'a str,
@@ -1781,6 +1828,7 @@ async fn invalidate_document(entry: &Entry, wc: u64) {
         {
             let mut document = entry.document.lock().expect("Preview document");
             document.frame_pixels = None;
+            document.last_paint = None;
             document.marked = None;
             document.text_target = None;
             document.selection = native::TextRange::default();
@@ -2097,12 +2145,6 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                     continue;
                 }
                 match frames::Frame::from_event(Arc::clone(&event.params)) {
-                    Ok(frame) if !deliverable(&entry, route.wc, &frame) => {
-                        crate::log::log(
-                            "preview.frame.stale",
-                            json!({"wcId":route.wc,"width":frame.width(),"height":frame.height()}),
-                        );
-                    }
                     Ok(frame) => {
                         let (width, height, scale) = (frame.width(), frame.height(), frame.scale());
                         {
@@ -2114,10 +2156,38 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                                 }
                                 continue;
                             }
+                            let offscreen = runtime()
+                                .registry
+                                .lock()
+                                .expect("registry")
+                                .page(route.wc)
+                                .is_some_and(|page| page.kind == Kind::PreviewOffscreen);
                             {
                                 let mut document = entry.document.lock().expect("Preview document");
-                                document.frame_pixels = Some(frame.clone());
-                                document.pending_ack = None;
+                                if offscreen
+                                    && !frames::pictures_window(&frame.pixels, document.viewport)
+                                {
+                                    drop(document);
+                                    crate::log::log(
+                                        "preview.frame.stale",
+                                        json!({"wcId":route.wc,"width":width,"height":height}),
+                                    );
+                                    schedule_frame_ack(&entry, frame.ack());
+                                    continue;
+                                }
+                                if !document.painting
+                                    || document.paint_after.is_some_and(|after| {
+                                        event.params["metadata"]["timestamp"]
+                                            .as_f64()
+                                            .is_none_or(|time| time < after)
+                                    })
+                                {
+                                    drop(document);
+                                    schedule_frame_ack(&entry, frame.ack());
+                                    continue;
+                                }
+                                document.frame_pixels = Some(frame.pixels.clone());
+                                document.pending_ack = offscreen.then_some(frame.ack());
                                 document.last_paint = Some(Instant::now());
                             }
                             let key = surface::key(route.wc);
@@ -2156,23 +2226,8 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                                         }
                                     }
                                 }
-                                _ => {
-                                    let offscreen = runtime()
-                                        .registry
-                                        .lock()
-                                        .expect("registry")
-                                        .page(route.wc)
-                                        .is_some_and(|page| page.kind == Kind::PreviewOffscreen);
-                                    if offscreen {
-                                        entry
-                                            .document
-                                            .lock()
-                                            .expect("Preview document")
-                                            .pending_ack = Some(frame.ack());
-                                    } else {
-                                        schedule_frame_ack(&entry, frame.ack());
-                                    }
-                                }
+                                _ if !offscreen => schedule_frame_ack(&entry, frame.ack()),
+                                _ => {}
                             }
                         }
                         host::event(

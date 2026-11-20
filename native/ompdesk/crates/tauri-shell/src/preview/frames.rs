@@ -6,10 +6,14 @@ use shell_preview::Viewport;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct Frame {
+pub struct Pixels {
     png: Arc<Vec<u8>>,
     width: u32,
     height: u32,
+}
+
+pub struct Frame {
+    pub pixels: Pixels,
     scale: f64,
     metadata: native::FrameMetadata,
     ack: i64,
@@ -19,15 +23,7 @@ impl Frame {
         let encoded = params["data"]
             .as_str()
             .ok_or_else(|| invalid("missing screencast pixels"))?;
-        let png = STANDARD.decode(encoded).map_err(invalid)?;
-        if png.len() < 24 || &png[..8] != b"\x89PNG\r\n\x1a\n" || &png[12..16] != b"IHDR" {
-            return Err(invalid("Preview screencast is not PNG"));
-        }
-        let width = u32::from_be_bytes(png[16..20].try_into().expect("PNG width"));
-        let height = u32::from_be_bytes(png[20..24].try_into().expect("PNG height"));
-        if width == 0 || height == 0 || width > 16384 || height > 16384 {
-            return Err(invalid("invalid Preview painted dimensions"));
-        }
+        let pixels = Pixels::new(STANDARD.decode(encoded).map_err(invalid)?)?;
         let number = |name: &str| {
             params["metadata"][name]
                 .as_f64()
@@ -49,10 +45,8 @@ impl Frame {
             return Err(invalid("invalid screencast metadata dimensions"));
         }
         Ok(Self {
-            png: Arc::new(png),
-            width,
-            height,
-            scale: f64::from(width) / metadata.device_width,
+            scale: f64::from(pixels.width) / metadata.device_width,
+            pixels,
             metadata,
             ack: params["sessionId"]
                 .as_i64()
@@ -63,10 +57,10 @@ impl Frame {
         self.ack
     }
     pub fn width(&self) -> u32 {
-        self.width
+        self.pixels.width
     }
     pub fn height(&self) -> u32 {
-        self.height
+        self.pixels.height
     }
     pub fn scale(&self) -> f64 {
         self.scale
@@ -75,12 +69,36 @@ impl Frame {
         native::EncodedFrame {
             key,
             ack: self.ack,
-            png: Arc::clone(&self.png),
-            pixel_width: self.width,
-            pixel_height: self.height,
+            png: Arc::clone(&self.pixels.png),
+            pixel_width: self.width(),
+            pixel_height: self.height(),
             scale: self.scale,
             metadata: self.metadata.clone(),
         }
+    }
+}
+
+impl Pixels {
+    pub fn new(png: Vec<u8>) -> Result<Self, WireError> {
+        if png.len() < 24 || &png[..8] != b"\x89PNG\r\n\x1a\n" || &png[12..16] != b"IHDR" {
+            return Err(invalid("Preview frame is not PNG"));
+        }
+        let width = u32::from_be_bytes(png[16..20].try_into().expect("PNG width"));
+        let height = u32::from_be_bytes(png[20..24].try_into().expect("PNG height"));
+        if width == 0 || height == 0 || width > 16384 || height > 16384 {
+            return Err(invalid("invalid Preview painted dimensions"));
+        }
+        Ok(Self {
+            png: Arc::new(png),
+            width,
+            height,
+        })
+    }
+    pub fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.png, &other.png)
+    }
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
     pub fn encode(&self, params: &Value) -> Result<(Arc<Vec<u8>>, u32, u32), WireError> {
         let format = match params["format"].as_str() {
@@ -145,7 +163,7 @@ pub fn frame_pixels(window: Viewport) -> (u32, u32) {
 /// after a 240×160 view became 780×1400 the first frame is the old picture at 780×520. Such a frame shows a geometry
 /// the page no longer has. A side may be over by the rounding of a fractional view scale (`Page::resize_framed`
 /// rounds the view's DIP up).
-pub fn pictures_window(frame: &Frame, window: Viewport) -> bool {
+pub fn pictures_window(frame: &Pixels, window: Viewport) -> bool {
     let (width, height) = frame_pixels(window);
     let slack = window.device_scale_factor.ceil() as u32;
     frame.width.abs_diff(width) <= slack && frame.height.abs_diff(height) <= slack
@@ -172,7 +190,7 @@ mod tests {
     }
     #[test]
     fn encoding_keeps_the_retained_paint_and_never_enlarges_it() {
-        let frame = painted();
+        let frame = painted().pixels;
         let (png, width, height) = frame.encode(&json!({"format":"png","width":100})).unwrap();
         assert_eq!((width, height), (20, 10));
         assert_eq!(
@@ -185,7 +203,7 @@ mod tests {
     }
     #[test]
     fn invalid_frame_encoding_options_do_not_masquerade_as_defaults() {
-        let frame = painted();
+        let frame = painted().pixels;
         for params in [
             json!({"format":"gif"}),
             json!({"format":"jpeg","quality":101}),
@@ -225,7 +243,7 @@ mod tests {
                 device_scale_factor,
             };
             assert_eq!(
-                pictures_window(&painted_at(frame.0, frame.1), window),
+                pictures_window(&painted_at(frame.0, frame.1).pixels, window),
                 pictured,
                 "{frame:?} in {width}x{height}@{device_scale_factor}"
             );

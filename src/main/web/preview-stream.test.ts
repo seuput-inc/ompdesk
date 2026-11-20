@@ -174,6 +174,22 @@ describe("PageStream", () => {
 		expect(frame).toMatchObject({ seq: 1, width: 390, height: 844 });
 	});
 
+	it("hiding drops an in-flight encode and resizing the hidden page does not restart it", async () => {
+		const { page, stream } = setup();
+		const stale = new SlowImage(780, 1688);
+		page.listener?.(stale);
+		const poll = stream.poll({ ack: null, wait: 100 });
+		stream.setVisible(false);
+		stale.release();
+		await vi.advanceTimersByTimeAsync(101);
+		expect((await poll).frame).toBeNull();
+		stream.configure({ ...GEOMETRY, pixelWidth: 390 });
+		expect(page.invalidations).toBe(0);
+		stream.setVisible(true);
+		page.paint(390, 844);
+		expect((await stream.poll({ ack: null })).frame).toMatchObject({ width: 390, height: 844 });
+	});
+
 	it("keeps a frame whose poll left while it was being encoded for the next poll", async () => {
 		const { page, stream } = setup();
 		const image = new SlowImage(780, 1688);
