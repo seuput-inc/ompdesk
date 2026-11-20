@@ -337,6 +337,72 @@ fn child_commands(asked: &Asked, tab_id: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The kinds of command an open with `args` sent its child, the model list holding `oa/gpt` and the review role on it.
+async fn open_kinds(id: u64, args: Value) -> Vec<Value> {
+    let (control, asked) = rig(
+        id,
+        vec![tab("a", "/s/x_1.jsonl"), tab("c1", "/s/c_1.jsonl")],
+        json!({}),
+        |method, args| match (method, args["command"]["type"].as_str()) {
+            ("spawn", _) => Ok(json!({ "tabId": "c1" })),
+            ("command", Some("get_available_models")) => Ok(
+                json!({ "success": true, "data": { "models": [{ "provider": "oa", "id": "gpt" }] } }),
+            ),
+            ("command", Some("get_model_roles")) => Ok(
+                json!({ "success": true, "data": { "roles": [{ "id": "review", "model": "oa/gpt" }] } }),
+            ),
+            (other, _) => main_of(other, args),
+        },
+    );
+    let outcome = control.run("a", "ompdesk_session_open", args, None).await;
+    assert!(!outcome.is_error, "{}", outcome.text);
+    let kinds = child_commands(&asked, "c1")
+        .into_iter()
+        .map(|command| command["type"].clone())
+        .collect();
+    control.host.port().close();
+    kinds
+}
+
+#[tokio::test]
+async fn an_open_on_the_review_role_or_without_an_advisor_turns_the_advisor_off_before_its_first_message()
+ {
+    // C17, 20 Nov 2026: a review session another project opened on openai-codex had its advisor (the advisor role,
+    // Claude) interject, and the reviewer turned its "needs fix" into "ok" 18 s later.
+    let off = json!("agent_control_advisor_off");
+    let plain = open_kinds(7_330, json!({ "message": "m", "folder": "/w" })).await;
+    assert!(!plain.contains(&off), "{plain:?}");
+    assert_eq!(
+        open_kinds(
+            7_331,
+            json!({ "message": "m", "folder": "/w", "advisor": false })
+        )
+        .await,
+        vec![json!("agent_control_worker"), off.clone(), json!("prompt")]
+    );
+    assert_eq!(
+        open_kinds(
+            7_332,
+            json!({ "message": "m", "folder": "/w", "model": "review" })
+        )
+        .await,
+        vec![
+            json!("get_available_models"),
+            json!("get_model_roles"),
+            json!("agent_control_worker"),
+            json!("set_model"),
+            off.clone(),
+            json!("prompt")
+        ]
+    );
+    let asked_on = open_kinds(
+        7_333,
+        json!({ "message": "m", "folder": "/w", "model": "review", "advisor": true }),
+    )
+    .await;
+    assert!(!asked_on.contains(&off), "{asked_on:?}");
+}
+
 #[tokio::test]
 async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_once_after_the_relaunch()
  {

@@ -154,6 +154,54 @@ async fn a_send_to_an_idle_child_hands_over_a_numbered_dispatch_and_repeats_its_
 }
 
 #[tokio::test]
+async fn a_send_that_starts_with_a_slash_goes_as_text_and_its_receipt_says_so() {
+    // C17, 20 Nov 2026: '/advisor off' sent to a review session arrived inside the agent-message wrapper and was not
+    // run, and the sender was not told. An agent never runs a command in another session; the receipt says so.
+    let tuning = Tuning {
+        turn_start_wait_ms: 40,
+        ..Tuning::default()
+    };
+    let (control, asked) = rig(9_340, state(vec![tab("a"), tab("b")]), tuning, main_replies);
+    let sent = control
+        .run(
+            "a",
+            "ompdesk_session_send",
+            json!({ "session": "b", "message": "  /advisor off" }),
+            None,
+        )
+        .await;
+    assert!(!sent.is_error, "{}", sent.text);
+    assert!(
+        sent.text.ends_with(
+            " It went as text, not run as a command: an agent never runs a slash command in another session. To keep a session's advisor off, open it with ompdesk_session_open advisor: false."
+        ),
+        "{}",
+        sent.text
+    );
+    let prompt = asked_with(&asked, "command")
+        .into_iter()
+        .find(|args| args["command"]["type"] == "prompt")
+        .unwrap();
+    let message = prompt["command"]["message"].as_str().unwrap();
+    assert!(message.starts_with("<ompdesk-agent-message"), "{message}");
+    assert!(message.contains("/advisor off"), "{message}");
+    let plain = control
+        .run(
+            "a",
+            "ompdesk_session_send",
+            json!({ "session": "b", "message": "see /tmp/x" }),
+            None,
+        )
+        .await;
+    assert!(
+        !plain.text.contains("not run as a command"),
+        "{}",
+        plain.text
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
 async fn a_report_reaches_the_opener_once_and_says_what_to_do_next() {
     let (control, asked) = rig(
         9_302,
