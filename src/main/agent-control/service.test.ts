@@ -3730,6 +3730,28 @@ describe("autoClose: opened sessions whose work landed", () => {
 		await problem.service.autoClose("main0001");
 		expect(closes(problem.host)).toHaveLength(1);
 
+		// A report or note that reached it afterwards (stock's custom message, attribution agent) starts no work.
+		const noted = await finishedChild({
+			patch: {
+				restored: true,
+				lastRun: undefined,
+				messages: finalTurn("Done.\nResult: ok", [
+					Object.assign(
+						{
+							role: "custom" as const,
+							customType: "ompdesk.mail",
+							display: true,
+							content: [{ type: "text" as const, text: "Boss: thanks, merged." }],
+							details: { kind: "note", from: "main0001" },
+						},
+						{ attribution: "agent" },
+					),
+				]),
+			},
+		});
+		await noted.service.autoClose("main0001");
+		expect(closes(noted.host)).toHaveLength(1);
+
 		// Not started at all (a deferred tab): no omp to ask, the saved transcript answers, on its own computer.
 		for (const device of [undefined, "dev-win-1"]) {
 			const asleep = await finishedChild({
@@ -3801,6 +3823,18 @@ describe("autoClose: opened sessions whose work landed", () => {
 					stopReason: "toolUse",
 				},
 			],
+			// Cut off right after its opener's next instruction (`ompdesk_session_send`, journaled as a wrapped user
+			// message): the earlier Result: ok answers the earlier work, not this one.
+			[
+				...finalTurn("Done.\nResult: ok"),
+				Object.assign(
+					{
+						role: "user" as const,
+						content: [{ type: "text" as const, text: wrapAgentMessage("also cover the empty input", "Boss") }],
+					},
+					{ attribution: "user" },
+				),
+			],
 		];
 		for (const messages of endings) {
 			const { host, service } = await finishedChild({
@@ -3812,6 +3846,30 @@ describe("autoClose: opened sessions whose work landed", () => {
 			const [item] = await service.reviewItems("main0001");
 			expect(item?.state).not.toBe("running");
 		}
+	});
+
+	it("keeps a restored child that is up and was cut off after its opener's next instruction", async () => {
+		// Started again (C14's case): stock's last assistant text is the earlier answer, and the transcript shows the
+		// opener's instruction after it, journaled as a wrapped user message.
+		const { host, service } = await finishedChild({
+			patch: {
+				restored: true,
+				lastRun: undefined,
+				last: "Done.\nResult: ok",
+				messages: [
+					...finalTurn("Done.\nResult: ok"),
+					Object.assign(
+						{
+							role: "user" as const,
+							content: [{ type: "text" as const, text: wrapAgentMessage("also cover the empty input", "Boss") }],
+						},
+						{ attribution: "user" },
+					),
+				],
+			},
+		});
+		await service.autoClose("main0001");
+		expect(closes(host)).toHaveLength(0);
 	});
 });
 
