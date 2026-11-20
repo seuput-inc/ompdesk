@@ -12,10 +12,7 @@
  * without a download.
  *
  *   bun run build:node -- --check     the staged folder against the pin and its record, nothing downloaded
- *   bun run build:node -- --pin-latest   moves the pin to nodejs.org's newest 24.x LTS with its SHASUMS256.txt hashes
- *
- * Node 24 is the LTS line main was written and tested on (the repo's `.node-version`-less CI runs 24); a new 24.x patch
- * release is a pin bump, a new major is a decision.
+ *   bun run build:node -- --pin-latest   updates within the pinned LTS major using nodejs.org's SHASUMS256.txt
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,7 +27,6 @@ export const PIN_FILE = path.join(REPO_ROOT, "scripts", "node-runtime-pin.json")
 export const NODE_ROOT = path.join(REPO_ROOT, "resources", "node");
 /** Read by scripts/after-pack.cjs. */
 export const BUILD_RECORD = "node.build.json";
-const MAJOR = "24";
 
 export interface NodePinTarget {
 	file: string;
@@ -207,14 +203,14 @@ export function checkNode(key = `${process.platform}-${process.arch}`): NodeBuil
 	return record;
 }
 
-/** Every pinned target moved to nodejs.org's newest 24.x LTS, with the hashes its SHASUMS256.txt lists. */
 async function pinLatest(pin: NodePin): Promise<NodePin> {
 	const index = (await (await fetch("https://nodejs.org/dist/index.json")).json()) as Array<{
 		version: string;
 		lts: string | false;
 	}>;
-	const latest = index.find(entry => entry.lts && entry.version.startsWith(`v${MAJOR}.`));
-	if (!latest) fail(`nodejs.org lists no ${MAJOR}.x LTS`);
+	const major = pin.version.split(".")[0];
+	const latest = index.find(entry => entry.lts && entry.version.startsWith(`v${major}.`));
+	if (!latest) fail(`nodejs.org lists no ${major}.x LTS`);
 	const version = latest.version.slice(1);
 	const sums = await (await fetch(`https://nodejs.org/dist/v${latest.version.slice(1)}/SHASUMS256.txt`)).text();
 	const targets: Record<string, NodePinTarget> = {};

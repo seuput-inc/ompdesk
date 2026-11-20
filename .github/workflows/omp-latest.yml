@@ -122,8 +122,8 @@ jobs:
       main: ${{ steps.plan.outputs.main }}
       write: ${{ steps.plan.outputs.write }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - id: plan
@@ -174,8 +174,8 @@ jobs:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -192,7 +192,7 @@ jobs:
           bun scripts/omp-bump/extract.ts > "$OUT/omp-bump.json"
           bun scripts/omp-bump/extract.ts --check > "$OUT/strings-check.txt" 2>&1 || { cat "$OUT/strings-check.txt"; exit 1; }
       - if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: omp-bump
           path: ${{ runner.temp }}/omp-bump
@@ -210,7 +210,7 @@ jobs:
     permissions:
       contents: write # the omp/bump/<version> branch
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - env:
           VERSION: ${{ needs.plan.outputs.latest }}
           BRANCH: ${{ needs.plan.outputs.branch }}
@@ -241,13 +241,13 @@ jobs:
       OMP: ${{ needs.main.outputs.omp }}
     steps:
       - if: needs.plan.outputs.bump == 'true'
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: needs.plan.outputs.bump == 'true'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - if: needs.plan.outputs.bump == 'true'
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         # A run whose jobs ended before uploading leaves nothing to download; the report still names them.
         continue-on-error: true
         with:
@@ -266,7 +266,7 @@ jobs:
           tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/report.md"
       - name: Failure issue
         if: github.ref == 'refs/heads/main' && inputs.pretend_tested == ''
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const fs = require("node:fs");
@@ -302,7 +302,7 @@ jobs:
             }
       - name: Ready issue
         if: github.ref == 'refs/heads/main' || inputs.pretend_tested != ''
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PUSHED: ${{ needs.push.result }}
           VERSION: ${{ needs.plan.outputs.latest }}
@@ -373,12 +373,12 @@ jobs:
       WRITE: ${{ needs.plan.outputs.write }}
     steps:
       # This ref's code, never the tested tag's: the only job of the run that can write runs no released code.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - if: env.VERDICT == 'red'
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         # A run whose jobs ended before uploading leaves nothing to download; the report still names them.
         continue-on-error: true
         with:
@@ -402,7 +402,7 @@ jobs:
         if: env.VERDICT == 'red' && env.WRITE == 'true'
         # The hold is recorded even when no issue could be opened: without it every hourly run tests this omp again.
         continue-on-error: true
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const fs = require("node:fs");
@@ -438,7 +438,7 @@ jobs:
         run: bun scripts/omp-bump/compat.ts record
       - name: Close the hold issues this verdict lifts
         if: env.VERDICT == 'green' && env.WRITE == 'true'
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RELEASED: ${{ steps.record.outputs.released_issue }}
         with:

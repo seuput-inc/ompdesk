@@ -151,8 +151,8 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/shell-check
@@ -170,8 +170,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -205,8 +205,8 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # macOS runs the shell from an .app bundle (CEF finds its framework and helpers by that layout),
@@ -255,8 +255,8 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/shell-mac-inputs
@@ -269,7 +269,7 @@ jobs:
         run: |
           { echo "### update move from v0.127.0, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: move-mac-${{ matrix.os }}
           path: move-mac.log
@@ -293,8 +293,8 @@ jobs:
       ELECTRON_BUILDER_COMPRESSION_LEVEL: "4"
       OMP_MOVE_RELEASED_TAG: ${{ matrix.released-tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - name: Put bun's cache on the workspace volume
@@ -336,7 +336,7 @@ jobs:
         run: |
           { echo "### update move from $OMP_MOVE_RELEASED_TAG, windows-latest"; for f in move-win-*.log; do echo "#### $f"; echo '```'; grep -E '"step":"(ok|FAILED)|^RESULT|OWNER CHANGED' "$f" | cut -c1-400 || true; echo '```'; done; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: move-win-${{ matrix.released-tag }}
           path: |
@@ -371,8 +371,8 @@ jobs:
         os: ${{ fromJSON(inputs.only == 'move-current-mac' && '["macos-15"]' || '["macos-15","macos-26"]') }}
         released-tag: ${{ fromJSON((inputs.only == 'move-current-mac' || inputs.only == 'tauri-move') && '["v0.131.0"]' || '["v0.128.0","v0.131.0"]') }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/shell-mac-inputs
@@ -388,7 +388,7 @@ jobs:
           { echo "### update move from ${{ matrix.released-tag }}, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac-release1.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           { echo "Screenshots (artifact move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}, folder move-shots):"; ls "${{ runner.temp }}/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}
           path: |
@@ -416,8 +416,8 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/shell-mac-inputs
@@ -429,7 +429,7 @@ jobs:
         run: |
           { echo "### keychain gate, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' keychain-ci.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: keychain-${{ matrix.os }}
           path: keychain-ci.log
@@ -454,8 +454,8 @@ jobs:
       matrix:
         os: [macos-15, windows-latest]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -535,7 +535,7 @@ jobs:
             exit 1
           fi
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tauri-native-${{ matrix.os }}
           path: |
@@ -558,8 +558,8 @@ jobs:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -586,7 +586,7 @@ jobs:
           mkdir -p test-results/crash-reports
           find "$HOME/Library/Logs/DiagnosticReports" -name '*.ips' -mmin -90 -exec cp {} test-results/crash-reports/ \; 2>/dev/null || true
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: phone-webkit-mac
           path: |
@@ -608,7 +608,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/native-toolchain
         with:
           workspaces: native/ompdesk/crates/shell-preview
@@ -620,8 +620,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -649,7 +649,7 @@ jobs:
       - name: Check the packaging and automatic-update consumers
         run: bunx vitest run src/main/packaging-config.test.ts src/main/update-compatibility.test.ts src/main/update-provider.test.ts src/main/update-release.test.ts src/main/updater-state.test.ts
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tauri-generated-notices
           path: |
@@ -679,7 +679,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The published DMG (size, SHA-512, signature, requirement, leaf certificate, Gatekeeper and notarization evidence)
         shell: bash
         run: set -o pipefail; bash scripts/shell-move/release-assets.sh mac "$RELEASE_TAG" 2>&1 | tee release-assets-mac.log
@@ -689,7 +689,7 @@ jobs:
         run: |
           { echo "### published $RELEASE_TAG DMG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-assets-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets-mac-${{ inputs.tag }}
           path: |
@@ -714,7 +714,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The published setup (size and SHA-512 against the metadata, GitHub's digest, PE header)
         shell: bash
         run: set -o pipefail; bash scripts/shell-move/release-assets.sh win "$RELEASE_TAG" 2>&1 | tee release-assets-win.log
@@ -730,7 +730,7 @@ jobs:
         run: |
           { echo "### published $RELEASE_TAG setup, windows-latest"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED)' release-assets-win.log release-authenticode.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets-win-${{ inputs.tag }}
           path: |
@@ -761,8 +761,8 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Nothing is built: the scripts only need the repository's dependencies (Playwright's CDP client for the released Electron's
@@ -785,7 +785,7 @@ jobs:
           { echo "### real-feed update v0.131.0 to $RELEASE_TAG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-update-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           { echo "Screenshots (artifact release-update-mac-$RELEASE_TAG, folder move-shots):"; ls "$RUNNER_TEMP/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-update-mac-${{ inputs.tag }}
           path: |
@@ -836,8 +836,8 @@ jobs:
       CANDIDATE_TAG: ${{ inputs.tag }}
       CPU_LOAD: ${{ inputs.cpu_load }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - name: The published v0.131.0 setup and the candidate setup
@@ -870,7 +870,7 @@ jobs:
         run: |
           { echo "### win-update-real ${{ matrix.mode }}: v$OLD_VERSION to ${CANDIDATE_RUN:+run }${CANDIDATE_RUN:-$CANDIDATE_TAG}"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-real/out-${{ matrix.mode }}/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: win-update-real-${{ matrix.mode }}
           path: ${{ runner.temp }}/win-update-real/out-${{ matrix.mode }}/
@@ -901,8 +901,8 @@ jobs:
       NEXT_RUN: ${{ inputs.next_run }}
       OLD_TAG: ${{ inputs.old_tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # manual: the turn the setup cuts off runs on stock omp, the version every other workflow tests against.
@@ -941,7 +941,7 @@ jobs:
         run: |
           { echo "### win-update-gate ${{ matrix.mode }}"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-gate/out/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: win-update-gate-${{ matrix.mode }}
           path: ${{ runner.temp }}/win-update-gate/out/
@@ -973,8 +973,8 @@ jobs:
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
       NEXT_RUN: ${{ inputs.next_run }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Nothing is built: the e2e fake omp needs the repository's dependencies; the apps are the dry runs'.
@@ -1010,7 +1010,7 @@ jobs:
         run: |
           { echo "### mac-update-gate: run $CANDIDATE_RUN to run $NEXT_RUN (${NEXT_VERSION:-unknown})"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED|RESULT)' mac-update-gate.log | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-update-gate
           path: |

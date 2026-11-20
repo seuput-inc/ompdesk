@@ -3,7 +3,7 @@
 #
 #   resources/ompdesk-shell/<platform>-<arch>/   `bun run build:shell`: the shell executable, CEF's runtime and the
 #                                               build record (native/ompdesk/crates/shell; cargo, CEF's archive)
-#   resources/node/<platform>-<arch>/            `bun run build:node`: the pinned Node 24 LTS (scripts/node-runtime-pin.json)
+#   resources/node/<platform>-<arch>/            `bun run build:node`: the LTS release in scripts/node-runtime-pin.json
 #   resources/shell-licenses/<platform>-<arch>/  `bun run stage:cef-licenses` (packaging jobs only): CEF's CREDITS.html
 #                                               as LICENSES.chromium.html, and its LICENSE
 #
@@ -29,7 +29,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: resources/ompdesk-shell
-        key: ompdesk-shell-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'scripts/build-shell.ts', 'scripts/cargo.ts') }}
+        key: ompdesk-shell-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'scripts/build-shell.ts', 'scripts/cargo.ts') }}
 
     - if: steps.shell-cache.outputs.cache-hit != 'true'
       uses: ./.github/actions/shell-toolchain
