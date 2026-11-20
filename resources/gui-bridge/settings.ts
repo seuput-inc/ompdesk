@@ -800,7 +800,7 @@ export async function roleMetadata(session: AgentSession) {
 			import("./omp/pi-catalog/types"),
 		]);
 	const catalog = session.modelRegistry.getAll("all");
-	const describe = (id: string) => {
+	const roleInfo = (id: string) => {
 		const info = getRoleInfo(id, session.settings);
 		const { name, tag, color, hidden, section } = info;
 		const accepts = [...new Set(catalog.filter(model => info.accepts(model)).map(model => modelKind(model)))];
@@ -808,14 +808,14 @@ export async function roleMetadata(session: AgentSession) {
 	};
 	const stock = MODEL_ROLE_IDS.map(id => ({
 		id,
-		...describe(id),
+		...roleInfo(id),
 		defaults: rolePriorityDefaults(id),
 		origin: "stock" as const,
 	}));
 	const known = getKnownRoleIds(session.settings);
 	const ompdesk = OMPDESK_ROLES.filter(role => known.includes(role.id)).map(role => ({
 		id: role.id,
-		...describe(role.id),
+		...roleInfo(role.id),
 		name: role.name,
 		defaults: [...role.chain],
 		origin: "ompdesk" as const,

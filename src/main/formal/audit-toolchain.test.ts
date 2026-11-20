@@ -69,7 +69,7 @@ function finished(child: ChildProcess): Promise<number | null> {
  */
 describe("the install lock", () => {
 	const TOOLCHAIN = path.join(SKILL, "scripts/lib/toolchain.ts");
-	const CHILD = (toolchain: string): string =>
+	const childScript = (toolchain: string): string =>
 		[
 			'import fs from "node:fs";',
 			`import { withLock } from ${JSON.stringify(toolchain)};`,
@@ -92,7 +92,7 @@ describe("the install lock", () => {
 	 */
 	async function race(procs: number, rounds: number, roundMs: number): Promise<void> {
 		const script = path.join(temp, `lock-child-${procs}.ts`);
-		fs.writeFileSync(script, CHILD(TOOLCHAIN));
+		fs.writeFileSync(script, childScript(TOOLCHAIN));
 		let overlaps = 0;
 		let entered = 0;
 		for (let round = 0; round < rounds; round++) {

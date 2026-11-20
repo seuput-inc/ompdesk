@@ -285,7 +285,7 @@ async function launcherVersion(bin: string): Promise<string> {
 	return out.trim();
 }
 
-const describe = (outcome: OmpUpdateOutcome) =>
+const outcomeLabel = (outcome: OmpUpdateOutcome) =>
 	outcome.kind === "failed"
 		? `failed (${outcome.failure.reason}${outcome.failure.detail ? `: ${outcome.failure.detail}` : ""})`
 		: outcome.kind;
@@ -350,10 +350,10 @@ async function check(root: string): Promise<void> {
 		console.log(`✓ a running omp holds ${PACKAGE}@${older.version}`);
 
 		const first = await service.updateOmp(newer.version);
-		console.log(`→ update while omp runs: ${describe(first)}`);
+		console.log(`→ update while omp runs: ${outcomeLabel(first)}`);
 		if (first.kind === "skipped") fail("the update was skipped while omp ran");
 		if (first.kind === "failed" && first.failure.reason !== "not-updated" && first.failure.reason !== "install") {
-			fail(`the update ended as ${describe(first)}, not updated, not-updated or install`);
+			fail(`the update ended as ${outcomeLabel(first)}, not updated, not-updated or install`);
 		}
 		const afterFirst = await launcherVersion(launcher);
 		console.log(`  launcher afterwards: ${afterFirst}`);
@@ -377,9 +377,9 @@ async function check(root: string): Promise<void> {
 		const exit = await running.stop();
 		if (exit !== 0) fail(`omp hold exited ${exit}`);
 		const second = await service.updateOmp(newer.version);
-		console.log(`→ update after omp exited: ${describe(second)}`);
+		console.log(`→ update after omp exited: ${outcomeLabel(second)}`);
 		if (second.kind !== "updated" || isNewer(newer.version, second.version)) {
-			fail(`the update after omp exited ended as ${describe(second)}`);
+			fail(`the update after omp exited ended as ${outcomeLabel(second)}`);
 		}
 		const resolved = await resolveOmp();
 		if (!resolved.ok || isNewer(newer.version, resolved.runtime.version)) {

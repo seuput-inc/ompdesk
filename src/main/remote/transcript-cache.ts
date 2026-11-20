@@ -56,7 +56,7 @@ export class TranscriptCache {
 				await core().call<{ version: string; page: object } | null>("remotebytes.page", { dir: this.#dir, key })
 			).result;
 		} catch (error) {
-			console.warn(`[transcript-cache] page not read: ${describe(error)}`);
+			console.warn(`[transcript-cache] page not read: ${errorText(error)}`);
 			return null;
 		}
 	}
@@ -65,10 +65,10 @@ export class TranscriptCache {
 	async keepPage(key: string, version: string, page: object): Promise<void> {
 		await core()
 			.call("remotebytes.keepPage", { dir: this.#dir, limit: this.#limit, key, version, page })
-			.catch(error => console.warn(`[transcript-cache] page not kept: ${describe(error)}`));
+			.catch(error => console.warn(`[transcript-cache] page not kept: ${errorText(error)}`));
 	}
 }
 
-function describe(error: unknown): string {
+function errorText(error: unknown): string {
 	return error instanceof CoreError ? `${error.code} ${error.message}` : String(error);
 }
