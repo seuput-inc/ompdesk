@@ -630,6 +630,8 @@ export type RuntimeErrorSource =
 	 * `channel`). No message text.
 	 */
 	| "turn-stop"
+	/** Settings › Credit use changed on this computer (src/main/index.ts): `message` is `on` or `off`. */
+	| "credit-spend"
 	/**
 	 * A host link's transitions (src/main/remote/client.ts, host-server.ts): `message` is `down` (`reason`,
 	 * `wasOnlineMs`), `attempt` (`n`, `delayMs`, `trigger`), `up` (`outageMs`, `attempts`) on the client, `open` and

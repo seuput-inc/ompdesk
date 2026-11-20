@@ -226,7 +226,7 @@ export default function(pi) {
     const accounts = auth.oauth.accounts(report.provider, session.sessionId);
     const count = raw.filter(peer => peer.provider === report.provider).length;
     const old = oldMatch(report, accounts, count);
-    const next = matchReportAccount(report, accounts, count, reportMatchesActiveAccount);
+    const next = matchReportAccount(report, accounts, count, reportMatchesActiveAccount, typeof report.metadata?.accountId === "string" ? report.metadata.accountId : undefined);
     if (usage.reports[index]?.credentialId !== next?.credentialId) throw new Error("wire attribution differs from stock matching");
     oldAttributed += Number(!!old); newAttributed += Number(!!next);
     changedAttribution += Number(old?.credentialId !== next?.credentialId);

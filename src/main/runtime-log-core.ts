@@ -43,6 +43,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"remote-tab": true,
 	"session-delete": true,
 	"turn-stop": true,
+	"credit-spend": true,
 	"remote-link": true,
 	"gpu-fallback": true,
 	"launch-guard": true,

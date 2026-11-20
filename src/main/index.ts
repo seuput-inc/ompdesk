@@ -1336,6 +1336,8 @@ app.whenReady().then(async () => {
 			read: () => prefsStore().get(CREDIT_SPEND_PREF),
 			write: enabled => {
 				prefsStore().set(CREDIT_SPEND_PREF, enabled);
+				// When it changed: a usage read or a spent credit is judged by the switch at that time.
+				writeRuntimeLog({ source: "credit-spend", message: enabled ? "on" : "off" });
 				// Tabs on a paired host follow the host's own pref.
 				for (const tab of sidecarPool.allSidecars()) if (!tab.device) tab.syncCreditSpend?.();
 				devices.hostCreditSpendChanged();

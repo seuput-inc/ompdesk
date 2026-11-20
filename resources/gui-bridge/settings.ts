@@ -11,8 +11,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { accountCredits, creditKind, creditsInRaw } from "./account-credits";
+import type { AccountCredits } from "../../src/shared/rpc-types";
+import { accountCredits, creditKind, creditsInRaw, rawCredits } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
+import { creditSpendEnabled } from "./credit-spend-core";
 import { guard, probe } from "./health";
 import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
@@ -26,6 +28,7 @@ import { shownRoleValue, storedRoleValue } from "./role-values";
 import { settingText } from "./settings-core";
 import { heldDefaultNotes, releaseThinkingDefaultFor, syncThinkingDefault } from "./thinking-default";
 import type { BridgeEnv, BridgeMethods } from "./types";
+import { usageStanding } from "./usage-standing";
 
 type Rec = Record<string, unknown>;
 type Layer = "global" | "project" | "overlay" | "runtime";
@@ -490,6 +493,9 @@ interface WireUsageReport {
 	fetchedAt: number;
 	limits: Rec[];
 	resetAt?: number;
+	limitedUntil?: number;
+	planSpentUntil?: number;
+	credits?: AccountCredits;
 	notes?: string[];
 	account?: string;
 	credentialId?: number;
@@ -534,12 +540,22 @@ async function reportShaper() {
 	): WireUsageReport => {
 		const resetPasses = projectReset?.(report, account);
 		const usedAt = lastUsedAt(report, account, assigned);
+		const now = Date.now();
+		const standing = usageStanding(report, { now, creditSpend: creditSpendEnabled(), resetAtMs: usageResetAtMs });
+		// ChatGPT's balance is only in a fetch's `raw`: this read's, else the account's last fetch through this bridge.
+		const credits =
+			accountCredits(report.limits) ??
+			rawCredits(report.provider, report.raw) ??
+			(account ? lastFetchedCredits(report.provider, account.credentialId) : undefined) ??
+			undefined;
 		return {
 			provider: report.provider,
 			fetchedAt: report.fetchedAt,
 			limits: report.limits.map(shapeLimit),
-			// When every exhausted window has reset (stock's own rule); absent while not limited.
-			resetAt: usageResetAtMs(report.limits, Date.now()),
+			// When every exhausted window has reset (stock's own rule, every row): what a wait for a limit reads.
+			resetAt: usageResetAtMs(report.limits, now),
+			...standing,
+			...(credits ? { credits } : {}),
 			notes: report.notes,
 			account:
 				formatActiveAccountLabel(account) ??
@@ -606,6 +622,7 @@ async function usage(env: BridgeEnv, session: AgentSession, refresh: boolean) {
 				accountsOf(report.provider),
 				reportCount.get(report.provider) ?? 0,
 				reportMatchesActiveAccount,
+				typeof report.metadata?.accountId === "string" ? report.metadata.accountId : undefined,
 			);
 			if (account) {
 				showReport(report.provider, account.credentialId, report);
@@ -637,6 +654,8 @@ async function usage(env: BridgeEnv, session: AgentSession, refresh: boolean) {
 	const stats = session.sessionManager.getUsageStatistics();
 	return {
 		reports,
+		// The Credit use of the omp that read them: whether the plans its reports show used up are run on credits here.
+		creditSpend: creditSpendEnabled(),
 		session: {
 			input: stats.input,
 			output: stats.output,
