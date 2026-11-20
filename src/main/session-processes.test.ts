@@ -112,13 +112,16 @@ beforeEach(() => {
 	logs.length = 0;
 });
 
-afterEach(() => {
-	for (const child of children.splice(0)) child.kill("SIGKILL");
+afterEach(async () => {
+	const killed = children.splice(0);
+	for (const child of killed) child.kill("SIGKILL");
 	for (const pid of orphans.splice(0)) {
 		try {
 			process.kill(pid, "SIGKILL");
 		} catch {}
 	}
+	// Windows refuses to remove a folder a running process has as its working folder.
+	await Promise.all(killed.map(child => (ended(child) ? undefined : once(child, "exit"))));
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
