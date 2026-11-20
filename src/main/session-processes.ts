@@ -642,8 +642,9 @@ export class SessionProcesses {
 			row => !own.has(row.pid) && row.startedMs !== undefined && row.startedMs < takenAt,
 		);
 		const pids = new Set(old.map(row => row.pid));
+		// Windows' console host under a console program is the program's, never a command of the session's own.
 		const running = old
-			.filter(row => row.deadOutput || !pids.has(row.ppid))
+			.filter(row => (row.deadOutput || !pids.has(row.ppid)) && row.name.toLowerCase() !== "conhost.exe")
 			.map(row => this.#described(entry.record, row));
 		const ended = survey.ended.map(row => this.#described(entry.record, row));
 		return running.length > 0 || ended.length > 0 ? { running, ended } : undefined;

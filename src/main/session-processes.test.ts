@@ -241,7 +241,7 @@ describe("a session's processes, on this computer", () => {
 	 * quit took the omp (or a Playwright run between) that read it. `args` stand in for a command line's secrets.
 	 */
 	async function deafened(tag: string, script: string, cwd: string, args: string[] = []) {
-		const child = spawn(process.execPath, ["-e", script, ...args], {
+		const child = spawn(process.execPath, ["-e", script, "--", ...args], {
 			env: env(tag),
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -249,7 +249,12 @@ describe("a session's processes, on this computer", () => {
 		});
 		children.push(child);
 		const out = child.stdout as NonNullable<typeof child.stdout>;
-		const [first] = (await once(out, "data")) as [Buffer];
+		const [first] = (await Promise.race([
+			once(out, "data"),
+			once(child, "exit").then(([code]) => {
+				throw new Error(`exited (${code}) before its first output`);
+			}),
+		])) as [Buffer];
 		out.destroy();
 		child.stderr?.destroy();
 		return { child, said: first.toString() };
@@ -271,6 +276,7 @@ describe("a session's processes, on this computer", () => {
 			const sink = fs.openSync(logFile, "w");
 			const busy = spawn(process.execPath, ["-e", BUSY], {
 				env: env(tab.tag),
+				cwd: folder,
 				stdio: ["ignore", sink, sink],
 				windowsHide: true,
 			});
