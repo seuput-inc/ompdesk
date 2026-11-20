@@ -21,9 +21,10 @@ import { useRemoteStore } from "../../../stores/remote";
 import { setFocusedSessionRuntime } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { useUiStore } from "../../../stores/ui";
+import { parseDelimited } from "./delimited";
 import { FileViewer } from "./FileViewer";
 import { fileIconKind, viewerKind } from "./file-kind";
-import { hexDump, parseDelimited, prettyJson } from "./parse";
+import { hexDump, prettyJson } from "./parse";
 
 const { document, window, Event, HTMLElement, Element, Node, MutationObserver } = parseHTML(
 	'<html data-theme="dark"><body></body></html>',

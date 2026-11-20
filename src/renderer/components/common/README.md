@@ -2,8 +2,9 @@
 
 The renderer's design system: every primitive a surface is built from. Read this before you write UI; reach for a
 component here before a raw element, and read the component's file header for its full rules. Import from the barrel
-(`components/common` → `index.ts`). Every primitive renders in the internal style guide (`OMP_GUI_STYLEGUIDE=1`, or
-`#/styleguide` on the dev harness).
+(`components/common` → `index.ts`) except for `QrCode`: import `components/common/QrCode` directly so the phone
+does not load the QR encoder before Settings opens. Every primitive renders in the internal style guide
+(`OMP_GUI_STYLEGUIDE=1`, or `#/styleguide` on the dev harness).
 
 `scripts/lint-controls.mjs` (run with the other surface rules by `scripts/lint-surfaces.mjs`, so by `bun run check` and
 `bun run check:changed`) fails a renderer component

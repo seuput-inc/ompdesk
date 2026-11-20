@@ -85,7 +85,6 @@ import {
 	PopoverSurface,
 	ProgressBar,
 	type ProgressSegment,
-	QrCode,
 	Radio,
 	RootErrorBoundary,
 	SearchField,
@@ -118,6 +117,7 @@ import {
 } from "../common";
 import { MenuItemView, MenuSurface, menuItemClasses } from "../common/ContextMenu";
 import { DialogSurface } from "../common/Modal";
+import { QrCode } from "../common/QrCode";
 import { SheetSurface } from "../common/Sheet";
 import { ToastCard } from "../common/Toast";
 import { TooltipBubble } from "../common/Tooltip";

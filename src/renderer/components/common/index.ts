@@ -85,7 +85,6 @@ export {
 } from "./ProgressBar";
 export { ProjectArtwork, type ProjectArtworkProps } from "./ProjectArtwork";
 export { isTabbable, popoverTabStops, tabOutOfPopover } from "./popover-focus";
-export { QrCode } from "./QrCode";
 export { RootErrorBoundary } from "./RootErrorBoundary";
 export { SectionLabel, type SectionLabelProps } from "./SectionLabel";
 export {
