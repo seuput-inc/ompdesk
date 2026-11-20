@@ -683,7 +683,11 @@ export type RuntimeErrorSource =
 	 * left the pool, whoever closed it.
 	 */
 	| "session-processes"
-	/** An agent's close of a tab (src/main/agent-control/host.ts): `message` `agent close`, details `tab`, `by` (the caller's tab), `auto` (the opener's auto-close). */
+	/**
+	 * What the control tools did to a session (the core's `fate_closed`/`fate_deleted`, through host.ts `fate`):
+	 * `message` `closed` or `deleted`, details `tab`, `session` (file name), `device`, `by` in the words
+	 * `agent-session-fates.json` keeps. Written once the close is done, so a window that refused writes nothing.
+	 */
 	| "agent-control"
 	/**
 	 * A start that waited for another live omp to let go of its session (src/main/session-free.ts): `message` says
