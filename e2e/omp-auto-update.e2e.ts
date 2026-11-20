@@ -166,9 +166,14 @@ async function launch(name: string, prefs: Record<string, unknown>, options: Lau
 	return { app, page, root, errors, omp };
 }
 
-async function close(launched: Launched): Promise<void> {
+/** Quit the app; `afterQuit` runs before its temp folder goes. */
+async function close(launched: Launched, afterQuit?: () => Promise<void>): Promise<void> {
 	await exitApp(launched.app);
-	await fs.rm(launched.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+	try {
+		await afterQuit?.();
+	} finally {
+		await fs.rm(launched.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+	}
 }
 
 const sidecarStatus = (page: Page) => page.evaluate(async () => (await window.omp.sidecar.getStatus()).status);
@@ -355,10 +360,11 @@ test("without the hidden pref (an upgrade from 0.135.0) a newer omp of the teste
 		expect(log.slice(0, 3)).toEqual(["checked launch", "started launch", "finished launch"]);
 		expect(log.filter(line => line.startsWith("stock-auto"))).toEqual([]);
 	} finally {
-		await close(launched);
+		// Byte for byte, after the app has quit too.
+		await close(launched, async () => {
+			expect((await fs.readFile(config)).equals(before)).toBe(true);
+		});
 	}
-	// Byte for byte, after the app has quit too.
-	expect((await fs.readFile(config)).equals(before)).toBe(true);
 });
 
 /** Opt-in captures (`OMP_GUI_OMP_UPDATE_CAPTURES=<dir>`): the updating row, the updated toast and Settings' omp rows. */
