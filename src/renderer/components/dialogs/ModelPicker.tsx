@@ -81,7 +81,7 @@ export function ModelPicker() {
 	const availableModels = useMemo(
 		() =>
 			catalog.filter(
-				row => !row.pickerAvailability || (accountRead && row.pickerAvailability === "account-verified"),
+				row => !row.pickerAvailability || (accountRead && row.pickerAvailability !== "account-unverified"),
 			),
 		[catalog, accountRead],
 	);

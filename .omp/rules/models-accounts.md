@@ -77,6 +77,7 @@ globs:
 
 ### Composer model picker
 - Stock's official Codex discovery cache is shared across accounts. The picker uses a row's `accountAccess` only on an identified OAuth route. A previous account's list cannot populate the provider or Recent group for the new account. Re-read stock's catalog on that boundary; a 429 does not revoke a row the current account already reported. An unconfirmed choice gets a retry notice, not a claim about subscription status. Disk snapshots do not restore a previous account's confirmation. This rule does not change Settings role candidates.
+- A Codex row that may also use a key stays selectable on a live catalog read. The bridge sends `live-route`, not account IDs. A restored snapshot or a picker reopened before its next read cannot assume the key is still present.
 
 ### Provider sign-in
 - Settings › Models & accounts and first run (`providers/ProviderLogin.tsx`) run stock `login` on the tab's omp. While a sign-in is in flight its `open_url`, `input` and info `notify` requests (`isSignInRequest` in `shared/rpc-types.ts`) belong to the panel (`loginRequestIds` in `stores/extension-ui.ts`) and **never render as chat cards**, even after the panel unmounts, the page reloads or a paired host's link returns.

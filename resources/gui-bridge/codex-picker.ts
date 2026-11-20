@@ -27,12 +27,20 @@ export async function pickerAccounts(session: AgentSession, rows: readonly Model
 	return new Set(accounts.flatMap(account => account.accountId ?? []));
 }
 
-export function pickerAvailability(row: Model, accounts: ReadonlySet<string> | undefined) {
+function pickerAvailability(row: Model, accounts: ReadonlySet<string> | undefined) {
 	const access = codexAccountAccess(row);
-	if (!access || !accounts) return undefined;
+	if (!access) return undefined;
+	if (!accounts) return "live-route";
 	const ids = Object.keys(access);
 	if (!ids.length) return undefined;
 	return ids.some(id => accounts.has(id)) ? "account-verified" : "account-unverified";
+}
+
+/** Send provenance, not account IDs or the provider's request compatibility block. */
+export function wireModel(model: Model, accounts: ReadonlySet<string> | undefined) {
+	const { compat: _compat, accountAccess: _access, ...rest } = model;
+	const availability = pickerAvailability(model, accounts);
+	return availability ? { ...rest, pickerAvailability: availability } : rest;
 }
 
 const lastAccountSet = new WeakMap<AgentSession["modelRegistry"], string>();

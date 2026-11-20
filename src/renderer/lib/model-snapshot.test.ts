@@ -66,6 +66,7 @@ describe("model snapshot", () => {
 
 	it.skipIf(!hasCodexProbe)("does not restore an account A mixed route as authority after removing its key", () => {
 		const { mixed } = codexPickerSequence();
+		for (const row of mixed) expect(row).not.toHaveProperty("accountAccess");
 		const alternate = { provider: "openai", id: "fixture-private" };
 		const old = createModelStore();
 		old.setState({ availableModels: [...mixed, alternate] });

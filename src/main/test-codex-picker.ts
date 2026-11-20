@@ -28,7 +28,7 @@ export function codexPickerSequence() {
 		globalThis.fetch = () => { throw Error("external network disabled"); };
 		const {openaiCodexModelManagerOptions} = await import(${file("pi-catalog", "provider-models/special.ts")});
 		const {resolveProviderModels} = await import(${JSON.stringify(manager)});
-		const {pickerAccounts, pickerAvailability, refreshForeignCatalog} = await import(${JSON.stringify(join(bridge, "codex-picker.ts"))});
+		const {pickerAccounts, wireModel, refreshForeignCatalog} = await import(${JSON.stringify(join(bridge, "codex-picker.ts"))});
 		let id = "A", fail = false, mixed = false, reads = 0, rows = [];
 		const opts = {...openaiCodexModelManagerOptions({
 			resolveAccounts: async () => [{accountId: id, accessToken: "fixture"}],
@@ -57,7 +57,7 @@ export function codexPickerSequence() {
 		}};
 		const image = async () => {
 			const ids = await pickerAccounts(session, rows);
-			return rows.map(row => ({provider:row.provider, id:row.id, name:row.id, pickerAvailability:pickerAvailability(row,ids)}));
+			return rows.map(row => wireModel(row,ids));
 		};
 		await read("online"); await refreshForeignCatalog(session,true); const a = await image();
 		mixed = true; const mixedRows = await image(); mixed = false;

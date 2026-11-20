@@ -13,7 +13,7 @@ import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { accountCredits, creditKind, creditsInRaw } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
-import { pickerAccounts, pickerAvailability, refreshForeignCatalog } from "./codex-picker";
+import { pickerAccounts, refreshForeignCatalog, wireModel } from "./codex-picker";
 import { guard, probe } from "./health";
 import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
@@ -315,20 +315,6 @@ function discoveryStates(session: AgentSession) {
 		});
 	}
 	return states;
-}
-
-/**
- * A model as the windows get it: stock's model less its `compat` block (request quirks of the provider's API, about
- * 1.9 KB of a 2.5 KB model, read by nothing in OMPdesk). A host with many providers sent a paired device 1.73 MB for
- * one `get_providers`; every catalog read and `model_catalog_update` carries the list.
- */
-function wireModel(
-	model: ReturnType<AgentSession["getAvailableModels"]>[number],
-	accounts: ReadonlySet<string> | undefined,
-) {
-	const { compat: _compat, accountAccess: _access, ...rest } = model;
-	const availability = pickerAvailability(model, accounts);
-	return availability ? { ...rest, pickerAvailability: availability } : rest;
 }
 
 async function catalogSnapshot(session: AgentSession, refreshPending: boolean) {

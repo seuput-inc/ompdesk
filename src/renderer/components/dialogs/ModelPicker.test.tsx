@@ -158,7 +158,7 @@ describe("ModelPicker account availability", () => {
 		const alternate = { provider: "openai", id: "fixture-private", name: "API route" };
 		recent = { selectors: ["openai-codex/fixture-private", "openai/fixture-private"] };
 		await mount([...states.a, alternate]);
-		expect(rows("recent")).toEqual(["fixture-private", "API route"]);
+		expect(rows("recent")).toEqual([expect.stringContaining("fixture-private"), "API route"]);
 		const show = async (models: ModelInfo[]) =>
 			act(async () => useModelStore.setState({ availableModels: [...models, alternate] }));
 		await show(states.firstFailure);
@@ -166,10 +166,10 @@ describe("ModelPicker account availability", () => {
 		expect(rows("recent")).toEqual(["API route"]);
 		expect(document.body.textContent).toContain(notice);
 		await show(states.mixed);
-		expect(rows("recent")).toEqual(["fixture-private", "API route"]);
+		expect(rows("recent")).toEqual([expect.stringContaining("fixture-private"), "API route"]);
 		for (const models of [states.b, states.limited]) {
 			await show(models);
-			expect(rows("openai-codex")).toEqual(["fixture-common"]);
+			expect(rows("openai-codex")).toEqual([expect.stringContaining("fixture-common")]);
 			expect(rows("recent")).toEqual(["API route"]);
 			expect(document.body.textContent).not.toContain(notice);
 		}

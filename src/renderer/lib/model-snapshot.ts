@@ -43,7 +43,7 @@ export function seedModelStore(store: SeedTarget, device: string | undefined, se
 		if (catalog && Array.isArray(catalog.availableModels))
 			store.setState({
 				availableModels: catalog.availableModels.map(row =>
-					row.pickerAvailability === "account-verified" || codexAccountAccess(row)
+					row.pickerAvailability || codexAccountAccess(row)
 						? { ...row, pickerAvailability: "account-unverified" }
 						: row,
 				),

@@ -1647,7 +1647,8 @@ export interface ModelInfo {
 	id: string;
 	name?: string;
 	description?: string;
-	pickerAvailability?: "account-verified" | "account-unverified";
+	/** A live route may serve through a key; it is not proof of subscription access after reopening. */
+	pickerAvailability?: "account-verified" | "account-unverified" | "live-route";
 	isNew?: boolean;
 	isBeta?: boolean;
 	isRecommended?: boolean;
