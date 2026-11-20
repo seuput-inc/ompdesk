@@ -902,14 +902,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Plugins and marketplaces through stock's plugin loader, manager, marketplace, git-url, npm-registry and discovery helpers.",
+			"Plugins and marketplaces through stock's plugin manager and discovery helpers. The bundled Ponytail skill provider defers to a registered marketplace install.",
 		files: [
 			"resources/gui-bridge/extensions/plugins.ts",
+			"resources/gui-bridge/ponytail.ts",
 			"resources/gui-bridge/extensions/shared.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
 		],
 		stock: [
+			"@oh-my-pi/pi-coding-agent/capability",
 			"@oh-my-pi/pi-coding-agent/config/registry",
 			"@oh-my-pi/pi-coding-agent/discovery/helpers",
 			"@oh-my-pi/pi-coding-agent/extensibility/plugins/loader",
@@ -919,7 +921,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace",
 			"@oh-my-pi/pi-utils",
 		],
-		tests: ["e2e/agent-studio-stock.e2e.ts"],
+		tests: ["e2e/agent-studio-stock.e2e.ts", "src/main/ponytail/ponytail-stock.test.ts"],
 	},
 	{
 		id: "B26",

@@ -92,6 +92,7 @@ export const FEATURES = {
 	pluginReload: "Picking up plugin changes after an extension update",
 	extensionUpdates: "Extension updates (plugins and registry skills, in the Updates section)",
 	skills: "Skills list",
+	ponytail: "Built-in Ponytail skills",
 	skillDetail: "Skill preview",
 	skillToggle: "Turning a skill on or off",
 	manageSkill: "Creating, editing and deleting a managed skill",
@@ -937,6 +938,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** modes/ecc-hint.ts: the public `before_agent_start` hook and the context's `cwd` only. */
 	eccHint: {},
+	ponytail: union(MARKETPLACE_MANAGER, {
+		modules: {
+			[`${AGENT}/capability`]: ["registerProvider()", "getProviderInfo()"],
+			[`${AGENT}/discovery/helpers`]: ["scanSkillsFromDir()"],
+			[`${AGENT}/extensibility/plugins/marketplace`]: ["MarketplaceManager.prototype.listInstalledPlugins()"],
+		},
+	}),
 	/** modes/formal-hint.ts: the public `before_agent_start` hook and its `prompt` only. */
 	formalHint: {},
 	/**

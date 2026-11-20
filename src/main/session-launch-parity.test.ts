@@ -1,6 +1,6 @@
 /**
  * Every way a session's omp starts launches the same omp: the same extensions (bridge, control tools' skill, REA,
- * pstack, ECC, formal, ai-memory), the same OMPdesk settings (reply language, profile, suggestions, titles, judge,
+ * pstack, ECC, formal, Ponytail, ai-memory), the same OMPdesk settings (reply language, profile, suggestions, titles, judge,
  * delegation, account rotation, model roles, memory recall), the same proxy and environment. The paths: a new tab,
  * a stored session opened, a relaunch's saved tab started later, a relaunch's interrupted turn, an omp update's
  * restart, a paired device's tab on this computer and that tab revived after this computer relaunched.
@@ -394,6 +394,8 @@ describe("a session's omp launches the same way on every start path", () => {
 			join("/builtin", "ecc"),
 			"-e",
 			join("/builtin", "formal"),
+			"-e",
+			join("/bridge", "ponytail.ts"),
 			"-e",
 			"/ud/ai-memory/omp-ext",
 		]);
