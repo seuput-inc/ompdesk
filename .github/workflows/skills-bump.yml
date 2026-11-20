@@ -1,5 +1,4 @@
-# Keeps the three built-in skill packs current: pstack (cursor/plugins), ECC
-# (affaan-m/ECC pi/core) and REA (npm rea-agents). Daily, or on dispatch,
+# Keeps the built-in skill packs in scripts/skill-packs.ts current. Daily, or on dispatch,
 # scripts/skill-packs.ts compares each pin with the newest upstream release
 # that has been public for bunfig.toml's minimumReleaseAge (3 days: a commit's
 # committer date, an npm version's registry publish time). For each pack behind
