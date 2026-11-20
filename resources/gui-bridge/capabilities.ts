@@ -120,6 +120,7 @@ export const FEATURES = {
 	modelRoleMetadata: "Model role names and defaults",
 	modelRoleSet: "Changing a model role",
 	ompdeskRoles: "OMPdesk's own model roles and agent tiers (held at runtime)",
+	subagentModel: "A subagent's model: review agents held on theirs, another agent's fallback named to its parent",
 	modelSetupFacts: "Model setup (billing and model facts)",
 	sessionSpend: "Session spend per provider (work board)",
 	usage: "Usage (per-account reports and session totals)",
@@ -1643,6 +1644,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/task/discovery`]: ["discoverAgents()", "getAgent()"],
 		},
 	}),
+	/**
+	 * subagent-model.ts hooks, no bridge method: a review subagent (its `session_init` names the `review` role or a stock
+	 * review agent) gets stock's three fallback settings turned off on its own settings overlay, found through the
+	 * registry by the hook's agent id; a tool result carrying a `<task-result>` gets a line when that subagent's journal
+	 * (`AgentRef.sessionFile`) shows answers from another model.
+	 */
+	subagentModel: {
+		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
+		modules: { [`${AGENT}/config/registry`]: ["lookup()", "Setting.prototype.override()"] },
+	},
 	/**
 	 * model_setup_facts (model-setup-facts.ts): the models of every role's pool, each provider's billing, what
 	 * config.yml persists per role (`getGlobalModelRole`: its absence would let full auto overwrite a hand-set role, so

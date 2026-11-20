@@ -4513,6 +4513,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.modelRoleMetadata": "모델 역할 이름과 기본값",
 	"bridgeHealth.feature.modelRoleSet": "모델 역할 바꾸기",
 	"bridgeHealth.feature.ompdeskRoles": "OMPdesk 자체 모델 역할",
+	"bridgeHealth.feature.subagentModel": "리뷰 에이전트 모델 고정, 서브에이전트의 대체 모델 알림",
 	"bridgeHealth.feature.modelSetupFacts": "모델 자동 구성(요금 구분·모델 정보)",
 	"bridgeHealth.feature.sessionSpend": "프로바이더별 세션 비용",
 	"bridgeHealth.feature.usage": "사용량",

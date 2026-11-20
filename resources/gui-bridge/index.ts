@@ -101,6 +101,7 @@ const AREAS: readonly Area[] = [
 		load: () => import("./model-setup-facts"),
 	},
 	{ name: "ompdesk-roles", features: ["ompdeskRoles"], load: () => import("./ompdesk-roles") },
+	{ name: "subagent-model", features: ["subagentModel"], load: () => import("./subagent-model") },
 	{ name: "voice", features: ["dictation", "readAloud"], load: () => import("./voice") },
 	{ name: "debug", features: ["debug"], load: () => import("./debug") },
 	{

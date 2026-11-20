@@ -1775,6 +1775,28 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/gh-guard-stock.test.ts", "src/main/gh-guard.test.ts"],
 	},
 	{
+		id: "B66",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"Subagent models: a review subagent (its `session_init.modelRole` is `review`, or a stock review agent) gets `retry.modelFallback`, `retry.usageAwareFallback` and `contextPromotion.enabled` turned off on its own settings overlay (runtime override through the registry handles, stock's `disableModelFallback` set, as its security coordinator does), and a tool result carrying a `<task-result>` gets a line when the subagent's journal (`AgentRef.sessionFile`) shows answers from another model than its `resolvedModel`.",
+		files: [
+			"resources/gui-bridge/subagent-model.ts",
+			"resources/gui-bridge/subagent-model-core.ts",
+			"resources/gui-bridge/capabilities.ts",
+		],
+		stock: [
+			"@oh-my-pi/pi-coding-agent/config/registry",
+			"retry.modelFallback",
+			"retry.usageAwareFallback",
+			"contextPromotion.enabled",
+			"session_init.modelRole, session_init.resolvedModel",
+			"task/result-summary.ts <task-result>",
+			"omp://extensions.md#tool_result",
+		],
+		tests: ["src/main/bridge-subagent-model-stock.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

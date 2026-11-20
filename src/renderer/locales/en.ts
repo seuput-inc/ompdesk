@@ -4519,6 +4519,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.modelRoleMetadata": "Model role names and defaults",
 	"bridgeHealth.feature.modelRoleSet": "Change a model role",
 	"bridgeHealth.feature.ompdeskRoles": "OMPdesk's own model roles",
+	"bridgeHealth.feature.subagentModel": "Review agents kept on their model, and subagent fallbacks named",
 	"bridgeHealth.feature.modelSetupFacts": "Model setup (billing and model facts)",
 	"bridgeHealth.feature.sessionSpend": "Session spend per provider",
 	"bridgeHealth.feature.usage": "Usage",
