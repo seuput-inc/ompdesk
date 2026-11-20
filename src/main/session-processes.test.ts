@@ -40,6 +40,17 @@ setInterval(() => console.log("tick"), 100);
 setTimeout(() => process.exit(0), 120000);
 process.stdout.write("up");
 `;
+/** A quiet server: listens, says on which port, then writes nothing. */
+const QUIET_SERVER = `
+const server = require("node:net").createServer().listen(0, "127.0.0.1", () => process.stdout.write(String(server.address().port)));
+setTimeout(() => process.exit(0), 120000);
+`;
+/** A process busy computing whose output goes to a file: its output has a reader, however much CPU it uses. */
+const BUSY = `
+process.stdout.write("up");
+const end = Date.now() + 120000;
+while (Date.now() < end) {}
+`;
 
 const SLOW = 60_000;
 let dir: string;
@@ -223,37 +234,63 @@ describe("a session's processes, on this computer", () => {
 		expect(after.owners().map(owner => owner.tag)).toEqual([keptTab.tag]);
 	});
 
+	/**
+	 * Starts `script` with its output piped to this test, waits for its first output, then closes the test's end, as the
+	 * quit took the omp (or a Playwright run between) that read it. `args` stand in for a command line's secrets.
+	 */
+	async function deafened(tag: string, script: string, cwd: string, args: string[] = []) {
+		const child = spawn(process.execPath, ["-e", script, ...args], {
+			env: env(tag),
+			cwd,
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: true,
+		});
+		children.push(child);
+		const out = child.stdout as NonNullable<typeof child.stdout>;
+		const [first] = (await once(out, "data")) as [Buffer];
+		out.destroy();
+		child.stderr?.destroy();
+		return { child, said: first.toString() };
+	}
+
 	// Linux (tests and CI only, no product) does not tell a closed pipe's writer from any other: not checked there.
 	it.skipIf(process.platform === "linux")(
-		"whose output has nowhere to go end at the launch that keeps their session; the others stay",
+		"whose output has nowhere to go stay at the launch that keeps their session, and the launch reports them",
 		{ timeout: SLOW },
 		async () => {
-			const session = path.join(dir, "kept.jsonl");
+			const folder = fs.realpathSync(dir);
+			const session = path.join(folder, "kept.jsonl");
 			const before = registry(true);
-			const tab = before.open({ cwd: dir, sessionPath: session });
-			// What read its output (the omp, or a Playwright run between them) went with the quit.
-			const deaf = spawn(process.execPath, ["-e", CHATTY], {
+			const tab = before.open({ cwd: folder, sessionPath: session });
+			const secret = `--token=SYNTH-${Math.random().toString(36).slice(2)}`;
+			const chatty = await deafened(tab.tag, CHATTY, path.dirname(folder), [secret]);
+			const quiet = await deafened(tab.tag, QUIET_SERVER, folder);
+			const logFile = path.join(folder, "busy.log");
+			const sink = fs.openSync(logFile, "w");
+			const busy = spawn(process.execPath, ["-e", BUSY], {
 				env: env(tab.tag),
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["ignore", sink, sink],
 				windowsHide: true,
 			});
-			children.push(deaf);
-			const out = deaf.stdout as NonNullable<typeof deaf.stdout>;
-			await once(out, "data");
-			out.destroy();
-			deaf.stderr?.destroy();
-			// Its output still read, and one writing to nothing that reads (the null device, as after `nohup … &>/dev/null`).
-			const heard = await running(tab.tag);
-			const quiet = orphan(tab.tag);
+			children.push(busy);
+			fs.closeSync(sink);
+			await vi.waitFor(() => expect(fs.readFileSync(logFile, "utf8")).toContain("up"));
 			await tab.close();
 
 			const after = registry();
 			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
 			await after.settled();
 
-			await vi.waitFor(() => expect(ended(deaf)).toBe(true));
-			expect([ended(heard), alive(quiet)]).toEqual([false, true]);
-			expect(after.owners().map(owner => owner.tag)).toEqual([tab.tag]);
+			expect([ended(chatty.child), ended(quiet.child), ended(busy)]).toEqual([false, false, false]);
+			const reports = logs.filter(entry => entry.message === "no reader");
+			expect(reports).toHaveLength(1);
+			const found = JSON.parse(String(reports[0]?.details.found)) as Array<Record<string, unknown>>;
+			const by = (pid: number | undefined) => found.find(item => item.pid === pid);
+			expect(found.map(item => item.pid).sort()).toEqual([chatty.child.pid, quiet.child.pid].sort());
+			expect(by(chatty.child.pid)).toMatchObject({ noReader: true, spinning: true, outside: true });
+			expect(by(quiet.child.pid)).toMatchObject({ noReader: true, folder: ".", ports: [Number(quiet.said)] });
+			expect(by(quiet.child.pid)?.spinning).toBeUndefined();
+			expect(JSON.stringify(logs)).not.toContain("SYNTH-");
 		},
 	);
 });
