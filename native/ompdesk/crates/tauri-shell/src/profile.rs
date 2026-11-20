@@ -55,10 +55,7 @@ impl Profile {
         export: impl FnOnce() -> Result<Items, String>,
     ) -> Result<Self, String> {
         let path = user_data.join(JOURNAL);
-        let namespace = format!(
-            "{:x}",
-            Sha256::digest(user_data.to_string_lossy().as_bytes())
-        );
+        let namespace = crate::hex(&Sha256::digest(user_data.to_string_lossy().as_bytes()));
         let journal = match fs::read(&path) {
             Ok(bytes) => {
                 let journal: Journal = serde_json::from_slice(&bytes)
@@ -161,7 +158,7 @@ fn strings(exported: Map<String, Value>) -> Result<Items, String> {
 fn identity(items: &Items, namespace: &str) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(1, DESTINATION, SOURCE, namespace, items))
         .map_err(|_| "Cannot encode local storage migration identity".to_string())?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(crate::hex(&Sha256::digest(bytes)))
 }
 
 fn persist(path: &Path, journal: &Journal) -> Result<(), String> {
@@ -246,6 +243,22 @@ mod tests {
             ("theme".to_string(), "dark".to_string()),
         ]
         .into()
+    }
+
+    #[test]
+    fn reads_an_existing_pending_migration_id() {
+        let (namespace, id) = if cfg!(windows) {
+            (
+                "7b373831d669c7fd9b519eed9dc75830946aa181ab962509183713eab1c4a5bf",
+                "e9f27466311aabce2e73d2e50ad3848e779936afe21612f3ea14d078b8ad362d",
+            )
+        } else {
+            (
+                "a81e76a6be4d6f2d1a49a4dac396014c529bda9bc1f2e9f363e0aacd8d16d725",
+                "48001857d79dff0b3602acbd3620ffb7a200632417f5f058325145d0c6a103dc",
+            )
+        };
+        assert_eq!(identity(&items(), namespace).unwrap(), id);
     }
 
     #[test]

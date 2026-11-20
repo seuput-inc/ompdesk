@@ -150,7 +150,7 @@ mod tests {
         fn record(&self, binary: &str) {
             std::fs::write(self.0.join("preview-browser/runtime.json"), serde_json::to_vec(&serde_json::json!({
                 "version": "157.0.8103.78", "platform": platform(), "arch": arch(), "binary": binary,
-                "sha256": format!("{:x}", Sha256::digest(b"runtime fixture bytes"))
+                "sha256": "3eb313bc1853a76f0a13a5cbe07717b9e603f59228fd4e79bf2ca62ee8b0792d"
             })).unwrap()).unwrap();
         }
     }
