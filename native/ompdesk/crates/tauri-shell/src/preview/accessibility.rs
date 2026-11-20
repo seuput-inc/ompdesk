@@ -244,12 +244,11 @@ pub(super) async fn snapshot_frame(
             .and_then(|d| d.get("attributes"))
             .and_then(Value::as_array);
         let attr = |name: &str| {
-            attrs
-                .and_then(|a| {
-                    a.chunks_exact(2)
-                        .find(|p| p[0].as_str().is_some_and(|s| s.eq_ignore_ascii_case(name)))
-                })
-                .and_then(|p| p[1].as_str())
+            let (pairs, _) = attrs?.as_chunks::<2>();
+            pairs
+                .iter()
+                .find(|[key, _]| key.as_str().is_some_and(|s| s.eq_ignore_ascii_case(name)))
+                .and_then(|[_, value]| value.as_str())
         };
         let input = tag.eq_ignore_ascii_case("input");
         let input_type = attr("type").unwrap_or("text").to_ascii_lowercase();

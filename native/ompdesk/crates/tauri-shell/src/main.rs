@@ -223,8 +223,8 @@ fn stall_bootstrap_request() -> bool {
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(0);
     STALLED
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-            (n < wanted).then_some(n + 1)
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            (n < wanted).then(|| n + 1)
         })
         .is_ok()
 }
