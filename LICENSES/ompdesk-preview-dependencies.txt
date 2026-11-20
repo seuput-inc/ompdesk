@@ -1,6 +1,6 @@
 OMPdesk's Preview driver: statically linked Rust crates
 
-Cargo.lock SHA-256: d81700a91acecf3d1ef465c4b717d76015d71c5bfe98d84fd28f7f81a7a6d0ae
+Cargo.lock SHA-256: 0feb0765023115abd403efd7ace0a1fab2585c6a3944183fe13792855a59be32
 
 The Preview driver from native/ompdesk/crates/shell-preview links the crates below. Its separate browser
 runtime carries its own notices; this list covers the Rust driver only. Set: normal dependencies of
@@ -16,7 +16,7 @@ Crates: name version (SPDX license expression) repository [license text numbers 
 
 base64 0.23.1 (MIT OR Apache-2.0) https://github.com/marshallpierce/rust-base64 [1,2]
 bytes 1.12.1 (MIT) https://github.com/tokio-rs/bytes [3]
-errno 0.3.14 (MIT OR Apache-2.0) https://github.com/lambda-fairy/rust-errno [1,4]
+errno 0.3.15 (MIT OR Apache-2.0) https://github.com/lambda-fairy/rust-errno [1,4]
 form_urlencoded 1.2.2 (MIT OR Apache-2.0) https://github.com/servo/rust-url [1,5]
 icu_collections 2.4.0 (Unicode-3.0) https://github.com/unicode-org/icu4x [6]
 icu_locale_core 2.4.0 (Unicode-3.0) https://github.com/unicode-org/icu4x [6]
@@ -31,7 +31,7 @@ itoa 1.0.19 (MIT OR Apache-2.0) https://github.com/dtolnay/itoa [9,10]
 libc 0.2.191 (MIT OR Apache-2.0) https://github.com/rust-lang/libc [9,11]
 litemap 0.8.3 (Unicode-3.0) https://github.com/unicode-org/icu4x [6]
 memchr 2.8.3 (Unlicense OR MIT) https://github.com/BurntSushi/memchr [12,13,14]
-mio 1.2.4 (MIT) https://github.com/tokio-rs/mio [15]
+mio 1.2.5 (MIT) https://github.com/tokio-rs/mio [15]
 percent-encoding 2.3.2 (MIT OR Apache-2.0) https://github.com/servo/rust-url/ [1,7]
 pin-project-lite 0.2.17 (Apache-2.0 OR MIT) https://github.com/taiki-e/pin-project-lite [16,10]
 potential_utf 0.1.6 (Unicode-3.0) https://github.com/unicode-org/icu4x [6]

@@ -1,6 +1,6 @@
 # Tauri system-WebView host
 
-`ompdesk-tauri-shell` pins Tauri 2.12.5. WKWebView on macOS and WebView2 on Windows host the existing React page. The crate imports the existing shell's authenticated host wire, Node child supervisor and logger by path. `shell_core` is linked with default features disabled. This crate does not depend on CEF.
+`ompdesk-tauri-shell` pins Tauri 2.12.6. WKWebView on macOS and WebView2 on Windows host the existing React page. The crate imports the existing shell's authenticated host wire, Node child supervisor and logger by path. `shell_core` is linked with default features disabled. This crate does not depend on CEF.
 
 The runtime finds the actual Node main from `OMPDESK_APP_DIR` or the packaged `resources/app` layout. `OMPDESK_APP_ENTRY` can select an existing main bundle. Its sibling `renderer/index.html` and `preload/tauri.js` must exist. Missing assets are startup errors, not a fallback UI. An unpackaged run with `ELECTRON_RENDERER_URL` (`bun run dev`, `scripts/dev.ts`) takes the page from that Vite dev server instead: it must be a loopback `http` origin with a port, and it becomes Tauri's dev URL so the page's IPC is accepted. A packaged app ignores the variable.
 

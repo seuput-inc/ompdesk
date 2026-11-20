@@ -46,13 +46,14 @@ pub fn decrypt_v10_gcm(key: &[u8], blob: &[u8]) -> Result<String, String> {
             String::from_utf8_lossy(&blob[..blob.len().min(3)])
         )
     })?;
-    if body.len() < 12 + 16 {
-        return Err("a v10 value too short to hold a nonce and a tag".into());
-    }
+    let (nonce, ciphertext) = body
+        .split_first_chunk::<12>()
+        .filter(|(_, ciphertext)| ciphertext.len() >= 16)
+        .ok_or("a v10 value too short to hold a nonce and a tag")?;
     let cipher = aes_gcm::Aes256Gcm::new_from_slice(key)
         .map_err(|_| "the key is not 32 bytes".to_string())?;
     let plain = cipher
-        .decrypt(aes_gcm::Nonce::from_slice(&body[..12]), &body[12..])
+        .decrypt(nonce.into(), ciphertext)
         .map_err(|_| "AES-GCM authentication failed".to_string())?;
     String::from_utf8(plain).map_err(|e| e.to_string())
 }
@@ -66,11 +67,11 @@ pub fn mac_key(password: &[u8]) -> [u8; 16] {
 
 /// macOS OSCrypt `v10`: AES-128-CBC, PKCS7, IV of 16 spaces.
 pub fn decrypt_v10_cbc(password: &[u8], blob: &[u8]) -> Result<String, String> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
     let body = blob.strip_prefix(b"v10").ok_or("not a v10 value")?;
     let key = mac_key(password);
     let plain = cbc::Decryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into())
-        .decrypt_padded_vec_mut::<Pkcs7>(body)
+        .decrypt_padded_vec::<Pkcs7>(body)
         .map_err(|e| format!("AES-CBC: {e}"))?;
     String::from_utf8(plain).map_err(|e| e.to_string())
 }

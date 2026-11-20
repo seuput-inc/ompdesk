@@ -85,9 +85,12 @@ fn create(call: Call) {
     }
     ensure_handler();
     let mut builder = TrayIconBuilder::new().with_id(id.to_string());
-    if let Some(icon) = icon {
-        builder = builder.with_icon(icon);
-    }
+    builder = match icon {
+        #[cfg(target_os = "macos")]
+        Some(icon) if call.params["template"] == true => builder.with_icon_templated(icon),
+        Some(icon) => builder.with_icon(icon),
+        None => builder,
+    };
     if let Some(tooltip) = call
         .params
         .get("tooltip")
@@ -95,15 +98,6 @@ fn create(call: Call) {
         .filter(|t| !t.is_empty())
     {
         builder = builder.with_tooltip(tooltip);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.with_icon_as_template(
-            call.params
-                .get("template")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        );
     }
     match builder.build() {
         Ok(icon) => {
@@ -133,11 +127,12 @@ fn op(call: Call) {
         "setImage" => icon_of(args.get("images").unwrap_or(&Value::Null)).and_then(|icon| {
             with_tray(id, |tray| {
                 #[cfg(target_os = "macos")]
-                tray.icon.set_icon_as_template(
-                    args.get("template")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                );
+                if args["template"] == true {
+                    return tray
+                        .icon
+                        .set_icon_templated(icon)
+                        .map_err(|e| e.to_string());
+                }
                 tray.icon.set_icon(icon).map_err(|e| e.to_string())
             })
         }),

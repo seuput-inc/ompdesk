@@ -21,7 +21,7 @@ const payload = { kind: "invoke", payload: JSON.stringify({ channel: "tabs:list"
 internals.postMessage?.({ cmd: "omp_ipc", callback: 11, error: 12, payload, options: undefined });
 internals.postMessage?.({ cmd: "omp_ipc", callback: 13, error: 14, payload, options: { headers: { a: "b" } } });
 
-// The fields tauri 2.12.5's `handle_ipc_message` reads from the posted string (src/ipc/protocol.rs `Message`).
+// The fields Tauri's `handle_ipc_message` reads from the posted string (src/ipc/protocol.rs `Message`).
 assert.equal(typeof posted[0], "string");
 assert.deepEqual(JSON.parse(posted[0] as string), {
 	cmd: "omp_ipc",

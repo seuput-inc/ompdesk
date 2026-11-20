@@ -46,24 +46,24 @@ cef = { version = "=156.4.0", optional = true, default-features = false, feature
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a number is read as its digits say, as the core's wire does (crates/core).
 serde_json = { version = "1", features = ["float_roundtrip"] }
-sha2 = "0.10"
-base64 = "0.22"
+sha2 = "0.11"
+base64 = "0.23"
 # Electron's safeStorage key on Windows (OSCrypt v10 = AES-256-GCM).
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 # Chromium's Local Storage is a LevelDB with snappy blocks (migrate/local_storage.rs).
-rusty-leveldb = "3"
+rusty-leveldb = "4"
 # The IPC token, the Windows safeStorage key a clean profile gets.
-getrandom = "0.3"
+getrandom = "0.4"
 # macOS safeStorage key derivation and the cipher tests (every OS runs them: the vectors are the contract with Electron).
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-sha1 = "0.10"
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+sha1 = "0.11"
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
 # Only the CEF binary's tray uses it; the library the Tauri host links stays free of a second muda.
-tray-icon = { version = "0.21", optional = true }
+tray-icon = { version = "0.26", optional = true }
 # wc.frame: the latest painted frame of an offscreen page as JPEG or PNG.
-jpeg-encoder = "0.6"
-png = "0.17"
+jpeg-encoder = "0.7"
+png = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

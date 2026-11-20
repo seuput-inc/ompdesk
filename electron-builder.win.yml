@@ -12,7 +12,7 @@ directories:
 electronDist: resources/ompdesk-tauri/win32-x64
 afterExtract: scripts/after-pack.cjs
 # Custom electronDist supplies the engine; this version labels the packager's runtime cache.
-electronVersion: 2.12.5
+electronVersion: 2.12.6
 # No native add-on is rebuilt: the app's dependencies are bundled into out/ and node_modules is not packed.
 npmRebuild: false
 # The shell starts <resources>/node/node.exe on <resources>/app/out/main/index.js: a plain folder, not an archive

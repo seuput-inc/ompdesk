@@ -1352,7 +1352,7 @@ describe("Windows package config", () => {
 		expect(fs.readFileSync(path.join(PACKAGE_ROOT, ".gitignore"), "utf8").split("\n")).toEqual(
 			expect.arrayContaining(["resources/node/", "resources/ompdesk-shell/", "resources/shell-licenses/"]),
 		);
-		expect(String((config as { electronVersion?: unknown }).electronVersion)).toBe("2.12.5");
+		expect(config).toMatchObject({ electronVersion: "2.12.6" });
 	});
 
 	it("keeps the identity v0.127.0's NSIS update installs over: the same app id, no custom uninstall GUID, no per-machine install", () => {
