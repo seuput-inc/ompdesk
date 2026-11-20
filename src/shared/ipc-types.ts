@@ -769,6 +769,7 @@ export type RuntimeErrorSource =
 	 * `project boundary mode` (`details.mode`).
 	 */
 	| "agent-control"
+	/**
 	 * A known session's pane shown with no rows, info level (src/renderer/hooks/session-hydration.ts
 	 * `reportEmptyTranscript`): `key` the transcript snapshot key looked up and whether the cache has it (`found`,
 	 * `foundAgeMs`), the key the tab was seeded under (`seeded`, `seededFound`, `seededAgoMs`) and the one its snapshot

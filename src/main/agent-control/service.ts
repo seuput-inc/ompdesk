@@ -153,6 +153,7 @@ export interface ControlTab {
 	 * the project boundary; absent while main has not resolved it, and while the boundary is off.
 	 */
 	project?: string;
+	/**
 	 * A view of a tab another party holds (a paired host's window or another device's tab there, or a tab this
 	 * computer runs for a paired device; `SidecarLike.shared`): closing it only leaves, that tab stays open.
 	 */
