@@ -270,26 +270,33 @@ pub fn footprint(pid: u32) -> Option<u64> {
     Some(unsafe { info.assume_init() }.ri_phys_footprint)
 }
 
-/// Whether `pid`'s standard output or error has no reader any more: a pipe whose other end closed (`PIPE_EOF`), or a
-/// stream socket that can send no more or lost its peer (a `socketpair`, which libuv and Bun give a child for `pipe`).
-/// Each write to it fails. A file, a terminal, the null device and a descriptor this user may not read have a reader.
+/// Whether `pid`'s standard output or error path is closed, so a write to it fails, and what is known of the other end
+/// (`Peer`): none while both can be written. A pipe whose other end closed (`PIPE_EOF`) has its peer closed. A stream
+/// socket that can send no more (`SS_CANTSENDMORE`; a `socketpair`, which libuv and Bun give a child for `pipe`) is
+/// closed two ways in XNU's `uipc_usrreq.c`: the peer's close disconnects both ends (`unp_disconnect`: clears
+/// `SS_ISCONNECTED`), while this end's own `shutdown(SHUT_WR)` (`uipc_shutdown`: `socantsendmore`) leaves it connected
+/// to a peer that may still be reading. So a Unix socket's peer is closed when disconnected and open when connected;
+/// any other family's is unknown. With both descriptors closed, the less certain peer counts.
 #[cfg(target_os = "macos")]
-pub fn output_closed(pid: u32) -> bool {
-    let Ok(pid) = libc::c_int::try_from(pid) else {
-        return false;
-    };
-    [1, 2].into_iter().any(|fd| descriptor_closed(pid, fd))
+pub fn output_closed(pid: u32) -> Option<crate::procs::Peer> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    [1, 2]
+        .into_iter()
+        .filter_map(|fd| descriptor_closed(pid, fd))
+        .min()
 }
 
 #[cfg(target_os = "macos")]
-fn descriptor_closed(pid: libc::c_int, fd: libc::c_int) -> bool {
+fn descriptor_closed(pid: libc::c_int, fd: libc::c_int) -> Option<crate::procs::Peer> {
+    use crate::procs::Peer;
     // `<sys/proc_info.h>`: `struct socket_fdinfo` and `struct pipe_fdinfo` each start with a `proc_fileinfo` (24
     // bytes) and then a `vinfo_stat` (136). `socket_info` goes on with `soi_so`, `soi_pcb`, `soi_type` (+152),
-    // `soi_protocol`, `soi_family`, `soi_options`, `soi_linger`, `soi_state` (+168, a short); `pipe_info` with
+    // `soi_protocol`, `soi_family` (+160), `soi_options`, `soi_linger`, `soi_state` (+168, a short); `pipe_info` with
     // `pipe_handle`, `pipe_peerhandle`, `pipe_status` (+152).
     const PROC_PIDFDSOCKETINFO: libc::c_int = 3;
     const PROC_PIDFDPIPEINFO: libc::c_int = 6;
     const SOCKET_TYPE: usize = 24 + 152;
+    const SOCKET_FAMILY: usize = 24 + 160;
     const SOCKET_STATE: usize = 24 + 168;
     const PIPE_STATUS: usize = 24 + 152;
     /// `<sys/socketvar.h>`.
@@ -311,17 +318,26 @@ fn descriptor_closed(pid: libc::c_int, fd: libc::c_int) -> bool {
     };
     if info(PROC_PIDFDSOCKETINFO, &mut buffer) > SOCKET_STATE + 2 {
         let state = i16::from_ne_bytes([buffer[SOCKET_STATE], buffer[SOCKET_STATE + 1]]);
-        return int(&buffer, SOCKET_TYPE) == libc::SOCK_STREAM
-            && (state & SS_CANTSENDMORE != 0 || state & SS_ISCONNECTED == 0);
+        if int(&buffer, SOCKET_TYPE) != libc::SOCK_STREAM || state & SS_CANTSENDMORE == 0 {
+            return None;
+        }
+        return Some(if int(&buffer, SOCKET_FAMILY) != libc::AF_UNIX {
+            Peer::Unknown
+        } else if state & SS_ISCONNECTED == 0 {
+            Peer::Closed
+        } else {
+            Peer::Open
+        });
     }
-    info(PROC_PIDFDPIPEINFO, &mut buffer) > PIPE_STATUS + 4
-        && int(&buffer, PIPE_STATUS) & PIPE_EOF != 0
+    (info(PROC_PIDFDPIPEINFO, &mut buffer) > PIPE_STATUS + 4
+        && int(&buffer, PIPE_STATUS) & PIPE_EOF != 0)
+        .then_some(Peer::Closed)
 }
 
 /// Linux runs OMPdesk's tests and CI only, and does not tell a closed pipe's writer from another: never closed.
 #[cfg(all(unix, not(target_os = "macos")))]
-pub fn output_closed(_pid: u32) -> bool {
-    false
+pub fn output_closed(_pid: u32) -> Option<crate::procs::Peer> {
+    None
 }
 
 /// `proc_pidinfo` of one flavor, whole or none: a process this user may not read, or one that is gone, has none.
@@ -1565,7 +1581,10 @@ mod process_list {
         }
     }
 
-    /// Whether `handle` is a pipe whose other end closed: a write to it fails.
+    /// Whether `handle` is a pipe whose other end closed: a write to it fails. The pipe file system enters the closing
+    /// state only in the cleanup of an end's last handle (ReactOS's NPFS, `NpCommonCleanup` → `NpSetClosingPipeState`;
+    /// `DisconnectNamedPipe` gives the disconnected state instead), and a pipe has no half-close, so this end's own
+    /// doing cannot set it while the other end lives.
     fn pipe_closed(handle: &OwnedHandle) -> bool {
         let mut status = [0u64; 2];
         let mut information = [0u32; 10];

@@ -4,12 +4,13 @@
 //! this computer with its tag, so main can say whose the largest processes are when memory runs short; `procs.end`
 //! ends what a closed session left running, asking politely first and forcing what is left.
 //!
-//! For the tags it is asked about, `procs.list` also says whose output has no reader any more: a process whose standard
-//! output or error is a pipe or socket whose other end closed (the program that read it ended). Each write of such a
-//! process fails, and a server that logs the failure writes again: next-server spun at 100 % CPU after a relaunch (20
-//! Nov 2026). Of those it names the TCP ports they listen on and, with `sampleMs`, the CPU they use. It never answers
-//! a command line's arguments, which can hold tokens. `procs.end` with `only` ends just the processes named by their
-//! id and start.
+//! For the tags it is asked about, `procs.list` also says whose output path is closed: a process whose standard output
+//! or error is a pipe or socket a write to which fails, with what is known of the other end (`Peer`). The relaunch of
+//! 20 Nov 2026 left a server whose reader had ended; each write failed, the server logged the failure, which failed
+//! again, and next-server spun at 100 % CPU. A closed path alone does not say the reader is gone: on macOS a process's
+//! own `shutdown(SHUT_WR)` closes it too (`crate::sys::output_closed`). Of those it names the TCP ports they listen on
+//! and, with `sampleMs`, the CPU they use. It never answers a command line's arguments, which can hold tokens.
+//! `procs.end` with `only` ends just the processes named by their id and start.
 //!
 //! Reading another process's environment and command line: Windows reads the process's own memory (its PEB's
 //! `RTL_USER_PROCESS_PARAMETERS`, `sys.rs`), macOS asks `sysctl(KERN_PROCARGS2)`, Linux (tests and CI) reads
@@ -53,7 +54,7 @@ struct ListParams {
     /// Marks those that are a shared worker (an argument starting with it) or under one (`stock`).
     #[serde(default)]
     keep_arg: Option<String>,
-    /// How long to measure the CPU of those whose output has no reader (`cpuPercent`); none: not measured.
+    /// How long to measure the CPU of those whose output path is closed (`cpuPercent`); none: not measured.
     #[serde(default)]
     sample_ms: Option<u64>,
 }
@@ -78,6 +79,20 @@ struct EndParams {
 struct Pinned {
     pid: u32,
     started_ms: u64,
+}
+
+/// What is known of the other end of a closed output path, from least to most certain that the reader is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+// Only macOS tells `Open` and `Unknown` (a socket); a Windows pipe that reads closing is always `Closed`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Peer {
+    /// The other end is still there (macOS: a Unix socket this end shut down for writing, still connected).
+    Open,
+    /// Nothing tells (macOS: a socket of another family).
+    Unknown,
+    /// The other end was closed (a pipe at end of file, a disconnected Unix socket, a Windows pipe closing).
+    Closed,
 }
 
 /// One process as a scan saw it, and a row of `procs.list`.
@@ -106,14 +121,14 @@ struct Row {
     /// A shared worker (`keepArg`) or under one, for the tags asked.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     stock: bool,
-    /// Its standard output or error is a pipe or socket whose other end closed, so each write of it fails; read only
+    /// Its standard output or error path is closed, so a write to it fails: what is known of the other end. Read only
     /// for the tags asked, and never on Linux.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    dead_output: bool,
-    /// Of one whose output has no reader: the share of one core it used over `sampleMs`, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_closed: Option<Peer>,
+    /// Of one whose output path is closed: the share of one core it used over `sampleMs`, in percent.
     #[serde(skip_serializing_if = "Option::is_none")]
     cpu_percent: Option<u32>,
-    /// Of one whose output has no reader: the TCP ports it listens on.
+    /// Of one whose output path is closed: the TCP ports it listens on.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     ports: Vec<u16>,
     /// The handle its environment was read through, which `procs.end` ends it through.
@@ -225,7 +240,7 @@ async fn list(params: ListParams, scope: Scope) -> Result<Vec<Row>, Fault> {
         }
     }
     let deaf: Vec<usize> = (0..rows.len())
-        .filter(|&index| rows[index].dead_output)
+        .filter(|&index| rows[index].output_closed.is_some())
         .collect();
     if deaf.is_empty() {
         return Ok(rows);
@@ -878,7 +893,7 @@ async fn scan(
             if row.tag.as_ref().is_some_and(|tag| args_of.contains(tag)) {
                 row.args = reader.arguments(row.pid);
                 if detail {
-                    row.dead_output = crate::sys::output_closed(row.pid);
+                    row.output_closed = crate::sys::output_closed(row.pid);
                     row.cwd = crate::sys::cwd(row.pid);
                     if let Some(started_ms) = crate::sys::started_ms(row.pid) {
                         row.started_ms = Some(started_ms);
@@ -962,8 +977,9 @@ async fn scan(
                 })
                 .collect();
             let closed = crate::sys::outputs_closed(outputs, OUTPUT_CHECK);
+            // Only the other end's close puts a Windows pipe in the closing state; there is no half-close of one.
             for (index, closed) in asked.into_iter().zip(closed) {
-                rows[index].dead_output = closed;
+                rows[index].output_closed = closed.then_some(Peer::Closed);
             }
         }
         Ok(rows)
@@ -1636,10 +1652,12 @@ mod tests {
         let deaf: BTreeSet<u32> = but_console_hosts(
             tagged(&rows, &mine)
                 .into_iter()
-                .filter(|row| row.dead_output)
+                .filter(|row| row.output_closed.is_some())
                 .map(|row| (row.pid, row.name.as_str())),
         );
         assert_eq!(deaf, BTreeSet::from([spinning, quiet]), "{rows:?}");
+        // A pipe whose reader closed.
+        assert_eq!(row(quiet).output_closed, Some(Peer::Closed));
         assert!(
             row(spinning).cpu_percent.unwrap() >= 50,
             "{:?}",
@@ -1658,6 +1676,53 @@ mod tests {
         let wire = serde_json::to_string(&rows).unwrap();
         assert!(!wire.contains("SYNTH-not-answered"), "{wire}");
         assert!(started.running(spinning) && started.running(quiet));
+    }
+
+    /// The hub's finding (20 Nov 2026): on macOS a closed output path is also a process's own `shutdown(SHUT_WR)`, with
+    /// its peer alive and reading. A socket pair stands in for the stdout libuv gives a child: the test shuts the
+    /// child's end down for writing (a shutdown acts on the socket, which the child shares) and keeps the peer, then
+    /// closes the peer.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn tells_a_socket_shut_down_for_writing_from_one_whose_peer_closed() {
+        use std::os::unix::net::UnixStream;
+        let env = new_env();
+        let mine = new_tag();
+        let mut started = Started::new(&env);
+        let (end, peer) = UnixStream::pair().unwrap();
+        let mut command = long(&env, Some(&mine));
+        command.stdout(Stdio::from(std::os::fd::OwnedFd::from(
+            end.try_clone().unwrap(),
+        )));
+        let child = command
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        started.children.push(child);
+        let detailed = || ListParams {
+            env: env.clone(),
+            timeout_ms: 10_000,
+            tags: vec![mine.clone()],
+            ..ListParams::default()
+        };
+        let closed = || async {
+            let rows = list(detailed(), Scope::detached()).await.unwrap();
+            rows.iter()
+                .find(|row| row.pid == pid)
+                .unwrap()
+                .output_closed
+        };
+        listed_until(&env, |rows| {
+            rows.iter().any(|row| row.pid == pid && is_long(&row.name))
+        })
+        .await;
+        assert_eq!(closed().await, None, "a connected socket can be written");
+        end.shutdown(std::net::Shutdown::Write).unwrap();
+        assert_eq!(closed().await, Some(Peer::Open));
+        drop(peer);
+        assert_eq!(closed().await, Some(Peer::Closed));
     }
 
     /// `only` ends a process by its id and start, and nothing of the same tag beside it; a start that does not match
