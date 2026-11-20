@@ -413,7 +413,7 @@ export class CoreProcess {
 	}
 
 	#start(): ChildProcessWithoutNullStreams {
-		if (this.#shuttingDown) throw new CoreError("core_unavailable", "ompdesk-core is shutting down");
+		if (this.#shuttingDown) throw shutdownRefusal();
 		if (this.#child) return this.#child;
 		if (Date.now() < this.#restUntil)
 			throw new CoreError(
@@ -589,10 +589,25 @@ export function core(): CoreProcess {
 
 /**
  * Whether `error` is the core's refusal of work after the quit began (`shutdown` ran). A timer, a window event or a
- * status listener that reaches the core while the app quits has nothing left to do: its caller drops the error.
+ * status listener that reaches the core while the app quits has nothing left to do: its caller drops the error, and
+ * one that does not is handled as a `core-shutdown` line by main's last-resort handlers (main-failures.ts).
  */
 export function isCoreShutdown(error: unknown): boolean {
 	return error instanceof CoreError && error.code === "core_unavailable" && instance?.shuttingDown === true;
+}
+
+/**
+ * The refusal `#start` throws once `shutdown` ran. Main's hub and pool frames take nine of V8's default ten (the 0.134.0
+ * quit logged 6,175 of it with every caller cut off), so it keeps enough frames to name who called.
+ */
+function shutdownRefusal(): CoreError {
+	const limit = Error.stackTraceLimit;
+	Error.stackTraceLimit = Math.max(limit, 40);
+	try {
+		return new CoreError("core_unavailable", "ompdesk-core is shutting down");
+	} finally {
+		Error.stackTraceLimit = limit;
+	}
 }
 
 /** Ends the app's core (quit); a later request starts it again. */

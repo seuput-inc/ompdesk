@@ -163,6 +163,7 @@ import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
 import { MailAccounts, plainImapConnect } from "./mail-accounts";
+import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
@@ -637,16 +638,6 @@ let connectivityMonitor: ConnectivityMonitor | null = null;
 /** The 3 s link sampling of `connectivityMonitor`. */
 let connectivityPoll: ReturnType<typeof setInterval> | null = null;
 
-function errorMessage(value: unknown): { message: string; stack?: string } {
-	if (value instanceof Error) return { message: value.message, stack: value.stack };
-	if (typeof value === "string") return { message: value };
-	try {
-		return { message: JSON.stringify(value) ?? String(value) };
-	} catch {
-		return { message: String(value) };
-	}
-}
-
 function installMainRuntimeLogging(): void {
 	// A console line to a stdout/stderr whose reader is gone (the terminal or test runner that started this copy
 	// closed) fails with EPIPE on the stream; with no listener that is an uncaught exception and a crash dialog.
@@ -656,12 +647,7 @@ function installMainRuntimeLogging(): void {
 			if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error;
 		});
 	}
-	process.on("uncaughtExceptionMonitor", (error, origin) => {
-		writeRuntimeLog({ source: "main-uncaught", ...errorMessage(error), details: { origin } });
-	});
-	process.on("unhandledRejection", reason => {
-		writeRuntimeLog({ source: "main-unhandled-rejection", ...errorMessage(reason) });
-	});
+	installMainFailureLogging(process, report => writeRuntimeLog(report));
 	app.on("child-process-gone", (_event, details) => {
 		writeRuntimeLog({
 			source: "child-process",
