@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { memo, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentMessage, MessagesPage } from "../../../shared/rpc-types";
-import { hydrateTabSession, loadOlderTranscript, reportEmptyTranscript } from "../../hooks/session-hydration";
+import { hydrateTabSession, loadOlderTranscript } from "../../hooks/session-hydration";
 import { currentShellMode } from "../../hooks/use-shell-mode";
 import { compactionRunningKey } from "../../lib/compaction-action";
 import { useDisplayPreference } from "../../lib/display-preferences";
@@ -194,7 +194,12 @@ function SessionTranscript() {
 	});
 	const shownEmpty = knownSession && displayMessages.length === 0;
 	useEffect(() => {
-		if (shownEmpty && tabId) reportEmptyTranscript(tabId);
+		if (!shownEmpty || !tabId) return;
+		// A diagnostic line only: a chunk that fails to load loses the line, never the pane.
+		import("../../hooks/empty-transcript-probe").then(
+			probe => probe.reportEmptyTranscript(tabId),
+			() => {},
+		);
 	}, [shownEmpty, tabId]);
 	const savedView = useSessionStore(s => s.transcriptView);
 	const saveView = useSessionStore(s => s.saveTranscriptView);
