@@ -115,6 +115,39 @@ describe("PageStream", () => {
 		expect(FakeImage.encodes).toBe(0);
 	});
 
+	it("says once why a viewer waiting for its first frame got none: no paint, or every encode failed", async () => {
+		const said: string[] = [];
+		const quiet = new PageStream({
+			page: new FakePage(),
+			tab: "tab-1",
+			geometry: GEOMETRY,
+			onStarved: why => said.push(why),
+		});
+		const first = quiet.poll({ ack: null, wait: 5000 });
+		await vi.advanceTimersByTimeAsync(5001);
+		expect(await first).toEqual({ frame: null, dialogs: [] });
+		const again = quiet.poll({ ack: null, wait: 5000 });
+		await vi.advanceTimersByTimeAsync(5001);
+		await again;
+
+		const page = new FakePage();
+		const broken = new PageStream({ page, tab: "tab-2", geometry: GEOMETRY, onStarved: why => said.push(why) });
+		const second = broken.poll({ ack: null, wait: 5000 });
+		const failing = new FakeImage(780, 1688);
+		failing.jpeg = async () => {
+			throw new Error("the shell had no painted frame");
+		};
+		page.listener?.(failing);
+		await vi.advanceTimersByTimeAsync(5001);
+		expect(await second).toEqual({ frame: null, dialogs: [] });
+		expect(said).toEqual([
+			expect.stringMatching(/^no paint arrived; painting true, painted 0 \(first never\), encodes failed 0, sent 0/),
+			expect.stringMatching(
+				/^every encode failed; painting true, painted 1 \(first 0 ms\), encodes failed \d+, sent 0/,
+			),
+		]);
+	});
+
 	it("caps a hold at the maximum whatever the viewer asked for", async () => {
 		const { stream } = setup();
 		let answered = false;

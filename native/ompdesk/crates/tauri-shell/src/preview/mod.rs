@@ -1145,11 +1145,16 @@ async fn execute(
                         entry.page.stop_screencast().await.map_err(wire)?;
                         entry.document.lock().expect("Preview document").painting = false;
                     } else {
-                        entry
+                        let started = entry
                             .page
                             .start_screencast(json!({"format":"png","everyNthFrame":1}))
-                            .await
-                            .map_err(wire)?;
+                            .await;
+                        #[cfg(feature = "test-automation")]
+                        crate::log::log(
+                            "preview.screencast.start",
+                            json!({"wcId":wc,"op":op,"error":started.as_ref().err().map(|error| error.message.clone())}),
+                        );
+                        started.map_err(wire)?;
                         entry.document.lock().expect("Preview document").painting = true;
                     }
                     json!({})
@@ -2085,9 +2090,15 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                         last.elapsed() >= Duration::from_secs_f64(1.0 / f64::from(document.fps))
                     })
             };
+            #[cfg(feature = "test-automation")]
+            if !deliver && !entry.document.lock().expect("Preview document").painting {
+                crate::log::log("preview.frame.unpainted", json!({"wcId":route.wc}));
+            }
             if deliver {
                 ack_retained(&entry).await;
                 if original(identity).is_err() {
+                    #[cfg(feature = "test-automation")]
+                    crate::log::log("preview.frame.superseded", json!({"wcId":route.wc}));
                     if let Some(ack) = ack {
                         let _submitting = entry.submitting.lock().expect("native frame submission");
                         if pages.current(route.wc).is_ok() {
@@ -2116,6 +2127,13 @@ async fn observe(pages: Arc<Pages>, mut receive: shell_preview::EventReceiver) {
                             }
                             {
                                 let mut document = entry.document.lock().expect("Preview document");
+                                #[cfg(feature = "test-automation")]
+                                if document.last_paint.is_none() {
+                                    crate::log::log(
+                                        "preview.frame.first",
+                                        json!({"wcId":route.wc,"width":width,"height":height}),
+                                    );
+                                }
                                 document.frame_pixels = Some(frame.clone());
                                 document.pending_ack = None;
                                 document.last_paint = Some(Instant::now());

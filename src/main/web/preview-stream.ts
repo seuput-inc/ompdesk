@@ -92,6 +92,8 @@ export interface PageStreamOptions {
 	now?: () => number;
 	/** Numbers this page's frames from the viewer's one counter (a tab switch never reuses a number). */
 	nextSeq?: () => number;
+	/** A poll's wait ran out before any frame went out: why, once per stream (a diagnostic line). */
+	onStarved?: (why: string) => void;
 }
 
 export class PageStream {
@@ -125,12 +127,20 @@ export class PageStream {
 	#sent = 0;
 	#bytes = 0;
 	#encodeMs = 0;
+	#encodeFailed = 0;
+	readonly #began: number;
+	#firstPaintAt: number | null = null;
+	#firstSentAt: number | null = null;
+	#starvedReported = false;
+	readonly #onStarved: ((why: string) => void) | undefined;
 
 	constructor(options: PageStreamOptions) {
 		this.#page = options.page;
 		this.#tab = options.tab;
 		this.#geometry = options.geometry;
 		this.#now = options.now ?? Date.now;
+		this.#began = this.#now();
+		this.#onStarved = options.onStarved;
 		this.#pacer = new FramePacer({
 			maxFps: options.geometry.profile.maxFps,
 			now: this.#now,
@@ -141,6 +151,7 @@ export class PageStream {
 			// A paint between a resize and the next layout can be an empty image: there is nothing to show in it.
 			if (image.isEmpty()) return;
 			this.#painted += 1;
+			this.#firstPaintAt ??= this.#now();
 			this.#latest = image;
 			this.#pacer.markDirty();
 			this.#arm();
@@ -200,7 +211,14 @@ export class PageStream {
 		this.#release({ frame: null, dialogs: [] });
 		const wait = Math.min(Math.max(0, request.wait ?? POLL_MAX_WAIT_MS), POLL_MAX_WAIT_MS);
 		const { promise, resolve } = Promise.withResolvers<PreviewStreamPoll>();
-		const timer = setTimeout(() => this.#release({ frame: null, dialogs: [] }), wait);
+		const timer = setTimeout(() => {
+			// A viewer waiting for the first frame and getting none: what the page gave by then (once per stream).
+			if (this.#sent === 0 && !this.#starvedReported && this.#waiter?.timer === timer) {
+				this.#starvedReported = true;
+				this.#onStarved?.(this.#emptyReason());
+			}
+			this.#release({ frame: null, dialogs: [] });
+		}, wait);
 		this.#waiter = { resolve, timer };
 		void this.#kick();
 		return promise;
@@ -254,6 +272,7 @@ export class PageStream {
 			if (this.#disposed || epoch !== this.#epoch) return null;
 			this.#bytes += encoded.data.length;
 			this.#sent += 1;
+			this.#firstSentAt ??= this.#now();
 			return {
 				seq: this.#pacer.sent(),
 				tab: this.#tab,
@@ -264,6 +283,7 @@ export class PageStream {
 			};
 		} catch {
 			// The shell could not encode this paint (the page went away): the next paint is tried instead.
+			this.#encodeFailed += 1;
 			return null;
 		} finally {
 			this.#encoding = false;
@@ -336,6 +356,19 @@ export class PageStream {
 	stats(): StreamStats {
 		const { dropped, lost } = this.#pacer.skipped;
 		return { painted: this.#painted, sent: this.#sent, bytes: this.#bytes, encodeMs: this.#encodeMs, dropped, lost };
+	}
+
+	/** Why a poll's wait ran out with nothing: what the stream had of the page by then, with times since it began. */
+	#emptyReason(): string {
+		const at = (time: number | null) => (time === null ? "never" : `${time - this.#began} ms`);
+		const why = !this.#visible
+			? "hidden"
+			: this.#painted === 0
+				? "no paint arrived"
+				: this.#encodeFailed > 0 && this.#sent === 0
+					? "every encode failed"
+					: `pacer ${this.#pacer.readiness().state}`;
+		return `${why}; painting ${this.#painting}, painted ${this.#painted} (first ${at(this.#firstPaintAt)}), encodes failed ${this.#encodeFailed}, sent ${this.#sent} (first ${at(this.#firstSentAt)})`;
 	}
 
 	#applyPainting(): void {
