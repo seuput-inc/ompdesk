@@ -12,6 +12,7 @@ import {
 	RETRY_REMAINING_MS,
 	SESSION_PROCESSES_FILE,
 	SessionProcesses,
+	type SessionProcessesDeps,
 	type SessionProcessLogDetails,
 	STOCK_WORKER_ARG,
 	type TaggedProcess,
@@ -99,11 +100,11 @@ function orphan(tag: string | undefined): number {
 /** Whether a direct child has ended (its exit event, never the pid: a reaped pid may name another process). */
 const ended = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
 
-function registry(frozen = false, endSpinning?: boolean): SessionProcesses {
+function registry(frozen = false, deps: Partial<SessionProcessesDeps> = {}): SessionProcesses {
 	return new SessionProcesses(file, {
 		frozen: () => frozen,
 		log: (message, details) => logs.push({ message, details }),
-		...(endSpinning !== undefined ? { endSpinning } : {}),
+		...deps,
 	});
 }
 
@@ -266,7 +267,7 @@ describe("a session's processes, on this computer", () => {
 
 	// Linux (tests and CI only, no product) does not tell a closed pipe's writer from any other: not checked there.
 	it.skipIf(process.platform === "linux")(
-		"whose output path is closed stay at the launch that keeps their session, and the launch reports them",
+		"whose output path is closed stay at the launch that keeps their session when the automatic end is off, and the launch reports them",
 		{ timeout: SLOW },
 		async () => {
 			const folder = fs.realpathSync(dir);
@@ -289,7 +290,7 @@ describe("a session's processes, on this computer", () => {
 			await vi.waitFor(() => expect(fs.readFileSync(logFile, "utf8")).toContain("up"));
 			await tab.close();
 
-			const after = registry();
+			const after = registry(false, { endSpinning: () => false });
 			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
 			await after.settled();
 
@@ -327,7 +328,7 @@ describe("a session's processes, on this computer", () => {
 	);
 
 	it.skipIf(process.platform === "linux")(
-		"with the switch on, end at the launch only those spinning on an output path whose other end closed",
+		"by default end at the launch only those that keep spinning on an output path whose other end closed",
 		{ timeout: SLOW },
 		async () => {
 			const folder = fs.realpathSync(dir);
@@ -338,7 +339,8 @@ describe("a session's processes, on this computer", () => {
 			const quiet = await deafened(tab.tag, QUIET_SERVER, folder);
 			await tab.close();
 
-			const after = registry(false, true);
+			// The samples a minute apart run back to back here: the CPU each measures is real.
+			const after = registry(false, { later: run => void setImmediate(run) });
 			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
 			await after.settled();
 
@@ -346,11 +348,16 @@ describe("a session's processes, on this computer", () => {
 			expect(ended(quiet.child)).toBe(false);
 			const end = logs.find(entry => entry.message === "ended");
 			expect(end?.details).toMatchObject({
-				reason: "spinning on a closed output path, its other end closed",
+				reason: "kept spinning on a closed output path whose other end is closed",
 				processes: 1,
 			});
+			const found = JSON.parse(String(end?.details.found)) as Array<Record<string, unknown>>;
+			expect(found).toEqual([
+				expect.objectContaining({ pid: chatty.child.pid, outputClosed: "closed", sustained: expect.anything() }),
+			]);
 			const left = await after.open({ cwd: folder, sessionPath: session }).leftover();
 			expect(left?.ended.map(item => item.pid)).toEqual([chatty.child.pid]);
+			expect(left?.ended[0]?.sustained?.percents.every(percent => percent >= 50)).toBe(true);
 			expect(left?.running.map(item => item.pid)).toEqual([quiet.child.pid]);
 			// The tag stays: its tab is open and a process of it still runs.
 			expect(after.owners().map(owner => owner.tag)).toEqual([tab.tag]);
@@ -506,7 +513,9 @@ describe("which tags end, and when", () => {
 			const sessions = new SessionProcesses(file, {
 				frozen: () => false,
 				log: (message, details) => logs.push({ message, details }),
-				endSpinning: true,
+				endSpinning: () => true,
+				// Every later sample answers the same rows at once.
+				later: run => void setImmediate(run),
 				survey: async () => rows,
 				endOnly: async (_tags, only) => {
 					pids.push(...only.map(process => process.pid));

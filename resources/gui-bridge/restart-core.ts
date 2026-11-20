@@ -79,11 +79,13 @@ export interface LeftProcess {
 	cpu?: { percent: number; seconds: number };
 	/** That share is at or over the mark that reads as spinning (`SPIN_PERCENT` in main). */
 	spinning?: true;
+	/** Of one the launch ended: the share of a core in each sample that kept it spinning, over `seconds`. */
+	sustained?: { percents: number[]; seconds: number };
 }
 
 /**
- * What the session's commands left running across the relaunch: what still runs, and what the launch ended (only
- * while the switch that lets it end a process spinning on a closed output path is on; off by default).
+ * What the session's commands left running across the relaunch: what still runs, and what the launch ended (one whose
+ * output path was closed with its other end closed and that kept spinning, while that is on; on by default).
  */
 export interface LeftProcesses {
 	running: LeftProcess[];
@@ -118,6 +120,8 @@ function leftProcessLine(item: LeftProcess): string {
 	if (item.outputClosed) line += `; output path closed (peer ${item.outputClosed})`;
 	if (item.cpu)
 		line += `; ${item.spinning ? "spinning: " : ""}${item.cpu.percent}% of a core for ${item.cpu.seconds} s`;
+	if (item.sustained)
+		line += `; still ${item.sustained.percents.slice(1).join("%, ")}% in samples over ${item.sustained.seconds} s`;
 	return line;
 }
 
@@ -631,7 +635,7 @@ function restartNotice(
 	}
 	if (processes.ended.length > 0) {
 		lines.push(
-			"OMPdesk ended these processes your commands had started: their output path was closed, its other end closed, and they were spinning (pid, program, what was observed):",
+			"OMPdesk ended these processes your commands had started: their output path was closed, its other end closed, and they kept spinning in every sample (pid, program, what was observed):",
 			...processes.ended.map(leftProcessLine),
 			"Start again only the ones the work still needs, with their output going to a file.",
 		);
