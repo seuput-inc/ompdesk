@@ -239,14 +239,8 @@ import { methods } from "./settings";
 import { install } from "./ompdesk-roles";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { getLogPath } from "@oh-my-pi/pi-utils";
 export default function (pi) {
- // What the bridge logs, kept for the probe's answer (and still logged).
- const traced = [];
- const info = pi.logger.info.bind(pi.logger);
- pi.logger.info = (message, details) => {
-  if (message === "gui-bridge: model role set") traced.push(details);
-  return info(message, details);
- };
  install(pi);
  const session = () => pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
  const sel = model => model.provider + "/" + model.id;
@@ -267,12 +261,26 @@ export default function (pi) {
   const chat = session().modelRegistry.getAvailable().filter(model => modelKind(model) === "chat");
   const A = sel(chat[0]);
   await methods.model_role_set({ role: "review", modelId: A }, env);
-  // Any writer of a role into config.yml, stock's own included, leaves one line naming its callers.
+  // Any writer of a role into config.yml, stock's own included, leaves one line naming its callers in this omp's log.
   session().settings.setModelRole("slow", A);
-  console.error("PRESET_READY=" + JSON.stringify({ A, traced }));
+  console.error("PRESET_READY=" + JSON.stringify({ A, log: getLogPath() }));
  });
 }
 `;
+
+/** The `gui-bridge: model role set` lines the omp wrote to its own log (`log`: its path, from stock's `getLogPath`). */
+function tracedRoleWrites(
+	log: string | undefined,
+): Array<{ role: string; from: string | null; to: string | null; caller?: string[] }> {
+	if (!log || !existsSync(log)) return [];
+	return readFileSync(log, "utf8")
+		.split("\n")
+		.flatMap(line => {
+			if (!line.includes('"gui-bridge: model role set"')) return [];
+			const { role, from, to, caller } = JSON.parse(line);
+			return [{ role, from, to, caller }];
+		});
+}
 
 /** Runs PRESET_PROBE, sends `/modelpreset save mine`, then `switch mine`, then reads the probe and config.yml. */
 async function runPresetSession(delayMs = 0): Promise<{
@@ -330,7 +338,7 @@ async function runPresetSession(delayMs = 0): Promise<{
 		const configFile = join(isolated, "config.yml");
 		return {
 			A: JSON.parse(ready?.slice("PRESET_READY=".length) ?? "{}").A,
-			traced: JSON.parse(ready?.slice("PRESET_READY=".length) ?? "{}").traced ?? [],
+			traced: tracedRoleWrites(JSON.parse(ready?.slice("PRESET_READY=".length) ?? "{}").log),
 			review: JSON.parse(after?.slice("PRESET_PROBE=".length) ?? "{}").review,
 			config: existsSync(configFile)
 				? ((parse(readFileSync(configFile, "utf8")) ?? {}) as Record<string, unknown>)
