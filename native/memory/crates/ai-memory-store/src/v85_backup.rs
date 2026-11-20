@@ -48,6 +48,49 @@ fn same_schema(source: &Connection, copy: &Connection) -> rusqlite::Result<bool>
     }
 }
 
+#[cfg(windows)]
+fn require_private_acl(path: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    // Inspect SIDs, not localized icacls output. Reject null DACLs and ACE types
+    // we cannot interpret. Neither the new file nor an existing backup is re-ACL'd.
+    const CHECK: &str = r#"
+$ErrorActionPreference = 'Stop'
+$trusted = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
+$security = [IO.File]::GetAccessControl($env:OMPDESK_BACKUP_PATH)
+$sd = [Security.AccessControl.RawSecurityDescriptor]::new($security.GetSecurityDescriptorBinaryForm(), 0)
+if ($null -eq $sd.Owner -or $trusted -notcontains $sd.Owner.Value -or $null -eq $sd.DiscretionaryAcl) { exit 1 }
+foreach ($ace in $sd.DiscretionaryAcl) {
+    if ($ace.AceType -eq 'AccessDenied') { continue }
+    if ($ace.AceType -ne 'AccessAllowed' -or $trusted -notcontains $ace.SecurityIdentifier.Value) { exit 1 }
+}
+[Console]::Out.Write('private')
+exit 0"#;
+    let windows = std::env::var_os("SystemRoot")
+        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Windows system directory not set"))?;
+    let shell = Path::new(&windows).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let result = Command::new(shell)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            CHECK,
+        ])
+        .env("OMPDESK_BACKUP_PATH", path)
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()?;
+    if result.status.success() && result.stdout == b"private" {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "could not verify a private Windows ACL on the V85 backup",
+        ))
+    }
+}
+
 fn validate(path: &Path, source: &Connection, source_id: &str) -> StoreResult<()> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_file() {
@@ -64,6 +107,8 @@ fn validate(path: &Path, source: &Connection, source_id: &str) -> StoreResult<()
             );
         }
     }
+    #[cfg(windows)]
+    require_private_acl(path)?;
     let copy = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let journal: String = copy.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
     if journal != "delete"
@@ -107,6 +152,8 @@ pub(super) fn ensure(conn: &mut Connection, db_path: &Path) -> StoreResult<()> {
         Ok(_) => validate(&dest, &source, &id)?,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             let temp = NamedTempFile::new_in(dir)?;
+            #[cfg(windows)]
+            require_private_acl(temp.path())?;
             source.backup(
                 rusqlite::MAIN_DB,
                 temp.path(),
@@ -136,11 +183,56 @@ mod tests {
     use super::*;
     use crate::{DB_FILENAME, Store, migrations};
 
+    fn private_db_dir(root: &Path) -> std::path::PathBuf {
+        let dir = root.join("db");
+        fs::create_dir(&dir).unwrap();
+        #[cfg(windows)]
+        {
+            // CI's temp root need not have the same inherited ACL as a user profile.
+            let user = std::process::Command::new("whoami")
+                .args(["/user", "/fo", "csv", "/nh"])
+                .output()
+                .unwrap();
+            assert!(user.status.success());
+            let row = String::from_utf8_lossy(&user.stdout);
+            let sid = row.trim().rsplit(',').next().unwrap().trim_matches('"');
+            assert!(sid.starts_with("S-1-"));
+            let acl = std::process::Command::new("icacls")
+                .arg(&dir)
+                .args(["/inheritance:r", "/grant:r", &format!("*{sid}:(OI)(CI)F")])
+                .output()
+                .unwrap();
+            assert!(acl.status.success());
+        }
+        dir
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_readable_by_everyone_snapshot_cannot_authorize_migration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = private_db_dir(tmp.path());
+        let path = dir.join(DB_FILENAME);
+        let dest = dir.join(BACKUP);
+        let mut conn = Connection::open(&path).unwrap();
+        migrations::run_to(&mut conn, 85).unwrap();
+        ensure(&mut conn, &path).unwrap();
+        let grant = std::process::Command::new("icacls")
+            .arg(&dest)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(grant.status.success());
+        let before = fs::read(&dest).unwrap();
+        assert!(Store::open(tmp.path()).is_err());
+        assert_eq!(version(&conn).unwrap(), Some(85));
+        assert_eq!(fs::read(&dest).unwrap(), before);
+    }
+
     #[test]
     fn store_upgrades_only_after_a_private_restartable_v85_snapshot() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("db");
-        fs::create_dir(&dir).unwrap();
+        let dir = private_db_dir(tmp.path());
         let db = dir.join(DB_FILENAME);
         let dest = dir.join(BACKUP);
         let mut conn = Connection::open(&db).unwrap();
