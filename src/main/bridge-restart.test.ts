@@ -254,6 +254,15 @@ describe("restartFollowUp", () => {
 		expect(restartFollowUp([], [])).toBeUndefined();
 	});
 
+	it("names what the session's commands left running only to a turn that goes on, never starting one for it", () => {
+		const processes = { running: [{ pid: 4321, name: "next-server", noReader: true as const }], ended: [] };
+		expect(restartFollowUp([], [], "idle", [], processes)).toBeUndefined();
+		const followUp = restartFollowUp([], [], "restored", [], processes);
+		expect(followUp?.content).toContain("- 4321 next-server; its output has nowhere to go");
+		// The transcript shows no line for it: no job, subagent or cut turn.
+		expect(followUp?.details).toEqual({ jobs: [] });
+	});
+
 	it("names each stopped job with its intent first, then its command, and asks for a quiet re-run of what is needed", () => {
 		const followUp = restartFollowUp(
 			[

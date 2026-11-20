@@ -51,6 +51,66 @@ export interface InterruptedJob {
 	intent?: string;
 }
 
+/**
+ * A process the session's commands started before the relaunch (main's `SessionProcesses.leftover`). Named by what
+ * cannot leak a secret: never its arguments, which can hold tokens, and its folder only inside the session's own.
+ */
+export interface LeftProcess {
+	pid: number;
+	/** Its executable's file name. */
+	name: string;
+	/** When it started, ISO 8601. */
+	started?: string;
+	/** Its working folder relative to the session's folder (`.` for that folder); `outside` when not under it. */
+	folder?: string;
+	outside?: true;
+	/** The TCP ports it listens on. */
+	ports?: number[];
+	/** Its output has nowhere to go: the program that read it stopped with the restart, so each write fails. */
+	noReader?: true;
+	/** Of one with no reader: the share of one core it used while measured, over `seconds`. */
+	cpu?: { percent: number; seconds: number };
+	/** That share is at or over the mark that reads as spinning (`SPIN_PERCENT` in main). */
+	spinning?: true;
+}
+
+/**
+ * What the session's commands left running across the relaunch: what still runs, and what the launch ended (only
+ * while the switch that lets it end a process spinning on output nobody reads is on; off by default).
+ */
+export interface LeftProcesses {
+	running: LeftProcess[];
+	ended: LeftProcess[];
+}
+
+/** `LeftProcesses` out of a restore's `processes` parameter; an item of another shape is left out. */
+export function leftProcessesOf(value: unknown): LeftProcesses {
+	const list = (items: unknown): LeftProcess[] =>
+		Array.isArray(items)
+			? items.flatMap(item =>
+					isObject(item) && typeof item.pid === "number" && typeof item.name === "string"
+						? [item as unknown as LeftProcess]
+						: [],
+				)
+			: [];
+	const record = isObject(value) ? value : {};
+	return { running: list(record.running), ended: list(record.ended) };
+}
+
+/** One process as the notice names it: `- 4321 next-server, started …, in ., listening on 3000; …`. */
+function leftProcessLine(item: LeftProcess): string {
+	const facts = [`- ${item.pid} ${item.name}`];
+	if (item.started) facts.push(`started ${item.started}`);
+	if (item.outside) facts.push("outside the session folder");
+	else if (item.folder) facts.push(`in ${item.folder}`);
+	if (item.ports?.length) facts.push(`listening on ${item.ports.join(", ")}`);
+	let line = facts.join(", ");
+	if (item.noReader) line += "; its output has nowhere to go";
+	if (item.cpu)
+		line += `; ${item.spinning ? "spinning: " : ""}${item.cpu.percent}% of a core for ${item.cpu.seconds} s`;
+	return line;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -526,6 +586,7 @@ function restartNotice(
 	subagents: readonly RevivedSubagent[],
 	turn: RestartTurn,
 	stopped: readonly RevivedSubagent[],
+	processes: LeftProcesses,
 ): string {
 	const lines: string[] = [];
 	if (turn === "cut") {
@@ -546,6 +607,23 @@ function restartNotice(
 			"OMPdesk restarted and these background agents you started stopped with it; they did not come back and their results will not arrive:",
 			...stopped.map(agent => `- ${agent.id}: ${agent.intent ?? "background agent"}`),
 			"Check what each one already did, then start again only the ones the work still needs; skip any whose result no longer matters.",
+		);
+	}
+	if (processes.running.length > 0) {
+		const deaf = processes.running.some(item => item.noReader);
+		lines.push(
+			"These processes your commands started before OMPdesk restarted are still running; they are yours as before (pid, program, what is known):",
+			...processes.running.map(leftProcessLine),
+			deaf
+				? "Use them as they are. One whose output has nowhere to go fails each write it makes; one marked spinning may be stuck retrying that. If the work needs such a one, end it yourself and start it again with its output going to a file."
+				: "Use them as they are; do not start them again.",
+		);
+	}
+	if (processes.ended.length > 0) {
+		lines.push(
+			"OMPdesk ended these processes your commands had started: their output had nowhere to go after the restart and they spun on it (pid, program, what was measured):",
+			...processes.ended.map(leftProcessLine),
+			"Start again only the ones the work still needs, with their output going to a file.",
 		);
 	}
 	if (subagents.length > 0) {
@@ -588,16 +666,26 @@ const listedSubagents = (items: readonly RevivedSubagent[]) =>
 
 /**
  * The relaunch's one follow-up, or undefined when it has nothing to say: the cut-off jobs, the revived subagents, what
- * happened to the session's own turn (`RestartTurn`) and the background subagents the restart stopped for good
- * (`stopped`, counted with the jobs in the transcript's line). One message, so one turn.
+ * happened to the session's own turn (`RestartTurn`), the background subagents the restart stopped for good
+ * (`stopped`, counted with the jobs in the transcript's line) and what the session's commands left running
+ * (`processes`, named only to a turn that goes on: alone they never start one). One message, so one turn.
  */
 export function restartFollowUp(
 	jobs: readonly InterruptedJob[],
 	subagents: readonly RevivedSubagent[],
 	turn: RestartTurn = "idle",
 	stopped: readonly RevivedSubagent[] = [],
+	processes: LeftProcesses = { running: [], ended: [] },
 ): RestartFollowUp | undefined {
-	if (jobs.length === 0 && stopped.length === 0 && subagents.length === 0 && turn !== "cut") return undefined;
+	const left = processes.running.length > 0 || processes.ended.length > 0;
+	if (
+		jobs.length === 0 &&
+		stopped.length === 0 &&
+		subagents.length === 0 &&
+		turn !== "cut" &&
+		!(left && turn === "restored")
+	)
+		return undefined;
 	return {
 		customType:
 			jobs.length > 0 || stopped.length > 0
@@ -605,7 +693,7 @@ export function restartFollowUp(
 				: subagents.length > 0
 					? RESTART_SUBAGENTS_MESSAGE
 					: RESTART_TURN_MESSAGE,
-		content: restartNotice(jobs, subagents, turn, stopped),
+		content: restartNotice(jobs, subagents, turn, stopped, processes),
 		details: {
 			jobs: listed([...jobs, ...stopped]),
 			...(subagents.length > 0 ? { subagents: listedSubagents(subagents) } : {}),

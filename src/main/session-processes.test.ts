@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { restartFollowUp } from "../../resources/gui-bridge/restart-core";
 import { SESSION_TAG_ENV } from "./omp-launch";
 import {
 	type EndResult,
@@ -97,10 +98,11 @@ function orphan(tag: string | undefined): number {
 /** Whether a direct child has ended (its exit event, never the pid: a reaped pid may name another process). */
 const ended = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
 
-function registry(frozen = false): SessionProcesses {
+function registry(frozen = false, endSpinning?: boolean): SessionProcesses {
 	return new SessionProcesses(file, {
 		frozen: () => frozen,
 		log: (message, details) => logs.push({ message, details }),
+		...(endSpinning !== undefined ? { endSpinning } : {}),
 	});
 }
 
@@ -291,6 +293,50 @@ describe("a session's processes, on this computer", () => {
 			expect(by(quiet.child.pid)).toMatchObject({ noReader: true, folder: ".", ports: [Number(quiet.said)] });
 			expect(by(quiet.child.pid)?.spinning).toBeUndefined();
 			expect(JSON.stringify(logs)).not.toContain("SYNTH-");
+
+			// The tab back on the session takes the tag over; its continuation names what still runs.
+			const back = after.open({ cwd: folder, sessionPath: session });
+			const left = await back.leftover();
+			const named = (pid: number | undefined) => left?.running.find(item => item.pid === pid);
+			expect(named(chatty.child.pid)).toMatchObject({ noReader: true, spinning: true });
+			expect(named(quiet.child.pid)).toMatchObject({ noReader: true, ports: [Number(quiet.said)] });
+			expect(named(busy.pid)).toMatchObject({ folder: "." });
+			expect(named(busy.pid)?.noReader).toBeUndefined();
+			expect(left?.ended).toEqual([]);
+			const notice = restartFollowUp([], [], "restored", [], left)?.content ?? "";
+			expect(notice).toContain(`- ${chatty.child.pid} `);
+			expect(notice).toContain("spinning: ");
+			expect(notice).toContain(`listening on ${quiet.said}`);
+			expect(notice).toContain("outside the session folder");
+			expect(`${notice}${JSON.stringify(left)}`).not.toContain("SYNTH-");
+		},
+	);
+
+	it.skipIf(process.platform === "linux")(
+		"with the switch on, end at the launch only those spinning on output nobody reads",
+		{ timeout: SLOW },
+		async () => {
+			const folder = fs.realpathSync(dir);
+			const session = path.join(folder, "kept.jsonl");
+			const before = registry(true);
+			const tab = before.open({ cwd: folder, sessionPath: session });
+			const chatty = await deafened(tab.tag, CHATTY, folder);
+			const quiet = await deafened(tab.tag, QUIET_SERVER, folder);
+			await tab.close();
+
+			const after = registry(false, true);
+			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
+			await after.settled();
+
+			await vi.waitFor(() => expect(ended(chatty.child)).toBe(true));
+			expect(ended(quiet.child)).toBe(false);
+			const end = logs.find(entry => entry.message === "ended");
+			expect(end?.details).toMatchObject({ reason: "spinning without a reader", processes: 1 });
+			const left = await after.open({ cwd: folder, sessionPath: session }).leftover();
+			expect(left?.ended.map(item => item.pid)).toEqual([chatty.child.pid]);
+			expect(left?.running.map(item => item.pid)).toEqual([quiet.child.pid]);
+			// The tag stays: its tab is open and a process of it still runs.
+			expect(after.owners().map(owner => owner.tag)).toEqual([tab.tag]);
 		},
 	);
 });
@@ -308,6 +354,8 @@ describe("which tags end, and when", () => {
 			log: (message, details) => logs.push({ message, details }),
 			newTag: () => (++made).toString(16).padStart(32, "0"),
 			later: (run, ms) => timers.push({ run, ms }),
+			// What a kept tag left is looked at, never ended here (the cases above run it on real processes).
+			survey: async () => [],
 			end: tags => {
 				const { promise, resolve, reject } = Promise.withResolvers<EndResult>();
 				calls.push({
