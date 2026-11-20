@@ -359,7 +359,7 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
 
     // Quit while the first message is on its way: main never answers it, and the core goes with the app.
     let (before, asked_before) = rig_files(
-        7_320,
+        7_342,
         state_of(
             vec![tab("a", "/s/x_1.jsonl"), tab("c1", "/s/c_1.jsonl")],
             json!({}),
@@ -401,7 +401,7 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
     let journaled = Arc::new(Mutex::new(false));
     let journal = journaled.clone();
     let (after, asked) = rig_files(
-        7_321,
+        7_343,
         state_of(
             vec![tab("a", "/s/x_1.jsonl"), tab("c9", "/s/c_1.jsonl")],
             json!({}),
