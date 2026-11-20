@@ -64,7 +64,7 @@ renderer (React) ── IPC ──▶ main (Node, under the Tauri host)
                                                          live AgentSession access)
 ```
 
-The shipped app is the Tauri 2 host (`native/ompdesk/crates/tauri-shell`; WKWebView on macOS, WebView2 on Windows). It starts Node 24 (`<resources>/node`) on `out/main/index.js`, whose `electron` import is the shim `src/main/shell-host/electron` speaking the host protocol; the Preview runs a bundled Brave (`resources/preview-browser`). No Electron or CEF ships (native-rust › First app replacement, › S).
+The shipped app is the Tauri 2 host (`native/ompdesk/crates/tauri-shell`; WKWebView on macOS, WebView2 on Windows). It starts the Node LTS pinned in `scripts/node-runtime-pin.json` (`<resources>/node`) on `out/main/index.js`, whose `electron` import is the shim `src/main/shell-host/electron` speaking the host protocol; the Preview runs a bundled Brave (`resources/preview-browser`). No Electron or CEF ships (native-rust › First app replacement, › S).
 
 ### Command routing and IPC
 

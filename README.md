@@ -105,7 +105,7 @@ OMPdesk, omp, the CLIs of your connected accounts, and omp's plugins, skills and
 
 ## Build from source
 
-Needs Bun, Git, Rust 1.95 (selected by `native/ompdesk/rust-toolchain.toml`), and omp 18.18.9 or newer.
+Needs Bun, Git, the Rust version pinned in `native/ompdesk/rust-toolchain.toml`, and omp 18.18.9 or newer.
 
 ```bash
 git clone https://github.com/seuput-inc/ompdesk.git

@@ -105,7 +105,7 @@ OMPdesk, omp, 연결한 계정의 도구 CLI, omp의 플러그인·스킬·MCP �
 
 ## 소스에서 실행하기
 
-Bun, Git, Rust 1.95(`native/ompdesk/rust-toolchain.toml`에서 선택), omp 18.18.9 이상이 필요해요.
+Bun, Git, `native/ompdesk/rust-toolchain.toml`에 지정된 Rust, omp 18.18.9 이상이 필요해요.
 
 ```bash
 git clone https://github.com/seuput-inc/ompdesk.git

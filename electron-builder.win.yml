@@ -30,7 +30,7 @@ files:
 extraResources:
   - from: resources/gui-bridge
     to: gui-bridge
-  # Node 24 LTS, the runtime of the TypeScript main that is left (scripts/node-runtime-pin.json: version and SHA-256
+  # Node LTS, the runtime of the TypeScript main that is left (scripts/node-runtime-pin.json: version and SHA-256
   # per platform). bun run build:node fills the gitignored directory with node.exe, Node's LICENSE and its build
   # record; scripts/after-pack.cjs checks them against the pin.
   - from: resources/node/win32-x64

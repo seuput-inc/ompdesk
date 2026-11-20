@@ -61,5 +61,15 @@
 			}
 		}
 	},
+	"overrides": [
+		{
+			"includes": [
+				"resources/omp-builtin/ecc/skills/yoruba-localization-testing/examples/localization.mjs",
+				"resources/omp-builtin/ecc/skills/yoruba-localization-testing/examples/localization-check.mjs"
+			],
+			"formatter": { "enabled": false },
+			"assist": { "enabled": false }
+		}
+	],
 	"assist": { "actions": { "source": { "organizeImports": "on" } } }
 }
