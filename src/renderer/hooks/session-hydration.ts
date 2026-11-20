@@ -14,6 +14,7 @@ import { workTurnStartedAt } from "../components/chat/work/work-turn";
 import { MODEL_WRITE_DELAY_MS, seedModelStore, writeModelSnapshot } from "../lib/model-snapshot";
 import { reportRuntimeError } from "../lib/runtime-errors";
 import {
+	readTranscriptSnapshot,
 	reuseSeededRows,
 	seedTranscript,
 	TRANSCRIPT_WRITE_DELAY_MS,
@@ -862,9 +863,56 @@ function seedFromSnapshot(tabId: string, { messages, session, tools, model }: Hy
 	if (session && !session.getState().cwd && tab.cwd) session.setState({ cwd: tab.cwd });
 	if (model) seedModelStore(model, tab.device, transcriptKey(snapshotIdentity(tab)));
 	if (!messages) return;
-	const rows = seedTranscript(messages, snapshotIdentity(tab));
+	const identity = snapshotIdentity(tab);
+	const rows = seedTranscript(messages, identity);
+	const key = transcriptKey(identity);
+	if (key)
+		transcriptProbe.set(tabId, {
+			...transcriptProbe.get(tabId),
+			seeded: { key, found: rows !== null, at: Date.now() },
+		});
 	// The tool cards derive from the rows: rebuilt, none of them waits for a result that is already in the rows.
 	if (rows) tools?.getState().hydrateMessages(rows, { turnIsLive: false });
+}
+
+/** Per tab, the transcript snapshot key it was last seeded from (and whether rows were there) and last written under. */
+const transcriptProbe = new Map<
+	string,
+	{ seeded?: { key: string; found: boolean; at: number }; written?: { key: string; at: number } }
+>();
+
+/** A log-safe key: the session file's name, never its folder. */
+const probeKey = (key: string | null | undefined) => (key ? key.replace(/^path:.*[\\/]/, "path:") : null);
+
+/**
+ * Probe for a known session shown with no rows (the idle-release report: a released hidden tab sat on "Loading
+ * earlier messages…" over a second): the key looked up now and whether the cache has it, the key the tab was seeded
+ * under and the key its snapshot was last written under, with their ages. Says which of "never written", "written
+ * under another key" and "not found" it was.
+ */
+export function reportEmptyTranscript(tabId: string): void {
+	const tab = useTabsStore.getState().tabs.find(entry => entry.id === tabId);
+	if (!tab) return;
+	const identity = snapshotIdentity(tab);
+	const hit = readTranscriptSnapshot(identity);
+	const { seeded, written } = transcriptProbe.get(tabId) ?? {};
+	const now = Date.now();
+	window.omp?.runtime?.report({
+		source: "transcript-seed",
+		message: "empty",
+		details: {
+			level: "info",
+			status: tab.status,
+			key: probeKey(transcriptKey(identity)),
+			found: hit !== null,
+			foundAgeMs: hit ? now - hit.at : null,
+			seeded: probeKey(seeded?.key),
+			seededFound: seeded?.found ?? null,
+			seededAgoMs: seeded ? now - seeded.at : null,
+			written: probeKey(written?.key),
+			writtenAgoMs: written ? now - written.at : null,
+		},
+	});
 }
 
 /**
@@ -909,8 +957,9 @@ function watchTranscript(tabId: string, runtime: SessionRuntime, { messages, mod
 		clearTimeout(timer);
 		timer = setTimeout(() => {
 			const tab = useTabsStore.getState().tabs.find(entry => entry.id === tabId);
-			if (tab && sessionRuntime(tabId) === runtime)
-				writeTranscriptSnapshot(snapshotIdentity(tab), messages.getState().messages);
+			if (!tab || sessionRuntime(tabId) !== runtime) return;
+			const key = writeTranscriptSnapshot(snapshotIdentity(tab), messages.getState().messages);
+			if (key) transcriptProbe.set(tabId, { ...transcriptProbe.get(tabId), written: { key, at: Date.now() } });
 		}, TRANSCRIPT_WRITE_DELAY_MS);
 	});
 }

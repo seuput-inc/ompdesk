@@ -752,6 +752,13 @@ export type RuntimeErrorSource =
 	 * `details` the list (local or device), focus/reroot/open, whether it was archived and whether a tab held it.
 	 */
 	| "sidebar"
+	/**
+	 * A known session's pane shown with no rows, info level (src/renderer/hooks/session-hydration.ts
+	 * `reportEmptyTranscript`): `key` the transcript snapshot key looked up and whether the cache has it (`found`,
+	 * `foundAgeMs`), the key the tab was seeded under (`seeded`, `seededFound`, `seededAgoMs`) and the one its snapshot
+	 * was last written under (`written`, `writtenAgoMs`); a path key carries the file's name only.
+	 */
+	| "transcript-seed"
 	| "unknown";
 
 /** Bounded, serializable renderer/main failure payload written as JSONL. */
