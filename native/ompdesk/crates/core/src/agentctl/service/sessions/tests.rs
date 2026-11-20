@@ -1105,7 +1105,7 @@ async fn a_child_opened_through_the_check_stays_in_scope_once_the_grant_is_gone(
     assert!(!child.is_error, "{}", child.text);
     // A paired host is told which of the caller's sessions passed a check and which did not, and judges by its own
     // setting.
-    let claim = &names(&asked, "command").last().unwrap()["boundaryCaller"];
+    let claim = names(&asked, "command").last().unwrap()["boundaryCaller"].clone();
     assert_eq!(claim["own"], json!(["/pb", "/s/c1_c1c1c1c1.jsonl"]));
     assert_eq!(claim["earlier"], json!(["/pc", "/s/c0_c0c0c0c0.jsonl"]));
     for stranger in ["b", "c0"] {
