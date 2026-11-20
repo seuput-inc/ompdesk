@@ -875,14 +875,13 @@ async fn closing_a_view_of_a_tab_another_computer_holds_says_that_tab_stays_open
     control.host.port().close();
 }
 
-/// This window ("a"), an asleep tab "v" here on Desk's session (restored by a relaunch, not shown since), and Desk's
-/// summary of that session: what the tab Desk itself holds on it does now.
-fn asleep_on_desk(summary: Value) -> Value {
+/// This window ("a") and an asleep tab "v" here on Desk's session (restored by a relaunch, not shown since), with what
+/// the tab Desk itself holds on it does now, as main reads it from Desk's summary (`hostOpen`).
+fn asleep_on_desk(work: &str) -> Value {
     let mut asleep = desk_tab("v", false);
     asleep["status"] = json!("asleep");
-    let mut state = desk_state(vec![asleep]);
-    state["summaries"] = json!({ "d1": [summary] });
-    state
+    asleep["hostOpen"] = json!({ "work": work });
+    desk_state(vec![asleep])
 }
 
 #[tokio::test]
@@ -890,8 +889,7 @@ async fn an_asleep_tab_on_a_session_its_host_runs_reads_as_the_host_runs_it() {
     // 20 Nov 2026 (C12): after a relaunch the MacBook's list and result read SeuOffice's main tab, which the Mac mini's
     // window ran (its turn resumed there), as "not started (it starts when shown or messaged)" for 26 minutes: the
     // MacBook's own tab on it was restored asleep, and the line read that tab, never the host's summary every row reads.
-    let running = json!({ "sessionPath": DESK_PATH, "tabId": "w1", "status": "running" });
-    let (control, _) = rig_with(7_316, asleep_on_desk(running), |method, args, _| {
+    let (control, _) = rig_with(7_316, asleep_on_desk("turn"), |method, args, _| {
         main_of(method, args)
     });
     let list = control
@@ -927,10 +925,9 @@ async fn an_asleep_tab_on_a_session_its_host_runs_reads_as_the_host_runs_it() {
 
 #[tokio::test]
 async fn an_asleep_tab_whose_host_finished_answers_from_the_saved_file() {
-    let idle = json!({ "sessionPath": DESK_PATH, "tabId": "w1", "status": "ready" });
     let (control, asked) = rig_with(
         7_315,
-        asleep_on_desk(idle),
+        asleep_on_desk("idle"),
         |method, args, _| match method {
             "storedMessages" => Ok(json!([
                 { "role": "user", "content": "go", "timestamp": 1 },
