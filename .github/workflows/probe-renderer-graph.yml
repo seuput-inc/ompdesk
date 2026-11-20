@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 4107235b936c9135585be3e02a950f5521453a07
+          ref: 41498876762ecc76e59dec21dfc9f278455a2108
           path: subject
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -69,9 +69,17 @@ jobs:
           node - <<'JS'
           const {bytes, chunks, sessionList} = require('./renderer-graph.json');
           if (bytes > 2212359 || chunks.some(c => c.eager && c.name.startsWith('assets/PanelViews-')) || sessionList.split(' ').filter(p => p.endsWith('.js')).length !== 1) process.exitCode = 1;
+          const qr = chunks.filter(c => c.modules.some(([id]) => id.includes('/qrcode-generator/')));
+          console.log('QR encoder chunks:', qr.map(c => c.name));
+          if (!qr.length || qr.some(c => c.eager)) process.exitCode = 1;
           JS
       - name: Verify the affected renderer behaviors
         if: ${{ !cancelled() }}
         working-directory: subject
         run: |
-          bunx --no-install vitest run --project renderer src/renderer/hooks/use-auto-title.test.ts src/renderer/stores/input-history.test.ts src/renderer/components/layout/composer/ContextSizeField.test.tsx src/renderer/components/layout/composer/ContextUsagePopover.test.tsx src/renderer/components/panels/viewers/FileViewer.test.tsx
+          bunx --no-install vitest run --project renderer \
+            src/renderer/hooks/use-auto-title.test.ts src/renderer/stores/input-history.test.ts \
+            src/renderer/components/layout/composer/ContextSizeField.test.tsx src/renderer/components/layout/composer/ContextUsagePopover.test.tsx \
+            src/renderer/components/panels/viewers/FileViewer.test.tsx src/renderer/components/settings/MobileWebSection.test.tsx \
+            src/renderer/components/layout/composer/HistorySearchOverlay.test.tsx src/renderer/lib/chunk-load.test.tsx \
+            src/renderer/components/common/catalog.test.ts
