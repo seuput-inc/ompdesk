@@ -1779,11 +1779,12 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Subagent models: a review subagent (its `session_init.modelRole` is `review`, or a stock review agent) gets `retry.modelFallback`, `retry.usageAwareFallback` and `contextPromotion.enabled` turned off on its own settings overlay (runtime override through the registry handles, stock's `disableModelFallback` set, as its security coordinator does), and a tool result carrying a `<task-result>` gets a line when the subagent's journal (`AgentRef.sessionFile`) shows answers from another model than its `resolvedModel`.",
+			"Subagent models and review advisors: a review subagent (its `session_init.modelRole` is `review`, or a stock review agent) gets `retry.modelFallback`, `retry.usageAwareFallback` and `contextPromotion.enabled` turned off on its own settings overlay (runtime override through the registry handles, stock's `disableModelFallback` set, as its security coordinator does); a tool result carrying a `<task-result>` gets a line when the subagent's journal (`AgentRef.sessionFile`) shows answers from another model than its `resolvedModel`; and a session opened without its advisor gets stock's session-only `setAdvisorEnabled(false)`, again after stock re-applies a changed `advisor.enabled`.",
 		files: [
 			"resources/gui-bridge/subagent-model.ts",
 			"resources/gui-bridge/subagent-model-core.ts",
 			"resources/gui-bridge/capabilities.ts",
+			"resources/gui-bridge/advisor-off.ts",
 		],
 		stock: [
 			"@oh-my-pi/pi-coding-agent/config/registry",
@@ -1793,8 +1794,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"session_init.modelRole, session_init.resolvedModel",
 			"task/result-summary.ts <task-result>",
 			"omp://extensions.md#tool_result",
+			"AgentSession.setAdvisorEnabled",
+			"advisor.enabled",
 		],
-		tests: ["src/main/bridge-subagent-model-stock.test.ts"],
+		tests: ["src/main/bridge-subagent-model-stock.test.ts", "src/main/bridge-advisor-off-stock.test.ts"],
 	},
 	{
 		id: "H01",

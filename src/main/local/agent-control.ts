@@ -60,6 +60,11 @@ export const handlers: Record<string, LocalHandler> = {
 		await ctx.bridge.request("agent_control.worker", { from });
 		return {};
 	},
+	/** An open asked for the session without stock's advisor (`ompdesk_session_open` advisor): session-only, bridge advisor-off.ts. */
+	agent_control_advisor_off: async (_command, ctx) => {
+		await ctx.bridge.request("agent_control.advisor_off", {});
+		return {};
+	},
 	/** Whether the person's own typed message started this tab's current run (gui-bridge turn-origin.ts). */
 	agent_control_turn: async (_command, ctx) => {
 		const { person } = await ctx.bridge.request<{ person?: unknown }>("agent_control.turn", {});

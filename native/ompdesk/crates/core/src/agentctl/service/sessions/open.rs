@@ -560,6 +560,20 @@ impl AgentControl {
             ));
             notes.push(format!("model {}/{}", model.provider, model.id));
         }
+        // A review read by another family's model is worth what that model alone says: stock's advisor (the advisor
+        // role, often the reviewed model's own family) interjecting pulled a reviewer's "needs fix" to "ok" (C17,
+        // 20 Nov 2026). Session-only: the bridge turns it off for this session and writes no setting.
+        let on_review_role = args
+            .model
+            .as_deref()
+            .is_some_and(|model| model.trim().eq_ignore_ascii_case("review"));
+        if args.advisor == Some(false) || (args.advisor.is_none() && on_review_role) {
+            setup.push((
+                "Turning the advisor off",
+                json!({ "type": "agent_control_advisor_off" }),
+            ));
+            notes.push("advisor off".to_owned());
+        }
         if args.mode.as_deref() == Some("plan") {
             setup.push((
                 "Turning on plan mode",

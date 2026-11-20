@@ -129,6 +129,11 @@ const OPEN_ONE = {
 		description:
 			"true: a one-off session (a lookup, a check). Once its final answer ends with Result: ok and has reached you, OMPdesk closes it and deletes its saved session, on a paired device too. Not with reopen.",
 	},
+	advisor: {
+		type: "boolean",
+		description:
+			"false: the session runs without its advisor (stock's second model that comments on every turn), for this session only; no setting changes. Default: off for a session on the review role (model: review), so a review is its own model's word; otherwise as the person's settings say.",
+	},
 } as const;
 
 export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
@@ -711,6 +716,7 @@ const openFields = {
 	mode: z.enum(["plan", "goal"]).optional(),
 	worktree: worktreeArg.optional(),
 	throwaway: z.boolean().optional(),
+	advisor: z.boolean().optional(),
 };
 
 const goalNeedsMessage = [

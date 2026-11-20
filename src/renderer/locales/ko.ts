@@ -4564,6 +4564,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.desktopSlot": "세션 간 화면 사용 차례",
 	"bridgeHealth.feature.sessionDump": "진단 묶음 저장(세션 덤프)",
 	"bridgeHealth.feature.advisorStats": "어드바이저 비용과 조언(실행 팝오버, 인사이트)",
+	"bridgeHealth.feature.advisorOff": "어드바이저 없이 연 세션",
 	"bridgeHealth.feature.todoReminder": "거부된 할 일 호출 뒤 알림",
 	"bridgeHealth.feature.todoWait": "답을 기다리는 세션에는 할 일 알림 안 보냄",
 	"bridgeHealth.feature.todoStale": "새 요청에 지난 할 일 목록 전달",

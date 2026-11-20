@@ -640,10 +640,18 @@ impl AgentControl {
         } else {
             String::new()
         };
+        // A message that reads like a slash command still goes as text inside the agent-message wrapper: running it
+        // would let any agent do in another session what the control tools' rules keep from it (C17, 20 Nov 2026: a
+        // sender's '/advisor off' arrived as text, and nobody told it).
+        let slash_note = if args.message.trim_start().starts_with('/') {
+            " It went as text, not run as a command: an agent never runs a slash command in another session. To keep a session's advisor off, open it with ompdesk_session_open advisor: false."
+        } else {
+            ""
+        };
         if !up {
             // Kept, never handed: the sweep hands it over once the target's omp is up (`redeliver_sends`).
             let receipt = format!(
-                "Sent to {}: kept; it is still starting, so OMPdesk hands this over as soon as its omp is up (it reads it then, at its next step if it is working). Do not send it again.{dispatch_note}{attached_note}",
+                "Sent to {}: kept; it is still starting, so OMPdesk hands this over as soon as its omp is up (it reads it then, at its next step if it is working). Do not send it again.{dispatch_note}{attached_note}{slash_note}",
                 named(target)
             );
             if let Some(key) = receipt_key {
@@ -744,7 +752,7 @@ impl AgentControl {
                 .to_owned()
         };
         let receipt = format!(
-            "Sent to {}: {}{}; {how}.{dispatch_note}{attached_note}",
+            "Sent to {}: {}{}; {how}.{dispatch_note}{attached_note}{slash_note}",
             named(target),
             if unconfirmed.is_some() {
                 "not confirmed"

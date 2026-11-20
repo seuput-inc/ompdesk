@@ -185,6 +185,7 @@ export const FEATURES = {
 	contextHookIdle: "Model requests not copied while the message filters have nothing to drop (recap, mount notice)",
 	sessionDump: "Session dump archive saved as a file (/dump all, /dump anon)",
 	advisorStats: "Advisor spend and advisories (Run popover, Insights)",
+	advisorOff: "A session opened without its advisor (ompdesk_session_open advisor: false, or on the review role)",
 	todoReminder: "A refused todo call's reminder reaches its own turn, and the turn then reads finished",
 	todoWait:
 		"A session waiting on another session's reply, or whose open todo items are all written as waiting, is not woken by stock's todo reminder",
@@ -1080,6 +1081,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** advisor-stats.ts: stock's advisor stats and branch. It imports nothing from omp, so health.ts has no LOADERS entry for it. */
 	advisorStats: {
 		session: ["getAdvisorStats()", "isAdvisorUsingSubscription()", "sessionManager.getBranch()"],
+	},
+	/**
+	 * advisor-off.ts: `agent_control.advisor_off` calls stock's session-only `setAdvisorEnabled(false)`, journals one
+	 * entry (its hook turns the advisor off again in the omp that continues the session), and listens to
+	 * `advisor.enabled`, which stock re-applies to every session when it changes.
+	 */
+	advisorOff: {
+		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
+		session: ["setAdvisorEnabled()", "settings", "sessionManager.getBranch()", "sessionManager.appendCustomEntry()"],
+		modules: { [`${AGENT}/config/registry`]: ["lookup()", "Setting.prototype.listen()"] },
 	},
 	/** todo-reminder.ts: wraps the session's `sendCustomMessage` for stock's `todo-error-reminder`. Imports nothing from omp. */
 	todoReminder: {

@@ -1111,6 +1111,10 @@ pub struct OpenOne {
     pub worktree: Option<WorktreeArg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throwaway: Option<bool>,
+    /// `false`: the session runs without stock's advisor (session-only); unset: off for a session opened on the review
+    /// role, else as the session's settings say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisor: Option<bool>,
 }
 
 /// `ompdesk_session_open`'s arguments: the single-session fields, or `sessions`, and where to show the tabs.

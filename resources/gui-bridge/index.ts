@@ -246,6 +246,7 @@ const AREAS: readonly Area[] = [
 	{ name: "desktop-slot", features: ["desktopSlot"], load: () => import("./desktop-slot") },
 	{ name: "session-dump", features: ["sessionDump"], load: () => import("./session-dump") },
 	{ name: "advisor-stats", features: ["advisorStats"], load: () => import("./advisor-stats") },
+	{ name: "advisor-off", features: ["advisorOff"], load: () => import("./advisor-off") },
 	{ name: "todo-reminder", features: ["todoReminder"], load: () => import("./todo-reminder") },
 	{ name: "todo-wait", features: ["todoWait"], load: () => import("./todo-wait") },
 	{ name: "todo-stale", features: ["todoStale"], load: () => import("./todo-stale") },

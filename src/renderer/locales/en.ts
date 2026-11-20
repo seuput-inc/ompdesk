@@ -4570,6 +4570,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.desktopSlot": "Screen turns between sessions",
 	"bridgeHealth.feature.sessionDump": "Save diagnostic bundle (session dump)",
 	"bridgeHealth.feature.advisorStats": "Advisor spend and advisories (Run popover, Insights)",
+	"bridgeHealth.feature.advisorOff": "Sessions opened without their advisor",
 	"bridgeHealth.feature.todoReminder": "Todo reminder after a refused todo call",
 	"bridgeHealth.feature.todoWait": "No todo reminder while a session waits for a reply",
 	"bridgeHealth.feature.todoStale": "Old todo list shown to the agent on a new request",
