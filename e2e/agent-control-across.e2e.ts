@@ -532,7 +532,11 @@ test.describe("on a paired device", () => {
 		test.setTimeout(240_000);
 		const { hostProfile, clientProfile, call, client: app } = await pairApps();
 		const parentTab = (await app.page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId ?? "";
-		const open = await call("ompdesk_session_open", { device: "PC-B", message: "Title: ask there\nAsk me" });
+		// Finish the setup turn: otherwise its missing-result reminder is another mail delivered to the host.
+		const open = await call("ompdesk_session_open", {
+			device: "PC-B",
+			message: "Title: ask there\nfixture:result-ok",
+		});
 		expect(open.isError, open.text).toBe(false);
 		const [child] = opened(open.text);
 		await call("ompdesk_session_result", { session: child, wait: true, timeout_seconds: 60 });
