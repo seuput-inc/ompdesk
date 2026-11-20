@@ -1185,7 +1185,7 @@ describe("usage.read", () => {
 					],
 				},
 				{
-					// The plan is used up and ChatGPT still serves it, on the credits it holds.
+					// The plan is used up and ChatGPT still allows requests; the report holds a balance, not a charge.
 					provider: "openai-codex",
 					account: "gpt@example.test (pro)",
 					fetchedAt: Date.now(),
@@ -1204,9 +1204,34 @@ describe("usage.read", () => {
 		expect(claude).toMatch(/read \d{4}-\d\d-\d\dT[\d:]+Z \(3m ago\)/);
 		expect(text).toContain("Claude 7 Day (Fable): 100% used");
 		const gpt = text.split("\n").find(line => line.includes("gpt@example.test"));
-		expect(gpt).toMatch(/plan used up until [\dT:-]+Z \(in 4d\dh\); running past it on credits/);
-		expect(gpt).toContain("credits: 500 credits left");
+		expect(gpt).toMatch(/plan used up until [\dT:-]+Z \(in 4d\dh\); requests still allowed/);
+		expect(gpt).toContain("credit balance: 500 credits");
 		expect(gpt).not.toContain("limited until");
+		expect(gpt).not.toMatch(/on credits|charged|spent/);
+	});
+
+	it("says a used-up plan the provider still allows is still allowed, with no word of what pays for it", async () => {
+		const ports = new FakePorts();
+		const week = Date.now() + 50 * HOUR;
+		// ChatGPT's explicit allow at 100 % with no credits block: stock writes `warning`.
+		ports.rpcData.get_usage = {
+			creditSpend: true,
+			reports: [
+				{
+					provider: "openai-codex",
+					account: "gpt@example.test (pro)",
+					fetchedAt: Date.now(),
+					planSpentUntil: week,
+					limits: [
+						{ id: "openai-codex:secondary", label: "7 days", usedFraction: 1, resetsAt: week, status: "warning" },
+					],
+				},
+			],
+		};
+		const text = await new AppControl(ports).run(CALLER, "usage.read", {});
+		const gpt = text.split("\n").find(line => line.includes("gpt@example.test"));
+		expect(gpt).toMatch(/plan used up until [\dT:-]+Z \(in 2d\dh\); requests still allowed/);
+		expect(gpt).not.toMatch(/credit|limited until/);
 	});
 
 	it("limits a used-up plan where Credit use is off, as that computer's omp refuses it", async () => {
@@ -1229,7 +1254,9 @@ describe("usage.read", () => {
 		expect(text).toContain("Read by an omp on your session's computer");
 		expect(text).toContain("Credit use off there");
 		expect(text).toMatch(/limited until [\dT:-]+Z \(in 1d\dh\)/);
-		expect(text).toContain("plan used up; Credit use is off here, so not run on credits");
+		expect(text).toMatch(
+			/plan used up until [\dT:-]+Z \(in 1d\dh\); Credit use is off here, so nothing is sent on it/,
+		);
 	});
 });
 

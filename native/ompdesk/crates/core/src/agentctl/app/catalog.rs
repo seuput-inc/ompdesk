@@ -581,18 +581,19 @@ fn first_text<'a>(candidates: &[&'a str]) -> &'a str {
         .unwrap_or("")
 }
 
-/// What an account has left beyond its plan (`UsageReport.credits`), as the accounts list shows it.
+/// What an account has left beyond its plan (`UsageReport.credits`), as the accounts list shows it: a balance or a
+/// cap the provider reports, never a charge.
 fn credits_text(credits: &Map<String, Value>) -> Option<String> {
     let remaining = finite(credits.get("remaining"));
     let unit = text_of(credits.get("unit"));
     match text_of(credits.get("kind")) {
-        "unlimited" => Some("credits: unlimited".into()),
-        "balance" => remaining.map(|left| format!("credits: {} {unit} left", js_number(left))),
+        "unlimited" => Some("credit balance: unlimited".into()),
+        "balance" => remaining.map(|left| format!("credit balance: {} {unit}", js_number(left))),
         "monthlyCap" => remaining.map(|left| {
             let cap = finite(credits.get("limit"))
                 .map_or(String::new(), |cap| format!(" of {}", js_number(cap)));
             format!(
-                "extra usage: {}{cap} {unit} left this month",
+                "extra usage cap: {}{cap} {unit} left this month",
                 js_number(left)
             )
         }),
@@ -629,29 +630,26 @@ fn describe_report(report: &Map<String, Value>, now: f64, credit_spend: Option<b
     if let Some(until) = limited {
         notes.push(format!("limited until {}", when_text(until, now)));
     }
-    let credits = report
-        .get("credits")
-        .and_then(Value::as_object)
-        .and_then(credits_text);
     if let Some(until) = finite(report.get("planSpentUntil")) {
-        let past = if text_of(report.get("provider")) == "anthropic" {
-            "extra usage"
-        } else {
-            "credits"
-        };
         let until = when_text(until, now);
-        notes.push(match (credit_spend, limited, &credits) {
-            (Some(true), None, Some(_)) => {
-                format!("plan used up until {until}; running past it on {past}")
+        // Whether ChatGPT or Claude still allowing requests past the plan bills credits or extra usage for them is
+        // not in a usage report (a 100 % row the provider still allows, a balance, a served answer prove no debit),
+        // so the reading says what is known: the plan is used up, and whether requests are still allowed.
+        notes.push(match (credit_spend, limited) {
+            (Some(false), _) => {
+                format!(
+                    "plan used up until {until}; Credit use is off here, so nothing is sent on it"
+                )
             }
-            (Some(true), None, None) => format!("plan used up until {until}; still served past it"),
-            (Some(false), _, _) => {
-                format!("plan used up; Credit use is off here, so not run on {past}")
-            }
-            _ => format!("plan used up until {until}"),
+            (_, None) => format!("plan used up until {until}; requests still allowed"),
+            (_, Some(_)) => format!("plan used up until {until}"),
         });
     }
-    if let Some(text) = credits {
+    if let Some(text) = report
+        .get("credits")
+        .and_then(Value::as_object)
+        .and_then(credits_text)
+    {
         notes.push(text);
     }
     if let Some(fetched) = finite(report.get("fetchedAt")) {
@@ -752,7 +750,7 @@ fn describe_usage(data: &Value, now: f64, device: Option<&str>) -> String {
     });
     let credit = match credit_spend {
         Some(true) => {
-            "Credit use on there: an account past its plan runs on credits or extra usage"
+            "Credit use on there: its omps keep sending an account requests past its plan while the provider allows them"
         }
         Some(false) => {
             "Credit use off there: an account whose plan is used up is limited until it resets"
