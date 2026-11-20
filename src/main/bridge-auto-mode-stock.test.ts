@@ -19,7 +19,7 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  */
 
 const PROBE = `
-import { methods } from "./modes/auto-mode";
+import { methods, preloadStock } from "./modes/auto-mode";
 import { capabilitiesFor } from "./probe-helper";
 export default function (pi) {
  pi.on("session_start", async () => {
@@ -36,6 +36,10 @@ export default function (pi) {
    out.slash = await decide("/compact now please");
    out.bash = await decide("!ls -la /tmp");
    out.short = await decide("ok thanks");
+   // In the app the bridge's install loads the first decision's stock modules as it starts; this probe loads the
+   // auto-mode module alone, so the timed decision paid their first evaluation: 5433 ms on a loaded Windows runner
+   // (omp-latest 44097221800, the run where judge-assist's first ask stalled on its first imports too).
+   await preloadStock();
    const started = Date.now();
    out.big = await decide("refactor the whole settings module across all files and add tests");
    out.bigWallMs = Date.now() - started;
