@@ -12,11 +12,12 @@
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 mod api_credentials;
 mod auto_improve;
 pub mod belief;
+mod dashboard;
 pub mod decay;
 mod error;
 mod fts_query;
@@ -26,8 +27,11 @@ mod migrations;
 mod ops;
 pub mod password;
 mod profile;
+mod provenance;
+pub use provenance::{PageDisagreement, PageProvenance, PageSource};
 mod project_authz;
 mod project_coordinates;
+pub mod query_signals;
 mod reader;
 mod retrieval_tuning;
 mod scope;
@@ -41,15 +45,16 @@ pub use fts_query::{FtsStopwords, prepare_fts5_query};
 
 pub use api_credentials::{AuthenticatedApiUser, generate_api_key, preview_for as api_key_preview};
 pub use auto_improve::{
-    AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS, ApproveAutoImproveProposal, ApproveAutoImproveProposalResult,
-    AutoImproveProposalDetail, AutoImproveProposalEvent, AutoImproveProposalOperation,
-    AutoImproveProposalStatus, AutoImproveProposalSummary, AutoImproveRejectionSummary,
-    AutoImproveTelemetryAggregate, AutoImproveTelemetryCount, FailAutoImproveProposal,
-    NewAutoImproveProposal, OwnedAutoImproveProposalDetail, PendingAutoImproveReview,
-    PendingAutoImproveScope, RejectAutoImproveProposal, SkippedProposal, StageAutoImproveRun,
-    StagedAutoImproveRun, StagedAutoImproveRunReport, artifact_path_for,
+    ABANDONED_SWEEP_CLAIM_ERROR, AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS, ApproveAutoImproveProposal,
+    ApproveAutoImproveProposalResult, AutoImproveProposalDetail, AutoImproveProposalEvent,
+    AutoImproveProposalOperation, AutoImproveProposalStatus, AutoImproveProposalSummary,
+    AutoImproveRejectionSummary, AutoImproveTelemetryAggregate, AutoImproveTelemetryCount,
+    FailAutoImproveProposal, NewAutoImproveProposal, OwnedAutoImproveProposalDetail,
+    PendingAutoImproveReview, PendingAutoImproveScope, RejectAutoImproveProposal, SkippedProposal,
+    StageAutoImproveRun, StagedAutoImproveRun, StagedAutoImproveRunReport, artifact_path_for,
 };
 pub use belief::{BeliefInputs, CONFIDENCE_CAP, confidence};
+pub use dashboard::{AgentUsage, RegisteredAgent};
 pub use decay::{
     DecayParams, SALIENCE_MAX, SALIENCE_MIN, SALIENCE_STEP, TierLambdas,
     lambda_from_half_life_days, retention_score, retention_score_with_breadth,
@@ -61,18 +66,20 @@ pub use error::{
 pub use grants::{GrantFilter, GrantListing, GrantOutcome, ProjectGrant};
 pub use maintenance::MaintenanceJob;
 pub use ops::{
-    AdmittedSession, BootstrapChunkRecord, CompactSummary, Compaction, ConditionalUpsert,
-    DateOnlyTtlPage, DeleteWorkspaceSummary, EmbedOutcome, EmbeddingWrite, EntityBackfillSummary,
-    HookSessionAdmission, IdentityResolution, IngestObservationOutcome, LifecycleOnlyEndOutcome,
-    MAX_PENDING_INBOX_MESSAGES, MoveSessionSummary, MoveSummary, ObservationPruneOutcome,
-    OkfMigratedPage, PAGE_WINDOW_BACKFILL_BATCH, PagePrecondition, PageWindowBackfillSummary,
-    PagesMode, ProjectAliasWriteResolution, PurgeMode, PurgeSessionSummary, PurgeSummary,
-    ReorgSummary, RepairSessionTimesSummary, RepairedSessionTimes, SessionTimesCandidate,
-    SessionTimesSkipReason, SkippedSessionTimes, StaleAfterRepair, backfill_entity_index,
-    backfill_page_windows, backfill_page_windows_in_batches, purge_session, record_embed_failure,
+    AdmittedSession, AdoptedProjectIdentity, BootstrapChunkRecord, CompactSummary, Compaction,
+    ConditionalBatchUpsert, ConditionalUpsert, DateOnlyTtlPage, DeleteWorkspaceSummary,
+    EmbedOutcome, EmbeddingWrite, EntityBackfillSummary, HookSessionAdmission, IdentityResolution,
+    IdleEndAction, IdleEndCandidate, IdleEndResult, IngestObservationOutcome,
+    LifecycleOnlyEndOutcome, MAX_PENDING_INBOX_MESSAGES, MergeProjectPage, MergeProjectSummary,
+    MoveSessionSummary, MoveSummary, ObservationPruneOutcome, OkfMigratedPage,
+    PAGE_WINDOW_BACKFILL_BATCH, PagePrecondition, PageWindowBackfillSummary, PagesMode,
+    ProjectAliasWriteResolution, PurgeMode, PurgeSessionSummary, PurgeSummary, ReorgSummary,
+    RepairSessionTimesSummary, RepairedSessionTimes, SessionTimesCandidate, SessionTimesSkipReason,
+    SkippedSessionTimes, StaleAfterRepair, backfill_entity_index, backfill_page_windows,
+    backfill_page_windows_in_batches, purge_session, record_embed_failure,
 };
 pub use profile::{
-    NewProfileCandidate, PROFILE_CANDIDATES_LIMIT, PROFILE_ENTRIES_LIMIT, PROFILE_HARVEST_BATCH,
+    NewProfileCandidate, PROFILE_CANDIDATES_LIMIT, PROFILE_DIGEST_READ_CAP, PROFILE_HARVEST_BATCH,
     ProfileCandidateRow, ProfileDigestInputs, ProfileHarvestMark, ProfileHarvestProject,
     ProfileLedgerEntry, ProfileOptOut, ProfilePageRow, ProfilePromptRow, ProfileScopePage,
     ProjectProfileFlags,
@@ -81,24 +88,33 @@ pub use project_authz::{
     AccessMode, GrantLevel, ProjectAccess, ProjectAuthz, ProjectPrincipal,
     RESTRICTED_PROJECT_FORBIDDEN, authorize_project, resolve_project_authz,
 };
+pub use query_signals::{
+    QUERY_SIGNAL_COUNT_CAP, QUERY_SIGNAL_TEXT_MAX_CHARS, QuerySignalRow, normalize_query,
+    query_hash, query_signal_boost,
+};
 pub use reader::{
-    ActivityWindow, AgentSessionCount, AuditEvent, AuditLogFilter, AutoImproveCandidateSession,
-    AutoImproveParkedClaim, BriefPageBody, BriefingPage, BriefingSnapshot, ClientActivity,
-    ContaminationFinding, ContaminationReport, ContaminationSummary, ContradictionEdge,
-    DecayCandidate, DecayTombstone, DerivedIndexStatus, EmbeddingTripleCount, FeedbackFinding,
-    GraphVia, HealthDetail, HealthPage, HybridSearch, InboxCount, InboxEntry, ObservationHit,
-    ObservationOrder, ObservationPage, ObservationPageResult, ObservationProjectionTotals,
-    ObservationRecord, OpenSession, PAGE_KINDS, PAGE_VERSIONS_MAX_LIMIT, PageAuthor, PageFilter,
-    PageHit, PageHitWithMeta, PageLinks, PageLinksPreview, PageMeta, PageSummary, PageVersion,
+    ActivityWindow, AgentSessionCount, AnswerEvidenceMeta, AuditEvent, AuditLogFilter,
+    AutoImproveCandidateSession, AutoImproveParkedClaim, BriefPageBody, BriefingPage,
+    BriefingSnapshot, ClientActivity, ContaminationFinding, ContaminationReport,
+    ContaminationSummary, ContradictionEdge, CrossProjectEdge, DecayCandidate, DecayTombstone,
+    DerivedIndexStatus, EmbeddingTripleCount, FTS_HIGHLIGHT_END, FTS_HIGHLIGHT_START,
+    FeedbackFinding, FileSessionRef, GraphVia, HealthDetail, HealthPage, HybridSearch,
+    HybridSearchOutcome, IdleOpenSession, InboxCount, InboxEntry, InterruptedSessionCandidate,
+    LinkGraph, LinkGraphEdge, LinkGraphNode, ObservationHit, ObservationOrder, ObservationPage,
+    ObservationPageResult, ObservationProjectionTotals, ObservationRecord, OpenSession, PAGE_KINDS,
+    PAGE_VERSIONS_MAX_LIMIT, PROJECT_LINK_GRAPH_MAX_NODES, PageAuthor, PageFilter, PageHit,
+    PageHitWithMeta, PageLinks, PageLinksPreview, PageMeta, PageSummary, PageVersion,
     PageVersionBody, PageVersions, ProjectCoordinateCollisionReason, ProjectCoordinateDiagnostic,
     ProjectCoordinateStatus, ProjectSummary, RELATED_WALK_MAX_DEPTH, RELATED_WALK_MAX_NODES,
     ReaderPool, ReindexTargetStatus, RelatedNode, RelatedPage, RrfContributions,
     SESSION_LINE_TITLE_CHARS, SUBSTANTIVE_OBSERVATION_KIND_SQL, ScopeRow, SearchExplain,
-    SessionConsolidationQueue, SessionConsolidationSummary, SessionDependentRows,
+    SessionActivity, SessionConsolidationQueue, SessionConsolidationSummary, SessionDependentRows,
     SessionEndDisposition, SessionKindSummary, SessionLine, SessionObservationSnapshot,
-    SessionPromptTitles, SessionSummary, SessionToolTitles, SettledPage, StatusCounts,
-    StorageStatus, StoredEmbedding, StoredPageBody, StreamTimings, VectorQuery, WorkspaceScopeRow,
-    WorkspaceSummary, f32_vec_to_bytes,
+    SessionPromptTitles, SessionSummary, SessionToolTitles, SessionUsageView, SettledPage,
+    StatusCounts, StorageStatus, StoredEmbedding, StoredPageBody, StreamTimings, TokenCallOrder,
+    TokenCallQuery, TokenCallView, TokenUsageReport, VectorQuery, WorkspaceScopeRow,
+    WorkspaceSummary, f32_vec_to_bytes, highlighted_snippet_html, plain_snippet,
+    project_name_fold_key,
 };
 pub use retrieval_tuning::{RetrievalTuning, is_session_recall_query};
 pub use scope::{
@@ -107,16 +123,20 @@ pub use scope::{
     create_explicit_scope, create_explicit_scope_guarded, create_global_scope,
     create_profile_scope, lookup_existing_scope, lookup_existing_scope_guarded,
     lookup_existing_workspace, lookup_global_scope, lookup_profile_scope,
-    resolve_many_existing_scopes, resolve_many_existing_scopes_guarded,
+    lookup_project_id_guarded, resolve_many_existing_scopes, resolve_many_existing_scopes_guarded,
 };
-pub use session_consolidation::{SESSION_CONSOLIDATION_MAX_ATTEMPTS, SessionConsolidationJob};
+pub use session_consolidation::{
+    SESSION_CONSOLIDATION_MAX_ATTEMPTS, SessionConsolidationJob, enqueue_in_tx,
+};
 pub use users::{LoginUser, TOKEN_HASH_LEN, TOKEN_RAW_LEN, TokenPepper, hash_token};
 pub use web_sessions::{LiveWebSession, WebSession, hash_session_secret};
 pub use workstream::{
-    FinishWorkstreamRun, FinishedWorkstreamRun, LinkManagedRunSessionInScope,
-    LinkOrAdoptManagedRunSession, ManagedRunAuthority, ManagedRunContext, ManagedRunSessionLink,
-    PrepareWorkstreamRun, PreparedWorkstreamRun, RenameWorkstream, RenamedWorkstream,
-    StoredManagedRunStatus, StoredWorkstreamSummary, WorkstreamSelection, WorkstreamSelector,
+    ClaudeSessionBoundary, FinishWorkstreamRun, FinishedWorkstreamRun,
+    LinkManagedRunSessionInScope, LinkOrAdoptManagedRunSession, ManagedRunAuthority,
+    ManagedRunContext, ManagedRunHookIdentity, ManagedRunSessionLink, NativeSessionHolder,
+    OperationalWorkstreamSummary, PrepareWorkstreamRun, PreparedWorkstreamRun, RenameWorkstream,
+    RenamedWorkstream, StoredManagedRunStatus, StoredWorkstreamSummary,
+    WorkstreamOperationalStatus, WorkstreamSelection, WorkstreamSelector,
 };
 pub use writer::{StartupContextAcceptance, WriterHandle};
 
@@ -152,6 +172,49 @@ pub struct Store {
 }
 
 impl Store {
+    /// Open an existing backup snapshot, applying any outstanding migrations.
+    /// Unlike [`Self::open`], this refuses to initialize an absent or blank
+    /// database: a restore must validate what the archive supplied before it
+    /// replaces the live data. Applied history is required even when the
+    /// snapshot contains no pages; refinery still validates that history.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::UninitializedSnapshot`] when the snapshot is
+    /// absent, empty, or has no applied migration history. Other I/O, SQLite
+    /// and migration errors propagate as for [`Self::open`].
+    pub fn open_snapshot(data_dir: &Path) -> StoreResult<Self> {
+        let db_path = data_dir.join("db").join(DB_FILENAME);
+        match std::fs::metadata(&db_path) {
+            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {}
+            Ok(_) => return Err(StoreError::UninitializedSnapshot),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StoreError::UninitializedSnapshot);
+            }
+            Err(error) => return Err(error.into()),
+        }
+        // Read-only and without CREATE: this check must not manufacture the
+        // evidence that distinguishes a snapshot from a fresh database.
+        let conn =
+            Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let has_history: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master \
+             WHERE type = 'table' AND name = 'refinery_schema_history')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_history
+            || !conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM refinery_schema_history)",
+                [],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Err(StoreError::UninitializedSnapshot);
+        }
+        drop(conn);
+        Self::open(data_dir)
+    }
+
     /// Open the SQLite file at `<data_dir>/db/memory.sqlite`, applying any
     /// outstanding migrations, then spawn the writer thread and prepare
     /// the read-only connection pool.
@@ -170,6 +233,14 @@ impl Store {
         conn.pragma_update(None, "journal_size_limit", WAL_JOURNAL_SIZE_LIMIT_BYTES)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "busy_timeout", 5_000)?; // ms
+        // Writer transactions start IMMEDIATE: a deferred transaction that
+        // has already read cannot wait through the busy handler when it
+        // upgrades to write, so another process holding the write lock (an
+        // external `wal_checkpoint(TRUNCATE)`, a sqlite3 shell) failed hook
+        // admission at once with "database is locked". IMMEDIATE takes the
+        // lock at BEGIN, where `busy_timeout` applies. Refinery's
+        // per-migration transactions below inherit it unchanged otherwise.
+        conn.set_transaction_behavior(TransactionBehavior::Immediate);
 
         // SQLite cannot disable FK enforcement inside refinery's per-migration
         // transaction. Keep it off while migrations rebuild tables, then enable
@@ -209,6 +280,29 @@ impl Store {
             tracing::info!(
                 projects = coordinate_keys,
                 "project coordinate keys backfilled"
+            );
+        }
+        for twin in project_coordinates::shadowing_empty_twins(&conn, 20)? {
+            tracing::warn!(
+                workspace = %twin.workspace,
+                project = %twin.name,
+                owner = %twin.owner,
+                "empty project '{}' holds the canonical name of '{}'; it is skipped when \
+                 resolving that name, and can be renamed out of the way with \
+                 `ai-memory rename-project --workspace {} --project-id {} --to {}-empty`",
+                twin.name,
+                twin.owner,
+                twin.workspace,
+                twin.id,
+                twin.name
+            );
+        }
+        let cjk_backfill = ops::backfill_cjk_indexes(&mut conn)?;
+        if cjk_backfill.pages > 0 || cjk_backfill.observations > 0 {
+            tracing::info!(
+                pages = cjk_backfill.pages,
+                observations = cjk_backfill.observations,
+                "CJK search indexes backfilled"
             );
         }
 
@@ -275,9 +369,9 @@ mod tests {
     use ai_memory_core::{
         ActorContext, AgentKind, HandoffAcceptance, HandoffId, HandoffState, LinkTarget,
         ManagedRunId, NewHandoff, NewObservation, NewPage, NewSession, NewWorkstreamEvent,
-        ObservationId, ObservationKind, PageEvidence, PageEvidenceKind, PageId, PagePath,
-        ProjectId, Sanitized, Sanitizer, SessionId, Tier, UserId, WorkspaceId, WorkstreamEventKind,
-        WorkstreamId,
+        ObservationId, ObservationKind, OwnerFilter, PageEvidence, PageEvidenceKind, PageId,
+        PagePath, ProjectId, Sanitized, Sanitizer, SessionId, Tier, UserId, WorkspaceId,
+        WorkstreamEventKind, WorkstreamId,
     };
     use rusqlite::{Connection, params};
     use sha2::{Digest, Sha256};
@@ -308,6 +402,26 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn open_snapshot_migrates_a_snapshot_from_the_first_schema() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("db")).unwrap();
+        let path = tmp.path().join("db").join(DB_FILENAME);
+        let mut conn = Connection::open(&path).unwrap();
+        migrations::run_to(&mut conn, 1).unwrap();
+        drop(conn);
+
+        let store = Store::open_snapshot(tmp.path()).unwrap();
+        drop(store);
+        let conn = Connection::open(&path).unwrap();
+        let applied: i64 = conn
+            .query_row("SELECT COUNT(*) FROM refinery_schema_history", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(applied > 1, "the historical snapshot must still migrate");
     }
 
     fn sample_page(ws: WorkspaceId, proj: ProjectId, path: &str, body: &str) -> NewPage {
@@ -1474,6 +1588,18 @@ mod tests {
                 .iter()
                 .any(|row| row.count == 2)
         );
+        assert_eq!(aggregate.eval_gate_rejections, 4);
+
+        let top_one = store
+            .reader
+            .auto_improve_telemetry_aggregate(ws, proj, 0, 1)
+            .await
+            .unwrap();
+        assert_eq!(top_one.rejections_by_reason.len(), 1);
+        assert_eq!(
+            top_one.eval_gate_rejections, 4,
+            "the eval-gate count must not depend on the top-N reason table"
+        );
 
         let other_aggregate = store
             .reader
@@ -2459,7 +2585,7 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path.as_str(), "alpha.md");
-        assert!(hits[0].snippet.contains("<mark>quick</mark>"));
+        assert!(highlighted_snippet_html(&hits[0].snippet).contains("<mark>quick</mark>"));
 
         // Supersede: only the latest version should appear in counts'
         // pages_latest, and search should still return exactly one hit.
@@ -2746,6 +2872,185 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path.as_str(), "hyphen.md");
+    }
+
+    const DIRECTORY_PATH_BODY: &str =
+        "edited crates/ai-memory-store/src/reader.rs for the writer_actor in ai-memory";
+    const DIRECTORY_PATH_QUERIES: [&str; 5] = [
+        "reader.rs",
+        "reader",
+        "src/reader.rs",
+        // Control: identifiers must still match as whole tokens.
+        "ai-memory",
+        "writer_actor",
+    ];
+
+    #[tokio::test]
+    async fn search_finds_a_page_naming_a_file_with_its_directory() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let (ws, proj) = open_managed_scope(&store, "proj").await;
+        store
+            .writer
+            .upsert_page(sample_page(ws, proj, "notes/edit.md", DIRECTORY_PATH_BODY))
+            .await
+            .unwrap();
+
+        for query in DIRECTORY_PATH_QUERIES {
+            let hits = store
+                .reader
+                .search_pages_for_project(ws, proj, query.into(), 10, None)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 1, "query {query:?}");
+            assert_eq!(hits[0].path.as_str(), "notes/edit.md", "query {query:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_matches_the_parts_of_a_hyphenated_word() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let (ws, proj) = open_managed_scope(&store, "proj").await;
+        let body = format!(
+            "{DIRECTORY_PATH_BODY} the zebrafinch-marker-alpha tag and the zebra_finch_keeper log"
+        );
+        store
+            .writer
+            .upsert_page(sample_page(ws, proj, "markers.md", &body))
+            .await
+            .unwrap();
+
+        // #2013: the content tokenizer keeps `-` and `_` inside tokens, so a
+        // `zebrafinch-marker-alpha` mention indexed as one term and no
+        // component word could reach it. Each part must now match on its own,
+        // in the project scope and in the unscoped search alike.
+        for query in ["alpha", "marker", "zebrafinch", "keeper"] {
+            let hits = store
+                .reader
+                .search_pages_for_project(ws, proj, query.into(), 10, None)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 1, "query {query:?}");
+            assert_eq!(hits[0].path.as_str(), "markers.md", "query {query:?}");
+
+            let global = store
+                .reader
+                .search_pages(query.into(), 10, None)
+                .await
+                .unwrap();
+            assert_eq!(global.len(), 1, "unscoped query {query:?}");
+        }
+
+        // The whole token keeps working as a single term (the reason the
+        // tokenizer was left alone), and an unrelated word still finds nothing.
+        for query in ["ai-memory", "zebrafinch-marker-alpha"] {
+            let hits = store
+                .reader
+                .search_pages_for_project(ws, proj, query.into(), 10, None)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 1, "whole token {query:?}");
+        }
+        let misses = store
+            .reader
+            .search_pages_for_project(ws, proj, "zebrafinches".into(), 10, None)
+            .await
+            .unwrap();
+        assert!(
+            misses.is_empty(),
+            "no false positives from the split column"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_column_filter_matches_the_parts_of_a_hyphenated_word() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let (ws, proj) = open_managed_scope(&store, "proj").await;
+        let mut titled = sample_page(ws, proj, "titled.md", "nothing to see here");
+        titled.title = "my-payment-gateway".into();
+        store.writer.upsert_page(titled).await.unwrap();
+        store
+            .writer
+            .upsert_page(sample_page(
+                ws,
+                proj,
+                "bodied.md",
+                "the run-managed launcher",
+            ))
+            .await
+            .unwrap();
+
+        // #2013: `title:` and `body:` must reach the `_parts` twin, or a
+        // filter narrows away the very hit the bare word finds. Each filter
+        // keeps its own column: the title word does not match `body:`.
+        for (query, expected) in [
+            ("title:gateway", vec!["titled.md"]),
+            ("body:managed", vec!["bodied.md"]),
+            ("title:my-payment-gateway", vec!["titled.md"]),
+            ("body:gateway", Vec::new()),
+            ("title:managed", Vec::new()),
+        ] {
+            let hits = store
+                .reader
+                .search_pages_for_project(ws, proj, query.into(), 10, None)
+                .await
+                .unwrap();
+            let paths: Vec<_> = hits.iter().map(|hit| hit.path.as_str()).collect();
+            assert_eq!(paths, expected, "query {query:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_finds_an_observation_naming_a_file_with_its_directory() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let (ws, proj) = open_managed_scope(&store, "proj").await;
+        let session_id = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: None,
+                id: session_id,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::ClaudeCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        store
+            .writer
+            .insert_observation(Sanitized::new(
+                NewObservation {
+                    occurred_at: None,
+                    session_id,
+                    workspace_id: ws,
+                    project_id: proj,
+                    kind: ObservationKind::PostToolUse,
+                    extension: None,
+                    source_event: None,
+                    title: "tool file".into(),
+                    body: DIRECTORY_PATH_BODY.into(),
+                    importance: 5,
+                    file_path: None,
+                },
+                &Sanitizer::builtin(),
+            ))
+            .await
+            .unwrap();
+
+        for query in DIRECTORY_PATH_QUERIES {
+            let hits = store
+                .reader
+                .search_observations_for_project(ws, proj, query.into(), 5)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 1, "query {query:?}");
+            assert_eq!(hits[0].session_id, session_id, "query {query:?}");
+        }
     }
 
     #[tokio::test]
@@ -3210,6 +3515,146 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn structured_filters_hold_in_vector_and_both_graph_directions() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "filters", None)
+            .await
+            .unwrap();
+
+        for path in ["kept/vector.md", "other/vector.md"] {
+            let id = store
+                .writer
+                .upsert_page(sample_page(ws, proj, path, "vector-only content"))
+                .await
+                .unwrap();
+            store
+                .writer
+                .store_embedding(
+                    id,
+                    f32_vec_to_bytes(&[1.0, 0.0]),
+                    "test".into(),
+                    "two-dim".into(),
+                    2,
+                )
+                .await
+                .unwrap();
+        }
+        let query_vector = [1.0, 0.0];
+        let (vector_hits, _) = store
+            .reader
+            .hybrid_search_scopes(
+                &[(ws, proj)],
+                HybridSearch {
+                    query: "no-lexical-match",
+                    vector: Some(VectorQuery {
+                        vector: &query_vector,
+                        provider: "test",
+                        model: "two-dim",
+                        dim: 2,
+                    }),
+                    limit: 10,
+                    expiry_cutoff_us: None,
+                    include_superseded: false,
+                    explain: true,
+                    owner: &OwnerFilter::Any,
+                    filter: PageFilter {
+                        path_prefix: Some("kept/"),
+                        ..PageFilter::default()
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(vector_hits.len(), 1, "{vector_hits:?}");
+        assert_eq!(vector_hits[0].0.path.as_str(), "kept/vector.md");
+        assert_eq!(
+            vector_hits[0]
+                .1
+                .as_ref()
+                .and_then(|details| details.vector_rank),
+            Some(1)
+        );
+
+        let tagged = |path: &str, body: &str, tag: &str| {
+            let mut page = sample_page(ws, proj, path, body);
+            page.frontmatter_json = serde_json::json!({"tags": [tag]});
+            page
+        };
+        let mut seed = tagged("graph/seed.md", "graphneedle source", "route");
+        seed.links = vec![
+            PagePath::new("graph/out.md").unwrap().into(),
+            PagePath::new("graph/out-denied.md").unwrap().into(),
+        ];
+        store.writer.upsert_page(seed).await.unwrap();
+        store
+            .writer
+            .upsert_page(tagged("graph/out.md", "outgoing target", "route"))
+            .await
+            .unwrap();
+        store
+            .writer
+            .upsert_page(tagged(
+                "graph/out-denied.md",
+                "excluded outgoing target",
+                "other",
+            ))
+            .await
+            .unwrap();
+        for (path, tag) in [("graph/in.md", "route"), ("graph/in-denied.md", "other")] {
+            let mut incoming = tagged(path, "incoming pointer", tag);
+            incoming.links = vec![PagePath::new("graph/seed.md").unwrap().into()];
+            store.writer.upsert_page(incoming).await.unwrap();
+        }
+
+        let (graph_hits, _) = store
+            .reader
+            .hybrid_search_scopes(
+                &[(ws, proj)],
+                HybridSearch {
+                    query: "graphneedle",
+                    vector: None,
+                    limit: 10,
+                    expiry_cutoff_us: None,
+                    include_superseded: false,
+                    explain: true,
+                    owner: &OwnerFilter::Any,
+                    filter: PageFilter {
+                        tag: Some("route"),
+                        ..PageFilter::default()
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let graph_paths: std::collections::HashSet<_> = graph_hits
+            .iter()
+            .map(|(hit, _)| hit.path.as_str())
+            .collect();
+        assert_eq!(
+            graph_paths,
+            ["graph/seed.md", "graph/out.md", "graph/in.md"]
+                .into_iter()
+                .collect()
+        );
+        for path in ["graph/out.md", "graph/in.md"] {
+            let details = graph_hits
+                .iter()
+                .find(|(hit, _)| hit.path.as_str() == path)
+                .and_then(|(_, details)| details.as_ref())
+                .unwrap();
+            assert!(details.graph_rank.is_some(), "{path}: {details:?}");
+        }
+    }
+
     /// P3 (docs/design-hindsight-borrowings.md): a typed edge (`fixes`) is
     /// surfaced as the graph_via `edge` kind in explain. Ranking is untouched;
     /// only the explanation names why the neighbour was reached.
@@ -3453,6 +3898,7 @@ mod tests {
                     title: "prompt".into(),
                     body: "the raw-only zebra detail lives here".into(),
                     importance: 5,
+                    file_path: None,
                 },
                 &Sanitizer::builtin(),
             ))
@@ -3466,7 +3912,7 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, session_id);
-        assert!(hits[0].snippet.contains("<mark>zebra</mark>"));
+        assert!(highlighted_snippet_html(&hits[0].snippet).contains("<mark>zebra</mark>"));
     }
 
     /// The public writer API only accepts `Sanitized<NewObservation>`, and
@@ -3516,6 +3962,7 @@ mod tests {
                     body: "leaked Authorization: Bearer abcdef0123456789ABCDEF0123456789 in transcript"
                         .into(),
                     importance: 5,
+                    file_path: None,
                 },
                 &Sanitizer::builtin(),
             ))
@@ -3538,6 +3985,92 @@ mod tests {
                 "secret reached disk unscrubbed: {col}"
             );
         }
+    }
+
+    /// #1843: a keyed insert that fails leaves no `file_path` behind and frees
+    /// its key, so the redelivery stores the path (AGENTS.md: new disk+SQL
+    /// mutations need recovery tests).
+    #[tokio::test]
+    async fn a_failed_observation_insert_leaves_no_file_path_and_can_be_retried() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "project", None)
+            .await
+            .unwrap();
+        let session_id = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: None,
+                id: session_id,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::ClaudeCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        let obs = || {
+            Sanitized::new(
+                NewObservation {
+                    occurred_at: None,
+                    session_id,
+                    workspace_id: ws,
+                    project_id: proj,
+                    kind: ObservationKind::PostToolUse,
+                    extension: None,
+                    source_event: None,
+                    title: "tool file".into(),
+                    body: "tool_family: file".into(),
+                    importance: 5,
+                    file_path: Some("src/lib.rs".into()),
+                },
+                &Sanitizer::builtin(),
+            )
+        };
+        let conn = rusqlite::Connection::open(tmp.path().join("db/memory.sqlite")).unwrap();
+        let rows_with_path = || -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM observations WHERE file_path IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        conn.execute_batch(
+            "CREATE TRIGGER reject_file_path BEFORE INSERT ON observations \
+             WHEN NEW.file_path IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+        assert!(
+            store
+                .writer
+                .insert_observation_ingest(obs(), "entry-file".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(rows_with_path(), 0, "the failed insert left a path behind");
+
+        conn.execute_batch("DROP TRIGGER reject_file_path;")
+            .unwrap();
+        let retried = store
+            .writer
+            .insert_observation_ingest(obs(), "entry-file".into())
+            .await
+            .unwrap();
+        assert!(
+            matches!(retried, IngestObservationOutcome::Inserted(_)),
+            "the rolled-back key is free for the redelivery"
+        );
+        assert_eq!(rows_with_path(), 1);
     }
 
     /// Ingest idempotency distinguishes pending and completed replays, scopes
@@ -3594,6 +4127,7 @@ mod tests {
             title: "prompt".into(),
             body: "hello".into(),
             importance: 5,
+            file_path: None,
         };
 
         let first = store
@@ -3958,6 +4492,7 @@ mod tests {
                     title: "first".into(),
                     body: "initial work".into(),
                     importance: 8,
+                    file_path: None,
                 },
                 &Sanitizer::builtin(),
             ))
@@ -4002,6 +4537,7 @@ mod tests {
                     title: "resumed".into(),
                     body: "new work".into(),
                     importance: 7,
+                    file_path: None,
                 },
                 &Sanitizer::builtin(),
             ))
@@ -4408,6 +4944,558 @@ mod tests {
         assert_eq!(remaining[0].ended_at, same_ended_at);
     }
 
+    /// Begin a session whose whole activity is in the past (`occurred_at`
+    /// stamps `started_at` and every observation's `created_at`), so a later
+    /// `close_abandoned_sessions` cutoff can reach it without touching any
+    /// row directly.
+    async fn aged_open_session(
+        store: &Store,
+        ws: WorkspaceId,
+        proj: ProjectId,
+        last_activity_us: i64,
+        observations: usize,
+    ) -> SessionId {
+        let session = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: Some(last_activity_us),
+                id: session,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::OpenCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        for i in 0..observations {
+            store
+                .writer
+                .insert_observation(Sanitized::new(
+                    NewObservation {
+                        occurred_at: Some(last_activity_us + i as i64),
+                        session_id: session,
+                        workspace_id: ws,
+                        project_id: proj,
+                        kind: if i == 0 {
+                            ObservationKind::SessionStart
+                        } else {
+                            ObservationKind::UserPrompt
+                        },
+                        extension: None,
+                        source_event: None,
+                        title: format!("event {i}"),
+                        body: "durable work".into(),
+                        importance: 5,
+                        file_path: None,
+                    },
+                    &Sanitizer::builtin(),
+                ))
+                .await
+                .unwrap();
+        }
+        session
+    }
+
+    /// Read a session's persisted auto-improvement claim
+    /// `(last_error, attempts, last_failed_at)`, or `None` when no claim row
+    /// exists.
+    fn auto_improve_claim_row(
+        store: &Store,
+        session: SessionId,
+    ) -> Option<(Option<String>, u32, Option<i64>)> {
+        let conn = Connection::open(store.db_path()).unwrap();
+        match conn.query_row(
+            "SELECT last_error, attempts, last_failed_at \
+             FROM auto_improve_scheduler_claims WHERE session_id = ?1",
+            params![session.as_bytes()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ) {
+            Ok(row) => Some(row),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => panic!("claim read failed: {e}"),
+        }
+    }
+
+    /// The abandoned-session sweep must not queue an LLM review: a session it
+    /// closes gets a parked claim in the same transaction and stays out of
+    /// `auto_improve_candidate_sessions`. The control — a session ended by a
+    /// real `SessionEnd` in the same project — stays a candidate.
+    #[tokio::test]
+    async fn abandoned_sweep_closed_session_is_not_an_auto_improve_candidate() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "abandoned-sweep", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .ensure_auto_improve_scheduler_state(ws, proj)
+            .await
+            .unwrap();
+
+        let now = jiff::Timestamp::now().as_microsecond();
+        let one_hour_us = 3_600 * 1_000_000;
+        let swept = aged_open_session(&store, ws, proj, now - 49 * one_hour_us, 4).await;
+
+        let control = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: None,
+                id: control,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::OpenCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        store.writer.end_session(control, None).await.unwrap();
+
+        let closed = store
+            .writer
+            .close_abandoned_sessions(now - 48 * one_hour_us)
+            .await
+            .unwrap();
+        assert_eq!(closed, 1, "only the stale open session must close");
+
+        let candidates = store
+            .reader
+            .auto_improve_candidate_sessions(ws, proj, 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "the sweep-closed session must not be a candidate"
+        );
+        assert_eq!(candidates[0].session_id, control);
+
+        let (last_error, attempts, last_failed_at) = auto_improve_claim_row(&store, swept)
+            .expect("the sweep must park a claim for the closed session");
+        assert_eq!(last_error.as_deref(), Some(ABANDONED_SWEEP_CLAIM_ERROR));
+        assert_eq!(attempts, AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS);
+        assert!(
+            last_failed_at.is_some(),
+            "a parked claim must carry its park time"
+        );
+    }
+
+    /// A session closed by the sweep returns to the auto-improvement queue
+    /// when a real `SessionEnd` with new observations re-ends it: the end
+    /// stamp deletes the sweep's parked claim in the same transaction.
+    #[tokio::test]
+    async fn abandoned_sweep_closed_session_returns_to_candidates_after_real_reend() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "abandoned-sweep", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .ensure_auto_improve_scheduler_state(ws, proj)
+            .await
+            .unwrap();
+
+        let now = jiff::Timestamp::now().as_microsecond();
+        let one_hour_us = 3_600 * 1_000_000;
+        let swept = aged_open_session(&store, ws, proj, now - 49 * one_hour_us, 4).await;
+        let closed = store
+            .writer
+            .close_abandoned_sessions(now - 48 * one_hour_us)
+            .await
+            .unwrap();
+        assert_eq!(closed, 1);
+        let candidates = store
+            .reader
+            .auto_improve_candidate_sessions(ws, proj, 0, 10)
+            .await
+            .unwrap();
+        assert!(
+            candidates.iter().all(|c| c.session_id != swept),
+            "the parked claim must exclude the sweep-closed session"
+        );
+
+        // New work, then the real end stamp.
+        store
+            .writer
+            .insert_observation(Sanitized::new(
+                NewObservation {
+                    occurred_at: None,
+                    session_id: swept,
+                    workspace_id: ws,
+                    project_id: proj,
+                    kind: ObservationKind::UserPrompt,
+                    extension: None,
+                    source_event: None,
+                    title: "resumed work".into(),
+                    body: "more durable work".into(),
+                    importance: 5,
+                    file_path: None,
+                },
+                &Sanitizer::builtin(),
+            ))
+            .await
+            .unwrap();
+        store.writer.end_session(swept, None).await.unwrap();
+
+        assert!(
+            auto_improve_claim_row(&store, swept).is_none(),
+            "the real end must delete the sweep's parked claim"
+        );
+        let candidates = store
+            .reader
+            .auto_improve_candidate_sessions(ws, proj, 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].session_id, swept);
+    }
+
+    /// A `SessionEnd` with no new observation answers `AlreadyEnded` before
+    /// `end_session_row` runs, so a sweep-closed session stays parked: the
+    /// claim keeps its marker and the session stays out of the queue. That is
+    /// the accepted limit — the work the sweep closed was never reviewed.
+    #[tokio::test]
+    async fn abandoned_sweep_closed_session_stays_parked_without_new_work() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "abandoned-sweep", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .ensure_auto_improve_scheduler_state(ws, proj)
+            .await
+            .unwrap();
+
+        let now = jiff::Timestamp::now().as_microsecond();
+        let one_hour_us = 3_600 * 1_000_000;
+        let swept = aged_open_session(&store, ws, proj, now - 49 * one_hour_us, 2).await;
+        let closed = store
+            .writer
+            .close_abandoned_sessions(now - 48 * one_hour_us)
+            .await
+            .unwrap();
+        assert_eq!(closed, 1);
+
+        let disposition = store
+            .reader
+            .session_end_disposition(swept, ws, proj, AgentKind::OpenCode)
+            .await
+            .unwrap();
+        assert_eq!(
+            disposition,
+            SessionEndDisposition::AlreadyEnded,
+            "without new observations the real end never reaches the end stamp"
+        );
+
+        let (last_error, attempts, last_failed_at) =
+            auto_improve_claim_row(&store, swept).expect("the claim must stay parked");
+        assert_eq!(last_error.as_deref(), Some(ABANDONED_SWEEP_CLAIM_ERROR));
+        assert_eq!(attempts, AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS);
+        assert!(last_failed_at.is_some());
+
+        let candidates = store
+            .reader
+            .auto_improve_candidate_sessions(ws, proj, 0, 10)
+            .await
+            .unwrap();
+        assert!(candidates.iter().all(|c| c.session_id != swept));
+    }
+
+    /// A claim parked by a genuine review failure survives a real
+    /// `SessionEnd` with its `last_error` and `attempts` intact: only the
+    /// sweep's marker error un-parks a claim.
+    #[tokio::test]
+    async fn real_session_end_keeps_a_parked_claim_from_a_real_failure() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "abandoned-sweep", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .ensure_auto_improve_scheduler_state(ws, proj)
+            .await
+            .unwrap();
+
+        let session = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: None,
+                id: session,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::OpenCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        store.writer.end_session(session, None).await.unwrap();
+        let conn = Connection::open(store.db_path()).unwrap();
+        let ended_at: i64 = conn
+            .query_row(
+                "SELECT ended_at FROM sessions WHERE id = ?1",
+                params![session.as_bytes()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let error = "auto-improve failed: class=provider status=400";
+        let mut attempts = 0;
+        for _ in 0..AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS {
+            assert!(
+                store
+                    .writer
+                    .claim_auto_improve_scheduler_session(ws, proj, session, ended_at)
+                    .await
+                    .unwrap(),
+                "the claim must succeed for a real end past the watermark"
+            );
+            attempts = store
+                .writer
+                .record_auto_improve_claim_failure(ws, proj, session, error)
+                .await
+                .unwrap();
+        }
+        assert_eq!(attempts, AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS);
+
+        // A real end of the resumed session.
+        store
+            .writer
+            .insert_observation(Sanitized::new(
+                NewObservation {
+                    occurred_at: None,
+                    session_id: session,
+                    workspace_id: ws,
+                    project_id: proj,
+                    kind: ObservationKind::UserPrompt,
+                    extension: None,
+                    source_event: None,
+                    title: "resumed work".into(),
+                    body: "more durable work".into(),
+                    importance: 5,
+                    file_path: None,
+                },
+                &Sanitizer::builtin(),
+            ))
+            .await
+            .unwrap();
+        store.writer.end_session(session, None).await.unwrap();
+
+        let (last_error, attempts, last_failed_at) =
+            auto_improve_claim_row(&store, session).expect("the claim must survive");
+        assert_eq!(last_error.as_deref(), Some(error));
+        assert_eq!(attempts, AUTO_IMPROVE_CLAIM_MAX_ATTEMPTS);
+        assert!(last_failed_at.is_some());
+
+        let candidates = store
+            .reader
+            .auto_improve_candidate_sessions(ws, proj, 0, 10)
+            .await
+            .unwrap();
+        assert!(
+            candidates.is_empty(),
+            "a parked claim still excludes the session"
+        );
+    }
+
+    /// The sweep never overwrites an existing claim: `ON CONFLICT(session_id)
+    /// DO NOTHING` leaves a claim the scheduler wrote exactly as it is.
+    #[tokio::test]
+    async fn abandoned_sweep_keeps_an_existing_claim_untouched() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "abandoned-sweep", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .ensure_auto_improve_scheduler_state(ws, proj)
+            .await
+            .unwrap();
+
+        let now = jiff::Timestamp::now().as_microsecond();
+        let one_hour_us = 3_600 * 1_000_000;
+        let session = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: None,
+                id: session,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::OpenCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        store.writer.end_session(session, None).await.unwrap();
+        let conn = Connection::open(store.db_path()).unwrap();
+        let ended_at: i64 = conn
+            .query_row(
+                "SELECT ended_at FROM sessions WHERE id = ?1",
+                params![session.as_bytes()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .writer
+                .claim_auto_improve_scheduler_session(ws, proj, session, ended_at)
+                .await
+                .unwrap()
+        );
+        let attempts = store
+            .writer
+            .record_auto_improve_claim_failure(
+                ws,
+                proj,
+                session,
+                "auto-improve failed: class=provider status=500",
+            )
+            .await
+            .unwrap();
+        assert_eq!(attempts, 1);
+        let before = auto_improve_claim_row(&store, session).expect("the claim must exist");
+
+        // A resuming harness (Grok/Kimi reuse the session id after an end)
+        // reopens the session, which then goes stale again.
+        conn.execute(
+            "UPDATE sessions SET ended_at = NULL, started_at = ?1 WHERE id = ?2",
+            params![now - 49 * one_hour_us, session.as_bytes()],
+        )
+        .unwrap();
+
+        let closed = store
+            .writer
+            .close_abandoned_sessions(now - 48 * one_hour_us)
+            .await
+            .unwrap();
+        assert_eq!(closed, 1);
+
+        assert_eq!(
+            auto_improve_claim_row(&store, session),
+            Some(before),
+            "the sweep must not touch an existing claim"
+        );
+    }
+
+    /// `experience_pass_due` does not count a session the sweep parked — the
+    /// sweep closed it, not a real `SessionEnd` — while a session ended by a
+    /// real `SessionEnd` still counts.
+    #[tokio::test]
+    async fn experience_pass_excludes_sessions_parked_by_the_sweep() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "abandoned-sweep", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .ensure_auto_improve_scheduler_state(ws, proj)
+            .await
+            .unwrap();
+
+        let now = jiff::Timestamp::now().as_microsecond();
+        let one_hour_us = 3_600 * 1_000_000;
+        // Move the experience anchor 50h back: only then can a session whose
+        // last activity is 49h ago be "newer than the last pass" at all.
+        let conn = Connection::open(store.db_path()).unwrap();
+        conn.execute(
+            "UPDATE auto_improve_scheduler_state \
+             SET last_experience_run_at = ?1 \
+             WHERE workspace_id = ?2 AND project_id = ?3",
+            params![now - 50 * one_hour_us, ws.as_bytes(), proj.as_bytes()],
+        )
+        .unwrap();
+
+        let swept = aged_open_session(&store, ws, proj, now - 49 * one_hour_us, 2).await;
+        let control = SessionId::new();
+        store
+            .writer
+            .begin_session(NewSession {
+                occurred_at: None,
+                id: control,
+                workspace_id: ws,
+                project_id: proj,
+                agent_kind: AgentKind::OpenCode,
+                cwd: None,
+                actor_user: None,
+            })
+            .await
+            .unwrap();
+        store.writer.end_session(control, None).await.unwrap();
+
+        let closed = store
+            .writer
+            .close_abandoned_sessions(now - 48 * one_hour_us)
+            .await
+            .unwrap();
+        assert_eq!(closed, 1);
+        assert!(
+            auto_improve_claim_row(&store, swept).is_some(),
+            "the sweep must park a claim for the closed session"
+        );
+
+        let (count, anchor) = store.reader.experience_pass_due(ws, proj).await.unwrap();
+        assert_eq!(anchor, now - 50 * one_hour_us);
+        assert_eq!(
+            count, 1,
+            "only the real-SessionEnd session counts; the sweep-parked one is excluded"
+        );
+    }
+
     // #833: a claim is the scheduler's in-flight marker, but the only writer was
     // `INSERT OR IGNORE` — nothing ever removed or expired a row. A review that
     // failed left the claim behind with no `auto_improve_runs` row, and the
@@ -4670,6 +5758,7 @@ mod tests {
                     title: "prompt".into(),
                     body: "upgrade observation survives".into(),
                     importance: 5,
+                    file_path: None,
                 },
             )
             .unwrap();
@@ -4793,6 +5882,78 @@ mod tests {
         assert_eq!(s.project_name, "my-project");
         assert_eq!(s.page_count, 2);
         assert!(s.last_updated.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_projects_and_workspaces_with_stats_hide_expired_pages() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let mixed = store
+            .writer
+            .get_or_create_project(ws, "mixed", None)
+            .await
+            .unwrap();
+        let expired_only = store
+            .writer
+            .get_or_create_project(ws, "expired-only", None)
+            .await
+            .unwrap();
+
+        let now = jiff::Timestamp::now().as_second();
+        let at = |seconds: i64| Some(jiff::Timestamp::from_second(seconds).unwrap());
+
+        for (path, expires_at) in [
+            ("expired.md", at(now - 60)),
+            ("future.md", at(now + 3_600)),
+            ("live.md", None),
+        ] {
+            let mut page = sample_page(ws, mixed, path, "body");
+            page.expires_at = expires_at;
+            store.writer.upsert_page(page).await.unwrap();
+        }
+
+        let mut only = sample_page(ws, expired_only, "stale.md", "stale body");
+        only.expires_at = at(now - 120);
+        store.writer.upsert_page(only).await.unwrap();
+
+        // Project summaries omit the expired pages from page_count and last_updated.
+        let summaries = store.reader.list_projects_with_stats(None).await.unwrap();
+        assert_eq!(summaries.len(), 2);
+
+        let mixed_summary = summaries
+            .iter()
+            .find(|s| s.project_name == "mixed")
+            .expect("mixed project summary");
+        assert_eq!(mixed_summary.page_count, 2);
+        assert!(mixed_summary.last_updated.is_some());
+
+        let expired_summary = summaries
+            .iter()
+            .find(|s| s.project_name == "expired-only")
+            .expect("expired-only project summary");
+        assert_eq!(expired_summary.page_count, 0);
+        assert_eq!(expired_summary.last_updated, None);
+
+        // Filtered by workspace matches.
+        let ws_projects = store
+            .reader
+            .list_projects_with_stats_for_workspace("default".to_string(), None)
+            .await
+            .unwrap();
+        assert_eq!(ws_projects.len(), 2);
+
+        // Workspace aggregates count only unexpired pages across projects.
+        let ws_summaries = store.reader.list_workspaces_with_stats(None).await.unwrap();
+        assert_eq!(ws_summaries.len(), 1);
+        assert_eq!(ws_summaries[0].workspace_name, "default");
+        assert_eq!(ws_summaries[0].project_count, 2);
+        assert_eq!(ws_summaries[0].page_count, 2);
+        assert!(ws_summaries[0].last_updated.is_some());
     }
 
     /// #1208: a project id is an address, so it must be exposed exactly where
@@ -5381,6 +6542,7 @@ mod tests {
             .await
             .unwrap();
         let prepare = PrepareWorkstreamRun {
+            scope_by_id: false,
             workspace_id: ws,
             project_id: project,
             repo_fingerprint: "repo".into(),
@@ -5558,6 +6720,7 @@ mod tests {
             .await
             .unwrap();
         let prepare = PrepareWorkstreamRun {
+            scope_by_id: false,
             workspace_id: ws,
             project_id: project,
             repo_fingerprint: "repo".into(),
@@ -5821,6 +6984,7 @@ mod tests {
             .await
             .unwrap();
         let prepare = PrepareWorkstreamRun {
+            scope_by_id: false,
             workspace_id: workspace,
             project_id: project,
             repo_fingerprint: "repo".into(),
@@ -5877,6 +7041,7 @@ mod tests {
             .await
             .unwrap();
         let prepare = |agent, owner: &str| PrepareWorkstreamRun {
+            scope_by_id: false,
             workspace_id: workspace,
             project_id: project,
             repo_fingerprint: "repo".into(),
@@ -6044,6 +7209,7 @@ mod tests {
             .await
             .unwrap();
         let base = |agent, owner: &str| PrepareWorkstreamRun {
+            scope_by_id: false,
             workspace_id: workspace,
             project_id: project,
             repo_fingerprint: "repo".into(),
@@ -6121,6 +7287,7 @@ mod tests {
             let run = store
                 .writer
                 .prepare_workstream_run(PrepareWorkstreamRun {
+                    scope_by_id: false,
                     workspace_id: workspace,
                     project_id: project,
                     repo_fingerprint: "same-repository".into(),
@@ -6203,6 +7370,7 @@ mod tests {
         owner: &str,
     ) -> PrepareWorkstreamRun {
         PrepareWorkstreamRun {
+            scope_by_id: false,
             workspace_id: ws,
             project_id: proj,
             repo_fingerprint: "repo".into(),
@@ -6400,6 +7568,57 @@ mod tests {
                 .heartbeat_managed_run(cancelled.run_id)
                 .await
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lapsed_active_run_boundary_remains_retryable_after_heartbeat() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let (ws, proj) = open_managed_scope(&store, "managed-lapsed-boundary").await;
+        let mut input = managed_prepare_input(ws, proj, "test:lapsed-boundary");
+        input.scope_by_id = true;
+        let run = store.writer.prepare_workstream_run(input).await.unwrap();
+        let identity = ManagedRunHookIdentity {
+            run_id: run.run_id,
+            agent: AgentKind::Codex,
+            cwd: Some("/repo".into()),
+            native_session_id: "native-session".into(),
+            owner_user: None,
+            session_start: true,
+            claude_boundary: ClaudeSessionBoundary::Other,
+        };
+
+        set_managed_run_lease(store.db_path(), run.run_id, 1);
+        let err = store
+            .reader
+            .managed_run_pinned_scope(identity)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ManagedRunLeaseLapsed));
+
+        assert!(
+            store
+                .writer
+                .heartbeat_managed_run(run.run_id)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .reader
+                .managed_run_pinned_scope(ManagedRunHookIdentity {
+                    run_id: run.run_id,
+                    agent: AgentKind::Codex,
+                    cwd: Some("/repo".into()),
+                    native_session_id: "native-session".into(),
+                    owner_user: None,
+                    session_start: true,
+                    claude_boundary: ClaudeSessionBoundary::Other,
+                })
+                .await
+                .unwrap(),
+            Some((ws, proj))
         );
     }
 
@@ -7152,6 +8371,72 @@ mod tests {
         }
     }
 
+    /// The column prefixes the event search strips are filters only at the
+    /// start of a word. `subtitle:rendering` used to lose its `title:` and
+    /// search for `subrendering`, and `somebody: help` lost the word
+    /// `somebody`.
+    #[tokio::test]
+    async fn search_events_keeps_words_that_end_in_a_column_name() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let (ws, proj) = open_managed_scope(&store, "managed-search-words").await;
+        let run = store
+            .writer
+            .prepare_workstream_run(managed_prepare_input(ws, proj, "test:1"))
+            .await
+            .unwrap();
+        store
+            .writer
+            .finish_workstream_run(
+                ManagedRunAuthority::from_auth(
+                    ai_memory_core::AuthLevel::Anonymous,
+                    None,
+                    None,
+                    &ai_memory_core::ActorContext::anonymous(),
+                    false,
+                ),
+                complete_finish(
+                    run.run_id,
+                    vec![
+                        managed_event(
+                            "ev-1",
+                            AgentKind::Codex,
+                            "native-x",
+                            "subtitle rendering broke",
+                        ),
+                        managed_event("ev-2", AgentKind::Codex, "native-x", "somebody asked"),
+                        managed_event("ev-3", AgentKind::Codex, "native-x", "unrelated"),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+        let search = |query: &str| {
+            let reader = store.reader.clone();
+            let query = query.to_string();
+            let workstream_id = run.workstream_id;
+            async move {
+                reader
+                    .search_workstream_events(
+                        workstream_id,
+                        query,
+                        10,
+                        ai_memory_core::Sanitizer::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|e| e.event_id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(search("subtitle:rendering").await, ["ev-1"]);
+        assert_eq!(search("somebody:").await, ["ev-2"]);
+        // A real column prefix is still stripped, including inside a group.
+        assert_eq!(search("(title:somebody)").await, ["ev-2"]);
+    }
+
     #[tokio::test]
     async fn link_native_session_rejects_blank_wrong_agent_and_inactive_targets() {
         let tmp = TempDir::new().unwrap();
@@ -7226,6 +8511,7 @@ mod tests {
         let store = Store::open(tmp.path()).unwrap();
         let (ws, proj) = open_managed_scope(&store, "managed-selection").await;
         let prepare = |selection| PrepareWorkstreamRun {
+            scope_by_id: false,
             selection,
             ..managed_prepare_input(ws, proj, "test:1")
         };
@@ -7285,6 +8571,7 @@ mod tests {
         let store = Store::open(tmp.path()).unwrap();
         let (ws, proj) = open_managed_scope(&store, "managed-list").await;
         let prepare = |name: &str, agent| PrepareWorkstreamRun {
+            scope_by_id: false,
             agent,
             selection: WorkstreamSelection::New(name.into()),
             ..managed_prepare_input(ws, proj, name)
@@ -7326,6 +8613,7 @@ mod tests {
         let claude = store
             .writer
             .prepare_workstream_run(PrepareWorkstreamRun {
+                scope_by_id: false,
                 agent: AgentKind::ClaudeCode,
                 selection: WorkstreamSelection::Named("current".into()),
                 ..managed_prepare_input(ws, proj, "claude")
@@ -7384,6 +8672,7 @@ mod tests {
         let hidden = store
             .writer
             .prepare_workstream_run(PrepareWorkstreamRun {
+                scope_by_id: false,
                 repo_fingerprint: "other-repo".into(),
                 worktree_fingerprint: "other-worktree".into(),
                 selection: WorkstreamSelection::New("hidden".into()),
@@ -7468,6 +8757,7 @@ mod tests {
             store
                 .writer
                 .prepare_workstream_run(PrepareWorkstreamRun {
+                    scope_by_id: false,
                     selection: WorkstreamSelection::New(name.into()),
                     ..managed_prepare_input(ws, proj, name)
                 })
@@ -7506,6 +8796,7 @@ mod tests {
             let prepared = store
                 .writer
                 .prepare_workstream_run(PrepareWorkstreamRun {
+                    scope_by_id: false,
                     selection: WorkstreamSelection::New((*name).into()),
                     ..managed_prepare_input(ws, proj, name)
                 })
@@ -7581,6 +8872,7 @@ mod tests {
             store
                 .writer
                 .prepare_workstream_run(PrepareWorkstreamRun {
+                    scope_by_id: false,
                     selection: WorkstreamSelection::Named(name.into()),
                     ..managed_prepare_input(ws, proj, name)
                 })
@@ -8607,6 +9899,108 @@ mod tests {
         let derived = store.reader.derived_index_status().await.unwrap();
         assert_eq!(derived.latest_pages_missing_embeddings, 1, "{derived:?}");
         assert_eq!(derived.latest_pages_unembeddable, 1, "{derived:?}");
+    }
+
+    /// A model swap must not read as a covered index: with the configured
+    /// `(provider, model, dim)` triple, a latest page whose only vector is
+    /// from another triple counts as missing, while the historical `None`
+    /// count (no vector at all) is unchanged.
+    #[tokio::test]
+    async fn missing_embeddings_counted_against_configured_triple() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store
+            .writer
+            .get_or_create_workspace("default")
+            .await
+            .unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "s", None)
+            .await
+            .unwrap();
+        store
+            .writer
+            .upsert_page(sample_page(ws, proj, "notes/stale.md", "body a"))
+            .await
+            .unwrap();
+
+        let db = rusqlite::Connection::open(tmp.path().join("db").join("memory.sqlite")).unwrap();
+        let insert_embedding = |path: &str, provider: &str, model: &str, dim: u32| {
+            let page_id: Vec<u8> = db
+                .query_row(
+                    "SELECT id FROM pages WHERE path = ?1 AND is_latest = 1",
+                    [path],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            db.execute(
+                "INSERT INTO page_embeddings (page_id, vector, provider, model, dim, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0) \
+                 ON CONFLICT(page_id) DO UPDATE SET \
+                     vector = excluded.vector, provider = excluded.provider, \
+                     model = excluded.model, dim = excluded.dim, \
+                     created_at = excluded.created_at",
+                rusqlite::params![
+                    page_id,
+                    crate::f32_vec_to_bytes(&vec![0.5f32; dim as usize]),
+                    provider,
+                    model,
+                    dim,
+                ],
+            )
+            .unwrap();
+        };
+        // One latest page whose only vector is triple A.
+        let triple_a = ("prov-a".to_string(), "model-a".to_string(), 8);
+        let triple_b = ("prov-b".to_string(), "model-b".to_string(), 16);
+        insert_embedding("notes/stale.md", "prov-a", "model-a", 8);
+
+        // Historical behaviour: the page carries a vector, so nothing is
+        // missing.
+        let derived = store.reader.derived_index_status().await.unwrap();
+        assert_eq!(derived.latest_pages_missing_embeddings, 0, "{derived:?}");
+
+        // Configured triple A: the page is covered by its own vector.
+        let derived = store
+            .reader
+            .derived_index_status_for_embedding(triple_a.clone())
+            .await
+            .unwrap();
+        assert_eq!(derived.latest_pages_missing_embeddings, 0, "{derived:?}");
+
+        // Configured triple B: the same page now counts as missing — its
+        // only vector is stale for the model in use.
+        let derived = store
+            .reader
+            .derived_index_status_for_embedding(triple_b.clone())
+            .await
+            .unwrap();
+        assert_eq!(derived.latest_pages_missing_embeddings, 1, "{derived:?}");
+
+        // A second page under triple B only: each configured triple then
+        // sees exactly the page holding the other triple's vector, and a
+        // page covered by its own triple never counts.
+        store
+            .writer
+            .upsert_page(sample_page(ws, proj, "notes/fresh.md", "body b"))
+            .await
+            .unwrap();
+        insert_embedding("notes/fresh.md", "prov-b", "model-b", 16);
+        let derived = store
+            .reader
+            .derived_index_status_for_embedding(triple_a.clone())
+            .await
+            .unwrap();
+        assert_eq!(derived.latest_pages_missing_embeddings, 1, "{derived:?}");
+        let derived = store
+            .reader
+            .derived_index_status_for_embedding(triple_b.clone())
+            .await
+            .unwrap();
+        assert_eq!(derived.latest_pages_missing_embeddings, 1, "{derived:?}");
+        let derived = store.reader.derived_index_status().await.unwrap();
+        assert_eq!(derived.latest_pages_missing_embeddings, 0, "{derived:?}");
     }
 
     /// Typed edges surface in the derived status by relation.

@@ -8,6 +8,156 @@
 //!
 //! Covers Unix `.tar.gz` and Windows `.zip` release layouts.
 
+#[test]
+fn replacement_refresh_preserves_claude_hook_endpoint_and_auth() -> anyhow::Result<()> {
+    use std::fs;
+    use std::path::Path;
+
+    use crate::e2e_support::hermetic;
+
+    const BIN: &str = env!("CARGO_BIN_EXE_ai-memory");
+    const HOOK_URL: &str = "https://memory.example.invalid/team";
+    const CONFIG_URL: &str = "https://configured.example.invalid";
+    const HOOK_TOKEN: &str = "aim_test_installed_hook_token";
+    const MCP_TOKEN: &str = "aim_test_unrelated_mcp_token";
+    const CONFIG_TOKEN: &str = "aim_test_configured_token";
+    let fixture = tempfile::tempdir()?;
+    let home = fixture.path();
+    let data = home.join("data");
+    let claude = home.join(".claude");
+    let settings = claude.join("settings.json");
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../hooks");
+    let command = || {
+        let mut cmd = hermetic(BIN);
+        cmd.arg("--data-dir")
+            .arg(&data)
+            .args(["--language", "en"])
+            .env("HOME", home)
+            .env("AI_MEMORY_HOME", home)
+            .env("USERPROFILE", home)
+            .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("XDG_DATA_HOME", home.join(".local/share"))
+            .env("APPDATA", home.join("AppData/Roaming"))
+            .env("LOCALAPPDATA", home.join("AppData/Local"))
+            .env("CLAUDE_CONFIG_DIR", &claude)
+            .current_dir(home);
+        cmd
+    };
+    let output = command()
+        .args([
+            "install-hooks",
+            "--agent",
+            "claude-code",
+            "--capture-assistant",
+            "--no-capture-prompts",
+            "--server-url",
+            HOOK_URL,
+            "--auth-token",
+            HOOK_TOKEN,
+            "--hooks-dir",
+        ])
+        .arg(hooks)
+        .arg("--apply")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "initial hook install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let original = fs::read_to_string(&settings)?;
+    let installed_hooks = original.matches(HOOK_URL).count();
+    assert!(installed_hooks > 1);
+    assert!(original.contains("--capture-assistant"));
+    assert!(!original.contains("UserPromptSubmit"));
+    assert!(!original.contains(HOOK_TOKEN));
+    assert!(!data.join("config.toml").exists());
+    let mut stale: serde_json::Value = serde_json::from_str(&original)?;
+    let stop = &mut stale["hooks"]["Stop"][0]["hooks"][0];
+    let command_key = stop["command"].as_str().expect("native Stop hook command");
+    let stale_command = match command_key.split_once(" --data-dir ") {
+        Some((_, args)) => format!("stale-ai-memory --data-dir {args}"),
+        None => "stale-ai-memory.exe".to_string(),
+    };
+    stop["command"] = serde_json::Value::String(stale_command);
+    fs::write(&settings, serde_json::to_vec(&stale)?)?;
+    let token_file = data.join("auth-token");
+    let header_file = data.join("auth-header");
+    let original_token = fs::read(&token_file)?;
+    let original_header = fs::read(&header_file)?;
+
+    // Neither an unrelated MCP token nor a newly configured bearer should
+    // replace the token that was installed for the preserved hook URL.
+    fs::write(
+        claude.join(".claude.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "mcpServers": {"ai-memory": {
+                "type": "http",
+                "url": "https://mcp.example.invalid/mcp",
+                "headers": {"Authorization": format!("Bearer {MCP_TOKEN}")}
+            }}
+        }))?,
+    )?;
+    for token in [None, Some(CONFIG_TOKEN)] {
+        let mut refresh = command();
+        refresh.arg("upgrade-refresh-hooks");
+        if let Some(token) = token {
+            refresh.env("AI_MEMORY_AUTH_TOKEN", token);
+        }
+        let output = refresh.output()?;
+        assert!(
+            output.status.success(),
+            "hook refresh failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let refreshed = fs::read_to_string(&settings)?;
+        assert_eq!(refreshed.matches(HOOK_URL).count(), installed_hooks);
+        assert!(!refreshed.contains("stale-ai-memory"));
+        assert!(refreshed.contains("--capture-assistant"));
+        assert!(!refreshed.contains("UserPromptSubmit"));
+        assert!(!refreshed.contains(HOOK_TOKEN));
+        assert_eq!(fs::read(&token_file)?, original_token);
+        assert_eq!(fs::read(&header_file)?, original_header);
+    }
+
+    let mixed = original.replacen(HOOK_URL, CONFIG_URL, 1);
+    fs::write(&settings, &mixed)?;
+    let output = command()
+        .arg("upgrade-refresh-hooks")
+        .env("AI_MEMORY_AUTH_TOKEN", CONFIG_TOKEN)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "mixed-endpoint hook refresh failed"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Kept the Claude Code hook settings"));
+    assert_eq!(fs::read_to_string(&settings)?, mixed);
+    assert_eq!(fs::read(&token_file)?, original_token);
+    assert_eq!(fs::read(&header_file)?, original_header);
+
+    fs::write(&settings, &original)?;
+    let output = command()
+        .arg("upgrade-refresh-hooks")
+        .env("AI_MEMORY_HOOK_PLATFORM", "posix")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "script-platform hook refresh failed"
+    );
+    assert_eq!(fs::read_to_string(&settings)?, original);
+
+    let output = command()
+        .arg("upgrade-refresh-hooks")
+        .env("AI_MEMORY_SERVER_URL", CONFIG_URL)
+        .env("AI_MEMORY_AUTH_TOKEN", CONFIG_TOKEN)
+        .output()?;
+    assert!(output.status.success(), "configured hook refresh failed");
+    let refreshed = fs::read_to_string(&settings)?;
+    assert_eq!(refreshed.matches(CONFIG_URL).count(), installed_hooks);
+    assert!(!refreshed.contains(HOOK_URL));
+    assert_eq!(fs::read_to_string(&token_file)?.trim(), CONFIG_TOKEN);
+    Ok(())
+}
+
 /// Spawns a loopback release fixture and a real CLI subprocess: seconds,
 /// not milliseconds — slow tier (`cargo tf` / CI), not the everyday loop.
 mod slow {
@@ -33,8 +183,11 @@ mod slow {
 
     const BIN: &str = env!("CARGO_BIN_EXE_ai-memory");
     const TAG: &str = "v9.9.9";
-    /// Distinct bytes so we can prove the on-disk binary was swapped.
+    /// Distinct Unix bytes so the replacement-only case proves the swap.
     const NEW_BINARY: &[u8] = b"#!/bin/sh\necho upgraded-native-e2e\n";
+    /// A PE loader ignores trailing overlay bytes. This keeps the Windows
+    /// replacement runnable when the upgrader re-enters it after the swap.
+    const REPLACEMENT_MARKER: &[u8] = b"\nai-memory-upgrade-e2e-replacement\n";
     const NEW_HOOK: &[u8] = b"#!/bin/sh\necho refreshed-hook\n";
     const OLD_HOOK: &[u8] = b"old-hook-body\n";
 
@@ -65,18 +218,32 @@ mod slow {
     }
 
     fn build_release_archive() -> Vec<u8> {
+        let replacement = replacement_only_binary();
+        build_release_archive_with_binary(&replacement)
+    }
+
+    fn replacement_only_binary() -> Vec<u8> {
+        if !cfg!(windows) {
+            return NEW_BINARY.to_vec();
+        }
+        let mut binary = fs::read(BIN).expect("read replacement binary");
+        binary.extend_from_slice(REPLACEMENT_MARKER);
+        binary
+    }
+
+    fn build_release_archive_with_binary(binary: &[u8]) -> Vec<u8> {
         if cfg!(windows) {
-            build_release_zip()
+            build_release_zip(binary)
         } else {
-            build_release_tarball()
+            build_release_tarball(binary)
         }
     }
 
-    fn build_release_tarball() -> Vec<u8> {
+    fn build_release_tarball(binary: &[u8]) -> Vec<u8> {
         let mut tar_bytes = Vec::new();
         {
             let mut builder = tar::Builder::new(&mut tar_bytes);
-            append_regular(&mut builder, "ai-memory", NEW_BINARY, 0o755);
+            append_regular(&mut builder, "ai-memory", binary, 0o755);
             append_regular(&mut builder, "hooks/claude-code/new.sh", NEW_HOOK, 0o755);
             // Match release.yml Unix layout (exact support paths) so hermetic
             // upgrade still exercises the #1025 support-file allowlist.
@@ -110,14 +277,14 @@ mod slow {
         gz_bytes
     }
 
-    fn build_release_zip() -> Vec<u8> {
+    fn build_release_zip(binary: &[u8]) -> Vec<u8> {
         let mut cursor = Cursor::new(Vec::new());
         {
             let mut zip = ZipWriter::new(&mut cursor);
             let options =
                 SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             zip.start_file("ai-memory.exe", options).expect("start exe");
-            zip.write_all(NEW_BINARY).expect("write exe");
+            zip.write_all(binary).expect("write exe");
             zip.add_directory("hooks/", options).expect("hooks dir");
             zip.start_file("hooks/claude-code/new.sh", options)
                 .expect("start hook");
@@ -253,10 +420,8 @@ mod slow {
         let home = tempfile::tempdir().expect("home");
         let exe = install_writable_prefix(prefix.path());
         let before = fs::read(&exe).expect("read pre-upgrade binary");
-        assert_ne!(
-            before, NEW_BINARY,
-            "pre-upgrade binary must differ from fixture payload"
-        );
+        let replacement = replacement_only_binary();
+        assert_ne!(before, replacement, "fixture must replace the binary");
 
         let base = format!("http://{addr}/releases");
         // Async child I/O — a blocking `.output()` would starve the in-process
@@ -284,7 +449,7 @@ mod slow {
         );
 
         let after = fs::read(&exe).expect("read post-upgrade binary");
-        assert_eq!(after, NEW_BINARY, "on-disk binary was not replaced");
+        assert_eq!(after, replacement, "on-disk binary was not replaced");
 
         let hooks_root = prefix.path().join("bin/hooks");
         assert_eq!(
@@ -303,7 +468,8 @@ mod slow {
     #[tokio::test]
     async fn native_upgrade_refreshes_hooks_without_a_deleted_path_or_losing_cli_data_dir() {
         let asset = host_asset_name().to_string();
-        let archive = Arc::new(build_release_archive());
+        let replacement = fs::read(BIN).expect("read replacement binary");
+        let archive = Arc::new(build_release_archive_with_binary(&replacement));
         let hash = format!("{:x}", Sha256::digest(archive.as_ref()));
         let fixture = ReleaseFixture {
             checksum_body: format!("{hash}  {asset}\n"),
@@ -391,6 +557,170 @@ mod slow {
             refreshed.contains(&data_dir.path().to_string_lossy().into_owned()),
             "CLI-only data dir was lost: {refreshed}"
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn native_upgrade_refreshes_only_owned_generated_integrations() {
+        fn generated_path(home: &Path, agent: &str) -> PathBuf {
+            match agent {
+                "opencode" => home.join(".config/opencode/plugins/ai-memory.ts"),
+                "opencode2" => home.join(".config/opencode/plugins/ai-memory-opencode2.ts"),
+                "pi" => home.join(".pi/agent/extensions/ai-memory-pi.ts"),
+                "omp" => home.join(".omp/agent/extensions/ai-memory-omp.ts"),
+                "openclaw" => {
+                    let data = if cfg!(windows) {
+                        home.join("AppData/Local")
+                    } else if cfg!(target_os = "macos") {
+                        home.join("Library/Application Support")
+                    } else {
+                        home.join(".local/share")
+                    };
+                    data.join("ai-memory/openclaw-plugin/index.ts")
+                }
+                other => panic!("unknown generated agent {other}"),
+            }
+        }
+
+        fn agent_constant(agent: &str) -> &str {
+            match agent {
+                "opencode" => "open-code",
+                other => other,
+            }
+        }
+
+        fn write_old_owned(home: &Path, agent: &str) {
+            let path = generated_path(home, agent);
+            fs::create_dir_all(path.parent().expect("generated parent")).expect("mkdir generated");
+            let assistant = if agent == "opencode2" {
+                "const CAPTURE_ASSISTANT = true;\n"
+            } else {
+                ""
+            };
+            fs::write(
+                path,
+                format!(
+                    "// Auto-generated by `ai-memory install-hooks --agent {agent} --apply`.\n\
+                     const AGENT = \"{}\";\n\
+                     const DEFAULT_PROJECT_STRATEGY = \"repo-root\";\n\
+                     {assistant}old-render\n",
+                    agent_constant(agent)
+                ),
+            )
+            .expect("plant old generated render");
+        }
+
+        async fn run_upgrade(
+            base: &str,
+            plant: impl FnOnce(&Path),
+        ) -> (tempfile::TempDir, std::process::Output) {
+            let prefix = tempfile::tempdir().expect("install prefix");
+            let data_dir = tempfile::tempdir().expect("data dir");
+            let home = tempfile::tempdir().expect("home");
+            let exe = install_writable_prefix(prefix.path());
+            fs::write(data_dir.path().join("capture-mode"), "allowlist\n")
+                .expect("persist capture mode");
+            plant(home.path());
+            let empty_path = prefix.path().join("empty-path");
+            fs::create_dir(&empty_path).expect("empty PATH");
+
+            let mut cmd = hermetic(exe.to_str().expect("utf-8 exe path"));
+            cmd.args(["upgrade", "--version", TAG, "--force"])
+                .env("AI_MEMORY_RELEASE_BASE_URL", base)
+                .env("AI_MEMORY_DATA_DIR", data_dir.path())
+                .env("AI_MEMORY_HOME", home.path())
+                .env("HOME", home.path())
+                .env("USERPROFILE", home.path())
+                .env("XDG_DATA_HOME", home.path().join(".local/share"))
+                .env("APPDATA", home.path().join("AppData/Roaming"))
+                .env("LOCALAPPDATA", home.path().join("AppData/Local"))
+                .env("PATH", empty_path)
+                .env_remove("OMP_PROFILE")
+                .env_remove("PI_PROFILE")
+                .env_remove("PI_CONFIG_DIR");
+            let output = tokio::process::Command::from(cmd)
+                .output()
+                .await
+                .expect("spawn upgrade");
+            assert!(
+                output.status.success(),
+                "upgrade failed: stdout={}\nstderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            (home, output)
+        }
+
+        let asset = host_asset_name().to_string();
+        let replacement = fs::read(BIN).expect("read replacement binary");
+        let archive = Arc::new(build_release_archive_with_binary(&replacement));
+        let hash = format!("{:x}", Sha256::digest(archive.as_ref()));
+        let fixture = ReleaseFixture {
+            checksum_body: format!("{hash}  {asset}\n"),
+            asset,
+            archive,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind release fixture");
+        let addr = listener.local_addr().expect("fixture addr");
+        let app = Router::new()
+            .route("/releases/latest/tag", get(latest_tag))
+            .route("/releases/download/{tag}/{name}", get(download))
+            .with_state(fixture);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("fixture serve");
+        });
+        let base = format!("http://{addr}/releases");
+
+        let unowned = "// User-owned OpenCode plugin; do not overwrite.\n";
+        let (home, _) = run_upgrade(&base, |home| {
+            fs::create_dir_all(home.join(".config/opencode/plugins"))
+                .expect("mkdir unowned plugin");
+            fs::write(generated_path(home, "opencode"), unowned).expect("plant unowned plugin");
+            for agent in ["opencode2", "pi", "omp", "openclaw"] {
+                write_old_owned(home, agent);
+            }
+        })
+        .await;
+        for agent in ["opencode2", "pi", "omp", "openclaw"] {
+            let content = fs::read_to_string(generated_path(home.path(), agent))
+                .unwrap_or_else(|error| panic!("read refreshed {agent}: {error}"));
+            assert!(
+                content.contains("windowsHide: true"),
+                "{agent} stayed stale"
+            );
+            assert!(
+                content.contains("const DEFAULT_PROJECT_STRATEGY = \"repo-root\";"),
+                "{agent} lost project strategy"
+            );
+            assert!(
+                content
+                    .contains("const CAPTURE_MODE: \"allowlist\" | \"denylist\" = \"allowlist\";"),
+                "{agent} lost capture mode"
+            );
+        }
+        let opencode2 =
+            fs::read_to_string(generated_path(home.path(), "opencode2")).expect("read OpenCode 2");
+        assert!(opencode2.contains("const CAPTURE_ASSISTANT = true;"));
+        assert_eq!(
+            fs::read_to_string(generated_path(home.path(), "opencode"))
+                .expect("read unowned plugin"),
+            unowned
+        );
+
+        let (home, _) = run_upgrade(&base, |home| write_old_owned(home, "opencode")).await;
+        let opencode = fs::read_to_string(generated_path(home.path(), "opencode"))
+            .expect("read refreshed OpenCode");
+        assert!(opencode.contains("windowsHide: true"));
+        assert!(opencode.contains("const DEFAULT_PROJECT_STRATEGY = \"repo-root\";"));
+        for agent in ["opencode2", "pi", "omp", "openclaw"] {
+            assert!(
+                !generated_path(home.path(), agent).exists(),
+                "upgrade created absent {agent} integration"
+            );
+        }
+
         server.abort();
     }
 }

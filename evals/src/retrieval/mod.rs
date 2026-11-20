@@ -1,9 +1,9 @@
-//! LongMemEval retrieval benchmark, end to end through the real stack.
+//! Pinned retrieval benchmarks, end to end through the real stack.
 //!
 //! Per question: replay its haystack sessions through `POST /hook/batch`
 //! (production hook cadence), query with `memory_query` over MCP, and
-//! score session-level hit@k / recall@k against the dataset's evidence
-//! labels. See `docs/benchmarks/` for published baselines and
+//! score session-level hit@k / recall@k / recall-all@k against the dataset's
+//! evidence labels. See `docs/benchmarks/` for published baselines and
 //! `evals/README.md` for how to run.
 //!
 //! ## R2: A/B + the accuracy/latency/context triple
@@ -12,8 +12,9 @@
 //! the same question set runs through TWO server configs — a baseline and
 //! a candidate — and the report gains a baseline→candidate delta. Every
 //! run, single or A/B, now reports a triple per slice: retrieval accuracy
-//! (hit@k / recall@k), `memory_query` latency (p50/p95), and the context
-//! tokens a result would cost the agent (chars/4 over returned snippets).
+//! (hit@k / recall@k / recall-all@k), `memory_query` latency (p50/p95), and
+//! the context tokens a result would cost the agent (chars/4 over returned
+//! snippets).
 //! Without a candidate config the single-config path is unchanged.
 //!
 //! ## Decomposing the retrieval gap
@@ -29,11 +30,12 @@
 //!   through the real page write path instead of replaying hooks;
 //! - `--date-prefix turn|session-start|none` moves the per-turn date.
 
-mod dataset;
-mod grep;
-mod ingest;
-mod qa;
-mod query;
+pub(crate) mod compare;
+pub(crate) mod dataset;
+pub(crate) mod grep;
+pub(crate) mod ingest;
+pub(crate) mod qa;
+pub(crate) mod query;
 mod reachability;
 pub(crate) mod report;
 mod score;
@@ -42,6 +44,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ai_memory_core::Sanitizer;
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
@@ -53,14 +56,13 @@ mod server;
 
 #[derive(clap::Args, Debug)]
 pub struct RetrievalArgs {
-    /// Dataset file (LongMemEval-S JSON). Defaults to the selected
-    /// variant's path under `evals/datasets/`.
+    /// Dataset file in LongMemEval JSON format. Defaults to the selected
+    /// variant's pinned path.
     #[arg(long)]
     dataset: Option<PathBuf>,
 
-    /// Which pinned LongMemEval-S file to use: `s` (the original, every
-    /// published ai-memory baseline) or `s-cleaned` (the re-release other
-    /// systems publish on).
+    /// Pinned dataset: `s` or `s-cleaned` for LongMemEval, or the bundled
+    /// offline coding-session corpus `coding-v1`.
     #[arg(long, value_enum, default_value_t = Variant::S)]
     dataset_variant: Variant,
 
@@ -74,7 +76,7 @@ pub struct RetrievalArgs {
     server_bin: PathBuf,
 
     /// Score only the first N questions (deterministic prefix) — smoke
-    /// runs and iteration. Omit for the full 500.
+    /// runs and iteration. Omit for the entire selected dataset.
     #[arg(long)]
     sample: Option<usize>,
 
@@ -101,7 +103,7 @@ pub struct RetrievalArgs {
     #[arg(long)]
     reachability: bool,
 
-    /// Cutoffs for hit@k / recall@k.
+    /// Cutoffs for hit@k / recall@k / recall-all@k.
     #[arg(long, value_delimiter = ',', default_values_t = vec![1, 3, 5, 10])]
     ks: Vec<usize>,
 
@@ -122,6 +124,12 @@ pub struct RetrievalArgs {
     /// Keep the server's temp data dir for post-mortem inspection.
     #[arg(long)]
     keep_data_dir: bool,
+
+    /// Embed every haystack document live instead of reusing vectors cached
+    /// under `evals/.cache/embeddings/` by earlier local-embeddings runs.
+    /// Query embeddings are never cached either way.
+    #[arg(long)]
+    no_embedding_cache: bool,
 
     // ---- baseline config knobs ----
     /// Baseline embedding mode: `none` (zero-LLM, vectors off, the
@@ -195,66 +203,8 @@ pub struct RetrievalArgs {
     candidate_date_prefix: Option<DatePrefix>,
 
     // ---- QA-accuracy mode (R2b, opt-in, live LLM) ----
-    /// Enable end-to-end QA-accuracy grading (real LLM API calls). OFF by
-    /// default. Per scored question the harness synthesizes an answer from
-    /// the retrieved snippets (or uses a server-provided `answer` field when
-    /// present) and grades it against the gold answer with an LLM judge.
-    /// Requires `--qa-provider` + `--qa-model` and a resolvable key; if the
-    /// key/provider cannot be resolved the run SKIPS QA (retrieval metrics
-    /// are unaffected) instead of failing.
-    #[arg(long)]
-    qa: bool,
-
-    /// QA answerer/judge provider
-    /// (`anthropic|openai|openai-compat|openai-oauth|codex|copilot|gemini`).
-    #[arg(long)]
-    qa_provider: Option<String>,
-
-    /// QA answerer model id.
-    #[arg(long)]
-    qa_model: Option<String>,
-
-    /// QA answerer base URL (omit for native vendors).
-    #[arg(long)]
-    qa_base_url: Option<String>,
-
-    /// QA answerer API key (raw value). Prefer `--qa-api-key-env` or the
-    /// provider's default env var.
-    #[arg(long)]
-    qa_api_key: Option<String>,
-
-    /// Env var to read the QA answerer API key from (defaults to the
-    /// provider's canonical env var, e.g. `GEMINI_API_KEY`).
-    #[arg(long)]
-    qa_api_key_env: Option<String>,
-
-    /// Auth file for a QA answerer using `openai-oauth`/`codex`/`copilot`.
-    #[arg(long)]
-    qa_token_file: Option<PathBuf>,
-
-    /// QA grader provider; defaults to `--qa-provider`.
-    #[arg(long)]
-    qa_grader_provider: Option<String>,
-
-    /// QA grader model; defaults to `--qa-model`.
-    #[arg(long)]
-    qa_grader_model: Option<String>,
-
-    /// QA grader base URL; defaults to `--qa-base-url`.
-    #[arg(long)]
-    qa_grader_base_url: Option<String>,
-
-    /// QA grader API key (raw); defaults to `--qa-api-key`.
-    #[arg(long)]
-    qa_grader_api_key: Option<String>,
-
-    /// Env var for the QA grader API key; defaults to `--qa-api-key-env`.
-    #[arg(long)]
-    qa_grader_api_key_env: Option<String>,
-
-    /// Auth file for the QA grader; defaults to `--qa-token-file`.
-    #[arg(long)]
-    qa_grader_token_file: Option<PathBuf>,
+    #[command(flatten)]
+    qa: qa::QaArgs,
 }
 
 impl RetrievalArgs {
@@ -275,6 +225,7 @@ impl RetrievalArgs {
 enum Variant {
     S,
     SCleaned,
+    CodingV1,
 }
 
 impl Variant {
@@ -282,6 +233,7 @@ impl Variant {
         match self {
             Self::S => &dataset::VARIANT_S,
             Self::SCleaned => &dataset::VARIANT_S_CLEANED,
+            Self::CodingV1 => &dataset::VARIANT_CODING_V1,
         }
     }
 }
@@ -293,6 +245,10 @@ enum Engine {
     Grep,
 }
 
+/// Where local-embeddings runs keep haystack document vectors between runs,
+/// keyed by provider, model, dimension and text hash (gitignored).
+const EMBEDDING_CACHE_DIR: &str = "evals/.cache/embeddings";
+
 /// One resolved server + query configuration.
 struct Knobs {
     /// Short label for reports (`baseline` / `candidate`).
@@ -301,6 +257,8 @@ struct Knobs {
     /// `zero-llm` or `local-embeddings`, for report provenance.
     mode: &'static str,
     models_root: Option<PathBuf>,
+    /// Document-embedding cache root handed to the server (local mode only).
+    embedding_cache: Option<PathBuf>,
     reranker: bool,
     env: Vec<(String, String)>,
     query_args: serde_json::Map<String, serde_json::Value>,
@@ -337,11 +295,23 @@ impl Knobs {
             "embeddings={embeddings} reranker={}",
             if reranker { "on" } else { "off" }
         );
+        // A value kept in the summary still goes through the built-in
+        // sanitizer: a name check cannot see a password inside a URL or a
+        // provider key passed under an unrelated name.
+        let sanitizer = Sanitizer::builtin();
         for (k, v) in &env {
-            summary.push_str(&format!(" env:{k}={v}"));
+            // The summary is the report's `config:` line, which gets copied
+            // into docs/benchmarks/: a credential is named, never printed.
+            let shown = if is_credential_env_name(k) {
+                "<redacted>".to_owned()
+            } else {
+                sanitizer.scrub(v)
+            };
+            summary.push_str(&format!(" env:{k}={shown}"));
         }
         for (k, v) in &query_args {
-            summary.push_str(&format!(" arg:{k}={v}"));
+            let shown = sanitizer.scrub(&v.to_string());
+            summary.push_str(&format!(" arg:{k}={shown}"));
         }
         // Only non-default ablations are named, so a default run's summary
         // reads exactly as the published baselines do.
@@ -357,6 +327,7 @@ impl Knobs {
             embeddings: embeddings_kind,
             mode,
             models_root,
+            embedding_cache: None,
             reranker,
             env,
             query_args,
@@ -366,10 +337,19 @@ impl Knobs {
         })
     }
 
+    /// Point a local-embeddings server at the document-vector cache; a
+    /// zero-LLM server has no embedder, so it never gets one.
+    fn use_embedding_cache(&mut self, root: &std::path::Path) {
+        if self.embeddings == EvalEmbeddings::Local {
+            self.embedding_cache = Some(root.to_path_buf());
+        }
+    }
+
     fn launch_config(&self) -> LaunchConfig<'_> {
         LaunchConfig {
             embeddings: self.embeddings,
             models_root: self.models_root.as_deref(),
+            embedding_cache: self.embedding_cache.as_deref(),
             reranker: self.reranker,
             env: &self.env,
         }
@@ -389,6 +369,26 @@ fn parse_env(side: &str, items: &[String]) -> Result<Vec<(String, String)>> {
             Ok((k.to_string(), v.to_string()))
         })
         .collect()
+}
+
+/// Whether a `--server-env` name holds a credential, judged by its
+/// `_`-separated words. Words rather than a closed list of names, because
+/// `[[llm_fallbacks]] api_key_env` lets an operator pick any variable name;
+/// `HEADERS` covers an `Authorization` header in `AI_MEMORY_LLM_HEADERS`.
+/// A false positive only hides a value from the report.
+fn is_credential_env_name(name: &str) -> bool {
+    const WORDS: [&str; 8] = [
+        "KEY",
+        "APIKEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIALS",
+        "HEADERS",
+    ];
+    name.split('_')
+        .any(|word| WORDS.iter().any(|w| word.eq_ignore_ascii_case(w)))
 }
 
 /// Reserved args the harness always sets; a config may not override them.
@@ -469,7 +469,7 @@ pub async fn run(args: RetrievalArgs) -> Result<()> {
     let run_dir = args.out.join(format!("{stamp}-retrieval"));
 
     if args.engine == Engine::Grep {
-        if args.ab_mode() || args.reachability || args.qa {
+        if args.ab_mode() || args.reachability || args.qa.enabled {
             bail!("--engine grep runs alone: no candidate, --reachability, or --qa");
         }
         let report = run_grep(&args, variant, &questions, abstention.len(), &commit);
@@ -492,7 +492,7 @@ pub async fn run(args: RetrievalArgs) -> Result<()> {
         );
     }
 
-    let baseline = Knobs::parse(
+    let mut baseline = Knobs::parse(
         "baseline",
         &args.embeddings,
         args.reranker,
@@ -501,7 +501,7 @@ pub async fn run(args: RetrievalArgs) -> Result<()> {
         args.ingest,
         args.date_prefix,
     )?;
-    let candidate = if args.ab_mode() {
+    let mut candidate = if args.ab_mode() {
         let embeddings = args
             .candidate_embeddings
             .clone()
@@ -518,6 +518,14 @@ pub async fn run(args: RetrievalArgs) -> Result<()> {
     } else {
         None
     };
+
+    if !args.no_embedding_cache {
+        let root = std::path::absolute(EMBEDDING_CACHE_DIR)
+            .context("resolving the embedding cache directory")?;
+        for knobs in std::iter::once(&mut baseline).chain(candidate.as_mut()) {
+            knobs.use_embedding_cache(&root);
+        }
+    }
 
     // Fetch the local embedding model once if any config needs it.
     let needs_local = baseline.embeddings == EvalEmbeddings::Local
@@ -536,8 +544,8 @@ pub async fn run(args: RetrievalArgs) -> Result<()> {
     // grader once and share them across both configs. If QA is requested but
     // a provider/key can't be resolved, SKIP cleanly (retrieval metrics are
     // unaffected) rather than failing the run — mirroring live-LLM tests.
-    let qa_engine = if args.qa {
-        match qa::QaEngine::resolve(&args) {
+    let qa_engine = if args.qa.enabled {
+        match qa::QaEngine::resolve(&args.qa) {
             Ok(engine) => {
                 println!("QA-accuracy mode ON (live LLM): {}", engine.summary());
                 tracing::info!(qa = engine.summary(), "QA-accuracy mode enabled");
@@ -790,6 +798,7 @@ async fn run_config(run: &RunContext<'_>, knobs: &Knobs) -> Result<report::Repor
         dataset_sha256: run.variant.sha256,
         mode: knobs.mode,
         config: knobs.summary.clone(),
+        embedding_cache: knobs.embedding_cache.is_some(),
         questions_scored: scores.len(),
         abstention_excluded: run.abstention_n,
         ks: args.ks.clone(),
@@ -855,6 +864,7 @@ fn run_grep(
         dataset_sha256: variant.sha256,
         mode: "grep",
         config: "engine=grep (whole raw session, term overlap, no server)".into(),
+        embedding_cache: false,
         questions_scored: scores.len(),
         abstention_excluded: abstention_n,
         ks: args.ks.clone(),
@@ -941,5 +951,128 @@ mod tests {
         .unwrap();
         assert!(k.summary.contains("ingest=whole-session"));
         assert!(k.summary.contains("date_prefix=session-start"));
+    }
+
+    #[test]
+    fn embedding_cache_reaches_only_local_embedding_servers() {
+        let root = std::path::Path::new("/cache");
+        let parse = |embeddings| {
+            Knobs::parse(
+                "baseline",
+                embeddings,
+                false,
+                &[],
+                &[],
+                IngestMode::Hooks,
+                DatePrefix::Turn,
+            )
+            .unwrap()
+        };
+        let mut local = parse("local");
+        assert_eq!(local.launch_config().embedding_cache, None);
+        local.use_embedding_cache(root);
+        assert_eq!(local.launch_config().embedding_cache, Some(root));
+        // The published config line stays comparable with earlier runs.
+        assert_eq!(local.summary, "embeddings=local reranker=off");
+
+        let mut fts = parse("none");
+        fts.use_embedding_cache(root);
+        assert_eq!(fts.launch_config().embedding_cache, None);
+    }
+
+    #[test]
+    fn knobs_summary_names_credentials_without_their_values() {
+        let k = Knobs::parse(
+            "candidate",
+            "none",
+            true,
+            &[
+                "OPENAI_API_KEY=sk-test-123".into(),
+                "AI_MEMORY_AUTH_TOKEN=tok-456".into(),
+                "AI_MEMORY_LLM_HEADERS=authorization=Bearer hdr-789".into(),
+                "MY_ROUTER_SECRET=sec-000".into(),
+                "AI_MEMORY_LLM_PROVIDER=openai".into(),
+                "AI_MEMORY_RETRIEVAL__OBSERVATION_STREAM=true".into(),
+            ],
+            &[],
+            IngestMode::Hooks,
+            DatePrefix::Turn,
+        )
+        .unwrap();
+        for secret in ["sk-test-123", "tok-456", "hdr-789", "sec-000"] {
+            assert!(
+                !k.summary.contains(secret),
+                "{secret} leaked: {}",
+                k.summary
+            );
+        }
+        assert!(k.summary.contains("env:OPENAI_API_KEY=<redacted>"));
+        assert!(k.summary.contains("env:AI_MEMORY_AUTH_TOKEN=<redacted>"));
+        // Other knobs keep their value: a published report says what ran.
+        assert!(k.summary.contains("env:AI_MEMORY_LLM_PROVIDER=openai"));
+        assert!(
+            k.summary
+                .contains("env:AI_MEMORY_RETRIEVAL__OBSERVATION_STREAM=true")
+        );
+        // The server still gets the real value.
+        assert!(
+            k.env
+                .contains(&("OPENAI_API_KEY".into(), "sk-test-123".into()))
+        );
+    }
+
+    #[test]
+    fn knobs_summary_scrubs_secrets_in_values_it_keeps() {
+        let k = Knobs::parse(
+            "candidate",
+            "none",
+            true,
+            &[
+                "AI_MEMORY_LLM_BASE_URL=https://evaluser:hunter2pass@llm.example.test/v1".into(),
+                "AI_MEMORY_RERANKER_MODEL=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                "AI_MEMORY_LLM_PROVIDER=openai".into(),
+            ],
+            &[r#"filter={"note":"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#.into()],
+            IngestMode::Hooks,
+            DatePrefix::Turn,
+        )
+        .unwrap();
+        for secret in [
+            "hunter2pass",
+            "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            assert!(
+                !k.summary.contains(secret),
+                "{secret} leaked: {}",
+                k.summary
+            );
+        }
+        // Control: a value with nothing secret in it reads as given.
+        assert!(k.summary.contains("env:AI_MEMORY_LLM_PROVIDER=openai"));
+        assert!(k.summary.contains("env:AI_MEMORY_LLM_BASE_URL="));
+        // The server and the query still get the real values.
+        assert!(k.env.iter().any(|(_, v)| v.contains("hunter2pass")));
+    }
+
+    #[test]
+    fn credential_env_names_match_whole_words() {
+        for name in [
+            "OPENAI_API_KEY",
+            "LLM_API_KEY",
+            "ai_memory_auth_token",
+            "AI_MEMORY_LLM_HEADERS",
+            "ROUTER_APIKEY",
+            "PROXY_PASSWD",
+        ] {
+            assert!(is_credential_env_name(name), "{name}");
+        }
+        for name in [
+            "AI_MEMORY_LLM_PROVIDER",
+            "AI_MEMORY_EVAL_SKIP_WIKI_CHECKPOINTS",
+            "MONKEY_MODE",
+        ] {
+            assert!(!is_credential_env_name(name), "{name}");
+        }
     }
 }

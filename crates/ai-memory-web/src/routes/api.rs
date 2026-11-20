@@ -9,7 +9,7 @@ use ai_memory_store::{
     resolve_many_existing_scopes_guarded,
 };
 use axum::extract::{Path, Query, RawQuery, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use base64::Engine as _;
@@ -18,16 +18,18 @@ use sha2::{Digest, Sha256};
 
 use crate::state::WebState;
 
-/// Cache TTL for page-list, workspace, search, and summary endpoints.
-const LIST_CACHE_MAX_AGE: u32 = 30;
-/// Cache TTL for project page-list endpoint.
-const PAGES_LIST_CACHE_MAX_AGE: u32 = 60;
-/// Cache TTL (and ETag max-age) for single-page reads.
-const PAGE_CACHE_MAX_AGE: u32 = 300;
-
 /// Build the `/api/v1` router from a shared [`WebState`].
 pub(crate) fn build(state: Arc<WebState>) -> Router {
     Router::new()
+        .route(
+            "/docs/features/status",
+            axum::routing::get(super::documentation::api_status),
+        )
+        .route("/docs", axum::routing::get(super::documentation::api_index))
+        .route(
+            "/docs/{slug}",
+            axum::routing::get(super::documentation::api_page),
+        )
         .route("/workspaces", axum::routing::get(workspaces_handler))
         .route("/projects", axum::routing::get(projects_handler))
         .route(
@@ -75,32 +77,43 @@ pub(crate) fn build(state: Arc<WebState>) -> Router {
             axum::routing::get(session_observations_handler),
         )
         .route("/graph", axum::routing::get(graph_handler))
+        .route(
+            "/workspaces/{workspace}/projects/{project}/graph",
+            axum::routing::get(project_graph_handler),
+        )
         .with_state(state)
-}
-
-/// Attach `Cache-Control: private, max-age=N` to a successful response.
-///
-/// Applied only to 2xx bodies — error paths return their responses
-/// directly without calling this, so error responses stay uncached.
-fn with_cache(resp: Response, max_age: u32) -> Response {
-    let mut resp = resp;
-    if let Ok(val) = HeaderValue::from_str(&format!("private, max-age={max_age}")) {
-        resp.headers_mut().insert(header::CACHE_CONTROL, val);
-    }
-    resp
 }
 
 /// Prevent browser reuse of a response whose body depends on request identity.
 ///
-/// `private` alone still permits a browser cache to serve Alice's response
-/// after credentials at the same URL switch to Bob. These endpoints contain
-/// owner-scoped prompt text, so successful responses must be revalidated by
-/// executing the authorization/filtering path on every request.
+/// Every `/api/v1` read is grant-filtered (#708): what it returns depends on
+/// who is signed in. `private` alone still permits the browser's own cache to
+/// serve Alice's response after credentials at the same URL switch to Bob, so
+/// on a shared browser profile Bob could see Alice's restricted data without
+/// the server ever running his grant check. `no-store` forbids the browser
+/// from keeping the body at all, so the authorization/filtering path runs on
+/// every request.
 fn with_no_store(resp: Response) -> Response {
     let mut resp = resp;
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, no-store"),
+    );
+    resp
+}
+
+/// Force the browser to revalidate a response that carries an `ETag`.
+///
+/// `no-cache` lets the browser keep the body but never reuse it without first
+/// revalidating with `If-None-Match`. The single-page read runs `authorize_read`
+/// before it compares the tag, so a viewer without a grant gets 403 rather than
+/// a 304 served from the browser's copy, while a granted viewer still saves the
+/// body transfer on an unchanged page.
+fn with_revalidate(resp: Response) -> Response {
+    let mut resp = resp;
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
     );
     resp
 }
@@ -114,30 +127,72 @@ async fn workspaces_handler(
         .list_workspaces_with_stats(viewer_of(viewer))
         .await
         .map_err(internal_error)?;
-    Ok(with_cache(
-        Json(workspaces).into_response(),
-        LIST_CACHE_MAX_AGE,
-    ))
+    Ok(with_no_store(Json(workspaces).into_response()))
 }
 
 /// Cross-project dependency graph: every resolved link whose endpoints are
 /// in different projects, each carrying both endpoints' workspace/project/
 /// path. The UI builds nodes from the endpoints (and may aggregate to a
-/// project-level dependency graph). Global for now; project scoping is a
-/// follow-up query param. With authorization on, only edges whose both ends
+/// project-level dependency graph). Omit `workspace`/`project` for the
+/// whole graph; pass both to keep edges that touch that project. Partial
+/// scope is refused. With authorization on, only edges whose both ends
 /// the viewer may read (#708).
 async fn graph_handler(
     State(state): State<Arc<WebState>>,
     viewer: Option<axum::Extension<ai_memory_core::AuthorizedViewer>>,
+    Query(query): Query<GraphQuery>,
 ) -> Result<Response, Response> {
+    let viewer = viewer_of(viewer);
+    let scope = match (
+        trimmed_opt(query.workspace.as_deref()),
+        trimmed_opt(query.project.as_deref()),
+    ) {
+        (None, None) => None,
+        (Some(workspace), Some(project)) => {
+            let (workspace_id, project_id) =
+                lookup_project(&state, workspace, project, viewer).await?;
+            Some((workspace_id, project_id))
+        }
+        _ => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "workspace and project must be provided together",
+            ));
+        }
+    };
     let edges = state
         .reader
-        .cross_project_edges(None, viewer_of(viewer))
+        .cross_project_edges(scope, viewer)
         .await
         .map_err(internal_error)?;
-    Ok(with_cache(
+    Ok(with_no_store(
         Json(serde_json::json!({ "edges": edges })).into_response(),
-        LIST_CACHE_MAX_AGE,
+    ))
+}
+
+/// In-project link graph: latest unexpired pages and the resolved
+/// wikilinks among them. Same read grant as the project page list.
+async fn project_graph_handler(
+    State(state): State<Arc<WebState>>,
+    viewer: Option<axum::Extension<ai_memory_core::AuthorizedViewer>>,
+    Path((workspace, project)): Path<(String, String)>,
+) -> Result<Response, Response> {
+    let (workspace_id, project_id) =
+        lookup_project(&state, &workspace, &project, viewer_of(viewer)).await?;
+    let graph = state
+        .reader
+        .project_link_graph(workspace_id, project_id)
+        .await
+        .map_err(internal_error)?;
+    Ok(with_no_store(
+        Json(serde_json::json!({
+            "workspace": workspace,
+            "project": project,
+            "truncated": graph.truncated,
+            "nodes": graph.nodes,
+            "edges": graph.edges,
+        }))
+        .into_response(),
     ))
 }
 
@@ -161,10 +216,7 @@ async fn projects_handler(
         state.reader.list_projects_with_stats(viewer).await
     }
     .map_err(internal_error)?;
-    Ok(with_cache(
-        Json(projects).into_response(),
-        LIST_CACHE_MAX_AGE,
-    ))
+    Ok(with_no_store(Json(projects).into_response()))
 }
 
 async fn pages_handler(
@@ -178,16 +230,13 @@ async fn pages_handler(
         .list_unexpired_pages(&workspace, &project)
         .await
         .map_err(internal_error)?;
-    Ok(with_cache(
-        Json(pages).into_response(),
-        PAGES_LIST_CACHE_MAX_AGE,
-    ))
+    Ok(with_no_store(Json(pages).into_response()))
 }
 
 async fn page_handler(
     State(state): State<Arc<WebState>>,
     viewer: Option<axum::Extension<ai_memory_core::AuthorizedViewer>>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Path((workspace, project, path)): Path<(String, String, String)>,
 ) -> Result<Response, Response> {
     super::authorize_read(&state, viewer, &workspace, &project)
@@ -253,25 +302,17 @@ async fn page_handler(
     let etag_value = format!("\"{etag_hex}\"");
     let etag_header = HeaderValue::from_str(&etag_value).expect("sha256 hex is always valid ASCII");
 
-    // If-None-Match: if the client sends back the exact ETag we issued,
-    // return 304 with no body.
-    if let Some(inm) = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-        && inm == etag_value
-    {
-        let mut resp = axum::http::Response::builder()
+    if matches_if_none_match(&headers, etag_header.as_bytes()) {
+        let resp = axum::http::Response::builder()
             .status(StatusCode::NOT_MODIFIED)
             .body(axum::body::Body::empty())
             .expect("static builder cannot fail");
+        let mut resp = with_revalidate(resp);
         resp.headers_mut().insert(header::ETAG, etag_header.clone());
-        if let Ok(cc) = HeaderValue::from_str(&format!("private, max-age={PAGE_CACHE_MAX_AGE}")) {
-            resp.headers_mut().insert(header::CACHE_CONTROL, cc);
-        }
         return Ok(resp);
     }
 
-    let mut resp = with_cache(
+    let mut resp = with_revalidate(
         (
             [(
                 header::CONTENT_TYPE,
@@ -280,10 +321,54 @@ async fn page_handler(
             json,
         )
             .into_response(),
-        PAGE_CACHE_MAX_AGE,
     );
     resp.headers_mut().insert(header::ETAG, etag_header);
     Ok(resp)
+}
+
+/// Conditional page reads use weak entity-tag comparison (RFC 9110 §13.1.2).
+fn matches_if_none_match(headers: &HeaderMap, etag: &[u8]) -> bool {
+    let values = headers.get_all(header::IF_NONE_MATCH);
+    let mut values = values.iter();
+    let Some(first) = values.next() else {
+        return false;
+    };
+    if first.as_bytes().trim_ascii() == b"*" {
+        return values.next().is_none();
+    }
+    std::iter::once(first)
+        .chain(values)
+        .try_fold(false, |matched, value| {
+            weak_etag_list_matches(value.as_bytes(), etag).map(|found| matched || found)
+        })
+        .unwrap_or(false)
+}
+
+fn weak_etag_list_matches(value: &[u8], etag: &[u8]) -> Option<bool> {
+    // A comma inside an opaque tag does not separate validators.
+    let mut quoted = false;
+    let mut matched = false;
+    for tag in value.split(|&byte| {
+        if byte == b'"' {
+            quoted = !quoted;
+        }
+        byte == b',' && !quoted
+    }) {
+        let tag = tag.trim_ascii();
+        if tag.is_empty() {
+            continue;
+        }
+        let tag = tag.strip_prefix(b"W/").unwrap_or(tag);
+        let opaque = tag.strip_prefix(b"\"")?.strip_suffix(b"\"")?;
+        if !opaque
+            .iter()
+            .all(|&byte| matches!(byte, b'!' | b'#'..=b'~' | 0x80..=0xff))
+        {
+            return None;
+        }
+        matched |= tag == etag;
+    }
+    Some(matched)
 }
 
 /// A page's stored versions, newest first, and a unified diff between two of
@@ -414,9 +499,13 @@ async fn search_with_request(
     }
     .map_err(internal_error)?;
 
-    Ok(with_cache(
+    // `owner` reaches the hybrid ranker, which attaches an observation excerpt
+    // only from a session that filter admits, so both the order and each hit's
+    // snippet depend on the caller's identity. `private` alone would let a
+    // browser cache replay one actor's hits at the same URL after the
+    // credentials switch, so the filtering path must run on every request.
+    Ok(with_no_store(
         Json(enrich_hits(state, hits).await?).into_response(),
-        LIST_CACHE_MAX_AGE,
     ))
 }
 
@@ -582,14 +671,12 @@ async fn recent_handler(
         lookup_project(&state, &workspace, &project, viewer_of(viewer)).await?;
     let limit = query.limit.clamp(1, 100);
     if query.updated_since.is_none() && query.cursor.is_none() {
-        let mut pages = state
+        let pages = state
             .reader
-            .list_unexpired_pages(&workspace, &project)
+            .recent_unexpired_page_summaries(workspace_id, project_id, &workspace, &project, limit)
             .await
             .map_err(internal_error)?;
-        pages.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        pages.truncate(limit);
-        return Ok(with_cache(Json(pages).into_response(), LIST_CACHE_MAX_AGE));
+        return Ok(with_no_store(Json(pages).into_response()));
     }
     let cursor = query
         .cursor
@@ -815,6 +902,23 @@ pub(crate) fn owner_filter_for(
     ai_memory_core::OwnerFilter::for_actor_context(
         &actor.map_or_else(ai_memory_core::ActorContext::anonymous, |ext| ext.0),
     )
+}
+
+/// The owner filter for reading sessions and the token usage recorded on them.
+///
+/// Root is the operator: it already lists every handoff with `all_owners`, and
+/// the dashboard counts every user's sessions. Filtering root's drilldowns by
+/// its own identity hid the sessions those counts promise (#1867). Every other
+/// caller keeps [`owner_filter_for`]: their own sessions plus shared ones.
+pub(crate) fn session_owner_filter_for(
+    actor: Option<axum::Extension<ai_memory_core::ActorContext>>,
+    auth: Option<axum::Extension<ai_memory_core::AuthLevel>>,
+) -> ai_memory_core::OwnerFilter {
+    if matches!(auth, Some(axum::Extension(ai_memory_core::AuthLevel::Root))) {
+        ai_memory_core::OwnerFilter::Any
+    } else {
+        owner_filter_for(actor)
+    }
 }
 
 /// May this request read the prompt-derived body of a handoff?
@@ -1106,6 +1210,7 @@ async fn sessions_handler(
     State(state): State<Arc<WebState>>,
     viewer: Option<axum::Extension<ai_memory_core::AuthorizedViewer>>,
     actor: Option<axum::Extension<ai_memory_core::ActorContext>>,
+    auth: Option<axum::Extension<ai_memory_core::AuthLevel>>,
     Path((workspace, project)): Path<(String, String)>,
     Query(query): Query<SessionListQuery>,
 ) -> Result<Response, Response> {
@@ -1116,7 +1221,7 @@ async fn sessions_handler(
         .sessions_for_scope(
             workspace_id,
             project_id,
-            owner_filter_for(actor),
+            session_owner_filter_for(actor, auth),
             query.include_open,
             query.limit.clamp(1, SESSION_LIST_MAX_LIMIT),
             query.offset,
@@ -1132,6 +1237,7 @@ async fn session_observations_handler(
     State(state): State<Arc<WebState>>,
     viewer: Option<axum::Extension<ai_memory_core::AuthorizedViewer>>,
     actor: Option<axum::Extension<ai_memory_core::ActorContext>>,
+    auth: Option<axum::Extension<ai_memory_core::AuthLevel>>,
     Path((workspace, project, session_id)): Path<(String, String, String)>,
     Query(query): Query<SessionObservationsQuery>,
 ) -> Result<Response, Response> {
@@ -1191,7 +1297,7 @@ async fn session_observations_handler(
             workspace_id,
             project_id,
             session_id,
-            owner_filter_for(actor),
+            session_owner_filter_for(actor, auth),
         )
         .await
         .map_err(internal_error)?
@@ -1306,7 +1412,7 @@ async fn enrich_hits(state: &WebState, hits: Vec<PageHit>) -> Result<Vec<ApiSear
                 path: meta.path,
                 project: meta.project_name,
                 rank: hit.rank,
-                snippet: hit.snippet,
+                snippet: ai_memory_store::highlighted_snippet_html(&hit.snippet),
                 title: hit.title,
                 workspace: meta.workspace_name,
             });
@@ -1356,6 +1462,14 @@ const MAX_SEARCH_SCOPES: usize = 25;
 struct ProjectListQuery {
     #[serde(default)]
     workspace: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQuery {
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
 }
 
 #[derive(Debug)]

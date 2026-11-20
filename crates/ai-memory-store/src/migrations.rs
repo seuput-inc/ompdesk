@@ -4,41 +4,121 @@ use crate::error::{StoreError, StoreResult};
 
 refinery::embed_migrations!("migrations");
 
+/// Checksum recorded by refinery for the V62 SQL shipped in v2.2.1.
+///
+/// The historical SQL is pinned in
+/// `testdata/V62__page_ingestion_windows.pre776.sql`; a regression test
+/// derives this value through refinery's own checksum implementation.
+const ORIGINAL_V62_CHECKSUM: u64 = 16_518_128_245_137_964_566;
+const V62_VERSION: i32 = 62;
+const V62_NAME: &str = "page_ingestion_windows";
+
 /// Run all pending migrations against an open connection.
 ///
 /// # Errors
 /// Propagates the underlying refinery error if a migration fails. When the
-/// store is *ahead* of this binary — an applied migration is absent from the
-/// compiled-in set, which refinery reports as `MissingVersion` with the
-/// misleading text "migration V… is missing from the filesystem" — the error
-/// is remapped to [`StoreError::DataSchemaAhead`], which names the offending
-/// migration and points the operator at the fix.
+/// store is *ahead* of this binary, the error is remapped to
+/// [`StoreError::DataSchemaAhead`]. An earlier embedded migration missing from
+/// the store's history instead reports [`StoreError::MigrationHistoryGap`].
+/// refinery reports both conditions as `MissingVersion`.
 pub fn run(conn: &mut rusqlite::Connection) -> StoreResult<()> {
+    repair_known_migration_checksums(conn)?;
     migrations::runner()
-        // Tolerate a divergent checksum on an already-applied migration.
-        //
-        // V62 was reshaped in place (#776) from an in-migration backfill to
-        // DDL-only + a chunked boot-path backfill (`ops::backfill_page_windows`).
-        // A store that applied the ORIGINAL V62 recorded that migration's
-        // checksum in `refinery_schema_history`; the embedded V62 now hashes
-        // differently, which refinery's default `abort_divergent = true` would
-        // reject as `DivergentVersion`, refusing to open a correctly-migrated
-        // store. Those stores already have the columns fully backfilled, so the
-        // boot step is inert for them — opening is safe. Relaxing divergence is
-        // the intentional cost of an in-place migration reshape.
-        //
-        // `abort_missing` stays TRUE: a store whose applied version is *ahead*
-        // of this binary must still fail closed with the actionable
-        // `DataSchemaAhead` error (the schema-version pin), not open silently.
-        .set_abort_divergent(false)
+        .set_abort_divergent(true)
         .set_abort_missing(true)
         .run(conn)
         .map_err(classify_run_error)?;
     Ok(())
 }
 
+/// Rewrite only checksums whose SQL bytes are known to be equivalent.
+///
+/// Windows release builds before v3.1.2 embedded the checked-out migration
+/// files with CRLF endings. The SQL and resulting schema are identical to the
+/// LF files embedded now, but refinery hashes the raw bytes. V62 also has one
+/// older released layout whose equivalent backfill moved to the bounded boot
+/// path (#776). Match version, name and the exact historical checksum before
+/// changing anything; every other mismatch remains a hard refinery error.
+fn repair_known_migration_checksums(conn: &mut rusqlite::Connection) -> StoreResult<()> {
+    let has_history: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master \
+         WHERE type = 'table' AND name = 'refinery_schema_history')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_history {
+        return Ok(());
+    }
+    let runner = migrations::runner();
+    let mut known = Vec::new();
+    for migration in runner.get_migrations() {
+        let Some(crlf_checksum) = crlf_checksum(migration) else {
+            continue;
+        };
+        known.push((
+            migration.version(),
+            migration.name().to_owned(),
+            crlf_checksum,
+            migration.checksum(),
+        ));
+    }
+    let Some(v62) = runner
+        .get_migrations()
+        .iter()
+        .find(|migration| migration.version() == V62_VERSION)
+    else {
+        return Ok(());
+    };
+    known.push((
+        V62_VERSION,
+        V62_NAME.to_owned(),
+        ORIGINAL_V62_CHECKSUM,
+        v62.checksum(),
+    ));
+    let original_v62 = include_str!("testdata/V62__page_ingestion_windows.pre776.sql");
+    known.push((
+        V62_VERSION,
+        V62_NAME.to_owned(),
+        checksum_for_sql(V62_VERSION, V62_NAME, &original_v62.replace('\n', "\r\n")),
+        v62.checksum(),
+    ));
+
+    let tx = conn.transaction()?;
+    let mut repaired = 0_usize;
+    for (version, name, historical, current) in known {
+        repaired += tx.execute(
+            "UPDATE refinery_schema_history SET checksum = ?1 \
+             WHERE version = ?2 AND name = ?3 AND checksum = ?4",
+            rusqlite::params![current.to_string(), version, name, historical.to_string()],
+        )?;
+    }
+    tx.commit()?;
+    if repaired > 0 {
+        tracing::info!(
+            migrations = repaired,
+            "repaired known byte-equivalent migration checksums"
+        );
+    }
+    Ok(())
+}
+
+fn crlf_checksum(migration: &refinery::Migration) -> Option<u64> {
+    let sql = migration.sql()?;
+    Some(checksum_for_sql(
+        migration.version(),
+        migration.name(),
+        &sql.replace('\n', "\r\n"),
+    ))
+}
+
+fn checksum_for_sql(version: i32, name: &str, sql: &str) -> u64 {
+    refinery::Migration::unapplied(&format!("V{version}__{name}"), sql)
+        .expect("embedded migration identity must remain valid")
+        .checksum()
+}
+
 /// Highest schema version baked into this binary (the max embedded migration).
-fn max_supported_version() -> u32 {
+fn max_supported_version() -> i32 {
     migrations::runner()
         .get_migrations()
         .iter()
@@ -47,21 +127,30 @@ fn max_supported_version() -> u32 {
         .unwrap_or(0)
 }
 
-/// Translate refinery's raw error into a store-domain error. The only variant
-/// reshaped is `MissingVersion` (the store's schema is ahead of this binary);
-/// every other refinery failure passes through as [`StoreError::Migration`].
+/// Translate refinery's two `MissingVersion` cases without confusing a
+/// skipped migration with a downgrade. Every other failure passes through.
 fn classify_run_error(err: refinery::Error) -> StoreError {
-    if let refinery::error::Kind::MissingVersion(applied) = err.kind() {
-        return StoreError::DataSchemaAhead {
-            applied: format!("V{} ({})", applied.version(), applied.name()),
-            supported: max_supported_version(),
-        };
+    if let refinery::error::Kind::MissingVersion(migration) = err.kind() {
+        let identity = format!("V{} ({})", migration.version(), migration.name());
+        // refinery returns the embedded (unapplied) migration when an older
+        // version was skipped, and the history row when a build lacks it.
+        if migration.applied_on().is_none() {
+            return StoreError::MigrationHistoryGap { missing: identity };
+        }
+        let supported = max_supported_version();
+        if migration.version() > supported {
+            return StoreError::DataSchemaAhead {
+                applied: identity,
+                supported: u32::try_from(supported)
+                    .expect("embedded migration version is non-negative"),
+            };
+        }
     }
     StoreError::Migration(err)
 }
 
 #[cfg(test)]
-pub(crate) fn run_to(conn: &mut rusqlite::Connection, target: u32) -> Result<(), refinery::Error> {
+pub(crate) fn run_to(conn: &mut rusqlite::Connection, target: i32) -> Result<(), refinery::Error> {
     migrations::runner()
         .set_target(refinery::Target::Version(target))
         .run(conn)?;
@@ -75,6 +164,219 @@ mod tests {
         AgentKind, HandoffId, NewObservation, NewSession, ObservationKind, SessionId,
     };
     use rusqlite::{Connection, params};
+
+    #[test]
+    fn v94_preserves_old_response_rows_and_cascades_context() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        run_to(&mut conn, 93).unwrap();
+        conn.execute_batch("INSERT INTO workspaces(id,name,created_at) VALUES(zeroblob(16),'usage',1);
+            INSERT INTO projects(id,workspace_id,name,created_at) VALUES(zeroblob(16),zeroblob(16),'usage',1);
+            INSERT INTO sessions(id,workspace_id,project_id,agent_kind,started_at) VALUES(zeroblob(16),zeroblob(16),zeroblob(16),'codex',1);
+            INSERT INTO token_calls(session_id,call_id,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,observed_at) VALUES(zeroblob(16),'old-response',70,7,0,0,123);").unwrap();
+        run(&mut conn).unwrap();
+        run(&mut conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let preserved:(u64,u64,i64,Option<String>,Option<String>,Option<i64>)=conn.query_row("SELECT input_tokens,output_tokens,observed_at,turn_id,native_response_id,response_at FROM token_calls",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).unwrap();
+        assert_eq!(preserved, (70, 7, 123, None, None, None));
+        conn.execute_batch("INSERT INTO token_call_tools(session_id,call_id,tool_id,tool_name,relation) VALUES(zeroblob(16),'old-response','tool-1','Read','requested');
+            DELETE FROM token_calls WHERE call_id='old-response';").unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM token_call_tools", [], |r| r
+                .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn v92_normalizes_codex_cache_once_and_preserves_claude() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        run_to(&mut conn, 91).unwrap();
+        conn.execute_batch("INSERT INTO workspaces(id,name,created_at) VALUES(zeroblob(16),'usage',1);
+            INSERT INTO projects(id,workspace_id,name,created_at) VALUES(zeroblob(16),zeroblob(16),'usage',1);
+            INSERT INTO sessions(id,workspace_id,project_id,agent_kind,started_at) VALUES(zeroblob(16),zeroblob(16),zeroblob(16),'codex',1);
+            INSERT INTO sessions(id,workspace_id,project_id,agent_kind,started_at) VALUES(x'00000000000000000000000000000001',zeroblob(16),zeroblob(16),'claude-code',1);
+            INSERT INTO session_usage(session_id,input_tokens,cache_read_tokens,updated_at) SELECT id,1000,800,1 FROM sessions;").unwrap();
+        run(&mut conn).unwrap();
+        run(&mut conn).unwrap();
+        let codex: u64 = conn
+            .query_row(
+                "SELECT input_tokens FROM session_usage WHERE session_id=zeroblob(16)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let claude:u64=conn.query_row("SELECT input_tokens FROM session_usage WHERE session_id=x'00000000000000000000000000000001'",[],|r|r.get(0)).unwrap();
+        assert_eq!(codex, 200);
+        assert_eq!(claude, 1000);
+    }
+
+    /// V95 rebuilds `agent_messages` so a message can be held in `editing`.
+    /// Existing mail keeps its text, state, order and addressee, the three
+    /// indexes come back, and `editing` is the only value the constraint gained.
+    #[test]
+    fn v95_accepts_the_editing_state_and_keeps_existing_messages() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        run_to(&mut conn, 94).unwrap();
+        conn.execute_batch(
+            "INSERT INTO workspaces(id,name,created_at) VALUES(zeroblob(16),'mail',1);
+             INSERT INTO projects(id,workspace_id,name,created_at) VALUES(zeroblob(16),zeroblob(16),'mail',1);
+             INSERT INTO agent_messages(id,from_workspace_id,from_project_id,from_agent,to_workspace_id,to_project_id,subject,body,state,created_at,to_agent,from_owner_user)
+                 VALUES(x'01000000000000000000000000000000',zeroblob(16),zeroblob(16),'other',zeroblob(16),zeroblob(16),'s','queued','pending',5,'codex','user:sender');
+             INSERT INTO agent_messages(id,from_workspace_id,from_project_id,from_agent,to_workspace_id,to_project_id,body,state,created_at,claimed_at,claimed_by_agent)
+                 VALUES(x'02000000000000000000000000000000',zeroblob(16),zeroblob(16),'other',zeroblob(16),zeroblob(16),'done','claimed',6,7,'codex');",
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        run(&mut conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        let rows: Vec<(String, String, i64, Option<String>)> = conn
+            .prepare(
+                "SELECT state, body, created_at, to_agent FROM agent_messages ORDER BY created_at",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "pending".to_owned(),
+                    "queued".to_owned(),
+                    5,
+                    Some("codex".to_owned())
+                ),
+                ("claimed".to_owned(), "done".to_owned(), 6, None),
+            ]
+        );
+        conn.execute(
+            "UPDATE agent_messages SET state='editing' WHERE body='queued'",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "UPDATE agent_messages SET state='held' WHERE body='queued'",
+                [],
+            )
+            .is_err(),
+            "the state constraint must still reject unknown values"
+        );
+        let indexes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='agent_messages' \
+                 AND name IN ('idx_agent_messages_inbox','idx_agent_messages_outbox','idx_messages_agent_inbox')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 3);
+        let edited_at: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_messages') WHERE name='edited_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(edited_at, 1);
+        let provenance: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT from_owner_user, subject FROM agent_messages WHERE body='queued'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            provenance,
+            (Some("user:sender".to_owned()), Some("s".to_owned())),
+            "the sender identity and subject survive the rebuild"
+        );
+        assert!(
+            conn.execute(
+                "UPDATE agent_messages SET from_session_id=zeroblob(16) WHERE body='queued'",
+                [],
+            )
+            .is_err(),
+            "the sender-session foreign key survives the rebuild"
+        );
+        conn.execute_batch("INSERT INTO sessions(id,workspace_id,project_id,agent_kind,started_at) VALUES(zeroblob(16),zeroblob(16),zeroblob(16),'codex',1);
+            UPDATE agent_messages SET from_session_id=zeroblob(16) WHERE body='queued';").unwrap();
+        let dangling: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check('agent_messages')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dangling, 0);
+    }
+
+    #[test]
+    fn project_id_pinning_upgrade_preserves_runs_and_failed_prepare_rolls_back() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 95).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let ws = crate::ops::get_or_create_workspace(&mut conn, "default").unwrap();
+        let project = crate::ops::get_or_create_project(&mut conn, &ws, "project", None).unwrap();
+        let workstream = ai_memory_core::WorkstreamId::new();
+        let run_id = ai_memory_core::ManagedRunId::new();
+        conn.execute("INSERT INTO workstreams \
+            (id, workspace_id, project_id, repo_fingerprint, worktree_fingerprint, name, cwd, created_at, selected_at, updated_at) \
+            VALUES (?1, ?2, ?3, 'repo', 'tree', 'default', '/repo', 1, 1, 1)",
+            params![workstream.as_bytes(), ws.as_bytes(), project.as_bytes()]).unwrap();
+        conn.execute("INSERT INTO managed_runs \
+            (id, workstream_id, agent_kind, lease_owner, state, sync_after, sync_through, context_delivered, lease_expires_at, started_at) \
+            VALUES (?1, ?2, 'codex', 'host:1', 'active', 3, 7, 1, ?3, 1)",
+            params![run_id.as_bytes(), workstream.as_bytes(), jiff::Timestamp::now().as_microsecond() + 60_000_000]).unwrap();
+        run(&mut conn).unwrap();
+        let snapshot = |conn: &Connection| {
+            conn.query_row(
+            "SELECT state, sync_after, sync_through, context_delivered, scope_by_id FROM managed_runs WHERE id = ?1",
+            params![run_id.as_bytes()], |row| Ok((row.get::<_,String>(0)?, row.get::<_,i64>(1)?, row.get::<_,i64>(2)?, row.get::<_,bool>(3)?, row.get::<_,bool>(4)?))).unwrap()
+        };
+        assert_eq!(snapshot(&conn), ("active".into(), 3, 7, true, false));
+        conn.execute_batch("CREATE TRIGGER reject_new_run BEFORE INSERT ON managed_runs BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+        let input = crate::PrepareWorkstreamRun {
+            workspace_id: ws,
+            project_id: project,
+            scope_by_id: true,
+            repo_fingerprint: "repo".into(),
+            worktree_fingerprint: "tree".into(),
+            cwd: "/repo".into(),
+            agent: AgentKind::Codex,
+            automatic_harness: false,
+            available_agents: Vec::new(),
+            selection: crate::WorkstreamSelection::Named("default".into()),
+            lease_owner: "host:2".into(),
+        };
+        assert!(crate::workstream::prepare_run(&mut conn, &input, None, true).is_err());
+        assert_eq!(
+            snapshot(&conn),
+            ("active".into(), 3, 7, true, false),
+            "failed prepare must roll back forced expiry and preserve the legacy flag"
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM managed_runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        conn.execute_batch("DROP TRIGGER reject_new_run;").unwrap();
+        let prepared = crate::workstream::prepare_run(&mut conn, &input, None, true).unwrap();
+        let pinned: bool = conn
+            .query_row(
+                "SELECT scope_by_id FROM managed_runs WHERE id = ?1",
+                params![prepared.run_id.as_bytes()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(pinned);
+        assert_eq!(snapshot(&conn).0, "expired");
+    }
 
     /// A store migrated by a newer build (an applied version above anything
     /// this binary embeds) must fail to open with the actionable
@@ -106,10 +408,59 @@ mod tests {
             StoreError::DataSchemaAhead { applied, supported } => {
                 assert!(applied.contains(&format!("V{future}")), "applied={applied}");
                 assert!(applied.contains("future_feature"), "applied={applied}");
-                assert_eq!(supported, max_supported_version());
+                assert_eq!(i32::try_from(supported).unwrap(), max_supported_version());
             }
             other => panic!("expected DataSchemaAhead, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_earlier_migration_reports_a_history_gap_without_applying_anything() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // Between v2.3.2 and v2.4, main briefly contained V66 before it
+        // received V65 from release/2.4 (#1612).
+        let historical: Vec<_> = migrations::runner()
+            .get_migrations()
+            .iter()
+            .filter(|migration| migration.version() <= 66 && migration.version() != 65)
+            .cloned()
+            .collect();
+        refinery::Runner::new(&historical).run(&mut conn).unwrap();
+        let before = applied_versions(&conn);
+        assert_eq!(before.last(), Some(&66));
+        assert!(!before.contains(&65));
+
+        let err = run(&mut conn).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("migration history has a gap"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("V65 (page_compacted_marker)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("not recorded"), "{rendered}");
+        assert!(!rendered.contains("newer than"), "{rendered}");
+        assert_eq!(applied_versions(&conn), before);
+        let compacted_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'compacted_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(compacted_column, 0, "a refused open must not apply V65");
+    }
+
+    #[test]
+    fn an_ordinary_older_store_migrates_without_a_history_gap() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 64).unwrap();
+        run(&mut conn).unwrap();
+        let applied = applied_versions(&conn);
+        assert!(applied.contains(&65) && applied.contains(&66));
+        assert_eq!(applied.last(), Some(&i64::from(max_supported_version())));
     }
 
     /// The rendered message must drop refinery's misleading phrasing and carry
@@ -414,6 +765,7 @@ mod tests {
                 title: "prompt".into(),
                 body: "continue".into(),
                 importance: 8,
+                file_path: None,
             },
         )
         .unwrap();
@@ -1517,6 +1869,283 @@ mod tests {
         }
     }
 
+    /// V88 expands the sessions enum for Qwen Code. Existing sessions and
+    /// dependent observations survive the table rebuild, while the old V87
+    /// constraint rejects the new value and the migrated schema accepts it.
+    #[test]
+    fn v87_to_v88_preserves_sessions_and_observations_and_accepts_qwen_code() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 87).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let workspace_id = crate::ops::get_or_create_workspace(&mut conn, "default").unwrap();
+        let project_id =
+            crate::ops::get_or_create_project(&mut conn, &workspace_id, "project", None).unwrap();
+        let existing = SessionId::new();
+        conn.execute(
+            "INSERT INTO sessions \
+             (id, workspace_id, project_id, agent_kind, cwd, started_at, actor_user) \
+             VALUES (?1, ?2, ?3, 'ibm-bob', '/repo', 1, 'user:alice')",
+            params![
+                existing.as_bytes(),
+                workspace_id.as_bytes(),
+                project_id.as_bytes(),
+            ],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "INSERT INTO sessions \
+                 (id, workspace_id, project_id, agent_kind, started_at) \
+                 VALUES (?1, ?2, ?3, 'qwen-code', 1)",
+                params![
+                    SessionId::new().as_bytes(),
+                    workspace_id.as_bytes(),
+                    project_id.as_bytes(),
+                ],
+            )
+            .is_err(),
+            "the V87 CHECK must reject qwen-code"
+        );
+        conn.execute(
+            "INSERT INTO observations \
+             (id, session_id, workspace_id, project_id, kind, title, body, created_at) \
+             VALUES (?1, ?2, ?3, ?4, 'prompt', 'kept', 'kept body', 1)",
+            params![
+                uuid::Uuid::new_v4().as_bytes(),
+                existing.as_bytes(),
+                workspace_id.as_bytes(),
+                project_id.as_bytes(),
+            ],
+        )
+        .unwrap();
+
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        run(&mut conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        let preserved: (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT agent_kind, cwd, actor_user FROM sessions WHERE id = ?1",
+                params![existing.as_bytes()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            preserved,
+            ("ibm-bob".into(), "/repo".into(), Some("user:alice".into()))
+        );
+        let observations: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM observations WHERE session_id = ?1",
+                params![existing.as_bytes()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(observations, 1, "the session's observations survive");
+
+        crate::ops::begin_session(
+            &mut conn,
+            &NewSession {
+                occurred_at: None,
+                id: SessionId::new(),
+                workspace_id,
+                project_id,
+                agent_kind: AgentKind::QwenCode,
+                cwd: Some("/repo".into()),
+                actor_user: Some("user:alice".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        for name in [
+            "idx_sessions_open_owner",
+            "sessions_ws_proj_pairing_ai",
+            "auto_improve_scheduler_claims_session_pairing_ai",
+            "session_consolidation_jobs_session_pairing_ai",
+        ] {
+            let kind = if name.starts_with("idx_") {
+                "index"
+            } else {
+                "trigger"
+            };
+            assert_eq!(schema_object_count(&conn, kind, name), 1, "missing {name}");
+        }
+    }
+
+    /// V89 expands the persisted session kind without losing the session
+    /// graph rebuilt by V88.
+    #[test]
+    fn v88_to_v89_preserves_sessions_and_accepts_qoder() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 88).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let workspace_id = crate::ops::get_or_create_workspace(&mut conn, "default").unwrap();
+        let project_id =
+            crate::ops::get_or_create_project(&mut conn, &workspace_id, "project", None).unwrap();
+        let existing = SessionId::new();
+        conn.execute(
+            "INSERT INTO sessions \
+             (id, workspace_id, project_id, agent_kind, cwd, started_at, actor_user) \
+             VALUES (?1, ?2, ?3, 'qwen-code', '/repo', 1, 'user:alice')",
+            params![
+                existing.as_bytes(),
+                workspace_id.as_bytes(),
+                project_id.as_bytes(),
+            ],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "INSERT INTO sessions \
+                 (id, workspace_id, project_id, agent_kind, started_at) \
+                 VALUES (?1, ?2, ?3, 'qoder', 1)",
+                params![
+                    SessionId::new().as_bytes(),
+                    workspace_id.as_bytes(),
+                    project_id.as_bytes(),
+                ],
+            )
+            .is_err(),
+            "the V88 CHECK must reject qoder"
+        );
+
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        run(&mut conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        let preserved: (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT agent_kind, cwd, actor_user FROM sessions WHERE id = ?1",
+                params![existing.as_bytes()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            preserved,
+            (
+                "qwen-code".into(),
+                "/repo".into(),
+                Some("user:alice".into())
+            )
+        );
+        crate::ops::begin_session(
+            &mut conn,
+            &NewSession {
+                occurred_at: None,
+                id: SessionId::new(),
+                workspace_id,
+                project_id,
+                agent_kind: AgentKind::Qoder,
+                cwd: Some("/repo".into()),
+                actor_user: Some("user:alice".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        for name in [
+            "idx_sessions_open_owner",
+            "sessions_ws_proj_pairing_ai",
+            "auto_improve_scheduler_claims_session_pairing_ai",
+            "session_consolidation_jobs_session_pairing_ai",
+        ] {
+            let kind = if name.starts_with("idx_") {
+                "index"
+            } else {
+                "trigger"
+            };
+            assert_eq!(schema_object_count(&conn, kind, name), 1, "missing {name}");
+        }
+    }
+
+    #[test]
+    fn v88_to_v89_preserves_existing_sessions_and_keeps_missing_usage_unknown() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 88).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let before = applied_versions(&conn);
+        let workspace = crate::ops::get_or_create_workspace(&mut conn, "upgrade").unwrap();
+        let project =
+            crate::ops::get_or_create_project(&mut conn, &workspace, "app", None).unwrap();
+        let session = SessionId::new();
+        crate::ops::begin_session(
+            &mut conn,
+            &NewSession {
+                occurred_at: None,
+                id: session,
+                workspace_id: workspace,
+                project_id: project,
+                agent_kind: AgentKind::Codex,
+                cwd: Some("/repo".into()),
+                actor_user: Some("user:alice".into()),
+            },
+        )
+        .unwrap();
+
+        run_to(&mut conn, 89).unwrap();
+        let mut expected = before;
+        expected.push(89);
+        assert_eq!(applied_versions(&conn), expected);
+        run(&mut conn).unwrap();
+        let preserved: (String, String, String) = conn
+            .query_row(
+                "SELECT agent_kind, cwd, actor_user FROM sessions WHERE id = ?1",
+                params![session.as_bytes()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            preserved,
+            ("codex".into(), "/repo".into(), "user:alice".into())
+        );
+        let missing: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_usage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            missing, 0,
+            "upgrading must not invent usage for existing sessions"
+        );
+
+        let mut report = ai_memory_core::NewSessionUsage {
+            session_id: SessionId::new(),
+            input_tokens: 12,
+            output_tokens: 4,
+            cache_write_tokens: 0,
+            cache_read_tokens: 2,
+            model: Some("fixture-model".into()),
+        };
+        assert!(crate::ops::upsert_session_usage(&conn, &report).is_err());
+        report.session_id = session;
+        crate::ops::upsert_session_usage(&conn, &report).unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            params![session.as_bytes()],
+        )
+        .unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_usage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0, "usage must not outlive its session");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+    }
+
     #[test]
     fn v81_to_v82_preserves_managed_runs_and_adds_previous_session_identity() {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -1585,28 +2214,74 @@ mod tests {
         assert_eq!(previous, ("claude-code".into(), "native-1".into()));
     }
 
-    /// V62 was reshaped in place (#776) from an in-migration backfill to
-    /// DDL-only + a boot-path backfill, changing its checksum. A store that
-    /// applied the ORIGINAL V62 recorded the old checksum; `run` must still
-    /// open it (divergence tolerated) rather than aborting with
-    /// `DivergentVersion` — while a strict runner would reject it, proving
-    /// the relaxation is load-bearing. `abort_missing` stays true, so a
-    /// schema that is genuinely *ahead* still fails closed (covered by
-    /// `data_ahead_of_binary_reports_schema_ahead_not_raw_refinery`).
+    /// The repair constant comes from the released SQL, not a remembered
+    /// value that could silently drift from its provenance.
     #[test]
-    fn reshaped_migration_divergent_checksum_is_tolerated() {
+    fn original_v62_checksum_matches_the_released_sql() {
+        let released_sql = include_str!("testdata/V62__page_ingestion_windows.pre776.sql");
+        let checksum = checksum_for_sql(V62_VERSION, V62_NAME, released_sql);
+
+        assert_eq!(checksum, ORIGINAL_V62_CHECKSUM);
+        let embedded = migrations::runner()
+            .get_migrations()
+            .iter()
+            .find(|migration| migration.version() == V62_VERSION)
+            .expect("V62 must remain embedded")
+            .checksum();
+        assert_ne!(
+            embedded, checksum,
+            "the V62 repair is unnecessary if the embedded SQL matches v2.2.1"
+        );
+    }
+
+    /// The reporter's three samples pin the exact Windows-native failure: the
+    /// checksums are the current embedded SQL with only LF changed to CRLF.
+    #[test]
+    fn windows_release_checksums_match_crlf_embedded_sql() {
+        let runner = migrations::runner();
+        for (version, reported) in [
+            (1, 17_285_868_314_470_184_417),
+            (62, 3_297_905_123_477_343_401),
+            (83, 11_621_067_245_702_300_616),
+        ] {
+            let migration = runner
+                .get_migrations()
+                .iter()
+                .find(|migration| migration.version() == version)
+                .unwrap();
+            assert_eq!(crlf_checksum(migration), Some(reported), "V{version}");
+        }
+    }
+
+    /// Every known byte-equivalent checksum is repaired before the strict
+    /// runner sees it. An arbitrary mismatch still fails closed.
+    #[test]
+    fn only_known_equivalent_migration_checksums_are_repaired() {
         let mut conn = Connection::open_in_memory().unwrap();
         run(&mut conn).unwrap();
-
-        // Simulate the original V62's recorded checksum by rewriting the
-        // stored value so it no longer matches the embedded migration.
-        let rewritten = conn
-            .execute(
-                "UPDATE refinery_schema_history SET checksum = '0' WHERE version = 62",
-                [],
-            )
+        let runner = migrations::runner();
+        let v62 = runner
+            .get_migrations()
+            .iter()
+            .find(|migration| migration.version() == V62_VERSION)
             .unwrap();
-        assert_eq!(rewritten, 1, "V62 history row must exist to diverge");
+        let current_checksum = v62.checksum();
+        assert_ne!(current_checksum, ORIGINAL_V62_CHECKSUM);
+
+        for version in [1, 62, 83] {
+            let migration = runner
+                .get_migrations()
+                .iter()
+                .find(|migration| migration.version() == version)
+                .unwrap();
+            let rewritten = conn
+                .execute(
+                    "UPDATE refinery_schema_history SET checksum = ?1 WHERE version = ?2",
+                    params![crlf_checksum(migration).unwrap().to_string(), version],
+                )
+                .unwrap();
+            assert_eq!(rewritten, 1, "V{version} history row must exist");
+        }
 
         // A strict runner (refinery's default) rejects the divergence.
         let strict = migrations::runner().run(&mut conn);
@@ -1618,10 +2293,70 @@ mod tests {
             Ok(_) => panic!("strict runner should reject a divergent checksum"),
         }
 
-        // The production path tolerates it: the already-migrated store opens.
-        run(&mut conn).expect("divergence must be tolerated so migrated stores open");
+        run(&mut conn).expect("the Windows-native checksums must be repaired");
+        for version in [1, 62, 83] {
+            let expected = runner
+                .get_migrations()
+                .iter()
+                .find(|migration| migration.version() == version)
+                .unwrap()
+                .checksum()
+                .to_string();
+            let repaired: String = conn
+                .query_row(
+                    "SELECT checksum FROM refinery_schema_history WHERE version = ?1",
+                    [version],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(repaired, expected, "V{version}");
+        }
 
-        // And the boot backfill is inert on such a store (no NULL windows).
+        conn.execute(
+            "UPDATE refinery_schema_history SET checksum = ?1 WHERE version = ?2",
+            params![ORIGINAL_V62_CHECKSUM.to_string(), V62_VERSION],
+        )
+        .unwrap();
+        run(&mut conn).expect("the released V62 checksum must be repaired");
+        let repaired: String = conn
+            .query_row(
+                "SELECT checksum FROM refinery_schema_history WHERE version = ?1",
+                [V62_VERSION],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(repaired, current_checksum.to_string());
+
+        let original_crlf = checksum_for_sql(
+            V62_VERSION,
+            V62_NAME,
+            &include_str!("testdata/V62__page_ingestion_windows.pre776.sql").replace('\n', "\r\n"),
+        );
+        conn.execute(
+            "UPDATE refinery_schema_history SET checksum = ?1 WHERE version = ?2",
+            params![original_crlf.to_string(), V62_VERSION],
+        )
+        .unwrap();
+        run(&mut conn).expect("the Windows-native original V62 checksum must be repaired");
+
+        conn.execute(
+            "UPDATE refinery_schema_history SET checksum = '0' WHERE version = ?1",
+            [V62_VERSION],
+        )
+        .unwrap();
+        match run(&mut conn).unwrap_err() {
+            StoreError::Migration(err) => assert!(matches!(
+                err.kind(),
+                refinery::error::Kind::DivergentVersion(_, _)
+            )),
+            other => panic!("unknown divergence must remain fatal: {other:?}"),
+        }
+
+        conn.execute(
+            "UPDATE refinery_schema_history SET checksum = ?1 WHERE version = ?2",
+            params![current_checksum.to_string(), V62_VERSION],
+        )
+        .unwrap();
         let summary = crate::ops::backfill_page_windows(&mut conn).unwrap();
         assert_eq!(summary, crate::ops::PageWindowBackfillSummary::default());
     }
@@ -1753,5 +2488,330 @@ mod tests {
             duplicate.is_err(),
             "a claimed identity must stay unique per workspace"
         );
+    }
+
+    #[test]
+    fn v97_rebuilds_both_fts_indexes_so_a_directory_path_matches_its_basename() {
+        use crate::fts_query::{FtsStopwords, prepare_fts5_query};
+
+        const TABLES: [&str; 2] = ["pages_fts", "observations_fts"];
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 96).unwrap();
+        let workspace_id = crate::ops::get_or_create_workspace(&mut conn, "default").unwrap();
+        let project_id =
+            crate::ops::get_or_create_project(&mut conn, &workspace_id, "proj", None).unwrap();
+        let session_id = SessionId::new();
+        crate::ops::begin_session(
+            &mut conn,
+            &NewSession {
+                occurred_at: None,
+                id: session_id,
+                workspace_id,
+                project_id,
+                agent_kind: AgentKind::Codex,
+                cwd: None,
+                actor_user: None,
+            },
+        )
+        .unwrap();
+        let observation = |body: &str| NewObservation {
+            occurred_at: None,
+            session_id,
+            workspace_id,
+            project_id,
+            kind: ObservationKind::PostToolUse,
+            extension: None,
+            source_event: None,
+            title: "tool file".into(),
+            body: body.into(),
+            importance: 5,
+            file_path: None,
+        };
+        let body = "edited crates/ai-memory-store/src/reader.rs in ai-memory";
+        let page = [4_u8; 16];
+        conn.execute(
+            "INSERT INTO pages \
+             (id, workspace_id, project_id, path, title, tier, body, body_sha256, \
+              frontmatter_json, is_latest, pinned, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, 'notes/edit.md', 'title', 'semantic', ?4, zeroblob(32), '{}', \
+                     1, 0, 1, 1)",
+            params![
+                page.as_slice(),
+                workspace_id.as_bytes(),
+                project_id.as_bytes(),
+                body,
+            ],
+        )
+        .unwrap();
+        crate::ops::insert_observation(&mut conn, &observation(body)).unwrap();
+
+        let stopwords = FtsStopwords::default();
+        let matches = |conn: &Connection, table: &str, raw: &str| -> i64 {
+            let query = prepare_fts5_query(raw, &stopwords);
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE {table} MATCH ?1"),
+                [query],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        for table in TABLES {
+            assert_eq!(matches(&conn, table, "reader.rs"), 0, "{table} at V96");
+        }
+
+        run(&mut conn).unwrap();
+
+        for table in TABLES {
+            for raw in ["reader.rs", "reader", "src/reader.rs", "ai-memory"] {
+                assert_eq!(matches(&conn, table, raw), 1, "{table} query {raw:?}");
+            }
+        }
+
+        // The recreated triggers keep the index in step with later writes.
+        conn.execute(
+            "UPDATE pages SET body = 'nothing here' WHERE id = ?1",
+            params![page.as_slice()],
+        )
+        .unwrap();
+        assert_eq!(matches(&conn, "pages_fts", "reader.rs"), 0);
+        crate::ops::insert_observation(&mut conn, &observation("see src/ops.rs")).unwrap();
+        assert_eq!(matches(&conn, "observations_fts", "ops.rs"), 1);
+    }
+
+    const V100_TABLES: [&str; 2] = ["pages_fts", "observations_fts"];
+
+    /// Seed a V99 store with one page and one observation whose body holds a
+    /// hyphenated and an underscored word, written under the pre-V100 index.
+    /// Returns the page id.
+    fn seed_v99_hyphenated_rows(conn: &mut Connection) -> [u8; 16] {
+        const BODY: &str = "the zebrafinch-marker-alpha tag and the zebra_finch_keeper log";
+
+        run_to(conn, 99).unwrap();
+        let workspace_id = crate::ops::get_or_create_workspace(conn, "default").unwrap();
+        let project_id =
+            crate::ops::get_or_create_project(conn, &workspace_id, "proj", None).unwrap();
+        let session_id = SessionId::new();
+        crate::ops::begin_session(
+            conn,
+            &NewSession {
+                occurred_at: None,
+                id: session_id,
+                workspace_id,
+                project_id,
+                agent_kind: AgentKind::Codex,
+                cwd: None,
+                actor_user: None,
+            },
+        )
+        .unwrap();
+        let page = [4_u8; 16];
+        conn.execute(
+            "INSERT INTO pages \
+             (id, workspace_id, project_id, path, title, tier, body, body_sha256, \
+              frontmatter_json, is_latest, pinned, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, 'notes/markers.md', 'title', 'semantic', ?4, zeroblob(32), '{}', \
+                     1, 0, 1, 1)",
+            params![
+                page.as_slice(),
+                workspace_id.as_bytes(),
+                project_id.as_bytes(),
+                BODY,
+            ],
+        )
+        .unwrap();
+        crate::ops::insert_observation(
+            conn,
+            &NewObservation {
+                occurred_at: None,
+                session_id,
+                workspace_id,
+                project_id,
+                kind: ObservationKind::PostToolUse,
+                extension: None,
+                source_event: None,
+                title: "tool file".into(),
+                body: BODY.into(),
+                importance: 5,
+                file_path: None,
+            },
+        )
+        .unwrap();
+        page
+    }
+
+    fn v100_matches(conn: &Connection, table: &str, raw: &str) -> i64 {
+        use crate::fts_query::{FtsStopwords, prepare_fts5_query};
+
+        let query = prepare_fts5_query(raw, &FtsStopwords::default());
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM {table} WHERE {table} MATCH ?1"),
+            [query],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    /// V100 gives both indexes a second spelling of `title`/`body` with `-`
+    /// and `_` turned into spaces, so the parts of a hyphenated word match.
+    /// A store that already holds such rows gets them re-indexed by the
+    /// rebuild, and the whole token keeps matching (#2013).
+    #[test]
+    fn v100_indexes_the_parts_of_a_hyphenated_word_on_an_existing_store() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let page = seed_v99_hyphenated_rows(&mut conn);
+        for table in V100_TABLES {
+            assert_eq!(v100_matches(&conn, table, "alpha"), 0, "{table} at V99");
+        }
+
+        run(&mut conn).unwrap();
+
+        for table in V100_TABLES {
+            for part in ["alpha", "marker", "zebrafinch", "keeper"] {
+                assert_eq!(
+                    v100_matches(&conn, table, part),
+                    1,
+                    "{table} query {part:?}"
+                );
+            }
+            // The whole token keeps matching: the tokenizer was not touched.
+            assert_eq!(
+                v100_matches(&conn, table, "zebrafinch-marker-alpha"),
+                1,
+                "{table} whole token"
+            );
+        }
+
+        // The recreated triggers keep both spellings in step with later writes.
+        conn.execute(
+            "UPDATE pages SET body = 'nothing hyphenated here' WHERE id = ?1",
+            params![page.as_slice()],
+        )
+        .unwrap();
+        assert_eq!(v100_matches(&conn, "pages_fts", "marker"), 0);
+        assert_eq!(v100_matches(&conn, "pages_fts", "hyphenated"), 1);
+    }
+
+    /// V100 rebuilds `pages_fts` before it reaches `observations`. When the
+    /// observations half fails, the pages half must roll back with it: the
+    /// store stays a working V99 store (old columns, old triggers, whole-token
+    /// search intact), and a re-run after the cause is removed converges.
+    #[test]
+    fn v100_failing_partway_rolls_back_to_a_searchable_v99_store() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        seed_v99_hyphenated_rows(&mut conn);
+        // V100 adds `observations.body_parts`; a column already holding that
+        // name fails the migration after the pages half has run.
+        conn.execute("ALTER TABLE observations ADD COLUMN body_parts TEXT", [])
+            .unwrap();
+
+        let err = run(&mut conn).unwrap_err();
+        assert!(matches!(err, StoreError::Migration(_)), "{err:?}");
+        assert_eq!(applied_versions(&conn).last(), Some(&99));
+        let pages_parts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_xinfo('pages') \
+                 WHERE name IN ('title_parts', 'body_parts')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pages_parts, 0, "the pages half must roll back");
+        for table in V100_TABLES {
+            assert_eq!(
+                v100_matches(&conn, table, "zebrafinch-marker-alpha"),
+                1,
+                "{table} keeps its V99 index"
+            );
+            assert_eq!(v100_matches(&conn, table, "alpha"), 0, "{table} at V99");
+        }
+
+        conn.execute("ALTER TABLE observations DROP COLUMN body_parts", [])
+            .unwrap();
+        run(&mut conn).unwrap();
+        assert_eq!(
+            applied_versions(&conn).last(),
+            Some(&i64::from(max_supported_version()))
+        );
+        for table in V100_TABLES {
+            assert_eq!(
+                v100_matches(&conn, table, "alpha"),
+                1,
+                "{table} after re-run"
+            );
+        }
+    }
+
+    /// V99 adds `file_path` to a store that already holds observations: an
+    /// existing row keeps its columns and reads NULL, a new row stores its
+    /// path, and a path lookup uses the partial index.
+    #[test]
+    fn v99_adds_a_nullable_file_path_to_existing_observations() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_to(&mut conn, 98).unwrap();
+        let workspace_id = crate::ops::get_or_create_workspace(&mut conn, "default").unwrap();
+        let project_id =
+            crate::ops::get_or_create_project(&mut conn, &workspace_id, "proj", None).unwrap();
+        let session_id = SessionId::new();
+        crate::ops::begin_session(
+            &mut conn,
+            &NewSession {
+                occurred_at: None,
+                id: session_id,
+                workspace_id,
+                project_id,
+                agent_kind: AgentKind::Codex,
+                cwd: None,
+                actor_user: None,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO observations \
+             (id, session_id, workspace_id, project_id, kind, title, body, importance, created_at) \
+             VALUES (?1, ?2, ?3, ?4, 'post-tool-use', 'tool file', 'before V99', 5, 1)",
+            params![
+                [7_u8; 16].as_slice(),
+                session_id.as_bytes(),
+                workspace_id.as_bytes(),
+                project_id.as_bytes(),
+            ],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let existing: (String, Option<String>) = conn
+            .query_row("SELECT body, file_path FROM observations", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(existing, ("before V99".to_owned(), None));
+        crate::ops::insert_observation(
+            &mut conn,
+            &NewObservation {
+                occurred_at: None,
+                session_id,
+                workspace_id,
+                project_id,
+                kind: ObservationKind::PostToolUse,
+                extension: None,
+                source_event: None,
+                title: "tool file".into(),
+                body: "after V99".into(),
+                importance: 5,
+                file_path: Some("src/lib.rs".into()),
+            },
+        )
+        .unwrap();
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT id FROM observations \
+                 WHERE workspace_id = ?1 AND project_id = ?2 AND file_path = 'src/lib.rs'",
+                params![workspace_id.as_bytes(), project_id.as_bytes()],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("idx_observations_file_path"), "{plan}");
     }
 }

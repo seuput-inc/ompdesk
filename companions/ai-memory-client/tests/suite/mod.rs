@@ -353,3 +353,112 @@ fn redaction_marker_suffix_never_exempts_a_credential() {
         assert_eq!(sanitize_external_text(&control), control);
     }
 }
+
+/// The vectors the server sanitizer runs too (`ai-memory-core::sanitize`), so
+/// the two copies cannot drift: credentials split by an invisible character,
+/// private-key blocks with and without an end line, and text that must pass
+/// through unchanged.
+#[test]
+fn shared_sanitizer_vectors_hold() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/sanitizer_vectors.json"
+    ))
+    .unwrap();
+    let strings = |key: &str| -> Vec<String> {
+        vectors[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect()
+    };
+    for secret in strings("credentials") {
+        let (head, tail) = secret.split_at(secret.len() / 2);
+        for invisible in strings("invisibles") {
+            let out = sanitize_external_text(&format!("key {head}{invisible}{tail} end"));
+            assert!(
+                out.contains("[REDACTED") && !out.contains(head) && !out.contains(tail),
+                "{invisible:?} inside {secret}: {out:?}"
+            );
+            assert!(out.starts_with("key ") && out.ends_with(" end"), "{out:?}");
+        }
+    }
+    for field in vectors["credential_fields"].as_array().unwrap() {
+        let input = field["input"].as_str().unwrap();
+        let out = sanitize_external_text(input);
+        assert!(
+            out.contains("[REDACTED") && !out.contains(field["secret"].as_str().unwrap()),
+            "{input:?} -> {out:?}"
+        );
+        for kept in field["kept"].as_array().into_iter().flatten() {
+            assert!(out.contains(kept.as_str().unwrap()), "{input:?} -> {out:?}");
+        }
+    }
+    let body_line = vectors["key_body_line"].as_str().unwrap();
+    for block in vectors["key_blocks"].as_array().unwrap() {
+        let input = block["input"].as_str().unwrap();
+        let out = sanitize_external_text(input);
+        assert!(
+            out.contains("[REDACTED PRIVATE KEY]") && !out.contains(body_line),
+            "{input:?} -> {out:?}"
+        );
+        for kept in block["kept"].as_array().unwrap() {
+            assert!(out.contains(kept.as_str().unwrap()), "{input:?} -> {out:?}");
+        }
+    }
+    for text in strings("unchanged") {
+        assert_eq!(sanitize_external_text(&text), text);
+    }
+}
+
+#[test]
+fn characters_that_hide_text_or_split_a_credential_are_removed() {
+    let hidden: String = "hidden note"
+        .chars()
+        .map(|c| char::from_u32(0xe0000 + u32::from(c)).unwrap())
+        .collect();
+    assert_eq!(
+        sanitize_external_text(&format!("visible{hidden} text")),
+        "visible text"
+    );
+    // A control character inside a credential no longer keeps it whole.
+    let out = sanitize_external_text("sk-leak-012345\u{0}6789abcdef0123");
+    assert_eq!(out, "[REDACTED CREDENTIAL]");
+}
+
+/// Control characters are stripped before matching, so a word glued onto a key
+/// by a removed character used to keep the key whole: the `aim_`/`ams_` and
+/// `AKIA` rules required a left word boundary the removal had destroyed, and
+/// `amk_` had no rule (GHSA-6pmr-q79m-87vp, item 5, the client mirror). The
+/// own-prefix and GitHub rules are now left-unanchored; AWS accepts a
+/// percent-encoded byte.
+#[test]
+fn a_key_glued_onto_a_word_by_a_stripped_character_is_still_redacted() {
+    let tail = "FAKEfake0123-_xy".repeat(3); // 48 base64url chars, > the 40 floor
+    for prefix in ["aim_", "ams_", "amk_"] {
+        let key = format!("{prefix}{tail}");
+        for glued in [
+            format!("title\u{7}{key}"),      // a removed BEL
+            format!("title\u{1b}[32m{key}"), // a removed ANSI escape
+            format!("word{key}"),            // a letter directly before it
+        ] {
+            let out = sanitize_external_text(&glued);
+            assert!(
+                out.contains("[REDACTED CREDENTIAL]") && !out.contains(&tail),
+                "glued key must be redacted: {glued:?} -> {out:?}"
+            );
+        }
+    }
+    // A GitHub token glued onto a word by a removed BEL, and an AWS key behind
+    // a percent-encoded byte.
+    for (input, leaked) in [
+        ("word\u{7}ghp_FAKE0123456789ABCDEFGHIJ0123", "ghp_FAKE"),
+        ("url?k=%20AKIAFAKEFAKEFAKEFAKE", "FAKEFAKE"),
+    ] {
+        let out = sanitize_external_text(input);
+        assert!(
+            out.contains("[REDACTED CREDENTIAL]") && !out.contains(leaked),
+            "credential must be redacted: {input:?} -> {out:?}"
+        );
+    }
+}

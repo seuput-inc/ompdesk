@@ -71,6 +71,11 @@ struct Fixture {
     /// Rewrite this page's body on its Nth read (1-based), to simulate an
     /// edit landing between a sync's classification and its write.
     edit_on_read: Option<(&'static str, usize)>,
+    /// Edit after capturing the Nth read's snapshot, before the next request.
+    /// The response still describes the old version, whether 200 or 304.
+    edit_after_read: Option<(&'static str, usize)>,
+    /// Save an editor's local change while the next page request is in flight.
+    repository_edit_on_read: Mutex<Option<(PathBuf, Vec<u8>)>>,
     /// Text the fixture's write path redacts, like the server's sanitizer.
     redact: Option<&'static str>,
     /// Edit this page right before an MCP call on it is handled, to simulate
@@ -79,6 +84,13 @@ struct Fixture {
     /// A server older than 3.0: no `expected_page_id` in the tool schema, no
     /// `id` on pages, and preconditions silently ignored.
     old_server: bool,
+    /// Pre-incremental `recent` returns at most 100 rows without a cursor.
+    legacy_listing: bool,
+    full_listing_status: Option<StatusCode>,
+    /// Serve a listing for any project name, not only `app`. Lets a test model
+    /// a second project on one server whose listing is successfully empty
+    /// (#1708) instead of a 404.
+    any_project: bool,
     /// Arguments of every MCP tool call, in order.
     mcp_calls: Mutex<Vec<serde_json::Value>>,
     reads_by_path: Mutex<BTreeMap<String, usize>>,
@@ -106,9 +118,14 @@ impl Fixture {
             project_exists: true,
             unreachable: None,
             edit_on_read: None,
+            edit_after_read: None,
+            repository_edit_on_read: Mutex::new(None),
             redact: None,
             edit_before_mcp: None,
             old_server: false,
+            legacy_listing: false,
+            full_listing_status: None,
+            any_project: false,
             mcp_calls: Mutex::new(Vec::new()),
             reads_by_path: Mutex::new(BTreeMap::new()),
             recent_calls: AtomicUsize::new(0),
@@ -191,7 +208,8 @@ async fn recent_handler(
     if let Err(response) = fixture.authorize(&headers) {
         return *response;
     }
-    if !fixture.project_exists || workspace != "demo" || project != "app" {
+    if !fixture.project_exists || workspace != "demo" || (project != "app" && !fixture.any_project)
+    {
         return error_json(StatusCode::NOT_FOUND, "workspace or project not found");
     }
     // Ignore updated_since; the fixture serves everything after the epoch.
@@ -201,6 +219,20 @@ async fn recent_handler(
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
     let all = fixture.pages.lock().unwrap().clone();
+    if fixture.legacy_listing {
+        let limit = query
+            .get("limit")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(20)
+            .clamp(1, 100);
+        return Json(
+            all.iter()
+                .take(limit)
+                .map(|page| json!({"path": page.path, "title": page.title}))
+                .collect::<Vec<_>>(),
+        )
+        .into_response();
+    }
     let end = (start + 2).min(all.len());
     let pages: Vec<serde_json::Value> = all[start..end]
         .iter()
@@ -227,6 +259,33 @@ async fn recent_handler(
         .into_response()
 }
 
+async fn pages_handler(
+    State(fixture): State<Arc<Fixture>>,
+    Path((workspace, project)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    if let Err(response) = fixture.authorize(&headers) {
+        return *response;
+    }
+    if !fixture.project_exists || workspace != "demo" || (project != "app" && !fixture.any_project)
+    {
+        return error_json(StatusCode::NOT_FOUND, "workspace or project not found");
+    }
+    if let Some(status) = fixture.full_listing_status {
+        return error_json(status, "listing refused");
+    }
+    Json(
+        fixture
+            .pages
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|page| json!({"path": page.path, "title": page.title}))
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
 /// Page read with the server's exact-ETag 304 contract.
 async fn page_handler(
     State(fixture): State<Arc<Fixture>>,
@@ -236,11 +295,16 @@ async fn page_handler(
     if let Err(response) = fixture.authorize(&headers) {
         return *response;
     }
-    if !fixture.project_exists || workspace != "demo" || project != "app" {
+    if !fixture.project_exists || workspace != "demo" || (project != "app" && !fixture.any_project)
+    {
         return error_json(StatusCode::NOT_FOUND, "workspace or project not found");
     }
     if fixture.unreachable == Some(path.as_str()) {
         return error_json(StatusCode::NOT_FOUND, "page not found");
+    }
+    if let Some((path, bytes)) = fixture.repository_edit_on_read.lock().unwrap().take() {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
     }
     let read_count = {
         let mut reads = fixture.reads_by_path.lock().unwrap();
@@ -285,6 +349,12 @@ async fn page_handler(
     // Like the server: the ETag covers the whole projection, so a change to
     // metadata alone also changes it.
     let etag = format!("\"{}\"", state::sha256_hex(document.to_string().as_bytes()));
+    if let Some((target, nth)) = fixture.edit_after_read
+        && target == path
+        && nth == read_count
+    {
+        fixture.update(&path, |page| page.body.push_str("edited concurrently\n"));
+    }
     if let Some(if_none_match) = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -455,6 +525,10 @@ async fn serve(fixture: Fixture) -> (SocketAddr, Arc<Fixture>) {
             get(recent_handler),
         )
         .route(
+            "/api/v1/workspaces/{workspace}/projects/{project}/pages",
+            get(pages_handler),
+        )
+        .route(
             "/api/v1/workspaces/{workspace}/projects/{project}/pages/{*path}",
             get(page_handler),
         )
@@ -479,6 +553,7 @@ fn args(addr: SocketAddr, dest: &std::path::Path, families: &[&str]) -> RunArgs 
         dest: dest.to_path_buf(),
         include: families.iter().map(|f| f.to_string()).collect(),
         force: false,
+        adopt_scope: false,
     }
 }
 
@@ -552,6 +627,71 @@ async fn export_apply_writes_files_and_state() {
         let entry = state.pages.get(path).expect(path);
         assert!(entry.etag.is_some(), "etag recorded for {path}");
     }
+}
+
+/// GHSA-jr85-7366-xrm2, end to end: a shared destination holds symlinks
+/// planted at the staging names this tool used to write through
+/// (`.wikisync-tmp-<page>` for page bodies, `state.json.tmp` for the state
+/// save). A full `export --apply` and a following `sync --apply` must write
+/// their real targets only: every canary keeps its bytes and every plant
+/// survives untouched, because no predictable name is ever opened.
+#[cfg(unix)]
+#[tokio::test]
+async fn export_and_sync_apply_ignore_symlinks_planted_at_the_old_staging_names() {
+    let (addr, _fixture) = serve(Fixture::new(fixture_pages())).await;
+    let (tmp, dest) = temp_dest();
+
+    let victim_page = tmp.path().join("victim-page");
+    fs::write(&victim_page, b"untouched page").unwrap();
+    fs::create_dir_all(dest.join("notes")).unwrap();
+    std::os::unix::fs::symlink(&victim_page, dest.join("notes/.wikisync-tmp-a.md")).unwrap();
+    let victim_state = tmp.path().join("victim-state");
+    fs::write(&victim_state, b"untouched state").unwrap();
+    fs::create_dir_all(dest.join(".ai-memory-wikisync")).unwrap();
+    std::os::unix::fs::symlink(
+        &victim_state,
+        dest.join(".ai-memory-wikisync/state.json.tmp"),
+    )
+    .unwrap();
+
+    run(&args(addr, &dest, &["notes"]), Mode::Apply)
+        .await
+        .expect("export applies over the plants");
+
+    assert_eq!(fs::read(&victim_page).unwrap(), b"untouched page");
+    assert_eq!(
+        fs::read(dest.join("notes/a.md")).unwrap(),
+        file("notes/a.md", "# A\nalpha\n")
+    );
+    let state = state::load(&dest).unwrap();
+    assert_eq!(state.pages.len(), 3, "the real state was written");
+    assert_eq!(fs::read(&victim_state).unwrap(), b"untouched state");
+    assert!(
+        fs::symlink_metadata(dest.join("notes/.wikisync-tmp-a.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        fs::symlink_metadata(dest.join(".ai-memory-wikisync/state.json.tmp"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    // A sync --apply over the same destination: its export write and state
+    // save run the same staging path, so the plants stay inert here too.
+    sync(addr, &dest).await.expect("sync applies");
+    assert!(dest.join("decisions/0001-db.md").exists());
+    assert_eq!(fs::read(&victim_page).unwrap(), b"untouched page");
+    assert_eq!(fs::read(&victim_state).unwrap(), b"untouched state");
+    assert_eq!(state::load(&dest).unwrap().pages.len(), 4);
+    assert!(
+        fs::symlink_metadata(dest.join(".ai-memory-wikisync/state.json.tmp"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[tokio::test]
@@ -635,6 +775,64 @@ async fn local_edits_are_refused_until_forced() {
 }
 
 #[tokio::test]
+async fn export_preserves_edits_saved_while_fetching_pages_even_with_force() {
+    for force in [false, true] {
+        let (addr, fixture) = serve(Fixture::new(vec![(
+            "notes/a.md".to_string(),
+            "# Original\n".to_string(),
+        )]))
+        .await;
+        let (_tmp, dest) = temp_dest();
+        let mut run_args = args(addr, &dest, &["notes"]);
+        run(&run_args, Mode::Apply).await.unwrap();
+        let old_state = fs::read(state::state_path(&dest)).unwrap();
+        fixture.update("notes/a.md", |page| {
+            page.body = "# Server edit\n".to_string()
+        });
+        if force {
+            fs::write(dest.join("notes/a.md"), b"# Older local edit\n").unwrap();
+        }
+        run_args.force = force;
+        let newest = b"# Editor saved this during export\n";
+        *fixture.repository_edit_on_read.lock().unwrap() =
+            Some((dest.join("notes/a.md"), newest.to_vec()));
+
+        let result = run(&run_args, Mode::Apply).await;
+        assert_eq!(fs::read(dest.join("notes/a.md")).unwrap(), newest);
+        let message = result
+            .expect_err("must preserve an unseen edit")
+            .to_string();
+        assert!(
+            message.contains("changed in the repository during this run"),
+            "{message}"
+        );
+        assert_eq!(fs::read(state::state_path(&dest)).unwrap(), old_state);
+    }
+}
+
+#[tokio::test]
+async fn export_preserves_a_file_created_while_fetching_pages() {
+    let (addr, fixture) = serve(Fixture::new(vec![(
+        "notes/a.md".to_string(),
+        "# Server page\n".to_string(),
+    )]))
+    .await;
+    let (_tmp, dest) = temp_dest();
+    let newest = b"# New local page\n";
+    *fixture.repository_edit_on_read.lock().unwrap() =
+        Some((dest.join("notes/a.md"), newest.to_vec()));
+
+    let result = run(&args(addr, &dest, &["notes"]), Mode::Apply).await;
+    assert_eq!(fs::read(dest.join("notes/a.md")).unwrap(), newest);
+    let message = result.expect_err("must preserve a new file").to_string();
+    assert!(
+        message.contains("changed in the repository during this run"),
+        "{message}"
+    );
+    assert!(!state::state_path(&dest).exists());
+}
+
+#[tokio::test]
 async fn unauthorized_is_a_clear_error() {
     let (addr, _fixture) = serve(Fixture::new(fixture_pages()).with_token("sekrit")).await;
     let (_tmp, dest) = temp_dest();
@@ -676,6 +874,52 @@ async fn listing_follows_cursors_to_the_last_page() {
         "cursor pagination was exercised"
     );
     assert!(dest.join("notes/c.md").exists(), "last page reached");
+}
+
+#[tokio::test]
+async fn legacy_recent_fallback_exports_pages_beyond_the_recent_limit() {
+    let pages = (0..103)
+        .map(|index| {
+            (
+                format!("notes/page-{index}.md"),
+                format!("# Page {index}\n"),
+            )
+        })
+        .collect();
+    let mut fixture = Fixture::new(pages).with_token("fixture-token");
+    fixture.legacy_listing = true;
+    fixture.old_server = true;
+    let (addr, fixture) = serve(fixture).await;
+    let (_tmp, dest) = temp_dest();
+    let mut args = args(addr, &dest, &["notes"]);
+    args.token = Some("fixture-token".into());
+
+    run(&args, Mode::Apply).await.expect("legacy export");
+
+    assert_eq!(state::load(&dest).unwrap().pages.len(), 103);
+    assert_eq!(
+        fs::read(dest.join("notes/page-102.md")).unwrap(),
+        file("notes/page-102.md", "# Page 102\n"),
+    );
+    assert_eq!(fixture.recent_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.mcp_writes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn legacy_fallback_refusal_does_not_export_the_partial_recent_list() {
+    let mut fixture = Fixture::new(fixture_pages());
+    fixture.legacy_listing = true;
+    fixture.full_listing_status = Some(StatusCode::FORBIDDEN);
+    let (addr, _) = serve(fixture).await;
+    let (_tmp, dest) = temp_dest();
+
+    let error = run(&args(addr, &dest, &["notes"]), Mode::Apply)
+        .await
+        .expect_err("a complete listing is required");
+
+    assert!(error.to_string().contains("403"), "{error}");
+    assert!(!dest.join("notes/a.md").exists());
+    assert!(!state::state_path(&dest).exists());
 }
 
 #[tokio::test]
@@ -806,6 +1050,93 @@ fn decision() -> FixturePage {
 const DECISION_FILE: &str =
     "---\ntitle: \"DB\"\ntags: [\"db\"]\npinned: true\n---\n# DB\nUse Postgres.\n";
 
+/// The reproduction from #1708: a destination exported from project `a` is
+/// reused for project `b`, whose (empty) listing made every page of `a` read
+/// as "deleted on the server", and `--propagate-deletes --apply` removed the
+/// file and emptied the baseline. The baseline records its scope now, so the
+/// reuse refuses before writing, and `--adopt-scope` is the explicit way to
+/// take the destination over.
+#[tokio::test]
+async fn reusing_a_destination_for_another_project_refuses_and_keeps_the_files() {
+    let (addr, fixture) = serve(Fixture::with_pages(vec![decision()])).await;
+    let (_tmp, dest) = temp_dest();
+    sync(addr, &dest).await.expect("export of project a");
+    assert!(dest.join("decisions/db.md").exists());
+
+    // Project b lists no pages at all; nothing about this destination belongs
+    // to it.
+    let (b_addr, _b) = serve(Fixture {
+        any_project: true,
+        ..Fixture::with_pages(Vec::new())
+    })
+    .await;
+    let mut b_args = deleting_args(b_addr, &dest, None);
+    b_args.run.project = "b".to_string();
+    let err = bidi::run(&b_args, SyncMode::Apply)
+        .await
+        .expect_err("another project's baseline must not be reused");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("belongs to") && message.contains("--adopt-scope"),
+        "{message}"
+    );
+    assert!(
+        dest.join("decisions/db.md").exists(),
+        "the previous project's file must survive the refusal"
+    );
+    assert!(
+        !state::load(&dest).unwrap().pages.is_empty(),
+        "the refusal must not empty the baseline"
+    );
+
+    // The explicit takeover discards the baseline instead of reading it as
+    // deletions. Project b here holds the same page, so the adopted run has
+    // nothing to write and simply stamps the new scope.
+    let (b_page_addr, _) = serve(Fixture {
+        any_project: true,
+        ..Fixture::with_pages(vec![decision()])
+    })
+    .await;
+    let mut adopted = sync_args(b_page_addr, &dest, None);
+    adopted.run.project = "b".to_string();
+    adopted.run.adopt_scope = true;
+    bidi::run(&adopted, SyncMode::Apply)
+        .await
+        .expect("adopting the destination is explicit");
+    assert_eq!(
+        state::load(&dest).unwrap().scope,
+        Some(state::SyncScope::of(
+            &format!("http://{b_page_addr}"),
+            "demo",
+            "b"
+        ))
+    );
+    assert!(
+        dest.join("decisions/db.md").exists(),
+        "adoption writes no delete"
+    );
+    assert_eq!(
+        fixture.page("decisions/db.md").unwrap().body,
+        "# DB\nUse Postgres.\n",
+        "the control: the first project's server copy is untouched"
+    );
+}
+
+/// The same project on the same server keeps working, which is the control
+/// for the guard above.
+#[tokio::test]
+async fn reusing_a_destination_for_the_same_project_still_syncs() {
+    let (addr, _) = serve(Fixture::with_pages(vec![decision()])).await;
+    let (_tmp, dest) = temp_dest();
+    sync(addr, &dest).await.expect("first sync");
+    let second = sync(addr, &dest).await.expect("same-scope sync");
+    assert_eq!(
+        second.status(),
+        bidi::CheckStatus::InSync,
+        "a same-scope rerun is in sync"
+    );
+}
+
 #[tokio::test]
 async fn sync_exports_metadata_and_round_trips_without_writes() {
     let (addr, fixture) = serve(Fixture::with_pages(vec![decision()])).await;
@@ -817,6 +1148,12 @@ async fn sync_exports_metadata_and_round_trips_without_writes() {
     );
 
     sync(addr, &dest).await.expect("second sync");
+    assert_eq!(fixture.page_reads_200.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.page_reads_304.load(Ordering::SeqCst),
+        1,
+        "an unchanged repository file still revalidates with its ETag"
+    );
     assert_eq!(
         fixture.mcp_writes.load(Ordering::SeqCst),
         0,
@@ -833,6 +1170,7 @@ async fn sync_imports_a_repo_edit_with_its_metadata() {
     let (addr, fixture) = serve(Fixture::with_pages(vec![decision()])).await;
     let (_tmp, dest) = temp_dest();
     sync(addr, &dest).await.expect("first sync");
+    let base = state::load(&dest).unwrap().pages["decisions/db.md"].clone();
 
     let edited =
         "---\ntitle: \"DB\"\ntags: [\"db\", \"ops\"]\npinned: true\n---\n# DB\nUse Postgres 17.\n";
@@ -842,8 +1180,19 @@ async fn sync_imports_a_repo_edit_with_its_metadata() {
         .await
         .expect("dry run");
     assert_eq!(fixture.mcp_writes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.page_reads_200.load(Ordering::SeqCst),
+        2,
+        "classifying an edited file needs one full read"
+    );
+    assert_eq!(fixture.page_reads_304.load(Ordering::SeqCst), 0);
 
     sync(addr, &dest).await.expect("import");
+    assert_eq!(
+        fixture.mcp_calls.lock().unwrap()[0]["arguments"]["expected_page_id"],
+        base.page_id.unwrap(),
+        "the write is conditional on the version that was classified"
+    );
     let page = fixture.page("decisions/db.md").unwrap();
     assert_eq!(page.body, "# DB\nUse Postgres 17.\n");
     assert!(
@@ -1020,6 +1369,42 @@ async fn sync_import_sends_the_classified_version_and_records_the_new_one() {
     }
 }
 
+/// A 304 used to trigger a second, full read for an import's metadata. If
+/// that read saw a concurrent edit, its id silently replaced the classified
+/// version and the import overwrote it instead of failing its precondition.
+#[tokio::test]
+async fn sync_does_not_rebase_an_import_onto_a_concurrent_server_edit() {
+    let (addr, fixture) = serve(Fixture {
+        edit_after_read: Some(("decisions/db.md", 2)),
+        ..Fixture::with_pages(vec![decision()])
+    })
+    .await;
+    let (_tmp, dest) = temp_dest();
+    sync(addr, &dest).await.expect("first sync");
+    let base = state::load(&dest).unwrap().pages["decisions/db.md"].clone();
+    let edited = DECISION_FILE.replace("Use Postgres.", "Repo edit.");
+    fs::write(dest.join("decisions/db.md"), &edited).unwrap();
+
+    let err = sync(addr, &dest)
+        .await
+        .expect_err("the concurrent server edit must be preserved");
+    assert!(err.to_string().contains("changed during this run"), "{err}");
+    let page = fixture.page("decisions/db.md").unwrap();
+    assert!(page.body.contains("edited concurrently"), "{}", page.body);
+    assert!(!page.body.contains("Repo edit"), "{}", page.body);
+    assert_eq!(fixture.mcp_writes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.mcp_calls.lock().unwrap()[0]["arguments"]["expected_page_id"],
+        base.page_id.as_ref().unwrap().as_str(),
+        "the import must keep the version it classified"
+    );
+    assert_eq!(state::load(&dest).unwrap().pages["decisions/db.md"], base);
+    assert_eq!(
+        fs::read_to_string(dest.join("decisions/db.md")).unwrap(),
+        edited
+    );
+}
+
 /// The race slice 3 could only narrow: another writer lands between the
 /// classification read and the write. The server refuses the stale version,
 /// the run reports it and fails, and every other page still syncs. Without
@@ -1048,6 +1433,17 @@ async fn sync_reports_a_page_changed_during_the_run_and_applies_the_rest() {
         ])
     };
     let (race_addr, raced) = serve(racing).await;
+    // The fixture binds a new ephemeral port, and the baseline records the
+    // origin it was exported from (#1708). This test means "the same project,
+    // served again", so restamp the scope rather than adopt a foreign one:
+    // adopting would discard the baseline the race classification needs.
+    let mut restamped = state::load(&dest).unwrap();
+    restamped.scope = Some(state::SyncScope::of(
+        &format!("http://{race_addr}"),
+        "demo",
+        "app",
+    ));
+    state::save(&dest, &restamped).unwrap();
     let err = sync(race_addr, &dest).await.expect_err("race reported");
     let message = format!("{err:#}");
     assert!(message.contains("changed during this run"), "{message}");
@@ -1220,6 +1616,75 @@ async fn sync_propagates_deletes_from_an_unchanged_side() {
     );
 }
 
+/// A restored file invalidates the planned repository-side deletion even
+/// though the server's version precondition still holds.
+#[tokio::test]
+async fn sync_keeps_a_server_page_when_its_file_reappears_during_planning() {
+    for prefer in [None, Some(Prefer::Repo)] {
+        let mut page = decision();
+        page.pinned = false;
+        let mut other = page.clone();
+        other.path = "decisions/other.md".to_string();
+        let (addr, fixture) = serve(Fixture::with_pages(vec![page, other])).await;
+        let (_tmp, dest) = temp_dest();
+        sync(addr, &dest).await.expect("first sync");
+        let before = state::load(&dest).unwrap();
+        let original = fixture.page("decisions/db.md").unwrap();
+        let restored = DECISION_FILE
+            .replace("pinned: true\n", "")
+            .replace("Use Postgres.", "Restored with a new repository edit.");
+        fs::remove_file(dest.join("decisions/db.md")).unwrap();
+        fs::remove_file(dest.join("decisions/other.md")).unwrap();
+        // The file is restored after the plan read its absence, while the
+        // server request is in flight, before any delete is sent.
+        *fixture.repository_edit_on_read.lock().unwrap() =
+            Some((dest.join("decisions/db.md"), restored.as_bytes().to_vec()));
+
+        let result = bidi::run(&deleting_args(addr, &dest, prefer), SyncMode::Apply).await;
+        assert!(
+            fixture.page("decisions/db.md").is_some(),
+            "a recreated file must prevent deleting its unchanged server page"
+        );
+        let kept = fixture.page("decisions/db.md").unwrap();
+        assert_eq!(kept.id, original.id);
+        assert_eq!(kept.body, original.body);
+        assert_eq!(
+            fs::read(dest.join("decisions/db.md")).unwrap(),
+            restored.as_bytes()
+        );
+        let after = state::load(&dest).unwrap();
+        assert_eq!(
+            after.pages["decisions/db.md"],
+            before.pages["decisions/db.md"]
+        );
+        let message = result
+            .expect_err("the local race must be reported")
+            .to_string();
+        assert!(message.contains("changed during this run"), "{message}");
+        assert!(message.contains("decisions/db.md"), "{message}");
+
+        // Control: the other file stayed absent, so its deletion proceeds.
+        assert!(fixture.page("decisions/other.md").is_none());
+        assert!(!after.pages.contains_key("decisions/other.md"));
+        assert_eq!(fixture.mcp_deletes.load(Ordering::SeqCst), 1);
+        let calls = fixture.mcp_calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0]["arguments"]["path"], "decisions/other.md");
+
+        // Retaining the baseline lets a later sync import the restored edit.
+        sync(addr, &dest)
+            .await
+            .expect("the next sync imports the restored file");
+        assert!(
+            fixture
+                .page("decisions/db.md")
+                .unwrap()
+                .body
+                .contains("Restored with a new repository edit.")
+        );
+    }
+}
+
 #[tokio::test]
 async fn sync_delete_conflicts_follow_prefer() {
     let mut other = decision();
@@ -1286,6 +1751,68 @@ async fn sync_delete_conflicts_follow_prefer() {
         .find(|call| call["name"] == "memory_write_page")
         .expect("write");
     assert_eq!(create["arguments"]["create_only"], true);
+}
+
+#[tokio::test]
+async fn sync_treats_server_only_metadata_edits_as_delete_conflicts() {
+    let mut page = decision();
+    page.pinned = false;
+    page.frontmatter["abstract"] = json!("Original abstract");
+    let path = page.path.clone();
+    let (addr, fixture) = serve(Fixture::with_pages(vec![page])).await;
+    let (_tmp, dest) = temp_dest();
+    sync(addr, &dest).await.expect("first sync");
+    let original = fs::read(dest.join(&path)).unwrap();
+    let base = state::load(&dest).unwrap();
+
+    fixture.update(&path, |page| {
+        page.frontmatter["abstract"] = json!("Server edit");
+    });
+    let edited_id = fixture.page(&path).unwrap().id;
+    assert_ne!(
+        base.pages[&path].page_id.as_deref(),
+        Some(edited_id.as_str())
+    );
+    fs::remove_file(dest.join(&path)).unwrap();
+    let args = deleting_args(addr, &dest, None);
+
+    let check = bidi::run(&args, SyncMode::Check).await.unwrap();
+    assert_eq!(check.status(), CheckStatus::Blocked);
+    let error = bidi::run(&args, SyncMode::Apply).await.unwrap_err();
+    assert!(error.to_string().contains("refused"), "{error}");
+    assert!(fixture.mcp_calls.lock().unwrap().is_empty());
+    assert_eq!(fixture.page(&path).unwrap().id, edited_id);
+    assert_eq!(state::load(&dest).unwrap(), base);
+
+    bidi::run(
+        &deleting_args(addr, &dest, Some(Prefer::Server)),
+        SyncMode::Apply,
+    )
+    .await
+    .expect("prefer server restores the unchanged projection");
+    assert_eq!(fs::read(dest.join(&path)).unwrap(), original);
+    assert!(fixture.mcp_calls.lock().unwrap().is_empty());
+    assert_eq!(
+        state::load(&dest).unwrap().pages[&path].page_id.as_deref(),
+        Some(edited_id.as_str())
+    );
+
+    fixture.update(&path, |page| {
+        page.frontmatter["abstract"] = json!("Another server edit");
+    });
+    let latest_id = fixture.page(&path).unwrap().id;
+    fs::remove_file(dest.join(&path)).unwrap();
+    bidi::run(
+        &deleting_args(addr, &dest, Some(Prefer::Repo)),
+        SyncMode::Apply,
+    )
+    .await
+    .expect("prefer repo explicitly chooses deletion");
+    assert!(fixture.page(&path).is_none());
+    let calls = fixture.mcp_calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0]["name"], "memory_delete_page");
+    assert_eq!(calls[0]["arguments"]["expected_page_id"], latest_id);
 }
 
 #[tokio::test]
@@ -1612,4 +2139,74 @@ async fn install_hook_never_writes_a_token() {
     assert!(!hook.contains("sekrit"), "{hook}");
     assert!(!hook.contains("AI_MEMORY_AUTH_TOKEN"), "{hook}");
     assert!(!out.contains("sekrit"), "{out}");
+}
+
+/// A server that sets `contacted` and answers 200 to anything, and a second
+/// one that answers every request with `307` to it, keeping the path. A
+/// client that follows the redirect reaches the first.
+async fn redirect_pair() -> (String, Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::AtomicBool;
+
+    let contacted = Arc::new(AtomicBool::new(false));
+    let flag = contacted.clone();
+    let target = Router::new().fallback(move || {
+        flag.store(true, Ordering::SeqCst);
+        async {
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                "[]",
+            )
+        }
+    });
+    let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_addr = target_listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(target_listener, target).await.unwrap() });
+
+    let redirect = Router::new().fallback(move |uri: axum::http::Uri| async move {
+        let location = format!("http://{target_addr}{}", uri.path());
+        (
+            StatusCode::TEMPORARY_REDIRECT,
+            [(header::LOCATION, location)],
+        )
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, redirect).await.unwrap() });
+    (format!("http://{addr}"), contacted)
+}
+
+/// The page reads never follow a redirect (#1932): the bearer GET stays at
+/// the configured origin and the 3xx is reported as a redirect.
+#[tokio::test]
+async fn api_client_does_not_follow_a_redirect() {
+    let (server, contacted) = redirect_pair().await;
+    let client =
+        ai_memory_wikisync::client::ApiClient::new(&server, Some("secret".into())).unwrap();
+    let error = client.list_pages("demo", "app").await.unwrap_err();
+    assert!(
+        error.to_string().contains("redirect"),
+        "unexpected error: {error:#}"
+    );
+    assert!(
+        !contacted.load(Ordering::SeqCst),
+        "the redirect target must never be contacted"
+    );
+}
+
+/// The MCP writes never follow a redirect (#1932): a 307 would replay the
+/// bearer POST and its body to the `Location` origin.
+#[tokio::test]
+async fn mcp_client_does_not_follow_a_redirect() {
+    let (server, contacted) = redirect_pair().await;
+    let client = ai_memory_wikisync::mcp::McpClient::new(&server, Some("secret".into())).unwrap();
+    let error = client.ensure_conditional_writes().await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("redirect"),
+        "unexpected error: {error:#}"
+    );
+    assert!(
+        !contacted.load(Ordering::SeqCst),
+        "the redirect target must never be contacted"
+    );
 }

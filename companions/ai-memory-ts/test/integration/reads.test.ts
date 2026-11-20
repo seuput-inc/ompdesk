@@ -82,7 +82,7 @@ describe("read tools", () => {
     assert.equal(feedback.signal, "helpful");
   });
 
-  it("observations in a project with no completed session is InvalidParamsError", async () => {
+  it("observations in a project with no session is InvalidParamsError", async () => {
     await memory.pages.write({ path: "notes/x.md", body: "# X", scope: { workspace: "it-reads", project: "empty" } });
     await assert.rejects(
       memory.observations({ scope: { workspace: "it-reads", project: "empty" } }),
@@ -124,6 +124,17 @@ describe("api namespace", () => {
     assert.equal(second.notModified, true);
   });
 
+  it("reads a listed page whose path contains literal percent escapes", async () => {
+    const path = "notes/%2e/%2E%2E/literal.md";
+    const written = await memory.pages.write({ path, body: "# Literal percent path" });
+    const listed = (await memory.api.pages()).find((page) => page.path === path);
+    assert.ok(listed);
+    const result = await memory.api.page(listed.path);
+    assert.equal(result.notModified, false);
+    assert.equal(result.page.id, written.pageId);
+    assert.equal(result.page.path, path);
+  });
+
   it("listings, search, handoffs and sessions", async () => {
     assert.ok((await memory.api.workspaces()).some((w) => w.name === "it-reads"));
     assert.ok((await memory.api.projects({ workspace: "it-reads" })).some((p) => p.project === "app"));
@@ -146,6 +157,41 @@ describe("api namespace", () => {
 });
 
 describe("servers in other modes", () => {
+  it("callTool works as the first MCP call in stateless and stateful modes", async () => {
+    for (const stateful of [true, false]) {
+      const fresh = await startServer({ stateful, basePath: "/wiki" });
+      try {
+        const methods: string[] = [];
+        const client = new AiMemoryClient({
+          serverUrl: fresh.url,
+          token: fresh.rootToken,
+          scope,
+          fetch: async (url, init) => {
+            const body = JSON.parse(init.body as string) as { method: string };
+            methods.push(body.method);
+            return fetch(url, init);
+          },
+        });
+        await client.callTool("memory_write_page", {
+          ...scope,
+          path: "notes/raw-first.md",
+          body: "# Raw first\ncreated through callTool",
+        });
+        assert.deepEqual(
+          methods,
+          stateful
+            ? ["initialize", "notifications/initialized", "tools/call"]
+            : ["initialize", "tools/call"],
+        );
+        assert.equal((await client.pages.read({ path: "notes/raw-first.md" })).title, "Raw first");
+        assert.equal(methods.filter((method) => method === "initialize").length, 1);
+        assert.equal(methods.filter((method) => method === "tools/list").length, 1);
+      } finally {
+        await fresh.stop();
+      }
+    }
+  });
+
   it("every /api/v1 route is NotFoundError without --enable-api", async () => {
     const bare = await startServer({ api: false });
     try {

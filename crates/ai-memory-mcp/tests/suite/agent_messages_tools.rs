@@ -44,7 +44,7 @@ fn mount(server: AiMemoryServer) -> Router {
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true),
     );
     Router::new().nest_service("/mcp", service)
@@ -115,6 +115,29 @@ async fn call(router: &Router, name: &str, arguments: Value) -> Value {
     serde_json::from_str(&joined).unwrap_or_else(|e| panic!("tool text not JSON: {joined}: {e}"))
 }
 
+/// Drive a real call without unwrapping a JSON-RPC error.
+async fn call_rpc(router: &Router, name: &str, arguments: Value) -> Value {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": name, "arguments": arguments },
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("host", "localhost")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(Body::from(body.to_string()))
+        .expect("mcp req");
+    let resp = router.clone().oneshot(req).await.expect("oneshot");
+    let bytes = axum::body::to_bytes(resp.into_body(), 4_000_000)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("JSON-RPC response")
+}
+
 /// `memory_message_send` from `project-a` to `project-b`, returning the new id.
 async fn send(router: &Router, subject: &str, body: &str) -> String {
     let sent = call(
@@ -134,6 +157,48 @@ async fn send(router: &Router, subject: &str, body: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("send returned no message_id: {sent}"))
         .to_string()
+}
+
+#[tokio::test]
+async fn measured_send_requires_evidence_but_inferred_does_not() {
+    let h = harness().await;
+    let refused = call_rpc(
+        &h.router,
+        "memory_message_send",
+        json!({
+            "from_workspace": WS,
+            "from_project": A,
+            "to_workspace": WS,
+            "to_project": B,
+            "body": "the benchmark improved",
+            "nature": "measured",
+            "evidence": "   ",
+        }),
+    )
+    .await;
+    assert!(
+        refused.to_string().contains("evidence_required"),
+        "{refused}"
+    );
+    assert!(list(&h.router, B, "inbox").await.is_empty());
+
+    call(
+        &h.router,
+        "memory_message_send",
+        json!({
+            "from_workspace": WS,
+            "from_project": A,
+            "to_workspace": WS,
+            "to_project": B,
+            "body": "the lock probably expired",
+            "nature": "inferred",
+        }),
+    )
+    .await;
+    let inbox = list(&h.router, B, "inbox").await;
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0]["nature"], "inferred");
+    assert_eq!(inbox[0]["evidence"], Value::Null);
 }
 
 /// The messages array from a `memory_message_list` for `workspace/project`.
@@ -291,6 +356,71 @@ async fn sender_can_cancel_a_pending_message() {
     );
 }
 
+async fn assert_blank_message_id_preserves_mail(tool: &str, project: &str) {
+    let h = harness().await;
+    let first = send(&h.router, "first", "first request").await;
+    let second = send(&h.router, "second", "second request").await;
+    let pending = list(&h.router, B, "inbox").await;
+    assert_eq!(pending.len(), 2);
+
+    for message_id in ["", " \t\n ", "not-a-uuid"] {
+        let refused = call_rpc(
+            &h.router,
+            tool,
+            json!({ "workspace": WS, "project": project, "message_id": message_id }),
+        )
+        .await;
+        assert_eq!(refused["error"]["code"], -32602, "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("invalid message_id"),
+            "{refused}"
+        );
+        assert_eq!(list(&h.router, B, "inbox").await, pending);
+    }
+
+    // A padded UUID still selects the second message, not the oldest one.
+    let selected = call(
+        &h.router,
+        tool,
+        json!({ "workspace": WS, "project": project, "message_id": format!(" {second}\n") }),
+    )
+    .await;
+    if tool == "memory_message_pop" {
+        assert_eq!(selected["message"]["id"], second);
+    } else {
+        assert_eq!(selected["cancelled"], 1);
+    }
+    let remaining = list(&h.router, B, "inbox").await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["id"], first);
+
+    let omitted = call(
+        &h.router,
+        tool,
+        json!({ "workspace": WS, "project": project }),
+    )
+    .await;
+    if tool == "memory_message_pop" {
+        assert_eq!(omitted["message"]["id"], first);
+    } else {
+        assert_eq!(omitted["cancelled"], 1);
+    }
+    assert!(list(&h.router, B, "inbox").await.is_empty());
+}
+
+#[tokio::test]
+async fn blank_message_pop_id_preserves_pending_mail() {
+    assert_blank_message_id_preserves_mail("memory_message_pop", B).await;
+}
+
+#[tokio::test]
+async fn blank_message_cancel_id_preserves_pending_mail() {
+    assert_blank_message_id_preserves_mail("memory_message_cancel", A).await;
+}
+
 /// Cancel is scoped to the SENDER coordinate: the recipient calling cancel from
 /// its own project clears nothing and the message it received survives — the
 /// tool-surface mirror of the store's `recipient_cannot_cancel_the_senders_outbox`.
@@ -327,4 +457,71 @@ async fn recipient_cannot_cancel_the_senders_message() {
     )
     .await;
     assert_eq!(popped["message"]["id"].as_str(), Some(id.as_str()));
+}
+
+/// Measured evidence within the 1 000-character budget (including multibyte UTF-8)
+/// and the character-cap notice added for oversized inputs must survive the store
+/// boundary intact (#2283).
+#[tokio::test]
+async fn measured_evidence_within_char_budget_and_truncation_marker_survive() {
+    let h = harness().await;
+    let multibyte = format!("{} END", "界".repeat(500));
+    assert_eq!(multibyte.chars().count(), 504);
+    assert!(multibyte.len() > 1_000);
+
+    let sent_multibyte = call(
+        &h.router,
+        "memory_message_send",
+        json!({
+            "from_workspace": WS,
+            "from_project": A,
+            "to_workspace": WS,
+            "to_project": B,
+            "body": "benchmark result",
+            "nature": "measured",
+            "evidence": multibyte,
+        }),
+    )
+    .await;
+    let multibyte_id = sent_multibyte["message_id"].as_str().unwrap().to_string();
+
+    let oversized = "e".repeat(1_500);
+    let sent_oversized = call(
+        &h.router,
+        "memory_message_send",
+        json!({
+            "from_workspace": WS,
+            "from_project": A,
+            "to_workspace": WS,
+            "to_project": B,
+            "body": "long evidence result",
+            "nature": "measured",
+            "evidence": oversized,
+        }),
+    )
+    .await;
+    let oversized_id = sent_oversized["message_id"].as_str().unwrap().to_string();
+
+    let inbox = list(&h.router, B, "inbox").await;
+    let stored_multibyte = inbox
+        .iter()
+        .find(|m| m["id"].as_str() == Some(multibyte_id.as_str()))
+        .unwrap();
+    assert_eq!(
+        stored_multibyte["evidence"].as_str(),
+        Some(multibyte.as_str())
+    );
+
+    let stored_oversized = inbox
+        .iter()
+        .find(|m| m["id"].as_str() == Some(oversized_id.as_str()))
+        .unwrap();
+    let expected = format!(
+        "{}\n[message evidence truncated; 500 chars omitted]",
+        "e".repeat(1_000)
+    );
+    assert_eq!(
+        stored_oversized["evidence"].as_str(),
+        Some(expected.as_str())
+    );
 }

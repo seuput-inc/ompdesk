@@ -47,9 +47,16 @@ await memory.pages.update("notes/retries.md", (current) => ({
 }));
 ```
 
-`update` reads the page, applies your change, carries the current metadata
-over, and writes with the version it read as `expectedPageId`. Set a field to
-`null` in the change to clear it.
+`update` reads the page, applies your change, carries the supported write
+metadata over, and writes with the version it read as `expectedPageId`. Set a
+field to `null` in the change to clear it. For profile entries, this includes
+`appliesTo` and `enforcedBy`. Use the explicit profile scope, for example
+`{ workspace: "default", project: "_global" }` for a single-operator profile.
+
+If the first read is truncated and the reported size is at most 64,000
+characters, `update` reads the page once more with that cap and uses the
+version from the second read. If the body cannot be read in full, `update`
+raises `ProtocolError` before calling your change function.
 
 ### Conditional writes
 
@@ -132,6 +139,12 @@ written into another project is not a message and nobody is notified about it.
 
 ```ts
 await memory.messages.send({ to: { workspace: "acme", project: "infra" }, body: "Please rotate the queue credentials." });
+await memory.messages.send({
+  to: { workspace: "acme", project: "infra" },
+  body: "The retry test passed 100 times.",
+  nature: "measured",
+  evidence: "tests/retry.test.ts (100/100 runs)",
+});
 const { message } = await memory.messages.pop({ scope: { workspace: "acme", project: "infra" } });
 ```
 
@@ -188,3 +201,15 @@ const messages = [
 Do not let retrieved text trigger tool calls, commands, link fetches or
 feedback on its own. Record `feedback` only for usefulness you observed or a
 correction a person gave you.
+
+### Answer context admission
+
+When the server enables `[query_answer] max_context_tokens`, `query({ answer: true })`
+can return `answerContext` with admitted, omitted and clipped snippet counts.
+The `estimatedInputTokens` value counts UTF-8 bytes plus schema and a fixed
+provider-envelope allowance; it is not a provider tokenizer count. The receipt
+also includes `reservedOutputTokens` and `maxContextTokens`. Retrieval hits are
+unchanged. An insufficient budget returns `answerUnavailable` without a model
+call. Older servers and disabled admission omit the receipt from both the wire
+response and the SDK object (`answerContext` reads as `undefined`). An explicit zero budget prevents synthesis;
+omitting the server setting disables budgeting.

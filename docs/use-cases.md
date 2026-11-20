@@ -91,7 +91,7 @@
   the workstream immediately. If a linked native transcript was deleted,
   ai-memory detects the orphan before launch and starts fresh; `--fresh` forces
   that recovery for one harness. Managed mode currently covers Claude Code,
-  Codex, OpenCode, OpenCode 2 beta, Pi, Crush, Kimi Code, Command Code, Kiro CLI v2/v3, OMP,
+  Codex, OpenCode, Pi, Crush, Kimi Code, Command Code, Kiro CLI v2/v3, OMP,
   Grok Build CLI, Antigravity CLI, and GitHub Copilot CLI; direct harness launches remain unchanged. See
   [Managed cross-harness workstreams](managed-workstreams.md).
 - **"Just put me back where I was."** From any directory, with no name to
@@ -133,6 +133,11 @@
   `additionalContext`. Without the rule, ask Grok to list and then accept the
   handoff. Zero still must call `memory_handoff_list` then
   `memory_handoff_accept`.
+- **"What changed in this project recently?"** From a shell, `ai-memory recent`
+  lists the newest wiki pages, with RFC 3339 timestamps and relative ages.
+  Add `--global` to cover every project, or `--json` for a machine-readable
+  list. The agent's `memory_recent` tool is the same recency listing inside a
+  session.
 - **"What did we decide about X six weeks ago?"** Use `memory_query X` from
   the agent for FTS5 fused with entity matches and linked-page expansion (plus
   vector similarity when an embedder is configured). For a quick terminal-only

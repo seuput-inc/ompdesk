@@ -10,7 +10,7 @@ use tracing::debug;
 
 use crate::error::{LlmError, LlmResult};
 use crate::provider::LlmProvider;
-use crate::response::{provider_error_body, response_json_limited};
+use crate::response::{provider_error, response_json_limited};
 use reqwest::header::{HeaderName, HeaderValue};
 
 use crate::types::{
@@ -104,6 +104,7 @@ pub struct OpenAiProvider {
     model: String,
     dialect: RequestDialect,
     timeout: Duration,
+    stream: Option<bool>,
     reasoning_effort: Option<ReasoningEffort>,
     /// Operator-configured headers from `AI_MEMORY_LLM_HEADERS`. Applied
     /// last, so an explicit entry wins over any default below.
@@ -138,7 +139,9 @@ impl OpenAiProvider {
     /// # Errors
     /// Returns a `reqwest::Error` if the HTTP client cannot be built.
     pub fn new(api_key: SecretString, model: impl Into<String>) -> LlmResult<Self> {
-        let client = reqwest::Client::builder().build()?;
+        let client = reqwest::Client::builder()
+            .redirect(crate::redirect::same_origin_redirects())
+            .build()?;
         Ok(Self {
             client,
             api_key,
@@ -146,6 +149,7 @@ impl OpenAiProvider {
             model: model.into(),
             dialect: RequestDialect::Official,
             timeout: Duration::from_secs(crate::DEFAULT_REQUEST_TIMEOUT_SECS),
+            stream: None,
             reasoning_effort: None,
             extra_headers: ExtraHeaders::default(),
             client_headers: None,
@@ -168,6 +172,13 @@ impl OpenAiProvider {
     #[must_use]
     pub fn with_timeout_secs(mut self, secs: u64) -> Self {
         self.timeout = Duration::from_secs(secs);
+        self
+    }
+
+    /// Set the optional Chat Completions `stream` request field.
+    #[must_use]
+    pub(crate) fn with_stream(mut self, stream: Option<bool>) -> Self {
+        self.stream = stream;
         self
     }
 
@@ -267,6 +278,8 @@ impl OpenAiProvider {
 struct OpenAiRequest<'a> {
     model: &'a str,
     messages: Vec<OpenAiMsg<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -540,6 +553,7 @@ impl OpenAiProvider {
         OpenAiRequest {
             model: &self.model,
             messages,
+            stream: self.stream,
             max_tokens,
             max_completion_tokens,
             temperature,
@@ -633,13 +647,8 @@ impl OpenAiProvider {
             }
         };
         let resp = request.json(body).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = provider_error_body(resp).await;
-            return Err(LlmError::Provider {
-                status: status.as_u16(),
-                body,
-            });
+        if !resp.status().is_success() {
+            return Err(provider_error(resp).await);
         }
         response_json_limited::<OpenAiResponse>(resp).await
     }
@@ -647,10 +656,16 @@ impl OpenAiProvider {
 
 /// `true` when the engine reports the output stopped at the token budget
 /// rather than at a natural end. OpenAI and the local engines spell it
-/// `length`; engines that omit the field report `None` and are never
-/// truncated by this classifier.
+/// `length`. Some OpenAI-compatible gateways in front of Claude (seen with
+/// 9router relaying Claude Haiku) pass Anthropic's own `max_tokens` stop
+/// reason through unchanged
+/// (<https://docs.anthropic.com/en/api/handling-stop-reasons>). Engines that
+/// omit the field report `None` and are never truncated by this classifier.
 pub(crate) fn is_length_truncated(finish_reason: Option<&str>) -> bool {
-    finish_reason.is_some_and(|reason| reason.trim().eq_ignore_ascii_case("length"))
+    finish_reason.is_some_and(|reason| {
+        let reason = reason.trim();
+        reason.eq_ignore_ascii_case("length") || reason.eq_ignore_ascii_case("max_tokens")
+    })
 }
 
 /// Recursively normalise a JSON schema for OpenAI Structured Outputs
@@ -665,9 +680,13 @@ pub(crate) fn is_length_truncated(finish_reason: Option<&str>) -> bool {
 ///    a complete `required` array: `'required' is required to be supplied
 ///    and to be an array including every key in properties`.
 ///
-/// Both rules are unconditional here: this normalisation only runs on
-/// the `Official` request dialect, which targets `api.openai.com`
-/// where strict mode is mandatory. Any caller-supplied
+/// Numeric `format` annotations are also removed. OpenAI-compatible strict
+/// endpoints commonly reject schemars' `float`, `double`, `int32`, and
+/// `int64` hints even though they accept the underlying `number` or `integer`.
+/// String formats such as `date-time` remain intact.
+///
+/// The object rules are unconditional here: every caller of this helper emits
+/// an OpenAI-shaped strict schema. Any caller-supplied
 /// `additionalProperties: true` or trimmed `required` array is
 /// overwritten — preserving them would let invalid schemas through
 /// and re-introduce the 400 this function exists to prevent. Callers
@@ -696,6 +715,18 @@ pub(crate) fn enforce_strict_object_schemas(value: &mut serde_json::Value) {
             // the rewrite preserves the generated schema's accepted set.
             if let Some(one_of) = map.remove("oneOf") {
                 map.insert("anyOf".to_string(), one_of);
+            }
+            let numeric = map.get("type").is_some_and(|schema_type| {
+                let is_numeric = |value: &serde_json::Value| {
+                    matches!(value.as_str(), Some("number" | "integer"))
+                };
+                is_numeric(schema_type)
+                    || schema_type
+                        .as_array()
+                        .is_some_and(|types| types.iter().any(is_numeric))
+            });
+            if numeric {
+                map.remove("format");
             }
             let is_object = map
                 .get("type")
@@ -911,6 +942,26 @@ mod tests {
         assert_eq!(
             schema["properties"]["tags"]["items"]["additionalProperties"],
             json!(false)
+        );
+    }
+
+    #[test]
+    fn enforce_strict_removes_numeric_formats_but_keeps_string_formats() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "confidence": { "type": "number", "format": "float" },
+                "count": { "type": ["integer", "null"], "format": "int64" },
+                "created_at": { "type": "string", "format": "date-time" }
+            }
+        });
+        enforce_strict_object_schemas(&mut schema);
+
+        assert!(schema["properties"]["confidence"].get("format").is_none());
+        assert!(schema["properties"]["count"].get("format").is_none());
+        assert_eq!(
+            schema["properties"]["created_at"]["format"],
+            json!("date-time")
         );
     }
 
@@ -1439,6 +1490,9 @@ mod tests {
         // still classify, and every other stop reason must not.
         assert!(is_length_truncated(Some(" length ")));
         assert!(is_length_truncated(Some("LENGTH")));
+        // Anthropic's spelling, relayed as-is by some compatible gateways.
+        assert!(is_length_truncated(Some("max_tokens")));
+        assert!(is_length_truncated(Some("MAX_TOKENS")));
         assert!(!is_length_truncated(None));
         assert!(!is_length_truncated(Some("stop")));
         assert!(!is_length_truncated(Some("tool_calls")));
@@ -1455,6 +1509,30 @@ mod tests {
         let finish_reason = resp.choices.first().and_then(|c| c.finish_reason.clone());
         assert_eq!(finish_reason, None);
         assert!(!is_length_truncated(finish_reason.as_deref()));
+    }
+
+    #[test]
+    fn build_request_omits_stream_by_default() {
+        let request = chat_request();
+        let default_provider = provider_for("gpt-4o-mini");
+        let omitted = default_provider.build_request(&request, None);
+        assert!(
+            serde_json::to_value(omitted)
+                .unwrap()
+                .get("stream")
+                .is_none(),
+            "stream must remain omitted when the operator did not configure it"
+        );
+    }
+
+    #[test]
+    fn build_request_forwards_configured_stream() {
+        for stream in [false, true] {
+            let provider = provider_for("gpt-4o-mini").with_stream(Some(stream));
+            let chat = chat_request();
+            let request = provider.build_request(&chat, None);
+            assert_eq!(serde_json::to_value(request).unwrap()["stream"], stream);
+        }
     }
 
     #[test]
@@ -1642,6 +1720,38 @@ mod tests {
         assert!(
             requests[0].headers.get(REQUEST_ID_HEADER).is_none(),
             "the official provider must not gain the openai-compat header"
+        );
+    }
+
+    #[tokio::test]
+    async fn official_structured_completion_classifies_whitespace_as_empty_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "gpt-empty",
+                "choices": [{
+                    "message": { "content": "  \n\t" },
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let provider = OpenAiProvider::new(SecretString::from("sk-test"), "gpt-empty")
+            .unwrap()
+            .with_base_url(server.uri());
+
+        let error = provider
+            .complete_structured_raw(
+                ChatRequest::user_prompt("return JSON"),
+                serde_json::json!({"type": "object", "properties": {}}),
+            )
+            .await
+            .expect_err("whitespace-only output must be empty content");
+
+        assert_eq!(error.class(), "empty-content");
+        assert!(
+            matches!(error, crate::error::LlmError::EmptyContent { model } if model == "gpt-empty")
         );
     }
 }

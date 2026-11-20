@@ -534,6 +534,65 @@ async fn s1_per_tier_curves_differentiate_decay() {
 /// retention above `cold_threshold`, so it survives a sweep it would otherwise
 /// fail. The reinforcement touches only the access columns, never `updated_at`,
 /// so a genuinely old page stays old — it is the *reads* that keep it alive.
+/// The lint's stale rule only flags episodic pages, so its threshold follows
+/// the episodic half-life the sweep scores them with, not the scalar λ.
+#[tokio::test]
+async fn s1_lint_stale_follows_the_episodic_half_life() {
+    let fx = seed_fixture(false).await;
+    write(
+        &fx,
+        "sessions/unread.md",
+        Tier::Episodic,
+        false,
+        "a session nobody reopened",
+    )
+    .await;
+    backdate_latest(&fx, "sessions/unread.md", 60);
+
+    let stale_paths = |decay: DecayParams| {
+        let fx = &fx;
+        async move {
+            run_lint(
+                &fx.store.reader,
+                &fx.wiki,
+                None,
+                fx.ws,
+                fx.proj,
+                LintOptions {
+                    dry_run: true,
+                    use_llm: false,
+                    decay,
+                    ..LintOptions::default()
+                },
+            )
+            .await
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|f| f.kind == "stale")
+            .count()
+        }
+    };
+
+    assert_eq!(
+        stale_paths(DecayParams::default()).await,
+        1,
+        "60 days unread is stale at the default 30-day threshold"
+    );
+    let slow_episodic = DecayParams {
+        tier_lambda: TierLambdas {
+            episodic: Some(lambda_from_half_life_days(180.0)),
+            ..TierLambdas::default()
+        },
+        ..DecayParams::default()
+    };
+    assert_eq!(
+        stale_paths(slow_episodic).await,
+        0,
+        "a 180-day episodic half-life puts the threshold near day 156"
+    );
+}
+
 #[tokio::test]
 async fn s1_access_reinforcement_saves_a_cold_page() {
     // Control: an identical un-reinforced page is evicted, proving the fixture
@@ -682,13 +741,13 @@ async fn s1_dedup_collapses_near_duplicate_cold_pages() {
     );
 }
 
-/// A5. Contradiction lint. Two cold semantic pages whose embeddings sit in the
-/// 0.4–0.75 cosine band produce ONE advisory `contradiction` finding naming
+/// A5. Similarity lint. Two cold semantic pages whose embeddings sit in the
+/// 0.4–0.75 cosine band produce ONE advisory `similarity_candidate` naming
 /// both — and nothing is deleted or superseded (advisory only, invariant #16).
 /// Embeddings are seeded as exact 2-D unit vectors so the similarity is pinned
 /// squarely inside the band.
 #[tokio::test]
-async fn s1_contradiction_lint_flags_band_pair_without_deleting() {
+async fn s1_similarity_lint_flags_band_pair_without_deleting() {
     const PROVIDER: &str = "test-embedder";
     const MODEL: &str = "unit-2d";
     let fx = seed_fixture(false).await;
@@ -725,7 +784,7 @@ async fn s1_contradiction_lint_flags_band_pair_without_deleting() {
         LintOptions {
             dry_run: true,
             use_llm: false,
-            decay_lambda: 0.02,
+            decay: ai_memory_store::DecayParams::default(),
             embedding: Some(EmbeddingCoord {
                 provider: PROVIDER.into(),
                 model: MODEL.into(),
@@ -738,19 +797,20 @@ async fn s1_contradiction_lint_flags_band_pair_without_deleting() {
     .await
     .unwrap();
 
-    let contradictions: Vec<_> = report
+    let candidates: Vec<_> = report
         .findings
         .iter()
-        .filter(|f| f.kind == "contradiction")
+        .filter(|f| f.kind == "similarity_candidate")
         .collect();
     assert_eq!(
-        contradictions.len(),
+        candidates.len(),
         1,
         "one band pair ⇒ one finding: {:?}",
         report.findings
     );
-    let f = contradictions[0];
-    assert_eq!(f.severity, "info", "contradiction findings are advisory");
+    let f = candidates[0];
+    assert_eq!(f.severity, "info", "similarity candidates are advisory");
+    assert!(!report.findings.iter().any(|f| f.kind == "contradiction"));
     assert!(f.pages.contains(&"concepts/old-claim.md".to_string()));
     assert!(f.pages.contains(&"concepts/new-claim.md".to_string()));
     assert_eq!(
