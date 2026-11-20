@@ -1039,6 +1039,9 @@ pub struct TranscriptEnding {
     pub reported_done: bool,
     /// A prompt the person typed (neither an agent's wrapped message nor stock's synthetic one).
     pub person_prompted: bool,
+    /// A prompt came after the last assistant message (the person's, or an agent's wrapped instruction): `last` is
+    /// the answer to earlier work. A report or note arrives as stock's custom message and is no prompt.
+    pub prompted_after_answer: bool,
 }
 
 /// `ompdesk_report {kind: "done"}` to the opener: as the tool itself, or written to its device.
@@ -1065,6 +1068,7 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
     let mut last = None;
     let mut stop_reason = None;
     let mut person_prompted = false;
+    let mut prompted_after_answer = false;
     let mut reports: Vec<String> = Vec::new();
     let mut refused: HashSet<&str> = HashSet::new();
     for message in messages {
@@ -1082,6 +1086,7 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
                 }
                 // New work: a done report before it no longer speaks for what the session does now.
                 reports.clear();
+                prompted_after_answer = true;
                 if parse_agent_message(text).is_none() {
                     person_prompted = true;
                 }
@@ -1090,6 +1095,7 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
                 let text = content_text(message.content.as_ref());
                 let text = trim(&text);
                 last = (!text.is_empty()).then(|| text.to_owned());
+                prompted_after_answer = false;
                 stop_reason = message.stop_reason.clone();
                 if let Some(Content::Blocks(blocks)) = &message.content {
                     for block in blocks {
@@ -1119,6 +1125,7 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
         stop_reason: stop_reason.filter(|reason| !reason.is_empty()),
         reported_done: reports.iter().any(|id| !refused.contains(id.as_str())),
         person_prompted,
+        prompted_after_answer,
     }
 }
 

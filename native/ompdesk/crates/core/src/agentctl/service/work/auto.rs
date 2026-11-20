@@ -458,7 +458,13 @@ impl AgentControl {
             } else {
                 None
             };
-        let last: Option<&str> = session_last.or(ending.as_ref().and_then(|e| e.last.as_deref()));
+        // A prompt after its last answer (an opener's instruction the relaunch cut off before any reply) leaves no
+        // answer to that work: stock's last assistant text and the transcript's both answer earlier work.
+        let last: Option<&str> = if ending.as_ref().is_some_and(|e| e.prompted_after_answer) {
+            None
+        } else {
+            session_last.or(ending.as_ref().and_then(|e| e.last.as_deref()))
+        };
         let branch = match &tab.worktree {
             Some(worktree) => Some(
                 match self
