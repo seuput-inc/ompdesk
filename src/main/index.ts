@@ -63,6 +63,7 @@ import {
 	CLOSE_TO_TRAY_PREF,
 	closeToTrayEnabled,
 	KEEP_AWAKE_WORKING_PREF,
+	OMP_FOLLOW_VERIFIED_PREF,
 	RESUME_INTERRUPTED_PREF,
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
@@ -173,7 +174,7 @@ import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
 import { followSetupState } from "./omp-availability";
 import { OmpCompatSource } from "./omp-compat-source";
-import { holdNotice, OMP_HOLD_TOLD_PREF, parseHoldTold } from "./omp-hold-notice";
+import { heldSince, holdNotice, OMP_HELD_SEEN_PREF, OMP_HOLD_TOLD_PREF, parseHoldTold } from "./omp-hold-notice";
 import { creditSpendRun, SESSION_TAG_ENV } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
 import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
@@ -1289,7 +1290,14 @@ app.whenReady().then(async () => {
 		},
 		schedules: () => scheduleService,
 		sidebarProjects: () => sidebarProjects,
-		bridgeHealth: () => bridgeHealth.report(),
+		// With the omp update this computer holds back, for `ompdesk_app` `omp.bridge_health`.
+		bridgeHealth: () => {
+			const state = ompUpdater?.state();
+			const held = state?.held;
+			return held
+				? { ...bridgeHealth.report(), held: { ...held, installed: state?.installed ?? null } }
+				: bridgeHealth.report();
+		},
 		accountRotation: accountRotationDeps({
 			prefs: { get: key => prefsStore().get(key), set: (key, value) => prefsStore().set(key, value) },
 			tabs: () => sidecarPool.allSidecars(),
@@ -1749,8 +1757,10 @@ app.whenReady().then(async () => {
 	// omp keeps itself current (src/main/omp-updater.ts): a packaged app checks on its own; a test
 	// launch only with a fake installer and OMP_GUI_TEST_OMP_UPDATES=1 (the fake omp's `update --check`
 	// answers). OMPdesk's own update stays manual. It starts once machine setup's first pass has detected omp.
-	// It installs unasked only what the verified list names for this release (omp-compat-source.ts); a test launch
-	// reads that list from the file OMP_GUI_TEST_OMP_COMPAT names, and never from the network.
+	// By default it keeps 0.135.0's passes with the major guard. With the hidden pref `ompFollowVerified` it installs
+	// unasked only what the verified list names for this release (omp-compat-source.ts); a test launch reads that list
+	// from the file OMP_GUI_TEST_OMP_COMPAT names, and never from the network.
+	const followVerified = () => prefs.get(OMP_FOLLOW_VERIFIED_PREF) === true;
 	const testCompat = app.isPackaged ? undefined : process.env.OMP_GUI_TEST_OMP_COMPAT;
 	const compatSource = new OmpCompatSource({
 		file: join(app.getPath("userData"), "omp-compat.json"),
@@ -1762,9 +1772,10 @@ app.whenReady().then(async () => {
 							: new Response(null, { status: 404 })
 				: (url, init) => net.fetch(url, init),
 	});
-	// OMPdesk is the one owner of omp updates: stock's own `update.auto` is taken while the switch is on and given
-	// back when it goes off (omp-auto-takeover.ts), through stock's settings command on the omp OMPdesk runs. Only a
-	// launch that updates omp on its own touches it (never a dev run or a test that did not opt in).
+	// OMPdesk is the one owner of omp updates while it follows the verified list: stock's own `update.auto` is taken
+	// while that pref and "Keep tools up to date" are on and given back when either goes off (omp-auto-takeover.ts),
+	// through stock's settings command on the omp OMPdesk runs. Only a launch that updates omp on its own touches it
+	// (never a dev run or a test that did not opt in), and an OMPdesk that does not follow never reads it.
 	const ompUpdatesScheduled = testInstaller
 		? process.env.OMP_GUI_TEST_OMP_UPDATES === "1"
 		: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1";
@@ -1774,7 +1785,7 @@ app.whenReady().then(async () => {
 		return omp.runtime.run(args, { timeoutMs: 30_000, env: { NO_COLOR: "1", FORCE_COLOR: "0" } });
 	};
 	const stockAuto = new OmpAutoTakeover({
-		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
+		enabled: () => followVerified() && prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
 		read: () => readStockAuto(runOmpCli),
 		write: value => writeStockAuto(runOmpCli, value),
 		file: join(app.getPath("userData"), "omp-auto-takeover.json"),
@@ -1786,7 +1797,15 @@ app.whenReady().then(async () => {
 		scheduled: ompUpdatesScheduled,
 		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
 		fetchLatest: () => setup.latestOmp(),
+		follow: followVerified,
 		compat: async () => compatEntry((await compatSource.read()) ?? {}, appVersion()),
+		// When this computer first saw a version held for verification, kept across relaunches (omp-hold-notice.ts).
+		firstSeen: version => {
+			const seen = heldSince(prefs.get(OMP_HELD_SEEN_PREF), version, Date.now());
+			if (seen.store) prefs.set(OMP_HELD_SEEN_PREF, seen.store);
+			return seen.since;
+		},
+		newestWithin: major => setup.newestOmpIn(major),
 		stockAutoTaken: () => stockAuto.taken(),
 		installed: () => {
 			const presence = setup.state().items.find(item => item.id === "omp")?.presence;
@@ -1817,14 +1836,36 @@ app.whenReady().then(async () => {
 			}
 			// Devices that use this computer as their host show the same state.
 			devices.hostOmpUpdateChanged(state);
-			// An omp runners found breaking this release is told once, and once more after a day (omp-hold-notice.ts).
+			// A held omp under the verified list is told (omp-hold-notice.ts): one runners failed once and once more after
+			// a day, one still waiting for them after 6 hours and then every 24 hours.
 			const hold = holdNotice(state.held, parseHoldTold(prefs.get(OMP_HOLD_TOLD_PREF)), Date.now());
 			if (hold.notice) {
+				const { notice } = hold;
 				prefs.set(OMP_HOLD_TOLD_PREF, hold.told);
-				const params = { version: hold.notice.version, installed: state.installed ?? "", days: hold.notice.days };
+				logOmpUpdate("told", {
+					version: notice.version,
+					reason: notice.reason,
+					since: state.held?.since ?? null,
+					hours: notice.hours,
+					installed: state.installed,
+					count: hold.told?.count ?? null,
+				});
+				const params = { ...notice, installed: state.installed ?? "" };
+				const body =
+					notice.reason === "verifying"
+						? notice.days > 0
+							? "ompHold.verifyingBodyDays"
+							: "ompHold.verifyingBody"
+						: notice.days > 0
+							? "ompHold.bodyDays"
+							: "ompHold.body";
 				appNotification({
-					title: mainT("ompHold.title", undefined, params),
-					body: mainT(hold.notice.days > 0 ? "ompHold.bodyDays" : "ompHold.body", undefined, params),
+					title: mainT(
+						notice.reason === "verifying" ? "ompHold.verifyingTitle" : "ompHold.title",
+						undefined,
+						params,
+					),
+					body: mainT(body, undefined, params),
 				}).show();
 			}
 		},
@@ -2561,9 +2602,11 @@ app.whenReady().then(async () => {
 			}
 			if (key === RESUME_INTERRUPTED_PREF) turnResume.sync();
 			if (key === APP_AUTO_UPDATE_PREF) void appAutoUpdatePrefChanged();
-			if (key === TOOLS_AUTO_UPDATE_PREF) {
+			if (key === TOOLS_AUTO_UPDATE_PREF || key === OMP_FOLLOW_VERIFIED_PREF) {
 				updater.prefChanged();
 				if (ompUpdatesScheduled) void stockAuto.sync();
+			}
+			if (key === TOOLS_AUTO_UPDATE_PREF) {
 				cliToolUpdater.prefChanged();
 				extensionToolUpdater.prefChanged();
 			}

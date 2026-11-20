@@ -11,14 +11,17 @@ import { OmpAutoTakeover, takeoverStep } from "./omp-auto-takeover";
 
 /** Stock's settings: `value` undefined stands for no config file (stock's default, off). */
 function world(initial: boolean | undefined, enabled = true) {
-	const stock = { value: initial, writes: [] as boolean[] };
+	const stock = { value: initial, writes: [] as boolean[], reads: 0 };
 	const sw = { enabled };
 	const logs: string[] = [];
 	const file = join(mkdtempSync(join(tmpdir(), "omp-auto-takeover-")), "omp-auto-takeover.json");
 	const make = () =>
 		new OmpAutoTakeover({
 			enabled: () => sw.enabled,
-			read: async () => stock.value ?? false,
+			read: async () => {
+				stock.reads += 1;
+				return stock.value ?? false;
+			},
 			write: async value => {
 				stock.writes.push(value);
 				stock.value = value;
@@ -89,6 +92,14 @@ describe("OmpAutoTakeover", () => {
 		const w = world(undefined);
 		await w.make().sync();
 		expect(w.stock).toMatchObject({ value: undefined, writes: [] });
+	});
+
+	it("an OMPdesk that does not follow the verified list neither reads nor writes stock's config, launch after launch", async () => {
+		const w = world(true, false);
+		await w.make().sync();
+		await w.make().sync();
+		expect(w.stock).toMatchObject({ value: true, writes: [], reads: 0 });
+		expect(w.logs).toEqual([]);
 	});
 
 	it("does nothing while stock cannot say its value, and logs a write stock refused", async () => {

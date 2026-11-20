@@ -3,10 +3,11 @@
  * fake installer (`OMP_GUI_TEST_OMP_UPDATES=1`, `OMP_GUI_TEST_INSTALLER`; both are
  * needed for a test launch to check at all). The check runs on the fixture omp
  * with that omp's folder first on PATH and reports a newer release
- * (`OMP_GUI_TEST_LATEST_OMP`, `NEWER`) than the fixture (`FLOOR`); the verified
- * list (`OMP_GUI_TEST_OMP_COMPAT`, a file in place of the repository's
- * `omp-compat` branch) names it for this OMPdesk release, so main runs the
- * omp-update plan on its own while the tab keeps its process and its draft; once
+ * (`OMP_GUI_TEST_LATEST_OMP`, `NEWER`) than the fixture (`FLOOR`). With the
+ * hidden pref `ompFollowVerified` (`FOLLOW`), the verified list
+ * (`OMP_GUI_TEST_OMP_COMPAT`, a file in place of the repository's
+ * `omp-compat` branch) names it for this OMPdesk release, so main installs it on
+ * its own while the tab keeps its process and its draft; once
  * the installer reports the new version, main re-detects omp, restarts the idle
  * tab on it (the boot log shows the floor then the newer one), shows one "omp updated to
  * …" toast, and the restarted bridge's capabilities probe names a feature
@@ -14,7 +15,9 @@
  * installed on its own: Settings says it waits for the checks, "Update now"
  * installs it, and gui-runtime.jsonl says who did what. Stock's own
  * `update.auto` (`OMP_GUI_TEST_STOCK_CONFIG`) is turned off while the switch is
- * on and given back when it goes off.
+ * on and given back when it goes off. Without the pref (the default, an upgrade
+ * from 0.135.0) the same newer release installs within the tested major whatever
+ * the list says, and stock's config file stays byte for byte as it was.
  */
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -30,6 +33,8 @@ import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible } from "./har
 const UNVERIFIED = "99.0.0";
 /** This OMPdesk release: the verified list's key. */
 const APP_VERSION: string = JSON.parse(readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8")).version;
+/** The hidden pref that makes omp follow the verified list (desktop-prefs.ts `OMP_FOLLOW_VERIFIED_PREF`). */
+const FOLLOW = { ompFollowVerified: true };
 
 /**
  * The fake installer: logs each call; an omp install (`bun-global` for the Bun-owned fixture, `omp-update` for one no
@@ -161,9 +166,14 @@ async function launch(name: string, prefs: Record<string, unknown>, options: Lau
 	return { app, page, root, errors, omp };
 }
 
-async function close(launched: Launched): Promise<void> {
+/** Quit the app; `afterQuit` runs before its temp folder goes. */
+async function close(launched: Launched, afterQuit?: () => Promise<void>): Promise<void> {
 	await exitApp(launched.app);
-	await fs.rm(launched.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+	try {
+		await afterQuit?.();
+	} finally {
+		await fs.rm(launched.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+	}
 }
 
 const sidecarStatus = (page: Page) => page.evaluate(async () => (await window.omp.sidecar.getStatus()).status);
@@ -214,7 +224,7 @@ async function expectUpdated(launched: Launched): Promise<void> {
 
 test("a newer omp installs on its own; the idle tab restarts on it with its draft, and the probe runs again", async () => {
 	test.setTimeout(120_000);
-	const launched = await launch("auto", {});
+	const launched = await launch("auto", FOLLOW);
 	try {
 		const { page } = launched;
 		await expect.poll(() => sidecarStatus(page), { timeout: 30_000 }).toBe("ready");
@@ -250,11 +260,12 @@ test("a newer omp installs on its own; the idle tab restarts on it with its draf
 test("an omp runners have not verified waits: nothing installs on its own, Settings says why, Update now installs it; stock's own update is taken and given back", async () => {
 	test.setTimeout(120_000);
 	// No package manager owns this omp: nothing but a person's "Update now" may move it, through stock's `omp update`.
-	const launched = await launch(
-		"held",
-		{},
-		{ latest: UNVERIFIED, verified: [], stockConfig: { "update.auto": true }, bunOwned: false },
-	);
+	const launched = await launch("held", FOLLOW, {
+		latest: UNVERIFIED,
+		verified: [],
+		stockConfig: { "update.auto": true },
+		bunOwned: false,
+	});
 	try {
 		const { page } = launched;
 		const state = () => page.evaluate(() => window.omp.ompUpdate.getState());
@@ -321,6 +332,38 @@ test("an omp runners have not verified waits: nothing installs on its own, Setti
 		await expect.poll(() => updateLog(launched), { timeout: 30_000 }).toContain("stock-auto-given-back undefined");
 	} finally {
 		await close(launched);
+	}
+});
+
+test("without the hidden pref (an upgrade from 0.135.0) a newer omp of the tested major installs whatever the list says, and stock's config is never touched", async () => {
+	test.setTimeout(120_000);
+	const launched = await launch("off", {}, { verified: [], stockConfig: { "update.auto": true } });
+	const config = path.join(launched.root, "stock-config.json");
+	const before = await fs.readFile(config);
+	try {
+		const { page } = launched;
+		const state = () => page.evaluate(() => window.omp.ompUpdate.getState());
+		await expect.poll(() => sidecarStatus(page), { timeout: 30_000 }).toBe("ready");
+		// The list names nothing for this release, and the pass installs the newer release anyway, by name.
+		await expect.poll(() => installs(launched), { timeout: 30_000 }).toEqual(["omp bun-global"]);
+		await releaseInstaller(launched);
+		await expect.poll(state, { timeout: 30_000 }).toMatchObject({
+			phase: "idle",
+			installed: NEWER,
+			updatedTo: NEWER,
+			held: null,
+			failure: null,
+			stockAutoTaken: false,
+		});
+		expect((await state()).verified).toBeUndefined();
+		const log = await updateLog(launched);
+		expect(log.slice(0, 3)).toEqual(["checked launch", "started launch", "finished launch"]);
+		expect(log.filter(line => line.startsWith("stock-auto"))).toEqual([]);
+	} finally {
+		// Byte for byte, after the app has quit too.
+		await close(launched, async () => {
+			expect((await fs.readFile(config)).equals(before)).toBe(true);
+		});
 	}
 });
 

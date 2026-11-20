@@ -6844,6 +6844,10 @@ export const en: Record<string, string> = {
 		"omp {latest} failed OMPdesk's checks, so omp {installed} stays. It installs by itself once a fixed OMPdesk is out. Press the update button to install it anyway.",
 	"ompUpdate.held.failedDays":
 		"omp {latest} failed OMPdesk's checks {days} day(s) ago, so omp {installed} stays. It installs by itself once a fixed OMPdesk is out. Press the update button to install it anyway.",
+	"ompUpdate.held.verifyingHours":
+		"omp {latest} has waited {hours} hours for OMPdesk's checks, which usually take under an hour, so omp {installed} stays. Press the update button to install it now anyway.",
+	"ompUpdate.held.verifyingDays":
+		"omp {latest} has waited {days} day(s) for OMPdesk's checks, which usually take under an hour, so omp {installed} stays. Press the update button to install it now anyway.",
 	"ompUpdate.unverified":
 		"omp {version} hasn't passed OMPdesk's checks for this release (tested with omp {tested}). Some features may not work.",
 	"ompUpdate.stockAutoTaken":

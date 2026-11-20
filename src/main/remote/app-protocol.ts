@@ -883,7 +883,10 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTy
 	gone: z.array(ProjectPath).optional(),
 });
 
-/** `host.bridgeHealth.get` reply: the host's bridge self-check per omp version (bridge-health.ts `report`). */
+/**
+ * `host.bridgeHealth.get` reply: the host's bridge self-check per omp version (bridge-health.ts `report`), and the
+ * omp update it holds back.
+ */
 export const BridgeHealthReportSchema: z.ZodType<BridgeHealthReport> = z.object({
 	results: z.array(
 		z.object({
@@ -895,6 +898,14 @@ export const BridgeHealthReportSchema: z.ZodType<BridgeHealthReport> = z.object(
 			unreachable: z.string().optional(),
 		}),
 	),
+	held: z
+		.object({
+			version: z.string(),
+			reason: z.string(),
+			since: z.string().optional(),
+			installed: z.string().nullable(),
+		})
+		.optional(),
 });
 
 /** A host-level stats read waits for the host's own stats request (15 s) plus the link. */

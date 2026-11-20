@@ -1671,19 +1671,35 @@ async fn h_ui_open_system_privacy<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done 
     )))
 }
 
-/// The bridge's self-check per omp version on the caller's computer (the channel routes by `device`).
+/// The bridge's self-check per omp version on the caller's computer (the channel routes by `device`), then the newer
+/// omp that computer's updater holds back, if any.
 async fn h_omp_bridge_health<P: AppPorts>(ctx: Ctx<P>, _args: Args) -> Done {
     let args = ctx
         .device()
         .map_or(Vec::new(), |device| vec![json!(device)]);
     let report = ctx.invoke(BRIDGE_HEALTH_GET, args).await?;
+    let held = report.get("held").and_then(Value::as_object).map(|held| {
+        let since = held
+            .get("since")
+            .and_then(Value::as_str)
+            .map_or(String::new(), |since| format!(" since {since}"));
+        let installed = match held.get("installed") {
+            Some(Value::String(version)) => version.as_str(),
+            _ => "?",
+        };
+        format!(
+            "omp {} is held back ({}{since}): omp {installed} keeps running; Update now in Settings › Updates & about installs it.",
+            text_of(held.get("version")),
+            text_of(held.get("reason"))
+        )
+    });
     let results = records(report.get("results"));
-    if results.is_empty() {
-        return Ok(ActionResult::text(
-            "Nothing checked yet in this launch: the check runs when an omp's bridge first connects.",
-        ));
-    }
     let mut lines = Vec::new();
+    if results.is_empty() {
+        lines.push(
+            "Nothing checked yet in this launch: the check runs when an omp's bridge first connects.".to_string(),
+        );
+    }
     for result in results {
         let running = match finite(result.get("running")) {
             Some(count) if count > 0.0 => format!("{} running", js_number(count)),
@@ -1716,6 +1732,7 @@ async fn h_omp_bridge_health<P: AppPorts>(ctx: Ctx<P>, _args: Args) -> Done {
             }
         }
     }
+    lines.extend(held);
     Ok(ActionResult::text(lines.join("\n")))
 }
 

@@ -7,7 +7,12 @@
 import { RefreshCcw, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { TOOLS_AUTO_UPDATE_PREF } from "../../../shared/desktop-prefs";
-import type { OmpUpdateFailure, OmpUpdateHold, OmpUpdateState } from "../../../shared/omp-update";
+import {
+	type OmpUpdateFailure,
+	type OmpUpdateHold,
+	type OmpUpdateState,
+	VERIFYING_OVERDUE_MS,
+} from "../../../shared/omp-update";
 import { majorOf } from "../../../shared/version";
 import { saveGuiPreference } from "../../lib/display-preferences";
 import { useT } from "../../lib/i18n";
@@ -17,7 +22,8 @@ import { SettingsSwitchRow } from "./SettingsLayout";
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 /**
  * What is going on or newer; nothing while omp is current, unchecked or left to the person (the switch says so).
@@ -47,13 +53,24 @@ export function OmpUpdateFailureNotice({ state }: { state: OmpUpdateState }) {
 	);
 }
 
-/** What a held omp's line says: why nothing installed it, and that "Update now" does. */
+/**
+ * What a held omp's line says: why nothing installed it, for how long when that matters (a failed release from its
+ * first day on; one still waiting for runners once it is overdue), and that "Update now" installs it.
+ */
 function heldText(t: Translate, state: OmpUpdateState, held: OmpUpdateHold): string {
 	const params = { latest: held.version, installed: state.installed ?? "", tested: state.tested ?? "" };
-	if (held.reason !== "failed") return t(`ompUpdate.held.${held.reason}`, params);
 	const since = held.since ? Date.parse(held.since) : Number.NaN;
-	const days = Number.isNaN(since) ? 0 : Math.floor((Date.now() - since) / DAY_MS);
-	return days > 0 ? t("ompUpdate.held.failedDays", { ...params, days }) : t("ompUpdate.held.failed", params);
+	const age = Number.isNaN(since) ? 0 : Math.max(0, Date.now() - since);
+	const days = Math.floor(age / DAY_MS);
+	if (held.reason === "failed") {
+		return days > 0 ? t("ompUpdate.held.failedDays", { ...params, days }) : t("ompUpdate.held.failed", params);
+	}
+	if (held.reason === "verifying" && age >= VERIFYING_OVERDUE_MS) {
+		return days > 0
+			? t("ompUpdate.held.verifyingDays", { ...params, days })
+			: t("ompUpdate.held.verifyingHours", { ...params, hours: Math.floor(age / HOUR_MS) });
+	}
+	return t(`ompUpdate.held.${held.reason}`, params);
 }
 
 /**

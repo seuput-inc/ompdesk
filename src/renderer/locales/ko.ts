@@ -6827,6 +6827,10 @@ export const ko: Record<string, string> = {
 		"omp {latest} 판이 OMPdesk 검사를 통과하지 못해서 지금 쓰는 omp {installed} 판을 그대로 써요. 고친 OMPdesk가 나오면 저절로 올라가요. 그래도 올리려면 업데이트 버튼을 눌러 주세요.",
 	"ompUpdate.held.failedDays":
 		"omp {latest} 판이 {days}일 전 OMPdesk 검사를 통과하지 못해서 지금 쓰는 omp {installed} 판을 그대로 써요. 고친 OMPdesk가 나오면 저절로 올라가요. 그래도 올리려면 업데이트 버튼을 눌러 주세요.",
+	"ompUpdate.held.verifyingHours":
+		"omp {latest} 판이 {hours}시간째 OMPdesk 검사를 기다리고 있어요(보통 한 시간 안에 끝나요). 그래서 지금 쓰는 omp {installed} 판을 그대로 써요. 지금 올리려면 업데이트 버튼을 눌러 주세요.",
+	"ompUpdate.held.verifyingDays":
+		"omp {latest} 판이 {days}일째 OMPdesk 검사를 기다리고 있어요(보통 한 시간 안에 끝나요). 그래서 지금 쓰는 omp {installed} 판을 그대로 써요. 지금 올리려면 업데이트 버튼을 눌러 주세요.",
 	"ompUpdate.unverified":
 		"지금 쓰는 omp {version} 판은 이 OMPdesk에서 아직 검사를 통과하지 않았어요(omp {tested}에서 검증됨). 일부 기능이 동작하지 않을 수 있어요.",
 	"ompUpdate.stockAutoTaken":
