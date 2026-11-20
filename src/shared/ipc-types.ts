@@ -558,6 +558,11 @@ export type RuntimeErrorSource =
 	| "error-toast"
 	/** A background task failed without interrupting the user (e.g. saving prompt history). */
 	| "background-task"
+	/**
+	 * A call that reached the core after the quit or the shell's end shut it down (src/main/main-failures.ts): nothing
+	 * was left for it to do. `stack` names the caller; repeats of one caller fold into a count line.
+	 */
+	| "core-shutdown"
 	/** A launch timing mark (src/main/startup-timing.ts): `message` names it, `details.sinceLaunchMs` is when. */
 	| "startup-timing"
 	/** A relaunch's resume decision (src/main/turn-resume.ts `log`): `message` is launch, marker or continue. */

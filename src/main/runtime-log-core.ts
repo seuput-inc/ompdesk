@@ -27,6 +27,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"main-unhandled-rejection": true,
 	"error-toast": true,
 	"background-task": true,
+	"core-shutdown": true,
 	"startup-timing": true,
 	"turn-resume": true,
 	hub: true,
@@ -157,34 +158,161 @@ export function normalizeRuntimeErrorReport(value: unknown): RuntimeErrorReport 
 	};
 }
 
+/** A line repeated within this long of its last copy is counted, not written again. */
+const REPEAT_WINDOW_MS = 10_000;
+/** A repeat that never pauses still has its count written this often. */
+const REPEAT_REPORT_MS = 60_000;
+/** Distinct recent lines followed per file; past it the oldest has its count written and is forgotten. */
+const MAX_FOLDS = 64;
+
+/** One line written lately and the identical copies that came after it. */
+interface Fold {
+	readonly context: RuntimeLogContext;
+	readonly source: RuntimeErrorSource;
+	readonly message: string;
+	/** When the line, or its last count line, was written. */
+	since: number;
+	/** When the latest copy came. */
+	last: number;
+	/** Copies since `since` that were not written. */
+	count: number;
+}
+
+interface FileFolds {
+	/** Keyed by the whole line but its timestamp; in the order they were written. */
+	readonly lines: Map<string, Fold>;
+	timer: NodeJS.Timeout | null;
+}
+
+const foldsByFile = new Map<string, FileFolds>();
+let flushOnExit = false;
+
+/** Rotates a full log and appends one line; the caller made the folder. */
+function appendLine(filePath: string, entry: object): void {
+	try {
+		if (fs.statSync(filePath).size >= MAX_LOG_BYTES) {
+			const archivePath = `${filePath}.1`;
+			fs.rmSync(archivePath, { force: true });
+			fs.renameSync(filePath, archivePath);
+		}
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+	}
+	fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
+/** The line that stands for the copies of `fold` not written since `since`; none when there are none. */
+function writeCount(filePath: string, fold: Fold, now: number): void {
+	const { count, since, last } = fold;
+	fold.count = 0;
+	fold.since = now;
+	if (count === 0) return;
+	try {
+		appendLine(filePath, {
+			timestamp: new Date(last).toISOString(),
+			...fold.context,
+			source: fold.source,
+			message: `repeated ${count} times in ${last - since} ms`,
+			details: {
+				repeatOf: fold.message.slice(0, 200),
+				count,
+				spanMs: last - since,
+				first: new Date(since).toISOString(),
+			},
+		});
+	} catch {
+		// As every other line here: a failed write is lost, never a second failure.
+	}
+}
+
+/** Writes the count of every line whose copies stopped, and forgets it; returns the time the next one may stop. */
+function settleFolds(filePath: string, file: FileFolds, now: number): number | null {
+	let next: number | null = null;
+	for (const [key, fold] of file.lines) {
+		const ends = fold.last + REPEAT_WINDOW_MS;
+		if (ends <= now) {
+			writeCount(filePath, fold, now);
+			file.lines.delete(key);
+		} else if (next === null || ends < next) next = ends;
+	}
+	return next;
+}
+
+function armFolds(filePath: string, file: FileFolds, at: number | null): void {
+	if (file.timer !== null || at === null) return;
+	file.timer = setTimeout(
+		() => {
+			file.timer = null;
+			armFolds(filePath, file, settleFolds(filePath, file, Date.now()));
+			if (file.lines.size === 0) foldsByFile.delete(filePath);
+		},
+		Math.max(0, at - Date.now()),
+	);
+	file.timer.unref();
+}
+
+/** The counts not written yet go out as the process ends (an exit, or the crash a `main-uncaught` line precedes). */
+function flushAllFolds(): void {
+	for (const [filePath, file] of foldsByFile)
+		for (const fold of file.lines.values()) writeCount(filePath, fold, fold.last);
+}
+
 /**
  * Crash logging intentionally uses synchronous file I/O: renderer/process-gone
  * events may be the last useful callback before shutdown, so queued async writes
  * are not reliable enough here. Each write is a single bounded JSON line.
+ *
+ * A line identical to one written within {@link REPEAT_WINDOW_MS} of its last copy (same source, message, stack,
+ * details and context) is not written again: its copies become one line `repeated N times in T ms` under the same
+ * source, written when the copies stop, before the next new line, every {@link REPEAT_REPORT_MS} while they go on,
+ * and at exit. The 0.134.0 quit wrote 6,175 copies of one rejection in 0.23 s, and the two 4 MB files then held
+ * nothing of what came before it.
  */
 export function appendRuntimeLogAtPath(filePath: string, report: RuntimeLogReport, context: RuntimeLogContext): void {
 	try {
-		fs.mkdirSync(path.dirname(filePath), { recursive: true });
-		try {
-			if (fs.statSync(filePath).size >= MAX_LOG_BYTES) {
-				const archivePath = `${filePath}.1`;
-				fs.rmSync(archivePath, { force: true });
-				fs.renameSync(filePath, archivePath);
-			}
-		} catch (error) {
-			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-		}
-
 		// The renderer's reports reach here already through `normalizeRuntimeErrorReport` (ipc.ts); main's own keep
 		// their source's one structured detail.
 		const normalized = normalizeRuntimeErrorReport(report);
-		const entry = {
-			timestamp: new Date().toISOString(),
-			...context,
-			...normalized,
-			details: mainDetails(normalized.source, report.details),
-		};
-		fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, "utf8");
+		const line = { ...context, ...normalized, details: mainDetails(normalized.source, report.details) };
+		const key = JSON.stringify(line);
+		const now = Date.now();
+		let file = foldsByFile.get(filePath);
+		if (!file) {
+			file = { lines: new Map(), timer: null };
+			foldsByFile.set(filePath, file);
+		}
+		settleFolds(filePath, file, now);
+		const fold = file.lines.get(key);
+		if (fold) {
+			fold.count++;
+			fold.last = now;
+			if (now - fold.since >= REPEAT_REPORT_MS) writeCount(filePath, fold, now);
+			return;
+		}
+		// What repeated before this line is told before it.
+		for (const earlier of file.lines.values()) writeCount(filePath, earlier, now);
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		appendLine(filePath, { timestamp: new Date(now).toISOString(), ...line });
+		file.lines.set(key, {
+			context,
+			source: normalized.source,
+			message: normalized.message,
+			since: now,
+			last: now,
+			count: 0,
+		});
+		if (file.lines.size > MAX_FOLDS) {
+			for (const [oldestKey, oldest] of file.lines) {
+				writeCount(filePath, oldest, now);
+				file.lines.delete(oldestKey);
+				break;
+			}
+		}
+		armFolds(filePath, file, now + REPEAT_WINDOW_MS);
+		if (!flushOnExit) {
+			flushOnExit = true;
+			process.once("exit", flushAllFolds);
+		}
 	} catch {
 		// A crash logger must never trigger a second failure path.
 	}
