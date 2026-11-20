@@ -1673,22 +1673,19 @@ describe("InputArea run settings and modes", () => {
 		await click(option);
 	}
 
-	/** The chip's words: the provider mark's fallback letter is decoration. */
-	function modelChipText(chip: TestElement | null): string | undefined {
-		const element = chip as unknown as Element | null;
-		const mark = element?.querySelector("[data-provider-mark]")?.textContent ?? "";
-		return element?.textContent?.replace(mark, "");
-	}
-
 	it("keeps one calm toolbar at every width: the model and its effort, the Run chip", async () => {
 		useModelStore.setState({ model: { provider: "acme", id: "acme-opus-5", name: "Acme Opus 5" } });
 		for (const width of [1200, 600, 380]) {
 			setWindowWidth(width);
 			await mount();
-			const model = document.querySelector("button[data-model-chip]") as unknown as TestElement | null;
 			// The chip shows the display name and the effort (`Model · Thinking`); the id stays in its tooltip.
-			expect(modelChipText(model)).toBe(`Acme Opus 5· ${translate("input.thinking.name.high")}`);
-			expect(model?.getAttribute("aria-label" as never)).toContain(translate("input.thinking.name.high"));
+			expect(document.querySelector("[data-model-chip] .omp-composer-model-label")?.textContent).toBe("Acme Opus 5");
+			expect(document.querySelector("[data-model-chip] .omp-composer-effort")?.textContent).toBe(
+				`· ${translate("input.thinking.name.high")}`,
+			);
+			expect(document.querySelector("[data-model-chip] .sr-only")?.textContent).toContain(
+				translate("input.thinking.name.high"),
+			);
 			expect(document.querySelectorAll("button[data-composer-modes-trigger]").length).toBe(0);
 			const runSettings = document.querySelector("button[data-run-settings-trigger]");
 			expect(runSettings?.textContent).toContain(translate("input.runSettings.title"));
@@ -1702,14 +1699,13 @@ describe("InputArea run settings and modes", () => {
 	it("shows Auto alone on the model chip; the effort Auto picked stays in its name, a fixed level shows itself", async () => {
 		useModelStore.setState({ model: { provider: "acme", id: "acme-opus-5", name: "Acme Opus 5" } });
 		await mount();
-		const chip = () => document.querySelector("button[data-model-chip]") as unknown as TestElement | null;
 		const effort = () => document.querySelector("button[data-model-chip] .omp-composer-effort")?.textContent;
 		await act(async () => useModelStore.setState({ thinkingConfigured: "auto" }));
 		expect(effort()).toBe(`· ${translate("input.thinking.name.auto")}`);
 		await act(async () => useModelStore.setState({ thinkingAutoResolved: "xhigh" }));
 		expect(effort()).toBe(`· ${translate("input.thinking.name.auto")}`);
 		const resolved = translate("input.thinking.autoResolved", { level: translate("input.thinking.name.xhigh") });
-		expect(chip()?.getAttribute("aria-label" as never)).toContain(resolved);
+		expect(document.querySelector("[data-model-chip] .sr-only")?.textContent).toContain(resolved);
 		await act(async () => useModelStore.setState({ thinkingConfigured: "high" }));
 		expect(effort()).toBe(`· ${translate("input.thinking.name.high")}`);
 	});

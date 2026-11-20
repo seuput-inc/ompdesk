@@ -805,7 +805,7 @@ export const ko: Record<string, string> = {
 	"input.more.steeringAllDesc": "대기 중인 추가 지시를 하나씩이 아니라 한 번에 모두 전달해요.",
 	"input.more.interruptImmediate": "즉시 중단",
 	"input.more.interruptImmediateDesc": "추가 지시가 오면 실행 중인 도구를 기다리지 않고 바로 중단해요.",
-	"input.modelLabelThinking": "모델: {model}, 사고 수준 {level} — 모델 변경",
+	"input.modelLabelThinking": "모델 및 사고 수준: {model} · {level} — 모델 변경",
 	"input.modelStandIn": "이번 턴은 {chosen} 모델 대신 {model} 모델로 실행 중이에요",
 	"input.modelStoodIn": "지난 턴은 {chosen} 모델 대신 {model} 모델로 실행했어요",
 	"input.runChip.chords": "계획 {plan} · 사고 수준 순환 {thinking}",

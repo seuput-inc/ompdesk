@@ -147,8 +147,8 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	const modelLabel = model && !settingUp ? model.name || model.id : t("input.chooseModel");
 	// The chip beside the provider's mark leaves the brand word out ("Claude Opus 5.5" → "Opus 5.5") and names Auto
 	// alone, not the effort Auto picked; the tooltip, the accessible name and the picker keep both in full.
-	const chipLabel =
-		model && !settingUp ? chipModelName({ id: model.provider, name: model.provider }, modelLabel) : modelLabel;
+	const chipProvider = model && !settingUp ? { id: model.provider, name: model.provider } : null;
+	const chipLabel = chipProvider ? chipModelName(chipProvider, modelLabel) : modelLabel;
 	const thinking = useThinkingSelector();
 	const chipThinking = thinking === "auto" && supportsThinking ? t("input.thinking.name.auto") : thinkingName;
 	/** Said in the chip's tooltip and name while a fallback answers: the turn runs on it, the person's model stays. */
@@ -393,23 +393,13 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 					shortcut={actionKbd("model.select", keymapOverrides)}
 				>
 					<Button
-						aria-label={
-							model && !settingUp
-								? [t("input.modelLabelThinking", { model: modelLabel, level: thinkingName }), standInLine]
-										.filter(Boolean)
-										.join(". ")
-								: t("input.modelLabel", { model: modelLabel })
-						}
 						className="omp-composer-chip omp-composer-fold-4 min-w-0 max-w-64"
 						data-model-chip
 						data-model-standin={standInLine ? "" : undefined}
 						icon={
-							model && !settingUp ? (
+							chipProvider ? (
 								<span className="omp-model-mark">
-									<ProviderMark
-										className="size-(--sc-icon-md)"
-										provider={{ id: model.provider, name: model.provider }}
-									/>
+									<ProviderMark className="size-(--sc-icon-md)" provider={chipProvider} />
 								</span>
 							) : (
 								<Cpu aria-hidden />
@@ -420,12 +410,21 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						trailingIcon={<ChevronDown aria-hidden className="omp-composer-chevron text-(--sc-text-subtle)" />}
 						variant="ghost"
 					>
-						<span className="omp-composer-model-label truncate">{chipLabel}</span>
+						<span aria-hidden className="omp-composer-model-label truncate">
+							{chipLabel}
+						</span>
 						{model && !settingUp && (
-							<span className="omp-composer-effort shrink-0 font-normal text-(--sc-text-muted)">
+							<span aria-hidden className="omp-composer-effort shrink-0 font-normal text-(--sc-text-muted)">
 								· {chipThinking}
 							</span>
 						)}
+						<span className="sr-only">
+							{model && !settingUp
+								? [t("input.modelLabelThinking", { model: modelLabel, level: thinkingName }), standInLine]
+										.filter(Boolean)
+										.join(". ")
+								: t("input.modelLabel", { model: modelLabel })}
+						</span>
 					</Button>
 				</Tooltip>
 				{!settingUp && <ContextUsagePopover variant={phone ? "sheet" : "ring"} />}

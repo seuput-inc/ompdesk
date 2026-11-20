@@ -271,10 +271,11 @@ describe("model chip", () => {
 		});
 		await render();
 		const chip = container.querySelector("button[data-model-chip]") as unknown as HTMLElement;
-		// The provider mark's fallback letter is decoration; the words are the model and the effort.
-		const mark = chip.querySelector("[data-provider-mark]")?.textContent ?? "";
-		expect(chip.textContent?.replace(mark, "")).toBe(`Sonnet 5.5· ${translate("input.thinking.name.auto")}`);
-		expect(chip.getAttribute("aria-label")).toBe(
+		expect(chip.querySelector(".omp-composer-model-label")?.textContent).toBe("Sonnet 5.5");
+		expect(chip.querySelector(".omp-composer-effort")?.textContent).toBe(
+			`· ${translate("input.thinking.name.auto")}`,
+		);
+		expect(chip.querySelector(".sr-only")?.textContent).toBe(
 			translate("input.modelLabelThinking", { model: "Sonnet 5.5", level: translate("input.thinking.name.auto") }),
 		);
 	});
@@ -294,7 +295,7 @@ describe("model chip", () => {
 			`· ${translate("input.thinking.name.auto")}`,
 		);
 		const resolved = translate("input.thinking.autoResolved", { level: translate("input.thinking.name.high") });
-		expect(chip.getAttribute("aria-label")).toBe(
+		expect(chip.querySelector(".sr-only")?.textContent).toBe(
 			translate("input.modelLabelThinking", { model: "Claude Sonnet 5.5", level: resolved }),
 		);
 		const tip = await tooltipOf(chip);
@@ -313,11 +314,11 @@ describe("model chip", () => {
 		expect(chip().querySelector(".omp-composer-model-label")?.textContent).toBe("Fable 5.2");
 		expect(chip().hasAttribute("data-model-standin")).toBe(true);
 		const runs = translate("input.modelStandIn", { model: "GPT-6.1 SOL", chosen: "Claude Fable 5.2" });
-		expect(chip().getAttribute("aria-label")).toContain(runs);
+		expect(chip().querySelector(".sr-only")?.textContent).toContain(runs);
 		expect(await tooltipOf(chip())).toContain(runs);
 
 		await act(async () => useSessionStore.setState({ isStreaming: false }));
-		expect(chip().getAttribute("aria-label")).toContain(
+		expect(chip().querySelector(".sr-only")?.textContent).toContain(
 			translate("input.modelStoodIn", { model: "GPT-6.1 SOL", chosen: "Claude Fable 5.2" }),
 		);
 
@@ -325,7 +326,7 @@ describe("model chip", () => {
 		await act(async () => useModelStore.setState({ model: fable, chosenModel: null }));
 		expect(chip().hasAttribute("data-model-standin")).toBe(false);
 		expect(chip().querySelector(".omp-composer-model-label")?.textContent).toBe("Fable 5.2");
-		expect(chip().getAttribute("aria-label")).not.toContain("GPT-6.1 SOL");
+		expect(chip().querySelector(".sr-only")?.textContent).not.toContain("GPT-6.1 SOL");
 	});
 });
 

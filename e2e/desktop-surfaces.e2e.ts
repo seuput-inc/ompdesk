@@ -121,10 +121,10 @@ test("@smoke Model roles lists every purpose with its use, and a role is set thr
 		await expect(roles.locator("#model-role-smol")).toContainText("Quick, cheap work");
 		await captureTo(CAPTURES, page, "model-roles");
 
-		await roles.getByRole("button", { name: "Model for Fast", exact: true }).click();
+		await roles.getByRole("button", { name: /.+ Model for Fast$/ }).click();
 		await page.getByRole("option", { name: "Local fixture", exact: true }).first().click();
 		await expect(page.getByText(/Role "Fast" set to /)).toBeVisible();
-		await expect(roles.locator("#model-role-smol")).toContainText("Local fixture");
+		await expect(roles.getByRole("button", { name: "Local fixture Model for Fast", exact: true })).toBeVisible();
 		await captureTo(CAPTURES, page, "model-roles-set");
 		expect(launched.errors).toEqual([]);
 	} finally {

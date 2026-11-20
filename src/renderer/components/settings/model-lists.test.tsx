@@ -142,7 +142,7 @@ describe("every model list groups models by provider", () => {
 		useModelStore.setState({ providers: PROVIDERS });
 		useSessionStore.getState().setStatus("ready", "/repo");
 		await mount(<ModelRolesSection />);
-		await click(document.body.querySelector('button[aria-label="Model for Default"]'));
+		await click(document.body.querySelector('#model-role-default button[aria-haspopup="listbox"]'));
 		expect(shownGroups()).toEqual(GROUPED);
 	});
 
