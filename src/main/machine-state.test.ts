@@ -157,9 +157,10 @@ describe("machine state around a stall", () => {
 					...machine,
 					availMB: 7_168,
 					cpuBusyPct: 100,
-					appCpuPct: 6.5,
-					hostCpuPct: 1,
-					coreCpuPct: 0.5,
+					// The listing stands for when it was asked (1.2 s after the last one), not when the answer came.
+					appCpuPct: 8.1,
+					hostCpuPct: 1.3,
+					coreCpuPct: 0.6,
 					workersCpuPct: 0,
 					ompCpuPct: 0,
 					ompCount: 0,
@@ -167,6 +168,24 @@ describe("machine state around a stall", () => {
 				},
 			},
 		]);
+	});
+
+	it("measures a stall's fresh sample right after the watch's against an older one, never over a few ms", async () => {
+		const { lines, fresh, state, pass } = rig();
+		state.sample(READING, listing(1), [400], Date.now());
+		await pass(5_000, 0.5);
+		const watchAt = Date.now();
+		await pass(2_000, 0.5);
+		// The watch's listing was asked for 2 s ago and its answer comes now; the stall's fresh one 20 ms later.
+		state.sample(READING, listing(2), [400], watchAt);
+		state.stalled("hub");
+		fresh.afterMs = 20;
+		fresh.answer = [READING, listing(3)];
+		await pass(20, 0.5);
+		const after = lines.find(line => line.message === "hub after")?.details;
+		expect(after?.cpuBusyPct).toBe(50);
+		// Measured from the watch's listing, asked for 2 s before: OMPdesk's processes used 4.2 s of 8 processor-s.
+		expect(after?.appCpuPct).toBe(52.5);
 	});
 
 	it("takes a slow step for a stall only from two seconds of main's thread or of its wait on the core", async () => {
