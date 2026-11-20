@@ -6821,9 +6821,17 @@ export const ko: Record<string, string> = {
 	"ompUpdate.status.available": "새 omp를 받을 수 있어요 ({latest}). 설치된 버전: {version}.",
 	"ompUpdate.held.untested-major":
 		"새 omp {latest} 버전이 나왔지만 이 OMPdesk는 omp {tested}에서 검증했어요. 주 버전이 달라서 자동으로 올리지 않아요. 그래도 올리려면 업데이트 버튼을 눌러 주세요.",
+	"ompUpdate.held.verifying":
+		"새 omp {latest} 판이 나왔어요. OMPdesk 검사를 통과하면 저절로 올라가요(보통 한 시간 안). 지금 올리려면 업데이트 버튼을 눌러 주세요.",
+	"ompUpdate.held.failed":
+		"omp {latest} 판이 OMPdesk 검사를 통과하지 못해서 지금 쓰는 omp {installed} 판을 그대로 써요. 고친 OMPdesk가 나오면 저절로 올라가요. 그래도 올리려면 업데이트 버튼을 눌러 주세요.",
+	"ompUpdate.held.failedDays":
+		"omp {latest} 판이 {days}일 전 OMPdesk 검사를 통과하지 못해서 지금 쓰는 omp {installed} 판을 그대로 써요. 고친 OMPdesk가 나오면 저절로 올라가요. 그래도 올리려면 업데이트 버튼을 눌러 주세요.",
+	"ompUpdate.unverified":
+		"지금 쓰는 omp {version} 판은 이 OMPdesk에서 아직 검사를 통과하지 않았어요(omp {tested}에서 검증됨). 일부 기능이 동작하지 않을 수 있어요.",
+	"ompUpdate.stockAutoTaken":
+		"omp 자체 자동 업데이트는 꺼 두었어요. OMPdesk가 검사를 통과한 판으로만 omp를 올려요. 이 스위치를 끄면 다시 켜져요.",
 	"ompUpdate.tested": "omp {version}에서 검증됨",
-	"ompUpdate.untested":
-		"설치된 버전: omp {version}. 이 OMPdesk를 검증한 omp {tested}보다 주 버전이 높아서 일부 기능이 동작하지 않을 수 있어요.",
 	"ompUpdate.failure.check": "npm에서 새 omp를 확인하지 못했어요.",
 	"ompUpdate.failure.install": "omp 업데이트에 실패했어요.",
 	"ompUpdate.failure.not-updated": "omp 업데이트가 끝났지만 아직 최신 버전({latest})이 아니에요.",

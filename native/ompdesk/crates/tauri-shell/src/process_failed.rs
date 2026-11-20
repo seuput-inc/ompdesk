@@ -39,8 +39,9 @@ mod windows {
     use webview2_com::ProcessFailedEventHandler;
     use windows_core::Interface;
 
-    /// Subscribes the app page `wc` to its WebView2's `ProcessFailed` for the life of the WebView.
-    pub fn watch(webview: &tauri::Webview, wc: u64) -> Result<(), String> {
+    /// Subscribes an app page's WebView2 to its `ProcessFailed` for the life of the WebView: the GPU process's end goes
+    /// to Node as `app.childProcessGone`, which names no page.
+    pub fn watch(webview: &tauri::Webview) -> Result<(), String> {
         webview
             .with_webview(move |view| {
                 // SAFETY: Tauri hands this closure the live controller on the owning UI thread.

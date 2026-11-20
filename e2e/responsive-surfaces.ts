@@ -540,15 +540,12 @@ async function openSettingsDiskCare(page: Page, look: Look): Promise<void> {
 	if ((await measured.count()) === 0) await row.locator("[data-testid='disk-care-clean']").click();
 	await measured.waitFor({ state: "visible", timeout: 180_000 });
 	await row.locator("[data-testid='disk-care-clean']:not([disabled])").waitFor({ timeout: 180_000 });
-	// A pointer opens the row's (i) by resting on it, a finger by pressing it.
+	// A pointer opens the row's (i) by resting on it, a finger by tapping it. Never a mouse click on touch: its move
+	// in starts the hover timer (at once while a tooltip closed lately is warm) and the click then toggles the bubble
+	// shut (reverse parity, run 44634794678, phone).
 	const info = row.locator("[data-setting-info]");
-	await info.hover();
-	const shown = page.locator("[role='tooltip']").first();
-	const hovered = await shown.waitFor({ state: "visible", timeout: 2_000 }).then(
-		() => true,
-		() => false,
-	);
-	if (!hovered) await info.click();
+	if (touchLook(look)) await info.tap();
+	else await info.hover();
 }
 
 /**
@@ -819,6 +816,18 @@ async function showTranscriptStart(page: Page): Promise<void> {
 			await mounted.promise;
 		});
 	await holdAtTop(first);
+}
+
+/**
+ * Brings the transcript back to its end the way a reader does, with "Jump to latest": a surface before may have
+ * scrolled this same session up, and a window keeps its view of a session between surfaces (only the phone's page
+ * loads afresh). A scroll of our own would leave the pill over the transcript and the view unpinned. The pill stays
+ * in the page while the view follows its end, hidden from the pointer and the accessibility tree.
+ */
+async function showTranscriptEnd(page: Page): Promise<void> {
+	const latest = page.locator("[data-jump-to-latest]:not([aria-hidden])").first();
+	if ((await latest.count()) > 0) await latest.click();
+	await latest.waitFor({ state: "detached", timeout: 15_000 });
 }
 
 /**
@@ -1136,12 +1145,8 @@ export const SURFACES: readonly Surface[] = [
 		title: "The usage row under a reply: model, tokens, cache, cost, duration, first token, speed and time on one line",
 		// The fake omp's agent-desktop run (`tool-agent-desktop`) ends on a reply carrying every segment.
 		open: async page => {
-			// A surface before may have scrolled the transcript up: back to its end, where this reply is, as a reader
-			// does (a scroll of our own would leave "Jump to latest" over the row).
-			// The pill stays in the page while pinned, hidden from the pointer and the accessibility tree.
-			const latest = page.locator("[data-jump-to-latest]:not([aria-hidden])").first();
-			if ((await latest.count()) > 0) await latest.click();
-			await latest.waitFor({ state: "detached", timeout: 15_000 });
+			// A surface before may have scrolled the transcript up: back to its end, where this reply is.
+			await showTranscriptEnd(page);
 			await page.getByText("agent-desktop run finished.", { exact: true }).last().waitFor({ timeout: 15_000 });
 		},
 		ready: ".omp-usage-row",
@@ -1347,7 +1352,12 @@ export const SURFACES: readonly Surface[] = [
 		id: "transcript-turn-rail",
 		area: "A",
 		title: "Transcript of a 44-turn session at its newest turn, with the turn rail in the left gutter",
-		open: page => expectTurnRail(page, { first: 25 }),
+		// `transcript-turn-rail-scrolled` leaves this session at its third turn: captured after it, the rail's window
+		// stayed on turns 1 to 20 in the two views that keep their tab.
+		open: async page => {
+			await showTranscriptEnd(page);
+			await expectTurnRail(page, { first: 25 });
+		},
 		ready: ".omp-transcript-scroll",
 		settle: 600,
 		when: () => false,

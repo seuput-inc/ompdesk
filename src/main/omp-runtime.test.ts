@@ -244,7 +244,7 @@ describe("omp lookup", () => {
 		}
 	});
 
-	it("runs the omp Bun installed past an omp below the minimum earlier in the lookup (npm's, which setup leaves alone)", async () => {
+	it("runs the omp Bun installed past an omp below the minimum earlier in the lookup (one neither Bun nor npm owns, which setup leaves alone)", async () => {
 		const old = await fakeOmp("omp/18.0.0");
 		const older = await fakeOmp("omp/17.9.0");
 		const tested = await fakeOmp(`omp/${TESTED_OMP_VERSION}`);

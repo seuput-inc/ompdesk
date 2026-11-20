@@ -5558,9 +5558,13 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			for (const [name, from] of Object.entries(drafts)) fs.copyFileSync(from, nodePath.join(shots, name));
 			// Escaped as the bridge escapes a destination (a Windows path's backslashes).
 			const shot = (name: string) => nodePath.join(shots, name).replace(/[\\<>]/g, "\\$&");
+			// An id of its own, as stock gives every dialog (`Snowflake.next`, rpc-mode.ts `requestRpcDialog`). The parity
+			// sheet asks this three times in one session, once from each view, and under one id a view's close of the
+			// question before (its own answer still on its way, or "answered elsewhere") closed this one too: the card
+			// never showed there, and the host refused that view's later answers as already given.
 			write({
 				type: "extension_ui_request",
-				id: "fixture-ask-pictures",
+				id: `fixture-ask-pictures-${randomUUID()}`,
 				method: "ask",
 				questions: [
 					{

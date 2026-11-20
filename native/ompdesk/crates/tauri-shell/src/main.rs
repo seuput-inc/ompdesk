@@ -708,7 +708,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         .get_webview(&label)
         .ok_or_else(|| WireError::new("gone", "created app WebView missing"))?;
     #[cfg(windows)]
-    if let Err(error) = process_failed::watch(&webview, wc) {
+    if let Err(error) = process_failed::watch(&webview) {
         eprintln!("[tauri-shell] ProcessFailed not watched for wc {wc}: {error}");
     }
     let (initialized, ready) = tokio::sync::watch::channel(None);
@@ -1455,11 +1455,21 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 host::event("ipc.send", params);
                 return Ok(json!({}));
             }
+            let started = std::time::Instant::now();
             let answer = tauri::async_runtime::spawn_blocking(move || {
                 host::request_blocking("ipc.invoke", params, Duration::from_secs(180))
             })
             .await
             .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+            // A page call main never answered, or answered late, held what the page awaited behind it: name it.
+            let ms = started.elapsed().as_millis() as u64;
+            if ms >= 10_000 {
+                let code = answer.as_ref().err().map(|e| e.code.clone());
+                log::log(
+                    "ipc.invoke.slow",
+                    json!({"wcId":identity.wc,"channel":channel,"ms":ms,"code":code}),
+                );
+            }
             if !runtime()
                 .registry
                 .lock()

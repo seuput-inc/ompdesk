@@ -436,6 +436,8 @@ export class SidecarPool {
 	onWindowTabsChanged: ((win: ClientWindow, layout: PersistedTabLayout | null) => void) | null = null;
 	/** Some tab may have started or finished running a turn (keep-awake while working). */
 	onRunningChange: (() => void) | null = null;
+	/** Whether the tab's relaunch continuation is still owed (`TurnResume.relaunchContinuation`): an omp update waits. */
+	continuationOwed: ((tabId: string) => boolean) | null = null;
 	/**
 	 * A tab took or let go of a session file, on any path (acquire, the `session` identity, a session-id change, a
 	 * release): paired devices list which sessions a tab here holds (index.ts hands it to
@@ -861,7 +863,8 @@ export class SidecarPool {
 				const status = this.#handles.get(tab)?.sidecar.status;
 				if (status === undefined) return "skip";
 				const facts = { status, busy: item.busy === true };
-				return item.kind === "omp" ? ompRestartDecision(facts) : extensionApplyDecision(facts);
+				if (item.kind !== "omp") return extensionApplyDecision(facts);
+				return ompRestartDecision({ ...facts, resuming: this.continuationOwed?.(tab) === true });
 			}
 			case "mergePlans":
 				return mergeApplyPlans(item.a as ExtensionApplyPlan, item.b as ExtensionApplyPlan);
@@ -1426,11 +1429,18 @@ export class SidecarPool {
 
 	/**
 	 * omp on this computer was updated: every local tab moves to it (omp-restart.ts).
-	 * Idle tabs restart now on their session file; a tab in a turn restarts when it ends.
-	 * Returns how many tabs still wait. Tabs on paired hosts are the host's; a hosted view's omp is the device tab's.
+	 * Idle tabs restart now on their session file; a tab in a turn, or whose relaunch continuation is still owed
+	 * (`continuationOwed`), restarts when that ends. Returns how many tabs still wait. Tabs on paired hosts are the
+	 * host's; a hosted view's omp is the device tab's.
 	 */
 	restartOnNewOmp(): number {
 		return this.#call<number>("restartOnNewOmp");
+	}
+
+	/** The tab's relaunch continuation ended: a restart for the new omp that waited on it runs now (one tick later). */
+	ompRestartIfWaiting(tabId: string): void {
+		if (this.continuationOwed?.(tabId) === true) return;
+		this.#call("ompRestartIfWaiting", { tab: tabId });
 	}
 
 	/**

@@ -194,11 +194,10 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 		// Up to date now: the next check says so.
 		await expect(service.latestOmp()).resolves.toBe(newer.version);
 
-		// The registry's newest becomes a major above the tested omp: the check names it, the tested major's newest
-		// release is found beside it, and an update that names that release installs exactly it.
+		// The registry's newest becomes a major above the tested omp: the check names it, and an update that names an
+		// older release (what the verified list allows) installs exactly that one.
 		latest = beyond.version;
 		await expect(service.latestOmp()).resolves.toBe(beyond.version);
-		await expect(service.newestOmpIn(testedMajor)).resolves.toBe(tested.version);
 		expect(await service.updateOmp(tested.version, undefined, true)).toEqual({
 			kind: "updated",
 			version: tested.version,
@@ -274,14 +273,14 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 	}, 120_000);
 
 	for (const path of ["launch setup", "the repair path"] as const) {
-		it(`${path} leaves npm's too-old omp alone and installs the tested omp with Bun while the registry's newest is a higher major; OMPdesk then runs the tested one`, async () => {
+		it(`${path} leaves a too-old omp neither Bun nor npm owns alone and installs the tested omp with Bun while the registry's newest is a higher major; OMPdesk then runs the tested one`, async () => {
 			// 19 Nov 2026: stock `omp update` on such an omp takes no version and would install the registry's newest.
 			latest = beyond.version;
 			const slug = path === "launch setup" ? "launch" : "repair";
 			const npmOmp = await writeFakeOmp(join(root, `npm-${slug}`), 'console.log("omp/18.0.0");\n');
 			const bunRoot = join(root, `bun-${slug}`);
 			const bunOmp = join(bunRoot, "bin", windows ? "omp.exe" : "omp");
-			// OMPdesk's lookup: npm's omp comes first on PATH, Bun's own folder after it.
+			// OMPdesk's lookup: the other omp comes first on PATH, Bun's own folder after it.
 			const lookup = () => resolveOmpAmong([npmOmp, bunOmp].filter(existsSync), env.PATH ?? "");
 			const present: SetupPresence = { kind: "present", version: bunVersion, path: bun ?? "" };
 			const detect = async (): Promise<Detection> => {
@@ -340,7 +339,7 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 				["started", { path: "setup", method: "bun-global", command }],
 				["finished", { path: "setup", method: "bun-global", command, version: tested.version }],
 			]);
-			// npm's omp was never run to update itself: it is what it was, and the lookup passes over it.
+			// The other omp was never run to update itself: it is what it was, and the lookup passes over it.
 			expect(await resolveOmpAmong([npmOmp], env.PATH ?? "")).toMatchObject({
 				ok: false,
 				reason: { kind: "too-old", version: "18.0.0", bin: npmOmp },

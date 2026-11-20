@@ -223,7 +223,7 @@ Open(t, s) ==
 \* @code src/main/remote/host-services.ts:2383-2412 #closeTab ... listingChanged()
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:331-347 Ctx::release_entry: #releaseEntry lets the file go (#unregisterSessionFile); releaseTab -> #notifyWindowTabsChanged -> listingChanged
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:349-436 Ctx::release_detached
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1272-1279 Ctx::release_tab
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1285-1292 Ctx::release_tab
 Close(t) ==
     /\ ~Busy
     /\ (file[t] # NoS \/ t \in pendReg) /\ nChanges < MaxChanges

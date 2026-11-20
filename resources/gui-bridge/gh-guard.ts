@@ -108,7 +108,7 @@ export function quotaReading(
 		}
 	}
 	try {
-		const read = spawnSync(gh, ["api", "rate_limit"], { encoding: "utf8", env, timeout: 15_000 });
+		const read = spawnSync(gh, ["api", "rate_limit"], { encoding: "utf8", env, timeout: 15_000, windowsHide: true });
 		const reading = read.status === 0 ? parseRateLimit(read.stdout, Date.now()) : undefined;
 		if (!reading) return stored;
 		writeAtomic(file, JSON.stringify(reading));
@@ -159,7 +159,7 @@ function exitWith(status: number | null, signal: NodeJS.Signals | null): never {
 }
 
 function passThrough(gh: string, args: readonly string[]): never {
-	const run = spawnSync(gh, args, { stdio: "inherit" });
+	const run = spawnSync(gh, args, { stdio: "inherit", windowsHide: true });
 	if (run.error) {
 		process.stderr.write(`gh: ${run.error.message}\n`);
 		process.exit(1);
@@ -169,7 +169,12 @@ function passThrough(gh: string, args: readonly string[]): never {
 
 /** Runs one `gh api` read for the cache's bookkeeping; tab-separated fields, or undefined when it failed. */
 function apiFields(gh: string, path: string, jq: string, env: NodeJS.ProcessEnv): string[] | undefined {
-	const read = spawnSync(gh, ["api", path, "--jq", `${jq} | @tsv`], { encoding: "utf8", env, timeout: 30_000 });
+	const read = spawnSync(gh, ["api", path, "--jq", `${jq} | @tsv`], {
+		encoding: "utf8",
+		env,
+		timeout: 30_000,
+		windowsHide: true,
+	});
 	return read.status === 0 ? read.stdout.trim().split("\t") : undefined;
 }
 
@@ -268,6 +273,7 @@ async function serveLog(
 	const fetched = spawnSync(gh, attemptArgs(args, log, owner.attempt), {
 		stdio: ["inherit", "pipe", "inherit"],
 		maxBuffer: 1 << 30,
+		windowsHide: true,
 	});
 	if (fetched.status !== 0 || fetched.error) {
 		if (fetched.stdout?.length) await Bun.write(Bun.stdout, fetched.stdout);

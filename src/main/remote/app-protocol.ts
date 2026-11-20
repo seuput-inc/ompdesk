@@ -805,10 +805,16 @@ export const OmpUpdateStateSchema: z.ZodType<OmpUpdateState> = z.object({
 	updatedTo: z.string().nullable(),
 	failure: z.object({ reason: z.enum(OMP_UPDATE_FAILURE_REASONS), detail: z.string().optional() }).nullable(),
 	tested: z.string().optional(),
+	verified: z.array(z.string()).optional(),
 	held: z
-		.object({ version: z.string(), reason: z.literal("untested-major") })
+		.object({
+			version: z.string(),
+			reason: z.enum(["verifying", "failed", "untested-major"]),
+			since: z.string().optional(),
+		})
 		.nullable()
 		.optional(),
+	stockAutoTaken: z.boolean().optional(),
 });
 
 const ScheduleDraftSchema = z.object({
