@@ -145,9 +145,11 @@ export class WebContents extends EventEmitter implements PageRecord {
 		this.#host.post(method, { wcId: this.id, ...params });
 	}
 
-	/** `wc.op`, not awaited. */
+	/** `wc.op`, not awaited; a failure is logged with the op's name (never its arguments). */
 	op(op: string, args: Record<string, unknown> = {}): void {
-		this.#host.post("wc.op", { wcId: this.id, op, args });
+		this.#host.client.call("wc.op", { wcId: this.id, op, args }).catch((error: unknown) => {
+			this.#host.warn(`wc.op ${op}: ${error instanceof Error ? error.message : String(error)}`);
+		});
 	}
 
 	/** `wc.op`, awaited. */

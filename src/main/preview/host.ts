@@ -488,7 +488,13 @@ export function registerPreviewHost(
 		const id = randomUUID();
 		const stream =
 			osr && nextSeq
-				? new PageStream({ page: osrPage(contents), tab: id, geometry: DEFAULT_STREAM_GEOMETRY, nextSeq })
+				? new PageStream({
+						page: osrPage(contents),
+						tab: id,
+						geometry: DEFAULT_STREAM_GEOMETRY,
+						nextSeq,
+						onStarved: why => console.warn(`[preview-stream] no first frame for a waiting viewer: ${why}`),
+					})
 				: null;
 		const page: PreviewPage = {
 			id,
