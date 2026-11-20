@@ -6,7 +6,7 @@ use sha2::Sha256;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::{Position, Url};
 
-use crate::sessions;
+use crate::{hex, sessions};
 
 type ResourceMac = Hmac<Sha256>;
 pub(super) const MAX_SOURCE_URL: usize = 8192;
@@ -267,16 +267,6 @@ fn validate_media(source: &str) -> Result<(), String> {
         return Err("The app media gateway accepts only original media resource URLs".into());
     }
     Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut value = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        value.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        value.push(char::from(DIGITS[usize::from(byte & 15)]));
-    }
-    value
 }
 
 fn unhex(value: &str) -> Result<[u8; 32], String> {

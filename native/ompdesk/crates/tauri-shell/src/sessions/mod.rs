@@ -108,7 +108,7 @@ pub fn configure_app<'a, M: Manager<Wry>>(
         Storage::Persistent(name) => user_data
             .join("tauri-webview")
             .join("Partitions")
-            .join(format!("{:x}", Sha256::digest(name.as_bytes()))),
+            .join(crate::hex(&Sha256::digest(name.as_bytes()))),
         Storage::Memory => {
             return Err(
                 "in-memory Preview partitions must use their Chromium BrowserContext".into(),
