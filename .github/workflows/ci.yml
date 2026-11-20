@@ -401,7 +401,8 @@ jobs:
     needs: gate
     if: "!cancelled() && inputs.installer_check"
     runs-on: windows-latest
-    timeout-minutes: 30
+    # The build, the installs and the WebView2 crash checks took 27 of 30 minutes on a slow runner (run 44647544053).
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
