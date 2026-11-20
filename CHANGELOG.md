@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.137.0] - 2026-11-21
+
+어느 기기에서 보든 같은 호스트의 사이드바에 같은 프로젝트 순서, 세션 고정 위치, 보관 상태가 표시돼요.
+
+- 연결된 컴퓨터와 휴대폰에서도 호스트가 공유한 항목의 배치를 따라요. 비공개 항목은 보내지 않아요. 기기 자체의 표시 순서도 동기화해요.
+- 다른 컴퓨터의 탭이 잠들어 있어도 세션 목록과 결과 조회는 호스트의 실행 상태를 보여줘요. 처음 모델을 연결할 때는 공급자 목록 전체를 기다리지 않고 설정을 시작해요.
+- 재시작 뒤 출력 경로가 닫힌 프로세스를 알려요. 기본값은 출력 상대가 닫혔고 같은 프로세스가 30초 간격으로 세 번 모두 한 코어의 50% 이상을 쓴 경우에만 자동 종료해요. 하위 에이전트 작업·PTY·이름 붙인 서비스까지 복원하는 것은 아니에요.
+- 긴 세션의 작업 속도는 새로 추가된 기록만 읽어 계산해요. 반복 로그는 횟수로 묶고 macOS 메모리는 footprint로 측정해요. 숨긴 탭의 대화가 잠시 비거나 코어 응답이 끊길 때 진단할 기록을 추가했어요.
+- Windows에서 특수 문자가 포함된 인자를 Bun에서 `gh`로 넘길 수 있어요. 저장소 스크립트의 API 잔여량 보호는 유지돼요. 공유 체크아웃의 편집 기록을 갱신할 때는 변경분을 반영해요.
+
+<!-- en -->
+
+A host’s project order, pinned session positions and archived sessions now match across sidebar views.
+
+- Paired computers and phones follow the host’s layout for shared items. Private items stay on the host. The order of the devices themselves also syncs.
+- The session list and result lookup show whether a session is running on its host, even if the viewing computer’s tab is asleep. First-run model setup no longer waits for the entire provider list.
+- After a relaunch, OMPdesk reports processes with a closed output path. By default it ends one only when the output peer is confirmed closed and the same process uses at least 50% of one CPU core in three samples 30 seconds apart. A relaunch still does not restore subagent jobs, PTYs or named services.
+- Long sessions read only newly appended records to calculate pace. Repeated log lines are counted together, and macOS memory is measured by footprint. New diagnostics cover briefly empty transcripts on reopened tabs and lost core responses.
+- On Windows, Bun can pass arguments containing shell metacharacters to `gh`. Repository scripts still protect the API quota. Shared-checkout edit records update incrementally.
+
 ## [0.136.0] - 2026-11-20
 
 OMPdesk가 다시 뜰 때(업데이트, 재시작) 끊기던 일 가운데 많은 것이 이제 이어져요: 앞에서 돌던 명령은 20초까지 끝을 보고 다시 실행되지 않으며, `async` 백그라운드 작업, 카운트다운 중 보낸 첫 메시지, 쉬던 탭, 켤 때 omp 업데이트와 겹친 이어 하기가 이어져요.
