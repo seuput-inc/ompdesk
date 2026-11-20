@@ -1,0 +1,61 @@
+name: Phone renderer graph probe
+on:
+  push:
+    branches: [probe/01370-renderer-graph-20261121]
+permissions:
+  contents: read
+jobs:
+  graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Measure the release renderer
+        run: |
+          node --input-type=module <<'JS'
+          import {writeFileSync} from 'node:fs';
+          import {resolveConfig} from 'electron-vite';
+          import {build} from 'vite';
+          process.env.NODE_ENV_ELECTRON_VITE = 'production';
+          const {config} = await resolveConfig({logLevel:'warn'}, 'build', 'production');
+          const rc = config.renderer;
+          rc.build.write = false;
+          const clean = s => s.replaceAll(process.cwd() + '/', '');
+          const importers = {};
+          rc.plugins.push({name:'probe-importers', generateBundle(_, bundle) {
+            for (const item of Object.values(bundle)) if (item.type === 'chunk') for (const id of item.moduleIds) {
+              importers[clean(id)] = this.getModuleInfo(id).importers.map(clean);
+            }
+          }});
+          const {output} = await build(rc);
+          const byName = new Map(output.map(x => [x.fileName, x]));
+          const html = byName.get('web.html').source;
+          const entry = /<script type="module"[^>]*src="\.\/(assets\/[^"]+)"/.exec(html)[1];
+          const seen = new Set();
+          function visit(id) {
+            if (seen.has(id)) return;
+            seen.add(id);
+            const x = byName.get(id);
+            x.imports.forEach(visit);
+            if (id === entry) x.dynamicImports.filter(d => d.startsWith('assets/main-')).forEach(visit);
+          }
+          visit(entry);
+          const chunks = output.filter(x => x.type === 'chunk').map(x => ({name:x.fileName, eager:seen.has(x.fileName), bytes:Buffer.byteLength(x.code), imports:x.imports, dynamic:x.dynamicImports, modules:Object.entries(x.modules).map(([id,v]) => [clean(id),v.renderedLength])}));
+          const bytes = chunks.reduce((n,c) => n + (c.eager ? c.bytes : 0), 0);
+          const sessionList = /<meta name="omp-session-list" content="([^"]*)"/.exec(html)[1];
+          console.log('FIRST_SCREEN', bytes, 'FILES', seen.size, 'SESSION_LIST', sessionList);
+          for (const c of chunks.filter(c => c.eager)) console.log(c.name, c.bytes);
+          writeFileSync('renderer-graph.json', JSON.stringify({entry,bytes,sessionList,chunks,importers}));
+          JS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: renderer-graph
+          path: renderer-graph.json
+          retention-days: 2
+          if-no-files-found: error
