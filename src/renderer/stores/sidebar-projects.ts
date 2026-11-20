@@ -37,8 +37,6 @@ interface SidebarProjectsStore {
 	changeLayout: (device: string, layout: SidebarLayout, change: SidebarLayoutChange) => Promise<void>;
 	/** Read (again) a computer's list: at mount, and for a host each time its link comes up. */
 	load: (device?: string, read?: boolean) => void;
-	/** The person opened a folder there: it joins the list (a worktree as its project), removed before or not. */
-	add: (device: string | undefined, path: string) => void;
 	/** "Remove from sidebar": its sessions stay, listed under no project. */
 	remove: (device: string | undefined, path: string) => Promise<void>;
 	reset: () => void;
@@ -84,10 +82,6 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 			}
 			// A list that cannot be read keeps what was known; the sidebar still groups by sessions meanwhile.
 			if (read) void run(device, { action: "get" }).catch(() => undefined);
-		},
-		add: (device, path) => {
-			if (!path || !window.omp?.sidebarProjects) return;
-			void run(device, { action: "add", path }).catch(() => undefined);
 		},
 		remove: async (device, path) => {
 			const before = get().lists[keyOf(device)] ?? EMPTY_SIDEBAR_PROJECTS;

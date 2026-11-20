@@ -100,7 +100,6 @@ import {
 	setFocusedSessionRuntime,
 	useRuntimeTabId,
 } from "./session-runtime-context";
-import { useSidebarProjects } from "./sidebar-projects";
 import { installTabReadyGate, READY_WAIT_CAP_MS } from "./tab-ready-gate";
 import { ensureTabRuntime, replaceTabRuntime } from "./tab-runtime";
 import { toast, toastError } from "./toast";
@@ -1033,8 +1032,10 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				const resolvedCwd = result.cwd ?? cwd;
 				// A new session in a folder makes that folder a project of the sidebar (a worktree: its project), so it
 				// stays listed after the session goes. A reopened session's folder is listed already, or was removed.
-				if (kind === "agent" && !args?.sessionPath && !args?.work && !args?.placeholder)
-					useSidebarProjects.getState().add(device, resolvedCwd);
+				if (resolvedCwd && kind === "agent" && !args?.sessionPath && !args?.work && !args?.placeholder)
+					void window.omp.sidebarProjects
+						?.command({ action: "add", path: resolvedCwd }, device)
+						.catch(() => undefined);
 				// Attached as a viewer of a session another window holds: the tab is already running there, so its
 				// status, title and viewers come from the list rather than from a first ready push that never comes.
 				if (result.attached) await get().reconcileTabs();
