@@ -217,6 +217,19 @@ impl Inner {
         lock(&self.fates)
     }
 
+    /// The control tools closed `session`'s tab: kept in `fates` and told to main, whose `gui-runtime.jsonl` then
+    /// names the tab, its session file and `by` (C14: a close no line named left its processes' end unexplained).
+    pub fn fate_closed(&self, session: FatedSession, by: &str) {
+        self.host.fate("closed", &session, by);
+        self.fates().closed(session, by);
+    }
+
+    /// The control tools deleted `session`: as `fate_closed`.
+    pub fn fate_deleted(&self, session: FatedSession, by: &str, at: Option<f64>) {
+        self.host.fate("deleted", &session, by);
+        self.fates().deleted(session, by, at);
+    }
+
     /// `#cleanups`.
     pub fn cleanups(&self) -> MutexGuard<'_, PendingCleanups> {
         lock(&self.cleanups)

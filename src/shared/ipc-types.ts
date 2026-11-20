@@ -677,10 +677,14 @@ export type RuntimeErrorSource =
 	/**
 	 * What a closed session, or one the last launch did not bring back, left running and OMPdesk ended
 	 * (src/main/session-processes.ts): `message` is `ended`, `details` why (`closed`, `relaunch`), the session's folder,
-	 * file name and device, how many processes, how many had to be killed, their MB and names. `not ended` and
-	 * `refused…` (`level: "warn"`) say why nothing was ended.
+	 * file name and device, how many processes, how many had to be killed, their MB and names; `kept`/`keptNames` what
+	 * stock's workers held back, `retryMs` when the tag is tried once more. `not ended` and `refused…`
+	 * (`level: "warn"`) say why nothing was ended. `tab released` (details `tab`, `session`, `device`) is every tab that
+	 * left the pool, whoever closed it.
 	 */
 	| "session-processes"
+	/** An agent's close of a tab (src/main/agent-control/host.ts): `message` `agent close`, details `tab`, `by` (the caller's tab), `auto` (the opener's auto-close). */
+	| "agent-control"
 	/**
 	 * A start that waited for another live omp to let go of its session (src/main/session-free.ts): `message` says
 	 * whether it was let go or the wait ran out, `details` the session file's name and the wait.

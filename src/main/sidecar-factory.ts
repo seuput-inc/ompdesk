@@ -152,6 +152,7 @@ export type LocalSidecarFactory = (
 	fresh: boolean,
 	origin?: PromptOriginEnv,
 	web?: boolean,
+	tabId?: string,
 ) => SidecarManager;
 
 /** What the factory hands the coordinator: the status to overlay, and the bridge's autopilot frames. */
@@ -171,7 +172,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 	const lowerPriority = agentPriorityLowerer({
 		report: reason => writeRuntimeLog({ source: "process-priority", message: reason }),
 	});
-	return (cwd, kind, fresh, origin, web) => {
+	return (cwd, kind, fresh, origin, web, tabId) => {
 		const sc: SidecarManager = new SidecarManager({
 			lowerPriority,
 			// The status keeps this reason (Settings, the status snapshot); localize it in the UI language.
@@ -269,6 +270,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			...(deps.ledgerFile ? { ledgerFile: deps.ledgerFile } : {}),
 			...(deps.tuning ? { tuning: deps.tuning } : {}),
 			...(deps.sessionProcesses ? { sessionProcesses: deps.sessionProcesses } : {}),
+			...(tabId !== undefined ? { tabId } : {}),
 			// Test seam: the slow-start parity surface (e2e/parity.e2e.ts) waits seconds, not START_SLOW_MS.
 			...(Number(process.env.OMP_GUI_START_SLOW_MS) > 0
 				? { startSlowMs: Number(process.env.OMP_GUI_START_SLOW_MS) }

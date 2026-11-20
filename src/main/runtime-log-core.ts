@@ -59,6 +59,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"process-priority": true,
 	"omp-reap": true,
 	"session-processes": true,
+	"agent-control": true,
 	"session-owner": true,
 	"bridge-health": true,
 	"goal-time-limit": true,

@@ -171,7 +171,7 @@ impl AgentControl {
             tab,
             opener.and_then(|opener| opener.session_path.as_deref()),
         );
-        self.fates().closed(fated, by);
+        self.fate_closed(fated, by);
         if let Some(opener) = opener {
             self.mem().closed_openers.insert(
                 receiver_key(path, tab.device.as_deref()),
@@ -621,7 +621,7 @@ impl AgentControl {
                     target,
                     own.then_some(caller.session_path.as_deref()).flatten(),
                 );
-                self.fates().deleted(fated, &by_caller(caller), None);
+                self.fate_deleted(fated, &by_caller(caller), None);
             } else if flags.close {
                 let now = self.live(&caller.tab_id, &target.tab_id);
                 if let Some(now) = now
@@ -773,7 +773,7 @@ impl AgentControl {
             mem.closed_openers
                 .remove(&receiver_key(&row.path, row.device.as_deref()));
         }
-        self.fates().deleted(
+        self.fate_deleted(
             FatedSession {
                 ids: vec![row.id.clone()],
                 path: Some(row.path.clone()),

@@ -214,6 +214,8 @@ interface TagEntry {
 	survey?: Promise<Survey>;
 	/** When a tab of this launch took the tag over. */
 	takenAt?: number;
+	/** The tab of this launch that holds or last held it, for the log (never saved: tab ids are a launch's own). */
+	tab?: string;
 }
 
 /** A tab's hold on its tag. */
@@ -326,7 +328,7 @@ export class SessionProcesses {
 	 * A tag whose processes are being ended is never taken over (a session reopened while its closed tab's leftovers
 	 * are still going down starts clean).
 	 */
-	open(facts: SessionProcessFacts): SessionProcessHandle {
+	open(facts: SessionProcessFacts, tab?: string): SessionProcessHandle {
 		const key = facts.sessionPath === undefined ? undefined : sessionKey(facts.sessionPath);
 		let entry = key === undefined ? undefined : this.#left(key, facts.device)[0];
 		if (entry) {
@@ -337,6 +339,7 @@ export class SessionProcesses {
 			entry = { record: { tag: this.#newTag(), ...facts, since: this.#now() }, state: "live" };
 			this.#entries.set(entry.record.tag, entry);
 		}
+		if (tab !== undefined) entry.tab = tab;
 		this.#save();
 		const held = entry;
 		const scratch = this.#deps.scratch?.open(held.record.tag, facts.sessionPath) ?? undefined;
@@ -461,14 +464,15 @@ export class SessionProcesses {
 				this.#deps.log("not ended", {
 					level: "warn",
 					reason,
-					...this.#whose(record),
+					...this.#whose(entry),
 					error: error instanceof Error ? error.message : String(error),
 				});
 				return;
 			}
+			const retry = (result.kept.length > 0 || result.left.length > 0) && !entry.retried;
 			if (result.kept.length > 0 || result.left.length > 0) {
 				entry.state = "left";
-				if (!entry.retried) {
+				if (retry) {
 					entry.retried = true;
 					this.#later(() => {
 						if (entry.state === "left" && !this.#deps.frozen()) void this.#endEntry(entry, reason);
@@ -482,22 +486,24 @@ export class SessionProcesses {
 				this.#deps.log("refused: OMPdesk itself runs under this session's tag", {
 					level: "warn",
 					reason,
-					...this.#whose(record),
+					...this.#whose(entry),
 				});
 				return;
 			}
-			// A session that left nothing writes nothing: most closes.
-			if (result.ended.length === 0 && result.left.length === 0) return;
+			// A session that left nothing writes nothing: most closes. One that left only stock's workers says so, or the
+			// retry's line a minute later would name an end nobody saw start.
+			if (result.ended.length === 0 && result.left.length === 0 && result.kept.length === 0) return;
 			this.#deps.log("ended", {
 				level: result.left.length > 0 ? "warn" : "info",
 				reason,
-				...this.#whose(record),
+				...this.#whose(entry),
 				processes: result.ended.length,
 				forced: result.ended.filter(process => process.forced).length,
 				mb: Math.round(result.ended.reduce((sum, process) => sum + process.bytes, 0) / 1024 ** 2),
 				names: nameCounts(result.ended),
 				...(result.left.length > 0 ? { left: result.left.length, leftNames: nameCounts(result.left) } : {}),
-				...(result.kept.length > 0 ? { kept: result.kept.length } : {}),
+				...(result.kept.length > 0 ? { kept: result.kept.length, keptNames: nameCounts(result.kept) } : {}),
+				...(retry ? { retryMs: RETRY_REMAINING_MS } : {}),
 			});
 		})();
 		this.#ending.add(run);
@@ -505,8 +511,9 @@ export class SessionProcesses {
 		return run;
 	}
 
-	#whose(record: TagRecord): SessionProcessLogDetails {
+	#whose({ record, tab }: TagEntry): SessionProcessLogDetails {
 		return {
+			...(tab !== undefined ? { tab } : {}),
 			folder: record.cwd,
 			...(record.sessionPath !== undefined ? { session: basename(record.sessionPath) } : {}),
 			...(record.device !== undefined ? { device: record.device } : {}),
@@ -553,7 +560,7 @@ export class SessionProcesses {
 		const spinning = deaf.filter(row => (row.cpuPercent ?? 0) >= SPIN_PERCENT);
 		this.#deps.log("no reader", {
 			level: "warn",
-			...this.#whose(record),
+			...this.#whose(entry),
 			processes: deaf.length,
 			spinning: spinning.length,
 			found: JSON.stringify(
@@ -574,7 +581,7 @@ export class SessionProcesses {
 			this.#deps.log("not ended", {
 				level: "warn",
 				reason: "spinning without a reader",
-				...this.#whose(record),
+				...this.#whose(entry),
 				error: error instanceof Error ? error.message : String(error),
 			});
 			return { rows, ended: [] };
@@ -585,7 +592,7 @@ export class SessionProcesses {
 			this.#deps.log("ended", {
 				level: "info",
 				reason: "spinning without a reader",
-				...this.#whose(record),
+				...this.#whose(entry),
 				processes: ended.length,
 				forced: result.ended.filter(process => process.forced).length,
 				found: JSON.stringify(ended.map(row => this.#described(record, row))),

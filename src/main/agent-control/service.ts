@@ -427,6 +427,17 @@ export interface AgentControlHost {
 	discardWorktree(worktree: WorktreeRef, device?: string): Promise<WorktreeRemoval>;
 	/** Remember a session closed after its work landed, so its opener's family still lists it. */
 	recordClosed(child: ClosedChild): void;
+	/**
+	 * What the control tools did to a session, as the core keeps it in `agent-session-fates.json`: its tab, its file
+	 * and `by`, for `gui-runtime.jsonl` (source `agent-control`).
+	 */
+	fate?(fate: {
+		state: "closed" | "deleted";
+		tab?: string | null;
+		session?: string | null;
+		device?: string | null;
+		by: string;
+	}): void;
 	/** The sessions main closed after their work landed (`recordClosed`), newest last. */
 	closedChildren?(): readonly ClosedChild[];
 	/**
@@ -1184,6 +1195,7 @@ export class AgentControl {
 				told(() => host.notify(callerTabId, title, body)),
 			reviewChanged: ({ parentTabId }: { parentTabId: string }) => told(() => host.reviewChanged?.(parentTabId)),
 			recordClosed: ({ child }: { child: ClosedChild }) => tell(() => host.recordClosed(child)),
+			fate: (fate: Parameters<NonNullable<AgentControlHost["fate"]>>[0]) => tell(() => host.fate?.(fate)),
 			"appPorts.fire": ({ tabId, channel, args }: { tabId: string; channel: string; args: unknown[] }) =>
 				tell(() => apps().fire(tabId, channel, args)),
 			"appPorts.send": ({ tabId, event }: { tabId: string; event: Parameters<AppPortsLike["send"]>[1] }) =>

@@ -8,7 +8,7 @@
  */
 
 import { stat } from "node:fs/promises";
-import { isAbsolute, posix, resolve } from "node:path";
+import { basename, isAbsolute, posix, resolve } from "node:path";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	AGENT_CARD_PREFIX,
@@ -258,6 +258,8 @@ export interface AgentControlHostDeps {
 	 * `stillReleasable` is asked again after the release's awaits, right before it lets the tab go.
 	 */
 	releaseTab: (win: ClientWindow, tabId: string, stillReleasable: () => boolean) => Promise<boolean>;
+	/** One `gui-runtime.jsonl` line (source `agent-control`): an agent's close names the tab and who asked. */
+	log?: (message: string, details: Record<string, string | number | boolean>) => void;
 	/** Settings › Schedules (`ScheduleService`); absent or null where there is none. */
 	schedules?: () => Pick<ScheduleService, "command" | "create"> | null;
 	/** The app's own handlers `ompdesk_app` goes through (src/main/ipc.ts): the `IpcRegistry` for the window, `PREFS_SET`, the language. */
@@ -1269,6 +1271,13 @@ export class AgentControlRuntime {
 					discardOpenedWorktree(worktree, { openFolders: sessionOpenFolders }),
 				),
 			recordClosed: child => this.#recordClosed(child),
+			fate: ({ state, tab, session, device, by }) =>
+				deps.log?.(state, {
+					...(tab ? { tab } : {}),
+					...(session ? { session: basename(session) } : {}),
+					...(device ? { device } : {}),
+					by,
+				}),
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			tombstones: () => tombstones(),
 			hasSchedules: device => (device ? deps.remote !== undefined : deps.schedules?.() != null),

@@ -393,6 +393,8 @@ export interface SidecarOptions {
 	 * environment, and what still carries it ends once the tab is disposed. Absent (tests): no tag.
 	 */
 	sessionProcesses?: Pick<SessionProcesses, "open">;
+	/** The pool's id of the tab, for the session-process lines of the log (a paired host's view runs without one). */
+	tabId?: string;
 	/** How long a started omp may stay silent before its tab reads slow (`START_SLOW_MS`; tests shorten it). */
 	startSlowMs?: number;
 	/** How long a recovering start may wait on its resolve before `resolve-slow` (`RECOVERY_SLOW_MS`; tests shorten it). */
@@ -1390,7 +1392,7 @@ export class SidecarManager extends EventEmitter {
 				...(this.#options.promptOrigin ? { device: this.#options.promptOrigin.name } : {}),
 			};
 			if (this.#processes) this.#processes.update(whose);
-			else this.#processes = this.#options.sessionProcesses?.open(whose) ?? null;
+			else this.#processes = this.#options.sessionProcesses?.open(whose, this.#options.tabId) ?? null;
 			const launch: OmpLaunch = {
 				open: ask.open,
 				...(bridgeDir && ask.bridgeAddress ? { bridge: { dir: bridgeDir, address: ask.bridgeAddress } } : {}),

@@ -168,7 +168,7 @@ impl AgentControl {
             self.mem().closing.remove(&child);
             if matches!(closed, Ok(TabClose::Closed)) {
                 let fated = self.fated(&tab, opener_session.as_deref());
-                self.fates().closed(fated, fate_by::ORPHAN);
+                self.fate_closed(fated, fate_by::ORPHAN);
             }
         }
     }
@@ -539,7 +539,7 @@ impl AgentControl {
         {
             return false;
         }
-        self.fates().deleted(
+        self.fate_deleted(
             self.fated(tab, caller.session_path.as_deref()),
             fate_by::THROWAWAY,
             None,

@@ -1178,7 +1178,7 @@ app.whenReady().then(async () => {
 		},
 	});
 	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web) => {
-		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web);
+		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web, tabId);
 		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
 		// back, for this machine's toast (no record and no repair here: the host keeps and repairs its own).
 		const sc = devices.createSidecar(device, tabId, cwd, kind, fresh);
@@ -2795,10 +2795,21 @@ app.whenReady().then(async () => {
 	}
 	// After the saved windows (and so their tabs) exist: go on with what the last process left running.
 	turnResume.launch();
-	// A restored tab closed before it ever started gives up what the last launch left for its session.
+	// Every tab that leaves the pool, so a later `ended … closed` line has the tab and the time its close began. A
+	// restored tab closed before it ever started gives up what the last launch left for its session.
 	sidecarPool.observeTabs(activity => {
-		if (activity.type === "released" && activity.session && activity.session.device === undefined)
-			sessionProcesses.sessionReleased(activity.session.path);
+		if (activity.type !== "released") return;
+		const session = activity.session;
+		writeRuntimeLog({
+			source: "session-processes",
+			message: "tab released",
+			details: {
+				tab: activity.tabId,
+				...(session ? { session: basename(session.path) } : {}),
+				...(session?.device !== undefined ? { device: session.device } : {}),
+			},
+		});
+		if (session && session.device === undefined) sessionProcesses.sessionReleased(session.path);
 	});
 	void sessionProcesses.sweep({
 		keep: keptSessions,

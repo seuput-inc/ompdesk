@@ -26,6 +26,7 @@ use crate::agentctl::app::AppState;
 use crate::agentctl::journal::Clock;
 use crate::agentctl::journal::attachments::{AttachedSet, AttachmentStore, LandedCache};
 use crate::agentctl::journal::mail_outbox::{MailAnswer, MailOutbox, OutboxMail};
+use crate::agentctl::journal::session_fates::FatedSession;
 use crate::agentctl::rules::mail::MailDelivery;
 use crate::ports::Port;
 
@@ -937,6 +938,21 @@ impl Host {
     /// `recordClosed(child)`: remember a session closed after its work landed.
     pub fn record_closed(&self, child: &ClosedChild) {
         self.port.tell("recordClosed", &json!({ "child": child }));
+    }
+
+    /// `fate(state, tab, session, device, by)`: what the control tools did to a session, for main's log (`fates`
+    /// keeps the same).
+    pub fn fate(&self, state: &str, session: &FatedSession, by: &str) {
+        self.port.tell(
+            "fate",
+            &json!({
+                "state": state,
+                "tab": session.ids.first(),
+                "session": session.path,
+                "device": session.device,
+                "by": by,
+            }),
+        );
     }
 }
 
