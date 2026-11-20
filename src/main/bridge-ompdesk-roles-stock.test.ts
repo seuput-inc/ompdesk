@@ -50,10 +50,9 @@ export default function (pi) {
    const roles = async () => Object.fromEntries((await methods.model_roles({}, env)).roles.map(role => [role.id, role]));
    const set = async (role, value) => {
     try {
-     await methods.model_role_set({ role, modelId: value }, env);
-     return null;
+     return { answer: await methods.model_role_set({ role, modelId: value }, env) };
     } catch (error) {
-     return error instanceof Error ? error.message : String(error);
+     return { error: error instanceof Error ? error.message : String(error) };
     }
    };
    const picks = () => (fs.existsSync(process.env.OMP_GUI_OMPDESK_ROLES) ? JSON.parse(fs.readFileSync(process.env.OMP_GUI_OMPDESK_ROLES, "utf8")) : null);
@@ -67,7 +66,7 @@ export default function (pi) {
     });
     return { model: resolve(patterns), role: role ?? null };
    };
-   const row = all => all.review ? { origin: all.review.origin, model: all.review.model ?? null, effective: all.review.effective } : null;
+   const row = all => all.review ? { origin: all.review.origin, model: all.review.model ?? null, effective: all.review.effective, waitingPick: all.review.waitingPick ?? null } : null;
    const out = { A, B, PARENT, SLOW, chat: chat.map(sel) };
    const configBefore = bytes();
    // A runtime role from someone else (stock's --plan flag does this): must survive every OMPdesk write.
@@ -82,7 +81,7 @@ export default function (pi) {
    out.knownHasReview = getKnownRoleIds(settings).includes("review");
    out.securityEmpty = security();
 
-   out.setError = await set("review", A);
+   out.setAnswer = await set("review", A);
    all = await roles();
    out.picked = row(all);
    out.pickedReview = resolve(["@review"]);
@@ -95,7 +94,7 @@ export default function (pi) {
    out.configUnchanged = bytes() === configBefore;
    out.globalReview = settings.getGlobalModelRole("review") ?? null;
 
-   out.clearError = await set("review", null);
+   out.clearAnswer = await set("review", null);
    all = await roles();
    out.cleared = row(all);
    out.clearedReview = resolve(["@review"]);
@@ -134,6 +133,12 @@ interface Row {
 	origin: string;
 	model: string | null;
 	effective: { model?: string; source: string; via?: string };
+	waitingPick: string | null;
+}
+
+interface SetAnswer {
+	answer?: { role: string; modelId: string | null; overriddenBy?: { layer: string; value: string } };
+	error?: string;
 }
 
 interface Probe {
@@ -165,8 +170,8 @@ interface Probe {
 	hook: string;
 	hookBundled: unknown;
 	hookOwn: unknown;
-	setError: string | null;
-	clearError: string | null;
+	setAnswer: SetAnswer;
+	clearAnswer: SetAnswer;
 }
 
 /** The private agent dir's environment: a throwaway OpenAI key is the only credential. */
@@ -235,6 +240,13 @@ import { install } from "./ompdesk-roles";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 export default function (pi) {
+ // What the bridge logs, kept for the probe's answer (and still logged).
+ const traced = [];
+ const info = pi.logger.info.bind(pi.logger);
+ pi.logger.info = (message, details) => {
+  if (message === "gui-bridge: model role set") traced.push(details);
+  return info(message, details);
+ };
  install(pi);
  const session = () => pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
  const sel = model => model.provider + "/" + model.id;
@@ -255,15 +267,20 @@ export default function (pi) {
   const chat = session().modelRegistry.getAvailable().filter(model => modelKind(model) === "chat");
   const A = sel(chat[0]);
   await methods.model_role_set({ role: "review", modelId: A }, env);
-  console.error("PRESET_READY=" + JSON.stringify({ A }));
+  // Any writer of a role into config.yml, stock's own included, leaves one line naming its callers.
+  session().settings.setModelRole("slow", A);
+  console.error("PRESET_READY=" + JSON.stringify({ A, traced }));
  });
 }
 `;
 
 /** Runs PRESET_PROBE, sends `/modelpreset save mine`, then `switch mine`, then reads the probe and config.yml. */
-async function runPresetSession(
-	delayMs = 0,
-): Promise<{ A: string; review: string | null; config: Record<string, unknown> }> {
+async function runPresetSession(delayMs = 0): Promise<{
+	A: string;
+	traced: Array<{ role: string; from: string | null; to: string | null; caller?: string[] }>;
+	review: string | null;
+	config: Record<string, unknown>;
+}> {
 	const { isolated, extension } = isolatedBridge(
 		PRESET_PROBE.replaceAll("__DELAY__", String(delayMs)),
 		"ompdesk-roles-preset-probe.ts",
@@ -313,6 +330,7 @@ async function runPresetSession(
 		const configFile = join(isolated, "config.yml");
 		return {
 			A: JSON.parse(ready?.slice("PRESET_READY=".length) ?? "{}").A,
+			traced: JSON.parse(ready?.slice("PRESET_READY=".length) ?? "{}").traced ?? [],
 			review: JSON.parse(after?.slice("PRESET_PROBE=".length) ?? "{}").review,
 			config: existsSync(configFile)
 				? ((parse(readFileSync(configFile, "utf8")) ?? {}) as Record<string, unknown>)
@@ -355,7 +373,8 @@ describe.skipIf(!existsSync(omp))("OMPdesk roles on stock omp", () => {
 		expect(probe.pickedReview).toBe(A);
 		expect(probe.pickedChild).toBe(A);
 		expect(probe.securityPicked).toEqual({ model: probe.SLOW, role: "slow" });
-		expect(probe.setError).toBeNull();
+		expect(probe.setAnswer).toEqual({ answer: { role: "review", modelId: A } });
+		expect(probe.picked?.waitingPick).toBeNull();
 		expect(probe.picks).toEqual({ review: A });
 		expect(probe.configUnchanged).toBe(true);
 		expect(probe.globalReview).toBeNull();
@@ -364,7 +383,7 @@ describe.skipIf(!existsSync(omp))("OMPdesk roles on stock omp", () => {
 		// Cleared: back on the chain, the pick gone from the file.
 		expect(probe.cleared).toMatchObject({ model: null, effective: { source: "fallback", via: "advisor" } });
 		expect(probe.clearedReview).toBe(probe.emptyReview);
-		expect(probe.clearError).toBeNull();
+		expect(probe.clearAnswer).toEqual({ answer: { role: "review", modelId: null } });
 		expect(probe.clearedPicks).toEqual({});
 
 		// The held tier yields to a user's own agent file of that name.
@@ -386,22 +405,28 @@ describe.skipIf(!existsSync(omp))("OMPdesk roles on stock omp", () => {
 		});
 		expect(probe.emptyReview).toBe(own);
 		expect(probe.securityEmpty.model).toBe(own);
-		// Setting and clearing the role never rewrite config.yml and never claim a change that config.yml overrides:
-		// both are refused with the value in force and where it is set, and no pick is stored to wait behind it.
-		expect(probe.setError).toContain(`modelRoles.review is set to ${own} in config.yml`);
-		expect(probe.clearError).toContain(`modelRoles.review is set to ${own} in config.yml`);
+		// Setting and clearing the role never rewrite config.yml. The pick is stored and waits behind the user's own
+		// value, and the answer and the row say so instead of claiming the role changed.
+		const waits = { layer: "global", value: own };
+		expect(probe.setAnswer).toEqual({ answer: { role: "review", modelId: probe.A, overriddenBy: waits } });
+		expect(probe.clearAnswer).toEqual({ answer: { role: "review", modelId: null, overriddenBy: waits } });
+		expect(probe.picked).toMatchObject({ model: own, waitingPick: probe.A });
 		expect(probe.pickedReview).toBe(own);
-		expect(probe.picks).toBeNull();
+		expect(probe.picks).toEqual({ review: probe.A });
 		expect(probe.configUnchanged).toBe(true);
 		expect(probe.globalReview).toBe(own);
 		expect(probe.clearedReview).toBe(own);
-		expect(probe.clearedPicks).toBeNull();
+		expect(probe.cleared?.waitingPick).toBeNull();
+		expect(probe.clearedPicks).toEqual({});
 		expect(probe.configUnchangedAfterClear).toBe(true);
 		expect(probe.clearedGlobalReview).toBe(own);
 	}, 260_000);
 
 	it("keeps a held review out of a saved preset and out of config.yml through /modelpreset save and switch", async () => {
-		const { A, review, config } = await runPresetSession();
+		const { A, traced, review, config } = await runPresetSession();
+		// The slow role the probe wrote through stock's own setter: one line, with the frames that called it.
+		expect(traced).toEqual([{ role: "slow", from: null, to: A, caller: expect.any(Array) }]);
+		expect(traced[0]?.caller?.length).toBeGreaterThan(0);
 		const presets = config.modelPresets as Record<string, { modelRoles?: Record<string, string> }> | undefined;
 		// The save landed (the command ran), without review; switching back to it wrote no review either.
 		expect(presets?.mine, JSON.stringify(config)).toBeDefined();

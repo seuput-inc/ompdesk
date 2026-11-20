@@ -13,6 +13,7 @@
 
 import { RefreshCw, Tags } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { z } from "zod";
 import {
 	HIDDEN_ROLE_IDS,
 	ROLE_ORDER,
@@ -35,6 +36,11 @@ import { SettingsSection } from "./SettingsLayout";
 import { modelRoleName } from "./schema-i18n";
 
 const GROUP_ORDER: readonly RoleGroupId[] = ["conversation", "agent", "io"];
+
+/** `set_model_role`'s answer: `overriddenBy` when config.yml or a project config sets the role, so the pick waits. */
+const SetRoleAnswer = z.object({
+	overriddenBy: z.object({ layer: z.enum(["global", "project"]), value: z.string() }).optional(),
+});
 
 /** Rows within a group: OMPdesk's preferred order, then the roles it does not know in the order stock lists them (the sort is stable). */
 function rank(entry: ModelRoleEntry): number {
@@ -132,12 +138,29 @@ export function ModelRolesSection() {
 		try {
 			const res = await tabRpc.setModelRole(role, modelId);
 			if (res.success) {
-				toast({
-					variant: "success",
-					message: modelLabel
-						? t("modelRoles.set", { role: roleLabel, model: modelLabel })
-						: t("modelRoles.cleared", { role: roleLabel }),
-				});
+				// OMPdesk's own role while config.yml or a project config sets it: the pick is stored and waits.
+				const waits = SetRoleAnswer.safeParse(res.data).data?.overriddenBy;
+				const where = waits?.layer === "project" ? t("modelRoles.where.project") : "config.yml";
+				toast(
+					waits
+						? {
+								variant: "warning",
+								message: modelLabel
+									? t("modelRoles.pickWaits", {
+											role: roleLabel,
+											model: modelLabel,
+											value: waits.value,
+											where,
+										})
+									: t("modelRoles.pickClearedWaits", { role: roleLabel, value: waits.value, where }),
+							}
+						: {
+								variant: "success",
+								message: modelLabel
+									? t("modelRoles.set", { role: roleLabel, model: modelLabel })
+									: t("modelRoles.cleared", { role: roleLabel }),
+							},
+				);
 				await load();
 			} else {
 				toastError({ title: t("modelRoles.failed"), error: res });

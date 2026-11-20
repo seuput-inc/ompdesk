@@ -2635,6 +2635,8 @@ export interface ModelRoleEntry extends ModelRoleMetadata {
 	effective?: ModelRoleEffective;
 	/** Backend-filtered eligible models; never shared with the chat picker. */
 	candidates: ModelRoleCandidate[];
+	/** OMPdesk's own role only: the pick stored while config.yml or a project config sets the role (not in force). */
+	waitingPick?: string;
 }
 
 /** `resources/gui-bridge/role-effective.ts`: the model a role really runs on. */

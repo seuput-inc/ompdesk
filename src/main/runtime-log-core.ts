@@ -72,6 +72,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	memory: true,
 	sidebar: true,
 	"transcript-seed": true,
+	"model-roles": true,
 	unknown: true,
 };
 

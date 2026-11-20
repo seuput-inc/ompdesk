@@ -759,6 +759,11 @@ export type RuntimeErrorSource =
 	 * was last written under (`written`, `writtenAgoMs`); a path key carries the file's name only.
 	 */
 	| "transcript-seed"
+	/**
+	 * A settled change of `modelRoles` in omp's config.yml, whoever wrote it (src/main/model-roles-watch.ts), info
+	 * level: `details.changes` (`role: before → after; …`) and `details.omps`, the pids omp-pids.json named then.
+	 */
+	| "model-roles"
 	| "unknown";
 
 /** Bounded, serializable renderer/main failure payload written as JSONL. */

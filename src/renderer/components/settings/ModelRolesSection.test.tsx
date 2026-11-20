@@ -237,6 +237,28 @@ describe("ModelRolesSection", () => {
 		expect(setModelRole).not.toHaveBeenCalled();
 	});
 
+	it("shows a review pick that waits behind the value config.yml sets", async () => {
+		const review = {
+			...ROLES[0],
+			id: "review",
+			name: "Review",
+			tag: undefined,
+			origin: "ompdesk",
+			source: "global",
+			model: "openai/gpt:high",
+			waitingPick: "anthropic/claude",
+		};
+		installRpc(async () => ({ success: true, data: { roles: [review] } }));
+		useSessionStore.getState().setStatus("ready", "/repo");
+
+		await mount(<ModelRolesSection />);
+
+		expect(roleTrigger("Review")?.textContent).toContain("GPT");
+		expect(document.body.querySelector("[data-model-role-waiting-pick]")?.textContent).toBe(
+			"OMPdesk's pick Claude waits: config.yml sets this role",
+		);
+	});
+
 	it("says why the list cannot refresh instead of claiming no roles are configured", async () => {
 		const { getModelRoles } = installRpc();
 		// No ready sidecar: the read never happens, which is a different answer

@@ -1473,11 +1473,14 @@ export function runRpcUi(): void {
 		modelRoles.default = "anthropic/claude-fable-5-2";
 		modelRoles.task = "anthropic/claude-opus-5-5";
 	}
-	// `OMP_GUI_TEST_ROLE_THINKING=<level>`: every role value carries `:<level>`, as a person writes one into config.yml
-	// (a parity capture of role rows whose value has a thinking suffix).
+	// `OMP_GUI_TEST_ROLE_THINKING=<level>` (with OMP_GUI_TEST_MODELS): every role value carries `:<level>`, as a person
+	// writes one into config.yml, and OMPdesk's review role is listed with such a value and a pick of OMPdesk's that waits
+	// behind it (`waitingPick`): a parity capture of the rows both change.
 	const roleThinking = process.env.OMP_GUI_TEST_ROLE_THINKING;
-	if (roleThinking)
+	if (roleThinking) {
 		for (const [role, id] of Object.entries(modelRoles)) if (id) modelRoles[role] = `${id}:${roleThinking}`;
+		modelRoles.review = `anthropic/claude-opus-4-1:${roleThinking}`;
+	}
 	/**
 	 * `OMP_GUI_TEST_CONFIG_YML=1`: settings and model roles persist in `$PI_CODING_AGENT_DIR/config.yml`, as stock keeps
 	 * them: read when this omp starts (nested keys become setting paths, `modelRoles` the roles) and written on every
@@ -1555,6 +1558,7 @@ export function runRpcUi(): void {
 		{ id: "advisor", name: "Advisor", tag: "ADVISOR", color: "accent", section: "chat" },
 		...(fallbackData ? [{ id: "task", name: "Task", tag: "TASK", section: "chat" }] : []),
 		{ id: "commit", name: "Commit messages", section: "kind" },
+		...(roleThinking ? [{ id: "review", name: "Review", section: "chat", origin: "ompdesk" }] : []),
 	];
 	const modelsPageMethods: Record<string, (params: Params, reply: Reply) => unknown> = {
 		model_roles: () => ({
@@ -1572,6 +1576,7 @@ export function runRpcUi(): void {
 					name: entry.name,
 					kind: "chat",
 				})),
+				...(roleThinking && meta.id === "review" ? { waitingPick: "anthropic/claude-sonnet-4-5" } : {}),
 			})),
 		}),
 		model_role_metadata: () => ({ roles: ROLE_META }),

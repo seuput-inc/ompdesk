@@ -171,6 +171,7 @@ import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
 import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { createMenu } from "./menu";
+import { ledgerPids, watchModelRoles } from "./model-roles-watch";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
@@ -1075,6 +1076,18 @@ app.whenReady().then(async () => {
 		})
 		.finally(() => core().call("sidecar.holdStarts", { hold: false }))
 		.catch(() => undefined);
+	// Every change of config.yml's model roles, whoever writes it, with the omps running then (model-roles-watch.ts).
+	const ledger = ompProcesses.file;
+	watchModelRoles({
+		configFile: join(agentDir(), "config.yml"),
+		pids: () => ledgerPids(ledger),
+		log: (changes, pids) =>
+			writeRuntimeLog({
+				source: "model-roles",
+				message: "config.yml model roles changed",
+				details: { level: "info", changes: changes.join("; "), omps: pids.join(",") },
+			}),
+	});
 	// Whose the processes a tab's omp starts are: they end once the tab is closed, and this launch ends what the
 	// sessions the last one did not bring back left running (session-processes.ts).
 	const diskCareLog = (message: string, details: Record<string, unknown>): void =>

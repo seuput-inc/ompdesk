@@ -1401,18 +1401,35 @@ async fn h_models_set_role<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
     let model_id = str_arg(&args, "modelId");
     let device = device_of(&args);
     let role = arg(&args, "role");
-    ctx.rpc(
-        json!({"type": "set_model_role", "role": role, "modelId": model_id}),
-        device,
-    )
-    .await?;
+    let answer = ctx
+        .rpc(
+            json!({"type": "set_model_role", "role": role, "modelId": model_id}),
+            device,
+        )
+        .await?;
     let on = device.map_or(String::new(), |device| format!(" on {device}"));
-    let what = match model_id {
-        Some(model) => format!("Role {role} now uses {model}"),
-        None => format!("Role {role} cleared"),
+    // OMPdesk's own role (review) while config.yml or a project config sets it: the pick is stored
+    // and waits.
+    let waits = answer.get("overriddenBy").and_then(|by| {
+        let value = by.get("value")?.as_str()?;
+        let place = match by.get("layer")?.as_str()? {
+            "project" => "this project's config",
+            _ => "config.yml",
+        };
+        Some(format!(
+            "; {place} sets {role} to {value}, which wins until it is changed or removed there"
+        ))
+    });
+    let what = match (model_id, &waits) {
+        (Some(model), Some(waits)) => {
+            format!("Saved {model} as OMPdesk's pick for {role}{on}{waits}")
+        }
+        (None, Some(waits)) => format!("Cleared OMPdesk's pick for {role}{on}{waits}"),
+        (Some(model), None) => format!("Role {role} now uses {model}{on}"),
+        (None, None) => format!("Role {role} cleared{on}"),
     };
     Ok(ActionResult::changed(
-        format!("{what}{on}."),
+        format!("{what}."),
         format!("Model role {role}{on}"),
         format!(
             "모델 역할 {role}{}",

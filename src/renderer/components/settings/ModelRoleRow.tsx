@@ -8,7 +8,7 @@
 
 import { CircleDashed } from "lucide-react";
 import { Fragment, useMemo } from "react";
-
+import { baseSelector } from "../../../shared/role-plan";
 import type {
 	CompactionPoint,
 	ModelRoleEffective,
@@ -282,6 +282,7 @@ export function ModelRoleRow({
 	const use = rolePurpose(entry, name, t, lang);
 	const fallback = roleFallback(entry, t, roleName);
 	const line = effectiveLine({ compaction, entry, labels, providers, roleName, t, usage });
+	const waiting = entry.waitingPick ? (baseSelector(entry.waitingPick) ?? entry.waitingPick) : "";
 	const details = [
 		line && <Fragment key="line">{line}</Fragment>,
 		entry.effective?.skipped && <SkippedLine effective={entry.effective} key="skipped" providers={providers} t={t} />,
@@ -299,6 +300,14 @@ export function ModelRoleRow({
 		entry.source === "project" && (
 			<p className="text-sc-xs text-(--sc-text-muted)" key="project">
 				{t("modelRoles.sourceProject")}
+			</p>
+		),
+		// OMPdesk's own role: a pick stored while config.yml (or a project config) sets the role, so not in force.
+		waiting && (
+			<p className="text-sc-xs text-(--sc-text-muted)" data-model-role-waiting-pick="" key="waiting">
+				{t(entry.source === "project" ? "modelRoles.waitingPickProject" : "modelRoles.waitingPick", {
+					model: compactModelText(labels.get(waiting) ?? compactModelLabel(modelRefOf(waiting))),
+				})}
 			</p>
 		),
 		// The effective line already says whether the role resolves (a role can run on another role's model with an

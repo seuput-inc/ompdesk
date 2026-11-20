@@ -1445,6 +1445,12 @@ export const en: Record<string, string> = {
 	"modelRoles.notConnectedHint": "Model roles load once omp connects.",
 	"modelRoles.set": 'Role "{role}" set to {model}',
 	"modelRoles.cleared": 'Role "{role}" cleared',
+	"modelRoles.pickWaits":
+		'Saved {model} as OMPdesk\'s pick for "{role}". {where} sets it to {value}, which wins until you change or remove it there.',
+	"modelRoles.pickClearedWaits": 'Cleared OMPdesk\'s pick for "{role}". {where} still sets it to {value}.',
+	"modelRoles.where.project": "This project's config",
+	"modelRoles.waitingPick": "OMPdesk's pick {model} waits: config.yml sets this role",
+	"modelRoles.waitingPickProject": "OMPdesk's pick {model} waits: this project's config sets this role",
 	"modelRoles.failed": "Couldn't set model role",
 	"modelRoles.loadFailed": "Couldn't load model roles. Try again.",
 	"modelRoles.stale": "Showing the last roles that loaded.",

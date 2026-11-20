@@ -1435,6 +1435,13 @@ export const ko: Record<string, string> = {
 	"modelRoles.notConnectedHint": "omp에 연결되면 모델 역할을 불러와요.",
 	"modelRoles.set": '"{role}" 역할을 {model} 모델로 설정했어요',
 	"modelRoles.cleared": '"{role}" 역할을 해제했어요',
+	"modelRoles.pickWaits":
+		'"{role}" 역할의 OMPdesk 선택으로 {model} 모델을 저장했어요. 지금은 {where}에 적힌 값({value})이 쓰여요. 거기서 바꾸거나 지우면 이 선택이 쓰여요.',
+	"modelRoles.pickClearedWaits":
+		'"{role}" 역할의 OMPdesk 선택을 지웠어요. 지금은 {where}에 적힌 값({value})이 쓰여요.',
+	"modelRoles.where.project": "이 프로젝트 설정",
+	"modelRoles.waitingPick": "OMPdesk 선택({model})은 대기 중이에요: config.yml에 적힌 값이 쓰여요",
+	"modelRoles.waitingPickProject": "OMPdesk 선택({model})은 대기 중이에요: 이 프로젝트 설정에 적힌 값이 쓰여요",
 	"modelRoles.failed": "모델 역할을 설정하지 못했어요",
 	"modelRoles.loadFailed": "모델 역할을 불러오지 못했어요. 다시 시도하세요.",
 	"modelRoles.stale": "마지막으로 불러온 역할을 보여 줘요.",

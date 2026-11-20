@@ -1775,6 +1775,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/gh-guard-stock.test.ts", "src/main/gh-guard.test.ts"],
 	},
 	{
+		id: "B67",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"In-memory monkey patch: wraps `Settings.prototype.setModelRole` once per omp (`pi.pi.Settings`, feature-detected) so every role an omp writes into its global settings, from any caller, leaves one log line with its call frames, because a role went back to older values on 20 Nov 2026 with no line naming the writer (C16). Behaviour unchanged.",
+		files: ["resources/gui-bridge/ompdesk-roles.ts"],
+		stock: ["config/settings.ts Settings.setModelRole", "config/settings.ts #saveNow"],
+		tests: ["src/main/bridge-ompdesk-roles-stock.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

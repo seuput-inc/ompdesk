@@ -236,8 +236,35 @@ async function watchRoles(pi: ExtensionAPI, scope: RoleSettings): Promise<void> 
 	}
 }
 
+/** Settings prototypes whose `setModelRole` is traced (one wrapper, whatever the rebinds). */
+const traced = new WeakSet<object>();
+
+/**
+ * One omp log line per role this omp writes into its global settings, from any caller (stock's settings save, a model
+ * pick, a preset, OMPdesk's `model_role_set`), with the frames that called it; each line carries the omp's pid. 20 Nov
+ * 2026 (C16): slow and advisor went back to two-day-old values on one computer and no log named the writer.
+ */
+function traceRoleWrites(pi: ExtensionAPI): void {
+	type Writer = RoleSettings & { setModelRole(role: string, modelId: string | undefined): void };
+	const proto: Partial<Writer> | undefined = pi.pi.Settings?.prototype;
+	const write = proto?.setModelRole;
+	if (!proto || !write || traced.has(proto)) return;
+	traced.add(proto);
+	proto.setModelRole = function (this: Writer, role: string, modelId: string | undefined) {
+		const from = this.getGlobalModelRole(role) ?? null;
+		write.call(this, role, modelId);
+		if (from === (modelId ?? null)) return;
+		const caller = new Error().stack
+			?.split("\n")
+			.slice(2, 8)
+			.map(frame => frame.trim());
+		pi.logger.info("gui-bridge: model role set", { role, from, to: modelId ?? null, caller });
+	};
+}
+
 export function install(pi: ExtensionAPI): void {
 	const settings = (): RoleSettings => pi.pi.Settings.instance as unknown as RoleSettings;
+	traceRoleWrites(pi);
 	// The hooks below register in this tick; the guards need stock's registry, loaded by the startup settle already.
 	void watchRoles(pi, settings()).catch(error =>
 		pi.logger.error("gui-bridge: OMPdesk role guards failed", { error: String(error) }),

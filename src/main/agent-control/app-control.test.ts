@@ -1260,6 +1260,21 @@ describe("a named device", () => {
 		expect(ports.rpcOns).toHaveLength(4);
 	});
 
+	it("says a review pick waits behind the value config.yml sets, instead of claiming the role changed", async () => {
+		const ports = new FakePorts();
+		ports.rpcData.set_model_role = {
+			role: "review",
+			modelId: "prov/model-a",
+			overriddenBy: { layer: "global", value: "openai-codex/gpt-6-astra:high" },
+		};
+		const control = new AppControl(ports);
+		const answer = await control.run(CALLER, "models.set_role", { role: "review", modelId: "prov/model-a" });
+		expect(answer).toContain(
+			"Saved prov/model-a as OMPdesk's pick for review; config.yml sets review to openai-codex/gpt-6-astra:high, which wins until it is changed or removed there.",
+		);
+		expect(answer).not.toContain("now uses");
+	});
+
 	it("checks the tier before it sends anything to the device", async () => {
 		const ports = new FakePorts();
 		const attempt: ScriptedAction = {

@@ -885,6 +885,11 @@ async function modelRoles(session: AgentSession) {
 	return roles.map(role => {
 		const chain = role.origin === "ompdesk" ? OMPDESK_ROLES.find(entry => entry.id === role.id)?.chain : undefined;
 		const pick = chain ? ompdeskRolePick(session, role.id) : undefined;
+		// OMPdesk's pick while config.yml or a project config sets the id: stored, not in force.
+		const waitingPick =
+			chain && roleConfigured(session.settings as unknown as RoleSettings, role.id)
+				? readRolePicks()[role.id]
+				: undefined;
 		return {
 			...role,
 			model: chain ? pick : shownRoleValue(role.id, session.settings.getModelRole(role.id)),
@@ -896,6 +901,7 @@ async function modelRoles(session: AgentSession) {
 				name: model.name,
 				kind: modelKind(model),
 			})),
+			...(waitingPick ? { waitingPick } : {}),
 		};
 	});
 }
@@ -988,35 +994,24 @@ export const methods: BridgeMethods = {
 							.some(model => (provider === undefined || model.provider === provider) && model.id === id),
 				}),
 			);
-			// An OMPdesk role is held at runtime, never written to config.yml; a value the user's config sets stays in
-			// force (settleOmpdeskRoles yields to it), so a pick or a clear then would change nothing: refused, naming
-			// that value, instead of answering success.
+			// An OMPdesk role is held at runtime, never written to config.yml. A value the user's config sets stays in
+			// force (settleOmpdeskRoles yields to it): the pick is stored and waits, and the answer says so
+			// (`overriddenBy`) instead of claiming the role changed.
+			let overriddenBy: { layer: "global" | "project"; value: string } | undefined;
 			if (OMPDESK_ROLES.some(entry => entry.id === role)) {
-				const configured = configuredRole(session.settings as unknown as RoleSettings, role);
-				if (configured) {
-					const where = configured.layer === "global" ? "config.yml" : "this project's config";
-					throw new Error(
-						`modelRoles.${role} is set to ${configured.value} in ${where}, which wins over OMPdesk's pick; change or remove it there`,
-					);
-				}
 				writeRolePick(role, value);
 				await settleOmpdeskRoles(session.settings as unknown as RoleSettings);
+				overriddenBy = configuredRole(session.settings as unknown as RoleSettings, role);
 			} else {
-				const before = (session.settings as unknown as RoleSettings).getGlobalModelRole(role) ?? null;
 				session.settings.setModelRole(role, value);
 				await session.settings.flush();
-				// The one OMPdesk path that writes a role into config.yml: a line per write, so a role that changes
-				// under the person (20 Nov 2026, C16: slow and advisor went back to older values with no line in any
-				// log) is attributable to a session, or shown not to be OMPdesk's.
-				env.pi.logger.info("gui-bridge: model role written to config.yml", {
-					role,
-					from: before,
-					to: value ?? null,
-					sessionId: session.sessionId,
-				});
 			}
 			env.emit({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-			return { role, modelId: typeof modelId === "string" ? modelId : null };
+			return {
+				role,
+				modelId: typeof modelId === "string" ? modelId : null,
+				...(overriddenBy ? { overriddenBy } : {}),
+			};
 		},
 	}),
 };
