@@ -81,6 +81,7 @@ pub mod codex;
 pub mod copilot;
 pub mod cursor_agent;
 pub mod embedding;
+pub mod embedding_capacity;
 pub mod error;
 pub mod factory;
 pub mod fallback;
@@ -97,11 +98,13 @@ pub mod openai_oauth;
 pub mod opencode;
 pub mod provider;
 pub mod reranker;
+pub mod routes;
 pub mod types;
 
 mod auth_file;
 mod cli;
 mod codex_responses;
+mod redirect;
 mod response;
 mod stored_token;
 mod text;
@@ -124,6 +127,7 @@ pub use embedding::{
     Embedder, OpenAiCompatEmbedder, OpenAiEmbedder, QueryVector, SyntheticEmbedder, VoyageEmbedder,
     cosine, embed_search_query,
 };
+pub use embedding_capacity::{EmbeddingCapacity, local_capacity};
 pub use error::{LlmError, LlmResult};
 pub use factory::{
     EmbedderChoice, EmbedderConfig, ProviderChoice, ProviderConfig, build_embedder, build_provider,
@@ -133,8 +137,9 @@ pub use fallback::{CIRCUIT_COOLDOWN, Candidate, FallbackLlmProvider};
 pub use gemini::GeminiProvider;
 pub use google::{DEFAULT_MODEL as GOOGLE_DEFAULT_EMBED_MODEL, GoogleEmbedder};
 pub use health::{
-    CandidateHealth, ProviderHealth, ProviderHealthSnapshot, ProviderHealthStatus,
-    ProviderRoleHealthSnapshot,
+    CandidateHealth, LlmTaskChainHealthSnapshot, LlmWorkloadHealthSnapshot, ProviderHealth,
+    ProviderHealthSnapshot, ProviderHealthStatus, ProviderRoleHealthSnapshot,
+    error_status_and_message,
 };
 #[cfg(feature = "local-embeddings")]
 pub use local::{LOCAL_DIM, LOCAL_MODEL, LocalEmbedder, fetch_model, model_present};
@@ -156,11 +161,12 @@ pub use opencode::{
 };
 pub use provider::{LlmProvider, complete_structured, complete_structured_with_operation_id};
 pub use reranker::{LlmReranker, RerankCandidate, RerankScore, RerankStage, Reranker};
-pub use response::provider_error_body;
+pub use response::{provider_error, provider_error_body};
+pub use routes::LlmProviders;
 pub use stored_token::StoredOAuthToken;
 pub use types::{
-    ChatMessage, ChatRequest, ChatResponse, ExtraHeaders, LlmOperationId, ReasoningEffort, Role,
-    Usage,
+    ChatMessage, ChatRequest, ChatResponse, ExtraHeaders, LlmOperationId, LlmWorkload,
+    ReasoningEffort, Role, Usage,
 };
 
 // Integration tests compile into this crate's test harness instead of a

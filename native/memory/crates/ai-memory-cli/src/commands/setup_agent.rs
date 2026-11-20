@@ -42,8 +42,8 @@ use crate::cli::{
 use crate::commands::render_shared::{
     ANTIGRAVITY_LIFECYCLE_EVENTS, ANTIGRAVITY_TOOL_EVENTS, CODEX_PROFILE, COMMAND_CODE_PROFILE,
     COPILOT_CLI_PROFILE, CURSOR_PROFILE, GEMINI_PROFILE, KIMI_CODE_EVENTS, KIRO_CLI_V2_EVENTS,
-    KIRO_CLI_V3_EVENTS, build_claude_code_payload, build_devin_payload, build_grok_payload,
-    build_pool_settings_yaml, hook_script_for_current_platform,
+    KIRO_CLI_V3_EVENTS, build_claude_code_payload, build_devin_payload, build_dsh_hooks_payload,
+    build_grok_payload, build_pool_settings_yaml, hook_script_for_current_platform, mask_secret,
 };
 use crate::commands::{install_hooks, install_mcp};
 use crate::config::{Config, DEFAULT_SERVER_URL};
@@ -55,23 +55,20 @@ use crate::config::{Config, DEFAULT_SERVER_URL};
 /// destination directory can't be created, any script copy fails,
 /// or the JSON config can't be serialised.
 pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
+    let i18n = &config.i18n;
     args.agent = match (args.agent, args.opencode_dialect) {
         (AgentChoice::OpenCode, Some(choice)) => match choice.dialect() {
             ai_memory_workstream::OpenCodeDialect::V1 => AgentChoice::OpenCode,
             ai_memory_workstream::OpenCodeDialect::V2 => AgentChoice::OpenCode2,
         },
         (AgentChoice::OpenCode, None) => bail!(
-            "setup-agent --agent opencode requires --opencode-dialect v1|v2 because a container cannot inspect the host executable"
-        ),
+            "{}", i18n.text("cli-setup-agent-setup-agent-agent-opencode-requires-opencode-dialect-v1-v2-because-a-contain")),
         (AgentChoice::OpenCode2, None) => AgentChoice::OpenCode2,
         (AgentChoice::OpenCode2, Some(_)) => bail!(
-            "--opencode-dialect cannot be combined with the force-V2 opencode2 compatibility alias"
-        ),
+            "{}", i18n.text("cli-setup-agent-opencode-dialect-cannot-be-combined-with-the-force-v2-opencode2-compatibilit")),
         (agent, None) => agent,
         (agent, Some(_)) => bail!(
-            "--opencode-dialect is valid only with --agent opencode, not {}",
-            agent.kind().as_str()
-        ),
+            "{}", i18n.format("cli-setup-agent-opencode-dialect-is-valid-only-with-agent-opencode-not", &[("value0", agent.kind().as_str().to_string())])),
     };
     let server_url = if args.server_url == DEFAULT_SERVER_URL && config.server_url_configured() {
         normalise_hook_server_url(&config.server_url)
@@ -85,6 +82,16 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
         auth_token: args
             .auth_token
             .or_else(|| config.auth.renderable_bearer_token().map(str::to_owned)),
+        ..args
+    };
+    // setup-agent only ever PRINTS the token into a snippet for the operator to
+    // merge into their agent config; it never writes it to a protected file. So
+    // mask the inline bearer in every snippet it emits, so the live value is not
+    // left in the terminal scrollback, a CI log or an agent transcript
+    // (GHSA-6pmr-q79m-87vp item 1). The notes that key off "a token was given"
+    // still fire — the masked value is still `Some`.
+    let args = SetupAgentArgs {
+        auth_token: args.auth_token.as_deref().map(mask_secret),
         ..args
     };
     if matches!(
@@ -111,7 +118,8 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
     // Hermes also runs the native `hook` command directly (no shell), so there
     // are no scripts to stage — setup-agent prints the YAML block instead.
     if matches!(args.agent, AgentChoice::Hermes) {
-        emit_hermes(&args)?;
+        let plugin_dir = install_hooks::hermes_plugin_dir(&config.runtime_env);
+        print!("{}", hermes_setup_output(&args, plugin_dir.as_deref()));
         return Ok(());
     }
     // Droid has no script bundle either: its hooks.json runs the native
@@ -135,12 +143,20 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
         emit_ibm_bob(&args)?;
         return Ok(());
     }
+    if matches!(args.agent, AgentChoice::Cline) {
+        bail!(
+            "{}", i18n.text("cli-setup-agent-cline-discovers-generated-hook-files-in-the-host-user-s-hook-directory-run-a"));
+    }
+    // Qwen Code too: ~/.qwen/settings.json runs the native `hook` command.
+    if matches!(args.agent, AgentChoice::QwenCode) {
+        emit_qwen_code(&args)?;
+        return Ok(());
+    }
     let Some(agent_sub) = args.agent.script_hook_subdir() else {
-        bail!("internal: generated integration should have returned before staging hooks")
+        bail!("{}", i18n.text("cli-setup-agent-internal-generated-integration-should-have-returned-before-staging-hooks"))
     };
     eprintln!(
-        "[ai-memory] setup-agent emits shell/PowerShell hook bundles for {agent_sub}; these remote/compatibility bundles do not enforce capture-policy capability v1. Install local native hooks instead when policy enforcement is required."
-    );
+        "{}", i18n.format("cli-setup-agent-ai-memory-setup-agent-emits-shell-powershell-hook-bundles-for-agent-sub-thes", &[("value0", agent_sub.to_string())]));
 
     let source = resolve_source(args.source.as_deref(), agent_sub)?;
     let dest_dir = args.to.join(agent_sub);
@@ -177,9 +193,15 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
     copy_support_hook_scripts(&source, &dest_dir)?;
 
     eprintln!(
-        "✓ Extracted {copied} hook script(s) from {} to {}",
-        source.display(),
-        dest_dir.display(),
+        "{}",
+        i18n.format(
+            "cli-setup-agent-extracted-copied-hook-script-s-from-to",
+            &[
+                ("value0", format!("{}", copied)),
+                ("value1", format!("{}", source.display())),
+                ("value2", format!("{}", dest_dir.display()))
+            ]
+        )
     );
 
     // The path the rendered JSON should reference. Defaults to where
@@ -195,15 +217,38 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
         AgentChoice::ClaudeCode => emit_claude_code(&emit_root, &args)?,
         AgentChoice::Grok => emit_grok(&emit_root, &args)?,
         AgentChoice::Devin => emit_devin(&emit_root, &args)?,
-        AgentChoice::Codex => emit_other(&emit_root, agent_sub, &args, &[CODEX_PROFILE.events]),
-        AgentChoice::CommandCode => {
-            emit_other(&emit_root, agent_sub, &args, &[COMMAND_CODE_PROFILE.events])
-        }
-        AgentChoice::Cursor => emit_other(&emit_root, agent_sub, &args, &[CURSOR_PROFILE.events]),
+        AgentChoice::Codex => emit_other(
+            &config.i18n,
+            &emit_root,
+            agent_sub,
+            &args,
+            &[CODEX_PROFILE.events],
+        ),
+        AgentChoice::CommandCode => emit_other(
+            &config.i18n,
+            &emit_root,
+            agent_sub,
+            &args,
+            &[COMMAND_CODE_PROFILE.events],
+        ),
+        AgentChoice::Cursor => emit_other(
+            &config.i18n,
+            &emit_root,
+            agent_sub,
+            &args,
+            &[CURSOR_PROFILE.events],
+        ),
         AgentChoice::GeminiCli => {
-            emit_other(&emit_root, agent_sub, &args, &[GEMINI_PROFILE.events]);
+            emit_other(
+                &config.i18n,
+                &emit_root,
+                agent_sub,
+                &args,
+                &[GEMINI_PROFILE.events],
+            );
         }
         AgentChoice::AntigravityCli => emit_other(
+            &config.i18n,
             &emit_root,
             agent_sub,
             &args,
@@ -212,16 +257,41 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
         // Kimi's success and failure post-tool events share one script. The
         // script listing is deduplicated below; apply-mode owns the exact
         // `[[hooks]]` TOML merge into the user's config.toml.
-        AgentChoice::KimiCode => emit_other(&emit_root, agent_sub, &args, &[&KIMI_CODE_EVENTS]),
+        AgentChoice::KimiCode => emit_other(
+            &config.i18n,
+            &emit_root,
+            agent_sub,
+            &args,
+            &[&KIMI_CODE_EVENTS],
+        ),
         AgentChoice::KiroCli => {
-            emit_other(&emit_root, agent_sub, &args, &[&KIRO_CLI_V2_EVENTS]);
+            emit_other(
+                &config.i18n,
+                &emit_root,
+                agent_sub,
+                &args,
+                &[&KIRO_CLI_V2_EVENTS],
+            );
         }
         AgentChoice::KiroCliV3 => {
-            emit_other(&emit_root, agent_sub, &args, &[&KIRO_CLI_V3_EVENTS]);
+            emit_other(
+                &config.i18n,
+                &emit_root,
+                agent_sub,
+                &args,
+                &[&KIRO_CLI_V3_EVENTS],
+            );
         }
         AgentChoice::Pool => emit_pool(&emit_root, &args),
+        AgentChoice::Dsh => emit_dsh(&emit_root, &args),
         AgentChoice::CopilotCli => {
-            emit_other(&emit_root, agent_sub, &args, &[COPILOT_CLI_PROFILE.events]);
+            emit_other(
+                &config.i18n,
+                &emit_root,
+                agent_sub,
+                &args,
+                &[COPILOT_CLI_PROFILE.events],
+            );
         }
         AgentChoice::OpenCode
         | AgentChoice::OpenCode2
@@ -234,10 +304,12 @@ pub fn run(config: &Config, mut args: SetupAgentArgs) -> Result<()> {
         | AgentChoice::Droid
         | AgentChoice::Muse
         | AgentChoice::CodeBuddy
-        | AgentChoice::IbmBob => {
+        | AgentChoice::IbmBob
+        | AgentChoice::Cline
+        | AgentChoice::QwenCode
+        | AgentChoice::Qoder => {
             bail!(
-                "internal: generated integration should have returned before emitting staged hooks"
-            )
+                "{}", i18n.text("cli-setup-agent-internal-generated-integration-should-have-returned-before-emitting-staged-h"))
         }
     }
     Ok(())
@@ -304,33 +376,45 @@ fn emit_zcode(args: &SetupAgentArgs) -> Result<()> {
     Ok(())
 }
 
-/// Print the `hooks:` block for `~/.hermes/config.yaml` (the follow-up to
+/// Print the `hooks:` block for the Hermes home's `config.yaml` (the follow-up to
 /// #623, where Hermes was accepted for capture/storage but had no installer).
 /// No scripts are staged: Hermes splits the configured `command` itself and
 /// runs the ai-memory binary directly with the JSON payload on stdin. The
 /// binary must be reachable on the host that runs Hermes — for docker-wrapper
 /// setups install the native binary or point `command` at the wrapper.
-fn emit_hermes(args: &SetupAgentArgs) -> Result<()> {
+///
+/// The community memory-provider plugin is looked for where this command
+/// runs. Inside a container that is not the host's Hermes home, which is why
+/// the full block also says which entries to drop beside the plugin.
+fn hermes_setup_output(args: &SetupAgentArgs, plugin_dir: Option<&Path>) -> String {
+    let hook_set = install_hooks::hermes_hook_set(plugin_dir);
     let block = crate::commands::render_shared::build_hermes_hooks_yaml(
         &args.server_url,
         args.auth_token.as_deref(),
         None,
         None,
+        hook_set,
     );
-    println!("# Hermes Agent — merge the `hooks:` block into ~/.hermes/config.yaml");
-    println!("# The `command` must be an ai-memory binary reachable on the host that");
-    println!("# runs Hermes; prefer `ai-memory install-hooks --agent hermes` from");
-    println!("# that host so the path is resolved for you.");
+    let mut out = String::new();
+    out.push_str(
+        "# Hermes Agent — merge the `hooks:` block into the config.yaml of the\n\
+         # Hermes home that runs it (`$HERMES_HOME/config.yaml`, else\n\
+         # `~/.hermes/config.yaml`; `%LOCALAPPDATA%\\hermes\\config.yaml` on\n\
+         # Windows).\n",
+    );
+    out.push_str("# The `command` must be an ai-memory binary reachable on the host that\n");
+    out.push_str("# runs Hermes; prefer `ai-memory install-hooks --agent hermes` from\n");
+    out.push_str("# that host so the path is resolved for you.\n");
     if args.auth_token.is_some() {
-        println!("#       Treat the config as sensitive (chmod 600).");
+        out.push_str("#       Treat the config as sensitive (chmod 600).\n");
     }
-    println!("# NOTE: Hermes splits each `command` with shlex.split and runs it with");
-    println!("#       no shell, so the generated line is argv, not a shell command.");
-    println!("# NOTE: tool observations only — session lifecycle stays with the");
-    println!("#       ai-memory memory-provider plugin.");
-    println!();
-    println!("{block}");
-    Ok(())
+    out.push_str("# NOTE: Hermes splits each `command` with shlex.split and runs it with\n");
+    out.push_str("#       no shell, so the generated line is argv, not a shell command.\n");
+    out.push_str(&install_hooks::hermes_hook_set_notes(hook_set, plugin_dir));
+    out.push('\n');
+    out.push_str(&block);
+    out.push('\n');
+    out
 }
 
 /// Print the event map for `~/.factory/hooks.json` (#1240). No scripts are
@@ -431,12 +515,37 @@ fn emit_ibm_bob(args: &SetupAgentArgs) -> Result<()> {
     Ok(())
 }
 
+/// Print the `hooks` block for `~/.qwen/settings.json`. No scripts are
+/// staged: each entry runs the native `hook` command.
+fn emit_qwen_code(args: &SetupAgentArgs) -> Result<()> {
+    let payload = crate::commands::render_shared::build_qwen_code_hooks_payload(
+        &args.server_url,
+        args.auth_token.as_deref(),
+        None,
+        None,
+    );
+    let serialized = serde_json::to_string_pretty(&payload["hooks"])
+        .context("serializing Qwen Code hook config")?;
+    println!("# Qwen Code — merge under the `hooks` key of");
+    println!("# ~/.qwen/settings.json. The `command` must be an ai-memory");
+    println!("# binary reachable on the host that runs Qwen Code; prefer");
+    println!("# `ai-memory install-hooks --agent qwen-code --apply` from that host.");
+    if args.auth_token.is_some() {
+        println!("#       Treat settings.json as sensitive (chmod 600).");
+    }
+    println!();
+    println!("{serialized}");
+    Ok(())
+}
+
 fn normalise_hook_server_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_string()
 }
 
-fn emit_extension_setup_hint(config: &Config, args: &SetupAgentArgs) -> Result<()> {
-    let (label, agent, restart_note, mcp_client) = match args.agent {
+fn extension_setup_metadata(
+    agent: AgentChoice,
+) -> Result<(&'static str, &'static str, &'static str, &'static str)> {
+    Ok(match agent {
         AgentChoice::OpenCode => (
             "OpenCode",
             "opencode",
@@ -452,13 +561,13 @@ fn emit_extension_setup_hint(config: &Config, args: &SetupAgentArgs) -> Result<(
         AgentChoice::Omp => (
             "OMP",
             "omp",
-            "Then restart OMP so it loads ~/.omp/agent/extensions/ai-memory.ts.",
+            "Then restart OMP so it loads ~/.omp/agent/extensions/ai-memory-omp.ts.",
             "omp",
         ),
         AgentChoice::Pi => (
             "Pi",
             "pi",
-            "Then restart Pi so it loads ~/.pi/agent/extensions/ai-memory.ts.",
+            "Then restart Pi so it loads ~/.pi/agent/extensions/ai-memory-pi.ts.",
             "pi",
         ),
         AgentChoice::Openclaw => (
@@ -468,15 +577,27 @@ fn emit_extension_setup_hint(config: &Config, args: &SetupAgentArgs) -> Result<(
             "openclaw",
         ),
         other => bail!("internal: {other:?} is not a generated-integration agent"),
-    };
-    println!("# {label} uses a TypeScript extension/plugin, not extracted shell scripts.");
+    })
+}
+
+fn emit_extension_setup_hint(config: &Config, args: &SetupAgentArgs) -> Result<()> {
+    let i18n = &config.i18n;
+    let (label, agent, restart_note, mcp_client) = extension_setup_metadata(args.agent)?;
     println!(
-        "# Capture-policy capability v1 requires a freshly generated integration; re-run --apply after upgrades."
+        "{}",
+        i18n.format(
+            "cli-setup-agent-label-uses-a-typescript-extension-plugin-not-extracted-shell-scripts",
+            &[("value0", label.to_string())]
+        )
     );
     println!(
-        "# Legacy shell/PowerShell and remote-only paths are unsupported compatibility modes."
+        "{}", i18n.text("cli-setup-agent-capture-policy-capability-v1-requires-a-freshly-generated-integration-re-run"));
+    println!(
+        "{}", i18n.text("cli-setup-agent-legacy-shell-powershell-and-remote-only-paths-are-unsupported-compatibility"));
+    println!(
+        "{}",
+        i18n.text("cli-setup-agent-install-it-directly-instead")
     );
-    println!("# Install it directly instead:");
     if matches!(args.agent, AgentChoice::OpenCode | AgentChoice::OpenCode2) {
         let dialect = if args.agent == AgentChoice::OpenCode {
             ai_memory_workstream::OpenCodeDialect::V1
@@ -526,20 +647,34 @@ fn emit_extension_setup_hint(config: &Config, args: &SetupAgentArgs) -> Result<(
     }
     println!("ai-memory install-hooks --agent {agent} --apply \\");
     if args.auth_token.is_some() {
-        println!("  --server-url {} \\", args.server_url);
-        println!("  --auth-token <token>");
+        println!(
+            "{}",
+            i18n.format(
+                "cli-setup-agent-server-url",
+                &[("value0", args.server_url.to_string())]
+            )
+        );
+        println!("{}", i18n.text("cli-setup-agent-auth-token-token"));
     } else {
-        println!("  --server-url {}", args.server_url);
-        println!("  # add --auth-token <token> if the server requires bearer auth");
+        println!(
+            "{}",
+            i18n.format(
+                "cli-setup-agent-server-url-2",
+                &[("value0", args.server_url.to_string())]
+            )
+        );
+        println!(
+            "{}",
+            i18n.text("cli-setup-agent-add-auth-token-token-if-the-server-requires-bearer-auth")
+        );
     }
     println!();
     println!("{restart_note}");
     if matches!(args.agent, AgentChoice::Pi) {
         println!(
-            "MCP tools come through the same generated Pi bridge extension; no native mcp.json is written."
-        );
+            "{}", i18n.text("cli-setup-agent-mcp-tools-come-through-the-same-generated-pi-bridge-extension-no-native-mcp"));
     } else {
-        println!("Also run `ai-memory install-mcp --client {mcp_client}` to wire MCP separately.");
+        println!("{}", i18n.format("cli-setup-agent-also-run-ai-memory-install-mcp-client-mcp-client-to-wire-mcp-separately", &[("value0", mcp_client.to_string())]));
     }
     Ok(())
 }
@@ -623,6 +758,41 @@ fn emit_pool(emit_root: &Path, args: &SetupAgentArgs) {
     print!("{snippet}");
 }
 
+/// Print DSH's generated Claude Code `hooks.json` plus the Cordis patch
+/// fragment that points the `@deepseek-ai/dsh-hooks-claude-code` bridge at
+/// it. The staged `.sh`/`.ps1` scripts are the artifact; the bridge reads the
+/// hooks.json via `configPath` after the operator merges the patch into
+/// `$DSH_HOME/profiles/<profile>/cordis.patch.yml`.
+fn emit_dsh(emit_root: &Path, args: &SetupAgentArgs) {
+    let payload = build_dsh_hooks_payload(
+        emit_root,
+        &args.server_url,
+        args.auth_token.as_deref(),
+        None,
+        None,
+    );
+    println!("# DeepSeek Harness (DSH) — DSH has no fixed agent config file.");
+    println!("# Hook scripts (must be reachable from the host that runs DSH):");
+    println!("#   {}", emit_root.display());
+    println!("# AI-memory server: {}", args.server_url);
+    if args.auth_token.is_some() {
+        println!("# Auth: AI_MEMORY_AUTH_TOKEN embedded in each hook command below.");
+        println!("#       Treat the hook config as sensitive (chmod 600).");
+    }
+    println!("# NOTE: the bridge delivers exactly seven events — no PreCompact or");
+    println!("#       SessionEnd, and SessionStart runs detached, so capture works");
+    println!("#       but handoff injection does not. Recover handoffs via the MCP");
+    println!("#       memory_handoff_accept tool, and close finished sessions with");
+    println!("#       `ai-memory finalize-session --agent dsh`.");
+    println!();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).expect("static hook payload serializes")
+    );
+    println!();
+    print!("{}", install_hooks::dsh_bridge_patch_fragment(emit_root));
+}
+
 fn emit_devin(emit_root: &Path, args: &SetupAgentArgs) -> Result<()> {
     print!("{}", render_devin_setup_output(emit_root, args)?);
     Ok(())
@@ -655,6 +825,7 @@ fn render_devin_setup_output(emit_root: &Path, args: &SetupAgentArgs) -> Result<
 }
 
 fn emit_other(
+    i18n: &ai_memory_core::i18n::Localizer,
     emit_root: &Path,
     label: &str,
     args: &SetupAgentArgs,
@@ -675,8 +846,19 @@ fn emit_other(
         println!("- {}", path.display());
     }
     println!();
-    println!("Set AI_MEMORY_HOOK_URL in each hook's environment to override the default.");
-    println!("Also run `ai-memory install-mcp --client {label}` to wire MCP separately.");
+    println!(
+        "{}",
+        i18n.diagnostic(
+            "Set AI_MEMORY_HOOK_URL in each hook's environment to override the default."
+        )
+    );
+    println!(
+        "{}",
+        crate::localization::diagnostic(
+            i18n,
+            format!("Also run `ai-memory install-mcp --client {label}` to wire MCP separately.")
+        )
+    );
 }
 
 fn event_script_paths(emit_root: &Path, event_lists: &[&[(&str, &str)]]) -> Vec<PathBuf> {
@@ -812,6 +994,49 @@ fn source_candidates(explicit: Option<&Path>, sub: &str, exe: Option<PathBuf>) -
 mod tests {
     use super::*;
 
+    fn hermes_setup_args() -> SetupAgentArgs {
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::try_parse_from([
+            "ai-memory",
+            "setup-agent",
+            "--agent",
+            "hermes",
+            "--to",
+            "/host/hooks",
+        ])
+        .unwrap();
+        let crate::cli::Command::SetupAgent(args) = cli.command else {
+            panic!("expected setup-agent");
+        };
+        args
+    }
+
+    /// `setup-agent --agent hermes` renders the same two blocks as
+    /// `install-hooks`: the whole lifecycle, or the tool events alone when the
+    /// community plugin is installed.
+    #[test]
+    fn hermes_setup_output_follows_the_plugin_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join("plugins").join("ai-memory");
+        let full = hermes_setup_output(&hermes_setup_args(), Some(&plugin));
+        assert!(full.contains("pre_llm_call:") && full.contains("on_session_finalize:"));
+        assert!(full.contains("pre_tool_call:") && full.contains("post_tool_call:"));
+        assert!(full.contains("keep only pre_tool_call"));
+
+        std::fs::create_dir_all(&plugin).unwrap();
+        let tools = hermes_setup_output(&hermes_setup_args(), Some(&plugin));
+        assert!(tools.contains("pre_tool_call:") && tools.contains("post_tool_call:"));
+        for event in [
+            "on_session_start:",
+            "pre_llm_call:",
+            "on_session_end:",
+            "on_session_finalize:",
+        ] {
+            assert!(!tools.contains(event), "{event}");
+        }
+        assert!(tools.contains("memory-provider plugin is installed at"));
+    }
+
     #[test]
     fn source_candidates_include_binary_sibling_for_flat_tarball() {
         // Flat release tarball: the binary and its `hooks/` bundle are
@@ -940,6 +1165,17 @@ mod tests {
     }
 
     #[test]
+    fn pi_family_setup_hints_name_the_installed_extension_files() {
+        let (_, _, omp_note, _) = extension_setup_metadata(AgentChoice::Omp).unwrap();
+        let (_, _, pi_note, _) = extension_setup_metadata(AgentChoice::Pi).unwrap();
+
+        assert!(omp_note.ends_with("/.omp/agent/extensions/ai-memory-omp.ts."));
+        assert!(pi_note.ends_with("/.pi/agent/extensions/ai-memory-pi.ts."));
+        assert!(!omp_note.ends_with("/ai-memory.ts."));
+        assert!(!pi_note.ends_with("/ai-memory.ts."));
+    }
+
+    #[test]
     fn devin_setup_emits_script_hook_config() {
         let args = SetupAgentArgs {
             agent: AgentChoice::Devin,
@@ -1036,8 +1272,12 @@ mod tests {
         assert!(rendered.contains("post-tool-use"));
         assert!(rendered.contains("pre-compact"));
         assert!(
-            !rendered.contains("user-prompt-submit"),
-            "Gemini has no UserPromptSubmit hook; setup-agent must not print Claude-only scripts"
+            rendered.contains("user-prompt-submit"),
+            "Gemini's BeforeAgent runs the prompt script: {rendered}"
+        );
+        assert!(
+            rendered.contains("stop.sh"),
+            "Gemini's AfterAgent runs the stop script: {rendered}"
         );
         assert!(
             !rendered.contains("subagent-start") && !rendered.contains("subagent-stop"),
@@ -1047,9 +1287,10 @@ mod tests {
 
     #[test]
     fn kimi_code_manual_script_paths_cover_kimi_event_set() {
-        // Kimi Code's hook vocabulary is Claude Code's nine events plus
-        // PostToolUseFailure; the failure entry reuses post-tool-use.sh,
-        // so the script list carries nine unique files for ten events.
+        // Kimi Code's hook vocabulary is Claude Code's ten events,
+        // PostToolUseFailure included; the failure entry reuses
+        // post-tool-use.sh, so the script list carries nine unique files for
+        // ten events.
         let root = Path::new("/hooks/kimi-code");
         let paths = event_script_paths(root, &[&KIMI_CODE_EVENTS]);
         let rendered = paths

@@ -28,6 +28,7 @@ default = []
 management-ui = ["ai-memory-mcp/management-ui", "ai-memory-web/management-ui"]
 
 [dependencies]
+askama.workspace = true
 ai-memory-consolidate.workspace = true
 ai-memory-core.workspace = true
 ai-memory-hooks.workspace = true
@@ -37,11 +38,13 @@ ai-memory-store.workspace = true
 ai-memory-web.workspace = true
 ai-memory-workstream.workspace = true
 ai-memory-wiki.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 secrecy.workspace = true
 sha2.workspace = true
 base64.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 # Sets SO_KEEPALIVE on accepted `serve` sockets (#792); not a workspace dep,
 # `ai-memory-cli` is the only crate that needs it.
@@ -49,10 +52,12 @@ socket2 = "0.6.3"
 clap.workspace = true
 clap_complete.workspace = true
 crossterm.workspace = true
+unicode-width.workspace = true
 dirs.workspace = true
 figment.workspace = true
 flate2.workspace = true
 fs2.workspace = true
+http.workspace = true
 libc.workspace = true
 # `transport-streamable-http-client-reqwest` pulls reqwest in with no TLS backend
 # (`__reqwest = ["dep:reqwest"]` and nothing more), so the bridge could not reach an
@@ -76,6 +81,11 @@ rmcp = { workspace = true, features = [
     "transport-streamable-http-client-reqwest",
     "reqwest-tls-no-provider",
 ] }
+# The reqwest 0.13 that rmcp's client transport is built on, named so the bridge
+# can hand rmcp its own client (`mcp_bridge::upstream_transport`) instead of
+# rmcp's default, which reads `HTTP_PROXY` and friends. No features of its own:
+# rmcp's choice above is the whole TLS setup.
+reqwest-mcp = { package = "reqwest", version = "0.13", default-features = false }
 rustls = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -100,6 +110,7 @@ tempfile.workspace = true
 
 [dev-dependencies]
 ai-memory-test-support.workspace = true
+ruzstd.workspace = true
 tempfile.workspace = true
 rstest.workspace = true
 rusqlite.workspace = true
@@ -111,3 +122,7 @@ workspace = true
 
 [target."cfg(windows)".dependencies]
 windows-registry = "0.100.0"
+# Stable, safe process creation with an explicit inherited-handle list. std's
+# corresponding Windows APIs are still unstable at our minimum Rust version.
+# Pinned exact: a new 0.1.x is vetted before it ships in a release.
+win-custody = "=0.1.2"

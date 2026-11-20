@@ -109,13 +109,20 @@ foreach ($Entry in $WrapperAssets.GetEnumerator()) {
 }
 Get-ChildItem "$UserBin\ai-memory.*" | Unblock-File
 
-# Put the wrapper directory on your user PATH for future terminals.
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (($UserPath -split ';') -notcontains $UserBin) {
+# Put the wrapper directory on your user PATH for future terminals. Read and
+# write the registry value as is: [Environment]::GetEnvironmentVariable expands
+# its %VAR% entries, and SetEnvironmentVariable would save them expanded, as
+# REG_SZ.
+$EnvKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+$UserPath = $EnvKey.GetValue("Path", "", "DoNotExpandEnvironmentNames")
+if (($UserPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_) }) -notcontains $UserBin) {
     $NewUserPath = (($UserPath, $UserBin) | Where-Object { $_ }) -join ";"
-    [Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
+    $EnvKey.SetValue("Path", $NewUserPath, "ExpandString")
+    # Removing a variable that does not exist broadcasts the change to Explorer.
+    [Environment]::SetEnvironmentVariable("ai-memory-path-notify", [NullString]::Value, "User")
     $env:Path = "$env:Path;$UserBin"
 }
+$EnvKey.Dispose()
 
 # Start the server with Docker Desktop. The image default allowlist includes
 # host.docker.internal so wrapper thin-client commands (status, search, …) are
@@ -155,6 +162,52 @@ After upgrading the wrapper/image, rerun `install-hooks --agent <agent> --apply`
 for each native Windows agent so existing hook entries receive the current
 command form.
 
+### Managed launches (`run`, `continue`, `show`, …) use the native client
+
+`ai-memory run <harness>`, `continue`, `resume`, `show`, `workstreams` and
+`rename-workstream` execute on the host: the helper container cannot see your
+checkouts, your `claude` or `codex` CLIs, or their native session stores. The
+wrapper intercepts those subcommands and runs the native Windows client
+instead of the container (the same interception the Linux/macOS wrapper
+performs), so managed launches work while the server stays in Docker.
+
+The Docker image and the wrapper do not install that client. Install it once
+from the release zip
+([Scenario C](#scenario-c-prebuilt-release-binary-no-toolchain)):
+
+```powershell
+irm https://github.com/akitaonrails/ai-memory/releases/latest/download/install.ps1 | iex
+```
+
+`install.ps1` unpacks `ai-memory.exe` to `%LOCALAPPDATA%\Programs\ai-memory`
+and puts that directory on your `PATH`; the wrapper finds it there, or
+wherever `AI_MEMORY_NATIVE_BIN` points. Without it the intercepted commands
+stop with a message naming that installer. They never fall back into the
+container, which has no host CLIs.
+
+- The native client inherits `AI_MEMORY_SERVER_URL`. Leave it unset and it
+  talks to `http://127.0.0.1:49374`, the port the container publishes on the
+  host; a remote-server URL wins, as with every other wrapper command.
+- When the container server has auth enabled (a fresh install mints a root
+  bearer into the volume), run `install-hooks --agent <agent> --apply` once.
+  The wrapper refreshes a host copy at
+  `%LOCALAPPDATA%\ai-memory\server-token`; later managed launches reuse it
+  without starting a helper container. An explicit `AI_MEMORY_AUTH_TOKEN`,
+  `AI_MEMORY_AUTH__BEARER_TOKEN_FILE`, or bind-mounted `AI_MEMORY_DATA_DIR`
+  still wins. Rerun `install-hooks` after rotating the volume token.
+- A managed launch does not rewire hooks or MCP: what `install-hooks` and
+  `install-mcp` rendered through the container stays in place (the wrapper
+  sets `AI_MEMORY_RUN_AUTOWIRE=false` for the intercepted commands unless you
+  set the variable yourself). Export `AI_MEMORY_RUN_AUTOWIRE=true` to let
+  `run` rewire a harness around the native client instead.
+- Upgrading in this scenario: `ai-memory upgrade` pulls the image only,
+  including when `--config` or `--data-dir` precedes `upgrade`. It does not
+  refresh the wrapper or install a native client. Refresh the
+  wrapper scripts by re-running the install block at the top of this
+  scenario, and the native client with its own `ai-memory.exe upgrade`
+  ([Scenario C](#scenario-c-prebuilt-release-binary-no-toolchain)). Then
+  rerun `install-hooks --agent <agent> --apply` as noted above.
+
 Use the matching `--client` / `--agent` values for other clients, for
 example `codex`, `command-code`, `devin`, `kimi-code`, `kiro-cli`, `cursor`, or `gemini-cli`.
 
@@ -192,11 +245,37 @@ ai-memory setup
 missing or mismatched checksum and any archive entry that is absolute or holds
 `..`, unpacks the release to `%LOCALAPPDATA%\Programs\ai-memory` and adds that
 directory to your user `PATH` (set `AI_MEMORY_NO_MODIFY_PATH=1` to skip that).
+The destination must not exist, even as an empty directory or a link. Remove
+it if it is empty or left over from a failed install, or use
+`ai-memory upgrade` for an existing installation. Failed copy/publication
+attempts leave the destination alone and report their staging directory for
+inspection; see the [native installer details](install.md#one-step-native-install-installsh--ai-memory-setup).
 `ai-memory setup` then initialises the data dir (`%LOCALAPPDATA%\ai-memory`),
 registers the server to start at logon (see
 [Scenario E](#scenario-e-keep-the-server-running-native-windows-service)),
 wires the agents it finds, and checks the result. Inside WSL2 the Linux
 `install.sh` and `setup` path works unchanged.
+
+### With Scoop
+
+Releases from 3.4.0 on are also published to the maintainer's
+[Scoop](https://scoop.sh) bucket:
+
+```powershell
+scoop bucket add akitaonrails https://github.com/akitaonrails/scoop-bucket
+scoop install ai-memory
+ai-memory setup
+```
+
+Scoop checks the zip against the release's published SHA-256, unpacks it to
+`<scoop>\apps\ai-memory\<version>` and points the
+`<scoop>\apps\ai-memory\current` junction at it. The `ai-memory` shim on
+`PATH` runs the binary through `current`. `ai-memory setup` records that
+`current` path in the logon entry, the hook commands and the MCP entries,
+never the version directory, so they keep working after
+`scoop update ai-memory` installs the next version and `scoop cleanup` deletes
+the old one. Update with `scoop update ai-memory`: `ai-memory upgrade` refuses
+a Scoop install, because the bucket owns the version.
 
 To do the same by hand:
 
@@ -212,12 +291,17 @@ Invoke-WebRequest `
 Expand-Archive "$env:TEMP\ai-memory.zip" -DestinationPath $Dest -Force
 Get-ChildItem "$Dest\ai-memory.exe" | Unblock-File
 
-# Put it on PATH for future terminals (optional but convenient).
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (($UserPath -split ';') -notcontains $Dest) {
-    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$Dest", "User")
+# Put it on PATH for future terminals (optional but convenient). The registry
+# value is read and written as is, so its %VAR% entries stay unexpanded.
+$EnvKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+$UserPath = $EnvKey.GetValue("Path", "", "DoNotExpandEnvironmentNames")
+if (($UserPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_) }) -notcontains $Dest) {
+    $EnvKey.SetValue("Path", "$UserPath;$Dest", "ExpandString")
+    # Removing a variable that does not exist broadcasts the change to Explorer.
+    [Environment]::SetEnvironmentVariable("ai-memory-path-notify", [NullString]::Value, "User")
     $env:Path = "$env:Path;$Dest"
 }
+$EnvKey.Dispose()
 
 # Wire MCP + lifecycle hooks against your server.
 & "$Dest\ai-memory.exe" install-mcp --client claude-code --apply
@@ -225,7 +309,8 @@ if (($UserPath -split ';') -notcontains $Dest) {
     --server-url "https://memory.example.com" --auth-token "<token>"
 ```
 
-Later updates for this install use the same command as Linux/macOS release
+Later updates for this install (not a Scoop one, which updates with
+`scoop update ai-memory`) use the same command as Linux/macOS release
 binaries. From a writable prefix (for example `%LOCALAPPDATA%\ai-memory`),
 run:
 
@@ -239,9 +324,13 @@ ai-memory upgrade --force
 That downloads `ai-memory-windows-x86_64.zip` + `.sha256`, verifies the
 checksum, replaces `ai-memory.exe` via rename-aside (Windows cannot overwrite
 a running image), refreshes a sibling `hooks/` tree when present, then
-re-stages hooks for agents already under the data-dir hooks tree. Keep the
-manual zip download above as a fallback if the install directory is not
-writable (for example under Program Files).
+re-stages hooks for agents already under the data-dir hooks tree. It also
+re-renders existing ai-memory-owned OpenCode, OpenCode 2, OMP, Pi, and OpenClaw
+TypeScript integrations from the newly installed binary's templates at their
+default or active-profile paths; absent and user-owned files are left untouched.
+Keep the manual zip download above as a
+fallback if the install directory is not writable (for example under Program
+Files).
 
 The zip mirrors the Linux release tarball, minus the Linux-only service
 assets: it contains `ai-memory.exe`, the full `hooks/` bundle (`.ps1` +
@@ -438,6 +527,43 @@ Remove-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -N
 `setup --no-service` skips writing the entry but does not remove one that
 already exists. Without the entry, run `ai-memory serve --transport http`
 in a terminal or use the WinSW service below.
+
+#### Security suites that rewrite AI-tool traffic
+
+Some consumer security suites intercept the network traffic of programs they
+classify as AI tools, and of the processes those tools start. This covers
+plain `http://` traffic too, not only HTTPS. A product that re-frames the
+server's response on the way back hands the client a malformed body, and the
+bridge and hooks fail while the server itself is healthy. This was seen with
+the Safe AI feature of Norton 360 Deluxe 26.10, on processes started by
+Antigravity talking to an `http://` server URL. Avast and AVG come from the
+same vendor and may behave the same way.
+
+Only the applications the product recognizes are affected. On the machine
+above, Safe AI listed Claude, Claude Code, Google Antigravity IDE and Visual
+Studio Code; DeepSeek Harness and Hermes Agent were not on the list, and
+their bridge and hooks to the same server kept working. The list grows with
+product updates, so an agent that works today can start failing after one.
+One agent failing while another on the same machine works points at this
+cause rather than at the server.
+
+**Symptoms.** `ai-memory mcp-bridge` or `ai-memory hook` fails with an HTTP
+decoding error such as `Invalid chunk size line: missing size digit`. The
+response arrives with `Transfer-Encoding: chunked` in place of
+`Content-Length`, but the body is not chunk-encoded. The same request from a
+terminal you opened yourself succeeds. MCP tools and hook capture stop
+together, and only for the agent the product protects.
+
+**How to tell.** Look for the agent in the product's list of protected AI
+tools (in Norton: Safe AI, the tab listing your AI tools). If the error goes away after you turn the
+feature off and restart the agent, the product was the cause.
+
+**What to do.** Turn the feature off (in Norton, switch off Safe AI), then
+restart the agent so the bridge reconnects. This is a different problem from
+the untrusted interception root in
+[HTTPS via a reverse proxy](https-via-proxy.md#outbound-llm-calls-fail-behind-a-tls-inspecting-firewall):
+it happens on plain HTTP as well, and installing the product's root
+certificate does not fix it.
 
 ### A real Windows service
 
@@ -711,10 +837,12 @@ large-backlog instances can raise them with whole-minute overrides. Unlike
 apply to the agent's environment (no re-`install-hooks` needed):
 
 Native hooks accept well-formed JSON with or without one leading UTF-8 BOM, as
-some PowerShell pipelines add that marker when writing to a native process. Any
-other malformed stdin is not spooled or sent; the hook prints a fixed warning
-to stderr, returns `{}` on stdout, and exits successfully so it cannot break the
-host agent. The warning never includes payload contents.
+some PowerShell pipelines add that marker when writing to a native process. The
+server's `/hook` ingress skips the same marker, so a shell-bundle hook that
+forwards it unchanged is still stored. Any other malformed stdin is not spooled
+or sent; the hook prints a fixed warning to stderr, returns `{}` on stdout, and
+exits successfully so it cannot break the host agent. The warning never
+includes payload contents.
 
 | Env var | Built-in default | Max override | What it caps |
 |---|---:|---:|---|

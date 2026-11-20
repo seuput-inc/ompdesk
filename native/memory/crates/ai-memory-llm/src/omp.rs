@@ -211,8 +211,9 @@ fn parse_events(stdout: &str) -> LlmResult<Answer> {
             status: 502,
             body: format!(
                 "omp's model call failed: {}",
-                cli::truncate_chars(detail, 500)
+                cli::child_output_excerpt(detail, 500)
             ),
+            retry_after: None,
         });
     }
     let text: String = message["content"]
@@ -299,6 +300,22 @@ mod tests {
         let err = parse_events(stdout).unwrap_err();
         assert!(err.to_string().contains("429 rate limited"), "{err}");
         assert!(parse_events("{\"type\":\"agent_end\"}").is_err());
+    }
+
+    #[test]
+    fn a_model_error_does_not_expose_credentials() {
+        let secret = format!("ghp_{}", "FAKEfake0123".repeat(3));
+        let event = serde_json::json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "error",
+                "errorMessage": format!("access denied for {secret}")
+            }
+        });
+        let err = parse_events(&event.to_string()).unwrap_err().to_string();
+        assert!(err.contains("access denied"), "{err}");
+        assert!(!err.contains("ghp_"), "{err}");
     }
 
     #[cfg(unix)]

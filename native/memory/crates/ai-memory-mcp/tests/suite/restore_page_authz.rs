@@ -2,11 +2,11 @@
 //!
 //! Git keeps every version the live wiki dropped: a page a root deleted, a
 //! session purge removed, an expired page the forget sweep hard-deleted. The
-//! tool's listing names those versions and a restore brings their text back,
-//! so both carry the authority of root-only `/admin/restore-page`. These tests
-//! drive the real `require_bearer` middleware with real `aim_` DB-user tokens
-//! and the trusted-proxy rung, attempt each bypass, and keep a root control
-//! beside every refusal so a blanket deny cannot pass for the guard.
+//! tool's listing names those versions; restoring refuses purged session
+//! summaries. Both carry the authority of root-only `/admin/restore-page`.
+//! These tests drive the real `require_bearer` middleware with real `aim_`
+//! DB-user tokens and the trusted-proxy rung, attempt each bypass, and keep a
+//! root control beside every refusal so a blanket deny cannot pass for the guard.
 
 use ai_memory_core::{ActorContext, ApiCredentialId, NewUser, ProjectId, UserRole};
 use ai_memory_mcp::AiMemoryServer;
@@ -75,7 +75,7 @@ async fn harness() -> Harness {
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true),
     );
     let auth = AuthState::new(Some(ROOT_TOKEN.to_string()))
@@ -457,5 +457,33 @@ async fn a_personal_slot_restores_to_its_exact_path_and_only_for_root() {
         root_reads(&h, "scratch", "_slots/current-focus.md").await,
         None,
         "a restore must never land on the shared slot"
+    );
+}
+
+/// The agent-facing `memory_delete_page` tool acknowledges an already-absent
+/// path with `deleted: true` — the idempotent "the page is gone" contract the
+/// TS SDK's `DeletePageResult` documents and relies on. #2181 made the shared
+/// `Wiki::delete_page` honest so `ai-memory profile forget` can tell a real
+/// deletion from a no-op, but that honesty lives on `/admin/delete-page`, not
+/// here: a regression to `false` on this tool breaks the SDK and was what broke
+/// `main` CI (#2190). The scope ("scratch") exists; only the page is absent.
+#[tokio::test]
+async fn memory_delete_page_acks_an_absent_page() {
+    let h = harness().await;
+    let acked = call(
+        &h.http,
+        ROOT_TOKEN,
+        "memory_delete_page",
+        scoped(
+            "scratch",
+            json!({ "path": "profile/workflow/never-there.md" }),
+        ),
+    )
+    .await
+    .expect("deleting an absent page in a resolved scope succeeds");
+    assert_eq!(
+        acked["deleted"],
+        json!(true),
+        "memory_delete_page must ack deleted:true for an already-absent page"
     );
 }
