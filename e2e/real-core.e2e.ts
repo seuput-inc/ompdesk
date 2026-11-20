@@ -326,14 +326,18 @@ test("system omp persists settings and sessions and serves every stats route", a
 		await expect(themes).toBeVisible();
 		await page.screenshot({ path: "test-results/05-packaged-ko.png", scale: "css", animations: "disabled" });
 		const backgrounds: string[] = [];
-		for (const theme of ["OMPdesk 라이트", "OMPdesk 다크"]) {
-			await themes.getByRole("radio", { name: theme }).click();
-			await expect(themes.getByRole("radio", { name: theme })).toHaveAttribute("aria-checked", "true");
+		// The OMPdesk set in its light and its dark mode (ThemePicker: the set's card, then the mode's segment).
+		await themes.locator('[data-theme-set="ompdesk"]').click();
+		await expect(themes.locator('[data-theme-set="ompdesk"]')).toHaveAttribute("aria-checked", "true");
+		for (const mode of ["light", "dark"]) {
+			const segment = settings.locator(`[data-theme-mode="${mode}"]`);
+			await segment.click();
+			await expect(segment).toHaveAttribute("aria-checked", "true");
 			backgrounds.push(
 				await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--omp-bg-primary")),
 			);
 			await page.screenshot({
-				path: `test-results/packaged-theme-${theme}.png`,
+				path: `test-results/packaged-theme-ompdesk-${mode}.png`,
 				scale: "css",
 				animations: "disabled",
 			});
