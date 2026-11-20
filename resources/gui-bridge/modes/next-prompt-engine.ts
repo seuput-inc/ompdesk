@@ -658,8 +658,12 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 			request(trigger);
 			return;
 		}
-		compactedSinceSuggestion = false;
-		remember(key, stateKey);
+		let keptKey = stateKey;
+		if (compactedSinceSuggestion) {
+			compactedSinceSuggestion = false;
+			keptKey = moment(session).key;
+		}
+		remember(key, keptKey);
 		lastModel = resolved.used;
 		const candidates = cleanCandidates(text, {
 			register,
@@ -678,7 +682,7 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 		const wasUnavailable = unavailable !== undefined;
 		unavailable = undefined;
 		const id = crypto.randomUUID();
-		keepSuggestion(session, { id, candidates, used: resolved.used, at: Date.now(), key: stateKey });
+		keepSuggestion(session, { id, candidates, used: resolved.used, at: Date.now(), key: keptKey });
 		const update: NextPromptUpdate = {
 			type: "next_prompt_update",
 			status: "ready",

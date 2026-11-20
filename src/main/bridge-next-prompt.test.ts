@@ -404,6 +404,12 @@ describe("regeneration", () => {
 		expect(world.calls).toHaveLength(2);
 		expect(world.calls[1]?.context.messages[0]?.content).toContain("history: compacted");
 		expect(updates(world).at(-1)).toMatchObject({ trigger: "compaction" });
+		const shown = updates(world).at(-1);
+		world.hooks.get("session_switch")?.({}, main);
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
+		await flush();
+		expect(world.calls).toHaveLength(2);
+		expect(updates(world).at(-1)).toEqual(shown);
 		await handlers.next_prompt_refresh({ reason: "bash" }, world.env);
 		world.session.messages.push({
 			role: "bashExecution",
