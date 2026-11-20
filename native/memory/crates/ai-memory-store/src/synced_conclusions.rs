@@ -23,7 +23,9 @@ use rusqlite::{Connection, OptionalExtension, Statement, params, params_from_ite
 use serde::Serialize;
 
 use crate::error::{StoreError, StoreResult};
-use crate::reader::{CONCLUSION_SNIPPET_TOKENS, ConclusionHit};
+use crate::reader::{
+    CONCLUSION_SNIPPET_TOKENS, ConclusionHit, FTS_HIGHLIGHT_END, FTS_HIGHLIGHT_START,
+};
 
 /// Longest conclusion body a copy keeps, in UTF-8 bytes. The capture side cuts
 /// the excerpt to the same size.
@@ -529,7 +531,7 @@ pub(crate) fn search_synced(
         .collect::<Result<Vec<_>, _>>()?;
     drop(stmt);
     let mut excerpt_of = conn.prepare(&format!(
-        "SELECT snippet(synced_conclusions_fts, 1, '<mark>', '</mark>', '…', \
+        "SELECT snippet(synced_conclusions_fts, 1, '{FTS_HIGHLIGHT_START}', '{FTS_HIGHLIGHT_END}', '…', \
                         {CONCLUSION_SNIPPET_TOKENS}) \
          FROM synced_conclusions_fts WHERE synced_conclusions_fts MATCH ?1 AND rowid = ?2"
     ))?;

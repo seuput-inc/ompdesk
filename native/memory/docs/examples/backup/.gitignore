@@ -7,10 +7,11 @@
 #     _prompts pages, since those are irreplaceable.
 #   - Keep raw/ if you want the untouched observation ledger, drop it if you
 #     want a small repository.
-#   - Never commit derived state (db/) or downloaded weights (models/), and
-#     never commit secrets.
+#   - Never commit derived state (db/) or downloaded weights (models/).
+#   - Exclude common standalone secret files. This cannot redact credentials
+#     stored inline in config.toml; omit that file or encrypt the repository.
 
-# Secrets — belt and braces alongside the rsync SECRET_EXCLUDES list.
+# Common standalone secrets — belt and braces alongside SECRET_EXCLUDES.
 config/*.env
 config/**/*.env
 config/auth.json
@@ -20,6 +21,16 @@ config/**/.secrets
 
 # Server pidfile.
 data/.serve.lock
+
+# Bearer tokens and hook Authorization material (plaintext, mode 0600). These
+# grant full access to the server; a mirror push would expose them. NEVER sync.
+data/auth-tokens/
+data/auth-token
+data/auth-header
+
+# Pre-delivery hook spool: transient, drained after delivery, and may hold
+# un-sanitized payload text. Not durable memory (that is wiki/ and raw/).
+data/hook-spool/
 
 # Derived SQLite index (rebuildable via `ai-memory reindex`).
 data/db/

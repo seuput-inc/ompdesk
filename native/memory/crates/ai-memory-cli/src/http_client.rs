@@ -11,9 +11,7 @@
 //! and can fall back to the stored OIDC device-flow token used by native hooks.
 
 use std::fmt;
-use std::io::{BufWriter, Write as _};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::io::{BufWriter, Read as _, Seek as _, Write as _};
 use std::path::Path;
 use std::time::Duration;
 
@@ -22,6 +20,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::config::{Config, DEFAULT_SERVER_URL};
+use crate::server_profiles::Route;
 use ai_memory_web::normalize_prefix;
 
 /// [`ai_memory_hooks::CLIENT_MARKER_HEADER`] value for CLI subcommands.
@@ -30,6 +29,7 @@ const CLI_CLIENT_KIND: &str = "cli";
 /// Non-success response returned by the configured ai-memory server.
 #[derive(Debug)]
 pub(crate) struct ServerResponseError {
+    i18n: ai_memory_core::i18n::Localizer,
     method: reqwest::Method,
     path: String,
     status: reqwest::StatusCode,
@@ -50,23 +50,29 @@ impl ServerResponseError {
 
 impl fmt::Display for ServerResponseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{} {}: server returned {}: {}",
-            self.method, self.path, self.status, self.body
-        )
+        formatter.write_str(&self.i18n.format(
+            "cli-http-server-response",
+            &[
+                ("method", self.method.to_string()),
+                ("path", self.path.clone()),
+                ("status", self.status.to_string()),
+                ("detail", crate::commands::show::terminal_body(&self.body)),
+            ],
+        ))
     }
 }
 
 impl std::error::Error for ServerResponseError {}
 
 fn server_response_error(
+    i18n: &ai_memory_core::i18n::Localizer,
     method: reqwest::Method,
     url: &reqwest::Url,
     status: reqwest::StatusCode,
     body: String,
 ) -> anyhow::Error {
     ServerResponseError {
+        i18n: i18n.clone(),
         method,
         path: url.path().to_owned(),
         status,
@@ -83,6 +89,7 @@ pub(crate) fn server_response_error_for_test(
     body: String,
 ) -> anyhow::Error {
     ServerResponseError {
+        i18n: ai_memory_core::i18n::Localizer::default(),
         method,
         path: path.to_owned(),
         status,
@@ -98,6 +105,7 @@ pub(crate) fn server_response_error_for_test(
 /// credentials in the URL never land in a message. `reqwest` does not carry
 /// the request method on the response, so callers supply it.
 async fn require_success(
+    i18n: &ai_memory_core::i18n::Localizer,
     method: reqwest::Method,
     resp: reqwest::Response,
 ) -> Result<reqwest::Response> {
@@ -107,12 +115,14 @@ async fn require_success(
     }
     let url = resp.url().clone();
     let body = resp.text().await.unwrap_or_default();
-    Err(server_response_error(method, &url, status, body))
+    Err(server_response_error(i18n, method, &url, status, body))
 }
 
 /// Resolved server target — origin URL + base-path prefix + optional bearer token.
 #[derive(Debug, Clone)]
 pub struct ServerEndpoint {
+    /// Human error/output language inherited from the command.
+    pub i18n: ai_memory_core::i18n::Localizer,
     /// Origin only (scheme + authority), any trailing slash and path
     /// stripped, e.g. `http://127.0.0.1:49374` or `http://192.168.0.90:49374`.
     pub url: String,
@@ -143,19 +153,66 @@ impl ServerEndpoint {
     ///    container as `serve`, which already reads the same env var via
     ///    clap to nest its router).
     pub async fn from_config_resolving_auth(config: &Config) -> Self {
-        let client = reqwest::Client::new();
+        let client = http_client();
         let token = crate::auth_bearer::resolve_bearer(
             &client,
             &config.oidc_device_token_path(),
             config.auth.bearer_token.as_deref(),
         )
         .await;
-        Self::build(
+        let mut endpoint = Self::build(
             Some(config.server_url.clone()),
             token,
             config.server_url_configured(),
             Some(config.base_path.clone()).filter(|s| !s.is_empty()),
-        )
+        );
+        endpoint.i18n = config.i18n.clone();
+        endpoint
+    }
+
+    /// Build the endpoint for a command that works on the checkout it runs
+    /// in (#2016): the server the hooks capture to from the same directory.
+    ///
+    /// Precedence: `AI_MEMORY_SERVER_URL` in the environment, then the server
+    /// profile the nearest marker selects (its URL and stored token, never the
+    /// config bearer, which belongs to another server), then config, as
+    /// [`Self::from_config_resolving_auth`]. `AI_MEMORY_IGNORE_MARKER` skips
+    /// the marker here as it does for scope.
+    ///
+    /// # Errors
+    /// A marker that selects a profile which does not resolve fails closed,
+    /// like the hook drops the event: falling back to config would send this
+    /// checkout's requests to another team's server.
+    pub(crate) async fn for_checkout(config: &Config) -> Result<Self> {
+        Self::from_checkout_route(config, checkout_route(config)).await
+    }
+
+    /// Resolve a selected checkout without borrowing the process cwd or its
+    /// Docker scope overrides. Managed pickers launch native host paths.
+    pub(crate) async fn for_checkout_at(config: &Config, cwd: &Path) -> Result<Self> {
+        Self::from_checkout_route(config, checkout_route_at(config, cwd)).await
+    }
+
+    async fn from_checkout_route(config: &Config, route: Route) -> Result<Self> {
+        match route {
+            Route::InstallDefault => Ok(Self::from_config_resolving_auth(config).await),
+            Route::Profile(profile) => {
+                let mut endpoint = Self::build(Some(profile.url), Some(profile.token), true, None);
+                endpoint.i18n = config.i18n.clone();
+                Ok(endpoint)
+            }
+            Route::Rejected { name, reason } => Err(anyhow::anyhow!(
+                "this checkout's .ai-memory.toml selects server profile {}, which was refused \
+                 ({}); nothing was sent. Run `ai-memory hook --check-capture` here or \
+                 `ai-memory server list` to see why, or set AI_MEMORY_SERVER_URL to choose \
+                 a server for this command",
+                name.map_or_else(
+                    || "(unreadable marker)".to_owned(),
+                    |name| format!("`{name}`")
+                ),
+                reason.as_str(),
+            )),
+        }
     }
 
     /// Build for a target the spawning hook already resolved: its URL
@@ -211,6 +268,7 @@ impl ServerEndpoint {
             normalize_prefix(&url_path)
         };
         Self {
+            i18n: ai_memory_core::i18n::Localizer::default(),
             url: origin,
             base_path,
             auth_token: token.filter(|s| !s.is_empty()),
@@ -253,6 +311,31 @@ impl ServerEndpoint {
     }
 }
 
+/// The server route for the directory this command runs in; see
+/// [`ServerEndpoint::for_checkout`].
+pub(crate) fn checkout_route(config: &Config) -> Route {
+    let Some((_, lookup_cwd)) = crate::commands::scope_directories(config) else {
+        return Route::InstallDefault;
+    };
+    checkout_route_at(config, Path::new(&lookup_cwd))
+}
+
+/// The same routing policy for an explicitly selected native checkout.
+pub(crate) fn checkout_route_at(config: &Config, cwd: &Path) -> Route {
+    let env = &config.runtime_env;
+    if env.server_url().is_some() || env.ignore_marker() {
+        return Route::InstallDefault;
+    }
+    // The hooks route the harness's logical cwd, so match a profile's roots
+    // against the same spelling of this directory (#2016).
+    let lookup_cwd = crate::commands::path_util::logical_dir(cwd, env.var_os("PWD").as_deref());
+    crate::server_profiles::route_for_cwd(
+        &config.data_dir,
+        &lookup_cwd.to_string_lossy(),
+        env.home_dir().map(Path::new),
+    )
+}
+
 /// Split a server URL into `(origin, path)` where `origin` is
 /// scheme+authority (`http://host:port`) and `path` is everything from the
 /// first `/` after the authority (`/wiki`, possibly empty). Trailing slashes
@@ -273,6 +356,62 @@ pub(crate) fn split_origin_and_path(raw: &str) -> (String, String) {
     (trimmed.to_string(), String::new())
 }
 
+/// `url` as a log line or error message may print it: without the
+/// `user:pass@` userinfo a URL can carry, and never the raw text of one that
+/// does not parse (it could hold that userinfo in a form the parser rejects).
+pub(crate) fn display_url(url: &str) -> String {
+    let Ok(mut parsed) = reqwest::Url::parse(url) else {
+        return "an unparsable URL".to_owned();
+    };
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.to_string()
+}
+
+/// Whether `url` names a server on this machine: an `http`/`https` URL whose
+/// host is `localhost`, an address in `127.0.0.0/8`, or `[::1]`, carrying no
+/// user information.
+///
+/// Parsed the way the HTTP client parses it, so the host checked here is the
+/// host a request would reach. Text before an `@` is user information, not
+/// the host, and a URL that has any is refused outright rather than
+/// interpreted. `localhost.` (trailing dot) is refused too: a fully qualified
+/// name can be answered by a DNS server instead of the local resolver. This
+/// gates the install's own root token (`config.rs`, `mcp-bridge`), so an
+/// unparsable or ambiguous URL is never treated as local.
+pub(crate) fn is_loopback_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return v6
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    }
+    host.parse::<std::net::Ipv4Addr>()
+        .map_or(host == "localhost", |ip| ip.is_loopback())
+}
+
+/// Shared reqwest client for thin-client CLI subcommands. Redirects are
+/// disabled so a 3xx from an SSO portal or proxy cannot be followed: JSON
+/// GET/POST would otherwise consume a login page, and a 307/308 would replay
+/// the body.
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// GET `<endpoint>{path}` with optional query params, deserialise JSON.
 ///
 /// # Errors
@@ -283,7 +422,7 @@ pub async fn get_json<T: DeserializeOwned>(
     path: &str,
     query: &[(&str, &str)],
 ) -> Result<T> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = endpoint.build_url(path);
     let mut req = client.get(&url);
     if !query.is_empty() {
@@ -294,10 +433,10 @@ pub async fn get_json<T: DeserializeOwned>(
         .send()
         .await
         .map_err(|e| augment_connect_error(e, endpoint, &url))?;
-    let resp = require_success(reqwest::Method::GET, resp).await?;
+    let resp = require_success(&endpoint.i18n, reqwest::Method::GET, resp).await?;
     resp.json::<T>()
         .await
-        .with_context(|| format!("parsing JSON body from GET {url}"))
+        .with_context(|| format!("parsing JSON body from GET {}", display_url(&url)))
 }
 
 /// PATCH JSON body to `<endpoint>{path}`, deserialise JSON response.
@@ -309,17 +448,17 @@ pub async fn patch_json<B: Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
 ) -> Result<T> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = endpoint.build_url(path);
     let req = endpoint.authenticate(client.patch(&url).json(body));
     let resp = req
         .send()
         .await
         .map_err(|e| augment_connect_error(e, endpoint, &url))?;
-    let resp = require_success(reqwest::Method::PATCH, resp).await?;
+    let resp = require_success(&endpoint.i18n, reqwest::Method::PATCH, resp).await?;
     resp.json::<T>()
         .await
-        .with_context(|| format!("parsing JSON body from PATCH {url}"))
+        .with_context(|| format!("parsing JSON body from PATCH {}", display_url(&url)))
 }
 
 /// POST JSON body to `<endpoint>{path}`, deserialise JSON response.
@@ -340,27 +479,27 @@ pub async fn post_json_no_content<B: Serialize>(
     path: &str,
     body: &B,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = endpoint.build_url(path);
     let req = endpoint.authenticate(client.post(&url).json(body));
     let resp = req
         .send()
         .await
         .map_err(|e| augment_connect_error(e, endpoint, &url))?;
-    require_success(reqwest::Method::POST, resp).await?;
+    require_success(&endpoint.i18n, reqwest::Method::POST, resp).await?;
     Ok(())
 }
 
 /// POST an empty body and require a successful response.
 pub async fn post_empty(endpoint: &ServerEndpoint, path: &str) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = endpoint.build_url(path);
     let req = endpoint.authenticate(client.post(&url));
     let resp = req
         .send()
         .await
         .map_err(|e| augment_connect_error(e, endpoint, &url))?;
-    require_success(reqwest::Method::POST, resp).await?;
+    require_success(&endpoint.i18n, reqwest::Method::POST, resp).await?;
     Ok(())
 }
 
@@ -374,7 +513,7 @@ pub async fn post_json_with_query<B: Serialize, T: DeserializeOwned>(
     query: &[(&str, &str)],
     body: &B,
 ) -> Result<T> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = build_url_with_query(endpoint, path, query)?;
     let req = client.post(&url);
     let req = endpoint.authenticate(req.json(body));
@@ -382,10 +521,10 @@ pub async fn post_json_with_query<B: Serialize, T: DeserializeOwned>(
         .send()
         .await
         .map_err(|e| augment_connect_error(e, endpoint, &url))?;
-    let resp = require_success(reqwest::Method::POST, resp).await?;
+    let resp = require_success(&endpoint.i18n, reqwest::Method::POST, resp).await?;
     resp.json::<T>()
         .await
-        .with_context(|| format!("parsing JSON body from POST {url}"))
+        .with_context(|| format!("parsing JSON body from POST {}", display_url(&url)))
 }
 
 fn build_url_with_query(
@@ -410,29 +549,19 @@ pub(crate) fn augment_connect_error(
     endpoint: &ServerEndpoint,
     url: &str,
 ) -> anyhow::Error {
+    let i18n = &endpoint.i18n;
     if error_chain_indicates_no_answer(&err) {
-        let hint = if endpoint.url_configured {
-            format!(
-                "\nAI_MEMORY_SERVER_URL is set to {} but nothing answered \
-                 (refused or timed out). Check the server is running, the \
-                 port is reachable from this host, and (if remote) any \
-                 firewall + bearer-token config matches.",
-                endpoint.url
-            )
-        } else {
-            format!(
-                "\nAI_MEMORY_SERVER_URL is NOT set; the CLI defaulted to \
-                 {} and nothing answered (refused or timed out). If your \
-                 server lives on another machine (e.g. a homelab), `export \
-                 AI_MEMORY_SERVER_URL=http://<server>:49374` and (if auth \
-                 is on) `export AI_MEMORY_AUTH_TOKEN=<token>` before \
-                 re-running.",
-                endpoint.url
-            )
-        };
-        anyhow::Error::new(err).context(format!("could not reach {url}.{hint}"))
+        let hint = i18n.one(
+            if endpoint.url_configured {
+                "cli-http-configured-server-hint"
+            } else {
+                "cli-http-default-server-hint"
+            },
+            display_url(&endpoint.url),
+        );
+        anyhow::Error::new(err).context(i18n.two("cli-http-unreachable", display_url(url), hint))
     } else {
-        anyhow::Error::new(err).context(format!("HTTP request to {url} failed"))
+        anyhow::Error::new(err).context(i18n.one("cli-http-request-failed", display_url(url)))
     }
 }
 
@@ -518,7 +647,7 @@ pub(crate) async fn probe_server(endpoint: &ServerEndpoint) -> ServerProbe {
 }
 
 async fn probe_server_with_timeout(endpoint: &ServerEndpoint, timeout: Duration) -> ServerProbe {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = endpoint.build_url("/healthz");
     match client.get(&url).timeout(timeout).send().await {
         Ok(_) => ServerProbe::Reachable,
@@ -528,30 +657,36 @@ async fn probe_server_with_timeout(endpoint: &ServerEndpoint, timeout: Duration)
 
 /// POST an empty body to `<endpoint>{path}`, streaming the response to `dest`.
 ///
-/// Intended for routes whose response is binary (e.g. `POST /admin/backup`
-/// returns an `application/gzip` tarball). On non-2xx the response body is
-/// consumed and returned as an error string. Returns bytes written.
+/// Intended for routes returning gzip archives, such as `POST /admin/backup`.
+/// On non-2xx the response body is consumed and returned as an error string.
+/// A complete download that is a valid gzip stream atomically replaces the
+/// destination path and returns the number of bytes written. A destination
+/// symlink is replaced rather than modifying the file it points to. Replacement
+/// symlinks and new destinations use private permissions; only existing regular
+/// files retain their permissions.
 ///
 /// # Errors
 /// Returns an error when the connection fails, the response is non-2xx,
-/// or the body cannot be read or written.
+/// the body cannot be read or written, the gzip signature is missing, or the
+/// gzip stream is corrupt or truncated.
 pub async fn post_to_file(endpoint: &ServerEndpoint, path: &str, dest: &Path) -> Result<u64> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = endpoint.build_url(path);
     let req = endpoint.authenticate(client.post(&url));
     let resp = req
         .send()
         .await
         .map_err(|e| augment_connect_error(e, endpoint, &url))?;
-    let mut resp = require_success(reqwest::Method::POST, resp).await?;
-    let file = private_output_file(dest)
-        .with_context(|| format!("creating output file {}", dest.display()))?;
-    let mut writer = BufWriter::new(file);
+    let mut resp = require_success(&endpoint.i18n, reqwest::Method::POST, resp).await?;
+    let permissions = checked_output_permissions(dest)?;
+    let mut temporary = private_output_file(dest)
+        .with_context(|| format!("creating temporary output beside {}", dest.display()))?;
+    let mut writer = BufWriter::new(temporary.as_file_mut());
     let mut written = 0_u64;
     while let Some(chunk) = resp
         .chunk()
         .await
-        .with_context(|| format!("reading response chunk from POST {url}"))?
+        .with_context(|| format!("reading response chunk from POST {}", display_url(&url)))?
     {
         writer
             .write_all(&chunk)
@@ -561,25 +696,148 @@ pub async fn post_to_file(endpoint: &ServerEndpoint, path: &str, dest: &Path) ->
     writer
         .flush()
         .with_context(|| format!("flushing {}", dest.display()))?;
+    drop(writer);
+    // A gateway can return a login page with a success status. Check the body
+    // because an intermediary may omit or rewrite the media type.
+    const GZIP_SIGNATURE: [u8; 3] = [0x1f, 0x8b, 0x08];
+    let mut signature = [0; GZIP_SIGNATURE.len()];
+    if written >= signature.len() as u64 {
+        let staged = temporary.as_file_mut();
+        staged
+            .rewind()
+            .and_then(|()| staged.read_exact(&mut signature))
+            .context(endpoint.i18n.text("cli-archive-download-reading-signature"))?;
+    }
+    if signature != GZIP_SIGNATURE {
+        anyhow::bail!("{}", endpoint.i18n.text("cli-archive-download-not-gzip"));
+    }
+    // The signature only proves the first bytes; a complete body can still
+    // carry a corrupt CRC or a truncated trailer, which `restore` would reject
+    // after this archive had already replaced a usable one. Decode the staged
+    // file to its end — that validates the CRC and length trailer — before the
+    // rename. Bounded memory: the inflated output streams into a sink (#2206).
+    {
+        let staged = temporary.as_file_mut();
+        staged
+            .rewind()
+            .context(endpoint.i18n.text("cli-archive-download-reading-signature"))?;
+        let mut decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(staged));
+        std::io::copy(&mut decoder, &mut std::io::sink())
+            .context(endpoint.i18n.text("cli-archive-download-corrupt-gzip"))?;
+    }
+    // Keep the staged file private until the complete response passes the check.
+    if let Some(permissions) = permissions {
+        temporary
+            .as_file()
+            .set_permissions(permissions)
+            .with_context(|| format!("preserving permissions for {}", dest.display()))?;
+    }
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("syncing temporary output beside {}", dest.display()))?;
+    let persisted = temporary
+        .persist(dest)
+        .map_err(|error| error.error)
+        .with_context(|| format!("replacing output file {}", dest.display()))?;
+    persisted
+        .sync_all()
+        .with_context(|| format!("syncing output file {}", dest.display()))?;
+    if let Ok(directory) = std::fs::File::open(output_parent(dest)) {
+        let _ = directory.sync_all();
+    }
     Ok(written)
 }
 
-/// Open a downloaded backup output file with private permissions before the
-/// first response bytes are written. Existing user-selected output files keep
-/// their existing permissions when overwritten.
-fn private_output_file(path: &Path) -> std::io::Result<std::fs::File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    options.open(path)
+/// Atomic replacement still requires permission to write an existing regular
+/// file. Opening without create or truncate checks OS permissions and ACLs
+/// without changing the archive before the response is complete.
+fn checked_output_permissions(dest: &Path) -> Result<Option<std::fs::Permissions>> {
+    match std::fs::symlink_metadata(dest) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(None),
+        Ok(metadata) if metadata.is_file() => {
+            let probe = std::fs::OpenOptions::new()
+                .write(true)
+                .open(dest)
+                .with_context(|| {
+                    format!(
+                        "checking output file write permission for {}",
+                        dest.display()
+                    )
+                })?;
+            drop(probe);
+            Ok(Some(metadata.permissions()))
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            anyhow::bail!("output path is a directory: {}", dest.display());
+        }
+        Ok(_) => anyhow::bail!("output path is not a regular file: {}", dest.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).context("reading output file permissions"),
+    }
+}
+
+/// Download beside the destination so publication is an atomic rename on the
+/// same filesystem. NamedTempFile removes an incomplete response on every exit.
+fn private_output_file(path: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(".ai-memory-download.")
+        .tempfile_in(output_parent(path))
+}
+
+fn output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
 
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// The host checked must be the host a request reaches: user
+    /// information before an `@` is refused, never read as the host.
+    #[test]
+    fn loopback_url_is_decided_by_the_parsed_host() {
+        for url in [
+            "http://127.0.0.1:49374",
+            "http://localhost:49374/mcp",
+            "http://LOCALHOST:1",
+            "https://localhost",
+            "http://[::1]:49374",
+            "http://[::1]",
+            "http://127.0.0.2:1",
+            "http://127.255.255.254/",
+        ] {
+            assert!(is_loopback_url(url), "{url} is loopback");
+        }
+        for url in [
+            "http://localhost:80@attacker.example/",
+            "http://127.0.0.1:1@evil.example/",
+            "http://u:p@[::1]:49374@evil.example/",
+            "http://user@localhost:49374",
+            "http://user:pw@127.0.0.1:49374",
+            "http://evil.example#@localhost:1",
+            "http://evil.example/?@localhost:1",
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example",
+            "http://localhost.:49374",
+            "http://0.0.0.0:49374",
+            "http://192.168.1.10:49374",
+            "http://[::ffff:127.0.0.1]:49374",
+            "ftp://localhost/",
+            "localhost:49374",
+            "not a url",
+            "",
+        ] {
+            assert!(!is_loopback_url(url), "{url} is not loopback");
+        }
+    }
 
     #[test]
     fn only_an_unanswered_request_is_unreachable() {
@@ -599,6 +857,19 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn output_write_permission_probe_never_truncates_existing_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("backup.tar.gz");
+        std::fs::write(&output, b"previous usable archive").unwrap();
+        assert!(
+            super::checked_output_permissions(&output)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous usable archive");
+    }
+
     #[cfg(unix)]
     #[test]
     fn downloaded_backup_output_is_private_when_created() {
@@ -606,9 +877,13 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let output = temp.path().join("backup.tar.gz");
-        private_output_file(&output).unwrap();
+        let temporary = private_output_file(&output).unwrap();
+        assert!(
+            !output.exists(),
+            "download is not published before completion"
+        );
         assert_eq!(
-            std::fs::metadata(output).unwrap().permissions().mode() & 0o777,
+            temporary.as_file().metadata().unwrap().permissions().mode() & 0o777,
             0o600
         );
     }
@@ -620,6 +895,7 @@ mod tests {
         )
         .expect("test URL parses");
         let error = server_response_error(
+            &ai_memory_core::i18n::Localizer::default(),
             reqwest::Method::POST,
             &url,
             reqwest::StatusCode::NOT_FOUND,
@@ -1076,6 +1352,204 @@ mod tests {
         assert!(!PROBE_TIMEOUT.is_zero());
     }
 
+    /// A checkout whose marker selects a server profile, the profile
+    /// registered with a token, and an install whose own server and bearer
+    /// are something else (#2016).
+    struct ProfiledCheckout {
+        _tmp: tempfile::TempDir,
+        home: std::path::PathBuf,
+        repo: std::path::PathBuf,
+        data_dir: std::path::PathBuf,
+    }
+
+    impl ProfiledCheckout {
+        fn new(marker: &str) -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("home");
+            let repo = home.join("work").join("team-b").join("repo");
+            let data_dir = home.join("data");
+            std::fs::create_dir_all(&repo).unwrap();
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(repo.join(".ai-memory.toml"), marker).unwrap();
+            let name = crate::server_profiles::ProfileName::parse("team-b").unwrap();
+            crate::server_profiles::add(
+                &data_dir,
+                &name,
+                "https://b.example/memory",
+                &[home
+                    .join("work")
+                    .join("team-b")
+                    .to_string_lossy()
+                    .into_owned()],
+                Some("PROFILE-TOKEN"),
+            )
+            .unwrap();
+            Self {
+                _tmp: tmp,
+                home,
+                repo,
+                data_dir,
+            }
+        }
+
+        fn config_in(&self, cwd: &Path, server_url: Option<&str>, ignore_marker: bool) -> Config {
+            let mut config = Config {
+                data_dir: self.data_dir.clone(),
+                server_url: server_url.unwrap_or("https://install.example").to_owned(),
+                runtime_env: crate::config::RuntimeEnv::for_checkout_tests(
+                    cwd.to_string_lossy(),
+                    self.home.to_string_lossy(),
+                    server_url,
+                    ignore_marker,
+                ),
+                ..Config::default()
+            };
+            config.auth.bearer_token = Some("INSTALL-TOKEN".to_owned());
+            config
+        }
+
+        fn config(&self, server_url: Option<&str>, ignore_marker: bool) -> Config {
+            self.config_in(&self.repo, server_url, ignore_marker)
+        }
+    }
+
+    /// The marker's profile decides the server and the bearer, the same way
+    /// the hook routes capture from this directory; the install's own bearer
+    /// never travels to the profile's server.
+    #[tokio::test]
+    async fn a_checkout_command_uses_the_marker_profile_like_the_hook() {
+        let checkout = ProfiledCheckout::new("server = \"team-b\"\n");
+        let config = checkout.config(None, false);
+        let hook = crate::server_profiles::route_for_cwd(
+            &checkout.data_dir,
+            &checkout.repo.to_string_lossy(),
+            Some(&checkout.home),
+        );
+        assert_eq!(hook.resolution(), "marker");
+
+        let ep = ServerEndpoint::for_checkout(&config).await.unwrap();
+        assert_eq!(ep.url, "https://b.example");
+        assert_eq!(ep.base_path, "/memory");
+        assert_eq!(ep.auth_token.as_deref(), Some("PROFILE-TOKEN"));
+
+        // A subdirectory inherits the routing.
+        let nested = checkout.repo.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        let ep = ServerEndpoint::for_checkout(&checkout.config_in(&nested, None, false))
+            .await
+            .unwrap();
+        assert_eq!(ep.auth_token.as_deref(), Some("PROFILE-TOKEN"));
+    }
+
+    /// `AI_MEMORY_SERVER_URL` outranks the marker, and
+    /// `AI_MEMORY_IGNORE_MARKER` skips it; both keep the install's bearer.
+    /// Without a `server` key the command keeps its config.
+    #[tokio::test]
+    async fn explicit_env_and_unrouted_checkouts_keep_the_config_server() {
+        let checkout = ProfiledCheckout::new("server = \"team-b\"\n");
+        let ep = ServerEndpoint::for_checkout(&checkout.config(Some("https://env.example"), false))
+            .await
+            .unwrap();
+        assert_eq!(ep.url, "https://env.example");
+        assert_eq!(ep.auth_token.as_deref(), Some("INSTALL-TOKEN"));
+
+        let ep = ServerEndpoint::for_checkout(&checkout.config(None, true))
+            .await
+            .unwrap();
+        assert_eq!(ep.url, "https://install.example");
+        assert_eq!(ep.auth_token.as_deref(), Some("INSTALL-TOKEN"));
+
+        let unrouted = ProfiledCheckout::new("workspace = \"team-b\"\n");
+        let ep = ServerEndpoint::for_checkout(&unrouted.config(None, false))
+            .await
+            .unwrap();
+        assert_eq!(ep.url, "https://install.example");
+        assert_eq!(ep.auth_token.as_deref(), Some("INSTALL-TOKEN"));
+    }
+
+    /// A selection the hook would refuse fails the command closed; it never
+    /// falls back to the install's server with this checkout's request.
+    #[tokio::test]
+    async fn a_refused_marker_profile_fails_closed() {
+        for (marker, reason) in [
+            ("server = \"nobody\"\n", "rejected-unknown-profile"),
+            ("server = \"../x\"\n", "rejected-invalid-profile-name"),
+        ] {
+            let checkout = ProfiledCheckout::new(marker);
+            let error = ServerEndpoint::for_checkout(&checkout.config(None, false))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(!error.contains("install.example"), "{error}");
+            assert!(!error.contains("TOKEN"), "{error}");
+        }
+
+        // The profile's roots do not admit a checkout outside them.
+        let checkout = ProfiledCheckout::new("server = \"team-b\"\n");
+        let outside = checkout.home.join("work").join("team-c");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join(".ai-memory.toml"), "server = \"team-b\"\n").unwrap();
+        let error = ServerEndpoint::for_checkout(&checkout.config_in(&outside, None, false))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("rejected-outside-roots"), "{error}");
+
+        // A profile without a stored token is refused too.
+        let checkout = ProfiledCheckout::new("server = \"team-b\"\n");
+        std::fs::remove_file(checkout.data_dir.join("auth-tokens").join("team-b")).unwrap();
+        let error = ServerEndpoint::for_checkout(&checkout.config(None, false))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("rejected-no-token"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn explicit_target_keeps_profile_refusals_and_explicit_overrides() {
+        let checkout = ProfiledCheckout::new("server = \"team-b\"\n");
+        // The ambient directory and Docker identity point elsewhere. They
+        // still govern ordinary checkout commands, never an explicit target.
+        let config = checkout.config_in(&checkout.home, None, false);
+        let ambient = ServerEndpoint::for_checkout(&config).await.unwrap();
+        assert_eq!(ambient.url, "https://install.example");
+        let selected = ServerEndpoint::for_checkout_at(&config, &checkout.repo)
+            .await
+            .unwrap();
+        assert_eq!(selected.url, "https://b.example");
+        assert_eq!(selected.base_path, "/memory");
+        assert_eq!(selected.auth_token.as_deref(), Some("PROFILE-TOKEN"));
+
+        let outside = checkout.home.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join(".ai-memory.toml"), "server = \"team-b\"\n").unwrap();
+        let refused = ServerEndpoint::for_checkout_at(&config, &outside)
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("rejected-outside-roots"));
+        for (url, ignore_marker, expected) in [
+            (
+                Some("https://override.example"),
+                false,
+                "https://override.example",
+            ),
+            (None, true, "https://install.example"),
+        ] {
+            let config = checkout.config_in(&checkout.home, url, ignore_marker);
+            let endpoint = ServerEndpoint::for_checkout_at(&config, &outside)
+                .await
+                .unwrap();
+            assert_eq!(endpoint.url, expected);
+            assert_eq!(endpoint.auth_token.as_deref(), Some("INSTALL-TOKEN"));
+        }
+        std::fs::remove_file(checkout.data_dir.join("auth-tokens/team-b")).unwrap();
+        let refused = ServerEndpoint::for_checkout_at(&config, &checkout.repo)
+            .await
+            .unwrap_err();
+        assert!(refused.to_string().contains("rejected-no-token"));
+    }
+
     #[tokio::test]
     async fn from_config_resolving_auth_uses_stored_oidc_for_authorization_header() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1111,5 +1585,218 @@ mod tests {
             .unwrap();
 
         assert_eq!(auth, "Bearer oidc-access");
+    }
+
+    // ----------------------------------------------------------------
+    // Redirect refusal (parity with hook_capture::build_client)
+    // ----------------------------------------------------------------
+
+    async fn redirect_server(status: &'static str, target_url: &str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let target = target_url.to_owned();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 {status}\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        format!("http://{addr}")
+    }
+
+    /// An origin that answers `200` with HTML if anyone connects, so a test
+    /// that accidentally follows the redirect fails closed instead of hanging.
+    async fn login_origin() -> (String, Arc<AtomicBool>) {
+        let contacted = Arc::new(AtomicBool::new(false));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/login", listener.local_addr().unwrap());
+        let flag = Arc::clone(&contacted);
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                flag.store(true, Ordering::SeqCst);
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let body = "<html>login</html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (url, contacted)
+    }
+
+    #[tokio::test]
+    async fn http_client_refuses_redirects() {
+        let (target_url, contacted) = login_origin().await;
+        let source_url = redirect_server("307 Temporary Redirect", &target_url).await;
+
+        let response = http_client().get(&source_url).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !contacted.load(Ordering::SeqCst),
+            "redirect target must never be contacted"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_json_does_not_follow_redirect() {
+        let (target_url, contacted) = login_origin().await;
+        let source_url = redirect_server("302 Found", &target_url).await;
+        let endpoint = ServerEndpoint::from_pair(Some(source_url), None);
+        let err = get_json::<serde_json::Value>(&endpoint, "/admin/status", &[])
+            .await
+            .unwrap_err();
+        assert!(
+            err.downcast_ref::<ServerResponseError>()
+                .is_some_and(|error| error.status() == reqwest::StatusCode::FOUND),
+            "302 must fail closed, got: {err:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !contacted.load(Ordering::SeqCst),
+            "redirect target must never be contacted"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_json_no_content_does_not_follow_redirect() {
+        let (target_url, contacted) = login_origin().await;
+        let source_url = redirect_server("307 Temporary Redirect", &target_url).await;
+        let endpoint = ServerEndpoint::from_pair(Some(source_url), None);
+        let err = post_json_no_content(&endpoint, "/admin/write-page", &())
+            .await
+            .unwrap_err();
+        assert!(
+            err.downcast_ref::<ServerResponseError>()
+                .is_some_and(|error| error.status() == reqwest::StatusCode::TEMPORARY_REDIRECT),
+            "307 must fail closed, got: {err:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !contacted.load(Ordering::SeqCst),
+            "redirect target must never be contacted"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_to_file_does_not_follow_a_redirect_or_write_the_target_body() {
+        let (target_url, contacted) = login_origin().await;
+        let source_url = redirect_server("302 Found", &target_url).await;
+        let endpoint = ServerEndpoint::from_pair(Some(source_url), None);
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("backup.tar.gz");
+        std::fs::write(&dest, b"previous usable archive").unwrap();
+        let err = post_to_file(&endpoint, "/admin/backup", &dest)
+            .await
+            .unwrap_err();
+        assert!(
+            err.downcast_ref::<ServerResponseError>()
+                .is_some_and(|error| error.status() == reqwest::StatusCode::FOUND),
+            "302 must fail closed, got: {err:#}"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"previous usable archive");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !contacted.load(Ordering::SeqCst),
+            "redirect target must never be contacted"
+        );
+    }
+
+    /// Serves one `200` response carrying `body` verbatim with a matching
+    /// `Content-Length`, so a test controls the exact bytes a complete,
+    /// successful download delivers.
+    async fn archive_server(body: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes()).await;
+                let _ = stream.write_all(&body).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// A complete `200` whose gzip body is valid is persisted, replacing a
+    /// previous archive — the control the corruption cases are measured against.
+    #[tokio::test]
+    async fn post_to_file_persists_a_valid_gzip_archive() {
+        let good = gzip(b"wiki/example.md\nhello\n");
+        let url = archive_server(good.clone()).await;
+        let endpoint = ServerEndpoint::from_pair(Some(url), None);
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("saved.tar.gz");
+        std::fs::write(&dest, b"previous usable archive").unwrap();
+
+        let written = post_to_file(&endpoint, "/admin/backup", &dest)
+            .await
+            .unwrap();
+        assert_eq!(written, good.len() as u64);
+        assert_eq!(std::fs::read(&dest).unwrap(), good);
+    }
+
+    /// A complete `200` whose gzip body has a flipped CRC byte is rejected and
+    /// the previous archive is left in place (#2206). The signature check alone
+    /// would have replaced it with bytes `restore` then refuses.
+    #[tokio::test]
+    async fn post_to_file_rejects_a_corrupt_gzip_and_keeps_the_previous_archive() {
+        let mut bad = gzip(b"wiki/example.md\nhello\n");
+        let crc_byte = bad.len() - 8;
+        bad[crc_byte] ^= 1;
+        let url = archive_server(bad).await;
+        let endpoint = ServerEndpoint::from_pair(Some(url), None);
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("saved.tar.gz");
+        std::fs::write(&dest, b"previous usable archive").unwrap();
+
+        let err = post_to_file(&endpoint, "/admin/backup", &dest)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("gzip"),
+            "corrupt download must name a gzip failure, got: {err:#}"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"previous usable archive");
+    }
+
+    /// A complete `200` whose gzip body is missing its 8-byte trailer is
+    /// rejected and the previous archive survives (#2206).
+    #[tokio::test]
+    async fn post_to_file_rejects_a_truncated_gzip_trailer_and_keeps_the_previous_archive() {
+        let full = gzip(b"wiki/example.md\nhello\n");
+        let truncated = full[..full.len() - 8].to_vec();
+        let url = archive_server(truncated).await;
+        let endpoint = ServerEndpoint::from_pair(Some(url), None);
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("saved.tar.gz");
+        std::fs::write(&dest, b"previous usable archive").unwrap();
+
+        let err = post_to_file(&endpoint, "/admin/backup", &dest)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("gzip"),
+            "truncated download must name a gzip failure, got: {err:#}"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"previous usable archive");
     }
 }

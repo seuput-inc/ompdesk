@@ -1,21 +1,26 @@
 //! `ai-memory-eval` — offline evaluation harnesses for ai-memory.
 //!
-//! Four subcommands:
+//! Six subcommands:
 //!
 //! - `ab` — live A/B comparison of two LLM providers on the production
 //!   consolidation prompt, with literal-fidelity scoring (see [`ab`],
 //!   [`fidelity`] and `evals/README.md`).
 //! - `projection` — the zero-LLM half of that scoring: which fixture facts
 //!   and literal tokens the observation projection lets into the prompt.
-//! - `retrieval` — LongMemEval retrieval benchmark driven end-to-end
+//! - `retrieval` — pinned retrieval benchmarks driven end-to-end
 //!   through a real `ai-memory serve` subprocess: hook-shaped ingestion,
 //!   real search stack, R@k / hit@k per question category (see
 //!   [`retrieval`] and `docs/benchmarks/`).
 //! - `dream` — the B2 dream pass on vs off on a snapshot of a real store,
 //!   merging through omp's cheap model role: recall before and after, and
 //!   whether every merged source's facts survived (see [`dream`]).
+//! - `retrieval-compare` — pairs two saved `retrieval` reports by question
+//!   and lists the questions whose first hit moved.
+//! - `abstention` — offline evidence-sufficiency signals, threshold sweeps,
+//!   and optional structured LLM answerability evaluation.
 
 mod ab;
+mod abstention;
 mod dream;
 mod fidelity;
 mod generate;
@@ -43,10 +48,15 @@ enum Command {
     /// Zero-LLM: which facts the consolidation prompt's observation
     /// projection keeps, per fixture.
     Projection(projection::ProjectionArgs),
-    /// LongMemEval retrieval benchmark through the real server stack.
+    /// Pinned retrieval benchmarks through the real server stack.
     Retrieval(Box<retrieval::RetrievalArgs>),
     /// Dream pass on vs off on a snapshot of a real store (real omp calls).
     Dream(Box<dream::DreamArgs>),
+    /// Pair two saved retrieval reports by question: which questions' first
+    /// hit moved, by how many cutoffs, and in which question types.
+    RetrievalCompare(retrieval::compare::CompareArgs),
+    /// Offline evidence-sufficiency and abstention benchmark.
+    Abstention(Box<abstention::AbstentionArgs>),
 }
 
 #[tokio::main]
@@ -63,5 +73,7 @@ async fn main() -> Result<()> {
         Command::Projection(args) => projection::run(args),
         Command::Retrieval(args) => retrieval::run(*args).await,
         Command::Dream(args) => dream::run(*args).await,
+        Command::RetrievalCompare(args) => retrieval::compare::run(args),
+        Command::Abstention(args) => abstention::run(*args).await,
     }
 }

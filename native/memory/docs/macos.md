@@ -172,7 +172,9 @@ If you symlink the built binary onto `PATH` for convenience (e.g.
 *after* the `install-hooks` call above, not before. See the `install-hooks`
 symlink caution in Scenario A
 ([#546](https://github.com/akitaonrails/ai-memory/issues/546)); it applies
-here too and is the exact layout that bug was filed against.
+here too and is the exact layout that bug was filed against. `install.sh`
+leaves such a link alone and stops, so remove it first if you later switch to
+the release install.
 
 ## Scenario C: Docker Wrapper
 
@@ -233,11 +235,18 @@ across rebuilds. The menu extra has no Dock icon.
 2. The status item is green when `GET /admin/status` succeeds, yellow when the
    server is up but the LLM/embedding role is in error or the write queue is
    non-empty, red when the server is unreachable. The app sends the token saved
-   in Settings, or, when none is saved, the one `init` wrote to
-   `auth-tokens/default` in its data dir, so an install the app initialized
-   needs no pasting.
+   in Settings only to the server it was saved for, so changing the URL does not
+   carry it to a different host; when no token is saved it sends the one `init`
+   wrote to `auth-tokens/default` in its data dir, but only to a loopback
+   server, so an install the app initialized needs no pasting. A token saved for
+   another server is not sent, and Settings says so with a **Clear saved token**
+   button.
 3. **Open Web UI**, **Show Status…**, **Open Config**, **Open Data Directory**,
    and **Open Logs** call the existing browser UI, the bundled CLI, and Finder.
+
+After adding, changing, or clearing the data-directory override in Settings,
+choose **Restart Server** to reload the LaunchAgent with that selection.
+Existing files stay in their original directory.
 
 Wire an agent with the **bundled** binary so `install-hooks` finds the sibling
 `hooks/` tree (#546):
@@ -302,6 +311,39 @@ launchctl print gui/$(id -u)/com.github.akitaonrails.ai-memory | grep state
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:49374/mcp   # 405
 tail -f ~/Library/Logs/ai-memory/stderr.log
 ```
+
+### Privacy controls and Full Disk Access
+
+The server looks at each hook event's working directory (git discovery) to
+decide which project the event belongs to. A LaunchAgent is a background
+process under macOS privacy controls (TCC): reading inside `~/Documents`,
+`~/Desktop`, `~/Downloads`, iCloud Drive, or an external or network volume can
+need a permission that a background agent has no way to ask for, and the read
+can hang instead of failing. A server started from a terminal or an SSH
+session borrows that app's permissions, which is why the same binary can work
+there and not under launchd.
+
+The server keeps answering when this happens: it runs those reads off its
+request threads with a 2-second limit. Events from a directory it cannot read
+are dropped, and `stderr.log` shows
+`inspecting cwd "<path>" did not finish within 2s` for each one. At most four
+of those reads wait at a time, so while a directory stays blocked, events from
+a project the server has not seen yet can be dropped too; projects it already
+knows keep working. If your
+agents work in one of those places, give the binary the plist runs Full Disk
+Access, then restart the agent:
+
+```bash
+# The binary the LaunchAgent runs:
+plutil -extract ProgramArguments.0 raw \
+    ~/Library/LaunchAgents/com.github.akitaonrails.ai-memory.plist
+# System Settings > Privacy & Security > Full Disk Access: click +, press
+# Cmd+Shift+G and paste that path. Then:
+launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory
+```
+
+The grant belongs to that file path. If `setup` later points the plist at a
+different binary, grant that one too.
 
 ### Coming from systemd
 
@@ -384,6 +426,13 @@ wrapper's `posix` shell-script path does not. Re-run `install-hooks --agent
 [Capture exclusions](marker-file.md#capture-exclusions).
 
 ## Troubleshooting on macOS
+
+- **Captures from `~/Documents`, `~/Desktop` or an external volume never show
+  up, and `stderr.log` says `inspecting cwd ... did not finish`:** the
+  LaunchAgent binary lacks Full Disk Access. See
+  [Privacy controls and Full Disk Access](#privacy-controls-and-full-disk-access).
+  In 3.1.2 and earlier the same condition made the whole server stop
+  answering (#1514).
 
 - **`403 forbidden host` from Docker-wrapper CLI commands:** update the Docker
   image and wrapper script. Current images allowlist `host.docker.internal` for

@@ -138,7 +138,12 @@ install-mcp --client <name> --auth-token <token>` prints the exact
 snippet for every client in the [README Support Matrix](../README.md#support-matrix);
 run `ai-memory install-mcp --help` for the current accepted values. The agent
 CLI sends an `Authorization: Bearer <token>` header on every call; ai-memory's
-middleware validates with a constant-time comparison.
+middleware validates with a constant-time comparison. For Claude Code, prefer
+the session-aware bridge: `ai-memory install-mcp --client claude-code
+--session-aware --apply --auth-token <token>` keeps the token in
+`<data_dir>/auth-token` instead of `~/.claude.json`, and after
+`install-hooks --apply --auth-token <token>` the same command works without
+`--auth-token`, since the bridge reads the key the hooks hold.
 
 **Encrypted transport.** Plain HTTP on the LAN means anyone with a
 packet capture can read the bearer token (and native `aim_` keys once
@@ -174,24 +179,17 @@ homelab, and restarts. The compose file + env file on the homelab are
 unchanged between deploys; if you ever need to change them, scp the
 new copy + re-run `bin/deploy`.
 
-The restart step stops the running container with SIGTERM. The server
-handles SIGINT and SIGTERM on both transports and bounds each wait in
-its shutdown path at five seconds, so a restart (or a plain `docker
-stop` or `docker compose down`) drains and exits in a few seconds
-instead of waiting out the supervisor's grace period and ending in
-SIGKILL. Before those handlers existed the two deployment shapes failed
-differently. In the container the server is PID 1, and for PID 1 the
-kernel discards a signal whose handler is not installed, so `docker
-stop` burned its full grace period and `docker kill` was the only way
-out. Under the native systemd unit the server is not PID 1, so
-`systemctl stop` fell through to the kernel's default disposition and
-killed it instantly instead: fast, but with no drain and the durable
-SessionEnd consolidation worker cut off mid-flight. There the stop is
-now slower and clean. The five-second bound is fixed and not
-configurable. `docker kill` remains the way to stop the server without
-waiting for the drain. No container init shim is required: the binary
-installs its own signal handlers, so it stops correctly as PID 1 and you
-do not need `tini` or `docker run --init`.
+The restart step stops the running container with SIGTERM. The image uses
+`tini` as PID 1 to forward SIGTERM and SIGINT to the server and reap orphaned
+helper processes. The server handles those signals on both transports and
+bounds each wait in its shutdown path at five seconds, so a restart (or a
+plain `docker stop` or `docker compose down`) drains and exits in a few
+seconds instead of waiting out the supervisor's grace period and ending in
+SIGKILL. Under the native systemd unit the server handles the same signals,
+so `systemctl stop` drains instead of cutting off the durable SessionEnd
+consolidation worker. The five-second bound is fixed and not configurable.
+`docker kill` remains the way to stop the server without waiting for the
+drain. No additional `docker run --init` is needed for the published image.
 
 ## Updating API keys
 
@@ -419,8 +417,9 @@ but it does not guarantee that content is unrecoverable. See
 ```bash
 ssh "$SERVER" "cd $DEPLOY_DIR && \
                docker tag $IMAGE $IMAGE-rollback && \
-               docker pull $IMAGE@sha256:<old-digest>"
-ssh "$SERVER" "cd $DEPLOY_DIR && docker compose up -d"
+               docker pull $IMAGE@sha256:<old-digest> && \
+               docker tag $IMAGE@sha256:<old-digest> $IMAGE && \
+               docker compose up -d --pull never --force-recreate ai-memory"
 ```
 
 The simplest rollback is to bring back an older image by digest. We
