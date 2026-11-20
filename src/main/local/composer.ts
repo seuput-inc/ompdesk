@@ -193,8 +193,14 @@ export const handlers: Record<string, LocalHandler> = {
 		return { retried: agentInvoked };
 	},
 
-	// Stock `omp --restore` (restoreSession) on the live session, for a relaunch that finds a turn cut off.
-	restore_interrupted: async (_command, ctx) => ctx.bridge.request("composer.restore_interrupted"),
+	// Stock `omp --restore` (restoreSession) on the live session, for a relaunch that finds a turn cut off; the follow-up
+	// also names what the session's commands left running.
+	restore_interrupted: async (_command, ctx) => {
+		const processes = await ctx.leftProcesses?.().catch(() => undefined);
+		return processes
+			? ctx.bridge.request("composer.restore_interrupted", { processes })
+			: ctx.bridge.request("composer.restore_interrupted");
+	},
 
 	clear_context: async (_command, ctx) => {
 		const result = await ctx.bridge.request<{ droppedCount: number } | null>("composer.clear_context");

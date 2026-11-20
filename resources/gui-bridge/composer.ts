@@ -25,6 +25,7 @@ import {
 	interruptedJobs,
 	type JournalEntry,
 	journalEnd,
+	leftProcessesOf,
 	requestCutAtExit,
 	restartFollowUp,
 	revivedSubagents,
@@ -468,14 +469,16 @@ export const methods: BridgeMethods = {
 		 * and never as a message, so it carries on without narrating the restart; `followUp` says it went):
 		 * `jobs`, the background bash jobs that process started and never finished (stock restores no bash
 		 * job), and the subagents the restore revived (their results arrive only when they finish, maybe
-		 * hours later; each one's first request after the restart can take minutes). A turn stock's restore
+		 * hours later; each one's first request after the restart can take minutes); with them, the
+		 * processes the session's commands left running (`processes`, from main: which still run, which
+		 * the launch ended for want of a reader of their output). A turn stock's restore
 		 * continues gets it as a steer, which ends a rerun `wait` at once; an idle session gets it as a
 		 * turn. Every continued turn sends the prompt sections a prompt would (`keepSectionsOnRestore`).
 		 * `goalPausedByExit` is a goal that was active until that process ended and that stock
 		 * paused at startup (the host resumes it after the restore). `journal` names the journal's end the
 		 * restore judged, for the host's log when nothing went on.
 		 */
-		"composer.restore_interrupted": async (_params, env) => {
+		"composer.restore_interrupted": async (params, env) => {
 			const session = env.session() as Session;
 			requireFn(session, "restoreInterruptedTurn", "relaunchResume");
 			requireFn(session, "sessionManager.getBranch", "relaunchResume");
@@ -553,11 +556,14 @@ export const methods: BridgeMethods = {
 			// Background subagents that process ran and stock could not revive (isolated, no `session_init`): named, so the
 			// agent starts again what the work still needs instead of waiting on results that never come.
 			const stopped = stoppedSubagents(branch, startedAt, outcome.subagents);
+			// What the session's commands left running across the relaunch (main's `SessionProcesses.leftover`).
+			const processes = leftProcessesOf(record(params).processes);
 			const followUp = restartFollowUp(
 				cutOff,
 				revivedSubagents(branch, outcome.subagents, id => prepared.doing.get(id)),
 				outcome.turn ? "restored" : turnCut ? "cut" : "idle",
 				stopped,
+				processes,
 			);
 			if (followUp) {
 				const failed = (error: unknown) =>
