@@ -245,7 +245,7 @@ function packStatus(pack: Pack): Status {
 	return pack.kind === "git" ? gitStatus(pack, cutoff) : npmStatus(pack, cutoff);
 }
 
-function describe({ pack, pinned, eligible, held }: Status): string {
+function statusLine({ pack, pinned, eligible, held }: Status): string {
 	const label = (release: Release) => {
 		const at = release.at.toISOString().slice(0, 16);
 		return pack.kind === "git"
@@ -324,7 +324,7 @@ async function verifyReaCatalog(pack: NpmPack, version: string): Promise<void> {
 async function bump(pack: Pack): Promise<void> {
 	if (pack.needsOmp && !Bun.which("omp")) throw new Error(`${pack.name}'s stock tests need an installed omp`);
 	const status = packStatus(pack);
-	console.log(describe(status));
+	console.log(statusLine(status));
 	if (!status.eligible) return;
 	writePin(pack, status.eligible);
 	run("bun", ["run", pack.sync]);
@@ -338,7 +338,7 @@ async function bump(pack: Pack): Promise<void> {
 const [command, name] = process.argv.slice(2);
 if (command === "check") {
 	const statuses = (name && !name.startsWith("--") ? [packNamed(name)] : PACKS).map(packStatus);
-	for (const status of statuses) console.log(describe(status));
+	for (const status of statuses) console.log(statusLine(status));
 	const outdated = statuses.filter(status => status.eligible).map(status => status.pack.name);
 	console.log(outdated.length ? `outdated: ${outdated.join(" ")}` : "every pack is current");
 	if (process.argv.includes("--github-output") && process.env.GITHUB_OUTPUT)

@@ -81,7 +81,7 @@ class EmailSource implements RoutineSource {
 			this.#options.context.saveMark({ accountId: account.id, ...read.cursor });
 			if (known)
 				for (const message of read.messages)
-					if (this.#wanted(message, account.address)) this.#options.context.fire(describe(message, account.label));
+					if (this.#wanted(message, account.address)) this.#options.context.fire(mailText(message, account.label));
 		} catch (error) {
 			if (this.#stopped) return;
 			this.#report("read", error);
@@ -114,7 +114,7 @@ function addresses(value: string): string[] {
 	return [...value.matchAll(/[^\s<>",;]+@[^\s<>",;]+/g)].map(match => match[0].toLowerCase());
 }
 
-function describe(message: MailMessage, label: string): string {
+function mailText(message: MailMessage, label: string): string {
 	const { headers } = message;
 	const field = (name: string) => clip(headers[name] ?? "", FIELD_CHARS);
 	const subject = field("subject") || "(no subject)";

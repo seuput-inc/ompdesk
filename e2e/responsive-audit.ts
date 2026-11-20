@@ -421,7 +421,7 @@ function measureInPage(
 	const cap: Record<string, number> = {};
 	const CAP = 14;
 
-	const describe = (element: Element): string => {
+	const domLabel = (element: Element): string => {
 		const parts: string[] = [];
 		let node: Element | null = element;
 		for (let depth = 0; node && node !== document.body && depth < 4; depth++, node = node.parentElement) {
@@ -447,7 +447,7 @@ function measureInPage(
 	};
 	const push = (kind: IssueKind, element: Element, detail: string) => {
 		cap[kind] = (cap[kind] ?? 0) + 1;
-		issues.push({ kind, at: describe(element), detail });
+		issues.push({ kind, at: domLabel(element), detail });
 	};
 
 	const style = (element: Element) => getComputedStyle(element);
@@ -853,7 +853,7 @@ function measureInPage(
 			// A list row's own actions sit above its title, whose ::after stretches over the whole row (ListRow): the
 			// title runs on under the fade to them by design, and a tap there is the action's.
 			if (stretchedOverRow(a.element, b.element) || stretchedOverRow(b.element, a.element)) continue;
-			push("overlap", a.element, `crosses ${describe(b.element)} by ${Math.round(width)}×${Math.round(height)}`);
+			push("overlap", a.element, `crosses ${domLabel(b.element)} by ${Math.round(width)}×${Math.round(height)}`);
 			break;
 		}
 	}
@@ -927,7 +927,7 @@ function measureInPage(
 					continue;
 			}
 			lost.push(name);
-			if (!thief) thief = owner ? describe(owner) : `nothing (${describe(topEl)})`;
+			if (!thief) thief = owner ? domLabel(owner) : `nothing (${domLabel(topEl)})`;
 		}
 		if (lost.length > 0) push("stolen-tap", element, `${lost.length}/9 points (${lost.join(", ")}) → ${thief}`);
 	}

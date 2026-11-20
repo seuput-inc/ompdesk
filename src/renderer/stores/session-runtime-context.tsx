@@ -171,6 +171,7 @@ function runtimeStore<T>(runtime: SessionRuntime | null, key: RuntimeStoreKey, f
  * window-level actions keep targeting the pane the user most recently focused.
  */
 export function createScopedStoreHook<T>(key: RuntimeStoreKey, fallback: StoreApi<T>): UseBoundStore<StoreApi<T>> {
+	// biome-ignore lint/correctness/noComponentHookFactories: each store binds its hook once at module scope, never during render.
 	const useScopedStore = (<U,>(selector?: (state: T) => U): T | U => {
 		const store = runtimeStore(useContext(SessionRuntimeContext), key, fallback);
 		const select = selector ?? ((state: T) => state as unknown as U);

@@ -60,7 +60,7 @@ export function createSessionSource(options: SessionSourceOptions): RoutineSourc
 		if (options.folder !== undefined && !folderHolds(tab.cwd, options.folder)) return;
 		if (isExcluded(tab, sessions, options.wakeSession)) return;
 		told.set(activity.tabId, key);
-		context.fire(describe(kind, tab, activity));
+		context.fire(eventText(kind, tab, activity));
 	});
 	return { stop: unobserve };
 }
@@ -72,7 +72,7 @@ function kindOf(activity: TabActivity): SessionEventKind | null {
 	return activity.outcome.stopReason === "aborted" ? null : "done";
 }
 
-function describe(kind: SessionEventKind, tab: SessionTab, activity: TabActivity): string {
+function eventText(kind: SessionEventKind, tab: SessionTab, activity: TabActivity): string {
 	const named = `Session "${clip(tab.title, 120) || "Untitled"}" in ${tab.cwd}`;
 	if (kind === "waiting") {
 		const text = activity.type === "ask" ? clip(activity.text, TEXT_CHARS) : "";

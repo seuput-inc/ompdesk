@@ -63,6 +63,35 @@
 	},
 	"overrides": [
 		{
+			"includes": ["resources/omp-builtin/**/*.md"],
+			"formatter": { "enabled": false }
+		},
+		{
+			"includes": [
+				"src/renderer/components/chat/work/WorkCrossfade.mount-cost.test.tsx",
+				"src/renderer/components/common/Chip.test.tsx",
+				"src/renderer/components/common/Modal.test.tsx",
+				"src/renderer/components/common/NestedEscape.test.tsx",
+				"src/renderer/components/common/Tabs.test.tsx",
+				"src/renderer/components/layout/sidebar/Sidebar.test.tsx",
+				"src/renderer/components/layout/work-board/WorkBoardChip.test.tsx",
+				"src/renderer/components/settings/providers/ProviderPicker.test.tsx",
+				"src/renderer/components/settings/settings-data.test.tsx",
+				"src/renderer/hooks/use-extension-ui.test.tsx",
+				"src/renderer/hooks/use-frame-selector.test.tsx",
+				"src/renderer/hooks/use-session-list.test.tsx",
+				"src/renderer/hooks/use-shell-mode.test.tsx",
+				"src/renderer/hooks/use-stats.test.tsx",
+				"src/renderer/hooks/use-usage-reports.test.tsx",
+				"src/renderer/lib/now-tick.test.tsx",
+				"src/renderer/lib/reveal-focus.test.tsx",
+				"src/renderer/lib/tab-runtime-provider.test.tsx",
+				"src/renderer/stores/tabs.test.tsx",
+				"src/renderer/web/link-status.test.tsx"
+			],
+			"linter": { "rules": { "correctness": { "noComponentHookFactories": "off" } } }
+		},
+		{
 			"includes": [
 				"resources/omp-builtin/ecc/skills/yoruba-localization-testing/examples/localization.mjs",
 				"resources/omp-builtin/ecc/skills/yoruba-localization-testing/examples/localization-check.mjs"

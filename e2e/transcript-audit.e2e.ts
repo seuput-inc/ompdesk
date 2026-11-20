@@ -320,7 +320,7 @@ async function resize(app: ElectronApplication, width: number, height: number): 
 async function inspect(page: Page, shot: string): Promise<Finding[]> {
 	const found = await page.evaluate(() => {
 		const out: { kind: string; detail: string }[] = [];
-		const describe = (element: Element) => {
+		const domLabel = (element: Element) => {
 			const label = element.getAttribute("aria-label") ?? element.textContent?.trim().slice(0, 50) ?? "";
 			const name = typeof element.className === "string" ? element.className.split(" ").slice(0, 2).join(".") : "";
 			return `${element.tagName.toLowerCase()}${name ? `.${name}` : ""} "${label}"`;
@@ -346,7 +346,7 @@ async function inspect(page: Page, shot: string): Promise<Finding[]> {
 				if (!clipped)
 					out.push({
 						kind: "spill",
-						detail: `${describe(element)} right=${Math.round(box.right)} > ${Math.round(edge)}`,
+						detail: `${domLabel(element)} right=${Math.round(box.right)} > ${Math.round(edge)}`,
 					});
 			}
 		}
@@ -354,7 +354,7 @@ async function inspect(page: Page, shot: string): Promise<Finding[]> {
 			const box = popup.getBoundingClientRect();
 			if (box.width === 0 || box.height === 0) continue;
 			if (box.left < -1 || box.top < -1 || box.right > innerWidth + 1 || box.bottom > innerHeight + 1)
-				out.push({ kind: "popup-outside", detail: describe(popup) });
+				out.push({ kind: "popup-outside", detail: domLabel(popup) });
 		}
 		return out;
 	});
