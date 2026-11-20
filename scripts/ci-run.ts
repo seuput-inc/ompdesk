@@ -23,6 +23,7 @@
  * Exit 0: dispatched, the exact response run ID printed (watch it once: `bun scripts/watch-run.ts <id>`).
  */
 import { spawnSync } from "node:child_process";
+import { gh } from "./gh-run";
 
 /**
  * The workflows a session dispatches, and what each asks of the macOS runners from its inputs. The Playwright suite
@@ -153,11 +154,6 @@ export function decide(
 		};
 	}
 	return { go: true };
-}
-
-function gh(args: string[]): { ok: boolean; out: string; err: string } {
-	const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-	return { ok: result.status === 0, out: result.stdout ?? "", err: (result.stderr ?? "").trim() };
 }
 
 function fail(message: string, code: number): never {
