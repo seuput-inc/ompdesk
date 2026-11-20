@@ -22,6 +22,7 @@ import {
 } from "./lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const MERMAID_CLI = "@mermaid-js/mermaid-cli@11.17.1";
 
 const USAGE = {
 	"from-spec":
@@ -108,7 +109,7 @@ const COMMON = `Both commands
                      finished last. The command does not use an output folder that has files that
                      it did not write. On a filesystem that cannot rename, the command copies the
                      files into place, and overlapping runs can mix their files.
-  --png              Also render each chart to PNG with npx @mermaid-js/mermaid-cli@11.12.0. That needs Node with npx
+  --png              Also render each chart to PNG with npx ${MERMAID_CLI}. That needs Node with npx
                      and a one-time Chromium download. The Mermaid text is the primary output.
   -h, --help         Print this help, and exit 0.
 
@@ -655,8 +656,6 @@ async function draw({ now, other, uncited, map, work, out, title, comparing }) {
 const PNG_NEEDS =
 	"--png needs Node with npx and a one-time Chromium download for @mermaid-js/mermaid-cli. The Mermaid text in the .mmd files is the primary output; show that when PNGs cannot be made.";
 let pngExplained = false;
-
-const MERMAID_CLI = "@mermaid-js/mermaid-cli@11.12.0";
 
 function render(charts, shown) {
 	const pngs = [];

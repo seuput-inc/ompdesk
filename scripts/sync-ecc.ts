@@ -89,10 +89,11 @@ const GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
 		],
 	],
 	["Dart and Flutter", ["dart-flutter-patterns", "flutter-dart-code-review"]],
+	["Godot", ["godot-patterns", "godot-testing"]],
 	["C++", ["cpp-coding-standards", "cpp-testing"]],
 	[".NET (C#, F#)", ["dotnet-patterns", "csharp-testing", "fsharp-testing"]],
 	["PHP (Laravel)", ["laravel-patterns", "laravel-security", "laravel-tdd", "laravel-verification"]],
-	["Ruby (Rails)", ["rails-patterns"]],
+	["Ruby (Rails)", ["rails-patterns", "rails-security"]],
 	["Perl", ["perl-patterns", "perl-security", "perl-testing"]],
 	[
 		"JavaScript and TypeScript (backend, tooling)",
@@ -160,6 +161,7 @@ const GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
 		["e2e-testing", "test-collaboration", "module-regression", "click-path-audit", "benchmark"],
 	],
 	["Security", ["security-review"]],
+	["Localization", ["yoruba-localization-testing"]],
 	[
 		"Conventions, git and docs",
 		[
@@ -210,8 +212,17 @@ const rule = (id: string, files: RegExp, from: string | RegExp, to: string | Rep
 const TEXT = /^(commands|skills)\/.*\.md$/;
 
 const droppedNames = Object.keys(DROPPED).join("|");
+// This runnable node:test example is not a Vitest suite. Keep its command and destination in sync.
+const LOCALIZATION_TEST = "yoruba-localization-testing/examples/localization.test.mjs";
+const LOCALIZATION_CHECK = "yoruba-localization-testing/examples/localization-check.mjs";
 
 const RULES: Rule[] = [
+	rule(
+		"localization-test-command",
+		/^skills\/yoruba-localization-testing\/SKILL\.md$/,
+		LOCALIZATION_TEST,
+		LOCALIZATION_CHECK,
+	),
 	rule("plan-command-refs", TEXT, /(?<![\w.-])\/plan(?![\w-])/g, `/${RENAMED_COMMANDS.plan?.to ?? "ecc-plan"}`),
 	rule(
 		"plan-description",
@@ -350,7 +361,7 @@ function main(): void {
 		for (const rel of walk(upstreamSkills)) {
 			if (rel.split("/")[0] in DROPPED) continue;
 			const from = path.join(upstreamSkills, rel);
-			const dest = path.join(PACK, "skills", rel);
+			const dest = path.join(PACK, "skills", rel === LOCALIZATION_TEST ? LOCALIZATION_CHECK : rel);
 			fs.mkdirSync(path.dirname(dest), { recursive: true });
 			if (!rel.endsWith(".md")) {
 				fs.copyFileSync(from, dest);

@@ -68,7 +68,7 @@ describe("M1: the Lean trust audit sees private theorems, hidden defs and a sorr
 			path.join(dir, "lakefile.toml"),
 			'name = "byp"\ndefaultTargets = ["Byp"]\n\n[[lean_lib]]\nname = "Byp"\n',
 		);
-		fs.writeFileSync(path.join(dir, "lean-toolchain"), "leanprover/lean4:v4.35.0\n");
+		fs.copyFileSync(path.join(SKILL, "assets/lean-template/lean-toolchain"), path.join(dir, "lean-toolchain"));
 		fs.writeFileSync(path.join(dir, "Byp.lean"), "import Byp.Hack\n");
 		fs.writeFileSync(path.join(dir, "Byp", "Hack.lean"), HACK);
 		return dir;
@@ -453,6 +453,7 @@ describe("M6: the leftovers of a killed setup go", () => {
 describe("M7: elan is never left to download an unpinned toolchain", () => {
 	async function fakeLean(): Promise<{ lean: unknown; elanHome: string }> {
 		const elanHome = fs.mkdtempSync(path.join(temp, "elan-"));
+		const { lean: pin } = (await lib("toolchain")).loadToolchain();
 		return {
 			elanHome,
 			lean: {
@@ -460,8 +461,8 @@ describe("M7: elan is never left to download an unpinned toolchain", () => {
 				env: {},
 				lake: "lake",
 				lean: "lean",
-				toolchain: "leanprover/lean4:v4.35.0",
-				leanVersion: "4.35.0",
+				toolchain: pin.toolchain,
+				leanVersion: pin.version,
 				source: "ompdesk",
 			},
 		};
@@ -501,8 +502,9 @@ describe("M7: elan is never left to download an unpinned toolchain", () => {
 	it("lets the pinned toolchain, no lean-toolchain file, and an already installed other toolchain through", async () => {
 		const { guardProjectToolchain, toolchainDirName } = await lib("lean-env");
 		const { lean, elanHome } = await fakeLean();
-		expect(() => guardProjectToolchain(project("leanprover/lean4:v4.35.0"), lean, {})).not.toThrow();
-		expect(() => guardProjectToolchain(project("v4.35.0"), lean, {})).not.toThrow();
+		const { lean: pin } = (await lib("toolchain")).loadToolchain();
+		expect(() => guardProjectToolchain(project(pin.toolchain), lean, {})).not.toThrow();
+		expect(() => guardProjectToolchain(project(`v${pin.version}`), lean, {})).not.toThrow();
 		const bare = fs.mkdtempSync(path.join(temp, "bare-"));
 		fs.writeFileSync(path.join(bare, "lakefile.toml"), "name = 'p'\n");
 		expect(() => guardProjectToolchain(bare, lean, {})).not.toThrow();

@@ -17,10 +17,11 @@ When the pstack section is in your prompt, its playbooks lead the workflow (plan
 - Kotlin and Android: `kotlin-patterns`, `kotlin-testing`, `kotlin-coroutines-flows`, `kotlin-ktor-patterns`, `kotlin-exposed-patterns`, `android-clean-architecture`, `compose-multiplatform-patterns`
 - Swift and Apple platforms: `swiftui-patterns`, `swift-concurrency-6-2`, `swift-actor-persistence`, `swift-protocol-di-testing`, `liquid-glass-design`, `foundation-models-on-device`
 - Dart and Flutter: `dart-flutter-patterns`, `flutter-dart-code-review`
+- Godot: `godot-patterns`, `godot-testing`
 - C++: `cpp-coding-standards`, `cpp-testing`
 - .NET (C#, F#): `dotnet-patterns`, `csharp-testing`, `fsharp-testing`
 - PHP (Laravel): `laravel-patterns`, `laravel-security`, `laravel-tdd`, `laravel-verification`
-- Ruby (Rails): `rails-patterns`
+- Ruby (Rails): `rails-patterns`, `rails-security`
 - Perl: `perl-patterns`, `perl-security`, `perl-testing`
 - JavaScript and TypeScript (backend, tooling): `typescript-patterns`, `backend-patterns`, `nestjs-patterns`, `prisma-patterns`, `bun-runtime`, `vite-patterns`, `mcp-server-patterns`
 - Frontend (React, Next.js, Vue, Nuxt, Angular, motion): `frontend-patterns`, `react-patterns`, `react-performance`, `react-testing`, `react-native-patterns`, `nextjs-turbopack`, `nuxt4-patterns`, `vue-patterns`, `angular-developer`, `motion-foundations`, `motion-patterns`, `motion-advanced`
@@ -30,6 +31,7 @@ When the pstack section is in your prompt, its playbooks lead the workflow (plan
 - APIs and architecture: `api-design`, `api-connector-builder`, `contract-first`, `hexagonal-architecture`, `error-handling`, `architecture-decision-records`, `context-and-decisions`
 - Testing, regression and performance: `e2e-testing`, `test-collaboration`, `module-regression`, `click-path-audit`, `benchmark`
 - Security: `security-review`
+- Localization: `yoruba-localization-testing`
 - Conventions, git and docs: `coding-standards`, `inherit-legacy-style`, `git-workflow`, `code-tour`, `docs-governance`, `living-docs-governance`, `module-governance`
 - Product: `product-lens`, `product-capability`
 - AI, ML and agent apps: `agent-architecture-audit`, `agent-eval`, `agent-harness-construction`, `agent-introspection-debugging`, `agent-security-hardening`, `cost-aware-llm-pipeline`, `regex-vs-llm-structured-text`, `ml-adoption-playbook`, `mle-workflow`, `bengali-nlp`

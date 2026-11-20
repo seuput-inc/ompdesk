@@ -31,8 +31,8 @@ Safe, reversible database schema changes for production systems.
 Before applying any migration:
 
 - [ ] Migration has both UP and DOWN (or is explicitly marked irreversible)
-- [ ] No full table locks on large tables (use concurrent operations)
-- [ ] New columns have defaults or are nullable (never add NOT NULL without default)
+- [ ] Lock modes and expected hold times reviewed; use concurrent operations where supported
+- [ ] On populated tables, new columns are nullable or have defaults compatible with their constraints
 - [ ] Indexes created concurrently (not inline with CREATE TABLE for existing tables)
 - [ ] Data backfill is a separate migration from schema change
 - [ ] Tested against a copy of production data
@@ -43,16 +43,36 @@ Before applying any migration:
 ### Adding a Column Safely
 
 ```sql
--- GOOD: Nullable column, no lock
+-- Nullable column: no table rewrite, but takes ACCESS EXCLUSIVE lock
 ALTER TABLE users ADD COLUMN avatar_url TEXT;
 
--- GOOD: Column with default (Postgres 11+ is instant, no rewrite)
+-- PostgreSQL 11+: a non-volatile default avoids a table rewrite
+-- Still takes ACCESS EXCLUSIVE lock and may wait for other transactions
 ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT true;
 
--- BAD: NOT NULL without default on existing table (requires full rewrite)
+-- BAD on a populated table: existing rows would have NULL in the new column
 ALTER TABLE users ADD COLUMN role TEXT NOT NULL;
--- This locks the table and rewrites every row
+-- Fails with not_null_violation (SQLSTATE 23502); does not backfill existing rows
 ```
+
+Avoiding a table rewrite does not mean avoiding locks. These `ADD COLUMN`
+operations take an `ACCESS EXCLUSIVE` lock, held until the transaction ends.
+Keep the transaction short and use an appropriate `lock_timeout` to bound lock
+acquisition waits. A volatile default such as `clock_timestamp()` requires a
+table rewrite; the PostgreSQL 11+ fast path applies to non-volatile defaults.
+Adding a `NOT NULL` column without a default can succeed on an empty table.
+
+Run the self-checking [reproduction SQL](examples/postgres-add-column.sql) on
+PostgreSQL 11+:
+
+```bash
+psql -X -v ON_ERROR_STOP=1 -f examples/postgres-add-column.sql
+```
+
+It uses a temporary table, rolls back the ALTERs, and drops the fixture, checking
+lock acquisition, rewrites, and the expected constraint violation.
+
+Reference: [PostgreSQL ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html).
 
 ### Adding an Index Without Downtime
 
@@ -101,7 +121,8 @@ WHERE display_name IS DISTINCT FROM username;
 -- Step 6: After the rollback window, stop backfill/reconciliation workers.
 -- Transfer required constraints/indexes/dependencies to the new column.
 -- Make old-column constraints compatible with new-only INSERTs/UPDATEs.
--- Deploy app v4 using ONLY display_name; drain all old-column users.
+-- Drain non-app readers of username and their in-flight transactions first.
+-- Then deploy app v4 using ONLY display_name; drain remaining old-column users.
 
 -- Step 7: Contract in a separate migration after checking dependencies.
 ALTER TABLE users DROP COLUMN username;
@@ -125,7 +146,7 @@ The [self-checking SQL example](examples/postgres-column-rename.sql) reproduces
 the stale-value failure and verifies reconciliation, retries, and NULL handling:
 
 ```bash
-psql -X -v ON_ERROR_STOP=1 -f skills/database-migrations/examples/postgres-column-rename.sql
+psql -X -v ON_ERROR_STOP=1 -f examples/postgres-column-rename.sql
 ```
 
 Reference: [PostgreSQL Read Committed behavior](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED).
@@ -452,7 +473,8 @@ Phase 2: MIGRATE
 
 Phase 3: CONTRACT
   - End rollback window; stop backfill and migrate constraints/dependencies
-  - Deploy: app only uses NEW; drain all old-column users
+  - Drain non-app old-column readers and their in-flight transactions
+  - Deploy: app only uses NEW; drain remaining old-column users
   - Drop old column/table in separate migration
 ```
 
@@ -464,7 +486,8 @@ Day 1: Deploy app v2 — reads status, writes both columns atomically
 Day 2: Drain old-only writers; backfill in batches; require zero mismatches
 Day 3: Deploy app v3 — reads new_status, still writes both columns
 Day 7: End rollback window; stop backfill; migrate constraints/dependencies
-Day 7: Deploy app v4 — only uses new_status; drain old-column users
+Day 7: Drain non-app old-column readers and their in-flight transactions
+Day 7: Deploy app v4 — only uses new_status; drain remaining old-column users
 Later: Separate migration drops status after all contract gates pass
 ```
 
@@ -474,7 +497,7 @@ Later: Separate migration drops status after all contract gates pass
 |-------------|-------------|-----------------|
 | Manual SQL in production | No audit trail, unrepeatable | Always use migration files |
 | Editing deployed migrations | Causes drift between environments | Create new migration instead |
-| NOT NULL without default | Locks table, rewrites all rows | Add nullable, backfill, then add constraint |
+| Adding NOT NULL column without default to populated table | Fails because existing rows would contain NULL | Add nullable, backfill, then set NOT NULL |
 | Inline index on large table | Blocks writes during build | CREATE INDEX CONCURRENTLY |
 | Schema + data in one migration | Hard to rollback, long transactions | Separate migrations |
 | Dropping column before removing code | Application errors on missing column | Remove code first, drop column next deploy |
