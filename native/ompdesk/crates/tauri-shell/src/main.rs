@@ -708,7 +708,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         .get_webview(&label)
         .ok_or_else(|| WireError::new("gone", "created app WebView missing"))?;
     #[cfg(windows)]
-    if let Err(error) = process_failed::watch(&webview, wc) {
+    if let Err(error) = process_failed::watch(&webview) {
         eprintln!("[tauri-shell] ProcessFailed not watched for wc {wc}: {error}");
     }
     let (initialized, ready) = tokio::sync::watch::channel(None);
