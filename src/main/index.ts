@@ -1342,11 +1342,12 @@ app.whenReady().then(async () => {
 		tabs: () => [...sidecarPool.memoryTabs(), ...hostServices.memoryTabs()],
 		owners: () => sessionProcesses.owners(),
 		log: (message, details) => writeRuntimeLog({ source: "memory", message, details }),
-		sampled: (reading, rows, tabs) =>
+		sampled: (reading, rows, tabs, readAt) =>
 			void machineState.sample(
 				reading,
 				rows,
 				tabs.flatMap(tab => (tab.pid === undefined ? [] : [tab.pid])),
+				readAt,
 			),
 		...(testMemory ? { testReading: () => testMemoryReading(testMemory) } : {}),
 		...(ampleTestMemory

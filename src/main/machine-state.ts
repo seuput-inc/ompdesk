@@ -26,6 +26,18 @@ export const STATE_SAMPLES = 12;
 export const STATE_REPEAT_MS = 60_000;
 /** Pairs an hour over all kinds. */
 export const STATE_PAIRS_PER_HOUR = 20;
+/**
+ * The shortest window a processor share is measured over: a stall's fresh sample lands moments after the watch's own,
+ * and a share of a few ms of wall time read 7050 % (parity run 44652689900). A shorter one keeps the older baseline.
+ */
+export const CPU_WINDOW_MS = 1_000;
+/** Baselines kept: a stall's fresh sample right after the watch's still finds one a window old. */
+const BASELINES = 4;
+
+/** The newest of `readings` taken at least {@link CPU_WINDOW_MS} before `at`. */
+function baseline<T extends { at: number }>(readings: readonly T[], at: number): T | undefined {
+	return readings.findLast(reading => at - reading.at >= CPU_WINDOW_MS);
+}
 
 /** What main reads of itself and the computer without the core. */
 export interface OwnReading {
@@ -137,11 +149,12 @@ export class MachineState {
 	readonly #now: () => number;
 	readonly #readOwn: (now: number) => OwnReading;
 	#samples: Array<{ at: number; facts: Details }> = [];
-	#own: OwnReading;
+	/** main's last readings of itself, oldest first: a share is measured from the newest one `CPU_WINDOW_MS` old. */
+	#owns: OwnReading[];
 	/** Each tab's omp (on Windows its launcher), as the watch last handed them: asking the pool is a wait on the core. */
 	#omps: readonly number[] = [];
-	/** Each process's processor time at the last listing, and when that was. */
-	#cpu: { at: number; byPid: Map<number, number> } | null = null;
+	/** Each process's processor time at the last listings, oldest first, and when each was asked for. */
+	#cpus: Array<{ at: number; byPid: Map<number, number> }> = [];
 	readonly #written = new Map<StallKind, number>();
 	readonly #budget = new LineBudget(STATE_PAIRS_PER_HOUR);
 	#kept = 0;
@@ -150,19 +163,24 @@ export class MachineState {
 		this.#deps = deps;
 		this.#now = deps.now ?? Date.now;
 		this.#readOwn = deps.own ?? readOwn;
-		this.#own = this.#readOwn(this.#now());
+		this.#owns = [this.#readOwn(this.#now())];
 	}
 
 	/**
 	 * One sample: the reading and the process list as the core gave them, null for what it did not answer, and the
 	 * tabs' omps when the caller knows them now.
 	 */
-	sample(reading: MemoryReading | null, rows: readonly ProcessRow[] | null, omps?: readonly number[]): Details {
+	sample(
+		reading: MemoryReading | null,
+		rows: readonly ProcessRow[] | null,
+		omps?: readonly number[],
+		readAt?: number,
+	): Details {
 		if (rows && omps) this.#omps = omps;
 		const now = this.#now();
 		const own = this.#readOwn(now);
-		const facts = ownFacts(own, this.#own);
-		this.#own = own;
+		const facts = ownFacts(own, baseline(this.#owns, now) ?? own);
+		this.#owns = [...this.#owns, own].slice(-BASELINES);
 		if (reading) {
 			// The OS's own word for what it can still hand out: node's free memory on macOS leaves out what it would reclaim.
 			facts.availMB = mb(reading.availableBytes);
@@ -175,7 +193,9 @@ export class MachineState {
 			if (reading.diskQueue !== undefined) facts.diskQueue = tenth(reading.diskQueue);
 			if (reading.diskBusyPct !== undefined) facts.diskBusyPct = tenth(reading.diskBusyPct);
 		}
-		if (rows) Object.assign(facts, this.#app(rows, now, own.cpus));
+		// The listing's processor times stand for when it was asked for, not when its answer came: in a stall the two
+		// are seconds apart.
+		if (rows) Object.assign(facts, this.#app(rows, readAt ?? now, own.cpus));
 		const loopMs = this.#deps.loopMaxMs?.();
 		if (typeof loopMs === "number") facts.elMaxMs = loopMs;
 		if (!reading || !rows) facts.core = reading ? "no processes" : rows ? "no reading" : "no answer";
@@ -185,10 +205,10 @@ export class MachineState {
 	}
 
 	/** What OMPdesk's own processes took of the processors since the listing before, and hold of memory. */
-	#app(rows: readonly ProcessRow[], now: number, cpuCount: number): Details {
+	#app(rows: readonly ProcessRow[], at: number, cpuCount: number): Details {
 		const pids = this.#deps.pids();
 		const byPid = new Map(rows.map(row => [row.pid, row]));
-		const before = this.#cpu;
+		const before = baseline(this.#cpus, at);
 		const times = new Map<number, number>();
 		const used: Record<Role, number> = { main: 0, host: 0, core: 0, workers: 0, omp: 0 };
 		let bytes = 0;
@@ -203,8 +223,8 @@ export class MachineState {
 			// fell: another process under an old pid.
 			used[role] += was === undefined || was > row.cpuMs ? row.cpuMs : row.cpuMs - was;
 		}
-		this.#cpu = { at: now, byPid: times };
-		const wall = before ? (now - before.at) * cpuCount : 0;
+		this.#cpus = [...this.#cpus, { at, byPid: times }].slice(-BASELINES);
+		const wall = before ? (at - before.at) * cpuCount : 0;
 		return {
 			...(wall > 0
 				? {
@@ -257,13 +277,14 @@ export class MachineState {
 	}
 
 	async #after(kind: StallKind, at: number, dropped: number): Promise<void> {
+		const readAt = this.#now();
 		const [reading, rows] = await this.#deps.read().catch(() => [null, null] as const);
 		const afterMs = this.#now() - at;
 		this.#deps.log(`${kind} after`, {
 			trigger: kind,
 			when: "after",
 			afterMs,
-			...this.sample(reading, rows),
+			...this.sample(reading, rows, undefined, readAt),
 			...(afterMs >= this.#deps.timeoutMs ? { timedOut: true } : {}),
 			...(dropped > 0 ? { dropped } : {}),
 		});
