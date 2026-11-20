@@ -542,7 +542,7 @@ describe("OmpUpdater and the verified list (19 Nov 2026: omp 19.0.0 installed it
 		// A failed release names the runners' time, not this computer's.
 		h.set.latest = "19.1.0";
 		h.set.verified = ["19.0.0"];
-		h.set.holding = { version: "19.1.0", since: SINCE };
+		h.set.holding = { version: "19.1.0", since: SINCE, issue: 42 };
 		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
 		expect(h.updater.state().held).toEqual({ version: "19.1.0", reason: "failed", since: SINCE });
 		expect(firstSeen.mock.calls.map(([version]) => version)).toEqual(["19.0.0", "19.0.0"]);
