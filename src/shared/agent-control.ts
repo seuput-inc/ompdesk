@@ -76,6 +76,10 @@ export function agentControlApproveEnabled(value: unknown): boolean {
  * `enforce` keeps an agent to its own project's sessions unless the person allowed its session across projects.
  * `earlierOpened`: whether the sessions a caller opened before a check ran stay in its reach (`visible`) or need
  * the grant like any other (`grant`). Changed only by a person in a desktop window (`AGENT_PROJECT_BOUNDARY_SET`).
+ *
+ * Two limits: it judges OMPdesk's own agent tools only (`ompdesk_*`, the `ompdesk` CLI), never a shell, git or any
+ * program reading session files; and on a paired computer it trusts the project that computer reports for its
+ * sessions and the caller it names. It prevents accidents and is not a security boundary.
  */
 export const AGENT_PROJECT_BOUNDARY_PREF = "agentProjectBoundary";
 
@@ -88,9 +92,12 @@ export interface ProjectBoundary {
 	earlierOpened: ProjectBoundaryEarlier;
 }
 
-/** What an unset or invalid value resolves to. The release's transition flips these and nothing else. */
+/**
+ * What an unset or invalid value resolves to: the owner's answer (20 Nov 2026). Off until the person turns it on, and
+ * a session of another project that a caller opened before the boundary checked needs the grant like any other.
+ */
 export const PROJECT_BOUNDARY_DEFAULT_MODE: ProjectBoundaryMode = "off";
-export const PROJECT_BOUNDARY_DEFAULT_EARLIER: ProjectBoundaryEarlier = "visible";
+export const PROJECT_BOUNDARY_DEFAULT_EARLIER: ProjectBoundaryEarlier = "grant";
 
 export function isProjectBoundaryMode(value: unknown): value is ProjectBoundaryMode {
 	return PROJECT_BOUNDARY_MODES.includes(value as ProjectBoundaryMode);

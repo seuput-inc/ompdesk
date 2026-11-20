@@ -406,40 +406,65 @@ impl AgentControl {
     }
 
     /// Who is calling, as a paired host reads it when a request of this call reaches it (`claim_for`): where the
-    /// caller runs and works, whether the person allowed it across projects, and the sessions and folders it opened.
+    /// caller runs and works, whether the person allowed it across projects, and the sessions and folders it opened:
+    /// `own` through a check that passed, `earlier` with none (the host keeps those in reach only while its own
+    /// `earlierOpened` says `visible`, as `boundary_verdict` does here).
     pub(super) fn claim(&self, state: &HostState, caller: &ControlTab, tabs: &[ControlTab]) {
         let mut own: Vec<String> = Vec::new();
+        let mut earlier: Vec<String> = Vec::new();
         {
             let mem = self.mem();
             let opened = mem.opened.get(&caller.tab_id);
+            let checked = mem.checked.get(&caller.tab_id);
+            let passed = |tab_id: Option<&str>, path: Option<&str>, device: Option<&str>| {
+                checked.is_some_and(|checked| {
+                    tab_id.is_some_and(|id| checked.contains(id))
+                        || path.is_some_and(|path| checked.contains(&receiver_key(path, device)))
+                })
+            };
             for tab in tabs {
                 if state.parent_of(&tab.tab_id) == Some(caller.tab_id.as_str())
                     || opened.is_some_and(|opened| opened.contains(&tab.tab_id))
                 {
-                    own.push(tab.cwd.clone());
-                    own.extend(tab.session_path.clone());
+                    let path = tab.session_path.as_deref();
+                    let list = if passed(Some(&tab.tab_id), path, tab.device.as_deref()) {
+                        &mut own
+                    } else {
+                        &mut earlier
+                    };
+                    list.push(tab.cwd.clone());
+                    list.extend(path.map(str::to_owned));
                 }
             }
-            for key in mem.checked.get(&caller.tab_id).into_iter().flatten() {
+            for key in checked.into_iter().flatten() {
                 own.extend(key.split_once('\n').map(|(_, path)| path.to_owned()));
             }
-        }
-        if let Some(session) = caller.session_path.as_deref() {
-            for child in &state.closed_children {
-                if child.opened_by_session == session {
-                    own.push(child.path.clone());
-                    own.push(child.cwd.clone());
+            if let Some(session) = caller.session_path.as_deref() {
+                for child in &state.closed_children {
+                    if child.opened_by_session == session {
+                        let list = if passed(None, Some(&child.path), child.device.as_deref()) {
+                            &mut own
+                        } else {
+                            &mut earlier
+                        };
+                        list.push(child.path.clone());
+                        list.push(child.cwd.clone());
+                    }
                 }
             }
         }
         own.sort_unstable();
         own.dedup();
+        earlier.sort_unstable();
+        earlier.dedup();
+        earlier.retain(|entry| own.binary_search(entry).is_err());
         let claim = json!({
             "caller": caller.session_path.as_deref().unwrap_or(&caller.tab_id),
             "device": caller.device,
             "cwd": caller.cwd,
             "granted": Self::granted(state, caller),
             "own": own,
+            "earlier": earlier,
         });
         let _ = CALL.try_with(|call| call.claim.set(claim));
     }

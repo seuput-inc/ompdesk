@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ProjectBoundaryMode } from "../../shared/agent-control";
+import type { ProjectBoundaryEarlier, ProjectBoundaryMode } from "../../shared/agent-control";
 import type { SessionInfo } from "../../shared/ipc-types";
 import type { SchedulesState } from "../../shared/schedules";
 import {
@@ -14,12 +14,12 @@ import type { RuntimeLogReport } from "../runtime-log-core";
 import { hostBoundary, scopedSchedules, scopedSessions } from "./host-boundary";
 
 /** A host whose folders are their own projects, except a worktree of `/repo/app`. */
-function host(mode: ProjectBoundaryMode) {
+function host(mode: ProjectBoundaryMode, earlierOpened: ProjectBoundaryEarlier = "grant") {
 	const logged: RuntimeLogReport[] = [];
 	return {
 		logged,
 		deps: {
-			mode: () => mode,
+			settings: () => ({ mode, earlierOpened }),
 			projectOf: async (folder: string) => (folder === "/wt/app-fix" ? "/repo/app" : folder),
 			log: (report: RuntimeLogReport) => logged.push(report),
 		},
@@ -27,13 +27,17 @@ function host(mode: ProjectBoundaryMode) {
 }
 
 /** What the link's client sends for a call by a session in `cwd` on `device` (null: the sending computer itself). */
-function sent(params: object, caller: { device: string | null; cwd: string; granted?: boolean; own?: string[] }) {
+function sent(
+	params: object,
+	caller: { device: string | null; cwd: string; granted?: boolean; own?: string[]; earlier?: string[] },
+) {
 	const claim = {
 		caller: "/s/caller.jsonl",
 		device: caller.device,
 		cwd: caller.cwd,
 		granted: caller.granted ?? false,
 		own: caller.own ?? [],
+		earlier: caller.earlier ?? [],
 	};
 	return withCallerClaim(claim, () => withHostClaim("host-1", params));
 }
@@ -41,23 +45,34 @@ function sent(params: object, caller: { device: string | null; cwd: string; gran
 describe("the caller a request carries", () => {
 	it("is added only to what main sends while it answers a control-tool call", () => {
 		expect(withHostClaim("host-1", { sessionPath: "/s/a.jsonl" })).toEqual({ sessionPath: "/s/a.jsonl" });
-		expect(sent({ sessionPath: "/s/a.jsonl" }, { device: "host-1", cwd: "/repo/app", own: ["/s/c.jsonl"] })).toEqual({
+		expect(
+			sent(
+				{ sessionPath: "/s/a.jsonl" },
+				{ device: "host-1", cwd: "/repo/app", own: ["/s/c.jsonl"], earlier: ["/s/o"] },
+			),
+		).toEqual({
 			sessionPath: "/s/a.jsonl",
-			[HOST_CLAIM_KEY]: { caller: "/s/caller.jsonl", cwd: "/repo/app", granted: false, own: ["/s/c.jsonl"] },
+			[HOST_CLAIM_KEY]: {
+				caller: "/s/caller.jsonl",
+				cwd: "/repo/app",
+				granted: false,
+				own: ["/s/c.jsonl"],
+				earlier: ["/s/o"],
+			},
 		});
 	});
 
 	it("names the caller's folder only to the host its tab runs on, and survives an await", async () => {
 		// A caller on the sending computer, or on another host, has no folder of this host's.
-		const elsewhere = { caller: "/s/caller.jsonl", granted: false, own: [] };
+		const elsewhere = { caller: "/s/caller.jsonl", granted: false, own: [], earlier: [] };
 		expect(hostClaimOf(sent({}, { device: null, cwd: "/Users/me/app" }))).toEqual(elsewhere);
 		expect(hostClaimOf(sent({}, { device: "host-2", cwd: "/repo/app" }))).toEqual(elsewhere);
-		const here = { caller: "tab-1", device: "host-1", cwd: "/repo/app", granted: true, own: [] };
+		const here = { caller: "tab-1", device: "host-1", cwd: "/repo/app", granted: true, own: [], earlier: [] };
 		const later = await withCallerClaim(here, async () => {
 			await Promise.resolve();
 			return withHostClaim("host-1", {});
 		});
-		expect(hostClaimOf(later)).toEqual({ caller: "tab-1", cwd: "/repo/app", granted: true, own: [] });
+		expect(hostClaimOf(later)).toEqual({ caller: "tab-1", cwd: "/repo/app", granted: true, own: [], earlier: [] });
 	});
 
 	it("is nobody for a malformed claim, and leaves params that are no object alone", () => {
@@ -69,29 +84,56 @@ describe("the caller a request carries", () => {
 });
 
 describe("judgeHostClaim", () => {
-	const claim = { caller: "/s/caller.jsonl", granted: false, own: ["/s/child.jsonl", "/wt/child"] };
+	const claim = {
+		caller: "/s/caller.jsonl",
+		granted: false,
+		own: ["/s/child.jsonl", "/wt/child"],
+		earlier: ["/s/old.jsonl", "/wt/old"],
+	};
+	const enforce = { mode: "enforce", earlierOpened: "grant" } as const;
 
 	it("allows the same project, the caller's own sessions and folders, a grant, and everything while off", () => {
-		expect(judgeHostClaim("enforce", claim, "/repo/app", { session: "/s/x.jsonl", project: "/repo/app" })).toBe(
+		expect(judgeHostClaim(enforce, claim, "/repo/app", { session: "/s/x.jsonl", project: "/repo/app" })).toBe(
 			"allow",
 		);
-		expect(judgeHostClaim("enforce", claim, null, { session: "/s/child.jsonl", project: "/repo/b" })).toBe("allow");
-		expect(judgeHostClaim("enforce", claim, null, { folder: "/wt/child", project: null })).toBe("allow");
-		expect(judgeHostClaim("enforce", { ...claim, granted: true }, null, { project: "/repo/b" })).toBe("allow");
+		expect(judgeHostClaim(enforce, claim, null, { session: "/s/child.jsonl", project: "/repo/b" })).toBe("allow");
+		expect(judgeHostClaim(enforce, claim, null, { folder: "/wt/child", project: null })).toBe("allow");
+		expect(judgeHostClaim(enforce, { ...claim, granted: true }, null, { project: "/repo/b" })).toBe("allow");
 		// A hosted tab this caller opened, whatever folder it is in.
-		expect(judgeHostClaim("enforce", claim, null, { folder: "/work", project: "/work", opened: true })).toBe("allow");
-		expect(judgeHostClaim("off", claim, null, { session: "/s/x.jsonl", project: "/repo/b" })).toBe("allow");
+		expect(judgeHostClaim(enforce, claim, null, { folder: "/work", project: "/work", opened: true })).toBe("allow");
+		const off = { mode: "off", earlierOpened: "grant" } as const;
+		expect(judgeHostClaim(off, claim, null, { session: "/s/x.jsonl", project: "/repo/b" })).toBe("allow");
+	});
+
+	it("keeps what the caller opened before a check ran out of reach unless this computer says visible", () => {
+		// The owner's answer (20 Nov 2026): another project's session opened before the boundary needs the grant.
+		for (const old of [
+			{ session: "/s/old.jsonl", project: "/repo/b" },
+			{ folder: "/wt/old", project: null },
+		]) {
+			expect(judgeHostClaim(enforce, claim, null, old)).toBe("refuse");
+			expect(judgeHostClaim({ mode: "log", earlierOpened: "grant" }, claim, null, old)).toBe("log");
+			expect(judgeHostClaim({ mode: "enforce", earlierOpened: "visible" }, claim, null, old)).toBe("allow");
+			expect(judgeHostClaim(enforce, { ...claim, granted: true }, null, old)).toBe("allow");
+		}
+		// An older device sends no `earlier`: its `own` (everything its caller opened) is read as before.
+		const older = hostClaimOf({
+			[HOST_CLAIM_KEY]: { caller: "/s/caller.jsonl", granted: false, own: ["/s/old.jsonl"] },
+		});
+		expect(older?.earlier).toEqual([]);
+		if (older)
+			expect(judgeHostClaim(enforce, older, null, { session: "/s/old.jsonl", project: "/repo/b" })).toBe("allow");
 	});
 
 	it("refuses another project and anything unknown under enforce, and only logs it under log", () => {
 		const other = { session: "/s/x.jsonl", folder: "/repo/b", project: "/repo/b" };
-		expect(judgeHostClaim("enforce", claim, "/repo/app", other)).toBe("refuse");
-		expect(judgeHostClaim("log", claim, "/repo/app", other)).toBe("log");
+		expect(judgeHostClaim(enforce, claim, "/repo/app", other)).toBe("refuse");
+		expect(judgeHostClaim({ mode: "log", earlierOpened: "grant" }, claim, "/repo/app", other)).toBe("log");
 		// Two unknown projects are never the same one; a session is not the caller's because its folder is.
-		expect(judgeHostClaim("enforce", claim, null, { session: "/s/x.jsonl", project: null })).toBe("refuse");
-		expect(
-			judgeHostClaim("enforce", claim, null, { session: "/s/x.jsonl", folder: "/wt/child", project: null }),
-		).toBe("refuse");
+		expect(judgeHostClaim(enforce, claim, null, { session: "/s/x.jsonl", project: null })).toBe("refuse");
+		expect(judgeHostClaim(enforce, claim, null, { session: "/s/x.jsonl", folder: "/wt/child", project: null })).toBe(
+			"refuse",
+		);
 	});
 });
 

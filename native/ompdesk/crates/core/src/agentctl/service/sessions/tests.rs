@@ -1037,7 +1037,7 @@ async fn a_caller_the_person_allowed_across_projects_reaches_another_project() {
     // What main may hand to a paired host says who asks: a host that enforces judges the request too.
     assert_eq!(
         names(&asked, "command")[0]["boundaryCaller"],
-        json!({ "caller": "/s/a_aaaa.jsonl", "device": null, "cwd": "/pa", "granted": true, "own": [] })
+        json!({ "caller": "/s/a_aaaa.jsonl", "device": null, "cwd": "/pa", "granted": true, "own": [], "earlier": [] })
     );
     let list = control.run("a", "ompdesk_sessions", json!({}), None).await;
     assert!(list.text.contains("Secret plan"), "{}", list.text);
@@ -1059,8 +1059,13 @@ async fn a_caller_the_person_allowed_across_projects_reaches_another_project() {
 
 #[tokio::test]
 async fn a_child_opened_through_the_check_stays_in_scope_once_the_grant_is_gone() {
-    let tabs = vec![tab_in("a", "/pa"), tab_in("b", "/pb"), tab_in("c1", "/pb")];
-    let (control, _) = rig(
+    let tabs = vec![
+        tab_in("a", "/pa"),
+        tab_in("b", "/pb"),
+        tab_in("c1", "/pb"),
+        tab_in("c0", "/pc"),
+    ];
+    let (control, asked) = rig(
         7_327,
         tabs.clone(),
         json!({ "boundary": { "mode": "enforce", "granted": ["/s/a_aaaa.jsonl"] } }),
@@ -1078,12 +1083,13 @@ async fn a_child_opened_through_the_check_stays_in_scope_once_the_grant_is_gone(
         )
         .await;
     assert!(!opened.is_error, "{}", opened.text);
-    // The grant goes, and what was opened earlier now needs one: only the check the child passed keeps it.
+    // The grant goes. "c0" the caller opened before the boundary checked (main's `parentOf` alone): under the default
+    // it needs the grant like any other; only the check "c1" passed keeps that one.
     let without = state_of(
         tabs,
         json!({
-            "boundary": { "mode": "enforce", "earlierOpened": "grant" },
-            "parents": { "c1": { "callerTabId": "a" } }
+            "boundary": { "mode": "enforce" },
+            "parents": { "c1": { "callerTabId": "a" }, "c0": { "callerTabId": "a" } }
         }),
     )
     .to_string();
@@ -1097,16 +1103,30 @@ async fn a_child_opened_through_the_check_stays_in_scope_once_the_grant_is_gone(
         )
         .await;
     assert!(!child.is_error, "{}", child.text);
-    let stranger = control
-        .run("a", "ompdesk_session_read", json!({ "session": "b" }), None)
-        .await;
-    assert_eq!(stranger.text, OTHER_PROJECT);
+    // A paired host is told which of the caller's sessions passed a check and which did not, and judges by its own
+    // setting.
+    let claim = &names(&asked, "command").last().unwrap()["boundaryCaller"];
+    assert_eq!(claim["own"], json!(["/pb", "/s/c1_c1c1c1c1.jsonl"]));
+    assert_eq!(claim["earlier"], json!(["/pc", "/s/c0_c0c0c0c0.jsonl"]));
+    for stranger in ["b", "c0"] {
+        let refused = control
+            .run(
+                "a",
+                "ompdesk_session_read",
+                json!({ "session": stranger }),
+                None,
+            )
+            .await;
+        assert_eq!(refused.text, OTHER_PROJECT, "{stranger}");
+    }
     control.host.port().close();
 }
 
 #[tokio::test]
-async fn a_session_opened_before_the_boundary_stays_visible_unless_the_option_says_grant() {
-    let tabs = vec![tab_in("a", "/pa"), tab_in("c1", "/pb")];
+async fn a_session_opened_before_the_boundary_needs_the_grant_unless_the_option_says_visible() {
+    // The owner's answers (20 Nov 2026): another project's session the caller opened before the boundary is reachable
+    // only once the person grants the caller's session; the grant is that one session's.
+    let tabs = vec![tab_in("a", "/pa"), tab_in("d", "/pa"), tab_in("c1", "/pb")];
     let parents = json!({ "c1": { "callerTabId": "a" } });
     let (control, _) = rig(
         7_328,
@@ -1122,16 +1142,120 @@ async fn a_session_opened_before_the_boundary_stays_visible_unless_the_option_sa
             None,
         )
     };
+    assert_eq!(read().await.text, OTHER_PROJECT);
+    let push = |seq: u64, boundary: Value| {
+        let state = state_of(
+            tabs.clone(),
+            json!({ "boundary": boundary, "parents": parents }),
+        );
+        crate::ports::apply_state(control.host.port(), seq, &state.to_string()).unwrap();
+    };
+    push(
+        1,
+        json!({ "mode": "enforce", "granted": ["/s/a_aaaa.jsonl"] }),
+    );
+    let granted = read().await;
+    assert!(!granted.is_error, "{}", granted.text);
+    // Granted to "a" alone: "d", of the same project, still sees another project's session as a count.
+    let other = control
+        .run(
+            "d",
+            "ompdesk_session_read",
+            json!({ "session": "c1" }),
+            None,
+        )
+        .await;
+    assert_eq!(other.text, OTHER_PROJECT);
+    push(2, json!({ "mode": "enforce", "earlierOpened": "visible" }));
     let visible = read().await;
     assert!(!visible.is_error, "{}", visible.text);
-    let grant = state_of(
-        tabs,
-        json!({ "boundary": { "mode": "enforce", "earlierOpened": "grant" }, "parents": parents }),
-    )
-    .to_string();
-    crate::ports::apply_state(control.host.port(), 1, &grant).unwrap();
-    assert_eq!(read().await.text, OTHER_PROJECT);
     control.host.port().close();
+}
+
+/// One computer's tabs and saved rows across three projects, as main sent them before the boundary existed
+/// (`project: false`) or with each one's project named (`project: true`).
+fn crossing_world(project: bool) -> (Vec<Value>, Vec<Value>) {
+    let place = |mut value: Value| {
+        if !project {
+            value.as_object_mut().unwrap().remove("project");
+        }
+        value
+    };
+    let tabs = [
+        tab_in("a", "/pa"),
+        titled(tab_in("b", "/pb"), "Secret plan"),
+        tab_in("c1", "/pb"),
+        tab_in("c0", "/pc"),
+    ];
+    let rows = [
+        saved_in("own1", "Mine", "/pa"),
+        saved_in("zq9x", "Old secret", "/pb"),
+    ];
+    (
+        tabs.into_iter().map(place).collect(),
+        rows.into_iter().map(place).collect(),
+    )
+}
+
+#[tokio::test]
+async fn while_off_every_cross_project_call_answers_as_it_did_before_the_boundary() {
+    // The owner's answer (20 Nov 2026): off by default, and nothing changes for any session until the person turns it
+    // on. One core is fed main's snapshot as it was before the boundary existed (no setting, no projects), the other
+    // the default main sends now (`projectBoundaryOf(undefined)`: off, earlier-opened `grant`) with every project named
+    // as well: each call answers the same and asks main the same, never for a project or a log line.
+    let rig_of = |id: u64, project: bool, boundary: Option<Value>| {
+        let (tabs, rows) = crossing_world(project);
+        let mut extra = json!({ "parents": { "c0": { "callerTabId": "a" } } });
+        if let Some(boundary) = boundary {
+            extra["boundary"] = boundary;
+        }
+        rig(id, tabs, extra, move |method, args| match method {
+            "stored" => Ok(json!(rows)),
+            "project" => Ok(json!("/pb")),
+            "spawn" => Ok(json!({ "tabId": "c1" })),
+            other => reading_main(other, args),
+        })
+    };
+    let (before, asked_before) = rig_of(7_340, false, None);
+    let (now, asked_now) = rig_of(
+        7_341,
+        true,
+        Some(json!({ "mode": "off", "earlierOpened": "grant" })),
+    );
+    let calls = [
+        ("ompdesk_sessions", json!({})),
+        ("ompdesk_sessions", json!({ "scope": "stored" })),
+        ("ompdesk_session_read", json!({ "session": "b" })),
+        ("ompdesk_session_read", json!({ "session": "Secret plan" })),
+        ("ompdesk_session_read", json!({ "session": "c0" })),
+        ("ompdesk_session_result", json!({ "session": "b" })),
+        (
+            "ompdesk_session_send",
+            json!({ "session": "b", "message": "hi", "request_id": "r1" }),
+        ),
+        (
+            "ompdesk_session_open",
+            json!({ "message": "x", "folder": "/pb" }),
+        ),
+    ];
+    for (tool, args) in calls {
+        let old = before.run("a", tool, args.clone(), None).await;
+        let new = now.run("a", tool, args.clone(), None).await;
+        assert_eq!(
+            (new.is_error, &new.text),
+            (old.is_error, &old.text),
+            "{tool} {args}"
+        );
+        // Each crosses into another project and goes through, as it always did.
+        assert!(!new.is_error, "{tool} {args}: {}", new.text);
+    }
+    let (old, new) = (methods(&asked_before), methods(&asked_now));
+    assert_eq!(new, old);
+    for method in ["project", "boundaryLog"] {
+        assert!(!new.iter().any(|asked| asked == method), "{method}");
+    }
+    before.host.port().close();
+    now.host.port().close();
 }
 
 #[tokio::test]

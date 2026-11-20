@@ -2655,7 +2655,11 @@ describe("LocalHostServices", () => {
 					return [];
 				},
 			} as unknown as HostServicesDeps["sessionIndex"],
-			boundary: { mode: () => "enforce", projectOf: async folder => folder, log: () => {} },
+			boundary: {
+				settings: () => ({ mode: "enforce", earlierOpened: "grant" }),
+				projectOf: async folder => folder,
+				log: () => {},
+			},
 		});
 		const x = new FakeConnection(peer("device-x"));
 		// What the device's link client sends for a control-tool call by a session that runs here, in /repo/app.

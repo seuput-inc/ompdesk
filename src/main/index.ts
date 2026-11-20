@@ -1404,7 +1404,7 @@ app.whenReady().then(async () => {
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
 		// What a paired device's agent asks through the control tools is judged by this computer's own setting too.
 		boundary: {
-			mode: () => projectBoundaryOf(prefs.get(AGENT_PROJECT_BOUNDARY_PREF)).mode,
+			settings: () => projectBoundaryOf(prefs.get(AGENT_PROJECT_BOUNDARY_PREF)),
 			projectOf: async folder =>
 				(await projectOfFolder(folder)) ?? sidebarProjects.state().worktrees[folder] ?? null,
 			log: report => writeRuntimeLog(report),

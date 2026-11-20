@@ -5,7 +5,7 @@
  * (the device's person, the device's own app) is not judged here.
  */
 
-import type { ProjectBoundaryMode } from "../../shared/agent-control";
+import type { ProjectBoundary } from "../../shared/agent-control";
 import { codedError } from "../../shared/ipc-error-codes";
 import type { SessionInfo } from "../../shared/ipc-types";
 import type { SchedulesState } from "../../shared/schedules";
@@ -13,8 +13,8 @@ import { type ClaimTarget, hostClaimOf, judgeHostClaim, OTHER_PROJECT } from "..
 import type { RuntimeLogReport } from "../runtime-log-core";
 
 export interface HostBoundaryDeps {
-	/** This computer's `agentProjectBoundary` mode. */
-	mode(): ProjectBoundaryMode;
+	/** This computer's `agentProjectBoundary`, resolved (`projectBoundaryOf`). */
+	settings(): ProjectBoundary;
 	/** The project a folder of this computer belongs to (the sidebar's rule); null when it cannot be told. */
 	projectOf(folder: string): Promise<string | null>;
 	log(report: RuntimeLogReport): void;
@@ -39,7 +39,8 @@ export async function hostBoundary(
 	target: RequestTarget | null,
 ): Promise<InScope | null> {
 	const claim = hostClaimOf(params);
-	const mode = deps.mode();
+	const settings = deps.settings();
+	const { mode } = settings;
 	if (!claim || mode === "off" || claim.granted) return null;
 	const projects = new Map<string, Promise<string | null>>();
 	const projectOf = (folder: string | null | undefined): Promise<string | null> => {
@@ -52,7 +53,7 @@ export async function hostBoundary(
 	};
 	const callerProject = await projectOf(claim.cwd);
 	const verdictOf = async (wanted: RequestTarget) =>
-		judgeHostClaim(mode, claim, callerProject, { ...wanted, project: await projectOf(wanted.folder) });
+		judgeHostClaim(settings, claim, callerProject, { ...wanted, project: await projectOf(wanted.folder) });
 	if (target) {
 		const verdict = await verdictOf(target);
 		if (verdict === "log")

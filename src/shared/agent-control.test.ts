@@ -159,8 +159,13 @@ describe("sidebar view for agents", () => {
 describe("project boundary prefs", () => {
 	it("resolves a missing or invalid value to the defaults, field by field", () => {
 		const defaults = { mode: PROJECT_BOUNDARY_DEFAULT_MODE, earlierOpened: PROJECT_BOUNDARY_DEFAULT_EARLIER };
-		// The release's transition flips these two constants and nothing else: off, and visible, until it is chosen.
-		expect(defaults).toEqual({ mode: "off", earlierOpened: "visible" });
+		// The owner's answer (20 Nov 2026): off until the person turns it on, and what a caller opened before the
+		// boundary checked needs the grant. A stored `visible` is still read as stored.
+		expect(defaults).toEqual({ mode: "off", earlierOpened: "grant" });
+		expect(projectBoundaryOf({ mode: "enforce", earlierOpened: "visible" })).toEqual({
+			mode: "enforce",
+			earlierOpened: "visible",
+		});
 		for (const stored of [undefined, null, "enforce", 7, [], {}, { mode: "strict", earlierOpened: true }])
 			expect(projectBoundaryOf(stored), JSON.stringify(stored)).toEqual(defaults);
 		expect(projectBoundaryOf({ mode: "enforce" })).toEqual({ ...defaults, mode: "enforce" });

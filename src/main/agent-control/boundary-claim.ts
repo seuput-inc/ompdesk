@@ -11,7 +11,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import type { ProjectBoundaryMode } from "../../shared/agent-control";
+import type { ProjectBoundary } from "../../shared/agent-control";
 
 const CallerClaimSchema = z.object({
 	/** The calling session, by its file (its tab's id while it has none): what a host knows it opened by. */
@@ -21,8 +21,10 @@ const CallerClaimSchema = z.object({
 	cwd: z.string(),
 	/** The person allowed the caller's session across projects on its own computer. */
 	granted: z.boolean(),
-	/** Session files and folders of the sessions the caller opened. */
+	/** Session files and folders of the sessions the caller opened through a check that passed. */
 	own: z.array(z.string()),
+	/** Those it opened with no such check (before the boundary, or while it only logged). */
+	earlier: z.array(z.string()).default([]),
 });
 export type CallerClaim = z.infer<typeof CallerClaimSchema>;
 
@@ -32,6 +34,8 @@ const HostClaimSchema = z.object({
 	cwd: z.string().optional(),
 	granted: z.boolean(),
 	own: z.array(z.string()),
+	/** Absent from an older device, whose `own` holds everything its caller opened. */
+	earlier: z.array(z.string()).default([]),
 });
 export type HostClaim = z.infer<typeof HostClaimSchema>;
 
@@ -55,6 +59,7 @@ export function withHostClaim(hostDeviceId: string, params: unknown): unknown {
 		...(claim.device === hostDeviceId ? { cwd: claim.cwd } : {}),
 		granted: claim.granted,
 		own: claim.own,
+		earlier: claim.earlier,
 	};
 	return { ...params, [HOST_CLAIM_KEY]: sent };
 }
@@ -76,22 +81,24 @@ export interface ClaimTarget {
 }
 
 /**
- * The host's verdict on one request, by the rule of `rules/boundary.rs`: allowed when the mode is off, the caller is
- * granted, the caller opened the target, or both projects are known and equal. `callerProject` is null for a caller
- * that runs on another computer, whose project is never one of this computer's.
+ * The host's verdict on one request, by the rule of `rules/boundary.rs` under this computer's own setting: allowed
+ * when the mode is off, the caller is granted, the caller opened the target through a check (the host's own record,
+ * or the claim's `own`), opened it with none while `earlierOpened` is `visible`, or both projects are known and equal.
+ * `callerProject` is null for a caller that runs on another computer, whose project is never one of this computer's.
  */
 export function judgeHostClaim(
-	mode: ProjectBoundaryMode,
+	boundary: ProjectBoundary,
 	claim: HostClaim,
 	callerProject: string | null,
 	target: ClaimTarget,
 ): "allow" | "log" | "refuse" {
-	if (mode === "off" || claim.granted || target.opened === true) return "allow";
+	if (boundary.mode === "off" || claim.granted || target.opened === true) return "allow";
 	// A session is the caller's by its file; a folder alone (a worktree) or a tab with no file yet, by the folder.
 	const opened = target.session ?? target.folder;
 	if (opened != null && claim.own.includes(opened)) return "allow";
+	if (opened != null && boundary.earlierOpened === "visible" && claim.earlier.includes(opened)) return "allow";
 	if (callerProject !== null && callerProject === target.project) return "allow";
-	return mode === "log" ? "log" : "refuse";
+	return boundary.mode === "log" ? "log" : "refuse";
 }
 
 /** What a refused request is answered with (the core's `OTHER_PROJECT`). */

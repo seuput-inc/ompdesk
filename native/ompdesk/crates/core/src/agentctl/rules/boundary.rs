@@ -1,6 +1,11 @@
 //! The project boundary: whether a caller may reach a session or a folder of another project through the control
-//! tools. It keeps an agent from crossing projects by accident; session files stay readable with bash, so it is no
-//! security boundary. Pure; the service gathers the facts (`service/boundary.rs`), main names the projects.
+//! tools. It keeps an agent from crossing projects by accident and is no security boundary. Its two limits:
+//! - it judges OMPdesk's own agent tools only (`ompdesk_*`, the `ompdesk` CLI): a shell, git or any program reads
+//!   session files and runs in any folder past it;
+//! - on a paired computer it trusts the project that computer reports for its sessions (and the caller a device
+//!   names in its claim): nothing here proves either.
+//!
+//! Pure; the service gathers the facts (`service/boundary.rs`), main names the projects.
 
 use serde::Deserialize;
 
@@ -15,13 +20,14 @@ pub enum BoundaryMode {
 }
 
 /// `agentProjectBoundary.earlierOpened`: what becomes of the sessions a caller opened before the boundary checked.
+/// The owner's answer (20 Nov 2026): they need the grant (`Grant`), as main's `PROJECT_BOUNDARY_DEFAULT_EARLIER` says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EarlierOpened {
     /// They stay in scope.
-    #[default]
     Visible,
     /// They are any other target: in scope only by project or grant.
+    #[default]
     Grant,
 }
 

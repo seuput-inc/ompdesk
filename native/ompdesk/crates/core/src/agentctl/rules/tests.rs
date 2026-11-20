@@ -889,9 +889,18 @@ fn the_project_boundary_allows_the_same_project_a_grant_and_what_the_caller_open
         ..Default::default()
     };
     let (a, b) = (Some("/repo/a"), Some("/repo/b"));
-    let table: [(BoundaryFacts, BoundaryVerdict, &str); 14] = [
+    let earlier = |mode: BoundaryMode| BoundaryFacts {
+        opened_earlier: true,
+        ..facts(mode, a, b)
+    };
+    let table: [(BoundaryFacts, BoundaryVerdict, &str); 17] = [
         (facts(Off, a, b), Allow, "off checks nothing"),
         (facts(Off, None, None), Allow, "off, nothing known"),
+        (
+            earlier(Off),
+            Allow,
+            "off, another project's session opened before",
+        ),
         (facts(Log, a, a), Allow, "log, same project"),
         (
             facts(Log, a, b),
@@ -929,40 +938,49 @@ fn the_project_boundary_allows_the_same_project_a_grant_and_what_the_caller_open
         (
             BoundaryFacts {
                 opened_through_check: true,
-                earlier_opened: EarlierOpened::Grant,
                 ..facts(Enforce, a, None)
             },
             Allow,
             "such a child, whatever the earlier-opened option says",
         ),
         (
-            BoundaryFacts {
-                opened_earlier: true,
-                ..facts(Enforce, a, b)
-            },
-            Allow,
-            "opened earlier stays visible by default",
+            earlier(Enforce),
+            Refuse,
+            "opened before the boundary checked needs the grant by default (the owner's answer)",
         ),
         (
             BoundaryFacts {
-                opened_earlier: true,
-                earlier_opened: EarlierOpened::Grant,
+                granted: true,
+                ..earlier(Enforce)
+            },
+            Allow,
+            "and the grant brings it back",
+        ),
+        (
+            earlier(Log),
+            BoundaryVerdict::Log,
+            "and is logged under log",
+        ),
+        (
+            BoundaryFacts {
+                earlier_opened: EarlierOpened::Visible,
+                ..earlier(Enforce)
+            },
+            Allow,
+            "opened earlier stays in reach once the option says visible",
+        ),
+        (
+            BoundaryFacts {
+                earlier_opened: EarlierOpened::Visible,
                 ..facts(Enforce, a, b)
             },
             Refuse,
-            "opened earlier is any other target once the option says grant",
-        ),
-        (
-            BoundaryFacts {
-                opened_earlier: true,
-                earlier_opened: EarlierOpened::Grant,
-                ..facts(Log, a, b)
-            },
-            BoundaryVerdict::Log,
-            "and is logged under log",
+            "visible keeps only what the caller opened",
         ),
     ];
     for (facts, verdict, what) in table {
         assert_eq!(boundary_verdict(&facts), verdict, "{what}: {facts:?}");
     }
+    assert_eq!(EarlierOpened::default(), EarlierOpened::Grant);
+    assert_eq!(BoundaryMode::default(), BoundaryMode::Off);
 }
