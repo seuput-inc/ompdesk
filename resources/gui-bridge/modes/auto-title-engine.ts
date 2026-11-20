@@ -25,7 +25,7 @@
  *   one line ({@link planTitlePrompt}: the person's language, the reply language as the fallback when it is not
  *   English, a plain 2-4 word noun phrase), set when the engine attaches, when `reply_language_set` changes the
  *   language, and again before each request (stock's headless `/move` re-resolves the slot). While that line is in
- *   effect, a title past the limits ({@link titleFits}) gets one retry with {@link titleShorterLine} on a stronger
+ *   effect, a title past the limits ({@link titleFits}) gets one retry with {@link TITLE_SHORTER_LINE} on a stronger
  *   model than the cheap title chain (stock's `default` role, else the session's model; reasoning off, a small output
  *   cap); the retry wins unless it is longer, cut only past the hard cap ({@link conciseTitle}). Each generated
  *   title is logged with the model's answers, the retry's model and usage (`auto-title: title` in omp's log). A
@@ -55,10 +55,10 @@ import {
 	EvolveGate,
 	isRewordedTitle,
 	planTitlePrompt,
+	TITLE_SHORTER_LINE,
 	titleFits,
 	titleInput,
 	titleIsAuto,
-	titleShorterLine,
 } from "./auto-title-core";
 import { newTitleFits, recentTitleTurns } from "./judge-assist-engine";
 import { currentReplyLanguage, onReplyLanguageChange } from "./reply-language";
@@ -297,7 +297,7 @@ interface Retry {
 	usage: unknown;
 }
 
-/** The one shorter retry: the slot's prompt plus {@link titleShorterLine}, on {@link retryModel}. */
+/** The one shorter retry on {@link retryModel}. */
 async function shorterTitle(session: TitleSession, prompt: string, answer: string, input: string): Promise<Retry> {
 	const functions = await stockFunctions();
 	const target = await retryModel(session, functions);
@@ -305,8 +305,14 @@ async function shorterTitle(session: TitleSession, prompt: string, answer: strin
 	const reply = await functions.completeSimple(
 		target.model as never,
 		{
-			systemPrompt: [`${prompt}\n\n${titleShorterLine(answer)}`],
-			messages: [{ role: "user", content: input, timestamp: Date.now() }],
+			systemPrompt: [`${prompt}\n\n${TITLE_SHORTER_LINE}`],
+			messages: [
+				{
+					role: "user",
+					content: input === answer ? answer : `Task: ${input}\n\nTitle to shorten: ${answer}`,
+					timestamp: Date.now(),
+				},
+			],
 		},
 		{
 			apiKey: target.resolver,
