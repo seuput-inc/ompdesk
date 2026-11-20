@@ -1473,6 +1473,11 @@ export function runRpcUi(): void {
 		modelRoles.default = "anthropic/claude-fable-5-2";
 		modelRoles.task = "anthropic/claude-opus-5-5";
 	}
+	// `OMP_GUI_TEST_ROLE_THINKING=<level>`: every role value carries `:<level>`, as a person writes one into config.yml
+	// (a parity capture of role rows whose value has a thinking suffix).
+	const roleThinking = process.env.OMP_GUI_TEST_ROLE_THINKING;
+	if (roleThinking)
+		for (const [role, id] of Object.entries(modelRoles)) if (id) modelRoles[role] = `${id}:${roleThinking}`;
 	/**
 	 * `OMP_GUI_TEST_CONFIG_YML=1`: settings and model roles persist in `$PI_CODING_AGENT_DIR/config.yml`, as stock keeps
 	 * them: read when this omp starts (nested keys become setting paths, `modelRoles` the roles) and written on every
