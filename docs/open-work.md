@@ -135,3 +135,5 @@ Last rewritten: 2026-11-20 02:40 KST. Branch owner names are the session's workt
 | id | item | status | owner | branch | proof |
 |---|---|---|---|---|---|
 | I1 | An agent can read another project's session content. Propose a per-project boundary: other projects' sessions show counts and state only. | in progress on a branch, not in any release until the owner decides (access rule) | tabs-tidy [desktop] | omp/agent/project-boundary-20261120 `993f03a02` | ci on the tip running; e2e 44601406118 on the tip; owner's three choices pending |
+
+Verified 20 Nov 02:05Z: the Windows desktop updated 0.135.0→0.136.0 on its FIRST download (02:05:10 started, 02:05:40 verified), without the one failure 0.134.0, 0.134.1 and 0.135.0 each had; the Windows update fix shipped in 0.135.0 works.
