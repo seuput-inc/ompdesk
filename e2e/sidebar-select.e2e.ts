@@ -376,7 +376,11 @@ test("a paired computer's section: selecting a host's row selects it and moves n
 	let host: RemoteInstance | undefined;
 	let client: RemoteInstance | undefined;
 	try {
-		const hostProfile = await makeRemoteProfile(parent, "host", { language: "en", theme: "light" });
+		const hostProfile = await makeRemoteProfile(parent, "host", {
+			language: "en",
+			theme: "light",
+			prefs: { sidebar: { archivedSessions: ["s-5"] } },
+		});
 		const clientProfile = await makeRemoteProfile(parent, "client", {
 			language: "en",
 			theme: "light",
@@ -401,12 +405,20 @@ test("a paired computer's section: selecting a host's row selects it and moves n
 		const loose = (id: string) =>
 			section.locator(`[data-sidebar-loose-children] [data-session-path$="${id}.jsonl"]`).first();
 		await expect(section).toHaveAttribute("data-device-state", "online", { timeout: 30_000 });
-		// The person archives the host's fifth session from its menu (this computer keeps it under the host's id).
-		await plain("s-5").click({ button: "right" });
-		await a.getByRole("menuitem", { name: "Archive", exact: true }).click();
 		const toggle = section.locator("[data-sidebar-archived] button[aria-expanded]").first();
 		await expect(toggle).toBeVisible({ timeout: 30_000 });
 		if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+		const archived = section.locator('[data-archived-list] [data-device-session$="s-5.jsonl"]');
+		await expect(archived).toBeVisible();
+		await archived.click({ button: "right" });
+		await a.getByRole("menuitem", { name: "Restore", exact: true }).click();
+		const hostRow = host.page.locator('[data-session-group] [data-session-path$="s-5.jsonl"]');
+		await expect(hostRow).toBeVisible();
+		await hostRow.click({ button: "right" });
+		await host.page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+		await expect(toggle).toBeVisible();
+		if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+		await expect(archived).toBeVisible();
 		// The loose child is listed with no tab anywhere holding it, among its project's rows.
 		await expect.poll(() => orderOf(a, lists), { timeout: 60_000 }).toBe(WORLD_ORDER);
 		await expect(section.locator("[data-sidebar-loose-children] [data-sidebar-opened-session]")).toHaveCount(1);
