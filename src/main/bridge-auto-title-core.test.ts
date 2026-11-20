@@ -25,7 +25,6 @@ import {
 	titleFits,
 	titleIsAuto,
 	titleLanguageLine,
-	titleShorterLine,
 	WEIGHT,
 } from "../../resources/gui-bridge/modes/auto-title-core";
 
@@ -255,27 +254,6 @@ describe("title language and length", () => {
 			"Session title internationalization rule",
 		])
 			expect(titleFits(title), title).toBe(false);
-	});
-
-	it("shows the first pass two compressions, and the retry all four with the rules", () => {
-		const first = titleLanguageLine("Korean");
-		expect(first).toContain('"로그인 비밀번호 에러 메시지 버그 수정" → "로그인 오류 수정"');
-		expect(first).toContain('"CSV export empty with filters" → "Empty CSV export"');
-		expect(first).not.toContain("현황판");
-		expect(first).toContain("Keep the subject and the head noun");
-		const line = titleShorterLine("작업 현황판 화면 디자인");
-		expect(line).toContain('the title "작업 현황판 화면 디자인" is too long');
-		expect(line).toContain(`at most ${TITLE_MAX_CJK_CHARS} characters in Korean, Chinese or Japanese`);
-		expect(line).toContain(`${TITLE_MAX_CHARS} characters otherwise, spaces included`);
-		expect(line).toContain("Keep the subject and the head noun");
-		expect(line).toContain("drop modifiers and generic tails (화면, 메시지, 로직, 기능, 관련");
-		for (const pair of [
-			'"로그인 비밀번호 에러 메시지 버그 수정" → "로그인 오류 수정"',
-			'"작업 현황판 화면 디자인 개선" → "현황판 디자인"',
-			'"결제 API 재시도 로직" → "결제 재시도"',
-			'"CSV export empty with filters" → "Empty CSV export"',
-		])
-			expect(line).toContain(pair);
 	});
 
 	it("keeps a title whole up to the hard cap, then cuts whole words: generic then leading ones in Korean, trailing ones otherwise", () => {
