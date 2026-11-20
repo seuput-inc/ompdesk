@@ -18,7 +18,14 @@ import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
 import { releaseDelegationForWrite } from "./modes/delegation";
 import { OMPDESK_ROLES } from "./ompdesk-role-contracts";
-import { type RoleSettings, readRolePicks, roleConfigured, settleOmpdeskRoles, writeRolePick } from "./ompdesk-roles";
+import {
+	configuredRole,
+	type RoleSettings,
+	readRolePicks,
+	roleConfigured,
+	settleOmpdeskRoles,
+	writeRolePick,
+} from "./ompdesk-roles";
 import { asRecord, requiredString } from "./params";
 import { type ResetPasses, shapeResetPasses } from "./reset-passes-core";
 import { effectiveOmpdeskRole, effectiveRole, type RoleStock } from "./role-effective";
@@ -982,13 +989,31 @@ export const methods: BridgeMethods = {
 				}),
 			);
 			// An OMPdesk role is held at runtime, never written to config.yml; a value the user's config sets stays in
-			// force (settleOmpdeskRoles yields to it), so a pick then waits in the picks file until that value is gone.
+			// force (settleOmpdeskRoles yields to it), so a pick or a clear then would change nothing: refused, naming
+			// that value, instead of answering success.
 			if (OMPDESK_ROLES.some(entry => entry.id === role)) {
+				const configured = configuredRole(session.settings as unknown as RoleSettings, role);
+				if (configured) {
+					const where = configured.layer === "global" ? "config.yml" : "this project's config";
+					throw new Error(
+						`modelRoles.${role} is set to ${configured.value} in ${where}, which wins over OMPdesk's pick; change or remove it there`,
+					);
+				}
 				writeRolePick(role, value);
 				await settleOmpdeskRoles(session.settings as unknown as RoleSettings);
 			} else {
+				const before = (session.settings as unknown as RoleSettings).getGlobalModelRole(role) ?? null;
 				session.settings.setModelRole(role, value);
 				await session.settings.flush();
+				// The one OMPdesk path that writes a role into config.yml: a line per write, so a role that changes
+				// under the person (20 Nov 2026, C16: slow and advisor went back to older values with no line in any
+				// log) is attributable to a session, or shown not to be OMPdesk's.
+				env.pi.logger.info("gui-bridge: model role written to config.yml", {
+					role,
+					from: before,
+					to: value ?? null,
+					sessionId: session.sessionId,
+				});
 			}
 			env.emit({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 			return { role, modelId: typeof modelId === "string" ? modelId : null };

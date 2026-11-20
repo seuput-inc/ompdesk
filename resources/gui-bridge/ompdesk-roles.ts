@@ -89,9 +89,20 @@ export function writeRolePick(id: string, pick: string | undefined): void {
 	fs.renameSync(temp, file);
 }
 
+/** Where config.yml or a project config sets OMPdesk role `id` (the user's own value wins), with that value. */
+export function configuredRole(
+	settings: RoleSettings,
+	id: string,
+): { layer: "project" | "global"; value: string } | undefined {
+	const project = settings.getProjectModelRole(id)?.trim();
+	if (project) return { layer: "project", value: project };
+	const global = settings.getGlobalModelRole(id)?.trim();
+	return global ? { layer: "global", value: global } : undefined;
+}
+
 /** Whether config.yml or a project config sets OMPdesk role `id` (the user's own value wins). */
 export function roleConfigured(settings: RoleSettings, id: string): boolean {
-	return Boolean(settings.getGlobalModelRole(id)?.trim() || settings.getProjectModelRole(id)?.trim());
+	return configuredRole(settings, id) !== undefined;
 }
 
 /** Drop key `key` of the record setting `id` from the runtime layer (the rest of that layer stays). */

@@ -23,6 +23,7 @@
 import { Check, ChevronDown, RefreshCw, Search, TriangleAlert } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { baseSelector } from "../../../shared/role-plan";
 import type { ProvidersResult } from "../../../shared/rpc-types";
 import { cx } from "../../lib/format";
 import { useT } from "../../lib/i18n";
@@ -367,7 +368,8 @@ export function ModelValueSelect({
 		setOpen(false);
 		setQuery("");
 		triggerRef.current?.focus();
-		if (next !== value) onCommit(next);
+		// The selected row of a suffixed value is that value: choosing it again keeps the thinking level.
+		if (next !== value && next !== currentOption?.value) onCommit(next);
 	};
 
 	const sourceGroups = groups ?? fetched;
@@ -389,8 +391,14 @@ export function ModelValueSelect({
 	const filteredCount = filteredGroups.reduce((sum, group) => sum + group.options.length, 0);
 
 	// The current value is pinned as a custom row when the options do not
-	// contain it (hand-written overrides stay selectable/clearable).
-	const currentOption = allOptions.find(option => option.value === value);
+	// contain it (hand-written overrides stay selectable/clearable). A model value with a thinking suffix
+	// (`p/m:high`, written by hand or by the advisor's `:auto`) is that model's row: the level is the row's own line.
+	const modelBase = kind === "model" ? baseSelector(value) : undefined;
+	const currentOption =
+		allOptions.find(option => option.value === value) ??
+		(modelBase === undefined || modelBase === value
+			? undefined
+			: allOptions.find(option => option.value === modelBase));
 	const currentIsCustom = value !== "" && ready && currentOption === undefined;
 	// In fetched mode (or with `allowCustom`) the search text doubles as a
 	// custom-value entry when it is not an exact known option.
@@ -410,9 +418,12 @@ export function ModelValueSelect({
 	// open list will.
 	const shownOption = useMemo(() => {
 		if (currentOption || kind !== "model" || value === "") return currentOption;
-		const known = storeModels.find(model => `${model.provider}/${model.id}` === value);
+		const known = storeModels.find(model => {
+			const selector = `${model.provider}/${model.id}`;
+			return selector === value || selector === modelBase;
+		});
 		return known ? modelValueOption(known, compactModelLabels(storeModels)) : undefined;
-	}, [currentOption, kind, storeModels, value]);
+	}, [currentOption, kind, modelBase, storeModels, value]);
 	const portal = (panel: ReactNode) => (compact ? createPortal(panel, document.body) : panel);
 
 	const moveFocus = (direction: 1 | -1, edge?: "first" | "last") => {
@@ -462,7 +473,7 @@ export function ModelValueSelect({
 	};
 
 	const renderOption = (option: ModelValueOption) => {
-		const selected = option.value === value;
+		const selected = option.value === (currentOption?.value ?? value);
 		// `disabled` is a recognition label, not a lock: choosing a disabled
 		// provider for a `*Provider` setting only fails when something later
 		// tries to call it.
