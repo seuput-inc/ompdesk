@@ -14,7 +14,7 @@ import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { nativeBinPath } from "./native-bin";
@@ -75,12 +75,11 @@ interface Provider {
 	continued: number;
 	/** Every request body, in order. */
 	requests: string[];
-	close(): Promise<void>;
 }
 
 /** The first prompt is answered in text; the second runs `secondTurn` (one step per tool result since it), then `CONTINUED`. */
 async function startProvider(secondTurn: readonly Step[]): Promise<Provider> {
-	const provider: Provider = { url: "", continued: 0, requests: [], close: async () => undefined };
+	const provider: Provider = { url: "", continued: 0, requests: [] };
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
@@ -123,10 +122,11 @@ async function startProvider(secondTurn: readonly Step[]): Promise<Provider> {
 	await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
 	const { port } = server.address() as { port: number };
 	provider.url = `http://127.0.0.1:${port}/v1`;
-	provider.close = () => {
+	onTestFinished(() => {
+		const closed = server[Symbol.asyncDispose]();
 		server.closeAllConnections();
-		return new Promise<void>(done => server.close(() => done()));
-	};
+		return closed;
+	});
 	return provider;
 }
 
@@ -169,10 +169,18 @@ interface Omp {
 	kill(): Promise<void>;
 }
 
-const cleanups: Array<() => Promise<void> | void> = [];
-afterAll(async () => {
-	for (const cleanup of cleanups.reverse()) await cleanup();
-});
+function testFolders(prefix: string) {
+	const isolated = mkdtempSync(join(tmpdir(), `ompdesk-${prefix}-`));
+	chmodSync(isolated, 0o700);
+	const root = realpathSync(mkdtempSync(join(tmpdir(), `ompdesk-${prefix}-repo-`)));
+	onTestFinished(() => {
+		// omp 19's daemon for this config folder keeps it and the repository busy on Windows.
+		stopOmpDaemon(isolated);
+		rmSync(isolated, RM_TEMP);
+		rmSync(root, RM_TEMP);
+	});
+	return { isolated, root };
+}
 
 async function startOmp(
 	provider: Provider,
@@ -240,15 +248,17 @@ async function startOmp(
 	});
 	const bridge = new GuiBridgeClient(address);
 	let counter = 0;
-	// A killed omp's stdin fails the cleanup's end with EPIPE.
+	// A killed omp can close its stdin while a write is pending.
 	child.stdin.on("error", () => undefined);
 	const quit = async () => {
 		bridge.close();
-		child.stdin.end();
-		// A guard, not a wait: an omp that ignores its closed stdin is killed so the test ends.
-		const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
-		await exited;
-		clearTimeout(timer);
+		if (child.exitCode === null && child.signalCode === null) {
+			child.stdin.end();
+			// A guard, not a wait: an omp that ignores its closed stdin is killed so the test ends.
+			const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+			await exited;
+			clearTimeout(timer);
+		}
 		removeBridgeAddress(address);
 	};
 	const kill = async () => {
@@ -257,7 +267,7 @@ async function startOmp(
 		await exited;
 		removeBridgeAddress(address);
 	};
-	cleanups.push(() => quit());
+	onTestFinished(quit);
 	await expect.poll(() => frames.some(frame => frame.type === "ready"), { timeout: 60_000 }).toBe(true);
 	await expect
 		.poll(
@@ -323,15 +333,8 @@ async function quitBeforeRequest(
 	holdAfter: "user" | "toolResult",
 	options: { lostAfterExit?: boolean } = {},
 ) {
+	const { isolated, root } = testFolders("request");
 	const provider = await startProvider(secondTurn);
-	cleanups.push(() => provider.close());
-	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-request-"));
-	chmodSync(isolated, 0o700);
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-request-repo-")));
-	cleanups.push(() => {
-		rmSync(isolated, { recursive: true, force: true });
-		rmSync(root, { recursive: true, force: true });
-	});
 	const { hold, held } = writeHoldExtension(isolated, holdAfter);
 	const first = await startOmp(provider, isolated, root, false);
 	await first.send({ type: "prompt", message: FIRST });
@@ -409,15 +412,8 @@ describe.skipIf(!existsSync(omp))(
 	"a quit that aborted a tool, with a note journaled after the abort, on stock omp",
 	() => {
 		it("goes on with the turn after the relaunch", async () => {
+			const { isolated, root } = testFolders("noted");
 			const provider = await startProvider([{ tool: "bash", args: { command: "sleep 120", i: "long check" } }]);
-			cleanups.push(() => provider.close());
-			const isolated = mkdtempSync(join(tmpdir(), "ompdesk-noted-"));
-			chmodSync(isolated, 0o700);
-			const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-noted-repo-")));
-			cleanups.push(() => {
-				rmSync(isolated, { recursive: true, force: true });
-				rmSync(root, { recursive: true, force: true });
-			});
 			const { hold } = writeHoldExtension(isolated, "user");
 			rmSync(hold);
 			const first = await startOmp(provider, isolated, root, false);
@@ -472,18 +468,9 @@ describe.skipIf(!existsSync(omp))(
  */
 describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock omp", () => {
 	async function cutCommand(script: (counter: string) => string, end: "quit" | "kill") {
-		const isolated = mkdtempSync(join(tmpdir(), "ompdesk-once-"));
-		chmodSync(isolated, 0o700);
-		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-once-repo-")));
-		cleanups.push(() => {
-			// omp 19's daemon for this config folder keeps it and the repository busy on Windows.
-			stopOmpDaemon(isolated);
-			rmSync(isolated, RM_TEMP);
-			rmSync(root, RM_TEMP);
-		});
+		const { isolated, root } = testFolders("once");
 		const counter = join(root, "counter").replaceAll("\\", "/");
 		const provider = await startProvider([{ tool: "bash", args: { command: script(counter), i: "counted" } }]);
-		cleanups.push(() => provider.close());
 		const { hold } = writeHoldExtension(isolated, "user");
 		rmSync(hold);
 		const first = await startOmp(provider, isolated, root, false);
@@ -534,19 +521,11 @@ describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock om
  */
 describe.skipIf(!existsSync(omp) || !existsSync(nativeBinPath("ompdesk")))("a background job on stock omp", () => {
 	it("keeps running through a relaunch, once, and its result reaches the agent after it", async () => {
-		const isolated = mkdtempSync(join(tmpdir(), "ompdesk-kept-"));
-		chmodSync(isolated, 0o700);
-		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-kept-repo-")));
-		cleanups.push(() => {
-			stopOmpDaemon(isolated);
-			rmSync(isolated, RM_TEMP);
-			rmSync(root, RM_TEMP);
-		});
+		const { isolated, root } = testFolders("kept");
 		const counter = join(root, "counter").replaceAll("\\", "/");
 		// The output is computed, so it reaches a request only from the job's result, never from the call's command.
 		const command = `echo started >> "${counter}"; sleep 8; echo KEPT-$((40 + 2)); echo finished >> "${counter}"`;
 		const provider = await startProvider([{ tool: "bash", args: { command, async: true, i: "kept" } }]);
-		cleanups.push(() => provider.close());
 		const { hold } = writeHoldExtension(isolated, "user");
 		rmSync(hold);
 		const keep = { [KEEP_CLI_ENV]: nativeBinPath("ompdesk") };
