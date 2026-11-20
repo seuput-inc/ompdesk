@@ -1100,7 +1100,21 @@ app.whenReady().then(async () => {
 		builtinDir,
 		sessionFree: async sessionPath => {
 			const started = Date.now();
-			const outcome = await whenSessionFree(sessionPath, { owned: path => sessionIndex.ownedElsewhere(path) });
+			const outcome = await whenSessionFree(sessionPath, {
+				owned: path => sessionIndex.ownedElsewhere(path),
+				// Fail-open: a stock helper that does not answer must not hold every start for a minute, so the start goes
+				// on; the line says a second owner was not ruled out.
+				unknown: error =>
+					writeRuntimeLog({
+						source: "session-owner",
+						message: "ownership unknown; opened anyway",
+						details: {
+							level: "info",
+							session: basename(sessionPath),
+							error: error instanceof Error ? error.message : String(error),
+						},
+					}),
+			});
 			if (outcome === "owned" || Date.now() - started > 1_000)
 				writeRuntimeLog({
 					source: "session-owner",

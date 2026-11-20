@@ -42,12 +42,21 @@ describe("whenSessionFree", () => {
 		expect(c.asked.length).toBeLessThan(60);
 	});
 
-	it("does not wait when it cannot tell", async () => {
+	it("does not wait when it cannot tell, and says the ownership was unknown", async () => {
 		const c = clock();
 		const owned = async (): Promise<boolean> => {
 			throw new Error("no stock helper");
 		};
-		expect(await whenSessionFree("/s/a.jsonl", { owned, now: c.now, sleep: c.sleep })).toBe("free");
+		const unknown: unknown[] = [];
+		expect(
+			await whenSessionFree("/s/a.jsonl", {
+				owned,
+				unknown: error => unknown.push(error),
+				now: c.now,
+				sleep: c.sleep,
+			}),
+		).toBe("free");
 		expect(c.now()).toBe(0);
+		expect(unknown.map(error => (error as Error).message)).toEqual(["no stock helper"]);
 	});
 });
