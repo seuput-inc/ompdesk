@@ -52,7 +52,7 @@ const pointsSchema = z.object({
 	roles: z.array(z.object({ role: z.string(), selector: z.string(), autoSelected: z.boolean(), point: pointSchema })),
 });
 
-const settingsValuesSchema = z.object({ values: z.record(z.unknown()) });
+const settingsValuesSchema = z.object({ values: z.record(z.string(), z.unknown()) });
 
 export interface CompactionPoints {
 	bySelector: ReadonlyMap<string, CompactionPoint>;

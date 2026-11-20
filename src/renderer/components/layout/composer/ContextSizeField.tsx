@@ -38,8 +38,8 @@ const asRecord = (value: unknown): Rec =>
 	typeof value === "object" && value !== null && !Array.isArray(value) ? { ...value } : {};
 
 const settingsSchema = z.object({
-	values: z.record(z.unknown()),
-	provenance: z.record(z.object({ globalValue: z.unknown().optional() }).passthrough()).optional(),
+	values: z.record(z.string(), z.unknown()),
+	provenance: z.record(z.string(), z.object({ globalValue: z.unknown().optional() }).passthrough()).optional(),
 });
 
 interface Loaded {

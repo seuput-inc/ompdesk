@@ -262,7 +262,7 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 			dir: "invoke",
 			permission: "device-self",
 			handler: (context, args) => {
-				const prefs = parse(z.record(z.unknown()), args[0]);
+				const prefs = parse(z.record(z.string(), z.unknown()), args[0]);
 				if (JSON.stringify(prefs).length > DEVICE_UI_PREFS_MAX_BYTES) {
 					throw codedError("invalid_content", "Preferences are too large");
 				}

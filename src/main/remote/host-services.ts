@@ -577,7 +577,7 @@ const FsSearchParams = z.object({ ...FsRoot, request: z.unknown() });
 const FsReadPlanParams = z.object({ ...FsRoot, fsPath: z.string(), localRoot: z.string().nullable() });
 const ListDirsParams = z.object({ path: z.string().optional(), query: z.string().max(255).optional() });
 const LaunchProfileGetParams = z.object({ cwd: AbsolutePath });
-const LaunchProfileUpdateParams = z.object({ cwd: AbsolutePath, patch: z.record(z.unknown()) });
+const LaunchProfileUpdateParams = z.object({ cwd: AbsolutePath, patch: z.record(z.string(), z.unknown()) });
 const ModelsUpsertParams = z.object({ input: CustomProviderInputSchema });
 const ModelsDeleteParams = z.object({ id: z.string().min(1) });
 const ModelsOverrideParams = z.object({
@@ -585,7 +585,10 @@ const ModelsOverrideParams = z.object({
 	modelId: z.string().min(1).max(400),
 	override: ModelOverrideInputSchema.nullable(),
 });
-const StatsFetchParams = z.object({ path: z.string().min(1).max(512), params: z.record(z.string()).optional() });
+const StatsFetchParams = z.object({
+	path: z.string().min(1).max(512),
+	params: z.record(z.string(), z.string()).optional(),
+});
 const BenchRunParams = z.object({ ...FsRoot, options: BenchmarkOptionsSchema });
 const ModelSetupRunParams = z.object({ request: ModelSetupRequestSchema });
 const AccountRotationSetParams = z.object({ mode: z.enum(ACCOUNT_ROTATION_MODES) });
@@ -614,7 +617,10 @@ const GitWorktreeCreateParams = z.object({
 	baseRef: z.string().min(1).max(200),
 });
 /** `runChargesFile`: Autopilot runs devices started here, by worktree root (the run's session, when known). */
-const RunChargesSchema = z.record(z.object({ device: z.string().min(1), session: z.string().optional() }).strict());
+const RunChargesSchema = z.record(
+	z.string(),
+	z.object({ device: z.string().min(1), session: z.string().optional() }).strict(),
+);
 type RunCharge = z.infer<typeof RunChargesSchema>[string];
 
 function parse<T extends z.ZodTypeAny>(schema: T, method: string, params: unknown): z.infer<T> {

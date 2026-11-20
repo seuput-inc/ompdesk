@@ -334,7 +334,7 @@ for (const engine of ENGINES)
 							if (size > 100_000) say(`received ${size} chars`);
 						});
 						const send = socket.send.bind(socket);
-						socket.send = (data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
+						socket.send = data => {
 							if (typeof data === "string" && data.length > 100_000) say(`sent ${data.length} chars`);
 							send(data);
 						};

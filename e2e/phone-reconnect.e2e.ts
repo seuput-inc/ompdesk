@@ -76,7 +76,7 @@ function watchLink(): void {
 				if (event.data.startsWith('{"t":"hello"')) note("hello", JSON.parse(event.data).resumed === true);
 			});
 		}
-		send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+		send(data: Parameters<WebSocket["send"]>[0]): void {
 			if (typeof data === "string" && data.startsWith('{"t":"inv"')) {
 				const frame = JSON.parse(data) as { ch: string };
 				link.calls.push({ at: performance.now(), ch: frame.ch });

@@ -100,7 +100,7 @@ const NotebookOutputSchema = z.object({
 	traceback: z.array(z.string()).optional(),
 	ename: z.string().optional(),
 	evalue: z.string().optional(),
-	data: z.record(z.unknown()).optional(),
+	data: z.record(z.string(), z.unknown()).optional(),
 });
 
 const NotebookCellSchema = z.object({

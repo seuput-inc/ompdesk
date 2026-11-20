@@ -1,6 +1,6 @@
 import { dirname, resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { defineConfig } from "electron-vite";
 import { normalizePath, type Plugin, type Rollup } from "vite";
 import { precompressPlugin } from "./scripts/precompress-plugin";
 import { pwaPlugin } from "./scripts/pwa-plugin";
@@ -59,6 +59,7 @@ function separatePreload(name: string): Plugin {
 				logLevel: "warn",
 				esbuild: KEEP_NAMES,
 				build: {
+					target: "es2022",
 					outDir,
 					emptyOutDir: false,
 					minify: "esbuild",
@@ -351,8 +352,11 @@ export default defineConfig({
 		esbuild: KEEP_NAMES,
 		define: MAIN_DEFINES,
 		resolve: { alias: { electron: ELECTRON_SHIM } },
-		plugins: [externalizeDepsPlugin({ exclude: MAIN_BUNDLED_DEPS }), bundleElectronShim()],
+		plugins: [bundleElectronShim()],
 		build: {
+			// Main also runs in Node during packaging checks, not in the installed Electron SDK.
+			target: "node22",
+			externalizeDeps: { exclude: MAIN_BUNDLED_DEPS },
 			minify: "esbuild",
 			rollupOptions: {
 				// hang-watchdog-worker is the main-thread hang watchdog's worker thread (src/main/hang-watchdog.ts).
@@ -372,6 +376,8 @@ export default defineConfig({
 		esbuild: KEEP_NAMES,
 		plugins: [separatePreload("tauri")],
 		build: {
+			target: "node22",
+			externalizeDeps: false,
 			minify: "esbuild",
 			rollupOptions: {
 				input: { shell: resolve(__dirname, "src/preload/shell.ts") },
@@ -402,6 +408,8 @@ export default defineConfig({
 			},
 		},
 		build: {
+			// WKWebView, WebView2 and the paired browser load this bundle, not Electron's Chromium.
+			target: "es2022",
 			minify: "esbuild",
 			rollupOptions: {
 				// `web` is the page a paired phone loads (src/renderer/web/); it shares every chunk with `index`.

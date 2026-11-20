@@ -121,7 +121,11 @@ const DELTA = "~delta";
  * (`set`) and the keys that are gone (`unset`). A whole record has no `~delta`, which no stock field is called.
  */
 const FieldDelta = z
-	.object({ "~delta": z.string(), set: z.record(z.unknown()).optional(), unset: z.array(z.string()).optional() })
+	.object({
+		"~delta": z.string(),
+		set: z.record(z.string(), z.unknown()).optional(),
+		unset: z.array(z.string()).optional(),
+	})
 	.passthrough();
 type FieldDelta = z.infer<typeof FieldDelta>;
 
@@ -198,7 +202,7 @@ const ITEMS = "~items";
  */
 const ItemsDelta = z.object({
 	"~items": z.number().int().nonnegative(),
-	at: z.record(z.unknown()),
+	at: z.record(z.string(), z.unknown()),
 	shift: z.number().int().positive().optional(),
 });
 type ItemsDelta = z.infer<typeof ItemsDelta>;
@@ -533,8 +537,8 @@ const SentRef = z
 	.object({
 		"~sent": z.string(),
 		entryId: z.string().optional(),
-		reads: z.record(z.unknown()).optional(),
-		set: z.record(z.unknown()).optional(),
+		reads: z.record(z.string(), z.unknown()).optional(),
+		set: z.record(z.string(), z.unknown()).optional(),
 		unset: z.array(z.string()).optional(),
 	})
 	.strict();

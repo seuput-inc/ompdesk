@@ -410,8 +410,15 @@ for (const language of ["en", "ko"] as const)
 			// The clipboard is the system's: the four runs share one worker (no parallel
 			// mode) so their copies never race, and the user's clipboard comes back after.
 			const readClipboard = () =>
-				app.evaluate(({ clipboard }) => ({ text: clipboard.readText(), html: clipboard.readHTML() }));
-			const clearClipboard = () => app.evaluate(({ clipboard }) => clipboard.clear());
+				page.evaluate(async () => {
+					const items = await navigator.clipboard.read();
+					const read = async (type: string) => {
+						const item = items.find(item => item.types.includes(type));
+						return item ? (await item.getType(type)).text() : "";
+					};
+					return { text: await read("text/plain"), html: await read("text/html") };
+				});
+			const clearClipboard = () => page.evaluate(() => navigator.clipboard.writeText(""));
 			/** The clipboard once a copy has landed (empty after a second means nothing was copied). */
 			const readCopied = async () => {
 				for (let attempt = 0; attempt < 10; attempt++) {
@@ -421,10 +428,25 @@ for (const language of ["en", "ko"] as const)
 				}
 				return readClipboard();
 			};
-			const saved = await readClipboard();
 			// Test windows never take focus; the page is told it has it, as a clicked window does.
 			const cdp = await page.context().newCDPSession(page);
 			await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+			await page
+				.context()
+				.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+			const saved = await page.evaluateHandle(async () => {
+				const items = await navigator.clipboard.read();
+				return Promise.all(
+					items.map(
+						async item =>
+							new ClipboardItem(
+								Object.fromEntries(
+									await Promise.all(item.types.map(async type => [type, await item.getType(type)] as const)),
+								),
+							),
+					),
+				);
+			});
 			const send = async (text: string) => {
 				await composer.fill(text);
 				await page.getByRole("button", { name: copy.send, exact: true }).first().click();
@@ -479,7 +501,7 @@ for (const language of ["en", "ko"] as const)
 				}
 				await page.waitForTimeout(150);
 				await shoot(`select-${name}`);
-				await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.copy());
+				await page.keyboard.press("ControlOrMeta+c");
 				await page.waitForTimeout(150);
 				clipboard[name] = await readCopied();
 				await page.evaluate(() => getSelection()?.removeAllRanges());
@@ -684,7 +706,7 @@ for (const language of ["en", "ko"] as const)
 					);
 					await fs.writeFile(path.join(directory, `${prefix}-clipboard.json`), JSON.stringify(clipboard, null, 2));
 				}
-				await app.evaluate(({ clipboard }, saved) => clipboard.write(saved), saved);
+				await saved.evaluate(items => navigator.clipboard.write(items));
 				await exitApp(app);
 				await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 			}

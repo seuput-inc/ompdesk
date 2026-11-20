@@ -946,7 +946,9 @@ export const ARGS = {
 	[T.appList]: z
 		.object({ area: z.string().trim().max(60).optional(), query: z.string().trim().max(200).optional() })
 		.strict(),
-	[T.app]: z.object({ action: z.string().trim().min(1).max(100), args: z.record(z.unknown()).optional() }).strict(),
+	[T.app]: z
+		.object({ action: z.string().trim().min(1).max(100), args: z.record(z.string(), z.unknown()).optional() })
+		.strict(),
 } as const;
 
 /** The slice of a tool's JSON schema `looseArgs` reads. */

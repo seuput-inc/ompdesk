@@ -409,7 +409,7 @@ export const MemoryPageWire = z.object({
 	metadata: z.object({
 		entities: z.array(z.string().max(200)).max(32).optional(),
 		abstract: z.string().max(4000).optional(),
-		relations: z.record(z.array(z.string().max(1024)).max(64)).optional(),
+		relations: z.record(z.string(), z.array(z.string().max(1024)).max(64)).optional(),
 		applies_to: z.array(z.string().max(64)).max(32).optional(),
 		enforced_by: z.string().max(1000).optional(),
 	}),
@@ -662,7 +662,7 @@ export const HOST_COMMAND_TIMEOUT_MS = 8_000;
 /** Extra wait on top of a command's own timeout, covering the link round trip. */
 export const LINK_SLACK_MS = 5_000;
 
-const StringRecord = z.record(z.string());
+const StringRecord = z.record(z.string(), z.string());
 // Transport shape only: host ModelsConfigSchema is the authority for option values.
 const ProviderApi = z.custom<CustomProviderApi>(value => typeof value === "string");
 const Effort = z.custom<CustomModelEffort>(value => typeof value === "string");
@@ -712,7 +712,7 @@ export const CustomProviderInputSchema: z.ZodType<CustomProviderInput> = z.objec
 		.optional(),
 	disableStrictTools: z.boolean().optional(),
 	transport: z.literal("pi-native").optional(),
-	extraBody: z.record(z.unknown()).optional(),
+	extraBody: z.record(z.string(), z.unknown()).optional(),
 	models: z.array(CustomProviderModelInputSchema),
 });
 
@@ -725,7 +725,7 @@ export const ModelOverrideInputSchema: z.ZodType<ModelOverrideInput> = z.object(
 		.object({
 			mode: z.custom<CustomModelThinkingMode>(value => typeof value === "string"),
 			efforts: z.array(Effort).min(1),
-			effortMap: z.record(z.string()).optional(),
+			effortMap: z.record(z.string(), z.string()).optional(),
 		})
 		.optional(),
 	contextWindow: OptionalNumber,
@@ -879,7 +879,7 @@ export const ProjectsCommandParams: z.ZodType<{ request: SidebarProjectsRequest 
 });
 
 /** `host.projects.command` reply and `host.projects.changed` event. */
-export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTypeDef, unknown> = z.object({
+export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState> = z.object({
 	projects: z.array(z.object({ path: ProjectPath, addedAt: z.number(), missing: z.literal(true).optional() })),
 	removed: z.array(ProjectPath),
 	// An older host sends none: its sessions then group by their own folder, as before.

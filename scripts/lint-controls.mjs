@@ -12,7 +12,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 const ROOT = fileURLToPath(new URL("../src/renderer", import.meta.url));
 

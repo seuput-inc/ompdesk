@@ -7,7 +7,7 @@
  * restored turn's first request, as all of OMPdesk's sections were on 27 Oct 2026. A deliberate exception carries
  * `prompt-section-ok: <reason>` in a comment on the `on(` line.
  */
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 /**
  * @param {string} source

@@ -13,7 +13,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { WebSocket } from "ws";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import {
@@ -47,7 +47,7 @@ let base: string;
 let port: number;
 let handlers: Map<string, Handler>;
 let desktopSent: { channel: string; payload: unknown }[];
-let unpaired: ReturnType<typeof vi.fn>;
+let unpaired: Mock<NonNullable<WebHostDeps["onUnpairedAuth"]>>;
 let confirmNew: boolean;
 let approve: boolean;
 let sockets: WebSocket[];

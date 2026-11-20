@@ -3,7 +3,7 @@
  * and the verdict (`workVerdict`), as `ExecutionGroup` runs them. Entries are hydrated through the tools store with
  * unique command and output text; building them is outside the timed body.
  */
-import { bench, describe } from "vitest";
+import { test } from "vitest";
 import type { AgentMessage } from "../../../../shared/rpc-types";
 import { createToolsStore, type ToolEntry } from "../../../stores/tools";
 import { workVerdict } from "./work-checks";
@@ -108,8 +108,8 @@ function hydrate(turn: number): [string, ToolEntry][] {
 }
 
 const turns = Array.from({ length: 226 }, (_, turn) => hydrate(turn));
-describe("the finished card's verdict over 226 turns", () => {
-	bench("workOutcomes + turnScope + workVerdict", () => {
+test("the finished card's verdict over 226 turns", async ({ bench }) => {
+	await bench("workOutcomes + turnScope + workVerdict", () => {
 		for (const entries of turns) {
 			const outcome = workOutcomes(
 				entries.map(([toolCallId, entry]) => ({ entry, toolCallId })),
@@ -119,5 +119,5 @@ describe("the finished card's verdict over 226 turns", () => {
 			const scope = turnScope(entries, outcome.commands, { running: false, failedEnd: false });
 			workVerdict(outcome.commands, "/repo", stepOperations(entries), scope);
 		}
-	});
+	}).run();
 });
