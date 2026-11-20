@@ -37,6 +37,7 @@ import type {
 } from "../../shared/rpc-types";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { applySummaryChange, type SummaryDelta, type VersionedSummaries } from "../../shared/session-summary";
+import { readSidebarPrefs } from "../../shared/sidebar-prefs";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { branchEvidence, branchFacts, landingFacts, type WorktreeRef } from "../agent-control/branches";
 import type { MemoryPageCopy } from "../ai-memory/client";
@@ -49,6 +50,7 @@ import { gitSync, initRepo } from "../local/git/test-repos";
 import type { MachineServices } from "../machine-services";
 import { RpcTimeoutError } from "../rpc-client";
 import { SessionSummaries, SUMMARY_DEBOUNCE_MS } from "../session-summaries";
+import { updateSidebarPrefs } from "../sidebar-prefs";
 import { SidebarProjects } from "../sidebar-projects";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { setTurnStopLog } from "../turn-stop-log";
@@ -4417,6 +4419,107 @@ describe("LocalHostServices host.* calls", () => {
 			await expect(services.call(x.peer, "host.projects.command", bad, x)).rejects.toThrow(
 				/Invalid host.projects.command/,
 			);
+	});
+
+	it("shares host pins, order and archive changes without exposing or changing private rows", async () => {
+		const { services, machine } = setup();
+		const x = new FakeConnection(peer("x"));
+		const y = new FakeConnection(peer("y"));
+		const cwd = String.raw`C:\src\app`;
+		const rows = Array.from({ length: 21 }, (_, i) => ({
+			id: `id-${i}`,
+			path: `C:\\sessions\\${i}.jsonl`,
+			cwd,
+			created: "",
+			messageCount: 1,
+			title: "Session",
+			firstMessage: "",
+		}));
+		const [first, second] = rows;
+		if (!first || !second) throw new Error("missing fixture rows");
+		const privateRow = { ...first, path: "/hidden.jsonl", id: "hidden-id" };
+		const a = first.path;
+		const b = second.path;
+		let stored: unknown = {
+			pinnedGroups: ["other-device\nelsewhere"],
+			pinnedSessions: [privateRow.path],
+			archivedSessions: [privateRow.id, "stale-id"],
+			agentHidden: [privateRow.path],
+			sessionOrder: { [cwd]: [a, privateRow.path, b], elsewhere: [privateRow.path] },
+		};
+		const storage = {
+			get: () => stored,
+			set: (_key: string, value: unknown) => {
+				stored = value;
+			},
+		};
+		const list = new SidebarProjects({
+			read: () => undefined,
+			write: () => {},
+			sessions: async () => [...rows, privateRow],
+			defaultWorkspace: () => "/work",
+			projectOf: async path => path,
+			exists: async () => true,
+			layout: {
+				read: () => readSidebarPrefs(stored),
+				write: change => {
+					updateSidebarPrefs(storage, change, "host", () => {});
+				},
+			},
+			onState: state => services.sidebarProjectsChanged(state),
+		});
+		machine.sidebarProjects.mockImplementation(request => list.command(request));
+		const command = (conn: FakeConnection, request: SidebarProjectsRequest) =>
+			services.call(conn.peer, "host.projects.command", { request }, conn);
+		await command(y, { action: "get" });
+		await command(x, { action: "layout", change: { op: "set-group-pinned", cwd, pinned: true } });
+		await command(x, { action: "layout", change: { op: "set-group-order", order: [cwd] } });
+		await command(x, { action: "layout", change: { op: "set-session-order", list: cwd, order: [b, a] } });
+		const ids = rows.map(row => row.id);
+		await command(x, { action: "layout", change: { op: "set-sessions-archived", ids, archived: true } });
+		const localPin = { op: "set-session-pinned", path: a, pinned: true } as const;
+		updateSidebarPrefs(storage, localPin, "window", () => {});
+		list.layoutChanged();
+		const expected = {
+			pinnedGroups: [cwd],
+			groupOrder: [cwd],
+			pinnedSessions: [a],
+			archivedSessions: ids,
+			sessionOrder: { [cwd]: [b, a] },
+		};
+		await expect(command(y, { action: "get" })).resolves.toMatchObject({ layout: expected });
+		for (const conn of [x, y]) {
+			const events = conn.events.filter(e => e.event === PROJECTS_EVENT);
+			expect(events.at(-1)?.data).toMatchObject({ layout: expected });
+			expect(JSON.stringify(events)).not.toMatch(
+				/hidden-id|hidden\.jsonl|other-device|elsewhere|stale-id|agentHidden/,
+			);
+		}
+		await expect(
+			command(y, {
+				action: "layout",
+				change: { op: "set-sessions-archived", ids: [privateRow.id], archived: false },
+			}),
+		).rejects.toThrow();
+		await expect(
+			command(y, { action: "layout", change: { op: "set-session-pinned", path: privateRow.path, pinned: false } }),
+		).rejects.toThrow();
+		await expect(
+			services.call(
+				y.peer,
+				"host.projects.command",
+				{ request: { action: "layout", change: { op: "set-agent-hidden", path: a, hidden: true } } },
+				y,
+			),
+		).rejects.toThrow();
+		await command(y, { action: "layout", change: { op: "set-sessions-archived", ids, archived: false } });
+		expect(stored).toMatchObject({
+			pinnedGroups: ["other-device\nelsewhere", cwd],
+			pinnedSessions: [privateRow.path, a],
+			archivedSessions: [privateRow.id, "stale-id"],
+			agentHidden: [privateRow.path],
+			sessionOrder: { [cwd]: [b, privateRow.path, a], elsewhere: [privateRow.path] },
+		});
 	});
 
 	it("serves a tab's file bytes to its own device only, as base64 that decodes to the same bytes", async () => {

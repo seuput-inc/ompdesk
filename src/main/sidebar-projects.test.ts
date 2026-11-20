@@ -15,7 +15,16 @@ import {
 const WORKSPACE = "/home/me/.omp/work";
 
 function session(cwd: string, created: string, extra: Partial<SidebarProjectsSession> = {}): SidebarProjectsSession {
-	return { path: `${cwd}/${created}.jsonl`, cwd, created, messageCount: 2, title: "t", firstMessage: "hi", ...extra };
+	return {
+		id: created,
+		path: `${cwd}/${created}.jsonl`,
+		cwd,
+		created,
+		messageCount: 2,
+		title: "t",
+		firstMessage: "hi",
+		...extra,
+	};
 }
 
 /** Folders as git sees them: a worktree names its main checkout, a gone folder nothing. */

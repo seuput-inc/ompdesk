@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RuntimeLogReport } from "./runtime-log-core";
-import { type SidebarPrefsStorage, updateSidebarPrefs } from "./sidebar-prefs";
+import { moveSidebarPin, type SidebarPrefsStorage, updateSidebarPrefs } from "./sidebar-prefs";
 
 function rig(initial?: unknown) {
 	const data = new Map<string, unknown>(initial === undefined ? [] : [["sidebar", structuredClone(initial)]]);
@@ -14,6 +14,7 @@ function rig(initial?: unknown) {
 		},
 	};
 	return {
+		storage,
 		writes,
 		logged,
 		stored: () => data.get("sidebar") as Record<string, unknown>,
@@ -23,6 +24,13 @@ function rig(initial?: unknown) {
 }
 
 describe("updateSidebarPrefs", () => {
+	it("transfers a moved file's host pin without pinning a file that was not pinned", () => {
+		const r = rig({ pinnedSessions: ["/a", "/b"], archivedSessions: ["kept-id"] });
+		moveSidebarPin(r.storage, "/c", "/d");
+		expect(r.writes).toEqual([]);
+		moveSidebarPin(r.storage, "/a", "/moved");
+		expect(r.stored()).toMatchObject({ pinnedSessions: ["/moved", "/b"], archivedSessions: ["kept-id"] });
+	});
 	it("applies a change to what is stored now and keeps every other field", () => {
 		const r = rig({
 			pinnedGroups: ["/work/a"],

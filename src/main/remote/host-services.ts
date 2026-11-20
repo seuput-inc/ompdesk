@@ -307,6 +307,7 @@ export interface HostServicesDeps {
 		Partial<Pick<SessionIndex, "pace">>;
 	/** Session files this computer's user hid from agents (Sidebar › Hide from other agents); a device's agent never reads them. */
 	agentHidden?: () => ReadonlySet<string>;
+	sessionMoved?: (from: string, to: string) => void;
 	/** Stored-file rename for a session no live tab holds (`omp` on this machine). */
 	renameStoredSession: (sessionPath: string, name: string) => Promise<void>;
 	/** The GUI-owned Work workspace, created on demand. */
@@ -1384,9 +1385,11 @@ export class LocalHostServices implements HostServices {
 			case "sessions.move": {
 				const { sessionPath, cwd } = parse(MoveParams, method, params);
 				if (this.#liveOwner(sessionPath)) throw codedError("session_open_in_tab", "Session is open on the host");
-				return moveSession(this.#deps.localTabs, sessionPath, undefined, () =>
+				const moved = await moveSession(this.#deps.localTabs, sessionPath, undefined, () =>
 					this.#deps.sessionIndex.moveSession(sessionPath, cwd),
 				);
+				this.#deps.sessionMoved?.(sessionPath, moved);
+				return moved;
 			}
 			case "sessions.targets":
 				return sessionTargets(parse(SessionTargetsParams, method, params));

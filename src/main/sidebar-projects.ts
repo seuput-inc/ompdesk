@@ -20,21 +20,25 @@ import {
 	pathBaseName,
 	type WorktreeKind,
 } from "../shared/project-origin";
+import type { SidebarPrefs } from "../shared/sidebar-prefs";
 import {
 	parseSidebarProjects,
+	type SidebarLayout,
+	type SidebarLayoutChange,
 	type SidebarProject,
 	type SidebarProjectsRequest,
 	type SidebarProjectsState,
 } from "../shared/sidebar-projects";
 import { readProjectOrigin } from "./local/git/origin";
 import { sessionKey } from "./session-scratch";
+import { SidebarLayoutScope } from "./sidebar-layout";
 
 /** How long the list waits after the session index last changed before it looks for new folders. */
 export const SIDEBAR_PROJECTS_SYNC_DELAY_MS = 1_500;
 
 export type SidebarProjectsSession = Pick<
 	SessionInfo,
-	"path" | "cwd" | "kind" | "created" | "messageCount" | "title" | "firstMessage"
+	"id" | "path" | "cwd" | "kind" | "created" | "messageCount" | "title" | "firstMessage"
 >;
 
 export interface SidebarProjectsDeps {
@@ -66,6 +70,10 @@ export interface SidebarProjectsDeps {
 	scratchSessions?: (folder: string) => readonly string[] | null;
 	/** The projects the person pinned on this computer: one only sessions brought in stays while pinned. */
 	pinned?: () => readonly string[];
+	layout?: {
+		read(): SidebarPrefs;
+		write(change: SidebarLayoutChange): void;
+	};
 	onState: (state: SidebarProjectsState) => void;
 	now?: () => number;
 }
@@ -119,6 +127,8 @@ export class SidebarProjects {
 	readonly #runOf: (cwd: string) => Promise<AutopilotRun | null>;
 	readonly #now: () => number;
 	#state: SidebarProjectsState;
+	#sessions: readonly SidebarProjectsSession[] = [];
+	#layout: SidebarLayout | undefined;
 	/**
 	 * What each session folder resolved to while it was there: whether a folder is a linked worktree does not change,
 	 * and a worktree removed since still names the project it was cut from.
@@ -138,18 +148,49 @@ export class SidebarProjects {
 		this.#runOf = deps.autopilotRunOf ?? autopilotRunOfFolder;
 		this.#now = deps.now ?? Date.now;
 		this.#state = parseSidebarProjects(deps.read());
+		delete this.#state.layout;
 	}
 
 	state(): SidebarProjectsState {
-		return this.#state;
+		return this.#layout ? { ...this.#state, layout: this.#layout } : this.#state;
+	}
+
+	/** Recompute on a local preference change or a session-list change, even when the project list stayed put. */
+	layoutChanged(): void {
+		this.#publish(false);
+	}
+
+	#publish(projectsChanged: boolean): void {
+		const layout = this.#deps.layout;
+		if (layout) {
+			const prefs = layout.read();
+			const next = this.#scope(prefs).read(prefs);
+			if (!projectsChanged && JSON.stringify(this.#layout) === JSON.stringify(next)) return;
+			this.#layout = next;
+		} else if (!projectsChanged) return;
+		this.#deps.onState(this.state());
+	}
+
+	#scope(prefs: SidebarPrefs): SidebarLayoutScope {
+		return new SidebarLayoutScope(this.#state, this.#sessions, this.#deps.defaultWorkspace(), prefs.agentHidden);
 	}
 
 	async command(request: SidebarProjectsRequest): Promise<SidebarProjectsState> {
 		if (request.action === "add") await this.add(request.path);
 		else if (request.action === "remove") this.remove(request.path);
+		else if (request.action === "layout") {
+			const layout = this.#deps.layout;
+			if (!layout) throw new Error("Sidebar layout is unavailable");
+			const sessions = await this.#deps.sessions();
+			if (!sessions) throw new Error("The host session list is unavailable");
+			this.#sessions = sessions;
+			const prefs = layout.read();
+			layout.write(this.#scope(prefs).change(request.change, prefs));
+			this.layoutChanged();
+		}
 		// A read also notices a session folder or a project folder that went (or came back) since the last pass.
 		else await this.sync();
-		return this.#state;
+		return this.state();
 	}
 
 	/** The person opened or added a folder: it is listed (its project, for a worktree) as theirs, removed or not before. */
@@ -214,6 +255,7 @@ export class SidebarProjects {
 	async #syncOnce(): Promise<void> {
 		const workspace = this.#deps.defaultWorkspace();
 		const sessions = await this.#deps.sessions();
+		this.#sessions = sessions ?? [];
 		// Each folder once, with its newest session's start: that is where it sorts until a session there sorts it.
 		const newest = new Map<string, number>();
 		for (const session of sessions ?? []) {
@@ -393,11 +435,12 @@ export class SidebarProjects {
 				autopilotRuns: Object.keys(autopilotRuns).length > 0 ? autopilotRuns : undefined,
 				...(gone.length > 0 ? { gone: [...gone] } : { gone: undefined }),
 			});
+		else this.layoutChanged();
 	}
 
 	#commit(next: Partial<SidebarProjectsState>): void {
 		this.#state = { ...this.#state, ...next };
 		this.#deps.write(this.#state);
-		this.#deps.onState(this.#state);
+		this.#publish(true);
 	}
 }

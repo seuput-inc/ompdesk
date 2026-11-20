@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
+import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../../shared/web-protocol";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
@@ -380,6 +381,22 @@ describe("channel policy and grants", () => {
 		await r.frame({ t: "snd", ch: IPC_COMMANDS.SESSIONS_LIST, a: [] });
 		await r.settle();
 		expect(r.send).not.toHaveBeenCalled();
+	});
+
+	it("requires settings-write to change a host arrangement and workspace to receive it", async () => {
+		const reader = await rig({ grants: ["workspace"] });
+		const edit = { action: "layout", change: { op: "set-group-pinned", cwd: "/app", pinned: true } };
+		await reader.frame({ t: "inv", id: 1, ch: SIDEBAR_PROJECTS_COMMAND, a: [edit, "paired-host"] });
+		await reader.settle();
+		expect(reader.socket.frames("res").at(-1)).toMatchObject({ ok: false, e: { code: "web_forbidden" } });
+		expect(reader.invoke).not.toHaveBeenCalled();
+		const nonReader = await rig({ grants: ["device-self"] });
+		for (const r of [reader, nonReader]) {
+			r.windows.windowFor("dev1").webContents.send(SIDEBAR_PROJECTS_STATE, { state: { projects: [] } });
+			await r.host.flush();
+		}
+		expect(reader.socket.frames("evt").map(e => e.ch)).toContain(SIDEBAR_PROJECTS_STATE);
+		expect(nonReader.socket.frames("evt").map(e => e.ch)).not.toContain(SIDEBAR_PROJECTS_STATE);
 	});
 
 	it("lets each channel through exactly when the device holds its permission", { timeout: 60_000 }, async () => {

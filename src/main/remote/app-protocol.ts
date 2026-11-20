@@ -54,8 +54,8 @@
  *   schedule's id from the save that made it, so concurrent creates never swap ids); the host pushes every
  *   change as the `host.schedules.changed` event
  * - The host's sidebar project list (sidebar-projects.ts): `host.projects.command {request: SidebarProjectsRequest}`
- *   → SidebarProjectsState (get, add a folder the person opened there, remove one from the sidebar); the host pushes
- *   every change as the `host.projects.changed` event
+ *   → SidebarProjectsState (get, add/remove a folder, or change the host's pins, order or archive).
+ *   Changes made here or on a paired device push the host's current arrangement as `host.projects.changed`.
  * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
  *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
  * - Agent control on a session the host runs (agent-control/branches.ts and local/git/worktree.ts on the host's
@@ -136,6 +136,7 @@ import { BLOCKING_UI_METHODS, type ExtensionUIRequest } from "../../shared/rpc-t
 import type { ScheduleCreated, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { ScheduleFrequencySchema, ScheduleRunSchema } from "../../shared/schedules-schema";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
+import { SidebarLayoutChangeSchema } from "../sidebar-prefs";
 import { SIGN_IN_PAGE_MAX_CHARS } from "../sign-in-callback";
 
 /**
@@ -869,6 +870,7 @@ export const ProjectsCommandParams: z.ZodType<{ request: SidebarProjectsRequest 
 		z.object({ action: z.literal("get") }),
 		z.object({ action: z.literal("add"), path: ProjectPath }),
 		z.object({ action: z.literal("remove"), path: ProjectPath }),
+		z.object({ action: z.literal("layout"), change: SidebarLayoutChangeSchema }),
 	]),
 });
 
@@ -881,6 +883,15 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTy
 	worktreeKinds: z.record(ProjectPath, z.enum(["autopilot", "agent", "other"])).optional(),
 	autopilotRuns: z.record(ProjectPath, z.object({ run: z.string().min(1), child: z.boolean() })).optional(),
 	gone: z.array(ProjectPath).optional(),
+	layout: z
+		.object({
+			pinnedGroups: z.array(ProjectPath),
+			pinnedSessions: z.array(ProjectPath),
+			archivedSessions: z.array(ProjectPath),
+			groupOrder: z.array(ProjectPath),
+			sessionOrder: z.record(ProjectPath, z.array(ProjectPath)),
+		})
+		.optional(),
 });
 
 /**

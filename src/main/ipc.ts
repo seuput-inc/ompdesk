@@ -134,7 +134,7 @@ import type {
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
-import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../shared/sidebar-projects";
+import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -183,7 +183,12 @@ import { openLocalPath } from "./open-path";
 import { registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
-import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, ModelOverrideInputSchema } from "./remote/app-protocol";
+import {
+	decodeBinaryRead,
+	HOST_FS_READ_BINARY_TIMEOUT_MS,
+	ModelOverrideInputSchema,
+	ProjectsCommandParams,
+} from "./remote/app-protocol";
 import type { RemoteDevices } from "./remote/devices";
 import type { LocalHostServices } from "./remote/host-services";
 import { uploadToHost } from "./remote/host-upload";
@@ -313,7 +318,7 @@ export interface IpcDeps {
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
-	sidebarProjects?: Pick<SidebarProjects, "schedule">;
+	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
 	/**
 	 * Who typed a prompt, for the tabs several windows show (bridge prompt-origin.ts): `of` is the paired
 	 * device a window belongs to (null for a desktop window, whose prompts are the host's own), `hostName`
@@ -1637,10 +1642,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (typeof payload.sessionPath !== "string" || !payload.sessionPath.endsWith(".jsonl")) {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
-		if (typeof payload.cwd !== "string" || !path.isAbsolute(payload.cwd)) {
+		const device = deviceOf(payload.device);
+		// The host validates its own absolute paths; a Windows target need not be absolute on the viewing Mac.
+		if (typeof payload.cwd !== "string" || (!device && !path.isAbsolute(payload.cwd))) {
 			throw codedError("not_absolute_path", "Not an absolute path");
 		}
-		const device = deviceOf(payload.device);
 		return moveSession(sidecarPool, payload.sessionPath, device, async () => {
 			if (!device) return sessionIndex.moveSession(payload.sessionPath, payload.cwd);
 			const moved = await remoteDevices.request<string>(device, "sessions.move", {
@@ -2212,7 +2218,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.handle(IPC_COMMANDS.PREFS_UPDATE_SIDEBAR, (caller, payload: unknown) => {
 		const from = caller.win && isWebWindow(caller.win.webContents.id) ? "web" : "window";
-		updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
+		const change = updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
+		if (change && change.op !== "touch-workspace" && change.op !== "set-rail-pin" && change.op !== "set-group-alias")
+			deps.sidebarProjects?.layoutChanged();
 		prefChanged(caller.win, SIDEBAR_PREFS_KEY);
 	});
 
@@ -2461,12 +2469,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	// The sidebar's project list of the machine a section shows: this computer's, or a paired host's own.
 	ipc.handle(SIDEBAR_PROJECTS_COMMAND, (caller, request: unknown, device?: unknown) => {
-		if (typeof request !== "object" || request === null) throw new Error("Invalid project list request");
-		const { action, path } = request as { action?: unknown; path?: unknown };
-		if (action === "get") return machineFor(caller, device).sidebarProjects({ action });
-		if ((action === "add" || action === "remove") && typeof path === "string" && path.length > 0)
-			return machineFor(caller, device).sidebarProjects({ action, path } satisfies SidebarProjectsRequest);
-		throw new Error("Invalid project list request");
+		const params = ProjectsCommandParams.parse({ request });
+		return machineFor(caller, device).sidebarProjects(params.request);
 	});
 
 	// "Edit config" — open the agent's models.yml in the system editor. The

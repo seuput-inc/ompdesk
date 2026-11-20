@@ -84,6 +84,7 @@ import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import { SCHEDULES_STATE } from "../shared/schedules";
+import { readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
 	finishedWorktreeFolders,
 	type IpcSidebarProjects,
@@ -218,6 +219,7 @@ import {
 	safeStorageUnavailableReason,
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
+import { moveSidebarPin, updateSidebarPrefs } from "./sidebar-prefs";
 import { SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
@@ -1143,12 +1145,22 @@ app.whenReady().then(async () => {
 	});
 	initDeletedSessions(join(app.getPath("userData"), "deleted-sessions.json"));
 	sessionIndex = new SessionIndex(undefined, initialCwd, sessionId => sessionKinds.isChat(sessionId), bridgeDir);
+	const sidebarPrefsChanged = () => {
+		for (const win of [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])])
+			if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.PREFS_CHANGED, { key: SIDEBAR_PREFS_KEY });
+	};
 	// The sidebar's project list: a folder the person opened outlives its last session (src/main/sidebar-projects.ts).
 	const sidebarProjects = new SidebarProjects({
 		read: () => prefsStore().get(SIDEBAR_PROJECTS_PREF),
 		write: state => prefsStore().set(SIDEBAR_PROJECTS_PREF, state),
 		sessions: () => sessionIndex.listKnown(),
 		pinned: () => sidebarViewOf(prefsStore().get(AGENT_HIDDEN_PREFS_KEY)).pinnedProjects,
+		layout: {
+			read: () => readSidebarPrefs(prefsStore().get(SIDEBAR_PREFS_KEY)),
+			write: change => {
+				if (updateSidebarPrefs(prefsStore(), change, "host", writeRuntimeLog)) sidebarPrefsChanged();
+			},
+		},
 		defaultWorkspace: ensureDefaultWorkspace,
 		// A removed worktree's project, read off its `gui-<name>-<hash7>` folder name (stock's root and repo hash).
 		worktreeLocation: project => stockWorktreeLocation(tablessWorktreeBridge, project),
@@ -1383,6 +1395,12 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
+		sessionMoved: (from, to) => {
+			if (moveSidebarPin(prefs, from, to)) {
+				sidebarPrefsChanged();
+				sidebarProjects.schedule();
+			}
+		},
 		renameStoredSession: async (sessionPath, name) => {
 			const omp = await systemOmp();
 			if (!omp.ok) throw new Error(omp.error);
