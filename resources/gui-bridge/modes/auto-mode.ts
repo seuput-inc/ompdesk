@@ -87,22 +87,17 @@ interface Answer {
 }
 
 /**
- * The stock modules the first decision needs. `install` starts loading them as the bridge starts, so the first prompt
- * of a session does not pay their import time inside its 2 s deadline; a module that is missing fails later, in
- * `decide`, with the capability guard's coded error.
+ * Load the stock modules the first decision needs when the bridge starts (index.ts calls `install`), so the first
+ * prompt of a session does not pay their import time inside its 2 s deadline, and warm the judge as the main session
+ * starts (`warmJudge`). A module that is missing fails later, in `decide`, with the capability guard's coded error.
  */
-export function preloadStock(): Promise<unknown> {
-	return Promise.allSettled([
+export function install(pi: BridgeEnv["pi"]): void {
+	void Promise.allSettled([
 		import("../omp/pi-coding-agent/judgment"),
 		import("../omp/pi-coding-agent/tiny/message-preproc"),
 		import("../omp/pi-coding-agent/plan-mode/settings"),
 		import("../omp/pi-coding-agent/config/registry"),
 	]);
-}
-
-/** Load the first decision's stock modules (index.ts calls `install`) and warm the judge as the main session starts. */
-export function install(pi: BridgeEnv["pi"]): void {
-	void preloadStock();
 	pi.on("session_start", (_event, ctx) => {
 		const env = boundEnv();
 		if (ctx.agent.kind === "main" && env) void warmJudge(env);
