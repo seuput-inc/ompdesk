@@ -28,14 +28,18 @@ interface Drop {
 const SESSION_MIME = "application/x-omp-session";
 
 /** Whether `over` may take `from`'s place: both in the list, and on the same side of the pinned edge. */
-export function canDropOn(list: SessionList, from: string, over: string): boolean {
+export function canDropOn(list: Pick<SessionList, "paths" | "pinned">, from: string, over: string): boolean {
 	if (from === over || !list.paths.includes(from) || !list.paths.includes(over)) return false;
 	const pinned = list.pinned ?? [];
 	return pinned.includes(from) === pinned.includes(over);
 }
 
 /** Whether the row can trade places with its neighbour `delta` away: one exists on the same side of the pinned edge. */
-export function canMoveWithin(list: SessionList | null, path: string, delta: -1 | 1): boolean {
+export function canMoveWithin(
+	list: Pick<SessionList, "paths" | "pinned"> | null,
+	path: string,
+	delta: -1 | 1,
+): boolean {
 	const index = list ? list.paths.indexOf(path) : -1;
 	const neighbour = list && index !== -1 ? list.paths[index + delta] : undefined;
 	if (list === null || neighbour === undefined) return false;
@@ -64,21 +68,18 @@ export interface SessionReorder {
 	status: ReactNode;
 }
 
-/**
- * `titleOf` names a row for the announcement; `save` writes the list's order (under the caller's prefs key, so a
- * host's rows are kept apart from this computer's).
- */
+/** A remote save confirms the host accepted the order before announcing it. */
 export function useSessionReorder(options: {
 	titleOf: (path: string) => string;
-	save: (list: SessionList, next: readonly string[]) => void;
+	save: (list: SessionList, next: readonly string[]) => void | Promise<boolean>;
 }): SessionReorder {
 	const t = useT();
 	const [drag, setDrag] = useState<{ list: SessionList; path: string; splits: boolean } | null>(null);
 	const [drop, setDrop] = useState<Drop | null>(null);
 	const [announcement, setAnnouncement] = useState("");
 
-	const move: SessionReorder["move"] = (list, path, next, title) => {
-		options.save(list, next);
+	const move: SessionReorder["move"] = async (list, path, next, title) => {
+		if ((await options.save(list, next)) === false) return;
 		setAnnouncement(
 			t("sidebar.sessionOrder.moved", { name: title, position: next.indexOf(path) + 1, count: next.length }),
 		);

@@ -17,14 +17,9 @@ export function moveInOrder(visible: readonly string[], id: string, delta: numbe
 	return reorderProjects(visible, id, visible[to] as string);
 }
 
-/** The key a paired host's project or list is ordered under in this computer's sidebar prefs. */
-export function hostOrderKey(deviceId: string, list: string): string {
-	return `${deviceId}\n${list}`;
-}
-
 /**
  * The stored project order after this computer's own projects took `local`'s order: every paired host's entries
- * (their `hostOrderKey`, which holds a newline no folder path has) stay as they were.
+ * (legacy entries with the device id and a newline before the folder path) stay as they were.
  */
 export function withLocalProjectOrder(stored: readonly string[], local: readonly string[]): string[] {
 	return [...local, ...stored.filter(key => key.includes("\n"))];
