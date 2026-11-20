@@ -60,11 +60,11 @@ export function codexPickerSequence() {
 			return rows.map(row => ({provider:row.provider, id:row.id, name:row.id, pickerAvailability:pickerAvailability(row,ids)}));
 		};
 		await read("online"); await refreshForeignCatalog(session,true); const a = await image();
+		mixed = true; const mixedRows = await image(); mixed = false;
 		id = "B"; fail = true; await read("online-if-uncached"); const warmReads = reads; await refreshForeignCatalog(session,false);
 		if (reads === warmReads) throw Error("the switched account was never queried");
 		const firstFailure = await image();
 		const afterFailure = reads; await refreshForeignCatalog(session,false); const repeatFailed = reads-afterFailure;
-		mixed = true; const mixedRows = await image(); mixed = false;
 		fail = false; await refreshForeignCatalog(session,false,true); const b = await image();
 		const beforeOpen = reads; await read("online-if-uncached"); await refreshForeignCatalog(session,false);
 		const extraReads = reads-beforeOpen + repeatFailed;

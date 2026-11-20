@@ -176,6 +176,20 @@ describe("ModelPicker account availability", () => {
 		expect(states.extraReads).toBe(0);
 	});
 
+	it.skipIf(!hasCodexProbe)("withholds the previous mixed route while checking an OAuth-only account", async () => {
+		const { mixed, firstFailure } = codexPickerSequence();
+		const next = Promise.withResolvers<AvailableModelsResult>();
+		recent = { selectors: ["openai-codex/fixture-private"] };
+		await mount(mixed, next.promise);
+		expect(rows("recent")).toEqual([]);
+		await act(async () => {
+			useModelStore.setState({ availableModels: firstFailure });
+			next.resolve({ models: firstFailure, generation: 1, discoveryStates: [], refreshPending: false });
+		});
+		expect(rows("openai-codex")).toEqual([]);
+		expect(document.body.textContent).toContain(notice);
+	});
+
 	it("does not offer the previous in-memory account row while the opening catalog read is pending", async () => {
 		const read = Promise.withResolvers<AvailableModelsResult>();
 		recent = { selectors: ["openai-codex/supported", "openai/shared"] };

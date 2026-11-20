@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { codexPickerSequence, hasCodexProbe } from "../../main/test-codex-picker";
 import type { ModelInfo } from "../../shared/rpc-types";
 import { createModelStore } from "../stores/model";
 import { seedModelStore, writeModelSnapshot } from "./model-snapshot";
@@ -61,6 +62,19 @@ describe("model snapshot", () => {
 			{ ...selected, pickerAvailability: "account-unverified" },
 			local,
 		]);
+	});
+
+	it.skipIf(!hasCodexProbe)("does not restore an account A mixed route as authority after removing its key", () => {
+		const { mixed } = codexPickerSequence();
+		const alternate = { provider: "openai", id: "fixture-private" };
+		const old = createModelStore();
+		old.setState({ availableModels: [...mixed, alternate] });
+		writeModelSnapshot(undefined, null, old.getState());
+		const restored = createModelStore();
+		seedModelStore(restored, undefined, null);
+		expect(
+			restored.getState().availableModels.filter(row => row.pickerAvailability !== "account-unverified"),
+		).toEqual([alternate]);
 	});
 
 	it("marks legacy Codex subscription rows without hiding independent routes to the same model", () => {
