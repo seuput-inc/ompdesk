@@ -143,6 +143,7 @@ export interface RemoteDevicesDeps {
 	identity: Identity;
 	appVersion: string;
 	prefs: { get(key: string): unknown; set(key: string, value: unknown): void };
+	deviceOrderStore: RemoteDevicesDeps["prefs"];
 	/** Send to every window. */
 	broadcast: (channel: string, data: unknown) => void;
 	/** Host role services (this machine's sidecars, sessions, files). */
@@ -295,7 +296,7 @@ export class RemoteDevices {
 	constructor(deps: RemoteDevicesDeps) {
 		this.#deps = deps;
 		this.#identity = deps.identity;
-		this.#deviceOrder = new DeviceSectionOrder(this.deviceId, deps.prefs);
+		this.#deviceOrder = new DeviceSectionOrder(this.deviceId, deps.deviceOrderStore, deps.prefs.get("sidebarFolds"));
 		this.#imageBlobs = new ImageBlobCache(path.join(deps.userData, "remote-image-blobs"));
 		this.#transcripts = new TranscriptCache(path.join(deps.userData, "remote-transcripts"));
 		this.#keepAwake = new KeepAwakePolicy({

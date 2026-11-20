@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-const PREF = "remote.deviceSectionOrder";
+const PREF = "rows";
 const LOCAL = "local";
 // remote/identity.rs accepts this spelling for the random 128-bit device id.
 const DEVICE_ID = /^[a-z0-9]{26}$/;
@@ -63,7 +63,7 @@ export class DeviceSectionOrder {
 	#slots: Row[];
 	#legacy: unknown;
 
-	constructor(self: string, prefs: Prefs) {
+	constructor(self: string, prefs: Prefs, folds: unknown) {
 		if (!DEVICE_ID.test(self)) throw new Error("Invalid local device identity");
 		this.#self = self;
 		this.#writer = hash(self);
@@ -71,7 +71,6 @@ export class DeviceSectionOrder {
 		const stored = prefs.get(PREF);
 		this.#slots = place(parse(stored) ?? []);
 		if (stored === undefined || stored === null) {
-			const folds = prefs.get("sidebarFolds");
 			if (folds && typeof folds === "object" && "deviceOrder" in folds) this.#legacy = folds.deviceOrder;
 		}
 	}

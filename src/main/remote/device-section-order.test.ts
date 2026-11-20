@@ -9,7 +9,7 @@ const viewer = "v".repeat(26);
 const local = "local";
 
 function device(id: string, prefs = new Map<string, unknown>()): DeviceSectionOrder {
-	return new DeviceSectionOrder(id, prefs);
+	return new DeviceSectionOrder(id, prefs, prefs.get("sidebarFolds"));
 }
 
 describe("shared device section order", () => {

@@ -1484,16 +1484,19 @@ app.whenReady().then(async () => {
 		};
 		return lidAwake ? lidAwake.wrap(blocker, label) : blocker;
 	};
+	const deviceOrderStore = new SafeStore({ name: "sidebar-device-order" });
 	const devices = new RemoteDevices({
 		userData: app.getPath("userData"),
 		identity: await remoteIdentity,
 		appVersion: app.getVersion(),
 		prefs: { get: key => prefs.get(key), set: (key, value) => prefs.set(key, value) },
+		deviceOrderStore,
 		broadcast: (channel, data) => {
 			for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.send(channel, data);
 			// A paired phone's page lists the hosts' sessions and projects too: what changed
 			// in a host's list reaches it as it reaches a window, or a rename or delete made anywhere stayed until a reload.
 			if (
+				channel === IPC_EVENTS.REMOTE_STATE ||
 				channel === IPC_EVENTS.SESSIONS_CHANGED ||
 				channel === IPC_EVENTS.SESSION_SUMMARIES_CHANGED ||
 				channel === IPC_EVENTS.MODELS_CONFIG_CHANGED ||

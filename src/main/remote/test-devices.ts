@@ -128,6 +128,7 @@ export class DevicesRig {
 			identity: await loadIdentity(dir),
 			appVersion: "1.0.0",
 			prefs: { get: key => prefs.get(key), set: (key, value) => prefs.set(key, value) },
+			deviceOrderStore: new Map<string, unknown>(),
 			broadcast: (channel, data) => {
 				if (channel === "remote:state") for (const listener of [...listeners]) listener();
 				else if (channel === "remote:tailnet") tailnet.pushed = structuredClone(data as TailnetComputer[]);
