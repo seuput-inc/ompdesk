@@ -2910,6 +2910,7 @@ export const ko: Record<string, string> = {
 	"modelPicker.placeholder": "모델 검색…",
 	"modelPicker.notResponding": "omp가 응답하지 않아요",
 	"modelPicker.notConnected": "omp가 연결되지 않았어요",
+	"modelPicker.accountUnverified": "이 계정에서 사용 가능한 모델을 아직 확인하지 못했어요",
 	"modelPicker.notRespondingHint": "omp 프로세스가 멈췄을 수 있어요.",
 	"modelPicker.stillNotResponding": "여전히 응답이 없어요. omp를 다시 시작해 보세요.",
 	"modelPicker.loading": "모델 불러오는 중…",

@@ -13,6 +13,7 @@ import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { accountCredits, creditKind, creditsInRaw } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
+import { pickerAccounts, pickerAvailability, refreshForeignCatalog } from "./codex-picker";
 import { guard, probe } from "./health";
 import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
@@ -321,17 +322,24 @@ function discoveryStates(session: AgentSession) {
  * 1.9 KB of a 2.5 KB model, read by nothing in OMPdesk). A host with many providers sent a paired device 1.73 MB for
  * one `get_providers`; every catalog read and `model_catalog_update` carries the list.
  */
-function wireModel(model: ReturnType<AgentSession["getAvailableModels"]>[number]) {
-	const { compat: _compat, ...rest } = model as typeof model & { compat?: unknown };
-	return rest;
+function wireModel(
+	model: ReturnType<AgentSession["getAvailableModels"]>[number],
+	accounts: ReadonlySet<string> | undefined,
+) {
+	const { compat: _compat, accountAccess: _access, ...rest } = model;
+	const availability = pickerAvailability(model, accounts);
+	return availability ? { ...rest, pickerAvailability: availability } : rest;
 }
 
-function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
+async function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
+	const generation = nextGeneration();
+	const rows = session.getAvailableModels();
+	const accounts = await pickerAccounts(session, rows);
 	return {
-		models: session.getAvailableModels().map(wireModel),
+		models: rows.map(model => wireModel(model, accounts)),
 		discoveryStates: discoveryStates(session),
 		refreshPending,
-		generation: nextGeneration(),
+		generation,
 	};
 }
 
@@ -385,7 +393,7 @@ async function emitCatalogUpdate(env: BridgeEnv, session: AgentSession): Promise
 	// Logins, logouts and settled refreshes all land here: the image tool follows.
 	await syncImageGeneration(session);
 	const providers = await buildProviders(session);
-	env.emit({ type: "model_catalog_update", ...catalogSnapshot(session, false), providers });
+	env.emit({ type: "model_catalog_update", ...(await catalogSnapshot(session, false)), providers });
 }
 
 /** Push the catalog once a refresh that outlived the bounded wait settles (fork `watchCatalogRefresh`). */
@@ -408,8 +416,12 @@ async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefres
 	const before = credentials.generation;
 	await credentials.reload();
 	const authChanged = credentials.generation !== before;
-	registry.refreshInBackground(forceRefresh || authChanged ? "online" : "online-if-uncached");
-	const refresh = registry.awaitBackgroundRefresh();
+	const online = forceRefresh || authChanged;
+	const joined = online && registry.isBackgroundRefreshPending();
+	registry.refreshInBackground(online ? "online" : "online-if-uncached");
+	const refresh = registry
+		.awaitBackgroundRefresh()
+		.then(() => refreshForeignCatalog(session, online && !joined, joined));
 	const timeout = Promise.withResolvers<false>();
 	const timer = setTimeout(() => timeout.resolve(false), DISCOVERY_WAIT_MS);
 	const completed = await Promise.race([

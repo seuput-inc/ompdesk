@@ -1647,6 +1647,7 @@ export interface ModelInfo {
 	id: string;
 	name?: string;
 	description?: string;
+	pickerAvailability?: "account-verified" | "account-unverified";
 	isNew?: boolean;
 	isBeta?: boolean;
 	isRecommended?: boolean;

@@ -2,6 +2,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { codexPickerSequence, hasCodexProbe } from "../../../main/test-codex-picker";
 import type { AvailableModelsResult, ModelInfo, ModelReleaseDatesResult } from "../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { useModelStore } from "../../stores/model";
@@ -133,6 +134,89 @@ describe("ModelPicker Recent group", () => {
 		recent = { selectors: [] };
 		await mount();
 		expect(groupNames()).not.toContain("Recent");
+	});
+});
+
+describe("ModelPicker account availability", () => {
+	const notice = "We haven’t confirmed which models this account can use yet.";
+	const supported = {
+		provider: "openai-codex",
+		id: "supported",
+		name: "Supported",
+		pickerAvailability: "account-verified",
+	} as const;
+	const withheld = {
+		provider: "openai-codex",
+		id: "shared",
+		name: "Withheld",
+		pickerAvailability: "account-unverified",
+	} as const;
+	const api = { provider: "openai", id: "shared", name: "API route" };
+
+	it.skipIf(!hasCodexProbe)("shows only this account's stock catalog across a switch and temporary 429s", async () => {
+		const states = codexPickerSequence();
+		const alternate = { provider: "openai", id: "fixture-private", name: "API route" };
+		recent = { selectors: ["openai-codex/fixture-private", "openai/fixture-private"] };
+		await mount([...states.a, alternate]);
+		expect(rows("recent")).toEqual(["fixture-private", "API route"]);
+		const show = async (models: ModelInfo[]) =>
+			act(async () => useModelStore.setState({ availableModels: [...models, alternate] }));
+		await show(states.firstFailure);
+		expect(rows("openai-codex")).toEqual([]);
+		expect(rows("recent")).toEqual(["API route"]);
+		expect(document.body.textContent).toContain(notice);
+		await show(states.mixed);
+		expect(rows("recent")).toEqual(["fixture-private", "API route"]);
+		for (const models of [states.b, states.limited]) {
+			await show(models);
+			expect(rows("openai-codex")).toEqual(["fixture-common"]);
+			expect(rows("recent")).toEqual(["API route"]);
+			expect(document.body.textContent).not.toContain(notice);
+		}
+		expect(states.extraReads).toBe(0);
+	});
+
+	it("does not offer the previous in-memory account row while the opening catalog read is pending", async () => {
+		const read = Promise.withResolvers<AvailableModelsResult>();
+		recent = { selectors: ["openai-codex/supported", "openai/shared"] };
+		await mount([supported, api], read.promise);
+		expect(rows("recent")).toEqual(["API route"]);
+		expect(rows("openai-codex")).toEqual([]);
+		await act(async () =>
+			read.resolve({ models: [supported, api], generation: 1, discoveryStates: [], refreshPending: false }),
+		);
+		expect(rows("openai-codex")).toEqual(["Supported"]);
+	});
+
+	it("keeps supported and API routes, excludes unconfirmed Recent rows, and restores a verified row after retry", async () => {
+		recent = { selectors: ["openai-codex/shared", "openai/shared"] };
+		await mount([supported, withheld, api]);
+		expect(rows("openai-codex")).toEqual(["Supported"]);
+		expect(rows("recent")).toEqual(["API route"]);
+		expect(rows("openai")).toEqual(["API route"]);
+		expect(document.body.textContent).toContain(notice);
+		const refresh = vi.fn(useModelStore.getState().refreshAvailableModels);
+		await act(async () => useModelStore.setState({ refreshAvailableModels: refresh }));
+		const retry = Array.from(document.querySelectorAll("button")).find(
+			button => button.textContent === translate("common.retry"),
+		);
+		expect(retry).toBeDefined();
+		await act(async () => retry?.click());
+		expect(refresh).toHaveBeenCalledWith(true);
+		await act(async () =>
+			useModelStore.setState({
+				availableModels: [supported, { ...withheld, pickerAvailability: "account-verified" }, api],
+			}),
+		);
+		expect(rows("recent")).toEqual(["Withheld", "API route"]);
+		expect(document.body.textContent).not.toContain(notice);
+	});
+
+	it("does not suggest connecting another provider when all rows await confirmation", async () => {
+		await mount([withheld]);
+		expect(document.querySelector('[role="option"]')).toBeNull();
+		expect(document.body.textContent).toContain(notice);
+		expect(document.body.textContent).not.toContain(translate("modelPicker.connectProvider"));
 	});
 });
 

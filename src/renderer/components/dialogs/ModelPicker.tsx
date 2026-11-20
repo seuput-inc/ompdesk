@@ -74,7 +74,18 @@ export function ModelPicker() {
 	const open = useUiStore(state => state.modelPickerOpen);
 	const close = useUiStore(state => state.closeModelPicker);
 	const openProviders = useUiStore(state => state.openProviders);
-	const availableModels = useModelStore(state => state.availableModels);
+	const generation = useModelStore(state => state.catalogGeneration);
+	const [readSince, setReadSince] = useState<number | null>(() => generation);
+	const accountRead = readSince === null || generation > readSince;
+	const catalog = useModelStore(state => state.availableModels);
+	const availableModels = useMemo(
+		() =>
+			catalog.filter(
+				row => !row.pickerAvailability || (accountRead && row.pickerAvailability === "account-verified"),
+			),
+		[catalog, accountRead],
+	);
+	const unconfirmed = availableModels.length !== catalog.length;
 	const catalogProviders = useModelStore(state => state.providers);
 	// The person's model is checked, also while a fallback answers in its place.
 	const current = useModelStore(chosenModelOf);
@@ -124,6 +135,7 @@ export function ModelPicker() {
 				refreshAvailableModels(forceRefresh),
 			]);
 			if (version !== requestVersion.current) return;
+			if (modelsResult.status === "fulfilled") setReadSince(null);
 			setLoading(false);
 			const providersOk = providersResult.status === "fulfilled" && providersResult.value.success;
 			if (providersOk) {
@@ -140,6 +152,10 @@ export function ModelPicker() {
 	);
 
 	useEffect(() => {
+		if (!open) setReadSince(generation);
+	}, [open, generation]);
+
+	useEffect(() => {
 		if (!open) return undefined;
 		setQuery("");
 		setOpenRouterExpanded(false);
@@ -148,6 +164,7 @@ export function ModelPicker() {
 		void load(false);
 		return () => {
 			requestVersion.current++;
+			setReadSince(useModelStore.getState().catalogGeneration);
 		};
 	}, [open, load]);
 
@@ -436,6 +453,23 @@ export function ModelPicker() {
 						value={query}
 					/>
 				</div>
+				{unconfirmed && !error && (
+					<InlineNotice
+						action={
+							<Button
+								disabled={!sidecarReady}
+								disabledReason={t("modelPicker.notConnected")}
+								onClick={() => void load(true)}
+								size="sm"
+							>
+								{t("common.retry")}
+							</Button>
+						}
+						className="px-2"
+						title={t("modelPicker.accountUnverified")}
+						tone="warning"
+					/>
+				)}
 				<div
 					className="min-h-0 flex-1 overflow-y-auto p-1"
 					id={listboxId}
@@ -466,7 +500,7 @@ export function ModelPicker() {
 							}
 							tone="danger"
 						/>
-					) : waitingForModels ? (
+					) : unconfirmed && availableModels.length === 0 ? null : waitingForModels ? (
 						<SkeletonRows className="py-2" label={t("modelPicker.loading")} widths={[60, 44, 70, 52]} />
 					) : availableModels.length === 0 ? (
 						<EmptyState

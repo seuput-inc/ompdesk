@@ -4,6 +4,7 @@
  * names the model before the tab's omp has answered `get_state`. The live reads replace them in place; the
  * catalog generation is never restored, so a live read always wins the generation check.
  */
+import { codexAccountAccess } from "../../../resources/gui-bridge/codex-picker-contracts";
 import type { ModelInfo, ProviderInfo } from "../../shared/rpc-types";
 import { chosenModelOf, type ModelSelection, type ModelStore } from "../stores/model";
 import { snapshotNs, snapshots } from "./snapshot-cache";
@@ -41,7 +42,11 @@ export function seedModelStore(store: SeedTarget, device: string | undefined, se
 		const catalog = snapshots().read<CatalogSnapshot>("models", ns, "catalog")?.value;
 		if (catalog && Array.isArray(catalog.availableModels))
 			store.setState({
-				availableModels: catalog.availableModels,
+				availableModels: catalog.availableModels.map(row =>
+					row.pickerAvailability === "account-verified" || codexAccountAccess(row)
+						? { ...row, pickerAvailability: "account-unverified" }
+						: row,
+				),
 				providers: Array.isArray(catalog.providers) ? catalog.providers : [],
 			});
 	}
