@@ -314,11 +314,6 @@ function generate(workspace: Workspace, cargo: string): void {
 }
 
 if (import.meta.main) {
-	const cargo = cargoPath(join(ROOT, "native", "ompdesk"));
-	if (!cargo) {
-		console.error("gen-crate-notices: Rust is not installed (no `cargo` on PATH or in ~/.cargo/bin).");
-		process.exit(1);
-	}
 	const asked = process.argv.slice(2);
 	const names = asked.length ? asked : Object.keys(WORKSPACES);
 	for (const name of names) {
@@ -326,6 +321,12 @@ if (import.meta.main) {
 			console.error(`gen-crate-notices: no workspace "${name}" (${Object.keys(WORKSPACES).join(", ")}).`);
 			process.exit(1);
 		}
-		generate(WORKSPACES[name as WorkspaceName], cargo);
+		const workspace = WORKSPACES[name as WorkspaceName];
+		const cargo = cargoPath(join(ROOT, workspace.dir));
+		if (!cargo) {
+			console.error("gen-crate-notices: Rust is not installed (no `cargo` on PATH or in ~/.cargo/bin).");
+			process.exit(1);
+		}
+		generate(workspace, cargo);
 	}
 }

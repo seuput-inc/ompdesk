@@ -402,7 +402,12 @@ function generate(): { text: string; flagged: string[] } {
 		"",
 	);
 	for (const [text, list] of ordered) {
-		for (const component of list) out.push(`${component.name} ${component.version} (${component.spdx})`);
+		for (const component of list) {
+			out.push(`${component.name} ${component.version} (${component.spdx})`);
+			if (component.name === "elkjs") {
+				out.push(`Source available under EPL-2.0: https://github.com/kieler/elkjs/tree/${component.version}`);
+			}
+		}
 		const copyrights = [...new Set(list.flatMap(component => copyrightLines(component.text)))];
 		if (copyrights.length > 1 && list.length > 1) out.push("", ...copyrights);
 		out.push("", text, "", THIN, "");
