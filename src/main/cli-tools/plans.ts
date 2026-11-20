@@ -47,7 +47,7 @@ export function command(file: string, args: string[], env: Record<string, string
 export const NPM_BIN = { win32: "npm.cmd", darwin: "npm" } as const;
 
 /** The npm that owns `prefix` (its own, else the first on PATH, always aimed at that prefix). */
-function npmFor(prefix: string, tools: PlanTools): string | null {
+export function npmFor(prefix: string, tools: PlanTools): string | null {
 	const own = tools.platform === "win32" ? join(prefix, "npm.cmd") : join(prefix, "bin", "npm");
 	return existsSync(own) ? own : findOnPath([NPM_BIN[tools.platform]], tools.pathEnv, tools.platform);
 }

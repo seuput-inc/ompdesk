@@ -25,6 +25,7 @@ import {
 	interruptedJobs,
 	type JournalEntry,
 	journalEnd,
+	leftProcessesOf,
 	requestCutAtExit,
 	restartFollowUp,
 	revivedSubagents,
@@ -59,12 +60,12 @@ function forcedTool(session: Session): string | null {
 }
 
 async function setForcedTool(session: Session, tool: string): Promise<{ tool: string | null }> {
-	requireFn(session, "getActiveToolNames", "composer");
-	requireFn(session, "toolChoiceQueue.pushSequence", "composer");
+	requireFn(session, "getActiveToolNames", "forceTool");
+	requireFn(session, "toolChoiceQueue.pushSequence", "forceTool");
 	const queue = session.toolChoiceQueue;
 	if (!session.getActiveToolNames().includes(tool)) throw new Error(`Tool "${tool}" is not currently active.`);
 	const toolChoice = await import("./omp/pi-coding-agent/utils/tool-choice");
-	requireFn(toolChoice, "buildNamedToolChoice", "composer", "utils/tool-choice");
+	requireFn(toolChoice, "buildNamedToolChoice", "forceTool", "utils/tool-choice");
 	const forced = toolChoice.buildNamedToolChoice(tool, session.model);
 	if (!forced || typeof forced === "string")
 		throw new Error("Current model does not support forcing a specific tool.");
@@ -90,7 +91,7 @@ async function setForcedTool(session: Session, tool: string): Promise<{ tool: st
 
 function clearForcedTool(session: Session): { tool: null } {
 	pendingForce.delete(session);
-	requireFn(session, "toolChoiceQueue.removeByLabel", "composer");
+	requireFn(session, "toolChoiceQueue.removeByLabel", "forceTool");
 	const queue = session.toolChoiceQueue;
 	// Removing an in-flight force requeues it under the `-requeued` label first.
 	queue.removeByLabel(USER_FORCE_LABEL);
@@ -159,7 +160,7 @@ async function closeSubagent(
 ): Promise<void> {
 	try {
 		const { SessionManager } = await import("./omp/pi-coding-agent/session/session-manager");
-		requireFn(SessionManager, "open", "composer", "session/session-manager");
+		requireFn(SessionManager, "open", "relaunchResume", "session/session-manager");
 		const writer = await SessionManager.open(file, undefined, undefined, { throwIfMissing: true });
 		try {
 			writer.appendCustomEntry("session_exit", { reason, kind: "normal", recordedAt: new Date().toISOString() });
@@ -206,9 +207,9 @@ async function closeShutdownSubagents(
 	const { collectSubSessions } = await import("./omp/pi-coding-agent/session/sub-sessions");
 	const diagnostics = await import("./omp/pi-coding-agent/session/exit-diagnostics");
 	const { SessionManager, extractSessionInit } = await import("./omp/pi-coding-agent/session/session-manager");
-	requireFn(diagnostics, "hasRestorableTurn", "composer", "session/exit-diagnostics");
-	requireFn(diagnostics, "createInterruptedToolResults", "composer", "session/exit-diagnostics");
-	requireFn(SessionManager, "open", "composer", "session/session-manager");
+	requireFn(diagnostics, "hasRestorableTurn", "relaunchResume", "session/exit-diagnostics");
+	requireFn(diagnostics, "createInterruptedToolResults", "relaunchResume", "session/exit-diagnostics");
+	requireFn(SessionManager, "open", "relaunchResume", "session/session-manager");
 	const subSessions = await collectSubSessions(sessionFile);
 	const appended: SubagentRecord[] = [];
 	for (const [key, sub] of Object.entries(subSessions)) {
@@ -263,8 +264,9 @@ async function closeShutdownSubagents(
 }
 
 // ── Methods ──────────────────────────────────────────────────────────────────
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
-	...guard("composer", {
+	...guard("composerState", {
 		/** The get_state fields stock omits. */
 		"composer.state": async (_params, env) => {
 			const session = env.session() as Session;
@@ -289,7 +291,8 @@ export const methods: BridgeMethods = {
 				ultrafastEnabled: session.isUltrafastModeEnabled(),
 			};
 		},
-
+	}),
+	...guard("ultrafast", {
 		/** Stock `/fast ultra` / `/fast off` for the active model; reports the fast state it left. */
 		"composer.set_ultrafast": async (params, env) => {
 			const session = env.session() as Session;
@@ -302,10 +305,11 @@ export const methods: BridgeMethods = {
 				ultrafast: session.isUltrafastModeEnabled(),
 			};
 		},
-
+	}),
+	...guard("pythonEval", {
 		"composer.eval": async (params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "executePython", "composer");
+			requireFn(session, "executePython", "pythonEval");
 			const { code, excluded } = record(params);
 			if (typeof code !== "string") throw new Error("eval requires code");
 			const result = await session.executePython(code, undefined, { excludeFromContext: excluded === true });
@@ -319,11 +323,12 @@ export const methods: BridgeMethods = {
 
 		"composer.abort_eval": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "abortEval", "composer");
+			requireFn(session, "abortEval", "pythonEval");
 			session.abortEval();
 			return null;
 		},
-
+	}),
+	...guard("abortCompaction", {
 		/**
 		 * Esc during a manual `/compact` or handoff, as stock's input-controller does it: stock's
 		 * serial RPC queue is still awaiting that command, so a queued `abort` frame would only run
@@ -332,28 +337,31 @@ export const methods: BridgeMethods = {
 		 */
 		"composer.abort_maintenance": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "abortCompaction", "composer");
+			requireFn(session, "abortCompaction", "abortCompaction");
 			session.abortCompaction();
 			return null;
 		},
-
+	}),
+	...guard("bashExcluded", {
 		/** Bash whose output stays out of model context (`!!`). */
 		"composer.bash_excluded": async (params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "executeBash", "composer");
+			requireFn(session, "executeBash", "bashExcluded");
 			const { command } = record(params);
 			if (typeof command !== "string") throw new Error("bash requires command");
 			return session.executeBash(command, undefined, { excludeFromContext: true });
 		},
-
+	}),
+	...guard("clearContext", {
 		/** Null while streaming or a foreground bash/eval runs (the caller maps it to `busy`). */
 		"composer.clear_context": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "resetSessionContext", "composer");
+			requireFn(session, "resetSessionContext", "clearContext");
 			const result = await session.resetSessionContext();
 			return result ? { droppedCount: result.droppedCount } : null;
 		},
-
+	}),
+	...guard("forceTool", {
 		"composer.get_force_tool": async (_params, env) => ({ tool: forcedTool(env.session() as Session) }),
 
 		"composer.set_force_tool": async (params, env) => {
@@ -364,21 +372,23 @@ export const methods: BridgeMethods = {
 				throw new Error("set_force_tool takes exactly one of tool or clear.");
 			return setForcedTool(session, tool.trim());
 		},
-
+	}),
+	...guard("prewalk", {
 		"composer.disarm_prewalk": async (_params, env) => {
 			const session = env.session() as Session;
 			// Stock `/prewalk off`: drops only this session's pending hand-off, settings untouched.
-			requireFn(session, "disarmPrewalk", "composer");
+			requireFn(session, "disarmPrewalk", "prewalk");
 			session.disarmPrewalk();
 			return { enabled: false };
 		},
 
 		"composer.prewalk_armed": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "getPrewalkState", "composer");
+			requireFn(session, "getPrewalkState", "prewalk");
 			return { armed: session.getPrewalkState() !== undefined };
 		},
-
+	}),
+	...guard("toolExtras", {
 		/** Stock get_state supplies top-level tool descriptions; only provenance and xd:// entries are extras. */
 		"composer.tool_extras": async (_params, env) => {
 			const session = env.session() as Session;
@@ -395,11 +405,12 @@ export const methods: BridgeMethods = {
 				})),
 			};
 		},
-
+	}),
+	...guard("contextReport", {
 		/** `/context` parity. */
 		"composer.context_report": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "getContextBreakdown", "composer");
+			requireFn(session, "getContextBreakdown", "contextReport");
 			const breakdown = session.getContextBreakdown();
 			return {
 				breakdown,
@@ -407,7 +418,8 @@ export const methods: BridgeMethods = {
 				model: session.model?.id ?? "",
 			};
 		},
-
+	}),
+	...guard("jobs", {
 		/**
 		 * `/jobs` parity: the session's jobs and its subagents' as stock's tree rows (`pi-tui/overlays/job-tree`), with
 		 * stock's own recent limit (10, what `/jobs` and the jobs sheet show; the subagents share it, so 5 would leave
@@ -415,30 +427,33 @@ export const methods: BridgeMethods = {
 		 */
 		"composer.jobs": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "getAsyncJobTree", "composer");
-			requireFn(session, "inspectAsyncJob", "composer");
+			requireFn(session, "getAsyncJobTree", "jobs");
+			requireFn(session, "inspectAsyncJob", "jobs");
 			// A late import isolates a moved stock internal from the other composer adapters.
 			const { buildJobTree } = await import("./omp/pi-tui/overlays/job-tree");
 			const tree = session.getAsyncJobTree();
 			return tree ? jobRows(tree, buildJobTree, id => session.inspectAsyncJob(id)) : [];
 		},
-
+	}),
+	...guard("cancelJob", {
 		/** Stock's `cancelAsyncJob`: it stops only jobs the session's own agent owns; a subagent's job answers false. */
 		"composer.cancel_job": async (params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "cancelAsyncJob", "composer");
+			requireFn(session, "cancelAsyncJob", "cancelJob");
 			const { id } = record(params);
 			if (typeof id !== "string" || !id) throw new Error("cancel_job requires id");
 			return { cancelled: session.cancelAsyncJob(id) };
 		},
-
+	}),
+	...guard("cycleModelBackward", {
 		/** Stock RPC owns forward cycling; only the missing backward direction needs the bridge. */
 		"composer.cycle_model_backward": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "cycleModel", "composer");
+			requireFn(session, "cycleModel", "cycleModelBackward");
 			return (await session.cycleModel("backward")) ?? null;
 		},
-
+	}),
+	...guard("relaunchResume", {
 		/**
 		 * What `omp --restore` runs (stock's own continue path, TUI-only as a flag): the turn the
 		 * last process was cut off in plus the subagents it ran. `turn` is false with nothing left
@@ -454,33 +469,47 @@ export const methods: BridgeMethods = {
 		 * and never as a message, so it carries on without narrating the restart; `followUp` says it went):
 		 * `jobs`, the background bash jobs that process started and never finished (stock restores no bash
 		 * job), and the subagents the restore revived (their results arrive only when they finish, maybe
-		 * hours later; each one's first request after the restart can take minutes). A turn stock's restore
+		 * hours later; each one's first request after the restart can take minutes); with them, the
+		 * processes the session's commands left running (`processes`, from main: which still run, which
+		 * the launch ended for want of a reader of their output). A turn stock's restore
 		 * continues gets it as a steer, which ends a rerun `wait` at once; an idle session gets it as a
 		 * turn. Every continued turn sends the prompt sections a prompt would (`keepSectionsOnRestore`).
 		 * `goalPausedByExit` is a goal that was active until that process ended and that stock
 		 * paused at startup (the host resumes it after the restore). `journal` names the journal's end the
 		 * restore judged, for the host's log when nothing went on.
 		 */
-		"composer.restore_interrupted": async (_params, env) => {
+		"composer.restore_interrupted": async (params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "restoreInterruptedTurn", "composer");
-			requireFn(session, "sessionManager.getBranch", "composer");
-			requireFn(session, "sessionManager.appendMessage", "composer");
-			requireFn(session, "promptCustomMessage", "composer");
-			requireFn(session, "getToolByName", "composer");
-			requireFn(session, "getGoalModeState", "composer");
-			requireFn(session, "agent.setSystemPrompt", "composer");
-			requireFn(session, "extensionRunner.createContext", "composer");
-			requireFn(session, "subscribe", "composer");
+			requireFn(session, "restoreInterruptedTurn", "relaunchResume");
+			requireFn(session, "sessionManager.getBranch", "relaunchResume");
+			requireFn(session, "sessionManager.appendMessage", "relaunchResume");
+			requireFn(session, "promptCustomMessage", "relaunchResume");
+			requireFn(session, "getToolByName", "relaunchResume");
+			requireFn(session, "getGoalModeState", "relaunchResume");
+			requireFn(session, "agent.setSystemPrompt", "relaunchResume");
+			requireFn(session, "extensionRunner.createContext", "relaunchResume");
+			requireFn(session, "subscribe", "relaunchResume");
 			const restore = await import("./omp/pi-coding-agent/task/restore");
-			requireFn(restore, "restoreSession", "composer", "task/restore");
+			requireFn(restore, "restoreSession", "relaunchResume", "task/restore");
 			const diagnostics = await import("./omp/pi-coding-agent/session/exit-diagnostics");
-			requireFn(diagnostics, "createInterruptedTurnAbortMessage", "composer", "session/exit-diagnostics");
+			requireFn(diagnostics, "createInterruptedTurnAbortMessage", "relaunchResume", "session/exit-diagnostics");
 			const entries = session.sessionManager.getBranch();
 			const branch = entries as readonly JournalEntry[];
 			// This process's start: the entries before it are the lives of the processes the relaunch replaced.
 			const startedAt = performance.timeOrigin;
-			const cutOff = interruptedJobs(branch, startedAt);
+			// Background jobs still running outside omp (kept-jobs.ts) are registered again, not named as stopped. Imported
+			// on use: an omp without the internals kept jobs need must not take the composer's methods down with it.
+			const kept = await import("./kept-jobs")
+				.then(module => module.reattachKeptJobs(session, branch))
+				.catch((error: unknown): string[] => {
+					env.emit({
+						type: "notice",
+						level: "error",
+						message: `Taking up the background jobs that ran on through the restart failed: ${error instanceof Error ? error.message : String(error)}`,
+					});
+					return [];
+				});
+			const cutOff = interruptedJobs(branch, startedAt).filter(job => !kept.includes(job.id));
 			const goalPausedByExit =
 				goalActiveAtExit(branch, startedAt) && session.getGoalModeState()?.goal.status === "paused";
 			// Stock's record for a turn whose process exit it did not see as clean: read past that exit record
@@ -527,11 +556,14 @@ export const methods: BridgeMethods = {
 			// Background subagents that process ran and stock could not revive (isolated, no `session_init`): named, so the
 			// agent starts again what the work still needs instead of waiting on results that never come.
 			const stopped = stoppedSubagents(branch, startedAt, outcome.subagents);
+			// What the session's commands left running across the relaunch (main's `SessionProcesses.leftover`).
+			const processes = leftProcessesOf(record(params).processes);
 			const followUp = restartFollowUp(
 				cutOff,
 				revivedSubagents(branch, outcome.subagents, id => prepared.doing.get(id)),
 				outcome.turn ? "restored" : turnCut ? "cut" : "idle",
 				stopped,
+				processes,
 			);
 			if (followUp) {
 				const failed = (error: unknown) =>
@@ -569,14 +601,16 @@ export const methods: BridgeMethods = {
 				journal: journalEnd(branch),
 			};
 		},
-
+	}),
+	...guard("skillCount", {
 		"composer.skill_count": async (_params, env) => ({ skills: (env.session() as Session).skills?.length ?? 0 }),
-
+	}),
+	...guard("dequeue", {
 		/** Pop the newest user-queued message back to the composer (TUI dequeue). */
 		"composer.dequeue": async (_params, env) => {
 			const session = env.session() as Session;
-			requireFn(session, "popLastQueuedMessage", "composer");
-			requireFn(session, "getQueuedMessages", "composer");
+			requireFn(session, "popLastQueuedMessage", "dequeue");
+			requireFn(session, "getQueuedMessages", "dequeue");
 			const before = session.getQueuedMessages();
 			const popped = session.popLastQueuedMessage();
 			if (!popped) return null;
@@ -600,12 +634,13 @@ export const methods: BridgeMethods = {
 			return result.truncated || prepared.truncated ? { url: result.url, truncated: true } : { url: result.url };
 		},
 	}),
-	...guard(["composer", "sessionTree"], {
+	...guard("copyTargets", {
 		"composer.copy_targets": async (_params, env) => {
 			// Late imports isolate moved stock internals from the other composer adapters.
 			const stock = await import("./omp/pi-tui/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
-			const messages = buildTranscript(env.session().sessionManager).messages as unknown as AgentMessage[];
+			const transcript = await buildTranscript(env.session().sessionManager);
+			const messages = transcript.messages as unknown as AgentMessage[];
 			return {
 				targets: buildCopyTargets(messages, {
 					extractBlocks: stock.extractBlocks,
@@ -614,14 +649,15 @@ export const methods: BridgeMethods = {
 				}),
 			};
 		},
+	}),
+	...guard("lastLink", {
 		/** `/open`: stock's TUI command opens the newest http(s) link of an assistant message.
 		 * Late imports for the same reason as `composer.copy_targets`. */
 		"composer.last_link": async (_params, env) => {
 			const stock = await import("./omp/pi-tui/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
-			const messages = buildTranscript(env.session().sessionManager).messages as unknown as Parameters<
-				typeof stock.extractLastLink
-			>[0];
+			const transcript = await buildTranscript(env.session().sessionManager);
+			const messages = transcript.messages as unknown as Parameters<typeof stock.extractLastLink>[0];
 			return { href: stock.extractLastLink(messages)?.href ?? null };
 		},
 	}),

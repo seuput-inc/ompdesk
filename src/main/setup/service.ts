@@ -12,7 +12,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { dirname, join } from "node:path";
 import type { OmpUpdateFailure } from "../../shared/omp-update";
 import {
 	type GitAslrAction,
@@ -58,6 +58,7 @@ import {
 	manualSteps,
 	OMP_PACKAGE,
 	ompInstallSpecs,
+	ompNpmOwner,
 	type PlanContext,
 	type PlanDownload,
 	type SpawnSpec,
@@ -125,9 +126,10 @@ export interface SetupServiceDeps {
 	ompRelease?: (bun: string, version: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
 	/**
 	 * One gui-runtime.jsonl line (source `omp-update`) per step of an omp install setup runs on its own account
-	 * (a missing, broken or too-old omp): `started`, then `finished` or `failed`, each with `path: "setup"`.
+	 * (a missing, broken or too-old omp): `started`, then `finished` or `failed`, or `skipped` with the reason when
+	 * nothing could run (`no-bun`), each with `path: "setup"`.
 	 */
-	logOmpInstall?: (step: "started" | "finished" | "failed", details: Record<string, unknown>) => void;
+	logOmpInstall?: (step: "started" | "finished" | "failed" | "skipped", details: Record<string, unknown>) => void;
 	now?: () => number;
 }
 
@@ -365,11 +367,13 @@ export class SetupService {
 	 * Move omp to `target` under the supervisor, in the background, queued behind any install that runs now. It
 	 * never asks and never looks at what omp is doing: running omp processes keep the code they loaded.
 	 *
-	 * An omp Bun manages (`ompBunRoot`) is installed as a package at exactly `target` (`bun install -g`, the natives
-	 * its manifest pins in step: `ompInstallSpecs`), so the version that lands is the one the caller judged. Any
-	 * other omp can only be moved by stock `omp update` (the `omp-update` plan), which takes no version and installs
-	 * whatever the registry calls newest when it runs: with `exactOnly` (the caller's `target` is not that newest)
-	 * such an omp is left alone and the outcome is `skipped`.
+	 * An omp a package manager owns is installed as a package at exactly `target`, so the version that lands is the
+	 * one the caller judged: Bun's (`ompBunRoot`) through `bun install -g` with the natives its manifest pins in step
+	 * (`ompInstallSpecs`), npm's (`ompNpmOwner`) through that npm's `install -g --prefix` (`npm-global`). An omp
+	 * neither owns can only be moved by stock `omp update` (the `omp-update` plan), which takes no version, installs
+	 * whatever the registry calls newest when it runs and, for a higher major, swaps in its compiled build. So it runs
+	 * only on a person's "Update now" (`exactOnly` false); any pass nobody asked for (`exactOnly`) leaves such an omp
+	 * alone and the outcome is `skipped`.
 	 *
 	 * `beforeInstall` runs once omp is known to be present, just before the installer starts (main stops the helpers
 	 * that read omp's files from disk). After it, omp is detected again, and an omp still older than `target` is a
@@ -390,8 +394,9 @@ export class SetupService {
 
 	/**
 	 * The newest omp release of `major` in the registry the update installs from (`bun pm view <omp>@<major>`, in
-	 * the update's environment), for a pass that may not go above that major. Null when nothing here can install a
-	 * named version (no omp, or one Bun does not manage) or the registry has none; rejects when the lookup fails.
+	 * the update's environment), for a pass that may not go above that major (OmpUpdater with `follow` off). Null
+	 * when nothing here can install a named version (no omp, or one Bun does not manage) or the registry has none;
+	 * rejects when the lookup fails.
 	 */
 	async newestOmpIn(major: number): Promise<string | null> {
 		const omp = this.#detection?.omp;
@@ -715,14 +720,15 @@ export class SetupService {
 		) {
 			return { kind: "skipped" };
 		}
-		const root = detection.bun ? ompBunRoot(detection.omp) : null;
-		if (!root && exactOnly) return { kind: "skipped" };
-		const method: SetupMethod = root ? "bun-global" : "omp-update";
 		const ctx = this.#planContext(detection);
+		const root = detection.bun ? ompBunRoot(detection.omp) : null;
+		const npm = root ? null : ctx.ompNpm;
+		if (!root && !npm && exactOnly) return { kind: "skipped" };
+		const method: SetupMethod = root ? "bun-global" : npm ? "npm-global" : "omp-update";
 		const plan = buildPlan(
 			"omp",
 			method,
-			root ? { ...ctx, bunInstall: root, ompSpecs: ompInstallSpecs(root, target) } : ctx,
+			root ? { ...ctx, bunInstall: root, ompSpecs: ompInstallSpecs(root, target) } : { ...ctx, ompVersion: target },
 		);
 		if (!plan) return { kind: "skipped" };
 		const env = await this.#updateEnv(detection.omp);
@@ -955,7 +961,8 @@ export class SetupService {
 		}
 		const plan = buildPlan(id, method, ctx, release, tailscale);
 		if (!plan) {
-			// Only omp has a prerequisite (Bun).
+			// Only omp has a prerequisite (Bun). Without Bun omp stays as it is: nothing else installs a named version.
+			if (id === "omp") this.#deps.logOmpInstall?.("skipped", { path: "setup", method, reason: "no-bun" });
 			this.#fail(id, { reason: "prerequisite", detail: "bun" });
 			return;
 		}
@@ -1150,7 +1157,6 @@ export class SetupService {
 	}
 
 	#planContext(detection: Detection): PlanContext {
-		const root = detection.omp ? ompBunRoot(detection.omp) : null;
 		return {
 			platform: this.#deps.platform,
 			arch: this.#deps.arch,
@@ -1158,10 +1164,20 @@ export class SetupService {
 			toolsDir: this.#deps.toolsDir,
 			bun: detection.bun,
 			omp: detection.omp,
-			ompManaged: root !== null && resolvePath(root) === resolvePath(this.#deps.bunInstall),
 			// Setup's own install is the omp this OMPdesk was tested with, never the registry's newest, which may be a
 			// major nothing here was tested on (19 Nov 2026: omp 19.0.0 came out while OMPdesk was tested with 18).
 			ompSpecs: ompInstallSpecs(this.#deps.bunInstall, TESTED_OMP_VERSION),
+			// The PATH main itself keeps current (`refreshPath`): where an npm outside its own prefix is found (Windows'
+			// `%APPDATA%\npm` holds the packages, `npm.cmd` sits beside node.exe).
+			ompNpm:
+				detection.omp && ompBunRoot(detection.omp) === null
+					? ompNpmOwner(detection.omp, {
+							platform: this.#deps.platform,
+							toolsDir: this.#deps.toolsDir,
+							pathEnv: process.env.PATH ?? "",
+						})
+					: null,
+			ompVersion: TESTED_OMP_VERSION,
 			brew: detection.brew,
 			winget: detection.winget,
 			systemRoot: this.#deps.systemRoot,

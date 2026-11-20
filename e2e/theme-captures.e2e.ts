@@ -112,7 +112,7 @@ for (const theme of themes) {
 		await page.keyboard.press("Escape");
 
 		await ui(page, "openSettings", "appearance");
-		await expect(page.locator('[data-theme-option="system"]')).toBeVisible({ timeout: 30_000 });
+		await expect(page.locator('[data-theme-mode="system"]')).toBeVisible({ timeout: 30_000 });
 		await shoot(page, `${theme}-settings`);
 		await page.context().close();
 	});
@@ -127,7 +127,7 @@ for (const theme of themes) {
 		await page.locator('[data-figure="mermaid"]').first().scrollIntoViewIfNeeded();
 		await shoot(page, `${theme}-phone-figure`);
 		await ui(page, "openSettings", "appearance");
-		await expect(page.locator('[data-theme-option="system"]')).toBeVisible({ timeout: 30_000 });
+		await expect(page.locator('[data-theme-mode="system"]')).toBeVisible({ timeout: 30_000 });
 		await shoot(page, `${theme}-phone-settings`);
 		await page.context().close();
 	});

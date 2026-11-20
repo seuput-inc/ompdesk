@@ -11,8 +11,10 @@
  *   budget     the phone's first-screen JavaScript budget (scripts/check-main-bundle.ts), only for a renderer change and
  *              only when this checkout's `out/` was built from exactly the pushed inputs, which means the build's own
  *              check already passed; a fresh build takes minutes, so otherwise the output says it was skipped
+ *   tables     scripts/check-captured-tables.ts on the pushed commit, when it touched `ompdesk_app`'s Rust tables or
+ *              their captured TypeScript copy (a second; otherwise only CI's `cargo test` finds a mismatch)
  *
- * Only the checks the change needs run: a push of docs, native Rust or workflows runs fix-tests alone.
+ * Only the checks the change needs run: a push of docs, workflows or other native Rust runs fix-tests alone.
  *
  * The checks read exactly the pushed commit. In a working tree that holds those files unchanged (a worktree of one's
  * own, after the commit) they run in place, on the warm typecheck cache `bun run check:types` keeps and the `out/`
@@ -36,6 +38,7 @@ import { processAlive } from "../src/main/process-alive";
 import { withoutGitSelectors } from "../src/shared/git-env";
 import { inputHash, rebuildReason } from "./build-cache";
 import { biomeFiles, changedScope } from "./changed-scope";
+import { CAPTURED_TABLE_INPUT } from "./check-captured-tables";
 
 const ZERO_SHA = /^0+$/;
 const SHA = /[0-9a-f]{40}/g;
@@ -90,6 +93,8 @@ export interface Plan {
 	types: boolean;
 	/** A renderer change: the first-screen budget applies. */
 	budget: boolean;
+	/** The Rust tables `ompdesk_app` keeps or their captured TypeScript copy changed (scripts/check-captured-tables.ts). */
+	tables: boolean;
 }
 
 /** A change to a lint itself or to the duplicate rules' allow list: the per-file rules run on the whole tree. */
@@ -109,6 +114,7 @@ export function planGate(files: readonly string[]): Plan {
 		surfaces: lintChanged || surfaceFiles.length > 0 ? { only: lintChanged ? null : surfaceFiles } : null,
 		types: scope.files.some(file => TYPE_INPUT.test(file)),
 		budget: scope.files.some(file => /^src\/(?:renderer|shared)\//.test(file)),
+		tables: files.some(file => CAPTURED_TABLE_INPUT.test(file)),
 	};
 }
 
@@ -132,6 +138,14 @@ const git = (cwd: string, args: string[]): Buffer =>
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 const gitText = (cwd: string, args: string[]): string => git(cwd, args).toString("utf8").trim();
+const gitInput = (cwd: string, args: string[], input: string): string =>
+	execFileSync("git", args, {
+		cwd,
+		env: withoutGitSelectors(process.env),
+		input,
+		encoding: "utf8",
+		maxBuffer: 1 << 30,
+	}).trim();
 const hasCommit = (cwd: string, sha: string): boolean => {
 	try {
 		git(cwd, ["cat-file", "-e", `${sha}^{commit}`]);
@@ -152,36 +166,65 @@ export function rangeBase(cwd: string, ref: PushRef): string {
 }
 
 /**
- * The probe branches (`probe/*`, here or as origin's) whose commits a push to `main` would carry: a probe holds what
+ * The probe branches (`probe/*`, here or as origin's) whose own commits a push to `main` would carry: a probe holds what
  * main must not (a test alone that fails before its fix, an old commit rerun), so its commits never reach main by a
  * merge or a fast-forward. Its fix carries the test again in a commit of its own.
+ *
+ * A probe's own commits are those of it in the push that no other ref reaches (`refs/heads`, origin's branches, tags;
+ * not the probes and not the pushed branch itself), apart from the pushed branch's own first-parent line: a probe
+ * that sits on a branch or a release candidate shares their commits, and those land as theirs. Pushing a probe (or a
+ * detached HEAD at a probe's tip) to main carries all of its commits. Limit: a probe merged into a branch that is
+ * already on origin reads as that branch's.
  */
 export function probesInPush(cwd: string, ref: PushRef, base: string): string[] {
 	if (ref.remoteRef !== "refs/heads/main") return [];
-	const probes = gitText(cwd, [
+	const isProbe = (name: string) => /^refs\/(?:heads|remotes\/origin)\/probe\//.test(name);
+	const refs = gitText(cwd, [
 		"for-each-ref",
-		"--format=%(refname)",
-		"refs/heads/probe/",
-		"refs/remotes/origin/probe/",
+		"--format=%(objectname) %(refname)",
+		"refs/heads/",
+		"refs/remotes/",
+		"refs/tags/",
 	])
 		.split("\n")
-		.filter(Boolean);
-	return probes.filter(probe => {
-		let shared: string;
+		.filter(Boolean)
+		.map(line => line.split(" ") as [string, string]);
+	const probes = refs.filter(([, name]) => isProbe(name));
+	if (probes.length === 0) return [];
+	let source: string | null = ref.localRef;
+	if (source === "HEAD") {
 		try {
-			shared = gitText(cwd, ["merge-base", probe, ref.localSha]);
+			source = gitText(cwd, ["symbolic-ref", "-q", "HEAD"]);
 		} catch {
-			return false;
+			source = null;
 		}
-		return gitText(cwd, ["rev-list", "--count", `${base}..${shared}`]) !== "0";
-	});
+	}
+	const pushesProbe = source ? isProbe(source) : probes.some(([sha]) => sha === ref.localSha);
+	const ownLine = new Set(
+		pushesProbe ? [] : gitText(cwd, ["rev-list", "--first-parent", `${base}..${ref.localSha}`]).split("\n"),
+	);
+	const others = refs.filter(([, name]) => !isProbe(name) && name !== source).map(([sha]) => `^${sha}`);
+	return probes
+		.filter(([, probe]) => {
+			let shared: string;
+			try {
+				shared = gitText(cwd, ["merge-base", probe, ref.localSha]);
+			} catch {
+				return false;
+			}
+			// --stdin: a checkout's refs run past Windows' command-line length.
+			const alone = gitInput(cwd, ["rev-list", "--stdin"], [shared, `^${base}`, ...others].join("\n"));
+			return alone.split("\n").some(sha => sha && !ownLine.has(sha));
+		})
+		.map(([, probe]) => probe);
 }
 
 function extract(cwd: string, tree: string, sha: string, paths: string[]): void {
 	const chunk = 400;
 	for (let at = 0; at < paths.length; at += chunk) {
 		const tar = git(cwd, ["archive", "--format=tar", sha, "--", ...paths.slice(at, at + chunk)]);
-		execFileSync("tar", ["-x", "-C", tree], { input: tar, maxBuffer: 1 << 30 });
+		// cwd, not `-C <path>`: Git for Windows' GNU tar (first on a hook's PATH) reads `C:\…` as a remote host.
+		execFileSync("tar", ["-x"], { cwd: tree, input: tar, maxBuffer: 1 << 30 });
 	}
 }
 
@@ -376,6 +419,14 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 		? [await runStep("fix commits carry a test", [process.execPath, "scripts/lint-fix-tests.mjs", range], root)]
 		: [];
 	if (!needsFixTests(ref)) notes.push("probe branch: the fix-commit rule is not checked here; it is where it lands");
+	if (plan.tables)
+		results.push(
+			await runStep(
+				"ompdesk_app's Rust tables match captured/meta.json",
+				[process.execPath, "scripts/check-captured-tables.ts", ref.localSha],
+				root,
+			),
+		);
 	const gateDir = path.join(gitDir, "ompdesk-gate");
 	fs.mkdirSync(gateDir, { recursive: true });
 	const inPlace =

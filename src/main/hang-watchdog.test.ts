@@ -54,4 +54,35 @@ describe("reportPreviousHang", () => {
 			details: { unresponsiveMs: 5628, phase: "update", steps: "update:quit-and-install > quit:teardown:sidecars" },
 		});
 	});
+
+	it("writes how the computer stood during the stall as a line of its own, with when that was", () => {
+		writeHangMarker(hangMarkerPath(), {
+			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
+			pid: 29292,
+			unresponsiveMs: 5628,
+			selfRecovered: false,
+			machine: { availMB: 512, totalMB: 16_384, cpus: 8, cpuBusyPct: 99.5, mainCpuPct: 0.1 },
+		});
+
+		reportPreviousHang();
+
+		const lines = fs.readFileSync(path.join(mocks.userData.dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
+		expect(lines.slice(-2).map(line => JSON.parse(line))).toMatchObject([
+			{ source: "main-thread-hang", details: { unresponsiveMs: 5628, selfRecovered: false } },
+			{
+				source: "machine-state",
+				message: "hang during",
+				details: {
+					trigger: "hang",
+					when: "during",
+					at: "2026-10-20T01:38:33.839Z",
+					availMB: 512,
+					totalMB: 16_384,
+					cpus: 8,
+					cpuBusyPct: 99.5,
+					mainCpuPct: 0.1,
+				},
+			},
+		]);
+	});
 });

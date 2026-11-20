@@ -48,6 +48,7 @@ import {
 	stoppedSubagents,
 } from "../../resources/gui-bridge/restart-core";
 import { type ForkEntry, forkCut } from "../../resources/gui-bridge/session-fork-core";
+import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import { transcriptPageMessages, transcriptRunStart } from "../../resources/gui-bridge/transcript-page";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
@@ -408,6 +409,8 @@ export function runRpcUi(): void {
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
 	let isStreaming = false;
+	/** A `fixture flow` run's compaction is under way (`compact-start` until `compact-end` or the turn's end). */
+	let isCompacting = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
 	let thinking = { level: "medium", configured: "medium" };
 	/** `fixture usage limit` and `fixture rate limit` stop a turn on the provider's quota; its account resets at this time. */
@@ -448,12 +451,16 @@ export function runRpcUi(): void {
 	}
 	/** Stock `/btw` history, newest first. */
 	const btwRecords: object[] = [];
+	/** The session's todo list and the bridge's reading of it (todo-drift.ts), set by `fixture todo behind`. */
+	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
+	const noDrift: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
+	let todoDrift = noDrift;
 	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
 		model,
 		thinkingLevel: thinking.level,
 		isStreaming,
-		isCompacting: false,
+		isCompacting,
 		steeringMode: "all",
 		followUpMode: "all",
 		interruptMode: "immediate",
@@ -474,7 +481,7 @@ export function runRpcUi(): void {
 		hasPendingAsyncWork: false,
 		isSettled: !isStreaming,
 		queuedMessages: { steering: [...lanes.steering], followUp: [...lanes.followUp] },
-		todoPhases: [],
+		todoPhases,
 		fastModeEnabled: false,
 		tokensPerSecond: null,
 		fastModeActive: false,
@@ -1690,31 +1697,33 @@ export function runRpcUi(): void {
 	 * boots and leaves every `get_state` unanswered; the held ones are answered as usual once the file no longer says
 	 * so (a spec that writes another script, or removes the file, ends the wait). `{"holdExit": true}` makes an omp that is
 	 * stopped (SIGTERM, or its stdin ending) keep running, as one slow to wind down does, and exit as usual once the file
-	 * no longer says so; a stop that waits too long is SIGKILLed by main, as a real one is.
+	 * no longer says so; a stop that waits too long is SIGKILLed by main, as a real one is. `{"holdResume": true}` keeps
+	 * the turn `composer.restore_interrupted` continues from starting (the tab's "continuing" row stays up) until the
+	 * file no longer says so, so a spec sees the row however late its window mounts.
 	 */
 	const startFile = process.env.OMP_GUI_TEST_START_FILE;
-	const startHeld = (hold: "holdGetState" | "holdExit" = "holdGetState"): boolean => {
+	const startHeld = (hold: "holdGetState" | "holdExit" | "holdResume" = "holdGetState"): boolean => {
 		try {
 			return startFile ? JSON.parse(fs.readFileSync(startFile, "utf8"))[hold] === true : false;
 		} catch {
 			return false;
 		}
 	};
-	/** Runs `stop` now, or once the start file no longer holds the exit. */
-	const stopWhenReleased = (stop: () => void) => {
-		if (!startHeld("holdExit")) {
-			stop();
+	/** Runs `run` now, or once the start file no longer holds `hold`. */
+	const whenReleased = (hold: "holdExit" | "holdResume", run: () => void) => {
+		if (!startHeld(hold)) {
+			run();
 			return;
 		}
 		const timer = setInterval(() => {
-			if (startHeld("holdExit")) return;
+			if (startHeld(hold)) return;
 			clearInterval(timer);
-			stop();
+			run();
 		}, 100);
 	};
 	if (startFile) {
 		process.on("SIGTERM", () =>
-			stopWhenReleased(() => {
+			whenReleased("holdExit", () => {
 				process.removeAllListeners("SIGTERM");
 				process.kill(process.pid, "SIGTERM");
 			}),
@@ -2015,6 +2024,7 @@ export function runRpcUi(): void {
 			return null;
 		},
 		model_choice: () => ({ chosen: standIn }),
+		"todoDrift.state": () => todoDrift,
 		"composer.state": () => ({
 			cwd: process.cwd(),
 			autoRetryEnabled: true,
@@ -2320,37 +2330,40 @@ export function runRpcUi(): void {
 			if (!cutOff && !followUp)
 				return { turn: false, subagents, jobs, followUp: false, cutBeforeRequest, journal: journalEnd(journal) };
 			// A model that is slow to start (the relaunch's spawn and first request): the tab's "continuing" row stays
-			// up for the whole wait, so a spec observes it instead of racing a resume that finishes in a frame.
-			setTimeout(
-				() => {
-					isStreaming = true;
-					write({ type: "agent_start" });
-					setTimeout(() => {
-						const answer: AgentMessage = {
-							role: "assistant",
-							// After a restart-job notice the answer is tall, so the transcript overflows and "stays at the bottom" means something.
-							content: [
-								{
-									type: "text",
-									text:
-										stopped.length > 0
-											? `Continued after the interruption.\n\n${Array.from({ length: 30 }, (_, index) => `- Checked item ${index + 1}`).join("\n")}`
-											: followUp
-												? "Watcher is still on the release build; I'll report when it is green."
-												: "Continued after the interruption.",
-								},
-							],
-							timestamp: Date.now(),
-							provider: model.provider,
-							model: model.id,
-							stopReason: "stop",
-						};
-						appendMessage(answer);
-						write({ type: "message_end", message: answer });
-						endTurn([answer]);
-					}, 600);
-				},
-				followUp ? 1500 : 0,
+			// up for the whole wait, so a spec observes it instead of racing a resume that finishes in a frame. A spec
+			// that must see the row holds the start with `holdResume` (a loaded runner mounts the window seconds late).
+			whenReleased("holdResume", () =>
+				setTimeout(
+					() => {
+						isStreaming = true;
+						write({ type: "agent_start" });
+						setTimeout(() => {
+							const answer: AgentMessage = {
+								role: "assistant",
+								// After a restart-job notice the answer is tall, so the transcript overflows and "stays at the bottom" means something.
+								content: [
+									{
+										type: "text",
+										text:
+											stopped.length > 0
+												? `Continued after the interruption.\n\n${Array.from({ length: 30 }, (_, index) => `- Checked item ${index + 1}`).join("\n")}`
+												: followUp
+													? "Watcher is still on the release build; I'll report when it is green."
+													: "Continued after the interruption.",
+									},
+								],
+								timestamp: Date.now(),
+								provider: model.provider,
+								model: model.id,
+								stopReason: "stop",
+							};
+							appendMessage(answer);
+							write({ type: "message_end", message: answer });
+							endTurn([answer]);
+						}, 600);
+					},
+					followUp ? 1500 : 0,
+				),
 			);
 			return { turn: cutOff, subagents, jobs, followUp: followUp !== undefined, cutBeforeRequest };
 		},
@@ -3957,6 +3970,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 		};
 		const finish = (last: AgentMessage) => {
 			say(last);
+			isCompacting = false;
 			endTurn([...turn]);
 			flow = undefined;
 		};
@@ -4041,11 +4055,24 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						write({ type: "extension_ui_request", id: askId, method: "ask", questions });
 						return undefined;
 					}
-					// Stock's mid-turn maintenance: start, the compaction entry, end (the loop goes on).
+					// Stock's mid-turn maintenance: start, the compaction entry, end (the loop goes on). `skipped` ends it
+					// as stock's benign skip does: no entry, nothing said.
 					case "compact-start":
+						isCompacting = true;
 						write({ type: "auto_compaction_start", reason: "threshold", action: "context-full" });
 						return undefined;
 					case "compact-end": {
+						isCompacting = false;
+						if (spec.skipped === true) {
+							write({
+								type: "auto_compaction_end",
+								action: "context-full",
+								aborted: false,
+								willRetry: false,
+								skipped: true,
+							});
+							return undefined;
+						}
 						const kept = entries.find(entry => entry.message === user)?.id;
 						const compaction = {
 							summary: "Compacted the run so far.",
@@ -5531,9 +5558,13 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			for (const [name, from] of Object.entries(drafts)) fs.copyFileSync(from, nodePath.join(shots, name));
 			// Escaped as the bridge escapes a destination (a Windows path's backslashes).
 			const shot = (name: string) => nodePath.join(shots, name).replace(/[\\<>]/g, "\\$&");
+			// An id of its own, as stock gives every dialog (`Snowflake.next`, rpc-mode.ts `requestRpcDialog`). The parity
+			// sheet asks this three times in one session, once from each view, and under one id a view's close of the
+			// question before (its own answer still on its way, or "answered elsewhere") closed this one too: the card
+			// never showed there, and the host refused that view's later answers as already given.
 			write({
 				type: "extension_ui_request",
-				id: "fixture-ask-pictures",
+				id: `fixture-ask-pictures-${randomUUID()}`,
 				method: "ask",
 				questions: [
 					{
@@ -5805,6 +5836,50 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				Number(process.env.OMP_GUI_TEST_LATER_MS ?? 3000),
 			);
 		} else if (message !== "fixture running") {
+			if (message === "fixture todo behind") {
+				// A list with two instructions steered in since its last change (resources/gui-bridge/todo-drift.ts): the
+				// todo call 12 minutes ago, then the bridge's reading of it, pushed as the bridge pushes it (two are news,
+				// no warning: RECEIVED_WARN).
+				todoPhases = [
+					{
+						name: "Parser",
+						tasks: [
+							{ content: "Write the parser", status: "completed" },
+							{ content: "Test the parser", status: "in_progress" },
+							{ content: "Document the parser", status: "pending" },
+						],
+					},
+				];
+				const tool = { toolCallId: `todo-behind-${Date.now()}`, toolName: "todo" };
+				write({ type: "tool_execution_start", ...tool, args: { op: "init" } });
+				write({
+					type: "tool_execution_end",
+					...tool,
+					result: {
+						content: [{ type: "text", text: "todo updated" }],
+						details: { op: "init", phases: todoPhases },
+					},
+					isError: false,
+				});
+				const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
+				todoDrift = {
+					changedAt: minutesAgo(12),
+					stale: null,
+					received: [
+						{ at: minutesAgo(9), text: "Also fix the README typo on line 3" },
+						{ at: minutesAgo(4), text: "Then rename parse() to parseConfig() everywhere" },
+					],
+					receivedCount: 2,
+				};
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
+			if (message === "fixture todo clear") {
+				todoPhases = [];
+				todoDrift = noDrift;
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
 			if (message === "fixture reply actions") {
 				// Stock auto thinking names the effort it classified for this turn.
 				thinking = { level: "high", configured: "auto" };
@@ -6484,8 +6559,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					write({ type: "message_end", message: answer });
 					endTurn([answer]);
 					ok();
-					// As stock's agent loop: the follow-ups queued behind the turn run once it ends, in order.
-					const followUps = lanes.followUp.splice(0);
+					// As stock's agent loop: the asides it had not read and the follow-ups queued behind the turn run once
+					// it ends, in order.
+					const followUps = [...lanes.steering.splice(0), ...lanes.followUp.splice(0)];
 					if (followUps.length) emitQueue();
 					for (const text of followUps) prompt(text, () => {});
 					break;
@@ -7336,7 +7412,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			// Like stock rpc mode: the host closing stdin ends the process (a running stream timer would not), and a
 			// turn in flight is journaled aborted first.
 			.on("close", () =>
-				stopWhenReleased(() => {
+				whenReleased("holdExit", () => {
 					autopilot.hangUp();
 					recordSessionExit();
 					process.exit(0);

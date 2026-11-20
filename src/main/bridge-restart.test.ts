@@ -23,6 +23,7 @@ import {
 	shutdownMarks,
 	stoppedSubagents,
 	turnCutBehindNotes,
+	unsettledJobs,
 } from "../../resources/gui-bridge/restart-core";
 
 const exit: JournalEntry = { type: "custom", customType: "session_exit" };
@@ -128,6 +129,14 @@ describe("interruptedJobs", () => {
 			content: restartFollowUp([{ id: "bg_7", command: "x", intent: "Watch" }], [])?.content,
 		};
 		expect(interruptedJobs(replaced(bashCall("c1", "x"), started("c1", "bg_7"), named), startedAt)).toEqual([]);
+	});
+});
+
+describe("unsettledJobs", () => {
+	it("finds a job still unsettled two relaunches later, with its call, and drops it once its result arrived", () => {
+		const branch = [bashCall("c1", "make", "Build"), started("c1", "bg_1"), exit, exit, exit];
+		expect(unsettledJobs(branch)).toEqual([{ id: "bg_1", command: "make", intent: "Build", toolCallId: "c1" }]);
+		expect(unsettledJobs([...branch, delivered("bg_1")])).toEqual([]);
 	});
 });
 
@@ -243,6 +252,15 @@ describe("stoppedSubagents", () => {
 describe("restartFollowUp", () => {
 	it("says nothing when the restart left nothing to tell", () => {
 		expect(restartFollowUp([], [])).toBeUndefined();
+	});
+
+	it("names what the session's commands left running only to a turn that goes on, never starting one for it", () => {
+		const processes = { running: [{ pid: 4321, name: "next-server", noReader: true as const }], ended: [] };
+		expect(restartFollowUp([], [], "idle", [], processes)).toBeUndefined();
+		const followUp = restartFollowUp([], [], "restored", [], processes);
+		expect(followUp?.content).toContain("- 4321 next-server; its output has nowhere to go");
+		// The transcript shows no line for it: no job, subagent or cut turn.
+		expect(followUp?.details).toEqual({ jobs: [] });
 	});
 
 	it("names each stopped job with its intent first, then its command, and asks for a quiet re-run of what is needed", () => {

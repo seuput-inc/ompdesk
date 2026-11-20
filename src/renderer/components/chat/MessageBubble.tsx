@@ -9,7 +9,8 @@ import { extractFileMentions, replaceFileMentions, splitAttachedMentions } from 
 import type { AgentMessage, ImageContent, MessageContent, ToolCallContent } from "../../../shared/rpc-types";
 import { useShellInput } from "../../hooks/use-shell-mode";
 import { AnsiText, hasAnsi } from "../../lib/ansi";
-import { basename, cx, extractResultImage, formatClock, formatTokens, uiLocale } from "../../lib/format";
+import { compactionDoneKey, compactionTook } from "../../lib/compaction-action";
+import { basename, cx, extractResultImage, formatClock, formatDuration, uiLocale } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { MarkdownRenderer } from "../../lib/markdown";
 import { forkSessionFromMessageInNewTab, isRenderableMessageText } from "../../lib/messages";
@@ -59,6 +60,7 @@ export interface MessageBubbleProps {
 	clockRepeats?: boolean;
 }
 
+/** Stock's own name of a compaction method: an engineer's fact, read behind the card's Details. */
 const COMPACTION_METHOD_KEYS: Record<string, string> = {
 	remote: "chat.context.compactionMethod.remote",
 	soft: "chat.context.compactionMethod.soft",
@@ -236,28 +238,39 @@ function ContextBubble({ message }: { message: AgentMessage }) {
 	const t = useT();
 	const [expanded, setExpanded] = useState(false);
 	const isFiles = message.role === "fileMention";
-	const compactionMethodKey = message.method ? COMPACTION_METHOD_KEYS[message.method] : undefined;
-	const compactionMethod = message.method
-		? compactionMethodKey
-			? t(compactionMethodKey)
-			: message.method
-		: undefined;
-	const label =
-		message.role === "compactionSummary"
-			? compactionMethod && message.tokensBefore !== undefined && message.tokensAfter !== undefined
-				? t("chat.context.compactedByFromTo", {
-						method: compactionMethod,
-						before: formatTokens(message.tokensBefore),
-						after: formatTokens(message.tokensAfter),
-					})
-				: compactionMethod
-					? t("chat.context.compactedBy", { method: compactionMethod })
-					: message.tokensBefore
-						? t("chat.context.compactedFrom", { tokens: message.tokensBefore.toLocaleString(uiLocale()) })
-						: t("chat.context.compacted")
-			: message.role === "branchSummary"
-				? t("chat.context.branchSummary")
-				: t("chat.context.referencedFiles");
+	const isCompaction = message.role === "compactionSummary";
+	const tookMs = useSessionStore(s =>
+		isCompaction ? compactionTook(s.compactionRuns, message.timestamp) : undefined,
+	);
+	const { tokensBefore, tokensAfter } = message;
+	const savedPercent =
+		tokensBefore && tokensAfter !== undefined && tokensAfter < tokensBefore
+			? Math.round((1 - tokensAfter / tokensBefore) * 100)
+			: 0;
+	// One line in plain words: what was done, how long it took (when this window watched it) and how much it freed.
+	const label = isCompaction
+		? [
+				t(compactionDoneKey(message.method)),
+				tookMs === undefined ? null : t("chat.context.took", { duration: formatDuration(tookMs) }),
+				savedPercent > 0 ? t("chat.context.smaller", { percent: savedPercent }) : null,
+			]
+				.filter(Boolean)
+				.join(" · ")
+		: message.role === "branchSummary"
+			? t("chat.context.branchSummary")
+			: t("chat.context.referencedFiles");
+	const methodKey = message.method ? COMPACTION_METHOD_KEYS[message.method] : undefined;
+	const count = (tokens: number) => tokens.toLocaleString(uiLocale());
+	const facts = [
+		methodKey ? t(methodKey) : message.method,
+		tokensBefore !== undefined && tokensAfter !== undefined
+			? t("chat.context.tokensFromTo", { before: count(tokensBefore), after: count(tokensAfter) })
+			: tokensBefore
+				? t("chat.context.tokensFrom", { tokens: count(tokensBefore) })
+				: null,
+	]
+		.filter(Boolean)
+		.join(" · ");
 	const Icon = isFiles ? FileText : Archive;
 
 	return (
@@ -282,7 +295,7 @@ function ContextBubble({ message }: { message: AgentMessage }) {
 					<>
 						{message.shortSummary && <MarkdownRenderer content={message.shortSummary} />}
 						{typeof message.warning === "string" && <InlineNotice live title={message.warning} tone="warning" />}
-						{message.summary && (
+						{(message.summary || facts) && (
 							<>
 								<DisclosureButton
 									chevronClassName="size-(--sc-icon-sm) text-(--sc-text-subtle)"
@@ -294,9 +307,16 @@ function ContextBubble({ message }: { message: AgentMessage }) {
 									{t("chat.context.details")}
 								</DisclosureButton>
 								<Collapse className="flow-root" open={expanded}>
-									<div className={cx("mt-2", PREVIEW_SCROLL_LG)}>
-										<MarkdownRenderer content={message.summary} />
-									</div>
+									{facts ? (
+										<div className="mt-2 text-sc-xs text-(--sc-text-subtle)" data-compaction-facts>
+											{facts}
+										</div>
+									) : null}
+									{message.summary ? (
+										<div className={cx("mt-2", PREVIEW_SCROLL_LG)}>
+											<MarkdownRenderer content={message.summary} />
+										</div>
+									) : null}
 								</Collapse>
 							</>
 						)}

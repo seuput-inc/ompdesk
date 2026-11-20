@@ -1,0 +1,78 @@
+{
+	"checker": {
+		"kind": "tlc",
+		"config": "MC.cfg",
+		"timeoutSec": 600
+	},
+	"properties": [
+		"TypeOK",
+		"AtMostOnce",
+		"HubOnce",
+		"KeptUntilDelivered",
+		"CallsSettle",
+		"KeptDelivered",
+		"AwayCallsSettle"
+	],
+	"waive": {
+		"TypeOK": "Shape check only: no behaviour change breaks it without also breaking a property above it."
+	},
+	"mutations": [
+		{
+			"name": "take-handed",
+			"why": "#takeOver also takes a call a connection was handed (drops the `delivered` check): A runs it too.",
+			"file": "AwayCalls.tla",
+			"search": "    /\\ TakeDelivered \\/ ~delivered[c]",
+			"replace": "    /\\ TRUE",
+			"breaks": "AtMostOnce"
+		},
+		{
+			"name": "replay-before-hub",
+			"why": "B drops a kept report when it sends the replay, not when A answers it: a replay the link lost is gone.",
+			"file": "AwayCalls.tla",
+			"search": "          /\\ delivered' = [c \\in Calls |-> delivered[c] \\/ c \\in again]\n    /\\ link' = \"up\"\n    /\\ UNCHANGED <<pending, replies, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>",
+			"replace": "          /\\ delivered' = [c \\in Calls |-> delivered[c] \\/ c \\in again]\n    /\\ link' = \"up\"\n    /\\ kept' = {}\n    /\\ UNCHANGED <<pending, replies, aJournal, runs, toldKept, hub, sleeps, crashes>>",
+			"breaks": "KeptUntilDelivered"
+		},
+		{
+			"name": "no-journal-on-a",
+			"why": "A runs a re-sent call without its journal: a call it ran before the link dropped runs again.",
+			"file": "AwayCalls.tla",
+			"search": "runs' = IF m[2] \\in aJournal THEN runs ELSE [runs EXCEPT ![m[2]] = @ + 1]",
+			"replace": "runs' = [runs EXCEPT ![m[2]] = @ + 1]",
+			"breaks": "AtMostOnce"
+		},
+		{
+			"name": "hub-no-dedup",
+			"why": "The hub's bridge keeps a report whose id it already holds.",
+			"file": "AwayCalls.tla",
+			"search": "IF StableIds /\\ @ >= 1 THEN @ ELSE @ + 1",
+			"replace": "@ + 1",
+			"breaks": "HubOnce"
+		},
+		{
+			"name": "no-replay",
+			"why": "A re-attach sends no kept report: they stay in the outbox for good.",
+			"file": "AwayCalls.tla",
+			"search": " \\cup ({\"replay\"} \\X kept)",
+			"replace": "",
+			"breaks": "KeptDelivered"
+		},
+		{
+			"name": "no-resend-handed",
+			"why": "The same tab's re-attach skips a call a dead connection was handed.",
+			"file": "AwayCalls.tla",
+			"search": "pending[c] = \"waiting\" /\\ (~delivered[c] \\/ ResendDelivered)}",
+			"replace": "pending[c] = \"waiting\" /\\ ~delivered[c]}",
+			"breaks": "CallsSettle"
+		},
+		{
+			"name": "no-takeover",
+			"why": "Nothing on B carries a call out while A is away.",
+			"file": "AwayCalls.tla",
+			"config": "MC_away.cfg",
+			"search": "    /\\ UseTakeover /\\ link = \"down\" /\\ pending[c] = \"waiting\"",
+			"replace": "    /\\ FALSE",
+			"breaks": "AwayCallsSettle"
+		}
+	]
+}

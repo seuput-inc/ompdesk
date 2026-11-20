@@ -1,9 +1,16 @@
 /**
  * Compatibility self-check: every omp internal the bridge modules use, grouped
- * by the GUI feature that needs it. omp internals carry no semver, so after an
+ * by the GUI capability that needs it. omp internals carry no semver, so after an
  * `omp update` a method can vanish; `capabilities` (index.ts) reports which
- * features lost something, and `guard` (health.ts) fails their bridge methods
+ * capabilities lost something, and `guard` (health.ts) fails their bridge methods
  * with a coded `unsupported_omp` error instead of a raw TypeError.
+ *
+ * One id per action a person sees: `guard(id, methods)` refuses every method of its
+ * group when any internal listed under `id` is missing, so a group holds only methods
+ * that use the same internals (a stated reason otherwise). A method that needs an
+ * internal its siblings do not gets an id of its own, and the warning names that one
+ * action, never a whole area (omp 19 dropped two handoff members and took ten composer
+ * actions and the relaunch resume down with them while they shared one id).
  *
  * Pure on purpose: no omp imports (not even types) and no Bun globals, so the
  * GUI's own vitest/tsc can exercise the derivation with fake objects
@@ -16,17 +23,43 @@
 
 export const FEATURES = {
 	core: "GUI bridge core",
-	composer: "Composer extras (eval, forced tool, prewalk, context, jobs, dequeue)",
+	composerState: "Composer status (folder, auto-retry, thinking, agent pause, ultrafast)",
+	ultrafast: "Ultrafast mode (/fast ultra)",
+	pythonEval: "Python in the composer ($)",
+	abortCompaction: "Cancel compaction",
+	bashExcluded: "Bash kept out of context (!!)",
+	clearContext: "Clear context",
+	forceTool: "Forced tool",
+	prewalk: "Prewalk",
+	toolExtras: "Tool sources and mounted tools",
+	contextReport: "/context report",
+	jobs: "Background jobs list (/jobs)",
+	cancelJob: "Cancel a background job",
+	cycleModelBackward: "Previous model (backward model cycling)",
+	relaunchResume: "Continuing interrupted turns and subagents after a relaunch",
+	skillCount: "Skill count",
+	dequeue: "Pull a queued message back into the composer",
+	copyTargets: "/copy",
+	lastLink: "/open (the last link)",
+	localPaste: "Large pastes kept as local:// files",
+	localLinks: "Opening local:// links",
+	argCompletions: "Slash-command argument completion",
 	share: "Session sharing",
-	planMode: "Plan mode",
-	goalMode: "Goal mode",
+	planMode: "Plan mode (on and off, and the plan the agent proposes as a card)",
+	planApproval: "Plan approval (execute, compact, keep context, save, feedback)",
+	guidedGoal: "Guided goal interview",
+	goalReplace: "Changing an active goal's objective",
+	goalBudget: "Goal token budget",
+	goalTimeLimit: "Goal time limit",
 	tan: "/tan background tangents",
 	omfg: "/omfg rule forging",
 	agentPause: "Agent pause",
 	replyLanguage: "Reply language",
-	nextPrompt: "Prompt suggestions (next message, inline completion)",
+	nextPrompt: "Prompt suggestions (next message)",
+	inlineCompletion: "Inline completion while typing in the composer",
 	autoTitle: "Automatic session titles (first message, as the work changes, regenerate)",
 	autoMode: "Automatic mode choice (Plan or Goal for a prompt)",
+	autoModeUndo: "Undoing an automatic mode choice",
 	judgeAssist: "Judge-model assists (needs-you notifications, title check, preview check)",
 	memoryRecall: "Memory recall (earlier decisions and conclusions for a typed prompt)",
 	outputStyle: "Output style (concise, detailed, minimal)",
@@ -36,27 +69,89 @@ export const FEATURES = {
 	creditSpend: "Credit use off: an account whose plan is spent does not run on credits or extra usage",
 	thinkingDefault: "Auto thinking by default",
 	delegation: "Delegation strength (Solo to Swarm)",
-	mcp: "MCP servers",
-	plugins: "Plugins & marketplaces",
-	skills: "Skills, hooks & prompt templates",
-	agents: "Agent definitions & memory",
+	mcp: "MCP server list",
+	mcpToggle: "Turning an MCP server on or off",
+	mcpReconnect: "Reconnecting an MCP server",
+	mcpRemove: "Removing an MCP server",
+	mcpAdopt: "Using an MCP server another tool's config declares",
+	mcpAdd: "Adding an MCP server",
+	mcpTest: "MCP connection test",
+	mcpReauth: "MCP server sign-in (OAuth)",
+	mcpSync: "Following MCP changes another tab made",
+	mcpReload: "MCP reload (/mcp reload)",
+	mcpUpdateReconnect: "Reconnecting MCP servers after an extension update",
+	plugins: "Installed plugins list",
+	marketplaces: "Marketplaces and the plugins they offer",
+	marketplaceEdit: "Adding, removing and updating a marketplace",
+	pluginInstall: "Installing, uninstalling and upgrading a plugin",
+	pluginToggle: "Turning a plugin on or off",
+	pluginThemes: "Themes a plugin brings",
+	pluginDetail: "Plugin details (features and settings)",
+	pluginFeatures: "Plugin features on or off",
+	pluginSettings: "Plugin settings",
+	pluginReload: "Picking up plugin changes after an extension update",
+	extensionUpdates: "Extension updates (plugins and registry skills, in the Updates section)",
+	skills: "Skills list",
+	skillDetail: "Skill preview",
+	skillToggle: "Turning a skill on or off",
+	manageSkill: "Creating, editing and deleting a managed skill",
+	hooks: "Hooks list",
+	hookToggle: "Turning a hook on or off",
+	contextFiles: "Instruction files list (AGENTS.md and the like)",
+	contextFileToggle: "Turning an instruction file on or off",
+	promptTemplates: "Prompt templates list",
+	agentValidate: "Checking an agent definition",
+	agents: "Agent definitions list",
+	agentDefinition: "One agent definition with its system prompt",
+	agentAuthoring: "Agent folders and tool names for the agent editor",
+	reviveSubagent: "Reviving a parked subagent",
+	subagentTranscript: "A finished subagent's transcript",
+	imageBlob: "Pictures read from omp's blob store (subagent transcripts, paired devices)",
 	themes: "Themes",
-	settings: "Settings",
+	settingsSchema: "Settings page layout (tabs and every setting)",
+	settings: "Settings (read and change)",
+	imageGeneration: "Image generation turned on while a connected account can make images",
 	models: "Model catalog",
-	providers: "Providers & logout",
+	providers: "Providers list",
+	providerLogout: "Disconnecting a provider",
+	providerAccounts: "A provider's accounts (quota, health, pinned account)",
+	storedCredentials: "Connected providers read outside a session (tool CLI updates, first-run sign-in check)",
 	modelRoles: "Model roles",
+	modelRoleMetadata: "Model role names and defaults",
+	modelRoleSet: "Changing a model role",
+	ompdeskRoles: "OMPdesk's own model roles and agent tiers (held at runtime)",
 	modelSetupFacts: "Model setup (billing and model facts)",
-	usage: "Usage",
-	security: "Security scans",
-	ssh: "SSH hosts",
-	voice: "Voice input & speech",
+	sessionSpend: "Session spend per provider (work board)",
+	usage: "Usage (per-account reports and session totals)",
+	usageHistory: "Usage totals across a session's whole journal",
+	security: "Security dashboard (scans, findings, running operations)",
+	securityScanDetail: "One security scan's findings",
+	securityRun: "Starting and cancelling a security scan",
+	securityDisposition: "Marking a security finding (false positive, accepted risk, fixed)",
+	securityValidation: "Validation request for a security finding",
+	ssh: "SSH hosts list",
+	sshManage: "Adding, editing and deleting an SSH host",
+	sshTest: "SSH connection test",
+	dictation: "Dictation (speech to text)",
+	readAloud: "Read aloud (text to speech)",
 	debug: "Debug console",
-	sessionTree: "Session tree, labels & pins",
+	transcript: "Session transcript",
+	entryIds: "Journal entry ids for live messages",
+	sessionTree: "Session tree",
+	entryLabel: "Labels on session tree entries",
+	switchLeaf: "Moving to another branch of the session tree",
+	forkFrom: "New session from a message",
+	sessionPins: "Pinned sessions",
 	sessionImport: "Claude/Codex session import",
-	workspace: "Workspace directories",
-	compactionLimits: "Per-model compaction limits",
+	workspace: "Workspace directories list",
+	resolvePath: "Resolving the folder a session moves to (/move)",
+	workspaceEdit: "Adding and removing a workspace directory",
+	moveStoredSession: "Moving a stored session to another project",
+	compactionPoints: "Where compaction triggers for each model (context ring, roles)",
+	compactionLimits: "Per-model compaction limits (checking and formatting an entry)",
 	idleMaintenance: "Idle compaction and recap (compaction.idleEnabled, recap.enabled)",
 	contextInspector: "Context inspector (per-entry tokens)",
+	contextEntry: "Context inspector entry preview",
 	promptOrigin: "Prompt origins (from another device)",
 	typedPrompts: "Prompts a person typed, told to the omp (memory recall, answering first)",
 	answerFirst: "A person's message that joins a running turn is answered in text before the next tool call",
@@ -64,7 +159,10 @@ export const FEATURES = {
 	modelChoice: "The person's model on the composer while a fallback model runs the session",
 	inputHistory: "Shared prompt history",
 	accountPools: "Agent account pools",
+	worktreeLocation: "Where a repository's worktrees are kept",
+	prCheckout: "Checking out a pull request into a worktree",
 	worktreeLifecycle: "Per-session worktrees (worktree.onStart / onExit)",
+	worktreeBase: "Worktree folder read outside a session (for a paired device's agent)",
 	resetPasses: "Saved rate-limit resets (reset passes)",
 	streamMetadata: "Stock read grouping and live token rate",
 	agentBrowser: "Agent browsing in the Preview panel (stock browser relay)",
@@ -91,9 +189,13 @@ export const FEATURES = {
 		"A session waiting on another session's reply, or whose open todo items are all written as waiting, is not woken by stock's todo reminder",
 	todoStale: "A todo list left from earlier work is named to the agent when a new request starts a turn",
 	todoCompact: "A todo list grown long by appends is asked to fold its finished items",
+	todoDrift:
+		"The to-do panel says when the list last changed, which instructions came since, and marks a list behind the work",
 	wasteGuards:
 		"A bash service start whose ready.log cannot match is refused; a polling call or a refused edit is told once what to do instead; a wait returns only with news",
-	quitJournal: "A quit while a tool runs journals the tool's aborted result before the process ends",
+	quitJournal:
+		"A quit lets a running command finish and journals every tool's result before the process ends; a relaunch never runs a command a second time",
+	keptJobs: "A background command keeps running through an app restart, and its result still reaches the agent",
 	exitDrain: "An omp that ends by itself finishes its exit cleanup first (a login refresh being saved)",
 	turnStages: "Turn stages recorded when a turn waits long for the model or ends without output (gui-runtime.jsonl)",
 	askForm: "An ask form's paragraphs, tables and pictures on its question card",
@@ -118,29 +220,341 @@ export interface FeatureRequirement {
 export interface UnavailableFeature {
 	feature: FeatureId;
 	missing: string[];
+	/** A capability a core flow needs (`CORE_FEATURES`): main repairs omp only for these. */
+	core?: true;
 }
+
+/**
+ * Capabilities whose loss breaks a core flow, each with why. Only these start main's omp repair
+ * (BridgeHealth `onIncompatible`); a missing optional action is reported and its methods refused, nothing more.
+ */
+export const CORE_FEATURES: Readonly<Partial<Record<FeatureId, string>>> = {
+	core: "the bridge's registry access: without it no bridge method reaches the session",
+	relaunchResume: "a relaunch would drop the turns and background subagents it cut, losing their work",
+	sessionOwner: "a session another omp still holds could be opened twice, two writers on one journal",
+};
 
 const AGENT = "@oh-my-pi/pi-coding-agent";
 const UTILS = "@oh-my-pi/pi-utils";
+
+/** The union of requirement lists: an action that runs several of the bridge's helpers needs what each of them needs. */
+function union(...parts: readonly FeatureRequirement[]): FeatureRequirement {
+	const paths = (key: "session" | "pkg" | "api" | "prompts") => [...new Set(parts.flatMap(part => part[key] ?? []))];
+	const modules: Record<string, string[]> = {};
+	for (const part of parts) {
+		for (const [specifier, exports] of Object.entries(part.modules ?? {})) {
+			modules[specifier] = [...new Set([...(modules[specifier] ?? []), ...exports])];
+		}
+	}
+	return { session: paths("session"), pkg: paths("pkg"), api: paths("api"), modules, prompts: paths("prompts") };
+}
+
+/** stream-metadata.ts `decorateMessages`: which read calls group, by stock's URL registry and read selector grammar. */
+const READ_GROUPS: FeatureRequirement = {
+	modules: {
+		[`${AGENT}/internal-urls/router`]: ["InternalUrlRouter.instance()", "InternalUrlRouter.prototype.spec()"],
+		"@oh-my-pi/pi-tui/tools/url-scheme-host": ["splitUrlScheme()"],
+		"@oh-my-pi/pi-tui/tools/read": ["splitPathAndSel()"],
+	},
+};
+
+/** session-display.ts `buildTranscript`: stock's replay of the live journal. */
+const TRANSCRIPT_REPLAY: FeatureRequirement = {
+	session: ["sessionManager.getEntries()", "sessionManager.getLeafId()", "sessionManager.getBranch()"],
+	modules: { [`${AGENT}/session/session-context`]: ["buildSessionContext()"] },
+};
+
+/** modes/plan.ts `exitPlanMode`: leaving plan mode, as a plan's approval and an undone automatic choice also do. */
+const PLAN_EXIT: FeatureRequirement = {
+	session: [
+		"setPlanModeState()",
+		"peekPlanProposalHandler()",
+		"setPlanProposalHandler()",
+		"setActiveToolsByName()",
+		"sessionManager.getSessionId()",
+		"sessionManager.appendModeChange()",
+	],
+};
+
+/** modes/plan.ts `readPlan`: the plan file, through stock's reader and the session's local:// root. */
+const PLAN_READ: FeatureRequirement = {
+	session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()", "sessionManager.getCwd()"],
+	modules: { [`${AGENT}/plan-mode/plan-files`]: ["readPlanFile()"] },
+};
+
+/** extensions/mcp.ts `listMcpServers`: user and project config, stock's discovery and the live manager's state. */
+const MCP_LIST: FeatureRequirement = {
+	session: [
+		"settings",
+		"settings.getAgentDir()",
+		"effectiveExtensionRoots",
+		"sessionManager.getCwd()",
+		"modelRegistry.authStorage",
+	],
+	modules: {
+		[`${AGENT}/capability`]: [
+			"loadCapability()",
+			"isForeignUserProvider()",
+			"isProviderEnabled()",
+			"isUserSourceEnabled()",
+		],
+		[`${AGENT}/mcp/config`]: ["loadAllMCPConfigs()"],
+		[`${AGENT}/mcp/config-writer`]: ["readMCPConfigFile()"],
+		[`${AGENT}/mcp/manager`]: [
+			"MCPManager.instance()",
+			"MCPManager.prototype.waitForStartup()",
+			"MCPManager.prototype.getAllServerNames()",
+			"MCPManager.prototype.getTools()",
+			"MCPManager.prototype.getServerConfig()",
+			"MCPManager.prototype.getConnectionStatus()",
+		],
+		[`${AGENT}/mcp/oauth-credentials`]: ["hasMcpAuthorizationHeader()", "lookupMcpOAuthCredential()"],
+		[`${AGENT}/mcp/oauth-discovery`]: ["analyzeAuthError()"],
+		[`${AGENT}/mcp/settings`]: ["cfgMcpEnableProjectConfig.get()"],
+		"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": ["inferMcpTransport()"],
+		[UTILS]: ["getMCPConfigPath()"],
+	},
+};
+
+/**
+ * extensions/mcp.ts `reloadMcpServers`: stock's `MCPCommandController.reloadServers` on a context the bridge builds
+ * (manager, session, settings), so what that controller asks of the session and the manager is listed.
+ */
+const MCP_RELOAD: FeatureRequirement = {
+	session: ["settings", "getEvalPreludes()", "setMCPPromptCommands()", "refreshMCPTools()"],
+	modules: {
+		[`${AGENT}/modes/controllers/mcp-command-controller`]: ["MCPCommandController.prototype.reloadServers()"],
+		[`${AGENT}/mcp/manager`]: [
+			"MCPManager.instance()",
+			"MCPManager.prototype.disconnectAll()",
+			"MCPManager.prototype.discoverAndConnect()",
+			"MCPManager.prototype.getTools()",
+		],
+	},
+};
+
+/** extensions/mcp.ts `syncMcpServers`: this session's connections brought to what config and credentials say now. */
+const MCP_SYNC: FeatureRequirement = {
+	session: [
+		"settings",
+		"effectiveExtensionRoots",
+		"sessionManager.getCwd()",
+		"getEvalPreludes()",
+		"refreshMCPTools()",
+		"modelRegistry.authStorage.credentials.reload()",
+	],
+	modules: {
+		[`${AGENT}/capability/fs`]: ["clearCache()"],
+		[`${AGENT}/mcp/config`]: ["loadAllMCPConfigs()"],
+		[`${AGENT}/mcp/settings`]: ["cfgMcpEnableProjectConfig.get()"],
+		[`${AGENT}/mcp/manager`]: [
+			"MCPManager.instance()",
+			"MCPManager.prototype.getAllServerNames()",
+			"MCPManager.prototype.getConnectionStatus()",
+			"MCPManager.prototype.getServerConfig()",
+			"MCPManager.prototype.disconnectServer()",
+			"MCPManager.prototype.connectServers()",
+			"MCPManager.prototype.getTools()",
+		],
+	},
+};
+
+/** extensions/shared.ts `createMarketplaceManager`: the manager `omp plugin` builds, rooted at the session's folder. */
+const MARKETPLACE_MANAGER: FeatureRequirement = {
+	session: ["sessionManager.getCwd()"],
+	modules: {
+		[`${AGENT}/discovery/helpers`]: ["clearPluginRootsAndCaches()", "resolveOrDefaultProjectRegistryPath()"],
+		[`${AGENT}/extensibility/plugins/marketplace`]: [
+			"getInstalledPluginsRegistryPath()",
+			"getMarketplacesCacheDir()",
+			"getMarketplacesRegistryPath()",
+			"getPluginsCacheDir()",
+		],
+	},
+};
+
+/** extensions/shared.ts `reloadPluginState`: what stock's `/reload-plugins` runs headlessly. */
+const PLUGIN_RELOAD: FeatureRequirement = {
+	session: ["sessionManager.getCwd()", "refreshSkillsAndCommands()"],
+	modules: {
+		[`${AGENT}/discovery/helpers`]: ["clearPluginRootsAndCaches()", "resolveActiveProjectRegistryPath()"],
+	},
+};
+
+/** extensions/shared.ts `classifyPluginActivation`: the effective plugins before and after a change. */
+const PLUGIN_DIFF: FeatureRequirement = {
+	modules: {
+		[`${AGENT}/extensibility/plugins/loader`]: ["getEnabledPlugins()", "resolvePluginManifestEntries()"],
+	},
+};
+
+/** extensions/plugins.ts `findPlugin`: an installed plugin by npm name or marketplace id. */
+const PLUGIN_FIND: FeatureRequirement = union(MARKETPLACE_MANAGER, {
+	modules: {
+		[`${AGENT}/extensibility/plugins/loader`]: ["getEnabledPlugins()"],
+		[`${AGENT}/extensibility/plugins/manager`]: [
+			"PluginManager.prototype.list()",
+			"PluginManager.prototype.getPlugin()",
+		],
+		[`${AGENT}/extensibility/plugins/marketplace`]: [
+			"parsePluginId()",
+			"MarketplaceManager.prototype.listInstalledPlugins()",
+		],
+	},
+});
+
+/** extensions/shared.ts `setExtensionDisabled`: an id toggled in `disabledExtensions` and flushed to config.yml. */
+const EXTENSION_TOGGLE: FeatureRequirement = {
+	session: ["settings", "settings.flush()"],
+	modules: {
+		[`${AGENT}/config/registry`]: [
+			"lookup()",
+			"Setting.prototype.get()",
+			"Setting.prototype.setMember()",
+			"Setting.prototype.provenance()",
+		],
+	},
+};
+
+/** extensions/skills.ts `listSkills`: stock's disabled-inclusive discovery against the session's loaded set. */
+const SKILL_LIST: FeatureRequirement = {
+	session: ["skills", "settings", "settings.getAgentDir()", "effectiveExtensionRoots", "sessionManager.getCwd()"],
+	modules: {
+		[`${AGENT}/capability`]: ["loadCapability()"],
+		[`${AGENT}/autolearn/managed-skills`]: ["MANAGED_SKILLS_PROVIDER_ID"],
+		[`${AGENT}/config/registry`]: ["lookup()", "Setting.prototype.get()"],
+	},
+};
+
+/** settings.ts `syncImageGeneration`: the image tool held on while a connected account can make images. */
+const IMAGE_TOOL: FeatureRequirement = {
+	session: ["settings", "modelRegistry"],
+	modules: {
+		[`${AGENT}/config/registry`]: ["lookup()"],
+		[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
+	},
+};
+
+/** settings.ts `refreshCatalog`: credentials re-read, a bounded wait for stock's discovery, then the models. */
+const MODEL_CATALOG: FeatureRequirement = union(IMAGE_TOOL, {
+	session: [
+		"getAvailableModels()",
+		"modelRegistry.authStorage.credentials.reload()",
+		"modelRegistry.refreshInBackground()",
+		"modelRegistry.awaitBackgroundRefresh()",
+	],
+});
+
+/** settings.ts `buildProviders`: every provider with models, a login or a stored credential. */
+const PROVIDER_LIST: FeatureRequirement = {
+	session: [
+		"sessionId",
+		"settings",
+		"getAvailableModels()",
+		"modelRegistry.authStorage.credentials.list()",
+		"modelRegistry.authStorage.keys.source()",
+		"modelRegistry.authStorage.oauth.identity()",
+		"modelRegistry.getProviderBaseUrl()",
+	],
+	modules: {
+		"@oh-my-pi/pi-ai/oauth": ["getOAuthProviders()"],
+		[`${AGENT}/config/registry`]: ["lookup()"],
+		// An MCP server's sign-in shares the credential store: never a model provider.
+		[`${AGENT}/mcp/oauth-flow`]: ["isManagedMCPOAuthCredentialId()"],
+	},
+};
+
+/**
+ * ompdesk-roles.ts `settleOmpdeskRoles`: OMPdesk's own roles and agent tiers, held in the runtime layer and never
+ * persisted. Every model-role method settles them first.
+ */
+const ROLE_SETTLE: FeatureRequirement = {
+	session: [
+		"settings.overrideModelRoles()",
+		"settings.overlayLayers()",
+		"settings.getGlobalModelRole()",
+		"settings.getProjectModelRole()",
+		"settings.getGlobalSettings()",
+		"settings.getProjectSettings()",
+	],
+	modules: {
+		[`${AGENT}/config/registry`]: ["lookup()", "Setting.prototype.override()", "Setting.prototype.clearOverride()"],
+		// The security reviewer's tier holds only while stock's bundled agent has no model line.
+		[`${AGENT}/task/agents`]: ["getBundledAgent()"],
+	},
+};
+
+/** settings.ts `roleMetadata`: every role of this omp and OMPdesk's own, with what stock knows of each. */
+const ROLE_METADATA: FeatureRequirement = union(ROLE_SETTLE, {
+	session: ["modelRegistry", "modelRegistry.getAll()"],
+	modules: {
+		[`${AGENT}/config/model-roles`]: ["getRoleInfo()", "getKnownRoleIds()", "MODEL_ROLE_IDS"],
+		[`${AGENT}/config/model-resolver`]: ["rolePriorityDefaults()"],
+		"@oh-my-pi/pi-catalog/types": ["modelKind()"],
+	},
+});
+
+/**
+ * security.ts `runSecurityTool`: stock's `security_scan` tool over this session, which holds the session's
+ * coordinator (`security/coordinator` is not in omp's bundle: an import of it is a second copy with its own
+ * settings registry).
+ */
+const SECURITY_TOOL: FeatureRequirement = {
+	session: [
+		"getAgentId()",
+		"asyncJobManager",
+		"sessionId",
+		"model",
+		"settings",
+		"modelRegistry.authStorage",
+		"sessionManager.getCwd()",
+	],
+	modules: { [`${AGENT}/tools/security-scan`]: ["SecurityScanTool.prototype.execute()"] },
+};
+
+/** model-setup-facts.ts `providerBillings`: each provider's billing class, from stock's own auth data. */
+const PROVIDER_BILLING: FeatureRequirement = {
+	session: [
+		"modelRegistry.getDiscoverableProviders()",
+		"modelRegistry.authStorage.credentials.list()",
+		"modelRegistry.authStorage.keys.source()",
+		"modelRegistry.authStorage.keys.keyless()",
+	],
+	modules: {
+		"@oh-my-pi/pi-ai": ["getEnvApiKey()", "getProviderDefinition()"],
+		[`${AGENT}/config/models-config`]: ["ModelsConfigFile.relocate()"],
+		[UTILS]: ["getAgentDir()"],
+	},
+};
+
+/** next-prompt-engine.ts `resolveModel` and `ask`: the cheap request suggestions and inline completion both make. */
+const NEXT_PROMPT_REQUEST: FeatureRequirement = {
+	session: [
+		"messages",
+		"settings",
+		"sessionId",
+		"modelRegistry.getApiKey()",
+		"modelRegistry.resolver()",
+		"sessionManager.getSessionId()",
+		"sessionManager.getLeafId()",
+	],
+	modules: {
+		"@oh-my-pi/pi-ai": ["completeSimple()"],
+		[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
+		[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
+	},
+};
 
 export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	core: {
 		pkg: ["VERSION", "AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 	},
-	streamMetadata: {
-		session: ["subscribe()", "tokenRate.rate()"],
-		modules: {
-			"@oh-my-pi/pi-coding-agent/internal-urls/router": [
-				"InternalUrlRouter.instance()",
-				"InternalUrlRouter.prototype.spec()",
-			],
-			"@oh-my-pi/pi-tui/tools/url-scheme-host": ["splitUrlScheme()"],
-			"@oh-my-pi/pi-tui/tools/read": ["splitPathAndSel()"],
-		},
-	},
+	/** stream_metadata.start: the live read grouping and the token rate, pushed while the session runs. */
+	streamMetadata: union(READ_GROUPS, { session: ["subscribe()", "tokenRate.rate()"] }),
 	/**
-	 * browser-relay.ts: stock's `omp browser-relay` server inside the session, with
-	 * `browser.relay`/`browser.relayUrl` held as runtime overrides (handles via `lookup`).
+	 * browser.relay_start and browser.relay_stop (browser-relay.ts): stock's `omp browser-relay` server inside the
+	 * session, with `browser.relay`/`browser.relayUrl` held as runtime overrides (handles via `lookup`). A relay that
+	 * can be started but not stopped is not offered, and the session's shutdown hook stops it the same way.
 	 */
 	agentBrowser: {
 		session: ["settings"],
@@ -156,41 +570,51 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	composer: {
+	composerState: {
+		session: [
+			"sessionManager.getCwd()",
+			"autoRetryEnabled",
+			"configuredThinkingLevel()",
+			"isUltrafastModeEnabled()",
+			"model",
+		],
+		modules: {
+			"@oh-my-pi/pi-agent-core": ["agentPauseGate.paused", "agentPauseGate.pausedAt"],
+			"@oh-my-pi/pi-ai": ["serviceTierFamily()", "shouldSendServiceTier()"],
+		},
+	},
+	ultrafast: {
+		session: ["setUltrafastMode()", "isFastModeEnabled()", "isFastModeActive()", "isUltrafastModeEnabled()"],
+	},
+	/** composer.eval and composer.abort_eval together: an eval that cannot be stopped is not started. */
+	pythonEval: { session: ["executePython()", "abortEval()"] },
+	abortCompaction: { session: ["abortCompaction()"] },
+	bashExcluded: { session: ["executeBash()"] },
+	clearContext: { session: ["resetSessionContext()"] },
+	/** composer.get_force_tool reads what composer.set_force_tool queued: one id for both. */
+	forceTool: {
 		session: [
 			"getActiveToolNames()",
 			"toolChoiceQueue.pushSequence()",
 			"toolChoiceQueue.removeByLabel()",
 			"toolChoiceQueue.inspect()",
-			"getPrewalkState()",
-			"disarmPrewalk()",
-			"autoRetryEnabled",
-			"configuredThinkingLevel()",
-			"executePython()",
-			"abortEval()",
-			"abortCompaction()",
-			"executeBash()",
-			"resetSessionContext()",
-			"getContextBreakdown()",
-			"getAsyncJobTree()",
-			"inspectAsyncJob()",
-			"cancelAsyncJob()",
-			"cycleModel()",
-			"isFastModeEnabled()",
-			"isFastModeActive()",
-			"isUltrafastModeEnabled()",
-			"setUltrafastMode()",
-			"popLastQueuedMessage()",
-			"getQueuedMessages()",
-			"agent.state",
-			"hasBuiltInTool()",
-			"getXdevToolEntries()",
-			"settings",
 			"model",
-			"skills",
-			"sessionManager.getCwd()",
-			"sessionManager.getArtifactsDir()",
-			"sessionManager.getSessionId()",
+		],
+		modules: { [`${AGENT}/utils/tool-choice`]: ["buildNamedToolChoice()"] },
+	},
+	/** composer.prewalk_armed shows what composer.disarm_prewalk drops: an armed mark nobody can disarm is not shown. */
+	prewalk: { session: ["getPrewalkState()", "disarmPrewalk()"] },
+	toolExtras: { session: ["hasBuiltInTool()", "agent.state", "getXdevToolEntries()"] },
+	contextReport: { session: ["getContextBreakdown()", "model"] },
+	jobs: {
+		session: ["getAsyncJobTree()", "inspectAsyncJob()"],
+		modules: { "@oh-my-pi/pi-tui/overlays/job-tree": ["buildJobTree()"] },
+	},
+	cancelJob: { session: ["cancelAsyncJob()"] },
+	cycleModelBackward: { session: ["cycleModel()"] },
+	/** composer.restore_interrupted: stock's `omp --restore` path plus the subagent and restart-note preparation. */
+	relaunchResume: {
+		session: [
 			"restoreInterruptedTurn()",
 			// A turn stock's restore continues gets the prompt sections set on its agent (prompt-sections.ts
 			// `keepSectionsOnRestore`, wrapped on the AgentSession prototype).
@@ -200,26 +624,17 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"extensionRunner.createContext()",
 			"getToolByName()",
 			"sessionManager.getBranch()",
+			"sessionManager.appendMessage()",
+			"sessionManager.getSessionFile()",
 			"promptCustomMessage()",
 			// The restart notice for a turn stock's restore continues is queued at that turn's `turn_start`.
 			"subscribe()",
-			"sessionManager.appendMessage()",
 			"isStreaming",
+			"model",
 			"getGoalModeState()",
 			"asyncJobManager",
-			"sessionManager.getSessionFile()",
 		],
 		modules: {
-			"@oh-my-pi/pi-agent-core": ["agentPauseGate.paused", "agentPauseGate.pausedAt"],
-			"@oh-my-pi/pi-ai": ["serviceTierFamily()", "shouldSendServiceTier()"],
-			"@oh-my-pi/pi-tui/overlays/job-tree": ["buildJobTree()"],
-			"@oh-my-pi/pi-tui/overlays/copy-targets": [
-				"extractBlocks()",
-				"commandFromToolCall()",
-				"assistantText()",
-				"extractLastLink()",
-			],
-			[`${AGENT}/utils/tool-choice`]: ["buildNamedToolChoice()"],
 			[`${AGENT}/task/restore`]: ["restoreSession()"],
 			[`${AGENT}/session/exit-diagnostics`]: [
 				"createInterruptedTurnAbortMessage()",
@@ -228,7 +643,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 			// A subagent a graceful stop parked on an aborted reply, or cut in a call stock's exit record calls clean, gets
 			// stock's "outcome unknown" results and interrupted-turn record appended through stock's writer before the
-			// restore (composer.restore_interrupted).
+			// restore.
 			[`${AGENT}/session/sub-sessions`]: ["collectSubSessions()"],
 			[`${AGENT}/session/session-manager`]: [
 				"SessionManager.open()",
@@ -236,13 +651,43 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 				"SessionManager.prototype.close()",
 				"extractSessionInit()",
 			],
-			[`${AGENT}/internal-urls/local-protocol`]: ["resolveLocalRoot()", "resolveLocalUrlToPath()"],
+		},
+	},
+	skillCount: { session: ["skills"] },
+	dequeue: { session: ["popLastQueuedMessage()", "getQueuedMessages()"] },
+	/** With `buildTranscript`'s internals: the targets come from session-display's replay of the journal. */
+	copyTargets: union(TRANSCRIPT_REPLAY, {
+		modules: {
+			"@oh-my-pi/pi-tui/overlays/copy-targets": ["extractBlocks()", "commandFromToolCall()", "assistantText()"],
+		},
+	}),
+	/** The newest link of the replayed transcript, as copyTargets. */
+	lastLink: union(TRANSCRIPT_REPLAY, {
+		modules: { "@oh-my-pi/pi-tui/overlays/copy-targets": ["extractLastLink()"] },
+	}),
+	localPaste: {
+		session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()"],
+		modules: {
+			[`${AGENT}/internal-urls/local-protocol`]: ["resolveLocalRoot()"],
+			[UTILS]: ["isEexist()"],
+		},
+	},
+	localLinks: {
+		session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()"],
+		modules: { [`${AGENT}/internal-urls/local-protocol`]: ["resolveLocalUrlToPath()"] },
+	},
+	argCompletions: {
+		modules: {
 			[`${AGENT}/slash-commands/builtin-completions`]: ["buildMcpArgumentCompletions()"],
 			[`${AGENT}/slash-commands/builtin-registry`]: ["BUILTIN_SLASH_COMMANDS"],
 			[`${AGENT}/mcp/manager`]: ["MCPManager.instance()"],
-			[UTILS]: ["isEexist()", "getProjectDir()"],
+			[UTILS]: ["getProjectDir()"],
 		},
 	},
+	/**
+	 * composer.share_preview and composer.share: the upload sends the snapshot the preview showed (its digest binds
+	 * the two), so an upload nobody could preview is not offered.
+	 */
 	share: {
 		session: ["state", "obfuscator", "settings", "sessionManager"],
 		modules: {
@@ -260,64 +705,67 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	planMode: {
+	/**
+	 * modes.get_plan_mode and modes.set_plan_mode with the proposal lifecycle they arm (modes/plan.ts): both install
+	 * the proposal handler, and a session listener turns the agent's `xd://propose` write into the plan card and
+	 * stops the turn. Plan mode without that lifecycle would leave a proposal nobody sees, and nothing guards a
+	 * listener, so its internals are listed here.
+	 */
+	planMode: union(PLAN_EXIT, PLAN_READ, {
 		session: [
 			"subscribe()",
 			"getPlanModeState()",
-			"setPlanModeState()",
-			"peekPlanProposalHandler()",
-			"setPlanProposalHandler()",
 			"preparePlanForReview()",
 			"getGoalModeState()",
-			"getEnabledToolNames()",
 			"getPlanReferencePath()",
-			"setPlanReferencePath()",
-			"markPlanReferenceSent()",
+			"getEnabledToolNames()",
 			"hasBuiltInTool()",
-			"setActiveToolsByName()",
 			"sendPlanModeContext()",
+			"isStreaming",
 			"markPlanInternalAbortPending()",
 			"clearPlanInternalAbortPending()",
 			"abort()",
-			"newSession()",
-			"compact()",
-			"prompt()",
-			"followUp()",
-			"setSessionName()",
-			"isStreaming",
-			"sessionManager.appendModeChange()",
-			"sessionManager.getArtifactsDir()",
-			"sessionManager.getSessionId()",
-			"sessionManager.getSessionName()",
-			"sessionManager.getCwd()",
 		],
 		modules: {
-			[`${AGENT}/plan-mode/plan-files`]: ["readPlanFile()"],
-			[`${AGENT}/plan-mode/approved-plan`]: ["humanizePlanTitle()"],
 			[`${AGENT}/tools/resolve`]: ["writeDeviceDispatch()"],
 			"@oh-my-pi/pi-tui/tools/resolve": ["PROPOSE_DEVICE_NAME"],
+		},
+	}),
+	/**
+	 * modes.plan_approval: the card's answer (execute in a fresh session, compact, keep context, save, or feedback).
+	 * A plan the automatic mode choice entered is approved by the same code, with "keep context".
+	 */
+	planApproval: union(PLAN_EXIT, PLAN_READ, {
+		session: [
+			"subscribe()",
+			"isStreaming",
+			"prompt()",
+			"followUp()",
+			"newSession()",
+			"compact()",
+			"setPlanReferencePath()",
+			"markPlanReferenceSent()",
+			"setSessionName()",
+			"sessionManager.getSessionName()",
+		],
+		modules: {
+			[`${AGENT}/plan-mode/approved-plan`]: ["humanizePlanTitle()"],
 			[`${AGENT}/internal-urls`]: ["copyLocalArtifacts()", "resolveLocalUrlToPath()"],
 			[UTILS]: ["prompt.render()"],
 		},
 		prompts: ["system/plan-mode-compact-instructions.md", "system/plan-mode-approved.md"],
-	},
-	goalMode: {
+	}),
+	guidedGoal: {
 		session: [
 			"subscribe()",
-			"getGoalModeState()",
-			"setGoalModeState()",
+			"settings",
 			"getPlanModeState()",
+			"getGoalModeState()",
 			"getEnabledToolNames()",
 			"setActiveToolsByName()",
-			"sendGoalModeContext()",
+			"isStreaming",
 			"prompt()",
 			"followUp()",
-			"isStreaming",
-			"goalRuntime.replaceGoal()",
-			"goalRuntime.onBudgetMutated()",
-			// Time limit (goal-time-core.ts): the journal entry; main pauses through stock RPC `goal pause`.
-			"sessionManager.getBranch()",
-			"sessionManager.appendCustomEntry()",
 		],
 		modules: {
 			// `goal.enabled` through stock's registry: omp's bundle does not export `goals/settings` (see COPY_SAFE).
@@ -325,6 +773,32 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[UTILS]: ["prompt.render()"],
 		},
 		prompts: ["goals/guided-goal-interview.md"],
+	},
+	goalReplace: {
+		session: [
+			"subscribe()",
+			"getGoalModeState()",
+			"setGoalModeState()",
+			"goalRuntime.replaceGoal()",
+			"isStreaming",
+			"sendGoalModeContext()",
+		],
+	},
+	goalBudget: { session: ["subscribe()", "getGoalModeState()", "goalRuntime.onBudgetMutated()"] },
+	/**
+	 * modes.goal_time_limit, modes.goal_set_time_limit and modes.goal_resume_time_limit with the watcher that enforces
+	 * the limit (goal-time-core.ts): they read and write one journal entry, and a limit nothing reads back or enforces
+	 * is not offered. The watcher is a session listener nothing guards, so its internals are listed here. Main pauses
+	 * through stock RPC `goal pause`.
+	 */
+	goalTimeLimit: {
+		session: [
+			"subscribe()",
+			"getGoalModeState()",
+			"isStreaming",
+			"sessionManager.getBranch()",
+			"sessionManager.appendCustomEntry()",
+		],
 	},
 	tan: {
 		session: ["subscribe()", "sessionManager", "settings"],
@@ -376,9 +850,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * `agent_control.attachment` reads the live conversation's pictures (`AgentSession.messages`, a persisted one from
 	 * stock's blob store as `read_image_blob` does) and a file in the session's folder (`sessionManager.getCwd()`).
 	 * `agent_control.aside` hands a working session another session's message as stock's aside
-	 * (`AgentSession.prompt` with `streamingBehavior: "aside"` and `onPromptAdmitted`).
+	 * (`AgentSession.prompt` with `streamingBehavior: "aside"` and `onPromptAdmitted`). That aside, and a report that
+	 * asks for a turn, are urgent while they wait in stock's aside queue: at each main run's start the bridge wraps the
+	 * main agent's peek `Agent.hasIrcInterrupts` (found through `AgentRegistry`) to answer true then (read with
+	 * `Agent.hasQueuedAsides`), so a running shell backgrounds.
 	 */
 	agentControl: {
+		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 		session: [
 			"settings",
 			"sessionId",
@@ -389,6 +867,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"modelRegistry.resolver()",
 			"messages",
 			"sessionManager.getCwd()",
+			"agent.hasIrcInterrupts()",
+			"agent.hasQueuedAsides()",
 		],
 		modules: {
 			"@oh-my-pi/pi-ai": ["completeSimple()"],
@@ -402,7 +882,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/**
 	 * modes/autopilot.ts: the tool set (`ask`/`eval`/`debug` off, the `autopilot` tool on), the session-only
 	 * `tools.approvalMode` override, the cycle ledger in the journal, usage from the session stats, the todo
-	 * list for stall classification, and the extension API's zod for the tool schema.
+	 * list for stall classification, and the extension API's zod for the tool schema. One id for every run control
+	 * (arm, configure, note, ship actions, cycle amendments, disarm): they write and read one run's ledger, and an
+	 * unattended run is not armed on an omp where any of them (its stop included) cannot answer.
 	 */
 	autopilot: {
 		pkg: ["AgentRegistry.global()", "MAIN_AGENT_ID", "z.object()", "z.enum()", "z.array()", "z.literal()"],
@@ -431,7 +913,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/**
 	 * modes/checkout-peers.ts: public hooks (`before_agent_start`, `tool_call`, `tool_result`, `session_start`) and the
 	 * journal. Stock's todo reader (`tools/todo` `getLatestTodoPhasesFromEntries`, for the session's current task) is
-	 * feature-detected inside the module: a missing one only drops the task line, never the guard.
+	 * feature-detected inside the module: a missing one only drops the task line, never the guard. One id for main's
+	 * four calls (peers set and read back, status, retire): they are one ledger's two ends, and none of them calls an
+	 * omp internal the others do not.
 	 */
 	checkoutPeers: {
 		session: ["sessionManager.getBranch()"],
@@ -560,14 +1044,18 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/**
 	 * credit-spend.ts: while credit use is off, ChatGPT's usage provider is stock's own wrapped as a runtime override
-	 * (`usage.providerFor`, `usage.setProvider`, `usage.removeProvider`), and every request key stock resolves
-	 * (`keys.getWithCredential`) is checked against the account's own report (`credentials.list`, `usage.report`) and
-	 * Claude's last answer for the session's account (`oauth.accounts`); a refusal carries stock's retry hint.
+	 * (`usage.providerFor`, `usage.setProvider`, `usage.removeProvider`), and every account stock hands a request
+	 * (`keys.getWithCredential`, and `oauth.access` for Codex web search and the live transport) is checked against the
+	 * account's own report (`credentials.list`, `usage.report`, the model's own windows through the provider's ranking
+	 * strategy) and Claude's last answer for the session's account (`oauth.accounts`), kept in a file of the agent
+	 * directory (`getAgentDir`); a refusal carries stock's retry hint. `credit_spend_commit_check` asks the same checks
+	 * about the models stock's `omp commit` would pick (`resolvePrimaryModel`, `resolveSmolModel`, `resolveApiKeyOnce`).
 	 */
 	creditSpend: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
 		session: [
 			"modelRegistry.authStorage.keys.getWithCredential()",
+			"modelRegistry.authStorage.oauth.access()",
 			"modelRegistry.authStorage.usage.providerFor()",
 			"modelRegistry.authStorage.usage.setProvider()",
 			"modelRegistry.authStorage.usage.removeProvider()",
@@ -577,6 +1065,11 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		],
 		modules: {
 			"@oh-my-pi/pi-ai/utils/retry-after": ["appendRetryAfterHint()"],
+			"@oh-my-pi/pi-ai/auth/usage-report": ["scopedUsageLimits()"],
+			"@oh-my-pi/pi-ai/usage/registry": ["defaultRankingStrategy()"],
+			"@oh-my-pi/pi-ai": ["resolveApiKeyOnce()"],
+			[`${AGENT}/commit/model-selection`]: ["resolvePrimaryModel()", "resolveSmolModel()"],
+			[UTILS]: ["getAgentDir()"],
 		},
 	},
 	/** session-dump.ts: the two session methods `/dump all` and `/dump anon` run, called directly for their zip. */
@@ -612,6 +1105,22 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** todo-compact.ts: the public `tool_result` hook and its `additionalContext` only. Imports nothing from omp. */
 	todoCompact: {},
 	/**
+	 * todo-drift.ts: the public `tool_result` hook, stock's journal todo readers, the session's active tools and plan
+	 * state after each tool call, its branch for the panel's reading, and one journaled marker per session.
+	 */
+	todoDrift: {
+		session: [
+			"getActiveToolNames()",
+			"getPlanModeState()",
+			"sessionManager.getBranch()",
+			"sessionManager.getSessionId()",
+			"sessionManager.appendCustomEntry()",
+		],
+		modules: {
+			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
+		},
+	},
+	/**
 	 * waste-guards.ts: the public `tool_call` (`block`) and `tool_result` (`content`) hooks, `registerTool` over the
 	 * built-in `wait` with the same-tool `ctx.invokeTool` (present since before 18.18.2), and on Windows stock's
 	 * `WaitTool` from the package index over the process settings, which connects the folder's service broker client.
@@ -620,12 +1129,33 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["WaitTool.prototype.execute()", "Settings.instance"],
 	},
 	/**
-	 * quit-journal.ts: the public `tool_execution_start`, `message_end` and `session_shutdown` hooks, and the
-	 * session's agent loop reached through the registry to abort it a moment before stock's dispose does.
+	 * quit-journal.ts: the public `tool_call` (`block`), `tool_execution_start`, `message_end`, `context` and
+	 * `session_shutdown` hooks with the context's read-only `sessionManager` (`getEntries`, `getBranch`), and the
+	 * session's agent loop reached through the registry to abort it once its running commands finished. Stock caps every
+	 * `session_shutdown` handler at 2 s (`SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS`); its setter raises the cap past the
+	 * stop's wait for commands. The embedded shell's `run`, wrapped once, records that a plain bash call's command
+	 * started (`RAN_COMMANDS_FILE`), so a replay of a call that never ran is let through.
 	 */
 	quitJournal: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
 		session: ["agent.abort()"],
+		modules: {
+			[`${AGENT}/extensibility/extensions/runner`]: ["testSetSessionShutdownHandlerTimeoutMs()"],
+			"@oh-my-pi/pi-natives": ["Shell.prototype.run()"],
+		},
+	},
+	/**
+	 * kept-jobs.ts: the public `tool_call` and `session_shutdown` hooks, the embedded shell's `run` (wrapped once for a
+	 * background job's command, which runs as stock's shell process under `ompdesk keep`), the shell process's command
+	 * line, and the bash tool's job manager, which the relaunch's restore registers a job still running again with.
+	 */
+	keptJobs: {
+		pkg: ["MAIN_AGENT_ID"],
+		session: ["getToolByName()", "sessionManager.getArtifactsDir()"],
+		modules: {
+			"@oh-my-pi/pi-natives": ["Shell.prototype.run()"],
+			[`${AGENT}/exec/shell-process`]: ["shellProcessCommand()"],
+		},
 	},
 	/**
 	 * exit-drain.ts: the public `session_shutdown` hook of the main agent, and stock's `postmortem` for the awaited
@@ -666,7 +1196,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	/** modes/delegation.ts: runtime overrides of stock's task settings; each handle is reached through `lookup`. */
+	/**
+	 * modes.get_delegation and modes.set_delegation (modes/delegation.ts): runtime overrides of stock's task settings,
+	 * each handle reached through `lookup`. The chip reads the strength the setter holds, so a strength nobody can
+	 * change is not shown. `Settings.instance` is the startup hold's (index.ts, before the first session), which
+	 * nothing guards.
+	 */
 	delegation: {
 		pkg: ["Settings.instance"],
 		session: ["settings"],
@@ -707,139 +1242,186 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	mcp: {
-		session: [
-			"setMCPPromptCommands()",
-			"getEvalPreludes()",
-			"refreshMCPTools()",
-			"effectiveExtensionRoots",
-			"settings",
-			"settings.getAgentDir()",
-			"sessionManager.getCwd()",
-			"modelRegistry.authStorage.credentials.set()",
-			"modelRegistry.authStorage.credentials.reload()",
-		],
+	mcp: MCP_LIST,
+	/**
+	 * mcp_action enable and disable: one config flag and stock's runtime toggle, so a server that can be turned off
+	 * but not on again is not offered. A name no config or manager knows is looked up in the listed servers.
+	 */
+	mcpToggle: union(MCP_LIST, {
+		session: ["getEvalPreludes()", "refreshMCPTools()"],
 		modules: {
-			[`${AGENT}/capability`]: [
-				"loadCapability()",
-				"isForeignUserProvider()",
-				"isProviderEnabled()",
-				"isUserSourceEnabled()",
-			],
-			[`${AGENT}/capability/fs`]: ["clearCache()"],
-			[`${AGENT}/mcp/client`]: ["connectToServer()", "disconnectServer()", "listTools()"],
-			[`${AGENT}/mcp/config`]: ["loadAllMCPConfigs()", "validateServerConfig()"],
-			[`${AGENT}/modes/controllers/mcp-command-controller`]: ["MCPCommandController.prototype.reloadServers()"],
+			[`${AGENT}/mcp/config-writer`]: ["setMcpServerEnabled()"],
 			[`${AGENT}/modes/components/extensions/mcp-runtime`]: ["applyMcpToggleRuntime()"],
-			"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": ["inferMcpTransport()"],
-			[`${AGENT}/mcp/config-writer`]: [
-				"addMCPServer()",
-				"readMCPConfigFile()",
-				"removeMCPServer()",
-				"setMcpServerEnabled()",
-			],
+			[`${AGENT}/mcp/manager`]: ["MCPManager.prototype.getSource()"],
+		},
+	}),
+	mcpReconnect: {
+		session: ["sessionManager.getCwd()", "refreshMCPTools()"],
+		modules: {
 			[`${AGENT}/mcp/manager`]: [
 				"MCPManager.instance()",
-				"MCPManager.prototype.disconnectAll()",
-				"MCPManager.prototype.discoverAndConnect()",
-				"MCPManager.prototype.connectServers()",
 				"MCPManager.prototype.reconnectServer()",
 				"MCPManager.prototype.getTools()",
-				"MCPManager.prototype.getServerConfig()",
-				"MCPManager.prototype.getSource()",
 				"MCPManager.prototype.getConnectionStatus()",
-				"MCPManager.prototype.setAuthStorage()",
-				"MCPManager.prototype.prepareConfig()",
-				"MCPManager.prototype.getAllServerNames()",
-				"MCPManager.prototype.disconnectServer()",
-				"MCPManager.prototype.waitForStartup()",
 			],
-			[`${AGENT}/mcp/oauth-credentials`]: ["hasMcpAuthorizationHeader()", "lookupMcpOAuthCredential()"],
-			[`${AGENT}/mcp/oauth-discovery`]: ["analyzeAuthError()"],
+		},
+	},
+	mcpRemove: union(MCP_RELOAD, {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/mcp/config-writer`]: ["readMCPConfigFile()", "removeMCPServer()"],
+			[UTILS]: ["getMCPConfigPath()"],
+		},
+	}),
+	/** mcp_action adopt: one server of another tool's config written into omp's own with stock's writer, then connected. */
+	mcpAdopt: union(MCP_SYNC, {
+		session: ["settings.getAgentDir()"],
+		modules: {
+			[`${AGENT}/capability`]: ["loadCapability()", "isForeignUserProvider()", "isUserSourceEnabled()"],
+			[`${AGENT}/mcp/config-writer`]: ["addMCPServer()"],
+			[`${AGENT}/mcp/manager`]: ["MCPManager.prototype.waitForStartup()"],
+			"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": ["inferMcpTransport()"],
+			[UTILS]: ["getMCPConfigPath()"],
+		},
+	}),
+	/** mcp_add: the write, stock's reload, then the new server's row from the list. */
+	mcpAdd: union(MCP_LIST, MCP_RELOAD, { modules: { [`${AGENT}/mcp/config-writer`]: ["addMCPServer()"] } }),
+	/** mcp_test: a throwaway manager and connection; the shared pool is never touched. */
+	mcpTest: {
+		session: ["sessionManager.getCwd()", "modelRegistry.authStorage"],
+		modules: {
+			[`${AGENT}/mcp/client`]: ["connectToServer()", "disconnectServer()", "listTools()"],
+			[`${AGENT}/mcp/config`]: ["validateServerConfig()"],
+			[`${AGENT}/mcp/config-writer`]: ["readMCPConfigFile()"],
+			[`${AGENT}/mcp/manager`]: ["MCPManager.prototype.setAuthStorage()", "MCPManager.prototype.prepareConfig()"],
+			[UTILS]: ["getMCPConfigPath()"],
+		},
+	},
+	/** mcp_reauth: stock's own reauth, then the reload. mcp_reauth_cancel uses no omp internal and has no guard. */
+	mcpReauth: union(MCP_RELOAD, {
+		session: ["sessionManager.getCwd()", "modelRegistry.authStorage.credentials.set()"],
+		modules: {
 			[`${AGENT}/mcp/oauth-reauth`]: [
 				"findMcpServerForAuth()",
 				"reauthorizeMcpServer()",
 				"MCPOAuthCancelledError()",
 			],
 			[`${AGENT}/mcp/settings`]: ["cfgMcpEnableProjectConfig.get()"],
-			[UTILS]: ["getMCPConfigPath()", "Snowflake.next()"],
+			[UTILS]: ["Snowflake.next()"],
+		},
+	}),
+	mcpSync: MCP_SYNC,
+	/** mcp_reload: `/mcp reload` for the GUI, answered with the fresh list. */
+	mcpReload: union(MCP_LIST, MCP_RELOAD, {
+		session: ["modelRegistry.authStorage.credentials.reload()"],
+		modules: { [`${AGENT}/capability/fs`]: ["clearCache()"] },
+	}),
+	/** extension_update.reconnect: the servers whose package the extension updater replaced. */
+	mcpUpdateReconnect: {
+		session: ["settings", "effectiveExtensionRoots", "sessionManager.getCwd()", "refreshMCPTools()"],
+		modules: {
+			[`${AGENT}/mcp/config`]: ["loadAllMCPConfigs()"],
+			[`${AGENT}/mcp/settings`]: ["cfgMcpEnableProjectConfig.get()"],
+			[`${AGENT}/mcp/manager`]: [
+				"MCPManager.instance()",
+				"MCPManager.prototype.getAllServerNames()",
+				"MCPManager.prototype.reconnectServer()",
+				"MCPManager.prototype.getTools()",
+			],
 		},
 	},
-	plugins: {
-		session: ["refreshSkillsAndCommands()", "settings.flush()", "sessionManager.getCwd()"],
+	/** get_plugins: both install channels, npm packages and marketplace installs. */
+	plugins: union(MARKETPLACE_MANAGER, {
 		modules: {
-			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/discovery/helpers`]: [
-				"clearPluginRootsAndCaches()",
-				"resolveActiveProjectRegistryPath()",
-				"resolveOrDefaultProjectRegistryPath()",
-			],
-			[`${AGENT}/extensibility/plugins/loader`]: ["getEnabledPlugins()", "resolvePluginManifestEntries()"],
-			[`${AGENT}/extensibility/plugins/manager`]: [
-				"validateSetting()",
-				"PluginManager.prototype.list()",
-				"PluginManager.prototype.getPlugin()",
-				"PluginManager.prototype.setEnabled()",
-				"PluginManager.prototype.getPluginSettings()",
-				"PluginManager.prototype.setEnabledFeatures()",
-				"PluginManager.prototype.setPluginSetting()",
-				"PluginManager.prototype.deletePluginSetting()",
-				"PluginManager.prototype.upgrade()",
-			],
-			[`${AGENT}/extensibility/plugins/git-url`]: ["parseGitUrl()"],
-			[`${AGENT}/cli/npm-registry`]: ["loadNpmRegistryResolver()", "npmRegistryPackageUrl()"],
+			[`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.list()"],
 			[`${AGENT}/extensibility/plugins/marketplace`]: [
-				"classifySource()",
 				"parsePluginId()",
-				"getInstalledPluginsRegistryPath()",
-				"getMarketplacesCacheDir()",
-				"getMarketplacesRegistryPath()",
-				"getPluginsCacheDir()",
+				"MarketplaceManager.prototype.listInstalledPlugins()",
+			],
+		},
+	}),
+	/**
+	 * get_marketplaces and marketplace_action list_available: the same cached catalogs, counted for the one and
+	 * listed with what is installed for the other.
+	 */
+	marketplaces: union(MARKETPLACE_MANAGER, {
+		modules: {
+			[`${AGENT}/extensibility/plugins/marketplace`]: [
 				"MarketplaceManager.prototype.listMarketplaces()",
 				"MarketplaceManager.prototype.listAvailablePlugins()",
 				"MarketplaceManager.prototype.listInstalledPlugins()",
+			],
+		},
+	}),
+	/** marketplace_action add, remove and update: a marketplace that can be added but not removed or refreshed is not offered. */
+	marketplaceEdit: union(MARKETPLACE_MANAGER, PLUGIN_RELOAD, {
+		modules: {
+			[`${AGENT}/extensibility/plugins/marketplace`]: [
+				"classifySource()",
 				"MarketplaceManager.prototype.addMarketplace()",
 				"MarketplaceManager.prototype.removeMarketplace()",
 				"MarketplaceManager.prototype.updateMarketplace()",
 				"MarketplaceManager.prototype.updateAllMarketplaces()",
+			],
+		},
+	}),
+	/** marketplace_action install, uninstall and upgrade: a plugin that can be installed but not removed or upgraded is not offered. */
+	pluginInstall: union(MARKETPLACE_MANAGER, PLUGIN_RELOAD, PLUGIN_DIFF, {
+		modules: {
+			[`${AGENT}/extensibility/plugins/marketplace`]: [
 				"MarketplaceManager.prototype.installPlugin()",
 				"MarketplaceManager.prototype.uninstallPlugin()",
 				"MarketplaceManager.prototype.upgradePlugin()",
-				"MarketplaceManager.prototype.setPluginEnabled()",
-				// The Updates section's extension updater (stock-helper/extensions.ts) checks and upgrades through these.
-				"MarketplaceManager.prototype.checkForUpdates()",
 			],
-			[UTILS]: ["pathIsWithin()", "getPluginsPackageJson()"],
+		},
+	}),
+	/** set_plugin_enabled: a marketplace install by its `name@marketplace` id, anything else as an npm package. */
+	pluginToggle: union(MARKETPLACE_MANAGER, PLUGIN_RELOAD, PLUGIN_DIFF, {
+		modules: {
+			[`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.setEnabled()"],
+			[`${AGENT}/extensibility/plugins/marketplace`]: [
+				"parsePluginId()",
+				"MarketplaceManager.prototype.setPluginEnabled()",
+			],
+		},
+	}),
+	pluginThemes: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/extensibility/plugins/loader`]: ["getEnabledPlugins()"],
+			[UTILS]: ["pathIsWithin()"],
 		},
 	},
-	skills: {
-		session: [
-			"skills",
-			"promptTemplates",
-			"effectiveExtensionRoots",
-			"refreshSkills()",
-			"refreshBaseSystemPrompt()",
-			"settings.flush()",
-			"settings.getAgentDir()",
-			"sessionManager.getCwd()",
-		],
+	pluginDetail: union(PLUGIN_FIND, {
+		modules: { [`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.getPluginSettings()"] },
+	}),
+	pluginFeatures: union(PLUGIN_FIND, PLUGIN_DIFF, PLUGIN_RELOAD, {
+		modules: { [`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.setEnabledFeatures()"] },
+	}),
+	/** set_plugin_setting and delete_plugin_setting: a setting that can be set but not cleared is not offered. */
+	pluginSettings: union(PLUGIN_FIND, PLUGIN_RELOAD, {
 		modules: {
-			[`${AGENT}/capability`]: ["loadCapability()", "reset()"],
-			[`${AGENT}/capability/context-file`]: ["contextFileCapability.id", "contextFileCapability.toExtensionId()"],
-			[`${AGENT}/capability/hook`]: ["hookCapability.id"],
-			[`${AGENT}/autolearn/managed-skills`]: ["MANAGED_SKILLS_PROVIDER_ID", "sanitizeSkillName()"],
-			// Writes go through stock's tool: the session's own per-skill mutation chain (see COPY_SAFE).
-			[`${AGENT}/tools/manage-skill`]: ["ManageSkillTool.prototype.execute()"],
-			[`${AGENT}/config/prompt-templates`]: ["templateUsesInlineArgPlaceholders()"],
-			[`${AGENT}/config/registry`]: [
-				"lookup()",
-				"Setting.prototype.get()",
-				"Setting.prototype.setMember()",
-				"Setting.prototype.provenance()",
+			[`${AGENT}/extensibility/plugins/manager`]: [
+				"validateSetting()",
+				"PluginManager.prototype.setPluginSetting()",
+				"PluginManager.prototype.deletePluginSetting()",
 			],
-			[UTILS]: ["parseFrontmatter()"],
-			// The Updates section's extension updater reads these in the stock helper's `extensions` worker
-			// (stock-helper/extensions.ts): registry-skill installs, skill discovery for the plugin/local counts.
+		},
+	}),
+	/** extension_update.reload: the headless `/reload-plugins` once the extension updater changed files on disk. */
+	pluginReload: PLUGIN_RELOAD,
+	/**
+	 * The Updates section's extension updater. No bridge method uses these: the stock helper's `extensions` worker
+	 * (stock-helper/extensions.ts) checks and upgrades plugins and registry skills in its own process, and the probe
+	 * only reports whether this omp has what that worker loads.
+	 */
+	extensionUpdates: {
+		modules: {
+			[`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.upgrade()"],
+			[`${AGENT}/extensibility/plugins/marketplace`]: ["MarketplaceManager.prototype.checkForUpdates()"],
+			[`${AGENT}/extensibility/plugins/git-url`]: ["parseGitUrl()"],
+			[`${AGENT}/cli/npm-registry`]: ["loadNpmRegistryResolver()", "npmRegistryPackageUrl()"],
+			// Registry-skill installs, and skill discovery for the plugin and local counts.
 			[`${AGENT}/config/settings`]: ["Settings.loadReadOnly()", "Settings.prototype.extensionsSourceLevel()"],
 			[`${AGENT}/discovery`]: ["initializeWithSettings()", "loadCapability()"],
 			[`${AGENT}/extensibility/settings`]: ["cfgSkills.get()", "cfgDisabledExtensions.get()", "cfgExtensions.get()"],
@@ -851,25 +1433,82 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 			[`${AGENT}/skillshare/installer`]: ["listInstalledSkills()", "resolveSkillVersion()", "updateSkillPackages()"],
 			[`${AGENT}/skillshare/manifest`]: ["getProjectSkillsInstallPaths()"],
+			[UTILS]: ["getPluginsPackageJson()"],
 		},
 	},
+	skills: SKILL_LIST,
+	skillDetail: union(SKILL_LIST, { modules: { [UTILS]: ["parseFrontmatter()"] } }),
+	skillToggle: union(EXTENSION_TOGGLE, { session: ["skills", "refreshSkills()"] }),
+	/** manage_skill: writes go through stock's tool, the session's own per-skill mutation chain (see COPY_SAFE). */
+	manageSkill: union(SKILL_LIST, {
+		session: ["refreshSkills()"],
+		modules: {
+			[`${AGENT}/autolearn/managed-skills`]: ["sanitizeSkillName()"],
+			[`${AGENT}/tools/manage-skill`]: ["ManageSkillTool.prototype.execute()"],
+		},
+	}),
+	hooks: {
+		session: ["settings", "sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/capability`]: ["loadCapability()"],
+			[`${AGENT}/capability/hook`]: ["hookCapability.id"],
+			[`${AGENT}/config/registry`]: ["lookup()", "Setting.prototype.get()"],
+		},
+	},
+	hookToggle: EXTENSION_TOGGLE,
+	contextFiles: {
+		session: ["settings", "settings.getAgentDir()", "effectiveExtensionRoots", "sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/capability`]: ["loadCapability()"],
+			[`${AGENT}/capability/context-file`]: ["contextFileCapability.id", "contextFileCapability.toExtensionId()"],
+			[`${AGENT}/config/registry`]: ["lookup()", "Setting.prototype.get()"],
+		},
+	},
+	/** set_context_file_enabled: the toggle, then the base prompt rebuilt from a fresh discovery. */
+	contextFileToggle: union(EXTENSION_TOGGLE, {
+		session: ["refreshBaseSystemPrompt()"],
+		modules: { [`${AGENT}/capability`]: ["reset()"] },
+	}),
+	promptTemplates: {
+		session: ["promptTemplates"],
+		modules: { [`${AGENT}/config/prompt-templates`]: ["templateUsesInlineArgPlaceholders()"] },
+	},
+	agentValidate: {
+		modules: {
+			[`${AGENT}/discovery/helpers`]: ["parseAgentFields()"],
+			[`${AGENT}/task/agents`]: ["AgentParsingError"],
+			[UTILS]: ["parseFrontmatter()"],
+		},
+	},
+	/** get_agent_definitions: stock's agents hub, with the model and prewalk each definition resolves to. */
 	agents: {
 		session: [
-			"effectiveExtensionRoots",
+			"settings",
+			"settings.getModelRole()",
 			"model",
 			"modelRegistry",
-			"settings.getModelRole()",
+			"effectiveExtensionRoots",
 			"sessionManager.getCwd()",
 		],
 		modules: {
 			[`${AGENT}/config`]: ["getConfigDirs()", "findAllNearestProjectConfigDirs()"],
 			[`${AGENT}/config/model-resolver`]: ["formatModelString()"],
-			[`${AGENT}/discovery/helpers`]: ["parseAgentFields()"],
 			[`${AGENT}/modes/agents-hub-deps`]: ["createAgentsHubDeps()"],
-			[`${AGENT}/modes/rpc/rpc-subagents`]: ["readRpcSubagentTranscript()"],
-			[`${AGENT}/session/blob-store`]: ["BlobStore()", "BlobStore.prototype.get()", "parseBlobRef()"],
-			[`${AGENT}/task/agents`]: ["AgentParsingError"],
-			[UTILS]: ["parseFrontmatter()", "getBlobsDir()"],
+		},
+	},
+	agentDefinition: {
+		session: ["effectiveExtensionRoots", "sessionManager.getCwd()"],
+		modules: { [`${AGENT}/task/discovery`]: ["discoverAgents()"] },
+	},
+	agentAuthoring: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/config`]: ["getConfigDirs()", "findAllNearestProjectConfigDirs()"],
+			[`${AGENT}/tools/builtin-names`]: ["BUILTIN_TOOL_NAMES", "HIDDEN_TOOL_NAMES"],
+		},
+	},
+	reviveSubagent: {
+		modules: {
 			[`${AGENT}/registry/agent-lifecycle`]: [
 				"AgentLifecycleManager.global()",
 				"AgentLifecycleManager.prototype.ensureLive()",
@@ -879,8 +1518,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 				"AgentRegistry.prototype.get()",
 				"MAIN_AGENT_ID",
 			],
-			[`${AGENT}/task/discovery`]: ["discoverAgents()"],
-			[`${AGENT}/tools/builtin-names`]: ["BUILTIN_TOOL_NAMES", "HIDDEN_TOOL_NAMES"],
+		},
+	},
+	subagentTranscript: {
+		session: ["sessionManager.getArtifactsDir()"],
+		modules: { [`${AGENT}/modes/rpc/rpc-subagents`]: ["readRpcSubagentTranscript()"] },
+	},
+	imageBlob: {
+		modules: {
+			[`${AGENT}/session/blob-store`]: ["BlobStore()", "BlobStore.prototype.get()", "parseBlobRef()"],
+			[UTILS]: ["getBlobsDir()"],
 		},
 	},
 	themes: {
@@ -888,210 +1535,223 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"@oh-my-pi/pi-tui/theme": ["getResolvedThemeColors()"],
 		},
 	},
-	settings: {
-		// modelRegistry + roleCandidatePool + credentials: the automatic image-tool
-		// switch (settings.ts; Setting override methods and onGeneration are feature-detected).
-		session: [
-			"settings",
-			"model",
-			"thinkingLevel",
-			"modelRegistry.refreshInBackground()",
-			"modelRegistry.awaitBackgroundRefresh()",
-			"modelRegistry.authStorage.credentials.reload()",
-		],
+	/** settings_schema, guarded with thinkingDefault too: it re-checks OMPdesk's thinking defaults first. */
+	settingsSchema: {
+		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/all-settings`]: ["orderedSettings()"],
-			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
 			"@oh-my-pi/pi-tui/overlays/settings-defs": ["SETTING_TABS", "TAB_GROUPS", "TAB_METADATA"],
 			[UTILS]: ["getAgentDir()", "MAIN_CONFIG_FILENAMES"],
 		},
 	},
-	models: {
+	/**
+	 * settings_get and settings_set, guarded with thinkingDefault too: a write answers with the value and the layers a
+	 * read reports, so a page that shows settings it cannot change is not offered.
+	 */
+	settings: {
+		session: ["settings", "model", "thinkingLevel"],
+		modules: {
+			[`${AGENT}/config/all-settings`]: ["orderedSettings()"],
+			[`${AGENT}/config/registry`]: ["lookup()"],
+			[UTILS]: ["getAgentDir()", "MAIN_CONFIG_FILENAMES"],
+		},
+	},
+	/**
+	 * image_generation_sync: the credentials re-read after a login or logout in any tab, and the watcher that follows
+	 * this omp's own (the Setting override methods and `onGeneration` are feature-detected).
+	 */
+	imageGeneration: union(IMAGE_TOOL, {
 		session: [
-			"getAvailableModels()",
 			"modelRegistry.authStorage.credentials.reload()",
 			"modelRegistry.refreshInBackground()",
 			"modelRegistry.awaitBackgroundRefresh()",
 		],
-	},
-	providers: {
+	}),
+	models: MODEL_CATALOG,
+	/** providers: the list, answered with the catalog its model counts come from. */
+	providers: union(MODEL_CATALOG, PROVIDER_LIST),
+	/** provider_logout: stock's `logoutCredential(session, …)` refreshes the session's scoped models itself (omp 18.18.2). */
+	providerLogout: union(IMAGE_TOOL, PROVIDER_LIST, {
+		session: ["modelRegistry.authStorage", "refreshScopedModels()"],
+		modules: { [`${AGENT}/slash-commands/helpers/logout`]: ["listLogoutAccounts()", "logoutCredential()"] },
+	}),
+	/**
+	 * provider_accounts: per-account quota, health and the session's pinned account. `refresh` is stock's
+	 * `omp usage invalidate`, and every read keys stock's usage cache by the provider's base URL, as fetchUsageReports,
+	 * header ingestion and credential selection do.
+	 */
+	providerAccounts: {
 		session: [
 			"sessionId",
-			"settings",
-			"modelRegistry.authStorage.credentials.list()",
-			"modelRegistry.authStorage.credentials.reload()",
-			"modelRegistry.authStorage.keys.source()",
-			"modelRegistry.authStorage.oauth.identity()",
+			"model",
 			"modelRegistry.getProviderBaseUrl()",
-			// Stock's `logoutCredential(session, …)` calls it (omp 18.18.2).
-			"refreshScopedModels()",
-		],
-		modules: {
-			"@oh-my-pi/pi-ai/oauth": ["getOAuthProviders()", "getOAuthCredentialProvider()"],
-			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/slash-commands/helpers/logout`]: ["listLogoutAccounts()", "logoutCredential()"],
-			// The Updates section's tool CLIs read the connected providers in the stock helper (accounts.providers);
-			// the first-run step asks whether any credential exists at all (accounts.signedIn).
-			[`${AGENT}/sdk`]: ["discoverAuthStorage()"],
-			"@oh-my-pi/pi-ai": ["listProvidersWithEnvKey()", "getEnvApiKey()"],
-			// An MCP server's sign-in shares the credential store: never a model provider or a first-run sign-in.
-			[`${AGENT}/mcp/oauth-flow`]: ["isManagedMCPOAuthCredentialId()"],
-		},
-	},
-	modelRoles: {
-		session: [
-			"model",
-			"modelRegistry",
-			"modelRegistry.getAll()",
-			"settings.getModelRole()",
-			"settings.getModelRoleSource()",
-			"settings.setModelRole()",
-			"settings.flush()",
-			// OMPdesk's own roles and agent tiers (ompdesk-roles.ts), held in the runtime layer, never persisted.
-			"settings.overrideModelRoles()",
-			"settings.overlayLayers()",
-			"settings.getGlobalModelRole()",
-			"settings.getProjectModelRole()",
-			"settings.getGlobalSettings()",
-			"settings.getProjectSettings()",
-			"effectiveExtensionRoots",
-		],
-		modules: {
-			[`${AGENT}/config/model-roles`]: [
-				"getRoleInfo()",
-				"roleCandidatePool()",
-				"MODEL_ROLE_IDS",
-				"CHAT_MODEL_ROLE_IDS",
-			],
-			[`${AGENT}/config/model-resolver`]: [
-				"disabledProviderIds()",
-				"extractExplicitThinkingSelector()",
-				"resolveModelOverride()",
-				"resolveRoleChain()",
-				"resolveRoleSelection()",
-				"rolePriorityDefaults()",
-			],
-			"@oh-my-pi/pi-catalog/types": ["modelKind()"],
-			[`${AGENT}/config/registry`]: [
-				"lookup()",
-				"Setting.prototype.override()",
-				"Setting.prototype.clearOverride()",
-				// The `modelPresets` handle's writes drop the roles OMPdesk holds (ompdesk-roles.ts).
-				"Setting.prototype.setEntry()",
-				// A `/modelpreset switch` clears held roles; a `modelRoles` change re-holds them (ompdesk-roles.ts).
-				"Setting.prototype.listen()",
-			],
-			// The security reviewer's tier holds only while stock's bundled agent has no model line.
-			[`${AGENT}/task/agents`]: ["getBundledAgent()"],
-			[`${AGENT}/task/discovery`]: ["discoverAgents()", "getAgent()"],
-		},
-	},
-	modelSetupFacts: {
-		// model_setup_facts (model-setup-facts.ts): billing from stock's auth data, the models of every role's pool,
-		// what config.yml persists per role (`getGlobalModelRole`: its absence would let full auto overwrite a hand-set
-		// role, so it is required, not feature-detected) and stock's judge defaults. session_spend: the live journal's
-		// spend per provider with that billing (work board: a metered charge apart from a subscription's estimate).
-		session: [
-			"settings.getGlobalModelRole()",
-			"sessionManager.getEntries()",
-			"modelRegistry",
-			"modelRegistry.getAll()",
-			"modelRegistry.getDiscoverableProviders()",
-			"modelRegistry.authStorage.credentials.list()",
-			"modelRegistry.authStorage.keys.source()",
-			"modelRegistry.authStorage.keys.keyless()",
-		],
-		modules: {
-			"@oh-my-pi/pi-ai": ["getEnvApiKey()", "getProviderDefinition()"],
-			"@oh-my-pi/pi-catalog/types": ["modelKind()"],
-			[`${AGENT}/config/model-resolver`]: ["resolveModelOverride()", "rolePriorityDefaults()"],
-			[`${AGENT}/config/model-roles`]: [
-				"getKnownRoleIds()",
-				"getRoleInfo()",
-				"roleCandidatePool()",
-				"MODEL_ROLE_IDS",
-			],
-			[`${AGENT}/config/models-config`]: ["ModelsConfigFile.relocate()"],
-		},
-	},
-	usage: {
-		// usage + provider_accounts (settings.ts): per-account quota, health and the session's pinned account;
-		// `refresh` is stock's `omp usage invalidate`, and every read keys stock's usage cache by the
-		// provider's base URL, as fetchUsageReports, header ingestion and credential selection do.
-		session: [
-			"fetchUsageReports()",
-			"sessionId",
-			"model",
-			"sessionManager.getUsageStatistics()",
-			"sessionManager.getEntries()",
-			"modelRegistry.authStorage.oauth.accounts()",
 			"modelRegistry.authStorage.credentials.reload()",
 			"modelRegistry.authStorage.credentials.list()",
+			"modelRegistry.authStorage.oauth.accounts()",
 			"modelRegistry.authStorage.health.model()",
 			"modelRegistry.authStorage.usage.report()",
 			"modelRegistry.authStorage.usage.invalidate()",
-			"modelRegistry.getProviderBaseUrl()",
+		],
+		modules: {
+			"@oh-my-pi/pi-ai": ["resolveUsedFraction()"],
+			"@oh-my-pi/pi-ai/oauth": ["getOAuthCredentialProvider()"],
+		},
+	},
+	/**
+	 * No bridge method uses these: the stock helper (stock-helper/accounts.ts) reads the connected providers for the
+	 * Updates section's tool CLIs and asks at first run whether any credential exists, in its own process.
+	 */
+	storedCredentials: {
+		modules: {
+			[`${AGENT}/sdk`]: ["discoverAuthStorage()"],
+			"@oh-my-pi/pi-ai": ["listProvidersWithEnvKey()", "getEnvApiKey()"],
+		},
+	},
+	/** model_roles: each role's value, source, effective model and candidates. */
+	modelRoles: union(ROLE_METADATA, {
+		session: ["model", "settings.getModelRole()", "settings.getModelRoleSource()"],
+		modules: {
+			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()", "CHAT_MODEL_ROLE_IDS"],
+			[`${AGENT}/config/model-resolver`]: [
+				"disabledProviderIds()",
+				"resolveModelOverride()",
+				"resolveRoleChain()",
+				"resolveRoleSelection()",
+			],
+		},
+	}),
+	modelRoleMetadata: ROLE_METADATA,
+	/** model_role_set: a stock role into config.yml, an OMPdesk role into the picks file and the runtime layer. */
+	modelRoleSet: union(ROLE_SETTLE, {
+		session: ["model", "thinkingLevel", "modelRegistry.getAll()", "settings.setModelRole()", "settings.flush()"],
+		modules: { [`${AGENT}/config/model-resolver`]: ["extractExplicitThinkingSelector()"] },
+	}),
+	/**
+	 * ompdesk-roles.ts hooks, no bridge method: the held roles settle before each turn and when `modelRoles` changes,
+	 * a saved preset never carries them, and a user's own agent keeps its model line over a held tier. Nothing guards
+	 * a hook, so their internals are listed here.
+	 */
+	ompdeskRoles: union(ROLE_SETTLE, {
+		session: ["effectiveExtensionRoots"],
+		modules: {
+			[`${AGENT}/config/registry`]: [
+				// The `modelPresets` handle's writes drop the roles OMPdesk holds.
+				"Setting.prototype.setEntry()",
+				// A `/modelpreset switch` clears held roles; a `modelRoles` change re-holds them.
+				"Setting.prototype.listen()",
+			],
+			[`${AGENT}/task/discovery`]: ["discoverAgents()", "getAgent()"],
+		},
+	}),
+	/**
+	 * model_setup_facts (model-setup-facts.ts): the models of every role's pool, each provider's billing, what
+	 * config.yml persists per role (`getGlobalModelRole`: its absence would let full auto overwrite a hand-set role, so
+	 * it is required, not feature-detected) and stock's judge defaults.
+	 */
+	modelSetupFacts: union(ROLE_METADATA, PROVIDER_BILLING, {
+		modules: {
+			[`${AGENT}/config/model-resolver`]: ["resolveModelOverride()"],
+			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
+		},
+	}),
+	/**
+	 * session_spend: the live journal's spend per provider with that provider's billing (work board: a metered charge
+	 * apart from a subscription's estimate).
+	 */
+	sessionSpend: union(PROVIDER_BILLING, { session: ["sessionManager.getEntries()", "modelRegistry.getAll()"] }),
+	/** usage: one report per stored account and the session's own tallies; `refresh` is stock's `omp usage invalidate`. */
+	usage: {
+		session: [
+			"fetchUsageReports()",
+			"sessionId",
+			"sessionManager.getUsageStatistics()",
+			"modelRegistry.authStorage.oauth.accounts()",
+			"modelRegistry.authStorage.usage.invalidate()",
 		],
 		modules: {
 			"@oh-my-pi/pi-ai": ["resolveUsedFraction()"],
 			"@oh-my-pi/pi-ai/auth/usage-report": ["usageResetAtMs()"],
-			"@oh-my-pi/pi-ai/oauth": ["getOAuthCredentialProvider()"],
 			[`${AGENT}/slash-commands/helpers/active-oauth-account`]: [
 				"reportMatchesActiveAccount()",
 				"formatActiveAccountLabel()",
 			],
 		},
 	},
-	security: {
-		session: [
-			"getAgentId()",
-			"asyncJobManager",
-			"sessionId",
-			"model",
-			"settings",
-			"modelRegistry.authStorage",
-			"sessionManager.getCwd()",
-		],
+	/** sessions.usage_history: totals across the whole live journal, with every compaction it records. */
+	usageHistory: { session: ["sessionManager.getUsageStatistics()", "sessionManager.getEntries()"] },
+	/** security_dashboard: the stored scans, the repository's revision and each operation's status from stock's tool. */
+	security: union(SECURITY_TOOL, {
 		modules: {
 			"@oh-my-pi/pi-natives/vcs": ["git()"],
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			// Operations through stock's tool, which holds the session's coordinator (`security/coordinator` is not
-			// in omp's bundle: an import of it is a second copy with its own settings registry).
-			[`${AGENT}/tools/security-scan`]: ["SecurityScanTool.prototype.execute()"],
 			[`${AGENT}/security/store`]: [
 				"SecurityStore.openForCwd()",
 				"SecurityStore.prototype.listScans()",
 				"SecurityStore.prototype.getBundle()",
-				"SecurityStore.prototype.getFinding()",
-				"SecurityStore.prototype.updateDisposition()",
 			],
+		},
+	}),
+	securityScanDetail: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/security/store`]: ["SecurityStore.openForCwd()", "SecurityStore.prototype.getBundle()"],
+		},
+	},
+	/** security_start and security_cancel: both through stock's tool; a scan that cannot be cancelled is not started. */
+	securityRun: SECURITY_TOOL,
+	securityDisposition: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/security/store`]: ["SecurityStore.openForCwd()", "SecurityStore.prototype.updateDisposition()"],
+		},
+	},
+	securityValidation: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/security/store`]: ["SecurityStore.openForCwd()", "SecurityStore.prototype.getFinding()"],
 			[UTILS]: ["prompt.render()"],
 		},
 		prompts: ["security/validate-request.md"],
 	},
+	/** ssh_hosts: stock's discovery, with the host facts its connection manager has cached. */
 	ssh: {
 		session: ["sessionManager.getCwd()"],
 		modules: {
 			[`${AGENT}/capability/ssh`]: ["sshCapability.id"],
-			[`${AGENT}/discovery`]: ["loadCapability()", "reset()"],
+			[`${AGENT}/discovery`]: ["loadCapability()"],
+			[`${AGENT}/ssh/connection-manager`]: ["getHostInfoForHost()"],
+			[UTILS]: ["$which()"],
+		},
+	},
+	/** ssh_manage create, update and delete: one method, and a host that can be added but not removed is not offered. */
+	sshManage: {
+		session: ["sessionManager.getCwd()"],
+		modules: {
+			[`${AGENT}/discovery`]: ["reset()"],
 			[`${AGENT}/ssh/config-writer`]: [
 				"readSSHConfigFile()",
 				"removeSSHHost()",
 				"updateSSHHost()",
 				"validateHostName()",
 			],
-			[`${AGENT}/ssh/connection-manager`]: [
-				"ensureConnection()",
-				"ensureHostInfo()",
-				"getHostInfoForHost()",
-				"invalidateHostMetadata()",
-			],
-			[`${AGENT}/ssh/utils`]: ["buildSshTarget()"],
-			[UTILS]: ["$which()", "getSSHConfigPath()", "ptree.exec()"],
+			[`${AGENT}/ssh/connection-manager`]: ["invalidateHostMetadata()"],
+			[UTILS]: ["getSSHConfigPath()"],
 		},
 	},
-	voice: {
+	/** ssh_test: stock's connection, and after a failure the OpenSSH client's own verbose trace. */
+	sshTest: {
+		modules: {
+			[`${AGENT}/ssh/config-writer`]: ["validateHostName()"],
+			[`${AGENT}/ssh/connection-manager`]: ["ensureConnection()", "ensureHostInfo()"],
+			[`${AGENT}/ssh/utils`]: ["buildSshTarget()"],
+			[UTILS]: ["$which()", "ptree.exec()"],
+		},
+	},
+	/**
+	 * transcribe_audio and stt_prepare: prepare is dictation's own setup (it gets the model the speech's language
+	 * needs, and transcription waits on the same download), so dictation that cannot be prepared is not offered.
+	 */
+	dictation: {
 		session: ["settings", "modelRegistry"],
 		modules: {
 			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
@@ -1100,6 +1760,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()"],
 			[`${AGENT}/stt/downloader`]: ["downloadSttModel()", "isSttModelCached()"],
 			[`${AGENT}/stt/models`]: ["resolveSttModelSpec()"],
+		},
+	},
+	/** synthesize_speech: the only action that evaluates the `tts/*` source copies (HEAVY_COPIES). */
+	readAloud: {
+		session: ["settings", "modelRegistry"],
+		modules: {
+			[`${AGENT}/config/registry`]: ["lookup()"],
 			[`${AGENT}/tts/models`]: ["DEFAULT_TTS_VOICE", "TTS_LOCAL_MODELS"],
 			[`${AGENT}/tts/tts-client`]: ["ttsClient.synthesize()"],
 			[`${AGENT}/tools/tts`]: ["resolveSpeechCandidates()"],
@@ -1112,19 +1779,40 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/tools/debug`]: ["DebugTool.prototype.execute()"],
 		},
 	},
+	/**
+	 * sessions.transcript: stock's replay in pages. With `imageRefs` (a paired device) a page names its pictures by
+	 * stock's blob reference (image-refs.ts).
+	 */
+	transcript: union(TRANSCRIPT_REPLAY, READ_GROUPS, {
+		session: ["sessionManager.getSessionFile()"],
+		modules: {
+			[`${AGENT}/session/blob-store`]: ["BlobStore()", "externalizeImageDataSync()", "isBlobRef()"],
+			[`${AGENT}/session/session-persistence`]: ["isExternalizableImagePosition()"],
+			[UTILS]: ["getBlobsDir()"],
+		},
+	}),
+	entryIds: union(READ_GROUPS, {
+		session: ["sessionManager.getEntries()"],
+		modules: {
+			[`${AGENT}/session/turn-persistence`]: ["sessionMessagePersistenceKey()", "sameMessageContent()"],
+		},
+	}),
 	sessionTree: {
 		session: [
-			"navigateTree()",
-			"isStreaming",
-			"sessionManager.appendLabelChange()",
-			"sessionManager.getLeafId()",
-			"sessionManager.getSessionFile()",
-			"sessionManager.getBranch()",
-			"sessionManager.getCwd()",
-			"sessionManager.getSessionDir()",
-			"sessionManager.getEntries()",
 			"sessionManager.getTree()",
+			"sessionManager.getLeafId()",
+			"sessionManager.getBranch()",
 			"sessionManager.getLabel()",
+		],
+	},
+	entryLabel: { session: ["sessionManager.appendLabelChange()"] },
+	switchLeaf: { session: ["isStreaming", "navigateTree()", "sessionManager.getLeafId()"] },
+	/** sessions.fork_from: an independent copy of one branch, written through a second manager on the same file. */
+	forkFrom: {
+		session: [
+			"sessionManager.getSessionFile()",
+			"sessionManager.getSessionDir()",
+			"sessionManager.getCwd()",
 			"sessionManager.flush()",
 		],
 		modules: {
@@ -1138,16 +1826,20 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 				"SessionManager.prototype.close()",
 				"SessionManager.prototype.getSessionId()",
 			],
-			[`${AGENT}/session/session-context`]: ["buildSessionContext()"],
-			// A paired device's page names its pictures by stock's blob reference (image-refs.ts).
-			[`${AGENT}/session/blob-store`]: ["BlobStore()", "externalizeImageDataSync()", "isBlobRef()"],
-			[`${AGENT}/session/session-persistence`]: ["isExternalizableImagePosition()"],
-			[`${AGENT}/session/turn-persistence`]: ["sessionMessagePersistenceKey()", "sameMessageContent()"],
-			[`${AGENT}/session/session-pins`]: ["loadPinnedSessionIds()"],
-			[`${AGENT}/utils/atomic-file`]: ["replaceFileAtomically()"],
-			[UTILS]: ["getAgentDir()", "withFileLock()", "getBlobsDir()"],
 		},
 	},
+	/** sessions.set_pinned: omp's pins file, written under stock's cross-process lock (session-pins.ts). */
+	sessionPins: {
+		modules: {
+			[`${AGENT}/session/session-pins`]: ["loadPinnedSessionIds()"],
+			[`${AGENT}/utils/atomic-file`]: ["replaceFileAtomically()"],
+			[UTILS]: ["getAgentDir()", "withFileLock()"],
+		},
+	},
+	/**
+	 * sessions.foreign_list and sessions.foreign_import: the list is the import's own picker (an import reads the same
+	 * listing), so a list nobody can import from is not shown.
+	 */
 	sessionImport: {
 		session: ["sessionManager.getCwd()"],
 		modules: {
@@ -1157,7 +1849,14 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[UTILS]: ["directoryExists()", "withFileLock()"],
 		},
 	},
-	workspace: {
+	workspace: { session: ["sessionManager.getCwd()", "sessionManager.getAdditionalDirectories()"] },
+	/** workspace.resolve_path: the folder `/move` takes a live session to, resolved as stock's tools resolve a path. */
+	resolvePath: {
+		session: ["sessionManager.getCwd()"],
+		modules: { [`${AGENT}/tools/path-utils`]: ["resolveToCwd()"] },
+	},
+	/** workspace.add_directory and workspace.remove_directory: a folder that can be added but not removed is not offered. */
+	workspaceEdit: {
 		session: [
 			"isStreaming",
 			"refreshBaseSystemPrompt()",
@@ -1166,10 +1865,14 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"sessionManager.addWorkspaceDirectory()",
 			"sessionManager.removeWorkspaceDirectory()",
 		],
+		modules: { [`${AGENT}/session/session-workspace`]: ["normalizeWorkspaceDirectory()"] },
+	},
+	/**
+	 * No bridge method uses these: the sidebar's "Move to project" moves a stored session in the stock helper
+	 * (stock-helper/sessions.ts), in its own process.
+	 */
+	moveStoredSession: {
 		modules: {
-			[`${AGENT}/session/session-workspace`]: ["normalizeWorkspaceDirectory()"],
-			[`${AGENT}/tools/path-utils`]: ["resolveToCwd()"],
-			// The sidebar's "Move to project" moves a stored session in the stock helper.
 			[`${AGENT}/session/session-manager`]: [
 				"SessionManager.open()",
 				"SessionManager.prototype.moveTo()",
@@ -1199,28 +1902,17 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * session's credentials through `modelRegistry.resolver`, `completeSimple`); `runEphemeralTurn` cannot take another
 	 * model. Reads of the todo, plan and goal state, the running async jobs (`getAsyncJobTree`), the usage ledger
 	 * (`appendModelUsage`) and the loaded-extension list are feature-detected inside the module (they only enrich the
-	 * request).
+	 * request). One id for the settings, state, draft, refresh, children and cancel calls: they drive one scheduler,
+	 * whose requests the `agent_end`, compaction and session-switch hooks start, and nothing guards a hook.
 	 */
-	nextPrompt: {
-		session: [
-			"messages",
-			"settings",
-			"isStreaming",
-			"isCompacting",
-			"queuedMessageCount",
-			"sessionId",
-			"modelRegistry.getApiKey()",
-			"modelRegistry.resolver()",
-			"sessionManager.getSessionId()",
-			"sessionManager.getLeafId()",
-		],
-		modules: {
-			"@oh-my-pi/pi-ai": ["completeSimple()"],
-			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
-			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
-			[`${AGENT}/modes/controllers/input-controller`]: ["shouldSkipHistory()"],
-		},
-	},
+	nextPrompt: union(NEXT_PROMPT_REQUEST, { session: ["isStreaming", "isCompacting", "queuedMessageCount"] }),
+	/**
+	 * next_prompt_inline: the same cheap request for the draft being typed. It alone reads stock's secret-draft rule
+	 * (`shouldSkipHistory`: such a draft never leaves the machine), so it is refused, never run, without it.
+	 */
+	inlineCompletion: union(NEXT_PROMPT_REQUEST, {
+		modules: { [`${AGENT}/modes/controllers/input-controller`]: ["shouldSkipHistory()"] },
+	}),
 	/**
 	 * modes/auto-title.ts: stock's own title machinery on the live session: `generateTitle` (the title model
 	 * roles, `title-generator.ts`), `renameTitle` (`/rename` without a title: the card per `title.icons`),
@@ -1230,7 +1922,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * (rendered with `prompt.render`) plus one language line; `title-card` splits a card off a title cut to length,
 	 * and `title.icons` (`cfgTitleIcons`) says whether a fresh title drops the card stock's retitle kept. A title over
 	 * the limits gets one retry on the `default` role's model (`roleCandidatePool`, `resolveRoleChain`, the session's
-	 * credentials, `completeSimple`), its answer checked by stock's `normalizeGeneratedTitle`.
+	 * credentials, `completeSimple`), its answer checked by stock's `normalizeGeneratedTitle`. One id for
+	 * auto_title_set and regenerate_title: both attach the session's title listener, and the ✨ button asks for the
+	 * title that listener makes, with the same machinery.
 	 */
 	autoTitle: {
 		session: [
@@ -1266,6 +1960,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		},
 		prompts: ["system/title-system.md"],
 	},
+	/**
+	 * modes/judge-assist.ts: one switch (judge_assist_set) and three questions asked of stock's judge through one
+	 * loader and one gate (available, needs_user, preview_check). One id: every stock call sits in the engine's `try`,
+	 * so a missing internal already means "the judge did not decide" for that question alone, and this guard only
+	 * names the judge when main asks it directly.
+	 */
 	judgeAssist: {
 		session: ["settings", "sessionId", "modelRegistry", "sessionManager", "messages"],
 		modules: {
@@ -1287,8 +1987,14 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 		session: ["settings", "sessionId", "modelRegistry", "sessionManager"],
 	},
+	/**
+	 * modes.auto_mode_decide and modes.auto_mode_prefetch: the prefetch asks the question the decision will ask, and
+	 * the decision reads its answer from stock's judgment cache. `hasNativeJudge` is the judge warm-up's alone
+	 * (`install`, at session start, nothing guards it): listed here, with the judge it warms.
+	 */
 	autoMode: {
 		session: [
+			"subscribe()",
 			"settings",
 			"sessionId",
 			"model",
@@ -1302,7 +2008,6 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"sessionManager.getSessionId()",
 			"getPlanModeState()",
 			"getGoalModeState()",
-			"setPlanModeState()",
 		],
 		modules: {
 			[`${AGENT}/judgment`]: [
@@ -1316,17 +2021,25 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/config/registry`]: ["lookup()"],
 		},
 	},
-	compactionLimits: {
+	/** modes.auto_mode_undo: leaves the plan mode an automatic decision entered (modes/plan.ts `exitPlanMode`). */
+	autoModeUndo: union(PLAN_EXIT, { session: ["subscribe()", "getPlanModeState()"] }),
+	/** compaction_points: where auto-compaction triggers for each model and each role's model, by stock's hub code. */
+	compactionPoints: {
 		session: ["settings", "getAvailableModels()", "modelRegistry.getAll()", "modelRegistry.getAvailable()"],
+		modules: {
+			[`${AGENT}/session/model-compaction-threshold`]: ["describeModelCompactionPoint()"],
+			[`${AGENT}/modes/model-browser-source`]: ["createModelBrowserSource()"],
+			"@oh-my-pi/pi-tui/overlays/model-browser": ["resolveRoleAssignments()"],
+		},
+	},
+	/** compaction_limits: a typed limit checked and formatted by stock's own parser, before `settings_set` writes it. */
+	compactionLimits: {
 		modules: {
 			[`${AGENT}/config/compaction-threshold`]: [
 				"parseCompactionPointInput()",
 				"validateModelCompactionThresholds()",
 				"formatCompactionPointInput()",
 			],
-			[`${AGENT}/session/model-compaction-threshold`]: ["describeModelCompactionPoint()"],
-			[`${AGENT}/modes/model-browser-source`]: ["createModelBrowserSource()"],
-			"@oh-my-pi/pi-tui/overlays/model-browser": ["resolveRoleAssignments()"],
 		},
 	},
 	/**
@@ -1359,7 +2072,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 		session: ["agent.state"],
 	},
-	/** context-inspect.ts: every tool, skill, instruction file, prompt block and message, counted as stock counts them. */
+	/** context.inspect: every tool, skill, instruction file, prompt block and message, counted as stock counts them. */
 	contextInspector: {
 		session: [
 			"getContextBreakdown()",
@@ -1378,6 +2091,20 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		modules: {
 			[`${AGENT}/session/messages`]: ["convertToLlm()"],
 			"@oh-my-pi/pi-tui/status-line/context-usage": ["estimateToolSchemaTokens()", "claimPromptSources()"],
+		},
+	},
+	/** context.entry: one entry's text as the provider gets it (a tool's schema as stock serializes it). */
+	contextEntry: {
+		session: [
+			"systemPrompt",
+			"systemPromptSources",
+			"extensionRunner.createContext()",
+			"getXdevToolEntries()",
+			"agent.state",
+		],
+		modules: {
+			[`${AGENT}/session/messages`]: ["convertToLlm()"],
+			"@oh-my-pi/pi-tui/status-line/context-usage": ["claimPromptSources()"],
 			"@oh-my-pi/pi-ai/utils/schema": ["toolWireSchema()"],
 		},
 	},
@@ -1410,21 +2137,39 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"@oh-my-pi/pi-ai": ["resolveCredentialIdentityKey()"],
 		},
 	},
-	worktreeLifecycle: {
-		// worktree-lifecycle.ts: the `worktree.onStart` / `worktree.onExit` settings and
-		// stock's start condition and creation for them. stock-helper/worktrees.ts reads the same worktree
-		// location without a session (`worktree.base` read-only, applied as stock's effect does) for a worktree
-		// a paired device's agent makes here.
+	/** git.worktree_location: naming and authorization by the running omp's `worktree.base` and its path hash. */
+	worktreeLocation: { modules: { [UTILS]: ["getWorktreesDir()", "hashPath()"] } },
+	/** git.pr_checkout: stock's own checkout of a pull request into a worktree. */
+	prCheckout: {
 		session: ["settings", "sessionManager.getCwd()", "sessionManager.getSessionFile()"],
+		modules: { [`${AGENT}/tools/gh-pr-checkout`]: ["checkoutPullRequest()"] },
+	},
+	/**
+	 * worktree_lifecycle_settings and worktree_lifecycle_create (worktree-lifecycle.ts): main reads the
+	 * `worktree.onStart` / `worktree.onExit` policies and stock's start condition, then has stock create the worktree.
+	 * One id: a policy whose worktree cannot be made is not read, so the tab starts where it is instead of asking the
+	 * person and then failing.
+	 */
+	worktreeLifecycle: {
+		session: ["settings", "sessionManager.getCwd()"],
 		modules: {
-			[`${AGENT}/task/settings`]: ["cfgWorktreeOnStart.get()", "cfgWorktreeOnExit.get()", "cfgWorktreeBase.get()"],
-			[`${AGENT}/config/settings`]: ["Settings.loadReadOnly()"],
+			[`${AGENT}/task/settings`]: ["cfgWorktreeOnStart.get()", "cfgWorktreeOnExit.get()"],
 			[`${AGENT}/session/session-worktree`]: [
 				"canAutoCreateWorktree()",
 				"createSessionWorktree()",
 				"defaultSessionWorktreeBranch()",
 			],
-			[`${AGENT}/tools/gh-pr-checkout`]: ["checkoutPullRequest()"],
+			[UTILS]: ["getWorktreesDir()"],
+		},
+	},
+	/**
+	 * No bridge method uses these: stock-helper/worktrees.ts reads the worktree location without a session
+	 * (`worktree.base` read-only, applied as stock's effect does) for a worktree a paired device's agent makes here.
+	 */
+	worktreeBase: {
+		modules: {
+			[`${AGENT}/task/settings`]: ["cfgWorktreeBase.get()"],
+			[`${AGENT}/config/settings`]: ["Settings.loadReadOnly()"],
 			[UTILS]: ["getWorktreesDir()", "hashPath()", "setWorktreesDir()"],
 		},
 	},
@@ -1644,6 +2389,11 @@ export function missingFor(requirement: FeatureRequirement, sources: ProbeSource
 	return missing;
 }
 
+/** One unavailable entry, marked `core` when a core flow needs the feature. */
+function unavailableEntry(feature: FeatureId, missing: string[]): UnavailableFeature {
+	return Object.hasOwn(CORE_FEATURES, feature) ? { feature, missing, core: true } : { feature, missing };
+}
+
 /** Features (in `features` order) with at least one missing requirement. */
 export function deriveUnavailable(
 	features: readonly FeatureId[],
@@ -1655,7 +2405,7 @@ export function deriveUnavailable(
 		const requirement = requirements[feature];
 		if (!requirement) continue;
 		const missing = missingFor(requirement, sources);
-		if (missing.length > 0) unavailable.push({ feature, missing });
+		if (missing.length > 0) unavailable.push(unavailableEntry(feature, missing));
 	}
 	return unavailable;
 }
@@ -1681,7 +2431,7 @@ export function mergeAreaFailures(
 			merged.set(feature, missing);
 		}
 	}
-	return [...merged].map(([feature, missing]) => ({ feature, missing }));
+	return [...merged].map(([feature, missing]) => unavailableEntry(feature, missing));
 }
 
 /** `OMP_GUI_BRIDGE_PROBE_HIDE`: comma-separated missing labels to simulate (diagnostics and tests). */

@@ -72,7 +72,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "f094161e3444ba44a4d3b4b0f6894fd13e36f014",
+			"syncCommit": "36afdcdbfa812dd0c02b57f4d9d79cd1fc12528c",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -171,7 +171,7 @@
 				"src/main/checkout-peers.ts#CheckoutPeerCoordinator.#retire",
 				"src/main/checkout-peers.ts#CheckoutPeerCoordinator.#send"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "f51f4c8c61e3e4b731e656ba02960cf5c135ce3a",
 			"verifySkill": ".omp/skills/checkout-claims-verify/SKILL.md"
 		},
 		{
@@ -214,7 +214,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "00fe764465cc83c1683062fb293c828dfcff1d1e",
+			"syncCommit": "6053c5d04986a9fffec4447106e3a1df5e3957a4",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{
@@ -247,6 +247,67 @@
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
 			"syncCommit": "5c502f9a208886c32caef2c7fdc95e6a4ce1bdc0"
+		},
+		{
+			"id": "away-calls",
+			"title": "A device tab's control calls while the device is away: the host carries out unhanded calls and keeps reports for the device",
+			"kind": "tla",
+			"dir": "away-calls/tla",
+			"spec": "AwayCalls.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/main/remote/host-services.ts",
+				"src/main/remote/kept-calls.ts",
+				"src/main/ipc.ts:642-661"
+			],
+			"syncCommit": null
+		},
+		{
+			"id": "open-first-message",
+			"title": "An open's setup and first message across a quit: kept before it goes out, handed once per omp",
+			"kind": "tla",
+			"dir": "open-first-message/tla",
+			"spec": "OpenFirstMessage.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/open.rs",
+				"native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs",
+				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
+			],
+			"syncCommit": null
+		},
+		{
+			"id": "urgent-asides",
+			"title": "Urgent asides background a running shell; a progress report or note never does",
+			"kind": "tla",
+			"dir": "urgent-asides/tla",
+			"spec": "UrgentAsides.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/agent-control.ts#urgentKey",
+				"resources/gui-bridge/agent-control.ts#watchAsides",
+				"resources/gui-bridge/agent-control.ts#interruptFor",
+				"resources/gui-bridge/agent-control.ts#install",
+				"resources/gui-bridge/agent-control.ts:343-396"
+			],
+			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
+		},
+		{
+			"id": "relaunch-once",
+			"title": "A command across a relaunch runs once and a stop does not cut a short one",
+			"kind": "tla",
+			"dir": "relaunch-once/tla",
+			"spec": "RelaunchOnce.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/quit-journal.ts",
+				"resources/gui-bridge/quit-journal-core.ts#replayOfEarlierLife"
+			],
+			"syncCommit": "df9f756aab26a6e4688887ad724e5584d869aeda"
 		}
 	]
 }

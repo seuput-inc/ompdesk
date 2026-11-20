@@ -93,6 +93,11 @@ fn mime(path: &Path) -> &'static str {
     }
 }
 
+/// Whether `uri` asks for the profile-migration page (`/__profile/migrate`), whichever form of the app origin it has.
+pub fn is_bootstrap(uri: &tauri::http::Uri) -> bool {
+    path_from_uri(uri).is_some_and(|path| path == Path::new("__profile/migrate"))
+}
+
 /// Serves renderer files. The caller must run this function off the UI thread.
 pub fn serve(root: &Path, request: Request<Vec<u8>>, policy: &str) -> Response<Vec<u8>> {
     let head = request.method() == Method::HEAD;

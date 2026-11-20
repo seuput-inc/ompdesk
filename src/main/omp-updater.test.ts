@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { IPC_COMMANDS } from "../shared/ipc-types";
+import type { OmpCompatHolding } from "../shared/omp-compat";
 import ompTested from "../shared/omp-tested.json";
 import type { OmpUpdatedNotice, OmpUpdateState } from "../shared/omp-update";
 import { type OmpUpdateLogStep, OmpUpdater, type OmpUpdaterDeps, registerOmpUpdateIpc } from "./omp-updater";
@@ -21,12 +22,18 @@ interface Harness {
 	/** Every runtime-log line, in order: its step and details. */
 	logs: [OmpUpdateLogStep, Record<string, unknown>][];
 	fetchLatest: Mock<() => Promise<string>>;
+	compat: Mock<OmpUpdaterDeps["compat"]>;
 	newestWithin: Mock<OmpUpdaterDeps["newestWithin"]>;
 	update: Mock<OmpUpdaterDeps["update"]>;
 	set: {
 		latest: string;
-		/** The newest release of the tested major that can be installed by name; null when nothing can. */
+		/** This release's verified list; `latest` (the default) verifies whatever the registry calls newest. */
+		verified: string[] | "latest";
+		/** The hidden pref `ompFollowVerified`; on by default here, so the verified-list cases read naturally. */
+		follow: boolean;
+		/** What the lookup for the tested major's newest release answers (`follow` off). */
 		within: string | null;
+		holding: OmpCompatHolding | null;
 		installed: string | null;
 		enabled: boolean;
 		outcome: OmpUpdateOutcome;
@@ -38,12 +45,23 @@ interface Harness {
  * named version reads `update <version> exact`). `tested: null` leaves the release's own tested omp.
  */
 function harness(
-	options: { scheduled?: boolean; enabled?: boolean; installed?: string | null; tested?: string | null } = {},
+	options: {
+		scheduled?: boolean;
+		enabled?: boolean;
+		installed?: string | null;
+		tested?: string | null;
+		follow?: boolean;
+		/** `firstSeen`: when this computer first saw each version held for verification. */
+		firstSeen?: (version: string) => string;
+	} = {},
 ): Harness {
 	const calls: string[] = [];
 	const set: Harness["set"] = {
 		latest: "18.9.0",
+		verified: "latest",
+		follow: options.follow ?? true,
 		within: null,
+		holding: null,
 		installed: options.installed === undefined ? "18.8.7" : options.installed,
 		enabled: options.enabled ?? true,
 		outcome: { kind: "updated", version: "18.9.0" },
@@ -55,6 +73,10 @@ function harness(
 		calls.push("fetch");
 		return set.latest;
 	});
+	const compat = vi.fn<OmpUpdaterDeps["compat"]>(async () => ({
+		verified: set.verified === "latest" ? [set.latest] : set.verified,
+		holding: set.holding,
+	}));
 	const newestWithin = vi.fn<OmpUpdaterDeps["newestWithin"]>(async major => {
 		calls.push(`within ${major}`);
 		return set.within;
@@ -69,7 +91,10 @@ function harness(
 		scheduled: options.scheduled ?? true,
 		enabled: () => set.enabled,
 		fetchLatest,
+		follow: () => set.follow,
+		compat,
 		newestWithin,
+		...(options.firstSeen ? { firstSeen: options.firstSeen } : {}),
 		installed: () => set.installed,
 		update,
 		releaseHelpers: async () => {
@@ -87,7 +112,7 @@ function harness(
 		...(options.tested === null ? {} : { tested: options.tested ?? TESTED }),
 		now: () => Date.now(),
 	});
-	return { updater, calls, states, notices, logs, fetchLatest, newestWithin, update, set };
+	return { updater, calls, states, notices, logs, fetchLatest, compat, newestWithin, update, set };
 }
 
 describe("OmpUpdater", () => {
@@ -102,8 +127,9 @@ describe("OmpUpdater", () => {
 		const h = harness();
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
-		// Helpers stop right before the installer starts (inside update), come back after it, then the one toast.
-		expect(h.calls).toEqual(["fetch", "update 18.9.0", "release", "resume true", "toast 18.9.0"]);
+		// Helpers stop right before the installer starts (inside update), come back after it, then the one toast. A pass
+		// nobody asked for installs by name only (`exact`), never through stock's own `omp update`.
+		expect(h.calls).toEqual(["fetch", "update 18.9.0 exact", "release", "resume true", "toast 18.9.0"]);
 		expect(h.updater.state()).toMatchObject({
 			phase: "idle",
 			installed: "18.9.0",
@@ -141,18 +167,23 @@ describe("OmpUpdater", () => {
 		h.updater.dispose();
 	});
 
-	it("treats a canary of the installed release as not newer, and a canary of a newer release as newer", async () => {
+	it("treats a canary of the installed release as not newer, and installs a canary of a newer release only when asked", async () => {
 		const same = harness({ installed: "18.9.0" });
 		same.set.latest = "18.9.0-canary.3";
 		same.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(same.calls).toEqual(["fetch"]);
 		same.updater.dispose();
+		// The verified list names exact releases only, so a canary is held whatever a list says, until a person asks.
 		const newer = harness({ installed: "18.8.7" });
 		newer.set.latest = "18.9.0-canary.3";
+		newer.set.outcome = { kind: "updated", version: "18.9.0-canary.3" };
 		newer.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(newer.calls[1]).toBe("update 18.9.0-canary.3");
+		expect(newer.update).not.toHaveBeenCalled();
+		expect(newer.updater.state().held).toEqual({ version: "18.9.0-canary.3", reason: "verifying" });
+		await newer.updater.updateNow();
+		expect(newer.calls.at(-4)).toBe("update 18.9.0-canary.3");
 		newer.updater.dispose();
 	});
 
@@ -198,7 +229,7 @@ describe("OmpUpdater", () => {
 		h.set.outcome = { kind: "failed", failure: { reason: "install", detail: "exit 1 — EBUSY" } };
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(h.calls).toEqual(["fetch", "update 18.9.0", "release", "resume false"]);
+		expect(h.calls).toEqual(["fetch", "update 18.9.0 exact", "release", "resume false"]);
 		expect(h.notices).toEqual([]);
 		expect(h.updater.state()).toMatchObject({
 			phase: "idle",
@@ -210,7 +241,7 @@ describe("OmpUpdater", () => {
 		h.calls.length = 0;
 		h.set.outcome = { kind: "updated", version: "18.9.0" };
 		await vi.advanceTimersByTimeAsync(8 * HOUR);
-		expect(h.calls).toEqual(["fetch", "update 18.9.0", "release", "resume true", "toast 18.9.0"]);
+		expect(h.calls).toEqual(["fetch", "update 18.9.0 exact", "release", "resume true", "toast 18.9.0"]);
 		expect(h.updater.state().failure).toBeNull();
 		h.updater.dispose();
 	});
@@ -343,6 +374,8 @@ describe("OmpUpdater", () => {
 				h.calls.push("fetch");
 				return h.set.latest;
 			},
+			follow: () => true,
+			compat: async () => ({ verified: [h.set.latest], holding: null }),
 			newestWithin: async () => null,
 			installed: () => h.set.installed,
 			update: async target => {
@@ -445,7 +478,7 @@ describe("OmpUpdater", () => {
 	});
 });
 
-describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed itself on an OMPdesk tested with 18)", () => {
+describe("OmpUpdater and the verified list (19 Nov 2026: omp 19.0.0 installed itself on an OMPdesk tested with 18)", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 	});
@@ -453,21 +486,21 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		vi.useRealTimers();
 	});
 
-	const HELD = { version: "19.0.0", reason: "untested-major" } as const;
+	const VERIFYING = { version: "19.0.0", reason: "verifying" } as const;
+	const SINCE = "2026-11-19T00:18:00.000Z";
 
-	it("a scheduled check that finds a newer major installs nothing and says it is held", async () => {
+	it("a scheduled check that finds an omp runners have not verified installs nothing and says it is being verified", async () => {
 		const h = harness({ installed: "18.22.2" });
 		h.set.latest = "19.0.0";
-		h.set.within = "18.22.2";
+		h.set.verified = [];
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.update).not.toHaveBeenCalled();
-		expect(h.calls).toEqual(["fetch", "within 18"]);
 		expect(h.updater.state()).toMatchObject({
 			phase: "idle",
 			installed: "18.22.2",
 			latest: "19.0.0",
-			held: HELD,
+			held: VERIFYING,
 			failure: null,
 			updatedTo: null,
 		});
@@ -476,74 +509,133 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
 		expect(h.fetchLatest).toHaveBeenCalledTimes(2);
 		expect(h.update).not.toHaveBeenCalled();
+		const checked = { installed: "18.22.2", latest: "19.0.0", tested: TESTED, verified: null };
 		expect(h.logs).toEqual([
-			["checked", { path: "launch", installed: "18.22.2", latest: "19.0.0", tested: TESTED }],
-			["held", { path: "launch", installed: "18.22.2", ...HELD, tested: TESTED }],
-			["checked", { path: "scheduled", installed: "18.22.2", latest: "19.0.0", tested: TESTED }],
-			["held", { path: "scheduled", installed: "18.22.2", ...HELD, tested: TESTED }],
+			["checked", { path: "launch", ...checked }],
+			["held", { path: "launch", installed: "18.22.2", ...VERIFYING }],
+			["checked", { path: "scheduled", ...checked }],
+			["held", { path: "scheduled", installed: "18.22.2", ...VERIFYING }],
 		]);
 		h.updater.dispose();
 	});
 
-	it("a scheduled check that finds a newer release of the tested major installs it, and holds nothing", async () => {
+	it("a version held for verification carries when this computer first saw it, the same on every later check", async () => {
+		const seen = new Map<string, string>();
+		const firstSeen = vi.fn((version: string) => {
+			if (!seen.has(version)) seen.set(version, new Date(Date.now()).toISOString());
+			return seen.get(version) ?? "";
+		});
+		const h = harness({ installed: "18.22.2", firstSeen });
+		h.set.latest = "19.0.0";
+		h.set.verified = [];
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		const since = seen.get("19.0.0");
+		expect(h.updater.state().held).toEqual({ ...VERIFYING, since });
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.updater.state().held).toEqual({ ...VERIFYING, since });
+		// Verified and installed: nothing is held any more.
+		h.set.verified = ["19.0.0"];
+		h.set.outcome = { kind: "updated", version: "19.0.0" };
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.updater.state()).toMatchObject({ installed: "19.0.0", held: null });
+		// A failed release names the runners' time, not this computer's.
+		h.set.latest = "19.1.0";
+		h.set.verified = ["19.0.0"];
+		h.set.holding = { version: "19.1.0", since: SINCE, issue: 42 };
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.updater.state().held).toEqual({ version: "19.1.0", reason: "failed", since: SINCE });
+		expect(firstSeen.mock.calls.map(([version]) => version)).toEqual(["19.0.0", "19.0.0"]);
+		h.updater.dispose();
+	});
+
+	it("once runners verified it, the next check installs it, whatever its major", async () => {
 		const h = harness({ installed: "18.22.2" });
-		h.set.latest = "18.23.0";
-		h.set.outcome = { kind: "updated", version: "18.23.0" };
-		h.updater.start();
-		await vi.advanceTimersByTimeAsync(0);
-		expect(h.calls).toEqual(["fetch", "update 18.23.0", "release", "resume true", "toast 18.23.0"]);
-		expect(h.updater.state()).toMatchObject({ installed: "18.23.0", updatedTo: "18.23.0", held: null });
-		expect(h.logs).toEqual([
-			["checked", { path: "launch", installed: "18.22.2", latest: "18.23.0", tested: TESTED }],
-			["started", { path: "launch", from: "18.22.2", target: "18.23.0" }],
-			["finished", { path: "launch", from: "18.22.2", target: "18.23.0", version: "18.23.0" }],
-		]);
-		h.updater.dispose();
-	});
-
-	it("while a major is held, a scheduled check still installs the newest release of the tested major, by name only", async () => {
-		const h = harness({ installed: "18.22.0" });
 		h.set.latest = "19.0.0";
-		h.set.within = "18.22.2";
-		h.set.outcome = { kind: "updated", version: "18.22.2" };
-		h.updater.start();
-		await vi.advanceTimersByTimeAsync(0);
-		// `exact`: stock `omp update` would install 19.0.0, so only an install that names 18.22.2 may run.
-		expect(h.calls).toEqual([
-			"fetch",
-			"within 18",
-			"update 18.22.2 exact",
-			"release",
-			"resume true",
-			"toast 18.22.2",
-		]);
-		expect(h.updater.state()).toMatchObject({ installed: "18.22.2", updatedTo: "18.22.2", held: HELD });
-		expect(h.logs.map(([step]) => step)).toEqual(["checked", "held", "started", "finished"]);
-		expect(h.logs.at(-1)).toEqual([
-			"finished",
-			{ path: "launch", from: "18.22.0", target: "18.22.2", version: "18.22.2" },
-		]);
-		h.updater.dispose();
-	});
-
-	it("never installs what the lookup for the tested major answers when that is another major", async () => {
-		const h = harness({ installed: "18.22.0" });
-		h.set.latest = "19.0.0";
-		h.set.within = "19.0.0";
+		h.set.verified = [];
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.update).not.toHaveBeenCalled();
-		expect(h.updater.state().held).toEqual(HELD);
+		h.set.verified = ["19.0.0"];
+		h.set.outcome = { kind: "updated", version: "19.0.0" };
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.calls).toEqual(["fetch", "fetch", "update 19.0.0 exact", "release", "resume true", "toast 19.0.0"]);
+		expect(h.updater.state()).toMatchObject({ installed: "19.0.0", held: null, verified: ["19.0.0"] });
+		expect(h.logs.slice(-3)).toEqual([
+			["checked", { path: "scheduled", installed: "18.22.2", latest: "19.0.0", tested: TESTED, verified: "19.0.0" }],
+			["started", { path: "scheduled", from: "18.22.2", target: "19.0.0" }],
+			["finished", { path: "scheduled", from: "18.22.2", target: "19.0.0", version: "19.0.0" }],
+		]);
 		h.updater.dispose();
 	});
 
-	it("holds a version whose major cannot be read rather than install it unasked", async () => {
+	it("an omp runners failed is held as failed, with when they first failed it", async () => {
+		const h = harness({ installed: "18.22.2" });
+		h.set.latest = "19.0.0";
+		h.set.verified = [];
+		h.set.holding = { version: "19.0.0", since: SINCE, issue: 41 };
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.updater.state().held).toEqual({ version: "19.0.0", reason: "failed", since: SINCE });
+		expect(h.logs.at(-1)).toEqual([
+			"held",
+			{ path: "launch", installed: "18.22.2", version: "19.0.0", reason: "failed", since: SINCE },
+		]);
+		h.updater.dispose();
+	});
+
+	it("while the newest is held, a check installs the newest verified omp below it, by name only", async () => {
+		const h = harness({ installed: "18.22.0" });
+		h.set.latest = "19.0.1";
+		h.set.verified = ["18.22.2", "19.0.0"];
+		h.set.outcome = { kind: "updated", version: "19.0.0" };
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		// `exact`: stock `omp update` would install 19.0.1, so only an install that names 19.0.0 may run.
+		expect(h.calls).toEqual(["fetch", "update 19.0.0 exact", "release", "resume true", "toast 19.0.0"]);
+		expect(h.updater.state()).toMatchObject({
+			installed: "19.0.0",
+			held: { version: "19.0.1", reason: "verifying" },
+		});
+		expect(h.logs.map(([step]) => step)).toEqual(["checked", "held", "started", "finished"]);
+		h.updater.dispose();
+	});
+
+	it("with nothing verified for this release yet, a check brings omp up to the tested omp, by name only", async () => {
+		const h = harness({ installed: "18.20.0" });
+		h.set.latest = "19.0.0";
+		h.set.verified = [];
+		h.set.outcome = { kind: "updated", version: TESTED };
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.calls).toEqual(["fetch", `update ${TESTED} exact`, "release", "resume true", `toast ${TESTED}`]);
+		expect(h.updater.state().held).toEqual(VERIFYING);
+		h.updater.dispose();
+	});
+
+	it("never steps omp down, and never installs a verified omp the registry does not offer yet", async () => {
+		const h = harness({ installed: "19.0.0" });
+		h.set.latest = "19.0.0";
+		h.set.verified = ["18.22.2"];
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.updater.state().held).toBeNull();
+		// A list that names a version newer than the registry's newest (another registry, a mirror behind) waits.
+		h.set.verified = ["19.0.0", "19.1.0"];
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.update).not.toHaveBeenCalled();
+		h.updater.dispose();
+	});
+
+	it("holds a newest that is no exact release rather than install it unasked", async () => {
 		const h = harness({ installed: "18.22.2" });
 		h.set.latest = "nightly-3f2a";
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.update).not.toHaveBeenCalled();
-		expect(h.updater.state().held).toEqual({ version: "nightly-3f2a", reason: "untested-major" });
+		expect(h.updater.state().held).toEqual({ version: "nightly-3f2a", reason: "verifying" });
 		h.updater.dispose();
 	});
 
@@ -567,12 +659,12 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 	});
 
 	// The repair cases below never start the timer, so the repair pass is the only one that runs.
-	it("the repair pass with the pref on installs a newer omp of the tested major", async () => {
+	it("the repair pass with the pref on installs a verified newer omp", async () => {
 		const h = harness({ installed: "18.22.0" });
 		h.set.latest = "18.23.0";
 		h.set.outcome = { kind: "updated", version: "18.23.0" };
 		await h.updater.repair();
-		expect(h.calls).toEqual(["fetch", "update 18.23.0", "release", "resume true", "toast 18.23.0"]);
+		expect(h.calls).toEqual(["fetch", "update 18.23.0 exact", "release", "resume true", "toast 18.23.0"]);
 		expect(h.logs.map(([step, details]) => [step, details.path])).toEqual([
 			["checked", "repair"],
 			["started", "repair"],
@@ -581,13 +673,13 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		h.updater.dispose();
 	});
 
-	it("the repair pass with the pref on installs no newer major", async () => {
+	it("the repair pass with the pref on installs no unverified omp", async () => {
 		const h = harness({ installed: "18.22.2" });
 		h.set.latest = "19.0.0";
-		h.set.within = "18.22.2";
+		h.set.verified = [];
 		await h.updater.repair();
 		expect(h.update).not.toHaveBeenCalled();
-		expect(h.updater.state()).toMatchObject({ installed: "18.22.2", held: HELD, failure: null });
+		expect(h.updater.state()).toMatchObject({ installed: "18.22.2", held: VERIFYING, failure: null });
 		expect(h.logs.map(([step, details]) => [step, details.path])).toEqual([
 			["checked", "repair"],
 			["held", "repair"],
@@ -595,13 +687,41 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		h.updater.dispose();
 	});
 
-	it("Update now installs a held major: a person's click is the ask", async () => {
-		const h = harness({ installed: "18.22.2" });
+	it("an omp already above the tested major is kept: launch, the timer and the repair pass neither move it back nor install an unverified newer release", async () => {
+		const h = harness({ installed: "19.0.0" });
 		h.set.latest = "19.0.0";
-		h.set.within = "18.22.2";
+		h.set.verified = [];
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(h.updater.state().held).toEqual(HELD);
+		// Nothing is newer than what runs: nothing held, and the tested omp is no target (never a step down).
+		expect(h.calls).toEqual(["fetch"]);
+		expect(h.updater.state()).toMatchObject({ installed: "19.0.0", latest: "19.0.0", held: null, failure: null });
+		h.calls.length = 0;
+		h.logs.length = 0;
+		h.set.latest = "19.0.1";
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		await h.updater.repair();
+		expect(h.calls).toEqual(["fetch", "fetch"]);
+		expect(h.update).not.toHaveBeenCalled();
+		const held = { version: "19.0.1", reason: "verifying" };
+		expect(h.updater.state()).toMatchObject({ installed: "19.0.0", latest: "19.0.1", held, failure: null });
+		const checked = { installed: "19.0.0", latest: "19.0.1", tested: TESTED, verified: null };
+		expect(h.logs).toEqual([
+			["checked", { path: "scheduled", ...checked }],
+			["held", { path: "scheduled", installed: "19.0.0", ...held }],
+			["checked", { path: "repair", ...checked }],
+			["held", { path: "repair", installed: "19.0.0", ...held }],
+		]);
+		h.updater.dispose();
+	});
+
+	it("Update now installs a held omp: a person's click is the ask", async () => {
+		const h = harness({ installed: "18.22.2" });
+		h.set.latest = "19.0.0";
+		h.set.verified = [];
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.updater.state().held).toEqual(VERIFYING);
 		h.calls.length = 0;
 		h.logs.length = 0;
 		h.set.outcome = { kind: "updated", version: "19.0.0" };
@@ -609,22 +729,23 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		expect(h.calls).toEqual(["fetch", "update 19.0.0", "release", "resume true", "toast 19.0.0"]);
 		expect(h.updater.state()).toMatchObject({ installed: "19.0.0", updatedTo: "19.0.0", held: null, failure: null });
 		expect(h.logs).toEqual([
-			["checked", { path: "manual", installed: "18.22.2", latest: "19.0.0", tested: TESTED }],
+			["checked", { path: "manual", installed: "18.22.2", latest: "19.0.0", tested: TESTED, verified: null }],
 			["started", { path: "manual", from: "18.22.2", target: "19.0.0" }],
 			["finished", { path: "manual", from: "18.22.2", target: "19.0.0", version: "19.0.0" }],
 		]);
-		// On the major the person chose, a later check on the timer still installs nothing above the tested one.
+		// On the omp the person chose, a later check on the timer still installs nothing unverified.
 		h.calls.length = 0;
 		h.set.latest = "19.0.1";
 		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
 		expect(h.update).toHaveBeenCalledTimes(1);
-		expect(h.updater.state().held).toEqual({ version: "19.0.1", reason: "untested-major" });
+		expect(h.updater.state().held).toEqual({ version: "19.0.1", reason: "verifying" });
 		h.updater.dispose();
 	});
 
-	it("Update now with the pref off still installs a held major", async () => {
+	it("Update now with the pref off still installs a held omp", async () => {
 		const h = harness({ enabled: false, installed: "18.22.2" });
 		h.set.latest = "19.0.0";
+		h.set.verified = [];
 		h.set.outcome = { kind: "updated", version: "19.0.0" };
 		await h.updater.updateNow();
 		expect(h.calls).toEqual(["fetch", "update 19.0.0", "release", "resume true", "toast 19.0.0"]);
@@ -633,6 +754,7 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 
 	it("a click that lands while the timer's pass is still checking makes that pass the person's", async () => {
 		const h = harness({ installed: "18.22.2" });
+		h.set.verified = [];
 		const gate = Promise.withResolvers<string>();
 		h.fetchLatest.mockImplementationOnce(() => {
 			h.calls.push("fetch");
@@ -649,28 +771,27 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 			["started", "manual"],
 			["finished", "manual"],
 		]);
-		// The click was for that pass only: the timer's next one holds 19.0.1 again.
+		// The click was for that pass only: the timer's next one holds 19.0.1.
 		h.set.latest = "19.0.1";
 		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
 		expect(h.update).toHaveBeenCalledTimes(1);
 		h.updater.dispose();
 	});
 
-	it("a click that lands while a held pass still looks up the tested major's newest release installs the held major", async () => {
-		const h = harness({ installed: "18.22.0" });
+	it("a click that lands while the pass still reads the verified list installs the held omp", async () => {
+		const h = harness({ installed: "18.22.2" });
 		h.set.latest = "19.0.0";
 		h.set.outcome = { kind: "updated", version: "19.0.0" };
-		const gate = Promise.withResolvers<string | null>();
-		h.newestWithin.mockImplementationOnce(() => gate.promise);
+		const gate = Promise.withResolvers<{ verified: string[]; holding: null }>();
+		h.compat.mockImplementationOnce(() => gate.promise);
 		h.updater.start();
 		await vi.advanceTimersByTimeAsync(0);
 		const clicked = h.updater.updateNow();
-		gate.resolve("18.22.2");
+		gate.resolve({ verified: [], holding: null });
 		await clicked;
 		expect(h.calls).toEqual(["fetch", "update 19.0.0", "release", "resume true", "toast 19.0.0"]);
 		expect(h.logs.map(([step, details]) => [step, details.path])).toEqual([
-			["checked", "launch"],
-			["held", "launch"],
+			["checked", "manual"],
 			["started", "manual"],
 			["finished", "manual"],
 		]);
@@ -680,7 +801,7 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 	it("a click after the version is chosen changes nothing about the install that runs", async () => {
 		const h = harness({ installed: "18.22.0" });
 		h.set.latest = "19.0.0";
-		h.set.within = "18.22.2";
+		h.set.verified = ["18.22.2"];
 		const gate = Promise.withResolvers<void>();
 		h.update.mockImplementationOnce(async (target, beforeInstall, exactOnly) => {
 			h.calls.push(exactOnly ? `update ${target} exact` : `update ${target}`);
@@ -694,20 +815,13 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		const clicked = h.updater.updateNow();
 		gate.resolve();
 		await clicked;
-		expect(h.calls).toEqual([
-			"fetch",
-			"within 18",
-			"update 18.22.2 exact",
-			"release",
-			"resume true",
-			"toast 18.22.2",
-		]);
+		expect(h.calls).toEqual(["fetch", "update 18.22.2 exact", "release", "resume true", "toast 18.22.2"]);
 		expect(h.logs.at(-1)).toEqual([
 			"finished",
 			{ path: "launch", from: "18.22.0", target: "18.22.2", version: "18.22.2" },
 		]);
-		// The major is still held: the next click installs it.
-		expect(h.updater.state().held).toEqual(HELD);
+		// 19.0.0 is still held: the next click installs it.
+		expect(h.updater.state().held).toEqual(VERIFYING);
 		h.updater.dispose();
 	});
 
@@ -724,15 +838,160 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		h.set.outcome = { kind: "failed", failure: { reason: "install", detail: "exit 1 — EBUSY" } };
 		await h.updater.updateNow();
 		expect(h.logs).toEqual([
-			["checked", { path: "manual", installed: "18.22.0", latest: "18.23.0", tested: TESTED }],
+			["checked", { path: "manual", installed: "18.22.0", latest: "18.23.0", tested: TESTED, verified: "18.23.0" }],
 			["started", { path: "manual", from: "18.22.0", target: "18.23.0" }],
 			["failed", { path: "manual", target: "18.23.0", reason: "install", detail: "exit 1 — EBUSY" }],
 		]);
 		h.updater.dispose();
 	});
 
+	it("a paired device reads what its host holds from the host's state, whichever the reason", () => {
+		const h = harness();
+		for (const held of [
+			VERIFYING,
+			{ version: "19.0.0", reason: "failed", since: SINCE },
+			{ version: "19.0.0", reason: "untested-major" },
+		] as const) {
+			expect(OmpUpdateStateSchema.parse({ ...h.updater.state(), held }).held).toEqual(held);
+		}
+		// A host whose OMPdesk predates the fields still parses.
+		const { held: _, verified: __, stockAutoTaken: ___, ...older } = h.updater.state();
+		const parsed = OmpUpdateStateSchema.parse(older);
+		expect(parsed.held).toBeUndefined();
+		expect(parsed.verified).toBeUndefined();
+		h.updater.dispose();
+	});
+});
+
+describe("OmpUpdater with the verified list off (the default: 0.135.0's passes with the major guard)", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const HELD = { version: "19.0.0", reason: "untested-major" } as const;
+
+	it("a scheduled check that finds a newer major installs nothing, says it is held, and never reads the verified list", async () => {
+		const h = harness({ installed: "18.22.2", follow: false });
+		h.set.latest = "19.0.0";
+		h.set.within = "18.22.2";
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.calls).toEqual(["fetch", "within 18"]);
+		expect(h.updater.state()).toMatchObject({
+			phase: "idle",
+			installed: "18.22.2",
+			latest: "19.0.0",
+			held: HELD,
+			failure: null,
+			updatedTo: null,
+		});
+		expect(h.updater.state().verified).toBeUndefined();
+		expect(h.notices).toEqual([]);
+		// Holding is no failure: the next check is one normal interval away, and it holds again.
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.fetchLatest).toHaveBeenCalledTimes(2);
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.compat).not.toHaveBeenCalled();
+		expect(h.logs).toEqual([
+			["checked", { path: "launch", installed: "18.22.2", latest: "19.0.0", tested: TESTED }],
+			["held", { path: "launch", installed: "18.22.2", ...HELD, tested: TESTED }],
+			["checked", { path: "scheduled", installed: "18.22.2", latest: "19.0.0", tested: TESTED }],
+			["held", { path: "scheduled", installed: "18.22.2", ...HELD, tested: TESTED }],
+		]);
+		h.updater.dispose();
+	});
+
+	it("a scheduled check installs the registry's newest release of the tested major, by name only, whatever the list says", async () => {
+		const h = harness({ installed: "18.22.2", follow: false });
+		h.set.latest = "18.23.0";
+		h.set.verified = [];
+		h.set.outcome = { kind: "updated", version: "18.23.0" };
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.calls).toEqual(["fetch", "update 18.23.0 exact", "release", "resume true", "toast 18.23.0"]);
+		expect(h.updater.state()).toMatchObject({ installed: "18.23.0", updatedTo: "18.23.0", held: null });
+		h.updater.dispose();
+	});
+
+	it("while a major is held, a scheduled check still installs the newest release of the tested major, by name only", async () => {
+		const h = harness({ installed: "18.22.0", follow: false });
+		h.set.latest = "19.0.0";
+		h.set.within = "18.22.2";
+		h.set.outcome = { kind: "updated", version: "18.22.2" };
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.calls).toEqual([
+			"fetch",
+			"within 18",
+			"update 18.22.2 exact",
+			"release",
+			"resume true",
+			"toast 18.22.2",
+		]);
+		expect(h.updater.state()).toMatchObject({ installed: "18.22.2", updatedTo: "18.22.2", held: HELD });
+		h.updater.dispose();
+	});
+
+	it("never installs what the lookup for the tested major answers when that is another major, nor a version whose major cannot be read", async () => {
+		const h = harness({ installed: "18.22.0", follow: false });
+		h.set.latest = "19.0.0";
+		h.set.within = "19.0.0";
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.updater.state().held).toEqual(HELD);
+		h.set.latest = "nightly-3f2a";
+		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.updater.state().held).toEqual({ version: "nightly-3f2a", reason: "untested-major" });
+		h.updater.dispose();
+	});
+
+	it("the repair pass with the pref on installs no newer major", async () => {
+		const h = harness({ installed: "18.22.2", follow: false });
+		h.set.latest = "19.0.0";
+		h.set.within = "18.22.2";
+		await h.updater.repair();
+		expect(h.update).not.toHaveBeenCalled();
+		expect(h.updater.state()).toMatchObject({ installed: "18.22.2", held: HELD, failure: null });
+		h.updater.dispose();
+	});
+
+	it("Update now installs a held major through whatever owns omp: a person's click is the ask", async () => {
+		const h = harness({ installed: "18.22.2", follow: false });
+		h.set.latest = "19.0.0";
+		h.set.within = "18.22.2";
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		h.calls.length = 0;
+		h.set.outcome = { kind: "updated", version: "19.0.0" };
+		await h.updater.updateNow();
+		expect(h.calls).toEqual(["fetch", "update 19.0.0", "release", "resume true", "toast 19.0.0"]);
+		expect(h.updater.state()).toMatchObject({ installed: "19.0.0", held: null, failure: null });
+		h.updater.dispose();
+	});
+
+	it("a click that lands while a held pass still looks up the tested major's newest release installs the held major", async () => {
+		const h = harness({ installed: "18.22.0", follow: false });
+		h.set.latest = "19.0.0";
+		h.set.outcome = { kind: "updated", version: "19.0.0" };
+		const gate = Promise.withResolvers<string | null>();
+		h.newestWithin.mockImplementationOnce(() => gate.promise);
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		const clicked = h.updater.updateNow();
+		gate.resolve("18.22.2");
+		await clicked;
+		expect(h.calls).toEqual(["fetch", "update 19.0.0", "release", "resume true", "toast 19.0.0"]);
+		h.updater.dispose();
+	});
+
 	it("a failed lookup of the tested major's newest release is a failed check, and nothing installs", async () => {
-		const h = harness({ installed: "18.22.0" });
+		const h = harness({ installed: "18.22.0", follow: false });
 		h.set.latest = "19.0.0";
 		h.newestWithin.mockRejectedValueOnce(new Error("bun pm view: 503"));
 		h.updater.start();
@@ -742,13 +1001,24 @@ describe("OmpUpdater and the tested major (19 Nov 2026: omp 19.0.0 installed its
 		h.updater.dispose();
 	});
 
-	it("a paired device reads what its host holds from the host's state", () => {
-		const h = harness();
-		const held = OmpUpdateStateSchema.parse({ ...h.updater.state(), held: HELD });
-		expect(held.held).toEqual(HELD);
-		// A host whose OMPdesk predates the field still parses.
-		const { held: _, ...older } = h.updater.state();
-		expect(OmpUpdateStateSchema.parse(older).held).toBeUndefined();
+	it("turning the list on later holds what it has not verified at the next check, and off again drops the list", async () => {
+		const h = harness({ installed: "18.22.2", follow: false });
+		h.set.latest = "18.23.0";
+		h.set.verified = [];
+		h.set.outcome = { kind: "failed", failure: { reason: "install", detail: "EBUSY" } };
+		h.updater.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).toHaveBeenCalledTimes(1);
+		h.set.follow = true;
+		h.updater.prefChanged();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).toHaveBeenCalledTimes(1);
+		expect(h.updater.state()).toMatchObject({ verified: [], held: { version: "18.23.0", reason: "verifying" } });
+		h.set.follow = false;
+		h.updater.prefChanged();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.update).toHaveBeenCalledTimes(2);
+		expect(h.updater.state().verified).toBeUndefined();
 		h.updater.dispose();
 	});
 });

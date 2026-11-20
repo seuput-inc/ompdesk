@@ -8,11 +8,13 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SetupPresence } from "../../shared/setup";
 import {
@@ -20,6 +22,7 @@ import {
 	buildPlan,
 	manualSteps,
 	ompInstallSpecs,
+	ompNpmOwner,
 	type PlanContext,
 	PORTABLE_GIT,
 	selectMethod,
@@ -43,8 +46,9 @@ const mac: PlanContext = {
 	toolsDir: "/data/tools",
 	bun: "/home/u/.bun/bin/bun",
 	omp: null,
-	ompManaged: false,
 	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
+	ompNpm: null,
+	ompVersion: "18.22.2",
 	brew: "/opt/homebrew/bin/brew",
 	winget: null,
 	systemRoot: "C:\\Windows",
@@ -56,8 +60,9 @@ const win: PlanContext = {
 	toolsDir: "C:\\Users\\First Last\\AppData\\Local\\ompdesk\\tools",
 	bun: "C:\\Users\\First Last\\.bun\\bin\\bun.exe",
 	omp: null,
-	ompManaged: false,
 	ompSpecs: ["@oh-my-pi/pi-coding-agent@18.22.2"],
+	ompNpm: null,
+	ompVersion: "18.22.2",
 	brew: null,
 	winget: "C:\\Users\\First Last\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe",
 	systemRoot: "C:\\Windows",
@@ -76,16 +81,23 @@ describe("selectMethod", () => {
 		}
 	});
 
-	it("picks Bun's script, the bun global install, and omp update for an omp below the minimum", () => {
+	it("picks Bun's script and an exact-version install for omp, npm's for an omp npm owns, never stock's update", () => {
 		expect(selectMethod("bun", missing, mac)).toBe("bun-script");
 		expect(selectMethod("bun", missing, win)).toBe("bun-script");
 		expect(selectMethod("omp", missing, mac)).toBe("bun-global");
 		expect(selectMethod("omp", { kind: "broken", detail: "x", path: "/x" }, mac)).toBe("bun-global");
-		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp" })).toBe("omp-update");
-		// A too-old omp Bun manages gets the package install (the tested omp); stock's update picks its own target.
-		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp", ompManaged: true })).toBe(
-			"bun-global",
-		);
+		// Never stock `omp update` (it picks the registry's newest, whatever its major): a too-old omp of another Bun root
+		// or a checkout gets the tested omp as Bun's package.
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/home/u/.bun/bin/omp" })).toBe("bun-global");
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/opt/checkout/bin/omp" })).toBe("bun-global");
+		expect(
+			selectMethod("omp", outdated, { ...win, omp: "C:\\Users\\First Last\\AppData\\Local\\other\\omp.exe" }),
+		).toBe("bun-global");
+		// A too-old or broken omp npm owns gets the tested omp through that npm; a missing one is still Bun's to install.
+		const ompNpm = { npm: "/usr/local/bin/npm", prefix: "/usr/local" };
+		expect(selectMethod("omp", outdated, { ...mac, omp: "/usr/local/bin/omp", ompNpm })).toBe("npm-global");
+		expect(selectMethod("omp", { kind: "broken", detail: "x", path: "/x" }, { ...mac, ompNpm })).toBe("npm-global");
+		expect(selectMethod("omp", missing, mac)).toBe("bun-global");
 	});
 
 	it("upgrades a Bun older than omp's engines with `bun upgrade`, and installs it afresh without one", () => {
@@ -250,6 +262,84 @@ describe("buildPlan", () => {
 			shell: true,
 		});
 		expect(buildPlan("omp", "omp-update", mac)).toBeNull();
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"installs a too-old omp npm owns at the one version it is handed, into that npm's prefix",
+		() => {
+			const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-omp-npm-")));
+			try {
+				const pkg = join(root, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent");
+				mkdirSync(join(pkg, "src"), { recursive: true });
+				writeFileSync(join(pkg, "src", "cli.ts"), "");
+				mkdirSync(join(root, "bin"));
+				writeFileSync(join(root, "bin", "npm"), "");
+				symlinkSync(join(pkg, "src", "cli.ts"), join(root, "bin", "omp"));
+				const omp = join(root, "bin", "omp");
+				const ompNpm = ompNpmOwner(omp, { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" });
+				expect(ompNpm).toEqual({ npm: join(root, "bin", "npm"), prefix: root });
+				const ctx = { ...mac, omp, ompNpm, ompVersion: "18.22.2" };
+				expect(selectMethod("omp", outdated, ctx)).toBe("npm-global");
+				const plan = buildPlan("omp", "npm-global", ctx);
+				expect(plan?.spawn).toEqual({
+					file: join(root, "bin", "npm"),
+					args: ["install", "-g", "--prefix", root, "@oh-my-pi/pi-coding-agent@18.22.2"],
+					shell: false,
+				});
+				expect(plan?.command).toBe(
+					`"${join(root, "bin", "npm")}" install -g --prefix "${root}" @oh-my-pi/pi-coding-agent@18.22.2`,
+				);
+				expect(plan?.location).toBe(pkg);
+				// Another package's launcher in the same prefix, and an omp outside any npm prefix, are not npm's omp.
+				const other = join(root, "lib", "node_modules", "other", "cli.js");
+				mkdirSync(dirname(other), { recursive: true });
+				writeFileSync(other, "");
+				expect(ompNpmOwner(other, { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" })).toBeNull();
+				expect(
+					ompNpmOwner("/opt/checkout/bin/omp", { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" }),
+				).toBeNull();
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("follows a Windows npm .cmd shim to the prefix that holds omp, and runs npm.cmd from PATH through cmd.exe", () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-omp-npm-win-")));
+		try {
+			const prefix = join(root, "npm");
+			const node = join(root, "nodejs");
+			mkdirSync(prefix);
+			mkdirSync(node);
+			writeFileSync(join(node, "npm.cmd"), "");
+			const shim = join(prefix, "omp.cmd");
+			writeFileSync(shim, '@ECHO off\r\n"%dp0%\\node_modules\\@oh-my-pi\\pi-coding-agent\\src\\cli.ts" %*\r\n');
+			const where = { platform: "win32" as const, toolsDir: win.toolsDir, pathEnv: node };
+			const ompNpm = ompNpmOwner(shim, where);
+			// The prefix reads as a Windows path whatever host builds the plan.
+			expect(ompNpm).toEqual({ npm: join(node, "npm.cmd"), prefix: win32.normalize(prefix) });
+			// No npm anywhere: nothing can install into that prefix.
+			expect(ompNpmOwner(shim, { ...where, pathEnv: "" })).toBeNull();
+			// A project's own shim names a package above its folder: never a global prefix to install into.
+			const local = join(root, "proj", "node_modules", ".bin");
+			mkdirSync(local, { recursive: true });
+			writeFileSync(join(local, "omp.cmd"), '"%dp0%\\..\\@oh-my-pi\\pi-coding-agent\\src\\cli.ts" %*\r\n');
+			expect(ompNpmOwner(join(local, "omp.cmd"), where)).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+		const npm = "C:\\Program Files\\nodejs\\npm.cmd";
+		const prefix = "C:\\Users\\First Last\\AppData\\Roaming\\npm";
+		const ctx = { ...win, omp: `${prefix}\\omp.cmd`, ompNpm: { npm, prefix }, ompVersion: "18.22.2" };
+		expect(selectMethod("omp", outdated, ctx)).toBe("npm-global");
+		const plan = buildPlan("omp", "npm-global", ctx);
+		expect(plan?.spawn).toEqual({
+			file: `"${npm}"`,
+			args: ['"install"', '"-g"', '"--prefix"', `"${prefix}"`, '"@oh-my-pi/pi-coding-agent@18.22.2"'],
+			shell: true,
+		});
+		expect(plan?.location).toBe(`${prefix}\\node_modules\\@oh-my-pi\\pi-coding-agent`);
+		expect(buildPlan("omp", "npm-global", win)).toBeNull();
 	});
 
 	it("has main download the pinned PortableGit, re-checks its published SHA-256, and extracts it without admin", () => {

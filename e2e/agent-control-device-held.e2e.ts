@@ -99,21 +99,19 @@ test("an agent on one device messages and reopens a session another device's tab
 				.not.toBe("");
 		});
 
-		await test.step("its message runs in A's omp: no second omp on the host, and the session is not its child", async () => {
+		await test.step("its message runs in A's omp: no second omp on the host, not its child, and the view it joined to deliver goes", async () => {
 			const launchedBefore = await launches();
 			const sent = await call("ompdesk_session_send", { session: savedId, message: "Clean up from PC-C's agent" });
 			expect(sent.isError, sent.text).toBe(false);
 			await expect.poll(() => promptBy("Clean up from PC-C's agent"), { timeout: 30_000 }).toBe(aOmp);
 			await expect(a.getByText("Clean up from PC-C's agent").first()).toBeVisible({ timeout: 30_000 });
 			expect(await launches()).toBe(launchedBefore);
-			expect((await cTabs()).map(tab => tab.shared)).toEqual([true]);
+			// The view made only to hand the message over closes once the call answered (C3): no tab is left on C.
+			await expect.poll(async () => (await cTabs()).length, { timeout: 30_000 }).toBe(0);
 			expect((await call("ompdesk_sessions", { scope: "app", mine: true })).text).toMatch(/^0 sessions/);
 		});
 
-		await test.step("closed on C and reopened by C's agent: a view of A's tab again, not its child", async () => {
-			const view = (await cTabs())[0]?.tabId ?? "";
-			expect(await c.evaluate(id => window.omp.tabs.close(id), view)).toBe(true);
-			await expect.poll(async () => (await cTabs()).length, { timeout: 30_000 }).toBe(0);
+		await test.step("reopened by C's agent: a view of A's tab again, not its child", async () => {
 			const launchedBefore = await launches();
 			const reopened = await call("ompdesk_session_open", { reopen: savedId });
 			expect(reopened.isError, reopened.text).toBe(false);

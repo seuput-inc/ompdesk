@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
+import { NEXT_PROMPT_ENV } from "../../resources/gui-bridge/modes/next-prompt-contracts";
 import {
 	MODEL_REQUEST_EVENT,
 	TURN_STAGES_EVENT,
@@ -157,6 +158,9 @@ async function startOmp(provider: Provider, isolated: string, extension: string)
 		OMP_GUI_BRIDGE: address,
 		PI_STREAM_FIRST_EVENT_TIMEOUT_MS: String(FIRST_EVENT_TIMEOUT_MS),
 		[TURN_STAGES_LATE_ENV]: String(LATE_MS),
+		// The provider counts every request. After `agent_end` the bridge's next-prompt suggestion sends one of its own
+		// (smol role, no tools); on a loaded runner it lands before the count is read ("got 2", omp-latest 44516017584).
+		[NEXT_PROMPT_ENV]: JSON.stringify({ suggestions: false, inline: false }),
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) Reflect.deleteProperty(env, key);
@@ -273,6 +277,10 @@ describe.skipIf(!existsSync(omp))("turn stages on stock omp", () => {
 		const flag = join(isolated, "slow");
 		const run = await startOmp(provider, isolated, slowHandlerExtension(isolated, flag));
 		expect((await run.send({ type: "set_auto_retry", enabled: false })).success).toBe(true);
+		// A named session gets no title request: stock names a new one with a side request to the same provider once
+		// the first reply arrives, which landed 1.3 s after the turn's own and made `arrivals` two (omp-latest run
+		// 44615080026, Windows).
+		expect((await run.send({ type: "set_session_name", name: "turn stages" })).success).toBe(true);
 		// The omp internals the tracing uses are all there (capabilities.ts `turnStages`).
 		const { unavailable } = await run.bridge.request<{ unavailable: Array<{ feature: string }> }>("capabilities", {});
 		expect(unavailable.map(entry => entry.feature)).not.toContain("turnStages");

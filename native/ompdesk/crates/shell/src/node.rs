@@ -94,13 +94,28 @@ pub fn watch(on_exit: impl FnOnce(Option<i32>) + Send + 'static) {
                     }
                 };
                 match status {
-                    Ok(Some(status)) => return on_exit(status.code()),
+                    Ok(Some(status)) => {
+                        log("node.exited", exit_fields(&status));
+                        return on_exit(status.code());
+                    }
                     Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
-                    Err(_) => return on_exit(None),
+                    Err(error) => {
+                        log("node.exited", json!({ "error": error.to_string() }));
+                        return on_exit(None);
+                    }
                 }
             }
         })
         .expect("node watch thread");
+}
+
+/// How Node ended, for the log: its exit code, or on POSIX the signal that ended it.
+fn exit_fields(status: &std::process::ExitStatus) -> serde_json::Value {
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(status);
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    json!({ "code": status.code(), "signal": signal })
 }
 
 /// Waits for an accepted exit without closing stdin ahead of its reply; otherwise asks Node to stop through stdin.
@@ -116,11 +131,16 @@ pub fn stop(grace: std::time::Duration) {
     };
     let deadline = std::time::Instant::now() + grace;
     while std::time::Instant::now() < deadline {
-        if matches!(node.child.try_wait(), Ok(Some(_))) {
+        if let Ok(Some(status)) = node.child.try_wait() {
+            log("node.stopped", exit_fields(&status));
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     let _ = node.child.kill();
-    let _ = node.child.wait();
+    let status = node.child.wait();
+    log(
+        "node.killed",
+        json!({ "graceMs": grace.as_millis() as u64, "exit": status.as_ref().map(exit_fields).ok() }),
+    );
 }

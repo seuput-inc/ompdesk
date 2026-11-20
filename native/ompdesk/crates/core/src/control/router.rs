@@ -42,7 +42,6 @@ pub struct Connection {
 
 /// node's longest timer.
 const MAX_TIMER_MS: f64 = 2_147_483_647.0;
-const DELIVERIES: [&str; 2] = ["follow_up", "steer"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Until {
@@ -331,13 +330,10 @@ async fn send(
     else {
         return Err(failure("bad_request", "message must be text"));
     };
-    let delivery = request.raw("delivery");
-    if let Some(delivery) = delivery
-        && !frame::text_of(delivery).is_some_and(|text| DELIVERIES.contains(&text.as_str()))
-    {
+    if request.raw("delivery").is_some() {
         return Err(failure(
             "bad_request",
-            "delivery must be one of follow_up, steer",
+            "delivery was removed: every message is read at the receiver's next step",
         ));
     }
     let request_id = request.raw("requestId");
@@ -365,7 +361,6 @@ async fn send(
         Sending {
             name,
             message,
-            delivery,
             request_id,
             force,
             wait: wait.is_some(),
@@ -388,7 +383,6 @@ async fn send(
 struct Sending<'a> {
     name: Box<RawValue>,
     message: &'a str,
-    delivery: Option<&'a str>,
     request_id: Option<&'a str>,
     force: bool,
     wait: bool,
@@ -418,9 +412,6 @@ async fn sent(
         json(&tab)?,
         sending.message
     );
-    if let Some(delivery) = sending.delivery {
-        args.push_str(&format!(",\"delivery\":{delivery}"));
-    }
     if let Some(request_id) = sending.request_id {
         args.push_str(&format!(",\"request_id\":{request_id}"));
     }

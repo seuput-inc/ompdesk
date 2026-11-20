@@ -128,6 +128,13 @@ describe("hang marker", () => {
 		expect(consumeHangMarker(file)).toMatchObject({ unresponsiveMs: 9_000, selfRecovered: true });
 	});
 
+	it("keeps what the worker read of the computer, primitives only", () => {
+		const file = join(dir, "m.json");
+		const machine = { availMB: 512, cpuBusyPct: 99.5 };
+		writeFileSync(file, JSON.stringify({ ...marker, machine: { ...machine, nested: { a: 1 }, list: [1] } }));
+		expect(consumeHangMarker(file)).toEqual({ ...marker, machine });
+	});
+
 	it("drops a corrupt or invalid marker without throwing", () => {
 		const file = join(dir, "m.json");
 		writeFileSync(file, "{not json");

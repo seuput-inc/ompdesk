@@ -493,6 +493,7 @@ impl Ctx {
             was_since: Option<i64>,
             was_saga: Option<super::run::Saga>,
             unsaved_before: Option<String>,
+            goal_before: bool,
         }
         let list = events.as_array().cloned().unwrap_or_default();
         let (seen, run_ended, retry_started, stepped, hidden, win) = self.with(|pool| {
@@ -509,6 +510,7 @@ impl Ctx {
                 was_since: entry.tracking.run.since,
                 was_saga: entry.tracking.run.saga.clone(),
                 unsaved_before: entry.unsaved_prompt.clone(),
+                goal_before: entry.tracking.goal_active,
             };
             let mut run_ended = false;
             let mut retry_started = false;
@@ -578,7 +580,7 @@ impl Ctx {
         let Some(seen) = seen else {
             return Ok(());
         };
-        let (busy, settling, placeholder, since, saga, unsaved) = self.with(|pool| {
+        let (busy, settling, placeholder, since, saga, unsaved, goal) = self.with(|pool| {
             let entry = pool.entry(tab).expect("the tab is in the pool");
             (
                 entry.busy(),
@@ -587,12 +589,18 @@ impl Ctx {
                 entry.tracking.run.since,
                 entry.tracking.run.saga.clone(),
                 entry.unsaved_prompt.clone(),
+                entry.tracking.goal_active,
             )
         });
         let busy_changed = busy != seen.was_busy;
         // The resume rules first: a failure they turn into a connection wait reaches the window already waiting, so
-        // it never shows (or notifies) as a failure first.
-        if busy_changed || run_ended || retry_started || unsaved != seen.unsaved_before {
+        // it never shows (or notifies) as a failure first. A goal turning active or not changes the tab's marker.
+        if busy_changed
+            || run_ended
+            || retry_started
+            || unsaved != seen.unsaved_before
+            || goal != seen.goal_before
+        {
             self.on_running_change().await?;
         }
         if busy_changed || (run_ended && !busy) {

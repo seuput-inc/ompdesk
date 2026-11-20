@@ -478,8 +478,8 @@ for (const engine of ENGINES)
 					await phone.locator("header button:has(svg.lucide-menu)").click();
 					await phone.locator('[data-destination="settings"]').click();
 					await phone.locator('[data-settings-section="appearance"]').click();
-					await phone.locator(`[data-theme-option="${name}"]`).scrollIntoViewIfNeeded();
-					await phone.locator(`[data-theme-option="${name}"]`).click();
+					await phone.locator(`[data-theme-mode="${name}"]`).scrollIntoViewIfNeeded();
+					await phone.locator(`[data-theme-mode="${name}"]`).click();
 					await phone.getByRole("button", { name: "Back to session" }).click();
 					await expect(field).toBeVisible();
 					await phone.waitForTimeout(800);

@@ -1,8 +1,7 @@
 /**
- * Software-rendering escape hatch. When the Chromium GPU process crashes on a
- * machine (typical on Windows 10 with old Intel graphics drivers), every
- * window can go black while the app keeps running. Relaunching once with
- * hardware acceleration disabled is the recovery.
+ * Software-rendering escape hatch for a GPU that keeps failing. One GPU process crash is WebView2's to recover: it
+ * starts a new GPU process and repaints (the Tauri host reports the crash as `app.childProcessGone`). A second crash
+ * within 10 minutes, or a crash in a hardware trial, relaunches once with hardware acceleration disabled.
  *
  * Never twice: with hardware acceleration off Chromium still runs a GPU
  * process (SwiftShader, WARP on Windows), restarts it itself when it dies and
@@ -213,16 +212,12 @@ export function markerForcesSoftware(marker: string): boolean {
 }
 
 /**
- * Called from the `child-process-gone` handler. A hardware launch whose GPU process dies early writes the marker and
- * relaunches into software rendering, once. A launch up for `GPU_CRASH_SETTLED_MS` leaves its first crash to Chromium
- * (it restarts the GPU process and the window stays up) and writes no marker, so hardware stays, here and on the
- * next launch; a second crash within the cooldown of that one is a GPU that keeps dying and takes the marker path.
- * Every other launch leaves recovery to Chromium. `upMs` is this launch's age (a test passes its own).
+ * Called from the `child-process-gone` handler. A hardware launch leaves its first GPU crash to WebView2 (it restarts
+ * the GPU process and repaints) and writes no marker, so hardware stays, here and on the next launch; a second crash
+ * within the cooldown of that one is a GPU that keeps dying, and it, or a crash in a hardware trial, writes the marker
+ * and relaunches into software rendering, once. Every other launch leaves recovery to WebView2.
  */
-export function handleGpuProcessGone(
-	details: { type: string; reason: string; exitCode: number | undefined },
-	upMs = process.uptime() * 1000,
-): void {
+export function handleGpuProcessGone(details: { type: string; reason: string; exitCode: number | undefined }): void {
 	if (!isGpuProcessCrash(details) || gpuCrashHandled) return;
 	const exit = { reason: details.reason, exitCode: details.exitCode ?? null };
 	const now = Date.now();
@@ -230,17 +225,17 @@ export function handleGpuProcessGone(
 		software: softwareLaunch,
 		safeMode: launchSafeMode(),
 		testLaunch: process.env.OMP_GUI_HEADLESS === "1",
+		trial: hardwareTrial,
 		history: launchHistory(),
 		now,
-		upMs,
 		crashedBefore: gpuCrashedAt,
 	});
 	if (!decision.relaunch && decision.why === "settled") {
 		gpuCrashedAt = now;
 		writeRuntimeLog({
 			source: "gpu-fallback",
-			message: `GPU process exited (${details.reason}) after ${Math.round(upMs / 1000)} s up: Chromium restarts it, hardware acceleration stays`,
-			details: { ...exit, why: decision.why, upMs: Math.round(upMs) },
+			message: `GPU process exited (${details.reason}): WebView2 restarts it and repaints, hardware acceleration stays`,
+			details: { ...exit, why: decision.why },
 		});
 		return;
 	}

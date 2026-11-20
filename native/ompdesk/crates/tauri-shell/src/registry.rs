@@ -1,4 +1,6 @@
-use std::collections::{HashMap, VecDeque};
+use crate::page_watch::{Activity, Step, Watch};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -31,6 +33,8 @@ pub struct Page {
     pub zoom: f64,
     pub ready: bool,
     pub pushes: VecDeque<String>,
+    /// The responsiveness watch of an app window's page (page_watch); a Preview page has none.
+    pub watch: Option<Watch>,
 }
 
 #[derive(Default)]
@@ -72,6 +76,7 @@ impl Registry {
                 zoom: 1.0,
                 ready: false,
                 pushes: VecDeque::new(),
+                watch: (kind == Kind::App).then(Watch::default),
             },
         );
         Ok(label)
@@ -101,6 +106,7 @@ impl Registry {
                 zoom: 1.0,
                 ready: false,
                 pushes: VecDeque::new(),
+                watch: None,
             },
         );
         Ok(label)
@@ -136,6 +142,9 @@ impl Registry {
         let page = self.pages.get_mut(&wc)?;
         page.url = url;
         page.loading = true;
+        if let Some(watch) = &mut page.watch {
+            watch.document_started();
+        }
         Some(identity)
     }
     pub fn invalidate(&mut self, wc: u64) -> Option<Identity> {
@@ -147,6 +156,56 @@ impl Registry {
         page.ready = false;
         page.pushes.clear();
         Some(page.identity)
+    }
+    /// The content process of an app page ended: its document is gone (its callbacks are stale, pushes queue for the
+    /// next document's `ready`), nothing loads, and the watch rests until a document starts. The flag says the host
+    /// ended the process itself.
+    pub fn process_gone(&mut self, wc: u64) -> Option<(Identity, bool)> {
+        self.watched(wc)?;
+        let identity = self.invalidate(wc)?;
+        let page = self.pages.get_mut(&wc)?;
+        page.loading = false;
+        let killed = page.watch.as_mut().is_some_and(Watch::process_gone);
+        Some((identity, killed))
+    }
+    /// A live app page's watch.
+    pub fn watched(&mut self, wc: u64) -> Option<(Identity, &mut Watch)> {
+        let page = self
+            .pages
+            .get_mut(&wc)
+            .filter(|page| page.state == PageState::Live)?;
+        Some((page.identity, page.watch.as_mut()?))
+    }
+    /// The live app pages the watch covers, by their webview labels.
+    pub fn watched_labels(&self) -> Vec<(u64, String)> {
+        self.pages
+            .values()
+            .filter(|page| page.state == PageState::Live && page.watch.is_some())
+            .map(|page| (page.identity.wc, page.label.clone()))
+            .collect()
+    }
+    /// One turn of the watch over the live app pages: what each asks of the host. `inspected` names the pages whose
+    /// Web Inspector is open.
+    pub fn watch_turn(
+        &mut self,
+        step: Duration,
+        inspected: &HashSet<u64>,
+    ) -> Vec<(Identity, Step)> {
+        self.pages
+            .values_mut()
+            .filter(|page| page.state == PageState::Live)
+            .filter_map(|page| {
+                let activity = if inspected.contains(&page.identity.wc) {
+                    Activity::Inspected
+                } else if page.loading {
+                    Activity::Loading
+                } else {
+                    Activity::Settled
+                };
+                let step = page.watch.as_mut()?.turn(step, activity)?;
+                Some((page.identity, step))
+            })
+            .collect()
     }
     pub fn set_parent(&mut self, wc: u64, parent: Option<u64>) -> Result<(), &'static str> {
         if parent.is_some_and(|win| {
@@ -233,6 +292,87 @@ fn trusted_under(url: &str, dev_origin: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `seconds` one-second turns of the watch ask of the host, by page.
+    fn watch_turns(registry: &mut Registry, seconds: u64, inspected: &[u64]) -> Vec<(u64, Step)> {
+        let inspected = inspected.iter().copied().collect();
+        (0..seconds)
+            .flat_map(|_| registry.watch_turn(Duration::from_secs(1), &inspected))
+            .map(|(identity, step)| (identity.wc, step))
+            .collect()
+    }
+    fn load(registry: &mut Registry, wc: u64) {
+        registry
+            .navigate(wc, "app://ompdesk/index.html".into())
+            .unwrap();
+        registry.page_mut(wc).unwrap().loading = false;
+    }
+
+    #[test]
+    fn page_watch_asks_loaded_app_pages_only() {
+        let mut registry = Registry::default();
+        registry.create(1, 1).unwrap();
+        registry.create_view(1, 2).unwrap();
+        registry.create_offscreen(2, 3).unwrap();
+        registry.create(3, 4).unwrap();
+        registry.create(4, 5).unwrap();
+        for wc in [1, 2, 3] {
+            load(&mut registry, wc);
+        }
+        registry
+            .navigate(5, "app://ompdesk/index.html".into())
+            .unwrap();
+        assert_eq!(watch_turns(&mut registry, 5, &[]), [(1, Step::Probe(1))]);
+        assert!(registry.watched(2).is_none());
+        assert!(registry.watched(3).is_none());
+    }
+    #[test]
+    fn page_watch_leaves_an_inspected_page_alone() {
+        let mut registry = Registry::default();
+        registry.create(1, 1).unwrap();
+        load(&mut registry, 1);
+        assert_eq!(watch_turns(&mut registry, 60, &[1]), []);
+        assert_eq!(watch_turns(&mut registry, 1, &[]), [(1, Step::Probe(1))]);
+    }
+    #[test]
+    fn page_watch_ends_with_its_page() {
+        let mut registry = Registry::default();
+        registry.create(1, 1).unwrap();
+        load(&mut registry, 1);
+        assert_eq!(watch_turns(&mut registry, 5, &[]), [(1, Step::Probe(1))]);
+        registry.begin_close(1);
+        assert_eq!(watch_turns(&mut registry, 60, &[]), []);
+        assert!(registry.watched(1).is_none());
+        assert!(registry.process_gone(1).is_none());
+        registry.remove(1);
+        assert_eq!(watch_turns(&mut registry, 60, &[]), []);
+        assert!(registry.watched(1).is_none());
+    }
+    #[test]
+    fn page_watch_a_gone_content_process_ends_its_document_until_the_reload() {
+        let mut registry = Registry::default();
+        registry.create(1, 1).unwrap();
+        registry.create_view(1, 2).unwrap();
+        let old = registry
+            .navigate(1, "app://ompdesk/index.html".into())
+            .unwrap();
+        let page = registry.page_mut(1).unwrap();
+        page.ready = true;
+        page.pushes.push_back("push".into());
+        let (gone, killed) = registry.process_gone(1).unwrap();
+        assert!(!killed);
+        assert!(!registry.current(old));
+        assert!(registry.current(gone));
+        let page = registry.page(1).unwrap();
+        assert!(!page.ready && !page.loading && page.pushes.is_empty());
+        assert_eq!(watch_turns(&mut registry, 60, &[]), []);
+        assert!(registry.process_gone(2).is_none());
+
+        load(&mut registry, 1);
+        assert_eq!(watch_turns(&mut registry, 5, &[]), [(1, Step::Probe(1))]);
+        registry.watched(1).unwrap().1.killing(true);
+        assert!(registry.process_gone(1).unwrap().1);
+    }
     #[test]
     fn closed_ids_and_failed_creates_cannot_be_reused() {
         let mut registry = Registry::default();

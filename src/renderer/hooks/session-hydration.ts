@@ -129,6 +129,8 @@ export function applySessionState(
 	const todo = useTodoStore.getState();
 	todo.setTurnActive(state.isStreaming, todo.turnSourceKnown ? undefined : turnStartedAt);
 	useTodoStore.getState().setPhases(state.todoPhases);
+	// After the phases: a list this snapshot changed read as fresh there, and the bridge's reading is the one to show.
+	useTodoStore.getState().setDrift(state.todoDrift ?? null);
 }
 
 /**
@@ -847,7 +849,7 @@ function runtimeStores(tabId: string): HydrationStores {
 }
 
 /** What names a tab's transcript in the snapshot cache: its file, a file it is about to open, or its id. */
-function snapshotIdentity(tab: SessionTab) {
+export function snapshotIdentity(tab: SessionTab) {
 	return { sessionPath: tab.sessionPath ?? tab.pendingSessionPath, sessionId: tab.sessionId, device: tab.device };
 }
 
@@ -860,10 +862,26 @@ function seedFromSnapshot(tabId: string, { messages, session, tools, model }: Hy
 	if (session && !session.getState().cwd && tab.cwd) session.setState({ cwd: tab.cwd });
 	if (model) seedModelStore(model, tab.device, transcriptKey(snapshotIdentity(tab)));
 	if (!messages) return;
-	const rows = seedTranscript(messages, snapshotIdentity(tab));
+	const identity = snapshotIdentity(tab);
+	const rows = seedTranscript(messages, identity);
+	const key = transcriptKey(identity);
+	if (key)
+		transcriptProbe.set(tabId, {
+			...transcriptProbe.get(tabId),
+			seeded: { key, found: rows !== null, at: Date.now() },
+		});
 	// The tool cards derive from the rows: rebuilt, none of them waits for a result that is already in the rows.
 	if (rows) tools?.getState().hydrateMessages(rows, { turnIsLive: false });
 }
+
+/**
+ * Per tab, the transcript snapshot key it was last seeded from (and whether rows were there) and last written under,
+ * for `empty-transcript-probe.ts`, which reads it only when a known session's pane shows no rows.
+ */
+export const transcriptProbe = new Map<
+	string,
+	{ seeded?: { key: string; found: boolean; at: number }; written?: { key: string; at: number } }
+>();
 
 /**
  * Seed every tab the store lists as soon as it (or its session file) is known, not when its omp is ready: a tab
@@ -907,8 +925,9 @@ function watchTranscript(tabId: string, runtime: SessionRuntime, { messages, mod
 		clearTimeout(timer);
 		timer = setTimeout(() => {
 			const tab = useTabsStore.getState().tabs.find(entry => entry.id === tabId);
-			if (tab && sessionRuntime(tabId) === runtime)
-				writeTranscriptSnapshot(snapshotIdentity(tab), messages.getState().messages);
+			if (!tab || sessionRuntime(tabId) !== runtime) return;
+			const key = writeTranscriptSnapshot(snapshotIdentity(tab), messages.getState().messages);
+			if (key) transcriptProbe.set(tabId, { ...transcriptProbe.get(tabId), written: { key, at: Date.now() } });
 		}, TRANSCRIPT_WRITE_DELAY_MS);
 	});
 }

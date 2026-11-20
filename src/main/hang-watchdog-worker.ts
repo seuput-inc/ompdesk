@@ -7,11 +7,14 @@ import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import {
 	createHangDetector,
 	createStepRing,
+	HANG_MACHINE_MS,
+	type HangMarker,
 	type HangWorkerData,
 	type MainSteps,
 	type MainToHangWorkerMessage,
 	writeHangMarker,
 } from "./hang-watchdog-core";
+import { ownFacts, readOwn } from "./machine-state";
 
 function isWorkerData(value: unknown): value is HangWorkerData {
 	if (typeof value !== "object" || value === null) return false;
@@ -32,14 +35,16 @@ if (!isMainThread && parentPort && isWorkerData(workerData)) {
 	const ring = createStepRing();
 	// The steps at the moment of the hang: a recovered stall's rewrite still names the step that stalled.
 	let atHang: MainSteps = ring.snapshot();
-	const record = (unresponsiveMs: number, selfRecovered: boolean): void => {
+	let stall = { unresponsiveMs: 0, selfRecovered: false };
+	let machine: HangMarker["machine"];
+	const record = (): void => {
 		try {
 			writeHangMarker(config.markerPath, {
 				detectedAt: Date.now(),
 				pid: config.pid,
-				unresponsiveMs,
-				selfRecovered,
+				...stall,
 				...atHang,
+				...(machine ? { machine } : {}),
 			});
 		} catch {
 			// Best effort: a marker that cannot be written must not stop the watchdog.
@@ -49,12 +54,24 @@ if (!isMainThread && parentPort && isWorkerData(workerData)) {
 		timeoutMs: config.timeoutMs,
 		checkIntervalMs: config.checkIntervalMs,
 		now: () => Date.now(),
-		onHang: ms => {
+		onHang: unresponsiveMs => {
 			atHang = ring.snapshot();
-			record(ms, false);
+			stall = { unresponsiveMs, selfRecovered: false };
+			machine = undefined;
+			record();
+			// Main's thread is stuck, so this one says how the computer stands: memory now, and over the next second
+			// how busy the processors are and how much of them this process takes (little: main waits on something).
+			const before = readOwn();
+			setTimeout(() => {
+				machine = ownFacts(readOwn(), before);
+				record();
+			}, HANG_MACHINE_MS).unref();
 		},
 		// Rewriting the marker keeps one record per stall.
-		onResolved: ms => record(ms, true),
+		onResolved: unresponsiveMs => {
+			stall = { unresponsiveMs, selfRecovered: true };
+			record();
+		},
 	});
 	const timer = setInterval(() => detector.tick(), config.checkIntervalMs);
 	port.on("message", (message: MainToHangWorkerMessage) => {

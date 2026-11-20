@@ -169,6 +169,7 @@ import type {
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE, type SchedulesState } from "./schedules";
 import type { VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
+import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
 import type { GitAslrAction, GitAslrResult, SetupItemId, SetupState } from "./setup";
 import { type IpcSidebarProjects, SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "./sidebar-projects";
 import {
@@ -572,6 +573,12 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.SESSIONS_MESSAGES, { sessionPath, device }) as Promise<AgentMessage[]>,
 			move: (sessionPath: string, cwd: string, device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_MOVE, { sessionPath, cwd, device }) as Promise<string>,
+			/** What each row's session works in (`session-target.ts`), read on the computer that runs it. */
+			targets: (sessions: SessionTargetQuery[], device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_TARGETS, { sessions, device }) as Promise<SessionTargets>,
+			/** Repository images by root; resolves once each was looked up (bounded, cached on that computer). */
+			artwork: (roots: string[], device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_ARTWORK, { roots, device }) as Promise<SessionArtworks>,
 			saveDiagnosticBundle: (request: DiagnosticBundleRequest) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>
@@ -612,6 +619,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			reportFileEdits: async (dirtyTabId: string | null) => {
 				const payload: IpcFileEditReportPayload = { dirtyTabId };
 				await transport.invoke(IPC_COMMANDS.FILE_EDIT_REPORT, payload);
+			},
+			answerAgentClose: async answer => {
+				await transport.invoke(IPC_COMMANDS.AGENT_CLOSE_ANSWER, answer);
 			},
 			getSessionOwner: (sessionPath: string, device?: string) =>
 				transport.invoke(IPC_COMMANDS.GET_SESSION_OWNER, {

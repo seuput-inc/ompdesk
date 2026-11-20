@@ -30,6 +30,19 @@ export function windowsProcesses(): WinProcess[] {
 export const describeProcess = (process: WinProcess) =>
 	`${process.pid} (parent ${process.ppid}) ${process.name}: ${process.commandLine ?? process.exe ?? "?"}`;
 
+/** The app's core process (`ompdesk-core`, main's child; not the setup supervisor it starts). */
+export function corePids(mainPid: number): number[] {
+	if (process.platform === "win32")
+		return windowsProcesses()
+			.filter(entry => entry.ppid === mainPid && entry.name.toLowerCase() === "ompdesk-core.exe")
+			.map(entry => entry.pid);
+	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+		.split("\n")
+		.map(line => line.trim().split(/\s+/))
+		.filter(([, ppid, command]) => Number(ppid) === mainPid && command?.endsWith("ompdesk-core") === true)
+		.map(([pid]) => Number(pid));
+}
+
 /**
  * Processes whose command line names `root`: what a killed app left running there. Children get an open stdin pipe
  * and end when it closes (AGENTS.md), because a SIGKILL runs no quit handler.

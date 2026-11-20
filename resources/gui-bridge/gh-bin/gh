@@ -1,0 +1,13 @@
+#!/bin/sh
+# OMPdesk gh guard: main puts this folder first on a session's PATH, so every gh an agent's command runs comes
+# here first (resources/gui-bridge/gh-guard.ts, .omp/rules/waste-guards.md › Guard 6).
+dir=$(cd "$(dirname "$0")" && pwd)
+if command -v bun >/dev/null 2>&1; then exec bun "$dir/../gh-guard.ts" "$@"; fi
+# No bun on PATH: the next gh after this folder, untouched.
+IFS=:
+for d in $PATH; do
+	[ "$d" = "$dir" ] && continue
+	if [ -x "$d/gh" ] && [ ! -d "$d/gh" ] && ! grep -q "OMPdesk gh guard" "$d/gh" 2>/dev/null; then exec "$d/gh" "$@"; fi
+done
+echo "gh: command not found" >&2
+exit 127

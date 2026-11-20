@@ -5,6 +5,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir, release } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -56,7 +57,7 @@ import {
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
 import { REA_PREF, reaEnabled } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF } from "../shared/computer-use";
-import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
+import { CREDIT_SPEND_PREF, creditSpendEnabled } from "../shared/credit-spend";
 import { DEFAULT_BROWSER_PREF } from "../shared/default-browser";
 import {
 	APP_AUTO_UPDATE_PREF,
@@ -64,6 +65,7 @@ import {
 	CLOSE_TO_TRAY_PREF,
 	closeToTrayEnabled,
 	KEEP_AWAKE_WORKING_PREF,
+	OMP_FOLLOW_VERIFIED_PREF,
 	RESUME_INTERRUPTED_PREF,
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
@@ -79,6 +81,7 @@ import {
 } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
 import { MODEL_SETUP_RESEARCH_PICK_PREF } from "../shared/model-setup";
+import { compatEntry } from "../shared/omp-compat";
 import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
@@ -99,14 +102,14 @@ import { migrateAgentPowers } from "./agent-power-migration";
 import { lowerAgentPriority } from "./agent-priority";
 import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
-import { ompLaunch } from "./ai-memory/core-asks";
+import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
 import { registerAiMemoryIpc } from "./ai-memory/ipc";
 import { RecallTermsIndex } from "./ai-memory/recall-terms";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
 import { appIconPath, appNotification, holdTestNotifications } from "./app-icon";
-import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes } from "./app-quit";
+import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
@@ -119,6 +122,7 @@ import {
 	reaches,
 	tcpConnects,
 } from "./connectivity";
+import { CONSOLE_POLL_MS, type ConsoleWindow, ConsoleWindowWatch } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
@@ -160,16 +164,22 @@ import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./lo
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
+import { MachineState } from "./machine-state";
 import { MailAccounts, plainImapConnect } from "./mail-accounts";
+import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
-import { testMemoryReading } from "./memory-sampler";
+import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
+import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
 import { followSetupState } from "./omp-availability";
+import { OmpCompatSource } from "./omp-compat-source";
+import { heldSince, holdNotice, OMP_HELD_SEEN_PREF, OMP_HOLD_TOLD_PREF, parseHoldTold } from "./omp-hold-notice";
+import { creditSpendRun, SESSION_TAG_ENV } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
 import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
 import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
@@ -188,6 +198,7 @@ import { FileMarks } from "./routines/marks";
 import { filesChanged, githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
 import { RoutineTriggers } from "./routines/triggers";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
+import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
@@ -215,6 +226,7 @@ import { projectOfFolder, SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
+import { installSlowSteps, loopMaxMs } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
 import { StatsClient } from "./stats-client";
@@ -231,6 +243,7 @@ import { exitWithLauncher } from "./test-launcher-exit";
 import { createTray, destroyTray, hasTray } from "./tray";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
+import { TurnWaitWatch, WAIT_JOURNAL_BYTES, WAIT_JOURNAL_LINES, WAIT_SWEEP_MS } from "./turn-wait-watch";
 import {
 	appAutoUpdatePrefChanged,
 	appVersion,
@@ -323,6 +336,8 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
 	app.quit();
 }
+// Before anything else is logged: how the last run ended, and this run's end line when it exits.
+if (gotLock) startQuitLog();
 
 // Crash-loop guard (launch-guard-core.ts): when the last launches all ended within seconds, this one starts in
 // safe mode (software rendering, no automatic relaunch, machine setup and memory setup paused). Packaged runs
@@ -626,16 +641,6 @@ let connectivityMonitor: ConnectivityMonitor | null = null;
 /** The 3 s link sampling of `connectivityMonitor`. */
 let connectivityPoll: ReturnType<typeof setInterval> | null = null;
 
-function errorMessage(value: unknown): { message: string; stack?: string } {
-	if (value instanceof Error) return { message: value.message, stack: value.stack };
-	if (typeof value === "string") return { message: value };
-	try {
-		return { message: JSON.stringify(value) ?? String(value) };
-	} catch {
-		return { message: String(value) };
-	}
-}
-
 function installMainRuntimeLogging(): void {
 	// A console line to a stdout/stderr whose reader is gone (the terminal or test runner that started this copy
 	// closed) fails with EPIPE on the stream; with no listener that is an uncaught exception and a crash dialog.
@@ -645,12 +650,7 @@ function installMainRuntimeLogging(): void {
 			if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error;
 		});
 	}
-	process.on("uncaughtExceptionMonitor", (error, origin) => {
-		writeRuntimeLog({ source: "main-uncaught", ...errorMessage(error), details: { origin } });
-	});
-	process.on("unhandledRejection", reason => {
-		writeRuntimeLog({ source: "main-unhandled-rejection", ...errorMessage(reason) });
-	});
+	installMainFailureLogging(process, report => writeRuntimeLog(report));
 	app.on("child-process-gone", (_event, details) => {
 		writeRuntimeLog({
 			source: "child-process",
@@ -856,10 +856,33 @@ app.whenReady().then(async () => {
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
 	markStartup("app-ready");
+	// A stall says how the computer and OMPdesk's own processes stood around it (machine-state.ts).
+	const machineState = new MachineState({
+		log: (message, details) => writeRuntimeLog({ source: "machine-state", message, details }),
+		read: () => Promise.all([readMemory(), listProcesses()]),
+		timeoutMs: SAMPLE_TIMEOUT_MS,
+		pids: () => {
+			const corePid = core().pid;
+			return {
+				main: process.pid,
+				// Under the window's shell main is its child (`OMPDESK_SHELL_SOCKET`, crates/shell/src/node.rs).
+				...(process.env.OMPDESK_SHELL_SOCKET ? { host: process.ppid } : {}),
+				...(corePid === null ? {} : { core: corePid }),
+			};
+		},
+		loopMaxMs,
+	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
 		reportPreviousHang();
 		installHangWatchdog();
+		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
+		installSlowSteps({
+			log: (message, details) => {
+				writeRuntimeLog({ source: "slow-step", message, details });
+				machineState.slowStep(details);
+			},
+		});
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -891,12 +914,17 @@ app.whenReady().then(async () => {
 	const initialCwd = resolveInitialCwd();
 	const explicitStartupCwd = resolveExplicitStartupCwd();
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
+	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
+	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
 	configureNativeBin({
 		packaged: app.isPackaged,
 		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
 	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
-	core().report = (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details });
+	core().report = (step, details) => {
+		writeRuntimeLog({ source: "core-loss", message: step, details });
+		if (step === "abandoned") machineState.stalled("core-loss");
+	};
 	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
@@ -941,6 +969,8 @@ app.whenReady().then(async () => {
 			if (presence && presence.kind !== "present") void setupService?.retry("omp").catch(() => undefined);
 			else void ompUpdater?.repair().catch(() => undefined);
 		},
+		// One gui-runtime line per omp version this computer runs, read back by `omp.bridge_health`.
+		{ log: writeRuntimeLog },
 	);
 	// Every IPC handler registers once, here and in what this hands it to: on ipcMain for the app's windows,
 	// and in the table a paired web device's calls are dispatched from (web/ipc-registry.ts).
@@ -968,6 +998,7 @@ app.whenReady().then(async () => {
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
+	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
 	let stuckTabs: { count: number; minutes: number } | null = null;
 	/**
@@ -1135,6 +1166,7 @@ app.whenReady().then(async () => {
 		// A removed worktree's project, read off its `gui-<name>-<hash7>` folder name (stock's root and repo hash).
 		worktreeLocation: project => stockWorktreeLocation(tablessWorktreeBridge, project),
 		worktreeBindings: () => sidecarPool.worktreeBindings(),
+		scratchSessions: folder => sessionScratch.sessionsOf(folder),
 		onState: state => {
 			const update: IpcSidebarProjects = { state };
 			// Every window and paired phone page: a page that never heard a removal kept the project until a tap.
@@ -1149,8 +1181,8 @@ app.whenReady().then(async () => {
 	});
 	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web) => {
 		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web);
-		// The host runs its own health check, session-kind record and bridge
-		// probe; only the probe's verdict comes back, for this machine's toast.
+		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
+		// back, for this machine's toast (no record and no repair here: the host keeps and repairs its own).
 		const sc = devices.createSidecar(device, tabId, cwd, kind, fresh);
 		sc.on("bridge", (result: BridgeConnectResult) => void bridgeHealth.observe(result));
 		return sc;
@@ -1271,6 +1303,14 @@ app.whenReady().then(async () => {
 		},
 		schedules: () => scheduleService,
 		sidebarProjects: () => sidebarProjects,
+		// With the omp update this computer holds back, for `ompdesk_app` `omp.bridge_health`.
+		bridgeHealth: () => {
+			const state = ompUpdater?.state();
+			const held = state?.held;
+			return held
+				? { ...bridgeHealth.report(), held: { ...held, installed: state?.installed ?? null } }
+				: bridgeHealth.report();
+		},
 		accountRotation: accountRotationDeps({
 			prefs: { get: key => prefsStore().get(key), set: (key, value) => prefsStore().set(key, value) },
 			tabs: () => sidecarPool.allSidecars(),
@@ -1310,6 +1350,12 @@ app.whenReady().then(async () => {
 		tabs: () => [...sidecarPool.memoryTabs(), ...hostServices.memoryTabs()],
 		owners: () => sessionProcesses.owners(),
 		log: (message, details) => writeRuntimeLog({ source: "memory", message, details }),
+		sampled: (reading, rows, tabs) =>
+			void machineState.sample(
+				reading,
+				rows,
+				tabs.flatMap(tab => (tab.pid === undefined ? [] : [tab.pid])),
+			),
 		...(testMemory ? { testReading: () => testMemoryReading(testMemory) } : {}),
 		...(ampleTestMemory
 			? {
@@ -1399,6 +1445,8 @@ app.whenReady().then(async () => {
 			}).show(),
 		// Autopilot runs paired devices started here, charged to them until they end (remote/hosted-autopilot.ts).
 		runChargesFile: join(app.getPath("userData"), "autopilot-device-runs.json"),
+		// A device's session here keeps its reports and notices while the device is away, until it is back.
+		keptCallsFile: join(app.getPath("userData"), "kept-host-calls.json"),
 	});
 	// Orphaned worktrees (worktree-orphans.ts): a folder is open when a tab of this computer or a tab it hosts for a
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
@@ -1735,13 +1783,56 @@ app.whenReady().then(async () => {
 	// omp keeps itself current (src/main/omp-updater.ts): a packaged app checks on its own; a test
 	// launch only with a fake installer and OMP_GUI_TEST_OMP_UPDATES=1 (the fake omp's `update --check`
 	// answers). OMPdesk's own update stays manual. It starts once machine setup's first pass has detected omp.
+	// By default it keeps 0.135.0's passes with the major guard. With the hidden pref `ompFollowVerified` it installs
+	// unasked only what the verified list names for this release (omp-compat-source.ts); a test launch reads that list
+	// from the file OMP_GUI_TEST_OMP_COMPAT names, and never from the network.
+	const followVerified = () => prefs.get(OMP_FOLLOW_VERIFIED_PREF) === true;
+	const testCompat = app.isPackaged ? undefined : process.env.OMP_GUI_TEST_OMP_COMPAT;
+	const compatSource = new OmpCompatSource({
+		file: join(app.getPath("userData"), "omp-compat.json"),
+		fetch:
+			testCompat !== undefined || testInstaller
+				? async () =>
+						testCompat && existsSync(testCompat)
+							? new Response(await readFile(testCompat, "utf8"))
+							: new Response(null, { status: 404 })
+				: (url, init) => net.fetch(url, init),
+	});
+	// OMPdesk is the one owner of omp updates while it follows the verified list: stock's own `update.auto` is taken
+	// while that pref and "Keep tools up to date" are on and given back when either goes off (omp-auto-takeover.ts),
+	// through stock's settings command on the omp OMPdesk runs. Only a launch that updates omp on its own touches it
+	// (never a dev run or a test that did not opt in), and an OMPdesk that does not follow never reads it.
+	const ompUpdatesScheduled = testInstaller
+		? process.env.OMP_GUI_TEST_OMP_UPDATES === "1"
+		: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1";
+	const runOmpCli: OmpCliRun = async args => {
+		const omp = await systemOmp();
+		if (!omp.ok) throw new Error(omp.error);
+		return omp.runtime.run(args, { timeoutMs: 30_000, env: { NO_COLOR: "1", FORCE_COLOR: "0" } });
+	};
+	const stockAuto = new OmpAutoTakeover({
+		enabled: () => followVerified() && prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
+		read: () => readStockAuto(runOmpCli),
+		write: value => writeStockAuto(runOmpCli, value),
+		file: join(app.getPath("userData"), "omp-auto-takeover.json"),
+		app: appVersion(),
+		log: logOmpUpdate,
+		onChanged: () => ompUpdater?.changed(),
+	});
 	const updater = new OmpUpdater({
-		scheduled: testInstaller
-			? process.env.OMP_GUI_TEST_OMP_UPDATES === "1"
-			: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
+		scheduled: ompUpdatesScheduled,
 		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
 		fetchLatest: () => setup.latestOmp(),
+		follow: followVerified,
+		compat: async () => compatEntry((await compatSource.read()) ?? {}, appVersion()),
+		// When this computer first saw a version held for verification, kept across relaunches (omp-hold-notice.ts).
+		firstSeen: version => {
+			const seen = heldSince(prefs.get(OMP_HELD_SEEN_PREF), version, Date.now());
+			if (seen.store) prefs.set(OMP_HELD_SEEN_PREF, seen.store);
+			return seen.since;
+		},
 		newestWithin: major => setup.newestOmpIn(major),
+		stockAutoTaken: () => stockAuto.taken(),
 		installed: () => {
 			const presence = setup.state().items.find(item => item.id === "omp")?.presence;
 			return presence?.kind === "present" ? presence.version : null;
@@ -1771,6 +1862,38 @@ app.whenReady().then(async () => {
 			}
 			// Devices that use this computer as their host show the same state.
 			devices.hostOmpUpdateChanged(state);
+			// A held omp under the verified list is told (omp-hold-notice.ts): one runners failed once and once more after
+			// a day, one still waiting for them after 6 hours and then every 24 hours.
+			const hold = holdNotice(state.held, parseHoldTold(prefs.get(OMP_HOLD_TOLD_PREF)), Date.now());
+			if (hold.notice) {
+				const { notice } = hold;
+				prefs.set(OMP_HOLD_TOLD_PREF, hold.told);
+				logOmpUpdate("told", {
+					version: notice.version,
+					reason: notice.reason,
+					since: state.held?.since ?? null,
+					hours: notice.hours,
+					installed: state.installed,
+					count: hold.told?.count ?? null,
+				});
+				const params = { ...notice, installed: state.installed ?? "" };
+				const body =
+					notice.reason === "verifying"
+						? notice.days > 0
+							? "ompHold.verifyingBodyDays"
+							: "ompHold.verifyingBody"
+						: notice.days > 0
+							? "ompHold.bodyDays"
+							: "ompHold.body";
+				appNotification({
+					title: mainT(
+						notice.reason === "verifying" ? "ompHold.verifyingTitle" : "ompHold.title",
+						undefined,
+						params,
+					),
+					body: mainT(body, undefined, params),
+				}).show();
+			}
 		},
 		// One quiet toast, in one window.
 		onUpdated: notice => {
@@ -2073,6 +2196,7 @@ app.whenReady().then(async () => {
 		.catch(() => undefined)
 		.then(() => {
 			updater.start();
+			if (ompUpdatesScheduled) void stockAuto.sync();
 			cliToolUpdater.start();
 			extensionToolUpdater.start();
 		});
@@ -2097,6 +2221,7 @@ app.whenReady().then(async () => {
 		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
 		extensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
 		extensionEnv: cwd => mcpHub?.ompEnv(cwd) ?? Promise.resolve({}),
+		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
 	});
 	scheduleService = new ScheduleService({
 		file: join(app.getPath("userData"), "schedules.json"),
@@ -2250,23 +2375,42 @@ app.whenReady().then(async () => {
 			details: { error: error instanceof Error ? error.message : String(error) },
 		}),
 	);
+	// A tab that waits long without a step says what it waits on (turn-wait-watch.ts).
+	const turnWait = new TurnWaitWatch({
+		tabs: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()],
+		facts: tabId => sidecarPool.settleFacts(tabId),
+		status: tabId => sidecarPool.sidecarOf(tabId)?.status,
+		journal: file => tailLogLines(file, WAIT_JOURNAL_LINES, WAIT_JOURNAL_BYTES),
+		log: details => writeRuntimeLog({ source: "turn-wait", message: "still waiting", details }),
+	});
 	const turnResume = new TurnResume({
 		store: interruptedTurns,
 		// This computer's own tabs and the ones it runs for paired devices (host-services.ts): the host
 		// owns those turns, so their markers, waits and continuations are this computer's.
 		pool: {
-			resumeFacts: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()],
+			// A run's own tab stays revivable between its cycles and in its quota wait, when no turn and no goal may be on:
+			// restored deferred, its omp would never start and the run would wait until someone opened the tab.
+			resumeFacts: () => [
+				...sidecarPool
+					.resumeFacts()
+					.map(fact => (autopilotRef.current?.runsOn(fact.tabId) ? { ...fact, autopilotActive: true } : fact)),
+				...hostServices.resumeFacts(),
+			],
 			setAwaitingConnection: (tabId, awaiting) => {
 				sidecarPool.setAwaitingConnection(tabId, awaiting);
 				hostServices.setAwaitingConnection(tabId, awaiting);
 			},
 			// Only this computer's own tabs show the row: a paired device's tab mirrors its host's turn.
-			setResuming: (tabId, resuming) => sidecarPool.setResuming(tabId, resuming),
+			setResuming: (tabId, resuming) => {
+				sidecarPool.setResuming(tabId, resuming);
+				turnWait.noteResuming(tabId, resuming);
+			},
 			resumeRank: tabId => sidecarPool.resumeRank(tabId),
 			// A window's tab shows its retry; a hosted tab's wait for a provider's limit goes to its device.
 			setScheduledRetry: (tabId, retry) => {
 				sidecarPool.setScheduledRetry(tabId, retry);
 				hostServices.setScheduledRetry(tabId, retry);
+				turnWait.noteRetry(tabId, retry);
 			},
 			startTab: tabId => sidecarPool.startTab(tabId) ?? hostServices.startTab(tabId),
 			tabForSession: (sessionPath, peer) =>
@@ -2316,7 +2460,15 @@ app.whenReady().then(async () => {
 		resumeGoal: async tabId => {
 			await autopilotRef.current?.resumeGoal(tabId);
 		},
-		goalSettled: (tabId, outcome) => autopilotRef.current?.resumeSettled(tabId, outcome),
+		goalSettled: (tabId, outcome) => {
+			autopilotRef.current?.resumeSettled(tabId, outcome);
+			// The continuation is over: an omp update's restart that waited for it goes now (a tick later, outside the
+			// core's own call).
+			setImmediate(() => {
+				sidecarPool.ompRestartIfWaiting(tabId);
+				hostServices.ompRestartIfWaiting(tabId);
+			});
+		},
 		log: (message, details) => writeRuntimeLog({ source: "turn-resume", message, details }),
 	});
 	ipc.handle(IPC_COMMANDS.RESUME_CANCEL_WAIT, async (_caller, tabId: unknown) => {
@@ -2356,7 +2508,36 @@ app.whenReady().then(async () => {
 		facts: tabId => sidecarPool.settleFacts(tabId),
 		log: details => writeRuntimeLog({ source: "settle-watch", message: "still settling", details }),
 	});
+	sidecarPool.observeTabs(activity => turnWait.activity(activity));
+	setInterval(() => {
+		if (!quitApproved()) turnWait.sweep();
+	}, WAIT_SWEEP_MS).unref();
+	if (process.platform === "win32") {
+		// A console window that shows on the desktop says whose it is (console-window-watch.ts).
+		const consoleWindows = new ConsoleWindowWatch({
+			list: async (known, roots, sinceMs) =>
+				(await core().call<ConsoleWindow[]>("procs.consoles", { known, roots, env: SESSION_TAG_ENV, sinceMs }))
+					.result,
+			own: () => {
+				const corePid = core().pid;
+				return [
+					{ pid: process.pid, role: "main" },
+					// Under the window's shell main is its child (`OMPDESK_SHELL_SOCKET`, crates/shell/src/node.rs).
+					...(process.env.OMPDESK_SHELL_SOCKET ? [{ pid: process.ppid, role: "host" }] : []),
+					...(corePid === null ? [] : [{ pid: corePid, role: "core" }]),
+				];
+			},
+			sessionOf: tag => sessionProcesses.owners().find(owner => owner.tag === tag)?.sessionPath,
+			log: (message, details) => writeRuntimeLog({ source: "console-window", message, details }),
+		});
+		setInterval(() => {
+			// A look never starts a core: it waits for the one the app runs.
+			if (core().pid !== null) void consoleWindows.poll();
+		}, CONSOLE_POLL_MS).unref();
+	}
 	hostServices.attachResume(turnResume);
+	// An omp update never restarts a tab under its relaunch continuation (omp-restart.ts).
+	sidecarPool.continuationOwed = tabId => turnResume.relaunchContinuation(tabId) === "after_restore";
 	// Disk care: idle worktrees' build output, landed and long-idle worktrees (saved first), the HTTP cache and the
 	// tools' caches.
 	// Automatic only in the packaged app outside a test run: a dev or test instance sees none of the real app's open
@@ -2420,6 +2601,7 @@ app.whenReady().then(async () => {
 		webTabNotice,
 		sessionWake,
 		tabReport,
+		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],
 		spawnWindow,
 		initialCwd: resolveInitialCwd,
@@ -2446,8 +2628,11 @@ app.whenReady().then(async () => {
 			}
 			if (key === RESUME_INTERRUPTED_PREF) turnResume.sync();
 			if (key === APP_AUTO_UPDATE_PREF) void appAutoUpdatePrefChanged();
-			if (key === TOOLS_AUTO_UPDATE_PREF) {
+			if (key === TOOLS_AUTO_UPDATE_PREF || key === OMP_FOLLOW_VERIFIED_PREF) {
 				updater.prefChanged();
+				if (ompUpdatesScheduled) void stockAuto.sync();
+			}
+			if (key === TOOLS_AUTO_UPDATE_PREF) {
 				cliToolUpdater.prefChanged();
 				extensionToolUpdater.prefChanged();
 			}
@@ -2650,6 +2835,7 @@ app.whenReady().then(async () => {
 			[...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.awaitingUi),
 		planWaiting: () => sidecarPool.restartHolds().planWaiting,
 		compacting: () => sidecarPool.restartHolds().compacting || hostServices.compacting(),
+		opening: () => agentOpening.current?.() ?? false,
 		// Running subagents and background jobs: `composer.jobs` of every omp whose run is on (background-work.ts).
 		backgroundWork: () =>
 			askBackgroundWork(() => [...sidecarPool.runningBridges(), ...hostServices.runningBridges()]),
@@ -2683,7 +2869,7 @@ app.on("activate", () => {
 // Quit on all windows closed (except macOS)
 app.on("window-all-closed", () => {
 	if (process.platform !== "darwin") {
-		requestQuit();
+		requestQuit("last-window");
 	}
 });
 

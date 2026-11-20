@@ -26,9 +26,12 @@ If you hit GitHub's rate limit often, you can **optionally** give the app a toke
 
 ## omp
 
-omp updates itself. While OMPdesk is open it asks `omp update --check` at launch and every 4 hours, and installs the newer omp in the background. Both follow how you installed omp (Bun, npm, Homebrew, mise or the standalone build) and your registry settings, and update the omp OMPdesk runs, never another copy earlier on your `PATH`.
+omp updates itself. While OMPdesk is open it asks `omp update --check` at launch and every 4 hours for the newest omp, in the registry you installed omp from, and updates the omp OMPdesk runs, never another copy earlier on your `PATH`.
 
-- **A new major version waits for you.** Each OMPdesk release is tested with one omp. OMPdesk never moves omp to a higher major version (18 → 19) on its own: **Settings › Updates & about › This computer** says that the newer omp is available and which omp this OMPdesk was tested with, and **Update now** installs it if you want it anyway. Meanwhile omp still gets the newer releases of the tested major, when it was installed with Bun.
+- **Within the major version OMPdesk was tested with.** A newer omp of that major (18.x for an OMPdesk tested with 18) installs on its own at its next check, at exactly that version. A new major version (18 → 19) is held: **Settings › Updates & about › This computer** says so, and **Update now** installs it. (A stricter mode, in which only versions GitHub's runners have tested against your OMPdesk release install, of any major, is being tried and is off by default.)
+- **Installed the way you installed it.** An omp installed with Bun or npm is updated by OMPdesk to the exact version it picked, with Bun or that npm. An omp installed any other way (Homebrew, mise, the standalone build) is not updated on its own; **Update now** runs that omp's own `omp update`, which installs the newest omp whatever its major version.
+- **omp's own auto-update is left as you set it** in the default mode; the stricter mode turns it off while it keeps omp current and back on when it stops, unless you changed it yourself in between.
+- **If you run an omp OMPdesk has not checked** (one you updated yourself), OMPdesk keeps it and does not move it back. The same row says that it has not passed OMPdesk's checks and that some features may not work.
 - **Your work is not interrupted.** A running omp keeps the code it already loaded. Idle tabs restart on the new omp right away; busy tabs restart after their task finishes. Session history and drafts stay.
 - **A quiet notice.** One "omp updated" notification when it finishes. If the new omp lacks a feature OMPdesk uses, a warning names the feature.
 - **On failure** the reason is kept in **Settings › Updates & about › This computer** and the next check tries again, backing off if the network keeps failing. On Windows, a locked omp file can make the install fail; the next check retries.

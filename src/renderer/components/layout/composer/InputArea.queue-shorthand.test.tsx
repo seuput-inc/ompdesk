@@ -120,7 +120,10 @@ async function typeInto(element: TestElement, value: string): Promise<void> {
 }
 
 /** Drive the textarea's React onKeyDown with an Enter press. */
-async function pressEnter(element: TestElement): Promise<void> {
+async function pressEnter(
+	element: TestElement,
+	modifiers: { ctrlKey?: boolean; altKey?: boolean } = {},
+): Promise<void> {
 	const record = element as unknown as Record<string, unknown>;
 	const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
 	const props = propsKey
@@ -131,9 +134,9 @@ async function pressEnter(element: TestElement): Promise<void> {
 		props.onKeyDown?.({
 			key: "Enter",
 			shiftKey: false,
-			ctrlKey: false,
+			ctrlKey: modifiers.ctrlKey === true,
 			metaKey: false,
-			altKey: false,
+			altKey: modifiers.altKey === true,
 			nativeEvent: { isComposing: false },
 			keyCode: 13,
 			preventDefault: () => {},
@@ -546,24 +549,25 @@ describe("InputArea queue shorthand submit", () => {
 		await flush();
 	});
 
-	it("starts every run as Steer: a Follow-up picked on the chip lasts for that run only", async () => {
+	it("steers a running turn from Send, and the retired follow-up chords steer too", async () => {
 		await mount();
-		const chip = () => document.querySelector("[data-send-mode]") as unknown as TestElement | null;
-		expect(chip()?.getAttribute("data-send-mode")).toBe("steer");
-		await click(chip() as TestElement);
-		expect(chip()?.getAttribute("data-send-mode")).toBe("followUp");
-		await typeInto(findTextarea(), "after this run");
+		expect(document.querySelector("[data-send-mode]")).toBeNull();
+		await typeInto(findTextarea(), "do this now");
+		expect(document.querySelector('[data-slot="send"] button')?.getAttribute("data-send-lane")).toBe("steer");
 		await pressEnter(findTextarea());
 		await flush();
-		expect(followUp).toHaveBeenCalledWith("after this run", []);
+		expect(steer).toHaveBeenLastCalledWith("do this now", []);
 
-		await act(async () => useSessionStore.setState({ isStreaming: false }));
-		await act(async () => useSessionStore.setState({ isStreaming: true }));
-		expect(chip()?.getAttribute("data-send-mode")).toBe("steer");
-		await typeInto(findTextarea(), "next run steer");
-		await pressEnter(findTextarea());
-		await flush();
-		expect(steer).toHaveBeenCalledWith("next run steer", []);
+		for (const [text, modifiers] of [
+			["by ctrl enter", { ctrlKey: true }],
+			["by alt enter", { altKey: true }],
+		] as const) {
+			await typeInto(findTextarea(), text);
+			await pressEnter(findTextarea(), modifiers);
+			await flush();
+			expect(steer).toHaveBeenLastCalledWith(text, []);
+		}
+		expect(followUp).not.toHaveBeenCalled();
 	});
 
 	it("offers Stop while the automatic mode choice holds a prompt back, and Stop withdraws it into the draft", async () => {

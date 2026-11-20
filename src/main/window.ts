@@ -9,8 +9,8 @@ import { join } from "node:path";
 import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, screen, shell } from "electron";
 import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
-import { appIconPath } from "./app-icon";
-import { quitRisk, requestQuit } from "./app-quit";
+import { appIconPath, appNotification } from "./app-icon";
+import { askQuit, quitRisk, requestQuit } from "./app-quit";
 import { editableContextMenuTemplate } from "./editable-context-menu";
 import { softwareCompositing } from "./gpu-fallback";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
@@ -18,6 +18,8 @@ import type { LastWindowClose } from "./quit-guard";
 import {
 	type ApplicationResourceIdentity,
 	applicationResourcesChanged,
+	hangRestartNotifies,
+	RENDERER_HANG_RESTART_MS,
 	type RendererFailure,
 	shouldReloadRenderer,
 	shouldRestartForChangedResources,
@@ -227,7 +229,7 @@ export class WindowManager {
 				this.lastWindowHidden?.();
 			}
 			// The quit guard asks first; an approved quit then closes every window, this one included.
-			else app.quit();
+			else askQuit("last-window");
 		});
 
 		win.on("closed", () => {
@@ -242,6 +244,11 @@ export class WindowManager {
 		const { win } = record;
 		const context = () => ({ windowId: record.id, cwd: record.cwd });
 		let lastRendererRecoveryAt = 0;
+		// A page that stopped answering: its restart once the grace ends, whether the process end that follows is that
+		// restart's, and when the last restart was (a second within the hour is told to the person).
+		let hangRestart: NodeJS.Timeout | undefined;
+		let endedForHang = false;
+		let lastHangRestartAt: number | null = null;
 
 		win.webContents.on(
 			"did-fail-load",
@@ -275,7 +282,11 @@ export class WindowManager {
 
 		win.webContents.on("render-process-gone", (_event, details) => {
 			const now = Date.now();
-			const shouldReload = shouldReloadRenderer(details.reason, lastRendererRecoveryAt, now);
+			// A page this window ended because it stopped answering loads again whatever the crash cooldown says: a
+			// stuck page is worse than a reload loop, and each restart already waited out the hang's grace.
+			const ours = endedForHang;
+			endedForHang = false;
+			const shouldReload = ours || shouldReloadRenderer(details.reason, lastRendererRecoveryAt, now);
 			const resourcesChanged = this.#resourcesChangedSinceLaunch();
 			if (shouldReload && !resourcesChanged) lastRendererRecoveryAt = now;
 			writeRuntimeLog(
@@ -314,7 +325,44 @@ export class WindowManager {
 				},
 				context(),
 			);
+			clearTimeout(hangRestart);
+			hangRestart = setTimeout(() => {
+				hangRestart = undefined;
+				if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+				const now = Date.now();
+				const notify = hangRestartNotifies(lastHangRestartAt, now);
+				lastHangRestartAt = now;
+				writeRuntimeLog(
+					{
+						source: "renderer-unresponsive",
+						message: "Restarting the stuck page",
+						url: win.webContents.getURL(),
+						details: { afterMs: RENDERER_HANG_RESTART_MS, notified: notify },
+					},
+					context(),
+				);
+				if (notify)
+					appNotification({ title: mainT("rendererHang.title"), body: mainT("rendererHang.body") }).show();
+				endedForHang = true;
+				win.webContents.forcefullyCrashRenderer();
+			}, RENDERER_HANG_RESTART_MS);
+			hangRestart.unref?.();
 		});
+
+		win.on("responsive", () => {
+			if (hangRestart === undefined) return;
+			clearTimeout(hangRestart);
+			hangRestart = undefined;
+			writeRuntimeLog(
+				{
+					source: "renderer-unresponsive",
+					message: "Renderer responding again",
+					url: win.webContents.getURL(),
+				},
+				context(),
+			);
+		});
+		win.on("closed", () => clearTimeout(hangRestart));
 
 		win.webContents.on("console-message", details => {
 			if (details.level !== "error") return;
@@ -435,7 +483,7 @@ export class WindowManager {
 		// `requestQuit` carries the approval, so the guard below the restart
 		// prompt never asks a second time about the same running sessions.
 		app.relaunch();
-		requestQuit();
+		requestQuit("restart-prompt", { relaunch: true });
 	}
 
 	#crashRecoveryOffered = new Set<number>();
@@ -459,7 +507,7 @@ export class WindowManager {
 			: await dialog.showMessageBox(win, options);
 		if (answer.response !== 0) return;
 		app.relaunch();
-		requestQuit();
+		requestQuit("crash-recovery", { relaunch: true });
 	}
 
 	recordFor(win: ClientWindow): WindowRecord | undefined {

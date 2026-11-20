@@ -71,6 +71,7 @@ export function resetSessionSurface(closeOverlays = true): void {
 		awaitingModelSince: null,
 		retryInfo: null,
 		compactionInfo: null,
+		compactionRuns: [],
 		contextUsage: null,
 		messageCount: 0,
 		queuedMessageCount: 0,

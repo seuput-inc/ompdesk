@@ -816,9 +816,7 @@ test("daily flow d: a notification click opens its tab on the phone, a steer arr
 			await expect(send).toBeEnabled();
 			await send.click();
 			await expect(phone.getByRole("button", { name: /^(Stop|중지)$/ })).toBeVisible({ timeout: 30_000 });
-			await expect(phone.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", {
-				timeout: 30_000,
-			});
+			await expect(phone.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible({ timeout: 30_000 });
 			await field.fill("steer from the phone");
 			await expect(send).toBeEnabled({ timeout: 30_000 });
 			await send.click();
@@ -1226,15 +1224,17 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 			await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
 		});
 
-		await test.step("Appearance: nord, then back to System", async () => {
+		await test.step("Appearance: GitHub kept dark, then back to OMPdesk following the OS", async () => {
 			const settings = await flowFOpenSettings(page, "appearance");
-			await settings.locator('[data-theme-option="nord"]').click();
-			await expect.poll(() => flowFThemeName(page)).toBe("nord");
-			await settings.locator('[data-theme-option="system"]').click();
-			await expect.poll(() => flowFThemeName(page)).not.toBe("nord");
+			await settings.locator('[data-theme-set="github"]').click();
+			await settings.locator('[data-theme-mode="dark"]').click();
+			await expect.poll(() => flowFThemeName(page)).toBe("github-dark");
+			await settings.locator('[data-theme-set="ompdesk"]').click();
+			await settings.locator('[data-theme-mode="system"]').click();
+			await expect.poll(() => flowFThemeName(page)).not.toBe("github-dark");
 			await expect.poll(() => page.evaluate(() => window.omp.prefs.get("themeName"))).toBe("system");
 			await flowFCloseSettings(page);
-			expect(await flowFThemeName(page)).not.toBe("nord");
+			expect(await flowFThemeName(page)).not.toBe("github-dark");
 		});
 
 		await test.step("General: Korean labels, no raw key, and back to English", async () => {
@@ -1348,10 +1348,11 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 			for (const name of ["ask", "eval", "debug"]) expect(tools, name).toContain(name);
 		});
 
-		await test.step("nord and Korean are picked for the relaunch", async () => {
+		await test.step("GitHub Dark and Korean are picked for the relaunch", async () => {
 			let settings = await flowFOpenSettings(page, "appearance");
-			await settings.locator('[data-theme-option="nord"]').click();
-			await expect.poll(() => flowFThemeName(page)).toBe("nord");
+			await settings.locator('[data-theme-set="github"]').click();
+			await settings.locator('[data-theme-mode="dark"]').click();
+			await expect.poll(() => flowFThemeName(page)).toBe("github-dark");
 			settings = await flowFOpenSettings(page, "general");
 			await settings.locator("#setting-gui-language select").selectOption("ko");
 			await expect(settings.locator("#setting-gui-language")).toContainText("언어");
@@ -1363,7 +1364,7 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 
 		await test.step("after a relaunch the theme and the language stand", async () => {
 			({ app, page } = await launchAp(profile));
-			await expect.poll(() => flowFThemeName(page)).toBe("nord");
+			await expect.poll(() => flowFThemeName(page)).toBe("github-dark");
 			await expect(page.locator("[data-run-settings-trigger]").first()).toContainText("실행 설정");
 			const settings = await flowFOpenSettings(page, "general");
 			await expect(settings.locator('[data-settings-section="general"]')).toContainText("일반");

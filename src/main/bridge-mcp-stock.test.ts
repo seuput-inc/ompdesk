@@ -117,7 +117,14 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
 
 /** The live session's view: the bridge's row for `name` and the session's tools that name it. */
 const PROBE_HELPERS = `
+import { renameSync } from "node:fs";
 import { methods as mcp } from "./extensions/mcp";
+// The test reads the report as soon as it exists: Bun.write creates the file before it writes it, and on Windows the
+// test read it empty (omp-latest 44511132073), so a report appears only whole.
+const writeReport = async (file, out) => {
+	await Bun.write(file + ".tmp", JSON.stringify(out));
+	renameSync(file + ".tmp", file);
+};
 const until = async (check, ms) => {
 	const end = Date.now() + ms;
 	while (Date.now() < end) {
@@ -146,12 +153,13 @@ export default function (pi) {
 			await Bun.write(${JSON.stringify(`${report}.ready`)}, "1");
 			await until(() => Bun.file(${JSON.stringify(go)}).exists(), 60_000);
 			out.sync = await mcp.mcp_sync({ names: ["fake"] }, env);
+			out.synced = await view(env, session, "fake");
 			await until(async () => (await view(env, session, "fake")).row?.status === "connected", 15_000);
 			out.after = await view(env, session, "fake");
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -196,7 +204,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -242,7 +250,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -285,7 +293,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -413,7 +421,10 @@ describe.skipIf(!installed)("MCP servers on the installed omp", () => {
 		expect(before.row).toMatchObject({ enabled: true, status: "disconnected", authState: "required" });
 		expect(String(before.row.lastError)).toContain("401");
 		expect(before.tools).toEqual([]);
-		expect(out.sync).toMatchObject({ connected: ["fake"], failed: [] });
+		expect(out.sync, JSON.stringify({ synced: out.synced, after: out.after })).toMatchObject({
+			connected: ["fake"],
+			failed: [],
+		});
 		const after = out.after as { row: Record<string, unknown>; tools: string[] };
 		expect(after.row).toMatchObject({ status: "connected", authState: "authorized", toolCount: 1 });
 		expect(after.row.lastError).toBeUndefined();

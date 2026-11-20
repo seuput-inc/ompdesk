@@ -116,7 +116,7 @@ type Outcome = "delivered" | "later" | { failed: string };
 
 async function deliverMessage(item: OutboxItem, tab: SessionTab): Promise<Outcome> {
 	if (item.send.kind !== "message") return "delivered";
-	const { text, images, behavior } = item.send;
+	const { text, images } = item.send;
 	// The host's echo of this message is this page's own, not "from another device".
 	sessionRuntimeStore<MessagesStore>(tab.id, "messages")?.getState().noteOwnSend(text);
 	let response: RpcResponse;
@@ -125,7 +125,7 @@ async function deliverMessage(item: OutboxItem, tab: SessionTab): Promise<Outcom
 			type: "prompt",
 			message: text,
 			images,
-			streamingBehavior: behavior,
+			streamingBehavior: "steer",
 			deliveryId: item.id,
 		});
 	} catch (error) {

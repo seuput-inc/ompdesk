@@ -351,6 +351,7 @@ function fakeMachine() {
 				worktrees: {},
 			}),
 		),
+		bridgeHealth: vi.fn(async () => ({ results: [] })),
 	} satisfies MachineServices;
 }
 
@@ -1621,7 +1622,7 @@ describe("LocalHostServices", () => {
 		expect(openAsks(fourth)).toEqual([]);
 	});
 
-	it("re-sends the host tool calls its omp still waits on: one made while the device was away, and every open one to a relaunched device", async () => {
+	it("re-sends the host tool calls its omp still waits on: every open one on a re-attach, marked when a connection had it before", async () => {
 		// The 21 Oct 2026 update restart: a hosted child called `ompdesk_report` 7 s after its device quit, the call
 		// reached no connection, nobody ever answered it, and the turn waited on it for good (stock has no timeout).
 		const { services, sidecars } = setup();
@@ -1640,7 +1641,7 @@ describe("LocalHostServices", () => {
 				.filter(event => event.name === "hostToolCall" || event.name === "hostUriRequest")
 				.map(({ arg }) => (typeof arg === "object" && arg !== null && "id" in arg ? arg.id : undefined));
 
-		// The device has this one; the link drops while it runs it.
+		// The device has this one, or never got it: a sleeping computer's link stays up here until it is seen dead.
 		sidecar.emit("hostToolCall", call("seen"));
 		services.disconnected(first.peer, first);
 		// The omp asks while nobody is connected, and withdraws one it gave up on.
@@ -1649,12 +1650,15 @@ describe("LocalHostServices", () => {
 		sidecar.emit("hostToolCall", call("withdrawn"));
 		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-1", targetId: "withdrawn" });
 
-		// The same device comes back (a lost link): it gets what it never had, not the call it already runs.
+		// The same device comes back (a lost link): it gets every call still open. The one the dead connection was handed
+		// may never have reached it (19 Nov 2026: the MacBook slept, its sessions here stood in calls nobody re-sent), so
+		// it goes again, marked: the device answers from its record if it did run it (agent-control/call-journal.ts).
 		const second = new FakeConnection(peer("device-x"));
 		await services.call(second.peer, "tab.open", { rtab: "old", cwd: workDir, fresh: true }, second);
-		expect(resent(second)).toEqual(["away", "uri"]);
+		expect(resent(second)).toEqual(["seen", "away", "uri"]);
 		// Never handed to a connection before: provably new to the device, so not marked re-sent.
-		expect(second.tabEvents().find(event => event.name === "hostToolCall")?.arg).toEqual(call("away"));
+		const sentCalls = second.tabEvents().filter(event => event.name === "hostToolCall");
+		expect(sentCalls.map(event => event.arg)).toEqual([{ ...call("seen"), resent: true }, call("away")]);
 		await services.call(
 			second.peer,
 			"tab.sideChannel",
@@ -1681,6 +1685,153 @@ describe("LocalHostServices", () => {
 		const fourth = new FakeConnection(peer("device-x"));
 		await services.call(fourth.peer, "tab.open", { rtab: "new", cwd: workDir, fresh: true }, fourth);
 		expect(resent(fourth)).toEqual([]);
+	});
+
+	it("carries out here the calls its device never got once the device has been away past the notice, keeps its reports for it, and hands those over once when it is back", async () => {
+		// 19 Nov 2026: the MacBook slept 12:55-16:58 and the sessions its hub had opened on the Mac mini stood still,
+		// each in a control call only the sleeping MacBook would run.
+		vi.useFakeTimers();
+		const keptFile = join(workDir, "kept-calls.json");
+		const shown: string[] = [];
+		const carried: Array<{ id: string; toolName: string }> = [];
+		const waits: Array<{ device: string }> = [];
+		let window: HostedTabView | null = null;
+		const { services, sidecars } = setup(10 * 60_000, {
+			keptCallsFile: keptFile,
+			hostWaiting: wait => waits.push(wait),
+		});
+		// A window here opens a view of the session, as its pool would, and runs what the view hands it.
+		services.showAway = sessionPath => {
+			shown.push(sessionPath);
+			window = services.viewSession(sessionPath);
+			window?.on("hostToolCall", (request: { id: string; toolName: string }) => carried.push(request));
+		};
+		const first = new FakeConnection(peer("device-x"));
+		await services.call(first.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, first);
+		await services.call(first.peer, "tab.start", { rtab: "t1" }, first);
+		const sidecar = sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
+		sidecar.emit("events", [{ type: "agent_start" }]);
+		const call = (id: string, toolName: string) => ({
+			type: "host_tool_call",
+			id,
+			toolCallId: `c-${id}`,
+			toolName,
+			arguments: { text: id },
+		});
+		const results = () =>
+			(sidecar.sideFrames as Array<{ type?: string; id?: string; result?: { content?: Array<{ text?: string }> } }>)
+				.filter(frame => frame.type === "host_tool_result")
+				.map(frame => ({ id: frame.id, text: frame.result?.content?.[0]?.text ?? "" }));
+
+		// Handed to the connection before it was seen dead: the device may run it, so this computer never does.
+		sidecar.emit("hostToolCall", call("handed", "ompdesk_sessions"));
+		services.disconnected(first.peer, first);
+		sidecar.emit("hostToolCall", call("open", "ompdesk_session_open"));
+		sidecar.emit("hostToolCall", call("report", "ompdesk_report"));
+
+		// A routine drop and reconnect does nothing here.
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS - 1);
+		await Promise.resolve();
+		expect(shown).toEqual([]);
+		expect(results()).toEqual([]);
+
+		// Away past the notice: a window here takes the session's calls the device never got.
+		vi.advanceTimersByTime(1);
+		await vi.waitFor(() => expect(carried.map(request => request.id)).toEqual(["open"]));
+		expect(shown).toEqual(["/s/one.jsonl"]);
+		// The report waits for the device's opener, kept on disk, and the session is told so at once.
+		await vi.waitFor(() => expect(results().map(result => result.id)).toEqual(["report"]));
+		expect(results()[0]?.text).toContain("device-x");
+		expect(results()[0]?.text).toMatch(/kept/i);
+		// The window's answer reaches the omp, saying where it ran.
+		(window as HostedTabView | null)?.sendSideChannel({
+			type: "host_tool_result",
+			id: "open",
+			result: { content: [{ type: "text", text: "Opened 1 session" }] },
+		});
+		expect(results().map(result => result.id)).toEqual(["report", "open"]);
+		expect(results()[1]?.text).toContain("Opened 1 session");
+		expect(results()[1]?.text).toContain("Host B");
+		// The call the dead connection was handed still waits on the device, and the person here hears it once.
+		expect(waits).toEqual([{ device: "device-x", title: undefined }]);
+		// A call made later while the device is still away goes to the window at once.
+		sidecar.emit("hostToolCall", call("later", "ompdesk_session_send"));
+		await vi.waitFor(() => expect(carried.map(request => request.id)).toEqual(["open", "later"]));
+
+		// The device is back: it gets the call it may never have had, and the kept report to deliver, never the calls
+		// this computer carried out.
+		const back = new FakeConnection(peer("device-x"));
+		await services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, back);
+		const toDevice = () =>
+			back
+				.tabEvents()
+				.filter(event => event.name === "hostToolCall")
+				.map(event => event.arg as { id: string; toolName: string; arguments?: unknown; resent?: boolean });
+		expect(toDevice().map(request => request.id)).toEqual(["handed", "kept:report"]);
+		expect(toDevice()[1]).toMatchObject({ toolName: "ompdesk_report", arguments: { text: "report" } });
+		// Kept across this computer's restart until the device has answered it.
+		expect(readFileSync(keptFile, "utf8")).toContain("kept:report");
+
+		// The device's answer to the handed-over report settles it; the omp, answered long ago, hears nothing.
+		await services.call(
+			back.peer,
+			"tab.sideChannel",
+			{ rtab: "t1", frame: { type: "host_tool_result", id: "kept:report", result: { content: [] } } },
+			back,
+		);
+		expect(results().map(result => result.id)).toEqual(["report", "open"]);
+		await vi.waitFor(() => expect(readFileSync(keptFile, "utf8")).not.toContain("kept:report"));
+		services.disconnected(back.peer, back);
+		const again = new FakeConnection(peer("device-x"));
+		await services.call(again.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, again);
+		expect(again.tabEvents().filter(event => event.name === "hostToolCall")).toEqual([
+			{ rtab: "t1", name: "hostToolCall", arg: { ...call("handed", "ompdesk_sessions"), resent: true } },
+		]);
+	});
+
+	it("hands a kept report to its device once it is back, after this computer restarted meanwhile", async () => {
+		vi.useFakeTimers();
+		const keptFile = join(workDir, "kept-calls.json");
+		const before = setup(10 * 60_000, { keptCallsFile: keptFile });
+		const first = new FakeConnection(peer("device-x"));
+		await before.services.call(first.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, first);
+		await before.services.call(first.peer, "tab.start", { rtab: "t1" }, first);
+		const sidecar = before.sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
+		sidecar.emit("events", [{ type: "agent_start" }]);
+		before.services.disconnected(first.peer, first);
+		sidecar.emit("hostToolCall", {
+			type: "host_tool_call",
+			id: "report",
+			toolCallId: "c-report",
+			toolName: "ompdesk_report",
+			arguments: { kind: "done", text: "finished" },
+		});
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS);
+		await vi.waitFor(() => expect(readFileSync(keptFile, "utf8")).toContain("kept:report"));
+
+		// This computer quits and starts again; the device opens the session under the tab it kept.
+		const after = setup(10 * 60_000, { keptCallsFile: keptFile });
+		const back = new FakeConnection(peer("device-x"));
+		await after.services.call(back.peer, "tab.open", { rtab: "t2", cwd: workDir, sessionPath: "/s/one.jsonl" }, back);
+		await after.services.call(back.peer, "tab.start", { rtab: "t2" }, back);
+		const restarted = after.sidecars[0];
+		if (!restarted) throw new Error("expected a sidecar");
+		restarted.setStatus("ready");
+		restarted.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
+		const handed = back.tabEvents().filter(event => event.name === "hostToolCall");
+		expect(handed).toEqual([
+			{
+				rtab: "t2",
+				name: "hostToolCall",
+				arg: expect.objectContaining({ id: "kept:report", toolName: "ompdesk_report" }),
+			},
+		]);
 	});
 
 	it("tells the device which sign-ins its tab runs: as they start and end, and on every re-attach, link or no link", async () => {
@@ -2676,6 +2827,25 @@ describe("LocalHostServices", () => {
 		expect(a.events.filter(entry => entry.event === "sessions.changed").length).toBeGreaterThan(0);
 	});
 
+	it("a device's folder read (scope local) in the gap does not swallow the close the shared list owes the others", async () => {
+		vi.useFakeTimers();
+		const { services, local } = setup(60_000, {
+			sessionIndex: {
+				list: async () => [{ path: "/s/w.jsonl", id: "w", title: "w", cwd: workDir, firstMessage: "" }],
+			} as unknown as HostServicesDeps["sessionIndex"],
+		});
+		const a = new FakeConnection(peer("device-a"));
+		const b = new FakeConnection(peer("device-b"));
+		local.owned.set("/s/w.jsonl", { tabId: "w1", winId: 1 });
+		await services.call(a.peer, "sessions.list", { scope: "global" }, a);
+		// The window's tab lets go; before it is announced, device B reads one folder's sessions.
+		local.owned.delete("/s/w.jsonl");
+		await services.call(b.peer, "sessions.list", { scope: "local", cwd: workDir }, b);
+		services.listingChanged();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(a.events.filter(entry => entry.event === "sessions.changed").length).toBeGreaterThan(0);
+	});
+
 	it("tells a device which listed children its review list holds failed or unlanded, and forgets what landed", async () => {
 		const paths = ["/s/failed.jsonl", "/s/unmerged.jsonl", "/s/clean.jsonl", "/s/elsewhere.jsonl"];
 		const { services } = setup(60_000, {
@@ -3457,6 +3627,28 @@ describe("LocalHostServices: a device opening a session a window of this compute
 			.call(x.peer, "tab.command", { rtab: "t1", command: { type: "get_state" } }, x)
 			.catch((error: unknown) => error);
 		expect(ipcErrorCode(gone)).toBe("unknown_tab");
+	});
+
+	it("a window's close the device missed while away is not undone when it comes back: no omp of its own", async () => {
+		const { services, sidecars, local, view, x } = await viewing();
+		services.disconnected(x.peer, x);
+		// The window here closes its tab while the device is away: it never hears `viewEnded`.
+		local.views.delete(SESSION);
+		view.emit(VIEW_ENDED_EVENT);
+		const back = new FakeConnection(peer("device-x"));
+		const again = await services
+			.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(again)).toBe("view_ended");
+		expect(sidecars).toHaveLength(0);
+		// Told once: a later open of that rtab (the person reopening the session there) is an open like any other.
+		const later = await services.call(
+			back.peer,
+			"tab.open",
+			{ rtab: "t1", cwd: workDir, sessionPath: SESSION },
+			back,
+		);
+		expect(later).toMatchObject({ attached: false });
 	});
 
 	it("hands the device the asks the window's omp has open when it attaches", async () => {

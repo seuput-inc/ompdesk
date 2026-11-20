@@ -6,10 +6,13 @@ import { IPC_COMMANDS } from "../shared/ipc-types";
 import type { SetupItemState, SetupState } from "../shared/setup";
 import {
 	buildDiagnosticsReport,
+	currentDiagnosticsReport,
 	DIAGNOSTICS_LOG_LINES,
+	DIAGNOSTICS_PROBE_LINES,
 	type DiagnosticsInput,
 	type DiagnosticsSystem,
 	readDiagnosticsLog,
+	readProbeLines,
 	registerDiagnosticsIpc,
 } from "./diagnostics";
 import type { IpcRegistry } from "./web/ipc-registry";
@@ -230,6 +233,53 @@ describe("readDiagnosticsLog", () => {
 
 	it("is empty when there is no log", async () => {
 		expect(await readDiagnosticsLog(path.join(os.tmpdir(), "omp-gui-absent", "gui-runtime.jsonl"))).toEqual([]);
+	});
+});
+
+describe("readProbeLines", () => {
+	const probe = (source: string, n: number) => JSON.stringify({ timestamp: `t${n}`, source, message: `m${n}` });
+
+	it("finds the probes' lines far behind the last entries, across the archive, oldest first", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
+		tempDirs.push(dir);
+		const file = path.join(dir, "gui-runtime.jsonl");
+		const noise = Array.from({ length: 500 }, (_, n) => JSON.stringify({ source: "remote-link", message: `n${n}` }));
+		await fs.writeFile(`${file}.1`, `${[probe("console-window", 1), ...noise].join("\n")}\n`);
+		await fs.writeFile(
+			file,
+			`${[probe("slow-step", 2), ...noise, probe("turn-wait", 3), probe("machine-state", 4), ...noise].join("\n")}\n`,
+		);
+
+		expect(await readProbeLines(file)).toEqual([
+			probe("console-window", 1),
+			probe("slow-step", 2),
+			probe("turn-wait", 3),
+			probe("machine-state", 4),
+		]);
+		expect(await readDiagnosticsLog(file)).not.toContain(probe("turn-wait", 3));
+		const report = await currentDiagnosticsReport({
+			system: () => SYSTEM,
+			setupState: () => null,
+			runtimeLogPath: () => file,
+		});
+		expect(report).toContain(
+			`## Probes (console windows, slow steps, long waits, stalls; last ${DIAGNOSTICS_PROBE_LINES})`,
+		);
+		const at = report.indexOf(probe("turn-wait", 3));
+		expect(at).toBeGreaterThan(-1);
+		expect(at).toBeLessThan(report.indexOf("## Runtime log"));
+	});
+
+	it("keeps the newest only, and none is no section", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
+		tempDirs.push(dir);
+		const file = path.join(dir, "gui-runtime.jsonl");
+		const many = Array.from({ length: DIAGNOSTICS_PROBE_LINES + 5 }, (_, n) => probe("slow-step", n));
+		await fs.writeFile(`${file}.1`, `${probe("turn-wait", 999)}\n`);
+		await fs.writeFile(file, `${many.join("\n")}\n`);
+		expect(await readProbeLines(file)).toEqual(many.slice(5));
+
+		expect(buildDiagnosticsReport({ ...INPUT, probeLines: [] })).not.toContain("## Probes");
 	});
 });
 

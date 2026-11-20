@@ -717,7 +717,7 @@ html[data-platform="darwin"] .omp-sidebar-search {
 }
 
 /* On the selected row's wash the quiet text (an age, a mark) and a waiting title's warning fell under 4.5:1 (light
-   4.17 and 4.22, solarized-light and sepia lower): they read at secondary there, the warning a fifth toward the text
+   4.17 and 4.22, solarized-light lower): they read at secondary there, the warning a fifth toward the text
    color. Pinned by the "over sidebar selection" pairs of lib/theme-contrast.ts. */
 .omp-sidebar-session-row[data-active="true"] {
 	--sc-text-subtle: var(--sc-text-secondary);

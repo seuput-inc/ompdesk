@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /// <reference types="bun" />
 import * as fs from "node:fs";
+import { runConfig } from "./fixture/config";
 import { runPrint } from "./fixture/print";
 import { runRpcUi } from "./fixture/rpc-ui";
 import { runStats } from "./fixture/stats";
@@ -23,6 +24,7 @@ if (process.argv.includes("--version")) {
 if (process.argv[2] === "stats") await runStats();
 else if (process.argv[2] === "update" && process.argv.includes("--check")) runUpdateCheck();
 else if (process.argv[2] === "worktree" && process.argv.includes("--json")) runWorktree();
+else if (process.argv[2] === "config" && process.argv.includes("--json")) runConfig();
 else if (process.argv[2] === "-p") await runPrint();
 else if (!process.argv.includes("--mode")) {
 	// Other CLI calls have no local stand-in.

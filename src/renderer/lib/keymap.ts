@@ -88,8 +88,6 @@ export interface ReservedChord {
 	readonly hotkeyGroup: ReservedChordGroup;
 	/** Bound on macOS only: on Windows the same ⌃ chord is a ⌘→⌃ default of an action. */
 	readonly macOnly?: true;
-	/** The chord on Windows when it is not the ⌘→⌃ spelling of `chord`. */
-	readonly windowsChord?: string;
 }
 
 /** actionId → replacement chord list (canonical or aliased; sanitized on hydration). */
@@ -353,21 +351,6 @@ export function eventToChord(event: KeyEventLike): Chord | null {
 export function chordFromEvent(event: KeyEventLike): string | null {
 	const chord = eventToChord(event);
 	return chord ? serializeChord(chord) : null;
-}
-
-/**
- * The composer's follow-up chord (TUI `app.message.followUp`): send the draft after the
- * running turn instead of steering it. ⌃↵ on macOS. On Windows ⌃↵ is ⌘↵ — the send chord
- * the expanded composer advertises and every other Ctrl+Enter in the app submits with —
- * so it sends like Enter (a steer while a turn runs) and follow-ups take ⌥↵ there.
- */
-export function composerFollowUpChord(platform: KeymapPlatform = PLATFORM): string {
-	return platform === "mac" ? "⌃↵" : "⌥↵";
-}
-
-/** True when a composer keydown is the follow-up chord on `platform`. */
-export function isComposerFollowUpKey(event: KeyEventLike, platform: KeymapPlatform = PLATFORM): boolean {
-	return chordFromEvent(event) === composerFollowUpChord(platform);
 }
 
 /**
@@ -654,14 +637,6 @@ const COMPOSER_CHORDS: readonly ReservedChord[] = [
 		macOnly: true,
 	},
 	{ id: "composer.deleteLine", labelKey: "hotkeys.row.composerDeleteLine", chord: "⌃U", hotkeyGroup: "input" },
-	// isComposerFollowUpKey: ⌃↵ on macOS, ⌥↵ on Windows (where ⌃↵ is the send chord).
-	{
-		id: "composer.followUp",
-		labelKey: "hotkeys.row.followUpSend",
-		chord: composerFollowUpChord("mac"),
-		windowsChord: composerFollowUpChord("windows"),
-		hotkeyGroup: "input",
-	},
 ];
 
 /** Every chord the GUI already owns that the registry cannot dispatch (macOS spelling). */
@@ -680,7 +655,7 @@ export function reservedChords(platform: KeymapPlatform = PLATFORM): readonly Re
 	if (platform === "mac") return RESERVED_CHORDS;
 	return RESERVED_CHORDS.filter(entry => !entry.macOnly).map(entry => ({
 		...entry,
-		chord: entry.windowsChord ?? platformChord(entry.chord, platform),
+		chord: platformChord(entry.chord, platform),
 	}));
 }
 

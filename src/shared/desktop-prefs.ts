@@ -40,6 +40,15 @@ export const APP_AUTO_UPDATE_PREF = "appAutoUpdate";
  */
 export const TOOLS_AUTO_UPDATE_PREF = "toolsAutoUpdate";
 
+/**
+ * omp follows the verified list (src/shared/omp-compat.ts): a pass nobody asked for installs only an omp runners
+ * verified against this release, a newer one is held (`verifying`/`failed`) and told, and stock's own `update.auto` is
+ * taken while "Keep tools up to date" is on. Hidden, default off (only a stored `true` turns it on; the hub's call,
+ * 20 Nov 2026): off, omp's passes stay those of 0.135.0 with the major guard, nothing reads the list and stock's config
+ * is never touched.
+ */
+export const OMP_FOLLOW_VERIFIED_PREF = "ompFollowVerified";
+
 /** A dev server's address in a bash result opens the Preview for the focused tab (default off; only `true` turns it on). */
 export const AUTO_PREVIEW_DEV_SERVER_PREF = "autoPreviewDevServer";
 

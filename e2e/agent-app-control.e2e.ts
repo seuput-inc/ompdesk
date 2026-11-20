@@ -102,10 +102,10 @@ test("the agent lists actions, changes the theme with a toast and undo, opens th
 	await expect.poll(themeName).toBe("dark");
 
 	const [changed] = await Promise.all([
-		app_("settings.theme", { value: "nord" }),
+		app_("settings.theme", { value: "github-dark" }),
 		(async () => {
-			await expect.poll(themeName, { timeout: 90_000 }).toBe("nord");
-			expect(await storedPref("themeName")).toBe("nord");
+			await expect.poll(themeName, { timeout: 90_000 }).toBe("github-dark");
+			expect(await storedPref("themeName")).toBe("github-dark");
 			await page.getByRole("button", { name: "Undo" }).click();
 		})(),
 	]);

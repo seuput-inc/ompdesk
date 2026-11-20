@@ -4,6 +4,13 @@
 //! this computer with its tag, so main can say whose the largest processes are when memory runs short; `procs.end`
 //! ends what a closed session left running, asking politely first and forcing what is left.
 //!
+//! For the tags it is asked about, `procs.list` also says whose output has no reader any more: a process whose standard
+//! output or error is a pipe or socket whose other end closed (the program that read it ended). Each write of such a
+//! process fails, and a server that logs the failure writes again: next-server spun at 100 % CPU after a relaunch (20
+//! Nov 2026). Of those it names the TCP ports they listen on and, with `sampleMs`, the CPU they use. It never answers
+//! a command line's arguments, which can hold tokens. `procs.end` with `only` ends just the processes named by their
+//! id and start.
+//!
 //! Reading another process's environment and command line: Windows reads the process's own memory (its PEB's
 //! `RTL_USER_PROCESS_PARAMETERS`, `sys.rs`), macOS asks `sysctl(KERN_PROCARGS2)`, Linux (tests and CI) reads
 //! `/proc/<pid>/environ` and `cmdline`. The list is a Toolhelp32 snapshot on Windows and
@@ -11,6 +18,9 @@
 //! a protected one), a zombie and one that exited have no readable environment and so no tag: never a target, and a
 //! target that becomes one counts as gone. macOS and Linux show the environment a process was started with, Windows
 //! the one it holds now.
+//!
+//! `procs.consoles` (Windows) lists the console windows a person sees and whose each new one is: OMPdesk starts every
+//! program without a window, so one that shows is a start that missed that, a tool's own doing, or not OMPdesk's.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -32,11 +42,20 @@ const PROTECTED: [u32; 3] = [0, 1, 4];
 #[cfg(unix)]
 const PS_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ListParams {
     env: String,
     timeout_ms: u64,
+    /// The tags whose processes come with their working folder, whether their output has a reader, and `stock`.
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Marks those that are a shared worker (an argument starting with it) or under one (`stock`).
+    #[serde(default)]
+    keep_arg: Option<String>,
+    /// How long to measure the CPU of those whose output has no reader (`cpuPercent`); none: not measured.
+    #[serde(default)]
+    sample_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -46,19 +65,31 @@ struct EndParams {
     tags: Vec<String>,
     #[serde(default)]
     keep_arg: Option<String>,
+    /// Only these processes, each by its id and its start as `procs.list` named it: one whose id now names a process
+    /// that started at another time is not it.
+    #[serde(default)]
+    only: Option<Vec<Pinned>>,
     grace_ms: u64,
     timeout_ms: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Pinned {
+    pid: u32,
+    started_ms: u64,
+}
+
 /// One process as a scan saw it, and a row of `procs.list`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Row {
     pid: u32,
     ppid: u32,
     /// Resident bytes (Windows: the working set); 0 when unreadable.
     bytes: u64,
-    /// When it started, in ms since the Unix epoch.
+    /// When it started, in ms since the Unix epoch: to the millisecond on Windows and, for the tags asked, on macOS;
+    /// else to the second.
     #[serde(skip_serializing_if = "Option::is_none")]
     started_ms: Option<u64>,
     /// Its executable's file name.
@@ -66,9 +97,25 @@ struct Row {
     /// The asked variable's value in its environment, when that could be read and holds one.
     #[serde(skip_serializing_if = "Option::is_none")]
     tag: Option<String>,
-    /// Its command line's arguments, read only where `procs.end` checks `keepArg`.
+    /// Its command line's arguments, read only where `keepArg` is checked. Never answered: they can hold secrets.
     #[serde(skip)]
     args: Vec<String>,
+    /// Its working folder, for the tags asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    /// A shared worker (`keepArg`) or under one, for the tags asked.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stock: bool,
+    /// Its standard output or error is a pipe or socket whose other end closed, so each write of it fails; read only
+    /// for the tags asked, and never on Linux.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dead_output: bool,
+    /// Of one whose output has no reader: the share of one core it used over `sampleMs`, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cpu_percent: Option<u32>,
+    /// Of one whose output has no reader: the TCP ports it listens on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ports: Vec<u16>,
     /// The handle its environment was read through, which `procs.end` ends it through.
     #[cfg(windows)]
     #[serde(skip)]
@@ -115,6 +162,13 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&end(params, call.scope).await?)
         })
     });
+    #[cfg(windows)]
+    registry.add("procs.consoles", |call| {
+        Box::pin(async move {
+            let params: ConsolesParams = call.params()?;
+            Reply::json(&consoles(params).await?)
+        })
+    });
 }
 
 /// A name a variable can have: not empty, no `=` (which ends a name) and no NUL (which ends an entry).
@@ -146,7 +200,69 @@ fn check_tag(tag: &str) -> Result<(), Fault> {
 
 async fn list(params: ListParams, scope: Scope) -> Result<Vec<Row>, Fault> {
     check_env(&params.env)?;
-    scan(&params.env, params.timeout_ms, scope, HashSet::new()).await
+    for tag in &params.tags {
+        check_tag(tag)?;
+    }
+    if params.keep_arg.as_deref() == Some("") {
+        return Err(Fault::new(
+            "invalid_params",
+            "keepArg is empty, which every argument starts with",
+        ));
+    }
+    let tags: HashSet<String> = params.tags.into_iter().collect();
+    let detail = !tags.is_empty();
+    let mut rows = scan(
+        &params.env,
+        params.timeout_ms,
+        scope.clone(),
+        tags.clone(),
+        detail,
+    )
+    .await?;
+    if let Some(keep_arg) = params.keep_arg.as_deref() {
+        for index in plan(&rows, std::process::id(), &tags, Some(keep_arg)).kept {
+            rows[index].stock = true;
+        }
+    }
+    let deaf: Vec<usize> = (0..rows.len())
+        .filter(|&index| rows[index].dead_output)
+        .collect();
+    if deaf.is_empty() {
+        return Ok(rows);
+    }
+    let pids: Vec<u32> = deaf.iter().map(|&index| rows[index].pid).collect();
+    let mut ports = blocking(move || Ok(crate::sys::listening_ports(&pids))).await?;
+    for &index in &deaf {
+        rows[index].ports = ports.remove(&rows[index].pid).unwrap_or_default();
+    }
+    if let Some(sample_ms) = params.sample_ms {
+        let before: Vec<Option<u64>> = deaf.iter().map(|&index| cpu_ns(&rows[index])).collect();
+        let started = Instant::now();
+        tokio::time::sleep(Duration::from_millis(sample_ms)).await;
+        if scope.cancelled() {
+            return Err(Fault::cancelled());
+        }
+        let elapsed = started.elapsed().as_nanos().max(1);
+        for (&index, before) in deaf.iter().zip(before) {
+            if let (Some(before), Some(after)) = (before, cpu_ns(&rows[index])) {
+                let used = u128::from(after.saturating_sub(before));
+                rows[index].cpu_percent = u32::try_from(used * 100 / elapsed).ok();
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// The CPU time a process has used, in ns, through the handle it was read through: the same process.
+#[cfg(windows)]
+fn cpu_ns(row: &Row) -> Option<u64> {
+    row.process.as_ref()?.cpu_ns()
+}
+
+/// The CPU time a process has used, in ns.
+#[cfg(unix)]
+fn cpu_ns(row: &Row) -> Option<u64> {
+    crate::sys::cpu_ns(row.pid)
 }
 
 async fn end(params: EndParams, scope: Scope) -> Result<Report, Fault> {
@@ -163,7 +279,9 @@ async fn end(params: EndParams, scope: Scope) -> Result<Report, Fault> {
     let deadline = Instant::now() + Duration::from_millis(params.timeout_ms);
     let grace = Duration::from_millis(params.grace_ms);
     let tags: HashSet<String> = params.tags.into_iter().collect();
-    let args_of = if params.keep_arg.is_some() {
+    // `only` names processes by their start, which a detailed scan reads to the millisecond.
+    let detail = params.only.is_some();
+    let args_of = if params.keep_arg.is_some() || detail {
         tags.clone()
     } else {
         HashSet::new()
@@ -184,13 +302,29 @@ async fn end(params: EndParams, scope: Scope) -> Result<Report, Fault> {
         let timeout_ms = u64::try_from(remaining.as_millis())
             .unwrap_or(u64::MAX)
             .max(1);
-        let rows = match scan(&params.env, timeout_ms, scope.clone(), args_of.clone()).await {
+        let rows = match scan(
+            &params.env,
+            timeout_ms,
+            scope.clone(),
+            args_of.clone(),
+            detail,
+        )
+        .await
+        {
             Ok(rows) => rows,
             Err(fault) if round == 0 => return Err(fault),
             // What earlier rounds left running is what is known.
             Err(_) => break,
         };
-        let plan = plan(&rows, me, &tags, params.keep_arg.as_deref());
+        let mut plan = plan(&rows, me, &tags, params.keep_arg.as_deref());
+        if let Some(only) = &params.only {
+            plan.targets.retain(|&index| {
+                let row = &rows[index];
+                only.iter().any(|pinned| {
+                    pinned.pid == row.pid && Some(pinned.started_ms) == row.started_ms
+                })
+            });
+        }
         own.extend(plan.own);
         for &kept in &plan.kept {
             let row = &rows[kept];
@@ -345,6 +479,150 @@ fn orphans(rows: &[Row], pid: u32, started_ms: u64) -> Vec<usize> {
         .collect()
 }
 
+/// How many of the processes OMPdesk started just before a console window showed are named beside it.
+#[cfg(any(windows, test))]
+const RECENT_NAMED: usize = 8;
+/// How much of a command line is named: enough to tell the program and what it was asked.
+#[cfg(windows)]
+const COMMAND_LINE_UNITS: usize = 1_024;
+
+/// What the processes `roots` started, and so on down, that began at or after `since_ms`: by index, the newest first,
+/// `RECENT_NAMED` at most. A start that could not be read is not among them.
+#[cfg(any(windows, test))]
+fn recent_starts(rows: &[Row], roots: &[u32], since_ms: u64) -> Vec<usize> {
+    let roots: Vec<usize> = (0..rows.len())
+        .filter(|&index| roots.contains(&rows[index].pid))
+        .collect();
+    let mut recent: Vec<usize> = descendants(rows, &roots)
+        .into_iter()
+        .filter(|index| {
+            !roots.contains(index)
+                && rows[*index]
+                    .started_ms
+                    .is_some_and(|started| started >= since_ms)
+        })
+        .collect();
+    recent.sort_by_key(|&index| std::cmp::Reverse(rows[index].started_ms));
+    recent.truncate(RECENT_NAMED);
+    recent
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConsolesParams {
+    /// The windows the caller was told of before: each comes back without whose it is.
+    known: Vec<u64>,
+    /// OMPdesk's own processes (main, its host, this core).
+    roots: Vec<u32>,
+    env: String,
+    /// From when a start counts as just before the window, in ms since the epoch on the caller's clock.
+    since_ms: u64,
+}
+
+/// One process named beside a console window.
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Link {
+    pid: u32,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_line: Option<String>,
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConsoleRow {
+    window: u64,
+    pid: u32,
+    class: &'static str,
+    title: String,
+    /// The window's process and its ancestors, nearest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chain: Option<Vec<Link>>,
+    /// The session tag in that process's environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
+    /// What `roots` started since `sinceMs`, the newest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recent: Option<Vec<Link>>,
+}
+
+/// `procs.consoles`: the visible console windows of this desktop. A window not in `known` comes with whose it is: its
+/// process and that one's ancestors, the tag in its environment, and what `roots` started just before (Windows
+/// Terminal shows the console of another program, so its window's own process says nothing of who opened it). The
+/// processes are listed only when a window is new: the list costs a handle a process.
+#[cfg(windows)]
+async fn consoles(params: ConsolesParams) -> Result<Vec<ConsoleRow>, Fault> {
+    check_env(&params.env)?;
+    blocking(move || {
+        let windows = crate::sys::console_windows();
+        let known =
+            |window: &crate::sys::ConsoleWindow| params.known.contains(&(window.window as u64));
+        let rows = if windows.iter().all(known) {
+            Vec::new()
+        } else {
+            Snapshot::take()?.rows
+        };
+        let env: Vec<u16> = params.env.encode_utf16().collect();
+        let link = |index: usize, with_line: bool| {
+            let row = &rows[index];
+            let line = with_line
+                .then(|| row.process.as_ref()?.command_line())
+                .flatten();
+            Link {
+                pid: row.pid,
+                name: row.name.clone(),
+                started_ms: row.started_ms,
+                command_line: line.map(|line| {
+                    String::from_utf16_lossy(&line[..line.len().min(COMMAND_LINE_UNITS)])
+                }),
+            }
+        };
+        Ok(windows
+            .into_iter()
+            .map(|window| {
+                let fresh = !known(&window);
+                let chain = if fresh {
+                    lineage(&rows, window.pid)
+                } else {
+                    Vec::new()
+                };
+                ConsoleRow {
+                    window: window.window as u64,
+                    pid: window.pid,
+                    class: window.class,
+                    title: window.title,
+                    tag: chain
+                        .first()
+                        .and_then(|&index| rows[index].process.as_ref()?.environment())
+                        .and_then(|block| block_tag(&block, &env)),
+                    recent: fresh.then(|| {
+                        recent_starts(&rows, &params.roots, params.since_ms)
+                            .into_iter()
+                            .filter(|&index| rows[index].pid != window.pid)
+                            .map(|index| link(index, true))
+                            .collect()
+                    }),
+                    // Who started it reads off the window's process and its parent; further up the names do.
+                    chain: fresh.then(|| {
+                        chain
+                            .iter()
+                            .enumerate()
+                            .map(|(depth, &index)| link(index, depth < 2))
+                            .collect()
+                    }),
+                }
+            })
+            .collect())
+    })
+    .await
+}
+
 /// Every process of this computer at one moment, each opened to end it where this user may: what `taskkill /t`
 /// walks, read without it (which needs WMI). A process is ended through the handle taken here, so a pid that names
 /// another process later is never hit.
@@ -364,9 +642,8 @@ impl Snapshot {
                 bytes: entry.working_set,
                 started_ms: entry.started_ms,
                 name: entry.image,
-                tag: None,
-                args: Vec::new(),
                 process: entry.process,
+                ..Row::default()
             })
             .collect();
         Ok(Snapshot { rows })
@@ -569,13 +846,15 @@ impl Ender {
 }
 
 /// Every process of this computer with `env`'s value from its environment, and the command line of each whose tag is
-/// in `args_of`. `timeout_ms` is how long `ps` may run.
+/// in `args_of`, with its working folder, its start to the millisecond and whether its output has a reader when
+/// `detail`. `timeout_ms` is how long `ps` may run.
 #[cfg(unix)]
 async fn scan(
     env: &str,
     timeout_ms: u64,
     scope: Scope,
     args_of: HashSet<String>,
+    detail: bool,
 ) -> Result<Vec<Row>, Fault> {
     let text = crate::memory::program(
         "/bin/ps",
@@ -598,6 +877,13 @@ async fn scan(
             row.tag = reader.tag(row.pid, &env);
             if row.tag.as_ref().is_some_and(|tag| args_of.contains(tag)) {
                 row.args = reader.arguments(row.pid);
+                if detail {
+                    row.dead_output = crate::sys::output_closed(row.pid);
+                    row.cwd = crate::sys::cwd(row.pid);
+                    if let Some(started_ms) = crate::sys::started_ms(row.pid) {
+                        row.started_ms = Some(started_ms);
+                    }
+                }
             }
         }
         Ok(rows)
@@ -605,18 +891,24 @@ async fn scan(
     .await
 }
 
+/// How long the checks of whose output has a reader may take in one scan: a check waits behind a write another process
+/// has in flight on the same pipe (`crate::sys::outputs_closed`).
+#[cfg(windows)]
+const OUTPUT_CHECK: Duration = Duration::from_secs(2);
+
 /// Every process of this computer with `env`'s value from its environment, and the command line of each whose tag is
-/// in `args_of`.
+/// in `args_of`, with its working folder and whether its output has a reader when `detail`.
 #[cfg(windows)]
 async fn scan(
     env: &str,
     _timeout_ms: u64,
     _scope: Scope,
     args_of: HashSet<String>,
+    detail: bool,
 ) -> Result<Vec<Row>, Fault> {
     let name: Vec<u16> = env.encode_utf16().collect();
     blocking(move || {
-        Ok(crate::sys::processes(true)?
+        let mut rows: Vec<Row> = crate::sys::processes(true)?
             .into_iter()
             .map(|entry| {
                 let tag = entry
@@ -631,6 +923,12 @@ async fn scan(
                         .unwrap_or_default(),
                     _ => Vec::new(),
                 };
+                let cwd = match (&entry.process, &tag) {
+                    (Some(process), Some(tag)) if detail && args_of.contains(tag) => {
+                        process.current_directory()
+                    }
+                    _ => None,
+                };
                 Row {
                     pid: entry.pid,
                     ppid: entry.parent,
@@ -639,10 +937,36 @@ async fn scan(
                     name: entry.image,
                     tag,
                     args,
+                    cwd,
                     process: entry.process,
+                    ..Row::default()
                 }
             })
-            .collect())
+            .collect();
+        if detail {
+            let asked: Vec<usize> = (0..rows.len())
+                .filter(|&index| {
+                    rows[index]
+                        .tag
+                        .as_ref()
+                        .is_some_and(|tag| args_of.contains(tag))
+                })
+                .collect();
+            let outputs = asked
+                .iter()
+                .map(|&index| {
+                    let row = &rows[index];
+                    row.process
+                        .as_ref()
+                        .map_or_else(Vec::new, |process| process.outputs(row.pid))
+                })
+                .collect();
+            let closed = crate::sys::outputs_closed(outputs, OUTPUT_CHECK);
+            for (index, closed) in asked.into_iter().zip(closed) {
+                rows[index].dead_output = closed;
+            }
+        }
+        Ok(rows)
     })
     .await
 }
@@ -903,10 +1227,7 @@ fn parse_ps(text: &str, now_ms: u64) -> Vec<Row> {
                 started_ms: elapsed_secs(etime)
                     .and_then(|secs| now_ms.checked_sub(secs.checked_mul(1000)?)),
                 name: name.to_owned(),
-                tag: None,
-                args: Vec::new(),
-                #[cfg(windows)]
-                process: None,
+                ..Row::default()
             })
         })
         .collect()
@@ -1092,6 +1413,7 @@ mod tests {
             ListParams {
                 env: env.to_owned(),
                 timeout_ms: 10_000,
+                ..ListParams::default()
             },
             Scope::detached(),
         )
@@ -1121,6 +1443,7 @@ mod tests {
             env: env.to_owned(),
             tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
             keep_arg: keep_arg.map(str::to_owned),
+            only: None,
             grace_ms,
             timeout_ms: 30_000,
         }
@@ -1222,6 +1545,177 @@ mod tests {
         assert!(!started.running(held));
         assert!(started.running(other_pid) && started.running(untagged));
         assert!(tagged(&listed(&env).await, &mine).is_empty());
+    }
+
+    /// A process whose standard output goes to the test (stdin and stderr to the null device): `busy` spins in a loop of
+    /// its own and writes nothing; else a shell waiting on a `long` writing to the null device (Windows: `waitfor`,
+    /// since `cmd` points its own output at a redirection's target while that command runs).
+    #[cfg(any(windows, target_os = "macos"))]
+    fn piped(
+        started: &mut Started,
+        env: &str,
+        tag: &str,
+        busy: bool,
+    ) -> (u32, std::process::ChildStdout) {
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("sh");
+            let script = if busy {
+                "while :; do :; done"
+            } else {
+                "sleep 120 >/dev/null; exit 0"
+            };
+            command.args(["-c", script, "--token=SYNTH-not-answered"]);
+            command
+        };
+        #[cfg(windows)]
+        let mut command = {
+            use std::os::windows::process::CommandExt;
+            let mut command = if busy {
+                let mut command = Command::new("cmd");
+                command.raw_arg("/d /c for /l %i in (0,0,1) do @rem --token=SYNTH-not-answered");
+                command
+            } else {
+                let mut command = Command::new("waitfor");
+                command.args(["/t", "120", &format!("OmpdeskTestNever{}", hex(4))]);
+                command
+            };
+            command.creation_flags(CREATE_NO_WINDOW);
+            command
+        };
+        command
+            .env(env, tag)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().unwrap();
+        let out = child.stdout.take().unwrap();
+        let pid = child.id();
+        started.children.push(child);
+        (pid, out)
+    }
+
+    /// The relaunch's report (20 Nov 2026): the program that read a server's output ended, so each write of it fails.
+    /// A list for the tag says so of exactly those processes, measures their CPU and names their working folder, and
+    /// never answers their arguments. Linux (tests and CI only) does not tell.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[tokio::test]
+    async fn names_what_lost_the_reader_of_its_output_and_how_busy_it_is() {
+        let env = new_env();
+        let mine = new_tag();
+        let mut started = Started::new(&env);
+        let (spinning, out) = piped(&mut started, &env, &mine, true);
+        drop(out);
+        let (quiet, out) = piped(&mut started, &env, &mine, false);
+        drop(out);
+        let (heard, _kept_out) = piped(&mut started, &env, &mine, false);
+        listed_until(&env, |rows| {
+            [spinning, quiet, heard]
+                .iter()
+                .all(|pid| rows.iter().any(|row| row.pid == *pid && row.tag.is_some()))
+        })
+        .await;
+        let rows = list(
+            ListParams {
+                env: env.clone(),
+                timeout_ms: 10_000,
+                tags: vec![mine.clone()],
+                sample_ms: Some(2_000),
+                ..ListParams::default()
+            },
+            Scope::detached(),
+        )
+        .await
+        .unwrap();
+        for row in tagged(&rows, &mine) {
+            if is_long(&row.name) {
+                started.strays.push((row.pid, mine.clone()));
+            }
+        }
+        let row = |pid: u32| rows.iter().find(|row| row.pid == pid).unwrap();
+        let deaf: BTreeSet<u32> = but_console_hosts(
+            tagged(&rows, &mine)
+                .into_iter()
+                .filter(|row| row.dead_output)
+                .map(|row| (row.pid, row.name.as_str())),
+        );
+        assert_eq!(deaf, BTreeSet::from([spinning, quiet]), "{rows:?}");
+        assert!(
+            row(spinning).cpu_percent.unwrap() >= 50,
+            "{:?}",
+            row(spinning)
+        );
+        assert!(row(quiet).cpu_percent.unwrap() < 50, "{:?}", row(quiet));
+        assert_eq!(row(heard).cpu_percent, None);
+        let here = std::env::current_dir().unwrap();
+        let cwd = std::path::PathBuf::from(row(quiet).cwd.as_deref().unwrap());
+        assert_eq!(
+            cwd.canonicalize().unwrap(),
+            here.canonicalize().unwrap(),
+            "{:?}",
+            row(quiet)
+        );
+        let wire = serde_json::to_string(&rows).unwrap();
+        assert!(!wire.contains("SYNTH-not-answered"), "{wire}");
+        assert!(started.running(spinning) && started.running(quiet));
+    }
+
+    /// `only` ends a process by its id and start, and nothing of the same tag beside it; a start that does not match
+    /// (the id now names a later process) ends nothing.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[tokio::test]
+    async fn ends_only_the_processes_pinned_by_their_start() {
+        let env = new_env();
+        let mine = new_tag();
+        let mut started = Started::new(&env);
+        let (spinning, out) = piped(&mut started, &env, &mine, true);
+        drop(out);
+        let beside = started.spawn(long(&env, Some(&mine)));
+        let detailed = || ListParams {
+            env: env.clone(),
+            timeout_ms: 10_000,
+            tags: vec![mine.clone()],
+            ..ListParams::default()
+        };
+        listed_until(&env, |rows| {
+            rows.iter()
+                .any(|row| row.pid == beside && is_long(&row.name))
+                && rows.iter().any(|row| row.pid == spinning)
+        })
+        .await;
+        let rows = list(detailed(), Scope::detached()).await.unwrap();
+        let at = rows
+            .iter()
+            .find(|row| row.pid == spinning)
+            .unwrap()
+            .started_ms
+            .unwrap();
+        let pinned = |started_ms| {
+            let mut params = ending(&env, &[&mine], None, 2_000);
+            params.only = Some(vec![Pinned {
+                pid: spinning,
+                started_ms,
+            }]);
+            params
+        };
+        let report = end(pinned(at + 1), Scope::detached()).await.unwrap();
+        assert!(report.ended.is_empty(), "{report:?}");
+        let report = end(pinned(at), Scope::detached()).await.unwrap();
+        assert_eq!(
+            ended_pids(&report),
+            BTreeSet::from([spinning]),
+            "{report:?}"
+        );
+        assert!(!started.running(spinning) && started.running(beside));
+        // The start is read the same way every time, or the pin would never match.
+        let again = list(detailed(), Scope::detached()).await.unwrap();
+        let beside_at = |rows: &[Row]| {
+            rows.iter()
+                .find(|row| row.pid == beside)
+                .unwrap()
+                .started_ms
+        };
+        assert_eq!(beside_at(&rows), beside_at(&again));
     }
 
     #[tokio::test]
@@ -1410,6 +1904,7 @@ mod tests {
             ListParams {
                 env: String::new(),
                 timeout_ms: 1_000,
+                ..ListParams::default()
             },
             Scope::detached(),
         )
@@ -1426,14 +1921,57 @@ mod tests {
             started_ms: Some(started_ms),
             name: format!("p{pid}"),
             tag: tag.map(str::to_owned),
-            args: Vec::new(),
-            #[cfg(windows)]
-            process: None,
+            ..Row::default()
         }
     }
 
     fn at(rows: &[Row], indices: &[usize]) -> Vec<u32> {
         indices.iter().map(|&index| rows[index].pid).collect()
+    }
+
+    #[test]
+    fn names_what_the_roots_started_lately_the_newest_first() {
+        let rows = [
+            row(10, 1, 1_000, None),
+            row(11, 10, 1_100, None),
+            row(12, 11, 9_500, None),
+            row(13, 10, 9_800, None),
+            row(14, 13, 9_900, None),
+            // Somebody else's.
+            row(20, 1, 9_950, None),
+            // Took the id of a dead child of 10's: it started before 10, so 10 did not start it.
+            row(15, 10, 900, None),
+        ];
+        assert_eq!(
+            at(&rows, &recent_starts(&rows, &[10, 99], 9_000)),
+            [14, 13, 12]
+        );
+        assert!(recent_starts(&rows, &[20], 0).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn says_whose_a_console_window_is_only_while_it_is_new() {
+        let ask = |known| ConsolesParams {
+            known,
+            roots: vec![std::process::id()],
+            env: new_env(),
+            since_ms: 0,
+        };
+        let first = consoles(ask(Vec::new())).await.unwrap();
+        assert!(
+            first
+                .iter()
+                .all(|row| row.chain.is_some() && row.recent.is_some())
+        );
+        let known: Vec<u64> = first.iter().map(|row| row.window).collect();
+        let again = consoles(ask(known.clone())).await.unwrap();
+        assert!(
+            again
+                .iter()
+                .filter(|row| known.contains(&row.window))
+                .all(|row| row.chain.is_none() && row.tag.is_none() && row.recent.is_none())
+        );
     }
 
     #[test]
@@ -1641,6 +2179,15 @@ mod tests {
         assert_eq!(elapsed_secs("1e3:00"), None);
         assert_eq!(elapsed_secs(""), None);
         assert_eq!(elapsed_secs("99999999999999999999-00:00:00"), None);
+    }
+
+    #[test]
+    fn reads_each_process_s_listening_ports_once_from_lsof() {
+        let ports = crate::sys::parse_lsof_ports(
+            "p12\nf20\nn*:3000\nf21\nn[::1]:3000\nn127.0.0.1:9229\np40\nf7\nn*:5173\n",
+        );
+        assert_eq!(ports.get(&12), Some(&vec![3000, 9229]));
+        assert_eq!(ports.get(&40), Some(&vec![5173]));
     }
 
     #[test]

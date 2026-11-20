@@ -56,7 +56,7 @@ test("a message the phone sends into a running turn is noted as a typed steer be
 		await input.fill("fixture running");
 		await send.click();
 		await expect(phone.getByRole("button", { name: /^(Stop|중단)$/ })).toBeVisible({ timeout: 30_000 });
-		await expect(phone.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", { timeout: 30_000 });
+		await expect(phone.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible({ timeout: 30_000 });
 
 		await input.fill(QUESTION);
 		await expect(send).toBeEnabled();

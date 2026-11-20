@@ -544,9 +544,10 @@ async fn run_host(launch: &OmpLaunch, host_file: &str, cwd: &str, input: &Path, 
             "--no-extensions",
             "--no-skills",
             "--no-rules",
-            "-e",
-            host_file,
         ])
+        // Main's arguments (the Credit use switch's extension) before the host: its hooks are in place first.
+        .args(&launch.args)
+        .args(["-e", host_file])
         .current_dir(cwd)
         .env_clear()
         .stdin(Stdio::piped())

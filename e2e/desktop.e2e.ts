@@ -183,11 +183,11 @@ test("all named themes apply with readable primary text and no stale scheme toke
 		"OMPdesk Light",
 		"GitHub Light",
 		"Solarized Light",
-		"Sepia",
+		"Gruvbox Light",
 		"High Contrast Light",
 		"OMPdesk Dark",
-		"Nord",
-		"Tokyo Night",
+		"GitHub Dark",
+		"Solarized Dark",
 		"Gruvbox Dark",
 		"High Contrast Dark",
 	];
@@ -534,7 +534,7 @@ test("failed preference writes retain edits and never allow a premature restart"
 	await lineNumbers.click();
 	await expect(page.getByRole("alert").filter({ hasText: "audit appearance write refused" })).toBeVisible();
 	await expect(lineNumbers).toHaveAttribute("aria-checked", checked ?? "false");
-	await settings.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "OMPdesk Light" }).click();
+	await settings.locator('[data-theme-mode="light"]').click();
 	await expect(page.getByRole("alert").filter({ hasText: "audit appearance write refused" })).toBeVisible();
 	await page.keyboard.press("Escape");
 	expect(errors).toEqual([]);

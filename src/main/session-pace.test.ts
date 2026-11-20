@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -338,5 +338,45 @@ describe("session-pace", () => {
 		await writeFile(file, steady(3).join("\n"));
 		expect((await readPace(file))?.modelCalls).toBe(3);
 		expect(await readPace(join(dir, "missing.jsonl"))).toBeUndefined();
+	});
+
+	describe("a journal read again", () => {
+		const lines = steady(6);
+		const fresh = async (content: string) => {
+			const dir = await mkdtemp(join(tmpdir(), "pace-"));
+			const file = join(dir, "s.jsonl");
+			await writeFile(file, content);
+			return { dir, file };
+		};
+
+		it("answers what a whole read answers after lines were appended, a line still being written left for later", async () => {
+			const { file } = await fresh(`${lines.slice(0, 4).join("\n")}\n`);
+			expect(await readPace(file)).toEqual(pace(lines.slice(0, 4)));
+			const half = Math.floor(lines[4].length / 2);
+			await appendFile(file, lines[4].slice(0, half));
+			expect(await readPace(file)).toEqual(pace(lines.slice(0, 4)));
+			await appendFile(file, `${lines[4].slice(half)}\n${lines.slice(5).join("\n")}\n`);
+			expect(await readPace(file)).toEqual(pace(lines));
+		});
+
+		it("reads a file put in its place from the start", async () => {
+			const { dir, file } = await fresh(`${lines.join("\n")}\n`);
+			expect((await readPace(file))?.modelCalls).toBe(6);
+			// Longer than the first, so only the file's identity tells it from an append.
+			const other = join(dir, "other.jsonl");
+			const replaced = steady(8, "read", "x.ts");
+			await writeFile(other, `${replaced.join("\n")}\n`);
+			await rename(other, file);
+			expect(await readPace(file)).toEqual(pace(replaced));
+		});
+
+		it("counts appended lines once when two reads ask at once", async () => {
+			const { file } = await fresh(`${lines.slice(0, 3).join("\n")}\n`);
+			await readPace(file);
+			await appendFile(file, `${lines.slice(3).join("\n")}\n`);
+			const [a, b] = await Promise.all([readPace(file), readPace(file)]);
+			expect(a).toEqual(pace(lines));
+			expect(b).toEqual(pace(lines));
+		});
 	});
 });

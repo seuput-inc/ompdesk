@@ -9,12 +9,21 @@
  * or fails, the retire is answered or arrives late, and any of these events may happen while main waits for git).
  */
 import { describe, expect, it } from "vitest";
-import { ClaimBook, retiredClaims } from "../../resources/gui-bridge/modes/checkout-claims";
+import {
+	CLAIMS_FULL_EVERY,
+	ClaimBook,
+	journaledClaims,
+	nextClaimsEntry,
+	retiredClaims,
+} from "../../resources/gui-bridge/modes/checkout-claims";
 import type { CheckoutPeers } from "../../resources/gui-bridge/modes/checkout-peers-contracts";
 import { type CheckoutMember, CheckoutPeerCoordinator } from "./checkout-peers";
 
 const TOP = "/work/app";
 const F = `${TOP}/src/f.ts`;
+/** Another file of A's journal (`writeJournal`), never in the ledger the invariants read. */
+const G = `${TOP}/src/g.ts`;
+const JOURNAL = "ompdesk.checkout-claims";
 
 /** The claims of F a retire names, as `instance\0stamp`. */
 function retireKeys(params: unknown): string[] {
@@ -140,6 +149,31 @@ class World {
 		this.book.retireFrom(params);
 		if (held && !this.book.files.includes(F)) this.released = true;
 	}
+
+	/** A's session journal (`ompdesk.checkout-claims` entries) and its writer's base and count of deltas. */
+	readonly journal: Array<{ customType: string; data: unknown }> = [];
+	journalBase: readonly string[] = [];
+	deltas = CLAIMS_FULL_EVERY;
+
+	/**
+	 * The bridge writes the journal (`writeJournal`: `agent_end`, the interval, `session_shutdown`). The set it writes
+	 * holds one more file, G, as a real set holds many, so a change of F goes as a delta.
+	 */
+	writeJournal(): void {
+		const files = [...this.book.files, G];
+		const entry = nextClaimsEntry(
+			this.journalBase,
+			{
+				files,
+				snapshot: () => ({ files, stamps: files.map(file => this.book.stamp(file)) }),
+			},
+			this.deltas,
+		);
+		if (!entry) return;
+		this.journal.push({ customType: JOURNAL, data: entry.data });
+		this.journalBase = files;
+		this.deltas = entry.whole ? 0 : this.deltas + 1;
+	}
 }
 
 /** The events that can happen now, each a label and its effect (main's pass is added by the driver). */
@@ -220,12 +254,17 @@ function events(world: World, pick: () => number): Array<[string, () => void]> {
 			},
 		]);
 	}
+	found.push(["journal", () => world.writeJournal()]);
 	found.push([
 		"restart",
 		() => {
-			const journal = world.book.snapshot();
+			// `session_shutdown` writes the journal; the next load restores what it replays to (`restoreClaims`).
+			world.writeJournal();
+			const journal = journaledClaims(world.journal, JOURNAL);
 			world.book = new ClaimBook<string>();
-			world.book.restore(journal);
+			world.book.restore(journal && { files: journal.files.filter(file => file !== G) });
+			world.journalBase = journal?.files ?? [];
+			world.deltas = CLAIMS_FULL_EVERY;
 			world.calls.clear();
 			world.late = [];
 			world.released = false;

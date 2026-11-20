@@ -38,6 +38,7 @@ const { values } = parseArgs({
 		"rollback-dmg": { type: "string" },
 		"rollback-tag": { type: "string" },
 		"http-port": { type: "string" },
+		hostname: { type: "string", default: "127.0.0.1" },
 	},
 });
 const setup = values.setup ?? "";
@@ -71,6 +72,12 @@ if (!existsSync(cert)) {
 		"2",
 		"-subj",
 		"/CN=api.github.com",
+		// A system-trusted certificate (win-update-gate.ps1 and mac-update-gate.sh import it, since the Tauri app's
+		// native network ignores Chromium's switches) needs the name in subjectAltName and serverAuth (Apple's TLS rules).
+		"-addext",
+		"subjectAltName=DNS:api.github.com",
+		"-addext",
+		"extendedKeyUsage=serverAuth",
 	]);
 	if (made.exitCode !== 0) throw new Error(`openssl could not make the feed's certificate: ${made.stderr.toString()}`);
 }
@@ -97,7 +104,7 @@ const server = seedOnly
 	? undefined
 	: Bun.serve({
 			port: Number(values.port),
-			hostname: "127.0.0.1",
+			hostname: values.hostname,
 			tls: { key: Bun.file(key), cert: Bun.file(cert) },
 			fetch(request) {
 				const url = new URL(request.url);

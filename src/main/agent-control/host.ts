@@ -24,6 +24,8 @@ import {
 	AGENT_HIDDEN_PREFS_KEY,
 	AGENT_PROJECT_BOUNDARY_PREF,
 	AGENT_SCHEDULE_PREFIX,
+	type AgentCloseAnswer,
+	type AgentCloseOutcome,
 	type AgentControlToolName,
 	type AgentControlViewEvent,
 	type AgentReviewEvent,
@@ -134,6 +136,10 @@ export const CARD_TIMEOUT_MS = 10 * 60_000;
 const WORKTREE_PREFIX = "omp/agent/";
 /** A receiver's bridge answers which messages its journal holds within this (a socket request, no omp command queue). */
 const SENT_MARKS_TIMEOUT_MS = 8_000;
+/** After a new session's first prompt was answered, long enough for its turn to reach the relaunch marker. */
+const OPENING_SETTLE_MS = 3_000;
+/** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
+const OPENING_MAX_MS = 5 * 60_000;
 
 /** Every tombstone, by file and computer and by saved id (stock names a session file `<time>_<session id>.jsonl`). */
 function tombstones(): Tombstones {
@@ -358,6 +364,14 @@ export class AgentControlRuntime {
 	 */
 	readonly #projects = new Map<string, { project: string | null; at: number }>();
 	readonly #projectLookups = new Map<string, Promise<string | null>>();
+	/** Each tab's window's latest answer to an agent close (`AGENT_CLOSE_ANSWER`), read by the core's close. */
+	readonly #closeAnswers = new Map<string, { closeId: number; outcome: AgentCloseOutcome }>();
+	/**
+	 * Sessions an agent is opening with a first message, by tab: since when, and when the message's prompt was answered.
+	 * An update restart waits for them (`opening`), because until the new session's omp took the prompt (and its turn
+	 * reached the relaunch marker) nothing would send it again after the relaunch.
+	 */
+	readonly #opening = new Map<string, { since: number; prompted?: number }>();
 
 	constructor(deps: AgentControlHostDeps) {
 		this.#deps = deps;
@@ -384,6 +398,23 @@ export class AgentControlRuntime {
 	/** The tab Autopilot (or anyone) opened this one for, if the control tools opened it. */
 	parentOf(tabId: string): { callerTabId: string; tag?: string } | undefined {
 		return this.#parents.get(tabId);
+	}
+
+	/**
+	 * An agent is opening a session that has not taken its first message yet, or took it moments ago: an update restart
+	 * now would lose the message (B3 of the owner's 20 Nov 2026 list). A tab that went, or an open that never sent its
+	 * message within `OPENING_MAX_MS`, holds nothing.
+	 */
+	opening(now = Date.now()): boolean {
+		for (const [tabId, entry] of this.#opening) {
+			const over =
+				!this.#deps.pool.sidecarOf(tabId) ||
+				(entry.prompted === undefined
+					? now - entry.since >= OPENING_MAX_MS
+					: now - entry.prompted >= OPENING_SETTLE_MS);
+			if (over) this.#opening.delete(tabId);
+		}
+		return this.#opening.size > 0;
 	}
 
 	/** One pool activity, to the core's runtime with the opener, the card rule and the released session main knows. */
@@ -508,6 +539,16 @@ export class AgentControlRuntime {
 	/** The person typed a prompt to `tabId` in a window, on the phone page or on a paired device (main's word, not the text). */
 	personTyped(tabId: string): void {
 		void this.control.personTyped(tabId).catch(() => undefined);
+	}
+
+	/**
+	 * The window that holds `tabId` answered the agent close `closeId` (its own `applyAgentView`). Only the window that
+	 * owns the tab may answer for it; the core reads the answer with the next snapshot.
+	 */
+	answerClose(win: ClientWindow, answer: AgentCloseAnswer): void {
+		if (this.#deps.pool.windowOfTab(answer.tabId) !== win) return;
+		this.#closeAnswers.set(answer.tabId, { closeId: answer.closeId, outcome: answer.outcome });
+		this.control.changed();
 	}
 
 	/**
@@ -742,6 +783,7 @@ export class AgentControlRuntime {
 			...(info.device ? { device: info.device, deviceName: this.#deps.deviceName(info.device) } : {}),
 			status: info.status,
 			...(this.#deps.pool.sidecarOf(info.tabId)?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
+			...(this.#deps.pool.sidecarOf(info.tabId)?.shared === true ? { viewing: true as const } : {}),
 			...(info.message && (info.status === "error" || info.status === "exited") ? { failure: info.message } : {}),
 			...(info.status === "starting" && (info.queued || info.slow)
 				? { startWait: info.queued ? ("queued" as const) : ("slow" as const) }
@@ -764,6 +806,7 @@ export class AgentControlRuntime {
 			...(formerIds.length > 0 ? { formerIds } : {}),
 			...(webEdits ? { webEdits } : {}),
 			...(project ? { project } : {}),
+			...(this.#closeAnswers.has(info.tabId) ? { closeAnswer: this.#closeAnswers.get(info.tabId) } : {}),
 		};
 	}
 
@@ -909,6 +952,7 @@ export class AgentControlRuntime {
 			throw new Error("The new session could not be started.");
 		}
 		this.#windows.set(result.tabId, win);
+		if (request.task) this.#opening.set(result.tabId, { since: Date.now() });
 		// A view of a tab that holds the session elsewhere stays whoever's it was: no parent, no opener.
 		if (request.join) return { tabId: result.tabId };
 		this.#parents.set(result.tabId, { callerTabId, ...(request.tag ? { tag: request.tag } : {}) });
@@ -1257,7 +1301,16 @@ export class AgentControlRuntime {
 						success: false,
 						error: "That session is gone.",
 					} as RpcResponse);
-				return deps.dispatch(win, sidecar, tabId, command, timeoutMs);
+				const sent = deps.dispatch(win, sidecar, tabId, command, timeoutMs);
+				const opening = this.#opening.get(tabId);
+				if (opening && (command.type === "prompt" || command.type === "set_goal"))
+					void sent.then(
+						() => {
+							opening.prompted = Date.now();
+						},
+						() => this.#opening.delete(tabId),
+					);
+				return sent;
 			},
 			spawn: (callerTabId, request) => this.#spawn(callerTabId, request),
 			autopilot: this.#autopilotSource(),

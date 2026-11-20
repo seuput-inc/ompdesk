@@ -482,6 +482,14 @@ export class Autopilot {
 	}
 
 	/**
+	 * The tab is an active run's own (started and not ended): a relaunch starts its omp and the run goes on, whatever
+	 * the run did at the quit (a cycle, between cycles, its quota wait). TurnResume keeps a marker for it.
+	 */
+	runsOn(tabId: string): boolean {
+		return this.#mirror.has(tabId);
+	}
+
+	/**
 	 * TurnResume's goal resume after a relaunch (`ResumeDeps.resumeGoal`): an autopilot run is armed again first
 	 * (overrides, tools and guard before the goal), any other tab gets stock's own resume.
 	 */

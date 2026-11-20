@@ -151,7 +151,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "launch",
 		contract: "internal",
 		summary:
-			"Updates and installs omp through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (an exact version, with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) and, for an omp Bun does not manage, `omp update`; including launcher repair, install-kind detection, the newest release of one major (`bun pm view`) and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
+			"Updates and installs omp at an exact version through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) or, for an omp npm owns, `npm install -g --prefix <prefix> @oh-my-pi/pi-coding-agent@<version>`, and only for an omp neither owns `omp update`; including launcher repair, install-kind detection and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
 		files: [
 			"src/main/omp-updater.ts",
 			"src/main/setup/plans.ts",
@@ -163,6 +163,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		stock: [
 			"omp update",
 			"bun install -g @oh-my-pi/pi-coding-agent",
+			"npm install -g --prefix <prefix> @oh-my-pi/pi-coding-agent",
 			"@oh-my-pi/pi-coding-agent",
 			"@oh-my-pi/pi-natives* pinned in <BUN_INSTALL>/install/global/package.json",
 		],
@@ -204,6 +205,21 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"omp ps --json",
 		],
 		tests: ["src/main/omp-daemon-folder-stock.test.ts"],
+	},
+	{
+		id: "L13",
+		area: "launch",
+		contract: "public",
+		summary:
+			"OMPdesk is the one owner of omp updates: it reads stock's `update.auto` with `omp config get update.auto --json`, turns it off with `omp config set update.auto false --json` while it keeps omp current, and sets it back to true when the person turns that off (an `overriddenBy` in set's reply counts as not written).",
+		files: ["src/main/index.ts", "src/main/omp-auto-takeover.ts"],
+		stock: [
+			"omp config get <key> --json",
+			"omp config set <key> <value> --json",
+			"update.auto (default false)",
+			"omp://settings.md",
+		],
+		tests: ["src/main/omp-auto-takeover.test.ts", "src/main/omp-config-stock.test.ts", "e2e/omp-auto-update.e2e.ts"],
 	},
 	{
 		id: "Q01",
@@ -406,7 +422,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Compatibility probe and import rewriting: reads each LOADERS function's source for `omp-legacy-pi-bundled:` targets, and COPY_SAFE, HEAVY_COPIES and PRESENCE_ONLY decide which separate module copies are acceptable. Every in-omp stock import goes through a one-line `export * from` adapter under resources/gui-bridge/omp/, which omp rewrites like a direct import.",
+			"Compatibility probe and import rewriting: reads each LOADERS function's source for `omp-legacy-pi-bundled:` targets, and COPY_SAFE, HEAVY_COPIES and PRESENCE_ONLY decide which separate module copies are acceptable. Every in-omp stock import goes through a one-line `export * from` adapter under resources/gui-bridge/omp/, which omp rewrites like a direct import. `guard` refuses only the methods of the one action whose listed internals are missing; CORE_FEATURES alone start main's omp repair.",
 		files: [
 			"resources/gui-bridge/health.ts",
 			"resources/gui-bridge/capabilities.ts",
@@ -424,6 +440,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: [
 			"src/main/bridge-capabilities.test.ts",
 			"src/main/bridge-health.test.ts",
+			"src/main/bridge-capability-granular-stock.test.ts",
+			"src/main/bridge-guard.test.mjs",
+			"src/main/bridge-session-extras-guard.test.mjs",
 			"src/main/bridge-stock-settings-stock.test.ts",
 			"scripts/lint-omp-imports.test.mjs",
 		],
@@ -685,14 +704,27 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Credit-spend control: pi-ai's retry-after helper, the auth key selector and usage provider wrapping, and credential reports (including a provider's raw credits).",
+			"Credit-spend control: pi-ai's retry-after helper, the auth key selector and `oauth.access` wrapping (in-memory patches of the process's AuthStorage), usage provider wrapping and its own usage fetch, the provider's ranking strategy for a model's own windows, credential reports (including a provider's raw credits), one ledger file in the agent directory (`ompdesk-credit-limits.json`), the same check loaded alone (`-e credit-spend-run.ts`) by every omp OMPdesk starts without its bridge for a model call (a scheduled run, a PR draft, memory's upkeep, curation and judge host), and stock's commit model selection resolved in the tab's omp before `omp commit` runs.",
 		files: [
 			"resources/gui-bridge/credit-spend.ts",
+			"resources/gui-bridge/credit-spend-run.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
+			"src/main/omp-launch.ts",
+			"src/main/ai-memory/core-asks.ts",
 		],
-		stock: ["@oh-my-pi/pi-ai/utils/retry-after"],
-		tests: ["src/main/bridge-credit-spend-stock.test.ts"],
+		stock: [
+			"@oh-my-pi/pi-ai",
+			"@oh-my-pi/pi-ai/utils/retry-after",
+			"@oh-my-pi/pi-ai/auth/usage-report",
+			"@oh-my-pi/pi-ai/usage/registry",
+			"@oh-my-pi/pi-utils",
+			"@oh-my-pi/pi-coding-agent/commit/model-selection",
+			"omp -p -e <extension>",
+			"omp --mode rpc -e <extension>",
+			"omp commit --dry-run",
+		],
+		tests: ["src/main/bridge-credit-spend-stock.test.ts", "src/main/omp-launch.test.ts"],
 	},
 	{
 		id: "B17",
@@ -1455,6 +1487,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"resources/gui-bridge/todo-reminder.ts",
 			"resources/gui-bridge/todo-wait.ts",
 			"resources/gui-bridge/todo-stale.ts",
+			"resources/gui-bridge/todo-drift.ts",
 			"resources/gui-bridge/modes/checkout-peers.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
@@ -1470,6 +1503,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-todo-reminder-stock.test.ts",
 			"src/main/bridge-todo-wait-stock.test.ts",
 			"src/main/bridge-todo-stale-stock.test.ts",
+			"src/main/bridge-todo-drift-stock.test.ts",
 		],
 		changes: [
 			"41312bc8 omp 18.18.4 allows a todo append without a phase, so the refused-call fixture changed (fixture only)",
@@ -1494,9 +1528,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"In-memory monkey patch of shutdown and turn tracing: wraps `agent.abort`, `prompt`, `extensionRunner.emitBeforeAgentStart` and `agent.streamFn`, and drives `postmortem.quit`/`exitProcess`.",
+			"In-memory monkey patch of shutdown and turn tracing: wraps `agent.abort`, `prompt`, `extensionRunner.emitBeforeAgentStart` and `agent.streamFn`, drives `postmortem.quit`/`exitProcess`, and raises stock's `session_shutdown` handler cap so a stop lets a running command finish.",
 		files: [
 			"resources/gui-bridge/quit-journal.ts",
+			"resources/gui-bridge/quit-journal-core.ts",
+			"resources/gui-bridge/omp/pi-coding-agent/extensibility/extensions/runner.ts",
 			"resources/gui-bridge/exit-drain.ts",
 			"resources/gui-bridge/exit-drain-core.ts",
 			"resources/gui-bridge/turn-stages.ts",
@@ -1511,11 +1547,17 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"postmortem.quit",
 			"postmortem.exitProcess",
 			"NATIVE_PROCESS_EXIT",
+			"@oh-my-pi/pi-coding-agent/extensibility/extensions/runner",
+			"testSetSessionShutdownHandlerTimeoutMs",
+			"@oh-my-pi/pi-natives",
+			"Shell.prototype.run",
 		],
 		tests: [
 			"src/main/bridge-exit-drain-stock.test.ts",
 			"src/main/bridge-turn-stages-stock.test.ts",
 			"src/main/bridge-agent-mail-restart-stock.test.ts",
+			"src/main/bridge-restore-request-stock.test.ts",
+			"src/main/bridge-restore-card-stock.test.ts",
 		],
 	},
 	{
@@ -1668,6 +1710,69 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		],
 		stock: ["AgentSession.prompt", "PromptOptions.streamingBehavior aside", "PromptOptions.onPromptAdmitted"],
 		tests: ["src/main/bridge-agent-send-stock.test.ts", "src/main/agent-control/service.test.ts"],
+	},
+	{
+		id: "B63",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"In-memory monkey patch: at each main run's `before_agent_start` (stock copies the peek into the run's loop config when the run starts) the bridge wraps the main agent's `Agent.hasIrcInterrupts` peek, found through `AgentRegistry`, so it also answers true while an aside the bridge queued (another session's message, a report that asks for a turn) waits in stock's aside queue (`Agent.hasQueuedAsides`). The tool batch then raises its cooperative steering signal (source `irc`): a running `bash` or `eval` backgrounds itself and the message is read at the next step, where a plain aside waits for the call or its 60 s auto-background. No call is killed, a question card stays open.",
+		files: ["resources/gui-bridge/agent-control.ts", "resources/gui-bridge/capabilities.ts"],
+		stock: [
+			"Agent.hasIrcInterrupts",
+			"Agent.hasQueuedAsides",
+			"agent-loop.ts executeToolCalls checkAsideInterrupts",
+			"async/auto-background.ts raceJobSettlement",
+		],
+		tests: ["src/main/bridge-steer-now-stock.test.ts", "src/main/bridge-agent-mail.test.ts"],
+	},
+	{
+		id: "B64",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"In-memory monkey patch of the embedded shell's `Shell.prototype.run`: a main-agent background bash job's command runs as stock's shell process (`shellProcessCommand`, seeded as stock's `#sessionSeed`) under `ompdesk keep`, outside omp, so a relaunch does not end it; the restore registers the job again under its own id with the bash tool's `asyncJobManager`.",
+		files: [
+			"resources/gui-bridge/kept-jobs.ts",
+			"resources/gui-bridge/kept-jobs-core.ts",
+			"resources/gui-bridge/composer.ts",
+			"resources/gui-bridge/restart-core.ts",
+			"resources/gui-bridge/omp/pi-coding-agent/exec/shell-process.ts",
+			"resources/gui-bridge/capabilities.ts",
+			"resources/gui-bridge/health.ts",
+			"native/ompdesk/crates/checks/src/keep.rs",
+		],
+		stock: [
+			"@oh-my-pi/pi-natives",
+			"Shell.prototype.run",
+			"@oh-my-pi/pi-coding-agent/exec/shell-process",
+			"shellProcessCommand",
+			"omp __omp_worker_shell_process",
+			"BashTool session.asyncJobManager.register",
+			"tools/bash.ts #sessionSeed",
+		],
+		tests: ["src/main/bridge-restore-request-stock.test.ts", "src/main/bridge-restart.test.ts"],
+	},
+	{
+		id: "B65",
+		area: "bridge",
+		contract: "public",
+		summary:
+			"The gh guard: a `gh` wrapper first on a tab omp's PATH acts only when stock's bash sets `PI_TOOL_CALL_ID` (the agent's tool calls and the scripts they run; the composer's `!` runs without it), the bridge's tool_result hook turns a refused gh into an error (`isError`), and its tool_call hook refuses stock's `github` `run_watch` below the quota floor.",
+		files: [
+			"resources/gui-bridge/gh-guard.ts",
+			"resources/gui-bridge/gh-guard-core.ts",
+			"resources/gui-bridge/gh-bin/gh",
+			"resources/gui-bridge/waste-guards.ts",
+			"src/main/omp-launch.ts",
+			"src/main/sidecar.ts",
+		],
+		stock: [
+			"tools/bash.ts #sessionEnv PI_TOOL_CALL_ID",
+			"tools/gh-run-watch.ts run_watch",
+			"omp://extensions.md#tool_result",
+		],
+		tests: ["src/main/gh-guard-stock.test.ts", "src/main/gh-guard.test.ts"],
 	},
 	{
 		id: "H01",

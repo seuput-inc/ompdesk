@@ -139,7 +139,8 @@ const RULES: Rule[] = [
 		/and open its full steps at `playbooks\/<title>\.md`, with the title in kebab case, hyphens kept and other punctuation dropped, unless the entry gives its file\./,
 		"and open its full steps at the `skill://poteto-mode/playbooks/<file>.md` path printed after the entry.",
 	),
-	rule("mode-pause-cursor", /^poteto-mode\/SKILL\.md$/, "a Cursor restart", "an omp or OMPdesk restart"),
+	// An OMPdesk relaunch continues running turns by itself (adapter.md): Pause safely is never for one.
+	rule("mode-pause-cursor", /^poteto-mode\/SKILL\.md$/, "a Cursor restart", "an omp restart you start yourself"),
 	rule("mode-orchestrate-entry", /^poteto-mode\/SKILL\.md$/, /- \*\*Orchestrate\.\*\*.*\n/, ""),
 	rule(
 		"mode-orchestrate-route",

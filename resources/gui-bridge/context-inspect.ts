@@ -24,9 +24,6 @@ import {
 	type ToolSource,
 } from "./context-inspect-core";
 import { guard } from "./health";
-import { toolWireSchema } from "./omp/pi-ai/utils/schema";
-import { convertToLlm } from "./omp/pi-coding-agent/session/messages";
-import { claimPromptSources, estimateToolSchemaTokens } from "./omp/pi-tui/status-line/context-usage";
 import { sectionContext, withTurnSections } from "./prompt-sections";
 import type { BridgeMethods } from "./types";
 
@@ -56,7 +53,8 @@ function messageTimestamp(message: object): number {
  * session's own extension context (its folder: the ECC section reads it). Sections only append blocks, so stock's
  * prompt sources still claim the blocks it built.
  */
-function turnPrompt(session: AgentSession) {
+async function turnPrompt(session: AgentSession) {
+	const { claimPromptSources } = await import("./omp/pi-tui/status-line/context-usage");
 	const stock = session.systemPrompt;
 	const parts = withTurnSections(stock, sectionContext(session));
 	return { parts, stockBlocks: stock.length, claims: claimPromptSources(parts, session.systemPromptSources).byBlock };
@@ -67,7 +65,7 @@ function sourceEntryId(source: { id: string; label: string }): string {
 }
 
 /** `withEntries` false: the category totals only (Insights' breakdown card), without walking the messages. */
-function inspect(session: AgentSession, withEntries: boolean) {
+async function inspect(session: AgentSession, withEntries: boolean) {
 	const tokenizer = session.agent.tokenizer;
 	const breakdown = session.getContextBreakdown();
 	const tools = session.agent.state.tools;
@@ -83,7 +81,7 @@ function inspect(session: AgentSession, withEntries: boolean) {
 		messages: breakdown?.messagesTokens ?? 0,
 	};
 
-	const { parts, stockBlocks, claims } = turnPrompt(session);
+	const { parts, stockBlocks, claims } = await turnPrompt(session);
 	parts.forEach((part, index) => {
 		const { sources, rest } = splitBlock(part, claims.get(index) ?? []);
 		for (const { source, text } of sources) {
@@ -106,6 +104,7 @@ function inspect(session: AgentSession, withEntries: boolean) {
 	});
 
 	// A one-tool roster is summed by the same estimator stock uses for the whole set.
+	const { estimateToolSchemaTokens } = await import("./omp/pi-tui/status-line/context-usage");
 	const revision = session.settings.revision;
 	for (const tool of tools) {
 		const category = TOOL_CATEGORY[toolSource(session, tool.name)];
@@ -124,6 +123,7 @@ function inspect(session: AgentSession, withEntries: boolean) {
 	}
 
 	if (withEntries) {
+		const { convertToLlm } = await import("./omp/pi-coding-agent/session/messages");
 		session.agent.state.messages.forEach((message, index) => {
 			entries.push({
 				id: `msg:${index}:${messageTimestamp(message)}`,
@@ -145,11 +145,11 @@ function inspect(session: AgentSession, withEntries: boolean) {
 	};
 }
 
-function preview(session: AgentSession, id: string): Preview {
+async function preview(session: AgentSession, id: string): Promise<Preview> {
 	const colon = id.indexOf(":");
 	const kind = id.slice(0, colon);
 	const key = id.slice(colon + 1);
-	const { parts, claims } = turnPrompt(session);
+	const { parts, claims } = await turnPrompt(session);
 	switch (kind) {
 		case "prompt": {
 			const part = parts[Number(key)];
@@ -166,8 +166,9 @@ function preview(session: AgentSession, id: string): Preview {
 		case "tool": {
 			const tool = session.agent.state.tools.find(candidate => candidate.name === key);
 			// The schema as stock serializes it for the provider (Ark/legacy schemas do not stringify as is).
-			if (tool) return capPreview(`${tool.description ?? ""}\n\n${JSON.stringify(toolWireSchema(tool), null, 2)}`);
-			break;
+			if (!tool) break;
+			const { toolWireSchema } = await import("./omp/pi-ai/utils/schema");
+			return capPreview(`${tool.description ?? ""}\n\n${JSON.stringify(toolWireSchema(tool), null, 2)}`);
 		}
 		case "deferred": {
 			const mounted = session.getXdevToolEntries().find(candidate => candidate.name === key);
@@ -177,26 +178,30 @@ function preview(session: AgentSession, id: string): Preview {
 		case "msg": {
 			const [index, timestamp] = key.split(":");
 			const message = session.agent.state.messages[Number(index)];
-			if (message && String(messageTimestamp(message)) === timestamp)
-				return capPreview(llmMessagesText(convertToLlm([message])));
-			break;
+			if (!message || String(messageTimestamp(message)) !== timestamp) break;
+			const { convertToLlm } = await import("./omp/pi-coding-agent/session/messages");
+			return capPreview(llmMessagesText(convertToLlm([message])));
 		}
 	}
 	throw new Error(`context_entry: ${id} is no longer in the context`);
 }
 
-export const methods: BridgeMethods = guard("contextInspector", {
-	/** `{entries?: boolean}` (default true): every entry of the live context with its estimated tokens, plus stock's anchored totals. */
-	"context.inspect": async (params, env) =>
-		inspect(
-			env.session(),
-			!(typeof params === "object" && params !== null && "entries" in params && params.entries === false),
-		),
-
-	/** `{id}` from `context.inspect` → the entry's text as the provider gets it, capped at 32k characters. */
-	"context.entry": async (params, env) => {
-		const id = typeof params === "object" && params !== null && "id" in params ? params.id : undefined;
-		if (typeof id !== "string" || !id.includes(":")) throw new Error("context.entry needs {id: string}");
-		return preview(env.session(), id);
-	},
-});
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("contextInspector", {
+		/** `{entries?: boolean}` (default true): every entry of the live context with its estimated tokens, plus stock's anchored totals. */
+		"context.inspect": async (params, env) =>
+			inspect(
+				env.session(),
+				!(typeof params === "object" && params !== null && "entries" in params && params.entries === false),
+			),
+	}),
+	...guard("contextEntry", {
+		/** `{id}` from `context.inspect` → the entry's text as the provider gets it, capped at 32k characters. */
+		"context.entry": async (params, env) => {
+			const id = typeof params === "object" && params !== null && "id" in params ? params.id : undefined;
+			if (typeof id !== "string" || !id.includes(":")) throw new Error("context.entry needs {id: string}");
+			return preview(env.session(), id);
+		},
+	}),
+};

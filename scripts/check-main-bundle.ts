@@ -367,11 +367,44 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // measure plus 80 bytes.
 // The title bar says a paired device's session waits on that device (18 Nov 2026, `TitleBar.tsx`, on the phone's first
 // screen): measured 2,205,912 (branch run 44261937715), 87 bytes over. The budget is that measure plus 80 bytes.
-// The session menu's "May work across projects" item and the hook that reads its grant (20 Nov 2026, I1; the sidebar is
-// on the phone's first screen though the item shows only in a desktop window): measured 2,206,909 (branch run
-// 44585290915, before its icon became one the menu already loads), 917 bytes over. The budget is that measure plus 80
-// bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_206_989;
+// The setup screen says "Updating" for a too-old omp by its outdated state, since setup installs the tested omp over
+// it with Bun and no longer runs stock `omp update` (19 Nov 2026, `MachineSetupView.tsx`, on the phone's first screen):
+// measured 2,206,029 (branch run 44494564628), 37 bytes over.
+// A window answers an agent's close with what it did (19 Nov 2026, `stores/tabs.ts` `closeRefusal` and
+// `applyAgentView`; the tab store is on the phone's first screen): measured 2,206,451 (branch run 44519094423), 459
+// bytes over. The budget is that measure plus 80 bytes.
+// A todo list says when it last changed and why it is behind the work (20 Nov 2026, `chat/dock/TodoFreshness.tsx`; the
+// work strip and the dock's todo card are on the phone's first screen): measured 2,207,770 (branch run 44579782922),
+// 1,778 bytes over. The budget is that measure plus 80 bytes.
+// It also lists the instructions received since that change (20 Nov 2026, `TodoReceived` with the board's rows): measured
+// 2,208,877 (branch run 44589770282), 1,027 bytes over. The budget is that measure plus 80 bytes.
+// They lead with their count, say what the count measures, and a tap shows a cut line whole (20 Nov 2026): measured
+// 2,209,713 (branch run 44596214057), 756 bytes over. The budget is that measure plus 80 bytes.
+// A paired host's refusal of a view's return after its window closed it (20 Nov 2026, C2: `view_ended` in
+// `shared/ipc-error-codes.ts`, which the phone's first screen loads): measured 2,206,000 (branch run 44589727329), 8 bytes
+// over. The budget is that measure plus 80 bytes.
+// Those branches together with close-visible B, the page watchdog, the to-do panel's wording, the C fixes and the rest
+// of next-line (20 Nov 2026): measured 2,208,648 (branch run 44601435767). The budget is that measure plus 80 bytes.
+// A compaction's line and card say what happens and how long (20 Nov 2026, a50471797: `ChatStream.tsx`,
+// `MessageBubble.tsx`, `lib/compaction-action.ts`), with the work board's release-gate check row (830248735): measured
+// 2,207,914 (branch run 44612367045), 1,922 bytes over. The budget is that measure plus 80 bytes.
+// Five theme sets, each light and dark (20 Nov 2026, 7d7e723de: `lib/theme-palettes.ts`, the set picker's model in
+// `lib/themes.ts`): measured 2,208,335 (branch run 44615749422), 341 bytes over. The budget is that measure plus 80 bytes.
+// A turn refused because credits are off reads as the plan's limit, not a failed response (20 Nov 2026, f8aedbc24:
+// `lib/messages.ts`, `TurnErrorNotice.tsx`): measured 2,208,473 (branch run 44622480250), 58 bytes over. The budget is
+// that measure plus 80 bytes.
+// next-line with relaunch-keeps-work, the board fix, earlier-list's compaction line, theme sets and limit card, and G12
+// (20 Nov 2026): measured 2,211,213 (branch run 44627539158). The budget is that measure plus 80 bytes.
+// Session rows read their repository, branch and image (19 Nov 2026, `sessions.targets`/`sessions.artwork` in
+// `shared/omp-api.ts` and the two-line row): measured 2,206,290 with both halves (parity run 44491251735, the API alone
+// 2,206,183 in branch run 44489431846), 298 bytes over. The budget is that measure plus 80 bytes.
+// next-line with 0.135.0 merged (its session rows and bridge-health) and the board's transcript child lines (20 Nov
+// 2026): measured 2,211,541 (branch run 44628708913). The budget is that measure plus 80 bytes.
+// The empty-transcript probe (20 Nov 2026) put 790 bytes on it inline (2,212,331 in branch run 44655288339; the
+// branches merged with it add types only). Its report now loads by import() when a pane shows no rows; what stays is
+// the per-tab seeded/written record and that import: measured 2,212,013 (branch run 44656064987), 392 bytes over. The
+// budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_212_093;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

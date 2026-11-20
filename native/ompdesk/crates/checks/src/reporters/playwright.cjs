@@ -7,6 +7,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const OUTCOME = { expected: "passed", unexpected: "failed", flaky: "flaky", skipped: "skipped" };
+/** A failure's first line without colour codes, for the result's `error`; undefined when nothing failed. */
+const firstLine = message =>
+	String(message ?? "")
+		.replace(/\u001b\[[0-9;]*m/g, "")
+		.split("\n")
+		.find(line => line.trim())
+		?.trim()
+		.slice(0, 300);
 
 class OmpdeskCheckReporter {
 	constructor() {
@@ -41,6 +49,7 @@ class OmpdeskCheckReporter {
 			titles,
 			status: OUTCOME[test.outcome()] || "failed",
 			ms: result.duration,
+			error: firstLine(result.error?.message ?? result.error?.value),
 		});
 	}
 	onError(error) {

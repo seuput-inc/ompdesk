@@ -6,6 +6,7 @@
  */
 import { journalFacts, promptFacts } from "../../../resources/gui-bridge/stock-helper/memory";
 import { core } from "../core/process";
+import type { CreditSpendRun } from "../omp-launch";
 import { ompRunEnv, systemOmp } from "../omp-runtime";
 import { spawnPath } from "../shell-env";
 import { stockHelperHost } from "../stock-helper";
@@ -72,13 +73,28 @@ export async function ompLaunch(): Promise<OmpLaunch> {
 	return ompLaunchOf(omp.runtime.bin);
 }
 
-/** How the omp at `bin` starts: its binary and the environment it runs with (omp's own folders on `PATH`, telemetry off). */
+/**
+ * What every omp the core starts for a model carries: the Credit use switch (omp-launch.ts `creditSpendRun`). Those
+ * omps (the upkeep's and the curation's `omp -p`, the memory judge's host) have no bridge to apply it, so stock alone
+ * served a spent plan from credits. Main names it once at startup; with none named (a test) omp starts as it did.
+ */
+let modelRun: (() => CreditSpendRun) | undefined;
+
+export function configureModelRuns(run: () => CreditSpendRun): void {
+	modelRun = run;
+}
+
+/**
+ * How the omp at `bin` starts: its binary, the environment it runs with (omp's own folders on `PATH`, telemetry off)
+ * and the Credit use switch as it stands now.
+ */
 export async function ompLaunchOf(bin: string): Promise<OmpLaunch> {
 	const env: Record<string, string> = {};
 	for (const [name, value] of Object.entries(ompRunEnv(bin, await spawnPath()))) {
 		if (value !== undefined) env[name] = value;
 	}
-	return { bin, env };
+	const run = modelRun?.();
+	return run ? { bin, env: { ...env, ...run.env }, args: run.args } : { bin, env };
 }
 
 /**

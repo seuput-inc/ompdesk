@@ -35,9 +35,11 @@ import {
 	agentControlEnabled,
 	agentHiddenPaths,
 	isAgentControlTool,
+	parseAgentCloseAnswer,
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
+import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { REA_PREF } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -87,12 +89,14 @@ import type {
 	IpcRpcCommandPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
+	IpcSessionsArtworkPayload,
 	IpcSessionsDeletePayload,
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
 	IpcSessionsRenamePayload,
 	IpcSessionsSearchPayload,
+	IpcSessionsTargetsPayload,
 	IpcSetActiveTabPayload,
 	IpcSetTabViewPayload,
 	IpcSidecarRestartPayload,
@@ -211,6 +215,7 @@ import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
 import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
+import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { readClipboardText } from "./shell-host/shell-calls";
 import { updateSidebarPrefs } from "./sidebar-prefs";
@@ -280,6 +285,7 @@ export interface IpcDeps {
 	hostedTabs: Pick<
 		LocalHostServices,
 		| "viewSession"
+		| "showAway"
 		| "summariesChanged"
 		| "remoteOpened"
 		| "onRemoteOpenedChange"
@@ -340,6 +346,8 @@ export interface IpcDeps {
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
 	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
 	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
+	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */
+	agentOpening: { current: (() => boolean) | null };
 	/** The paired web pages' windows: `broadcast` reaches the desktop's own only. */
 	webPages?: () => readonly ClientWindow[];
 	/** The desktop slot's host, built in `registerIpcHandlers` (it needs the pool) and published here for the sidecar factory. */
@@ -605,6 +613,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Sidecar → owning-window event forwarding is wired by SidecarPool at
 	// acquire time. GUI host tools need Electron, so the pool calls this
 	// executor (set once at startup); unknown tools fail with stock's wording.
+	// The control calls being carried out, by device and call id.
+	const runningControlCalls = new Set<string>();
 	sidecarPool.hostToolExecutor = (sidecar, request, tab) => {
 		const reply = (text: string, isError: boolean) =>
 			sidecar.sendSideChannel({
@@ -655,12 +665,18 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return;
 		}
 		if (isAgentControlTool(request.toolName)) {
+			// A paired host re-sends every call still open when its link comes back (host-services.ts `#open`); one this
+			// computer is still carrying out answers when it ends, so the re-send runs nothing.
+			const running = `${sidecar.device ?? ""}\n${request.id}`;
+			if (request.resent === true && runningControlCalls.has(running)) return;
+			runningControlCalls.add(running);
 			void agentControl
 				.run(tab.win, tab.tabId, request.toolName, request.arguments, {
 					id: request.id,
 					resent: request.resent === true,
 				})
 				.then(outcome => {
+					runningControlCalls.delete(running);
 					reply(outcome.text, outcome.isError);
 					// A local omp never re-sends a call; a paired host's result counts once it reached the host
 					// (`hostReplyDelivered`, wired below).
@@ -727,6 +743,26 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				{ sessionPath, restore },
 				restore ? WORKTREE_PREPARE_BUDGET_MS : undefined,
 			),
+	};
+	/** An agent's open, and a session shown for its absent device, spawn into a window the same way (tab-spawn.ts). */
+	const agentSpawnDeps: Parameters<typeof spawnTabForWindow>[0] = {
+		sidecarPool: deps.sidecarPool,
+		sessionIndex,
+		fallbackCwd: () => null,
+		initialCwd: deps.initialCwd,
+		defaultWorkspace: ensureDefaultWorkspace,
+		remote: spawnRemote,
+		hosted: deps.hostedTabs,
+		savedWorktrees: savedWorktreesForSpawn,
+	};
+	// A device's session this computer runs, whose device has been away past the notice, shows in the front window in
+	// the background, so that window carries out the calls the device was never handed (host-services.ts `#takeOver`).
+	deps.hostedTabs.showAway = sessionPath => {
+		const win = windowManager.getTargetWindow();
+		if (!win) return;
+		void spawnTabForWindow(agentSpawnDeps, win, { sessionPath }).catch((error: unknown) =>
+			console.warn(`[host-services] showing a session for its absent device failed: ${String(error)}`),
+		);
 	};
 
 	// Log lines (batched by LogWatcher)
@@ -1254,21 +1290,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) =>
-			spawnTabForWindow(
-				{
-					sidecarPool: deps.sidecarPool,
-					sessionIndex,
-					fallbackCwd: () => null,
-					initialCwd: deps.initialCwd,
-					defaultWorkspace: ensureDefaultWorkspace,
-					remote: spawnRemote,
-					hosted: deps.hostedTabs,
-					savedWorktrees: savedWorktreesForSpawn,
-				},
-				win,
-				payload,
-			),
+		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
 		// The host's own banner (batched like any tab notification, notification-batch.ts; a click opens the tab), the
 		// paired device that started the run or shows it (`host.autopilotNotice`) and paired phones (Web Push).
 		notify: (tabId, notice) => {
@@ -1421,21 +1443,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) =>
-			spawnTabForWindow(
-				{
-					sidecarPool: deps.sidecarPool,
-					sessionIndex,
-					fallbackCwd: () => null,
-					initialCwd: deps.initialCwd,
-					defaultWorkspace: ensureDefaultWorkspace,
-					remote: spawnRemote,
-					hosted: deps.hostedTabs,
-					savedWorktrees: savedWorktreesForSpawn,
-				},
-				win,
-				payload,
-			),
+		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
 		prefs: {
 			get: key => prefsStore.get(key),
 			set: (key, value) => prefsStore.set(key, value),
@@ -1541,6 +1549,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.remoteDevices.onHostOnline(() => agentControl.control.changed());
 	deps.sessionWake.current = (schedule, runId) => agentControl.wakeSession(schedule, runId);
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
+	deps.agentOpening.current = () => agentControl.opening();
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),
@@ -1677,6 +1686,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		});
 	});
 
+	// What each row's session works in, read on the computer that runs it (session-targets.ts).
+	ipc.handle(IPC_COMMANDS.SESSIONS_TARGETS, async (_caller, payload: IpcSessionsTargetsPayload) => {
+		const params = SessionTargetsParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.targets", params) : sessionTargets(params);
+	});
+
+	ipc.handle(IPC_COMMANDS.SESSIONS_ARTWORK, async (_caller, payload: IpcSessionsArtworkPayload) => {
+		const params = SessionArtworkParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.artwork", params) : sessionArtwork(params);
+	});
+
 	// Open a session (or a fresh project window) in a NEW parallel window with
 	// its own sidecar. The calling window's sidecar is left running untouched —
 	// this is the explicit parallel action. Returns false when the window's
@@ -1788,6 +1810,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const report = parseFileEditReport(args);
 		if (!caller.win || !caller.connId || !report) return;
 		fileEditReports.report(caller.win.webContents.id, caller.connId, report.dirtyTabId);
+	});
+
+	// A window's answer to an agent's close it was asked to make (`AgentControlViewEvent.closeId`).
+	ipc.handle(IPC_COMMANDS.AGENT_CLOSE_ANSWER, (caller, payload: unknown) => {
+		const answer = parseAgentCloseAnswer(payload);
+		if (!caller.win || !answer) return;
+		agentControl.answerClose(caller.win, answer);
 	});
 
 	// The calling window's open `worktree.onStart` / `worktree.onExit` questions.
@@ -1956,8 +1985,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Renderer-initiated quit (the `quit` command). Straight to the guard, never
 	// `window.close()`: closing the focused window only hides the rest of the
 	// session behind it.
-	ipc.on(IPC_COMMANDS.APP_QUIT, () => {
-		requestQuit();
+	ipc.on(IPC_COMMANDS.APP_QUIT, caller => {
+		requestQuit("command", caller.connId ? { detail: "from a paired device" } : undefined);
 	});
 
 	// System
@@ -2449,6 +2478,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.HOST_OMP_UPDATE_NOW, (caller, device?: unknown) =>
 		machineFor(caller, device).startOmpUpdate(),
 	);
+	// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
+	ipc.handle(BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
 	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");

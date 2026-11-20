@@ -590,3 +590,45 @@ async fn a_running_child_is_read_again_only_when_it_moved_and_a_list_went_out() 
     assert_eq!(asks_of(&told, "command"), after_live);
     control.host.port().close();
 }
+
+#[tokio::test]
+async fn an_opener_s_closed_tab_closes_its_resting_children_only() {
+    let child = |id: &str, extra: Value| {
+        let mut tab = tab(id, &format!("/s/{id}.jsonl"));
+        tab["autoClosable"] = json!(true);
+        for (key, value) in extra.as_object().unwrap() {
+            tab[key] = value.clone();
+        }
+        tab
+    };
+    let mut family = state(vec![
+        tab("boss", "/s/boss.jsonl"),
+        child("rest", json!({})),
+        child("busy", json!({ "busy": true })),
+        child("seen", json!({ "looked": true })),
+    ]);
+    family["parents"] = json!({
+        "rest": { "callerTabId": "boss" },
+        "busy": { "callerTabId": "boss" },
+        "seen": { "callerTabId": "boss" },
+    });
+    let (control, runtime, told) = rig(7_430, family, Files::default(), |_, _| Ok(Value::Null));
+    assert_eq!(control.children_of("boss").len(), 3);
+    let mut released = activity(ActivityKind::Released, "boss", None);
+    released.session = Some(serde_json::from_value(json!({ "path": "/s/boss.jsonl" })).unwrap());
+    runtime.activity(released);
+    let mut closes = Vec::new();
+    for _ in 0..100 {
+        closes = told_of(&told, "view")
+            .into_iter()
+            .filter(|view| view["event"]["how"] == "close")
+            .map(|view| view["event"]["tabId"].as_str().unwrap_or("").to_owned())
+            .collect::<Vec<_>>();
+        if !closes.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(closes, vec!["rest".to_owned()]);
+    control.host.port().close();
+}

@@ -14,6 +14,8 @@
  * - `tab.cancelWait {rtab}`: Cancel on the tab's connection wait or scheduled retry
  * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|readPlan|listDirs`,
  *   `workspace.default`, `launchProfile.get|update`
+ * - `sessions.targets {sessions: SessionTargetQuery[]}` → SessionTargets, `sessions.artwork {roots}` → SessionArtworks
+ *   (`shared/session-target.ts`, answered by session-targets.ts); an older host answers `unsupported`
  * - `host.fs.readBinary {rtab?, cwd?, path, maxBytes?}` → HostFsReadBinaryReply: the file
  *   viewer's bytes, base64 on the link, capped at FS_BINARY_REMOTE_MAX_BYTES by the host
  * - `host.fs.readRange {rtab?, cwd?, path, offset, length}` → HostFsReadBinaryReply: one slice of a file for a
@@ -54,6 +56,8 @@
  * - The host's sidebar project list (sidebar-projects.ts): `host.projects.command {request: SidebarProjectsRequest}`
  *   → SidebarProjectsState (get, add a folder the person opened there, remove one from the sidebar); the host pushes
  *   every change as the `host.projects.changed` event
+ * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
+ *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
  * - Agent control on a session the host runs (agent-control/branches.ts and local/git/worktree.ts on the host's
  *   own checkout; `worktree` = `{path, branch, baseCwd}` of the tab's binding): `host.git.facts {worktree}` →
  *   BranchFacts, `host.git.evidence {worktree, diffChars}` → BranchEvidence (the child's diff cut to `diffChars`
@@ -107,6 +111,7 @@ import type { BuiltinReaState } from "../../shared/builtin-mcp";
 import type { CreditSpendState } from "../../shared/credit-spend";
 import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import type {
+	BridgeHealthReport,
 	CustomModelEffort,
 	CustomModelThinkingMode,
 	CustomProviderApi,
@@ -800,10 +805,16 @@ export const OmpUpdateStateSchema: z.ZodType<OmpUpdateState> = z.object({
 	updatedTo: z.string().nullable(),
 	failure: z.object({ reason: z.enum(OMP_UPDATE_FAILURE_REASONS), detail: z.string().optional() }).nullable(),
 	tested: z.string().optional(),
+	verified: z.array(z.string()).optional(),
 	held: z
-		.object({ version: z.string(), reason: z.literal("untested-major") })
+		.object({
+			version: z.string(),
+			reason: z.enum(["verifying", "failed", "untested-major"]),
+			since: z.string().optional(),
+		})
 		.nullable()
 		.optional(),
+	stockAutoTaken: z.boolean().optional(),
 });
 
 const ScheduleDraftSchema = z.object({
@@ -871,6 +882,31 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTy
 	worktreeKinds: z.record(ProjectPath, z.enum(["autopilot", "agent", "other"])).optional(),
 	autopilotRuns: z.record(ProjectPath, z.object({ run: z.string().min(1), child: z.boolean() })).optional(),
 	gone: z.array(ProjectPath).optional(),
+});
+
+/**
+ * `host.bridgeHealth.get` reply: the host's bridge self-check per omp version (bridge-health.ts `report`), and the
+ * omp update it holds back.
+ */
+export const BridgeHealthReportSchema: z.ZodType<BridgeHealthReport> = z.object({
+	results: z.array(
+		z.object({
+			ompVersion: z.string(),
+			at: z.number(),
+			ok: z.boolean(),
+			running: z.number().int().nonnegative(),
+			unavailable: z.array(z.object({ feature: z.string(), missing: z.array(z.string()) })),
+			unreachable: z.string().optional(),
+		}),
+	),
+	held: z
+		.object({
+			version: z.string(),
+			reason: z.string(),
+			since: z.string().optional(),
+			installed: z.string().nullable(),
+		})
+		.optional(),
 });
 
 /** A host-level stats read waits for the host's own stats request (15 s) plus the link. */

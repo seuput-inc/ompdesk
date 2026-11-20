@@ -7,7 +7,8 @@
  * 2. Polling: a repeated look at a job (sleep then check, the same `gh run` or `pgrep` or `read proc://` again,
  *    `tail -f`) that a backgrounded job or a schedule delivers by itself. The first look at a target is not a poll,
  *    `gh run view --log-failed` is diagnosis, and nothing in an `async: true` bash is a poll (it runs without the model
- *    and its result is delivered once). One non-blocking hint per kind and process.
+ *    and its result is delivered once). One non-blocking hint per kind and process. A burst of `gh` commands (async
+ *    ones too: they spend the GitHub account's shared quota) is the kind `gh-burst`, with its own hint.
  * 3. An `edit` the tool refused for anchoring to lines the latest read never showed, or a tag the session never got
  *    (36 errors in 14 days, all agent misuse). One non-blocking hint per process.
  * 4. A `wait` that comes back with nothing: stock's `wait` returns when its window (5 s, 10 s, 30 s, 60 s, 300 s,
@@ -23,6 +24,9 @@ export const READY_LOG_REASON =
 
 export const POLL_HINT =
 	"OMPdesk: this polled. A backgrounded job (async: true, or a bash that outlives 60 s) delivers its result by itself; `wait` blocks until then; for a CI run `gh run watch` under async, or ompdesk_schedule {on: github}. Each look costs a model call.";
+
+export const GH_BURST_HINT =
+	"OMPdesk: this session ran many gh commands in a few minutes. Every one spends the GitHub account's hourly quota (5000 requests, shared by every session and project of this account; a run's log costs several). Read what you already fetched (a finished run's log is kept in this session's scratch folder), watch a run with one `gh run watch <run> --interval 60` under async, and ask for one run's failed jobs (`--log-failed`), not every log.";
 
 export const EDIT_HINT =
 	"OMPdesk: this edit was refused. Edit only lines shown by the latest read of that file; after a grep hit or an elided or declarations-only read, read the exact range first. Copy the `[FILE#TAG]` from that read or the last edit's response, never invent one; after each edit use the tags and line numbers its response returns.";
@@ -278,7 +282,28 @@ export function readyLogCannotMatch(input: Record<string, unknown>): boolean {
 	return typeof command === "string" && stdoutToFile(scan(command).last);
 }
 
-export type PollKind = "sleep" | "gh-run" | "pgrep" | "tail-f" | "proc";
+export type PollKind = "sleep" | "gh-run" | "pgrep" | "tail-f" | "proc" | "gh-burst";
+
+/** `gh` commands within `GH_BURST_WINDOW_MS` from which a session is told once. */
+export const GH_BURST_CALLS = 15;
+export const GH_BURST_WINDOW_MS = 10 * 60_000;
+/** A `gh` command word: what follows `gh` when it runs one. */
+const GH_COMMAND =
+	/^(?:api|run|pr|issue|workflow|repo|release|search|cache|gist|label|project|secret|variable|browse|status|codespace|attestation|ruleset)$/;
+
+/**
+ * How many `gh` commands a `bash` call runs, `async: true` included (the quota counts requests, not model calls): one per
+ * segment that starts one. A loop counts as written: how often it runs is not in the command.
+ */
+export function ghCommands(toolName: string, input: Record<string, unknown>): number {
+	if (toolName !== "bash" || typeof input.command !== "string") return 0;
+	let count = 0;
+	for (const part of segments(withoutHeredocs(input.command))) {
+		const said = words(part);
+		if (said.some((word, i) => /(?:^|[/\\])gh(?:\.exe)?$/.test(word) && GH_COMMAND.test(said[i + 1] ?? ""))) count++;
+	}
+	return count;
+}
 
 /**
  * One status look a call makes. A look with a `key` (the thing looked at: a run id, a list's arguments, a pattern, a
@@ -443,12 +468,17 @@ export function pollLooks(toolName: string, input: Record<string, unknown>): Loo
 /**
  * A poll is a repeated look at the same thing, not a look: the first `gh run view <id>`, `gh run list <args>`, `pgrep
  * <pattern>` or `read proc://<path>` of a session is how a person finds out; the second is waiting by hand. One tracker
- * per session (the bridge keeps one per omp process, the pace reader one per journal).
+ * per session (the bridge keeps one per omp process, the pace reader one per journal). A burst of `gh` commands
+ * (`GH_BURST_CALLS` within `GH_BURST_WINDOW_MS` of `at`, Unix ms) is the kind `gh-burst`, once per burst: the count
+ * starts again after it.
  */
-export function createPollTracker(): { observe(toolName: string, input: Record<string, unknown>): PollKind[] } {
+export function createPollTracker(): {
+	observe(toolName: string, input: Record<string, unknown>, at?: number): PollKind[];
+} {
 	const seen = new Set<string>();
+	let ghAt: number[] = [];
 	return {
-		observe(toolName, input) {
+		observe(toolName, input, at = Date.now()) {
 			const kinds = new Set<PollKind>();
 			for (const { kind, key } of pollLooks(toolName, input)) {
 				if (key === undefined) {
@@ -458,6 +488,15 @@ export function createPollTracker(): { observe(toolName: string, input: Record<s
 				const id = `${kind}\0${key}`;
 				if (seen.has(id)) kinds.add(kind);
 				else seen.add(id);
+			}
+			const gh = ghCommands(toolName, input);
+			if (gh > 0) {
+				ghAt = ghAt.filter(stamp => at - stamp < GH_BURST_WINDOW_MS);
+				for (let i = 0; i < gh; i++) ghAt.push(at);
+				if (ghAt.length >= GH_BURST_CALLS) {
+					kinds.add("gh-burst");
+					ghAt = [];
+				}
 			}
 			return [...kinds];
 		},
@@ -510,25 +549,30 @@ export function waitWindowElapsed(result: WaitResult): boolean {
 }
 
 /**
- * Remembers which kinds were already pointed out (a poll of each kind, an edit the tool refused); one per process, since
- * an omp process is one session. Returns the hint to append to the call's result, once per kind.
+ * Remembers which kinds were already pointed out (a poll of each kind, a burst of gh commands, an edit the tool
+ * refused); one per process, since an omp process is one session. Returns the hint to append to the call's result, once
+ * per kind.
  */
 export function createHints(): {
-	note(toolName: string, input: Record<string, unknown>, outcome?: ToolOutcome): string | undefined;
+	note(toolName: string, input: Record<string, unknown>, outcome?: ToolOutcome, at?: number): string | undefined;
 } {
 	const told = new Set<PollKind | "edit-misuse">();
 	const polls = createPollTracker();
 	return {
-		note(toolName, input, outcome) {
+		note(toolName, input, outcome, at) {
 			if (editMisuse(toolName, outcome)) {
 				if (told.has("edit-misuse")) return undefined;
 				told.add("edit-misuse");
 				return EDIT_HINT;
 			}
-			const kinds = polls.observe(toolName, input);
+			const kinds = polls.observe(toolName, input, at);
 			const fresh = kinds.filter(kind => !told.has(kind));
 			for (const kind of kinds) told.add(kind);
-			return fresh.length > 0 ? POLL_HINT : undefined;
+			const hints = [
+				...(fresh.some(kind => kind !== "gh-burst") ? [POLL_HINT] : []),
+				...(fresh.includes("gh-burst") ? [GH_BURST_HINT] : []),
+			];
+			return hints.length > 0 ? hints.join("\n") : undefined;
 		},
 	};
 }

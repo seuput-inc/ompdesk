@@ -92,9 +92,15 @@ test("a quiet hidden session is released only while memory is short, and comes b
 		const file = (await page.evaluate(() => window.omp.tabs.list())).find(tab => tab.tabId === quiet)?.sessionPath;
 		expect(file).toBeTruthy();
 		await page.locator(`[data-session-path=${cssString(file ?? "")}] button[data-roving-item]`).click();
-		await expect(
-			page.locator(`.omp-session-pane[data-tab-id="${quiet}"] [data-transcript-kind]`).first(),
-		).toBeVisible({ timeout: 1_000 });
+		// A miss names its cause: the transcript-seed lines say which snapshot key was looked up and found, and which
+		// the tab was seeded and last written under.
+		await expect(page.locator(`.omp-session-pane[data-tab-id="${quiet}"] [data-transcript-kind]`).first())
+			.toBeVisible({ timeout: 1_000 })
+			.catch(async (error: Error) => {
+				const log = await fs.readFile(path.join(desktop, "logs", "gui-runtime.jsonl"), "utf8");
+				const seeds = log.split("\n").filter(line => line.includes('"transcript-seed"'));
+				throw new Error(`${error.message}\ntranscript-seed lines:\n${seeds.join("\n") || "(none)"}`);
+			});
 		await expect.poll(() => status(quiet), { timeout: 15_000 }).toBe("ready");
 		expect(await transcript(quiet)).toEqual(before);
 		await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello again" }), quiet);

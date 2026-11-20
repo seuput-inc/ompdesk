@@ -6,6 +6,7 @@ import {
 	CARD,
 	CLEANUP_MS,
 	type Frame,
+	HELD_STEPS,
 	HOLD,
 	type Omp,
 	type Provider,
@@ -154,8 +155,17 @@ describe.skipIf(!existsSync(omp))("several messages other sessions send one busy
 	}, 180_000);
 
 	it("as asides during a turn of tool steps, are read together at the next step, and no call is skipped", async () => {
-		const { provider, session } = await busyOmp();
+		// An urgent aside backgrounds a running shell at the tool batch's next 250 ms peek, so asides sent one by one
+		// during a shell call can straddle a step boundary: all three are queued while the step's model request is held.
+		const provider = await startProvider();
+		atEnd(() => provider.close());
+		const session = await startOmp(provider);
+		await session.send({ type: "prompt", message: "first" });
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
+		await session.send({ type: "prompt", message: HELD_STEPS });
+		await provider.held;
 		for (const n of [1, 2, 3]) await aside(session, `step-aside-${n}`);
+		provider.release();
 		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(2);
 		expect(firsts(provider, "step-aside")).toEqual([2, 2, 2]);
 		expect(provider.turns).toBe(5);
@@ -165,6 +175,26 @@ describe.skipIf(!existsSync(omp))("several messages other sessions send one busy
 			["call_s2", false],
 			["call_s3", false],
 		]);
+		expect(queued(session.frames)).toBe(0);
+	}, 180_000);
+
+	it("as asides sent one by one during a running shell step, each reaches the model once, in order", async () => {
+		const { provider, session } = await busyOmp();
+		const texts = [1, 2, 3].map(n => `live-aside-${n}`);
+		for (const text of texts) await aside(session, text);
+		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(2);
+		// Whatever batches they ride (each may background the running shell): the order they first reached the model,
+		// and each once in what the model read last.
+		const arrivals = provider.bodies.flatMap((body, i) =>
+			texts
+				.filter(text => body.includes(text) && !provider.bodies[i - 1]?.includes(text))
+				.sort((a, b) => body.indexOf(a) - body.indexOf(b)),
+		);
+		expect(arrivals).toEqual(texts);
+		const last = provider.bodies.at(-1) ?? "";
+		expect(texts.map(text => last.split(text).length - 1)).toEqual([1, 1, 1]);
+		const ends = session.frames.filter(frame => frame.type === "tool_execution_end");
+		expect(ends.map(frame => frame.toolCallId)).toEqual(["call_s1", "call_s2", "call_s3"]);
 		expect(queued(session.frames)).toBe(0);
 	}, 180_000);
 

@@ -235,8 +235,8 @@ export class CoreProcess {
 	readonly #binary: () => string;
 	readonly #log: (line: string) => void;
 	readonly #timeoutMs: number;
-	/** Cores `abandon` ended: their end is a loss, not the quit's stop. */
-	readonly #abandoned = new WeakSet<ChildProcessWithoutNullStreams>();
+	/** Cores abandoned for a missed hub deadline, with when: an `ended` long after says the computer itself stalled. */
+	readonly #abandoned = new WeakMap<ChildProcessWithoutNullStreams, number>();
 	/** Cores that answered a request: one that ends without is a failed start. */
 	readonly #answeredBy = new WeakSet<ChildProcessWithoutNullStreams>();
 	/**
@@ -309,7 +309,7 @@ export class CoreProcess {
 		const child = this.#child;
 		if (!child) return;
 		this.#log(`ompdesk-core: ${reason}; ending it`);
-		this.#abandoned.add(child);
+		this.#abandoned.set(child, Date.now());
 		this.report?.("abandoned", { generation: this.generation, reason });
 		// Forgotten now, not at its exit event: main's thread may call again before that event can run, and that call
 		// must start the next core. Its exit still fails what waited on it, as a core that died does.
@@ -413,7 +413,7 @@ export class CoreProcess {
 	}
 
 	#start(): ChildProcessWithoutNullStreams {
-		if (this.#shuttingDown) throw new CoreError("core_unavailable", "ompdesk-core is shutting down");
+		if (this.#shuttingDown) throw shutdownRefusal();
 		if (this.#child) return this.#child;
 		if (Date.now() < this.#restUntil)
 			throw new CoreError(
@@ -517,12 +517,15 @@ export class CoreProcess {
 	): void {
 		const expected = this.#stopping.has(child);
 		this.#stopping.add(child);
-		if (!expected || this.#abandoned.has(child))
+		const abandonedAt = this.#abandoned.get(child);
+		if (!expected || abandonedAt !== undefined)
 			this.report?.("ended", {
 				generation,
 				code: exit.code ?? -1,
 				signal: exit.signal ?? "",
-				abandoned: this.#abandoned.has(child),
+				abandoned: abandonedAt !== undefined,
+				// How long the killed core took to end: seconds mean the whole computer stalled, not only the core.
+				...(abandonedAt !== undefined ? { exitMs: Date.now() - abandonedAt } : {}),
 				answered: this.#answeredBy.has(child),
 				stderr: stderr.map(line => redactDiagnosticsText(line).slice(0, STDERR_LINE_CHARS)).join("\n"),
 			});
@@ -589,10 +592,25 @@ export function core(): CoreProcess {
 
 /**
  * Whether `error` is the core's refusal of work after the quit began (`shutdown` ran). A timer, a window event or a
- * status listener that reaches the core while the app quits has nothing left to do: its caller drops the error.
+ * status listener that reaches the core while the app quits has nothing left to do: its caller drops the error, and
+ * one that does not is handled as a `core-shutdown` line by main's last-resort handlers (main-failures.ts).
  */
 export function isCoreShutdown(error: unknown): boolean {
 	return error instanceof CoreError && error.code === "core_unavailable" && instance?.shuttingDown === true;
+}
+
+/**
+ * The refusal `#start` throws once `shutdown` ran. Main's hub and pool frames take nine of V8's default ten (the 0.134.0
+ * quit logged 6,175 of it with every caller cut off), so it keeps enough frames to name who called.
+ */
+function shutdownRefusal(): CoreError {
+	const limit = Error.stackTraceLimit;
+	Error.stackTraceLimit = Math.max(limit, 40);
+	try {
+		return new CoreError("core_unavailable", "ompdesk-core is shutting down");
+	} finally {
+		Error.stackTraceLimit = limit;
+	}
 }
 
 /** Ends the app's core (quit); a later request starts it again. */

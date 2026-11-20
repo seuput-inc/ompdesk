@@ -8,6 +8,7 @@ import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import type { RemoteLinkState } from "../../shared/ipc-types";
 import type { RpcResponse, SidecarStatusPayload } from "../../shared/rpc-types";
 import type { BridgeConnectResult } from "../bridge-health";
+import { VIEW_ENDED_EVENT } from "../sidecar-types";
 import { SIGN_IN_CALLBACK_METHOD, type TabEventMessage, type TabStatusArg } from "./app-protocol";
 import { ImageBlobCache } from "./image-blob-cache";
 import { createReadEncoder } from "./link-events";
@@ -512,6 +513,19 @@ describe("RemoteSidecar", () => {
 		sidecar.restart(undefined, "/s/gone.jsonl");
 		await settle();
 		expect(deleted).toEqual(["/s/gone.jsonl"]);
+		expect(statuses.map(entry => entry.status)).not.toContain("error");
+	});
+
+	it("ends as a view whose window closed when the host says so on its return, never an error tab", async () => {
+		const { link, sidecar, statuses } = setup();
+		let ended = 0;
+		sidecar.on(VIEW_ENDED_EVENT, () => ended++);
+		link.handlers["tab.open"] = () => {
+			throw codedError("view_ended", "The tab this one showed was closed on the host");
+		};
+		sidecar.restart(undefined, "/s/closed.jsonl");
+		await settle();
+		expect(ended).toBe(1);
 		expect(statuses.map(entry => entry.status)).not.toContain("error");
 	});
 

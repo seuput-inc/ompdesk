@@ -126,7 +126,8 @@ impl AgentControl {
         let wanted: Vec<&ControlTab> = tabs
             .iter()
             .filter(|tab| {
-                (app || tab.here)
+                // Mine is every session the caller opened, in whichever window it went to.
+                (app || mine || tab.here)
                     && match &device {
                         None => true,
                         Some(None) => tab.device.as_deref().is_none_or(str::is_empty),
@@ -436,8 +437,9 @@ impl AgentControl {
         {
             return fail("status filters open sessions; leave it out with scope stored.");
         }
+        let state = self.host.state();
         let opened: HashSet<String> = self
-            .opened_by(&self.host.state(), &caller.tab_id, tabs)
+            .opened_by(&state, &caller.tab_id, tabs)
             .into_iter()
             .collect();
         let held: HashSet<&str> = tabs
@@ -450,17 +452,20 @@ impl AgentControl {
             .map(|device| device.id.as_str());
         let query = args.query.as_deref();
         let folder = args.folder.as_deref().filter(|folder| !folder.is_empty());
-        let bounds = self.host.state();
         let mut outside = Outside::default();
         let mut rows: Vec<StoredSession> = self
             .over_link(device_id, || self.host.stored(device_id, query))
             .await?
             .into_iter()
             .filter(|row| {
-                (args.mine != Some(true) || held.contains(row.path.as_str()))
+                // Mine: open in a tab the caller opened, or a child of its whose tab closed (the same rule as a
+                // delete of its own needing no card).
+                (args.mine != Some(true)
+                    || held.contains(row.path.as_str())
+                    || self.own_closed(&state, caller, &row.path, row.device.as_deref()))
                     && self.listed(
                         caller,
-                        self.row_verdict(&bounds, caller, row),
+                        self.row_verdict(&state, caller, row),
                         &mut outside,
                         &row.path,
                         row.project.as_deref(),

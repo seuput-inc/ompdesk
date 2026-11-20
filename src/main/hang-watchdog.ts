@@ -43,6 +43,18 @@ export function reportPreviousHang(): void {
 			steps: marker.steps?.join(" > ") ?? null,
 		},
 	});
+	// The line is written a launch later, so the state the worker read during the stall says when it was.
+	if (marker.machine)
+		writeRuntimeLog({
+			source: "machine-state",
+			message: "hang during",
+			details: {
+				trigger: "hang",
+				when: "during",
+				at: new Date(marker.detectedAt).toISOString(),
+				...marker.machine,
+			},
+		});
 }
 
 let postStep: ((message: MainToHangWorkerMessage) => void) | null = null;

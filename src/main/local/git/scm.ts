@@ -8,11 +8,14 @@
  * message, a reset mode), the removal of the untracked files a discard names
  * (fenced to the lock, `fenced-fs`), and the commit message, which stock
  * `omp commit --dry-run` writes (stock's conventional-commit pipeline; it
- * never commits on a dry run).
+ * never commits on a dry run). With Credit use off the tab's omp checks the
+ * account's plan before that run starts (omp-launch.ts `withCreditSpendRuns`):
+ * a refusal is shown as it is, and nothing runs.
  *
  * Failures map to typed codes: not_a_repo / invalid_name / invalid_path /
  * git_failed / push_rejected / no_remote / detached_head / nothing_staged /
- * commit_message_failed / branch_checked_out / dirty_worktree / commit_pushed.
+ * commit_message_failed / credit_spend_off / branch_checked_out /
+ * dirty_worktree / commit_pushed.
  */
 
 import * as path from "node:path";
@@ -26,6 +29,7 @@ import type {
 } from "../../../shared/rpc-types";
 import { CoreError } from "../../core/process";
 import { fs } from "../../fenced-fs";
+import { CreditSpendRefusal } from "../../omp-launch";
 import type { OmpRuntime } from "../types";
 import { LocalCommandError } from "../types";
 import { repoRoot } from "./changes";
@@ -184,6 +188,7 @@ export async function commitMessage(cwd: string, omp: OmpRuntime): Promise<{ mes
 			timeoutMs: MESSAGE_TIMEOUT_MS,
 		});
 	} catch (error) {
+		if (error instanceof CreditSpendRefusal) throw new LocalCommandError(error.message, "credit_spend_off");
 		throw new LocalCommandError(`omp commit failed: ${errorText(error)}`, "commit_message_failed");
 	}
 	const message = output.code === 0 ? parseGeneratedMessage(output.stdout) : null;

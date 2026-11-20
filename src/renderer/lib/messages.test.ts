@@ -396,7 +396,7 @@ describe("abortActiveTurn", () => {
 		const harness = installWindow([]);
 		const compact = Promise.withResolvers<{ type: "response"; command: string; success: false; error: string }>();
 		const running = runManualMaintenance("compact", () => compact.promise);
-		expect(useSessionStore.getState().compactionInfo).toEqual({ reason: "manual", action: "compact" });
+		expect(useSessionStore.getState().compactionInfo).toMatchObject({ reason: "manual", action: "compact" });
 		expect(useSessionStore.getState().isCompacting).toBe(true);
 
 		await abortActiveTurn();
@@ -408,6 +408,23 @@ describe("abortActiveTurn", () => {
 		expect((await running).cancelled).toBe(true);
 		expect(useSessionStore.getState().compactionInfo).toBeNull();
 		expect(useSessionStore.getState().isCompacting).toBe(false);
+		expect(useSessionStore.getState().compactionRuns).toEqual([]);
+	});
+
+	it("keeps how long a manual /compact that ran to its end took, never a handoff's", async () => {
+		installWindow([]);
+		const done = { type: "response" as const, command: "compact", success: true as const, data: {} };
+		await runManualMaintenance("handoff", async () => ({ ...done, command: "handoff" }));
+		expect(useSessionStore.getState().compactionRuns).toEqual([]);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(5_000);
+		await runManualMaintenance("compact", async () => {
+			clock.mockReturnValue(43_000);
+			return done;
+		});
+		clock.mockRestore();
+		expect(useSessionStore.getState().compactionRuns).toEqual([
+			{ action: "compact", startedAt: 5_000, endedAt: 43_000 },
+		]);
 	});
 
 	it("ends a manual handoff's row on its own when nobody stopped it", async () => {

@@ -39,6 +39,16 @@ pub struct Found {
     pub unreached: Vec<String>,
 }
 
+/// What `rejoin` came to: the tab of this app that holds a saved session since it was named (`Held`), a tab opened on
+/// the tab that holds it elsewhere (`Joined`: a view, or this computer's own tab on a paired host taken over again),
+/// or the row as its computer lists it while no tab anywhere holds it.
+#[derive(Debug)]
+pub enum Rejoined {
+    Held(ControlTab),
+    Joined(ControlTab),
+    Nowhere(StoredSession),
+}
+
 /// `open`'s options: `allow_self` is TypeScript's `self: false` (the caller itself may be the target), `reach: false`
 /// does not wait for a paired device's tab to come back.
 #[derive(Clone, Copy, Debug)]
@@ -904,15 +914,55 @@ impl AgentControl {
         row: &StoredSession,
         verb: &str,
     ) -> R<ControlTab> {
+        let now = match self.rejoin(caller, row).await? {
+            Rejoined::Held(tab) => return Ok(tab),
+            Rejoined::Joined(joined) => {
+                // A view made only to reach the session for this call closes when the call ends (`let_go_joined`);
+                // one made to show it stays, as does one a caller outside OMPdesk waits on.
+                if matches!(verb, "send to" | "answer" | "report to" | "merge") {
+                    self.mem()
+                        .joined
+                        .entry(caller.tab_id.clone())
+                        .or_default()
+                        .push(joined.tab_id.clone());
+                }
+                return Ok(joined);
+            }
+            Rejoined::Nowhere(now) => now,
+        };
+        // What a computer lists as held is its windows' tabs and the tabs it runs for devices that are attached. A
+        // paired device's tab restored by a relaunch and not shown since runs no omp and tells no computer.
+        fail(format!(
+            "\"{}\" ({}) is saved{} and not open in any tab OMPdesk can see: no tab of this app, and none {} lists. A paired computer may still show it in a tab that has not started since a relaunch (it starts when the person shows it there), which no other computer sees. To {verb} it now, open it with ompdesk_session_open {{\"reopen\":\"{}\"}} and {verb} it by the id that returns: a tab elsewhere that shows it then views that tab's omp, never a second omp (ompdesk_session_read reads it without opening).",
+            one_line(&stored_title(&now), 80),
+            now.id,
+            now.device_name
+                .as_deref()
+                .map_or_else(String::new, |name| format!(" on {name}")),
+            self.where_of(row),
+            now.id
+        ))
+    }
+
+    /// The computer a saved row is on, as the lines name it.
+    fn where_of(&self, row: &StoredSession) -> String {
+        row.device_name
+            .clone()
+            .or_else(|| {
+                row.device
+                    .as_deref()
+                    .and_then(|id| self.host.state().device(id).map(|home| home.name.clone()))
+            })
+            .unwrap_or_else(|| "this computer".to_owned())
+    }
+
+    /// `join_stored` without its refusal: the row as its computer lists it now when no tab anywhere holds it.
+    pub async fn rejoin(&self, caller: &ControlTab, row: &StoredSession) -> R<Rejoined> {
         let home = row
             .device
             .as_deref()
             .and_then(|id| self.host.state().device(id).cloned());
-        let where_ = row
-            .device_name
-            .clone()
-            .or_else(|| home.as_ref().map(|home| home.name.clone()))
-            .unwrap_or_else(|| "this computer".to_owned());
+        let where_ = self.where_of(row);
         let now = async {
             if let Some(home) = &home {
                 self.reach(home.clone()).await?;
@@ -944,25 +994,15 @@ impl AgentControl {
         };
         let state = self.host.state();
         if let Some(live) = self.live_tab(&state.tabs(&caller.tab_id).unwrap_or_default(), &now) {
-            return Ok(live);
+            return Ok(Rejoined::Held(live));
         }
         if now.hidden {
             return fail("The user hid that session from other agents.");
         }
-        // What a computer lists as held is its windows' tabs and the tabs it runs for devices that are attached. A
-        // paired device's tab restored by a relaunch and not shown since runs no omp and tells no computer.
         if now.elsewhere.is_none() {
-            return fail(format!(
-                "\"{}\" ({}) is saved{} and not open in any tab OMPdesk can see: no tab of this app, and none {where_} lists. A paired computer may still show it in a tab that has not started since a relaunch (it starts when the person shows it there), which no other computer sees. To {verb} it now, open it with ompdesk_session_open {{\"reopen\":\"{}\"}} and {verb} it by the id that returns: a tab elsewhere that shows it then views that tab's omp, never a second omp (ompdesk_session_read reads it without opening).",
-                one_line(&stored_title(&now), 80),
-                now.id,
-                now.device_name
-                    .as_deref()
-                    .map_or_else(String::new, |name| format!(" on {name}")),
-                now.id
-            ));
+            return Ok(Rejoined::Nowhere(now));
         }
-        self.join(caller, &now).await
+        Ok(Rejoined::Joined(self.join(caller, &now).await?))
     }
 
     /// `#join`: joins a saved session open in a tab elsewhere: a tab in the caller's window that views that tab's omp
