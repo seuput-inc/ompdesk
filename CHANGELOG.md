@@ -5,6 +5,7 @@
 어느 기기에서 보든 같은 호스트의 사이드바에 같은 프로젝트 순서, 세션 고정 위치, 보관 상태가 표시돼요.
 
 - 연결된 컴퓨터와 휴대폰에서도 호스트가 공유한 항목의 배치를 따라요. 비공개 항목은 보내지 않아요. 기기 자체의 표시 순서도 동기화해요.
+- 공식 Ponytail 스킬 6개를 별도 설치 없이 쓸 수 있어요. 이미 설치한 플러그인이 있으면 그 버전을 우선하고, 꺼 둔 플러그인은 다시 켜지 않아요. 내장 스킬 업데이트는 OMPdesk 업데이트와 함께 받아요.
 - 다른 컴퓨터의 탭이 잠들어 있어도 세션 목록과 결과 조회는 호스트의 실행 상태를 보여줘요. 처음 모델을 연결할 때는 공급자 목록 전체를 기다리지 않고 설정을 시작해요.
 - 재시작 뒤 출력 경로가 닫힌 프로세스를 알려요. 기본값은 출력 상대가 닫혔고 같은 프로세스가 30초 간격으로 세 번 모두 한 코어의 50% 이상을 쓴 경우에만 자동 종료해요. 하위 에이전트 작업·PTY·이름 붙인 서비스까지 복원하는 것은 아니에요.
 - 긴 세션의 작업 속도는 새로 추가된 기록만 읽어 계산해요. 반복 로그는 횟수로 묶고 macOS 메모리는 footprint로 측정해요. 숨긴 탭의 대화가 잠시 비거나 코어 응답이 끊길 때 진단할 기록을 추가했어요.
@@ -15,6 +16,7 @@
 A host’s project order, pinned session positions and archived sessions now match across sidebar views.
 
 - Paired computers and phones follow the host’s layout for shared items. Private items stay on the host. The order of the devices themselves also syncs.
+- Six official Ponytail skills are available without a separate installation. An installed plugin takes precedence, and a disabled plugin stays off. Updates to the bundled skills arrive with OMPdesk updates.
 - The session list and result lookup show whether a session is running on its host, even if the viewing computer’s tab is asleep. First-run model setup no longer waits for the entire provider list.
 - After a relaunch, OMPdesk reports processes with a closed output path. By default it ends one only when the output peer is confirmed closed and the same process uses at least 50% of one CPU core in three samples 30 seconds apart. A relaunch still does not restore subagent jobs, PTYs or named services.
 - Long sessions read only newly appended records to calculate pace. Repeated log lines are counted together, and macOS memory is measured by footprint. New diagnostics cover briefly empty transcripts on reopened tabs and lost core responses.
