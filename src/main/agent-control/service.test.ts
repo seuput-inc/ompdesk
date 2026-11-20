@@ -3758,6 +3758,32 @@ describe("autoClose: opened sessions whose work landed", () => {
 		}
 	});
 
+	it("keeps a restored child its relaunch still owes a continuation, and judges it once that turn ran", async () => {
+		// Its transcript ends where the cut left it, here an earlier dispatch's Result: ok; the continuation (waiting
+		// for its omp, the network or a limit) runs the work it was doing, so closing now would drop it.
+		const { host, service, child } = await finishedChild({
+			patch: { restored: true, resuming: true, lastRun: undefined, messages: finalTurn("Done.\nResult: ok") },
+		});
+		const fates: unknown[] = [];
+		Object.assign(host, { fate: (fate: unknown) => fates.push(fate) });
+		await service.autoClose("main0001");
+		expect(closes(host)).toHaveLength(0);
+		child.resuming = false;
+		await service.autoClose("main0001");
+		expect(closes(host)).toHaveLength(1);
+		// Main's log names the closed tab, its session file and who closed it (C14).
+		await vi.waitFor(() =>
+			expect(fates).toEqual([
+				expect.objectContaining({
+					state: "closed",
+					tab: child.tabId,
+					session: "/s/kid.jsonl",
+					by: expect.stringContaining("reached the session that opened it"),
+				}),
+			]),
+		);
+	});
+
 	it("keeps a restored child its transcript shows typed into, failed or unfinished, and never calls it running", async () => {
 		const person: AgentMessage = { role: "user", content: [{ type: "text", text: "also check the README" }] };
 		const endings: AgentMessage[][] = [

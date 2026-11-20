@@ -392,7 +392,7 @@ describe("which tags end, and when", () => {
 
 	it("tries a tag once more when its end left something running, then leaves it to the next launch", async () => {
 		const { sessions, calls, timers } = held();
-		const tab = sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+		const tab = sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" }, "15d4faaef72e56d8");
 		const closed = tab.close();
 		// Stock's worker was still up (its omp had just exited), so what it started was kept with it.
 		const remaining: EndResult = { ...NOTHING, kept: [{ pid: 7, name: "bun" }] };
@@ -400,12 +400,25 @@ describe("which tags end, and when", () => {
 		await closed;
 		expect(sessions.owners().map(owner => owner.tag)).toEqual([tab.tag]);
 		expect(timers.map(timer => timer.ms)).toEqual([RETRY_REMAINING_MS]);
+		// Said at once, so the retry's line a minute later never names an end nobody saw start.
+		expect(logs.map(entry => entry.details)).toEqual([
+			expect.objectContaining({
+				reason: "closed",
+				tab: "15d4faaef72e56d8",
+				session: "a.jsonl",
+				processes: 0,
+				kept: 1,
+				retryMs: RETRY_REMAINING_MS,
+			}),
+		]);
 		timers[0]?.run();
 		expect(calls.map(call => call.tags)).toEqual([[tab.tag], [tab.tag]]);
 		// Still there (a broker whose services the person keeps): no third try in this launch.
 		calls[1]?.settle(remaining);
 		await sessions.settled();
 		expect(timers).toHaveLength(1);
+		expect(logs[1]?.details).toMatchObject({ processes: 0, kept: 1, keptNames: "bun" });
+		expect(logs[1]?.details).not.toHaveProperty("retryMs");
 		expect(sessions.owners().map(owner => owner.tag)).toEqual([tab.tag]);
 		// The next launch tries again; with nothing left the tag is forgotten.
 		const next = held();
