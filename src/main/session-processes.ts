@@ -15,11 +15,13 @@
  * - The next launch (`sweep`) ends the processes of every tag the last one left whose session did not come back: no tab
  *   in the restored layout and no marker of interrupted work. This is also what cleans up after a crash or a forced
  *   quit, where no close ever ran.
- * - Of a tag it keeps, the launch reports what has no reader of its output any more (`procs.list`'s `deadOutput`: the
- *   program that read it, the omp or a Playwright run between, went with the quit): its pid, name, start, ports and
- *   the CPU it uses, marked spinning at `SPIN_PERCENT` (the relaunch of 20 Nov 2026: next-server logged each failed
- *   write and spun at 100 % CPU). It ends none of it unless `END_SPINNING_WITHOUT_READER` is on. The tab that takes
- *   the tag over tells its session what still runs (`leftover`).
+ * - Of a tag it keeps, the launch reports whose output path is closed (`procs.list`'s `outputClosed`, a write to it
+ *   fails, with what is known of its other end: `closed`, `open` or `unknown`): its pid, name, start, ports and the
+ *   CPU it uses, marked spinning at `SPIN_PERCENT` (the relaunch of 20 Nov 2026: next-server logged each failed write
+ *   and spun at 100 % CPU). It ends, while `endSpinning` holds (the hidden pref `endSpinningOnClosedOutput`, default
+ *   on: the owner's answer of 20 Nov 2026), only one whose other end is confirmed closed and that spins in each of
+ *   `SPIN_SAMPLES` samples `SPIN_SAMPLE_GAP_MS` apart. The tab that takes the tag over tells its session what still runs
+ *   and what was ended (`leftover`).
  *
  * Never the wrong process: only tags this file wrote are ever ended (`<userData>/session-processes.json`), so a
  * process started outside OMPdesk, by another OMPdesk (another userData) or by a tab that is still open is not
@@ -35,7 +37,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, isAbsolute, normalize, relative } from "node:path";
 import { z } from "zod";
-import type { LeftProcess, LeftProcesses } from "../../resources/gui-bridge/restart-core";
+import type { LeftProcess, LeftProcesses, OutputPeer } from "../../resources/gui-bridge/restart-core";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { core } from "./core/process";
 import { SESSION_TAG_ENV } from "./omp-launch";
@@ -59,20 +61,24 @@ export const LIST_TIMEOUT_MS = 10_000;
 export const RETRY_REMAINING_MS = 60_000;
 
 /**
- * The one switch that lets a launch end, of a kept session's processes, those spinning on output nobody reads. Off: the
- * owner's rule keeps a restored tab's processes, and high CPU alone does not prove the loop (a dev server compiling a
- * request also uses a core), so it waits for the owner's answer.
- */
-export const END_SPINNING_WITHOUT_READER = false;
-/**
- * The share of one core, in percent, over `SPIN_SAMPLE_MS`, at which a process with no reader reads as spinning. The
- * relaunch's loop used 99-100 % without pause; the same server with nothing to write used 0 %, so half a core over 3 s
- * tells the two apart without making the restore wait long.
+ * The share of one core, in percent, over `SPIN_SAMPLE_MS`, at which a process with a closed output path reads as
+ * spinning. The relaunch's loop used 99-100 % without pause; the same server with nothing to write used 0 %, so half a
+ * core over 3 s tells the two apart without making the restore wait long.
  */
 export const SPIN_PERCENT = 50;
 export const SPIN_SAMPLE_MS = 3_000;
+/**
+ * Before a launch ends a spinning process whose output's other end is closed, it must spin in this many samples, each
+ * starting this long after the one before: three over a minute. The loop never paused in any sample measured (99-100 %
+ * every time, macOS and Windows); a dev server busy compiling after a relaunch works in bursts and falls back to idle
+ * within a minute, so it drops under the mark in one of them and is only reported.
+ */
+export const SPIN_SAMPLES = 3;
+export const SPIN_SAMPLE_GAP_MS = 30_000;
 /** At most this many processes in one log line's `found`, spinning ones first: gui-runtime.jsonl keeps a detail to 4 KiB. */
 const FOUND_MAX = 16;
+/** Why a launch ends a process, in the log. */
+const REASON_SPINNING = "kept spinning on a closed output path whose other end is closed";
 
 /** One process as `procs.list` answers it. */
 export interface TaggedProcess {
@@ -90,11 +96,11 @@ export interface TaggedProcess {
 	cwd?: string;
 	/** For the tags asked: stock's shared worker or under one. */
 	stock?: true;
-	/** For the tags asked: its output has no reader any more. */
-	deadOutput?: true;
-	/** Of one with no reader, when measured: percent of one core over the sample. */
+	/** For the tags asked: its output path is closed (a write fails), and what is known of the other end. */
+	outputClosed?: OutputPeer;
+	/** Of one whose output path is closed, when measured: percent of one core over the sample. */
 	cpuPercent?: number;
-	/** Of one with no reader: the TCP ports it listens on. */
+	/** Of one whose output path is closed: the TCP ports it listens on. */
 	ports?: number[];
 }
 
@@ -200,7 +206,7 @@ type TagState = "live" | "left" | "ending";
 /** What a launch saw of a tag the last one left: its processes then (stock's workers left out), and what it ended. */
 interface Survey {
 	rows: TaggedProcess[];
-	ended: TaggedProcess[];
+	ended: LeftProcess[];
 }
 
 interface TagEntry {
@@ -229,7 +235,7 @@ export interface SessionProcessHandle {
 	close(): Promise<void>;
 	/**
 	 * What the session's commands left running across the relaunch, for the tab that took its tag over: each process
-	 * with no parent among them and each whose output has no reader, by name, never arguments; and what the launch
+	 * with no parent among them and each whose output path is closed, by name, never arguments; and what the launch
 	 * ended (only with the switch on). Undefined for a tab that took nothing over, or when nothing was left.
 	 */
 	leftover(): Promise<LeftProcesses | undefined>;
@@ -249,12 +255,15 @@ export interface SessionProcessesDeps {
 	log(message: string, details: SessionProcessLogDetails): void;
 	/** Ends the processes of `tags` (default: the core's `procs.end`). */
 	end?(tags: readonly string[]): Promise<EndResult>;
-	/** `tags`' processes in detail, the CPU of those with no reader measured over `sampleMs` (default: `procs.list`). */
+	/** `tags`' processes in detail, the CPU of those with a closed output path over `sampleMs` (default: `procs.list`). */
 	survey?(tags: readonly string[], sampleMs?: number): Promise<TaggedProcess[]>;
 	/** Ends just these processes of `tags`, each by its id and start (default: `procs.end` with `only`). */
 	endOnly?(tags: readonly string[], only: ReadonlyArray<{ pid: number; startedMs: number }>): Promise<EndResult>;
-	/** Whether a launch ends a kept session's processes spinning on output nobody reads (default: the switch). */
-	endSpinning?: boolean;
+	/**
+	 * Whether a launch ends a kept session's process whose output's other end is closed and that keeps spinning
+	 * (default: on; index.ts reads the hidden pref `endSpinningOnClosedOutput`, which only a stored `false` turns off).
+	 */
+	endSpinning?(): boolean;
 	/** A new tag (default: 16 random bytes as hex). */
 	newTag?(): string;
 	now?(): number;
@@ -514,9 +523,9 @@ export class SessionProcesses {
 	}
 
 	/**
-	 * Looks once at what the last launch left for `entries`' tags (one listing for all, the CPU of those with no reader
-	 * measured over `SPIN_SAMPLE_MS`) and reports per tag what lost the reader of its output; with the switch on, ends
-	 * those of them spinning. An entry looked at already is not looked at again.
+	 * Looks once at what the last launch left for `entries`' tags (one listing for all, the CPU of those whose output
+	 * path is closed measured over `SPIN_SAMPLE_MS`) and reports per tag whose output path is closed; with the switch on,
+	 * ends those of them spinning whose other end is seen closed. An entry looked at already is not looked at again.
 	 */
 	#surveyAll(entries: readonly TagEntry[]): Promise<void> {
 		const fresh = entries.filter(entry => entry.survey === undefined);
@@ -547,11 +556,11 @@ export class SessionProcesses {
 	}
 
 	async #surveyed(entry: TagEntry, rows: TaggedProcess[]): Promise<Survey> {
-		const deaf = rows.filter(row => row.deadOutput);
+		const deaf = rows.filter(row => row.outputClosed !== undefined);
 		if (deaf.length === 0) return { rows, ended: [] };
 		const { record } = entry;
 		const spinning = deaf.filter(row => (row.cpuPercent ?? 0) >= SPIN_PERCENT);
-		this.#deps.log("no reader", {
+		this.#deps.log("output path closed", {
 			level: "warn",
 			...this.#whose(record),
 			processes: deaf.length,
@@ -562,40 +571,87 @@ export class SessionProcesses {
 					.map(row => this.#described(record, row)),
 			),
 		});
-		const pinned = spinning.flatMap(row =>
-			row.startedMs === undefined ? [] : [{ pid: row.pid, startedMs: row.startedMs }],
-		);
-		if (!(this.#deps.endSpinning ?? END_SPINNING_WITHOUT_READER) || pinned.length === 0 || this.#deps.frozen())
+		// A path closed by the process's own shutdown(SHUT_WR), or one whose other end is unknown, has maybe a live
+		// reader: only a peer seen closed counts, and only a process that keeps spinning in every sample.
+		const candidates = spinning.filter(row => row.startedMs !== undefined && row.outputClosed === "closed");
+		if (!(this.#deps.endSpinning?.() ?? true) || candidates.length === 0 || this.#deps.frozen())
 			return { rows, ended: [] };
+		const kept = await this.#keptSpinning(record.tag, candidates);
+		if (kept.length === 0 || this.#deps.frozen() || !(this.#deps.endSpinning?.() ?? true)) return { rows, ended: [] };
 		let result: EndResult;
 		try {
-			result = await this.#endOnly([record.tag], pinned);
+			// The core ends each only while its pid still names the process that started then.
+			result = await this.#endOnly(
+				[record.tag],
+				kept.map(({ row }) => ({ pid: row.pid, startedMs: row.startedMs as number })),
+			);
 		} catch (error) {
 			this.#deps.log("not ended", {
 				level: "warn",
-				reason: "spinning without a reader",
+				reason: REASON_SPINNING,
 				...this.#whose(record),
 				error: error instanceof Error ? error.message : String(error),
 			});
 			return { rows, ended: [] };
 		}
 		const gone = new Set(result.ended.map(process => process.pid));
-		const ended = spinning.filter(row => gone.has(row.pid));
+		const ended = kept.filter(({ row }) => gone.has(row.pid));
 		if (ended.length > 0) {
 			this.#deps.log("ended", {
 				level: "info",
-				reason: "spinning without a reader",
+				reason: REASON_SPINNING,
 				...this.#whose(record),
 				processes: ended.length,
 				forced: result.ended.filter(process => process.forced).length,
-				found: JSON.stringify(ended.map(row => this.#described(record, row))),
+				found: JSON.stringify(ended.map(({ row, percents }) => this.#described(record, row, percents))),
 			});
 		}
-		return { rows: rows.filter(row => !gone.has(row.pid)), ended };
+		return {
+			rows: rows.filter(row => !gone.has(row.pid)),
+			ended: ended.map(({ row, percents }) => this.#described(record, row, percents)),
+		};
 	}
 
-	/** A process as the session and the log name it: never its arguments, its folder only inside the session's own. */
-	#described(record: TagRecord, row: TaggedProcess): LeftProcess {
+	/**
+	 * Of `candidates` (each spinning in the first sample), those that spin in each of the `SPIN_SAMPLES - 1` samples
+	 * after it, `SPIN_SAMPLE_GAP_MS` apart, with their output path still closed and its other end closed, under the same
+	 * pid and start; with every share of a core measured. A quit or a failed look ends the watch with none.
+	 */
+	async #keptSpinning(
+		tag: string,
+		candidates: readonly TaggedProcess[],
+	): Promise<Array<{ row: TaggedProcess; percents: number[] }>> {
+		let watched = candidates.map(row => ({ row, percents: [row.cpuPercent ?? 0] }));
+		for (let sample = 1; sample < SPIN_SAMPLES && watched.length > 0; sample++) {
+			const { promise, resolve } = Promise.withResolvers<void>();
+			this.#later(resolve, SPIN_SAMPLE_GAP_MS - SPIN_SAMPLE_MS);
+			await promise;
+			if (this.#deps.frozen()) return [];
+			let rows: TaggedProcess[];
+			try {
+				rows = await this.#survey([tag], SPIN_SAMPLE_MS);
+			} catch {
+				return [];
+			}
+			watched = watched.flatMap(({ row, percents }) => {
+				const now = rows.find(
+					next =>
+						next.pid === row.pid &&
+						next.startedMs === row.startedMs &&
+						next.outputClosed === "closed" &&
+						(next.cpuPercent ?? 0) >= SPIN_PERCENT,
+				);
+				return now ? [{ row, percents: [...percents, now.cpuPercent ?? 0] }] : [];
+			});
+		}
+		return watched;
+	}
+
+	/**
+	 * A process as the session and the log name it: never its arguments, its folder only inside the session's own;
+	 * `percents` are the shares of a core of every sample that kept it spinning, when it was watched over them.
+	 */
+	#described(record: TagRecord, row: TaggedProcess, percents?: readonly number[]): LeftProcess {
 		const inside = row.cwd === undefined ? undefined : relative(record.cwd, row.cwd);
 		return {
 			pid: row.pid,
@@ -607,19 +663,22 @@ export class SessionProcesses {
 					? { outside: true as const }
 					: { folder: inside === "" ? "." : inside }),
 			...(row.ports?.length ? { ports: row.ports } : {}),
-			...(row.deadOutput ? { noReader: true as const } : {}),
+			...(row.outputClosed !== undefined ? { outputClosed: row.outputClosed } : {}),
 			...(row.cpuPercent !== undefined
 				? {
 						cpu: { percent: row.cpuPercent, seconds: SPIN_SAMPLE_MS / 1000 },
 						...(row.cpuPercent >= SPIN_PERCENT ? { spinning: true as const } : {}),
 					}
 				: {}),
+			...(percents && percents.length > 1
+				? { sustained: { percents: [...percents], seconds: ((percents.length - 1) * SPIN_SAMPLE_GAP_MS) / 1000 } }
+				: {}),
 		};
 	}
 
 	/**
 	 * What the last launch left for a tag this tab took over, from the launch's look at it: the processes with no parent
-	 * among them and those with no reader of their output, leaving out the tab's own omp and what started after the
+	 * among them and those whose output path is closed, leaving out the tab's own omp and what started after the
 	 * takeover; and what the launch ended.
 	 */
 	async #leftover(entry: TagEntry): Promise<LeftProcesses | undefined> {
@@ -644,9 +703,11 @@ export class SessionProcesses {
 		const pids = new Set(old.map(row => row.pid));
 		// Windows' console host under a console program is the program's, never a command of the session's own.
 		const running = old
-			.filter(row => (row.deadOutput || !pids.has(row.ppid)) && row.name.toLowerCase() !== "conhost.exe")
+			.filter(
+				row => (row.outputClosed !== undefined || !pids.has(row.ppid)) && row.name.toLowerCase() !== "conhost.exe",
+			)
 			.map(row => this.#described(entry.record, row));
-		const ended = survey.ended.map(row => this.#described(entry.record, row));
+		const ended = survey.ended;
 		return running.length > 0 || ended.length > 0 ? { running, ended } : undefined;
 	}
 

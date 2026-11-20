@@ -52,6 +52,13 @@ export interface InterruptedJob {
 }
 
 /**
+ * What is known of the other end of a closed output path (the core's `procs.list` `outputClosed`): `closed` (a pipe at
+ * end of file, a disconnected Unix socket, a Windows pipe closing), `open` (macOS: a Unix socket the process shut down
+ * for writing itself, still connected), `unknown` (any other socket).
+ */
+export type OutputPeer = "closed" | "open" | "unknown";
+
+/**
  * A process the session's commands started before the relaunch (main's `SessionProcesses.leftover`). Named by what
  * cannot leak a secret: never its arguments, which can hold tokens, and its folder only inside the session's own.
  */
@@ -66,17 +73,19 @@ export interface LeftProcess {
 	outside?: true;
 	/** The TCP ports it listens on. */
 	ports?: number[];
-	/** Its output has nowhere to go: the program that read it stopped with the restart, so each write fails. */
-	noReader?: true;
-	/** Of one with no reader: the share of one core it used while measured, over `seconds`. */
+	/** Its standard output or error path is closed, so a write fails; what is known of the other end. */
+	outputClosed?: OutputPeer;
+	/** Of one whose output path is closed: the share of one core it used while measured, over `seconds`. */
 	cpu?: { percent: number; seconds: number };
 	/** That share is at or over the mark that reads as spinning (`SPIN_PERCENT` in main). */
 	spinning?: true;
+	/** Of one the launch ended: the share of a core in each sample that kept it spinning, over `seconds`. */
+	sustained?: { percents: number[]; seconds: number };
 }
 
 /**
- * What the session's commands left running across the relaunch: what still runs, and what the launch ended (only
- * while the switch that lets it end a process spinning on output nobody reads is on; off by default).
+ * What the session's commands left running across the relaunch: what still runs, and what the launch ended (one whose
+ * output path was closed with its other end closed and that kept spinning, while that is on; on by default).
  */
 export interface LeftProcesses {
 	running: LeftProcess[];
@@ -97,7 +106,10 @@ export function leftProcessesOf(value: unknown): LeftProcesses {
 	return { running: list(record.running), ended: list(record.ended) };
 }
 
-/** One process as the notice names it: `- 4321 next-server, started …, in ., listening on 3000; …`. */
+/**
+ * One process as the notice names it, only what was observed: `- 4321 next-server, started …, in ., listening on 3000;
+ * output path closed (peer closed); spinning: 99% of a core for 3 s`.
+ */
 function leftProcessLine(item: LeftProcess): string {
 	const facts = [`- ${item.pid} ${item.name}`];
 	if (item.started) facts.push(`started ${item.started}`);
@@ -105,9 +117,11 @@ function leftProcessLine(item: LeftProcess): string {
 	else if (item.folder) facts.push(`in ${item.folder}`);
 	if (item.ports?.length) facts.push(`listening on ${item.ports.join(", ")}`);
 	let line = facts.join(", ");
-	if (item.noReader) line += "; its output has nowhere to go";
+	if (item.outputClosed) line += `; output path closed (peer ${item.outputClosed})`;
 	if (item.cpu)
 		line += `; ${item.spinning ? "spinning: " : ""}${item.cpu.percent}% of a core for ${item.cpu.seconds} s`;
+	if (item.sustained)
+		line += `; still ${item.sustained.percents.slice(1).join("%, ")}% in samples over ${item.sustained.seconds} s`;
 	return line;
 }
 
@@ -610,18 +624,18 @@ function restartNotice(
 		);
 	}
 	if (processes.running.length > 0) {
-		const deaf = processes.running.some(item => item.noReader);
+		const closed = processes.running.some(item => item.outputClosed);
 		lines.push(
-			"These processes your commands started before OMPdesk restarted are still running; they are yours as before (pid, program, what is known):",
+			"These processes your commands started before OMPdesk restarted are still running; they are yours as before (pid, program, what was observed):",
 			...processes.running.map(leftProcessLine),
-			deaf
-				? "Use them as they are. One whose output has nowhere to go fails each write it makes; one marked spinning may be stuck retrying that. If the work needs such a one, end it yourself and start it again with its output going to a file."
+			closed
+				? "Use them as they are. A write by one whose output path is closed fails; one marked spinning may be retrying that. If the work needs such a one, end it yourself and start it again with its output going to a file."
 				: "Use them as they are; do not start them again.",
 		);
 	}
 	if (processes.ended.length > 0) {
 		lines.push(
-			"OMPdesk ended these processes your commands had started: their output had nowhere to go after the restart and they spun on it (pid, program, what was measured):",
+			"OMPdesk ended these processes your commands had started: their output path was closed, its other end closed, and they kept spinning in every sample (pid, program, what was observed):",
 			...processes.ended.map(leftProcessLine),
 			"Start again only the ones the work still needs, with their output going to a file.",
 		);

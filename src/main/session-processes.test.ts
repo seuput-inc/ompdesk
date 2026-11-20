@@ -12,8 +12,10 @@ import {
 	RETRY_REMAINING_MS,
 	SESSION_PROCESSES_FILE,
 	SessionProcesses,
+	type SessionProcessesDeps,
 	type SessionProcessLogDetails,
 	STOCK_WORKER_ARG,
+	type TaggedProcess,
 } from "./session-processes";
 
 // Real processes through the real core (native/ompdesk/crates/core/src/procs): what a session's omp started is found by
@@ -98,11 +100,11 @@ function orphan(tag: string | undefined): number {
 /** Whether a direct child has ended (its exit event, never the pid: a reaped pid may name another process). */
 const ended = (child: ChildProcess): boolean => child.exitCode !== null || child.signalCode !== null;
 
-function registry(frozen = false, endSpinning?: boolean): SessionProcesses {
+function registry(frozen = false, deps: Partial<SessionProcessesDeps> = {}): SessionProcesses {
 	return new SessionProcesses(file, {
 		frozen: () => frozen,
 		log: (message, details) => logs.push({ message, details }),
-		...(endSpinning !== undefined ? { endSpinning } : {}),
+		...deps,
 	});
 }
 
@@ -265,7 +267,7 @@ describe("a session's processes, on this computer", () => {
 
 	// Linux (tests and CI only, no product) does not tell a closed pipe's writer from any other: not checked there.
 	it.skipIf(process.platform === "linux")(
-		"whose output has nowhere to go stay at the launch that keeps their session, and the launch reports them",
+		"whose output path is closed stay at the launch that keeps their session when the automatic end is off, and the launch reports them",
 		{ timeout: SLOW },
 		async () => {
 			const folder = fs.realpathSync(dir);
@@ -288,18 +290,22 @@ describe("a session's processes, on this computer", () => {
 			await vi.waitFor(() => expect(fs.readFileSync(logFile, "utf8")).toContain("up"));
 			await tab.close();
 
-			const after = registry();
+			const after = registry(false, { endSpinning: () => false });
 			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
 			await after.settled();
 
 			expect([ended(chatty.child), ended(quiet.child), ended(busy)]).toEqual([false, false, false]);
-			const reports = logs.filter(entry => entry.message === "no reader");
+			const reports = logs.filter(entry => entry.message === "output path closed");
 			expect(reports).toHaveLength(1);
 			const found = JSON.parse(String(reports[0]?.details.found)) as Array<Record<string, unknown>>;
 			const by = (pid: number | undefined) => found.find(item => item.pid === pid);
 			expect(found.map(item => item.pid).sort()).toEqual([chatty.child.pid, quiet.child.pid].sort());
-			expect(by(chatty.child.pid)).toMatchObject({ noReader: true, spinning: true, outside: true });
-			expect(by(quiet.child.pid)).toMatchObject({ noReader: true, folder: ".", ports: [Number(quiet.said)] });
+			expect(by(chatty.child.pid)).toMatchObject({ outputClosed: "closed", spinning: true, outside: true });
+			expect(by(quiet.child.pid)).toMatchObject({
+				outputClosed: "closed",
+				folder: ".",
+				ports: [Number(quiet.said)],
+			});
 			expect(by(quiet.child.pid)?.spinning).toBeUndefined();
 			expect(JSON.stringify(logs)).not.toContain("SYNTH-");
 
@@ -307,10 +313,10 @@ describe("a session's processes, on this computer", () => {
 			const back = after.open({ cwd: folder, sessionPath: session });
 			const left = await back.leftover();
 			const named = (pid: number | undefined) => left?.running.find(item => item.pid === pid);
-			expect(named(chatty.child.pid)).toMatchObject({ noReader: true, spinning: true });
-			expect(named(quiet.child.pid)).toMatchObject({ noReader: true, ports: [Number(quiet.said)] });
+			expect(named(chatty.child.pid)).toMatchObject({ outputClosed: "closed", spinning: true });
+			expect(named(quiet.child.pid)).toMatchObject({ outputClosed: "closed", ports: [Number(quiet.said)] });
 			expect(named(busy.pid)).toMatchObject({ folder: "." });
-			expect(named(busy.pid)?.noReader).toBeUndefined();
+			expect(named(busy.pid)?.outputClosed).toBeUndefined();
 			expect(left?.ended).toEqual([]);
 			const notice = restartFollowUp([], [], "restored", [], left)?.content ?? "";
 			expect(notice).toContain(`- ${chatty.child.pid} `);
@@ -322,7 +328,7 @@ describe("a session's processes, on this computer", () => {
 	);
 
 	it.skipIf(process.platform === "linux")(
-		"with the switch on, end at the launch only those spinning on output nobody reads",
+		"by default end at the launch only those that keep spinning on an output path whose other end closed",
 		{ timeout: SLOW },
 		async () => {
 			const folder = fs.realpathSync(dir);
@@ -333,16 +339,25 @@ describe("a session's processes, on this computer", () => {
 			const quiet = await deafened(tab.tag, QUIET_SERVER, folder);
 			await tab.close();
 
-			const after = registry(false, true);
+			// The samples a minute apart run back to back here: the CPU each measures is real.
+			const after = registry(false, { later: run => void setImmediate(run) });
 			await after.sweep({ keep: new Set([session]), hostedHeld: () => false, hostedGraceMs: 0 });
 			await after.settled();
 
 			await vi.waitFor(() => expect(ended(chatty.child)).toBe(true));
 			expect(ended(quiet.child)).toBe(false);
 			const end = logs.find(entry => entry.message === "ended");
-			expect(end?.details).toMatchObject({ reason: "spinning without a reader", processes: 1 });
+			expect(end?.details).toMatchObject({
+				reason: "kept spinning on a closed output path whose other end is closed",
+				processes: 1,
+			});
+			const found = JSON.parse(String(end?.details.found)) as Array<Record<string, unknown>>;
+			expect(found).toEqual([
+				expect.objectContaining({ pid: chatty.child.pid, outputClosed: "closed", sustained: expect.anything() }),
+			]);
 			const left = await after.open({ cwd: folder, sessionPath: session }).leftover();
 			expect(left?.ended.map(item => item.pid)).toEqual([chatty.child.pid]);
+			expect(left?.ended[0]?.sustained?.percents.every(percent => percent >= 50)).toBe(true);
 			expect(left?.running.map(item => item.pid)).toEqual([quiet.child.pid]);
 			// The tag stays: its tab is open and a process of it still runs.
 			expect(after.owners().map(owner => owner.tag)).toEqual([tab.tag]);
@@ -475,5 +490,95 @@ describe("which tags end, and when", () => {
 	it("drops a damaged file's records instead of ending by them", () => {
 		fs.writeFileSync(file, JSON.stringify({ tags: [{ tag: "not-a-tag", cwd: "/w", since: 1 }, { cwd: "/w" }, 7] }));
 		expect(held().sessions.owners()).toEqual([]);
+	});
+
+	// The hub's finding of 20 Nov 2026: a closed output path (macOS SS_CANTSENDMORE) is also what a process's own
+	// shutdown(SHUT_WR) leaves, with its peer alive and reading. Only a peer seen closed may let the switch end it.
+	it("with the switch on, ends a spinning process only once its output's peer is seen closed", async () => {
+		const spinner = (pid: number, extra: Partial<TaggedProcess> = {}): TaggedProcess => ({
+			pid,
+			ppid: 1,
+			bytes: 0,
+			startedMs: 1,
+			name: "node",
+			tag: "1".padStart(32, "0"),
+			outputClosed: "unknown",
+			cpuPercent: 99,
+			...extra,
+		});
+		const ended = async (rows: TaggedProcess[]) => {
+			fs.rmSync(file, { force: true });
+			held().sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+			const pids: number[] = [];
+			const sessions = new SessionProcesses(file, {
+				frozen: () => false,
+				log: (message, details) => logs.push({ message, details }),
+				endSpinning: () => true,
+				// Every later sample answers the same rows at once.
+				later: run => void setImmediate(run),
+				survey: async () => rows,
+				endOnly: async (_tags, only) => {
+					pids.push(...only.map(process => process.pid));
+					return { ended: [], left: [], kept: [], own: [] };
+				},
+			});
+			await sessions.sweep({ keep: new Set(["/s/a.jsonl"]), hostedHeld: () => false, hostedGraceMs: 0 });
+			await sessions.settled();
+			return pids;
+		};
+		// Shut down for writing by itself (macOS: still connected), or a socket that does not say.
+		expect(await ended([spinner(10, { outputClosed: "open" }), spinner(11)])).toEqual([]);
+		expect(await ended([spinner(12, { outputClosed: "closed" }), spinner(13, { outputClosed: "open" })])).toEqual([
+			12,
+		]);
+	});
+
+	// The owner's answer of 20 Nov 2026: OMPdesk ends by itself a process whose output's other end is confirmed closed
+	// and that keeps using CPU; a compiling dev server, busy for a while, must never be taken for one.
+	it("by default ends a process whose output's peer is closed once it spins in every sample over a minute", async () => {
+		const row = (pid: number, cpuPercent: number, startedMs = 1): TaggedProcess => ({
+			pid,
+			ppid: 1,
+			bytes: 0,
+			startedMs,
+			name: "next-server",
+			tag: "1".padStart(32, "0"),
+			outputClosed: "closed",
+			cpuPercent,
+		});
+		held().sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+		// 20 spins throughout; 21 stops (a compile that finished); 22's pid names a later process by the last sample.
+		const samples = [
+			[row(20, 99), row(21, 100), row(22, 98)],
+			[row(20, 100), row(21, 100), row(22, 99)],
+			[row(20, 99), row(21, 3), row(22, 99, 2)],
+		];
+		const waits: Array<() => void> = [];
+		const pids: number[] = [];
+		const sessions = new SessionProcesses(file, {
+			frozen: () => false,
+			log: (message, details) => logs.push({ message, details }),
+			later: run => waits.push(run),
+			survey: async () => samples.shift() ?? [],
+			endOnly: async (_tags, only) => {
+				pids.push(...only.map(process => process.pid));
+				return {
+					ended: only.map(({ pid }) => ({ pid, name: "next-server", bytes: 0, forced: false })),
+					left: [],
+					kept: [],
+					own: [],
+				};
+			},
+		});
+		const swept = sessions.sweep({ keep: new Set(["/s/a.jsonl"]), hostedHeld: () => false, hostedGraceMs: 0 });
+		for (let turn = 0; turn < 20 && samples.length > 0; turn++) {
+			await new Promise(resolve => setImmediate(resolve));
+			for (const run of waits.splice(0)) run();
+		}
+		await swept;
+		await sessions.settled();
+		expect(pids).toEqual([20]);
+		const end = logs.find(entry => entry.message === "ended");
+		expect(String(end?.details.found)).toContain('"pid":20');
 	});
 });

@@ -62,6 +62,7 @@ import {
 	CLOSE_TO_TRAY_NOTICE_PREF,
 	CLOSE_TO_TRAY_PREF,
 	closeToTrayEnabled,
+	END_SPINNING_ON_CLOSED_OUTPUT_PREF,
 	KEEP_AWAKE_WORKING_PREF,
 	OMP_FOLLOW_VERIFIED_PREF,
 	RESUME_INTERRUPTED_PREF,
@@ -1094,6 +1095,7 @@ app.whenReady().then(async () => {
 		frozen: () => quitApproved(),
 		log: (message, details) => writeRuntimeLog({ source: "session-processes", message, details }),
 		scratch: sessionScratch,
+		endSpinning: () => prefsStore().get(END_SPINNING_ON_CLOSED_OUTPUT_PREF) !== false,
 	});
 	const createLocalSidecar = localSidecarFactory({
 		bridgeDir,
