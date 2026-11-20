@@ -782,7 +782,20 @@ export class AgentControlRuntime {
 			...(formerIds.length > 0 ? { formerIds } : {}),
 			...(webEdits ? { webEdits } : {}),
 			...(this.#closeAnswers.has(info.tabId) ? { closeAnswer: this.#closeAnswers.get(info.tabId) } : {}),
+			...this.#hostOpen(info),
 		};
+	}
+
+	/**
+	 * A tab here a relaunch restored and nobody showed since (`asleep`) runs no omp, yet its paired host may run the
+	 * session in a tab of its own: who holds it there and what that tab does, from the host's summary every row reads.
+	 */
+	#hostOpen(info: IpcTabInfo): { hostOpen: OpenElsewhere } | undefined {
+		if (info.status !== "asleep" || !info.device || !info.sessionPath) return undefined;
+		const summary = this.#deps.summaries?.(info.device)?.sessions.find(row => row.sessionPath === info.sessionPath);
+		const work = summary ? summaryWork(summary) : undefined;
+		if (!summary || !work) return undefined;
+		return { hostOpen: { ...(summary.openFor ? { holder: summary.openFor } : {}), work } };
 	}
 
 	/** A paired host's folder as typed, or this computer's resolved against the caller's. */

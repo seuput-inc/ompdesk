@@ -135,6 +135,11 @@ export interface ControlTab {
 	viewing?: true;
 	/** The tab's window's latest answer to an agent close (`AgentControlViewEvent.closeId`). */
 	closeAnswer?: { closeId: number; outcome: AgentCloseOutcome };
+	/**
+	 * A tab here not started since a relaunch (`asleep`) on a paired host's session a tab on that host holds: who holds
+	 * it there and what that tab does, from the host's summary every row reads. Its lines say that, never "not started".
+	 */
+	hostOpen?: OpenElsewhere;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */

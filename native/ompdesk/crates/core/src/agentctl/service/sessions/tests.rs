@@ -874,3 +874,89 @@ async fn closing_a_view_of_a_tab_another_computer_holds_says_that_tab_stays_open
     assert_eq!(names(&asked, "view")[0]["event"]["tabId"], "j");
     control.host.port().close();
 }
+
+/// This window ("a") and an asleep tab "v" here on Desk's session (restored by a relaunch, not shown since), with what
+/// the tab Desk itself holds on it does now, as main reads it from Desk's summary (`hostOpen`).
+fn asleep_on_desk(work: &str) -> Value {
+    let mut asleep = desk_tab("v", false);
+    asleep["status"] = json!("asleep");
+    asleep["hostOpen"] = json!({ "work": work });
+    desk_state(vec![asleep])
+}
+
+#[tokio::test]
+async fn an_asleep_tab_on_a_session_its_host_runs_reads_as_the_host_runs_it() {
+    // 20 Nov 2026 (C12): after a relaunch the MacBook's list and result read SeuOffice's main tab, which the Mac mini's
+    // window ran (its turn resumed there), as "not started (it starts when shown or messaged)" for 26 minutes: the
+    // MacBook's own tab on it was restored asleep, and the line read that tab, never the host's summary every row reads.
+    let (control, _) = rig_with(7_316, asleep_on_desk("turn"), |method, args, _| {
+        main_of(method, args)
+    });
+    let list = control
+        .run(
+            "a",
+            "ompdesk_sessions",
+            json!({ "status": "running" }),
+            None,
+        )
+        .await;
+    assert!(!list.is_error, "{}", list.text);
+    assert!(
+        list.text.contains("- v \"Report gap\" (saved id 01a1ed95-53b0-752a-a272-9c911a8499c4)\n  running (open in a tab on Desk; this app's tab on it starts when shown or messaged); folder /w"),
+        "{}",
+        list.text
+    );
+    let result = control
+        .run(
+            "a",
+            "ompdesk_session_result",
+            json!({ "session": "v", "wait": true, "timeout_seconds": 0 }),
+            None,
+        )
+        .await;
+    assert!(!result.is_error, "{}", result.text);
+    assert!(
+        result.text.starts_with("Still running after waiting 0 s (0/1 finished).\n\"Report gap\" [v]: running (open in a tab on Desk;"),
+        "{}",
+        result.text
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn an_asleep_tab_whose_host_finished_answers_from_the_saved_file() {
+    let (control, asked) = rig_with(
+        7_315,
+        asleep_on_desk("idle"),
+        |method, args, _| match method {
+            "storedMessages" => Ok(json!([
+                { "role": "user", "content": "go", "timestamp": 1 },
+                { "role": "assistant", "content": [{ "type": "text", "text": "done there" }], "stopReason": "stop", "timestamp": 2 }
+            ])),
+            other => main_of(other, args),
+        },
+    );
+    let result = control
+        .run(
+            "a",
+            "ompdesk_session_result",
+            json!({ "session": "v", "wait": true, "timeout_seconds": 5 }),
+            None,
+        )
+        .await;
+    assert!(!result.is_error, "{}", result.text);
+    assert!(
+        result.text.starts_with("\"Report gap\" [v]: idle (open in a tab on Desk; this app's tab on it starts when shown or messaged)."),
+        "{}",
+        result.text
+    );
+    assert!(
+        result.text.ends_with("Last answer:\ndone there"),
+        "{}",
+        result.text
+    );
+    let read = &names(&asked, "storedMessages")[0]["session"];
+    assert_eq!(read["path"], DESK_PATH);
+    assert_eq!(read["device"], "d1");
+    control.host.port().close();
+}

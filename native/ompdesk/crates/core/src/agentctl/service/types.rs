@@ -234,6 +234,10 @@ pub struct ControlTab {
     /// The tab's window's latest answer to an agent close (`closeId` of the view event).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_answer: Option<CloseAnswer>,
+    /// A tab here not started since a relaunch (`asleep`) on a paired host's session that a tab on that host holds:
+    /// who holds it there and what that tab does, from the host's summary every row reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_open: Option<OpenElsewhere>,
 }
 
 impl ControlTab {
@@ -244,6 +248,15 @@ impl ControlTab {
         } else {
             &self.title
         }
+    }
+
+    /// For a tab here not started since a relaunch on a paired host's session: what the tab that host holds on it
+    /// does (`host_open`). None for any other tab, or while the host's summary does not say.
+    pub fn host_work(&self) -> Option<StoredWork> {
+        if self.status != TabStatus::Asleep || self.device.is_none() {
+            return None;
+        }
+        self.host_open.as_ref()?.work
     }
 }
 
