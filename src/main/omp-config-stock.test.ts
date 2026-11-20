@@ -4,11 +4,11 @@
  * change to the command or its JSON reply (`value`, `overriddenBy`) shows here, not on a person's computer.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
+import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
 import { INSTALLED_OMP } from "./test-bridge-probe";
 
 function cli(env: Record<string, string>): OmpCliRun {
@@ -38,5 +38,33 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("stock update.auto through omp confi
 		expect(await readStockAuto(run)).toBe(true);
 		await writeStockAuto(run, false);
 		expect(await readStockAuto(run)).toBe(false);
+	}, 60_000);
+
+	it("an OMPdesk that does not follow the verified list leaves stock's config file byte for byte as it was", async () => {
+		const home = mkdtempSync(join(tmpdir(), "omp-config-stock-"));
+		const agentDir = join(home, ".omp", "agent");
+		const run = cli({ HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: agentDir });
+		await writeStockAuto(run, true);
+		// Every file stock keeps in its agent folder (the config omp writes, whatever stock calls it).
+		const snapshot = () =>
+			Object.fromEntries(
+				readdirSync(agentDir, { withFileTypes: true })
+					.filter(entry => entry.isFile())
+					.map(entry => [entry.name, readFileSync(join(agentDir, entry.name)).toString("base64")]),
+			);
+		const before = snapshot();
+		expect(Object.keys(before)).not.toEqual([]);
+		const takeover = new OmpAutoTakeover({
+			enabled: () => false,
+			read: () => readStockAuto(run),
+			write: value => writeStockAuto(run, value),
+			file: join(home, "omp-auto-takeover.json"),
+			app: "0.136.0",
+			log: () => {},
+			onChanged: () => {},
+		});
+		await takeover.sync();
+		expect(snapshot()).toEqual(before);
+		expect(await readStockAuto(run)).toBe(true);
 	}, 60_000);
 });

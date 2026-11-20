@@ -751,6 +751,18 @@ async fn bridge_health_reads_each_omp_version_of_the_callers_computer() {
          omp 18.0.0 (no longer running, checked 2026-11-18T08:20:00Z): bridge never connected: \
          GUI bridge did not accept a connection within 3000ms"
     );
+    // The newer omp the updater holds back follows, with how long and the omp that keeps running.
+    fake.world().answers.insert(
+        "bridge-health:get".into(),
+        json!({"results": [], "held": {"version": "19.2.0", "reason": "verifying",
+            "since": "2026-11-20T00:00:00.000Z", "installed": "19.1.0"}}),
+    );
+    assert_eq!(
+        read().await.unwrap(),
+        "Nothing checked yet in this launch: the check runs when an omp's bridge first connects.\n\
+         omp 19.2.0 is held back (verifying since 2026-11-20T00:00:00.000Z): omp 19.1.0 keeps running; \
+         Update now in Settings › Updates & about installs it."
+    );
     fake.world().device = Some("host-1".into());
     read().await.unwrap();
     let world = fake.world();
@@ -761,7 +773,7 @@ async fn bridge_health_reads_each_omp_version_of_the_callers_computer() {
         .filter(|(channel, _)| channel == "bridge-health:get")
         .map(|(_, args)| args)
         .collect();
-    assert_eq!(sent, [&vec![], &vec![], &vec![json!("host-1")]]);
+    assert_eq!(sent, [&vec![], &vec![], &vec![], &vec![json!("host-1")]]);
 }
 
 #[tokio::test]

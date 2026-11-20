@@ -862,6 +862,11 @@ export interface BridgeHealthResult {
 /** The latest result per omp version checked in this launch: running versions first, then the newest. */
 export interface BridgeHealthReport {
 	results: BridgeHealthResult[];
+	/**
+	 * A newer omp that computer's updater keeps back (OmpUpdateState `held`), with the omp it runs, so `ompdesk_app`
+	 * `omp.bridge_health` says why an old omp still runs there. Absent while nothing is held, and from older hosts.
+	 */
+	held?: { version: string; reason: string; since?: string; installed: string | null };
 }
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */

@@ -1,9 +1,10 @@
 /**
  * OMPdesk is the one owner of omp updates (docs/design/follow-omp.md, "올리는 길이 둘"): stock omp's own background
  * update (`update.auto`, default off) installs the registry's newest on any interactive launch, verified or not, and
- * takes no version, so the verified list cannot steer it. While "Keep tools up to date" is on, OMPdesk turns a stock
+ * takes no version, so the verified list cannot steer it. While OMPdesk follows that list (the hidden pref
+ * `ompFollowVerified`) and "Keep tools up to date" is on, OMPdesk turns a stock
  * `update.auto` that is on off, once, through stock's own settings command (`omp config set`), and records what it
- * found (who, when, which value) in `<userData>/omp-auto-takeover.json`. Turning the switch off gives the value back,
+ * found (who, when, which value) in `<userData>/omp-auto-takeover.json`. Either switch going off gives the value back,
  * but only while stock still holds the value OMPdesk wrote. A person who changes it in between keeps their choice:
  * OMPdesk lets go and leaves it alone until the switch goes off (turning it on again later is a fresh start). The hub's
  * review point 6 (a): round trip, a change in between, originally off, no config file at all.
@@ -113,8 +114,12 @@ export class OmpAutoTakeover {
 	}
 
 	async #sync(): Promise<void> {
+		const enabled = this.#deps.enabled();
+		// Nothing taken and nothing to take: stock's config is not even read (an OMPdesk that does not follow the verified
+		// list leaves omp's config exactly as it found it).
+		if (!enabled && this.#record === null) return;
 		const current = await this.#deps.read().catch(() => null);
-		const step = takeoverStep(this.#deps.enabled(), current, this.#record);
+		const step = takeoverStep(enabled, current, this.#record);
 		const stamp = { at: new Date((this.#deps.now ?? Date.now)()).toISOString(), by: `OMPdesk ${this.#deps.app}` };
 		const taken = this.#record?.at;
 		try {

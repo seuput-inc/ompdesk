@@ -908,6 +908,39 @@ describe("SetupService", () => {
 			},
 		);
 
+		it("finds the newest release of one major in the update's registry, for an omp it can install by name", async () => {
+			const { root, omp } = await bunRoot();
+			const asked: { bun: string; version: string; bunInstall?: string }[] = [];
+			let answer: unknown = { version: "18.22.2" };
+			const h = harness(machine({ omp: present("18.22.0") }), {
+				automatic: false,
+				ompBin: omp,
+				ompRelease: async (bun, version, env) => {
+					asked.push({ bun, version, bunInstall: env.BUN_INSTALL });
+					if (answer instanceof Error) throw answer;
+					return answer;
+				},
+			});
+			await h.service.start();
+			await expect(h.service.newestOmpIn(18)).resolves.toBe("18.22.2");
+			expect(asked).toEqual([{ bun: "/home/u/.bun/bin/bun", version: "18", bunInstall: root }]);
+			// A registry that answers another major, or nothing, has no release to install.
+			answer = { version: "19.0.0" };
+			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
+			answer = null;
+			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
+			answer = new Error("503 Service Unavailable");
+			await expect(h.service.newestOmpIn(18)).rejects.toThrow("503 Service Unavailable");
+		});
+
+		it("names no release for an omp Bun does not manage, without asking the registry", async () => {
+			const ompRelease = vi.fn(async () => ({ version: "18.22.2" }));
+			const h = harness(machine({ omp: present("18.22.0") }), { automatic: false, ompRelease });
+			await h.service.start();
+			await expect(h.service.newestOmpIn(18)).resolves.toBeNull();
+			expect(ompRelease).not.toHaveBeenCalled();
+		});
+
 		it("writes a line when its own omp install starts and when it ends, with the version that landed or the reason", async () => {
 			const ok = harness(machine({ omp: missing }), { installed: { omp: "18.22.2" } });
 			await ok.service.start();

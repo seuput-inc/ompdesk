@@ -14,13 +14,17 @@
  * running omp holds, so there an install can fail; that attempt is just a
  * failure here, shown in Settings and retried on the next check.
  *
- * **Nothing here installs an unverified omp unasked** (the owner's rule, 19 Nov 2026: omp 19.0.0 came out and
- * OMPdesk, tested with 18, put it on two computers within hours; the composer's extras, the plan card and resume
- * broke). A pass nobody asked for (the timer's, the bridge compatibility repair's) runs only under the pref and
- * installs, at its exact version, only the tested omp (`src/shared/omp-tested.json`) or one runners verified against
- * this OMPdesk release (the verified list, `followTarget` in src/shared/omp-compat.ts; docs/design/follow-omp.md). A
- * newer omp is `held` (`verifying` until runners judge it, `failed` when they found it breaks this release): the state
- * names it, Settings says so, and a person's "Update now" installs it anyway.
+ * **Nothing here installs an untested omp unasked** (the owner's rule, 19 Nov 2026: omp 19.0.0 came out and OMPdesk,
+ * tested with 18, put it on two computers within hours; the composer's extras, the plan card and resume broke). A
+ * pass nobody asked for (the timer's, the bridge compatibility repair's) runs only under the pref, installs only by
+ * name (never stock `omp update`), and picks its target one of two ways (`follow`, the hidden pref
+ * `ompFollowVerified`, default off):
+ * - off: the registry's newest while its major is at most the tested omp's (`src/shared/omp-tested.json`); a newer
+ *   major is held (`untested-major`) and the pass brings omp to the newest release of the tested major instead.
+ * - on: only the tested omp or one runners verified against this OMPdesk release (the verified list, `followTarget`
+ *   in src/shared/omp-compat.ts; docs/design/follow-omp.md); a newer omp is held (`verifying` until runners judge
+ *   it, since when this computer first saw it; `failed` when they found it breaks this release).
+ * Either way the state names what is held, Settings says so, and a person's "Update now" installs it anyway.
  *
  * OMPdesk's own update is not part of this (updater.ts).
  * Each computer runs its own instance under its own pref. A paired device
@@ -36,7 +40,7 @@ import type {
 	OmpUpdateState,
 	OmpUpdateTrigger,
 } from "../shared/omp-update";
-import { isNewer } from "../shared/version";
+import { isNewer, majorOf } from "../shared/version";
 import { TESTED_OMP_VERSION } from "./omp-runtime";
 import type { OmpUpdateOutcome } from "./setup/service";
 import { nextCheckDelay, UpdateScheduler } from "./update-scheduler";
@@ -58,11 +62,24 @@ export interface OmpUpdaterDeps {
 	enabled: () => boolean;
 	/** The newest omp for the installed one (stock `omp update --check`); rejects with the reason it could not tell. */
 	fetchLatest: () => Promise<string>;
+	/** The hidden pref `ompFollowVerified` (default off): a pass nobody asked for follows the verified list. */
+	follow: () => boolean;
 	/**
 	 * This OMPdesk release's entry of the verified list (OmpCompatSource); an empty entry when the list was never
-	 * read or names nothing for this release. Never rejects.
+	 * read or names nothing for this release. Never rejects. Read only while `follow` is on.
 	 */
 	compat: () => Promise<OmpCompatEntry>;
+	/**
+	 * When this computer first saw `version` held for verification (ISO 8601), recording now for a version it has not
+	 * seen; kept across relaunches (main keeps it in prefs). Absent: a `verifying` hold carries no `since`.
+	 */
+	firstSeen?: (version: string) => string;
+	/**
+	 * The newest omp release of `major` that can be installed here as a named version (SetupService.newestOmpIn);
+	 * null when nothing can (an omp Bun does not manage). Rejects with the reason it could not tell. Used only while
+	 * `follow` is off, for a pass that may not go above the tested major.
+	 */
+	newestWithin: (major: number) => Promise<string | null>;
 	/** The omp that runs now (from machine setup's detection); null while omp is missing. */
 	installed: () => string | null;
 	/**
@@ -167,8 +184,8 @@ export class OmpUpdater {
 
 	/**
 	 * A tab's omp lacks what the bridge needs, or the bridge never reached it (BridgeHealth): a newer omp may have
-	 * it. Nobody asked, so this is the timer's pass run early: in a launch that schedules, under the pref, only to a
-	 * verified omp.
+	 * it. Nobody asked, so this is the timer's pass run early: in a launch that schedules, under the pref, only to an
+	 * omp such a pass may install.
 	 */
 	repair(): Promise<void> {
 		if (this.#scheduler.disposed) return Promise.resolve();
@@ -209,6 +226,33 @@ export class OmpUpdater {
 		this.#set({ failure });
 	}
 
+	/** `version`'s major is known and at most the tested omp's: a pass nobody asked for may install it (`follow` off). */
+	#withinTested(version: string): boolean {
+		const major = majorOf(version);
+		const tested = majorOf(this.#tested);
+		return major !== null && tested !== null && major <= tested;
+	}
+
+	/** `follow` off: a newer omp whose major is above the tested omp's (or cannot be read) is held. */
+	#guardHold(installed: string, latest: string): OmpUpdateHold | null {
+		return isNewer(latest, installed) && !this.#withinTested(latest)
+			? { version: latest, reason: "untested-major" }
+			: null;
+	}
+
+	/** `follow` on: a newer omp the list does not let a pass install is held, as failed or as waiting for runners. */
+	#verifiedHold(
+		installed: string,
+		latest: string,
+		followed: string | null,
+		entry: OmpCompatEntry,
+	): OmpUpdateHold | null {
+		if (!isNewer(latest, installed) || followed === latest) return null;
+		if (entry.holding?.version === latest) return { version: latest, reason: "failed", since: entry.holding.since };
+		const since = this.#deps.firstSeen?.(latest);
+		return since ? { version: latest, reason: "verifying", since } : { version: latest, reason: "verifying" };
+	}
+
 	async #check(trigger: OmpUpdateTrigger): Promise<void> {
 		// Missing, outdated or broken omp is machine setup's to install; there is nothing to check or update yet.
 		if (this.#deps.installed() === null) return;
@@ -221,20 +265,18 @@ export class OmpUpdater {
 			this.#fail(this.#asked ? "manual" : trigger, { reason: "check", detail });
 			return;
 		}
-		const entry = await this.#deps.compat();
+		const entry = this.#deps.follow() ? await this.#deps.compat() : null;
 		const installed = this.#deps.installed();
+		const checkedAt = (this.#deps.now ?? Date.now)();
 		if (installed === null) {
-			this.#set({ latest, checkedAt: (this.#deps.now ?? Date.now)(), verified: entry.verified });
+			this.#set({ latest, checkedAt, verified: entry?.verified });
 			return;
 		}
-		const followed = followTarget({ installed, latest, tested: this.#tested, verified: entry.verified });
-		const held: OmpUpdateHold | null =
-			isNewer(latest, installed) && followed !== latest
-				? entry.holding?.version === latest
-					? { version: latest, reason: "failed", since: entry.holding.since }
-					: { version: latest, reason: "verifying" }
-				: null;
-		this.#set({ latest, checkedAt: (this.#deps.now ?? Date.now)(), verified: entry.verified, held });
+		const followed = entry
+			? followTarget({ installed, latest, tested: this.#tested, verified: entry.verified })
+			: null;
+		const held = entry ? this.#verifiedHold(installed, latest, followed, entry) : this.#guardHold(installed, latest);
+		this.#set({ latest, checkedAt, verified: entry?.verified, held });
 		// Whoever started the pass, a click before the version is chosen makes it the person's.
 		const path = (): OmpUpdateTrigger => (this.#asked ? "manual" : trigger);
 		this.#deps.log("checked", {
@@ -242,12 +284,23 @@ export class OmpUpdater {
 			installed,
 			latest,
 			tested: this.#tested,
-			verified: entry.verified.at(-1) ?? null,
+			...(entry ? { verified: entry.verified.at(-1) ?? null } : {}),
 		});
 		if (held && !this.#asked) {
-			this.#deps.log("held", { path: path(), installed, version: held.version, reason: held.reason });
+			this.#deps.log("held", { path: path(), installed, ...held, ...(entry ? {} : { tested: this.#tested }) });
 		}
-		const target = this.#asked ? latest : (followed ?? installed);
+		let target = entry && !this.#asked ? (followed ?? installed) : latest;
+		if (!entry && held && !this.#asked) {
+			let within: string | null;
+			try {
+				within = await this.#deps.newestWithin(majorOf(this.#tested) ?? 0);
+			} catch (error) {
+				this.#fail(path(), { reason: "check", detail: error instanceof Error ? error.message : String(error) });
+				return;
+			}
+			// The lookup is asked for one major; an answer outside it is never installed.
+			if (!this.#asked) target = within !== null && this.#withinTested(within) ? within : installed;
+		}
 		if (!isNewer(target, installed)) {
 			this.#failures = 0;
 			this.#set({ failure: null });

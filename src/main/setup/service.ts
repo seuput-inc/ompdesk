@@ -30,7 +30,7 @@ import {
 	setupItemAutomatic,
 	setupItemRequired,
 } from "../../shared/setup";
-import { isNewer } from "../../shared/version";
+import { isNewer, majorOf } from "../../shared/version";
 import { manifestBunMinimum, ompBunRoot, ompUpdateEnv, parseUpdateCheck, TESTED_OMP_VERSION } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { SerialChain, stepStalled, throwIfStepStalled } from "../serial-chain";
@@ -390,6 +390,21 @@ export class SetupService {
 			error => resolve({ kind: "failed", failure: { reason: "install", detail: String(error) } }),
 		);
 		return promise;
+	}
+
+	/**
+	 * The newest omp release of `major` in the registry the update installs from (`bun pm view <omp>@<major>`, in
+	 * the update's environment), for a pass that may not go above that major (OmpUpdater with `follow` off). Null
+	 * when nothing here can install a named version (no omp, or one Bun does not manage) or the registry has none;
+	 * rejects when the lookup fails.
+	 */
+	async newestOmpIn(major: number): Promise<string | null> {
+		const omp = this.#detection?.omp;
+		const bun = this.#detection?.bun;
+		if (!omp || !bun || this.#items.omp.presence?.kind !== "present" || !ompBunRoot(omp)) return null;
+		const manifest = await this.#viewRelease(bun, String(major), await this.#updateEnv(omp));
+		const version = typeof manifest === "object" && manifest !== null ? Reflect.get(manifest, "version") : null;
+		return typeof version === "string" && majorOf(version) === major ? version : null;
 	}
 
 	/**

@@ -1,11 +1,12 @@
 /**
  * omp keeps itself current (src/main/omp-updater.ts): while OMPdesk runs it
  * asks stock `omp update --check` for the newest omp and installs, on its own,
- * only an omp runners verified against this OMPdesk release (the verified list,
- * src/shared/omp-compat.ts) or the omp it was tested with; a newer one waits
- * (`held`) until runners verify it, or for a person's "Update now". Each
- * computer, a paired host included, updates its own omp under its own pref,
- * always through its own updater: a client only asks the host to run it
+ * only an omp it may: by default one within the major it was tested with; with
+ * the hidden pref `ompFollowVerified`, only one runners verified against this
+ * OMPdesk release (the verified list, src/shared/omp-compat.ts) or the omp it
+ * was tested with. A newer one waits (`held`), or for a person's "Update now".
+ * Each computer, a paired host included, updates its own omp under its own
+ * pref, always through its own updater: a client only asks the host to run it
  * (`host.ompUpdate.now`) and follows the state the host pushes; it never runs
  * `omp update` there.
  */
@@ -13,15 +14,15 @@
 /**
  * Who started a pass. `launch` and `scheduled` are the timer's, `repair` is the bridge compatibility check's
  * (an omp that lacks what the bridge needs): nobody asked for those, so they run only under the pref and install
- * only a verified omp. `manual` is a person's "Update now", here or from a paired device.
+ * only an omp they may (`held`). `manual` is a person's "Update now", here or from a paired device.
  */
 export type OmpUpdateTrigger = "launch" | "scheduled" | "repair" | "manual";
 
 /**
  * Why a newer omp is not installed on its own:
+ * - `untested-major`: its major is above the tested omp's (the default, `ompFollowVerified` off).
  * - `verifying`: runners have not verified it against this OMPdesk release yet; it installs once they have.
  * - `failed`: runners found it breaks this OMPdesk release; it stays held until a fixed OMPdesk release verifies it.
- * - `untested-major`: said only by a paired host on OMPdesk 0.134, which held a major above its tested omp.
  */
 export type OmpUpdateHoldReason = "verifying" | "failed" | "untested-major";
 
@@ -29,9 +30,18 @@ export type OmpUpdateHoldReason = "verifying" | "failed" | "untested-major";
 export interface OmpUpdateHold {
 	version: string;
 	reason: OmpUpdateHoldReason;
-	/** `failed`: when runners first failed it (ISO 8601), so Settings can say for how long it has been held. */
+	/**
+	 * When the hold began (ISO 8601), so Settings and the notification can say for how long: `failed`, when runners
+	 * first failed it; `verifying`, when this computer first saw it held.
+	 */
 	since?: string;
 }
+
+/**
+ * Runners judge a new omp within the hour, so a `verifying` hold this old means the hourly run reached no verdict:
+ * the person is told (src/main/omp-hold-notice.ts) and Settings says how long it has waited.
+ */
+export const VERIFYING_OVERDUE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * - `check`: the registry lookup failed (`detail` is the reason).

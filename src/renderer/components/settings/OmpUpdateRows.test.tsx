@@ -14,6 +14,8 @@ import { ko } from "../../locales/ko";
 import { useOmpUpdateStore } from "../../stores/omp-update";
 import { OmpUpdateNowButton, OmpUpdateRows, OmpUpdateStatus } from "./OmpUpdateRows";
 
+const HOUR = 60 * 60 * 1000;
+
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
 	document,
@@ -199,7 +201,7 @@ describe("OmpUpdateRows", () => {
 		expect(status()).toBeUndefined();
 	});
 
-	it("reads a host on OMPdesk 0.134, which sends no verified list, by the tested major", async () => {
+	it("reads a host that sends no verified list (the default passes, and OMPdesk 0.134) by the tested major", async () => {
 		const onNewerMajor = { installed: "19.0.0", tested: "18.22.2" };
 		const held = { version: "19.0.1", reason: "untested-major" } as const;
 		await mount(ompUpdateState({ ...onNewerMajor, latest: "19.0.1", held }));
@@ -224,6 +226,19 @@ describe("OmpUpdateRows", () => {
 			ompUpdateState({ ...state, held: { version: "19.0.0", reason: "failed", since: new Date().toISOString() } }),
 		);
 		expect(heldNote()).toBe(translate("ompUpdate.held.failed", { latest: "19.0.0", installed: "18.22.2" }));
+	});
+
+	it("says how long a newer omp has waited for the checks once that is overdue (6 h), in hours and then days", async () => {
+		const heldNote = () => document.body.querySelector("[data-testid='omp-update-held']")?.textContent;
+		const state = { installed: "18.22.2", latest: "19.0.0", tested: "18.22.2", verified: [] };
+		const ago = (ms: number) => new Date(Date.now() - ms - 60_000).toISOString();
+		const params = { latest: "19.0.0", installed: "18.22.2", tested: "18.22.2" };
+		await mount(ompUpdateState({ ...state, held: { version: "19.0.0", reason: "verifying", since: ago(HOUR) } }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.verifying", params));
+		await push(ompUpdateState({ ...state, held: { version: "19.0.0", reason: "verifying", since: ago(7 * HOUR) } }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.verifyingHours", { ...params, hours: 7 }));
+		await push(ompUpdateState({ ...state, held: { version: "19.0.0", reason: "verifying", since: ago(50 * HOUR) } }));
+		expect(heldNote()).toBe(translate("ompUpdate.held.verifyingDays", { ...params, days: 2 }));
 	});
 
 	it("says omp's own auto-update is off only while OMPdesk holds it", async () => {
