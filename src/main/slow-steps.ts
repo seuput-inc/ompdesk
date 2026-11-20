@@ -118,6 +118,12 @@ export class SlowSteps {
 }
 
 let active: SlowSteps | null = null;
+let loopMax: (() => number) | null = null;
+
+/** The longest main's thread was kept from its timers in the last 5 to 10 s, in ms; null where no probe is installed. */
+export function loopMaxMs(): number | null {
+	return loopMax?.() ?? null;
+}
 
 /** Starts the probe for this process and the watch on main's own thread (index.ts, once the app is ready). */
 export function installSlowSteps(deps: SlowStepsDeps): void {
@@ -126,13 +132,16 @@ export function installSlowSteps(deps: SlowStepsDeps): void {
 	const delay = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
 	delay.enable();
 	let cpu = process.cpuUsage();
+	// The histogram holds each timer interval whole: the delay is what its longest ran past the resolution.
+	const lag = (): number => Math.max(0, delay.max / 1e6 - LOOP_RESOLUTION_MS);
+	let lastLagMs = 0;
+	loopMax = () => Math.round(Math.max(lastLagMs, lag()));
 	setInterval(() => {
 		const used = process.cpuUsage(cpu);
 		cpu = process.cpuUsage();
-		// The histogram holds each timer interval whole: the delay is what its longest ran past the resolution.
-		const lagMs = delay.max / 1e6 - LOOP_RESOLUTION_MS;
+		lastLagMs = lag();
 		delay.reset();
-		steps.loop(lagMs, (used.user + used.system) / 1_000);
+		steps.loop(lastLagMs, (used.user + used.system) / 1_000);
 	}, LOOP_CHECK_MS).unref();
 }
 

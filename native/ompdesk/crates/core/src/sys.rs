@@ -722,10 +722,19 @@ pub fn junction(target: &std::path::Path, link: &std::path::Path) -> std::io::Re
     set
 }
 
-/// This computer's physical memory and what of it is available, in bytes (`GlobalMemoryStatusEx`, which Electron's
-/// `process.getSystemMemoryInfo()` read).
+/// What `GlobalMemoryStatusEx` says of this computer, in bytes: physical memory and what of it is available, and the
+/// commit limit (RAM plus page files) with what of it is still free to promise.
 #[cfg(windows)]
-pub fn physical_memory() -> std::io::Result<(u64, u64)> {
+pub struct PhysicalMemory {
+    pub total: u64,
+    pub available: u64,
+    pub commit_limit: u64,
+    pub commit_available: u64,
+}
+
+/// This computer's memory now (`GlobalMemoryStatusEx`, which Electron's `process.getSystemMemoryInfo()` read).
+#[cfg(windows)]
+pub fn physical_memory() -> std::io::Result<PhysicalMemory> {
     /// `MEMORYSTATUSEX`.
     #[repr(C)]
     #[derive(Default)]
@@ -757,7 +766,124 @@ pub fn physical_memory() -> std::io::Result<(u64, u64)> {
     if unsafe { GlobalMemoryStatusEx(&raw mut status) } == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((status.total_phys, status.avail_phys))
+    Ok(PhysicalMemory {
+        total: status.total_phys,
+        available: status.avail_phys,
+        commit_limit: status.total_page_file,
+        commit_available: status.avail_page_file,
+    })
+}
+
+/// What Windows' performance counters say now: threads ready to run with no processor free, requests waiting on the
+/// disks, and the share of time the disks were busy since the look before. A counter Windows does not have, or has
+/// no value for yet, is absent.
+#[cfg(windows)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Queues {
+    pub run_queue: Option<f64>,
+    pub disk_queue: Option<f64>,
+    pub disk_busy_pct: Option<f64>,
+}
+
+/// One look at the counters (PDH). The query is opened at the first look and kept for the life of the process: a
+/// share of time is the difference between two looks.
+#[cfg(windows)]
+pub fn queues() -> Queues {
+    /// `PDH_FMT_COUNTERVALUE`, its union read as the double `PDH_FMT_DOUBLE` asks for.
+    #[repr(C)]
+    struct Value {
+        status: u32,
+        value: f64,
+    }
+
+    const _: () = assert!(size_of::<Value>() == 16);
+    const PDH_FMT_DOUBLE: u32 = 0x200;
+    /// `PDH_CSTATUS_VALID_DATA` is 0 and `PDH_CSTATUS_NEW_DATA` 1; every other status is no value.
+    const NEW_DATA: u32 = 1;
+    /// The busy share is what `% Idle Time` leaves: `% Disk Time` is the queue's length times 100, not a share.
+    const PATHS: [&str; 3] = [
+        r"\System\Processor Queue Length",
+        r"\PhysicalDisk(_Total)\Current Disk Queue Length",
+        r"\PhysicalDisk(_Total)\% Idle Time",
+    ];
+
+    // PDH's handles are pointer-sized; kept as integers so the open query can live in a static.
+    #[link(name = "pdh")]
+    unsafe extern "system" {
+        fn PdhOpenQueryW(source: *const u16, user_data: usize, query: *mut isize) -> u32;
+        fn PdhAddEnglishCounterW(
+            query: isize,
+            path: *const u16,
+            user_data: usize,
+            counter: *mut isize,
+        ) -> u32;
+        fn PdhCollectQueryData(query: isize) -> u32;
+        fn PdhGetFormattedCounterValue(
+            counter: isize,
+            format: u32,
+            kind: *mut u32,
+            value: *mut Value,
+        ) -> u32;
+    }
+
+    /// The open query and its counters in `PATHS`' order, 0 for one Windows would not add.
+    static QUERY: std::sync::Mutex<Option<(isize, [isize; 3])>> = std::sync::Mutex::new(None);
+
+    let Ok(mut held) = QUERY.lock() else {
+        return Queues::default();
+    };
+    let (query, counters) = match *held {
+        Some(open) => open,
+        None => {
+            let mut query = 0;
+            // SAFETY: a null source is the live counters; `query` is written only during the call.
+            if unsafe { PdhOpenQueryW(std::ptr::null(), 0, &raw mut query) } != 0 {
+                return Queues::default();
+            }
+            let counters = PATHS.map(|path| {
+                let path: Vec<u16> = path.encode_utf16().chain([0]).collect();
+                let mut counter = 0;
+                // SAFETY: `query` is the open query; `path` is NUL-terminated UTF-16 that outlives the call, and
+                // `counter` is written only during it.
+                let added =
+                    unsafe { PdhAddEnglishCounterW(query, path.as_ptr(), 0, &raw mut counter) };
+                if added == 0 { counter } else { 0 }
+            });
+            // The first look of a share of time has none behind it, so one is taken here and the first reading
+            // (a new core's, right after a lost one) covers these 100 ms.
+            // SAFETY: `query` is the open query.
+            unsafe { PdhCollectQueryData(query) };
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            *held.insert((query, counters))
+        }
+    };
+    // SAFETY: `query` is the open query, never closed.
+    if unsafe { PdhCollectQueryData(query) } != 0 {
+        return Queues::default();
+    }
+    let read = |counter: isize| {
+        let mut value = Value {
+            status: 0,
+            value: 0.0,
+        };
+        // SAFETY: `counter` belongs to the open query; `value` is a `PDH_FMT_COUNTERVALUE` laid out as C lays it out
+        // (`repr(C)`, size checked above), written only during the call; the counter's type is not asked for.
+        let status = unsafe {
+            PdhGetFormattedCounterValue(
+                counter,
+                PDH_FMT_DOUBLE,
+                std::ptr::null_mut(),
+                &raw mut value,
+            )
+        };
+        (counter != 0 && status == 0 && value.status <= NEW_DATA && value.value.is_finite())
+            .then_some(value.value)
+    };
+    Queues {
+        run_queue: read(counters[0]),
+        disk_queue: read(counters[1]),
+        disk_busy_pct: read(counters[2]).map(|idle| (100.0 - idle).clamp(0.0, 100.0)),
+    }
 }
 
 #[cfg(windows)]
@@ -939,11 +1065,13 @@ mod process_list {
     }
 
     /// One process of the list: `working_set` in bytes, 0 for the idle process and for one this user may not open;
-    /// `image` its executable's file name (`conhost.exe`).
+    /// `cpu_ms` the processor time it has used so far, kernel and user, absent for those too; `image` its
+    /// executable's file name (`conhost.exe`).
     pub struct ProcessEntry {
         pub pid: u32,
         pub parent: u32,
         pub working_set: u64,
+        pub cpu_ms: Option<u64>,
         pub image: String,
         /// When it started, in ms since the Unix epoch; read only when `processes` was asked to open each one.
         pub started_ms: Option<u64>,
@@ -980,7 +1108,8 @@ mod process_list {
         (read != 0).then_some(counters.working_set_size as u64)
     }
 
-    fn started_ms(process: &OwnedHandle) -> Option<u64> {
+    /// When the process started, in ms since the Unix epoch, and the processor time it has used, kernel and user, in ms.
+    fn times(process: &OwnedHandle) -> Option<(Option<u64>, u64)> {
         let mut times: [FileTime; 4] = Default::default();
         let [creation, exit, kernel, user] = &mut times;
         // SAFETY: `process` is an open handle; the four are `FILETIME`s laid out as C lays them out (`repr(C)`, size
@@ -990,8 +1119,15 @@ mod process_list {
         if read == 0 {
             return None;
         }
-        let ticks = (u64::from(times[0].high) << 32) | u64::from(times[0].low);
-        (ticks / 10_000).checked_sub(UNIX_EPOCH_MS)
+        let ticks = |time: &FileTime| (u64::from(time.high) << 32) | u64::from(time.low);
+        Some((
+            (ticks(&times[0]) / 10_000).checked_sub(UNIX_EPOCH_MS),
+            (ticks(&times[2]) + ticks(&times[3])) / 10_000,
+        ))
+    }
+
+    fn started_ms(process: &OwnedHandle) -> Option<u64> {
+        times(process)?.0
     }
 
     /// UTF-16 units out of little-endian bytes (Windows runs little-endian only).
@@ -1201,13 +1337,15 @@ mod process_list {
                 .iter()
                 .position(|unit| *unit == 0)
                 .unwrap_or(name.len());
+            let times = handle.and_then(times);
             entries.push(ProcessEntry {
                 pid,
                 parent: entry.parent_process_id,
                 working_set: handle.and_then(working_set).unwrap_or(0),
+                cpu_ms: times.map(|(_, cpu)| cpu),
                 image: String::from_utf16_lossy(&name[..end]),
                 started_ms: if open {
-                    handle.and_then(started_ms)
+                    times.and_then(|(started, _)| started)
                 } else {
                     None
                 },

@@ -159,11 +159,12 @@ import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./lo
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
+import { MachineState } from "./machine-state";
 import { MailAccounts, plainImapConnect } from "./mail-accounts";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
-import { testMemoryReading } from "./memory-sampler";
+import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
@@ -216,7 +217,7 @@ import { SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
-import { installSlowSteps } from "./slow-steps";
+import { installSlowSteps, loopMaxMs } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
 import { StatsClient } from "./stats-client";
@@ -859,12 +860,33 @@ app.whenReady().then(async () => {
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
 	markStartup("app-ready");
+	// A stall says how the computer and OMPdesk's own processes stood around it (machine-state.ts).
+	const machineState = new MachineState({
+		log: (message, details) => writeRuntimeLog({ source: "machine-state", message, details }),
+		read: () => Promise.all([readMemory(), listProcesses()]),
+		timeoutMs: SAMPLE_TIMEOUT_MS,
+		pids: () => {
+			const corePid = core().pid;
+			return {
+				main: process.pid,
+				// Under the window's shell main is its child (`OMPDESK_SHELL_SOCKET`, crates/shell/src/node.rs).
+				...(process.env.OMPDESK_SHELL_SOCKET ? { host: process.ppid } : {}),
+				...(corePid === null ? {} : { core: corePid }),
+			};
+		},
+		loopMaxMs,
+	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
 		reportPreviousHang();
 		installHangWatchdog();
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
-		installSlowSteps({ log: (message, details) => writeRuntimeLog({ source: "slow-step", message, details }) });
+		installSlowSteps({
+			log: (message, details) => {
+				writeRuntimeLog({ source: "slow-step", message, details });
+				machineState.slowStep(details);
+			},
+		});
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -903,7 +925,10 @@ app.whenReady().then(async () => {
 		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
 	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
-	core().report = (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details });
+	core().report = (step, details) => {
+		writeRuntimeLog({ source: "core-loss", message: step, details });
+		if (step === "abandoned") machineState.stalled("core-loss");
+	};
 	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
@@ -1317,6 +1342,12 @@ app.whenReady().then(async () => {
 		tabs: () => [...sidecarPool.memoryTabs(), ...hostServices.memoryTabs()],
 		owners: () => sessionProcesses.owners(),
 		log: (message, details) => writeRuntimeLog({ source: "memory", message, details }),
+		sampled: (reading, rows, tabs) =>
+			void machineState.sample(
+				reading,
+				rows,
+				tabs.flatMap(tab => (tab.pid === undefined ? [] : [tab.pid])),
+			),
 		...(testMemory ? { testReading: () => testMemoryReading(testMemory) } : {}),
 		...(ampleTestMemory
 			? {

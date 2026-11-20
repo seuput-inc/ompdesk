@@ -702,6 +702,13 @@ export type RuntimeErrorSource =
 	 */
 	| "turn-wait"
 	/**
+	 * How the computer and OMPdesk's own processes stood around a stall (src/main/machine-state.ts): `details.trigger`
+	 * is `core-loss`, `loop`, `hub` or `hang`, `when` the sample (`before`, `after`, or `during` a hang), then memory
+	 * (`availMB`, `commitPct`, `swapMB`, `pressure`), the processors (`cpuBusyPct`, `runQueue`, `load1`), the disks
+	 * (`diskQueue`, `diskBusyPct`) and OMPdesk's own share (`appCpuPct` and one per kind of process, `appMB`).
+	 */
+	| "machine-state"
+	/**
 	 * A routine's trigger (src/main/routines): a source that could not read what it watches (GitHub through `gh`, a
 	 * path that does not exist, a branch or repository git cannot read). Told once per distinct failure; `message`
 	 * names the routine and the source.

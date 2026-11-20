@@ -1,12 +1,14 @@
 //! This computer's memory, for idle release (was the OS reads and their rules in `src/main/memory-sampler.ts` and, on
 //! Windows, the stock helper's `process-memory.ts`): the OS's reading (`memory.reading`) and every process with its
-//! parent and resident bytes (`memory.processes`). Main keeps the watch's timer, the sessions' state and the choice
-//! of what to release (`memory-watch.ts`, `idle-release.ts`).
+//! parent, resident bytes and processor time (`memory.processes`). Main keeps the watch's timer, the sessions' state
+//! and the choice of what to release (`memory-watch.ts`, `idle-release.ts`). The reading also carries what tells a
+//! starved computer from a busy OMPdesk when something stalls (`machine-state.ts`): Windows' commit charge and its
+//! processor and disk queues (`sys.rs` `queues`, PDH), macOS' swap (`vm.swapusage`, on the same `sysctl`).
 //!
 //! macOS reads through the two programs the TypeScript ran: one `sysctl` for `kern.memorystatus_vm_pressure_level`
 //! (1 normal, 2 warn, 4 critical: the level `memory_pressure` and the kernel's jetsam act on),
 //! `kern.memorystatus_level` (the "memory free percentage" `memory_pressure` prints) and `hw.memsize`, and one
-//! `ps -axo pid=,ppid=,rss=`. Windows has no pressure level: `GlobalMemoryStatusEx`'s available physical memory and
+//! `ps -axo pid=,ppid=,rss=,time=`. Windows has no pressure level: `GlobalMemoryStatusEx`'s available physical memory and
 //! the share of RAM still available decide it, and the processes come from a Toolhelp32 snapshot with each one's
 //! working set (`sys.rs`; no WMI, which answers "call cancelled" on a loaded machine). Any other system (the Linux
 //! that runs the tests) reads `/proc/meminfo` under the Windows rule and runs `ps`.
@@ -36,6 +38,33 @@ pub struct Reading {
     /// physical memory.
     available_bytes: u64,
     pressure: Pressure,
+    #[serde(flatten)]
+    machine: Machine,
+}
+
+/// What the reading says beyond memory's level; each value absent where the system has none.
+#[derive(Debug, Default, PartialEq, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+#[serde(rename_all = "camelCase")]
+pub struct Machine {
+    /// Windows: the memory promised to processes, and the most that can be (RAM plus page files).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit_limit_bytes: Option<u64>,
+    /// macOS: the swap in use, and its size now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    swap_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    swap_total_bytes: Option<u64>,
+    /// Windows: threads ready to run with no processor free, requests waiting on the disks, and the share of time
+    /// the disks were busy since the reading before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_queue: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disk_queue: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disk_busy_pct: Option<f64>,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -48,6 +77,9 @@ pub struct ProcessRow {
     /// Image name (`conhost.exe`), Windows only: `ps` names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Processor time used so far, kernel and user, in ms; absent where the system would not say.
+    #[serde(rename = "cpuMs", default, skip_serializing_if = "Option::is_none")]
+    cpu_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -81,8 +113,9 @@ pub(crate) fn digits<T: std::str::FromStr>(text: &str) -> Option<T> {
     text.parse().ok()
 }
 
-/// `sysctl -n kern.memorystatus_vm_pressure_level kern.memorystatus_level hw.memsize`, one value a line; none when a
-/// value is missing. The percentage is a C `int`, so it may carry a minus sign: below zero is zero.
+/// `sysctl -n kern.memorystatus_vm_pressure_level kern.memorystatus_level hw.memsize vm.swapusage`, one value a line;
+/// none when one of the first three is missing. The percentage is a C `int`, so it may carry a minus sign: below zero
+/// is zero.
 #[cfg(any(target_os = "macos", test))]
 fn mac_reading(text: &str) -> Option<Reading> {
     let mut values = text.split_whitespace();
@@ -101,7 +134,31 @@ fn mac_reading(text: &str) -> Option<Reading> {
             "4" => Pressure::Critical,
             _ => Pressure::Normal,
         },
+        machine: Machine {
+            swap_bytes: swap_bytes(text, "used"),
+            swap_total_bytes: swap_bytes(text, "total"),
+            ..Machine::default()
+        },
     })
+}
+
+/// One amount of `vm.swapusage` (`total = 2048.00M  used = 1250.50M  free = 797.50M  (encrypted)`) in bytes; none
+/// when the line does not name it.
+#[cfg(any(target_os = "macos", test))]
+fn swap_bytes(text: &str, name: &str) -> Option<u64> {
+    let mut words = text.split_whitespace().skip_while(|word| *word != name);
+    let (_, equals, amount) = (words.next()?, words.next()?, words.next()?);
+    let (number, unit) = [('K', 1_u64 << 10), ('M', 1 << 20), ('G', 1 << 30)]
+        .into_iter()
+        .find_map(|(suffix, unit)| Some((amount.strip_suffix(suffix)?, unit)))?;
+    let plain = !number.is_empty()
+        && number
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.');
+    if equals != "=" || !plain {
+        return None;
+    }
+    Some((number.parse::<f64>().ok()? * unit as f64).round() as u64)
 }
 
 /// Windows: under 5 % of RAM available is critical and under 10 % a warning. Windows signals its own low-memory
@@ -123,10 +180,34 @@ fn share_reading(total_kb: u64, free_kb: u64) -> Option<Reading> {
         } else {
             Pressure::Normal
         },
+        machine: Machine::default(),
     })
 }
 
-/// `ps -axo pid=,ppid=,rss=` (rss in KB); a line that is not three numbers is no row.
+/// Processor time as `ps` prints it: macOS `12:34.56` (minutes, seconds), procps `[1-]02:03:04` (days, hours,
+/// minutes, seconds), in ms. A plain number is none of them.
+#[cfg(any(unix, test))]
+fn cpu_time_ms(text: &str) -> Option<u64> {
+    let (days, clock) = match text.split_once('-') {
+        Some((days, clock)) => (digits::<u64>(days)?, clock),
+        None => (0, text),
+    };
+    let mut parts = clock.rsplit(':');
+    let seconds = parts.next()?;
+    let minutes = digits::<u64>(parts.next()?)?;
+    let hours = parts.next().map_or(Some(0), digits::<u64>)?;
+    let plain = !seconds.is_empty()
+        && seconds
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.');
+    if parts.next().is_some() || !plain {
+        return None;
+    }
+    let whole = ((days * 24 + hours) * 60 + minutes).checked_mul(60_000)?;
+    whole.checked_add((seconds.parse::<f64>().ok()? * 1000.0).round() as u64)
+}
+
+/// `ps -axo pid=,ppid=,rss=,time=` (rss in KB); a line that does not start with three numbers is no row.
 #[cfg(any(unix, test))]
 fn parse_ps(text: &str) -> Vec<ProcessRow> {
     text.split('\n')
@@ -138,6 +219,7 @@ fn parse_ps(text: &str) -> Vec<ProcessRow> {
                 ppid: digits(ppid)?,
                 bytes: digits::<u64>(kb)?.checked_mul(1024)?,
                 name: None,
+                cpu_ms: fields.next().and_then(cpu_time_ms),
             })
         })
         .collect()
@@ -190,16 +272,28 @@ pub(crate) async fn blocking<T: Send + 'static>(
         .map_err(|error| Fault::new("memory_read", error.to_string()))
 }
 
-/// Physical memory and what of it is available, in whole KB.
+/// Physical memory and what of it is available, in whole KB, with the commit charge and the queues.
 #[cfg(windows)]
-fn physical_kb() -> std::io::Result<(u64, u64)> {
-    let (total, available) = crate::sys::physical_memory()?;
-    Ok((total / 1024, available / 1024))
+fn physical() -> std::io::Result<(u64, u64, Machine)> {
+    let memory = crate::sys::physical_memory()?;
+    let queues = crate::sys::queues();
+    Ok((
+        memory.total / 1024,
+        memory.available / 1024,
+        Machine {
+            commit_bytes: Some(memory.commit_limit.saturating_sub(memory.commit_available)),
+            commit_limit_bytes: Some(memory.commit_limit),
+            run_queue: queues.run_queue,
+            disk_queue: queues.disk_queue,
+            disk_busy_pct: queues.disk_busy_pct,
+            ..Machine::default()
+        },
+    ))
 }
 
 /// `MemTotal` and `MemFree`, the two Electron's `process.getSystemMemoryInfo()` answered there.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn physical_kb() -> std::io::Result<(u64, u64)> {
+fn physical() -> std::io::Result<(u64, u64, Machine)> {
     let text = std::fs::read_to_string("/proc/meminfo")?;
     let field = |name: &str| {
         text.lines().find_map(|line| {
@@ -207,9 +301,10 @@ fn physical_kb() -> std::io::Result<(u64, u64)> {
             (fields.next()? == name).then(|| digits::<u64>(fields.next()?))?
         })
     };
-    field("MemTotal:")
+    let (total_kb, free_kb) = field("MemTotal:")
         .zip(field("MemFree:"))
-        .ok_or_else(|| std::io::Error::other("/proc/meminfo names no MemTotal and MemFree"))
+        .ok_or_else(|| std::io::Error::other("/proc/meminfo names no MemTotal and MemFree"))?;
+    Ok((total_kb, free_kb, Machine::default()))
 }
 
 /// The OS's reading now; none when its values are missing.
@@ -222,6 +317,7 @@ async fn reading(timeout_ms: u64, scope: Scope) -> Result<Option<Reading>, Fault
             "kern.memorystatus_vm_pressure_level",
             "kern.memorystatus_level",
             "hw.memsize",
+            "vm.swapusage",
         ],
         // `execFile`'s default `maxBuffer`.
         1024 * 1024,
@@ -235,8 +331,8 @@ async fn reading(timeout_ms: u64, scope: Scope) -> Result<Option<Reading>, Fault
 /// The OS's reading now; none when it reports no memory at all.
 #[cfg(not(target_os = "macos"))]
 async fn reading(_timeout_ms: u64, _scope: Scope) -> Result<Option<Reading>, Fault> {
-    let (total_kb, free_kb) = blocking(physical_kb).await?;
-    Ok(share_reading(total_kb, free_kb))
+    let (total_kb, free_kb, machine) = blocking(physical).await?;
+    Ok(share_reading(total_kb, free_kb).map(|reading| Reading { machine, ..reading }))
 }
 
 /// Every process with its parent and resident bytes.
@@ -244,7 +340,7 @@ async fn reading(_timeout_ms: u64, _scope: Scope) -> Result<Option<Reading>, Fau
 async fn processes(timeout_ms: u64, scope: Scope) -> Result<Vec<ProcessRow>, Fault> {
     let text = program(
         "/bin/ps",
-        &["-axo", "pid=,ppid=,rss="],
+        &["-axo", "pid=,ppid=,rss=,time="],
         8 * 1024 * 1024,
         timeout_ms,
         scope,
@@ -253,7 +349,8 @@ async fn processes(timeout_ms: u64, scope: Scope) -> Result<Vec<ProcessRow>, Fau
     Ok(parse_ps(&text))
 }
 
-/// Every process with its parent, working set and image name. A process this user may not open counts 0 bytes.
+/// Every process with its parent, working set, processor time and image name. A process this user may not open
+/// counts 0 bytes and names no time.
 #[cfg(windows)]
 async fn processes(_timeout_ms: u64, _scope: Scope) -> Result<Vec<ProcessRow>, Fault> {
     let entries = blocking(|| crate::sys::processes(false)).await?;
@@ -264,6 +361,7 @@ async fn processes(_timeout_ms: u64, _scope: Scope) -> Result<Vec<ProcessRow>, F
             ppid: entry.parent,
             bytes: entry.working_set,
             name: Some(entry.image),
+            cpu_ms: entry.cpu_ms,
         })
         .collect())
 }
@@ -333,6 +431,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reads_swap_as_sysctl_prints_it() {
+        let swap = "total = 2048.00M  used = 1250.50M  free = 797.50M  (encrypted)";
+        let machine = mac_reading(&format!("1\n80\n17179869184\n{swap}\n"))
+            .unwrap()
+            .machine;
+        assert_eq!(machine.swap_bytes, Some(1_311_244_288));
+        assert_eq!(machine.swap_total_bytes, Some(2048 << 20));
+        assert_eq!(
+            swap_bytes("total = 1.50G  used = 512K", "total"),
+            Some(3 << 29)
+        );
+        assert_eq!(
+            swap_bytes("total = 1.50G  used = 512K", "used"),
+            Some(512 << 10)
+        );
+        // A reading without the line is still a reading: an older `sysctl` answer, a wording this does not know.
+        for text in [
+            "",
+            "used 5M",
+            "used = 5",
+            "used = M",
+            "used = 1e3M",
+            "used = -5M",
+        ] {
+            assert_eq!(swap_bytes(text, "used"), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn reads_processor_time_as_ps_prints_it() {
+        for (text, ms) in [
+            ("0:00.05", Some(50)),
+            ("12:34.56", Some(754_560)),
+            ("1234:05.00", Some(74_045_000)),
+            ("01:02:03", Some(3_723_000)),
+            ("2-01:02:03", Some(176_523_000)),
+            ("4", None),
+            ("", None),
+            ("1:2:3:4", None),
+            ("a:01", None),
+            ("1:1e3", None),
+            ("-1:02", None),
+        ] {
+            assert_eq!(cpu_time_ms(text), ms, "{text:?}");
+        }
+        let rows = parse_ps("  1  0  12  0:01.50\n2 1 34 00:00:02\n3 1 56");
+        let times: Vec<_> = rows.iter().map(|row| row.cpu_ms).collect();
+        assert_eq!(times, [Some(1_500), Some(2_000), None]);
+    }
+
     #[tokio::test]
     async fn reads_this_computer() {
         let reading = reading(4_000, Scope::detached())
@@ -351,6 +500,7 @@ mod tests {
             .find(|row| row.pid == std::process::id())
             .expect("this process is listed");
         assert!(own.bytes >= 1 << 20, "{own:?}");
+        assert!(own.cpu_ms.is_some(), "{own:?}");
         #[cfg(unix)]
         {
             assert_eq!(own.ppid, std::os::unix::process::parent_id());
@@ -367,6 +517,27 @@ mod tests {
                 "{own:?}"
             );
             assert!(rows.iter().any(|row| row.pid == own.ppid), "{own:?}");
+            let machine = &reading.machine;
+            assert!(machine.commit_limit_bytes > Some(0), "{machine:?}");
+            assert!(
+                machine.commit_bytes <= machine.commit_limit_bytes,
+                "{machine:?}"
+            );
+            // The System object's counter is on every Windows; a computer may have no PhysicalDisk object.
+            assert!(
+                machine.run_queue.is_some_and(|queue| queue >= 0.0),
+                "{machine:?}"
+            );
+            assert!(
+                machine.disk_queue.is_none_or(|queue| queue >= 0.0),
+                "{machine:?}"
+            );
+            assert!(
+                machine
+                    .disk_busy_pct
+                    .is_none_or(|busy| (0.0..=100.0).contains(&busy)),
+                "{machine:?}"
+            );
         }
     }
 }
