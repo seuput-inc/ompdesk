@@ -428,15 +428,17 @@ function fromJournal(session: NextPromptSession): Kept | null {
 }
 
 /** The session's last suggestion, read from the journal the first time this omp is asked about the session. */
-function lastFor(session: NextPromptSession): NextPromptLast | undefined {
-	const key = sessionKey(session);
+function keptFor(session: NextPromptSession, key: string): Kept | null {
 	let entry = kept.get(key);
 	if (entry === undefined) {
 		entry = fromJournal(session);
 		keep(key, entry);
-		// Made for the moment this omp sees too: a trigger that finds the moment unchanged asks the model nothing.
-		if (entry?.key && !lastKeys.has(key) && moment(session).key === entry.key) remember(key, entry.key);
 	}
+	return entry;
+}
+
+function lastFor(session: NextPromptSession): NextPromptLast | undefined {
+	const entry = keptFor(session, sessionKey(session));
 	if (!entry) return undefined;
 	return {
 		...(entry.id ? { id: entry.id } : {}),
@@ -624,7 +626,7 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 		draftEmpty,
 		main: true,
 		hasReply: messages.some(message => message.role === "assistant"),
-		lastKey: lastKeys.get(key),
+		lastKey: lastKeys.get(key) ?? (trigger === "refresh" ? undefined : keptFor(session, key)?.key),
 		key: stateKey,
 		force: trigger === "refresh",
 	});

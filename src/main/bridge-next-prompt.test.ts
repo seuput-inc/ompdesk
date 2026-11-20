@@ -493,16 +493,16 @@ describe("the session's last suggestion (a page that reloads, a tab shown again,
 		const again = build();
 		withJournal(again, journal);
 		await handlers.next_prompt_set({ suggestions: true, inline: true }, again.env);
-		expect((await state(again)).last).toMatchObject({
-			id: frame?.id,
-			candidates: ["commit it", "push it", "run the linter"],
-		});
-		// The moment is the same: an emptied draft asks the model nothing.
+		// A draft event may reach the restored session before the renderer fetches the saved suggestion.
 		await handlers.next_prompt_draft({ empty: false }, again.env);
 		await handlers.next_prompt_draft({ empty: true }, again.env);
 		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
 		await flush();
 		expect(again.calls).toHaveLength(0);
+		expect((await state(again)).last).toMatchObject({
+			id: frame?.id,
+			candidates: ["commit it", "push it", "run the linter"],
+		});
 	});
 
 	it("never answers a journaled one a later message made stale", async () => {
