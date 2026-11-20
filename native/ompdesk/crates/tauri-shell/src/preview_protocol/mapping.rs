@@ -274,10 +274,10 @@ fn unhex(value: &str) -> Result<[u8; 32], String> {
         return Err("Invalid app media capability".into());
     }
     let mut bytes = [0; 32];
-    for (pair, byte) in value.as_bytes().chunks_exact(2).zip(&mut bytes) {
+    for (&[high, low], byte) in value.as_bytes().as_chunks::<2>().0.iter().zip(&mut bytes) {
         let digit = |b: u8| char::from(b).to_digit(16).map(|v| v as u8);
-        *byte = digit(pair[0])
-            .zip(digit(pair[1]))
+        *byte = digit(high)
+            .zip(digit(low))
             .map(|(high, low)| (high << 4) | low)
             .ok_or("Invalid app media capability")?;
     }

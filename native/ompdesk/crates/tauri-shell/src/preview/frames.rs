@@ -131,7 +131,7 @@ impl Pixels {
         if (image.width, image.height) != (self.width, self.height) {
             return Err(invalid("painted PNG dimensions changed"));
         }
-        for pixel in image.data.chunks_exact_mut(4) {
+        for pixel in image.data.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         frame::encode(
