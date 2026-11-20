@@ -22,6 +22,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import aiMemorySource from "../native/memory/ompdesk.json" with { type: "json" };
 import cefPin from "../native/ompdesk/crates/shell/cef-pin.json" with { type: "json" };
+import ponytailPin from "../resources/omp-builtin/ponytail/ponytail-config.json" with { type: "json" };
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
 import { committedCrateList } from "./gen-crate-notices";
 import nodePin from "./node-runtime-pin.json" with { type: "json" };
@@ -308,6 +309,13 @@ function vendoredSections(): string {
 			`Copyright (c) 2026 Affaan Mustafa, licensed under the MIT License. Skills and prompt commands copied from the ecc-pi-core ${eccPin.version} profile (pi/core, commit ${eccPin.commit}) into resources/omp-builtin/ecc/ by scripts/sync-ecc.ts. Changes: every skill is hidden from the model's skill list and reached through one generated index skill (ecc); the plan command is renamed ecc-plan; skills that duplicate the built-in pstack workflow are left out, references to them point at pstack's counterparts; Claude Code names and paths are replaced by omp ones. The license text is also in resources/omp-builtin/ecc/UPSTREAM-LICENSE.`,
 			"",
 			eccLicense,
+		].join("\n"),
+		[
+			`Ponytail ${ponytailPin.version} (https://github.com/DietrichGebert/ponytail, commit ${ponytailPin.commit})`,
+			"Six unmodified skill documents in resources/omp-builtin/ponytail/skills/. No plugin or hooks are bundled.",
+			"Licensed under the MIT License (full text below and in LICENSES/MIT-ponytail.txt).",
+			"",
+			read("LICENSES/MIT-ponytail.txt"),
 		].join("\n"),
 		[
 			"AI provider brand symbols of @lobehub/icons (@lobehub/icons-static-svg 1.95.1;",
