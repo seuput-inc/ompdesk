@@ -39,6 +39,7 @@
     "test:e2e": "playwright test",
     "gate": "bun scripts/gate.ts",
     "check:changed": "bun scripts/check-changed.ts",
+    "check:release-ci": "bun scripts/ci-run.ts ci -f batch=true -f mac=true -f installer_check=true -f legacy_tag=fixture",
     "locked": "bun scripts/build-lock.ts",
     "lock-stats": "bun scripts/lock-stats.ts",
     "flake": "bun scripts/flake.ts",
