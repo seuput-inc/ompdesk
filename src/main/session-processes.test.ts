@@ -523,4 +523,53 @@ describe("which tags end, and when", () => {
 			12,
 		]);
 	});
+
+	// The owner's answer of 20 Nov 2026: OMPdesk ends by itself a process whose output's other end is confirmed closed
+	// and that keeps using CPU; a compiling dev server, busy for a while, must never be taken for one.
+	it("by default ends a process whose output's peer is closed once it spins in every sample over a minute", async () => {
+		const row = (pid: number, cpuPercent: number, startedMs = 1): TaggedProcess => ({
+			pid,
+			ppid: 1,
+			bytes: 0,
+			startedMs,
+			name: "next-server",
+			tag: "1".padStart(32, "0"),
+			outputClosed: "closed",
+			cpuPercent,
+		});
+		held().sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
+		// 20 spins throughout; 21 stops (a compile that finished); 22's pid names a later process by the last sample.
+		const samples = [
+			[row(20, 99), row(21, 100), row(22, 98)],
+			[row(20, 100), row(21, 100), row(22, 99)],
+			[row(20, 99), row(21, 3), row(22, 99, 2)],
+		];
+		const waits: Array<() => void> = [];
+		const pids: number[] = [];
+		const sessions = new SessionProcesses(file, {
+			frozen: () => false,
+			log: (message, details) => logs.push({ message, details }),
+			later: run => waits.push(run),
+			survey: async () => samples.shift() ?? [],
+			endOnly: async (_tags, only) => {
+				pids.push(...only.map(process => process.pid));
+				return {
+					ended: only.map(({ pid }) => ({ pid, name: "next-server", bytes: 0, forced: false })),
+					left: [],
+					kept: [],
+					own: [],
+				};
+			},
+		});
+		const swept = sessions.sweep({ keep: new Set(["/s/a.jsonl"]), hostedHeld: () => false, hostedGraceMs: 0 });
+		for (let turn = 0; turn < 20 && samples.length > 0; turn++) {
+			await new Promise(resolve => setImmediate(resolve));
+			for (const run of waits.splice(0)) run();
+		}
+		await swept;
+		await sessions.settled();
+		expect(pids).toEqual([20]);
+		const end = logs.find(entry => entry.message === "ended");
+		expect(String(end?.details.found)).toContain('"pid":20');
+	});
 });
