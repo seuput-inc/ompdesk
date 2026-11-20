@@ -184,6 +184,7 @@ function idsBySource(info: Rollup.ModuleInfo): Map<string, string> | null {
 const reexportsOnly = (body: readonly ModuleNode[]): boolean =>
 	body.every(
 		node =>
+			(node.type === "ExpressionStatement" && "directive" in node && node.directive === "use strict") ||
 			node.type === "ImportDeclaration" ||
 			node.type === "ExportAllDeclaration" ||
 			(node.type === "ExportNamedDeclaration" && !node.declaration),

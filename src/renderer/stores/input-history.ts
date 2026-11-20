@@ -1,6 +1,6 @@
-import { z } from "zod";
 import { create } from "zustand";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
+import { z } from "../lib/rpc-schema";
 import { reportRuntimeError } from "../lib/runtime-errors";
 import { focusedTabRpc, type TabRpc } from "../lib/tab-rpc";
 import { isSessionReplaced } from "./session-runtime-context";
@@ -34,7 +34,7 @@ export function filterHistory(entries: InputHistoryEntry[], query: string, limit
 		.slice(0, Math.max(0, limit));
 }
 
-const historySchema = z.array(z.object({ prompt: z.string(), created_at: z.number(), cwd: z.string().optional() }));
+const historySchema = z.array(z.object({ prompt: z.string(), created_at: z.number(), cwd: z.optional(z.string()) }));
 function stockEntries(data: unknown, device?: string): InputHistoryEntry[] {
 	return historySchema
 		.parse(data)
@@ -76,7 +76,7 @@ async function migratePrefs(rpc: TabRpc): Promise<void> {
 			const entry =
 				typeof item === "string"
 					? { prompt: item }
-					: z.object({ prompt: z.string(), cwd: z.string().optional() }).safeParse(item).data;
+					: z.object({ prompt: z.string(), cwd: z.optional(z.string()) }).safeParse(item).data;
 			if (!entry?.prompt.trim() || (await stockHolds(rpc, entry.prompt, recent))) continue;
 			const result = await rpc.historyRecord(entry.prompt, entry.cwd);
 			if (!result.success) throw new Error(result.error);
