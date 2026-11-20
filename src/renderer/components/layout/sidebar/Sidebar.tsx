@@ -129,7 +129,6 @@ import {
 	SkeletonRows,
 	TimeAgo,
 } from "../../common";
-import { WorkspaceDialog } from "../../dialogs/WorkspaceDialog";
 import { StarterGuide } from "../../onboarding/StarterGuide";
 import { ForkParent } from "../ForkParent";
 import { workingAgentCount } from "../live-work";
@@ -478,7 +477,6 @@ export function Sidebar() {
 	// consequence before anything is removed.
 	const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 	const [renamingSessionPath, setRenamingSessionPath] = useState<string | null>(null);
-	const [workspaceDialog, setWorkspaceDialog] = useState<"switch" | "new-session" | null>(null);
 	const [renameDraft, setRenameDraft] = useState("");
 	const [groupMenu, setGroupMenu] = useState<{ anchor: ContextMenuAnchor; group: WorkspaceGroup } | null>(null);
 	const [sessionMenu, setSessionMenu] = useState<{ anchor: ContextMenuAnchor; session: SidebarSession } | null>(null);
@@ -2118,7 +2116,7 @@ export function Sidebar() {
 							<span>{t("sidebar.emptyCode")}</span>
 							<Button
 								icon={<FolderOpen />}
-								onClick={() => setWorkspaceDialog("new-session")}
+								onClick={() => useUiStore.getState().openProjectPicker("new-session")}
 								size="sm"
 								variant="ghost"
 							>
@@ -2371,13 +2369,6 @@ export function Sidebar() {
 					tabIndex={0}
 				/>
 			</aside>
-			<WorkspaceDialog
-				intent={workspaceDialog ?? "switch"}
-				onClose={() => setWorkspaceDialog(null)}
-				open={workspaceDialog !== null}
-				thisDevice
-			/>
-
 			{/* Project menu: the one builder every computer's project headers use (project-menu.ts). */}
 			{groupMenu &&
 				(() => {

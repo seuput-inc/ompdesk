@@ -272,7 +272,7 @@ export function App() {
 						branchPickerOpen: false,
 						quickOpenOpen: false,
 						tabOverviewOpen: false,
-						projectPickerOpen: false,
+						projectPickerIntent: null,
 					});
 				},
 				canRetryOnInteraction: () => useUiStore.getState().btwRequest === null,
@@ -668,7 +668,7 @@ export function App() {
 					ui.branchPickerOpen ||
 					ui.quickOpenOpen ||
 					ui.tabOverviewOpen ||
-					ui.projectPickerOpen);
+					ui.projectPickerIntent !== null);
 			const overlayOpen =
 				onDemandOpen || ui.destination !== "session" || ui.benchmarkOpen || ui.modelSetupOpen || ui.tabSwitcherOpen;
 			if (event.key === "Escape") {

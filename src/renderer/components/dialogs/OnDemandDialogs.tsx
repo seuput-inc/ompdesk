@@ -25,7 +25,7 @@ import { WorktreeCloseDialog } from "./WorktreeCloseDialog";
 import { WorktreeDialog } from "./WorktreeDialog";
 
 export function OnDemandDialogs() {
-	const workspaceOpen = useUiStore(state => state.projectPickerOpen);
+	const workspaceIntent = useUiStore(state => state.projectPickerIntent);
 	return (
 		<>
 			<CommandPalette />
@@ -45,7 +45,12 @@ export function OnDemandDialogs() {
 			<ShareSessionDialog />
 			<ForceToolDialog />
 			<HandoffDialog />
-			<WorkspaceDialog onClose={() => useUiStore.getState().closeProjectPicker()} open={workspaceOpen} />
+			<WorkspaceDialog
+				intent={workspaceIntent ?? "switch"}
+				onClose={() => useUiStore.getState().closeProjectPicker()}
+				open={workspaceIntent !== null}
+				thisDevice={workspaceIntent === "new-session"}
+			/>
 		</>
 	);
 }

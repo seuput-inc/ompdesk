@@ -283,6 +283,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("github-auth:fill-identity", Risk::Never(OPERATOR)),
     ("github-auth:product-star", Risk::Never(OPERATOR)),
     ("remote:get-state", Risk::Tier(Read, &["remote.devices"])),
+    ("remote:set-device-section-order", Risk::Never(DENY)),
     ("remote:set-host-enabled", Risk::Never(OPERATOR)),
     (
         "remote:set-device-name",
