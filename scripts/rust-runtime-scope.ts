@@ -14,9 +14,17 @@ const entries = {
 		"src/renderer/web/sw.ts",
 		"native/ompdesk/crates/tauri-shell/src/ipc_post_message.js",
 	],
-	stock: ["resources/gui-bridge/index.ts", "resources/gui-bridge/memory-judge-host.ts"],
+	stock: [
+		"resources/gui-bridge/index.ts",
+		"resources/gui-bridge/memory-judge-host.ts",
+		"resources/gui-bridge/credit-spend-run.ts",
+		"resources/gui-bridge/ponytail.ts",
+		// agent-control.ts lazy-loads this module through a nonliteral import.
+		"resources/gui-bridge/agent-control-blobs.ts",
+	],
 	worker: ["resources/gui-bridge/stock-helper/host.ts"],
 	stats: ["resources/gui-bridge/stats-host.ts"],
+	catalog: ["resources/gui-bridge/boot-model.ts"],
 	mcp: ["resources/gui-bridge/mcp-hub.ts"],
 };
 const sourceDirs = ["src", "resources/gui-bridge", "native/ompdesk/crates/tauri-shell/src"];

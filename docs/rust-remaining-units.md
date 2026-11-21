@@ -4,17 +4,18 @@
 
 The packaged Tauri shell still starts Node. In `native/ompdesk/crates/tauri-shell/src/main.rs`, the shell checks for `app/out/main/index.js`, reads `out/preload/tauri.js`, calls `node::spawn`, and forwards quit requests to Node. The app cannot start without that main entry. The release checks for both platforms require `tauri.js` and exclude the legacy `shell.js`. The injected page API is browser code, not a Node dependency.
 
-Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-file import graph. It includes tracked TypeScript and JavaScript in `src`, `resources/gui-bridge`, and `native/ompdesk/crates/tauri-shell/src`. At `eda57c5ed` it lists 3,077 paths:
+Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-file import graph. It includes tracked TypeScript and JavaScript in `src`, `resources/gui-bridge`, and `native/ompdesk/crates/tauri-shell/src`. The v0.137.1 Node graph contained 486 files, including 380 in `src/main`. At `094bd8f43`, after removing the test-only PNG decoder from the host, the inventory lists 3,075 paths:
 
 | Importing runtime | Paths | Migration boundary |
 |---|---:|---|
-| Node main or its hang watchdog | 486 | 380 are in `src/main`. Move the host implementation and its callers before removing Node. |
+| Node main or its hang watchdog | 485 | 379 are in `src/main`. Move the host implementation and its callers before removing Node. |
 | Desktop or paired page, including preload | 1,024 | Keep browser APIs and UI in the page. 78 paths are also imported by Node. Moving one caller does not retire a shared module. |
-| Stock omp extension or memory judge extension | 317 | Keep calls that need the live `AgentSession` in the extension. Inspect OMPdesk-owned I/O separately. |
+| Stock omp extensions and their lazy imports | 320 | Includes the stand-alone credit switch, memory judge and Ponytail registration. Keep calls that need the live `AgentSession` in the extension. Inspect OMPdesk-owned I/O separately. |
 | Stock helper worker | 23 | Keep stock API calls in the worker. Rust already owns its process lifetime. |
 | Stats host | 2 | The standalone Bun process loads stock's stats implementation. It is not the desktop Node process. |
+| Boot model lookup | 2 | A separate Bun invocation reads the installed stock catalog when a session has no default model. |
 | MCP hub | 4 | A separate Bun process. Its local HTTP and subprocess work is eligible for Rust; the actual tool implementation is a separate dependency. |
-| No static import from these entries | 1,349 | Includes tests, types, dynamic paths, and other build inputs. An absent import is not proof that a file is dead. |
+| No static import from these entries | 1,344 | Includes tests, types, dynamic paths, and other build inputs. An absent import is not proof that a file is dead. |
 
 Counts overlap. The command follows literal imports, including conditional test code, and excludes packages and assets. It does not measure which branches executed. Build scripts, verification tools, and third-party packages are outside this count.
 
