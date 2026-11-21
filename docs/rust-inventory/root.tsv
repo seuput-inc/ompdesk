@@ -200,6 +200,8 @@ src/main/bridge-turn-origin.test.ts	tooling	-	Vitest suite: who started the main
 src/main/bridge-turn-stages-stock.test.ts	tooling	-	Vitest suite: writes no line for a normal turn and names the stage of each way a turn waits.
 src/main/bridge-turn-stages.test.ts	tooling	-	Vitest suite: TurnStageRecorder.
 src/main/bridge-usage-live-stock.test.ts	tooling	-	Vitest suite: reads Settings' accounts from the base-URL entry every other usage reader shares, refreshes stale ones through invalidate, and never blanks a failed one.
+src/main/bridge-usage-standing-stock.test.ts	tooling	-	Checks usage standing against installed stock omp.
+src/main/bridge-usage-standing.test.ts	tooling	-	Tests the account-wide usage standing rules.
 src/main/bridge-user-profile.test.ts	tooling	-	Vitest suite: user profile contracts.
 src/main/bridge-visuals.test.ts	tooling	-	Vitest suite: gui-bridge diagram instructions.
 src/main/bridge-waste-guards-stock.test.ts	tooling	-	Vitest suite: refuses a ready.log that cannot match at once, without running the command.
@@ -481,6 +483,7 @@ src/main/tab-release.ts	port	3	closeWindowTab coordinates viewer detach or real 
 src/main/tab-spawn.test.ts	tooling	-	Vitest suite: spawnTabForWindow refusal contracts.
 src/main/tab-spawn.ts	port	3	spawnTabForWindow validates stored-session ownership and kind, determines folder state and attaches a tab for the requesting window.
 src/main/test-bridge-probe.ts	tooling	-	runBridgeProbe and runStock prepare isolated bridge fixtures against installed stock omp.
+src/main/test-codex-picker.ts	tooling	-	Builds synthetic account fixtures for picker tests.
 src/main/test-fake-judge.ts	tooling	-	fakeJudge records judge requests and returns test-controlled answers.
 src/main/test-fake-omp.ts	tooling	-	writeFakeOmp/writeFakeBin create platform-specific test launchers tied to the test runner's lifetime.
 src/main/test-folders.ts	tooling	-	removeWhenFree retries test-folder cleanup after transient filesystem locks.
@@ -491,6 +494,7 @@ src/main/test-mojibake.ts	tooling	-	garbled reinterprets UTF-8 bytes with the fi
 src/main/test-npm-registry.ts	tooling	-	npmRegistry serves mutable package tags and installer-compatible tarballs for tests.
 src/main/test-omp-registry.ts	tooling	-	ompRegistry serves fake stock omp releases with changing latest tags and real tarballs.
 src/main/test-skills-registry.ts	tooling	-	skillsRegistry serves Skillshare manifests, package tarballs and integrity metadata for installer tests.
+src/main/test-stock-browser-session.ts	tooling	-	Starts isolated stock browser relay sessions for tests.
 src/main/test-stock-rpc.ts	tooling	-	StockRpc correlates requests and responses for tests driving raw omp without a native sidecar lane.
 src/main/test-symlinks.ts	tooling	-	itWithFileSymlinks gates filesystem tests on a real unprivileged symlink capability probe.
 src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transcript over the live sidecar bridge for turn-edit parity and restart tests.
