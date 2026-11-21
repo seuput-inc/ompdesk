@@ -16,7 +16,6 @@ import {
 	assertUpdateSupported,
 	NO_RELEASE_ERROR,
 	type PlatformRelease,
-	pickRelease,
 	RELEASE_LOOKUP_ERROR,
 	ReleaseFeedError,
 	resolvePlatformRelease,
@@ -107,10 +106,7 @@ export function releaseUpdateProvider(feed: ReleaseFeed) {
 
 		async getLatestVersion(): Promise<UpdateInfo> {
 			this.#release = undefined;
-			const release = resolvePlatformRelease(
-				pickRelease(await fetchRelease(feed), feed.allowPrerelease),
-				feed.platform,
-			);
+			const release = await resolvePlatformRelease(await fetchRelease(feed), feed.platform, feed.allowPrerelease);
 			assertUpdateSupported(release, feed.systemVersion ?? osRelease());
 			this.#release = release;
 			feed.onResolved(release);

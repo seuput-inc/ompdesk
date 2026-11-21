@@ -42,6 +42,7 @@ pub mod stock;
 pub mod supervise;
 mod sys;
 pub mod tailscale;
+mod update_feed;
 pub mod upkeep;
 pub mod web;
 pub mod wire;

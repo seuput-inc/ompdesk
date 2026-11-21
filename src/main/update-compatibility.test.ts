@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { stopCore } from "./core/process";
 import { type ReleaseFeed, releaseUpdateProvider } from "./update-provider";
 import { UPDATE_COMPATIBILITY_ERROR, UPDATE_METADATA_ERROR } from "./update-release";
 import { releaseUpdateProvider as frozenProvider } from "./update-release.fixtures/v0.131.0/update-provider";
 import { parseUpdateMetadata as parseFrozenMetadata } from "./update-release.fixtures/v0.131.0/update-release";
+
+afterAll(stopCore);
 
 const API = "https://api.github.com/repos/seuput-inc/ompdesk";
 const digest = (value: string) => createHash("sha512").update(value).digest("base64");
@@ -86,9 +89,12 @@ describe("released and current updater compatibility", () => {
 	it.each(["21.0.0", "22.0.0", "invalid", "23.0.0-beta", ""])(
 		"rejects Darwin %s before exposing a resolved release or an admitted file",
 		async systemVersion => {
-			const { feed, resolved } = makeFeed("mac", systemVersion);
+			const { feed, requests, resolved } = makeFeed("mac", systemVersion);
 			const provider = providerFor(releaseUpdateProvider, feed);
-			await expect(provider.getLatestVersion()).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
+			await expect(provider.getLatestVersion()).rejects.toMatchObject({
+				code: UPDATE_COMPATIBILITY_ERROR,
+				message: `Update ${metadata.version} requires Darwin 23.0.0; this system reports ${systemVersion}`,
+			});
 			expect(resolved).toEqual([]);
 			expect(() =>
 				provider.resolveFiles({
@@ -99,6 +105,7 @@ describe("released and current updater compatibility", () => {
 					sha512: mac.sha512,
 				}),
 			).toThrow();
+			expect(requests).toEqual([{ url: `${API}/releases/latest`, headers }]);
 		},
 	);
 
