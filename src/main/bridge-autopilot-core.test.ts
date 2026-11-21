@@ -295,33 +295,34 @@ describe("releases", () => {
 		const commit = (subject: string, minutesAgo = 5) => ({ subject, at: at(minutesAgo) });
 		// Internal work alone never ships, however much of it.
 		const internal = [commit("docs: a"), commit("test: b"), commit("refactor: c"), commit("ci: d")];
-		expect(releaseReadiness(internal, now)).toMatchObject({ due: false, userVisible: [], internal: 4 });
+		expect(releaseReadiness(internal)).toMatchObject({ due: false, userVisible: [], internal: 4 });
 		// Two fixes minutes after a release: not yet. A third makes a batch, released at once.
 		const two = [...internal, commit("fix(toast): scroll"), commit("feat: picker")];
-		expect(releaseReadiness(two, now)).toMatchObject({
+		expect(releaseReadiness(two)).toMatchObject({
 			due: false,
 			userVisible: ["fix(toast): scroll", "feat: picker"],
 		});
-		expect(releaseReadiness([...two, commit("perf: page budget")], now)).toMatchObject({ due: true });
+		expect(releaseReadiness([...two, commit("perf: page budget")])).toMatchObject({ due: true });
 		// One urgent fix ships on its own; urgency names a reason, and needs something user-visible to ship.
-		expect(releaseReadiness([commit("fix: crash on launch")], now, "crashes at launch")).toMatchObject({
+		expect(releaseReadiness([commit("fix: crash on launch")], "crashes at launch")).toMatchObject({
 			due: true,
 			reason: "urgent: crashes at launch",
 		});
-		expect(releaseReadiness(internal, now, "please")).toMatchObject({ due: false });
-		// A lone change that has waited a day goes out; a breaking change counts whatever its type.
-		expect(releaseReadiness([commit("fix: old one", 24 * 60)], now)).toMatchObject({ due: true });
-		expect(releaseReadiness([commit("refactor!: drop the v1 api")], now)).toMatchObject({
+		expect(releaseReadiness(internal, "please")).toMatchObject({ due: false });
+		// Age alone never makes a lone change due; a breaking change counts whatever its type.
+		expect(releaseReadiness([commit("fix: old one", 24 * 60)])).toMatchObject({ due: false });
+		expect(releaseReadiness([commit("refactor!: drop the v1 api")])).toMatchObject({
 			userVisible: ["refactor!: drop the v1 api"],
 		});
 		// Release commits and merges are not changes; a repository without conventional commits counts every commit.
-		expect(releaseReadiness([commit("release: v1.2.3"), commit("Merge branch x")], now)).toMatchObject({
+		expect(releaseReadiness([commit("release: v1.2.3"), commit("Merge branch x")])).toMatchObject({
 			internal: 0,
 			userVisible: [],
 		});
-		expect(releaseReadiness([commit("Add a picker"), commit("Fix a crash"), commit("Tidy docs")], now)).toMatchObject(
-			{ due: true, internal: 0 },
-		);
+		expect(releaseReadiness([commit("Add a picker"), commit("Fix a crash"), commit("Tidy docs")])).toMatchObject({
+			due: true,
+			internal: 0,
+		});
 	});
 	it("proposeReleaseCheck: every precondition", () => {
 		const ok = { policyOn: true, hasProcedure: true, releaseInFlight: false, clean: true };

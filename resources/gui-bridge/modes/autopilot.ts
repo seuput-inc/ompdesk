@@ -877,7 +877,6 @@ async function runTool(
 			if (!landed) return toolText({ due: false, reason: `no ${state.baseBranch} branch to release from` });
 			const readiness = releaseReadiness(
 				landed.commits,
-				now(),
 				typeof params.urgent === "string" ? params.urgent : undefined,
 			);
 			const contents = {
@@ -919,7 +918,7 @@ function registerTool(pi: ExtensionAPI): void {
 		name: AUTOPILOT_TOOL,
 		label: "Autopilot",
 		description:
-			"Autopilot cycle ledger. op=begin: start the cycle (returns focus, notes, rotation, recent cycles, follow-ups, ship state, what to do next, hints). op=pick: name the item you chose after your audit (area + title). op=end: report the finished cycle (the runtime checks the commit and the check against your tool calls). op=ship: pass on the user's own push/release request (kind + their exact words as quote). op=propose_release: ask whether a release is due (auto release set to agent): it is by what landed since the last release, never by the time since it (3 user-visible changes, an urgent one, or one that waited a day).",
+			"Autopilot cycle ledger. op=begin: start the cycle (returns focus, notes, rotation, recent cycles, follow-ups, ship state, what to do next, hints). op=pick: name the item you chose after your audit (area + title). op=end: report the finished cycle (the runtime checks the commit and the check against your tool calls). op=ship: pass on the user's own push/release request (kind + their exact words as quote). op=propose_release: ask whether a release is due (auto release set to agent): it is by what landed since the last release, never by the time since it (3 user-visible changes or an urgent one).",
 		parameters: z.object({
 			op: z.enum(["begin", "pick", "end", "ship", "propose_release"]),
 			area: z

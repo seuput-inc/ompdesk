@@ -238,8 +238,6 @@ export interface UnreleasedCommit {
 
 /** User-visible changes that make a release worth it without anything urgent among them. */
 export const RELEASE_BATCH = 3;
-/** A user-visible change never waits longer than this for the next release, however few have gathered. */
-export const RELEASE_WAIT_CEILING_MS = 24 * 60 * 60_000;
 
 const CONVENTIONAL = /^(\w+)(?:\([^)]*\))?(!)?:\s/;
 const USER_VISIBLE_TYPES = new Set(["feat", "fix", "perf"]);
@@ -249,12 +247,10 @@ const USER_VISIBLE_TYPES = new Set(["feat", "fix", "perf"]);
  * (the user's call, 22 Oct 2026: "once or twice a day" made a run sit on a batch of fixes for hours). A user-visible
  * change is a `feat`, `fix` or `perf` commit (or a breaking `!` one); in a repository that does not write
  * conventional commits every commit counts. Due: an urgent one (the agent says why: a defect that breaks the released
- * product, a regression of the last release), or {@link RELEASE_BATCH} user-visible changes, or one that has waited
- * {@link RELEASE_WAIT_CEILING_MS}. Docs, tests, refactors and CI alone never are.
+ * product, a regression of the last release), or {@link RELEASE_BATCH} user-visible changes. Docs, tests, refactors and CI alone never are.
  */
 export function releaseReadiness(
 	commits: readonly UnreleasedCommit[],
-	now: number,
 	urgent?: string,
 ): { due: boolean; reason: string; userVisible: string[]; internal: number } {
 	const own = commits.filter(commit => !/^release:/i.test(commit.subject) && !/^Merge /.test(commit.subject));
@@ -282,12 +278,9 @@ export function releaseReadiness(
 			userVisible,
 			internal,
 		};
-	const oldest = Math.min(...visible.map(commit => commit.at));
-	if (now - oldest >= RELEASE_WAIT_CEILING_MS)
-		return { due: true, reason: "a user-visible change has waited a day for a release", userVisible, internal };
 	return {
 		due: false,
-		reason: `${visible.length} user-visible change${visible.length === 1 ? "" : "s"} since the last release; a release takes ${RELEASE_BATCH}, an urgent one, or a change that has waited a day`,
+		reason: `${visible.length} user-visible change${visible.length === 1 ? "" : "s"} since the last release; a release takes ${RELEASE_BATCH} or an urgent one`,
 		userVisible,
 		internal,
 	};
