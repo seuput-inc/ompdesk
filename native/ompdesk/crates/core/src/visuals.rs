@@ -4,12 +4,12 @@ mod store;
 
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
 use serde_json::json;
+pub(crate) use store::{register, saved_after_retry};
 use tokio::io::AsyncReadExt;
 
 use crate::fs::{disk, error::NodeError};
-use crate::server::{Fault, Registry, Reply};
+use crate::server::{Fault, Reply};
 
 const MAX_FILE: u64 = 5 * 1024 * 1024;
 
@@ -100,8 +100,6 @@ async fn source(
     Ok((target, root, entry, bytes))
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
 enum Location {
     Snapshot {
         dir: PathBuf,
@@ -114,11 +112,8 @@ enum Location {
     },
 }
 
-#[derive(Deserialize)]
 struct Request {
     entry: PathBuf,
-    bytes: bool,
-    #[serde(flatten)]
     location: Location,
 }
 
@@ -177,23 +172,16 @@ impl Request {
     }
 }
 
-async fn file(p: Request) -> Result<Reply, Fault> {
+async fn file(p: Request, bytes: bool) -> Result<Reply, Fault> {
     let Some((file, kind)) = p.resolve().await else {
         return Reply::json(&None::<()>);
     };
     let reply = Reply::json(&json!({"file": file, "type": kind}))?;
-    if !p.bytes {
+    if !bytes {
         return Ok(reply);
     }
     match tokio::fs::read(file).await {
         Ok(bytes) => Ok(reply.with_bin(bytes)),
         Err(_) => Reply::json(&None::<()>),
     }
-}
-
-pub(crate) fn register(registry: &mut Registry) {
-    store::register(registry);
-    registry.add("visual.file", |call| {
-        Box::pin(async move { file(call.params()?).await })
-    });
 }

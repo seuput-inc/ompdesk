@@ -27,7 +27,6 @@ pub(crate) fn disk_full(fault: &Fault) -> bool {
     fault.message.starts_with("ENOSPC:")
 }
 
-#[derive(Clone)]
 struct Kept {
     bytes: Vec<u8>,
     mode: Option<u32>,
@@ -119,6 +118,10 @@ impl Saves {
     }
 
     fn retry(self: &Arc<Self>, file: &Path) {
+        #[cfg(test)]
+        if self.delays.is_empty() {
+            return;
+        }
         let saves = Arc::clone(self);
         let file = file.to_path_buf();
         std::thread::spawn(move || {
@@ -126,27 +129,44 @@ impl Saves {
             loop {
                 std::thread::sleep(saves.delay(tries));
                 tries += 1;
-                let mut state = saves.lock();
-                let Some(kept) = state.kept.get(&file).cloned() else {
+                if saves.retry_once(&file) {
                     return;
-                };
-                let (path, bytes) = (file.as_path(), kept.bytes.as_slice());
-                let result = (saves.writer)(path, bytes, kept.mode, kept.dir_mode);
-                if matches!(&result, Err(fault) if disk_full(fault)) {
-                    continue;
                 }
-                if let Err(fault) = result {
-                    eprintln!(
-                        "ompdesk-core: couldn't save {} after the disk was full: {}",
-                        file.display(),
-                        fault.message
-                    );
-                }
-                state.kept.remove(&file);
-                state.tell("store.saved", &file);
-                return;
             }
         });
+    }
+
+    pub(crate) fn waiting_for_space(&self, file: &Path) -> bool {
+        self.lock().kept.contains_key(file)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn manual(writer: Box<Writer>) -> Arc<Self> {
+        Arc::new(Self::new(writer, Vec::new()))
+    }
+
+    pub(crate) fn retry_once(&self, file: &Path) -> bool {
+        let mut state = self.lock();
+        let Some(kept) = state.kept.get(file) else {
+            return true;
+        };
+        let result = (self.writer)(file, &kept.bytes, kept.mode, kept.dir_mode);
+        if matches!(&result, Err(fault) if disk_full(fault)) {
+            return false;
+        }
+        let kept = state.kept.remove(file).expect("held under this lock");
+        state.tell("store.saved", file);
+        drop(state);
+        match result {
+            Ok(true) => crate::visuals::saved_after_retry(file, &kept.bytes, self),
+            Err(fault) => eprintln!(
+                "ompdesk-core: couldn't save {} after the disk was full: {}",
+                file.display(),
+                fault.message
+            ),
+            Ok(false) => (),
+        }
+        true
     }
 }
 
@@ -168,6 +188,10 @@ pub(crate) fn write_kept(
     dir_mode: u32,
 ) -> Result<bool, Fault> {
     SAVES.write(file, bytes, mode, dir_mode)
+}
+
+pub(crate) fn waiting_content(file: &Path) -> Option<Vec<u8>> {
+    SAVES.lock().kept.get(file).map(|kept| kept.bytes.clone())
 }
 
 /// Where `store.saveFailed` and `store.saved` go: the connection main speaks on.

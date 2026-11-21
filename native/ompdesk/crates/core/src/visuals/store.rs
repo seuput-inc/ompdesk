@@ -1,4 +1,6 @@
 //! The existing history.json and v<N> files. Tab membership comes from the window host.
+#[cfg(test)]
+mod tests;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -8,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::disk::{
-    saves::write_kept,
+    saves::{Saves, waiting_content, write_kept},
     tree::{fault, write_atomic_if},
 };
 use crate::server::{Fault, Registry, Reply};
@@ -46,6 +48,14 @@ struct Record {
     created_at: u64,
     updated_at: u64,
     versions: Vec<Version>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired: Vec<Retired>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Retired {
+    id: String,
+    files: Vec<String>,
 }
 
 pub(super) fn valid_id(id: &str) -> bool {
@@ -61,10 +71,10 @@ struct Catalog {
 }
 static CATALOG: Mutex<Option<Catalog>> = Mutex::new(None);
 
-async fn with_catalog(
+async fn with_catalog<T: Send + 'static>(
     dir: PathBuf,
-    op: impl FnOnce(&mut Catalog) -> Result<Reply, Fault> + Send + 'static,
-) -> Result<Reply, Fault> {
+    op: impl FnOnce(&mut Catalog) -> Result<T, Fault> + Send + 'static,
+) -> Result<T, Fault> {
     tokio::task::spawn_blocking(move || {
         let mut slot = CATALOG
             .lock()
@@ -75,7 +85,9 @@ async fn with_catalog(
             return op(catalog);
         }
         let file = dir.join("history.json");
-        let records = match fs::read(&file) {
+        let waiting = waiting_content(&file);
+        let durable = waiting.is_none();
+        let records = match waiting.map_or_else(|| fs::read(&file), Ok) {
             Ok(bytes) => serde_json::from_slice::<Vec<Record>>(&bytes)
                 .ok()
                 .filter(|records| {
@@ -94,7 +106,11 @@ async fn with_catalog(
             Err(e) if e.kind() == ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(fault(&e, "read", &file)),
         };
-        op(slot.insert(Catalog { dir, records }))
+        let catalog = slot.insert(Catalog { dir, records });
+        if durable {
+            catalog.prune();
+        }
+        op(catalog)
     })
     .await
     .map_err(|e| Fault::new("internal", e.to_string()))?
@@ -191,7 +207,12 @@ fn snapshot_folder(dir: &Path, id: &str) -> Result<PathBuf, Fault> {
 }
 
 impl Catalog {
-    fn open(&mut self, p: Open, page: Page) -> Result<Reply, Fault> {
+    fn open(
+        &mut self,
+        p: Open,
+        page: Page,
+        save: impl FnOnce(&Path, &[u8]) -> Result<bool, Fault>,
+    ) -> Result<Reply, Fault> {
         let own = || {
             p.tab_ids
                 .iter()
@@ -215,7 +236,7 @@ impl Catalog {
         let now = crate::clock::now_ms();
         enum Selected {
             Existing(usize),
-            New(Record),
+            New(String),
         }
         let selected = if let Some(i) = existing {
             let r = &self.records[i];
@@ -241,36 +262,20 @@ impl Catalog {
             }
             let mut bytes = [0; 8];
             crate::sys::random(&mut bytes).map_err(|e| Fault::new("visual", e.to_string()))?;
-            let id = crate::hex(&bytes);
-            let root = if page.kind == Kind::Inline {
-                self.dir.join(&id)
-            } else {
-                PathBuf::new()
-            };
-            Selected::New(Record {
-                id,
-                label: page.label,
-                kind: page.kind,
-                target: String::new(),
-                cwd: p.cwd,
-                root,
-                entry: String::new(),
-                created_at: now,
-                updated_at: now,
-                versions: Vec::new(),
-            })
+            Selected::New(crate::hex(&bytes))
         };
-        let record = match &selected {
-            Selected::Existing(i) => &self.records[*i],
-            Selected::New(record) => record,
+        let (id, previous) = match &selected {
+            Selected::Existing(i) => (&self.records[*i].id, Some(&self.records[*i])),
+            Selected::New(id) => (id, None),
         };
-        let last = record.versions.last();
+        let last = previous.and_then(|r| r.versions.last());
         let digest = page
             .content
             .as_ref()
             .map(|b| crate::hex(&Sha256::digest(b)));
         let hash = digest.as_deref().unwrap_or(&page.target);
-        let added = last.is_none_or(|v| v.hash != hash) || record.target != page.target;
+        let added = last.is_none_or(|v| v.hash != hash)
+            || previous.is_some_and(|r| r.target != page.target);
         let mut number = last.map_or(0, |v| v.version);
         let version = if added {
             number = number
@@ -278,7 +283,7 @@ impl Catalog {
                 .ok_or_else(|| Fault::new("visual", "Invalid visual version"))?;
             let mut file = String::new();
             if let Some(bytes) = page.content {
-                let folder = snapshot_folder(&self.dir, &record.id)?;
+                let folder = snapshot_folder(&self.dir, id)?;
                 let ext = Path::new(&page.entry)
                     .extension()
                     .unwrap_or_default()
@@ -295,9 +300,30 @@ impl Catalog {
         } else {
             None
         };
+        let mut retired = self
+            .records
+            .first_mut()
+            .map(|r| std::mem::take(&mut r.retired))
+            .unwrap_or_default();
         let mut record = match selected {
             Selected::Existing(i) => self.records.remove(i),
-            Selected::New(record) => record,
+            Selected::New(id) => Record {
+                root: if page.kind == Kind::Inline {
+                    self.dir.join(&id)
+                } else {
+                    PathBuf::new()
+                },
+                id,
+                label: page.label,
+                kind: page.kind,
+                target: String::new(),
+                cwd: p.cwd,
+                entry: String::new(),
+                created_at: now,
+                updated_at: now,
+                versions: Vec::new(),
+                retired: Vec::new(),
+            },
         };
         if let Some(label) = p.label {
             record.label = label;
@@ -317,29 +343,38 @@ impl Catalog {
             let surplus = record.versions.len().saturating_sub(MAX_VERSIONS);
             pruned.extend(record.versions.drain(..surplus).map(|v| v.file));
         }
+        if !pruned.is_empty() {
+            retired.push(Retired {
+                id: record.id.clone(),
+                files: pruned,
+            });
+        }
         self.records.insert(0, record);
         let evicted = if self.records.len() > MAX_RECORDS {
             self.records.split_off(MAX_RECORDS)
         } else {
             Vec::new()
         };
-        let bytes =
-            serde_json::to_vec(&self.records).map_err(|e| Fault::new("internal", e.to_string()))?;
-        write_kept(&self.dir.join("history.json"), &bytes, None, 0o777)?;
-        let record = &self.records[0];
-        if !pruned.is_empty() {
-            let folder = snapshot_folder(&self.dir, &record.id)?;
-            for file in pruned {
-                if !file.is_empty() {
-                    let path = folder.join(file);
-                    remove_if_exists(fs::remove_file(&path), &path)?;
-                }
+        for r in &evicted {
+            if !r.versions.iter().all(|v| v.file.is_empty()) {
+                retired.push(Retired {
+                    id: r.id.clone(),
+                    files: r
+                        .versions
+                        .iter()
+                        .filter(|v| !v.file.is_empty())
+                        .map(|v| v.file.clone())
+                        .collect(),
+                });
             }
         }
-        for r in &evicted {
-            let path = self.dir.join(&r.id);
-            remove_if_exists(fs::remove_dir_all(&path), &path)?;
+        self.records[0].retired = retired;
+        let bytes =
+            serde_json::to_vec(&self.records).map_err(|e| Fault::new("internal", e.to_string()))?;
+        if save(&self.dir.join("history.json"), &bytes)? {
+            self.prune();
         }
+        let record = &self.records[0];
         #[derive(Serialize)]
         struct Opened<'a> {
             record: &'a Record,
@@ -355,6 +390,95 @@ impl Catalog {
         })
     }
 }
+
+impl Catalog {
+    fn prune(&mut self) {
+        let Some(head) = self.records.first_mut() else {
+            return;
+        };
+        let mut retired = std::mem::take(&mut head.retired);
+        retired.retain(|batch| match self.remove_retired(batch) {
+            Ok(removed) => !removed,
+            Err(error) => {
+                eprintln!("ompdesk-core: visual cleanup: {}", error.message);
+                true
+            }
+        });
+        self.records[0].retired = retired;
+    }
+
+    fn remove_retired(&self, batch: &Retired) -> Result<bool, Fault> {
+        if !valid_id(&batch.id) {
+            return Ok(true);
+        }
+        let folder = self.dir.join(&batch.id);
+        match fs::symlink_metadata(&folder) {
+            Ok(meta) if !meta.is_dir() => return Ok(true),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(true),
+            Err(e) => return Err(fault(&e, "lstat", &folder)),
+            Ok(_) => (),
+        }
+        let real_folder = fs::canonicalize(&folder).map_err(|e| fault(&e, "realpath", &folder))?;
+        let folder = PathBuf::from(crate::fs::disk::spelled(&real_folder));
+        let mut removed = true;
+        for name in &batch.files {
+            let Some((number, ext)) = name.strip_prefix('v').and_then(|name| name.split_once('.'))
+            else {
+                continue;
+            };
+            if number.is_empty()
+                || !number.bytes().all(|n| n.is_ascii_digit())
+                || !ext.bytes().all(|b| b.is_ascii_alphanumeric())
+                || super::mime(Path::new(name), false).is_none()
+            {
+                continue;
+            }
+            let path = folder.join(name);
+            if self.records.iter().any(|r| {
+                (r.id == batch.id && r.versions.iter().any(|v| v.file.eq_ignore_ascii_case(name)))
+                    || (r.kind == Kind::File
+                        && Path::new(&r.target)
+                            .as_os_str()
+                            .eq_ignore_ascii_case(path.as_os_str()))
+            }) {
+                removed = false;
+                continue;
+            }
+            remove_if_exists(fs::remove_file(&path), &path)?;
+        }
+        if !self.records.iter().any(|r| r.id == batch.id)
+            && let Err(e) = fs::remove_dir(&folder)
+            && !matches!(e.kind(), ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty)
+        {
+            return Err(fault(&e, "rmdir", &folder));
+        }
+        Ok(removed)
+    }
+
+    fn retry_landed(&mut self, file: &Path, bytes: &[u8], waiting: bool) {
+        if !waiting
+            && self.records.first().is_some_and(|r| !r.retired.is_empty())
+            && serde_json::to_vec(&self.records).ok().as_deref() == Some(bytes)
+            && fs::read(file).ok().as_deref() == Some(bytes)
+        {
+            self.prune();
+        }
+    }
+}
+
+// A retry releases the saves lock first: opens hold the catalog lock before they write.
+pub(crate) fn saved_after_retry(file: &Path, bytes: &[u8], saves: &Saves) {
+    if file.file_name().is_none_or(|name| name != "history.json") {
+        return;
+    }
+    if let Ok(mut slot) = CATALOG.lock()
+        && let Some(catalog) = slot.as_mut()
+        && file.parent() == Some(&catalog.dir)
+    {
+        catalog.retry_landed(file, bytes, saves.waiting_for_space(file));
+    }
+}
+
 fn remove_if_exists(result: std::io::Result<()>, path: &Path) -> Result<(), Fault> {
     match result {
         Err(e) if e.kind() != ErrorKind::NotFound => Err(fault(&e, "rm", path)),
@@ -362,7 +486,61 @@ fn remove_if_exists(result: std::io::Result<()>, path: &Path) -> Result<(), Faul
     }
 }
 
-pub(super) fn register(registry: &mut Registry) {
+#[derive(Deserialize)]
+struct FileQuery {
+    dir: PathBuf,
+    id: String,
+    version: Option<u64>,
+    relative: String,
+    bytes: bool,
+}
+
+async fn file(p: FileQuery) -> Result<Reply, Fault> {
+    let selected = with_catalog(p.dir, move |catalog| {
+        let Some(r) = catalog
+            .records
+            .iter()
+            .find(|r| r.id == p.id && r.kind != Kind::Url)
+        else {
+            return Ok(None);
+        };
+        let location = if p.relative == r.entry {
+            let Some(v) = r
+                .versions
+                .iter()
+                .find(|v| Some(v.version) == p.version && !v.file.is_empty())
+            else {
+                return Ok(None);
+            };
+            super::Location::Snapshot {
+                dir: catalog.dir.clone(),
+                id: p.id,
+                file: v.file.clone(),
+            }
+        } else if r.kind == Kind::File {
+            super::Location::Asset {
+                root: r.root.clone(),
+                relative: p.relative,
+            }
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(super::Request {
+            entry: PathBuf::from(&r.entry),
+            location,
+        }))
+    })
+    .await?;
+    match selected {
+        Some(selected) => super::file(selected, p.bytes).await,
+        None => Reply::json(&None::<()>),
+    }
+}
+
+pub(crate) fn register(registry: &mut Registry) {
+    registry.add("visual.file", |call| {
+        Box::pin(async move { file(call.params()?).await })
+    });
     #[derive(Deserialize)]
     struct Directory {
         dir: PathBuf,
@@ -383,7 +561,12 @@ pub(super) fn register(registry: &mut Registry) {
         Box::pin(async move {
             let p: Request = call.params()?;
             let page = p.input.prepare(&p.open.cwd, call.bin).await?;
-            with_catalog(p.dir, move |c| c.open(p.open, page)).await
+            with_catalog(p.dir, move |c| {
+                c.open(p.open, page, |file, bytes| {
+                    write_kept(file, bytes, None, 0o777)
+                })
+            })
+            .await
         })
     });
 }
