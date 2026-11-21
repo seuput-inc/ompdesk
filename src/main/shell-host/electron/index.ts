@@ -4,11 +4,13 @@
  * for the facts before any main code runs, so Electron's synchronous `app.getPath()` and friends work at module top
  * level, as they do there.
  */
+import { IPC_COMMANDS } from "../../../shared/ipc-types";
 import { shutdownCore } from "../../core/process";
 import type { DiagnosticsDeps } from "../../diagnostics";
 import type { WatchdogSignal } from "../../hang-watchdog";
 import { exitReport } from "../../quit-log";
 import { appendRuntimeLogAtPath, runtimeLogFile } from "../../runtime-log-core";
+import type { IpcRegistry } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
 import { createElectron } from "./create";
@@ -32,6 +34,14 @@ export function postWatchdog(signal: WatchdogSignal): void {
 }
 
 export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
+
+/** Paired pages arrive through the permission-checked registry. Desktop pages read the same log in the shell. */
+export function registerRuntimeLogIpc(ipc: Pick<IpcRegistry, "handle">): void {
+	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_PATH, () => client.call(IPC_COMMANDS.RUNTIME_LOG_PATH, []));
+	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_TAIL, (_caller, maxLines: unknown) =>
+		client.call(IPC_COMMANDS.RUNTIME_LOG_TAIL, [maxLines]),
+	);
+}
 
 let stopping = false;
 /** Main's app once made: its log line names the profile and the version. */

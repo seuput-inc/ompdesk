@@ -1,3 +1,4 @@
+mod feedback;
 mod files;
 mod reader;
 
@@ -5,6 +6,8 @@ use crate::host::Call;
 use reader::Selection;
 use serde_json::Value;
 use std::path::Path;
+
+pub(crate) use feedback::{FeedbackRead, feedback_profile};
 
 pub(crate) fn handle(call: Call, profile: &'static Path) {
     let selection = match call.params.as_str() {

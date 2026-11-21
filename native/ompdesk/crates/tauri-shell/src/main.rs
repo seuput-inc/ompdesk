@@ -24,6 +24,7 @@ mod ui;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
+use native_services::diagnostic_logs::{FeedbackRead, feedback_profile};
 use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
@@ -81,6 +82,7 @@ struct Runtime {
     host_navigations: Mutex<HashMap<u64, String>>,
     preload: String,
     user_data: PathBuf,
+    feedback_profile: PathBuf,
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
     relaunch: Mutex<Option<Vec<String>>>,
@@ -1071,6 +1073,12 @@ fn dispatch(call: host::Call) {
         native_services::diagnostic_logs::handle(call, &runtime().user_data);
         return;
     }
+    if let Some(read) = FeedbackRead::parse(&call.method, &call.params) {
+        tauri::async_runtime::spawn_blocking(move || {
+            call.ok(read.read(&runtime().feedback_profile))
+        });
+        return;
+    }
     let app = runtime().app.clone();
     if let Err(error) = app.run_on_main_thread(move || dispatch_ui(call)) {
         log::log("dispatch.failed", json!({"error":error.to_string()}));
@@ -1310,6 +1318,19 @@ async fn profile_ipc(
         .map_err(|error| json!({"code":"failed","message":error.to_string()}))?
 }
 
+fn ensure_current(identity: Identity) -> Result<(), Value> {
+    if runtime()
+        .registry
+        .lock()
+        .expect("registry")
+        .current(identity)
+    {
+        Ok(())
+    } else {
+        Err(json!({"code":"gone","message":"original document ended"}))
+    }
+}
+
 #[tauri::command]
 async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Result<Value, Value> {
     let url = webview
@@ -1446,6 +1467,17 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
             if !value["args"].is_array() {
                 return Err(json!({"code":"invalid","message":"args must be an array"}));
             }
+            if kind == "invoke"
+                && let Some(read) = FeedbackRead::parse(channel, &value["args"])
+            {
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    read.read(&runtime().feedback_profile)
+                })
+                .await
+                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+                ensure_current(identity)?;
+                return Ok(Value::from_iter([("value", result)]));
+            }
             #[cfg(windows)]
             let args = {
                 let mut args = value["args"].clone();
@@ -1482,14 +1514,7 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                     json!({"wcId":identity.wc,"channel":channel,"ms":ms,"code":code}),
                 );
             }
-            if !runtime()
-                .registry
-                .lock()
-                .expect("registry")
-                .current(identity)
-            {
-                return Err(json!({"code":"gone","message":"original document ended"}));
-            }
+            ensure_current(identity)?;
             let answer = answer.map_err(|e| json!({"code":e.code,"message":e.message}))?;
             #[cfg(windows)]
             let answer = {
@@ -1592,6 +1617,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         std::env::var(startup::USER_DATA_ENV).ok().as_deref(),
         startup::default_user_data(&app_data),
     );
+    let feedback_profile = feedback_profile(&user_data, &args)?;
     std::fs::create_dir_all(&user_data)?;
     log::start_clock();
     log::open_file(&user_data.join("tauri-shell.jsonl"));
@@ -1748,6 +1774,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     host_navigations: Mutex::new(HashMap::new()),
                     preload,
                     user_data,
+                    feedback_profile,
                     renderer,
                     user_agent: Mutex::new(None),
                     relaunch: Mutex::new(None),
