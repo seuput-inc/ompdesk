@@ -11,8 +11,12 @@
  * when nothing moved (one lstat per directory, no readdir).
  */
 
+import { homedir } from "node:os";
 import * as path from "node:path";
+import type { DiskUsage } from "../../shared/disk-care";
+import { agentDir } from "../agent-paths";
 import { coreHeld } from "../local/git/exec";
+import type { LocatedCache } from "./caches";
 
 /** A full walk at least this often: bounds what files rewritten in place (no directory change) can leave out. */
 export const FULL_WALK_EVERY_MS = 7 * 24 * 60 * 60_000;
@@ -25,6 +29,11 @@ const WALK_TIMEOUT_MS = 60 * 60_000;
 export interface TreeSizesWork {
 	lstat: number;
 	readdir: number;
+}
+
+/** Bytes of one target, without a retained reading. */
+export function diskBytes(target: string): Promise<number> {
+	return new TreeSizes(null).bytes(target);
 }
 
 /**
@@ -78,6 +87,31 @@ export class TreeSizes {
 		this.work.lstat += measured.lstat;
 		this.work.readdir += measured.readdir;
 		return measured.bytes;
+	}
+
+	async usage(options: {
+		userData: string;
+		worktreeRoot: string;
+		caches: readonly LocatedCache[];
+		scratchRoot?: string;
+	}): Promise<DiskUsage> {
+		const { usage, work } = await coreHeld<{ usage: DiskUsage; work: TreeSizesWork }>(
+			"disk.usage",
+			{
+				reading: this.#reading,
+				cwd: process.cwd(),
+				worktrees: options.worktreeRoot,
+				sessions: path.join(agentDir(), "sessions"),
+				omp: path.join(homedir(), ".omp"),
+				appData: options.userData,
+				scratch: options.scratchRoot,
+				caches: options.caches.map(({ cache, dir }) => ({ id: cache.part, path: dir })),
+			},
+			WALK_TIMEOUT_MS,
+		);
+		this.work.lstat += work.lstat;
+		this.work.readdir += work.readdir;
+		return usage;
 	}
 
 	/** Keeps what was measured since `load()` for the next run, and ends the reading. */

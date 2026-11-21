@@ -16,6 +16,7 @@ pub(crate) mod saves;
 mod scratch;
 mod sizes;
 pub(crate) mod tree;
+mod usage;
 
 use serde::{Deserialize, Serialize};
 
@@ -183,6 +184,7 @@ struct Restored {
 }
 
 pub fn register(registry: &mut Registry) {
+    registry.add("disk.usage", |call| Box::pin(usage::handle(call)));
     registry.add("disk.sizesOpen", |call| {
         Box::pin(async move {
             let OpenParams {

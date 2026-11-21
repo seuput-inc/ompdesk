@@ -33,7 +33,7 @@ import { ompsExitedIn } from "../omp-exits";
 import { stepStalled, trackEffect } from "../serial-chain";
 import type { BeforeRemove } from "../worktree-orphans";
 import { realFolder, withRemovalClaim } from "../worktree-removals";
-import { diskBytes } from "./usage";
+import { diskBytes } from "./tree-sizes";
 import {
 	inProgressOperation,
 	looksSecret,
