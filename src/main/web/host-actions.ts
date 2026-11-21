@@ -4,7 +4,6 @@
  * and fetch a host file over `/blob`. Each is a web-only channel (shared/web-host.ts) with its permission:
  * `workspace` for the disk and blobs, `desktop-control` for what happens on the host's screen.
  */
-import type { Dirent } from "node:fs";
 import { constants, promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,13 +14,13 @@ import {
 	WEB_HOST_CHANNELS,
 	WEB_HOST_LIST_MAX_ENTRIES,
 	type WebBlobOpenResult,
-	type WebHostEntry,
 	type WebHostListing,
 	type WebHostOpenResult,
 	type WebHostSaveResult,
 	type WebModelsText,
 	type WebModelsWriteResult,
 } from "../../shared/web-host";
+import { CoreError, core } from "../core/process";
 import { isOpenableExternalUrl } from "../external-url";
 import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin, sniffMime } from "../workspace-fs";
 import type { BlobStore } from "./blobs";
@@ -49,7 +48,7 @@ export interface HostActionsDeps {
 	homedir?: () => string;
 }
 
-const NAME_ORDER = new Intl.Collator(undefined, { numeric: true });
+const NAME_LOCALE = new Intl.Collator().resolvedOptions().locale;
 
 const ListRequest = z
 	.object({
@@ -110,41 +109,33 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		const dir = request.path === undefined || request.path === "" ? homeDir : expandHome(request.path, homeDir);
 		if (!path.isAbsolute(dir)) throw codedError("not_absolute_path", "Not an absolute path");
 		const abs = path.resolve(dir);
-		let dirents: Dirent[];
+		let listed: { entries: { name: string; size: number | null }[]; truncated: boolean };
 		try {
-			dirents = await fsp.readdir(abs, { withFileTypes: true });
+			listed = (
+				await core().call<typeof listed>("fs.listDirs", {
+					dir: abs,
+					query: request.query,
+					locale: NAME_LOCALE,
+					web: { files: request.files === true, limit: WEB_HOST_LIST_MAX_ENTRIES },
+				})
+			).result;
 		} catch (error) {
-			const code = error instanceof Error && "code" in error ? error.code : undefined;
-			if (code === "ENOTDIR") throw codedError("not_a_directory", "Not a directory");
-			if (code === "ENOENT") throw codedError("file_not_found", "Directory not found");
+			if (error instanceof CoreError && (error.code === "not_a_directory" || error.code === "file_not_found"))
+				throw codedError(error.code, error.message);
 			throw error;
 		}
-		const needle = request.query?.trim().toLocaleLowerCase() ?? "";
-		const found: WebHostEntry[] = [];
-		for (const dirent of dirents) {
-			if (dirent.name.startsWith(".")) continue;
-			if (needle !== "" && !dirent.name.toLocaleLowerCase().includes(needle)) continue;
-			const full = path.join(abs, dirent.name);
-			let directory = dirent.isDirectory();
-			let size: number | null = null;
-			if (dirent.isSymbolicLink() || dirent.isFile()) {
-				const info = await fsp.stat(full).catch(() => null);
-				if (!info) continue;
-				directory = info.isDirectory();
-				size = directory ? null : info.size;
-			}
-			if (!directory && request.files !== true) continue;
-			if (!directory && !dirent.isFile() && !dirent.isSymbolicLink()) continue;
-			found.push({ name: dirent.name, path: full, directory, size });
-		}
-		found.sort((a, b) => Number(b.directory) - Number(a.directory) || NAME_ORDER.compare(a.name, b.name));
 		const parent = path.dirname(abs);
 		return {
 			path: abs,
 			parent: parent === abs ? null : parent,
 			home: homeDir,
-			entries: found.slice(0, WEB_HOST_LIST_MAX_ENTRIES),
-			truncated: found.length > WEB_HOST_LIST_MAX_ENTRIES,
+			entries: listed.entries.map(({ name, size }) => ({
+				name,
+				path: path.join(abs, name),
+				directory: size === null,
+				size,
+			})),
+			truncated: listed.truncated,
 		};
 	};
 
