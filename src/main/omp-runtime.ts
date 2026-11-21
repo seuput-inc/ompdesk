@@ -427,7 +427,7 @@ async function examineOmp(bin: string, basePath: string): Promise<OmpResolution>
 	}
 	return {
 		ok: true,
-		runtime: { bin, version, run: (args, opts = {}) => runOmp(bin, args, opts, basePath) },
+		runtime: { bin, basePath, version, run: (args, opts = {}) => runOmp(bin, args, opts, basePath) },
 	};
 }
 

@@ -41,6 +41,7 @@ mod tests;
 
 use lane::{Command, Msg, OpenParams, Plan, StockReply};
 use process::Start;
+pub(crate) use process::omp_command;
 
 /// How long a request about a tab whose `sidecar.open` has not come waits for it.
 const OPEN_WAIT: Duration = Duration::from_secs(10);

@@ -12,14 +12,19 @@
  * manifest, node_modules, each plugin's version, tools, hooks and extensions).
  */
 import type { RpcDoctorCheck } from "../../shared/rpc-types";
-import { clearAgentWorktrees, listAgentWorktrees } from "../agent-worktrees";
-import { ompUpdateEnv, parseUpdateCheck } from "../omp-runtime";
+import { clearAgentWorktrees, listAgentWorktrees, type OmpCliLaunch } from "../agent-worktrees";
+import { ompRunEnv, ompUpdateEnv, parseUpdateCheck } from "../omp-runtime";
 import { spawnPath } from "../shell-env";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
 const UPDATE_CHECK_TIMEOUT_MS = 60_000;
 /** Plain text from omp's chalk output, so the update report parses the same everywhere. */
 const PLAIN_ENV = { NO_COLOR: "1", FORCE_COLOR: "0" };
+
+function worktreeLaunch({ omp }: LocalCommandContext): OmpCliLaunch {
+	if (omp.basePath === undefined) throw new Error("No resolved omp launcher for worktrees");
+	return { bin: omp.bin, env: ompRunEnv(omp.bin, omp.basePath) };
+}
 
 function lastLines(text: string, count = 6): string {
 	return text.trim().split(/\r?\n/).slice(-count).join("\n");
@@ -120,6 +125,6 @@ export const handlers: Record<string, LocalHandler> = {
 	get_omp_update: (_command, ctx) => checkOmpUpdate(ctx),
 	get_plugin_doctor: (_command, ctx) => pluginDoctor(ctx),
 	// Agent-managed worktrees under ~/.omp/wt (stock `omp worktree list|clear --json`, orphaned only).
-	get_agent_worktrees: async (_command, ctx) => ({ entries: await listAgentWorktrees(ctx.omp, ctx.cwd) }),
-	clear_agent_worktrees: (_command, ctx) => clearAgentWorktrees(ctx.omp, ctx.cwd),
+	get_agent_worktrees: (_command, ctx) => listAgentWorktrees(worktreeLaunch(ctx), ctx.cwd),
+	clear_agent_worktrees: (_command, ctx) => clearAgentWorktrees(worktreeLaunch(ctx), ctx.cwd),
 };

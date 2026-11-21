@@ -9,6 +9,8 @@ import type { LeftProcesses } from "../../../resources/gui-bridge/restart-core";
 export interface OmpRuntime {
 	/** Absolute path to the omp executable (or `.cmd` shim on Windows). */
 	bin: string;
+	/** PATH used to resolve this install. Injected runtimes that only implement `run` have no native launcher. */
+	basePath?: string;
 	/** `omp --version` semver, e.g. `18.6.1`. */
 	version: string;
 	/** Run a short-lived `omp …` subcommand to completion. Never rejects on a non-zero exit; rejects on spawn failure or timeout. */

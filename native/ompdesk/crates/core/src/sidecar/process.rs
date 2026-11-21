@@ -77,47 +77,46 @@ pub fn signal_name(signal: i32) -> String {
 }
 
 fn command(start: &Start) -> Command {
+    omp_command(&start.bin, &start.args, start.shell, &start.cwd, &start.env)
+}
+
+pub(crate) fn omp_command(
+    bin: &str,
+    args: &[impl AsRef<str>],
+    #[cfg_attr(not(windows), allow(unused_variables))] shell: bool,
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+) -> Command {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt as _;
-    let runner = Runner {
-        bin: start.bin.clone(),
-        args: Vec::new(),
-        env: start.env.clone(),
-        timeout_ms: 0,
-        max_bytes: 0,
-    };
     let mut command;
     #[cfg(windows)]
-    if start.shell {
+    if shell {
         let shell = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into());
         command = Command::new(shell);
-        let mut line = start.bin.clone();
-        for arg in &start.args {
+        let mut line = bin.to_owned();
+        for arg in args {
             line.push(' ');
-            line.push_str(arg);
+            line.push_str(arg.as_ref());
         }
         command.as_std_mut().raw_arg(format!("/d /s /c \"{line}\""));
     } else {
-        command = Command::new(&start.bin);
-        command.args(&start.args);
+        command = Command::new(bin);
+        command.args(args.iter().map(AsRef::as_ref));
     }
     #[cfg(not(windows))]
     {
-        command = Command::new(&start.bin);
-        command.args(&start.args);
+        command = Command::new(bin);
+        command.args(args.iter().map(AsRef::as_ref));
     }
+    command.current_dir(cwd);
     command
-        .current_dir(&start.cwd)
         .env_clear()
         // Open pipes: omp exits when its stdin closes, so it never outlives the core.
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    runner.environment(&mut command, &[]);
-    // A process group of its own, so the kill at the end of a stop takes the tools it started with it; through
-    // `posix_spawn`, never a fork of this many-threaded process (`own_group`).
-    #[cfg(unix)]
-    crate::sys::own_group(command.as_std_mut());
+    Runner::apply_environment(env, &mut command);
     command
 }
 
@@ -169,6 +168,8 @@ pub fn start(
     };
     #[cfg(unix)]
     let (mut child, priority_error) = {
+        // A tab has its own group so stopping it also stops the tools it started.
+        crate::sys::own_group(cmd.as_std_mut());
         let child = cmd.spawn().map_err(|e| refused(start, &e))?;
         let error = crate::sys::lower_agent_priority(&child).err();
         (child, error)
