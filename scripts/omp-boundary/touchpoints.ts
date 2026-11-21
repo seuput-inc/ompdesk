@@ -2481,4 +2481,19 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-computer-use-stock.test.ts",
 		],
 	},
+	{
+		id: "C19",
+		area: "copy",
+		contract: "internal",
+		disposition: {
+			kind: "registered",
+			reason:
+				"Stock's account-wide pool lives inside `computePolicyDiagnostics`, which is not exported and answers only for accounts with a policy.",
+		},
+		summary:
+			"Copy of the account-wide row filter of stock `omp usage` (`cli/usage-cli.ts`), which decides whether a usage read calls an account limited.",
+		files: ["resources/gui-bridge/usage-standing.ts"],
+		stock: ["@oh-my-pi/pi-coding-agent/cli/usage-cli"],
+		tests: ["src/main/bridge-usage-standing-stock.test.ts", "src/main/bridge-usage-standing.test.ts"],
+	},
 ];

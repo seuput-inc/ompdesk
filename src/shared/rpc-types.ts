@@ -2368,8 +2368,20 @@ export interface UsageReport {
 	fetchedAt: number;
 	limits: UsageLimit[];
 	notes?: string[];
-	/** When every exhausted window of this account has reset, epoch ms (stock `usageResetAtMs`); absent while it is not limited. */
+	/**
+	 * When every exhausted window of this account has reset, epoch ms (stock `usageResetAtMs` over every row, a model's
+	 * own week included); absent while none is exhausted. What a wait for a limit reads (shared/quota-reset.ts).
+	 */
 	resetAt?: number;
+	/**
+	 * Until when the omp that read this sends the account no request, epoch ms (gui-bridge usage-standing.ts): an
+	 * exhausted account-wide window, or, with that omp's Credit use off, a plan used up. A model's own week is not in it.
+	 */
+	limitedUntil?: number;
+	/** Until when the account's plan is used up (ChatGPT and Claude), epoch ms, whether or not it runs on past it. */
+	planSpentUntil?: number;
+	/** What the account has left to spend beyond its plan, while above zero (ChatGPT's from the last fetch). */
+	credits?: AccountCredits;
 	account?: string;
 	/** Stored credential the report belongs to, when its identity names one. */
 	credentialId?: number;

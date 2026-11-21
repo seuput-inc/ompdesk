@@ -581,9 +581,30 @@ fn first_text<'a>(candidates: &[&'a str]) -> &'a str {
         .unwrap_or("")
 }
 
+/// What an account has left beyond its plan (`UsageReport.credits`), as the accounts list shows it: a balance or a
+/// cap the provider reports, never a charge.
+fn credits_text(credits: &Map<String, Value>) -> Option<String> {
+    let remaining = finite(credits.get("remaining"));
+    let unit = text_of(credits.get("unit"));
+    match text_of(credits.get("kind")) {
+        "unlimited" => Some("credit balance: unlimited".into()),
+        "balance" => remaining.map(|left| format!("credit balance: {} {unit}", js_number(left))),
+        "monthlyCap" => remaining.map(|left| {
+            let cap = finite(credits.get("limit"))
+                .map_or(String::new(), |cap| format!(" of {}", js_number(cap)));
+            format!(
+                "extra usage cap: {}{cap} {unit} left this month",
+                js_number(left)
+            )
+        }),
+        _ => None,
+    }
+}
+
 /// One account's report: its windows each under their own label (the limit's, as `omp usage` names them), then its
-/// saved resets.
-fn describe_report(report: &Map<String, Value>, now: f64) -> String {
+/// saved resets. `credit_spend` is the Credit use of the omp that read it; `None` from a bridge older than that field,
+/// whose `resetAt` (any exhausted row, a model's own week included) is all it says of a limit.
+fn describe_report(report: &Map<String, Value>, now: f64, credit_spend: Option<bool>) -> String {
     let limits = records(report.get("limits"));
     let label_of = |limit: &Map<String, Value>| {
         first_text(&[
@@ -602,13 +623,41 @@ fn describe_report(report: &Map<String, Value>, now: f64) -> String {
     if report.get("active") == Some(&Value::Bool(true)) {
         notes.push("this session's account".into());
     }
-    if let Some(until) = finite(report.get("resetAt")) {
+    let limited = match credit_spend {
+        Some(_) => finite(report.get("limitedUntil")),
+        None => finite(report.get("resetAt")),
+    };
+    if let Some(until) = limited {
         notes.push(format!("limited until {}", when_text(until, now)));
     }
-    if let Some(fetched) = finite(report.get("fetchedAt"))
-        && now - fetched >= 120_000.0
+    if let Some(until) = finite(report.get("planSpentUntil")) {
+        let until = when_text(until, now);
+        // Whether ChatGPT or Claude still allowing requests past the plan bills credits or extra usage for them is
+        // not in a usage report (a 100 % row the provider still allows, a balance, a served answer prove no debit),
+        // so the reading says what is known: the plan is used up, and whether requests are still allowed.
+        notes.push(match (credit_spend, limited) {
+            (Some(false), _) => {
+                format!(
+                    "plan used up until {until}; Credit use is off here, so nothing is sent on it"
+                )
+            }
+            (_, None) => format!("plan used up until {until}; requests still allowed"),
+            (_, Some(_)) => format!("plan used up until {until}"),
+        });
+    }
+    if let Some(text) = report
+        .get("credits")
+        .and_then(Value::as_object)
+        .and_then(credits_text)
     {
-        notes.push(format!("read {} ago", span(now - fetched)));
+        notes.push(text);
+    }
+    if let Some(fetched) = finite(report.get("fetchedAt")) {
+        notes.push(format!(
+            "read {} ({} ago)",
+            iso_time(fetched),
+            span((now - fetched).max(0.0))
+        ));
     }
     let account = text_of(report.get("account"));
     let mut lines = vec![format!(
@@ -690,16 +739,37 @@ fn describe_report(report: &Map<String, Value>, now: f64) -> String {
     lines.join("\n")
 }
 
-fn describe_usage(data: &Value, now: f64) -> String {
-    let reports = records(fields(Some(data)).get("reports"));
+/// The whole read: where and when it was taken and under which Credit use, then one block per account. `device` is
+/// the computer the action named (`None`: the computer the caller's own session runs on).
+fn describe_usage(data: &Value, now: f64, device: Option<&str>) -> String {
+    let data = fields(Some(data));
+    let reports = records(data.get("reports"));
+    let credit_spend = data.get("creditSpend").and_then(Value::as_bool);
+    let place = device.map_or("your session's computer".to_string(), |name| {
+        format!("\"{name}\"")
+    });
+    let credit = match credit_spend {
+        Some(true) => {
+            "Credit use on there: its omps keep sending an account requests past its plan while the provider allows them"
+        }
+        Some(false) => {
+            "Credit use off there: an account whose plan is used up is limited until it resets"
+        }
+        None => "Credit use there unknown (an older OMPdesk)",
+    };
+    let mut lines = vec![format!(
+        "Read by an omp on {place} at {}; {credit}.",
+        iso_time(now)
+    )];
     if reports.is_empty() {
-        return "No provider usage reports yet (no signed-in account reports a quota).".into();
+        lines.push("No provider usage reports yet (no signed-in account reports a quota).".into());
     }
-    reports
-        .iter()
-        .map(|report| describe_report(report, now))
-        .collect::<Vec<_>>()
-        .join("\n")
+    lines.extend(
+        reports
+            .iter()
+            .map(|report| describe_report(report, now, credit_spend)),
+    );
+    lines.join("\n")
 }
 
 /// One line per model role: what it really runs on, and how (a fallback, the session's own model, a model that is gone).
@@ -1353,7 +1423,11 @@ async fn h_usage_read<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
             device_of(&args),
         )
         .await?;
-    Ok(ActionResult::text(describe_usage(&data, now_ms())))
+    Ok(ActionResult::text(describe_usage(
+        &data,
+        now_ms(),
+        device_of(&args),
+    )))
 }
 
 async fn h_models_list<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
