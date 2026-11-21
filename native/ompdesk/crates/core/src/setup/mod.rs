@@ -1,7 +1,4 @@
-//! What machine setup fetches from the network (was `src/main/setup/download.ts` and the lookups of
-//! `src/main/setup/archives.ts`): a verified download to disk with byte progress (`download`) and the release
-//! lookups for the archives setup installs itself (`archives`: Node.js, GitHub CLI, agent-desktop, Tailscale).
-//! `net` holds what both read the network with. Main keeps how a failure is shown and when a download starts.
+//! Machine setup's downloads, release lookups and compiled omp launcher repair.
 //!
 //! Methods:
 //! - `setup.download` `{id, url, sha256, file, accept?, mirror?}` answers `{}` once `file` holds bytes that match
@@ -14,6 +11,7 @@
 
 mod archives;
 mod download;
+mod launcher;
 mod net;
 #[cfg(test)]
 mod tests;
@@ -26,6 +24,7 @@ use net::Http;
 use crate::server::{Call, Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    launcher::register(registry);
     registry.add("setup.download", |call| Box::pin(download::handle(call)));
     registry.add("setup.resolveArchive", |call| {
         Box::pin(async move { resolve_archive_method(call).await })

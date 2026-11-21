@@ -93,7 +93,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Tells a compiled (standalone) omp from a package install by its binary format (Mach-O, ELF, Windows PE .bun section, Bun shims); bridge imports do not resolve inside a standalone bundle.",
-		files: ["src/main/omp-runtime.ts", "src/main/setup/compiled-launcher.ts"],
+		files: [
+			"src/main/omp-runtime.ts",
+			"src/main/setup/compiled-launcher.ts",
+			"native/ompdesk/crates/core/src/setup/launcher.rs",
+		],
 		stock: ["Mach-O / ELF / PE .bun section", "Bun shim and .bunx launcher"],
 		tests: ["src/main/omp-runtime.test.ts", "src/main/setup/plans.test.ts"],
 	},
@@ -157,6 +161,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/setup/plans.ts",
 			"src/main/setup/service.ts",
 			"src/main/setup/compiled-launcher.ts",
+			"native/ompdesk/crates/core/src/setup/launcher.rs",
 			"scripts/omp-update-lock-check.ts",
 			"scripts/setup-install-check.ts",
 		],
@@ -171,6 +176,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/setup/omp-update-install.test.ts",
 			"src/main/setup/plans.test.ts",
 			"src/main/setup/service.test.ts",
+			"native/ompdesk/crates/core/src/setup/tests.rs",
 			"src/main/omp-updater.test.ts",
 		],
 	},

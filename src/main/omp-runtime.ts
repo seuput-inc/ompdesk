@@ -18,12 +18,13 @@
  * setup installs the tested omp with Bun beside a too-old one it does not own.
  */
 import { execFile, spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import ompTested from "../shared/omp-tested.json";
 import { isNewer } from "../shared/version";
 import type { OmpRuntime } from "./local/types";
+import { isCompiledOmp } from "./setup/compiled-launcher";
 import { bunInstallDir } from "./setup/paths";
 import { spawnPath } from "./shell-env";
 import {
@@ -192,42 +193,6 @@ export function ompCandidates(pathEnv: string, home: string, platform: NodeJS.Pl
 }
 
 /**
- * Whether `file` is a compiled omp: Bun's standalone build (`bun build --compile`), which embeds omp's modules
- * under `/$bunfs` where the bridge's `@oh-my-pi/*` imports cannot reach them. A bun or npm install launches omp
- * through its `#!/usr/bin/env bun` script (a symlink to `dist/cli.js` on POSIX, an npm `.cmd`), so on POSIX any
- * native executable is a compiled omp. On Windows bun's launcher is itself a PE (`bun_shim_impl.exe` beside
- * `omp.bunx`), so there it is a PE carrying the `.bun` section a compiled Bun program keeps its module graph in.
- */
-export function isCompiledOmp(file: string, platform: NodeJS.Platform = process.platform): boolean {
-	const head = Buffer.alloc(4096);
-	let read: number;
-	try {
-		const fd = openSync(file, "r");
-		try {
-			read = readSync(fd, head, 0, head.length, 0);
-		} finally {
-			closeSync(fd);
-		}
-	} catch {
-		return false;
-	}
-	if (read < 4) return false;
-	if (platform === "win32") {
-		if (head.toString("latin1", 0, 2) !== "MZ" || read < 0x40) return false;
-		const pe = head.readUInt32LE(0x3c);
-		if (pe + 24 > read || head.toString("latin1", pe, pe + 4) !== "PE\0\0") return false;
-		const sections = head.readUInt16LE(pe + 6);
-		const table = pe + 24 + head.readUInt16LE(pe + 20);
-		for (let index = 0; index < sections && table + (index + 1) * 40 <= read; index++) {
-			if (head.toString("latin1", table + index * 40, table + index * 40 + 8) === ".bun\0\0\0\0") return true;
-		}
-		return false;
-	}
-	if (head.toString("latin1", 0, 4) === "\x7fELF") return true;
-	return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(head.readUInt32BE(0));
-}
-
-/**
  * The oldest Bun an omp package manifest names in `engines.bun` (stock publishes `>=X.Y.Z`, and its CLI exits
  * on an older Bun: "Bun runtime must be >= X.Y.Z"); null without one or for another range form.
  */
@@ -383,7 +348,7 @@ export async function resolveOmpAmong(candidates: readonly string[], basePath: s
 	let compiled: string | null = null;
 	let refused: OmpResolution | null = null;
 	for (const bin of new Set(candidates)) {
-		if (isCompiledOmp(bin)) {
+		if (await isCompiledOmp(bin)) {
 			compiled ??= bin;
 			continue;
 		}

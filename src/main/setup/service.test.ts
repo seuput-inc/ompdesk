@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import ompTested from "../../shared/omp-tested.json";
 import type { SetupItemId, SetupPlatform, SetupPresence, SetupState } from "../../shared/setup";
 import { RM_TEMP, writeFakeOmp } from "../test-fake-omp";
+import { itWithFileSymlinks } from "../test-symlinks";
 import type { Detection } from "./detect";
 import type { SpawnSpec } from "./plans";
 import { SetupRunner, type SupervisedChild } from "./runner";
@@ -260,6 +261,29 @@ describe("SetupService", () => {
 			return file;
 		};
 		const LAUNCHER_SCRIPT = "#!/usr/bin/env bun\n";
+
+		itWithFileSymlinks("restores the compiled launcher symlink, not a copy of its target", async () => {
+			const launcher = join(dir, "bin", "omp");
+			const bytes = compiledBytes("darwin");
+			await mkdir(dirname(launcher));
+			await writeFile(join(dir, "standalone"), bytes);
+			const target = join("..", "standalone");
+			await symlink(target, launcher);
+			let launcherDuringInstall: boolean | undefined;
+			const h = harness(machine({ omp: compiled }), {
+				platform: "darwin",
+				bunInstall: dir,
+				exits: { omp: 1 },
+				onInstall: () => {
+					launcherDuringInstall = existsSync(launcher);
+				},
+			});
+			await h.service.start();
+			expect(h.phase("omp")).toBe("failed");
+			expect(launcherDuringInstall).toBe(false);
+			expect(await readlink(launcher)).toBe(target);
+			expect(await readFile(join(dir, "standalone"))).toEqual(bytes);
+		});
 
 		for (const platform of ["darwin", "win32"] as const) {
 			const name = platform === "win32" ? "omp.exe" : "omp";

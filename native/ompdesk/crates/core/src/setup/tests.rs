@@ -300,6 +300,47 @@ fn temp(name: &str) -> PathBuf {
     dir
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn repairs_around_a_launcher_held_without_delete_sharing() {
+    use std::fs::{File, read, write};
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let root = temp("held-launcher");
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let launcher = bin.join("omp.exe");
+    let aside = bin.join("omp.exe.ompdesk-compiled-42");
+    let mut pe = [0u8; 128];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[60] = 64;
+    pe[64..68].copy_from_slice(b"PE\0\0");
+    pe[70] = 1;
+    pe[88..92].copy_from_slice(b".bun");
+    write(&launcher, pe).unwrap();
+    let hold = |path: &Path| File::options().read(true).share_mode(1).open(path).unwrap();
+    let mut core = Core::start().await;
+    let params = json!({"bunInstall": root, "windows": true, "now": 42});
+    let held = hold(&launcher);
+    let moved = core.call("setup.setAsideCompiledOmp", params.clone()).await;
+    assert_eq!(moved["result"], false);
+    assert_eq!(read(&launcher).unwrap(), pe);
+    drop(held);
+    let moved = core.call("setup.setAsideCompiledOmp", params.clone()).await;
+    assert_eq!(moved["result"], true);
+    let held = hold(&aside);
+    write(&launcher, b"package shim").unwrap();
+    let settled = core.call("setup.settleCompiledOmp", params.clone()).await;
+    assert_eq!(settled["ok"], true);
+    assert_eq!(read(&aside).unwrap(), pe);
+    drop(held);
+    let moved = core.call("setup.setAsideCompiledOmp", params).await;
+    assert_eq!(moved["result"], false);
+    assert!(!aside.exists());
+    assert_eq!(read(&launcher).unwrap(), b"package shim");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn sha256(bytes: &[u8]) -> String {
     crate::hex(&Sha256::digest(bytes))
 }

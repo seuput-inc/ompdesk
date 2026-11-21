@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	isCompiledOmp,
 	MIN_OMP_VERSION,
 	ompBunDefaults,
 	ompBunMinimum,
@@ -17,6 +16,7 @@ import {
 	resolveOmpAmong,
 	TESTED_OMP_VERSION,
 } from "./omp-runtime";
+import { isCompiledOmp } from "./setup/compiled-launcher";
 import { RM_TEMP, writeFakeOmp } from "./test-fake-omp";
 import { itWithFileSymlinks } from "./test-symlinks";
 
@@ -204,20 +204,19 @@ describe("omp lookup", () => {
 				'@"%dp0%\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js" %*\r\n',
 			);
 
-			expect(isCompiledOmp(script, "darwin")).toBe(false);
-			expect(isCompiledOmp(macho, "darwin")).toBe(true);
-			expect(isCompiledOmp(elf, "linux")).toBe(true);
-			expect(isCompiledOmp(standalone, "win32")).toBe(true);
-			expect(isCompiledOmp(shim, "win32")).toBe(false);
-			expect(isCompiledOmp(npmShim, "win32")).toBe(false);
-			expect(isCompiledOmp(path.join(dir, "missing"), "darwin")).toBe(false);
-			expect(isCompiledOmp(await file("compiled-real.exe", peWithSection(...REAL_COMPILED_OMP)), "win32")).toBe(
-				true,
-			);
-			expect(isCompiledOmp(await file("shim-real.exe", peWithSection(...REAL_BUN_SHIM)), "win32")).toBe(false);
-			expect(
-				isCompiledOmp(await file("bun-real.exe", peWithSection(...REAL_COMPILED_OMP.slice(0, -1))), "win32"),
-			).toBe(false);
+			expect(await isCompiledOmp(script, "darwin")).toBe(false);
+			expect(await isCompiledOmp(macho, "darwin")).toBe(true);
+			expect(await isCompiledOmp(elf, "linux")).toBe(true);
+			expect(await isCompiledOmp(standalone, "win32")).toBe(true);
+			expect(await isCompiledOmp(shim, "win32")).toBe(false);
+			expect(await isCompiledOmp(npmShim, "win32")).toBe(false);
+			expect(await isCompiledOmp(path.join(dir, "missing"), "darwin")).toBe(false);
+			const compiled = await file("compiled-real.exe", peWithSection(...REAL_COMPILED_OMP));
+			expect(await isCompiledOmp(compiled, "win32")).toBe(true);
+			const bunShim = await file("shim-real.exe", peWithSection(...REAL_BUN_SHIM));
+			expect(await isCompiledOmp(bunShim, "win32")).toBe(false);
+			const bun = await file("bun-real.exe", peWithSection(...REAL_COMPILED_OMP.slice(0, -1)));
+			expect(await isCompiledOmp(bun, "win32")).toBe(false);
 		} finally {
 			await fs.rm(dir, RM_TEMP);
 		}

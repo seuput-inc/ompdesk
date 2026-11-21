@@ -10,7 +10,7 @@
  * (`<userData>/setup-state.json`). A retry from the user always runs.
  */
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { OmpUpdateFailure } from "../../shared/omp-update";
@@ -31,6 +31,7 @@ import {
 	setupItemRequired,
 } from "../../shared/setup";
 import { isNewer, majorOf } from "../../shared/version";
+import { CoreError } from "../core/process";
 import { manifestBunMinimum, ompBunRoot, ompUpdateEnv, parseUpdateCheck, TESTED_OMP_VERSION } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { SerialChain, stepStalled, throwIfStepStalled } from "../serial-chain";
@@ -985,31 +986,29 @@ export class SetupService {
 		}
 		this.#installing = id;
 		this.#emit();
-		// Stock's compiled omp in the launcher's place keeps `bun install -g` from linking the package (compiled-launcher.ts).
-		let moved =
-			method === "bun-global"
-				? await setAsideCompiledOmp(this.#deps.bunInstall, this.#deps.platform, (this.#deps.now ?? Date.now)())
-				: null;
-		throwIfStepStalled();
-		const putBack = async () => {
-			if (!moved) return;
-			await settleSetAside(moved, existsSync(moved.launcher));
-			moved = null;
-		};
 		try {
-			if (download && !(await this.#fetch(id, download))) return;
-			const installEnv = await this.#installEnv();
-			throwIfStepStalled();
 			const target = id === "omp" ? { method, command: plan.command } : null;
-			if (target) this.#deps.logOmpInstall?.("started", { path: "setup", ...target });
-			const outcome = await this.#runner.run(this.#spec(plan.spawn, id, method), installEnv, chunk => {
-				if (stepStalled()) return;
-				item.output = (item.output + chunk).slice(-SETUP_OUTPUT_TAIL);
-				this.#emitSoon();
-			});
+			const moved =
+				method === "bun-global"
+					? await setAsideCompiledOmp(this.#deps.bunInstall, this.#deps.platform, (this.#deps.now ?? Date.now)())
+					: null;
 			throwIfStepStalled();
-			item.progress = null;
-			await putBack();
+			let outcome: RunOutcome;
+			try {
+				if (download && !(await this.#fetch(id, download))) return;
+				const installEnv = await this.#installEnv();
+				throwIfStepStalled();
+				if (target) this.#deps.logOmpInstall?.("started", { path: "setup", ...target });
+				outcome = await this.#runner.run(this.#spec(plan.spawn, id, method), installEnv, chunk => {
+					if (stepStalled()) return;
+					item.output = (item.output + chunk).slice(-SETUP_OUTPUT_TAIL);
+					this.#emitSoon();
+				});
+				throwIfStepStalled();
+				item.progress = null;
+			} finally {
+				if (moved) await settleSetAside(moved);
+			}
 			await this.#settle(id, outcome);
 			if (target) {
 				const presence = presenceOf(item);
@@ -1020,8 +1019,11 @@ export class SetupService {
 					...(landed ? { version: presence.version } : { reason: failureOf(item)?.reason ?? outcome.kind }),
 				});
 			}
+		} catch (error) {
+			throwIfStepStalled();
+			if (method !== "bun-global" || !(error instanceof CoreError)) throw error;
+			this.#fail(id, { reason: "spawn", detail: error.message });
 		} finally {
-			await putBack();
 			if (!stepStalled()) {
 				this.#installing = null;
 				item.progress = null;
