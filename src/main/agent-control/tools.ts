@@ -198,7 +198,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Message OMPdesk session",
 		description:
 			"Send a message to another open session.\n" +
-			'Send a message to any other open session. An idle session starts on it; a running one reads it at its next step, together with every other message waiting for it (it cuts no tool and leaves a question card the user has open, which it reads the message after). There is no way to hold a message until the turn ends. A session still starting gets it kept, and reads it once it is up: the call returns at once, so do not send it again. A session blocked in ompdesk_session_result with wait takes it at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. Pictures and files go along in attachments. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
+			'An idle session starts on it; a running one reads it at its next step, together with every other message waiting for it (it cuts no tool and leaves a question card the user has open, which it reads the message after). There is no way to hold a message until the turn ends. A session still starting gets it kept, and reads it once it is up: the call returns at once, so do not send it again. A session blocked in ompdesk_session_result with wait takes it at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. Pictures and files go along in attachments. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
 		parameters: {
 			type: "object",
 			properties: {
@@ -261,7 +261,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Read OMPdesk session result",
 		description:
 			"Read another session's last answer and state, optionally waiting for it.\n" +
-			"Read the last answer and state of one session (session) or several at once (sessions: a compact table). wait: true waits until they have finished (until all, the default, or any), one needs the user's answer, or the timeout passes; it also returns early, saying so, when a message (a steer or a report) reaches you meanwhile, so you read it at once and may wait again. See skill://ompdesk.",
+			"Multiple results form a compact table. A wait also ends if a session needs the user's answer or the timeout expires. An incoming steer or report returns the wait early with a notice; read it before waiting again. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -292,7 +292,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Read OMPdesk session transcript",
 		description:
 			"Read another session's transcript, open or stored.\n" +
-			"Read the most recent messages of any session's transcript, open or stored (user, assistant, tool calls; bounded). Pass the returned before cursor to page further back. Read-only. See skill://ompdesk.",
+			"Returns a bounded page of the newest user messages, assistant messages and tool calls. Read-only. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -329,7 +329,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Notify the user",
 		description:
 			"Show the user a system notification when work finishes or needs them.\n" +
-			"Show the user a system notification (for work that finished or needs them while they look elsewhere); clicking it opens this session.",
+			"Clicking the notification opens this session.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -389,7 +389,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Compare OMPdesk sessions' work",
 		description:
 			"Compare and judge sessions' work: checks, branches, optional ranked verdict.\n" +
-			"Compare and judge sessions' work: for each one the final answer, the checks it ran (test, build, lint commands from its transcript, with their outcome) and, for a git worktree, branch, commits ahead, changed files with line counts and uncommitted work. With criteria, a judge model (your slow role) grades each against them and returns a ranked verdict with reasons and a winner. It runs no tests itself. Default: every worktree session you opened. See skill://ompdesk.",
+			"For each session, shows the final answer, the checks it ran (test, build, lint commands from its transcript, with their outcome) and, for a git worktree, branch, commits ahead, changed files with line counts and uncommitted work. With criteria, a judge model (your slow role) grades each against them and returns a ranked verdict with reasons and a winner. It runs no tests itself. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -412,7 +412,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Merge an OMPdesk session's branch",
 		description:
 			"Merge a worktree session's branch into the parent checkout.\n" +
-			"Merge a worktree session's branch into the parent checkout's current branch on the computer the session runs on (a merge commit, never pushed). No card by default; the user confirms first only if they turned off \"Let agents manage other sessions\". A conflict aborts the merge and lists the files. The repository's .ompdesk/worktree-pre-merge (run in the worktree) must exit 0 before the merge starts, and .ompdesk/worktree-post-merge (run in the parent checkout) runs after it landed; a failing post-merge hook is reported and the merge stays. Refuses when the session or the parent has uncommitted changes. See skill://ompdesk.",
+			"Targets the parent's current branch on the session's computer; creates a merge commit, never pushes. No card by default; the user confirms first only if they turned off \"Let agents manage other sessions\". A conflict aborts the merge and lists the files. The repository's .ompdesk/worktree-pre-merge (run in the worktree) must exit 0 before the merge starts, and .ompdesk/worktree-post-merge (run in the parent checkout) runs after it landed; a failing post-merge hook is reported and the merge stays. Refuses when the session or the parent has uncommitted changes. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: { session: SESSION },
