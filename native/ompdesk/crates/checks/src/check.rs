@@ -76,7 +76,7 @@ fn may_cancel(owner: Option<&str>, caller: Option<&str>) -> bool {
 
 /// A result that fails a verdict.
 pub(crate) fn failing(status: &str) -> bool {
-    !matches!(status, "passed" | "skipped" | "flaky")
+    !matches!(status, "passed" | "skipped" | "unrun" | "flaky")
 }
 
 /// The check a command is: its checkout, its folder there, and its words.
@@ -198,10 +198,8 @@ pub fn start(opts: Start) -> i32 {
             &command_env(),
             detected.kind,
             &store,
-        )
-        .0
-        .digest();
-        let same_inputs = running.inputs.as_deref() == Some(now.as_str());
+        );
+        let same_inputs = now.is_ok_and(|set| running.inputs.as_ref() == Some(&set.digest()));
         if same_inputs && !opts.full && running.release == opts.release {
             eprintln!(
                 "ompdesk check: run {} of this check is already under way on the same inputs (started {}); following \
@@ -236,6 +234,7 @@ pub fn start(opts: Start) -> i32 {
         pid: 0,
         started: now_ms(),
         ended: None,
+        milestones: Some(store::Milestones::default()),
         exit_code: None,
         head: None,
         dirty: false,
@@ -303,6 +302,7 @@ pub fn start(opts: Start) -> i32 {
         let mut run = run;
         run.state = State::Error;
         run.ended = Some(now_ms());
+        eprintln!("ompdesk check: {}", run.timing(now_ms()).report());
         let _ = store.write(&run);
         return 1;
     }
@@ -431,6 +431,7 @@ pub(crate) fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
                         "ompdesk check {id}: its runner stopped before it finished (killed); what passed before stays \
                          reusable, so running the check again runs only the rest."
                     );
+                    eprintln!("ompdesk check: {}", run.timing(now_ms()).report());
                 }
                 return exit_of(&run);
             }
@@ -447,6 +448,7 @@ pub(crate) fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
 
 fn exit_of(run: &Run) -> i32 {
     match run.state {
+        State::Passed if !run.changed_during.is_empty() => crate::board::EXIT_UNKNOWN,
         State::Passed => 0,
         State::Cancelled => 130,
         State::Failed => run.exit_code.filter(|c| *c != 0).unwrap_or(1),
@@ -505,9 +507,23 @@ pub fn status(id: Option<&str>, all: bool, json: bool) -> i32 {
             .collect()
     };
     let mut out = io::stdout().lock();
+    let now = now_ms();
     if json {
-        let _ = writeln!(out, "{}", serde_json::to_string(&runs).unwrap_or_default());
-        return 0;
+        #[derive(Serialize)]
+        struct Status<'a> {
+            #[serde(flatten)]
+            run: &'a Run,
+            timing: store::Timing,
+        }
+        let rows = runs.iter().map(|run| Status {
+            run,
+            timing: run.timing(now),
+        });
+        let mut serializer = serde_json::Serializer::new(&mut out);
+        return i32::from(
+            serde::Serializer::collect_seq(&mut serializer, rows).is_err()
+                || writeln!(out).is_err(),
+        );
     }
     if runs.is_empty() {
         let _ = writeln!(
@@ -516,9 +532,8 @@ pub fn status(id: Option<&str>, all: bool, json: bool) -> i32 {
         );
         return 0;
     }
-    let now = now_ms();
     for r in &runs {
-        let took = store::duration(r.ended.unwrap_or(now).saturating_sub(r.started));
+        let timing = r.timing(now);
         let state = format!("{:?}", r.state).to_lowercase();
         let mode = if r.plan.mode.is_empty() {
             String::new()
@@ -527,10 +542,10 @@ pub fn status(id: Option<&str>, all: bool, json: bool) -> i32 {
         };
         let _ = writeln!(
             out,
-            "{}  {:<9} {:>7}  {}  {mode}{}",
+            "{}  {:<9}  {}  {}  {mode}{}",
             r.id,
             state,
-            took,
+            timing,
             r.argv.join(" "),
             r.summary.as_deref().unwrap_or("")
         );
@@ -641,6 +656,15 @@ impl Runtime<'_> {
     fn save(&self) {
         let _ = self.store.write(&self.run);
     }
+    fn end_before_command(&mut self, state: State, summary: String) -> i32 {
+        let end = now_ms();
+        self.run.state = state;
+        self.run.ended = Some(end);
+        self.say(&format!("{summary}; {}", self.run.timing(end).report()));
+        self.run.summary = Some(summary);
+        self.save();
+        exit_of(&self.run)
+    }
 }
 
 /// The input set of the checkout now.
@@ -651,21 +675,29 @@ fn input_set(
     env: &BTreeMap<String, String>,
     kind: Kind,
     store: &Store,
-) -> (InputSet, Option<Vec<String>>) {
-    let ignored = inputs::ignored(root);
+) -> io::Result<InputSet> {
+    let boundary = inputs::Boundary::load(root, cwd, argv)?;
+    let ignored = boundary.is_none().then(|| inputs::ignored(root)).flatten();
     let mut cache = StatCache::load(&store.dir, root);
-    let files = inputs::snapshot(root, ignored.as_deref(), &mut cache);
+    let files = inputs::snapshot(root, ignored.as_deref(), boundary.as_ref(), &mut cache)?;
+    let outside =
+        InputSet::command_files(cwd, argv, env, root, boundary.as_ref(), &files, &mut cache)?;
     let _ = cache.save();
-    (
-        InputSet {
-            files,
-            outside: InputSet::outside_files(root, cwd, argv),
-            env: InputSet::env_hashes(env),
-            tools: inputs::tools(kind == Kind::Cargo),
-            argv: argv.to_vec(),
+    let mut tools = inputs::tools(kind == Kind::Cargo);
+    tools.insert(
+        "input-policy-v2".into(),
+        match boundary {
+            Some(b) => inputs::sha256_hex(&serde_json::to_vec(&b)?),
+            None => "default".into(),
         },
-        ignored,
-    )
+    );
+    Ok(InputSet {
+        files,
+        outside,
+        env: InputSet::env_hashes(env),
+        tools,
+        argv: argv.to_vec(),
+    })
 }
 
 struct Decision {
@@ -786,6 +818,31 @@ fn decide(
     let records = merged(store, prev);
     let same = prev.inputs.as_deref() == Some(digest);
     let mut evidence = vec![format!("compared with {from}")];
+    let all_passed = !records.is_empty()
+        && records
+            .iter()
+            .all(|(r, _)| matches!(r.status.as_str(), "passed" | "skipped"));
+
+    if set.files.outputs != inputs::Outputs::Undeclared {
+        if !same || prev.state != State::Passed || !all_passed {
+            return full(
+                "the output-producing check needs a full run on these inputs".into(),
+                evidence,
+                plain(),
+            );
+        }
+        if !set
+            .files
+            .outputs
+            .matches_proof(&store.file(&prev.id, "outputs.sha256"))
+        {
+            return full(
+                "declared outputs are missing, changed, or have no previous fingerprint".into(),
+                evidence,
+                plain(),
+            );
+        }
+    }
 
     // What changed, and whether all of it is test files the runner can run on their own.
     let mut changed_tests: BTreeSet<PathBuf> = BTreeSet::new();
@@ -867,9 +924,6 @@ fn decide(
 
     // Whole reuse only when every result of that run passed: a run can pass with a quarantined test failing, and that
     // test runs again, under `--release` too.
-    let all_passed = records
-        .iter()
-        .all(|(r, _)| matches!(r.status.as_str(), "passed" | "skipped"));
     if same && prev.state == State::Passed && all_passed {
         let reused: Vec<Reused> = records
             .iter()
@@ -1157,7 +1211,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
     ));
 
     let mut lease: Option<heavy::Lease> = None;
-    let mut decided: Option<(Decision, InputSet, Option<Vec<String>>, String)> = None;
+    let mut decided: Option<(Decision, InputSet, String)> = None;
     let held_by_parent = env
         .get(heavy::HELD_ENV)
         .and_then(|p| p.parse::<u32>().ok())
@@ -1165,7 +1219,15 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
     // Decide, take a slot, and decide again when the inputs changed while it waited.
     for _ in 0..3 {
         let hashing = Instant::now();
-        let (set, ignored) = input_set(&root, &cwd, &argv, &env, detected.kind, rt.store);
+        let set = match input_set(&root, &cwd, &argv, &env, detected.kind, rt.store) {
+            Ok(set) => set,
+            Err(e) => {
+                return rt.end_before_command(
+                    State::Error,
+                    format!("not started: cannot establish check inputs: {e}"),
+                );
+            }
+        };
         let digest = set.digest();
         rt.say(&format!(
             "inputs: {} files, {} variables, {} tools hashed in {} (digest {})",
@@ -1175,16 +1237,20 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             store::duration(hashing.elapsed().as_millis() as u64),
             &digest[..12]
         ));
-        if decided.as_ref().is_some_and(|d| d.3 == digest) {
+        if decided
+            .as_ref()
+            .is_some_and(|d| d.2 == digest && d.1.files.outputs == set.files.outputs)
+        {
             break;
         }
         let decision = decide(rt.store, &rt.run, &detected, &set, &digest, forced_full);
         let nothing_to_run = decision.plan.mode == "reused";
-        decided = Some((decision, set, ignored, digest));
+        decided = Some((decision, set, digest));
         if nothing_to_run || rt.run.light || lease.is_some() || held_by_parent {
             break;
         }
         rt.run.state = State::Waiting;
+        rt.run.milestones.get_or_insert_default().queued_at = Some(now_ms());
         rt.save();
         let lookup = |k: &str| env.get(k).cloned();
         let owner = heavy::Owner {
@@ -1196,6 +1262,8 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             cwd: cwd.display().to_string(),
             since: 0,
             weight: 1,
+            run_id: Some(rt.run.id.clone()),
+            session: rt.run.session.clone(),
         };
         let log = &mut rt.log;
         let cancel_file = rt.store.file(&rt.run.id, "cancel");
@@ -1205,6 +1273,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                 pool.acquire_unless(
                     1,
                     owner,
+                    rt.run.release,
                     |w| {
                         let line = if w.low_disk.is_empty() {
                             format!(
@@ -1237,6 +1306,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             });
         match taken {
             Ok(l) => {
+                rt.run.milestones.get_or_insert_default().acquired_at = Some(l.acquired_at);
                 if l.waited.as_secs() >= 1 {
                     let waited = store::duration(l.waited.as_millis() as u64);
                     rt.say(&format!("heavy slot taken after {waited}"));
@@ -1247,28 +1317,22 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             // folder cannot be written) never lets the command start, or the disk rule is lost exactly when it matters.
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                 rt.say("cancelled while waiting for a heavy slot; the command never started");
-                rt.run.state = State::Cancelled;
-                rt.run.ended = Some(now_ms());
-                rt.run.summary = Some("cancelled before it started".into());
-                rt.save();
-                return 130;
+                return rt
+                    .end_before_command(State::Cancelled, "cancelled before it started".into());
             }
             Err(e) => {
                 rt.say(&format!(
                     "cannot take a heavy slot ({e}); the command does not start (free space, or the pool folder {}?)",
                     heavy::pool_dir(&lookup).display()
                 ));
-                rt.run.state = State::Error;
-                rt.run.ended = Some(now_ms());
-                rt.run.summary = Some(format!("not started: no heavy slot ({e})"));
-                rt.save();
-                return 1;
+                return rt
+                    .end_before_command(State::Error, format!("not started: no heavy slot ({e})"));
             }
         }
         rt.run.state = State::Running;
         rt.save();
     }
-    let Some((decision, start_set, ignored, digest)) = decided else {
+    let Some((decision, start_set, digest)) = decided else {
         return 1;
     };
     rt.run.plan = decision.plan.clone();
@@ -1289,11 +1353,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
 
     if rt.store.file(&rt.run.id, "cancel").exists() {
         rt.say("cancelled before the command started");
-        rt.run.state = State::Cancelled;
-        rt.run.ended = Some(now_ms());
-        rt.run.summary = Some("cancelled before it started".into());
-        rt.save();
-        return 130;
+        return rt.end_before_command(State::Cancelled, "cancelled before it started".into());
     }
     #[cfg(target_os = "macos")]
     let keychains_before = keychains();
@@ -1342,14 +1402,33 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
     }
 
     // What changed while the command ran.
-    let (end_set, _) = input_set(&root, &cwd, &argv, &env, detected.kind, rt.store);
-    let changed: Vec<String> = inputs::changed_paths(&start_set.files, &end_set.files)
-        .into_iter()
-        .filter(|p| !inputs::is_ignored(ignored.as_deref(), p))
-        .collect();
+    let changed = match input_set(&root, &cwd, &argv, &env, detected.kind, rt.store) {
+        Ok(end_set) => {
+            let mut changed = start_set.changed_during(&end_set);
+            match &end_set.files.outputs {
+                inputs::Outputs::Undeclared => {}
+                inputs::Outputs::Missing => {
+                    changed.push("declared output missing after the check".into())
+                }
+                inputs::Outputs::Present(_)
+                    if decision.plan.mode == "reused"
+                        && start_set.files.outputs != end_set.files.outputs =>
+                {
+                    changed.push("declared outputs changed during cache reuse".into());
+                }
+                inputs::Outputs::Present(hash) => {
+                    if let Err(e) = fs::write(rt.store.file(&rt.run.id, "outputs.sha256"), hash) {
+                        changed.push(format!("could not record output fingerprint: {e}"));
+                    }
+                }
+            }
+            changed
+        }
+        Err(e) => vec![format!("could not verify final inputs: {e}")],
+    };
     if !changed.is_empty() {
         rt.say(&format!(
-            "{} files outside the ignored outputs changed while the check ran ({}{}): its results will not be reused",
+            "{} input changes or verification errors while the check ran ({}{}): its results will not be reused",
             changed.len(),
             changed
                 .iter()
@@ -1374,15 +1453,28 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                 }));
             }
         }
-        if detected.kind == Kind::Command
-            || (lines.is_empty() && runner::read_results(&results_path).0.is_empty())
-        {
-            lines.push(serde_json::json!({
-                "runner": "command",
-                "titles": [argv.join(" ")],
-                "status": if exit_code == 0 { "passed" } else { "failed" },
-                "ms": ran_for.as_millis() as u64,
-            }));
+        if lines.is_empty() {
+            let (reported, _) = runner::read_results(&results_path);
+            let wrapper_failed = detected.kind == Kind::Command && exit_code != 0;
+            let mut seen = BTreeSet::new();
+            if reported.is_empty()
+                || (wrapper_failed
+                    && !reported
+                        .iter()
+                        .rev()
+                        .any(|r| seen.insert(&r.key) && failing(&r.status)))
+            {
+                let error = if wrapper_failed && reported.is_empty() {
+                    runner::playwright_log_diagnostic(&rt.store.file(&rt.run.id, "log"), &cwd)
+                } else {
+                    None
+                };
+                lines.push(serde_json::json!({
+                    "runner": "command", "titles": ["command"],
+                    "status": if exit_code == 0 { "passed" } else { "failed" },
+                    "ms": ran_for.as_millis() as u64, "error": error,
+                }));
+            }
         }
         for line in lines {
             let _ = rt
@@ -1467,7 +1559,9 @@ fn run_command(
         }
     };
     let pid = child.id();
+    rt.run.milestones.get_or_insert_default().command_started_at = Some(now_ms());
     let _ = fs::write(rt.store.file(&rt.run.id, "child"), pid.to_string());
+    rt.save();
     let said = std::sync::Mutex::new(said);
     let watch = crate::watch::Watch::start(
         heavy::Volumes::of_work(cwd, argv, &|k| env.get(k).cloned()),
@@ -1501,6 +1595,10 @@ fn run_command(
     // What the command left running in its group goes with it.
     #[cfg(unix)]
     crate::sys::signal_group(pid, libc::SIGKILL);
+    if status.is_ok() {
+        rt.run.milestones.get_or_insert_default().command_ended_at = Some(now_ms());
+        rt.save();
+    }
     for pump in pumps {
         let _ = pump.join();
     }
@@ -1524,7 +1622,7 @@ fn run_command(
     status.ok().and_then(|s| s.code()).unwrap_or(1)
 }
 
-/// About how long the reused results took when they ran: each origin run's own wall time, shared out by its results'
+/// About how long the reused results took when they ran: each origin command's runtime, shared out by its results'
 /// durations (tests run side by side, so their durations add up to more than the run took).
 fn saved_ms(store: &Store, records: &[(Record, Origin)], own: &str) -> u64 {
     let mut by_origin: BTreeMap<&str, u64> = BTreeMap::new();
@@ -1538,8 +1636,9 @@ fn saved_ms(store: &Store, records: &[(Record, Origin)], own: &str) -> u64 {
         let Some(run) = store.read(origin) else {
             continue;
         };
-        let ended = run.ended.unwrap_or(run.started);
-        let wall = ended.saturating_sub(run.started);
+        let Some(wall) = run.timing(now_ms()).run_ms else {
+            continue;
+        };
         let (own_records, _) = runner::read_results(&store.file(origin, "results.jsonl"));
         let total: u64 = own_records
             .iter()
@@ -1565,9 +1664,9 @@ fn finish(
     let mut records = merged(rt.store, &rt.run);
     // A test the filter was meant to run again but that did not come back.
     for r in &decision.must_run {
-        let back = records
-            .iter()
-            .any(|(m, o)| m.key == r.key && o.run == own && m.status != "skipped");
+        let back = records.iter().any(|(m, o)| {
+            m.key == r.key && o.run == own && !matches!(m.status.as_str(), "skipped" | "unrun")
+        });
         if !back {
             records.retain(|(m, _)| m.key != r.key);
             let mut missing = r.clone();
@@ -1580,6 +1679,9 @@ fn finish(
     let mut book = Book::load(&rt.store.dir, &rt.run.key);
     let mut entered = Vec::new();
     for (r, o) in &records {
+        if !rt.run.changed_during.is_empty() {
+            break;
+        }
         if o.run != own || r.file_record || r.key.contains(" error|") {
             continue;
         }
@@ -1604,7 +1706,10 @@ fn finish(
         .collect();
     let release_blocked =
         rt.run.release && (!quarantined.is_empty() || !quarantined_flaky.is_empty());
-    let passed_now = now.iter().filter(|(r, _)| !failing(&r.status)).count();
+    let passed_now = now
+        .iter()
+        .filter(|(r, _)| matches!(r.status.as_str(), "passed" | "flaky"))
+        .count();
     rt.run.reused = reused;
     rt.run.ran = now.len();
     rt.run.failed = blocking.len();
@@ -1612,9 +1717,11 @@ fn finish(
     rt.run.flaky = entered.clone();
     rt.run.saved_ms = saved_ms(rt.store, &records, &own);
     rt.run.exit_code = Some(exit_code);
-    rt.run.ended = Some(now_ms());
     // The command's exit code fails the verdict unless every failure it reports is a quarantined test's.
-    let exit_explained = exit_code == 0 || (!quarantined.is_empty() && blocking.is_empty());
+    let exit_explained = exit_code == 0
+        || (rt.run.runner != Kind::Command.name()
+            && !quarantined.is_empty()
+            && blocking.is_empty());
     rt.run.state = if cancelled {
         State::Cancelled
     } else if rt.resource_stop.is_some() {
@@ -1732,7 +1839,9 @@ fn finish(
             "the command exited {exit_code} with no failed test recorded: the verdict is failed"
         ));
     }
-    let took = store::duration(rt.run.ended.unwrap_or(0).saturating_sub(rt.run.started));
+    let finished = now_ms();
+    rt.run.ended = Some(finished);
+    let timing = rt.run.timing(finished).report();
     let summary = format!(
         "{} results: {} reused, {} run now ({} passed, {} failed{})",
         counted.len(),
@@ -1754,7 +1863,7 @@ fn finish(
     };
     // OMPdesk's Pace line reads `reuse saved about … (<n> s)` from this line (`src/main/session-pace.ts`).
     rt.say(&format!(
-        "{own}: {state} in {took}{note} — {summary} — reuse saved about {} ({} s) — verdict {}",
+        "{own}: {state} in {timing}{note} — {summary} — reuse saved about {} ({} s) — verdict {}",
         store::duration(rt.run.saved_ms),
         rt.run.saved_ms / 1000,
         verdict.display()

@@ -102,6 +102,66 @@ describe.skipIf(process.platform === "win32")("ompdesk check with Playwright", (
 		expect(JSON.parse(ompdesk("checks", "wait").stdout).next).toBe("fix");
 	}, 300_000);
 
+	it.each(["reporter", "stdout"])("keeps Playwright diagnostics from a Node wrapper (%s)", channel => {
+		writeFileSync(
+			join(project, "tests", "wrapper.spec.cjs"),
+			`const {test, expect} = require("@playwright/test");
+test.describe.configure({mode: "serial"});
+test.skip("explicit skip", () => {});
+test("passes", () => {});
+test("${channel === "stdout" ? "synthetic-private-title" : "asserts"}", () => expect("synthetic-private-received").toBe("synthetic-private-expected"));
+test("not reached", () => {});`,
+		);
+		writeFileSync(
+			join(project, "wrapper.cjs"),
+			`const {spawnSync} = require("node:child_process");
+if (process.argv[2] === "stdout") delete process.env.PW_TEST_REPORTER;
+process.exitCode = spawnSync(process.execPath, ["node_modules/playwright/cli.js", "test", "wrapper.spec.cjs", "--workers=1"], {stdio: "inherit"}).status ?? 2;`,
+		);
+		const result = ompdesk("check", "--light", "--", "node", "wrapper.cjs", channel);
+		expect(result.status).toBe(1);
+		const waited = ompdesk("checks", "wait");
+		expect(waited.status).toBe(1);
+		const answer = JSON.parse(waited.stdout);
+		expect(answer.verdict).toBe("red");
+		expect(answer.failed).toHaveLength(1);
+		expect(waited.stdout).not.toContain("synthetic-private");
+		if (channel === "reporter") {
+			expect(answer.counts).toEqual({ passed: 1, failed: 1, skipped: 1, unrun: 1 });
+			expect(answer.failed[0].test).toContain("asserts");
+			expect(answer.failed[0].firstError).toMatch(/expect\(\.\.\.\)\.toBe.*5:/);
+		} else {
+			expect(answer.counts.passed).toBe(0);
+			expect(answer.failed[0].firstError).toMatch(/assertion failed at .*5:\d+; 1 failed; 1 passed; 1 did not run/);
+		}
+	}, 300_000);
+
+	it("keeps the Node wrapper's own failure after its Playwright child passed", () => {
+		writeFileSync(
+			join(project, "wrapper.cjs"),
+			`const {spawnSync} = require("node:child_process");
+const child = spawnSync(process.execPath, ["node_modules/playwright/cli.js", "test", "a.spec.cjs"], {stdio: "inherit"});
+process.exitCode = child.status === 0 ? 7 : 2;`,
+		);
+		expect(ompdesk("check", "--light", "--", "node", "wrapper.cjs").status).not.toBe(0);
+		const waited = ompdesk("checks", "wait");
+		expect(waited.status).toBe(1);
+		const answer = JSON.parse(waited.stdout);
+		expect(answer.counts).toEqual({ passed: 2, failed: 1, skipped: 0, unrun: 0 });
+		expect(answer.failed[0].test).toBe("command");
+	}, 300_000);
+
+	it("retains an ordinary wrapper's nonzero exit without exposing its arguments or output", () => {
+		const args = ["node", "-e", 'console.error("synthetic-private; 9 passed"); process.exit(7)'];
+		expect(ompdesk("check", "--light", "--", ...args).status).not.toBe(0);
+		const waited = ompdesk("checks", "wait");
+		expect(waited.status).toBe(1);
+		const answer = JSON.parse(waited.stdout);
+		expect(answer.counts).toEqual({ passed: 0, failed: 1, skipped: 0, unrun: 0 });
+		expect(answer.failed[0].firstError).toBe("");
+		expect(waited.stdout).not.toContain("synthetic-private");
+	}, 300_000);
+
 	it("runs only a changed test file, and everything once anything else changed", () => {
 		expect(check().status).toBe(1);
 		writeFileSync(

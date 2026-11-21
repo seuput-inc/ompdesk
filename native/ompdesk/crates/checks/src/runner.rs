@@ -95,20 +95,36 @@ fn base(token: &str) -> String {
 
 /// The runner a single command line invokes, if any.
 fn runner_in(tokens: &[String]) -> Option<Kind> {
-    for (at, token) in tokens.iter().enumerate() {
-        let next = tokens[at + 1..]
+    let (launcher, args) = tokens.split_first()?;
+    let launcher = base(launcher);
+    let forwarded = match (launcher.as_str(), args) {
+        ("npm" | "pnpm" | "yarn", [exec, rest @ ..]) if exec == "exec" => Some(rest),
+        ("bun", [x, rest @ ..]) if x == "x" => Some(rest),
+        ("npx" | "bunx" | "node", rest) => Some(rest),
+        _ => None,
+    };
+    let (exe, args) = if let Some(rest) = forwarded {
+        let at = rest
             .iter()
-            .find(|t| !t.starts_with('-'))
-            .map(String::as_str);
-        match base(token).as_str() {
-            "playwright" if next == Some("test") => return Some(Kind::Playwright),
-            "vitest" => return Some(Kind::Vitest),
-            "jest" => return Some(Kind::Jest),
-            "cargo" if matches!(next, Some("test")) => return Some(Kind::Cargo),
-            _ => {}
+            .position(|a| !matches!(a.as_str(), "--" | "-y" | "--yes" | "--no-install"))?;
+        (base(&rest[at]), &rest[at + 1..])
+    } else {
+        (launcher, args)
+    };
+    match exe.as_str() {
+        "playwright" if args.first().is_some_and(|arg| arg == "test") => Some(Kind::Playwright),
+        "vitest" => Some(Kind::Vitest),
+        "jest" => Some(Kind::Jest),
+        "cargo"
+            if args
+                .iter()
+                .find(|a| !a.starts_with('+'))
+                .is_some_and(|a| a == "test") =>
+        {
+            Some(Kind::Cargo)
         }
+        _ => None,
     }
-    None
 }
 
 /// A package script that is one plain command (no `&&`, `;`, pipes, redirects or substitutions), split in words.
@@ -140,19 +156,20 @@ pub fn detect(argv: &[String], cwd: &Path) -> Detected {
     if !matches!(pm.as_str(), "bun" | "npm" | "pnpm" | "yarn") {
         return plain(Kind::Command);
     }
-    let words: Vec<&str> = argv[1..]
-        .iter()
-        .map(String::as_str)
-        .filter(|w| !w.starts_with('-'))
-        .collect();
-    let name = match words.as_slice() {
-        ["run", name, ..] | ["run-script", name, ..] => *name,
-        ["test", ..] | ["t", ..] if pm != "bun" => "test",
-        [name, ..] if pm == "pnpm" || pm == "yarn" => *name,
+    let tail = &argv[1..];
+    let (name, bin_args) = match tail {
+        [run, name, ..] if run == "run" || run == "run-script" => (name.as_str(), &tail[1..]),
+        [test, ..] if matches!(test.as_str(), "test" | "t") && pm != "bun" => ("test", tail),
+        [name, ..] if pm == "pnpm" || pm == "yarn" => (name.as_str(), tail),
         _ => return plain(Kind::Command),
     };
     let Some(text) = script_text(cwd, name) else {
-        return plain(Kind::Command);
+        // These package managers fall back to an installed binary when there is no script of that name.
+        return plain(if pm == "npm" {
+            Kind::Command
+        } else {
+            runner_in(bin_args).unwrap_or(Kind::Command)
+        });
     };
     match plain_script(&text).and_then(|words| runner_in(&words)) {
         // cargo through a package script is left alone: its arguments would land after `--`.
@@ -345,6 +362,118 @@ pub fn cargo_results(log: &str) -> (Vec<Record>, bool) {
     }
     let complete = !announced.is_empty() && announced.iter().all(|(n, seen)| n == seen);
     (out, complete)
+}
+
+/// Only a diagnostic for the failed parent, never a test record. Wrappers may drop the reporter's environment.
+pub(crate) fn playwright_log_diagnostic(log: &Path, cwd: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const LIMIT: u64 = 256 * 1024;
+    let mut file = fs::File::open(log).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(LIMIT))).ok()?;
+    let mut bytes = Vec::with_capacity(len.min(LIMIT) as usize);
+    file.take(LIMIT).read_to_end(&mut bytes).ok()?;
+    // A CSI changes presentation (colour or cursor), not the error. No other escape is copied to the answer.
+    let mut csi = 0;
+    bytes.retain(|b| {
+        csi = match (csi, *b) {
+            (0, 0x1b) => 1,
+            (1, b'[') => 2,
+            (2, 0x20..=0x3f) => 2,
+            (0, _) => return true,
+            _ => 0,
+        };
+        false
+    });
+    let text = String::from_utf8_lossy(&bytes);
+    let mut location = None;
+    let mut in_first_failure = false;
+    let mut reason = None;
+    let mut failed = 0;
+    let mut passed = None;
+    let mut skipped = None;
+    let mut unrun = None;
+    for line in text.split(['\r', '\n']).map(str::trim) {
+        if let Some((n, header)) = line.split_once(") ")
+            && n.parse::<u32>().is_ok()
+        {
+            in_first_failure = location.is_none();
+            if in_first_failure {
+                location = playwright_location(header, cwd);
+            }
+        } else if in_first_failure && location.is_some() && reason.is_none() {
+            reason = if line.starts_with("Error: expect(") || line.starts_with("AssertionError") {
+                Some("assertion failed")
+            } else if line.starts_with("TimeoutError:") || line.starts_with("Test timeout of ") {
+                Some("timeout")
+            } else {
+                None
+            };
+        }
+        if let Some((n, what)) = line.split_once(' ')
+            && let Ok(n) = n.parse::<u32>()
+        {
+            match what {
+                "failed" => failed = n,
+                "did not run" => unrun = Some(n),
+                "skipped" => skipped = Some(n),
+                s if s == "passed" || s.starts_with("passed (") => passed = Some(n),
+                _ => {}
+            }
+        } else if failed > 0 && location.is_none() {
+            location = playwright_location(line, cwd);
+        }
+    }
+    let location = location?;
+    if failed == 0 && reason.is_none() {
+        return None;
+    }
+    let mut error = format!(
+        "Playwright output: {} at {location}",
+        reason.unwrap_or("test failure")
+    );
+    for (n, label) in [
+        ((failed > 0).then_some(failed), "failed"),
+        (passed, "passed"),
+        (unrun, "did not run"),
+        (skipped, "skipped"),
+    ] {
+        if let Some(n) = n {
+            use std::fmt::Write;
+            let _ = write!(error, "; {n} {label}");
+        }
+    }
+    Some(error)
+}
+
+fn playwright_location(header: &str, cwd: &Path) -> Option<String> {
+    let header = if header.starts_with('[') {
+        header.split_once("] › ")?.1
+    } else {
+        header
+    };
+    let (location, _) = header.split_once(" › ")?;
+    let (file_line, column) = location.rsplit_once(':')?;
+    let (file, line) = file_line.rsplit_once(':')?;
+    let (line, column) = (line.parse::<u32>().ok()?, column.parse::<u32>().ok()?);
+    if line == 0 || column == 0 || file.len() > 240 {
+        return None;
+    }
+    let path = Path::new(file);
+    // Never return a title, an absolute path or an arbitrary stdout token disguised as a source location.
+    if path
+        .components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+        && file
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/\\ ".contains(&b))
+        && cwd.join(path).is_file()
+    {
+        Some(format!("{file}:{line}:{column}"))
+    } else {
+        Some(format!("line {line}:{column}"))
+    }
 }
 
 /// What a run of the command becomes: the runner's reporter, and when narrowing, what is left out.
@@ -668,6 +797,11 @@ mod tests {
         );
         assert_eq!(detect(&argv("pnpm exec jest"), &cwd).kind, Kind::Jest);
         assert_eq!(
+            detect(&argv("npm exec -- vitest run"), &cwd).kind,
+            Kind::Vitest
+        );
+        assert_eq!(detect(&argv("pnpm vitest run"), &cwd).kind, Kind::Vitest);
+        assert_eq!(
             detect(&argv("cargo test --workspace"), &cwd).kind,
             Kind::Cargo
         );
@@ -680,6 +814,16 @@ mod tests {
             detect(&argv("./scripts/release-check.sh"), &cwd).kind,
             Kind::Command
         );
+        for command in [
+            "bun scripts/build-lock.ts --kind vitest -- tsc --noEmit",
+            "node wrapper.cjs -- playwright test",
+            "echo jest",
+        ] {
+            let args = argv(command);
+            let detected = detect(&args, &cwd);
+            assert_eq!(detected.kind, Kind::Command, "{command}");
+            assert_eq!(rewrite(&detected, &args, &reporters(), None).argv, args);
+        }
     }
 
     #[test]

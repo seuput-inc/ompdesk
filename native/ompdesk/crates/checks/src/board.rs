@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::check::{attach_to, failing, find_run, open_store, session_tag};
 use crate::flaky::{Book, CLEAR_AFTER};
 use crate::heavy::{Disk, Pool, now_ms};
-use crate::store::{Run, State, Store};
+use crate::store::{Run, State, Store, Timing};
 
 /// `checks wait` exits by outcome: 0 green, 1 red, and this when there is no judgment (still running, cancelled,
 /// killed, stopped, or a pass whose inputs changed under it).
@@ -54,6 +54,8 @@ pub struct Failed {
 pub struct Counts {
     pub passed: usize,
     pub failed: usize,
+    pub skipped: usize,
+    pub unrun: usize,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -68,8 +70,15 @@ pub struct ReusedFrom {
 #[serde(rename_all = "camelCase")]
 pub struct Answer {
     pub run: String,
+    /// No exit was observed for a cache hit or a command that never ran.
+    pub command_exit_code: Option<i32>,
+    pub inputs_stable: Option<bool>,
     pub verdict: Verdict,
     pub as_of: u64,
+    pub state: State,
+    pub timing: Timing,
+    pub session: Option<String>,
+    pub last_progress: Progress,
     pub counts: Counts,
     pub failed: Vec<Failed>,
     /// A `--release` check that is not green.
@@ -128,7 +137,7 @@ pub(crate) fn answer(store: &Store, run: &Run) -> Answer {
         State::Passed if run.changed_during.is_empty() => Verdict::Green,
         State::Passed => {
             notes.push(format!(
-                "it passed, but its inputs changed while it ran ({}), so none of its results hold: not green",
+                "the check passed, but its input evidence did not hold ({}); do not reuse it or pass a gate",
                 run.changed_during.join(", ")
             ));
             Verdict::Unknown
@@ -203,16 +212,28 @@ pub(crate) fn answer(store: &Store, run: &Run) -> Answer {
         ));
     }
 
+    let as_of = run.ended.unwrap_or_else(now_ms);
     Answer {
         run: run.id.clone(),
+        command_exit_code: run
+            .exit_code
+            .filter(|_| run.milestones.is_some_and(|m| m.command_ended_at.is_some())),
+        inputs_stable: matches!(run.state, State::Passed | State::Failed)
+            .then_some(run.changed_during.is_empty()),
         verdict,
-        as_of: run.ended.unwrap_or_else(now_ms),
+        as_of,
+        state: run.state,
+        timing: run.timing(as_of),
+        session: run.session.clone(),
+        last_progress: last_progress(store, run),
         counts: Counts {
             passed: counted
                 .iter()
                 .filter(|r| matches!(r.status.as_str(), "passed" | "flaky"))
                 .count(),
             failed: failures.len(),
+            skipped: counted.iter().filter(|r| r.status == "skipped").count(),
+            unrun: counted.iter().filter(|r| r.status == "unrun").count(),
         },
         failed: failures
             .iter()
@@ -269,6 +290,75 @@ pub fn wait(id: Option<&str>) -> i32 {
     }
 }
 
+/// Last observable activity, never the command's output or a guess about its health.
+#[derive(Serialize, Clone, Copy, Debug)]
+pub struct Progress {
+    pub at: u64,
+    pub kind: &'static str,
+}
+
+fn last_progress(store: &Store, run: &Run) -> Progress {
+    if let Some(at) = run.ended {
+        return Progress {
+            at,
+            kind: "finished",
+        };
+    }
+    let m = run.milestones.unwrap_or_default();
+    let mut last = Progress {
+        at: run.started,
+        kind: "registered",
+    };
+    for (kind, at) in [
+        ("queued", m.queued_at),
+        ("slot-acquired", m.acquired_at),
+        ("command-started", m.command_started_at),
+        ("command-ended", m.command_ended_at),
+    ] {
+        if let Some(at) = at
+            && at >= last.at
+        {
+            last = Progress { kind, at };
+        }
+    }
+    for (kind, file) in [("log-write", "log"), ("result-write", "results.jsonl")] {
+        let at = fs::metadata(store.file(&run.id, file))
+            .ok()
+            .filter(|meta| meta.len() != 0)
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+        if let Some(at) = at.map(|d| d.as_millis() as u64)
+            && at >= last.at
+        {
+            last = Progress { kind, at };
+        }
+    }
+    last
+}
+
+fn check_cancel_guidance(session: Option<&str>, me: Option<&str>) -> &'static str {
+    if session.is_some() && session == me {
+        "If this check is no longer needed, confirm its run ID and use ompdesk check cancel <run-id>."
+    } else if session.is_some() {
+        "Ask the owning session whether this check is still needed. Only the owner should use ompdesk check cancel <run-id>."
+    } else {
+        "Ask the person who started this check before using ompdesk check cancel <run-id> in their terminal."
+    }
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Holder {
+    pub slot: usize,
+    pub pid: Option<u32>,
+    pub run_id: Option<String>,
+    pub session: Option<String>,
+    pub acquired_at: Option<u64>,
+    pub held_ms: Option<u64>,
+    pub last_progress: Option<Progress>,
+    pub cancel_guidance: &'static str,
+}
+
 /// This computer's heavy slots as one pool.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -279,11 +369,13 @@ pub struct PoolRow {
     pub running: usize,
     pub queued: usize,
     pub oldest_wait_ms: u64,
+    pub holders: Vec<Holder>,
     /// Volumes too full for new heavy work to start.
     pub low_disk: Vec<Disk>,
 }
 
 #[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct RunRow {
     pub id: String,
     pub state: State,
@@ -297,6 +389,10 @@ pub struct RunRow {
     pub mine: bool,
     pub started: u64,
     pub ended: Option<u64>,
+    pub runner_pid: Option<u32>,
+    pub timing: Timing,
+    pub last_progress: Progress,
+    pub cancel_guidance: Option<&'static str>,
     pub summary: Option<String>,
 }
 
@@ -311,35 +407,65 @@ pub struct Board {
 /// The pool and every run not finished, then the newest finished ones; `me` is the caller's session.
 pub(crate) fn board(store: &Store, pool: &Pool, me: Option<&str>) -> Board {
     let status = pool.status();
+    let as_of = now_ms();
+    let runs: Vec<_> = store
+        .all()
+        .into_iter()
+        .enumerate()
+        .filter(|(at, run)| !run.state.finished() || *at < RECENT)
+        .map(|(_, run)| RunRow {
+            timing: run.timing(as_of),
+            last_progress: last_progress(store, &run),
+            cancel_guidance: (!run.state.finished())
+                .then(|| check_cancel_guidance(run.session.as_deref(), me)),
+            runner_pid: (run.pid != 0).then_some(run.pid),
+            lane: if run.release { "release" } else { "local" },
+            command: run.argv.join(" "),
+            folder: run.cwd,
+            mine: me.is_some() && run.session.as_deref() == me,
+            session: run.session,
+            id: run.id,
+            state: run.state,
+            started: run.started,
+            ended: run.ended,
+            summary: run.summary,
+        })
+        .collect();
+    let holders: Vec<_> = status.slots.into_iter().filter(|s| s.held).map(|s| {
+        let owner = s.owner.as_ref();
+        let pid = owner.map(|o| o.pid);
+        let acquired_at = owner.map(|o| o.since);
+        let run = owner.and_then(|o| o.run_id.as_ref()).and_then(|id| {
+            runs.iter().find(|r| r.id == *id && r.runner_pid == pid && !r.state.finished())
+        });
+        let last_progress = acquired_at.map(|at| Progress { at, kind: "slot-acquired" }).into_iter()
+            .chain(run.map(|r| r.last_progress))
+            .max_by_key(|p| p.at);
+        let cancel_guidance = match (owner, run.and_then(|r| r.cancel_guidance)) {
+            (_, Some(guidance)) => guidance,
+            (Some(o), None) if o.run_id.is_none() =>
+                "No check run ID. Ask the owning terminal or session to stop its heavy command if no longer needed.",
+            _ => "The check owner could not be verified. Do not cancel a run or signal a PID based on this slot.",
+        };
+        let (run_id, session) = s.owner.map(|o| (o.run_id, o.session)).unwrap_or_default();
+        Holder {
+            slot: s.slot, pid, run_id, session, acquired_at, last_progress, cancel_guidance,
+            held_ms: acquired_at.and_then(|at| as_of.checked_sub(at)),
+        }
+    }).collect();
     Board {
-        as_of: now_ms(),
+        as_of,
         pools: vec![PoolRow {
             id: "local",
             os: std::env::consts::OS,
             limit: status.size,
-            running: status.slots.iter().filter(|s| s.held).count(),
+            running: holders.len(),
+            holders,
             queued: status.queue.len(),
             oldest_wait_ms: pool.oldest_wait_ms(),
             low_disk: status.disk.into_iter().filter(Disk::low).collect(),
         }],
-        runs: store
-            .all()
-            .into_iter()
-            .enumerate()
-            .filter(|(at, run)| !run.state.finished() || *at < RECENT)
-            .map(|(_, run)| RunRow {
-                lane: if run.release { "release" } else { "local" },
-                command: run.argv.join(" "),
-                folder: run.cwd,
-                mine: run.session.as_deref() == me,
-                session: run.session,
-                id: run.id,
-                state: run.state,
-                started: run.started,
-                ended: run.ended,
-                summary: run.summary,
-            })
-            .collect(),
+        runs,
     }
 }
 
@@ -406,6 +532,8 @@ mod tests {
             serde_json::json!([
                 row("a passes", "passed", false, ""),
                 row("b fails", "failed", false, "AssertionError: expected 1 to be 2"),
+                row("c is skipped", "skipped", false, ""),
+                row("d did not run", "unrun", false, ""),
                 // A file's own record beside its tests is not a result people count.
                 {"key": "file", "name": "a.test.ts", "status": "failed", "counted": false},
             ]),
@@ -416,7 +544,9 @@ mod tests {
             a.counts,
             Counts {
                 passed: 1,
-                failed: 1
+                failed: 1,
+                skipped: 1,
+                unrun: 1,
             }
         );
         assert_eq!(
@@ -491,10 +621,18 @@ mod tests {
             &store,
             "0002",
             "passed",
-            serde_json::json!({"changed_during": ["src/a.ts"]}),
+            serde_json::json!({
+                "release": true, "changed_during": ["src/a.ts"],
+                "milestones": {"command_started_at": 1, "command_ended_at": 2}
+            }),
         );
         let a = answer(&store, &moved);
         assert_eq!((a.verdict, a.next), (Verdict::Unknown, Next::RerunFailed));
+        assert_eq!(
+            (a.command_exit_code, a.inputs_stable),
+            (Some(0), Some(false))
+        );
+        assert!(a.blocks_release);
         assert!(
             a.notes.iter().any(|n| n.contains("src/a.ts")),
             "{:?}",
@@ -558,6 +696,91 @@ mod tests {
     }
 
     #[test]
+    fn wait_separates_admission_child_runtime_and_total_even_when_nothing_ran() {
+        let dir = temp("timing");
+        let store = Store::open(dir.clone()).unwrap();
+        let observed = |id, state, metadata| {
+            let r = run(&store, id, state, metadata);
+            serde_json::to_value(answer(&store, &r)).unwrap()
+        };
+        let complete = observed(
+            "complete",
+            "passed",
+            serde_json::json!({
+                "started": 100, "ended": 300, "milestones": {
+                    "queued_at": 110, "acquired_at": 240, "command_started_at": 250, "command_ended_at": 280
+                }
+            }),
+        );
+        assert_eq!(
+            complete["timing"],
+            serde_json::json!({
+                "registeredAt": 100, "queuedAt": 110, "acquiredAt": 240, "commandStartedAt": 250,
+                "commandEndedAt": 280, "finishedAt": 300, "waitMs": 130, "runMs": 30, "totalMs": 200
+            })
+        );
+        let queued = observed(
+            "queued",
+            "waiting",
+            serde_json::json!({
+                "ended": null, "milestones": {"queued_at": 10}
+            }),
+        );
+        assert_eq!(
+            queued["timing"]["waitMs"],
+            queued["asOf"].as_u64().unwrap() - 10
+        );
+        assert!(queued["timing"]["acquiredAt"].is_null());
+        assert_eq!(queued["timing"]["runMs"], 0);
+        let running = observed(
+            "running",
+            "running",
+            serde_json::json!({
+                "ended": null, "milestones": {"queued_at": 10, "acquired_at": 40, "command_started_at": 45}
+            }),
+        );
+        assert_eq!(running["timing"]["waitMs"], 30);
+        assert_eq!(
+            running["timing"]["runMs"],
+            running["asOf"].as_u64().unwrap() - 45
+        );
+        let cancelled = observed(
+            "cancelled",
+            "cancelled",
+            serde_json::json!({
+                "ended": 90, "milestones": {"queued_at": 10}
+            }),
+        );
+        assert_eq!(cancelled["timing"]["waitMs"], 80);
+        assert_eq!(cancelled["timing"]["runMs"], 0);
+        assert!(cancelled["timing"]["acquiredAt"].is_null());
+        let reused = observed(
+            "reused",
+            "passed",
+            serde_json::json!({
+                "milestones": {}, "plan": {"mode": "reused", "reason": "", "from": "complete", "evidence": []}
+            }),
+        );
+        assert_eq!(reused["timing"]["waitMs"], 0);
+        assert_eq!(reused["timing"]["runMs"], 0);
+        assert!(reused["timing"]["commandStartedAt"].is_null());
+        let dead = observed(
+            "dead",
+            "killed",
+            serde_json::json!({
+                "ended": null, "milestones": {"command_started_at": 20}
+            }),
+        );
+        assert!(dead["timing"]["runMs"].is_null());
+        assert!(dead["timing"]["totalMs"].is_null());
+        let old = observed("old", "passed", serde_json::json!({}));
+        assert!(old["timing"]["waitMs"].is_null());
+        assert!(old["timing"]["runMs"].is_null());
+        assert_eq!(old["timing"]["totalMs"], 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn status_lists_the_pool_and_who_started_each_run() {
         let dir = temp("status");
         let store = Store::open(dir.join("store")).unwrap();
@@ -576,6 +799,8 @@ mod tests {
                     cwd: "/r".into(),
                     since: 0,
                     weight: 1,
+                    run_id: None,
+                    session: Some("raw-owner".into()),
                 },
                 |_| {},
             )
@@ -594,6 +819,14 @@ mod tests {
             (p.limit, p.running, p.queued, p.oldest_wait_ms),
             (2, 1, 0, 0)
         );
+        let holder = &p.holders[0];
+        assert_eq!(holder.pid, Some(std::process::id()));
+        assert_eq!(holder.session.as_deref(), Some("raw-owner"));
+        assert!(holder.run_id.is_none());
+        assert_eq!(holder.acquired_at, Some(lease.acquired_at));
+        assert_eq!(holder.held_ms, b.as_of.checked_sub(lease.acquired_at));
+        assert_eq!(holder.last_progress.unwrap().kind, "slot-acquired");
+        assert!(!holder.cancel_guidance.contains("check cancel"));
         let rows: Vec<(&str, &str, bool, Option<&str>)> = b
             .runs
             .iter()
@@ -612,6 +845,76 @@ mod tests {
         );
         drop(lease);
         assert_eq!(board(&store, &pool, None).pools[0].running, 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_old_check_holder_shows_result_activity_without_its_contents_or_cancelling_it() {
+        let dir = temp("long-holder");
+        let store = Store::open(dir.join("store")).unwrap();
+        let mut pool = Pool::new(dir.join("pool"), 1).unwrap();
+        pool.volumes = pool
+            .volumes
+            .clone()
+            .with_probe(std::sync::Arc::new(|_| Some((1 << 40, 1 << 41))));
+        let pid = std::process::id();
+        let r = run(
+            &store,
+            "long",
+            "running",
+            serde_json::json!({
+                "ended": null, "pid": pid, "session": "owner", "milestones": {
+                    "queued_at": 10, "acquired_at": 42, "command_started_at": 49
+                }
+            }),
+        );
+        let alive = fs::File::create(store.file(&r.id, "alive")).unwrap();
+        alive.lock().unwrap();
+        let slot = fs::File::create(pool.dir.join("slot.0")).unwrap();
+        slot.lock().unwrap();
+        let owner = Owner {
+            pid,
+            command: "synthetic private args".into(),
+            cwd: "/r".into(),
+            since: 42,
+            weight: 1,
+            run_id: Some(r.id.clone()),
+            session: r.session.clone(),
+        };
+        fs::write(
+            pool.dir.join("slot.0.owner"),
+            serde_json::to_vec(&owner).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            store.file(&r.id, "results.jsonl"),
+            "synthetic private result",
+        )
+        .unwrap();
+
+        let b = board(&store, &pool, Some("other"));
+        let holder = &b.pools[0].holders[0];
+        assert_eq!(holder.run_id.as_deref(), Some("long"));
+        assert_eq!(holder.session.as_deref(), Some("owner"));
+        assert_eq!(holder.held_ms, Some(b.as_of - 42));
+        assert_eq!(holder.last_progress.unwrap().kind, "result-write");
+        assert!(holder.cancel_guidance.contains("Ask the owning session"));
+        assert_eq!(b.runs[0].timing.wait_ms, Some(32));
+        assert_eq!(b.runs[0].timing.run_ms, Some(b.as_of - 49));
+        assert!(
+            !serde_json::to_string(&b)
+                .unwrap()
+                .contains("synthetic private")
+        );
+        let owned = board(&store, &pool, Some("owner"));
+        assert!(owned.runs[0].mine);
+        assert!(
+            owned.pools[0].holders[0]
+                .cancel_guidance
+                .contains("confirm its run ID")
+        );
+        assert!(!store.file(&r.id, "cancel").exists());
+        drop((alive, slot));
         let _ = fs::remove_dir_all(dir);
     }
 }

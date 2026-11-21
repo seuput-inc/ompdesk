@@ -5,10 +5,10 @@
 //! The pool is a folder of files any program can join (`pool_dir`): `slot.<i>` for `0 ≤ i < size`, each held by an
 //! exclusive OS file lock (`flock`, Windows `LockFileEx`) for as long as its holder lives, so a holder that dies or is
 //! killed gives its place back at once and nothing has to judge a stale owner. `slot.<i>.owner` says who holds it (JSON,
-//! read only while the lock is held). Waiters queue in order: `counter` (locked while read and raised) numbers each
-//! waiter's ticket `queue/<number>.<pid>`, which its waiter keeps locked while it waits; only the oldest live ticket
-//! takes slots, so a stream of small commands never starves a large one (`--all`). A ticket whose lock is free belongs
-//! to a waiter that died and is removed by whoever finds it.
+//! read only while the lock is held). `counter` serializes publishing tickets and claiming slots. A waiter locks
+//! `queue/<number>.<pid>` until admitted or cancelled. A release may pass older normal tickets once; the number of
+//! the admitted release protects those tickets from every subsequent release. Legacy FIFO tickets are barriers.
+//! A ticket whose lock is free belongs to a waiter that died.
 //!
 //! Size (`pool_size`): one slot per 8 GB of RAM over the first 8 GB (which stay for the system, OMPdesk and its
 //! sessions), at least 1, at most half the cores and at most 7: a 16 GB computer runs one heavy command at a time, a
@@ -96,6 +96,10 @@ pub struct Owner {
     pub since: u64,
     /// Slots this holder took at once (`--all` takes every one).
     pub weight: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 pub fn now_ms() -> u64 {
@@ -225,6 +229,7 @@ pub struct Lease {
     dir: PathBuf,
     /// How long the holder waited in the queue.
     pub waited: Duration,
+    pub acquired_at: u64,
 }
 
 impl Lease {
@@ -265,7 +270,7 @@ pub struct Status {
     pub dir: String,
     pub size: usize,
     pub slots: Vec<SlotView>,
-    /// Live waiters, oldest first: their pids.
+    /// Live waiters' pids in admission order if nobody else joins or cancels.
     pub queue: Vec<u32>,
     /// The volumes this process's heavy commands would write to; a `low` one holds new heavy commands back.
     pub disk: Vec<Disk>,
@@ -286,6 +291,53 @@ fn open_rw(path: &Path) -> io::Result<File> {
         .create(true)
         .truncate(false)
         .open(path)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Legacy,
+    Normal,
+    Release,
+}
+
+// Windows locks the ticket's data bytes. Its length can still be read without disturbing the lock.
+const NORMAL: &[u8] = b"normal";
+const RELEASE: &[u8] = b"release";
+
+struct Turn {
+    number: u64,
+    pid: u32,
+    class: Class,
+}
+
+struct Ticket {
+    number: u64,
+    path: PathBuf,
+    _lock: File,
+}
+
+impl Ticket {
+    fn leave(self) {
+        let _ = fs::remove_file(&self.path);
+    }
+
+    fn cancel(self) -> io::Error {
+        self.leave();
+        io::Error::new(io::ErrorKind::Interrupted, "cancelled while waiting")
+    }
+}
+
+fn admission_order(turns: &mut [Turn], protected: u64) {
+    // Rotate each unprotected run of normals behind the first release that follows it.
+    let mut start = 0;
+    for i in 0..turns.len() {
+        match turns[i].class {
+            Class::Normal if turns[i].number > protected => continue,
+            Class::Release => turns[start..=i].rotate_right(1),
+            Class::Normal | Class::Legacy => {}
+        }
+        start = i + 1;
+    }
 }
 
 impl Pool {
@@ -311,46 +363,66 @@ impl Pool {
         self.dir.join(format!("slot.{i}.owner"))
     }
 
-    /// The next ticket number: `counter` read and raised under its lock.
-    fn next_ticket(&self) -> io::Result<u64> {
-        let mut file = open_rw(&self.dir.join("counter"))?;
+    fn queue_lock(&self) -> io::Result<File> {
+        let file = open_rw(&self.dir.join("counter"))?;
         file.lock()?;
+        Ok(file)
+    }
+
+    fn protected(&self) -> io::Result<u64> {
+        match fs::read_to_string(self.dir.join("protected-through")) {
+            Ok(text) => text.parse().map_err(io::Error::other),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn protect(&self, through: u64) -> io::Result<()> {
+        let tmp = self.dir.join("protected-through.tmp");
+        fs::write(&tmp, through.to_string())?;
+        fs::rename(tmp, self.dir.join("protected-through"))
+    }
+
+    fn enqueue(&self, release: bool) -> io::Result<Ticket> {
+        let mut counter = self.queue_lock()?;
         let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        let next = text.trim().parse::<u64>().unwrap_or(0) + 1;
-        file.seek(SeekFrom::Start(0))?;
-        file.set_len(0)?;
-        write!(file, "{next}")?;
-        file.unlock()?;
-        Ok(next)
-    }
-
-    /// Joins the queue: a ticket locked by this process.
-    fn enqueue(&self) -> io::Result<(u64, PathBuf, File)> {
-        let number = self.next_ticket()?;
+        counter.read_to_string(&mut text)?;
+        // A legacy writer could die after truncating its counter.
+        let live = self.live_tickets(None)?;
+        let last = live.last().map_or(0, |t| t.number);
+        let number = text
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0)
+            .max(last)
+            .max(self.protected()?)
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("heavy ticket numbers exhausted"))?;
+        counter.seek(SeekFrom::Start(0))?;
+        write!(counter, "{number}")?;
         let name = format!("{number:020}.{}", std::process::id());
-        let tmp = self.dir.join("queue").join(format!("{name}.tmp"));
-        let file = open_rw(&tmp)?;
+        let dir = self.dir.join("queue");
+        let tmp = dir.join(format!("{name}.tmp"));
+        let mut file = open_rw(&tmp)?;
         file.lock()?;
-        let path = self.dir.join("queue").join(&name);
-        fs::rename(&tmp, &path)?;
-        Ok((number, path, file))
+        file.set_len(0)?;
+        file.write_all(if release { RELEASE } else { NORMAL })?;
+        let path = dir.join(name);
+        fs::rename(tmp, &path)?;
+        Ok(Ticket {
+            number,
+            path,
+            _lock: file,
+        })
     }
 
-    /// Live tickets, oldest first, as (number, pid); a dead waiter's ticket is removed on the way.
-    fn live_tickets(&self, own: Option<&Path>) -> Vec<(u64, u32)> {
-        let Ok(entries) = fs::read_dir(self.dir.join("queue")) else {
-            return Vec::new();
-        };
+    /// Live tickets in arrival order. An unreadable queue cannot grant admission.
+    fn live_tickets(&self, own: Option<&Path>) -> io::Result<Vec<Turn>> {
+        let entries = fs::read_dir(self.dir.join("queue"))?;
         let mut live = Vec::new();
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry?;
             let path = entry.path();
-            if Some(path.as_path()) == own {
-                if let Some(t) = parse_ticket(&entry.file_name().to_string_lossy()) {
-                    live.push(t);
-                }
-                continue;
-            }
             let name = entry.file_name().to_string_lossy().into_owned();
             if name.ends_with(".tmp") {
                 let old = entry
@@ -359,27 +431,38 @@ impl Pool {
                     .ok()
                     .and_then(|t| t.elapsed().ok())
                     .is_some_and(|age| age > TMP_STALE);
-                if old {
+                if old
+                    && let Ok(file) = File::open(&path)
+                    && try_lock(&file)?
+                {
                     let _ = fs::remove_file(&path);
                 }
                 continue;
             }
-            let Some(ticket) = parse_ticket(&name) else {
+            let Some((number, pid)) = parse_ticket(&name) else {
                 continue;
             };
-            match File::open(&path) {
-                Ok(file) => match try_lock(&file) {
-                    // Its waiter is gone: nobody holds the lock it took before the ticket was in the queue.
-                    Ok(true) => {
-                        let _ = fs::remove_file(&path);
-                    }
-                    _ => live.push(ticket),
-                },
-                Err(_) => continue,
+            let file = match File::open(&path) {
+                Ok(file) => file,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            if Some(path.as_path()) != own && try_lock(&file)? {
+                let _ = fs::remove_file(&path);
+                continue;
             }
+            let len = file.metadata()?.len();
+            let class = if len == NORMAL.len() as u64 {
+                Class::Normal
+            } else if len == RELEASE.len() as u64 {
+                Class::Release
+            } else {
+                Class::Legacy
+            };
+            live.push(Turn { number, pid, class });
         }
-        live.sort_unstable();
-        live
+        live.sort_unstable_by_key(|t| (t.number, t.pid));
+        Ok(live)
     }
 
     fn read_owner(&self, i: usize) -> Option<Owner> {
@@ -387,24 +470,23 @@ impl Pool {
         serde_json::from_str(&text).ok()
     }
 
-    /// Takes free slots until `held` has `want`; true once it has.
+    /// Attempts one all-or-nothing claim under the queue lock.
     fn take_free(&self, held: &mut Vec<(usize, File)>, want: usize) -> io::Result<bool> {
         for i in 0..self.size {
-            if held.len() >= want {
-                break;
-            }
-            if held.iter().any(|(h, _)| *h == i) {
-                continue;
-            }
             let file = open_rw(&self.slot_path(i))?;
             if try_lock(&file)? {
                 held.push((i, file));
+                if held.len() == want {
+                    return Ok(true);
+                }
             }
         }
-        Ok(held.len() >= want)
+        // A later release can become head. Never leave a partial --all claim in its way.
+        held.clear();
+        Ok(false)
     }
 
-    /// Takes `weight` slots (clamped to the pool's size), waiting in order behind every earlier waiter.
+    /// Takes `weight` slots (clamped to the pool's size) as a normal waiter.
     /// `on_wait` is called when the slots are not free at once and again when the reason changes.
     pub fn acquire(
         &self,
@@ -412,7 +494,7 @@ impl Pool {
         owner: Owner,
         on_wait: impl FnMut(&Waiting),
     ) -> io::Result<Lease> {
-        self.acquire_unless(weight, owner, on_wait, &|| false)
+        self.acquire_unless(weight, owner, false, on_wait, &|| false)
     }
 
     /// `acquire` that gives up its place, with `ErrorKind::Interrupted`, once `cancelled` says so (a cancelled check
@@ -421,71 +503,76 @@ impl Pool {
         &self,
         weight: usize,
         mut owner: Owner,
+        release: bool,
         mut on_wait: impl FnMut(&Waiting),
         cancelled: &dyn Fn() -> bool,
     ) -> io::Result<Lease> {
         let want = weight.clamp(1, self.size);
         let started = Instant::now();
-        let (number, ticket_path, ticket) = self.enqueue()?;
-        let mut held: Vec<(usize, File)> = Vec::new();
+        let ticket = self.enqueue(release)?;
+        let mut held = Vec::new();
         let mut told: Option<(bool, usize)> = None;
-        let outcome = loop {
+        loop {
+            let gate = self.queue_lock()?;
             if cancelled() {
-                break Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "cancelled while waiting",
-                ));
+                return Err(ticket.cancel());
             }
-            let tickets = self.live_tickets(Some(&ticket_path));
-            let ahead = tickets.iter().filter(|(n, _)| *n < number).count();
+            let mut tickets = self.live_tickets(Some(&ticket.path))?;
+            let protected = self.protected()?;
+            admission_order(&mut tickets, protected);
+            let ahead = tickets
+                .iter()
+                .position(|t| t.number == ticket.number && t.pid == std::process::id())
+                .ok_or_else(|| io::Error::other("heavy queue ticket disappeared"))?;
             let mut low_disk = Vec::new();
             if ahead == 0 {
-                // The oldest waiter holds the line while the disk is low, so a later small command never starts
-                // on the space it waits for.
                 low_disk = self.disks().into_iter().filter(Disk::low).collect();
                 if low_disk.is_empty() {
-                    match self.take_free(&mut held, want) {
-                        Ok(true) => break Ok(()),
-                        Ok(false) => {}
-                        Err(e) => break Err(e),
+                    if self.take_free(&mut held, want)? {
+                        if cancelled() {
+                            return Err(ticket.cancel());
+                        }
+                        let overtook = tickets.get(1).is_some_and(|t| t.number < ticket.number);
+                        owner.since = now_ms();
+                        owner.weight = want;
+                        let text = serde_json::to_vec(&owner)?;
+                        let lease = Lease {
+                            slots: held,
+                            dir: self.dir.clone(),
+                            waited: started.elapsed(),
+                            acquired_at: owner.since,
+                        };
+                        for (i, _) in &lease.slots {
+                            fs::write(self.owner_path(*i), &text)?;
+                        }
+                        if overtook {
+                            self.protect(ticket.number)?;
+                        }
+                        ticket.leave();
+                        return Ok(lease);
                     }
+                } else if !release && ticket.number > protected {
+                    // A normal already waiting for disk space keeps the line.
+                    self.protect(ticket.number)?;
                 }
             }
+            drop(gate);
             // Told again when the reason changes (the disk filled or freed, the queue moved).
             let reason = (!low_disk.is_empty(), ahead);
             if told != Some(reason) {
                 told = Some(reason);
                 on_wait(&Waiting {
                     ahead,
-                    holders: self
-                        .status()
-                        .slots
-                        .into_iter()
-                        .filter_map(|s| s.owner)
-                        .collect(),
+                    holders: self.slots().into_iter().filter_map(|s| s.owner).collect(),
                     low_disk,
                 });
             }
             std::thread::sleep(POLL);
-        };
-        let _ = fs::remove_file(&ticket_path);
-        drop(ticket);
-        outcome?;
-        owner.since = now_ms();
-        owner.weight = want;
-        let text = serde_json::to_string(&owner).unwrap_or_default();
-        for (i, _) in &held {
-            let _ = fs::write(self.owner_path(*i), &text);
         }
-        Ok(Lease {
-            slots: held,
-            dir: self.dir.clone(),
-            waited: started.elapsed(),
-        })
     }
 
-    pub fn status(&self) -> Status {
-        let slots = (0..self.size)
+    fn slots(&self) -> Vec<SlotView> {
+        (0..self.size)
             .map(|i| {
                 let held = match File::open(self.slot_path(i)) {
                     Ok(file) => !try_lock(&file).unwrap_or(false),
@@ -497,25 +584,35 @@ impl Pool {
                     held,
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    pub fn status(&self) -> Status {
+        let queue = (|| -> io::Result<_> {
+            let _gate = self.queue_lock()?;
+            let mut tickets = self.live_tickets(None)?;
+            admission_order(&mut tickets, self.protected()?);
+            Ok(tickets.into_iter().map(|t| t.pid).collect())
+        })()
+        .unwrap_or_default();
         Status {
             dir: self.dir.display().to_string(),
             size: self.size,
-            slots,
-            queue: self
-                .live_tickets(None)
-                .into_iter()
-                .map(|(_, pid)| pid)
-                .collect(),
+            slots: self.slots(),
+            queue,
             disk: self.disks(),
         }
     }
 
     /// How long the oldest live waiter has waited (its ticket's age); 0 with nobody waiting.
     pub fn oldest_wait_ms(&self) -> u64 {
+        let Ok(_gate) = self.queue_lock() else {
+            return 0;
+        };
         self.live_tickets(None)
-            .first()
-            .and_then(|(number, pid)| {
+            .ok()
+            .and_then(|tickets| {
+                let Turn { number, pid, .. } = tickets.first()?;
                 fs::metadata(self.dir.join("queue").join(format!("{number:020}.{pid}"))).ok()
             })
             .and_then(|m| m.modified().ok())
@@ -541,6 +638,8 @@ mod tests {
             cwd: String::new(),
             since: 0,
             weight: 1,
+            run_id: None,
+            session: None,
         }
     }
 
@@ -723,6 +822,176 @@ mod tests {
         assert_eq!(waiter.join().unwrap(), vec![0]);
         assert_eq!(said.lock().unwrap()[0], 1);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    const WORKER_DIR: &str = "OMPDESK_TEST_QUEUE_WORKER_DIR";
+
+    fn synthetic_pool(dir: &Path) -> Pool {
+        let mut pool = Pool::new(dir.to_owned(), 2).unwrap();
+        pool.volumes.paths = vec![dir.to_owned()];
+        pool.volumes.need = Some(10 * GIB);
+        pool.volumes = pool
+            .volumes
+            .with_probe(Arc::new(|_| Some((50 * GIB, 100 * GIB))));
+        pool
+    }
+
+    fn queue_worker(dir: &Path) {
+        let pool = synthetic_pool(dir);
+        let release = std::env::var("OMPDESK_TEST_QUEUE_CLASS").unwrap() == "release";
+        let weight = std::env::var("OMPDESK_TEST_QUEUE_WEIGHT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let cancel = dir.join(format!("cancel-{}", std::process::id()));
+        let mut told = false;
+        match pool.acquire_unless(
+            weight,
+            owner("worker"),
+            release,
+            |_| {
+                if !told {
+                    println!("queue-worker:waiting");
+                    told = true;
+                }
+            },
+            &|| cancel.exists(),
+        ) {
+            Ok(_lease) => {
+                println!("queue-worker:held");
+                io::copy(&mut io::stdin().lock(), &mut io::sink()).unwrap();
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => println!("queue-worker:cancelled"),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    struct Worker {
+        child: std::process::Child,
+        events: std::sync::mpsc::Receiver<String>,
+    }
+
+    impl Worker {
+        fn waiting(dir: &Path, class: &str, weight: usize) -> Self {
+            use std::io::{BufRead, BufReader};
+            use std::process::{Command, Stdio};
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "heavy::tests::release_queue_with_two_slots",
+                    "--nocapture",
+                ])
+                .env(WORKER_DIR, dir)
+                .env("OMPDESK_TEST_QUEUE_CLASS", class)
+                .env("OMPDESK_TEST_QUEUE_WEIGHT", weight.to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let (tx, events) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if let Some((_, event)) = line.split_once("queue-worker:")
+                        && tx.send(event.to_owned()).is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            let worker = Self { child, events };
+            worker.expect("waiting");
+            worker
+        }
+
+        fn expect(&self, phase: &str) {
+            assert_eq!(
+                self.events.recv_timeout(Duration::from_secs(30)).unwrap(),
+                phase
+            );
+        }
+
+        fn pid(&self) -> u32 {
+            self.child.id()
+        }
+    }
+
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    #[test]
+    fn release_queue_with_two_slots() {
+        if let Some(dir) = std::env::var_os(WORKER_DIR) {
+            return queue_worker(Path::new(&dir));
+        }
+        let (dir, _) = temp_pool(2);
+        let pool = synthetic_pool(&dir);
+        let a = pool.acquire(1, owner("a"), |_| panic!()).unwrap();
+        let b = pool.acquire(1, owner("b"), |_| panic!()).unwrap();
+        let mut normal = Worker::waiting(&dir, "normal", 2);
+        drop(Worker::waiting(&dir, "release", 1)); // Dies while queued.
+        let cancelled = Worker::waiting(&dir, "release", 1);
+        let first = Worker::waiting(&dir, "release", 1);
+        let second = Worker::waiting(&dir, "release", 1);
+        assert_eq!(
+            pool.status().queue,
+            [cancelled.pid(), normal.pid(), first.pid(), second.pid()]
+        );
+        fs::write(dir.join(format!("cancel-{}", cancelled.pid())), []).unwrap();
+        cancelled.expect("cancelled");
+        assert_eq!(
+            pool.status().queue,
+            [first.pid(), normal.pid(), second.pid()]
+        );
+
+        drop(a);
+        first.expect("held");
+        assert_eq!(
+            pool.status().slots[b.slots()[0]]
+                .owner
+                .as_ref()
+                .unwrap()
+                .command,
+            "b"
+        );
+        let third = Worker::waiting(&dir, "release", 1);
+        assert_eq!(
+            pool.status().queue,
+            [normal.pid(), second.pid(), third.pid()]
+        );
+        drop(first); // A crashed holder returns its OS lock without touching the queue.
+        drop(b);
+        normal.expect("held");
+        assert!(
+            pool.status()
+                .slots
+                .iter()
+                .all(|s| s.owner.as_ref().unwrap().pid == normal.pid())
+        );
+        drop(normal.child.stdin.take());
+        second.expect("held");
+        third.expect("held");
+        assert!(pool.status().queue.is_empty());
+        drop((normal, cancelled, second, third));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_empty_legacy_ticket_is_a_fifo_barrier_until_its_lock_is_returned() {
+        let (dir, _) = temp_pool(2);
+        let pool = synthetic_pool(&dir);
+        let legacy = open_rw(&dir.join("queue/00000000000000000001.4242")).unwrap();
+        legacy.lock().unwrap();
+        let release = Worker::waiting(&dir, "release", 1);
+        assert_eq!(pool.status().queue, [4242, release.pid()]);
+        drop(legacy);
+        release.expect("held");
+        drop(release);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

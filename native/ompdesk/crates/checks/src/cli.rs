@@ -239,6 +239,8 @@ fn take(weight: usize, command: &[String], label: &str) -> io::Result<heavy::Lea
         weight,
         Owner {
             pid: std::process::id(),
+            run_id: None,
+            session: crate::check::session_tag(),
             command: label.chars().take(200).collect(),
             cwd: cwd(),
             since: 0,

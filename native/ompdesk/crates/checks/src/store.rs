@@ -75,6 +75,69 @@ pub struct Plan {
     pub evidence: Vec<String>,
 }
 
+/// Absent from old journals. A missing milestone in a new journal means that phase has not started.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Milestones {
+    pub queued_at: Option<u64>,
+    pub acquired_at: Option<u64>,
+    pub command_started_at: Option<u64>,
+    pub command_ended_at: Option<u64>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Timing {
+    pub registered_at: u64,
+    pub queued_at: Option<u64>,
+    pub acquired_at: Option<u64>,
+    pub command_started_at: Option<u64>,
+    pub command_ended_at: Option<u64>,
+    pub finished_at: Option<u64>,
+    pub wait_ms: Option<u64>,
+    pub run_ms: Option<u64>,
+    pub total_ms: Option<u64>,
+}
+
+impl std::fmt::Display for Timing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn span(ms: Option<u64>) -> String {
+            match ms {
+                None => "unknown".into(),
+                Some(ms @ 1..1000) => format!("{ms}ms"),
+                Some(ms) => duration(ms),
+            }
+        }
+        write!(
+            f,
+            "{} total (slot wait {}, command run {})",
+            span(self.total_ms),
+            span(self.wait_ms),
+            span(self.run_ms)
+        )
+    }
+}
+
+impl Timing {
+    pub fn report(&self) -> String {
+        fn stamp(at: Option<u64>) -> String {
+            let Some(ms) = at else {
+                return "not recorded".into();
+            };
+            let (year, month, day, hour, minute, second) = civil(ms / 1000);
+            format!(
+                "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
+                ms % 1000
+            )
+        }
+        format!(
+            "{self}; registered {}, slot acquired {}, finished {}",
+            stamp(Some(self.registered_at)),
+            stamp(self.acquired_at),
+            stamp(self.finished_at)
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Run {
     pub id: String,
@@ -87,8 +150,11 @@ pub struct Run {
     pub state: State,
     /// The runner's process (its group on POSIX).
     pub pid: u32,
+    /// When the foreground registered the run, not when a slot or command started.
     pub started: u64,
     pub ended: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestones: Option<Milestones>,
     pub exit_code: Option<i32>,
     /// `git rev-parse HEAD` and whether the work tree had changes, for people; reuse reads `inputs`.
     pub head: Option<String>,
@@ -117,6 +183,34 @@ pub struct Run {
     /// The OMPdesk session that started it, as the tag its omp's processes carry; none from a plain terminal.
     #[serde(default)]
     pub session: Option<String>,
+}
+
+impl Run {
+    pub fn timing(&self, as_of: u64) -> Timing {
+        // A dead runner with no recorded end did not run until the moment somebody listed it.
+        let live = (!self.state.finished()).then_some(as_of);
+        let end = self.ended.or(live);
+        let m = self.milestones.unwrap_or_default();
+        let elapsed = |start: Option<u64>, stop: Option<u64>| match start {
+            Some(start) => stop.and_then(|stop| stop.checked_sub(start)),
+            None => Some(0),
+        };
+        Timing {
+            registered_at: self.started,
+            queued_at: m.queued_at,
+            acquired_at: m.acquired_at,
+            command_started_at: m.command_started_at,
+            command_ended_at: m.command_ended_at,
+            finished_at: self.ended,
+            wait_ms: self
+                .milestones
+                .and_then(|_| elapsed(m.queued_at, m.acquired_at.or(end))),
+            run_ms: self
+                .milestones
+                .and_then(|_| elapsed(m.command_started_at, m.command_ended_at.or(live))),
+            total_ms: end.and_then(|end| end.checked_sub(self.started)),
+        }
+    }
 }
 
 pub struct Store {
