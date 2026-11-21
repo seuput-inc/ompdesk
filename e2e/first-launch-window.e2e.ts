@@ -16,6 +16,7 @@ import {
 	type WinProcess,
 	windowsProcesses,
 } from "./process-tree";
+import { screenshotBitmap } from "./screenshot-bitmap";
 
 // What a Windows user sees when OMPdesk opens: the packaged app (dist/win-unpacked, which release.yml's win job
 // has just packaged; OMP_GUI_E2E_EXE points at another OMPdesk.exe, e.g. an installed release), NOT headless
@@ -69,33 +70,30 @@ function captureScreen(file: string, bounds: Bounds | null): void {
 	);
 }
 
-/** Luma statistics of a PNG, decoded by Electron's nativeImage in the app's main process. */
-function pixelStats(app: ElectronApplication, file: string): Promise<PixelStats> {
-	return app.evaluate(({ nativeImage }, file) => {
-		const bitmap = nativeImage.createFromPath(file).toBitmap(); // BGRA
-		let count = 0;
-		let sum = 0;
-		let squares = 0;
-		let black = 0;
-		const colors = new Set<number>();
-		for (let i = 0; i + 3 < bitmap.length; i += 4 * 3) {
-			const b = bitmap[i] ?? 0;
-			const g = bitmap[i + 1] ?? 0;
-			const r = bitmap[i + 2] ?? 0;
-			const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-			count++;
-			sum += luma;
-			squares += luma * luma;
-			if (luma < 12) black++;
-			colors.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
-		}
-		const mean = count ? sum / count : 0;
-		return {
-			stddev: count ? Math.sqrt(Math.max(0, squares / count - mean * mean)) : 0,
-			black: count ? black / count : 1,
-			colors: colors.size,
-		};
-	}, file);
+async function pixelStats(file: string): Promise<PixelStats> {
+	const bitmap = await screenshotBitmap(file);
+	let count = 0;
+	let sum = 0;
+	let squares = 0;
+	let black = 0;
+	const colors = new Set<number>();
+	for (let i = 0; i + 3 < bitmap.length; i += 4 * 3) {
+		const b = bitmap[i] ?? 0;
+		const g = bitmap[i + 1] ?? 0;
+		const r = bitmap[i + 2] ?? 0;
+		const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+		count++;
+		sum += luma;
+		squares += luma * luma;
+		if (luma < 12) black++;
+		colors.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
+	}
+	const mean = count ? sum / count : 0;
+	return {
+		stddev: count ? Math.sqrt(Math.max(0, squares / count - mean * mean)) : 0,
+		black: count ? black / count : 1,
+		colors: colors.size,
+	};
 }
 
 function windowState(app: ElectronApplication) {
@@ -139,7 +137,7 @@ async function expectDrawn({ app, page }: Launched, info: TestInfo, name: string
 		.poll(
 			async () => {
 				captureScreen(file, inset);
-				screen = await pixelStats(app, file);
+				screen = await pixelStats(file);
 				return screen.colors;
 			},
 			// One capture is a cold PowerShell loading System.Windows.Forms: on a busy runner the first took over 10 s and
@@ -150,7 +148,7 @@ async function expectDrawn({ app, page }: Launched, info: TestInfo, name: string
 	await info.attach(`${name}-screen`, { path: file, contentType: "image/png" });
 	const rendererFile = info.outputPath(`${name}-renderer.png`);
 	await page.screenshot({ path: rendererFile });
-	const renderer = await pixelStats(app, rendererFile);
+	const renderer = await pixelStats(rendererFile);
 	await fs.appendFile(info.outputPath("captures.jsonl"), `${JSON.stringify({ name, state, screen, renderer })}\n`);
 	expect(screen?.black ?? 1, `${name}: the window shows black on screen`).toBeLessThan(0.5);
 	expect(screen?.stddev ?? 0, `${name}: the window shows one flat color on screen`).toBeGreaterThan(4);

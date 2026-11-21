@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { acceptLanguages } from "../src/main/system-languages";
 import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
+import { screenshotBitmap } from "./screenshot-bitmap";
 
 test("@smoke isolated Preview loads a local HTTP page without shell privileges", async () => {
 	test.setTimeout(120_000);
@@ -170,25 +171,21 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 			let nativeCapture = "";
 			await expect
 				.poll(async () => {
-					const captured = await app.evaluate(async ({ webContents }) => {
+					nativeCapture = await app.evaluate(async ({ webContents }) => {
 						const child = webContents
 							.getAllWebContents()
 							.find(contents => contents.getTitle() === "Local preview fixture");
 						if (!child) throw new Error("Missing native preview capture");
 						const image = await child.capturePage(undefined, { stayHidden: true });
-						const bitmap = image.toBitmap();
-						return {
-							painted: bitmap.some(
-								(alpha, index) =>
-									index % 4 === 3 &&
-									alpha > 0 &&
-									Math.min(bitmap[index - 3], bitmap[index - 2], bitmap[index - 1]) < 200,
-							),
-							png: image.toPNG().toString("base64"),
-						};
+						return image.toPNG().toString("base64");
 					});
-					nativeCapture = captured.png;
-					return captured.painted;
+					const bitmap = await screenshotBitmap(Buffer.from(nativeCapture, "base64"));
+					return bitmap.some(
+						(alpha, index) =>
+							index % 4 === 3 &&
+							alpha > 0 &&
+							Math.min(bitmap[index - 3], bitmap[index - 2], bitmap[index - 1]) < 200,
+					);
 				})
 				.toBe(true);
 			// Capture the actual app WebView through its test driver, not the separate Preview CDP service.

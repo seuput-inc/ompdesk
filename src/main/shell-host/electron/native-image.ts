@@ -7,7 +7,6 @@
  */
 import { readFileSync } from "node:fs";
 import type { HostClient } from "./host";
-import { bgraPremultiplied, decodePng } from "./png";
 
 export interface ImageSize {
 	width: number;
@@ -161,12 +160,6 @@ export class NativeImage {
 	toJPEG(_quality?: number): Buffer {
 		if (this.#bytes && this.#format === "jpeg") return Buffer.from(this.#bytes);
 		throw new Error("This image is not JPEG bytes here: ask for the encoding with encodeImage()");
-	}
-
-	/** BGRA, premultiplied, row-major, as Electron's; decoded from the PNG the shell captured. */
-	toBitmap(): Buffer {
-		if (!this.#bytes || this.#format !== "png") throw new Error("This image has no PNG bytes to read pixels from");
-		return bgraPremultiplied(decodePng(this.#bytes).rgba);
 	}
 
 	toDataURL(): string {
