@@ -15,6 +15,7 @@ import type { RpcWorktreeCreateResult } from "../../../shared/rpc-types";
 import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
 import { CoreError } from "../../core/process";
 import { fs } from "../../fenced-fs";
+import { SerialChain } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
 import { coreGit, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
@@ -24,6 +25,7 @@ import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 /** `git worktree add` checks out the whole tree: minutes on a large repository. */
 export const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
+const PLAN_AND_ADD_MS = 6 * DEFAULT_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS;
 /**
  * Longest each command runs before main answers, counting every git step on
  * its slowest path at that step's timeout. The renderer's RPC timeouts
@@ -31,10 +33,8 @@ const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
  * the work still lands.
  */
 export const WORKTREE_COMMAND_BUDGETS_MS = {
-	// Repo root, primary root, default branch, branch probe, `git branch`, the
-	// branch rollback when `worktree add` fails, `worktree add` itself, then
-	// seeding and the setup hook (`worktree-seed.ts`).
-	worktree_create: 6 * DEFAULT_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS + WORKTREE_PREPARE_BUDGET_MS,
+	// Planning, stock's location, waiting for the lock and every attempt share one cancellable step.
+	worktree_create: PLAN_AND_ADD_MS + WORKTREE_PREPARE_BUDGET_MS,
 	// Repo root, primary root, status, prune, and `worktree remove` itself.
 	worktree_remove: 4 * DEFAULT_TIMEOUT_MS + WORKTREE_REMOVE_TIMEOUT_MS,
 } as const;
@@ -103,17 +103,25 @@ export function worktreeBranchSource(value: unknown): WorktreeBranchSource | und
 	};
 }
 
+interface CreateInput {
+	name: string;
+	baseCwd?: string;
+	baseRef?: string;
+	branchPrefix?: string;
+	branch?: WorktreeBranchSource;
+}
+
 export async function createWorktree(
 	sessionCwd: string,
-	input: {
-		name: string;
-		baseCwd?: string;
-		baseRef?: string;
-		branchPrefix?: string;
-		branch?: WorktreeBranchSource;
-	},
+	input: CreateInput,
 	bridge: Pick<BridgeClient, "request">,
 ): Promise<RpcWorktreeCreateResult> {
+	const step = new SerialChain({ name: "worktree create", maxStepMs: PLAN_AND_ADD_MS });
+	const { primary, made } = await step.run(() => planAndAdd(sessionCwd, input, bridge), input.name);
+	return { ...made, ...(await prepareWorktree(primary, made.path)) };
+}
+
+async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<BridgeClient, "request">) {
 	const slug = worktreeSlug(input.name);
 	if (!slug) {
 		throw new LocalCommandError(
@@ -154,9 +162,8 @@ export async function createWorktree(
 					source: input.branch,
 					addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS,
 				},
-				// A generated name can need 100 branch probes before the create and its possible rollback.
-				input.branch ? 4 : 102,
-				WORKTREE_ADD_TIMEOUT_MS,
+				0,
+				PLAN_AND_ADD_MS,
 			);
 		} catch (error) {
 			if (error instanceof LocalCommandError) throw error;
@@ -166,7 +173,7 @@ export async function createWorktree(
 			);
 		}
 	});
-	return { ...made, baseCwd: mainCheckout, ...(await prepareWorktree(primary, made.path)) };
+	return { primary, made: { ...made, baseCwd: mainCheckout } };
 }
 
 /**
