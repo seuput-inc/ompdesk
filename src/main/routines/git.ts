@@ -14,10 +14,15 @@
 import { SCHEDULE_TICK_MS } from "../schedules";
 import { failureReporter, type RoutineSource, type SourceContext } from "./source";
 
+export type GitHeadRead =
+	| { kind: "missing"; mark: { head: null } | null }
+	| { kind: "unchanged" }
+	| { kind: "changed"; mark: { head: string }; from: string | null };
+
 /** The two git reads a git trigger makes; `repo` is the repository's folder. */
 export interface GitPort {
-	/** The commit `refs/heads/<branch>` names; null when the branch does not exist; rejects when git cannot read the repository. */
-	head(repo: string, branch: string): Promise<string | null>;
+	/** Compare the branch to its persisted mark. A missing branch keeps a previously observed commit. */
+	head(repo: string, branch: string, mark: unknown): Promise<GitHeadRead>;
 	/**
 	 * The line the routine fires with for the commits in `from..to` (`3 new commits on <branch>: …` with
 	 * `git log --oneline` of the newest ten); null when there are none.
@@ -45,8 +50,7 @@ class GitSource implements RoutineSource {
 	readonly #context: SourceContext;
 	readonly #report: (key: string, error: unknown | null) => void;
 	readonly #timer: ReturnType<typeof setInterval>;
-	/** The commit last seen: undefined before the first read, null while the branch did not exist. */
-	#baseline: string | null | undefined;
+	#mark: unknown;
 	/** The next read only takes the branch as the baseline: the routine's own run went since the last one. */
 	#rebase = false;
 	#busy = false;
@@ -62,8 +66,7 @@ class GitSource implements RoutineSource {
 		this.#report = failureReporter(message =>
 			options.context.warn(`git ${options.repo} ${options.branch}: ${message}`),
 		);
-		const mark = options.context.mark as { head?: unknown } | undefined;
-		if (mark && (typeof mark.head === "string" || mark.head === null)) this.#baseline = mark.head;
+		this.#mark = options.context.mark;
 		this.#timer = setInterval(() => void this.#poll(), options.intervalMs ?? SCHEDULE_TICK_MS);
 		this.#timer.unref?.();
 		void this.#poll();
@@ -101,31 +104,25 @@ class GitSource implements RoutineSource {
 			this.#rebase = true;
 			return;
 		}
-		const head = await this.#git.head(this.#repo, this.#branch);
+		const read = await this.#git.head(this.#repo, this.#branch, this.#mark);
 		if (this.#stopped) return;
 		if (this.#context.running()) {
 			this.#rebase = true;
 			return;
 		}
 		this.#report("read", null);
-		if (head === null) {
-			this.#report("branch", new Error("the branch does not exist"));
-			if (this.#baseline === undefined) {
-				this.#baseline = null;
-				this.#context.saveMark({ head: null });
-			}
-			return;
+		this.#report("branch", read.kind === "missing" ? new Error("the branch does not exist") : null);
+		if (read.kind !== "unchanged" && read.mark) {
+			this.#mark = read.mark;
+			this.#context.saveMark(read.mark);
 		}
-		this.#report("branch", null);
-		const before = this.#baseline;
-		this.#baseline = head;
-		if (before !== head) this.#context.saveMark({ head });
+		if (read.kind === "missing") return;
 		if (this.#rebase) {
 			this.#rebase = false;
 			return;
 		}
-		if (!before || before === head) return;
-		const line = await this.#git.commits(this.#repo, this.#branch, before, head);
+		if (read.kind !== "changed" || read.from === null) return;
+		const line = await this.#git.commits(this.#repo, this.#branch, read.from, read.mark.head);
 		if (this.#stopped || line === null || this.#context.running()) return;
 		this.#context.fire(line);
 	}

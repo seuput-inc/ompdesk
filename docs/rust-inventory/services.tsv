@@ -239,15 +239,15 @@ src/main/routines/email.test.ts	exception	Test coverage for mail trigger cursors
 src/main/routines/email.ts	port	Polls the mailbox, filters automated and self replies, saves the cursor and constructs the wake message.
 src/main/routines/fake-imap.ts	exception	Fake mailbox server supplies scripted IMAP exchanges to tests.
 src/main/routines/files.test.ts	exception	Test coverage for filesystem changes across relaunch.
-src/main/routines/files.ts	port	Attaches and retries watchers, ignores excluded directories, coalesces changes and reconciles saved listings.
+src/main/routines/files.ts	port	routines.filesScan now compares the saved mark against the listing it just read. Node still owns the live watcher, retry and burst timers, and quiet-period check before firing.
 src/main/routines/git.test.ts	exception	Test coverage for branch moves against a real repository.
-src/main/routines/git.ts	port	Polls branch heads against a saved baseline and fires a trigger with commit details when the branch moves.
+src/main/routines/git.ts	port	git.routineHead now decides whether to retain or replace the baseline. Node polls, rechecks stop/run state after the read, saves before requesting git.routineCommits, and suppresses the routine's own commits.
 src/main/routines/github.test.ts	exception	Test coverage for GitHub event baselines across relaunch.
 src/main/routines/github.ts	port	Validates repository names, selects event kinds, schedules polls and advances trigger state across reads.
 src/main/routines/imap.test.ts	exception	Test coverage for IMAP exchanges against a fake server.
 src/main/routines/imap.ts	port	Executes the IMAP login, examine, UID search and fetch sequence; parses literals and decodes MIME snippets.
 src/main/routines/marks.test.ts	exception	Test coverage for configuration-keyed marks across relaunch.
-src/main/routines/marks.ts	port	Keys marks by trigger configuration and serializes atomic file writes across updates and shutdown.
+src/main/routines/marks.ts	port	Keys marks by trigger configuration; migrating persistence requires preserving ordering between in-flight atomic saves and the final shutdown write.
 src/main/routines/ports.ts	port	Uses Node recursive fs.watch and adapts pool activity and session facts in addition to calling native Git and file methods.
 src/main/routines/sessions.test.ts	exception	Test coverage for session event triggering and filtering.
 src/main/routines/sessions.ts	port	Maps tab activity into waiting, failed or done events and excludes out-of-folder and related wake sessions.
@@ -255,7 +255,7 @@ src/main/routines/source.test.ts	exception	Test coverage for text clipping at ca
 src/main/routines/source.ts	port	Suppresses repeated failure notices and clips event text by Unicode code point.
 src/main/routines/test-context.ts	exception	Test harness captures fired events and marks and supplies fake file watchers and gh responses.
 src/main/routines/triggers.test.ts	exception	Test coverage for live trigger reconciliation on schedule edits.
-src/main/routines/triggers.ts	port	Reconciles enabled schedules with live sources, prunes marks and gates fires during runs and quiet periods.
+src/main/routines/triggers.ts	port	Core schedules owns run start, stop and state. Node reconciles live sources and quiet periods from that state. The older routines/runtime port needs the machine, tab-event and mailbox adapters before it can replace these subscriptions.
 src/main/setup/archives.test.ts	exception	Tests release selection and checksum lookup for the supported archives against a test mirror.
 src/main/setup/archives.ts	native-client	Forwards release lookups to setup.resolveArchive, setup.resolveAgentDesktop and setup.resolveTailscale and translates lookup errors.
 src/main/setup/compiled-launcher.ts	port	Moves a compiled omp launcher aside before installation, cleans stale copies and restores the prior launcher if the replacement is absent.

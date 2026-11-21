@@ -7,12 +7,12 @@
  * again every minute and fires nothing meanwhile.
  *
  * Across a relaunch: a listing of what is under the path (name, modified time and size of each file, at most
- * `FILES_LISTING_MAX` in name order) is the trigger's mark, taken when it starts and again two seconds after each
+ * the core's cap in name order) is the trigger's mark, taken when it starts and again two seconds after each
  * burst of changes (its own writes too). A start with the last launch's listing compares the two and fires once for
  * the files added, changed or removed while OMPdesk was closed, merged with any change seen while it compared. Past
  * the cap only files both listings hold are compared, and a different set of names fires as "Something under … changed".
  *
- * The listing and that comparison are the core's (`routines.filesScan`, `routines.filesChanged`,
+ * The listing and that comparison are the core's (`routines.filesScan`,
  * `native/ompdesk/crates/core/src/routines/files.rs`); the watcher and the burst's timers stay here.
  */
 import { clip, failureReporter, type RoutineSource, type SourceContext } from "./source";
@@ -26,27 +26,24 @@ export type WatchPath = (
 
 /**
  * What is under a path: each file's name ("/"-separated, relative; "" for the path itself when it is a file) and
- * `<modified ms>:<size>`. `complete` is false when the listing stopped at `FILES_LISTING_MAX`.
+ * `<modified ms>:<size>`. `complete` is false when the listing stopped at the cap.
  */
 export interface FilesListing {
 	entries: Record<string, string>;
 	complete: boolean;
 }
 
-/** Lists `path` as `FilesListing` (skipping `IGNORED_DIRS`); null when nothing is there. Rejects when it cannot read it. */
-export type ScanPath = (path: string) => Promise<FilesListing | null>;
+export interface FilesScan {
+	listing: FilesListing | null;
+	/** Null without a readable previous mark; an empty string names an unspecified change. */
+	changed: string[] | null;
+}
 
-/**
- * The names added, changed or removed between the last launch's listing (`mark`, JSON from disk) and `listing`; ""
- * alone when only "something" can be said; null when the mark holds no listing it can read.
- */
-export type ChangedSince = (mark: unknown, listing: FilesListing | null) => Promise<string[] | null>;
+export type ScanPath = (path: string, mark?: unknown) => Promise<FilesScan>;
 
 export const FILES_DEBOUNCE_MS = 2_000;
 export const FILES_MAX_WAIT_MS = 10_000;
 export const FILES_RETRY_MS = 60_000;
-/** Files a listing holds at most: it is written to disk after each burst. */
-export const FILES_LISTING_MAX = 2_000;
 const PATHS_LISTED = 10;
 /** Distinct paths kept per burst; more only count towards "and N more" through this cap. */
 const PATHS_KEPT = 1_000;
@@ -56,7 +53,6 @@ export interface FilesSourceOptions {
 	path: string;
 	watch: WatchPath;
 	scan: ScanPath;
-	changed: ChangedSince;
 	context: SourceContext;
 }
 
@@ -68,7 +64,6 @@ class FilesSource implements RoutineSource {
 	readonly #path: string;
 	readonly #watch: WatchPath;
 	readonly #scan: ScanPath;
-	readonly #changedSince: ChangedSince;
 	readonly #context: SourceContext;
 	readonly #report: (key: string, error: unknown | null) => void;
 	readonly #changed = new Set<string>();
@@ -88,7 +83,6 @@ class FilesSource implements RoutineSource {
 		this.#path = options.path;
 		this.#watch = options.watch;
 		this.#scan = options.scan;
-		this.#changedSince = options.changed;
 		this.#context = options.context;
 		this.#report = failureReporter(message => options.context.warn(`files ${options.path}: ${message}`));
 		this.#before = options.context.mark;
@@ -194,16 +188,13 @@ class FilesSource implements RoutineSource {
 		}
 		this.#listing = true;
 		try {
-			const now = await this.#scan(this.#path);
+			const { listing, changed } = await this.#scan(this.#path, this.#before);
 			if (this.#stopped) return;
 			this.#report("list", null);
-			const before = this.#before;
 			this.#before = undefined;
-			this.#context.saveMark({ listing: now });
-			if (before === undefined) return;
-			const names = await this.#changedSince(before, now);
-			if (this.#stopped || names === null || this.#context.quiet()) return;
-			for (const name of names) this.#note(name);
+			this.#context.saveMark({ listing });
+			if (changed === null || this.#context.quiet()) return;
+			for (const name of changed) this.#note(name);
 		} catch (error) {
 			if (!this.#stopped) this.#report("list", error);
 		} finally {

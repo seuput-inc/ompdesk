@@ -65,7 +65,7 @@ beforeEach(async () => {
 	const git: GitPort = {
 		head: async (_repo, branch) => {
 			gitCalls.push(`head ${branch}`);
-			return "abc";
+			return { kind: "unchanged" };
 		},
 		commits: async () => null,
 	};
@@ -89,7 +89,6 @@ beforeEach(async () => {
 		github,
 		watch: watch.watch,
 		scan: watch.scan,
-		filesChanged: watch.changed,
 		marks,
 		git,
 		sessions,
@@ -205,7 +204,7 @@ describe("RoutineTriggers", () => {
 		const git: GitPort = {
 			head: async () => {
 				heads.push(head);
-				return head;
+				return { kind: "changed", mark: { head }, from: heads.at(-2) ?? null };
 			},
 			commits: async () => "1 new commit on main: bbb change",
 		};
@@ -216,7 +215,6 @@ describe("RoutineTriggers", () => {
 			github: async () => NO_NEWS,
 			watch: watch.watch,
 			scan: watch.scan,
-			filesChanged: watch.changed,
 			marks,
 			git,
 			sessions: { observeTabs: () => () => undefined, tabs: () => [] },
@@ -254,7 +252,6 @@ describe("RoutineTriggers", () => {
 			github: async () => NO_NEWS,
 			watch: watch.watch,
 			scan: watch.scan,
-			filesChanged: watch.changed,
 			marks,
 			git,
 			sessions: { observeTabs: () => () => undefined, tabs: () => [] },
@@ -265,7 +262,12 @@ describe("RoutineTriggers", () => {
 		triggers.sync();
 	}
 	const gitAt = (head: () => string): GitPort => ({
-		head: async () => head(),
+		head: async (_repo, _branch, mark) => {
+			const to = head();
+			const from =
+				typeof mark === "object" && mark && "head" in mark && typeof mark.head === "string" ? mark.head : null;
+			return from === to ? { kind: "unchanged" } : { kind: "changed", mark: { head: to }, from };
+		},
 		commits: async (_repo, branch, from, to) => `1 new commit on ${branch}: ${to} after ${from}`,
 	});
 

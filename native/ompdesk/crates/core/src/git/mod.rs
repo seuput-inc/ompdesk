@@ -311,6 +311,8 @@ struct RoutineHeadParams {
     git: Runner,
     repo: String,
     branch: String,
+    #[serde(default)]
+    mark: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -431,8 +433,14 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.routineHead", |call| {
         Box::pin(async move {
-            let RoutineHeadParams { git, repo, branch } = call.params()?;
-            Reply::json(&triggers::routine_head(&Git::new(git, call.scope), &repo, &branch).await?)
+            let RoutineHeadParams {
+                git,
+                repo,
+                branch,
+                mark,
+            } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&triggers::routine_head(&git, &repo, &branch, &mark).await?)
         })
     });
     registry.add("git.routineCommits", |call| {
