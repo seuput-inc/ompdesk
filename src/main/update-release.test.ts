@@ -136,7 +136,7 @@ describe.runIf(process.platform !== "win32")("release workflow metadata step", (
 
 			const result = spawnSync("bash", ["-c", script ?? ""], {
 				cwd: dir,
-				env: { PATH: process.env.PATH, VERSION: "0.18.0" },
+				env: { HOME: dir, PATH: process.env.PATH, VERSION: "0.18.0" },
 				encoding: "utf8",
 			});
 			expect(result.stderr).toBe("");
