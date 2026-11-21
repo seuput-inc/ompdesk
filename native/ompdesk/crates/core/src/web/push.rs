@@ -4,9 +4,9 @@
 //! with its batcher) and the rule that a 404 or 410 forgets the subscription.
 //!
 //! Methods: `push.vapid` `{userData}` → `{publicKey, subject, created}` reads `<userData>/web-push.json` (a missing,
-//! damaged or mismatched file makes a new pair, `created: true`, and every subscription made against the old key can
-//! no longer be pushed to: the caller drops them) and keeps the pair in the process for `push.send` `{userData,
-//! subscription: {endpoint, keys: {p256dh, auth}}, payload, ttl, urgency, topic?, timeoutMs}` → `{statusCode}`. A
+//! damaged or mismatched file makes a new pair, `created: true`, and clears obsolete subscriptions). `web.start`
+//! does the same before binding. The pair stays in the process for `push.send` `{userData, subscription: {endpoint,
+//! keys: {p256dh, auth}}, payload, ttl, urgency, topic?, timeoutMs}` → `{statusCode}`. A
 //! push service's refusal is an answer; only a message that cannot be made or sent is a fault (`push_subscription`,
 //! `push_request`, `push_connect`, `push_tls`, `push_broken`, `push_timeout`, `no_vapid`), and no fault carries the
 //! endpoint, which is a capability URL.
@@ -148,7 +148,7 @@ fn open() -> MutexGuard<'static, HashMap<PathBuf, Arc<Vapid>>> {
 }
 
 /// The pair `load_vapid` last loaded for `user_data`, with no file read and nothing made: the edge's `/api/push`
-/// reads the public key through it on each request. None until main's `push.vapid` (or a `load_vapid`) ran.
+/// reads the public key through it on each request after `web.start`.
 pub fn loaded(user_data: &Path) -> Option<Arc<Vapid>> {
     open().get(user_data).cloned()
 }
@@ -439,12 +439,25 @@ struct VapidParams {
     user_data: PathBuf,
 }
 
+pub(super) async fn initialize(user_data: PathBuf) -> Result<(Arc<Vapid>, bool), Fault> {
+    tokio::task::spawn_blocking(move || {
+        // Two starts of an empty profile must not publish different keys.
+        static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let (vapid, created) =
+            load_vapid(&user_data).map_err(|error| Fault::new("io", error.to_string()))?;
+        if created {
+            super::store::FileDevices::open(&user_data).drop_push_subscriptions();
+        }
+        Ok((vapid, created))
+    })
+    .await
+    .map_err(|error| Fault::new("internal", error.to_string()))?
+}
+
 async fn vapid(call: Call) -> Result<Reply, Fault> {
     let params: VapidParams = call.params()?;
-    let (vapid, created) = tokio::task::spawn_blocking(move || load_vapid(&params.user_data))
-        .await
-        .map_err(|error| Fault::new("internal", error.to_string()))?
-        .map_err(|error| Fault::new("io", error.to_string()))?;
+    let (vapid, created) = initialize(params.user_data).await?;
     Reply::json(&json!({
         "publicKey": vapid.public_key(),
         "subject": VAPID_SUBJECT,

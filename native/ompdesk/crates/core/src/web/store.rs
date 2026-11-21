@@ -9,7 +9,7 @@
 //! an event, all in that one step, so the file, the events and the answers keep the order of the changes.
 //!
 //! Main keeps a copy it reads synchronously (`web-stores-client.ts`) and changes with ordered pushes
-//! (`web.devices.revoke`, `rename`, `setGrants`, `setUiPrefs`, `setPush`, `forgetPush`, `dropAllPush`, `update`,
+//! (`web.devices.revoke`, `rename`, `setGrants`, `setUiPrefs`, `setPush`, `forgetPush`, `update`,
 //! `web.blocks.add`, `remove`). Each carries `seq`, main's number for it; every push is answered by an event with
 //! `ack`, the highest `seq` applied, so main ignores a snapshot that does not hold its own latest change yet.
 //! The events, all with `userData`:
@@ -281,6 +281,10 @@ impl FileDevices {
     pub async fn flush(&self) -> Result<(), Fault> {
         let upto = locked(&self.state).lane.saved;
         self.writer.flush(upto).await
+    }
+
+    pub(super) fn drop_push_subscriptions(&self) {
+        self.apply(None, Book::drop_all_push);
     }
 
     pub fn get(&self, device_id: &str) -> Option<Device> {
@@ -639,15 +643,6 @@ pub fn register(registry: &mut Registry) {
                 s.devices.apply(Some(seq), |book| {
                     book.forget_push(&forget.device_id, &forget.endpoint)
                 });
-            },
-        );
-    });
-    registry.add_push("web.devices.dropAllPush", |call| {
-        pushed(
-            &call,
-            "web.devices.dropAllPush",
-            |s, seq, _: Map<String, Value>| {
-                s.devices.apply(Some(seq), |book| book.drop_all_push());
             },
         );
     });

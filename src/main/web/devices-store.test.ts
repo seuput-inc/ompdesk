@@ -6,6 +6,7 @@ import { DEFAULT_WEB_GRANTS } from "../../shared/web-protocol";
 import { PeerQuota } from "../remote/peer-quota";
 import { pushSettingsOf, sanitizeGrants, type WebDevice, WebDevices } from "./devices-store";
 import { seededDevice, writeWebDevices } from "./test-web-devices";
+import { loadVapid } from "./vapid-store";
 
 // The devices are the core's (crates/core/src/web/store.rs): these cases run against the real process. A device is
 // paired by the web edge, which the Rust tests cover (cookie check, expiry, never `pairing-admin` on a new device),
@@ -199,16 +200,19 @@ describe("push settings on a web device", () => {
 		const devices = await store();
 		devices.setPush(a.deviceId, { subscription: subscription("a"), hideContent: true, categories: ["ask"] });
 		devices.setPush(b.deviceId, { subscription: subscription("b"), hideContent: false, categories: ["error"] });
-		expect(devices.dropAllPushSubscriptions()).toBe(2);
+		expect((await loadVapid(dir)).created).toBe(true);
 		expect(devices.get(a.deviceId)?.push).toEqual({ subscription: null, hideContent: true, categories: ["ask"] });
 		expect(devices.get(b.deviceId)?.push?.subscription).toBeNull();
 		expect(devices.get(never.deviceId)?.push).toBeUndefined();
-		expect(devices.dropAllPushSubscriptions()).toBe(0);
 		await devices.flush();
 		const [first, second, third] = fileOf().devices;
 		expect(first?.push).toEqual({ subscription: null, hideContent: true, categories: ["ask"] });
 		expect(second?.push?.subscription).toBeNull();
 		expect(third?.push).toBeUndefined();
+		devices.setPush(a.deviceId, { subscription: subscription("fresh"), hideContent: true, categories: ["ask"] });
+		expect((await loadVapid(dir)).created).toBe(false);
+		await devices.flush();
+		expect(fileOf().devices[0]?.push?.subscription).toEqual(subscription("fresh"));
 	});
 
 	it("goes with the device on revoke", async () => {

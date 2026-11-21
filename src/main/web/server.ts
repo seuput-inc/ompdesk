@@ -11,6 +11,7 @@ import { CORE_EXITED, type CoreProcess, core } from "../core/process";
 import type { WebhookOutcome } from "../schedules";
 import type { TailnetPeer } from "../tailscale/whois";
 import type { PairingConfirmations } from "./pairing";
+import { loadVapid } from "./vapid-store";
 import type { WsRouter } from "./ws-router";
 
 export const WEB_SERVER_HOST = "127.0.0.1";
@@ -144,8 +145,11 @@ export class WebServer {
 
 	/** Listen on the loopback; `port` 0 picks a free one. Rejects (`EADDRINUSE`) when the port is taken. */
 	async start(options: { port?: number } = {}): Promise<{ port: number }> {
+		if (this.#port !== null) {
+			await loadVapid(this.#deps.userData);
+			if (this.#port !== null) return { port: this.#port };
+		}
 		if (this.#stopping) await this.#stopping;
-		if (this.#port !== null) return { port: this.#port };
 		const process = core();
 		route(process);
 		servers.set(this.#id, this);

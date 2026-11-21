@@ -116,7 +116,6 @@ export class WebHost {
 	readonly uploads: UploadStore;
 	readonly confirmations: PairingConfirmations;
 	readonly #deps: WebHostDeps;
-	readonly sender: PushSender;
 	readonly notifier: WebPushNotifier;
 	readonly #serveSecret: ServeSecretStore;
 	/** The upload sweep in flight; one at a time, and `stop` waits for it. */
@@ -128,11 +127,6 @@ export class WebHost {
 		this.#deps = deps;
 		const now = deps.now ?? Date.now;
 		this.devices = new WebDevices(deps.userData);
-		this.sender = new PushSender({
-			userData: deps.userData,
-			transport: deps.pushTransport,
-			log: deps.log,
-		});
 		this.quota = new PeerQuota(this.devices, () => this.devices.notifyChanged());
 		this.blobs = new BlobStore({ userData: deps.userData, now });
 		this.uploads = new UploadStore({ userData: deps.userData, now });
@@ -171,7 +165,7 @@ export class WebHost {
 		});
 		this.notifier = new WebPushNotifier({
 			devices: this.devices,
-			sender: this.sender,
+			sender: new PushSender({ userData: deps.userData, transport: deps.pushTransport, log: deps.log }),
 			visible: deviceId => this.router.isDeviceVisible(deviceId),
 			tabFacts: deps.tabs.facts,
 			language: deps.language,
@@ -226,9 +220,6 @@ export class WebHost {
 
 	/** Start listening (the loopback port; 0 picks a free one) and the upload sweep. */
 	async start(options: { port?: number } = {}): Promise<{ port: number }> {
-		// A keypair made now (first run, or its file was lost) breaks every subscription made against the old one.
-		// Before the server answers a page that asks for the key.
-		if ((await this.sender.open()).created) this.devices.dropAllPushSubscriptions();
 		await this.ready();
 		const started = await this.server.start(options);
 		// Until Mobile web confirms serve's handler, a request under this host's secret is answered 503, not 404.

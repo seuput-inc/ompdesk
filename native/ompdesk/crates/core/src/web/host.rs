@@ -75,6 +75,7 @@ fn page_build(html: &[u8], meta: &str) -> Option<String> {
 
 async fn start(call: Call) -> Result<Reply, Fault> {
     let mut params: StartParams = call.params()?;
+    super::push::initialize(params.user_data.clone()).await?;
     if let Some(running) = running().get(&params.host) {
         return Reply::json(&json!({ "port": running.port }));
     }

@@ -37,7 +37,7 @@ src/main/web/test-web-devices.ts	TS test fixture	devices-store.test.ts, web-stor
 src/main/web/uploads.test.ts	Vitest (node)	UploadStore, attachHere and web.uploads.receive	Keep multipart, ownership, quota and lifetime parity.
 src/main/web/uploads.ts	core web/uploads.rs; TS upload client	WsRouter, createHostActions, ipc.ts and remote/host-services.ts	Move synchronous owns check with host save. Move result shaping with attachment IPC; storage and sweep already run in Rust.
 src/main/web/vapid-store.test.ts	Vitest (node)	loadVapid and push.vapid	Keep public key creation and persistence parity.
-src/main/web/vapid-store.ts	core web/push.rs; TS typed client	PushSender.open	Retire the client with push initialization; private key material stays in the core.
+src/main/web/vapid-store.ts	core web/push.rs; TS typed client	WebServer.start (already listening)	Native web.start loads the key before binding, including after a core exit. A repeated start refreshes the key without rebinding. Rust invalidates obsolete subscriptions.
 src/main/web/web-client-window.ts	TS virtual window registry	WebHost, WsRouter and index.ts	Move per-device virtual windows with IPC caller identity, tab ownership and teardown.
 src/main/web/web-edge-p256.test.ts	Vitest and Playwright browsers	WebCrypto proof fixture for core web/proof_browsers.rs	Keep cross-runtime verification tooling; browser signatures are produced by the browsers.
 src/main/web/web-host.ts	TS host composition; core web/host.rs owns page build identity and asset archiving	index.ts constructs WebHost	Move admin handlers, revocation, tab notices and sweep scheduling with their services. Archive copy and stop barrier run with the listener; main holds no archive roots.
