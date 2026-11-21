@@ -65,7 +65,7 @@ export function releaseUpdateInfo(release: PlatformRelease): UpdateInfo {
  */
 export const RELEASE_LOOKUP_TIMEOUT_MS = 15_000;
 
-async function fetchRelease(feed: ReleaseFeed): Promise<unknown> {
+async function fetchRelease(feed: ReleaseFeed): Promise<string> {
 	// GitHub lists newest first; one page reaches any pre-release worth testing.
 	const url = feed.allowPrerelease ? `${feed.apiRepo}/releases?per_page=30` : `${feed.apiRepo}/releases/latest`;
 	const abort = new AbortController();
@@ -79,13 +79,13 @@ async function fetchRelease(feed: ReleaseFeed): Promise<unknown> {
 			),
 		);
 	}, RELEASE_LOOKUP_TIMEOUT_MS);
-	const lookup = async (): Promise<unknown> => {
+	const lookup = async (): Promise<string> => {
 		const response = await feed.fetch(url, { headers: feed.apiHeaders, signal: abort.signal });
 		// 404 is also what a token without access sees; runCheck asks the repo
 		// endpoint before trusting "no release".
 		if (response.status === 404) throw new ReleaseFeedError(NO_RELEASE_ERROR, `No published release (${url})`);
 		if (!response.ok) throw new ReleaseFeedError(RELEASE_LOOKUP_ERROR, `GitHub answered ${response.status} (${url})`);
-		return response.json();
+		return response.text();
 	};
 	// The race holds whether or not the fetch honours the signal.
 	return Promise.race([lookup(), late.promise]).finally(() => clearTimeout(timer));

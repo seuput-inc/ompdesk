@@ -1,4 +1,4 @@
-//! The `ompdesk-update` comment in release notes. Its schema order is also the order of its errors.
+//! GitHub releases and their `ompdesk-update` comments. Schema order determines diagnostic order.
 
 use std::{borrow::Cow, fmt};
 
@@ -136,8 +136,39 @@ fn digest(s: &str) -> bool {
     })
 }
 
+struct Entries<F>(F);
+
+impl<'de, F> de::Visitor<'de> for Entries<F>
+where
+    F: FnMut(usize, &'de RawValue) -> serde_json::Result<()>,
+{
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an array")
+    }
+
+    fn visit_seq<S: de::SeqAccess<'de>>(mut self, mut seq: S) -> Result<(), S::Error> {
+        let mut i = 0;
+        while let Some(raw) = seq.next_element()? {
+            (self.0)(i, raw).map_err(de::Error::custom)?;
+            i += 1;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Field {
+    ReleaseList,
+    Release,
+    Assets,
+    Asset,
+    Text,
+    OptionalText,
+    Boolean,
+    Number,
+    Url,
     Metadata,
     Version,
     ReleaseDate,
@@ -209,6 +240,22 @@ impl Field {
         let first = raw.as_bytes().first().copied();
         if first == Some(b'{') {
             let object = match self {
+                Release => Fields([
+                    ("tag_name", Text),
+                    ("name", OptionalText),
+                    ("body", OptionalText),
+                    ("draft", Boolean),
+                    ("prerelease", Boolean),
+                    ("assets", Assets),
+                ])
+                .object(raw, path, issues)?,
+                Asset => Fields([
+                    ("id", Number),
+                    ("name", Text),
+                    ("size", Number),
+                    ("url", Url),
+                ])
+                .object(raw, path, issues)?,
                 Metadata => Fields([
                     ("version", Version),
                     ("releaseDate", ReleaseDate),
@@ -231,14 +278,59 @@ impl Field {
             };
             return Ok(Some(object));
         }
+        if matches!(self, ReleaseList | Assets) && first == Some(b'[') {
+            let list = matches!(self, ReleaseList);
+            let field = if list { Release } else { Asset };
+            let mut assets = Vec::new();
+            let mut selected = None;
+            let mut selected_prerelease = false;
+            let previous = path.len();
+            let entries = Entries(|i, entry: &RawValue| {
+                use std::fmt::Write;
+                if previous != 0 {
+                    path.push('.');
+                }
+                write!(path, "{i}").unwrap();
+                if let Some(item) = field.read(entry.get(), path, issues)? {
+                    if !list {
+                        assets.push(item);
+                    } else if item["draft"].as_bool() == Some(false) {
+                        let pre = item["prerelease"].as_bool() == Some(true);
+                        if selected.is_none() || (pre && !selected_prerelease) {
+                            selected = Some(item);
+                            selected_prerelease = pre;
+                        }
+                    }
+                }
+                path.truncate(previous);
+                Ok(())
+            });
+            serde_json::Deserializer::from_str(raw).deserialize_seq(entries)?;
+            return Ok(if list {
+                selected
+            } else {
+                Some(Value::Array(assets))
+            });
+        }
+        if matches!(self, OptionalText) && matches!(first, None | Some(b'n')) {
+            return Ok(None);
+        }
+        if matches!(self, Boolean) && matches!(first, Some(b't' | b'f')) {
+            return Ok(Some(Value::Bool(first == Some(b't'))));
+        }
         if first.is_none() && matches!(self, File(_) | Minimum) {
             return Ok(None);
         }
         let mut add = |msg: &str| issue(issues, path, msg);
-        if first == Some(b'"') && matches!(self, Version | ReleaseDate | Name(_) | Digest | Minimum)
+        if first == Some(b'"')
+            && matches!(
+                self,
+                Text | OptionalText | Url | Version | ReleaseDate | Name(_) | Digest | Minimum
+            )
         {
             let text: String = serde_json::from_str(raw)?;
             match self {
+                Url if url::Url::parse(js_trim(&text)).is_err() => add("Invalid URL"),
                 Version if !semver(&text) => add("version must be semver"),
                 ReleaseDate if !datetime(&text) => add("Invalid ISO datetime"),
                 Name(name) if text != name => add(&format!("Invalid input: expected \"{name}\"")),
@@ -268,6 +360,8 @@ impl Field {
                     "Infinity"
                 } else if n == f64::NEG_INFINITY {
                     "-Infinity"
+                } else if matches!(self, Number) {
+                    return Ok(Some(Value::from(n)));
                 } else if matches!(self, Size) {
                     if n.fract() != 0.0 {
                         add("Invalid input: expected int, received number");
@@ -294,8 +388,10 @@ impl Field {
 
     fn wrong_type(self, received: &str, path: &str, issues: &mut String) -> Option<Value> {
         let want = match self {
-            Self::Metadata | Self::Files | Self::File(_) => "object",
-            Self::Size => "number",
+            Self::Release | Self::Asset | Self::Metadata | Self::Files | Self::File(_) => "object",
+            Self::Size | Self::Number => "number",
+            Self::ReleaseList | Self::Assets => "array",
+            Self::Boolean => "boolean",
             Self::Name(name) => {
                 issue(issues, path, &format!("Invalid input: expected \"{name}\""));
                 return None;
@@ -312,14 +408,44 @@ impl Field {
 }
 
 fn issue(issues: &mut String, path: &str, message: &str) {
-    if issues.is_empty() {
-        issues.push_str("The ompdesk-update comment is invalid: ");
-    } else {
+    if !issues.is_empty() {
         issues.push_str("; ");
     }
     issues.push_str(if path.is_empty() { "(root)" } else { path });
     issues.push_str(": ");
     issues.push_str(message);
+}
+
+pub(super) fn select(payload: &str, allow_prerelease: bool) -> Result<Value, Fault> {
+    let malformed = |_| Fault::new("update_invalid_payload", "Invalid release JSON");
+    let normalized = whole_surrogates(payload);
+    let root: &RawValue = serde_json::from_str(&normalized).map_err(malformed)?;
+    let mut issues = String::new();
+    let field = if allow_prerelease {
+        Field::ReleaseList
+    } else {
+        Field::Release
+    };
+    let selected = field
+        .read(root.get(), &mut String::new(), &mut issues)
+        .map_err(malformed)?;
+    if !issues.is_empty() {
+        let what = if allow_prerelease {
+            "release list"
+        } else {
+            "release"
+        };
+        return Err(Fault::new(
+            super::LOOKUP_ERROR,
+            format!("Unexpected {what} payload: {issues}"),
+        ));
+    }
+    selected.ok_or_else(|| {
+        Fault::new(
+            super::NO_RELEASE_ERROR,
+            "The repository has no published release",
+        )
+    })
 }
 
 pub(super) fn parse(body: &str) -> Result<(Value, String), Fault> {
@@ -345,7 +471,10 @@ pub(super) fn parse(body: &str) -> Result<(Value, String), Fault> {
         .map_err(malformed)?;
     match metadata {
         Some(metadata) if issues.is_empty() => Ok((metadata, notes(before, after))),
-        _ => Err(Fault::new(METADATA_ERROR, issues)),
+        _ => Err(Fault::new(
+            METADATA_ERROR,
+            format!("The ompdesk-update comment is invalid: {issues}"),
+        )),
     }
 }
 
