@@ -97,7 +97,7 @@ export class DesktopSlotHost {
 		const pid = frame.processId;
 		if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) return;
 		const process = sidecar.desktopSlotProcess?.(pid, acquire);
-		if (!process) return;
+		if (!process || process.absentAtAcquire) return;
 		let id = this.#keys.get(process);
 		if (!id) {
 			if (!acquire) return;

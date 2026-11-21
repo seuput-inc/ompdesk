@@ -47,6 +47,7 @@ class FakeSidecar extends EventEmitter {
 			},
 		};
 		this.execution = {
+			absentAtAcquire: false,
 			client: this.rpcClient,
 			exited: this.exit.promise,
 			gone: () => false,
@@ -340,6 +341,26 @@ describe("DesktopSlotHost", () => {
 
 describe("desktop process exit evidence", () => {
 	const identity = { launcher: 2, owner: 3, core: 1, wrapped: true };
+
+	it("grants the next live session immediately if the first requester already exited", () => {
+		const world = new World();
+		const a = world.tab("a", "A");
+		const b = world.tab("b", "B");
+		Object.assign(
+			a.execution,
+			desktopExitReceipt(
+				identity,
+				a.exit.promise,
+				() => false,
+				() => "absent",
+			),
+		);
+		world.frame(a, { type: "desktop_slot_acquire", requestId: "a1" });
+		world.frame(b, { type: "desktop_slot_acquire", requestId: "b1" });
+		expect(world.calls).toEqual([
+			{ tab: "b", method: "desktop_slot.grant", params: { requestId: "b1", waited: false } },
+		]);
+	});
 
 	it("does not grant the waiter on cmd.exe exit while the bridge process lives or cannot be inspected", async () => {
 		const world = new World();

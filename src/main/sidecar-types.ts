@@ -18,6 +18,7 @@ export const VIEW_ENDED_EVENT = "viewEnded";
 /** A single local omp spawn. None of its operations may target a replacement in the same tab. */
 export interface DesktopSlotProcess {
 	readonly client: Pick<RpcClient, "command">;
+	readonly absentAtAcquire: boolean;
 	readonly exited: Promise<boolean>;
 	/** Rechecks still-missing evidence for this spawn (e.g. the body outliving its launcher). */
 	gone(): boolean;

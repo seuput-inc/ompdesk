@@ -15,10 +15,11 @@ export function desktopExitReceipt(
 	wait: Promise<boolean>,
 	generationEnded: () => boolean,
 	inspect: (pid: number) => Presence = presence,
-): { exited: Promise<boolean>; gone(): boolean } {
+): { absentAtAcquire: boolean; exited: Promise<boolean>; gone(): boolean } {
 	const { launcher, owner, core, wrapped } = identity;
 	const direct = launcher === owner;
-	const observed = !(wrapped && direct) && inspect(owner) === "present";
+	const initial = inspect(owner);
+	const observed = !(wrapped && direct) && initial === "present";
 	let reaped = false;
 	let lost = false;
 	const gone = (): boolean => {
@@ -43,5 +44,5 @@ export function desktopExitReceipt(
 			return gone();
 		},
 	);
-	return { exited, gone };
+	return { absentAtAcquire: initial === "absent", exited, gone };
 }
