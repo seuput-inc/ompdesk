@@ -22,6 +22,7 @@ pub mod events;
 mod handshake;
 mod host;
 pub mod identity;
+mod kept_calls;
 mod link;
 pub mod store;
 pub mod tailnet;
@@ -125,6 +126,7 @@ pub(crate) fn identity(device_id: &str) -> Result<Arc<Identity>, Fault> {
 
 pub fn register(registry: &mut Registry) {
     devices::register(registry);
+    kept_calls::register(registry);
     store::register(registry);
     tailnet::register(registry);
     registry.add("remote.identity", |call| Box::pin(load_identity(call)));
