@@ -1,22 +1,16 @@
-/**
- * The previous builds' assets archive, run against the real core process (it lives in
- * `crates/core/src/web/archive.rs`).
- *
- * One difference from the TypeScript suite, forced by the move: the last case held the first call's copy by spying on
- * `fs.promises.readFile` of this process, which the core's reads never pass through. It now starts the two calls
- * together and checks the end state the held order protects; the held order itself is the Rust test
- * `a_second_call_waits_for_the_first_…`.
- */
+/** Archive lifecycle through the real edge. A new host represents an app relaunch on the same profile. */
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ARCHIVE_MAX_PREVIOUS, ARCHIVE_RETAIN_MS, AssetArchive, buildIdOf } from "./asset-archive";
+import { core } from "../core/process";
 
 let root: string;
 let renderer: string;
 let archiveDir: string;
 let clock: number;
+let nextHost = 1;
 
 /** Put build `name` in the renderer folder: its own web.html and one hashed chunk named after it. */
 function build(name: string): void {
@@ -26,9 +20,48 @@ function build(name: string): void {
 	writeFileSync(join(renderer, "assets", `chunk-${name}.js`), `chunk ${name}`);
 }
 
-const served = (archive: AssetArchive, file: string) =>
-	archive
-		.roots()
+async function start(staticRoot: string): Promise<number> {
+	const host = nextHost++;
+	await core().call("web.start", {
+		host,
+		port: 0,
+		userData: root,
+		staticRoot,
+		archiveNow: clock,
+		buildMeta: "omp-build",
+		router: {
+			channels: { batch: "batch", streams: [], heavy: [], prefsSet: "prefs" },
+			protocol: 1,
+			features: {},
+			policy: {},
+		},
+	});
+	return host;
+}
+
+async function stop(host: number): Promise<void> {
+	await core().call("web.stop", { host });
+}
+
+async function relaunch(): Promise<void> {
+	await stop(await start(renderer));
+}
+
+const buildId = (folder: string) =>
+	createHash("sha256")
+		.update(readFileSync(join(folder, "web.html")))
+		.digest("hex")
+		.slice(0, 12);
+
+function previous(): string[] {
+	const index: { builds: { build: string; replacedAt: number | null }[] } = JSON.parse(
+		readFileSync(join(archiveDir, "builds.json"), "utf8"),
+	);
+	return index.builds.filter(entry => entry.replacedAt !== null).map(entry => join(archiveDir, entry.build));
+}
+
+const kept = (file: string) =>
+	previous()
 		.map(dir => join(dir, "assets", file))
 		.filter(existsSync)
 		.map(path => readFileSync(path, "utf8"));
@@ -45,63 +78,65 @@ afterEach(() => {
 
 describe("AssetArchive (the previous builds' assets, served for a while after an update)", () => {
 	it("keeps each build once and serves only the replaced ones", async () => {
-		const archive = new AssetArchive({ userData: root, now: () => clock });
 		build("a");
-		await archive.retain(renderer);
+		await relaunch();
 		// The current build is the renderer folder's own: nothing older to serve yet.
-		expect(archive.roots()).toEqual([]);
+		expect(previous()).toEqual([]);
 		clock += 1000;
 		build("b");
-		await archive.retain(renderer);
-		expect(served(archive, "chunk-a.js")).toEqual(["chunk a"]);
-		expect(served(archive, "chunk-b.js")).toEqual([]);
+		await relaunch();
+		expect(kept("chunk-a.js")).toEqual(["chunk a"]);
+		expect(kept("chunk-b.js")).toEqual([]);
 		// A relaunch on the same build changes nothing and copies nothing again.
 		const before = readdirSync(archiveDir).sort();
-		await archive.retain(renderer);
+		writeFileSync(join(renderer, "assets", "chunk-b.js"), "changed in place");
+		await relaunch();
 		expect(readdirSync(archiveDir).sort()).toEqual(before);
-		expect(served(archive, "chunk-a.js")).toEqual(["chunk a"]);
+		expect(readFileSync(join(archiveDir, buildId(renderer), "assets", "chunk-b.js"), "utf8")).toBe("chunk b");
+		expect(kept("chunk-a.js")).toEqual(["chunk a"]);
 	});
 
 	it("drops a build once it was replaced longer than the window ago, and keeps the newest few", async () => {
-		const archive = new AssetArchive({ userData: root, now: () => clock });
 		for (const name of ["a", "b", "c", "d"]) {
 			build(name);
-			await archive.retain(renderer);
+			await relaunch();
 			clock += 1000;
 		}
 		// d is current; c and b replaced most recently; a is past the count.
-		expect(ARCHIVE_MAX_PREVIOUS).toBe(2);
-		expect(served(archive, "chunk-c.js")).toEqual(["chunk c"]);
-		expect(served(archive, "chunk-b.js")).toEqual(["chunk b"]);
-		expect(served(archive, "chunk-a.js")).toEqual([]);
-		clock += ARCHIVE_RETAIN_MS;
-		await archive.retain(renderer);
-		expect(archive.roots()).toEqual([]);
-		const currentBuild = await buildIdOf(renderer);
+		expect(kept("chunk-c.js")).toEqual(["chunk c"]);
+		expect(kept("chunk-b.js")).toEqual(["chunk b"]);
+		expect(kept("chunk-a.js")).toEqual([]);
+		clock += 7 * 24 * 60 * 60_000;
+		await relaunch();
+		expect(previous()).toEqual([]);
+		const currentBuild = buildId(renderer);
 		expect(readdirSync(archiveDir).sort()).toEqual(["builds.json", currentBuild].sort());
 	});
 
 	it("does nothing without a built renderer (a dev run) and survives a corrupt index", async () => {
-		const archive = new AssetArchive({ userData: root, now: () => clock });
-		await archive.retain(renderer);
+		await relaunch();
 		expect(existsSync(archiveDir)).toBe(false);
 		build("a");
 		mkdirSync(archiveDir, { recursive: true });
 		writeFileSync(join(archiveDir, "builds.json"), "{not json");
-		await archive.retain(renderer);
-		expect(archive.roots()).toEqual([]);
+		await relaunch();
+		expect(previous()).toEqual([]);
 		expect(JSON.parse(readFileSync(join(archiveDir, "builds.json"), "utf8")).builds).toHaveLength(1);
 	});
 
 	it("runs two calls one after the other, so the first call's cleanup never sweeps the second call's copy", async () => {
-		const archive = new AssetArchive({ userData: root, now: () => clock });
 		build("a");
 		const first = renderer;
 		renderer = join(root, "renderer-next");
 		build("b");
 		const second = renderer;
-		await Promise.all([archive.retain(first), archive.retain(second)]);
-		expect(served(archive, "chunk-a.js")).toEqual(["chunk a"]);
-		expect(existsSync(join(archiveDir, (await buildIdOf(second)) ?? "", "assets", "chunk-b.js"))).toBe(true);
+		const older = await start(first);
+		try {
+			await stop(await start(second));
+		} finally {
+			await stop(older);
+		}
+		expect(kept("chunk-a.js")).toEqual(["chunk a"]);
+		expect(existsSync(join(archiveDir, buildId(second), "assets", "chunk-b.js"))).toBe(true);
 	});
 });

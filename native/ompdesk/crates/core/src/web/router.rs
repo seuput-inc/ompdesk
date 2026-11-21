@@ -598,6 +598,8 @@ pub struct Host {
     events: Mutex<Events>,
     config: Config,
     grants: Arc<dyn Grants>,
+    /// The first successful listen with a renderer starts one archive copy for this host.
+    pub(super) archive_copy: OnceLock<tokio::sync::watch::Receiver<()>>,
     clock: Clock,
     /// A test drives the batch and heartbeat timers (`web.router.test.*`).
     manual: bool,
@@ -611,7 +613,7 @@ fn hosts() -> MutexGuard<'static, HashMap<u64, Arc<Host>>> {
     HOSTS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn host_of(host: u64) -> Option<Arc<Host>> {
+pub(super) fn host_of(host: u64) -> Option<Arc<Host>> {
     hosts().get(&host).cloned()
 }
 
@@ -676,6 +678,7 @@ impl Host {
             events: Mutex::new(events),
             config,
             grants,
+            archive_copy: OnceLock::new(),
             clock,
             manual,
             state: Mutex::new(State::default()),

@@ -404,13 +404,16 @@ describe("static files", () => {
 
 	// v0.38.1: a phone's page, older than the computer's update, asked for a lazy chunk the new build no longer had.
 	it("after an update, serves the previous build's hashed assets by name, and nothing else from them", async () => {
-		// This launch kept its build (WebHost.start, queued first); the next one runs a new build without the old chunk.
-		await host.assets.retain(staticRoot);
+		await host.stop();
 		expect(existsSync(join(userData, "web-assets", "builds.json"))).toBe(true);
 		writeFileSync(join(staticRoot, "web.html"), `${PAGE}<!-- next build -->`);
 		rmSync(join(staticRoot, "assets", "app-abc.js"));
 		writeFileSync(join(staticRoot, "assets", "app-def.js"), "next");
-		await host.assets.retain(staticRoot);
+		let clock = Date.now();
+		host = new WebHost({ ...hostDeps, now: () => clock });
+		await host.start({ port });
+		host.server.configure({ host: "127.0.0.1", publicPort: port, secure: false, servePrefix: SECRET });
+		await vi.waitFor(async () => expect((await raw("/assets/app-abc.js")).status).toBe(200));
 		const old = await raw("/assets/app-abc.js");
 		expect(old.status).toBe(200);
 		expect(old.body).toBe(SCRIPT);
@@ -418,13 +421,53 @@ describe("static files", () => {
 		expect((await raw("/assets/app-def.js")).body).toBe("next");
 		expect((await raw("/assets/missing.js")).status).toBe(404);
 		expect((await raw("/assets/../web-assets/builds.json")).status).not.toBe(200);
-	});
+
+		clock += 6 * 24 * 60 * 60_000;
+		await restartCore();
+		await vi.waitFor(async () => expect((await raw("/assets/app-abc.js")).body).toBe(SCRIPT));
+
+		// A core restart reloads the archive, but does not give a replaced build another seven days.
+		clock += 24 * 60 * 60_000;
+		await restartCore();
+		await vi.waitFor(() => {
+			const index = JSON.parse(readFileSync(join(userData, "web-assets", "builds.json"), "utf8"));
+			expect(index.builds).toHaveLength(1);
+		});
+		expect((await raw("/assets/app-abc.js")).status).toBe(404);
+	}, 30_000);
 
 	// Windows CI (release run 39191568825): the teardown's rmSync of userData hit ENOTEMPTY because the start's copy
 	// of the build into web-assets/ was still writing after stop() returned.
 	it("stop() returns only once the start's background work in userData is done", async () => {
+		const stopping = host.stop();
 		await host.stop();
 		expect(existsSync(join(userData, "web-assets", "builds.json"))).toBe(true);
+		await stopping;
+	});
+
+	it("starts archiving only after the host gets a listener", async () => {
+		const otherProfile = join(userData, "other-profile");
+		mkdirSync(otherProfile);
+		const other = new WebHost({ ...hostDeps, userData: otherProfile });
+		const index = join(otherProfile, "web-assets", "builds.json");
+		try {
+			await expect(other.start({ port })).rejects.toMatchObject({ code: "EADDRINUSE" });
+			expect(existsSync(index)).toBe(false);
+			await other.start({ port: 0 });
+		} finally {
+			await other.stop();
+		}
+		expect(JSON.parse(readFileSync(index, "utf8")).builds).toHaveLength(1);
+	});
+
+	it("does not archive a second build when the same host stops and starts again", async () => {
+		await host.stop();
+		const index = join(userData, "web-assets", "builds.json");
+		const original = readFileSync(index, "utf8");
+		writeFileSync(join(staticRoot, "web.html"), `${PAGE}<!-- changed -->`);
+		await host.start({ port });
+		await host.stop();
+		expect(readFileSync(index, "utf8")).toBe(original);
 	});
 });
 

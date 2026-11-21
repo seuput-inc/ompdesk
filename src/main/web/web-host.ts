@@ -30,7 +30,6 @@ import { PeerQuota } from "../remote/peer-quota";
 import type { TabActivity, TabFacts } from "../sidecar-pool";
 import { stockHelperRequest } from "../stock-helper";
 import type { TailnetPeer } from "../tailscale/whois";
-import { AssetArchive } from "./asset-archive";
 import { BlobStore } from "./blobs";
 import { WebBlocks } from "./blocks-store";
 import type { ClientWindow } from "./client-window";
@@ -120,9 +119,6 @@ export class WebHost {
 	readonly sender: PushSender;
 	readonly notifier: WebPushNotifier;
 	readonly #serveSecret: ServeSecretStore;
-	/** The previous builds' assets the server still serves (asset-archive.ts); filled once per launch at `start`. */
-	readonly assets: AssetArchive;
-	#archiving: Promise<void> | null = null;
 	/** The upload sweep in flight; one at a time, and `stop` waits for it. */
 	#sweeping: Promise<number> | null = null;
 	#sweeper: ReturnType<typeof setInterval> | undefined;
@@ -142,7 +138,6 @@ export class WebHost {
 		this.uploads = new UploadStore({ userData: deps.userData, now });
 		this.blocks = new WebBlocks(deps.userData, now);
 		this.#serveSecret = new ServeSecretStore(deps.userData);
-		this.assets = new AssetArchive({ userData: deps.userData, now });
 		this.confirmations = new PairingConfirmations({
 			notify: request => this.#toDesktop(WEB_PAIRING_REQUEST, request),
 			now,
@@ -198,7 +193,8 @@ export class WebHost {
 			whois: deps.whois,
 			onDeviceConnected: device => this.#toDesktop(WEB_DEVICE_CONNECTED, device),
 			router: this.router,
-			staticRoot: () => this.#deps.staticRoot(),
+			staticRoot: () => deps.staticRoot(),
+			now: deps.now,
 			onUnpairedAuth: deps.onUnpairedAuth,
 			...(deps.hooks ? { hooks: deps.hooks } : {}),
 			log: deps.log,
@@ -234,16 +230,10 @@ export class WebHost {
 		// Before the server answers a page that asks for the key.
 		if ((await this.sender.open()).created) this.devices.dropAllPushSubscriptions();
 		await this.ready();
-		const root = this.#deps.staticRoot();
 		const started = await this.server.start(options);
 		// Until Mobile web confirms serve's handler, a request under this host's secret is answered 503, not 404.
 		this.server.configure({ publicPort: started.port, pendingPrefix: this.serveSecret() });
 		void this.keepUploadsSwept();
-		if (root) {
-			this.#archiving ??= this.assets
-				.retain(root)
-				.catch(error => this.#deps.log?.(`web assets: keeping this build's assets failed: ${String(error)}`));
-		}
 		return started;
 	}
 
@@ -254,7 +244,7 @@ export class WebHost {
 	 */
 	async stop(): Promise<void> {
 		this.notifier.dispose();
-		await Promise.all([this.server.stop(), this.#archiving, this.#sweeping]);
+		await Promise.all([this.server.stop(), this.#sweeping]);
 		// What the edge and this side changed is on disk before the app may quit.
 		await Promise.all([this.devices.flush(), this.blocks.flush()]).catch(() => {});
 	}
