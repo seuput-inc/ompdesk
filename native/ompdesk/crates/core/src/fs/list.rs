@@ -284,11 +284,12 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
     };
     let entries = disk::read_dir(&params.dir).map_err(|error| match error.code {
         "ENOTDIR" => Fault::new("not_a_directory", "Not a directory"),
-        "ENOENT" => Fault::new("file_not_found", "Directory not found"),
-        // Windows answers a file listed as a folder with ERROR_DIRECTORY, which libuv's scandir reported as ENOTDIR.
+        // Windows' directory search can report ENOENT for an existing file as well as a missing path.
+        #[cfg(windows)]
         _ if std::fs::metadata(&params.dir).is_ok_and(|meta| !meta.is_dir()) => {
             Fault::new("not_a_directory", "Not a directory")
         }
+        "ENOENT" => Fault::new("file_not_found", "Directory not found"),
         _ => Fault::new(IO, error.message),
     })?;
     let visible = |name: &str| {
