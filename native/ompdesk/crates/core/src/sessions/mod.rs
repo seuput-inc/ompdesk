@@ -1,6 +1,6 @@
 //! The session index's own disk work (was the watch, the header read and the row rules of
 //! `src/main/session-index.ts`): the one recursive watch of the sessions tree with its settle and its change events,
-//! the legacy chat label read from a session file's head once per session id, and which rows of a list are kept.
+//! the legacy chat label read from a session file's head once per session id, which rows are kept, and content search.
 //!
 //! The list itself is not read here: main asks stock omp for it (`listAllSessions` in the stock helper) and hands this
 //! side each row's path and id, in the list's order. Main also keeps the tombstones, the folder filter of a window's
@@ -11,10 +11,12 @@
 //! `{index, names}` with the settled entries relative to the root, `names: null` when anything may have changed.
 
 mod rules;
+mod search;
+mod snippet;
 mod source;
 mod watch;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,9 @@ type LegacyFlags = Arc<Mutex<HashMap<String, Legacy>>>;
 #[derive(Default)]
 struct Index {
     legacy: LegacyFlags,
+    search: Arc<search::ContentCache>,
+    /// Only paths in stock's last deduplicated list are eligible; the caller can narrow, never widen, that list.
+    searchable: Option<(PathBuf, HashSet<String>)>,
     watch: Option<Watch>,
 }
 
@@ -63,6 +68,19 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("sessions.listed", |call| {
         Box::pin(blocking(move || listed(call.params()?)))
+    });
+    registry.add("sessions.search", |call| Box::pin(search(call)));
+    registry.add_push("sessions.forgetText", |push| {
+        if let Ok(change) = serde_json::from_str::<ChangedPaths>(push.params.get())
+            && let Some(index) = locked(&INDEXES).get_mut(&change.index)
+        {
+            for path in change.paths {
+                index.search.invalidate(Path::new(&path));
+                if let Some((_, listed)) = &mut index.searchable {
+                    listed.remove(&path);
+                }
+            }
+        }
     });
     registry.add("sessions.kind", |call| {
         Box::pin(blocking(move || kind(&call.params()?)))
@@ -107,50 +125,68 @@ fn watch(call: &Call) -> Result<Reply, Fault> {
     let mut indexes = locked(&INDEXES);
     let index = indexes.entry(params.index.clone()).or_default();
     let legacy = Arc::clone(&index.legacy);
+    let text = Arc::clone(&index.search);
     let events = call.events.clone();
     let root = PathBuf::from(&params.root);
     let name = params.index;
     let folder = root.clone();
-    index.watch = Some(watch::spawn(root, move |report| match report {
-        Report::Watching { missed } => events.send(
-            "sessions.watching",
-            &Watching {
-                index: &name,
-                watching: true,
-                missed,
-            },
-        ),
-        Report::Unwatched => events.send(
-            "sessions.watching",
-            &Watching {
-                index: &name,
-                watching: false,
-                missed: false,
-            },
-        ),
-        Report::Anything => events.send(
-            "sessions.changed",
-            &Changed {
-                index: &name,
-                names: None,
-            },
-        ),
-        Report::Changed(settled) => {
-            // A file that went takes its flag with it: another session may be written at that path.
-            let gone = settled.iter().filter(|entry| entry.gone);
-            let mut flags = locked(&legacy);
-            for entry in gone {
-                flags.remove(folder.join(&entry.name).to_string_lossy().as_ref());
+    index.watch = Some(watch::spawn(root, move |report| {
+        match &report {
+            Report::Changed(settled) => {
+                for entry in settled {
+                    if entry.name.ends_with(".jsonl") {
+                        text.invalidate(&folder.join(&entry.name));
+                    } else {
+                        // A project directory can have been renamed with every journal in it.
+                        text.clear();
+                        break;
+                    }
+                }
             }
-            drop(flags);
-            let names = settled.into_iter().map(|entry| entry.name).collect();
-            events.send(
+            Report::Watching { missed: false } => {}
+            _ => text.clear(),
+        }
+        match report {
+            Report::Watching { missed } => events.send(
+                "sessions.watching",
+                &Watching {
+                    index: &name,
+                    watching: true,
+                    missed,
+                },
+            ),
+            Report::Unwatched => events.send(
+                "sessions.watching",
+                &Watching {
+                    index: &name,
+                    watching: false,
+                    missed: false,
+                },
+            ),
+            Report::Anything => events.send(
                 "sessions.changed",
                 &Changed {
                     index: &name,
-                    names: Some(names),
+                    names: None,
                 },
-            );
+            ),
+            Report::Changed(settled) => {
+                // A file that went takes its flag with it: another session may be written at that path.
+                let gone = settled.iter().filter(|entry| entry.gone);
+                let mut flags = locked(&legacy);
+                for entry in gone {
+                    flags.remove(folder.join(&entry.name).to_string_lossy().as_ref());
+                }
+                drop(flags);
+                let names = settled.into_iter().map(|entry| entry.name).collect();
+                events.send(
+                    "sessions.changed",
+                    &Changed {
+                        index: &name,
+                        names: Some(names),
+                    },
+                );
+            }
         }
     }));
     Reply::json(&Done {})
@@ -171,6 +207,7 @@ fn close(call: &Call) -> Result<Reply, Fault> {
 #[derive(Deserialize)]
 struct ListedParams {
     index: String,
+    root: PathBuf,
     /// Every row of the list stock answered, in the list's order (newest first).
     rows: Vec<Row>,
 }
@@ -197,14 +234,20 @@ struct Listed {
 /// The rows the list keeps (one per session id), each with its legacy chat flag, read from the file only the first
 /// time this session is listed at that path.
 fn listed(params: ListedParams) -> Result<Reply, Fault> {
-    let flags = Arc::clone(&locked(&INDEXES).entry(params.index).or_default().legacy);
-    let kept = rules::first_of_each_id(params.rows.iter().map(|row| row.id.as_str()));
+    let mut rows = params.rows;
+    let kept = rules::first_of_each_id(rows.iter().map(|row| row.id.as_str()));
+    let flags = Arc::clone(
+        &locked(&INDEXES)
+            .entry(params.index.clone())
+            .or_default()
+            .legacy,
+    );
     let mut listed: Vec<ListedRow> = Vec::with_capacity(kept.len());
     let mut unread = Vec::new();
     {
         let known = locked(&flags);
         for row in kept {
-            let entry = &params.rows[row];
+            let entry = &rows[row];
             let chat = match known.get(&entry.path) {
                 Some(legacy) if legacy.id == entry.id => legacy.chat,
                 _ => {
@@ -218,7 +261,7 @@ fn listed(params: ListedParams) -> Result<Reply, Fault> {
     let read: Vec<Option<bool>> = {
         let paths: Vec<&str> = unread
             .iter()
-            .map(|at| params.rows[listed[*at].row].path.as_str())
+            .map(|at| rows[listed[*at].row].path.as_str())
             .collect();
         read_flags(&paths)
     };
@@ -226,7 +269,7 @@ fn listed(params: ListedParams) -> Result<Reply, Fault> {
     for (at, chat) in unread.into_iter().zip(read) {
         // No header read (unreadable, or not written yet): asked again next time.
         let Some(chat) = chat else { continue };
-        let entry = &params.rows[listed[at].row];
+        let entry = &rows[listed[at].row];
         known.insert(
             entry.path.clone(),
             Legacy {
@@ -237,7 +280,48 @@ fn listed(params: ListedParams) -> Result<Reply, Fault> {
         listed[at].chat = chat;
     }
     drop(known);
+    let paths = listed
+        .iter()
+        .map(|entry| std::mem::take(&mut rows[entry.row].path))
+        .collect();
+    // The index might have closed while a large list's headers were read.
+    if let Some(index) = locked(&INDEXES).get_mut(&params.index)
+        && Arc::ptr_eq(&index.legacy, &flags)
+    {
+        index.searchable = Some((params.root, paths));
+    }
     Reply::json(&Listed { listed })
+}
+
+#[derive(Deserialize)]
+struct ChangedPaths {
+    index: String,
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SearchParams {
+    index: String,
+    paths: Vec<String>,
+    query: snippet::Query,
+}
+
+async fn search(call: Call) -> Result<Reply, Fault> {
+    let mut params: SearchParams = call.params()?;
+    let (cache, root) = {
+        let indexes = locked(&INDEXES);
+        let Some(Index {
+            search,
+            searchable: Some((root, allowed)),
+            ..
+        }) = indexes.get(&params.index)
+        else {
+            return Reply::json(&[(); 0]);
+        };
+        params.paths.retain(|path| allowed.contains(path));
+        (Arc::clone(search), root.clone())
+    };
+    Reply::json(&cache.search(&root, params.paths, &params.query).await)
 }
 
 /// Each file's legacy chat flag, in order; a first list of many sessions reads them on a few threads.
@@ -315,6 +399,7 @@ mod tests {
     fn listed_rows(index: &str, rows: &[(&Path, &str)]) -> Vec<(usize, bool)> {
         let params = ListedParams {
             index: index.to_owned(),
+            root: rows[0].0.parent().unwrap().to_owned(),
             rows: rows
                 .iter()
                 .map(|(path, id)| Row {

@@ -4,11 +4,10 @@
  *
  * What reads the sessions tree by OMPdesk's own rules is in the core process (`native/ompdesk/crates/core/src/sessions`):
  * the one recursive watch of the tree with its settle, the legacy chat flag read from a session file's head once per
- * session id, and which rows of a list are kept (one per session id). This file keeps who asks: the call into stock
- * for the list, the tombstones, a window's folder filter (node's `path.resolve`), the shared numbered copy
- * (`SessionListShare`, whose order and diff are `src/shared` code the page runs too) and the content search.
+ * session id, which rows are kept, and search text and excerpts. Main asks stock for the list and applies tombstones
+ * and the window's folder filter. The shared numbered copy uses the same order and diff as the page.
  */
-import { open, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { codedError } from "../shared/ipc-error-codes";
@@ -19,22 +18,10 @@ import { agentDir } from "./agent-paths";
 import { core } from "./core/process";
 import { deletedSessions } from "./deleted-sessions";
 import { OmpUnavailableError } from "./omp-availability";
-import { StampedLru } from "./session-cache";
 import { SessionListShare } from "./session-list-share";
 import { type Pace, readPace } from "./session-pace";
-import { contentSnippet } from "./session-snippet";
 import { StockSessionStore } from "./session-store";
 
-/** Per-file cap for full-content search reads; larger sessions match on this prefix. */
-const SEARCH_READ_BYTES = 8 * 1024 * 1024;
-/**
- * Total bytes of cached search text. Counted, not entry-counted: one entry can be
- * the full read cap, so an entry-count ceiling alone would allow ~8 MB × entries
- * of resident strings.
- */
-const SEARCH_CACHE_BYTES = 64 * 1024 * 1024;
-/** Files read concurrently during a content search (bounds FD pressure). */
-const SEARCH_BATCH = 16;
 /**
  * The OS starts delivering a moment after the watch is made: a file written in that moment is never reported, so the
  * shared list (read once per change) is read once more this long after the watch starts.
@@ -66,10 +53,8 @@ export class SessionIndex {
 	#missed = false;
 	/** Whether the core may hold anything of this index. */
 	#inCore = false;
-	#textCache = new StampedLru<{ raw: string; lower: string }>(
-		SEARCH_CACHE_BYTES,
-		text => text.raw.length + text.lower.length,
-	);
+	/** A core that restarted needs stock's list again before it can search those rows. */
+	#listedGeneration: number | null = null;
 	#sessionsDir: string;
 	#cwd: string;
 	/** GUI-side chat labels for sessions whose header carries no kind (stock omp writes none). */
@@ -197,11 +182,7 @@ export class SessionIndex {
 			this.#notifyChange();
 			return;
 		}
-		for (const name of names) {
-			const path = join(this.#sessionsDir, name);
-			if (path.endsWith(".jsonl")) this.#textCache.delete(path);
-			this.onChange?.(path);
-		}
+		for (const name of names) this.onChange?.(join(this.#sessionsDir, name));
 		this.#share.changed();
 	}
 
@@ -223,7 +204,7 @@ export class SessionIndex {
 		}
 		this.#inCore = false;
 		this.#store.stop();
-		this.#textCache.clear();
+		this.#listedGeneration = null;
 	}
 
 	/**
@@ -283,13 +264,18 @@ export class SessionIndex {
 	async #readAll(): Promise<SessionInfo[]> {
 		const deleted = deletedSessions();
 		const infos = (await this.#store.list()).filter(info => !deleted.has(info.path));
-		if (infos.length === 0) return infos;
+		if (infos.length === 0 && (this.#listedGeneration === null || core().pid === null)) {
+			this.#listedGeneration = null;
+			return infos;
+		}
 		infos.sort(compareSessionRows);
 		this.#inCore = true;
-		const { result } = await core().call("sessions.listed", {
+		const { result, generation } = await core().call("sessions.listed", {
 			index: this.#id,
+			root: resolve(this.#sessionsDir),
 			rows: infos.map(info => ({ path: info.path, id: info.id })),
 		});
+		this.#listedGeneration = generation;
 		return listedAnswer.parse(result).listed.flatMap(({ row, chat }) => {
 			const info = infos[row];
 			if (!info) return [];
@@ -333,7 +319,7 @@ export class SessionIndex {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
 		await this.#store.delete(target);
-		this.#textCache.delete(target);
+		this.#forgetText([target]);
 		this.#notifyChange();
 	}
 
@@ -376,65 +362,36 @@ export class SessionIndex {
 		const info = await stat(target).catch(() => null);
 		if (!info?.isDirectory()) throw codedError("not_a_directory", `Not a directory: ${target}`);
 		const moved = await this.#store.move(source, target);
-		this.#textCache.delete(source);
-		this.#textCache.delete(moved);
+		this.#forgetText([source, moved]);
 		this.#notifyChange();
 		return moved;
 	}
 
-	/**
-	 * Full-content search: the given session files whose raw JSONL text
-	 * contains every query token (case-insensitive), each with an excerpt of
-	 * the conversation around the first token. The match is deliberately a raw
-	 * grep — no JSON parsing — because tokens are matched individually, so JSON
-	 * escaping rarely breaks them. File text is cached by mtime:size so
-	 * debounced keystrokes only re-read files that changed.
-	 */
-	async searchContent(query: string, candidatePaths: string[]): Promise<SessionContentMatch[]> {
-		const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-		if (tokens.length === 0 || candidatePaths.length === 0) return [];
-		const matches: SessionContentMatch[] = [];
-		for (let i = 0; i < candidatePaths.length; i += SEARCH_BATCH) {
-			const batch = await Promise.all(
-				candidatePaths.slice(i, i + SEARCH_BATCH).map(async (path): Promise<SessionContentMatch | null> => {
-					const text = await this.#searchText(path);
-					if (text === null) return null;
-					for (const token of tokens) {
-						if (!text.lower.includes(token)) return null;
-					}
-					const snippet = contentSnippet(text.raw, text.lower, tokens);
-					return snippet === undefined ? { path } : { path, snippet };
-				}),
-			);
-			for (const hit of batch) {
-				if (hit !== null) matches.push(hit);
-			}
-		}
-		return matches;
+	#forgetText(paths: string[]): void {
+		if (this.#listedGeneration !== null)
+			core().push("sessions.forgetText", { index: this.#id, paths }, undefined, this.#listedGeneration);
 	}
 
-	/** Session-file text and its lowercase twin (capped at SEARCH_READ_BYTES), LRU-cached by mtime:size. */
-	async #searchText(filePath: string): Promise<{ raw: string; lower: string } | null> {
-		try {
-			const fileStat = await stat(filePath);
-			const signature = `${fileStat.mtimeMs}:${fileStat.size}`;
-			const cached = this.#textCache.get(filePath, signature);
-			if (cached !== null) return cached;
-			const fh = await open(filePath, "r");
-			try {
-				const length = Math.min(fileStat.size, SEARCH_READ_BYTES);
-				const buffer = Buffer.alloc(length);
-				await fh.read(buffer, 0, length, 0);
-				const raw = buffer.toString("utf-8");
-				const text = { raw, lower: raw.toLowerCase() };
-				this.#textCache.set(filePath, signature, text);
-				return text;
-			} finally {
-				await fh.close();
-			}
-		} catch {
-			return null;
+	/** Search only the caller's subset of stock's listed rows; file text stays in the core. */
+	async searchContent(query: string, candidatePaths: string[]): Promise<SessionContentMatch[]> {
+		if (!query.trim() || !candidatePaths.length) return [];
+		if (this.#listedGeneration !== core().generation) {
+			this.#share.stale();
+			if (!(await this.listShared()).version) return [];
 		}
+		if (this.#listedGeneration === null) return [];
+		// The normal core JSON encoder replaces lone surrogates. A JS substring can match either half of a pair.
+		const wireQuery = query.isWellFormed()
+			? query
+			: Array.from({ length: query.length }, (_, i) => query.charCodeAt(i));
+		return (
+			await core().call<SessionContentMatch[]>(
+				"sessions.search",
+				{ index: this.#id, query: wireQuery, paths: candidatePaths },
+				// A search reads its batches to completion even on a large tree, not just until the usual RPC deadline.
+				{ generation: this.#listedGeneration, timeoutMs: 0x7fff_ffff },
+			)
+		).result;
 	}
 
 	/** Anything may have changed. */

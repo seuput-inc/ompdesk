@@ -30,6 +30,46 @@ pub fn random(bytes: &mut [u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The normalized DOS path of this open handle, in the same namespace as `std::fs::canonicalize`.
+#[cfg(windows)]
+pub(crate) fn final_file_path(file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    use std::ffi::{OsString, c_void};
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFinalPathNameByHandleW(
+            handle: *mut c_void,
+            path: *mut u16,
+            len: u32,
+            flags: u32,
+        ) -> u32;
+    }
+    let mut short = [0_u16; 260];
+    let mut long = Vec::new();
+    let mut buffer = short.as_mut_slice();
+    loop {
+        // SAFETY: `file` owns the handle and `buffer` is writable for the supplied number of UTF-16 units.
+        let n = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        } as usize;
+        if n == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if n < buffer.len() {
+            return Ok(OsString::from_wide(&buffer[..n]).into());
+        }
+        // The required length includes the terminator; success returns the length without it.
+        long.resize(n, 0);
+        buffer = long.as_mut_slice();
+    }
+}
+
 /// `fs.copyFile` on Windows uses CopyFileW, including its alternate data streams and exclusive-create behavior.
 #[cfg(windows)]
 pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io::Result<()> {
