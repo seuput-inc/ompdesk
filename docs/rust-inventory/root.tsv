@@ -10,8 +10,8 @@ src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPower
 src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
 src/main/agent-priority.test.ts	tooling	-	Checks best-effort scheduling of the Node-spawned hub.
 src/main/agent-priority.ts	port	1	The Bun MCP hub still starts in Node. For every tab, Rust sets priority on the child before publishing its PID; main only reports a failure.
-src/main/agent-worktrees.test.ts	tooling	-	Vitest suite: parseAgentWorktrees.
-src/main/agent-worktrees.ts	port	1	listAgentWorktrees/clearAgentWorktrees run stock omp worktree list/clear --json and parse the two response shapes; stock owns orphan detection and removal.
+src/main/agent-worktrees.test.ts	tooling	-	Exercises list and orphan-only clear through the core against an isolated stock CLI.
+src/main/agent-worktrees.ts	native-client	1	Forwards the resolved executable, environment and cwd once to omp.worktrees. Rust starts stock and interprets its reply; stock decides which worktrees are orphaned.
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.
 src/main/agents-md.test.ts	tooling	-	Vitest suite: AGENTS.md and the area rules.
 src/main/app-auto-update.test.ts	tooling	-	Vitest suite: quietMoment.
@@ -274,7 +274,7 @@ src/main/initial-cwd.test.ts	tooling	-	Vitest suite: firstUsableCwd.
 src/main/initial-cwd.ts	port	1	firstUsableCwd selects the first usable directory in caller-supplied priority order.
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
 src/main/installer-spawn.ts	port	1	spawnDetachedOffThread delegates detached installer process creation to a Node Worker and returns its PID.
-src/main/ipc.ts	mixed	4	registerIpcHandlers owns caller/window routing, local and paired-device session commands and renderer events; clipboard.readText reaches shell/src/clipboard.rs and image.toModel uses core stock.request to reach stock omp.
+src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
 src/main/launch-guard-core.ts	port	1	parseLaunchHistory, crashLoopDetected and gpuRelaunchDecision implement launch-history and relaunch cooldown policy.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.
