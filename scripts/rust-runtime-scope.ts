@@ -41,7 +41,7 @@ const inventory = remaining || process.argv.includes("--check-inventory");
 const paths = tracked.filter(path => /\.[cm]?[jt]sx?$/.test(path));
 const reach = new Map<string, string[]>(paths.map(path => [path, []]));
 for (const [runtime, entrypoints] of Object.entries(entries)) {
-	if (inventory && (runtime === "node" || runtime === "page" || runtime === "stock")) continue;
+	if (inventory && (runtime === "page" || runtime === "stock")) continue;
 	const result = await Bun.build({
 		root: ".",
 		entrypoints,
