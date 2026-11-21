@@ -4563,7 +4563,16 @@ describe("LocalHostServices host.* calls", () => {
 		await command(y, { action: "get" });
 		await command(x, { action: "layout", change: { op: "set-group-pinned", cwd, pinned: true } });
 		await command(x, { action: "layout", change: { op: "set-group-order", order: [cwd] } });
-		await command(x, { action: "layout", change: { op: "set-session-order", list: cwd, order: [b, a] } });
+		const order = [b, a, privateRow.path, "/since-deleted.jsonl"];
+		const change = { op: "set-session-order", list: cwd, order } as const;
+		for (const move of [
+			{ path: privateRow.path, over: a },
+			{ path: b, over: "/since-deleted.jsonl" },
+		])
+			await expect(command(x, { action: "layout", change: { ...change, move } })).rejects.toThrow(
+				"The sidebar row is not available on this host",
+			);
+		await command(x, { action: "layout", change: { ...change, move: { path: b, over: a } } });
 		const ids = rows.map(row => row.id);
 		await command(x, { action: "layout", change: { op: "set-sessions-archived", ids, archived: true } });
 		const localPin = { op: "set-session-pinned", path: a, pinned: true } as const;

@@ -64,7 +64,7 @@ export type SidebarChange =
 	/** An empty or absent alias shows the folder's own name again. */
 	| { op: "set-group-alias"; cwd: string; alias: string | null }
 	| { op: "set-group-order"; order: string[] }
-	| { op: "set-session-order"; list: string; order: string[] }
+	| { op: "set-session-order"; list: string; order: string[]; move?: { path: string; over: string } }
 	| { op: "set-sessions-archived"; ids: string[]; archived: boolean }
 	| { op: "set-rail-pin"; pin: RailPin; pinned: boolean }
 	| { op: "touch-workspace"; cwd: string };

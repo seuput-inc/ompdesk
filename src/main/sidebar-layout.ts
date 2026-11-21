@@ -79,11 +79,20 @@ export class SidebarLayoutScope {
 				break;
 			}
 			case "set-session-order": {
-				const { list } = change;
+				const { list, move } = change;
+				if (list !== CHATS_ORDER_KEY && !this.#groups.has(list)) break;
 				const visible = (key: string) => this.#lists.get(key) === list;
-				if ((list === CHATS_ORDER_KEY || this.#groups.has(list)) && change.order.every(visible))
-					return { ...change, order: reorder(prefs.sessionOrder[list] ?? [], change.order, visible) };
-				break;
+				const order = change.order.filter(visible);
+				const slots = new Set(order);
+				// A paired view can include protected rows or lag a deletion. Neither is part of this gesture.
+				if (move) {
+					if (move.path === move.over || !slots.has(move.path) || !slots.has(move.over)) break;
+				} else if (order.length !== change.order.length) break;
+				return {
+					op: change.op,
+					list,
+					order: reorder(prefs.sessionOrder[list] ?? [], order, key => slots.has(key)),
+				};
 			}
 		}
 		throw new Error("The sidebar row is not available on this host");

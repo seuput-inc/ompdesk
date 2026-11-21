@@ -62,8 +62,8 @@ export interface SessionReorder {
 		list: SessionList | null,
 		tab: { id: string; shown: boolean } | undefined,
 	) => HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | true | undefined>;
-	/** Saves a new order for `list` and says so to a screen reader. */
-	move: (list: SessionList, path: string, next: readonly string[], title: string) => void;
+	/** Moves a row to its neighbour's place unless at the end or the pinned edge. */
+	moveBy: (list: SessionList | null, path: string, delta: -1 | 1, title: string) => boolean;
 	/** The polite live region a drop, a menu move or Alt+↑/↓ is told through. */
 	status: ReactNode;
 }
@@ -71,15 +71,16 @@ export interface SessionReorder {
 /** A remote save confirms the host accepted the order before announcing it. */
 export function useSessionReorder(options: {
 	titleOf: (path: string) => string;
-	save: (list: SessionList, next: readonly string[]) => void | Promise<boolean>;
+	save: (list: SessionList, next: string[], path: string, over: string) => void | Promise<boolean>;
 }): SessionReorder {
 	const t = useT();
 	const [drag, setDrag] = useState<{ list: SessionList; path: string; splits: boolean } | null>(null);
 	const [drop, setDrop] = useState<Drop | null>(null);
 	const [announcement, setAnnouncement] = useState("");
 
-	const move: SessionReorder["move"] = async (list, path, next, title) => {
-		if ((await options.save(list, next)) === false) return;
+	const move = async (list: SessionList, path: string, over: string, title: string) => {
+		const next = reorderProjects(list.paths, path, over);
+		if ((await options.save(list, next, path, over)) === false) return;
 		setAnnouncement(
 			t("sidebar.sessionOrder.moved", { name: title, position: next.indexOf(path) + 1, count: next.length }),
 		);
@@ -120,10 +121,9 @@ export function useSessionReorder(options: {
 				event.preventDefault();
 				event.stopPropagation();
 				const from = drag.path;
-				const next = reorderProjects(list.paths, from, path);
 				if (drag.splits) window.dispatchEvent(new CustomEvent("omp:tab-drag", { detail: { tabId: null } }));
 				finish();
-				if (next.join("\n") !== list.paths.join("\n")) move(list, from, next, options.titleOf(from));
+				void move(list, from, path, options.titleOf(from));
 			},
 			onDragEnd: () => {
 				if (splits) window.dispatchEvent(new CustomEvent("omp:tab-drag", { detail: { tabId: null } }));
@@ -136,7 +136,12 @@ export function useSessionReorder(options: {
 
 	return {
 		rowDrag,
-		move,
+		moveBy: (list, path, delta, title) => {
+			const over = list?.paths[list.paths.indexOf(path) + delta];
+			if (!list || over === undefined || !canDropOn(list, path, over)) return false;
+			void move(list, path, over, title);
+			return true;
+		},
 		status: (
 			<span aria-live="polite" className="sr-only" data-session-order-status role="status">
 				{announcement}

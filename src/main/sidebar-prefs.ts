@@ -28,7 +28,12 @@ export const SidebarLayoutChangeSchema = z.discriminatedUnion("op", [
 	z.object({ op: z.literal("set-group-pinned"), cwd: layoutPath, pinned: z.boolean() }),
 	z.object({ op: z.literal("set-session-pinned"), path: layoutPath, pinned: z.boolean() }),
 	z.object({ op: z.literal("set-group-order"), order: ordered }),
-	z.object({ op: z.literal("set-session-order"), list: layoutPath, order: ordered }),
+	z.object({
+		op: z.literal("set-session-order"),
+		list: layoutPath,
+		order: ordered,
+		move: z.object({ path: layoutPath, over: layoutPath }).optional(),
+	}),
 	z.object({ op: z.literal("set-sessions-archived"), ids: ordered, archived: z.boolean() }),
 ]) satisfies z.ZodType<SidebarLayoutChange>;
 

@@ -4417,7 +4417,12 @@ describe("Sidebar device sections", () => {
 		expect(omp.sidebarProjects.command).toHaveBeenCalledWith(
 			{
 				action: "layout",
-				change: { op: "set-session-order", list: "/code/app", order: ["/s/app/two.jsonl", "/s/app/one.jsonl"] },
+				change: {
+					op: "set-session-order",
+					list: "/code/app",
+					order: ["/s/app/two.jsonl", "/s/app/one.jsonl"],
+					move: { path: "/s/app/two.jsonl", over: "/s/app/one.jsonl" },
+				},
 			},
 			"dev-studio",
 		);

@@ -70,7 +70,7 @@ import { cx, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { actionKbd, onEscape } from "../../../lib/keymap";
-import { moveInOrder, reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
+import { reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
 import { sessionForkOrigin } from "../../../lib/session-fork";
 import type { RunFacts } from "../../../lib/session-run";
@@ -961,7 +961,7 @@ export function Sidebar() {
 		if (query) return lists;
 		const add = (key: string, rows: readonly SidebarSession[]) => {
 			const paths = rows
-				.filter(row => row.liveTabId === undefined && !runParentOf.has(row.path))
+				.filter(row => row.liveTabId === undefined && !row.departed && !runParentOf.has(row.path))
 				.map(row => row.path);
 			const list: SessionList = { key, paths, pinned: pinnedSessions };
 			for (const path of paths) if (!lists.has(path)) lists.set(path, list);
@@ -977,16 +977,11 @@ export function Sidebar() {
 			const found = allSessions.find(session => session.path === path);
 			return found ? sessionDisplayLabel(found, "") : "";
 		},
-		save: (list, next) => void useSidebarPrefs.getState().setSessionOrder(list.key, [...next]),
+		save: (list, next) => void useSidebarPrefs.getState().setSessionOrder(list.key, next),
 	});
 	/** A neighbour on the other side of the pinned rows' edge never trades places: pins stay on top. */
-	const moveSession = (session: SidebarSession, delta: -1 | 1): boolean => {
-		const list = sessionListOf(session);
-		const next = canMoveWithin(list, session.path, delta) && list && moveInOrder(list.paths, session.path, delta);
-		if (!list || !next) return false;
-		reorder.move(list, session.path, next, sessionDisplayLabel(session, ""));
-		return true;
-	};
+	const moveSession = (session: SidebarSession, delta: -1 | 1) =>
+		reorder.moveBy(sessionListOf(session), session.path, delta, sessionDisplayLabel(session, ""));
 	const onProjectDragEnd = ({ active, over }: DragEndEvent) => {
 		if (!over || active.id === over.id) return;
 		projectDropped();
