@@ -612,7 +612,7 @@ function DeviceSessions({
 		if (!editable || query || session.liveTabId !== undefined) return null;
 		// A row the host has no file for yet (a new tab's) has no place to keep.
 		const stored = (list: readonly DeviceSession[]) =>
-			list.filter(row => row.liveTabId === undefined).map(row => row.path);
+			list.filter(row => row.liveTabId === undefined && !row.departed).map(row => row.path);
 		if (chats.some(item => item.path === session.path))
 			return { key: CHATS_ORDER_KEY, paths: stored(chats), pinned: hostPins };
 		const group = groups.find(item => item.sessions.some(row => row.path === session.path));
@@ -623,15 +623,11 @@ function DeviceSessions({
 			const found = tree.rows.sessions.find(session => session.path === path);
 			return found ? sessionDisplayLabel(found, "") : "";
 		},
-		save: (list, next) => changeLayout({ op: "set-session-order", list: list.key, order: [...next] }),
+		save: (list, order, path, over) =>
+			changeLayout({ op: "set-session-order", list: list.key, order, move: { path, over } }),
 	});
-	const moveSession = (session: DeviceSession, delta: -1 | 1): boolean => {
-		const list = listOf(session);
-		const next = canMoveWithin(list, session.path, delta) && list && moveInOrder(list.paths, session.path, delta);
-		if (!list || !next) return false;
-		reorder.move(list, session.path, next, sessionDisplayLabel(session, ""));
-		return true;
-	};
+	const moveSession = (session: DeviceSession, delta: -1 | 1) =>
+		reorder.moveBy(listOf(session), session.path, delta, sessionDisplayLabel(session, ""));
 
 	// A window viewing an opener here hears main's review list of what its agent opened (Sidebar.tsx): the child's
 	// verdict by its one identity, this host and its session file (`reviewKey`), whatever tab here holds it.
