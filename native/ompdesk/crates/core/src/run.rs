@@ -215,6 +215,10 @@ impl Runner {
             merged = env;
             &merged
         };
+        Self::apply_environment(env, command);
+    }
+
+    pub(crate) fn apply_environment(env: &BTreeMap<String, String>, command: &mut Command) {
         #[cfg(windows)]
         {
             // Windows names are case-insensitive and the main side's object can hold `Path` and `PATH`: node keeps

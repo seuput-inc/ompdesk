@@ -186,7 +186,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Lists and clears agent-managed worktrees under ~/.omp/wt through `omp worktree list --json` and `omp worktree clear --json`; stock decides what counts as orphaned and does the removal.",
-		files: ["src/main/agent-worktrees.ts"],
+		files: ["native/ompdesk/crates/core/src/omp/worktrees.rs", "src/main/agent-worktrees.ts"],
 		stock: [
 			"omp worktree list --json",
 			"omp worktree clear --json",

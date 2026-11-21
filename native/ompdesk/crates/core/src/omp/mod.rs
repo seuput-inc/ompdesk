@@ -21,6 +21,7 @@
 //! (`omp-stop.ts`), and so is the quit's wait for all of them: both need the child process main spawned.
 
 mod log_tail;
+mod worktrees;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -79,6 +80,7 @@ struct Entry {
 }
 
 pub fn register(registry: &mut Registry) {
+    registry.add("omp.worktrees", |call| Box::pin(worktrees::run(call)));
     registry.add("omp.logTail", |call| {
         Box::pin(async move {
             let params = call.params()?;
