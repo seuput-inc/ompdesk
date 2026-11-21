@@ -483,7 +483,7 @@ struct Channels {
     prefs_set: String,
 }
 
-/// What main hands the router at the start: the page protocol it speaks, the host's features and build,
+/// What main hands the router at the start: the page protocol it speaks, the host's features,
 /// `IPC_POLICY`, the web-only channels and the channels it treats apart.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -491,8 +491,9 @@ pub struct Config {
     channels: Channels,
     protocol: u32,
     features: Box<RawValue>,
-    #[serde(default)]
-    build: Option<String>,
+    /// The edge reads this from the same web.html it serves.
+    #[serde(skip)]
+    pub(super) build: Option<String>,
     policy: HashMap<String, PolicyEntry>,
     #[serde(default)]
     web_channels: HashMap<String, WebChannel>,

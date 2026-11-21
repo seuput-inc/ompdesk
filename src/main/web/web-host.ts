@@ -5,8 +5,6 @@
  * `WebHost`; Mobile web's service (src/main/tailscale/) starts and stops its server and tells it the published
  * address and the secret path of its serve handler.
  */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { z } from "zod";
 import type { PeerLimits } from "../../shared/ipc-types";
 import {
@@ -26,7 +24,7 @@ import {
 	webDeviceTier,
 } from "../../shared/mobile-web";
 import type { UiLanguage } from "../../shared/ui-language";
-import { WEB_BUILD_META, WEB_PERMISSIONS, type WebFeatures } from "../../shared/web-protocol";
+import { WEB_PERMISSIONS, type WebFeatures } from "../../shared/web-protocol";
 import { readModelsText, writeModelsText } from "../models-config";
 import { PeerQuota } from "../remote/peer-quota";
 import type { TabActivity, TabFacts } from "../sidecar-pool";
@@ -125,8 +123,6 @@ export class WebHost {
 	/** The previous builds' assets the server still serves (asset-archive.ts); filled once per launch at `start`. */
 	readonly assets: AssetArchive;
 	#archiving: Promise<void> | null = null;
-	/** The page build `web.html` names (`WEB_BUILD_META`), read at `start`: every `hello` tells a page which it is. */
-	#build: string | null = null;
 	/** The upload sweep in flight; one at a time, and `stop` waits for it. */
 	#sweeping: Promise<number> | null = null;
 	#sweeper: ReturnType<typeof setInterval> | undefined;
@@ -169,7 +165,6 @@ export class WebHost {
 			}),
 			// The phone's streamed Preview (preview-stream.ts) is built in; a host build without it passes `preview: false`.
 			features: () => ({ push: true, preview: true, upload: true, passkey: false, ...deps.features }),
-			build: () => this.#build,
 			activeTab: win => deps.tabs.activeTab(win),
 			blobs: this.blobs,
 			mediaOpen: deps.openMedia,
@@ -240,8 +235,6 @@ export class WebHost {
 		if ((await this.sender.open()).created) this.devices.dropAllPushSubscriptions();
 		await this.ready();
 		const root = this.#deps.staticRoot();
-		// Before the first connection: its `hello` names it.
-		if (root) this.#build = await servedBuild(root);
 		const started = await this.server.start(options);
 		// Until Mobile web confirms serve's handler, a request under this host's secret is answered 503, not 404.
 		this.server.configure({ publicPort: started.port, pendingPrefix: this.serveSecret() });
@@ -403,10 +396,4 @@ export class WebHost {
 			this.confirmations.respond(PairingResponse.parse(response));
 		});
 	}
-}
-
-/** The page build `web.html` names (`WEB_BUILD_META`, scripts/pwa-plugin.ts); null when it names none (a dev run). */
-async function servedBuild(root: string): Promise<string | null> {
-	const page = await readFile(join(root, "web.html"), "utf8").catch(() => "");
-	return new RegExp(`<meta name="${WEB_BUILD_META}" content="([^"]+)"`).exec(page)?.[1] ?? null;
 }

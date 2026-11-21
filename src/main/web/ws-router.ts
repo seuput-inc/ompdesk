@@ -117,8 +117,6 @@ export interface WsRouterDeps {
 	quota: Pick<PeerQuota, "reserve" | "record">;
 	webChannels: WebChannelTable;
 	features: () => WebFeatures;
-	/** The page build this host serves (`WEB_BUILD_META` of its `web.html`); null in a dev run. */
-	build?: () => string | null;
 	/** The tab a window's untargeted calls act on, to know whose model command it was. */
 	activeTab?: (win: WebClientWindow) => string | null;
 	/** `/blob` URLs for bytes and streams a reply carries. */
@@ -142,7 +140,6 @@ export interface RouterConfig {
 	channels: { batch: string; streams: string[]; heavy: readonly string[]; prefsSet: string };
 	protocol: number;
 	features: WebFeatures;
-	build: string | null;
 	policy: Record<string, { dir: string; permission?: string; mode: string }>;
 	webChannels: Record<string, { dir: string; permission: string; heavy: boolean }>;
 }
@@ -349,7 +346,6 @@ export class WsRouter {
 			},
 			protocol: WEB_PROTOCOL_VERSION,
 			features: this.#deps.features(),
-			build: this.#deps.build?.() ?? null,
 			policy: routerPolicy(),
 			webChannels,
 		};
