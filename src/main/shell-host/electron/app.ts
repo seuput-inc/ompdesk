@@ -10,6 +10,8 @@ import { join } from "node:path";
 import type { HostFacts, PathName, SchemeFact } from "../facts";
 import { emitPreventable, type Host, makeEvent } from "./host";
 
+type LaunchRequest = { kind: "url"; url: string } | { kind: "path"; path: string } | { kind: "focus" };
+
 export interface InitState {
 	schemes: SchemeFact[];
 }
@@ -119,9 +121,6 @@ export class App extends EventEmitter {
 			this.emit("ready");
 			for (const waiter of this.#readyWaiters.splice(0)) waiter();
 		});
-		client.on("app.secondInstance", ({ argv, cwd }: { argv: string[]; cwd: string }) => {
-			this.emit("second-instance", makeEvent(), argv, cwd, undefined);
-		});
 		client.on("app.openUrl", ({ url }: { url: string }) => {
 			this.emit("open-url", makeEvent(), url);
 		});
@@ -204,6 +203,10 @@ export class App extends EventEmitter {
 	}
 
 	// --- lifecycle ---
+
+	onSecondInstance(listener: (request: LaunchRequest) => void): void {
+		this.#host.client.on("app.secondInstance", listener);
+	}
 
 	isReady(): boolean {
 		return this.#ready;

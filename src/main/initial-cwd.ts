@@ -3,7 +3,15 @@
  * rule is testable without Electron; the caller supplies the candidates in
  * priority order.
  */
-import { isExistingDirectory } from "./launch-argv";
+import { statSync } from "node:fs";
+
+function isExistingDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
 
 /**
  * The first candidate that is a real directory. The volume root is never an

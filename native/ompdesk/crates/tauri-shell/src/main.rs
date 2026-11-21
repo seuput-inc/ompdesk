@@ -1789,8 +1789,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     if runtime().stop_instance.load(Ordering::SeqCst) {
                         break;
                     }
-                    if let Ok((argv, cwd)) = conn::take_hand_over(&mut connection) {
-                        host::event("app.secondInstance", json!({"argv":argv,"cwd":cwd}));
+                    if let Ok((argv, _cwd)) = conn::take_hand_over(&mut connection) {
+                        host::event("app.secondInstance", startup::second_instance(&argv));
                     }
                 }
             });

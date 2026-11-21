@@ -142,17 +142,15 @@ wrap_browser_process_handler! {
             }
         }
 
-        fn on_already_running_app_relaunch(&self, command_line: Option<&mut CommandLine>, current_directory: Option<&CefString>) -> i32 {
+        fn on_already_running_app_relaunch(&self, command_line: Option<&mut CommandLine>, _current_directory: Option<&CefString>) -> i32 {
             // CEF's own profile singleton saw a second process: ours handles launches before CEF starts, so this only
             // fires for a CEF process started outside it. Passed on like any second instance.
             let mut argv = CefStringList::new();
             if let Some(c) = command_line {
                 c.argv(Some(&mut argv));
             }
-            host::event(
-                "app.secondInstance",
-                json!({ "argv": argv.into_iter().collect::<Vec<String>>(), "cwd": current_directory.map(|d| d.to_string()).unwrap_or_default() }),
-            );
+            let argv = argv.into_iter().collect::<Vec<_>>();
+            host::event("app.secondInstance", shell_core::startup::second_instance(&argv));
             1
         }
     }

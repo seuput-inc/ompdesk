@@ -248,19 +248,24 @@ describe("app", () => {
 		]);
 	});
 
-	it("emits second-instance, open-url, open-file, activate and child-process-gone", async () => {
+	it("delivers shell launch requests separately from macOS open-url, open-file and activate", async () => {
 		const { app } = electron;
 		const seen: unknown[][] = [];
-		for (const name of ["second-instance", "open-url", "open-file", "activate", "child-process-gone"])
+		app.onSecondInstance(request => seen.push(["launch", request]));
+		for (const name of ["open-url", "open-file", "activate", "child-process-gone"])
 			app.on(name, (_event, ...args) => seen.push([name, ...args]));
-		await shell.event("app.secondInstance", { argv: ["C:/app/OMPdesk.exe", "C:/work"], cwd: "C:/" });
+		await shell.event("app.secondInstance", { kind: "path", path: "C:/work" });
+		await shell.event("app.secondInstance", { kind: "url", url: "omp://session/abc" });
+		await shell.event("app.secondInstance", { kind: "focus" });
 		await shell.event("app.openUrl", { url: "omp://new" });
 		await shell.event("app.openFile", { path: "C:/x" });
 		await shell.event("app.activate", { hasVisibleWindows: true });
 		await shell.event("app.childProcessGone", { type: "GPU", reason: "crashed" });
 		await settle();
 		expect(seen).toEqual([
-			["second-instance", ["C:/app/OMPdesk.exe", "C:/work"], "C:/", undefined],
+			["launch", { kind: "path", path: "C:/work" }],
+			["launch", { kind: "url", url: "omp://session/abc" }],
+			["launch", { kind: "focus" }],
 			["open-url", "omp://new"],
 			["open-file", "C:/x"],
 			["activate", true],

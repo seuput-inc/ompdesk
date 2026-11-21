@@ -8,6 +8,22 @@ use sha2::{Digest, Sha256};
 /// Test seam: a dry run keeps a relaunched app off the person's real profile with this.
 pub const USER_DATA_ENV: &str = "OMP_GUI_TEST_USER_DATA_DIR";
 
+/// The running instance checks directories in its own cwd, as its Node child did. Keep the spelling:
+/// main refuses relative paths rather than opening them against either launch's cwd.
+pub fn second_instance(argv: &[String]) -> serde_json::Value {
+    let args = argv.get(1..).unwrap_or_default();
+    if let Some(url) = args.iter().find(|arg| arg.starts_with("omp://")) {
+        return serde_json::json!({ "kind": "url", "url": url });
+    }
+    if let Some(path) = args
+        .iter()
+        .find(|arg| !arg.starts_with('-') && Path::new(arg).is_dir())
+    {
+        return serde_json::json!({ "kind": "path", "path": path });
+    }
+    serde_json::json!({ "kind": "focus" })
+}
+
 /// `--user-data-dir=<dir>` or `--user-data-dir <dir>` among `args` (the shell's argv after the exe); the last one wins,
 /// as Chromium's own switch parsing does.
 pub fn user_data_switch(args: &[String]) -> Option<String> {
@@ -194,6 +210,37 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn second_instance_prefers_the_first_link_over_real_directories() {
+        assert_eq!(
+            second_instance(&args(&["exe", ".", "omp://new", "omp://session/abc"])),
+            serde_json::json!({ "kind": "url", "url": "omp://new" }),
+        );
+    }
+
+    #[test]
+    fn second_instance_checks_directories_and_preserves_the_first_spelling() {
+        let dir = std::env::current_dir().unwrap();
+        let dir = dir.to_str().unwrap();
+        let file = std::env::current_exe().unwrap();
+        let file = file.to_str().unwrap();
+        for (first, second) in [(".", dir), (dir, ".")] {
+            assert_eq!(
+                second_instance(&args(&["exe", "--no-sandbox", file, first, second])),
+                serde_json::json!({ "kind": "path", "path": first }),
+            );
+        }
+        for argv in [
+            vec![],
+            args(&[dir, "-flag", file, "not-a-directory/absent"]),
+        ] {
+            assert_eq!(
+                second_instance(&argv),
+                serde_json::json!({ "kind": "focus" })
+            );
+        }
     }
 
     fn started<'a>(

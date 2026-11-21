@@ -221,7 +221,7 @@ src/main/console-window-watch.test.ts	tooling	-	Vitest suite: console window wat
 src/main/console-window-watch.ts	mixed	2	procs.consoles in crates/core/src/procs/mod.rs enumerates Windows console windows; ConsoleWindowWatch polls, attributes new windows to recent process ancestry and rate-limits logs.
 src/main/core-saves.test.ts	tooling	-	Vitest suite: the core's stores on a full disk.
 src/main/core-saves.ts	native-client	2	routeCoreSaves consumes store.saveFailed/store.saved from crates/core/src/disk/saves.rs and clears reported names on core exit; retries stay in Rust.
-src/main/deep-link.ts	port	4	setupDeepLinks and handleOpenPath capture startup URLs and second-instance argv, then focus or create the matching Electron window.
+src/main/deep-link.ts	mixed	4	shell/src/startup.rs selects second-instance requests. Main still decodes deep-link URLs, replays early macOS opens, matches workspaces and dispatches window operations.
 src/main/default-workspace.ts	port	1	ensureDefaultWorkspace resolves the work directory beside agentDir and creates it recursively.
 src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that save on every change, on a full disk.
 src/main/deleted-sessions.ts	port	2	DeletedSessions loads and persists bounded per-device/path tombstones through AtomicSaver to prevent deleted sessions reopening.
@@ -275,8 +275,6 @@ src/main/initial-cwd.ts	port	1	firstUsableCwd selects the first usable directory
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
 src/main/installer-spawn.ts	port	1	spawnDetachedOffThread delegates detached installer process creation to a Node Worker and returns its PID.
 src/main/ipc.ts	mixed	4	registerIpcHandlers owns caller/window routing, local and paired-device session commands and renderer events; clipboard.readText reaches shell/src/clipboard.rs and image.toModel uses core stock.request to reach stock omp.
-src/main/launch-argv.test.ts	tooling	-	Vitest suite: parseLaunchArgv.
-src/main/launch-argv.ts	port	1	parseLaunchArgv distinguishes a protocol URL, existing directory and focus-only launch for a second instance.
 src/main/launch-guard-core.ts	port	1	parseLaunchHistory, crashLoopDetected and gpuRelaunchDecision implement launch-history and relaunch cooldown policy.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.

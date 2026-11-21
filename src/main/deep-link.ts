@@ -3,9 +3,9 @@
  * Supports omp://session/<id> and omp://new.
  */
 import { isAbsolute, resolve } from "node:path";
-import { app, type BrowserWindow } from "electron";
+import type { BrowserWindow } from "electron";
 import { type DeepLinkPayload, IPC_EVENTS } from "../shared/ipc-types";
-import { parseLaunchArgv } from "./launch-argv";
+import { app } from "./shell-host/electron/index";
 import type { SpawnWindow, WindowManager } from "./window";
 
 const PROTOCOL = "omp";
@@ -45,12 +45,7 @@ export function setupDeepLinks(windowManager: WindowManager, spawnWindow: SpawnW
 	fileHandler = path => handleOpenPath(path, windowManager, spawnWindow);
 	for (const path of filesBeforeSetup.splice(0)) fileHandler(path);
 
-	// Windows/Linux (and `open -n` on macOS): the refused second instance hands
-	// over its argv. Only omp:// URLs used to be read, so a workspace path was
-	// dropped and the launch did nothing at all.
-	app.on("second-instance", (_event, argv) => {
-		// argv[0] is the other launch's executable: a real file, never the requested directory.
-		const request = parseLaunchArgv(argv.slice(1), PROTOCOL);
+	app.onSecondInstance(request => {
 		if (request.kind === "url") handleDeepLink(request.url, windowManager, spawnWindow);
 		else if (request.kind === "path") handleOpenPath(request.path, windowManager, spawnWindow);
 		else showWindow(windowManager.getTargetWindow());
@@ -79,9 +74,7 @@ export function handleOpenPath(path: string, windowManager: WindowManager, spawn
 	const target = resolve(path);
 	for (const win of windowManager.getAllWindows()) {
 		if (windowManager.recordFor(win)?.cwd !== target) continue;
-		if (win.isMinimized()) win.restore();
-		win.show();
-		win.focus();
+		showWindow(win);
 		return;
 	}
 	spawnWindow(target);

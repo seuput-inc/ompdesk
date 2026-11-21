@@ -395,9 +395,9 @@ fn spawn_instance_listener(mut listener: Listener) {
         .spawn(move || {
             while let Ok(mut conn) = listener.accept() {
                 match conn::take_hand_over(&mut conn) {
-                    Ok((argv, cwd)) => {
+                    Ok((argv, _cwd)) => {
                         log("instance.second", json!({ "argv": argv }));
-                        host::event("app.secondInstance", json!({ "argv": argv, "cwd": cwd }));
+                        host::event("app.secondInstance", startup::second_instance(&argv));
                     }
                     Err(error) => log(
                         "instance.hand_over_bad",
