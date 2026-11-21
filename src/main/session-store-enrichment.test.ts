@@ -77,7 +77,10 @@ it.skipIf(!ompPackageRoot(INSTALLED_OMP))("lists the newest date Bun accepts in 
 	expect(await store.listDirectory(file)).toMatchObject([expected]);
 	await fs.appendFile(file, `${JSON.stringify({ type: "message", message, timestamp: "Jan 1 1970 00:00 GMT" })}\n`);
 	expect(await store.listDirectory(file)).toMatchObject([{ ...expected, modified: "1970-01-01T00:00:00.000Z" }]);
-	const undated = [{ ...header, id: "undated" }, { type: "message", message, timestamp: "unknown" }];
+	const undated = [
+		{ ...header, id: "undated" },
+		{ type: "message", message, timestamp: "unknown" },
+	];
 	await fs.writeFile(file, `${undated.map(line => JSON.stringify(line)).join("\n")}\n`);
 	const mtime = new Date("2020-01-01T00:00:00.000Z");
 	await fs.utimes(file, mtime, mtime);
