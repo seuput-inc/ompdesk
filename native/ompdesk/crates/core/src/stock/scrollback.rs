@@ -82,8 +82,8 @@ impl Scrollback {
                         Delta::Text(text) => text.encode_utf16().for_each(append),
                         Delta::Units { utf16 } => {
                             let bytes = STANDARD.decode(utf16).map_err(serde::de::Error::custom)?;
-                            for pair in bytes.chunks_exact(2) {
-                                append(u16::from_le_bytes([pair[0], pair[1]]));
+                            for &pair in bytes.as_chunks::<2>().0 {
+                                append(u16::from_le_bytes(pair));
                             }
                         }
                     }
