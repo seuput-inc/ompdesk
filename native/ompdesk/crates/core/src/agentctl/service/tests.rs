@@ -323,11 +323,14 @@ fn command_done_report_needs_a_successful_dispatch_to_the_opener() {
     let call = json!({"role":"assistant","content":[{
         "type":"toolCall","id":"sh","name":"bash","arguments":{"command":"echo ompdesk_report --kind done"}
     }]});
-    let report = json!({"tool":"ompdesk_report","mode":"execute","exitCode":0,"args":{"kind":"done"}});
-    let result = |dispatch: Value, shell_failed: bool| json!({
-        "role":"toolResult","toolCallId":"sh","toolName":"bash","isError":shell_failed,
-        "content":"ompdesk_report --kind done", "details":{"toolCommands":[dispatch]}
-    });
+    let report =
+        json!({"tool":"ompdesk_report","mode":"execute","exitCode":0,"args":{"kind":"done"}});
+    let result = |dispatch: Value, shell_failed: bool| {
+        json!({
+            "role":"toolResult","toolCallId":"sh","toolName":"bash","isError":shell_failed,
+            "content":"ompdesk_report --kind done", "details":{"toolCommands":[dispatch]}
+        })
+    };
     let done = |page: Value| transcript_ending(&messages(&page)).reported_done;
     let success = result(report.clone(), true);
     let prompt = json!({"role":"user","content":"new job"});

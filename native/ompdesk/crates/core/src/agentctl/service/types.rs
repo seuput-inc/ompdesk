@@ -563,7 +563,11 @@ pub struct AgentMessage {
     #[serde(default)]
     pub is_error: bool,
     /// Only this fact from stock's `details.toolCommands` is needed after reading the result.
-    #[serde(default, rename = "details", deserialize_with = "command_reported_done")]
+    #[serde(
+        default,
+        rename = "details",
+        deserialize_with = "command_reported_done"
+    )]
     pub command_reported_done: bool,
     #[serde(default)]
     pub synthetic: Option<bool>,
@@ -573,14 +577,17 @@ pub struct AgentMessage {
 
 fn command_reported_done<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     let details = Value::deserialize(deserializer)?;
-    Ok(details.get("toolCommands").and_then(Value::as_array).is_some_and(|commands| {
-        commands.iter().any(|command| {
-            command.get("tool").and_then(Value::as_str) == Some(Tool::Report.name())
-                && command.get("mode").and_then(Value::as_str) == Some("execute")
-                && command.get("exitCode").and_then(Value::as_i64) == Some(0)
-                && command.get("args").is_some_and(super::text::done_to_opener)
-        })
-    }))
+    Ok(details
+        .get("toolCommands")
+        .and_then(Value::as_array)
+        .is_some_and(|commands| {
+            commands.iter().any(|command| {
+                command.get("tool").and_then(Value::as_str) == Some(Tool::Report.name())
+                    && command.get("mode").and_then(Value::as_str) == Some("execute")
+                    && command.get("exitCode").and_then(Value::as_i64) == Some(0)
+                    && command.get("args").is_some_and(super::text::done_to_opener)
+            })
+        }))
 }
 
 /// One page of `get_transcript_page`.

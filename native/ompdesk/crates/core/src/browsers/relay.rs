@@ -222,7 +222,13 @@ async fn stock(omp: Omp, scope: Scope, dir: &Path, native_host: bool) -> Result<
         max_bytes: OMP_OUTPUT_KEPT,
     };
     let dir = dir.to_string_lossy();
-    let args = ["browser-relay", "install", "--dir", dir.as_ref(), "--no-chrome"];
+    let args = [
+        "browser-relay",
+        "install",
+        "--dir",
+        dir.as_ref(),
+        "--no-chrome",
+    ];
     let args = if native_host { &args[..] } else { &args[..4] };
     let ended = Exec::new(runner, scope, "omp")
         .run_kept(".", args, Opts::default())

@@ -1048,9 +1048,12 @@ pub fn is_done_report(name: &str, args: &Value) -> bool {
     }
     name == "write"
         && args.get("path").and_then(Value::as_str) == Some("xd://ompdesk_report")
-        && args.get("content").and_then(Value::as_str)
+        && args
+            .get("content")
+            .and_then(Value::as_str)
             .and_then(|content| serde_json::from_str(content).ok())
-            .as_ref().is_some_and(done_to_opener)
+            .as_ref()
+            .is_some_and(done_to_opener)
 }
 
 pub(super) fn done_to_opener(args: &Value) -> bool {
@@ -1111,7 +1114,10 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
             }
             // A shell may fail after a successful report (or succeed after a failed one).
             // Only accept stock's execution record for an actual Bash call of this turn.
-            "toolResult" if message.command_reported_done && message.tool_name.as_deref() == Some("bash") => {
+            "toolResult"
+                if message.command_reported_done
+                    && message.tool_name.as_deref() == Some("bash") =>
+            {
                 if let Some(id) = message.tool_call_id.as_deref().filter(|id| !id.is_empty()) {
                     command_done |= messages[turn_start..index].iter().rev().any(|prior| {
                         prior.role == "assistant" && matches!(&prior.content, Some(Content::Blocks(parts))
