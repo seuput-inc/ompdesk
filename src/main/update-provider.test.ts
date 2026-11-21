@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor";
 import { findFile } from "electron-updater/out/providers/Provider";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { stopCore } from "./core/process";
 import { RELEASE_LOOKUP_TIMEOUT_MS, type ReleaseFeed, releaseUpdateProvider } from "./update-provider";
 import {
 	NO_RELEASE_ERROR,
@@ -11,6 +12,8 @@ import {
 	UPDATE_METADATA_ERROR,
 } from "./update-release";
 import { githubApiHeaders } from "./updater-state";
+
+afterAll(stopCore);
 
 const API = "https://api.github.com/repos/SeuPut0705/ompdesk";
 const sha512 = (bytes: string) => createHash("sha512").update(bytes).digest("base64");

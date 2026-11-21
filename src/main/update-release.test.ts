@@ -3,26 +3,17 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-	type GitHubRelease,
-	NO_RELEASE_ERROR,
-	parseUpdateMetadata,
-	pickRelease,
-	RELEASE_LOOKUP_ERROR,
-	ReleaseFeedError,
-	resolvePlatformRelease,
-	stripUpdateMetadata,
-	UPDATE_ASSETS,
-	UPDATE_METADATA_ERROR,
-	UPDATE_PLATFORM_ERROR,
-	type UpdateMetadata,
-} from "./update-release";
+import { stopCore } from "./core/process";
+import { ReleaseFeedError, resolvePlatformRelease, UPDATE_ASSETS, type UpdatePlatform } from "./update-release";
+import * as frozen from "./update-release.fixtures/v0.131.0/update-release";
+
+afterAll(stopCore);
 
 const sha512 = (bytes: string) => createHash("sha512").update(bytes).digest("base64");
 
-const METADATA: UpdateMetadata = {
+const METADATA = {
 	version: "0.18.0",
 	releaseDate: "2026-10-09T12:00:00.000Z",
 	files: {
@@ -35,7 +26,7 @@ const METADATA: UpdateMetadata = {
 const comment = (metadata: unknown) => `<!-- ompdesk-update ${JSON.stringify(metadata)} -->`;
 const NOTES = "### Changes\n\n- Two assets.\n\n---\n\nRequires omp **18.7.0** or newer (`omp update`).";
 
-const release = (overrides: Partial<GitHubRelease> = {}): GitHubRelease => ({
+const release = (overrides: Partial<frozen.GitHubRelease> = {}): frozen.GitHubRelease => ({
 	tag_name: "v0.18.0",
 	name: "v0.18.0",
 	body: `${NOTES}\n\n${comment(METADATA)}\n`,
@@ -48,101 +39,71 @@ const release = (overrides: Partial<GitHubRelease> = {}): GitHubRelease => ({
 	...overrides,
 });
 
-const codeOf = (run: () => unknown) => {
-	try {
-		run();
-	} catch (error) {
-		return error instanceof ReleaseFeedError ? error.code : "not a ReleaseFeedError";
-	}
-	return "no error";
-};
-
-describe("update metadata comment", () => {
-	it("round-trips through the notes and leaves them readable", () => {
-		const body = `${NOTES}\n\n${comment(METADATA)}\n`;
-		expect(parseUpdateMetadata(body)).toEqual(METADATA);
-		expect(stripUpdateMetadata(body)).toBe(NOTES);
-	});
-
-	it("treats missing, repeated or malformed comments as unusable releases", () => {
-		expect(codeOf(() => parseUpdateMetadata(NOTES))).toBe(UPDATE_METADATA_ERROR);
-		expect(codeOf(() => parseUpdateMetadata(null))).toBe(UPDATE_METADATA_ERROR);
-		expect(codeOf(() => parseUpdateMetadata(`${comment(METADATA)}\n${comment(METADATA)}`))).toBe(
-			UPDATE_METADATA_ERROR,
-		);
-		expect(codeOf(() => parseUpdateMetadata("<!-- ompdesk-update {not json} -->"))).toBe(UPDATE_METADATA_ERROR);
-	});
-
-	it("names what is wrong in an invalid comment", () => {
-		const hexDigest = { ...METADATA.files.mac, sha512: createHash("sha512").update("mac").digest("hex") };
-		expect(() => parseUpdateMetadata(comment({ ...METADATA, files: { mac: hexDigest } }))).toThrow(
-			/files\.mac\.sha512: sha512 must be a base64 SHA-512 digest/,
-		);
-		expect(() => parseUpdateMetadata(comment({ ...METADATA, version: "latest" }))).toThrow(
-			/version: version must be semver/,
-		);
-		// Asset names are part of the contract: a renamed installer is not silently accepted.
-		const renamed = { ...METADATA.files.windows, name: "ompdesk-windows-portable.exe" };
-		expect(() => parseUpdateMetadata(comment({ ...METADATA, files: { windows: renamed } }))).toThrow(
-			/files\.windows\.name/,
-		);
-	});
+// v0.131 has the same feed contract except for the Mac floor. Reuse the pinned consumer
+// rather than keeping a second copy of the parser as a test oracle.
+const stable = release();
+const pre = release({
+	tag_name: "v0.19.0-beta",
+	name: null,
+	body: comment({ ...METADATA, version: "0.19.0-beta" }),
+	prerelease: true,
 });
+const draft = { ...pre, draft: true };
 
-describe("platform release resolution", () => {
-	it("hands each platform its installer with the API asset endpoint", () => {
-		expect(resolvePlatformRelease(release(), "mac")).toEqual({
-			version: "0.18.0",
-			releaseDate: METADATA.releaseDate,
-			releaseName: "v0.18.0",
-			notes: NOTES,
-			file: METADATA.files.mac,
-			assetUrl: "https://api.github.com/repos/o/r/releases/assets/1",
-			minimumSystemVersion: "23.0.0",
+describe("release resolution through the core", () => {
+	it.each([
+		["one stable release", stable, false],
+		["the newest non-draft prerelease", [draft, stable, pre], true],
+		["the newest stable without a prerelease", [draft, stable], true],
+	] as const)("selects %s with the same notes, hash, size and asset URL", async (_name, payload, prereleases) => {
+		const selected = frozen.pickRelease(payload, prereleases);
+		for (const platform of ["windows", "mac"] as const) {
+			const expected = frozen.resolvePlatformRelease(selected, platform);
+			expect(await resolvePlatformRelease(payload, platform, prereleases)).toEqual(
+				platform === "mac" ? { ...expected, minimumSystemVersion: "23.0.0" } : expected,
+			);
+		}
+	});
+
+	const malformedFile = (patch: Record<string, unknown>) =>
+		release({
+			body: comment({ ...METADATA, files: { ...METADATA.files, mac: { ...METADATA.files.mac, ...patch } } }),
 		});
-		expect(resolvePlatformRelease(release(), "windows").assetUrl).toBe(
-			"https://api.github.com/repos/o/r/releases/assets/2",
-		);
-	});
-
-	it("reports a release without this platform's installer as a platform error", () => {
-		const macOnly = comment({ ...METADATA, files: { mac: METADATA.files.mac } });
-		expect(codeOf(() => resolvePlatformRelease(release({ body: macOnly }), "windows"))).toBe(UPDATE_PLATFORM_ERROR);
-		expect(resolvePlatformRelease(release({ body: macOnly }), "mac").file).toEqual(METADATA.files.mac);
-	});
-
-	it("rejects metadata that contradicts the release it sits in", () => {
-		expect(codeOf(() => resolvePlatformRelease(release({ tag_name: "v0.18.1" }), "mac"))).toBe(UPDATE_METADATA_ERROR);
-		expect(codeOf(() => resolvePlatformRelease(release({ assets: release().assets.slice(1) }), "mac"))).toBe(
-			UPDATE_METADATA_ERROR,
-		);
-		const resized = release().assets.map(asset => ({ ...asset, size: asset.size + 1 }));
-		expect(codeOf(() => resolvePlatformRelease(release({ assets: resized }), "mac"))).toBe(UPDATE_METADATA_ERROR);
-	});
-
-	it("treats a release without the comment (any release before v0.18.0) as unusable", () => {
-		expect(codeOf(() => resolvePlatformRelease(release({ body: NOTES }), "mac"))).toBe(UPDATE_METADATA_ERROR);
-	});
-});
-
-describe("release selection", () => {
-	const stable = release();
-	const pre = release({ tag_name: "v99.0.0-test.1", prerelease: true });
-	const draft = release({ tag_name: "v99.0.0-draft", prerelease: true, draft: true });
-
-	it("takes /releases/latest as is when pre-releases are off", () => {
-		expect(pickRelease(stable, false)).toEqual(stable);
-	});
-
-	it("takes the newest non-draft pre-release, else the newest release, when they are on", () => {
-		expect(pickRelease([draft, pre, stable], true)).toEqual(pre);
-		expect(pickRelease([draft, stable], true)).toEqual(stable);
-		expect(codeOf(() => pickRelease([draft], true))).toBe(NO_RELEASE_ERROR);
-	});
-
-	it("rejects payloads that are not GitHub releases", () => {
-		expect(codeOf(() => pickRelease({ message: "Bad credentials" }, false))).toBe(RELEASE_LOOKUP_ERROR);
-		expect(codeOf(() => pickRelease(stable, true))).toBe(RELEASE_LOOKUP_ERROR);
+	it.each([
+		["missing body", release({ body: null }), false],
+		["missing comment", release({ body: NOTES }), false],
+		["duplicate comment", release({ body: `${comment(METADATA)}\n${comment(METADATA)}` }), false],
+		["invalid JSON", release({ body: "<!-- ompdesk-update {not json} -->" }), false],
+		["invalid JSON in an unknown field", release({ body: '<!-- ompdesk-update {"unused":[1,]} -->' }), false],
+		["invalid metadata shape", release({ body: comment({}) }), false],
+		["invalid semver", release({ body: comment({ ...METADATA, version: "latest" }) }), false],
+		["renamed installer", malformedFile({ name: "renamed.dmg" }), false],
+		["invalid digest", malformedFile({ sha512: createHash("sha512").update("mac").digest("hex") }), false],
+		["multiple invalid fields", malformedFile({ name: false, size: -0.5, sha512: "bad" }), false],
+		["wrong tag", release({ tag_name: "v0.18.1" }), false],
+		["missing asset", release({ assets: [] }), false],
+		["wrong size", release({ assets: stable.assets.map(a => ({ ...a, size: a.size + 1 })) }), false],
+		[
+			"no Mac installer",
+			release({ body: comment({ ...METADATA, files: { windows: METADATA.files.windows } }) }),
+			false,
+		],
+		["only drafts", [draft], true],
+		["unexpected release", { message: "Bad credentials" }, false],
+		["unexpected release list", stable, true],
+		["invalid unselected list member", [pre, { ...draft, assets: [null] }], true],
+	] as const)("preserves the exact refusal for %s", async (_name, payload, prereleases) => {
+		let refusal: frozen.ReleaseFeedError | undefined;
+		try {
+			frozen.resolvePlatformRelease(frozen.pickRelease(payload, prereleases), "mac");
+		} catch (error) {
+			if (!(error instanceof frozen.ReleaseFeedError)) throw error;
+			refusal = error;
+		}
+		expect(refusal).toBeDefined();
+		const result = resolvePlatformRelease(payload, "mac", prereleases);
+		await expect(result).rejects.toBeInstanceOf(ReleaseFeedError);
+		await expect(result).rejects.toMatchObject({ code: refusal?.code, message: refusal?.message });
 	});
 });
 
@@ -153,7 +114,7 @@ interface ReleaseWorkflow {
 // The publish job's own script on fake installers, parsed back: the workflow
 // and the updater agree on the format (bash, jq and openssl as on its runner).
 describe.runIf(process.platform !== "win32")("release workflow metadata step", () => {
-	it("writes a comment the updater parses, with each file's real size and SHA-512", () => {
+	it("writes a comment the updater resolves, with each file's real size and SHA-512", async () => {
 		const workflow = parse(
 			fs.readFileSync(path.join(__dirname, "..", "..", ".github", "workflows", "release.yml"), "utf8"),
 		) as ReleaseWorkflow;
@@ -182,21 +143,29 @@ describe.runIf(process.platform !== "win32")("release workflow metadata step", (
 			expect(result.status).toBe(0);
 
 			const notes = fs.readFileSync(path.join(dir, "notes", "notes.md"), "utf8");
-			const metadata = parseUpdateMetadata(notes);
-			expect(metadata).toEqual({
-				version: "0.18.0",
-				releaseDate: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/),
-				files: {
-					mac: {
-						name: UPDATE_ASSETS.mac,
-						size: 14,
-						sha512: sha512("fake dmg bytes"),
-						minimumSystemVersion: minimumDarwin,
-					},
-					windows: { name: UPDATE_ASSETS.windows, size: 24, sha512: sha512("fake setup bytes, longer") },
-				},
+			const payload = release({
+				body: notes,
+				assets: stable.assets.map(asset => ({
+					...asset,
+					size: fs.statSync(path.join(dir, "dist", asset.name)).size,
+				})),
 			});
-			expect(stripUpdateMetadata(notes)).toBe(NOTES);
+			for (const platform of ["mac", "windows"] satisfies UpdatePlatform[]) {
+				const update = await resolvePlatformRelease(payload, platform, false);
+				expect(update.notes).toBe(NOTES);
+				expect(update.version).toBe(METADATA.version);
+				expect(update.releaseDate).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/);
+				expect(update.file).toEqual(
+					platform === "mac"
+						? {
+								name: UPDATE_ASSETS.mac,
+								size: 14,
+								sha512: sha512("fake dmg bytes"),
+								minimumSystemVersion: minimumDarwin,
+							}
+						: { name: UPDATE_ASSETS.windows, size: 24, sha512: sha512("fake setup bytes, longer") },
+				);
+			}
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

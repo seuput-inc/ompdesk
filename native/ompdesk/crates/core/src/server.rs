@@ -267,6 +267,7 @@ pub fn registry() -> Registry {
     crate::tailscale::register(&mut registry);
     crate::ssh::register(&mut registry);
     crate::stock::register(&mut registry);
+    crate::update_feed::register(&mut registry);
     crate::upkeep::register(&mut registry);
     crate::care::register(&mut registry);
     crate::sidecar::register(&mut registry);
