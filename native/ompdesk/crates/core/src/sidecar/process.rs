@@ -41,6 +41,7 @@ pub struct Exit {
 /// A started omp: its shared handle and the pipes the lane reads.
 pub struct Started {
     pub proc: Arc<Proc>,
+    pub priority_error: Option<std::io::Error>,
     /// True only for an OS wait status, not the synthetic failure the crash reporter also consumes.
     pub confirmed_exit: watch::Receiver<bool>,
     pub stdout: ChildStdout,
@@ -113,11 +114,6 @@ fn command(start: &Start) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     runner.environment(&mut command, &[]);
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
     // A process group of its own, so the kill at the end of a stop takes the tools it started with it; through
     // `posix_spawn`, never a fork of this many-threaded process (`own_group`).
     #[cfg(unix)]
@@ -151,9 +147,32 @@ pub fn start(
     timing: Timing,
     on_exit: impl FnOnce(Exit) + Send + 'static,
 ) -> Result<Started, String> {
-    let mut child = command(start)
-        .spawn()
-        .map_err(|error| refused(start, &error))?;
+    let mut cmd = command(start);
+    #[cfg(windows)]
+    let (mut child, priority_error) = {
+        // A .cmd can start Bun immediately. Set the class before either process runs.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
+        match cmd
+            .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
+            .spawn()
+        {
+            Ok(child) => (child, None),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => (
+                cmd.creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                    .map_err(|e| refused(start, &e))?,
+                Some(error),
+            ),
+            Err(error) => return Err(refused(start, &error)),
+        }
+    };
+    #[cfg(unix)]
+    let (mut child, priority_error) = {
+        let child = cmd.spawn().map_err(|e| refused(start, &e))?;
+        let error = crate::sys::lower_agent_priority(&child).err();
+        (child, error)
+    };
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
@@ -178,6 +197,7 @@ pub fn start(
     });
     Ok(Started {
         proc: Proc::new(pid, exited, lines, signals, timing),
+        priority_error,
         confirmed_exit,
         stdout,
         stderr,

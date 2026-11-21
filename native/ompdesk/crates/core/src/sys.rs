@@ -6,6 +6,18 @@
 //! dial that fails at once when refused.
 #![allow(unsafe_code)]
 
+/// Lower only the child we just spawned, before handing it to its wait task.
+#[cfg(unix)]
+pub(crate) fn lower_agent_priority(child: &tokio::process::Child) -> std::io::Result<()> {
+    let Some(pid) = child.id() else { return Ok(()) };
+    // SAFETY: the child has not been reaped, so its PID cannot name another process.
+    if unsafe { libc::setpriority(libc::PRIO_PROCESS, pid, 10) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 /// Fills `bytes` from the system's random generator (the control socket's token), as node's `randomBytes` does.
 #[cfg(unix)]
 pub fn random(bytes: &mut [u8]) -> std::io::Result<()> {

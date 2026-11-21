@@ -24,7 +24,6 @@ import { deviceLanguageTag, replyLanguageName, resolveReplyLanguage } from "../s
 import type { SetupPlatform } from "../shared/setup";
 import { agentBrowserStatus, resolveEgoBrowser } from "./agent-browsers";
 import { computerUseSpawn } from "./agent-desktop";
-import { agentPriorityLowerer } from "./agent-priority";
 import { bootModelSelector } from "./boot-model";
 import type { BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { builtinReaState, spawnReaState } from "./builtin-mcp";
@@ -167,13 +166,14 @@ export interface DesktopSlotFrameSink {
 
 export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory {
 	const { bridgeDir, bridgeHealth, sessionKinds } = deps;
-	// One for every tab: the first failure is logged, the same one on every later tab would be noise.
-	const lowerPriority = agentPriorityLowerer({
-		report: reason => writeRuntimeLog({ source: "process-priority", message: reason }),
-	});
+	let reportedPriorityFailure = false;
 	return (cwd, kind, fresh, origin, web) => {
 		const sc: SidecarManager = new SidecarManager({
-			lowerPriority,
+			reportPriorityFailure: reason => {
+				if (reportedPriorityFailure) return;
+				reportedPriorityFailure = true;
+				writeRuntimeLog({ source: "process-priority", message: reason });
+			},
 			// The status keeps this reason (Settings, the status snapshot); localize it in the UI language.
 			// While machine setup has omp missing or installing, a half-installed omp is not even resolved.
 			omp: async () => {

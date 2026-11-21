@@ -1297,10 +1297,11 @@ impl Lane {
             drained: drain_wait,
         });
         self.arm_slow_timer(generation);
-        self.emit(
-            "sidecar.spawned",
-            json!({ "pid": proc.pid, "spawnId": spawn_id, "wrapped": cfg!(windows) && start.shell }),
-        );
+        let mut spawned = json!({ "pid": proc.pid, "spawnId": spawn_id, "wrapped": cfg!(windows) && start.shell });
+        if let Some(error) = started.priority_error {
+            spawned["priorityError"] = error.to_string().into();
+        }
+        self.emit("sidecar.spawned", spawned);
     }
 
     fn arm_slow_timer(&mut self, generation: u64) {

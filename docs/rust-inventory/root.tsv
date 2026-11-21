@@ -8,8 +8,8 @@ src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed 
 src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
 src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
 src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
-src/main/agent-priority.test.ts	tooling	-	Vitest suite: agentPriorityLowerer.
-src/main/agent-priority.ts	port	1	agentPriorityLowerer applies OS below-normal process priority to spawned PIDs without failing spawn.
+src/main/agent-priority.test.ts	tooling	-	Checks best-effort scheduling of the Node-spawned hub.
+src/main/agent-priority.ts	port	1	The Bun MCP hub still starts in Node. For every tab, Rust sets priority on the child before publishing its PID; main only reports a failure.
 src/main/agent-worktrees.test.ts	tooling	-	Vitest suite: parseAgentWorktrees.
 src/main/agent-worktrees.ts	port	1	listAgentWorktrees/clearAgentWorktrees run stock omp worktree list/clear --json and parse the two response shapes; stock owns orphan detection and removal.
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.

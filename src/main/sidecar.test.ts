@@ -69,39 +69,36 @@ describe("SidecarManager", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"runs the omp and every process it starts at a lower CPU priority than the app",
-		async () => {
-			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-sidecar-nice-"));
-			const reportPath = path.join(tempDir, "nice.json");
-			// The fake reads its own nice once the app has lowered it (the app does it right after spawn, so the fake
-			// polls the OS), then starts a grandchild the way a tool call does.
-			const binaryPath = await writeFakeOmp(
-				tempDir,
-				[
-					`import * as fs from "node:fs";`,
-					`import { spawn, spawnSync } from "node:child_process";`,
-					`const niceOf = (pid: number) => Number(spawnSync("ps", ["-o", "ni=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim());`,
-					`for (let i = 0; i < 200 && niceOf(process.pid) === 0; i++) await Bun.sleep(10);`,
-					`const tool = spawn("sleep", ["30"], { stdio: "ignore" });`,
-					`fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ omp: niceOf(process.pid), tool: niceOf(tool.pid ?? 0) }));`,
-					`tool.kill();`,
-					`process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");`,
-					ANSWERS_COMMANDS,
-				].join("\n"),
-			);
-			const sidecar = new SidecarManager({ omp: ompAt(binaryPath), cwd: tempDir });
-			try {
-				const ready = waitForReady(sidecar);
-				sidecar.start();
-				await ready;
-				expect(JSON.parse(await fs.readFile(reportPath, "utf8"))).toEqual({ omp: 10, tool: 10 });
-			} finally {
-				sidecar.dispose();
-				await fs.rm(tempDir, RM_TEMP);
-			}
-		},
-	);
+	it("runs the omp and its tool at below-normal CPU priority", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-priority-"));
+		const probe = `const os = require("node:os"); console.log(JSON.stringify({omp: os.getPriority(process.ppid), tool: os.getPriority()}))`;
+		const bin = await writeFakeOmp(
+			dir,
+			`import { execFileSync } from "node:child_process";
+			import { createInterface } from "node:readline";
+			createInterface({ input: process.stdin }).on("line", line => {
+				const { id, type } = JSON.parse(line);
+				const data = type === "get_state" ? JSON.parse(execFileSync(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(probe)}], { encoding: "utf8" })) : {};
+				console.log(JSON.stringify({type: "response", id, command: type, success: true, data}));
+			});
+			console.log(JSON.stringify({type: "ready", supportedProtocolVersions: [1]}));`,
+		);
+		const sc = new SidecarManager({ omp: ompAt(bin), cwd: dir });
+		try {
+			const ready = waitForReady(sc);
+			sc.start();
+			await ready;
+			const priority = os.constants.priority.PRIORITY_BELOW_NORMAL;
+			expect(await sc.rpcClient?.stock({ type: "get_state" })).toMatchObject({
+				success: true,
+				data: { omp: priority, tool: priority },
+			});
+		} finally {
+			sc.dispose();
+			await sc.whenExited();
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
 
 	it.each([
 		{ hostTools: false, extra: [] as string[] },

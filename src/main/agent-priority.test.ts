@@ -1,33 +1,21 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import * as os from "node:os";
-import { describe, expect, it, vi } from "vitest";
-import { AGENT_PRIORITY, agentPriorityLowerer } from "./agent-priority";
+import { expect, it } from "vitest";
+import { lowerAgentPriority } from "./agent-priority";
 
-describe("agentPriorityLowerer", () => {
-	it("sets the below-normal priority on the spawned pid", () => {
-		const setPriority = vi.fn();
-		agentPriorityLowerer({ setPriority })(4242);
-		expect(setPriority).toHaveBeenCalledWith(4242, os.constants.priority.PRIORITY_BELOW_NORMAL);
-		expect(AGENT_PRIORITY).toBeGreaterThan(0);
-	});
-
-	it("does nothing for a spawn that has no pid", () => {
-		const setPriority = vi.fn();
-		agentPriorityLowerer({ setPriority })(undefined);
-		expect(setPriority).not.toHaveBeenCalled();
-	});
-
-	it("never throws, and reports only the first failure", () => {
-		const report = vi.fn();
-		const setPriority = vi.fn(() => {
-			throw new Error("ESRCH: no such process");
-		});
-		const lower = agentPriorityLowerer({ setPriority, report });
-		expect(() => {
-			lower(1);
-			lower(2);
-		}).not.toThrow();
-		expect(setPriority).toHaveBeenCalledTimes(2);
-		expect(report).toHaveBeenCalledTimes(1);
-		expect(report).toHaveBeenCalledWith("ESRCH: no such process");
-	});
+it("lowers a Node-spawned child's priority without changing its parent's", async () => {
+	const before = os.getPriority();
+	const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore"] });
+	const closed = once(child, "close");
+	try {
+		await once(child, "spawn");
+		if (!child.pid) throw new Error("no child pid");
+		lowerAgentPriority(child.pid);
+		expect(os.getPriority(child.pid)).toBe(os.constants.priority.PRIORITY_BELOW_NORMAL);
+		expect(os.getPriority()).toBe(before);
+	} finally {
+		child.stdin.end();
+		await closed;
+	}
 });
