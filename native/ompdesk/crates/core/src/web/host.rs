@@ -174,5 +174,6 @@ async fn stop(call: Call) -> Result<Reply, Fault> {
 pub fn register(registry: &mut Registry) {
     registry.add("web.start", |call| Box::pin(start(call)));
     registry.add("web.stop", |call| Box::pin(stop(call)));
+    super::save::register(registry);
     super::relay::register(registry);
 }

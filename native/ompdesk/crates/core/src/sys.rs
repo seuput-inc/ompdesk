@@ -30,6 +30,47 @@ pub fn random(bytes: &mut [u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// `fs.copyFile` on Windows uses CopyFileW, including its alternate data streams and exclusive-create behavior.
+#[cfg(windows)]
+pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io::Result<()> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CopyFileW(source: *const u16, target: *const u16, fail_if_exists: i32) -> i32;
+    }
+    // Main supplies resolved paths; pass long drive and UNC paths in the same namespace as Node.
+    fn wide(path: &str) -> std::io::Result<Vec<u16>> {
+        if path.contains('\0') {
+            return Err(std::io::Error::from_raw_os_error(123));
+        }
+        let (prefix, tail) = if path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
+            ("", path)
+        } else if let Some(unc) = path.strip_prefix(r"\\") {
+            (r"\\?\UNC\", unc)
+        } else {
+            (r"\\?\", path)
+        };
+        Ok(prefix
+            .encode_utf16()
+            .chain(tail.encode_utf16())
+            .chain([0])
+            .collect())
+    }
+    let from = wide(source)?;
+    let to = wide(target)?;
+    // SAFETY: both buffers are NUL-terminated and remain alive for the synchronous call.
+    if unsafe { CopyFileW(from.as_ptr(), to.as_ptr(), i32::from(exclusive)) } != 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    // libuv accepts a sharing violation only if both names identify the same file.
+    if crate::fs::error::uv_code(&error) == "EBUSY"
+        && same_file::is_same_file(source, target).unwrap_or(false)
+    {
+        return Ok(());
+    }
+    Err(error)
+}
+
 /// Windows answers a refused connect by sending its SYN again (about 2 s on loopback). libuv turns those retries off
 /// for a loopback peer, so node's dial to a closed local port failed at once; a remote link's dial does the same
 /// (`remote/dial.rs`). Best effort: a Windows before 10.0.16299 refuses the option and keeps the retries.
