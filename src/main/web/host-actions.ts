@@ -4,7 +4,6 @@
  * and fetch a host file over `/blob`. Each is a web-only channel (shared/web-host.ts) with its permission:
  * `workspace` for the disk and blobs, `desktop-control` for what happens on the host's screen.
  */
-import { constants, promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -20,7 +19,7 @@ import {
 	type WebModelsText,
 	type WebModelsWriteResult,
 } from "../../shared/web-host";
-import { CoreError, core } from "../core/process";
+import { type CoreAnswer, CoreError, core } from "../core/process";
 import { isOpenableExternalUrl } from "../external-url";
 import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin, sniffMime } from "../workspace-fs";
 import type { BlobStore } from "./blobs";
@@ -96,9 +95,11 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		const abs = expandHome(raw, home());
 		if (!path.isAbsolute(abs)) throw codedError("not_absolute_path", "Not an absolute path");
 		try {
-			await fsp.access(abs);
-		} catch {
-			throw codedError("file_not_found", "File not found");
+			await core().call("fs.stat", { path: abs });
+		} catch (error) {
+			if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "io"))
+				throw codedError("file_not_found", "File not found");
+			throw error;
 		}
 		return path.normalize(abs);
 	};
@@ -147,26 +148,28 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		}
 		const dir = expandHome(request.dir, home());
 		if (!path.isAbsolute(dir)) return { ok: false, error: "Not an absolute path", code: "not_absolute_path" };
-		const info = await fsp.stat(dir).catch(() => null);
-		if (!info?.isDirectory()) return { ok: false, error: "Not a folder", code: "not_a_directory" };
+		const upload = request.uploadPath === undefined ? undefined : path.resolve(request.uploadPath);
+		const source =
+			upload === undefined
+				? "inline"
+				: deps.uploads.owns(context.deviceId, upload)
+					? { ownedUpload: upload }
+					: "denied";
 		const target = path.join(path.resolve(dir), request.name);
 		try {
-			if (request.uploadPath !== undefined) {
-				if (!deps.uploads.owns(context.deviceId, request.uploadPath)) {
-					return { ok: false, error: "Not one of this device's uploads", code: "path_escapes_roots" };
-				}
-				await fsp.copyFile(request.uploadPath, target, request.overwrite ? 0 : constants.COPYFILE_EXCL);
-			} else {
-				await fsp.writeFile(target, Buffer.from(request.data ?? "", "base64"), {
-					flag: request.overwrite ? "w" : "wx",
-				});
-			}
+			const { result } = await core().call<WebHostSaveResult>(
+				"web.host.save",
+				{ dir, target, source, overwrite: request.overwrite === true },
+				{
+					...(request.data === undefined ? {} : { bin: Buffer.from(request.data, "base64") }),
+					// A slow destination can still be writing after the default RPC deadline.
+					timeoutMs: 2 ** 31 - 1,
+				},
+			);
+			return result;
 		} catch (error) {
-			const code = error instanceof Error && "code" in error ? error.code : undefined;
-			if (code === "EEXIST") return { ok: false, error: "A file with that name exists", code: "exists" };
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
 		}
-		return { ok: true, path: target };
 	};
 
 	const open = async (_context: WebCallContext, args: readonly unknown[]): Promise<WebHostOpenResult> => {
@@ -201,20 +204,22 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 			abs = within;
 		}
 		abs = path.normalize(abs);
-		const info = await fsp.stat(abs).catch(() => null);
-		if (!info?.isFile()) return { ok: false, error: "File not found", code: "file_not_found" };
-		if (info.size > FS_BINARY_LOCAL_MAX_BYTES) return { ok: false, error: "File too large", code: "file_too_large" };
-		const header = Buffer.alloc(Math.min(512, info.size));
-		const handle = await fsp.open(abs, "r");
+		let head: CoreAnswer<{ size: number }>;
 		try {
-			await handle.read(header, 0, header.length, 0);
-		} finally {
-			await handle.close();
+			head = await core().call<{ size: number }>("fs.resolveMedia", {
+				path: abs,
+				head: 512,
+				webBlobMaxBytes: FS_BINARY_LOCAL_MAX_BYTES,
+			});
+		} catch (error) {
+			if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "file_too_large"))
+				return { ok: false, error: error.message, code: error.code };
+			throw error;
 		}
-		const mime = sniffMime(header, abs);
+		const mime = sniffMime(head.bin ?? new Uint8Array(0), abs);
 		const name = path.basename(abs);
 		const url = deps.blobs.addFile(context.deviceId, { abs, mime, name, download: request.download === true });
-		return { ok: true, url, mime, size: info.size, name };
+		return { ok: true, url, mime, size: head.result.size, name };
 	};
 
 	const blobRelease = async (context: WebCallContext, args: readonly unknown[]): Promise<void> => {

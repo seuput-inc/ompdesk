@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import {
 	type WebHostListing,
 	type WebHostSaveResult,
 } from "../../shared/web-host";
+import { FS_BINARY_LOCAL_MAX_BYTES } from "../workspace-fs";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
 import { createHostActions, DEVICE_UI_PREFS_MAX_BYTES } from "./host-actions";
@@ -230,6 +231,19 @@ describe("blob URLs for host files", () => {
 			await call(WEB_HOST_CHANNELS.BLOB_RELEASE, relative.url);
 			expect(await blobs.release("dev1", relative.url)).toBe(false);
 		}
+	});
+
+	it("rejects an oversized file before granting the device a blob URL", async () => {
+		const file = join(home, "large");
+		writeFileSync(file, "");
+		truncateSync(file, FS_BINARY_LOCAL_MAX_BYTES + 1);
+		const { call, blobs } = rig();
+		expect(await call(WEB_HOST_CHANNELS.BLOB_OPEN, { path: file })).toEqual({
+			ok: false,
+			error: "File too large",
+			code: "file_too_large",
+		});
+		expect(await blobs.count()).toBe(0);
 	});
 
 	it("refuses a relative path that escapes the folder, a missing file, a folder and a relative path with no tab", async () => {

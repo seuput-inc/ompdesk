@@ -297,10 +297,13 @@ fn newest_plan_file(dir: &str) -> Option<(String, String)> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaParams {
     path: String,
     /// The head's length: what main sniffs a type from.
     head: u64,
+    /// The web blob picker rejects a large file before opening it. Streamed media has no such limit.
+    web_blob_max_bytes: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -310,13 +313,32 @@ struct Media {
 
 /// A stream's file: a regular file, its size and its head (main checks it sniffs as audio or video).
 pub fn resolve_media(params: &MediaParams) -> Result<Reply, Fault> {
-    let fail = |error: super::error::NodeError| error.fault(Codes::Missing);
-    let meta = disk::stat(&params.path).map_err(fail)?;
+    let missing = || Fault::new("file_not_found", "File not found");
+    let web = params.web_blob_max_bytes.is_some();
+    let meta = disk::stat(&params.path).map_err(|error| {
+        if web {
+            missing()
+        } else {
+            error.fault(Codes::Missing)
+        }
+    })?;
     if !meta.is_file() {
-        return Err(not_a_file());
+        return Err(if web { missing() } else { not_a_file() });
     }
-    let mut file = disk::open(&params.path).map_err(fail)?;
-    let head = read_head(&mut file, meta.len().min(params.head), Codes::Missing)?;
+    if params
+        .web_blob_max_bytes
+        .is_some_and(|cap| meta.len() > cap)
+    {
+        return Err(Fault::new("file_too_large", "File too large"));
+    }
+    let codes = if web { Codes::None } else { Codes::Missing };
+    let mut file = disk::open(&params.path).map_err(|error| error.fault(codes))?;
+    let len = meta.len().min(params.head);
+    let mut head = read_head(&mut file, len, codes)?;
+    if web {
+        // The web picker's fixed header buffer kept its zero suffix if the file shrank after stat.
+        head.resize(len as usize, 0);
+    }
     Ok(Reply::json(&Media { size: meta.len() })?.with_bin(head))
 }
 
