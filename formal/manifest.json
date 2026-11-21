@@ -259,7 +259,9 @@
 			"covers": [
 				"src/main/remote/host-services.ts",
 				"src/main/remote/kept-calls.ts",
-				"src/main/ipc.ts:642-661"
+				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
+				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
+				"src/main/ipc.ts:654-671"
 			],
 			"syncCommit": null
 		},
