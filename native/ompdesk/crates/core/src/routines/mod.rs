@@ -46,7 +46,8 @@ struct GithubParams {
 struct GithubAnswer {
     state: github::State,
     /// What to keep for the next launch (only after a read that did not fail).
-    mark: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mark: Option<Value>,
     lines: Vec<String>,
     error: Option<String>,
 }
@@ -101,7 +102,7 @@ pub fn register(registry: &mut Registry) {
                 Err(message) => (Vec::new(), Some(message)),
             };
             Reply::json(&GithubAnswer {
-                mark: state.mark(),
+                mark: error.is_none().then(|| state.mark()),
                 state,
                 lines,
                 error,

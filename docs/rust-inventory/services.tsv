@@ -243,7 +243,7 @@ src/main/routines/files.ts	port	routines.filesScan now compares the saved mark a
 src/main/routines/git.test.ts	exception	Test coverage for branch moves against a real repository.
 src/main/routines/git.ts	port	git.routineHead now decides whether to retain or replace the baseline. Node polls, rechecks stop/run state after the read, saves before requesting git.routineCommits, and suppresses the routine's own commits.
 src/main/routines/github.test.ts	exception	Test coverage for GitHub event baselines across relaunch.
-src/main/routines/github.ts	port	Validates repository names, selects event kinds, schedules polls and advances trigger state across reads.
+src/main/routines/github.ts	port	Core reads GitHub events and returns a persistable mark only on success. Node validates the repository, orders polls and commits each successful mark before waking the routine.
 src/main/routines/imap.test.ts	exception	Test coverage for IMAP exchanges against a fake server.
 src/main/routines/imap.ts	port	Executes the IMAP login, examine, UID search and fetch sequence; parses literals and decodes MIME snippets.
 src/main/routines/marks.test.ts	exception	Test coverage for configuration-keyed marks across relaunch.

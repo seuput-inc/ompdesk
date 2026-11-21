@@ -202,7 +202,7 @@ describe("github source", () => {
 
 	it("fires nothing when gh fails, tells each distinct failure once, and fires what happened meanwhile once it answers", async () => {
 		const github = fakeGithub({ "repos/o/r/pulls": [pull(1, "One", "a")] });
-		const { context, fired, warned } = fakeContext();
+		const { context, fired, warned, saved } = fakeContext();
 		createGithubSource({ repo: "o/r", events: ["pull_request"], read: github.read, context });
 		await settle();
 
@@ -214,10 +214,12 @@ describe("github source", () => {
 		await poll();
 		expect(warned).toHaveLength(2);
 		expect(fired).toEqual([]);
+		expect(saved).toEqual([{ seen: { pull_request: [1] } }]);
 
 		github.answers["repos/o/r/pulls"] = [pull(2, "Two", "b"), pull(1, "One", "a")];
 		await poll();
 		expect(fired).toEqual(['PR #2 "Two" opened by b: https://github.com/o/r/pull/2']);
+		expect(saved.at(-1)).toEqual({ seen: { pull_request: [1, 2] } });
 	});
 
 	it("takes the baseline from its first good answer when the first poll failed", async () => {
