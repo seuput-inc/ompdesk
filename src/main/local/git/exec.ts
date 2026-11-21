@@ -127,10 +127,9 @@ async function runnerEnv(extra: Record<string, string>): Promise<Record<string, 
 	return env;
 }
 
-/** This process's git rules for a git the core runs, read now (the PATH and the environment can change while the app runs). */
-export async function gitRunner(): Promise<CoreRunner> {
+async function availableGitRunner(): Promise<CoreRunner | null> {
 	const bin = await gitBin();
-	if (!bin) throw new Error("git is not installed or not on PATH");
+	if (!bin) return null;
 	return {
 		bin,
 		args: GIT_ARGS,
@@ -138,6 +137,13 @@ export async function gitRunner(): Promise<CoreRunner> {
 		timeoutMs: DEFAULT_TIMEOUT_MS,
 		maxBytes: DEFAULT_MAX_BYTES,
 	};
+}
+
+/** This process's git rules for a git the core runs (the PATH and environment can change between calls). */
+export async function gitRunner(): Promise<CoreRunner> {
+	const runner = await availableGitRunner();
+	if (!runner) throw new Error("git is not installed or not on PATH");
+	return runner;
 }
 
 /** Never prompt, never check for a newer gh, no colour. */
@@ -198,7 +204,12 @@ export async function coreGit<T>(method: string, params: object, rounds: number,
 
 /** `coreGit` with the answer's `bin` tail (file contents the request read). */
 export function coreGitAnswer<T>(method: string, params: object, rounds: number, slowMs = 0): Promise<CoreAnswer<T>> {
-	return heldAnswer(method, async () => ({ ...params, git: await gitRunner() }), rounds * DEFAULT_TIMEOUT_MS + slowMs);
+	// git.diff rejects the path before reporting a missing git; other requests require the runner as before.
+	return heldAnswer(
+		method,
+		async () => ({ ...params, git: await (method === "git.diff" ? availableGitRunner() : gitRunner()) }),
+		rounds * DEFAULT_TIMEOUT_MS + slowMs,
+	);
 }
 
 /**

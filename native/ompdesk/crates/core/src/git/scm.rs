@@ -2,7 +2,7 @@
 //! commit and undo, push/pull/fetch, stash, a stopped operation's continue or abort, branches, the log, a commit's
 //! files and diff, and the history's actions. Each method runs its whole sequence of gits here. Main resolves the
 //! checkout root first (`git.repoRoot`), takes the repository lock around every mutation and checks what a person
-//! typed (paths, branch and tag names, shas, an empty message, a reset mode) before the request; what needs main stays
+//! typed (branch and tag names, shas, an empty message, a reset mode) before the request; what needs main stays
 //! there: removing the untracked files a discard names (main's fenced files, `discard` answers them) and the commit
 //! message omp writes. A refusal is a fault whose code is the `LocalCommandError` code the TypeScript threw; git's own
 //! failure keeps run's `git_exit` (main reports it as `git_failed` in a mutation, as the TypeScript did).
@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::parse::{self, LOG_FORMAT};
 use super::read::{self, Diff, blocking};
@@ -35,7 +36,7 @@ fn strs(args: &[String]) -> Vec<&str> {
 }
 
 fn literal(paths: &[String]) -> impl Iterator<Item = String> {
-    paths.iter().map(|file| format!(":(literal){file}"))
+    paths.iter().map(|file| parse::literal(file))
 }
 
 /// What a command that may stop on conflicts answers.
@@ -98,21 +99,23 @@ async fn run_may_conflict(
     Err(failure(args, &output))
 }
 
-pub async fn stage(git: &Git, root: &str, paths: Option<&[String]>) -> Result<(), Fault> {
+pub async fn stage(git: &Git, root: &str, paths: &Value) -> Result<(), Fault> {
     let mut args = vec!["add".to_owned(), "-A".into()];
-    if let Some(paths) = paths {
+    if !paths.is_null() {
         args.push("--".into());
-        args.extend(literal(paths));
+        parse::append_pathspecs(&mut args, paths)?;
     }
     git.text(root, &strs(&args)).await?;
     Ok(())
 }
 
-pub async fn unstage(git: &Git, root: &str, paths: Option<&[String]>) -> Result<(), Fault> {
-    let spec: Vec<String> = match paths {
-        Some(paths) => literal(paths).collect(),
-        None => vec![".".into()],
-    };
+pub async fn unstage(git: &Git, root: &str, paths: &Value) -> Result<(), Fault> {
+    let mut spec = Vec::new();
+    if paths.is_null() {
+        spec.push(".".into());
+    } else {
+        parse::append_pathspecs(&mut spec, paths)?;
+    }
     // An unborn branch has no HEAD to restore the index from: drop the entries instead.
     let mut args: Vec<String> = if has_head(git, root).await? {
         ["restore", "--staged", "--"].map(String::from).to_vec()
@@ -133,7 +136,7 @@ pub struct Discarded {
 }
 
 /// Back to HEAD in index and worktree; untracked or newly added paths leave the index and are answered for removal.
-pub async fn discard(git: &Git, root: &str, paths: &[String]) -> Result<Discarded, Fault> {
+pub async fn discard(git: &Git, root: &str, paths: &Value) -> Result<Discarded, Fault> {
     let mut args: Vec<String> = [
         "status",
         "--porcelain=v2",
@@ -143,7 +146,7 @@ pub async fn discard(git: &Git, root: &str, paths: &[String]) -> Result<Discarde
     ]
     .map(String::from)
     .to_vec();
-    args.extend(literal(paths));
+    parse::append_pathspecs(&mut args, paths)?;
     let status = parse::status_v2_entries(&git.text(root, &strs(&args)).await?).in_v1_order();
     let is_fresh = |index: char| index == '?' || index == 'A';
     let fresh: Vec<String> = status
@@ -796,9 +799,9 @@ pub async fn commit_detail(git: &Git, root: &str, sha: &str) -> Result<CommitDet
     })
 }
 
-/// One file's diff in a commit against its first parent; main checked the sha and the path.
+/// One file's diff in a commit against its first parent.
 pub async fn commit_diff(git: &Git, root: &str, sha: &str, file_path: &str) -> Result<Diff, Fault> {
-    let spec = format!(":(literal){file_path}");
+    let spec = parse::literal(file_path);
     let args = [
         "show",
         "--format=",
@@ -1108,7 +1111,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("added.txt"), "added\n").unwrap();
         sh(&dir, &["add", "added.txt"]);
         let root = dir.to_str().unwrap();
-        let paths = ["README.md", "new file.txt", "added.txt"].map(String::from);
+        let paths = serde_json::json!(["README.md", "new file.txt", "added.txt"]);
         let discarded = discard(&git(), root, &paths).await.unwrap();
         assert_eq!(discarded.fresh, ["added.txt", "new file.txt"]);
         assert_eq!(

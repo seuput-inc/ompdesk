@@ -169,7 +169,7 @@ src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except 
 src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and prevents mutations of bundled REA servers before notifying sessions of MCP changes.
 src/main/local/git.ts	port	Dispatches local SCM and PR commands and verifies repository ownership before restoring a worktree. Compare native-root-mini-intake's local_dispatch/ candidate with the current command, result and refusal contracts before reuse.
 src/main/local/git/changes.test.ts	exception	Tests net tracked changes, rename counts and treatment of untracked or binary files in real checkouts.
-src/main/local/git/changes.ts	port	Forwards repository reads to Rust git.* methods but refuses an unsafe repository-relative path in TS before calling git.diff.
+src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. git.diff validates the path before reporting missing git or reading the checkout.
 src/main/local/git/exec-brew.test.ts	exception	Tests macOS gh discovery with a temporary shell and Homebrew bin directory.
 src/main/local/git/exec-gh.test.ts	exception	Tests core gh stdout, exit and timeout behavior and verifies token values do not escape into errors or logs.
 src/main/local/git/exec.test.ts	exception	Tests rediscovery after a missing binary, spawn diagnostics and git executable selection.
@@ -180,7 +180,7 @@ src/main/local/git/github.ts	port	Validates each GitHub operation and host/repo 
 src/main/local/git/origin.test.ts	exception	Tests project identity and worktree classification for ordinary, Autopilot and agent checkouts.
 src/main/local/git/origin.ts	port	Canonicalizes roots, coalesces lookups and caches known and unknown origins with separate expirations around git.originFacts.
 src/main/local/git/parse.test.ts	exception	Tests path confinement, slug generation, conditional PR templates and draft extraction from noisy model output.
-src/main/local/git/parse.ts	port	Validates refs, paths and input slugs, renders PR prompts and extracts a title and body from model output. Name allocation runs in git.worktreeAdd.
+src/main/local/git/parse.ts	port	Validates refs and input slugs, renders PR prompts and extracts a title and body from model output. Repository path checks and worktree name allocation run in core.
 src/main/local/git/pr-create-stock.test.ts	exception	Compares the gh pr create arguments and resulting PR number with stock behavior.
 src/main/local/git/pr-draft-system.md	exception	Static instructions for the draft model's title, body sections and JSON reply format.
 src/main/local/git/pr-draft-user.md	exception	Static model prompt template for a branch's commit list, changed files and optional diff statistics.
@@ -188,7 +188,7 @@ src/main/local/git/pr.ts	port	Builds a PR drafting prompt from Rust facts, invok
 src/main/local/git/repo-lock.test.ts	exception	Tests independent repo locks, serial mutations per repository and fencing of work from a stopped holder.
 src/main/local/git/scm-history.test.ts	exception	Tests branch mutations, occupied branches and conflict continuation or abort against real repositories.
 src/main/local/git/scm.test.ts	exception	Tests working-tree and index effects of staging, unstaging, discard and other SCM commands.
-src/main/local/git/scm.ts	port	Locks mutations, removes discarded untracked files in Node and runs stock commit-message generation after checking staged changes.
+src/main/local/git/scm.ts	port	Locks mutations, removes discarded untracked files through fenced-fs and runs stock commit-message generation. Core validates all selected paths before running git.
 src/main/local/git/session-worktree.test.ts	exception	Tests worktree exit choices, branch movement and dirty versus ignored files in snapshots.
 src/main/local/git/session-worktree.ts	native-client	Supplies the exit policy to git.sessionWorktreeSnapshot and uses the checked native removal plan under the repository lock. The lifecycle caller still asks the person and checks a fresh fingerprint before removal; compare native-root-mini-intake's worktree_lifecycle/ candidate against those contracts before further reuse.
 src/main/local/git/stock-bridge.test.ts	exception	Integration fixture drives stock omp to test worktree paths, checkout removal, session movement and PR metadata.

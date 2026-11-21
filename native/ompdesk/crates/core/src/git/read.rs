@@ -516,8 +516,7 @@ fn inspect(root: &str, absolute: &str) -> Result<OnDisk, Fault> {
     }
 }
 
-/// One changed path's diff against HEAD; never follows a symlink out of the checkout. Main checked that `file_path`
-/// is a safe relative path (`isSafeRelativePath`).
+/// One changed path's diff against HEAD; never follows a symlink out of the checkout.
 pub async fn diff(git: &Git, cwd: &str, file_path: &str) -> Result<Diff, Fault> {
     let changes = changes(git, cwd).await?;
     let entry = changes

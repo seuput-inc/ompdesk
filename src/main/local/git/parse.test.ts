@@ -1,16 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { extractDraftJson, isInside, isSafeRelativePath, renderPrompt, worktreeSlug } from "./parse";
+import { extractDraftJson, isInside, renderPrompt, worktreeSlug } from "./parse";
 
 // parseStatusV2 and newFileDiff moved to the core process with their cases (native/ompdesk/crates/core/src/git/parse.rs),
 // parsePrUnifiedDiff, rollupChecks and rollupCounts with theirs (native/ompdesk/crates/core/src/gh/pr.rs), parseGitStatus
 // with the shared checkout's reading of it (native/ompdesk/crates/core/src/git/checkout.rs).
 
 describe("path guards", () => {
-	it("rejects absolute, NUL and traversal paths", () => {
-		for (const bad of ["", "/etc/passwd", "C:\\x", "a/../b", "..\\x", "a\0b"])
-			expect(isSafeRelativePath(bad)).toBe(false);
-		expect(isSafeRelativePath("src/a..b.ts")).toBe(true);
-	});
 	it("isInside is strict", () => {
 		expect(isInside("/r", "/r/a")).toBe(true);
 		expect(isInside("/r", "/r")).toBe(false);

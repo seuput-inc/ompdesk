@@ -20,17 +20,6 @@ export function isValidRefName(name: string): boolean {
 	);
 }
 
-/** Validate a repository-relative path from the renderer (no absolute, NUL, or `..` segment). */
-export function isSafeRelativePath(filePath: string): boolean {
-	return !(
-		!filePath ||
-		filePath.includes("\0") ||
-		path.isAbsolute(filePath) ||
-		path.win32.isAbsolute(filePath) ||
-		filePath.split(/[\\/]/).includes("..")
-	);
-}
-
 /** True when `child` is strictly inside `root` (both already real paths). */
 export function isInside(root: string, child: string): boolean {
 	const relative = path.relative(root, child);

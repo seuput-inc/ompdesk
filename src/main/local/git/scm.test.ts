@@ -3,11 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { core } from "../../core/process";
 import { CreditSpendRefusal } from "../../omp-launch";
 import { RM_TEMP } from "../../test-fake-omp";
 import type { OmpRuntime } from "../types";
-import { getGitChanges, repoRoot } from "./changes";
-import { REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
+import { getGitChanges, getGitDiff, repoRoot } from "./changes";
+import { coreGit, REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
 import { isValidRefName } from "./parse";
 import * as scm from "./scm";
 import { gitSync, initRepo, pathExists } from "./test-repos";
@@ -103,9 +104,38 @@ describe("stage, unstage, discard", () => {
 		expect((await getGitChanges(root)).files).toEqual([]);
 	});
 
-	it("refuses paths that leave the checkout", async () => {
-		await expect(scm.stage(root, ["../outside"])).rejects.toMatchObject({ code: "invalid_path" });
-		await expect(scm.discard(root, [])).rejects.toMatchObject({ code: "invalid_path" });
+	it("rejects the whole selection before changing the index or removing a file", async () => {
+		await fs.writeFile(path.join(root, "scratch.txt"), "keep\n");
+		const refused = { code: "invalid_path", message: "Invalid repository-relative path" };
+		await expect(scm.stage(root, ["scratch.txt", "..\\outside"])).rejects.toMatchObject(refused);
+		expect(await statusOf("scratch.txt")).toBe("??");
+		await scm.stage(root, ["scratch.txt"]);
+		await expect(scm.unstage(root, ["scratch.txt", "/outside"])).rejects.toMatchObject(refused);
+		await expect(scm.discard(root, ["scratch.txt", "C:\\outside"])).rejects.toMatchObject(refused);
+		await expect(scm.discard(root, [])).rejects.toMatchObject(refused);
+		await expect(scm.commitDiff(root, "abcd", "sub/../outside")).rejects.toMatchObject(refused);
+		await expect(getGitDiff(root, "a\0b")).rejects.toThrow(refused.message);
+		expect(await statusOf("scratch.txt")).toBe("A ");
+		expect(await fs.readFile(path.join(root, "scratch.txt"), "utf8")).toBe("keep\n");
+	});
+
+	it("never widens a malformed native selection to all paths", async () => {
+		await fs.writeFile(path.join(root, "scratch.txt"), "keep\n");
+		for (const paths of [[], ["scratch.txt", 7], false, "all", {}]) {
+			await expect(coreGit("git.stage", { root, paths }, 1)).rejects.toMatchObject({ code: "invalid_path" });
+		}
+		await expect(coreGit("git.stage", { root }, 1)).rejects.toMatchObject({ code: "invalid_params" });
+		await expect(coreGit("git.discard", { root, paths: null }, 4)).rejects.toMatchObject({ code: "invalid_path" });
+		expect(await statusOf("scratch.txt")).toBe("??");
+	});
+
+	it("reports an invalid diff path before missing git, but reports missing git for a valid path", async () => {
+		for (const [file, message] of [
+			["a/../b", "Invalid repository-relative path"],
+			["a..b", "git is not installed or not on PATH"],
+		]) {
+			await expect(core().call("git.diff", { cwd: root, path: file, git: null })).rejects.toMatchObject({ message });
+		}
 	});
 });
 

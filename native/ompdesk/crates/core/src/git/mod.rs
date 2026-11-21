@@ -31,9 +31,10 @@ pub(crate) mod worktree;
 pub(crate) use scm::tests::{repo_at, sh};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::run::Runner;
-use crate::server::{Registry, Reply};
+use crate::server::{Fault, Registry, Reply};
 use run::Git;
 
 #[derive(Deserialize)]
@@ -51,9 +52,9 @@ struct FingerprintParams {
 
 #[derive(Deserialize)]
 struct DiffParams {
-    git: Runner,
+    git: Option<Runner>,
     cwd: String,
-    path: String,
+    path: Value,
 }
 
 /// A request on the checkout root main resolved.
@@ -63,19 +64,13 @@ struct Root {
     root: String,
 }
 
-/// `paths` none: all of them.
+/// Stage and unstage accept explicit `null` for all; discard always requires a list.
 #[derive(Deserialize)]
 struct PathsParams {
     git: Runner,
     root: String,
-    paths: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct DiscardParams {
-    git: Runner,
-    root: String,
-    paths: Vec<String>,
+    #[serde(deserialize_with = "Value::deserialize")]
+    paths: Value,
 }
 
 /// `slowMs`: the timeout of the request's one slow git (a hook, the network, a merge), main's to choose.
@@ -152,7 +147,7 @@ struct CommitDiffParams {
     git: Runner,
     root: String,
     sha: String,
-    path: String,
+    path: Value,
 }
 
 #[derive(Deserialize)]
@@ -500,27 +495,29 @@ pub fn register(registry: &mut Registry) {
     registry.add("git.diff", |call| {
         Box::pin(async move {
             let DiffParams { git, cwd, path } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(&read::diff(&git, &cwd, &path).await?)
+            let path = parse::relative_path(&path)?;
+            let git = git
+                .ok_or_else(|| Fault::new("git_missing", "git is not installed or not on PATH"))?;
+            Reply::json(&read::diff(&Git::new(git, call.scope), &cwd, path).await?)
         })
     });
     registry.add("git.stage", |call| {
         Box::pin(async move {
             let PathsParams { git, root, paths } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::stage(&git, &root, paths.as_deref()).await?)
+            Reply::json(&scm::stage(&git, &root, &paths).await?)
         })
     });
     registry.add("git.unstage", |call| {
         Box::pin(async move {
             let PathsParams { git, root, paths } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::unstage(&git, &root, paths.as_deref()).await?)
+            Reply::json(&scm::unstage(&git, &root, &paths).await?)
         })
     });
     registry.add("git.discard", |call| {
         Box::pin(async move {
-            let DiscardParams { git, root, paths } = call.params()?;
+            let PathsParams { git, root, paths } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&scm::discard(&git, &root, &paths).await?)
         })
@@ -655,7 +652,7 @@ pub fn register(registry: &mut Registry) {
                 path,
             } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::commit_diff(&git, &root, &sha, &path).await?)
+            Reply::json(&scm::commit_diff(&git, &root, &sha, parse::relative_path(&path)?).await?)
         })
     });
     registry.add("git.historyAction", |call| {
