@@ -7,7 +7,6 @@
  */
 import type { WebPushPayload, WebPushSubscriptionJson } from "../../shared/web-push";
 import { core } from "../core/process";
-import { loadVapid } from "./vapid-store";
 
 export type PushUrgency = "very-low" | "low" | "normal" | "high";
 
@@ -69,28 +68,10 @@ export interface PushSenderDeps {
 export class PushSender {
 	readonly #deps: PushSenderDeps;
 	readonly #transport: PushTransport;
-	#publicKey: string | null = null;
 
 	constructor(deps: PushSenderDeps) {
 		this.#deps = deps;
 		this.#transport = deps.transport ?? coreTransport(deps.userData);
-	}
-
-	/**
-	 * Loads the VAPID keypair in the core (making one when the file is unusable), before the first page asks for the
-	 * public key or the first push goes out. `created` is true when every stored subscription was made against
-	 * another key: the caller drops them.
-	 */
-	async open(): Promise<{ created: boolean }> {
-		const { publicKey, created } = await loadVapid(this.#deps.userData);
-		this.#publicKey = publicKey;
-		return { created };
-	}
-
-	/** The public key a page subscribes against; only once `open` has answered. */
-	get publicKey(): string {
-		if (this.#publicKey === null) throw new Error("web push: the VAPID keypair is not loaded yet");
-		return this.#publicKey;
 	}
 
 	/** Never throws: `gone` (404/410) tells the caller to forget the subscription. */

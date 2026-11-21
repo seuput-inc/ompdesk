@@ -53,11 +53,8 @@ describe("PushSender", () => {
 		return { push: new PushSender({ userData: dir, transport, log: message => log.push(message) }), calls };
 	}
 
-	it("sends the payload as JSON with the TTL and the urgency, and tells the public key the core signs with", async () => {
+	it("sends the payload as JSON with the TTL and the urgency", async () => {
 		const { push, calls } = sender(201);
-		const { created } = await push.open();
-		expect(created).toBe(true);
-		expect((await loadVapid(dir)).publicKey).toBe(push.publicKey);
 		const { subscription } = browser();
 		expect(await push.send(subscription, payload, { ttl: 21600, urgency: "high" })).toBe("sent");
 		const [sentTo, body, sentOptions] = calls[0] ?? [];

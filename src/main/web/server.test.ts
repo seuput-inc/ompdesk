@@ -1037,12 +1037,14 @@ describe("/api/push", () => {
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		const state = (await response.json()) as WebPushStateResponse;
 		expect(state).toEqual({
-			publicKey: host.sender.publicKey,
+			publicKey: expect.stringMatching(/^[A-Za-z0-9_-]{87}$/),
 			subscribed: false,
 			hideContent: false,
 			categories: ["completion", "error", "ask"],
 		});
-		expect(state.publicKey).toMatch(/^[A-Za-z0-9_-]{87}$/);
+		await host.devices.flush();
+		await restartCore();
+		expect(await (await get(paired)).json()).toEqual(state);
 	});
 
 	it("stores the subscription, hideContent and categories on the device record", async () => {

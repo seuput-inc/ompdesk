@@ -166,21 +166,6 @@ export class WebDevices implements QuotaStore {
 		return true;
 	}
 
-	/**
-	 * The VAPID keypair was made anew: every subscription was made against the old key and is dead. The core drops
-	 * its own list's, so this works before `ready()` too (the count is the copy's, 0 while it is empty).
-	 */
-	dropAllPushSubscriptions(): number {
-		let dropped = 0;
-		for (const device of this.#channel.devices.list) {
-			if (!device.push?.subscription) continue;
-			this.#change(device.deviceId, { push: { ...device.push, subscription: null } });
-			dropped++;
-		}
-		this.#channel.pushDevices("dropAllPush", {});
-		return dropped;
-	}
-
 	/** Quota's write path (peer-quota.ts): usage and limits ride the device record. A member set to undefined is removed. */
 	update(deviceId: string, patch: Pick<WebDevice, "limits" | "usage">): WebDevice | undefined {
 		if (!this.#change(deviceId, patch)) return undefined;
