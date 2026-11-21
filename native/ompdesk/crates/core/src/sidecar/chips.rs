@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::hash::{BuildHasher, RandomState};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,7 +31,7 @@ pub(super) struct Chip {
 }
 
 impl Chip {
-    fn fresh(text: &str, timestamp: u64) -> Self {
+    fn fresh(text: String, timestamp: u64) -> Self {
         // A renderer may still hold a chip from the core process that just exited.
         static PROCESS: LazyLock<u64> = LazyLock::new(|| RandomState::new().hash_one(0_u8));
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -37,7 +39,7 @@ impl Chip {
         let number = (u128::from(*PROCESS) << 64) | u128::from(serial);
         Self {
             id: format!("q{number}"),
-            text: text.to_owned(),
+            text,
             timestamp,
         }
     }
@@ -91,33 +93,65 @@ impl Chips {
         Value::Array(self.lane(lane).iter().map(Chip::wire).collect())
     }
 
-    pub(super) fn refresh(&mut self, data: &Value, now: u64) -> Result<(), String> {
-        if !data.is_null() && !data.is_object() {
-            return Err("Invalid get_state data".into());
+    pub(super) fn refresh_raw(
+        &mut self,
+        data: Option<&RawValue>,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        #[derive(Default, Deserialize)]
+        struct State<'a> {
+            #[serde(borrow, rename = "queuedMessages")]
+            queue: Option<&'a RawValue>,
         }
-        match data.get("queuedMessages") {
-            None | Some(Value::Null) => self.adopt([&[], &[]], now),
-            Some(queue) => self.adopt(
-                stock_lanes(queue).ok_or("Invalid queuedMessages lanes")?,
-                now,
-            ),
+        #[derive(Deserialize)]
+        struct Lanes {
+            steering: Vec<String>,
+            #[serde(rename = "followUp")]
+            follow_up: Vec<String>,
         }
+        let state = match data {
+            Some(raw) if raw.get().starts_with('{') => {
+                serde_json::from_str::<State>(raw.get()).map_err(|_| "Invalid get_state data")?
+            }
+            Some(_) => return Err("Invalid get_state data"),
+            None => State::default(),
+        };
+        let texts = match state.queue {
+            Some(raw) if raw.get().starts_with('{') => {
+                let lanes: Lanes =
+                    serde_json::from_str(raw.get()).map_err(|_| "Invalid queuedMessages lanes")?;
+                [lanes.steering, lanes.follow_up]
+            }
+            Some(_) => return Err("Invalid queuedMessages lanes"),
+            None => Default::default(),
+        };
+        self.adopt(texts, now);
         Ok(())
     }
 
     pub(super) fn project(&mut self, raw: &[u8], now: u64) -> Option<Vec<u8>> {
-        let mut frame: Value = serde_json::from_slice(raw).ok()?;
-        if frame.get("type")?.as_str()? != "queue_update" {
-            return None;
+        #[derive(Serialize)]
+        struct Projected<'a> {
+            #[serde(flatten)]
+            other: BTreeMap<String, &'a RawValue>,
+            steering: Value,
+            #[serde(rename = "followUp")]
+            follow_up: Value,
         }
-        self.adopt(stock_lanes(&frame)?, now);
-        for lane in LANES {
-            frame[lane.name()] = self.wire_lane(lane);
-        }
-        serde_json::to_vec(&frame).ok()
+        // The lane already routed by type. Carry extension values as written, without a depth limit.
+        let mut other: BTreeMap<String, &RawValue> = serde_json::from_slice(raw).ok()?;
+        let mut lane = |key| serde_json::from_str::<Vec<String>>(other.remove(key)?.get()).ok();
+        let texts = [lane("steering")?, lane("followUp")?];
+        self.adopt(texts, now);
+        serde_json::to_vec(&Projected {
+            other,
+            steering: self.wire_lane(Lane::Steering),
+            follow_up: self.wire_lane(Lane::FollowUp),
+        })
+        .ok()
     }
 
-    fn adopt(&mut self, texts: [&[Value]; 2], now: u64) {
+    fn adopt(&mut self, texts: [Vec<String>; 2], now: u64) {
         self.expected.retain(|e| now.saturating_sub(e.at) < 10_000);
         let mut old = std::mem::take(&mut self.lanes).map(VecDeque::from);
         let mut unmatched = [VecDeque::new(), VecDeque::new()];
@@ -125,10 +159,8 @@ impl Chips {
         let mut matched = LANES.map(|lane| {
             let i = lane as usize;
             let mut rows = Vec::with_capacity(texts[i].len());
-            for text in texts[i] {
-                let hit = old[i]
-                    .iter()
-                    .position(|chip| text.as_str() == Some(&chip.text));
+            for text in &texts[i] {
+                let hit = old[i].iter().position(|chip| *text == chip.text);
                 rows.push(hit.and_then(|index| {
                     unmatched[i].extend(old[i].drain(..index));
                     old[i].pop_front()
@@ -137,12 +169,11 @@ impl Chips {
             unmatched[i].append(&mut old[i]);
             rows
         });
-        for lane in LANES {
+        for (lane, texts) in LANES.into_iter().zip(texts) {
             let i = lane as usize;
             let other = 1 - i;
-            self.lanes[i].reserve(texts[i].len());
-            for (index, text) in texts[i].iter().enumerate() {
-                let text = text.as_str().expect("validated stock lane");
+            self.lanes[i].reserve(texts.len());
+            for (index, text) in texts.into_iter().enumerate() {
                 let chip = if let Some(chip) = matched[i][index].take() {
                     chip
                 } else if let Some(at) = self.expected.iter().position(|e| {
@@ -173,12 +204,12 @@ impl Chips {
     }
 }
 
-fn stock_lanes(queue: &Value) -> Option<[&[Value]; 2]> {
-    let lane = |key: &str| {
-        let rows = queue.get(key)?.as_array()?;
-        rows.iter().all(Value::is_string).then_some(rows.as_slice())
-    };
-    Some([lane("steering")?, lane("followUp")?])
+#[cfg(test)]
+impl Chips {
+    pub(super) fn refresh(&mut self, data: &Value, now: u64) -> Result<(), &'static str> {
+        let raw = serde_json::value::to_raw_value(data).unwrap();
+        self.refresh_raw((!data.is_null()).then_some(&raw), now)
+    }
 }
 
 #[cfg(test)]

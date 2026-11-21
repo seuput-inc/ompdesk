@@ -1657,23 +1657,9 @@ impl Lane {
             } => {
                 if !self.is_live(generation) {
                     let _ = reply.send(Err(disconnected()));
-                } else {
-                    let result = serde_json::from_str::<Value>(&text);
-                    match (self.running.as_mut(), result) {
-                        (Some(r), Ok(mut response)) if response["success"] == true => {
-                            let step = next.resume(response["data"].take(), &mut r.chips, now_ms());
-                            self.queue_step(step, reply);
-                        }
-                        (_, Ok(response)) => {
-                            let _ = reply.send(Err(Fault::new(
-                                "queue_error",
-                                response["error"].as_str().unwrap_or_default(),
-                            )));
-                        }
-                        (_, Err(error)) => {
-                            let _ = reply.send(Err(Fault::new("queue_error", error.to_string())));
-                        }
-                    }
+                } else if let Some(r) = self.running.as_mut() {
+                    let step = next.answer(&text, &mut r.chips, now_ms());
+                    self.queue_step(step, reply);
                 }
             }
             Waiter::Negotiate(generation) => self.after_negotiate(generation, true),

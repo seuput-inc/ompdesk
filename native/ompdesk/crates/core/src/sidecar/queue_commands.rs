@@ -1,5 +1,7 @@
 use super::chips::{Chip, Chips, Lane};
 use crate::server::Fault;
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 pub(super) enum Step {
@@ -206,10 +208,40 @@ impl Clear {
 }
 
 impl Continuation {
-    pub(super) fn resume(self, data: Value, chips: &mut Chips, now: u64) -> Step {
+    pub(super) fn answer(self, text: &str, chips: &mut Chips, now: u64) -> Step {
+        #[derive(Deserialize)]
+        struct Reply<'a> {
+            success: bool,
+            error: Option<String>,
+            #[serde(borrow)]
+            data: Option<&'a RawValue>,
+        }
+        let reply: Reply = match serde_json::from_str(text) {
+            Ok(reply) => reply,
+            Err(e) => return error(e.to_string()),
+        };
+        if !reply.success {
+            // Local stockSender throws Error(response.error); direct stock callers retain the whole frame.
+            return error(reply.error.unwrap_or_default());
+        }
+        #[derive(Default, Deserialize)]
+        struct Ack<'a> {
+            #[serde(borrow)]
+            removed: Option<&'a RawValue>,
+            #[serde(borrow)]
+            promoted: Option<&'a RawValue>,
+        }
+        let ack = || {
+            reply
+                .data
+                .filter(|raw| raw.get().starts_with('{'))
+                .and_then(|raw| serde_json::from_str::<Ack>(raw.get()).ok())
+                .unwrap_or_default()
+        };
+        let removed = || ack().removed.map(RawValue::get) == Some("true");
         match self.0 {
             Pending::Refresh(next) => {
-                if let Err(message) = chips.refresh(&data, now) {
+                if let Err(message) = chips.refresh_raw(reply.data, now) {
                     return error(message);
                 }
                 match next {
@@ -235,14 +267,14 @@ impl Continuation {
                 }
             }
             Pending::Removed(id) => {
-                if data["removed"] == true {
+                if removed() {
                     Step::Done(json!({"removed":true}))
                 } else {
                     unknown(&id)
                 }
             }
             Pending::Promoted { id, index } => {
-                if data["promoted"] == true {
+                if ack().promoted.map(RawValue::get) == Some("true") {
                     Step::Done(json!({"lane":"steering", "index":index}))
                 } else {
                     unknown(&id)
@@ -254,7 +286,7 @@ impl Continuation {
                 text,
                 result,
             } => {
-                if data["removed"] != true {
+                if !removed() {
                     return unknown(&chip.id);
                 }
                 let request = json!({"type": if lane == Lane::Steering { "steer" } else { "follow_up" }, "message":text});
@@ -263,10 +295,10 @@ impl Continuation {
             }
             Pending::Sent(result) => Step::Done(result),
             Pending::Clear(mut clear) => {
-                clear.removed += usize::from(data["removed"] == true);
+                clear.removed += usize::from(removed());
                 clear.next(chips)
             }
-            Pending::Dequeue(text) => Step::Done(if data["removed"] == true {
+            Pending::Dequeue(text) => Step::Done(if removed() {
                 json!({"messages":[{"text":text}]})
             } else {
                 json!({"messages":[]})
@@ -278,6 +310,12 @@ impl Continuation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Continuation {
+        fn resume(self, data: Value, chips: &mut Chips, now: u64) -> Step {
+            self.answer(&json!({"success":true,"data":data}).to_string(), chips, now)
+        }
+    }
 
     fn state(steering: &[&str], follow_up: &[&str]) -> Value {
         json!({"queuedMessages":{"steering":steering, "followUp":follow_up}})
