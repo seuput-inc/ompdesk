@@ -38,6 +38,7 @@ async function startTan(session: AgentSession, work: string): Promise<{ jobId: s
 }
 
 const MAX_OMFG_ATTEMPTS = 3;
+const LAST_FAILED_CANDIDATE = "(see the failed candidate above)";
 const PROJECT_OPTION = "This project (.omp/rules)";
 const GLOBAL_OPTION = "Global — all projects (~/.omp/agent/rules)";
 const AMEND_OPTION = "Amend with feedback…";
@@ -77,14 +78,17 @@ async function runOmfg(
 		let previousRule = startRule;
 		let last: Omit<OmfgCandidate, "validated"> | undefined;
 		for (let attempt = 1; attempt <= MAX_OMFG_ATTEMPTS; attempt++) {
-			const { replyText } = await session.runEphemeralTurn({
-				promptText: prompt.render(template, {
-					complaint: trimmed,
-					feedback: failed.length > 0 ? failed.join("\n\n") : undefined,
-					previousRule,
-				}),
-				dedupeReply: false,
-			});
+			const context = { complaint: trimmed, feedback: failed.join("\n\n") || undefined, previousRule };
+			const latestFailure = attempt > 1 ? failed.at(-1) : undefined;
+			let promptText: string;
+			if (latestFailure && previousRule && previousRule.length > LAST_FAILED_CANDIDATE.length) {
+				promptText = prompt.render(template, { ...context, previousRule: LAST_FAILED_CANDIDATE });
+				// Stock formats the rendered template. Keep both fields unless the failed attempt survived verbatim.
+				if (!promptText.includes(latestFailure)) promptText = prompt.render(template, context);
+			} else {
+				promptText = prompt.render(template, context);
+			}
+			const { replyText } = await session.runEphemeralTurn({ promptText, dedupeReply: false });
 			const parsed = rules.parseGeneratedRule(replyText);
 			if ("error" in parsed) {
 				const failedRule = rules.extractGeneratedRuleJson(replyText) ?? replyText.trim();
