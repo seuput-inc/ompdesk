@@ -839,6 +839,7 @@ function NativeFormDialog({
 	const [error, setError] = useState("");
 	const [attempt, retry] = useState(0);
 	const revision = useRef(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: retrying the same form must request a fresh projection.
 	useEffect(() => {
 		const current = ++revision.current;
 		void command({ type: "project_ask_form", html: request.html })
