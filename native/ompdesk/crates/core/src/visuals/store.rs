@@ -1,4 +1,5 @@
 //! The existing history.json and v<N> files. Tab membership comes from the window host.
+mod display;
 #[cfg(test)]
 mod tests;
 use std::fs;
@@ -276,9 +277,9 @@ impl Catalog {
         let hash = digest.as_deref().unwrap_or(&page.target);
         let added = last.is_none_or(|v| v.hash != hash)
             || previous.is_some_and(|r| r.target != page.target);
-        let mut number = last.map_or(0, |v| v.version);
         let version = if added {
-            number = number
+            let number = last
+                .map_or(0, |v| v.version)
                 .checked_add(1)
                 .ok_or_else(|| Fault::new("visual", "Invalid visual version"))?;
             let mut file = String::new();
@@ -374,20 +375,7 @@ impl Catalog {
         if save(&self.dir.join("history.json"), &bytes)? {
             self.prune();
         }
-        let record = &self.records[0];
-        #[derive(Serialize)]
-        struct Opened<'a> {
-            record: &'a Record,
-            version: u64,
-            added: bool,
-            evicted: Vec<&'a str>,
-        }
-        Reply::json(&Opened {
-            record,
-            version: number,
-            added,
-            evicted: evicted.iter().map(|r| r.id.as_str()).collect(),
-        })
+        display::opened(&self.records[0], added, &evicted)
     }
 }
 
@@ -547,7 +535,10 @@ pub(crate) fn register(registry: &mut Registry) {
     }
     registry.add("visual.history", |call| {
         Box::pin(async move {
-            with_catalog(call.params::<Directory>()?.dir, |c| Reply::json(&c.records)).await
+            with_catalog(call.params::<Directory>()?.dir, |c| {
+                Reply::json(&display::History(&c.records))
+            })
+            .await
         })
     });
     #[derive(Deserialize)]

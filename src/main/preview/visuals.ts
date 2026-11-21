@@ -104,22 +104,11 @@ const argsSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("close"), visual: z.string() }),
 ]);
 
-interface VisualVersionRecord {
-	version: number;
-	createdAt: number;
-}
-interface VisualRecord {
-	id: string;
-	label: string;
-	kind: "file" | "inline" | "url";
-	/** Absolute file path or web address ("" inline). */
-	target: string;
-	cwd: string;
-	/** URL path of the visual's entry, `/`-separated. */
+interface CatalogItem {
+	record: PreviewVisualRecord;
 	entry: string;
-	createdAt: number;
-	updatedAt: number;
-	versions: VisualVersionRecord[];
+	latest: number;
+	versions: PreviewVisualView["versions"];
 }
 
 interface OpenInput {
@@ -130,7 +119,7 @@ interface OpenInput {
 }
 
 interface OpenResult {
-	record: VisualRecord;
+	record: PreviewVisualRecord;
 	version: number;
 	added: boolean;
 }
@@ -145,7 +134,7 @@ interface VisualFile {
 /** The visuals of this computer: records on disk, which tabs show which, and file serving for the scheme. */
 export class VisualStore {
 	readonly #dir: string;
-	#records: VisualRecord[] = [];
+	#items: CatalogItem[] = [];
 	readonly #byTab = new Map<string, string[]>();
 	#loaded: Promise<void> | null = null;
 	#opening = Promise.resolve();
@@ -156,9 +145,9 @@ export class VisualStore {
 
 	#load(): Promise<void> {
 		this.#loaded ??= core()
-			.call<VisualRecord[]>("visual.history", { dir: this.#dir })
+			.call<CatalogItem[]>("visual.history", { dir: this.#dir })
 			.then(({ result }) => {
-				this.#records = result;
+				this.#items = result;
 			})
 			.catch(error => {
 				this.#loaded = null;
@@ -167,22 +156,13 @@ export class VisualStore {
 		return this.#loaded;
 	}
 
-	#record(id: string): VisualRecord | undefined {
-		return this.#records.find(record => record.id === id);
+	#item(id: string): CatalogItem | undefined {
+		return this.#items.find(item => item.record.id === id);
 	}
 
 	async list(): Promise<PreviewVisualRecord[]> {
 		await this.#load();
-		return this.#records.map(record => ({
-			id: record.id,
-			label: record.label,
-			kind: record.kind,
-			target: record.target,
-			cwd: record.cwd,
-			createdAt: record.createdAt,
-			updatedAt: record.updatedAt,
-			versions: record.versions.length,
-		}));
+		return this.#items.map(item => item.record);
 	}
 
 	forTab(tabId: string): string[] {
@@ -192,7 +172,7 @@ export class VisualStore {
 	/** Show a visual from "All visuals" in `tabId` too. */
 	async addToTab(tabId: string, id: string): Promise<boolean> {
 		await this.#load();
-		if (!this.#record(id)) return false;
+		if (!this.#item(id)) return false;
 		const ids = this.#byTab.get(tabId) ?? [];
 		if (!ids.includes(id)) this.#byTab.set(tabId, [...ids, id].slice(-TAB_VISUALS));
 		return true;
@@ -210,25 +190,26 @@ export class VisualStore {
 	}
 
 	view(id: string, version?: number): PreviewVisualView | null {
-		const record = this.#record(id);
-		if (!record) return null;
-		const latest = record.versions.at(-1)?.version ?? 0;
+		const item = this.#item(id);
+		if (!item) return null;
 		return {
 			id,
-			label: record.label,
-			version: version && record.versions.some(entry => entry.version === version) ? version : latest,
-			versions:
-				record.kind === "url" ? [] : record.versions.map(({ version, createdAt }) => ({ version, createdAt })),
+			label: item.record.label,
+			version: this.#shown(item, version),
+			versions: item.versions,
 		};
+	}
+
+	#shown(item: CatalogItem, version?: number): number {
+		return version && item.versions.some(v => v.version === version) ? version : item.latest;
 	}
 
 	/** The address a page loads for `version` (default latest). */
 	url(id: string, version?: number): string | null {
-		const record = this.#record(id);
-		if (!record) return null;
-		if (record.kind === "url") return record.target;
-		const shown = this.view(id, version)?.version ?? 0;
-		return `${VISUAL_SCHEME}://v${shown}-${id}/${record.entry.split("/").map(encodeURIComponent).join("/")}`;
+		const item = this.#item(id);
+		if (!item) return null;
+		if (item.record.kind === "url") return item.record.target;
+		return `${VISUAL_SCHEME}://v${this.#shown(item, version)}-${id}/${item.entry.split("/").map(encodeURIComponent).join("/")}`;
 	}
 
 	/** Which visual and version an `omp-visual:` address names, or null. */
@@ -311,7 +292,7 @@ export class VisualStore {
 		}
 		const tabIds = this.#byTab.get(tabId) ?? [];
 		const { result } = await core()
-			.call<OpenResult & { evicted: string[] }>(
+			.call<{ item: CatalogItem; added: boolean; evicted: string[] }>(
 				"visual.open",
 				{
 					dir: this.#dir,
@@ -328,8 +309,12 @@ export class VisualStore {
 				this.#loaded = null;
 				throw error;
 			});
-		const { record, added, version, evicted } = result;
-		this.#records = [record, ...this.#records.filter(old => old.id !== record.id && !evicted.includes(old.id))];
+		const { item, added, evicted } = result;
+		const { record, latest: version } = item;
+		this.#items = [
+			item,
+			...this.#items.filter(old => old.record.id !== record.id && !evicted.includes(old.record.id)),
+		];
 		if (!tabIds.includes(record.id)) this.#byTab.set(tabId, [...(this.#byTab.get(tabId) ?? []), record.id]);
 		return { record, version, added };
 	}
