@@ -492,6 +492,7 @@ src/main/test-omp-registry.ts	tooling	-	ompRegistry serves fake stock omp releas
 src/main/test-skills-registry.ts	tooling	-	skillsRegistry serves Skillshare manifests, package tarballs and integrity metadata for installer tests.
 src/main/test-stock-rpc.ts	tooling	-	StockRpc correlates requests and responses for tests driving raw omp without a native sidecar lane.
 src/main/test-symlinks.ts	tooling	-	itWithFileSymlinks gates filesystem tests on a real unprivileged symlink capability probe.
+src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transcript over the live sidecar bridge for turn-edit parity and restart tests.
 src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
 src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
 src/main/tray-labels.test.ts	tooling	-	Vitest suite: tray menu.

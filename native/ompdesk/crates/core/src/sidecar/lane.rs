@@ -62,7 +62,7 @@ fn queue_json_error(error: serde_json::Error) -> Fault {
     Fault::new("queue_error", error.to_string())
 }
 
-fn no_bridge() -> Fault {
+pub(super) fn no_bridge() -> Fault {
     Fault::new("bridge_disconnected", "gui-bridge not connected")
 }
 
@@ -102,6 +102,10 @@ pub enum Command {
         spawn_id: u64,
         action: DesktopProcessAction,
         reply: oneshot::Sender<bool>,
+    },
+    TurnEdits {
+        spawn_id: u64,
+        reply: oneshot::Sender<(Bridge, String)>,
     },
     Bridge {
         spawn_id: Option<u64>,
@@ -944,6 +948,11 @@ impl Lane {
                         }
                         let _ = reply.send(true);
                     }
+                }
+            }
+            Command::TurnEdits { spawn_id, reply } => {
+                if let Some(running) = self.running.as_ref().filter(|r| r.spawn_id == spawn_id) {
+                    let _ = reply.send((running.bridge.clone(), self.cwd.clone()));
                 }
             }
             Command::Bridge {

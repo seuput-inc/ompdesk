@@ -12,7 +12,7 @@ use super::super::host::{Caps, HostState};
 use super::super::tuning::Tuning;
 use super::super::{AgentControl, Files};
 use super::command_timeout;
-use super::review::{cost_split_of, turn_edits};
+use super::review::{cost_split_of, saved_edits};
 use crate::agentctl::journal::system_clock;
 use crate::ports::Port;
 
@@ -959,12 +959,41 @@ fn same(a: &Value, b: &Value) -> bool {
 #[test]
 fn a_turn_s_edit_calls_are_cut_as_the_typescript_cut_them() {
     for (index, case) in captured("turnEdits").iter().enumerate() {
-        let messages: Vec<Value> = case["in"][0].as_array().unwrap().clone();
-        let got = turn_edits(&messages, case["in"][1].as_str().unwrap());
+        let messages = serde_json::value::to_raw_value(&case["in"][0]).unwrap();
+        let got = saved_edits(&messages, case["in"][1].as_str().unwrap()).unwrap();
         assert!(
             same(&got, &case["out"]),
             "turnEdits case {index}\n got  {got}\n want {}",
             case["out"]
+        );
+    }
+}
+
+#[test]
+fn saved_results_follow_their_call_and_only_a_nullish_end_uses_the_prompt_time() {
+    let call = json!({"type": "toolCall", "name": "write", "id": "x"});
+    let assistant = json!({"role": "assistant", "timestamp": null, "content": [call]});
+    let result = json!({"role": "toolResult", "toolCallId": "x", "extra": {"kept": true}});
+    for (last, ended) in [
+        (json!({"role": "custom"}), json!(42)),
+        (json!({"role": "custom", "timestamp": null}), json!(42)),
+        (
+            json!({"role": "custom", "timestamp": "invalid"}),
+            Value::Null,
+        ),
+        (json!({"role": "custom", "timestamp": false}), Value::Null),
+    ] {
+        let rows = json!([
+            {"role": "user", "timestamp": 42},
+            result,
+            assistant,
+            result,
+            last
+        ]);
+        let raw = serde_json::value::to_raw_value(&rows).unwrap();
+        assert_eq!(
+            saved_edits(&raw, "/r").unwrap(),
+            json!({"cwd": "/r", "startedAt": 42, "endedAt": ended, "messages": [assistant, result]})
         );
     }
 }

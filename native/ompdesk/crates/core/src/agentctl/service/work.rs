@@ -3,7 +3,7 @@
 //! This file: `#evidence`, `#compare`, `#judge`, `#merge`, `#mergeable`, `#runMerge` (service.ts 3936-4164). The
 //! rest of the family is in `work/`:
 //! - `review`: `#reviewItem`, `reviewItems`, `review`, `familyEdits`, `#closedEdits`, `liveReview`, `#cost`,
-//!   `#split` (4166-4451) and the turn-edit cut of `src/shared/turn-edits.ts`.
+//!   `#split` (4166-4451).
 //! - `auto`: `autoClose`, `#autoDone`, `#nudgeSilent`, `#autoCloseFacts`, `#tabRow`, `#transcript`,
 //!   `#deleteThrowaway`, `#autoCloseTab` (4496-4796).
 //! - `schedule`: `#schedule`, `#frequencyOf`, `#autopilot`, `#runStatus`, `#autopilotStart`, `#autopilotFrom`

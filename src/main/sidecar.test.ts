@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import Store from "electron-store";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
 	CommandOutputFrame,
 	PromptResultFrame,
@@ -15,6 +15,7 @@ import { AGENT_CONTROL_DEFINITIONS } from "./agent-control/tools";
 import type { OmpResolution } from "./omp-runtime";
 import { type SidecarFailureReport, SidecarManager, type SlowStartReport } from "./sidecar";
 import { ANSWERS_COMMANDS, ompRuns, RM_TEMP, writeFakeOmp } from "./test-fake-omp";
+import type { TurnFixture, TurnPageRequest } from "./test-turn-edits-omp";
 
 /** The stop's grace in the core (`tuning.stopGraceMs`): the core's clock cannot be moved, so a short one is waited out. */
 const STOP_GRACE_MS = 1_000;
@@ -39,6 +40,170 @@ async function waitForReady(sidecar: SidecarManager): Promise<void> {
 		sidecar.off("status", onStatus);
 	}
 }
+
+describe("get_turn_edits through a live sidecar", () => {
+	const command = { type: "get_turn_edits" } as const;
+	const call = (id: string, name: string, args: object) => ({ type: "toolCall", id, name, arguments: args });
+	const assistant = (timestamp: number, ...calls: object[]) => ({
+		role: "assistant",
+		content: [{ type: "text", text: "working" }, ...calls],
+		timestamp,
+	});
+	const result = (toolCallId: string, toolName: string, timestamp: number) => ({
+		role: "toolResult",
+		toolCallId,
+		toolName,
+		content: [{ type: "text", text: "ok" }],
+		details: { diff: "+1 x" },
+		timestamp,
+	});
+	const prompt = (timestamp: string | number) => ({ role: "user", content: "go", timestamp });
+
+	async function open(fixture: TurnFixture) {
+		const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-turn-")));
+		const source = new URL("./test-turn-edits-omp.ts", import.meta.url).href;
+		const bin = await writeFakeOmp(cwd, `import ${JSON.stringify(source)};`);
+		const sidecar = new SidecarManager({ cwd, omp: ompAt(bin), bridgeDir: cwd, fresh: true });
+		onTestFinished(async () => {
+			sidecar.dispose();
+			await sidecar.whenExited();
+			await fs.rm(cwd, RM_TEMP);
+		});
+		await fs.writeFile(path.join(cwd, "transcript.json"), JSON.stringify(fixture));
+		const ready = waitForReady(sidecar);
+		sidecar.start();
+		await ready;
+		const client = sidecar.rpcClient;
+		if (!client) throw new Error("no rpc client");
+		return { cwd, sidecar, client };
+	}
+
+	async function pages(cwd: string): Promise<TurnPageRequest[]> {
+		const log = await fs.readFile(path.join(cwd, "pages.jsonl"), "utf8");
+		return log
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map(line => JSON.parse(line));
+	}
+
+	it("returns only the latest turn's edit calls and matching results without narrowing their JSON", async () => {
+		let deep: unknown = [false, { "not.an.identifier": null }, -1.5];
+		for (let depth = 0; depth < 160; depth++) deep = { inside: [deep] };
+		const write = { ...call("w1", "write", { path: "b.ts", content: "b\n", deep }), provider: [null, 0] };
+		const written = { ...result("w1", "write", 12), entryId: "e12", details: { diff: "+1 x", deep }, extra: [true] };
+		const { client, sidecar, cwd } = await open({
+			messages: [
+				prompt(1),
+				assistant(2, call("old", "edit", { path: "old.ts" })),
+				result("old", "edit", 3),
+				prompt("January 2, 2026 03:04:05 GMT"),
+				result("old", "edit", 10),
+				{ ...assistant(11, write, call("r1", "read", { path: "c.ts" })), entryId: "e11" },
+				written,
+				result("r1", "read", 13),
+				{ ...prompt(14), steering: true },
+				assistant(15, call("b1", "bash", { command: "ls" })),
+				result("b1", "bash", 16),
+				{ role: "assistant", content: "done", timestamp: "Fri, 02 Jan 2026 03:05:06 GMT" },
+			],
+		});
+		const adopted = path.join(cwd, "adopted");
+		await fs.mkdir(adopted);
+		sidecar.adoptCwd(adopted);
+		expect(await client.command(command)).toEqual({
+			type: "response",
+			id: expect.stringMatching(/^gui-\d+$/),
+			command: command.type,
+			success: true,
+			data: {
+				cwd: adopted,
+				startedAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+				endedAt: Date.UTC(2026, 0, 2, 3, 5, 6),
+				messages: [{ role: "assistant", content: [write], timestamp: 11 }, written],
+			},
+		});
+	});
+
+	it.each([600, 1500])("keeps an early edit across %i intervening calls using bounded forward pages", async count => {
+		const previous = Array.from({ length: 400 }, (_, i) => prompt(i));
+		const edit = call("early", "edit", { path: "early.ts" });
+		const edited = result("early", "edit", count + 4);
+		const messages = [
+			...previous,
+			prompt(1),
+			assistant(2, edit),
+			...Array.from({ length: count }, (_, i) => assistant(3 + i, call(`b${i}`, "bash", { command: "true" }))),
+			edited,
+		];
+		const { client, cwd } = await open({ messages });
+		expect((await client.command(command)).data).toEqual({
+			cwd,
+			startedAt: 1,
+			endedAt: count + 4,
+			messages: [{ role: "assistant", content: [edit], timestamp: 2 }, edited],
+		});
+		const [head, ...reads] = await pages(cwd);
+		expect(head).toEqual({ offset: 0, limit: 0, turnStart: true });
+		let next = previous.length;
+		for (const { offset, limit } of reads) {
+			expect(offset).toBe(next);
+			expect(limit).toBeGreaterThan(0);
+			expect(limit).toBeLessThanOrEqual(256);
+			next = Math.min(messages.length, offset + limit);
+		}
+		expect(next).toBe(messages.length);
+	});
+
+	it.each(["moveLeaf", "grow"] as const)("rejects the whole read when a page changes (%s)", async onPage => {
+		const { client } = await open({ messages: [prompt(1)], onPage });
+		const response = await client.command(command);
+		expect(response).toMatchObject({ command: command.type, success: false, code: "stale_cursor" });
+		expect(response).not.toHaveProperty("data");
+	});
+
+	it.each(["codedError", "plainError"] as const)(
+		"passes the bridge's failure back to the caller (%s)",
+		async onPage => {
+			const { client } = await open({ messages: [prompt(1)], onPage });
+			const response = await client.command(command);
+			expect(response).toMatchObject({ success: false, error: "Replay unavailable" });
+			if (onPage === "codedError") expect(response).toHaveProperty("code", "unsupported_omp");
+			else expect(response).not.toHaveProperty("code");
+		},
+	);
+
+	it("never completes an old spawn's held page or services its retired client using the next spawn", async () => {
+		const { client: old, sidecar, cwd } = await open({ messages: [prompt(1)], onPage: "hold" });
+		const nextCwd = path.join(cwd, "next");
+		await fs.mkdir(nextCwd);
+		const edit = call("new", "apply_patch", { patch: "new" });
+		await fs.writeFile(path.join(nextCwd, "transcript.json"), JSON.stringify({ messages: [assistant(42, edit)] }));
+		const held = old.command(command);
+		await expect.poll(async () => (await pages(cwd)).some(page => page.limit > 0)).toBe(true);
+		await expect(old.stock({ type: "get_state" })).resolves.toMatchObject({
+			success: true,
+			data: { sessionId: "fixture" },
+		});
+		const restarted = waitForReady(sidecar);
+		sidecar.restart(nextCwd);
+		await restarted;
+		await expect(held).resolves.toMatchObject({ success: false, code: "bridge_unavailable" });
+		await expect(old.command(command)).resolves.toMatchObject({ success: false, code: "bridge_unavailable" });
+		expect(await pages(nextCwd)).toEqual([]);
+
+		const fresh = sidecar.rpcClient;
+		if (!fresh) throw new Error("no rpc client after restart");
+		expect((await fresh.command(command)).data).toEqual({
+			cwd: nextCwd,
+			startedAt: null,
+			endedAt: 42,
+			messages: [{ role: "assistant", content: [edit], timestamp: 42 }],
+		});
+		sidecar.kill();
+		await expect(fresh.command(command)).resolves.toMatchObject({ success: false, code: "bridge_unavailable" });
+	});
+});
 
 describe("SidecarManager", () => {
 	it("passes the active session path on a manual restart", async () => {

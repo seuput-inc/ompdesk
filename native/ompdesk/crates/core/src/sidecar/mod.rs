@@ -75,6 +75,7 @@ pub fn register(registry: &mut Registry) {
     registry.add("sidecar.bridge", bridge_request::<BridgeParams>);
     registry.add("sidecar.queue", queue_command);
     registry.add("sidecar.guiBridge", bridge_request::<GuiBridgeParams>);
+    registry.add("sidecar.turnEdits", turn_edits);
     registry.add("sidecar.desktopProcess", desktop_process);
     registry.add("sidecar.barrier", |call| waited(call, Command::Barrier));
     registry.add("sidecar.whenExited", |call| {
@@ -373,6 +374,45 @@ fn command(call: Call) -> Answer {
                 Err(_) => Err(Fault::new("sidecar_disconnected", "Sidecar disconnected")),
             },
             () = scope.on_cancel() => Err(Fault::cancelled()),
+        }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TurnEditsParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+}
+
+fn turn_edits(call: Call) -> Answer {
+    let params: TurnEditsParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, target) = oneshot::channel();
+    deliver(
+        &params.tab,
+        params.seq,
+        Command::TurnEdits {
+            spawn_id: params.spawn_id,
+            reply,
+        },
+    );
+    #[derive(Serialize)]
+    struct TurnAnswer<T> {
+        result: T,
+    }
+    Box::pin(async move {
+        tokio::select! {
+            biased;
+            () = call.scope.on_cancel() => Err(Fault::cancelled()),
+            read = async {
+                let (bridge, cwd) = target.await.map_err(|_| lane::no_bridge())?;
+                let result = crate::turn_edits::live(&bridge, cwd).await?;
+                Reply::json(&TurnAnswer { result })
+            } => read,
         }
     })
 }

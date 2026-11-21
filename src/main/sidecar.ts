@@ -26,6 +26,7 @@ import type {
 	SidecarStatusPayload,
 } from "../shared/rpc-types";
 import { BTW_FRAME_TYPES, LIVE_FRAME_TYPES } from "../shared/rpc-types";
+import type { RpcTurnEdits } from "../shared/turn-edits";
 import { AGENT_CONTROL_DEFINITIONS } from "./agent-control/tools";
 import { isNoModelBootFailure } from "./boot-model";
 import { withoutControlEnv } from "./control-socket/env";
@@ -637,11 +638,24 @@ class BridgeRelay implements BridgeClient {
 	 * request waits as long as the bridge takes (a user prompt, a login).
 	 */
 	request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T> {
-		return this.#request("sidecar.bridge", { method, params }, options?.timeoutMs);
+		return this.#request("sidecar.bridge", { method, params }, options);
 	}
 
 	guiCommand(command: "get_advisor_stats" | "regenerate_session_title"): Promise<unknown> {
 		return this.#request("sidecar.guiBridge", { command });
+	}
+
+	async turnEdits(signal: AbortSignal): Promise<RpcTurnEdits> {
+		signal.throwIfAborted();
+		const turn = await this.#request<
+			Pick<RpcTurnEdits, "cwd" | "messages"> & { startedAt: unknown; endedAt: unknown }
+		>("sidecar.turnEdits", undefined, { signal });
+		// Legacy journal dates used this host's Date.parse, not the bridge's Bun parser.
+		const epochMs = (stamp: unknown) => {
+			const ms = typeof stamp === "string" ? Date.parse(stamp) : stamp;
+			return typeof ms === "number" && Number.isFinite(ms) ? ms : null;
+		};
+		return { ...turn, startedAt: epochMs(turn.startedAt), endedAt: epochMs(turn.endedAt) };
 	}
 
 	queueCommand(command: RpcCommand): Promise<unknown> {
@@ -649,12 +663,12 @@ class BridgeRelay implements BridgeClient {
 	}
 
 	async #request<T>(
-		route: "sidecar.bridge" | "sidecar.guiBridge" | "sidecar.queue",
-		target:
+		route: "sidecar.bridge" | "sidecar.guiBridge" | "sidecar.queue" | "sidecar.turnEdits",
+		target?:
 			| { method: string; params: unknown }
 			| { command: string }
 			| { command: RpcCommand; bridgeConnected: boolean },
-		timeoutMs?: number,
+		{ timeoutMs, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
 	): Promise<T> {
 		if (this.#closed || !core().pid || core().generation !== this.generation) {
 			if (route === "sidecar.queue") throw new Error("Sidecar disconnected");
@@ -674,6 +688,7 @@ class BridgeRelay implements BridgeClient {
 				{
 					timeoutMs: timeoutMs === undefined ? NO_DEADLINE_MS : timeoutMs + CORE_ANSWER_SLACK_MS,
 					generation: this.generation,
+					signal,
 				},
 			);
 			return result.result;
@@ -1116,14 +1131,17 @@ export class SidecarManager extends EventEmitter {
 			send: (command, timeoutMs) => this.#command(command, timeoutMs),
 			local: command => {
 				const type = command.type;
+				const read = type === "get_turn_edits" ? new AbortController() : undefined;
 				const handler =
 					type === "get_advisor_stats" || type === "regenerate_session_title"
 						? () => relay.guiCommand(type)
-						: QUEUE_COMMANDS[type] === true
-							? () => relay.queueCommand(command)
-							: localHandlerFor(type);
+						: read
+							? () => relay.turnEdits(read.signal)
+							: QUEUE_COMMANDS[type] === true
+								? () => relay.queueCommand(command)
+								: localHandlerFor(type);
 				if (!handler || !runtime) return undefined;
-				return this.#localContext(client, runtime, relay)
+				const response = this.#localContext(client, runtime, relay)
 					.then(ctx => runLocalCommand(handler, command, ctx))
 					.then(async response => {
 						// Same as an omp response: the frames omp sent before it go first, an `agent_end` held for its
@@ -1131,6 +1149,7 @@ export class SidecarManager extends EventEmitter {
 						await this.#barrier();
 						return response;
 					});
+				return read ? { response, cancel: () => read.abort() } : response;
 			},
 		});
 		this.#rpcClient = client;
