@@ -170,7 +170,9 @@ describe("released and current updater compatibility", () => {
 	});
 
 	it("honors a release minimum above the Darwin 23 floor", async () => {
-		const body = JSON.stringify(payload({ ...metadata, files: { mac: { ...mac, minimumSystemVersion: "24.0.0" }, windows } }));
+		const body = JSON.stringify(
+			payload({ ...metadata, files: { mac: { ...mac, minimumSystemVersion: "24.0.0" }, windows } }),
+		);
 		const { feed, resolved } = makeFeed("mac", "23.0.0", body);
 		const provider = providerFor(releaseUpdateProvider, feed);
 		await expect(provider.getLatestVersion()).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });

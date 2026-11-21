@@ -1424,7 +1424,9 @@ app.whenReady().then(async () => {
 	const hostServices = new LocalHostServices({
 		createSidecar: createLocalSidecar,
 		// A paired computer's attached files land in the phones' upload folder (24 h); `webHost` is made later.
-		uploads: { store: (deviceId, name, bytes) => hostUploads().store(deviceId, name, bytes) },
+		get uploads() {
+			return hostUploads();
+		},
 		// `devices` is created below; a host tab only opens once it serves connections.
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
