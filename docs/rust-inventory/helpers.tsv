@@ -1,0 +1,31 @@
+path	status	reason
+resources/gui-bridge/boot-model.ts	exception	Reads the installed stock catalog's provider defaults using its Bun modules. Do not ship a second model catalog in Rust.
+resources/gui-bridge/extensions/activation-core.ts	mixed	The live extension consumes the plugin restart rules too. A native extension inventory must preserve how stock distinguishes live changes from ones that require a restart.
+resources/gui-bridge/mcp-hub-memory.ts	port	The app's memory endpoint filters the upstream tool list and relays requests. Move with the hub's authenticated listener, not as a separately exposed endpoint.
+resources/gui-bridge/mcp-hub-rea.ts	port	The app owns per-session transport and child lifetime; the external tool implementation is not OMPdesk code. Preserve the existing boundary.
+resources/gui-bridge/mcp-hub.ts	port	The standalone app service owns its loopback listener, session streams and shutdown. Migrate both endpoint adapters with the same authentication and lifetime.
+resources/gui-bridge/memory-prompt.ts	mixed	The stock extension consumes prompt and title rules synchronously; the worker also uses them to form memory records. Retain the live extension contract when moving host consumers.
+resources/gui-bridge/modes/auto-title-contracts.ts	mixed	The page and stock extension consume title settings and journal rules. Native list enrichment must agree on which automatic title a typed name may accompany.
+resources/gui-bridge/modes/memory-recall-contracts.ts	mixed	The live extension and page still need the recall contract; the hub's state-file parsing must move with the memory endpoint.
+resources/gui-bridge/omp-package.ts	exception	Resolves and imports modules of the user's stock install for Bun callers. Native services must not duplicate or vendor those packages.
+resources/gui-bridge/prompt-origin-contracts.ts	exception	The same journal entry name and prompt-origin wire format are consumed by the stock extension and the list reader.
+resources/gui-bridge/redactor.ts	mixed	Privacy rules are shared with stock. Native journal or diagnostic readers must match the existing redaction before removing their Bun caller.
+resources/gui-bridge/session-list-contracts.ts	exception	The worker and the page share a wire sentinel for a message without text. It is not a host service.
+resources/gui-bridge/stats-host.ts	mixed	Stock serves the dashboard and reads messages by id; OMPdesk owns the front server, cursor, page limits and requests query. Moving the latter does not replace stock's dashboard.
+resources/gui-bridge/stock-helper/accounts.ts	mixed	Bun opens and reloads stock AuthStorage. The worker filters provider names before returning them; do not move credential contents across the boundary.
+resources/gui-bridge/stock-helper/dispatch.ts	port	The worker grants execution to an unqueued read or a serial request and withdraws cancelled work. Move admission and withdrawal together before deleting the worker queue.
+resources/gui-bridge/stock-helper/extension-specs.ts	port	Linked and pinned plugin eligibility is OMPdesk policy. The stock upgrade calls must still honor that decision at mutation time.
+resources/gui-bridge/stock-helper/extensions-contracts.ts	exception	Type-only contracts for inventory and changes. No runtime code to port.
+resources/gui-bridge/stock-helper/extensions.ts	mixed	Stock managers perform upgrades. OMPdesk shapes the inventory and chooses eligible changes; preserve its refusals and its restricted response fields.
+resources/gui-bridge/stock-helper/history.ts	mixed	Stock HistoryStorage owns composer history. The worker defaults the recent and search limits and permits these read-only requests beside the mutation queue.
+resources/gui-bridge/stock-helper/host.ts	mixed	Dispatch and worker lifetime can move toward the Rust lane. A Bun process must still load the installed stock methods and communicate over stdio.
+resources/gui-bridge/stock-helper/images.ts	exception	Converts unsupported formats and sizes images through stock's Bun image pipeline, not a desktop image decoder.
+resources/gui-bridge/stock-helper/memory.ts	mixed	The worker reads stock journals and derives prompt facts and completed assistant turns for the core. Separate the stock reader from the summarization rules.
+resources/gui-bridge/stock-helper/models.ts	mixed	Stock owns ModelsConfigSchema. The worker extracts schema literals and shapes answers without reimplementing stock validation.
+resources/gui-bridge/stock-helper/search.ts	mixed	Keep pi-natives grep in the installed stock worker. Its adapter maps matches and truncation to the Files panel response.
+resources/gui-bridge/stock-helper/session-activity.ts	port	Scans bounded journal tails for the latest conversation message. Relaunch records do not count as activity; when no usable message time is found the row keeps the listing's mtime.
+resources/gui-bridge/stock-helper/session-auto-title.ts	port	Reads the typed-name slot and incrementally scans appended journal entries. A shorter file invalidates the old read offset.
+resources/gui-bridge/stock-helper/sessions.ts	mixed	Stock lists and mutates its sessions. OMPdesk caches activity and auto-titles and enriches listing rows; retain ordering, scope and read-only lookup behavior when moving these reads.
+resources/gui-bridge/stock-helper/terminal-service.ts	port	OMPdesk owns terminal IDs, output snapshots and operations. Keep the same terminal alive for writes and dispose it only on the existing lifecycle edges.
+resources/gui-bridge/stock-helper/terminals.ts	mixed	Stock PtySession is the installed portable PTY implementation. Bun lazily creates the shared service; the OMPdesk terminal state need not live in this process.
+resources/gui-bridge/stock-helper/worktrees.ts	exception	Resolves worktree.base from the target project's installed stock settings and asks pi-utils for its worktree location. Do not rederive stock's naming rules.

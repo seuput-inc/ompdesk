@@ -37,9 +37,44 @@ const tracked = execFileSync("git", ["ls-files", "-z", "--", ...sourceDirs], {
 	.split("\0")
 	.filter(Boolean);
 const remaining = process.argv.includes("--remaining");
-if (remaining || process.argv.includes("--check-inventory")) {
+const inventory = remaining || process.argv.includes("--check-inventory");
+const paths = tracked.filter(path => /\.[cm]?[jt]sx?$/.test(path));
+const reach = new Map<string, string[]>(paths.map(path => [path, []]));
+for (const [runtime, entrypoints] of Object.entries(entries)) {
+	if (inventory && (runtime === "node" || runtime === "page" || runtime === "stock")) continue;
+	const result = await Bun.build({
+		root: ".",
+		entrypoints,
+		target: runtime === "node" ? "node" : runtime === "page" ? "browser" : "bun",
+		metafile: true,
+		packages: "external",
+		external: ["*?raw", "*?url", "*?inline", "*.css", "*.svg", "*.png", "*.wasm"],
+		plugins: [
+			{
+				name: "ompdesk-source-aliases",
+				setup(builder) {
+					builder.onResolve({ filter: /^electron$/ }, () => ({
+						path: resolve("src/main/shell-host/electron/index.ts"),
+					}));
+					builder.onResolve({ filter: /^@(shared|renderer)\// }, ({ path }) => ({
+						path: require.resolve(resolve(`src/${path.slice(1)}`)),
+					}));
+				},
+			},
+		],
+	});
+	if (!result.metafile) throw new Error(`No import graph for ${runtime}`);
+	for (const path of Object.keys(result.metafile.inputs)) reach.get(path.replaceAll("\\", "/"))?.push(runtime);
+	for (const path of entrypoints) {
+		if (!reach.get(path)?.includes(runtime)) throw new Error(`Missing entry: ${path} (${runtime})`);
+	}
+}
+if (inventory) {
 	const dir = "docs/rust-inventory";
 	const expected = new Set(tracked.filter(path => path.startsWith("src/main/") || path.startsWith("src/preload/")));
+	for (const [path, runtimes] of reach) {
+		if (runtimes.length || path.startsWith("resources/gui-bridge/stock-helper/")) expected.add(path);
+	}
 	const seen = new Set<string>();
 	const issues: string[] = [];
 	const statuses = new Set(["port", "mixed", "native-client", "tooling", "exception"]);
@@ -73,36 +108,6 @@ if (remaining || process.argv.includes("--check-inventory")) {
 	if (remaining) console.log(["path\tstatus\treason", ...pending.sort()].join("\n"));
 	else console.log(`${seen.size} paths classified exactly once; ${pending.length} paths with host logic to move`);
 	process.exit(0);
-}
-const paths = tracked.filter(path => /\.[cm]?[jt]sx?$/.test(path));
-const reach = new Map<string, string[]>(paths.map(path => [path, []]));
-for (const [runtime, entrypoints] of Object.entries(entries)) {
-	const result = await Bun.build({
-		root: ".",
-		entrypoints,
-		target: runtime === "node" ? "node" : runtime === "page" ? "browser" : "bun",
-		metafile: true,
-		packages: "external",
-		external: ["*?raw", "*?url", "*?inline", "*.css", "*.svg", "*.png", "*.wasm"],
-		plugins: [
-			{
-				name: "ompdesk-source-aliases",
-				setup(builder) {
-					builder.onResolve({ filter: /^electron$/ }, () => ({
-						path: resolve("src/main/shell-host/electron/index.ts"),
-					}));
-					builder.onResolve({ filter: /^@(shared|renderer)\// }, ({ path }) => ({
-						path: require.resolve(resolve(`src/${path.slice(1)}`)),
-					}));
-				},
-			},
-		],
-	});
-	if (!result.metafile) throw new Error(`No import graph for ${runtime}`);
-	for (const path of Object.keys(result.metafile.inputs)) reach.get(path.replaceAll("\\", "/"))?.push(runtime);
-	for (const path of entrypoints) {
-		if (!reach.get(path)?.includes(runtime)) throw new Error(`Missing entry: ${path} (${runtime})`);
-	}
 }
 console.log("path\timported_by");
 for (const [path, runtimes] of reach) console.log(`${path}\t${runtimes.join(",") || "not-reached"}`);
