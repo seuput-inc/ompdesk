@@ -2252,7 +2252,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Tails omp's process log: `<agentDir>/../logs/omp.<local date>.<pid>.log` with JSON timestamp, level, pid and message.",
-		files: ["src/main/omp-log-tail.ts", "src/main/sidecar.ts"],
+		files: ["src/main/omp-log-tail.ts", "src/main/sidecar.ts", "native/ompdesk/crates/core/src/omp/log_tail.rs"],
 		stock: ["<agentDir>/../logs/omp.<date>.<pid>.log"],
 		tests: ["src/main/omp-log-tail.test.ts"],
 	},

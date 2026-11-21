@@ -18,6 +18,8 @@ Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-fil
 
 Counts overlap. The command follows literal imports, including conditional test code, and excludes packages and assets. It does not measure which branches executed. Build scripts, verification tools, and third-party packages are outside this count.
 
+The file inventories in `docs/rust-inventory/` record ownership, not import reach. In `root.tsv`, wave 1 moves leaf operations, wave 2 moves services and their state, wave 3 moves session and window coordination, and wave 4 removes Node dispatch and startup. A dash marks code outside these runtime waves. `shell.tsv` separates the Node adapters from the browser preload and the test driver.
+
 A unit is complete when its production caller uses Rust, its previous host implementation is gone, and the same inputs still produce the expected results. To retire the desktop Node process, the packaged app must also start, service requests, and quit without the Node executable on both platforms.
 
 ## Historical inventory at `b0c90dd3`

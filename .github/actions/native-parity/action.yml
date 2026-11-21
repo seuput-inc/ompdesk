@@ -22,6 +22,7 @@ runs:
         src/main/schedules.test.ts
         src/main/web/webhook.test.ts
         src/main/omp-processes.test.ts
+        src/main/omp-log-tail.test.ts
         src/main/session-processes.test.ts
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
