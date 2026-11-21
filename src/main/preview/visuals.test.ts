@@ -219,15 +219,21 @@ describe("VisualStore", () => {
 			versions,
 		};
 		await fs.writeFile(path.join(dir, "history.json"), JSON.stringify([original]));
+		const prior = await store.serve(`omp-visual://v20-${id}/index.html`);
+		expect(await prior.text()).toBe(html(20));
 		expect(await store.addToTab("tab", id)).toBe(true);
 		expect(await store.open("tab", project, { label, html: html(20) })).toMatchObject({ added: false, version: 20 });
+		const referenced = await store.open("other", folder, { target: "v1.html", label: "사용자가 연 파일" });
 		const changed = await Promise.all([21, 22].map(n => store.open("tab", project, { visual: id, html: html(n) })));
 		expect(changed.map(opened => opened.version)).toEqual([21, 22]);
 		await expect(fs.stat(path.join(folder, "v2.html"))).rejects.toMatchObject({ code: "ENOENT" });
 		await stopCore();
 		const reopened = new VisualStore(dir);
+		expect((await reopened.serve(`omp-visual://v1-${id}/index.html`)).status).toBe(404);
+		expect(await fs.readFile(path.join(folder, "v1.html"), "utf8")).toBe(html(1));
 		expect(await reopened.list()).toEqual([
 			expect.objectContaining({ id, label, cwd: project, createdAt: 1, versions: 20 }),
+			expect.objectContaining({ id: referenced.record.id, label: "사용자가 연 파일" }),
 		]);
 		for (const version of [3, 20, 21, 22]) {
 			const response = await reopened.serve(reopened.url(id, version) ?? "");
