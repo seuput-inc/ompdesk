@@ -1,5 +1,6 @@
 // Static import reachability, not evidence that a request used a module. Run from the checkout root.
 import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { withoutGitSelectors } from "../src/shared/git-env";
 
@@ -28,13 +29,33 @@ const entries = {
 	mcp: ["resources/gui-bridge/mcp-hub.ts"],
 };
 const sourceDirs = ["src", "resources/gui-bridge", "native/ompdesk/crates/tauri-shell/src"];
-const paths = execFileSync("git", ["ls-files", "-z", "--", ...sourceDirs], {
+const tracked = execFileSync("git", ["ls-files", "-z", "--", ...sourceDirs], {
 	env: withoutGitSelectors(process.env),
 	encoding: "utf8",
 	maxBuffer: 16 << 20,
 })
 	.split("\0")
-	.filter(path => /\.[cm]?[jt]sx?$/.test(path));
+	.filter(Boolean);
+if (process.argv.includes("--check-inventory")) {
+	const dir = "docs/rust-inventory";
+	const expected = new Set(tracked.filter(path => path.startsWith("src/main/") || path.startsWith("src/preload/")));
+	const seen = new Set<string>();
+	const issues: string[] = [];
+	for (const name of readdirSync(dir).filter(name => name.endsWith(".tsv"))) {
+		const [, ...rows] = readFileSync(`${dir}/${name}`, "utf8").trimEnd().split("\n");
+		for (const row of rows) {
+			const [path] = row.split("\t", 1);
+			if (seen.has(path)) issues.push(`duplicate: ${path} (${name})`);
+			if (!expected.has(path)) issues.push(`no tracked file: ${path} (${name})`);
+			seen.add(path);
+		}
+	}
+	for (const path of expected) if (!seen.has(path)) issues.push(`unclassified: ${path}`);
+	if (issues.length) throw new Error(issues.join("\n"));
+	console.log(`${seen.size} tracked main/preload paths classified exactly once`);
+	process.exit(0);
+}
+const paths = tracked.filter(path => /\.[cm]?[jt]sx?$/.test(path));
 const reach = new Map<string, string[]>(paths.map(path => [path, []]));
 for (const [runtime, entrypoints] of Object.entries(entries)) {
 	const result = await Bun.build({

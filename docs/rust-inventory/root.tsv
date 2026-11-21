@@ -125,6 +125,7 @@ src/main/bridge-first-use-stock.test.ts	tooling	-	Vitest suite: gives a prompt s
 src/main/bridge-formal-hint.test.ts	tooling	-	Vitest suite: isFormalRequest.
 src/main/bridge-goal-continuation-stock.test.ts	tooling	-	Vitest suite: holds rpc as a runtime override, released by a Settings write.
 src/main/bridge-goal-time.test.ts	tooling	-	Vitest suite: goal time limit.
+src/main/bridge-guard.test.mjs	tooling	-	Checks that a missing stock job-tree export disables only the affected bridge action.
 src/main/bridge-health.test.ts	tooling	-	Vitest suite: unavailableFeatures.
 src/main/bridge-health.ts	port	2	BridgeHealth requests capabilities, records per-version results, reports missing actions and initiates repair on local core-capability/connection failures.
 src/main/bridge-idle-maintenance-stock.test.ts	tooling	-	Vitest suite: holds the recap while the draft has text, shows it once cleared, re-arms on a settings write and keeps it from the model.
@@ -170,6 +171,7 @@ src/main/bridge-restore-subagents-stock.test.ts	tooling	-	Vitest suite: reports 
 src/main/bridge-role-values.test.ts	tooling	-	Vitest suite: advisor auto policy around stock selector.
 src/main/bridge-scratch.test.ts	tooling	-	Vitest suite: bridge scratch section.
 src/main/bridge-security-stock.test.ts	tooling	-	Vitest suite: shows a scan an earlier process left running as failed, scan and operation alike, on the first read.
+src/main/bridge-session-extras-guard.test.mjs	tooling	-	Checks which session-extra actions stay available when stock lacks MCP argument completions.
 src/main/bridge-session-fork-stock.test.ts	tooling	-	Vitest suite: starts a branch from a prompt before it, with the prompt as the draft, and never leaves an unsent prompt.
 src/main/bridge-session-pins.test.ts	tooling	-	Vitest suite: writes stock's pins file, under stock's lock, and assigns instead of toggling.
 src/main/bridge-session-spend.test.ts	tooling	-	Vitest suite: spendByProvider.
@@ -520,9 +522,9 @@ src/main/update-compatibility.test.ts	tooling	-	Vitest suite: released and curre
 src/main/update-log-core.test.ts	tooling	-	Vitest suite: scrubUpdateText.
 src/main/update-log-core.ts	port	1	scrubUpdateText, parsePendingInstall and previousInstallDetails redact and reconstruct install/swap outcomes from persisted markers.
 src/main/update-provider.test.ts	tooling	-	Vitest suite: release-notes update provider.
-src/main/update-provider.ts	port	4	releaseUpdateProvider adapts resolved GitHub releases to electron-updater metadata and asset download selection.
+src/main/update-provider.ts	mixed	4	ReleaseUpdateProvider fetches the feed and adapts the Rust updateFeed.resolve result to electron-updater; synchronous resolveFiles remains here.
 src/main/update-release.test.ts	tooling	-	Vitest suite: update metadata comment.
-src/main/update-release.ts	port	1	pickRelease, parseUpdateMetadata and resolvePlatformRelease implement release, checksum metadata, asset and compatibility selection in TS here.
+src/main/update-release.ts	mixed	4	Rust selects the release, metadata and asset. TypeScript still checks the local OS version for the synchronous updater file-resolution contract.
 src/main/update-scheduler.test.ts	tooling	-	Vitest suite: nextCheckDelay.
 src/main/update-scheduler.ts	port	2	UpdateScheduler serializes updater passes and owns timer rearming, failure backoff and disposal.
 src/main/updater-check.test.ts	tooling	-	Vitest suite: Check for Updates while the background check runs.

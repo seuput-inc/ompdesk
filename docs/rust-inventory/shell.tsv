@@ -1,4 +1,5 @@
 path	status	reason
+src/main/shell-host/INVENTORY.md	exception	Documents the shell API surface; not executable.
 src/main/shell-host/client.test.ts	exception	Socket request and event parity test; keep until the last Node host client is gone.
 src/main/shell-host/client.ts	native-client	ShellClient exchanges frames with the Rust shell; remove with its last Node caller.
 src/main/shell-host/duplex-pair.ts	exception	Test stream pair used by client.test.ts and electron/create.test.ts.
