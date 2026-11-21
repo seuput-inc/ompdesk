@@ -2020,8 +2020,8 @@ export interface SessionInfo {
 	cwd: string;
 	created: string;
 	/**
-	 * When the session last did something: its newest conversation message's time (the stock helper's
-	 * `session-activity.ts`), else the file's mtime. Never the mtime alone, which every relaunch moves on.
+	 * When the session last did something: its newest conversation message's time, else the file's mtime.
+	 * Relaunch records alone do not change it.
 	 */
 	modified: string;
 	messageCount: number;

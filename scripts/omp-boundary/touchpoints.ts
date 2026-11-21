@@ -1808,7 +1808,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Lists and deletes stored sessions through stock's session-listing (`listAllSessions`, `listSessionsReadOnly`) and `FileSessionStorage.deleteSessionWithArtifacts`.",
-		files: ["resources/gui-bridge/stock-helper/sessions.ts", "resources/gui-bridge/stock-helper/session-activity.ts"],
+		files: [
+			"resources/gui-bridge/stock-helper/sessions.ts",
+			"native/ompdesk/crates/core/src/sessions/activity.rs",
+			"native/ompdesk/crates/core/src/sessions/title.rs",
+		],
 		stock: [
 			"@oh-my-pi/pi-coding-agent/session/session-listing",
 			"@oh-my-pi/pi-coding-agent/session/session-storage",
@@ -1821,6 +1825,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/session-index.test.ts",
 			"src/main/session-lists-report.test.ts",
 			"src/main/session-index-activity.test.ts",
+			"src/main/session-store-enrichment.test.ts",
 		],
 	},
 	{
@@ -1829,10 +1834,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"First prompt and stored transcript through stock's session-loader (`visitEntriesFromFileStream`, `loadSessionMessagesReadOnly`) and pi-tui's `transcript-entry.textContent`, including stock's placeholder text.",
-		files: [
-			"resources/gui-bridge/stock-helper/sessions.ts",
-			"resources/gui-bridge/stock-helper/session-auto-title.ts",
-		],
+		files: ["resources/gui-bridge/stock-helper/sessions.ts"],
 		stock: [
 			"@oh-my-pi/pi-coding-agent/session/session-loader",
 			"@oh-my-pi/pi-tui/chat/transcript-entry",
@@ -1840,11 +1842,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"loadSessionMessagesReadOnly",
 			"textContent",
 		],
-		tests: [
-			"src/main/stock-helper-sessions.test.ts",
-			"src/main/session-index-first-prompt.test.ts",
-			"src/main/stock-helper-auto-title.test.ts",
-		],
+		tests: ["src/main/stock-helper-sessions.test.ts", "src/main/session-index-first-prompt.test.ts"],
 	},
 	{
 		id: "H04",

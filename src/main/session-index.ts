@@ -51,8 +51,6 @@ export class SessionIndex {
 	#asked = false;
 	/** Changes may have gone unseen between two watches: reported as "anything" once the tree is watched again. */
 	#missed = false;
-	/** Whether the core may hold anything of this index. */
-	#inCore = false;
 	/** A core that restarted needs stock's list again before it can search those rows. */
 	#listedGeneration: number | null = null;
 	#sessionsDir: string;
@@ -85,7 +83,7 @@ export class SessionIndex {
 		this.#sessionsDir = sessionsDir ?? join(agentDir(), "sessions");
 		this.#cwd = resolve(cwd);
 		this.#isChat = isChat;
-		this.#store = new StockSessionStore(this.#sessionsDir, bridgeDir);
+		this.#store = new StockSessionStore(this.#sessionsDir, bridgeDir, this.#id);
 		this.#share.onChange = delta => this.onListChange?.(delta);
 	}
 
@@ -121,7 +119,6 @@ export class SessionIndex {
 		this.#missed ||= this.#asked;
 		this.#asked = true;
 		this.#watching = false;
-		this.#inCore = true;
 		const asked = core().call("sessions.watch", { index: this.#id, root: resolve(this.#sessionsDir) });
 		const pid = core().pid;
 		this.#watchCore = pid;
@@ -195,14 +192,13 @@ export class SessionIndex {
 		this.#asked = false;
 		this.#missed = false;
 		// Only a running core holds anything of this index: none is started to forget nothing.
-		if (this.#inCore && core().pid !== null) {
+		if (core().pid !== null) {
 			core()
 				.call("sessions.close", { index: this.#id })
 				.catch(() => {
 					// A core that ended has forgotten it already.
 				});
 		}
-		this.#inCore = false;
 		this.#store.stop();
 		this.#listedGeneration = null;
 	}
@@ -269,7 +265,6 @@ export class SessionIndex {
 			return infos;
 		}
 		infos.sort(compareSessionRows);
-		this.#inCore = true;
 		const { result, generation } = await core().call("sessions.listed", {
 			index: this.#id,
 			root: resolve(this.#sessionsDir),

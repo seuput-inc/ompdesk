@@ -2,8 +2,6 @@ import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { loadOmpModule } from "../omp-package";
 import { PROMPT_ORIGIN_ENTRY } from "../prompt-origin-contracts";
 import { NO_TEXT_PROMPT } from "../session-list-contracts";
-import { lastActivity } from "./session-activity";
-import { forgetAutoTitles, listedAutoTitle } from "./session-auto-title";
 
 /** The fields of stock's `SessionInfo` this helper reads; the rest pass through untouched. */
 interface StockSessionInfo {
@@ -14,8 +12,6 @@ interface StockSessionInfo {
 	firstMessage: string;
 	/** OMPdesk's: the paired device the first prompt came from (stock's journal holds OMPdesk's prompt-origin entry). */
 	promptOriginDevice?: string;
-	/** OMPdesk's: the automatic title beside a name the person typed (`session-auto-title.ts`). */
-	autoTitle?: string;
 }
 
 interface StockSessions {
@@ -254,53 +250,6 @@ function withoutPlaceholder(rows: StockSessionInfo[]): StockSessionInfo[] {
 	return rows;
 }
 
-/** Each row's newest message time, keyed by path and valid for one `modified:size` stamp (null: none in reach). */
-const activity = new Map<string, { stamp: string; at: number | null }>();
-
-/**
- * A row's `modified` becomes when the session last did something (`session-activity.ts`): stock's mtime moves on
- * every relaunch (a `session_exit`, a recap, a report) and every reader of `modified` means recency (the sidebar's
- * age and order, the session picker, the projects' recency). A row with no message in reach keeps stock's mtime.
- */
-async function withLastActivity(rows: StockSessionInfo[]): Promise<StockSessionInfo[]> {
-	await Promise.all(
-		rows.map(async row => {
-			const stamp = `${new Date(row.modified).getTime()}:${row.size}`;
-			let found = activity.get(row.path);
-			if (found?.stamp !== stamp) {
-				try {
-					found = { stamp, at: await lastActivity(row.path, row.size) };
-				} catch {
-					// Unreadable now (stock's own scan skips such files too): keep stock's mtime.
-					return;
-				}
-				activity.set(row.path, found);
-			}
-			if (found.at !== null) row.modified = new Date(found.at);
-		}),
-	);
-	return rows;
-}
-
-/**
- * Each row's automatic title beside a typed name (`SessionInfo.autoTitle`); a row that cannot be read has none. Before
- * {@link withLastActivity}: the stamp is stock's own `modified:size`.
- */
-async function withAutoTitles(rows: StockSessionInfo[]): Promise<StockSessionInfo[]> {
-	await Promise.all(
-		rows.map(async row => {
-			try {
-				const stamp = `${new Date(row.modified).getTime()}:${row.size}`;
-				const autoTitle = await listedAutoTitle(row.path, row.size, stamp);
-				if (autoTitle) row.autoTitle = autoTitle;
-			} catch {
-				// Unreadable now (stock's own scan skips such files too): the row shows its name alone.
-			}
-		}),
-	);
-	return rows;
-}
-
 /** Read-only probes the stock worker answers at once, beside its serial queue (`createDispatcher`): a restored tab's
  * omp spawns only after `sessions.owned` answers, and queued behind launch's session-list scan it waited ~0.3–0.5 s
  * for the scan, not the lease. The probe takes the lease for an instant and touches no journal. */
@@ -310,13 +259,9 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"sessions.list": async params => {
 		const { sessionsRoot } = paths(params);
 		const { listing, storage } = await stockSessions();
-		const rows = await withLastActivity(
-			await withAutoTitles(await withFirstPrompts(await listing.listAllSessions(storage, sessionsRoot))),
-		);
+		const rows = await withFirstPrompts(await listing.listAllSessions(storage, sessionsRoot));
 		const listed = new Set(rows.map(row => row.path));
 		for (const path of firstPrompts.keys()) if (!listed.has(path)) firstPrompts.delete(path);
-		for (const path of activity.keys()) if (!listed.has(path)) activity.delete(path);
-		forgetAutoTitles(listed);
 		return withoutPlaceholder(rows);
 	},
 	"sessions.list_directory": async params => {
@@ -324,11 +269,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (!sessionPath) throw new Error("Invalid session path");
 		const { listing, storage } = await stockSessions();
 		return withoutPlaceholder(
-			await withLastActivity(
-				await withAutoTitles(
-					await withFirstPrompts(await listing.listSessionsReadOnly(dirname(sessionPath), storage)),
-				),
-			),
+			await withFirstPrompts(await listing.listSessionsReadOnly(dirname(sessionPath), storage)),
 		);
 	},
 	/** Stock `deleteSessionWithArtifacts`; like stock's own `dropSession`, a file already gone (a tab's session never written) counts as deleted. */

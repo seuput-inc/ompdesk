@@ -149,19 +149,8 @@ impl ContentCache {
     }
 
     fn text(&self, root: &Path, path: &Path) -> Option<Arc<Text>> {
-        if !path.is_absolute() || !is_jsonl(path) {
-            return None;
-        }
         let generation = locked(&self.entries).generation;
-        let real = path.canonicalize().ok()?;
-        if real == root || !real.starts_with(root) || !is_jsonl(&real) {
-            return None;
-        }
-        let mut file = open_checked(&real)?;
-        let metadata = file.metadata().ok()?;
-        if !metadata.is_file() {
-            return None;
-        }
+        let (mut file, metadata) = open_journal(root, path)?;
         let stamp = Stamp::from(&metadata);
         if let Some(text) = locked(&self.entries).get(path, stamp) {
             return Some(text);
@@ -218,6 +207,20 @@ impl ContentCache {
         }
         hits
     }
+}
+
+/// A regular journal whose resolved path and opened handle both stay under the canonical root.
+pub(super) fn open_journal(root: &Path, path: &Path) -> Option<(File, Metadata)> {
+    if !path.is_absolute() || !is_jsonl(path) {
+        return None;
+    }
+    let real = path.canonicalize().ok()?;
+    if real == root || !real.starts_with(root) || !is_jsonl(&real) {
+        return None;
+    }
+    let file = open_checked(&real)?;
+    let metadata = file.metadata().ok()?;
+    metadata.is_file().then_some((file, metadata))
 }
 
 fn is_jsonl(path: &Path) -> bool {

@@ -10,10 +10,13 @@
 //! `sessions.watching` `{index, watching, missed}` when the tree's watch starts or ends, `sessions.changed`
 //! `{index, names}` with the settled entries relative to the root, `names: null` when anything may have changed.
 
+mod activity;
+mod enrich;
 mod rules;
 mod search;
 mod snippet;
 mod source;
+mod title;
 mod watch;
 
 use std::collections::{HashMap, HashSet};
@@ -45,6 +48,7 @@ type LegacyFlags = Arc<Mutex<HashMap<String, Legacy>>>;
 #[derive(Default)]
 struct Index {
     legacy: LegacyFlags,
+    enrichment: Arc<Mutex<enrich::Cache>>,
     search: Arc<search::ContentCache>,
     /// Only paths in stock's last deduplicated list are eligible; the caller can narrow, never widen, that list.
     searchable: Option<(PathBuf, HashSet<String>)>,
@@ -65,6 +69,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("sessions.close", |call| {
         Box::pin(async move { close(&call) })
+    });
+    registry.add("sessions.enrich", |call| {
+        Box::pin(blocking(move || enrich::listed(call.params()?)))
     });
     registry.add("sessions.listed", |call| {
         Box::pin(blocking(move || listed(call.params()?)))

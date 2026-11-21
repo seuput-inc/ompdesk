@@ -114,11 +114,6 @@ function automaticTitleOf(entry: TitleJournalEntry): string | undefined {
 	return entry.type === "title_change" && automaticChange(entry) ? entry.title || undefined : undefined;
 }
 
-/** Whether a journal entry holds an automatic title ({@link latestAutoTitle} reads the newest such entry). */
-export function isAutomaticTitle(entry: TitleJournalEntry): boolean {
-	return automaticTitleOf(entry) !== undefined;
-}
-
 /** The newest automatic title in the journal: OMPdesk's entry beside a typed name, or an automatic `title_change`. */
 export function latestAutoTitle(entries: readonly TitleJournalEntry[]): string | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {

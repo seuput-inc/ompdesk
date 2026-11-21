@@ -418,7 +418,7 @@ src/main/session-pace.ts	port	1	pace reconstructs tool intervals, idle time and 
 src/main/session-processes.test.ts	tooling	-	Vitest suite: a session's processes, on this computer.
 src/main/session-processes.ts	mixed	3	SessionProcesses uses procs.list/end in core/src/procs/mod.rs for OS surveys and termination; TS owns the session tag ledger, sweep selection, spin sampling policy and retries.
 src/main/session-scratch.ts	port	2	SessionScratch assigns tab-tag scratch folders and persists the sessions each folder served for retention.
-src/main/session-store.ts	mixed	2	StockSessionStore validates stock sessions.list/list_directory/delete/move/messages/owned replies; core/src/stock/mod.rs stock.request supervises transport, resources/gui-bridge/stock-helper/sessions.ts implements storage operations in Bun, not Rust.
+src/main/session-store.ts	mixed	2	Validates stock storage replies and applies sessions.enrich in one batch before sorting. Enumeration, first-prompt fill and mutations still use the installed stock helper.
 src/main/session-summaries.test.ts	tooling	-	Vitest suite: SessionSummaries.
 src/main/session-summaries.ts	port	3	SessionSummaries combines pool and paired-host facts with subagent rosters and publishes versioned summary changes.
 src/main/session-targets.test.ts	tooling	-	Vitest suite: session targets.
@@ -459,7 +459,7 @@ src/main/stats-host.test.ts	tooling	-	Vitest suite: exits when stdin closes whil
 src/main/stats-server.test.ts	tooling	-	Vitest suite: a live listener is never respawned by a demand-driven revive.
 src/main/stats-server.ts	port	2	StatsServerManager spawns stock's dashboard host, tracks private port readiness and terminates the child on quit.
 src/main/stock-helper-accounts.test.ts	tooling	-	Vitest suite: accounts.providers.
-src/main/stock-helper-auto-title.test.ts	tooling	-	Vitest suite: the automatic title a session list row shows beside a typed name.
+src/main/session-store-enrichment.test.ts	tooling	-	Global and directory stock listings through native activity/title enrichment.
 src/main/stock-helper-extensions.test.ts	tooling	-	Vitest suite: extensions worker on a fake install.
 src/main/stock-helper-history.test.ts	tooling	-	Vitest suite: stock helper history reads.
 src/main/stock-helper-images.test.ts	tooling	-	Vitest suite: turns a BMP and an AVIF into a format models take, and refuses bytes that are no picture.
