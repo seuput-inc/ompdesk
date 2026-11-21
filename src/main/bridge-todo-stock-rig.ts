@@ -56,12 +56,12 @@ export function sse(chunks: unknown[], finish: string): string {
 	return `${frame({ role: "assistant", content: "" })}${chunks.map(chunk => frame(chunk)).join("")}${frame({}, finish)}data: [DONE]\n\n`;
 }
 
-export function toolCall(name: string, args: Record<string, unknown>): unknown[] {
+export function toolCall(name: string, args: Record<string, unknown>, index = 0): unknown[] {
 	return [
 		{
 			tool_calls: [
 				{
-					index: 0,
+					index,
 					id: `call_${name}_${Math.random().toString(36).slice(2)}`,
 					type: "function",
 					function: { name, arguments: JSON.stringify(args) },

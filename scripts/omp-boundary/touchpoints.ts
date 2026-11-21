@@ -1534,7 +1534,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "public",
 		summary:
-			"Waste guards and todo compaction through public tool_call and tool_result hooks, additionalContext, registerTool and a same-tool re-invoke.",
+			"Waste guards and todo carry-over through tool_call and tool_result. The calling session's getTodoPhases guards stock init before mutation.",
 		files: [
 			"resources/gui-bridge/waste-guards.ts",
 			"resources/gui-bridge/todo-compact.ts",

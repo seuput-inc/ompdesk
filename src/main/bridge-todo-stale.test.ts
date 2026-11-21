@@ -221,7 +221,8 @@ describe("staleTodoMessage", () => {
 		});
 		expect(message.content).toContain("9/10");
 		expect(message.content).toContain("Sidebar bug");
-		expect(message.content).toContain('"init"');
+		expect(message.content).toContain('"append"');
+		expect(message.content).not.toContain('"init"');
 		expect(message.content.split("\n").length).toBeLessThanOrEqual(3);
 	});
 });

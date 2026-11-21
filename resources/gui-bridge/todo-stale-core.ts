@@ -19,6 +19,8 @@
  * No omp imports: the GUI's vitest runs it (src/main/bridge-todo-stale.test.ts).
  */
 
+import { isClosedTodo } from "./todo-compact-core";
+
 export const STALE_TODO_MESSAGE_TYPE = "ompdesk-todo-stale";
 
 /** Earlier requests (after the list's last change) that must have left an open list alone before it is stale. */
@@ -59,8 +61,6 @@ export interface StaleTodo {
 	phases: string[];
 	snapshotId: string;
 }
-
-const DONE: Record<string, true> = { completed: true, abandoned: true };
 
 function messageText(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -147,7 +147,7 @@ export function todoStaleness(input: TodoStaleInput): StaleTodo | undefined {
 		} else if (index !== current && promptText(entry) !== undefined) since++;
 	}
 	if (reminders >= MAX_REMINDERS) return undefined;
-	const done = tasks.filter(task => DONE[task.status]).length;
+	const done = tasks.filter(task => isClosedTodo(task.status)).length;
 	const kind = done === tasks.length ? "finished" : "untouched";
 	const needed = reminders > 0 ? REMIND_AGAIN_REQUESTS : kind === "finished" ? 0 : UNTOUCHED_REQUESTS;
 	if (since < needed) return undefined;
@@ -170,9 +170,9 @@ function listName(stale: StaleTodo): string {
 export function staleTodoText(stale: StaleTodo): string {
 	const what =
 		stale.kind === "finished"
-			? `Your todo list (${listName(stale)}) is finished: it belongs to an earlier task.`
-			: `Your todo list (${listName(stale)}) has not changed since an earlier request.`;
-	return `<system-reminder>\n${what} If this request is new work with steps, replace the list with its steps (todo op "init"); if it continues that work, mark the finished items done. Never leave an old task's list on screen.\n</system-reminder>`;
+			? `Your todo list (${listName(stale)}) is finished. If the new request needs steps, start its list with todo op "init".`
+			: `Your todo list (${listName(stale)}) still has unfinished work. Keep those items and their statuses. Add new steps with todo op "append" in their own phase, and keep working on the earlier request too.`;
+	return `<system-reminder>\n${what}\n</system-reminder>`;
 }
 
 /** The hidden custom message `before_agent_start` returns; `details` mark which list it was for. */

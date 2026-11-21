@@ -190,7 +190,7 @@ export const FEATURES = {
 	todoWait:
 		"A session waiting on another session's reply, or whose open todo items are all written as waiting, is not woken by stock's todo reminder",
 	todoStale: "A todo list left from earlier work is named to the agent when a new request starts a turn",
-	todoCompact: "A todo list grown long by appends is asked to fold its finished items",
+	todoCompact: "Keep unfinished todo items and append new work by phase",
 	todoDrift:
 		"The to-do panel says when the list last changed, which instructions came since, and marks a list behind the work",
 	wasteGuards:
@@ -1135,8 +1135,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
 		},
 	},
-	/** todo-compact.ts: the public `tool_result` hook and its `additionalContext` only. Imports nothing from omp. */
-	todoCompact: {},
+	/** todo-compact.ts: tool_call reads the calling agent's live list before stock can replace it. */
+	todoCompact: { session: ["getTodoPhases()"] },
 	/**
 	 * todo-drift.ts: the public `tool_result` hook, stock's journal todo readers, the session's active tools and plan
 	 * state after each tool call, its branch for the panel's reading, and one journaled marker per session.
