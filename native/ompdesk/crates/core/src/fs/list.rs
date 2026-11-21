@@ -307,7 +307,7 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
                         if !meta.is_dir() && !web.files {
                             return None;
                         }
-                        (!meta.is_dir()).then(|| meta.len())
+                        (!meta.is_dir()).then_some(meta.len())
                     }
                     #[cfg(not(windows))]
                     Kind::Other => return None,
