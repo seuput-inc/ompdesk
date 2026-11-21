@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stopCore } from "../core/process";
 import { itWithFileSymlinks } from "../test-symlinks";
 import { runVisualizeTool, VISUALIZE_DEFINITION, type VisualChoice, type VisualPages, VisualStore } from "./visuals";
 
@@ -23,6 +24,7 @@ beforeEach(async () => {
 afterEach(async () => {
 	await fs.rm(root, { recursive: true, force: true });
 });
+afterAll(stopCore);
 
 const pages = (overrides: Partial<VisualPages> = {}): VisualPages => ({
 	close: () => {},
@@ -74,6 +76,12 @@ describe("VisualStore", () => {
 			expect(await at("%2E%2E/outside.css")).toBeNull();
 			await fs.symlink(path.join(root, "outside.css"), path.join(project, "site", "link.css"));
 			expect(await at("site/link.css")).toBeNull();
+			const snapshot = path.join(root, "visuals", record.id, "v1.html");
+			await fs.rm(snapshot);
+			await fs.symlink(path.join(root, "outside.css"), snapshot);
+			const missing = await store.serve(store.url(record.id) ?? "");
+			expect(missing.status).toBe(404);
+			expect(await missing.text()).toBe("Not found");
 			expect(await store.resolve("omp-visual://v1-0000000000000000/site/index.html")).toBeNull();
 			expect(await store.resolve("https://example.com/")).toBeNull();
 		},
@@ -159,6 +167,22 @@ describe("VisualStore", () => {
 		await expect(store.open("tab", project, { target: "site/assets/app.css" })).rejects.toThrow(/shows/);
 		await expect(store.open("tab", project, { target: "missing.html" })).rejects.toThrow(/No such file/);
 		await expect(store.open("tab", project, {})).rejects.toThrow(/either target or html/);
+	});
+
+	it("serves the exact bytes at the file limit and keeps the snapshot when a later open is too large", async () => {
+		const target = "sample.PNG";
+		const file = path.join(project, target);
+		const bytes = Buffer.alloc(5 * 1024 * 1024, 0xf1);
+		await fs.writeFile(file, bytes);
+		const { record } = await store.open("tab", project, { target });
+		await fs.appendFile(file, "x");
+		await expect(store.open("tab", project, { target })).rejects.toThrow("is larger than 5 MB");
+		const url = store.url(record.id) ?? "";
+		const response = await store.serve(url);
+		expect(response.headers.get("Content-Type")).toBe("image/png");
+		expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
+		await fs.rm(path.join(root, "visuals", record.id, "v1.png"));
+		expect((await store.serve(url)).status).toBe(404);
 	});
 
 	it("keeps inline HTML by label, web addresses without versions, and history across instances", async () => {

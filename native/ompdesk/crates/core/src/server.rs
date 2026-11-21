@@ -271,6 +271,7 @@ pub fn registry() -> Registry {
     crate::care::register(&mut registry);
     crate::sidecar::register(&mut registry);
     crate::ipc::register(&mut registry);
+    crate::visuals::register(&mut registry);
     crate::web::bytes::register(&mut registry);
     crate::web::host::register(&mut registry);
     crate::web::push::register(&mut registry);

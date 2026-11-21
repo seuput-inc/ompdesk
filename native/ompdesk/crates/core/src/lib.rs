@@ -43,6 +43,7 @@ pub mod supervise;
 mod sys;
 pub mod tailscale;
 pub mod upkeep;
+mod visuals;
 pub mod web;
 pub mod wire;
 
