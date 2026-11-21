@@ -27,6 +27,7 @@ mod link;
 pub mod store;
 pub mod tailnet;
 pub mod traffic;
+mod upload_parts;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -127,6 +128,7 @@ pub(crate) fn identity(device_id: &str) -> Result<Arc<Identity>, Fault> {
 pub fn register(registry: &mut Registry) {
     devices::register(registry);
     kept_calls::register(registry);
+    registry.add("remote.uploadPart", upload_parts::receive);
     store::register(registry);
     tailnet::register(registry);
     registry.add("remote.identity", |call| Box::pin(load_identity(call)));

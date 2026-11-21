@@ -44,7 +44,8 @@ import type { MemoryPageCopy } from "../ai-memory/client";
 import { serveMemoryStore } from "../ai-memory/memory-store-test-rig";
 import { serveConclusionPull, serveConclusionPush, servePull, servePush } from "../ai-memory/sync";
 import { canonicalCwd } from "../canonical-cwd";
-import { fakeCoreTimers, realCoreTimers } from "../core/test-clock";
+import { stopCore } from "../core/process";
+import { advanceCoreTimers, fakeCoreTimers, realCoreTimers } from "../core/test-clock";
 import { deletedSessions, initDeletedSessions } from "../deleted-sessions";
 import { SavedWorktreeStore, setSavedWorktreeStore } from "../disk/saved-worktrees";
 import { gitSync, initRepo } from "../local/git/test-repos";
@@ -55,7 +56,7 @@ import { updateSidebarPrefs } from "../sidebar-prefs";
 import { SidebarProjects } from "../sidebar-projects";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { setTurnStopLog } from "../turn-stop-log";
-import { UploadError, UploadStore } from "../web/uploads";
+import { UploadStore } from "../web/uploads";
 import { FS_BINARY_REMOTE_MAX_BYTES } from "../workspace-fs";
 import { withRemovalClaim } from "../worktree-removals";
 import {
@@ -80,13 +81,7 @@ import {
 	TabStatusArg,
 } from "./app-protocol";
 import type { HostConnection } from "./host-server";
-import {
-	HOST_WAIT_NOTICE_MS,
-	type HostServicesDeps,
-	LocalHostServices,
-	UPLOAD_PART_IDLE_MS,
-	UPLOAD_PARTS_PER_DEVICE,
-} from "./host-services";
+import { HOST_WAIT_NOTICE_MS, type HostServicesDeps, LocalHostServices } from "./host-services";
 import type { HostedTabView } from "./hosted-view";
 import { KeptCalls } from "./kept-calls";
 import { createLinkEventDecoder, createReadDecoder, type WireSubagentFrame } from "./link-events";
@@ -3013,13 +3008,7 @@ describe("LocalHostServices", () => {
 			expect(path.endsWith("계약서 수정.docx")).toBe(true);
 			expect(readFileSync(path)).toEqual(bytes);
 
-			const full = setup(60_000, {
-				uploads: {
-					store: async () => {
-						throw new UploadError(413, "too large");
-					},
-				},
-			});
+			const full = setup(60_000, { uploads: new UploadStore({ userData: root, fileMaxBytes: 0 }) });
 			const tooLarge = await full.services
 				.call(x.peer, "host.files.upload", { name: "a.pdf", dataBase64: "AA==" }, x)
 				.catch((error: unknown) => error);
@@ -3053,6 +3042,29 @@ describe("LocalHostServices", () => {
 			expect(path.startsWith(join(root, "web-uploads", "device-x"))).toBe(true);
 			expect(readFileSync(path)).toEqual(Buffer.concat([first, second]));
 
+			// A new connection may finish its device's upload; another device cannot append to or discard it.
+			await part("upload-shared", 0, false, first);
+			const finish = (conn: FakeConnection) =>
+				services.call(
+					conn.peer,
+					"host.files.uploadPart",
+					{
+						upload: "upload-shared",
+						index: 1,
+						last: true,
+						name: "final.bin",
+						dataBase64: second.toString("base64"),
+					},
+					conn,
+				);
+			const other = new FakeConnection(peer("device-y"));
+			expect(ipcErrorCode(await finish(other).catch((error: unknown) => error))).toBe("invalid_path");
+			const reconnected = new FakeConnection(peer("device-x"));
+			const finished = (await finish(reconnected)) as { path: string };
+			expect(finished.path.endsWith("final.bin")).toBe(true);
+			expect(readFileSync(finished.path)).toEqual(Buffer.concat([first, second]));
+			expect(ipcErrorCode(await finish(reconnected).catch((error: unknown) => error))).toBe("invalid_path");
+
 			// A part that skips one drops what was held: the file is never stored with a hole in it.
 			await part("upload-bbbb", 0, false, first);
 			const skipped = await part("upload-bbbb", 2, true, second).catch((error: unknown) => error);
@@ -3084,9 +3096,32 @@ describe("LocalHostServices", () => {
 		}
 	});
 
+	it("rejects the tail of a lost upload after a core restart and stores a fresh attachment", async () => {
+		const root = mkdtempSync(join(tmpdir(), "host-uploads-"));
+		onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+		const { services } = setup(60_000, { uploads: new UploadStore({ userData: root }) });
+		const x = new FakeConnection(peer("device-x"));
+		const part = (upload: string, index: number, last: boolean, bytes: Buffer) =>
+			services.call(
+				x.peer,
+				"host.files.uploadPart",
+				{ upload, index, last, name: "fresh.bin", dataBase64: bytes.toString("base64") },
+				x,
+			);
+		await part("lost-file", 0, false, Buffer.from("discarded"));
+		expect(existsSync(join(root, "web-uploads"))).toBe(false);
+		await stopCore();
+		const head = Buffer.alloc(6000, 0x41);
+		const tail = Buffer.from("tail");
+		await part("fresh-file", 0, false, head);
+		expect(ipcErrorCode(await part("lost-file", 1, true, tail).catch((e: unknown) => e))).toBe("invalid_path");
+		const { path } = (await part("fresh-file", 1, true, tail)) as { path: string };
+		expect(readFileSync(path)).toEqual(Buffer.concat([head, tail]));
+	});
+
 	it("drops parts left waiting and gives their room back", async () => {
 		const root = mkdtempSync(join(tmpdir(), "host-uploads-"));
-		vi.useFakeTimers();
+		await fakeCoreTimers();
 		try {
 			const { services } = setup(60_000, { uploads: new UploadStore({ userData: root }) });
 			const x = new FakeConnection(peer("device-x"));
@@ -3097,15 +3132,16 @@ describe("LocalHostServices", () => {
 					{ upload, index, last, name: "a.bin", dataBase64: Buffer.alloc(10).toString("base64") },
 					x,
 				);
-			for (let n = 0; n < UPLOAD_PARTS_PER_DEVICE; n++) await part(`upload-idle-${n}`, 0, false);
-			await vi.advanceTimersByTimeAsync(UPLOAD_PART_IDLE_MS);
+			for (let n = 0; n < 2; n++) await part(`upload-idle-${n}`, 0, false);
+			await advanceCoreTimers(120_000);
 			// The held parts are gone: their next part has nothing to join, and a new file has room again.
 			expect(ipcErrorCode(await part("upload-idle-0", 1, true).catch((error: unknown) => error))).toBe(
 				"invalid_path",
 			);
 			expect(await part("upload-new0", 0, false)).toEqual({ received: 10 });
+			await part("upload-new0", 1, true);
 		} finally {
-			vi.useRealTimers();
+			await realCoreTimers();
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

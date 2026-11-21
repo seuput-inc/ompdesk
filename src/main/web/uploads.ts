@@ -77,18 +77,18 @@ export class UploadStore {
 		return resolve(file).startsWith(folder);
 	}
 
+	/** A paired transfer finishes in this same store, with the same clock and limits. */
+	writeOptions() {
+		return { userData: this.#userData, now: this.#now(), limits: this.#limits };
+	}
+
 	/**
 	 * A file a paired computer attached to a prompt of a tab it runs here (`host.files.upload`): the same folder,
 	 * limits and lifetime as a phone's upload, so the agent reads it by its path here.
 	 */
 	async store(deviceId: string, name: string, bytes: Uint8Array): Promise<StoredUpload> {
-		return (
-			await this.#call<StoredUpload>(
-				"web.uploads.store",
-				{ deviceId, name, now: this.#now(), limits: this.#limits },
-				bytes,
-			)
-		).result;
+		return (await this.#call<StoredUpload>("web.uploads.store", { deviceId, name, ...this.writeOptions() }, bytes))
+			.result;
 	}
 
 	/**
