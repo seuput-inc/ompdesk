@@ -41,6 +41,8 @@ describe("hang marker", () => {
 		expect(consumeHangMarker(file)).toBeNull();
 		writeFileSync(file, JSON.stringify({ detectedAt: 1, pid: -3, unresponsiveMs: 5 }));
 		expect(consumeHangMarker(file)).toBeNull();
+		writeFileSync(file, JSON.stringify({ ...marker, detectedAt: 1e20 }));
+		expect(consumeHangMarker(file)).toBeNull();
 	});
 });
 

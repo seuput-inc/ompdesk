@@ -32,7 +32,7 @@ function parseMarker(raw: string): HangMarker | null {
 	}
 	if (typeof value !== "object" || value === null) return null;
 	const { detectedAt, pid, unresponsiveMs, selfRecovered, phase, steps, machine } = value as Record<string, unknown>;
-	if (typeof detectedAt !== "number" || !Number.isFinite(detectedAt)) return null;
+	if (typeof detectedAt !== "number" || !Number.isFinite(new Date(detectedAt).getTime())) return null;
 	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
 	if (typeof unresponsiveMs !== "number" || !Number.isFinite(unresponsiveMs) || unresponsiveMs < 0) return null;
 	const marker: HangMarker = { detectedAt, pid, unresponsiveMs, selfRecovered: selfRecovered === true };
