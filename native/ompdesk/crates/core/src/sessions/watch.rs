@@ -362,21 +362,26 @@ mod tests {
         fs::create_dir_all(rig.path("p")).unwrap();
         rig.live().await;
         rig.write("p/a.jsonl", "{}\n");
-        rig.named(&["p/a.jsonl"]).await;
+        // A write may settle as two reports (create, then content: G21 on a busy runner, the second after the count
+        // was taken). A later file settles after everything of the earlier one, so its report closes the count.
+        rig.write("p/c.jsonl", "{}\n");
+        rig.named(&["p/a.jsonl", "p/c.jsonl"]).await;
         let times = |rig: &Rig| rig.named.iter().filter(|name| *name == "p/a.jsonl").count();
         let before = times(&rig);
-        // The same bytes again, then the time they had: changes the system reports and the watch does not.
+        // The same bytes again with the time they had, put in place in one step: a change the system reports and the
+        // watch does not. Written in place and restored after, the watch could read the new time between the two.
         let modified = fs::metadata(rig.path("p/a.jsonl"))
             .unwrap()
             .modified()
             .unwrap();
-        rig.write("p/a.jsonl", "{}\n");
+        rig.write("p/a.tmp", "{}\n");
         let file = fs::OpenOptions::new()
             .write(true)
-            .open(rig.path("p/a.jsonl"))
+            .open(rig.path("p/a.tmp"))
             .unwrap();
         file.set_modified(modified).unwrap();
         drop(file);
+        fs::rename(rig.path("p/a.tmp"), rig.path("p/a.jsonl")).unwrap();
         rig.write("p/b.jsonl", "{}\n");
         rig.named(&["p/b.jsonl"]).await;
         assert_eq!(times(&rig), before, "{:?}", rig.named);

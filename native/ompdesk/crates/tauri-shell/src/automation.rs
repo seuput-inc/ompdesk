@@ -111,6 +111,56 @@ pub fn install(
     }
 }
 
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub fn probe_edit_menu(app: tauri::AppHandle, profile: &Path) {
+    if std::env::var("RUNNER_ENVIRONMENT").as_deref() != Ok("github-hosted")
+        || std::env::var("OMPDESK_TEST_EDIT_MENU").as_deref() != Ok("1")
+        || std::env::var_os("OMP_GUI_TEST_USER_DATA_DIR").as_deref() != Some(profile.as_os_str())
+    {
+        return;
+    }
+    let profile = profile.to_owned();
+    std::thread::spawn(move || {
+        for action in ["Copy", "Paste"] {
+            let marker = profile.join(action);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            while !marker.is_file() {
+                if std::time::Instant::now() > deadline {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let _ = app.run_on_main_thread(move || {
+                use objc2::{class, msg_send, runtime::AnyObject};
+                use objc2_foundation::NSString;
+                // SAFETY: on AppKit's main thread. Act on the installed menu, never on a named responder.
+                unsafe {
+                    let ns: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                    let menu: *mut AnyObject = msg_send![ns, mainMenu];
+                    if menu.is_null() {
+                        return;
+                    }
+                    let edit: *mut AnyObject =
+                        msg_send![menu, itemWithTitle: &*NSString::from_str("Edit")];
+                    if edit.is_null() {
+                        return;
+                    }
+                    let sub: *mut AnyObject = msg_send![edit, submenu];
+                    if sub.is_null() {
+                        return;
+                    }
+                    let index: isize =
+                        msg_send![sub, indexOfItemWithTitle: &*NSString::from_str(action)];
+                    if index >= 0 {
+                        let _: () = msg_send![sub, performActionForItemAtIndex: index];
+                    }
+                }
+            });
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{debug_port, forwarded, port};

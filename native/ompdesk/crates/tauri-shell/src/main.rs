@@ -1755,6 +1755,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             });
         })
         .setup(move |app| {
+            #[cfg(all(target_os = "macos", feature = "test-automation"))]
+            automation::probe_edit_menu(app.handle().clone(), &user_data);
             RUNTIME
                 .set(Runtime {
                     app: app.handle().clone(),
