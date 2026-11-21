@@ -300,6 +300,32 @@ fn temp(name: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn two_restores_to_one_launcher_keep_both_files() {
+    use std::sync::Barrier;
+
+    let root = temp("racing-restores");
+    let launcher = root.join("omp");
+    let gate = Barrier::new(2);
+    let run = |name: &str| {
+        let source = root.join(name);
+        std::fs::write(&source, name).unwrap();
+        gate.wait();
+        crate::sys::move_launcher_exclusive(&source, &launcher).is_ok()
+    };
+    let (a, b) = std::thread::scope(|s| {
+        let a = s.spawn(|| run("a"));
+        let b = run("b");
+        (a.join().unwrap(), b)
+    });
+    assert_ne!(a, b);
+    let (winner, loser) = if a { ("a", "b") } else { ("b", "a") };
+    assert_eq!(std::fs::read_to_string(&launcher).unwrap(), winner);
+    assert!(!root.join(winner).exists());
+    assert_eq!(std::fs::read_to_string(root.join(loser)).unwrap(), loser);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn repairs_around_a_launcher_held_without_delete_sharing() {
@@ -310,7 +336,7 @@ async fn repairs_around_a_launcher_held_without_delete_sharing() {
     let bin = root.join("bin");
     std::fs::create_dir(&bin).unwrap();
     let launcher = bin.join("omp.exe");
-    let aside = bin.join("omp.exe.ompdesk-compiled-42");
+    let aside = bin.join("omp.exe.ompdesk-compiled-42-7");
     let mut pe = [0u8; 128];
     pe[..2].copy_from_slice(b"MZ");
     pe[60] = 64;
@@ -320,7 +346,7 @@ async fn repairs_around_a_launcher_held_without_delete_sharing() {
     write(&launcher, pe).unwrap();
     let hold = |path: &Path| File::options().read(true).share_mode(1).open(path).unwrap();
     let mut core = Core::start().await;
-    let params = json!({"bunInstall": root, "windows": true, "now": 42});
+    let params = json!({"bunInstall": root, "windows": true, "now": 42, "nonce": 7});
     let held = hold(&launcher);
     let moved = core.call("setup.setAsideCompiledOmp", params.clone()).await;
     assert_eq!(moved["result"], false);
@@ -330,11 +356,15 @@ async fn repairs_around_a_launcher_held_without_delete_sharing() {
     assert_eq!(moved["result"], true);
     let held = hold(&aside);
     write(&launcher, b"package shim").unwrap();
-    let settled = core.call("setup.settleCompiledOmp", params.clone()).await;
+    let mut settled_params = params.clone();
+    settled_params["installed"] = true.into();
+    let settled = core.call("setup.settleCompiledOmp", settled_params).await;
     assert_eq!(settled["ok"], true);
     assert_eq!(read(&aside).unwrap(), pe);
     drop(held);
-    let moved = core.call("setup.setAsideCompiledOmp", params).await;
+    let mut next = params;
+    next["now"] = 43.into();
+    let moved = core.call("setup.setAsideCompiledOmp", next).await;
     assert_eq!(moved["result"], false);
     assert!(!aside.exists());
     assert_eq!(read(&launcher).unwrap(), b"package shim");

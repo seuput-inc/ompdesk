@@ -1,8 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { core } from "./core/process";
 import {
+	firstPackageCandidate,
 	MIN_OMP_VERSION,
 	ompBunDefaults,
 	ompBunMinimum,
@@ -16,7 +18,6 @@ import {
 	resolveOmpAmong,
 	TESTED_OMP_VERSION,
 } from "./omp-runtime";
-import { isCompiledOmp } from "./setup/compiled-launcher";
 import { RM_TEMP, writeFakeOmp } from "./test-fake-omp";
 import { itWithFileSymlinks } from "./test-symlinks";
 
@@ -204,19 +205,17 @@ describe("omp lookup", () => {
 				'@"%dp0%\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js" %*\r\n',
 			);
 
-			expect(await isCompiledOmp(script, "darwin")).toBe(false);
-			expect(await isCompiledOmp(macho, "darwin")).toBe(true);
-			expect(await isCompiledOmp(elf, "linux")).toBe(true);
-			expect(await isCompiledOmp(standalone, "win32")).toBe(true);
-			expect(await isCompiledOmp(shim, "win32")).toBe(false);
-			expect(await isCompiledOmp(npmShim, "win32")).toBe(false);
-			expect(await isCompiledOmp(path.join(dir, "missing"), "darwin")).toBe(false);
+			expect(await firstPackageCandidate([macho, elf, script], "darwin")).toBe(2);
+			expect(await firstPackageCandidate([elf], "linux")).toBe(1);
+			expect(await firstPackageCandidate([standalone, shim], "win32")).toBe(1);
+			expect(await firstPackageCandidate([npmShim], "win32")).toBe(0);
+			expect(await firstPackageCandidate([path.join(dir, "missing")], "darwin")).toBe(0);
 			const compiled = await file("compiled-real.exe", peWithSection(...REAL_COMPILED_OMP));
-			expect(await isCompiledOmp(compiled, "win32")).toBe(true);
+			expect(await firstPackageCandidate([compiled], "win32")).toBe(1);
 			const bunShim = await file("shim-real.exe", peWithSection(...REAL_BUN_SHIM));
-			expect(await isCompiledOmp(bunShim, "win32")).toBe(false);
+			expect(await firstPackageCandidate([bunShim], "win32")).toBe(0);
 			const bun = await file("bun-real.exe", peWithSection(...REAL_COMPILED_OMP.slice(0, -1)));
-			expect(await isCompiledOmp(bun, "win32")).toBe(false);
+			expect(await firstPackageCandidate([bun], "win32")).toBe(0);
 		} finally {
 			await fs.rm(dir, RM_TEMP);
 		}
@@ -225,19 +224,24 @@ describe("omp lookup", () => {
 	it("runs the first omp that runs from its package, past a compiled one earlier in the lookup", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-pick-"));
 		const usable = await fakeOmp(`omp/${MIN_OMP_VERSION}`);
+		const calls = vi.spyOn(core(), "call");
 		try {
 			const compiled = path.join(dir, "compiled-omp");
 			await fs.writeFile(compiled, compiledOmpBytes());
-			expect(await resolveOmpAmong([compiled, usable.bin], LOOKUP_PATH)).toMatchObject({
+			const second = path.join(dir, "second-compiled-omp");
+			await fs.writeFile(second, compiledOmpBytes());
+			expect(await resolveOmpAmong([compiled, second, usable.bin], LOOKUP_PATH)).toMatchObject({
 				ok: true,
 				runtime: { bin: usable.bin, version: MIN_OMP_VERSION },
 			});
+			expect(calls.mock.calls.filter(([method]) => method === "setup.firstPackageCandidate")).toHaveLength(1);
 			expect(await resolveOmpAmong([compiled], LOOKUP_PATH)).toMatchObject({
 				ok: false,
 				reason: { kind: "compiled", bin: compiled },
 			});
 			expect(await resolveOmpAmong([], LOOKUP_PATH)).toBeNull();
 		} finally {
+			calls.mockRestore();
 			await fs.rm(dir, RM_TEMP);
 			await fs.rm(usable.dir, RM_TEMP);
 		}

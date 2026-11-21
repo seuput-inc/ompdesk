@@ -37,7 +37,7 @@ import { writeRuntimeLog } from "../runtime-log";
 import { SerialChain, stepStalled, throwIfStepStalled } from "../serial-chain";
 import { needsShell, spawnArgs, spawnCommand } from "../spawn";
 import { resolveAgentDesktopRelease, resolveArchiveRelease, resolveTailscaleRelease } from "./archives";
-import { setAsideCompiledOmp, settleSetAside } from "./compiled-launcher";
+import { withCompiledLauncherAside } from "./compiled-launcher";
 import { type Detection, detectMachine } from "./detect";
 import { DownloadError, downloadVerified } from "./download";
 import {
@@ -988,27 +988,32 @@ export class SetupService {
 		this.#emit();
 		try {
 			const target = id === "omp" ? { method, command: plan.command } : null;
-			const moved =
-				method === "bun-global"
-					? await setAsideCompiledOmp(this.#deps.bunInstall, this.#deps.platform, (this.#deps.now ?? Date.now)())
-					: null;
-			throwIfStepStalled();
-			let outcome: RunOutcome;
-			try {
-				if (download && !(await this.#fetch(id, download))) return;
+			const install = async (): Promise<RunOutcome | null> => {
+				throwIfStepStalled();
+				if (download && !(await this.#fetch(id, download))) return null;
 				const installEnv = await this.#installEnv();
 				throwIfStepStalled();
 				if (target) this.#deps.logOmpInstall?.("started", { path: "setup", ...target });
-				outcome = await this.#runner.run(this.#spec(plan.spawn, id, method), installEnv, chunk => {
+				const outcome = await this.#runner.run(this.#spec(plan.spawn, id, method), installEnv, chunk => {
 					if (stepStalled()) return;
 					item.output = (item.output + chunk).slice(-SETUP_OUTPUT_TAIL);
 					this.#emitSoon();
 				});
 				throwIfStepStalled();
 				item.progress = null;
-			} finally {
-				if (moved) await settleSetAside(moved);
-			}
+				return outcome;
+			};
+			const outcome =
+				method === "bun-global"
+					? await withCompiledLauncherAside(
+							this.#deps.bunInstall,
+							this.#deps.platform,
+							(this.#deps.now ?? Date.now)(),
+							install,
+						)
+					: await install();
+			throwIfStepStalled();
+			if (!outcome) return;
 			await this.#settle(id, outcome);
 			if (target) {
 				const presence = presenceOf(item);

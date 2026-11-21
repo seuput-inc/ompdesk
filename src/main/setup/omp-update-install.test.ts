@@ -26,10 +26,15 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SetupPresence } from "../../shared/setup";
-import { MIN_OMP_VERSION, parseOmpVersion, resolveOmpAmong, TESTED_OMP_VERSION } from "../omp-runtime";
+import {
+	firstPackageCandidate,
+	MIN_OMP_VERSION,
+	parseOmpVersion,
+	resolveOmpAmong,
+	TESTED_OMP_VERSION,
+} from "../omp-runtime";
 import { writeFakeOmp } from "../test-fake-omp";
 import { type OmpRegistry, type OmpRelease, ompRegistry, ompRelease } from "../test-omp-registry";
-import { isCompiledOmp } from "./compiled-launcher";
 import type { Detection } from "./detect";
 import { OMP_PACKAGE } from "./plans";
 import { SetupService } from "./service";
@@ -224,10 +229,11 @@ describe.skipIf(bun === null)("omp update with a real bun install -g", () => {
 			: Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01]);
 		rmSync(shellOmp, { force: true });
 		writeFileSync(shellOmp, compiled, { mode: 0o755 });
-		expect(await isCompiledOmp(shellOmp)).toBe(true);
+		expect(await firstPackageCandidate([shellOmp])).toBe(1);
 		const present: SetupPresence = { kind: "present", version: bunVersion, path: bun ?? "" };
 		const ompPresence = async (): Promise<SetupPresence> => {
-			if (await isCompiledOmp(shellOmp)) return { kind: "broken", detail: "a compiled omp", path: shellOmp };
+			if (await firstPackageCandidate([shellOmp]))
+				return { kind: "broken", detail: "a compiled omp", path: shellOmp };
 			const version = parseOmpVersion((await run(shellOmp, ["--version"], env)).output);
 			return version ? { kind: "present", version, path: shellOmp } : { kind: "missing" };
 		};

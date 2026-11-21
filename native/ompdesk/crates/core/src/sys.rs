@@ -70,6 +70,26 @@ pub(crate) fn final_file_path(file: &std::fs::File) -> std::io::Result<std::path
     }
 }
 
+// Main supplies resolved paths; pass long drive and UNC paths in the same namespace as Node.
+#[cfg(windows)]
+fn wide_path(path: &str) -> std::io::Result<Vec<u16>> {
+    if path.contains('\0') {
+        return Err(std::io::Error::from_raw_os_error(123));
+    }
+    let (prefix, tail) = if path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
+        ("", path)
+    } else if let Some(unc) = path.strip_prefix(r"\\") {
+        (r"\\?\UNC\", unc)
+    } else {
+        (r"\\?\", path)
+    };
+    Ok(prefix
+        .encode_utf16()
+        .chain(tail.encode_utf16())
+        .chain([0])
+        .collect())
+}
+
 /// `fs.copyFile` on Windows uses CopyFileW, including its alternate data streams and exclusive-create behavior.
 #[cfg(windows)]
 pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io::Result<()> {
@@ -77,26 +97,8 @@ pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io:
     unsafe extern "system" {
         fn CopyFileW(source: *const u16, target: *const u16, fail_if_exists: i32) -> i32;
     }
-    // Main supplies resolved paths; pass long drive and UNC paths in the same namespace as Node.
-    fn wide(path: &str) -> std::io::Result<Vec<u16>> {
-        if path.contains('\0') {
-            return Err(std::io::Error::from_raw_os_error(123));
-        }
-        let (prefix, tail) = if path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
-            ("", path)
-        } else if let Some(unc) = path.strip_prefix(r"\\") {
-            (r"\\?\UNC\", unc)
-        } else {
-            (r"\\?\", path)
-        };
-        Ok(prefix
-            .encode_utf16()
-            .chain(tail.encode_utf16())
-            .chain([0])
-            .collect())
-    }
-    let from = wide(source)?;
-    let to = wide(target)?;
+    let from = wide_path(source)?;
+    let to = wide_path(target)?;
     // SAFETY: both buffers are NUL-terminated and remain alive for the synchronous call.
     if unsafe { CopyFileW(from.as_ptr(), to.as_ptr(), i32::from(exclusive)) } != 0 {
         return Ok(());
@@ -109,6 +111,56 @@ pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io:
         return Ok(());
     }
     Err(error)
+}
+
+/// The setup repair must not replace a destination created between its probe and the rename.
+pub(crate) fn move_launcher_exclusive(
+    from: &std::path::Path,
+    to: &std::path::Path,
+) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let ok = {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())?;
+        let to = CString::new(to.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        let (rename, flag) = (libc::renameatx_np, libc::RENAME_EXCL);
+        #[cfg(target_os = "linux")]
+        let (rename, flag) = (libc::renameat2, libc::RENAME_NOREPLACE);
+        // SAFETY: both NUL-terminated path buffers live through the synchronous call.
+        unsafe {
+            rename(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                flag,
+            ) == 0
+        }
+    };
+    #[cfg(windows)]
+    let ok = {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+        }
+        let wide = |path: &std::path::Path| {
+            wide_path(
+                path.to_str()
+                    .ok_or_else(|| std::io::Error::from_raw_os_error(123))?,
+            )
+        };
+        let from = wide(from)?;
+        let to = wide(to)?;
+        // SAFETY: both buffers are NUL-terminated and valid for the call. Zero flags forbids replacement.
+        unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) != 0 }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Windows answers a refused connect by sending its SYN again (about 2 s on loopback). libuv turns those retries off

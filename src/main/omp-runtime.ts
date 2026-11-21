@@ -23,8 +23,8 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import ompTested from "../shared/omp-tested.json";
 import { isNewer } from "../shared/version";
+import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
-import { isCompiledOmp } from "./setup/compiled-launcher";
 import { bunInstallDir } from "./setup/paths";
 import { spawnPath } from "./shell-env";
 import {
@@ -337,6 +337,14 @@ export async function resolveOmp(): Promise<OmpResolution> {
 		: { ok: false, error: `omp not found. ${INSTALL_HINT}`, reason: { kind: "not-found" } };
 }
 
+/** Skip consecutive standalone binaries in one request. Do not open candidates after the first package launcher. */
+export async function firstPackageCandidate(
+	files: readonly string[],
+	platform: NodeJS.Platform = process.platform,
+): Promise<number> {
+	return (await core().call<number>("setup.firstPackageCandidate", { files, windows: platform === "win32" })).result;
+}
+
 /**
  * The first of `candidates` (in lookup order) that OMPdesk can run. Two kinds are passed over for a later one: a
  * compiled omp, and an omp below MIN_OMP_VERSION. The second is what lets machine setup leave a too-old omp it does
@@ -347,12 +355,13 @@ export async function resolveOmp(): Promise<OmpResolution> {
 export async function resolveOmpAmong(candidates: readonly string[], basePath: string): Promise<OmpResolution | null> {
 	let compiled: string | null = null;
 	let refused: OmpResolution | null = null;
-	for (const bin of new Set(candidates)) {
-		if (await isCompiledOmp(bin)) {
-			compiled ??= bin;
-			continue;
-		}
-		const resolution = await examineOmp(bin, basePath);
+	const bins = [...new Set(candidates)];
+	for (let i = 0; i < bins.length; ) {
+		const skipped = await firstPackageCandidate(i === 0 ? bins : bins.slice(i));
+		if (skipped) compiled ??= bins[i];
+		i += skipped;
+		if (i === bins.length) break;
+		const resolution = await examineOmp(bins[i++], basePath);
 		if (resolution.ok) return resolution;
 		refused ??= resolution;
 		if (resolution.reason?.kind !== "too-old") break;
