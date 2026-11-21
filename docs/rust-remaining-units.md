@@ -1,5 +1,27 @@
 # What remains of `src/main` for the core, cut into units
 
+## Runtime scope at v0.137.1
+
+The packaged Tauri shell still starts Node. In `native/ompdesk/crates/tauri-shell/src/main.rs`, the shell checks for `app/out/main/index.js`, reads `out/preload/tauri.js`, calls `node::spawn`, and forwards quit requests to Node. The app cannot start without that main entry. The release checks for both platforms require `tauri.js` and exclude the legacy `shell.js`. The injected page API is browser code, not a Node dependency.
+
+Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-file import graph. It includes tracked TypeScript and JavaScript in `src`, `resources/gui-bridge`, and `native/ompdesk/crates/tauri-shell/src`. At `eda57c5ed` it lists 3,077 paths:
+
+| Importing runtime | Paths | Migration boundary |
+|---|---:|---|
+| Node main or its hang watchdog | 486 | 380 are in `src/main`. Move the host implementation and its callers before removing Node. |
+| Desktop or paired page, including preload | 1,024 | Keep browser APIs and UI in the page. 78 paths are also imported by Node. Moving one caller does not retire a shared module. |
+| Stock omp extension or memory judge extension | 317 | Keep calls that need the live `AgentSession` in the extension. Inspect OMPdesk-owned I/O separately. |
+| Stock helper worker | 23 | Keep stock API calls in the worker. Rust already owns its process lifetime. |
+| Stats host | 2 | The standalone Bun process loads stock's stats implementation. It is not the desktop Node process. |
+| MCP hub | 4 | A separate Bun process. Its local HTTP and subprocess work is eligible for Rust; the actual tool implementation is a separate dependency. |
+| No static import from these entries | 1,349 | Includes tests, types, dynamic paths, and other build inputs. An absent import is not proof that a file is dead. |
+
+Counts overlap. The command follows literal imports, including conditional test code, and excludes packages and assets. It does not measure which branches executed. Build scripts, verification tools, and third-party packages are outside this count.
+
+A unit is complete when its production caller uses Rust, its previous host implementation is gone, and the same inputs still produce the expected results. To retire the desktop Node process, the packaged app must also start, service requests, and quit without the Node executable on both platforms.
+
+## Historical inventory at `b0c90dd3`
+
 Status 12 Nov 2026, read from `main` at `b0c90dd3`. Units 1, 2a–2i, 3a–3d and 4a–4c are on `main`; 4d (GitHub sign-in) and 4e (routines) are running. This document cuts what is left of the scope below into units for the strangler in `.omp/rules/native-rust.md`. It was made by reading and counting only: nothing was built or run. Every count is measured (Appendix A says how). A claim this document could not check by reading is marked **[not determined]**.
 
 Scope: `src/main/remote/**`, `src/main/web/**`, `src/main/ai-memory/**`, `src/main/agent-control/**`, `src/main/setup/**`, `src/main/cli-tools/**`, the hubs (`sidecar*.ts`, `turn-resume*.ts`, `autopilot*.ts`) and the root files over 300 lines that reach no Electron at runtime (`schedules.ts`, `models-config.ts`, `omp-processes.ts`, `agent-browsers.ts`, `model-setup-runner.ts`, `desktop-slot.ts`, `i18n-text.ts`, `omp-runtime.ts`, `updater-state.ts`), plus `workspace-search.ts` (71 lines, named in the order). 147 files, 59,062 lines.
