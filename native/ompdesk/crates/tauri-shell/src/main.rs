@@ -23,6 +23,7 @@ mod theme;
 mod ui;
 #[cfg(windows)]
 mod window_activation;
+mod window_bounds;
 use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
@@ -597,16 +598,14 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         .expect("registry")
         .create(win, wc)
         .map_err(|e| WireError::new("invalid", e))?;
+    let bounds = screen::with_displays(|snapshot| window_bounds::for_create(options, snapshot));
     let mut builder = WebviewWindowBuilder::new(
         &runtime().app,
         &label,
         WebviewUrl::External("about:blank".parse().map_err(failed)?),
     )
     .title(options["title"].as_str().unwrap_or("OMPdesk"))
-    .inner_size(
-        options["width"].as_f64().unwrap_or(1200.0),
-        options["height"].as_f64().unwrap_or(800.0),
-    )
+    .inner_size(bounds.width, bounds.height)
     .visible(options["show"].as_bool().unwrap_or(true))
     .focused(options["show"].as_bool().unwrap_or(true))
     .disable_drag_drop_handler()
@@ -644,7 +643,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         wc_state(wc);
         wc_event(wc, "page-title-updated", json!([title, true]));
     });
-    if let (Some(x), Some(y)) = (options["x"].as_f64(), options["y"].as_f64()) {
+    if let Some((x, y)) = bounds.position {
         builder = builder.position(x, y);
     }
     if let (Some(w), Some(h)) = (options["minWidth"].as_f64(), options["minHeight"].as_f64()) {
@@ -706,12 +705,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     #[cfg(windows)]
     page_watch::attach(&window, wc);
     if !options["useContentSize"].as_bool().unwrap_or(false) {
-        apply_size(
-            &window,
-            options["width"].as_f64().unwrap_or(1200.0),
-            options["height"].as_f64().unwrap_or(800.0),
-            false,
-        )?;
+        apply_size(&window, bounds.width, bounds.height, false)?;
     }
     let webview = runtime()
         .app
