@@ -60,8 +60,7 @@ import {
 	saveAndRemoveWorktree,
 } from "./saved-worktrees";
 import type { ScratchCare } from "./scratch";
-import { TreeSizes } from "./tree-sizes";
-import { diskBytes, measureDiskUsage } from "./usage";
+import { diskBytes, TreeSizes } from "./tree-sizes";
 import {
 	inProgressOperation,
 	lastActivity,
@@ -252,15 +251,12 @@ export class DiskCare {
 		});
 		await step("usage", async () => {
 			const started = performance.now();
-			this.#usage = await measureDiskUsage(
-				{
-					userData: this.#deps.userData,
-					worktreeRoot: worktreeRoot ?? path.join(this.#deps.userData, "no-worktrees"),
-					caches,
-					...(this.#deps.scratch ? { scratchRoot: this.#deps.scratch.root } : {}),
-				},
-				sizes,
-			);
+			this.#usage = await sizes.usage({
+				userData: this.#deps.userData,
+				worktreeRoot: worktreeRoot ?? path.join(this.#deps.userData, "no-worktrees"),
+				caches,
+				...(this.#deps.scratch ? { scratchRoot: this.#deps.scratch.root } : {}),
+			});
 			await sizes.save();
 			this.#deps.log("usage", {
 				ms: Math.round(performance.now() - started),
