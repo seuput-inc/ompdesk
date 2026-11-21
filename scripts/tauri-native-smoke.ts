@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -334,7 +334,12 @@ export async function saveFailure(driver: Driver, profile: string, error: unknow
 
 async function main(): Promise<void> {
 	console.log("test build: release bytes + feature test-automation (tauri-plugin-wdio-webdriver)");
-	const app = await launchNative();
+	const edit = process.env.OMPDESK_TEST_EDIT_MENU === "1";
+	if (edit) assert(process.platform === "darwin" && process.env.RUNNER_ENVIRONMENT === "github-hosted");
+	const app = await launchNative(
+		"native-smoke-",
+		edit ? { env: { OMP_GUI_HEADLESS: "0", OMPDESK_TEST_EDIT_MENU: "1" } } : {},
+	);
 	const { binary, profile, port, exited, code } = app;
 	const driver = new Driver(port);
 	let quitRequested = false;
@@ -379,6 +384,39 @@ async function main(): Promise<void> {
 					.then(value => value === 1),
 			exited,
 		);
+		if (edit) {
+			const sample = "맥 복사 검증 123";
+			execFileSync("/usr/bin/pbcopy", { input: "sentinel" });
+			const composer = await driver.element(".omp-composer-input");
+			await driver.command("POST", `${composer}/click`, {});
+			await driver.command("POST", `${composer}/value`, { text: sample, value: [...sample] });
+			assert.equal(
+				await driver.evaluate(
+					"(()=>{const t=document.querySelector('.omp-composer-input');t.focus();t.select();return t.value.slice(t.selectionStart,t.selectionEnd)})()",
+				),
+				sample,
+			);
+			await writeFile(path.join(app.desktop, "Copy"), "");
+			await until(
+				"real Edit > Copy",
+				async () => execFileSync("/usr/bin/pbpaste", { encoding: "utf8" }) === sample,
+				exited,
+			);
+			await driver.command("POST", `${composer}/clear`, {});
+			assert.equal(
+				await driver.evaluate(
+					"(()=>{const t=document.querySelector('.omp-composer-input');t.focus();return t.value})()",
+				),
+				"",
+			);
+			await writeFile(path.join(app.desktop, "Paste"), "");
+			await until(
+				"real Edit > Paste",
+				async () => (await driver.evaluate("document.querySelector('.omp-composer-input').value")) === sample,
+				exited,
+			);
+			console.log("Verified Edit > Copy and Edit > Paste in the OMPdesk WKWebView composer.");
+		}
 		await driver.chord(",");
 		await driver.element('[data-settings-page] [data-settings-section="appearance"]');
 		const png = await driver.command("GET", "/screenshot");

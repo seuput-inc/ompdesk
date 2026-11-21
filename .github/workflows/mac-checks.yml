@@ -41,7 +41,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/tauri-smoke"
           export OMPDESK_TAURI_TEST_BINARY="$PWD/resources/ompdesk-tauri/darwin-arm64/ompdesk-shell"
           export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
-          bun scripts/tauri-native-smoke.ts
+          OMPDESK_TEST_EDIT_MENU=1 bun scripts/tauri-native-smoke.ts
       # The packaged app (ad-hoc signed, the test host above inside) started as a person starts it: one app whose pid is the
       # shell's, a second `open` handing over, a quit leaving nothing behind (scripts/mac-launch-check.sh). The launcher
       # starts the shell and exits since the macOS 27 tray hang (launcher_main.rs); these say that changed nothing else.
