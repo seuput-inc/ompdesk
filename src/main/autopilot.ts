@@ -50,7 +50,6 @@ import { ghText, gitRunner, resolveBin } from "./local/git/exec";
 import { prCreate } from "./local/git/pr";
 import { prepareWorktree } from "./local/git/worktree-seed";
 import { nativeBinPath } from "./native-bin";
-import { detectReleaseProcedure } from "./release-detect";
 import { findGitBash } from "./setup/paths";
 import { shellSpawnEnv } from "./shell-env";
 import type { TabActivity } from "./sidecar-pool";
@@ -135,9 +134,7 @@ export interface AutopilotDeps {
 	 * launch continuation (`resumeGoal` or `resumeSettled` follows), at once, or not (Continue interrupted work is off).
 	 */
 	relaunchContinuation(tabId: string): RelaunchContinuation;
-	/** Test seams; defaults are the local date and the repository's rules files. */
 	today?: () => string;
-	detectRelease?: (root: string) => Promise<AutopilotReleaseProcedure | null>;
 	/** A stand-in for the core's look at a run's folder; absent: the core looks itself. */
 	probeRepo?: (root: string) => Promise<"present" | "gone" | "unknown">;
 	log?: (message: string) => void;
@@ -665,8 +662,6 @@ export class Autopilot {
 				deps.spawnTab(call(id).win, payload),
 			text: ({ key, params }: { key: MainTextKey; params?: Record<string, string | number> }) =>
 				deps.text(key, params),
-			releaseProcedure: ({ root }: { root: string }) =>
-				(deps.detectRelease ?? detectReleaseProcedure)(root).catch(() => null),
 			prText: ({ branch, cycles }: { branch: string; cycles: AutopilotStatus["cycles"] }) => ({
 				title: autopilotLogTitle(branch, (cycles ?? []).length),
 				body: formatAutopilotLog({ branch, cycles: cycles ?? [] }),

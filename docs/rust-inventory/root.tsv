@@ -377,8 +377,6 @@ src/main/quit-watchdog.ts	port	2	QuitWatchdog arms or cancels the bounded forced
 src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a failure stock calls a billing cap, and waits for the limits stock lets pass with time.
 src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
 src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.
-src/main/release-detect.test.ts	tooling	-	Vitest suite: findReleaseAnchors.
-src/main/release-detect.ts	port	1	findReleaseAnchors and detectReleaseProcedure inspect repository rule headings and the Autopilot guide to locate a declared release procedure.
 src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recovery.
 src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.

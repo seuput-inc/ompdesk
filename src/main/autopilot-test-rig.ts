@@ -4,6 +4,7 @@
  * run side by side: each runs real git many times, and on a Windows runner the one file took 203 s.
  */
 import { EventEmitter } from "node:events";
+import { writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -20,7 +21,6 @@ import { Autopilot, type AutopilotNotice, type AutopilotPool, type AutopilotTuni
 import { MAIN_TEXT, type MainTextKey } from "./i18n-text";
 import { gitSync, initRepoWithRemote } from "./local/git/test-repos";
 import { createWorktree } from "./local/git/worktree";
-import { detectReleaseProcedure } from "./release-detect";
 import type { SidecarLike } from "./sidecar-types";
 import type { RelaunchContinuation } from "./turn-resume";
 import type { ClientWindow } from "./web/client-window";
@@ -247,14 +247,18 @@ export function text(key: MainTextKey, params?: Record<string, string | number>)
 export function build(
 	over: {
 		releaseProcedure?: boolean;
-		/** The real detection over the run's checkout (the committed guide's Release section counts). */
-		realDetect?: boolean;
 		relaunch?: RelaunchContinuation;
 		probeRepo?: (root: string) => Promise<"present" | "gone" | "unknown">;
 		/** Over `TUNING`: the durations the core's own clock runs for this test. */
 		tuning?: AutopilotTuning;
 	} = {},
 ): void {
+	if (over.releaseProcedure) {
+		writeFileSync(path.join(main, "AGENTS.md"), "## Release\nTag the tested version.\n");
+		gitSync(main, "add", "AGENTS.md");
+		gitSync(main, "commit", "-qm", "define the release procedure");
+		gitSync(main, "push", "-q", "origin", "HEAD:main");
+	}
 	autopilot?.dispose();
 	const pool: AutopilotPool = {
 		sidecarOf: tab => (world.sidecars.get(tab) as unknown as SidecarLike | undefined) ?? null,
@@ -323,9 +327,6 @@ export function build(
 		relaunchContinuation: () => over.relaunch ?? "now",
 		today: () => "2026-10-17",
 		tuning: { ...TUNING, ...over.tuning },
-		detectRelease: over.realDetect
-			? detectReleaseProcedure
-			: async () => (over.releaseProcedure ? { file: "AGENTS.md", anchors: ["Release"] } : null),
 		log: () => undefined,
 		runLog: (message, details) => {
 			runLogs.push({ message, details });

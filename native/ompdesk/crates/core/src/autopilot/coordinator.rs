@@ -820,12 +820,12 @@ impl Coordinator {
         let value = match cached {
             Some((_, value)) => value,
             None => {
-                let value = self
-                    .port
-                    .ask::<Option<Value>, _>("releaseProcedure", &json!({"root": root}))
+                let path = std::path::PathBuf::from(root);
+                let value = tokio::task::spawn_blocking(move || super::release::detect(&path))
                     .await
                     .ok()
-                    .flatten();
+                    .flatten()
+                    .map(|procedure| json!(procedure));
                 locked(&self.release_cache).insert(root.to_owned(), (now, value.clone()));
                 value
             }

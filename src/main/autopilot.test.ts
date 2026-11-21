@@ -105,7 +105,6 @@ describe("start", () => {
 			expect(armedPolicy()).toMatchObject({ land: true, autoRelease: { on: true, cadence: { kind: "agent" } } });
 		});
 		it("releases by the Release section of the guide Start committed, and the agent is told to follow it", async () => {
-			build({ realDetect: true });
 			world.guide = {
 				text: "# Guide\n\n## Release\n\nReleases: yes\n1. Tag it.\n",
 				source: "template",
@@ -119,7 +118,6 @@ describe("start", () => {
 			});
 		});
 		it("only lands when the guide says the project does not release", async () => {
-			build({ realDetect: true });
 			world.guide = {
 				text: "# Guide\n\n## Release\n\nReleases: no\n- Nothing ships.\n",
 				source: "template",
