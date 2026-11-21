@@ -71,6 +71,7 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("sidecar.command", command);
     registry.add("sidecar.bridge", bridge_request);
+    registry.add("sidecar.desktopProcess", desktop_process);
     registry.add("sidecar.barrier", |call| waited(call, Command::Barrier));
     registry.add("sidecar.whenExited", |call| {
         waited(call, |_, reply| Command::WhenExited(reply))
@@ -374,10 +375,38 @@ fn command(call: Call) -> Answer {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DesktopProcessParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+    action: lane::DesktopProcessAction,
+}
+
+fn desktop_process(call: Call) -> Answer {
+    let params: DesktopProcessParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, answer) = oneshot::channel();
+    deliver(
+        &params.tab,
+        params.seq,
+        Command::DesktopProcess {
+            spawn_id: params.spawn_id,
+            action: params.action,
+            reply,
+        },
+    );
+    Box::pin(async move { Reply::json(&answer.await.unwrap_or(false)) })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BridgeParams {
     tab: String,
     seq: u64,
     method: String,
+    spawn_id: Option<u64>,
     #[serde(default, deserialize_with = "keep_null")]
     params: Option<Box<RawValue>>,
     timeout_ms: Option<u64>,
@@ -407,6 +436,7 @@ fn bridge_request(call: Call) -> Answer {
         &params.tab,
         params.seq,
         Command::Bridge {
+            spawn_id: params.spawn_id,
             method: params.method,
             params: params.params,
             timeout: params.timeout_ms.map(Duration::from_millis),

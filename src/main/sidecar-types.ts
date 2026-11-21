@@ -15,6 +15,15 @@ import type { SidecarStartGate } from "./sidecar";
  */
 export const VIEW_ENDED_EVENT = "viewEnded";
 
+/** A single local omp spawn. None of its operations may target a replacement in the same tab. */
+export interface DesktopSlotProcess {
+	readonly client: Pick<RpcClient, "command">;
+	readonly exited: Promise<boolean>;
+	/** Rechecks still-missing evidence for this spawn (e.g. the body outliving its launcher). */
+	gone(): boolean;
+	stop(restart: boolean): void;
+}
+
 /**
  * What the pool, ipc.ts and the host-tool executor need from a tab's sidecar:
  * the local SidecarManager, a RemoteSidecar whose omp runs on a paired host, or a HostedTabView of the omp
@@ -81,6 +90,7 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	setStartGate?(gate: SidecarStartGate): void;
 	/** Local sidecars: resolves once the omp process has exited. Call before dispose(). */
 	whenExited?(): Promise<void>;
+	desktopSlotProcess?(owner: number, acquire: boolean): DesktopSlotProcess | null;
 	/**
 	 * Remote sidecars and hosted views: the user's Cancel on the waiting row or on a scheduled retry. The host (or, for a
 	 * device's view of a window's tab, this computer's resume rules) holds that wait; a remote sidecar rejects

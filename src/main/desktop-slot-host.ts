@@ -1,17 +1,10 @@
-/**
- * The desktop slot's wiring (rules in desktop-slot.ts): which sidecar is which session, the bridge's three frames
- * (`desktop_slot_acquire` / `_touch` / `_release`, for main only: they leave the sidecar through `frame` and reach
- * no window), the two bridge methods main answers with (`desktop_slot.grant`, `desktop_slot.revoke`), a tab that
- * closes or whose process dies, and the state every window shows. One per app, for this computer's own omp
- * processes: the pool's local tabs and the tabs this host runs for paired devices (they drive this desktop too).
- * A tab on another computer is that computer's slot, never this one.
- */
+/** Routes the native slot's effects to a captured local omp spawn, never to its tab's replacement. */
 import { basename } from "node:path";
-import type { DesktopSlotState } from "../../resources/gui-bridge/desktop-slot-contracts";
+import type { DesktopSlotSession, DesktopSlotState } from "../../resources/gui-bridge/desktop-slot-contracts";
 import { DesktopSlot } from "./desktop-slot";
 import { DESKTOP_SLOT_BRIDGE_METHODS } from "./local/desktop-slot";
 import type { TabActivity } from "./sidecar-pool";
-import type { SidecarLike } from "./sidecar-types";
+import type { DesktopSlotProcess, SidecarLike } from "./sidecar-types";
 import { recordTurnStop } from "./turn-stop-log";
 
 /** What the host reads of the pool. */
@@ -34,22 +27,31 @@ const GRANT_COMMAND_TIMEOUT_MS = 10_000;
 /** A killed omp that has not exited by now is not confirmed gone (SIGTERM only: the slot stays held). */
 const KILL_CONFIRM_MS = 5_000;
 
+interface Execution {
+	key: string;
+	tabId: string;
+	title: string;
+	process: DesktopSlotProcess;
+	sidecar: SidecarLike;
+	exited: boolean;
+}
+
 export class DesktopSlotHost {
 	readonly #slot: DesktopSlot;
 	readonly #deps: DesktopSlotHostDeps;
-	/** The slot's id of a sidecar: the pool's tab id, or `host:<n>` for a tab this host runs for a paired device. */
-	readonly #idOf = new WeakMap<object, string>();
-	readonly #sidecars = new Map<string, SidecarLike>();
-	/** Last known title per id: a tab that is gone still shows under its name while it hands over. */
-	readonly #titles = new Map<string, string>();
-	#hosted = 0;
+	readonly #tabIds = new WeakMap<SidecarLike, string>();
+	readonly #closed = new WeakSet<SidecarLike>();
+	readonly #tabs = new Map<string, SidecarLike>();
+	readonly #keys = new WeakMap<DesktopSlotProcess, string>();
+	readonly #executions = new Map<string, Execution>();
+	#sequence = 0;
 	readonly #killConfirmMs: number;
 
 	constructor(deps: DesktopSlotHostDeps) {
 		this.#deps = deps;
 		this.#killConfirmMs = deps.killConfirmMs ?? KILL_CONFIRM_MS;
 		this.#slot = new DesktopSlot({
-			titleOf: id => this.#title(id),
+			titleOf: key => this.#title(key),
 			revoke: (id, reason) =>
 				this.#call(id, DESKTOP_SLOT_BRIDGE_METHODS.revoke, { reason }, REVOKE_COMMAND_TIMEOUT_MS),
 			kill: id => this.#kill(id),
@@ -60,34 +62,56 @@ export class DesktopSlotHost {
 					() => undefined,
 				);
 			},
-			onChange: state => deps.broadcast(state),
+			onChange: state => deps.broadcast(this.#view(state)),
 		});
 	}
 
 	state(): DesktopSlotState {
-		return this.#slot.state();
+		return this.#view(this.#slot.state());
 	}
 
 	/** A pool tab's sidecar exists (pool acquire); tabs on a paired host are that host's slot. */
 	attachSidecar(tabId: string, sidecar: SidecarLike): void {
 		if (sidecar.device) return;
-		this.#track(tabId, sidecar);
+		this.#tabIds.set(sidecar, tabId);
+		this.#tabs.set(tabId, sidecar);
 	}
 
 	/** The pool's tab activity: a released tab hands the slot on (revoking it first when it held it). */
 	observeActivity(activity: TabActivity): void {
 		if (activity.type !== "released") return;
-		const id = activity.tabId;
-		if (!this.#sidecars.has(id)) return;
-		void this.#slot.closed(id).finally(() => {
-			this.#sidecars.delete(id);
-			this.#titles.delete(id);
-		});
+		const sidecar = this.#tabs.get(activity.tabId);
+		if (!sidecar) return;
+		this.#closed.add(sidecar);
+		this.#tabs.delete(activity.tabId);
+		for (const entry of this.#executions.values()) {
+			if (entry.sidecar === sidecar) void this.#slot.closed(entry.key);
+		}
 	}
 
 	/** The sidecar factory's hook: the bridge's slot frames of one omp process. */
 	frame(sidecar: SidecarLike, frame: Record<string, unknown>): void {
-		const id = this.#idOf.get(sidecar) ?? this.#trackHosted(sidecar);
+		if (sidecar.device) return;
+		const acquire = frame.type === "desktop_slot_acquire";
+		if (acquire && (this.#closed.has(sidecar) || typeof frame.requestId !== "string")) return;
+		const pid = frame.processId;
+		if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) return;
+		const process = sidecar.desktopSlotProcess?.(pid, acquire);
+		if (!process) return;
+		let id = this.#keys.get(process);
+		if (!id) {
+			if (!acquire) return;
+			id = `omp:${++this.#sequence}`;
+			const tabId = this.#tabIds.get(sidecar) ?? `host:${this.#sequence}`;
+			this.#tabIds.set(sidecar, tabId);
+			const entry = { key: id, tabId, sidecar, process, title: basename(sidecar.cwd) || sidecar.cwd, exited: false };
+			this.#keys.set(process, id);
+			this.#executions.set(id, entry);
+			void process.exited.then(gone => {
+				if (gone) this.#exited(entry);
+			});
+		}
+		if (this.#executions.get(id)?.exited !== false) return;
 		switch (frame.type) {
 			case "desktop_slot_acquire":
 				if (typeof frame.requestId === "string") this.#slot.acquire(id, frame.requestId);
@@ -105,13 +129,10 @@ export class DesktopSlotHost {
 	async stop(): Promise<void> {
 		const holder = this.#slot.state().holder;
 		if (!holder) return;
-		this.#deps.pool.noteStopped(holder.tabId);
-		recordTurnStop({ command: "abort", tab: holder.tabId, by: "desktop-slot", surface: "screen-stop" });
-		this.#sidecars
-			.get(holder.tabId)
-			?.rpcClient?.command({ type: "abort" })
-			.catch(() => undefined);
-		await this.#slot.stop(holder.tabId);
+		const entry = this.#executions.get(holder.tabId);
+		if (!entry) return;
+		this.#stopProcess(entry, false);
+		await this.#slot.stop(entry.key);
 	}
 
 	/** The user's "try again" on a revoke-failed holder. */
@@ -126,23 +147,22 @@ export class DesktopSlotHost {
 
 	/** Abort the session and end its omp process; true only once that process has exited. */
 	async #kill(id: string): Promise<boolean> {
-		const sidecar = this.#sidecars.get(id);
-		if (!sidecar) return true;
-		const exited = sidecar.whenExited?.();
-		if (!exited) return false;
-		this.#deps.pool.noteStopped(id);
-		recordTurnStop({ command: "abort", tab: id, by: "desktop-slot", surface: "screen-kill" });
-		sidecar.rpcClient?.command({ type: "abort" }).catch(() => undefined);
-		// Ends the child with SIGTERM and starts the tab's omp afresh, as the tab's own restart does.
-		sidecar.restart();
+		const entry = this.#executions.get(id);
+		if (!entry) return false;
+		if (entry.process.gone()) {
+			this.#exited(entry);
+			return true;
+		}
+		this.#stopProcess(entry, true);
 		let timer: NodeJS.Timeout | undefined;
 		const gone = await Promise.race([
-			exited.then(() => true),
+			entry.process.exited,
 			new Promise<boolean>(resolve => {
 				timer = setTimeout(() => resolve(false), this.#killConfirmMs);
 			}),
 		]);
 		clearTimeout(timer);
+		if (gone) this.#exited(entry);
 		return gone;
 	}
 
@@ -150,46 +170,47 @@ export class DesktopSlotHost {
 		this.#slot.dispose();
 	}
 
-	#track(id: string, sidecar: SidecarLike): void {
-		this.#idOf.set(sidecar, id);
-		this.#sidecars.set(id, sidecar);
-		// The process whose exit proves it is gone: the current child, re-read whenever the sidecar is ready (a status
-		// other than ready arrives after the manager already forgot its child, and a restart's `starting` comes before
-		// the old child has exited).
-		let exited: Promise<void> = sidecar.whenExited?.() ?? Promise.resolve();
-		sidecar.on("status", (payload: { status: string }) => {
-			if (payload.status === "ready") {
-				exited = sidecar.whenExited?.() ?? Promise.resolve();
-				return;
-			}
-			// `error` over a live child is a failed health check, not an exit. Anything else hands the slot on only once
-			// the old process has really exited: a holder whose revoke failed may still be driving the desktop.
-			if (payload.status === "error") return;
-			void exited.then(() => this.#slot.crashed(id));
+	#exited(entry: Execution): void {
+		if (entry.exited) return;
+		entry.exited = true;
+		void this.#slot.crashed(entry.key).then(() => this.#executions.delete(entry.key));
+	}
+
+	#stopProcess(entry: Execution, restart: boolean): void {
+		if (entry.sidecar.rpcClient !== entry.process.client) return;
+		this.#deps.pool.noteStopped(entry.tabId);
+		recordTurnStop({
+			command: "abort",
+			tab: entry.tabId,
+			by: "desktop-slot",
+			surface: restart ? "screen-kill" : "screen-stop",
 		});
+		entry.process.stop(restart);
 	}
 
-	#trackHosted(sidecar: SidecarLike): string {
-		const id = `host:${++this.#hosted}`;
-		this.#titles.set(id, basename(sidecar.cwd) || sidecar.cwd);
-		this.#track(id, sidecar);
-		return id;
+	#title(key: string): string {
+		const entry = this.#executions.get(key);
+		if (!entry) return "";
+		entry.title = this.#deps.pool.tabFacts(entry.tabId)?.title ?? entry.title;
+		return entry.title;
 	}
 
-	#title(id: string): string {
-		const title = this.#deps.pool.tabFacts(id)?.title;
-		if (title) this.#titles.set(id, title);
-		else if (!this.#titles.has(id)) {
-			const cwd = this.#sidecars.get(id)?.cwd;
-			if (cwd) this.#titles.set(id, basename(cwd) || cwd);
-		}
-		return this.#titles.get(id) ?? "";
+	#view(state: DesktopSlotState): DesktopSlotState {
+		const session = <T extends DesktopSlotSession>(row: T): T => ({
+			...row,
+			tabId: this.#executions.get(row.tabId)?.tabId ?? row.tabId,
+		});
+		return { holder: state.holder && session(state.holder), queue: state.queue.map(session) };
 	}
 
 	async #call(id: string, method: string, params: unknown, timeoutMs: number): Promise<void> {
-		const client = this.#sidecars.get(id)?.rpcClient;
-		if (!client) throw new Error("That session's process is gone.");
-		const response = await client.command({ type: "desktop_slot_bridge", method, params }, timeoutMs);
+		const entry = this.#executions.get(id);
+		if (!entry) throw new Error("That session's process is gone.");
+		if (entry.process.gone()) {
+			this.#exited(entry);
+			throw new Error("That session's process exited.");
+		}
+		const response = await entry.process.client.command({ type: "desktop_slot_bridge", method, params }, timeoutMs);
 		if (!response.success) throw new Error(response.error ?? `${method} failed`);
 	}
 }

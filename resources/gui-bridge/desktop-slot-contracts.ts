@@ -2,13 +2,12 @@
  * The desktop slot: one omp session at a time drives the computer's desktop (input, focus, the
  * observe → act → verify span). Stock lacks this across sessions: its native layer only refuses an input
  * while another desktop operation owns input/focus control ("no input was sent"), it neither queues nor spans
- * a session's observe → act → verify sequence, and each omp process has its own ComputerSupervisor. So main owns
- * one slot per computer and the bridge (desktop-slot.ts) asks it through frames; hosted (remote) tabs use their
- * host's own slot, since the host's main owns that desktop.
+ * a session's observe → act → verify sequence, and each omp process has its own ComputerSupervisor. The host's
+ * native core owns one slot per computer. Hosted (remote) tabs use their host's slot.
  *
  * No omp imports: shared by the bridge, main and the renderer.
  *
- * Bridge → main frames (`emit`; main adds the tab):
+ * Bridge → main frames (`emit`; each carries the sending omp's `processId`, including behind a launcher):
  *   { type: "desktop_slot_acquire", requestId }   an acting run wants the slot (main replies by calling `desktop_slot.grant`)
  *   { type: "desktop_slot_touch" }                 progress by the holder (a run started or ended): resets the lease
  *   { type: "desktop_slot_release", reason }       the holder lets go (no revoke needed: the bridge already did it)

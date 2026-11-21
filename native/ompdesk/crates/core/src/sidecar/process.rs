@@ -41,6 +41,8 @@ pub struct Exit {
 /// A started omp: its shared handle and the pipes the lane reads.
 pub struct Started {
     pub proc: Arc<Proc>,
+    /// True only for an OS wait status, not the synthetic failure the crash reporter also consumes.
+    pub confirmed_exit: watch::Receiver<bool>,
     pub stdout: ChildStdout,
     pub stderr: ChildStderr,
 }
@@ -162,6 +164,7 @@ pub fn start(
     tokio::spawn(write_stdin(stdin, written));
     let (signals, mut asked) = mpsc::unbounded_channel::<Signal>();
     let (exit, exited) = watch::channel(false);
+    let (proof, confirmed_exit) = watch::channel(false);
     tokio::spawn(async move {
         let status = loop {
             tokio::select! {
@@ -169,21 +172,42 @@ pub fn start(
                 Some(Signal::Term) = asked.recv() => terminate(&mut child),
             }
         };
-        let info = match status {
-            Ok(status) => exit_of(status),
-            Err(_) => Exit {
-                code: Some(1),
-                signal: None,
-            },
-        };
+        let info = record_wait(status, &proof);
         exit.send_replace(true);
         on_exit(info);
     });
     Ok(Started {
         proc: Proc::new(pid, exited, lines, signals, timing),
+        confirmed_exit,
         stdout,
         stderr,
     })
+}
+
+fn record_wait(
+    status: std::io::Result<std::process::ExitStatus>,
+    proof: &watch::Sender<bool>,
+) -> Exit {
+    match status {
+        Ok(status) => {
+            proof.send_replace(true);
+            exit_of(status)
+        }
+        Err(_) => Exit {
+            code: Some(1),
+            signal: None,
+        },
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_wait_error_reports_a_crash_but_never_confirms_the_child_exited() {
+    let (proof, receipt) = watch::channel(false);
+    let report = record_wait(Err(std::io::Error::other("failed to reap child")), &proof);
+    drop(proof);
+    assert_eq!(report.code, Some(1));
+    assert!(!*receipt.borrow());
 }
 
 #[cfg(unix)]

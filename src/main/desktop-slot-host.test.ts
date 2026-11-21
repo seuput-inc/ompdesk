@@ -1,9 +1,11 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { DesktopSlotState } from "../../resources/gui-bridge/desktop-slot-contracts";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
+import { stopCore } from "./core/process";
+import { desktopExitReceipt } from "./desktop-slot-exit";
 import { DesktopSlotHost } from "./desktop-slot-host";
-import type { SidecarLike } from "./sidecar-types";
+import type { DesktopSlotProcess, SidecarLike } from "./sidecar-types";
 
 interface BridgeCall {
 	tab: string;
@@ -16,7 +18,8 @@ class FakeSidecar extends EventEmitter {
 	aborted = 0;
 	restarts = 0;
 	/** The omp process: its exit is what proves the session is gone. */
-	readonly exit = Promise.withResolvers<void>();
+	readonly exit = Promise.withResolvers<boolean>();
+	readonly execution: DesktopSlotProcess;
 	/** Whether a restart ends the process (SIGTERM honoured). */
 	exitsOnRestart = true;
 	readonly rpcClient: { command(command: RpcCommand): Promise<RpcResponse> };
@@ -43,23 +46,39 @@ class FakeSidecar extends EventEmitter {
 				return { type: "response", success: true } as RpcResponse;
 			},
 		};
+		this.execution = {
+			client: this.rpcClient,
+			exited: this.exit.promise,
+			gone: () => false,
+			stop: restart => {
+				this.aborted++;
+				if (restart) this.restart();
+			},
+		};
 	}
 
-	whenExited(): Promise<void> {
-		return this.exit.promise;
+	desktopSlotProcess(): DesktopSlotProcess {
+		return this.execution;
 	}
 
 	restart(): void {
 		this.restarts++;
-		if (this.exitsOnRestart) this.exit.resolve();
+		if (this.exitsOnRestart) this.exit.resolve(true);
 	}
 
 	/** The process exits, then the manager reports it. */
 	die(status = "exited"): void {
-		this.exit.resolve();
+		this.exit.resolve(true);
 		this.emit("status", { status });
 	}
 }
+
+const hosts = new Set<DesktopSlotHost>();
+afterEach(() => {
+	for (const host of hosts) host.dispose();
+	hosts.clear();
+});
+afterAll(stopCore);
 
 class World {
 	calls: BridgeCall[] = [];
@@ -77,6 +96,10 @@ class World {
 		broadcast: state => this.states.push(state),
 	});
 
+	constructor() {
+		hosts.add(this.host);
+	}
+
 	tab(tabId: string, title: string): FakeSidecar {
 		const sidecar = new FakeSidecar(`/work/${tabId}`, this, tabId);
 		this.titles.set(tabId, title);
@@ -85,7 +108,7 @@ class World {
 	}
 
 	frame(sidecar: FakeSidecar, frame: Record<string, unknown>): void {
-		this.host.frame(sidecar as unknown as SidecarLike, frame);
+		this.host.frame(sidecar as unknown as SidecarLike, { processId: 123, ...frame });
 	}
 }
 
@@ -205,7 +228,7 @@ describe("DesktopSlotHost", () => {
 		a.emit("status", { status: "starting" });
 		await flush();
 		expect(world.host.state().holder?.tabId).toBe("a");
-		a.exit.resolve();
+		a.exit.resolve(true);
 		await flush();
 		expect(world.host.state().holder?.tabId).toBe("b");
 	});
@@ -243,6 +266,43 @@ describe("DesktopSlotHost", () => {
 		expect(world.host.state().holder?.tabId).toBe("b");
 	});
 
+	it("keeps a closed owner when revoke and its exit watcher both fail", async () => {
+		const world = new World();
+		const a = world.tab("a", "A");
+		const b = world.tab("b", "B");
+		world.frame(a, { type: "desktop_slot_acquire", requestId: "a1" });
+		world.frame(b, { type: "desktop_slot_acquire", requestId: "b1" });
+		world.revokeFails = true;
+		world.host.observeActivity({ type: "released", tabId: "a" });
+		a.exit.resolve(false);
+		await flush();
+		expect(await world.host.killHolder()).toBe(false);
+		expect(world.host.state().holder).toMatchObject({ tabId: "a", revokeFailed: true });
+		expect(world.calls.some(call => call.tab === "b")).toBe(false);
+		world.revokeFails = false;
+		world.host.retry();
+		await flush();
+		expect(world.host.state().holder?.tabId).toBe("b");
+	});
+
+	it("never uses an old spawn's late exit to free a replacement in the same tab", async () => {
+		const world = new World();
+		const old = world.tab("a", "A");
+		world.frame(old, { type: "desktop_slot_acquire", requestId: "old" });
+		const replacement = world.tab("a", "A");
+		world.frame(replacement, { type: "desktop_slot_acquire", requestId: "new" });
+		expect(world.calls).toEqual([
+			{ tab: "a", method: "desktop_slot.grant", params: { requestId: "old", waited: false } },
+		]);
+		world.frame(old, { type: "desktop_slot_release" });
+		const b = world.tab("b", "B");
+		world.frame(b, { type: "desktop_slot_acquire", requestId: "b1" });
+		old.exit.resolve(true);
+		await flush();
+		expect(world.calls.at(-1)).toMatchObject({ tab: "a", params: { requestId: "new", waited: true } });
+		expect(world.host.state().queue.map(row => row.tabId)).toEqual(["b"]);
+	});
+
 	it("does nothing on stop when nobody holds the slot", async () => {
 		const world = new World();
 		await world.host.stop();
@@ -275,5 +335,86 @@ describe("DesktopSlotHost", () => {
 		const a = world.tab("a", "A");
 		world.frame(a, { type: "desktop_slot_acquire" });
 		expect(world.host.state().holder).toBeNull();
+	});
+});
+
+describe("desktop process exit evidence", () => {
+	const identity = { launcher: 2, owner: 3, core: 1, wrapped: true };
+
+	it("does not grant the waiter on cmd.exe exit while the bridge process lives or cannot be inspected", async () => {
+		const world = new World();
+		const a = world.tab("a", "A");
+		const b = world.tab("b", "B");
+		let body: "present" | "absent" | "unknown" = "present";
+		Object.assign(
+			a.execution,
+			desktopExitReceipt(
+				identity,
+				a.exit.promise,
+				() => false,
+				() => body,
+			),
+		);
+		world.frame(a, { type: "desktop_slot_acquire", requestId: "a1" });
+		world.frame(b, { type: "desktop_slot_acquire", requestId: "b1" });
+		world.revokeFails = true;
+		await world.host.stop();
+		a.exit.resolve(true);
+		await flush();
+		for (const state of ["unknown", "present"] as const) {
+			body = state; // Access denied, then a live (possibly reused) pid.
+			expect(await world.host.killHolder()).toBe(false);
+			expect(world.host.state().holder?.tabId).toBe("a");
+		}
+		body = "absent";
+		expect(await world.host.killHolder()).toBe(true);
+		expect(world.host.state().holder?.tabId).toBe("b");
+	});
+
+	it("requires the original core and both reported processes gone after a broken watch", async () => {
+		const present = new Set([1, 2, 3]);
+		let replaced = false;
+		const receipt = desktopExitReceipt(
+			identity,
+			Promise.reject(new Error("link lost")),
+			() => replaced,
+			pid => (present.has(pid) ? "present" : "absent"),
+		);
+		expect(await receipt.exited).toBe(false);
+		present.delete(3);
+		expect(receipt.gone()).toBe(false);
+		replaced = true;
+		present.delete(2);
+		expect(receipt.gone()).toBe(false);
+		present.delete(1);
+		expect(receipt.gone()).toBe(true);
+	});
+
+	it("never upgrades a failed wait, an unobserved body, or a wrapper reporting itself into confirmation", async () => {
+		let state: "present" | "unknown" | "absent" = "present";
+		const failed = desktopExitReceipt(
+			identity,
+			Promise.resolve(false),
+			() => true,
+			() => state,
+		);
+		const wrapper = desktopExitReceipt(
+			{ ...identity, owner: identity.launcher },
+			Promise.resolve(true),
+			() => true,
+			() => state,
+		);
+		state = "unknown";
+		const denied = desktopExitReceipt(
+			identity,
+			Promise.resolve(true),
+			() => true,
+			() => state,
+		);
+		state = "absent";
+		for (const receipt of [failed, wrapper, denied]) {
+			expect(await receipt.exited).toBe(false);
+			expect(receipt.gone()).toBe(false);
+		}
 	});
 });

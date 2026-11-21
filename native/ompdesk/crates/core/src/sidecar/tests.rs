@@ -114,6 +114,13 @@ fn fake_omp(mode: &str) {
                 reply(json!({ "sessionId": "s1", "sessionFile": file }));
             }
             "new_session" | "switch_session" => reply(json!({ "cancelled": false })),
+            "slot_on_stdout" => {
+                say(
+                    &json!({"type": "desktop_slot_touch", "processId": std::process::id()})
+                        .to_string(),
+                );
+                reply(json!({}));
+            }
             "exit0" => {
                 reply(json!({}));
                 std::process::exit(0);
@@ -225,6 +232,14 @@ async fn bridge_connection(stream: BoxedIo) {
         line.clear();
         let method = request["method"].as_str().unwrap_or("");
         note(&format!("bridge {method}"));
+        if method == "fixture.desktopTouch" {
+            let event =
+                json!({"event": {"type":"desktop_slot_touch","processId":std::process::id()}});
+            write
+                .write_all(format!("{event}\n").as_bytes())
+                .await
+                .unwrap();
+        }
         let result = if method == "sessions.attach_entry_ids" {
             let messages: Vec<Value> = request["params"]["messages"]
                 .as_array()
@@ -615,6 +630,77 @@ fn no_queue() -> Value {
 }
 
 // ---- tests --------------------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn desktop_receipts_and_commands_never_cross_a_restarted_spawn() {
+    let mut rig = Rig::new("desktop-receipt", "bridge").await;
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let first = rig.event("sidecar.spawned").unwrap().data["spawnId"]
+        .as_u64()
+        .unwrap();
+    rig.tab_call(
+        "sidecar.command",
+        json!({"command":{"type":"slot_on_stdout"}}),
+    )
+    .await
+    .unwrap();
+    rig.tab_call(
+        "sidecar.bridge",
+        json!({"spawnId":first,"method":"fixture.desktopTouch"}),
+    )
+    .await
+    .unwrap();
+    let touch = rig
+        .until("the private bridge's desktop touch", |event| {
+            event.name == "sidecar.frame"
+                && serde_json::from_slice::<Value>(&event.bin)
+                    .is_ok_and(|frame| frame["type"] == "desktop_slot_touch")
+        })
+        .await;
+    assert_eq!(touch.data["desktopSpawnId"], first);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&touch.bin).unwrap()["processId"],
+        rig.event("sidecar.spawned").unwrap().data["pid"]
+    );
+    let seq = rig.seq();
+    let exit = rig.post(
+        "sidecar.desktopProcess",
+        json!({"tab": rig.tab, "seq": seq, "spawnId": first, "action":"watch"}),
+    );
+    rig.tab_call(
+        "sidecar.desktopProcess",
+        json!({"spawnId": first, "action": "restart"}),
+    )
+    .await
+    .unwrap();
+    rig.status("ready").await;
+    assert_eq!(settle(exit).await.unwrap(), true);
+    assert_eq!(
+        rig.tab_call(
+            "sidecar.desktopProcess",
+            json!({"spawnId": first, "action":"restart"})
+        )
+        .await
+        .unwrap(),
+        false
+    );
+    let error = rig
+        .tab_call(
+            "sidecar.bridge",
+            json!({"spawnId": first, "method": "desktop_slot.revoke"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error["code"], "bridge_disconnected");
+    let state = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert_eq!(state["response"]["success"], true);
+    finish(rig).await;
+}
 
 #[tokio::test]
 async fn a_started_tab_negotiates_answers_get_state_and_reads_ready() {
