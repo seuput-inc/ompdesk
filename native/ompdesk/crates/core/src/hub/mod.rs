@@ -41,6 +41,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::server::Fault;
 
+mod desktop_slot;
 mod listen;
 mod probe;
 #[cfg(test)]
@@ -96,6 +97,7 @@ pub struct Kind {
 fn kinds() -> &'static [Kind] {
     &[
         probe::KIND,
+        desktop_slot::KIND,
         crate::pool::KIND,
         crate::pool::layout::KIND,
         crate::resume::RESUME_KIND,

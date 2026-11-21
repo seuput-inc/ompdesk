@@ -84,7 +84,13 @@ pub enum Command {
         reply: StockReply,
     },
     Send(Box<RawValue>),
+    DesktopProcess {
+        spawn_id: u64,
+        action: DesktopProcessAction,
+        reply: oneshot::Sender<bool>,
+    },
     Bridge {
+        spawn_id: Option<u64>,
         method: String,
         params: Option<Box<RawValue>>,
         timeout: Option<Duration>,
@@ -94,10 +100,21 @@ pub enum Command {
     WhenExited(oneshot::Sender<()>),
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopProcessAction {
+    Watch,
+    Abort,
+    Restart,
+}
+
 impl Command {
     /// What a command is answered when there is no lane to apply it (the tab is gone).
     pub fn refuse(self) {
         match self {
+            Command::DesktopProcess { reply, .. } => {
+                let _ = reply.send(false);
+            }
             Command::Stock { reply, .. } => {
                 let _ = reply.send(Err(disconnected()));
             }
@@ -164,6 +181,7 @@ pub enum Msg {
     Frame {
         spawn_id: u64,
         frame: Frame,
+        bridge: bool,
     },
     BridgeLost {
         spawn_id: u64,
@@ -335,6 +353,7 @@ struct Pending {
 struct Running {
     spawn_id: u64,
     proc: Arc<Proc>,
+    confirmed_exit: watch::Receiver<bool>,
     pending: Vec<Pending>,
     next_id: u64,
     bridge: Bridge,
@@ -721,13 +740,30 @@ impl Lane {
             Msg::Gated { ask, cwd } => self.on_gated(ask, cwd),
             Msg::SlowLog { ask, lines } => self.on_slow_log(ask, lines),
             Msg::SessionFreed { ask, free } => self.on_session_freed(ask, free),
-            Msg::Frame { spawn_id, frame } => {
+            Msg::Frame {
+                spawn_id,
+                frame,
+                bridge,
+            } => {
                 if self
                     .running
                     .as_ref()
                     .is_some_and(|r| r.spawn_id == spawn_id)
                 {
-                    self.route_frame(frame);
+                    if matches!(
+                        frame.ty.as_deref(),
+                        Some(
+                            "desktop_slot_acquire" | "desktop_slot_touch" | "desktop_slot_release"
+                        )
+                    ) {
+                        if bridge && !self.quiet {
+                            let data = json!({"tab": self.tab, "cmd": self.applied, "desktopSpawnId": spawn_id});
+                            super::tap(&self.tab, "sidecar.frame", &data, Some(&frame.raw));
+                            self.events.send_bin("sidecar.frame", &data, frame.raw);
+                        }
+                    } else {
+                        self.route_frame(frame);
+                    }
                 }
             }
             Msg::BridgeLost { spawn_id } => {
@@ -822,13 +858,48 @@ impl Lane {
                 line.push(b'\n');
                 self.write_line(line);
             }
+            Command::DesktopProcess {
+                spawn_id,
+                action,
+                reply,
+            } => {
+                let Some(running) = self.running.as_ref().filter(|r| r.spawn_id == spawn_id) else {
+                    let _ = reply.send(false);
+                    return;
+                };
+                match action {
+                    DesktopProcessAction::Watch => {
+                        let mut proof = running.confirmed_exit.clone();
+                        tokio::spawn(async move {
+                            let confirmed = proof.wait_for(|gone| *gone).await.is_ok();
+                            let _ = reply.send(confirmed);
+                        });
+                    }
+                    DesktopProcessAction::Abort | DesktopProcessAction::Restart => {
+                        self.internal(
+                            json!({ "type": "abort" }),
+                            Waiter::Ignore,
+                            Some(COMMAND_TIMEOUT),
+                        );
+                        if matches!(action, DesktopProcessAction::Restart) {
+                            self.restart(None, None);
+                        }
+                        let _ = reply.send(true);
+                    }
+                }
+            }
             Command::Bridge {
+                spawn_id,
                 method,
                 params,
                 timeout,
                 reply,
             } => {
-                let Some(running) = &self.running else {
+                let Some(running) = self
+                    .running
+                    .as_ref()
+                    .filter(|r| spawn_id.is_none_or(|id| id == r.spawn_id))
+                else {
                     let _ = reply.send(Err(no_bridge()));
                     return;
                 };
@@ -1105,7 +1176,11 @@ impl Lane {
             tokio::spawn(async move {
                 pump_stdout(started.stdout, |line| {
                     if let Some(frame) = decoder.line(line) {
-                        let _ = inbox.send(Msg::Frame { spawn_id, frame });
+                        let _ = inbox.send(Msg::Frame {
+                            spawn_id,
+                            frame,
+                            bridge: false,
+                        });
                     }
                 })
                 .await;
@@ -1142,7 +1217,11 @@ impl Lane {
             let inbox = inbox.clone();
             Arc::new(move |out| {
                 let _ = inbox.send(match out {
-                    Out::Event(frame) => Msg::Frame { spawn_id, frame },
+                    Out::Event(frame) => Msg::Frame {
+                        spawn_id,
+                        frame,
+                        bridge: true,
+                    },
                     Out::Lost => Msg::BridgeLost { spawn_id },
                 });
             })
@@ -1151,6 +1230,7 @@ impl Lane {
         self.running = Some(Running {
             spawn_id,
             proc: Arc::clone(&proc),
+            confirmed_exit: started.confirmed_exit,
             pending: Vec::new(),
             next_id: 0,
             bridge,
@@ -1158,7 +1238,10 @@ impl Lane {
             drained: drain_wait,
         });
         self.arm_slow_timer(generation);
-        self.emit("sidecar.spawned", json!({ "pid": proc.pid }));
+        self.emit(
+            "sidecar.spawned",
+            json!({ "pid": proc.pid, "spawnId": spawn_id, "wrapped": cfg!(windows) && start.shell }),
+        );
     }
 
     fn arm_slow_timer(&mut self, generation: u64) {

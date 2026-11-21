@@ -37,7 +37,7 @@ const ORIGINAL = Symbol.for("ompdesk.desktopSlot.originalRun");
 const controllers = new Set<SlotController>();
 
 const core = new DesktopSlotCore({
-	emit,
+	emit: frame => emit({ ...frame, processId: process.pid }),
 	newId: () => crypto.randomUUID(),
 	async revokeControllers() {
 		// Every controller is tried, but one that rejects makes the whole revoke fail: the slot is handed on only when

@@ -31,6 +31,7 @@ import { type LowerAgentPriority, lowerAgentPriority } from "./agent-priority";
 import { isNoModelBootFailure } from "./boot-model";
 import { withoutControlEnv } from "./control-socket/env";
 import { CoreError, core } from "./core/process";
+import { desktopExitReceipt } from "./desktop-slot-exit";
 import { EventBatcher } from "./event-batcher";
 import { withoutFrameBookkeeping } from "./frame-bookkeeping";
 import { localHandlerFor, runLocalCommand } from "./local";
@@ -54,6 +55,7 @@ import { VISUALIZE_DEFINITION } from "./preview/visuals";
 import { createLinkEventDecoder } from "./remote/link-events";
 import { RpcClient, RpcTimeoutError } from "./rpc-client";
 import type { SessionProcesses, SessionProcessHandle } from "./session-processes";
+import type { DesktopSlotProcess } from "./sidecar-types";
 import { tookStep } from "./slow-steps";
 import { needsShell, spawnArgs, spawnCommand } from "./spawn";
 import { TERMINAL_READ_DEFINITION } from "./terminal/agent-tool";
@@ -477,6 +479,9 @@ interface LaneEvent {
 	tab: string;
 	cmd: number;
 }
+interface FrameEvent extends LaneEvent {
+	desktopSpawnId?: number;
+}
 interface LaneAsk extends LaneEvent {
 	ask: number;
 	/** The generation of the core that asked (`CoreProcess.generation`), added when the ask is taken from the listener. */
@@ -509,6 +514,8 @@ interface StatusEvent extends LaneEvent {
 }
 interface PidEvent extends LaneEvent {
 	pid: number;
+	spawnId: number;
+	wrapped: boolean;
 }
 interface SessionEvent extends LaneEvent {
 	identity: SidecarSessionIdentity | null;
@@ -599,9 +606,20 @@ class BridgeRelay implements BridgeClient {
 	readonly #tab: string;
 	readonly #nextSeq: () => number;
 
-	constructor(tab: string, nextSeq: () => number) {
+	readonly generation: number;
+	readonly spawnId: number;
+
+	constructor(
+		tab: string,
+		nextSeq: () => number,
+		generation: number,
+		spawnId: number,
+		readonly wrapped: boolean,
+	) {
 		this.#tab = tab;
 		this.#nextSeq = nextSeq;
+		this.generation = generation;
+		this.spawnId = spawnId;
 	}
 
 	/** The omp this relay was made for is gone: a request no longer reaches the tab's next omp. */
@@ -615,14 +633,25 @@ class BridgeRelay implements BridgeClient {
 	 * request waits as long as the bridge takes (a user prompt, a login).
 	 */
 	async request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T> {
-		if (this.#closed) throw new LocalCommandError("GUI bridge closed", "bridge_unavailable");
+		if (this.#closed || !core().pid || core().generation !== this.generation)
+			throw new LocalCommandError("GUI bridge closed", "bridge_unavailable");
 		const timeoutMs = options?.timeoutMs;
 		try {
 			// `seq` is taken before the first await: messages leave in the order main makes them.
 			const { result } = await core().call<{ result: T }>(
 				"sidecar.bridge",
-				{ tab: this.#tab, seq: this.#nextSeq(), method, params, ...(timeoutMs === undefined ? {} : { timeoutMs }) },
-				{ timeoutMs: timeoutMs === undefined ? NO_DEADLINE_MS : timeoutMs + CORE_ANSWER_SLACK_MS },
+				{
+					tab: this.#tab,
+					seq: this.#nextSeq(),
+					spawnId: this.spawnId,
+					method,
+					params,
+					...(timeoutMs === undefined ? {} : { timeoutMs }),
+				},
+				{
+					timeoutMs: timeoutMs === undefined ? NO_DEADLINE_MS : timeoutMs + CORE_ANSWER_SLACK_MS,
+					generation: this.generation,
+				},
 			);
 			return result.result;
 		} catch (error) {
@@ -663,6 +692,7 @@ export class SidecarManager extends EventEmitter {
 	#alive = false;
 	#pid: number | undefined;
 	#rpcClient: RpcClient | null = null;
+	#desktopProcess: (DesktopSlotProcess & { owner: number }) | null = null;
 	/** The running omp's bridge; null while none runs. */
 	#bridge: BridgeRelay | null = null;
 	/** The last omp's bridge, kept until the next spawn: frames the lane releases after a stop still project their queues by it. */
@@ -942,6 +972,7 @@ export class SidecarManager extends EventEmitter {
 	/** The omp is gone from the mirror's view (stopped, or the core that ran it ended). */
 	#markGone(): void {
 		this.#alive = false;
+		this.#desktopProcess = null;
 		this.#pid = undefined;
 		this.#rpcClient?.retire();
 		this.#rpcClient = null;
@@ -970,11 +1001,11 @@ export class SidecarManager extends EventEmitter {
 			case "status":
 				return this.#onStatus(data as StatusEvent);
 			case "spawned":
-				return this.#onSpawned(data as PidEvent);
+				return this.#onSpawned(data as PidEvent, generation);
 			case "exited":
 				return this.#onExited(data);
 			case "frame":
-				return this.#onFrame(data, bin);
+				return this.#onFrame(data as FrameEvent, bin, generation);
 			case "answer":
 				return this.#onAnswer(data as AnswerEvent, bin);
 			case "session":
@@ -1038,7 +1069,7 @@ export class SidecarManager extends EventEmitter {
 		if (!echo) this.emit("status", payload);
 	}
 
-	#onSpawned(event: PidEvent): void {
+	#onSpawned(event: PidEvent, generation: number): void {
 		if (this.#staleOmp(event.cmd)) return;
 		const { pid } = event;
 		this.#markGone();
@@ -1051,7 +1082,7 @@ export class SidecarManager extends EventEmitter {
 		this.#pid = pid;
 		this.#session = null;
 		this.#processes?.setPid(pid);
-		const relay = new BridgeRelay(this.#tab, () => ++this.#seq);
+		const relay = new BridgeRelay(this.#tab, () => ++this.#seq, generation, event.spawnId, event.wrapped);
 		this.#bridge = relay;
 		this.#spawnRelay = relay;
 		this.#batcher = new EventBatcher(events => {
@@ -1200,7 +1231,7 @@ export class SidecarManager extends EventEmitter {
 	}
 
 	/** A frame omp wrote, or the bridge pushed, as the lane delivers it: after its hold, in order. */
-	#onFrame(event: LaneEvent, bin: Uint8Array | null): void {
+	#onFrame(event: FrameEvent, bin: Uint8Array | null, generation: number): void {
 		if (this.#staleOmp(event.cmd) || !bin) return;
 		let frame: unknown;
 		try {
@@ -1211,6 +1242,14 @@ export class SidecarManager extends EventEmitter {
 		if (typeof frame !== "object" || frame === null) return;
 		// Request bookkeeping no window reads leaves here, before any copy of the frame is made (frame-bookkeeping.ts).
 		let obj = withoutFrameBookkeeping(frame as Frame);
+		if (
+			obj.type === "desktop_slot_acquire" ||
+			obj.type === "desktop_slot_touch" ||
+			obj.type === "desktop_slot_release"
+		) {
+			const relay = this.#bridge;
+			if (!relay || relay.spawnId !== event.desktopSpawnId || relay.generation !== generation) return;
+		}
 		// Before anything in main reads it.
 		if (obj.type === "message_update")
 			[obj] = this.#rebuild.events([obj as unknown as AgentSessionEvent]) as unknown as Frame[];
@@ -1705,6 +1744,39 @@ export class SidecarManager extends EventEmitter {
 		this.#startGate = gate;
 		this.#ensureOpen();
 		this.#tell("sidecar.gate");
+	}
+
+	desktopSlotProcess(owner: number, acquire: boolean): DesktopSlotProcess | null {
+		if (this.#desktopProcess) return this.#desktopProcess.owner === owner ? this.#desktopProcess : null;
+		if (!acquire) return null;
+		const relay = this.#bridge;
+		const client = this.#rpcClient;
+		const pid = this.#pid;
+		const corePid = core().pid;
+		if (!relay || !client || !pid || !corePid || core().generation !== relay.generation) return null;
+		const call = async (action: "watch" | "abort" | "restart"): Promise<boolean> => {
+			if (this.#bridge !== relay || !core().pid || core().generation !== relay.generation) return false;
+			const answer = await core().call<boolean>(
+				"sidecar.desktopProcess",
+				{ tab: this.#tab, seq: ++this.#seq, spawnId: relay.spawnId, action },
+				{ generation: relay.generation, timeoutMs: NO_DEADLINE_MS },
+			);
+			return answer.result;
+		};
+		const receipt = desktopExitReceipt(
+			{ launcher: pid, owner, core: corePid, wrapped: relay.wrapped },
+			call("watch"),
+			() => core().generation !== relay.generation,
+		);
+		this.#desktopProcess = {
+			client,
+			owner,
+			...receipt,
+			stop: restart => {
+				void call(restart ? "restart" : "abort").catch(() => undefined);
+			},
+		};
+		return this.#desktopProcess;
 	}
 
 	/** Resolves once the current omp and every one this tab stopped before it have exited (at once when none runs). */

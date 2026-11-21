@@ -4519,7 +4519,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			appendMessage(result);
 			write({ type: "message_end", message: result });
 		});
-		pushBridgeEvent({ type: "desktop_slot_acquire", requestId: id });
+		pushBridgeEvent({ type: "desktop_slot_acquire", requestId: id, processId: process.pid });
 	};
 	const prompt = (message: string, respond: () => void, images: ImageContent[] = []) => {
 		respond();
@@ -4559,7 +4559,8 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			startDesktopActing();
 		} else if (message === "fixture desktop done") {
 			// The holder's turn ends: the bridge let go itself, so main needs no revoke.
-			if (desktopHolding) pushBridgeEvent({ type: "desktop_slot_release", reason: "turn_end" });
+			if (desktopHolding)
+				pushBridgeEvent({ type: "desktop_slot_release", reason: "turn_end", processId: process.pid });
 			desktopHolding = false;
 			endTurn([user]);
 		} else if (message.startsWith("fixture blocking tool:")) {

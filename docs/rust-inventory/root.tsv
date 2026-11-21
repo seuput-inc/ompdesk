@@ -227,10 +227,11 @@ src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that 
 src/main/deleted-sessions.ts	port	2	DeletedSessions loads and persists bounded per-device/path tombstones through AtomicSaver to prevent deleted sessions reopening.
 src/main/delivery-ledger.test.ts	tooling	-	Vitest suite: deliverOnce.
 src/main/delivery-ledger.ts	port	2	deliverOnce shares in-flight answers and retains accepted delivery IDs for bounded retry deduplication across tabs.
+src/main/desktop-slot-exit.ts	mixed	3	Desktop exit receipt: combines the spawn-bound native wait with read-only OS presence checks for the bridge process behind a launcher; move OS observations with the host.
 src/main/desktop-slot-host.test.ts	tooling	-	Vitest suite: DesktopSlotHost.
-src/main/desktop-slot-host.ts	port	3	DesktopSlotHost maps local and hosted session frames to slot requests and sends grant/revoke commands and window state.
+src/main/desktop-slot-host.ts	mixed	3	hub/desktop_slot.rs decides ownership. DesktopSlotHost still maps captured omp executions to UI tab ids, delivers bridge effects, records Stops and broadcasts state; remove with main IPC.
 src/main/desktop-slot.test.ts	tooling	-	Vitest suite: DesktopSlot.
-src/main/desktop-slot.ts	port	2	DesktopSlot owns the FIFO desktop lease, revoke timeout/retry and confirmed release/kill rules before the next grant. ipc.ts creates DesktopSlotHost, which constructs this class; desktop_slot/policy.rs on 8a5e1af8a is not the production implementation.
+src/main/desktop-slot.ts	native-client	3	DesktopSlot drives hub desktopSlot; core/src/hub/desktop_slot.rs owns FIFO, lease, revoke, retry and generation-specific confirmations. JS retains only the last acknowledged checkpoint and executes effects.
 src/main/diagnostic-bundle.test.ts	tooling	-	Vitest suite: saving through the dialog.
 src/main/diagnostic-bundle.ts	port	3	saveDiagnosticBundle requests a redacted session archive locally or remotely, adds the diagnostics report with JSZip, saves and discards the source archive.
 src/main/diagnostics.test.ts	tooling	-	Vitest suite: buildDiagnosticsReport.
