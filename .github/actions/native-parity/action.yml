@@ -28,6 +28,10 @@ runs:
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
         src/main/setup/archives.test.ts
+        src/main/setup/compiled-launcher.test.ts
+        src/main/setup/service.test.ts
+        src/main/setup/omp-update-install.test.ts
+        src/main/omp-runtime.test.ts
         src/main/stock-helper.test.ts
         src/main/models-config.test.ts
         src/main/bridge-input-history.test.ts

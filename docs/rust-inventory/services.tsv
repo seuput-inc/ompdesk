@@ -255,7 +255,8 @@ src/main/routines/triggers.test.ts	exception	Test coverage for live trigger reco
 src/main/routines/triggers.ts	port	Core schedules owns run start, stop and state. Node reconciles live sources and quiet periods from that state. The older routines/runtime port needs the machine, tab-event and mailbox adapters before it can replace these subscriptions.
 src/main/setup/archives.test.ts	exception	Tests release selection and checksum lookup for the supported archives against a test mirror.
 src/main/setup/archives.ts	native-client	Forwards release lookups to setup.resolveArchive, setup.resolveAgentDesktop and setup.resolveTailscale and translates lookup errors.
-src/main/setup/compiled-launcher.ts	port	Moves a compiled omp launcher aside before installation, cleans stale copies and restores the prior launcher if the replacement is absent.
+src/main/setup/compiled-launcher.test.ts	exception	Real core file operations and a delayed or lost reply exercise restore, competing installs, stale backups and the setup queue.
+src/main/setup/compiled-launcher.ts	mixed	Rust inspects and moves the launcher without replacing another file. Main holds the setup step until it has settled the repair and keeps the attempt identity across a lost reply.
 src/main/setup/detect-agent-desktop.test.ts	exception	Tests managed-only agent-desktop detection, version probing and minimum version handling.
 src/main/setup/detect-brew.test.ts	exception	Tests discovery of Homebrew's gh when the login shell does not supply its directory.
 src/main/setup/detect-bun.test.ts	exception	Checks Bun presence against the installed omp package's minimum Bun version.
