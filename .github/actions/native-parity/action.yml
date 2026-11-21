@@ -15,6 +15,7 @@ runs:
         bunx vitest run --project=node
         src/main/core/process.test.ts
         src/main/agent-browsers.test.ts
+        src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts
         src/main/session-index.test.ts
         src/main/memory-sampler.test.ts

@@ -44,6 +44,7 @@ mod sys;
 pub mod tailscale;
 mod update_feed;
 pub mod upkeep;
+mod visuals;
 pub mod web;
 pub mod wire;
 

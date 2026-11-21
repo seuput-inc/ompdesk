@@ -26,6 +26,7 @@ import {
 } from "../../shared/preview";
 import type { HostToolDefinition } from "../../shared/rpc-types";
 import { writeFileAtomic } from "../atomic-file";
+import { core } from "../core/process";
 import { type PreviewCheckOutcome, type PreviewImage, type PreviewVerdict, previewHint } from "./preview-check";
 import { parseVisualUrl } from "./visual-navigation";
 
@@ -34,46 +35,9 @@ export const VISUALIZE_TOOL = "gui_visualize";
 const TAB_VISUALS = 8;
 const MAX_VERSIONS = 20;
 const MAX_RECORDS = 100;
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const CHOICE_DEFAULT_SECONDS = 120;
 const CHOICE_MAX_SECONDS = 600;
-
-/** Files the preview can show as a visual's entry, with the type they are served as. */
-const ENTRY_TYPES: Record<string, string> = {
-	".html": "text/html",
-	".htm": "text/html",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif": "image/gif",
-	".webp": "image/webp",
-	".avif": "image/avif",
-	".txt": "text/plain",
-};
-/**
- * The only files a page's other requests may read (by extension); hidden paths (`.env`, `.git/…`) and
- * every other type are refused, so a page can load its assets but not the project's secrets.
- */
-const ASSET_TYPES: Record<string, string> = {
-	...ENTRY_TYPES,
-	".css": "text/css",
-	".js": "text/javascript",
-	".mjs": "text/javascript",
-	".json": "application/json",
-	".ico": "image/x-icon",
-	".woff": "font/woff",
-	".woff2": "font/woff2",
-	".ttf": "font/ttf",
-	".otf": "font/otf",
-	".mp4": "video/mp4",
-	".webm": "video/webm",
-	".mp3": "audio/mpeg",
-	".wav": "audio/wav",
-	".wasm": "application/wasm",
-	".md": "text/plain",
-};
 
 /**
  * The policy on every `omp-visual:` response. A visual's page loads only from its own origin (the entry and
@@ -183,10 +147,10 @@ const recordSchema: z.ZodType<VisualRecord> = z.object({
 
 class VisualError extends Error {}
 
-const inside = (root: string, candidate: string) => {
-	const relative = path.relative(root, candidate);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-};
+interface VisualFile {
+	file: string;
+	type: string;
+}
 
 /** The visuals of this computer: records on disk, which tabs show which, and file serving for the scheme. */
 export class VisualStore {
@@ -284,7 +248,11 @@ export class VisualStore {
 	}
 
 	/** The file an `omp-visual:` request reads, or null (unknown visual, outside its folder, missing). */
-	async resolve(url: string): Promise<{ file: string; type: string } | null> {
+	async resolve(url: string): Promise<VisualFile | null> {
+		return (await this.#file(url, false))?.result ?? null;
+	}
+
+	async #file(url: string, bytes: boolean) {
 		await this.#load();
 		const named = this.parse(url);
 		const record = named && this.#record(named.id);
@@ -295,46 +263,38 @@ export class VisualStore {
 		} catch {
 			return null;
 		}
+		let source:
+			| { kind: "snapshot"; dir: string; id: string; file: string }
+			| { kind: "asset"; root: string; relative: string };
 		if (relative === record.entry) {
-			const version = record.versions.find(entry => entry.version === named.version);
-			if (!version?.file) return null;
-			return {
-				file: path.join(this.#dir, record.id, version.file),
-				type: ENTRY_TYPES[path.extname(record.entry).toLowerCase()] ?? "text/html",
-			};
+			const file = record.versions.find(version => version.version === named.version)?.file;
+			if (!file) return null;
+			source = { kind: "snapshot", dir: this.#dir, id: record.id, file };
+		} else if (record.kind === "file") {
+			source = { kind: "asset", root: record.root, relative };
+		} else {
+			return null;
 		}
-		if (record.kind === "inline") return null;
-		if (relative.split("/").some(segment => segment.startsWith("."))) return null;
-		const type = ASSET_TYPES[path.extname(relative).toLowerCase()];
-		if (!type) return null;
-		// Assets come from the entry's own folder (the tab folder when the entry sits at its root), not the
-		// whole tab folder: a page cannot read the project's other `.json`/`.js`/`.txt` files.
-		const folder = path.dirname(path.join(record.root, ...record.entry.split("/")));
-		const candidate = path.resolve(record.root, relative);
-		if (!inside(folder, candidate)) return null;
-		const real = await fs.realpath(candidate).catch(() => null);
-		if (!real || !inside(folder, real) || !(await fs.stat(real)).isFile()) return null;
-		if (ASSET_TYPES[path.extname(real).toLowerCase()] !== type) return null;
-		return { file: real, type };
+		return core().call<VisualFile | null>("visual.file", { ...source, entry: record.entry, bytes });
 	}
 
 	/** The response for an `omp-visual:` request: the file `resolve` allows, or 404; both limited to the page's own origin. */
 	async serve(url: string): Promise<Response> {
-		const found = await this.resolve(url).catch(() => null);
-		const body = found ? await fs.readFile(found.file).catch(() => null) : null;
+		const served = await this.#file(url, true).catch(() => null);
 		const headers = {
 			"Content-Security-Policy": VISUAL_CSP,
 			"Cache-Control": "no-store",
 			"X-Content-Type-Options": "nosniff",
 		};
-		if (!found || !body) {
+		if (!served?.result || !(served.bin?.buffer instanceof ArrayBuffer)) {
 			return new Response("Not found", {
 				status: 404,
 				headers: { ...headers, "Content-Type": "text/plain; charset=utf-8" },
 			});
 		}
-		const type = found.type.startsWith("text/") ? `${found.type}; charset=utf-8` : found.type;
-		return new Response(body, { headers: { ...headers, "Content-Type": type } });
+		const mime = served.result.type;
+		const type = mime.startsWith("text/") ? `${mime}; charset=utf-8` : mime;
+		return new Response(served.bin.buffer, { headers: { ...headers, "Content-Type": type } });
 	}
 
 	/** `open`: a new visual or a new version of the tab's matching one. */
@@ -350,7 +310,7 @@ export class VisualStore {
 		let target = "";
 		let root = "";
 		let entry = "index.html";
-		let content: Buffer | null = null;
+		let content: Uint8Array | null = null;
 		const raw = input.target ?? "";
 		if (input.html !== undefined) {
 			kind = "inline";
@@ -363,21 +323,14 @@ export class VisualStore {
 			target = url;
 		} else {
 			kind = "file";
-			const realCwd = await fs.realpath(cwd).catch(() => {
-				throw new VisualError(`The working directory is unavailable: ${cwd}`);
+			const source = await core().call<{ target: string; root: string; entry: string }>("visual.source", {
+				cwd,
+				raw,
+				path: path.resolve(cwd, raw),
 			});
-			const real = await fs.realpath(path.resolve(cwd, raw)).catch(() => null);
-			if (!real) throw new VisualError(`No such file: ${raw}`);
-			if (!inside(realCwd, real)) throw new VisualError(`${raw} is outside the working directory`);
-			const stat = await fs.stat(real);
-			if (!stat.isFile()) throw new VisualError(`${raw} is not a file`);
-			if (!ENTRY_TYPES[path.extname(real).toLowerCase()])
-				throw new VisualError("visualize shows .html, .htm, .svg, .txt and image files");
-			if (stat.size > MAX_FILE_BYTES) throw new VisualError(`${raw} is larger than 5 MB`);
-			content = await fs.readFile(real);
-			target = real;
-			root = realCwd;
-			entry = path.relative(realCwd, real).split(path.sep).join("/");
+			if (!source.bin) throw new VisualError("Missing visual file contents");
+			content = source.bin;
+			({ target, root, entry } = source.result);
 		}
 		const own = tabIds.map(id => this.#record(id)).filter(record => record !== undefined);
 		let record =
