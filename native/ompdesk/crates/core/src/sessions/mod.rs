@@ -48,7 +48,7 @@ type LegacyFlags = Arc<Mutex<HashMap<String, Legacy>>>;
 #[derive(Default)]
 struct Index {
     legacy: LegacyFlags,
-    enrichment: Arc<Mutex<enrich::Cache>>,
+    enrichment: Arc<tokio::sync::Mutex<enrich::Cache>>,
     search: Arc<search::ContentCache>,
     /// Only paths in stock's last deduplicated list are eligible; the caller can narrow, never widen, that list.
     searchable: Option<(PathBuf, HashSet<String>)>,
@@ -70,9 +70,7 @@ pub fn register(registry: &mut Registry) {
     registry.add("sessions.close", |call| {
         Box::pin(async move { close(&call) })
     });
-    registry.add("sessions.enrich", |call| {
-        Box::pin(blocking(move || enrich::listed(call.params()?)))
-    });
+    registry.add("sessions.enrich", |call| Box::pin(enrich::listed(call)));
     registry.add("sessions.listed", |call| {
         Box::pin(blocking(move || listed(call.params()?)))
     });
@@ -94,9 +92,9 @@ pub fn register(registry: &mut Registry) {
     });
 }
 
-async fn blocking(
-    work: impl FnOnce() -> Result<Reply, Fault> + Send + 'static,
-) -> Result<Reply, Fault> {
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Fault> + Send + 'static,
+) -> Result<T, Fault> {
     tokio::task::spawn_blocking(work)
         .await
         .map_err(|_| Fault::new("internal", "The session read panicked"))?

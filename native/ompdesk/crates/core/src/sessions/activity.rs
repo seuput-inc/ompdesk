@@ -57,7 +57,7 @@ impl<'de> Deserialize<'de> for Fields<'de> {
     }
 }
 
-fn message_time(line: &[u8]) -> Option<i64> {
+fn message_time(line: &[u8], dates: &mut Vec<String>) -> Option<i64> {
     if !line.starts_with(br#"{"type":"message""#) {
         return None;
     }
@@ -75,17 +75,26 @@ fn message_time(line: &[u8]) -> Option<i64> {
         return Some((ms as i64).clamp(-invalid, invalid));
     }
     let raw = entry.timestamp?.get();
-    if let Ok(date) = serde_json::from_str::<&str>(raw) {
-        date_parse(date, &Local)
-    } else {
-        date_parse(&serde_json::from_str::<String>(raw).ok()?, &Local)
+    let date = raw.strip_prefix('"')?.strip_suffix('"')?;
+    // Stock writes UTC ISO. A restore can contain any spelling Bun's Date.parse accepts.
+    if date.len() == 24
+        && date.as_bytes()[10] == b'T'
+        && date.ends_with('Z')
+        && let Some(at) = date_parse(date, &Local)
+    {
+        return Some(at);
     }
+    // Keep the JSON string token: Rust strings cannot represent an escaped lone surrogate.
+    dates.push(raw.to_owned());
+    None
 }
 
-/// Epoch milliseconds of the last dated stock message, or an out-of-TimeClip millisecond
-/// for a finite message timestamp that produces an invalid JS Date. Journal dates use the
-/// core's ECMAScript date-time parser, not the engine's guesses for nonstandard spellings.
-pub(super) fn last_activity(file: &mut File, size: u64) -> io::Result<Option<i64>> {
+/// Dates for Bun precede the numeric/ISO fallback in newest-to-oldest journal order.
+pub(super) fn last_activity(
+    file: &mut File,
+    size: u64,
+    dates: &mut Vec<String>,
+) -> io::Result<Option<i64>> {
     let mut buffer = Vec::new();
     let mut end = size;
     for window in [FIRST_WINDOW, FIRST_WINDOW * 4, FIRST_WINDOW * 16, LIMIT] {
@@ -100,7 +109,7 @@ pub(super) fn last_activity(file: &mut File, size: u64) -> io::Result<Option<i64
             // needs reading again when the next window reaches farther back.
             end = start + lines.next().unwrap_or_default().len() as u64;
         }
-        if let Some(time) = lines.rev().find_map(message_time) {
+        if let Some(time) = lines.rev().find_map(|line| message_time(line, dates)) {
             return Ok(Some(time));
         }
         if start == 0 {
@@ -119,7 +128,11 @@ mod tests {
         let dir = crate::fs::disk::make_temp_dir("ompdesk-session-activity-").unwrap();
         let path = dir.join("journal.jsonl");
         fs::write(&path, journal).unwrap();
-        let result = last_activity(&mut File::open(path).unwrap(), journal.len() as u64);
+        let result = last_activity(
+            &mut File::open(path).unwrap(),
+            journal.len() as u64,
+            &mut Vec::new(),
+        );
         fs::remove_dir_all(dir).unwrap();
         result.unwrap()
     }
@@ -143,7 +156,7 @@ mod tests {
 
     #[test]
     fn parses_journal_dates_only_when_the_message_has_no_finite_number() {
-        let date = "1970-01-01T01:00:00.1234+01:00";
+        let date = "1970-01-01T00:00:00.123Z";
         for message in [
             "null",
             "[]",

@@ -256,6 +256,20 @@ function withoutPlaceholder(rows: StockSessionInfo[]): StockSessionInfo[] {
 export const UNQUEUED_METHODS: Readonly<Record<string, true>> = { "sessions.owned": true };
 
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
+	"sessions.parseDates": async groups => {
+		if (!Array.isArray(groups)) throw new Error("Invalid session date groups");
+		return groups.map(group => {
+			if (!Array.isArray(group)) throw new Error("Invalid session dates");
+			for (const token of group) {
+				if (typeof token !== "string") throw new Error("Invalid session date");
+				const date: unknown = JSON.parse(token);
+				if (typeof date !== "string") throw new Error("Expected a session timestamp string");
+				const at = Date.parse(date);
+				if (Number.isFinite(at)) return at;
+			}
+			return null;
+		});
+	},
 	"sessions.list": async params => {
 		const { sessionsRoot } = paths(params);
 		const { listing, storage } = await stockSessions();

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { core } from "./core/process";
 import { ompPackageRoot } from "./omp-runtime";
 import { StockSessionStore } from "./session-store";
-import { stopStockHelper } from "./stock-helper";
+import { stockHelperHost, stopStockHelper } from "./stock-helper";
 import { INSTALLED_OMP } from "./test-bridge-probe";
 
 const index = "synthetic-list-enrichment";
@@ -61,11 +61,34 @@ it.skipIf(!ompPackageRoot(INSTALLED_OMP))("refreshes both listings after a parti
 	}
 });
 
+it.skipIf(!ompPackageRoot(INSTALLED_OMP))("lists the newest date Bun accepts in a restored journal", async () => {
+	const store = new StockSessionStore(root, path.resolve("resources/gui-bridge"), index);
+	const header = { type: "session", version: 3, id: "restored", cwd: dir, timestamp: "2026-11-01T00:00:00Z" };
+	const message = { role: "user", content: "restored prompt" };
+	const lines = [
+		header,
+		{ type: "message", message: { ...message, timestamp: 1 } },
+		{ type: "message", message, timestamp: "Thu, 01 Jan 1970 01:02:03 GMT (\ud800)" },
+		{ type: "message", message, timestamp: "not a date" },
+	];
+	await fs.writeFile(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+	const expected = { id: "restored", modified: "1970-01-01T01:02:03.000Z" };
+	expect(await store.list()).toMatchObject([expected]);
+	expect(await store.listDirectory(file)).toMatchObject([expected]);
+	await fs.appendFile(file, `${JSON.stringify({ type: "message", message, timestamp: "Jan 1 1970 00:00 GMT" })}\n`);
+	expect(await store.listDirectory(file)).toMatchObject([{ ...expected, modified: "1970-01-01T00:00:00.000Z" }]);
+	const undated = [{ ...header, id: "undated" }, { type: "message", message, timestamp: "unknown" }];
+	await fs.writeFile(file, `${undated.map(line => JSON.stringify(line)).join("\n")}\n`);
+	const mtime = new Date("2020-01-01T00:00:00.000Z");
+	await fs.utimes(file, mtime, mtime);
+	expect(await store.list()).toMatchObject([{ id: "undated", modified: mtime.toISOString() }]);
+});
+
 it("forgets absent rows only on a full list and never reads outside its root", async () => {
 	const message = (at: number) => JSON.stringify({ type: "message", message: { timestamp: at } });
 	const row = { path: file, id: "a", modified: "fixed", size: Buffer.byteLength(message(1)) };
 	const read = async (rows: (typeof row)[], full: boolean, under = root) =>
-		(await core().call("sessions.enrich", { root: under, index, rows, full })).result;
+		(await core().call("sessions.enrich", { root: under, index, rows, full, host: stockHelperHost() })).result;
 	await fs.writeFile(file, message(1));
 	expect(await read([row], true)).toEqual([{ row: 0, at: 1 }]);
 	await fs.writeFile(file, message(2));

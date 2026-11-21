@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { SessionInfo } from "../shared/ipc-types";
 import type { AgentMessage } from "../shared/rpc-types";
 import { core } from "./core/process";
-import { configureStockHelper, stockHelperRequest, stopStockHelper } from "./stock-helper";
+import { configureStockHelper, stockHelperHost, stockHelperRequest, stopStockHelper } from "./stock-helper";
 
 const sessionRows = z.array(
 	z.object({
@@ -54,6 +54,7 @@ export class StockSessionStore {
 		);
 		const { result } = await core().call("sessions.enrich", {
 			index: this.#index,
+			host: stockHelperHost(),
 			root: this.#sessionsRoot,
 			full: method === "sessions.list",
 			rows: rows.map(({ path, id, size, modified }) => ({ path, id, size, modified })),
