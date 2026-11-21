@@ -235,6 +235,8 @@ describe("VisualStore", () => {
 			expect.objectContaining({ id, label, cwd: project, createdAt: 1, versions: 20 }),
 			expect.objectContaining({ id: referenced.record.id, label: "사용자가 연 파일" }),
 		]);
+		expect(reopened.view(id, 1)?.version).toBe(22);
+		expect(reopened.view(id, 3)?.versions[0]).toEqual({ version: 3, createdAt: 3 });
 		for (const version of [3, 20, 21, 22]) {
 			const response = await reopened.serve(reopened.url(id, version) ?? "");
 			expect(await response.text()).toBe(html(version));
@@ -255,6 +257,13 @@ describe("VisualStore", () => {
 		const reloaded = new VisualStore(path.join(root, "visuals"));
 		const list = await reloaded.list();
 		expect(list.map(entry => entry.label)).toEqual(["example.com", "Chart"]);
+		expect(list[0]).toMatchObject({ kind: "url", versions: 1 });
+		expect(reloaded.view(web.record.id, 999)).toEqual({
+			id: web.record.id,
+			label: "example.com",
+			version: 1,
+			versions: [],
+		});
 		expect(list[1]).toMatchObject({ kind: "inline", versions: 2 });
 		// A new launch knows the visuals but no tab shows them until one is opened again.
 		expect(reloaded.forTab("tab")).toEqual([]);
