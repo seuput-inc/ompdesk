@@ -1,5 +1,5 @@
 //! The edge serving (native-rust ledger 8b; was `src/main/web/server.ts`): `web.start {host, userData, port,
-//! staticRoot, router}` → `{port}` listens on `127.0.0.1` (`port` 0 picks one; a taken port is the fault `EADDRINUSE`, as
+//! staticRoot, buildMeta, router}` → `{port}` listens on `127.0.0.1` (`port` 0 picks one; a taken port is the fault `EADDRINUSE`, as
 //! node's `listen` failed), `web.stop {host}` ends the accept loop, gives the page sockets a second to close and lets the
 //! port go. `host` is main's number for its `WebServer`: every ask and socket event of the edge carries it
 //! (`relay.rs`, `router.rs`). The edge reads the paired devices, the blocks, the uploads, the blob tokens and the kept builds from
@@ -50,7 +50,8 @@ struct StartParams {
     user_data: PathBuf,
     port: u16,
     static_root: Option<PathBuf>,
-    /// The page sockets' router: `IPC_POLICY`, the web-only channels, the protocol, features and build.
+    build_meta: String,
+    /// The page sockets' router: `IPC_POLICY`, the web-only channels, the protocol and features.
     router: router::Config,
 }
 
@@ -60,10 +61,25 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// The PWA plugin's nonempty meta content, not the archive's hash of web.html.
+fn page_build(html: &[u8], meta: &str) -> Option<String> {
+    let html = String::from_utf8_lossy(html);
+    let prefix = format!(r#"<meta name="{meta}" content=""#);
+    html.match_indices(&prefix).find_map(|(at, _)| {
+        let (build, _) = html[at + prefix.len()..].split_once('"')?;
+        (!build.is_empty()).then(|| build.to_owned())
+    })
+}
+
 async fn start(call: Call) -> Result<Reply, Fault> {
-    let params: StartParams = call.params()?;
+    let mut params: StartParams = call.params()?;
     if let Some(running) = running().get(&params.host) {
         return Reply::json(&json!({ "port": running.port }));
+    }
+    if let Some(root) = &params.static_root
+        && let Ok(html) = tokio::fs::read(root.join("web.html")).await
+    {
+        params.router.build = page_build(&html, &params.build_meta);
     }
     let user_data = params.user_data;
     let stores = super::store::stores(&user_data);

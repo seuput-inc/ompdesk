@@ -28,7 +28,7 @@ import {
 	type WebPairingRequest,
 } from "../../shared/mobile-web";
 import { WEB_HOST_CHANNELS, type WebBlobOpenResult } from "../../shared/web-host";
-import { WEB_PROTOCOL_VERSION, type WebServerFrame } from "../../shared/web-protocol";
+import { WEB_BUILD_META, WEB_PROTOCOL_VERSION, type WebServerFrame } from "../../shared/web-protocol";
 import type { WebPushStateResponse } from "../../shared/web-push";
 import { stopCore } from "../core/process";
 import type { TailnetPeer } from "../tailscale/whois";
@@ -68,7 +68,7 @@ const PEER_IP = "100.64.0.9";
 /** What serve adds to every request it forwards. */
 const IDENTITY: Record<string, string> = { "tailscale-user-login": LOGIN, "x-forwarded-for": PEER_IP };
 
-const PAGE = "<!doctype html><title>OMPdesk</title>";
+const PAGE = `<!doctype html><meta name="${WEB_BUILD_META}" content="test-page-build"><title>OMPdesk</title>`;
 const SCRIPT = `${"console.log('x');".repeat(200)}\n`;
 
 function desktop(): ClientWindow {
@@ -772,6 +772,7 @@ describe("WebSocket", () => {
 		expect(frames[0]).toMatchObject({
 			t: "hello",
 			protocol: WEB_PROTOCOL_VERSION,
+			build: "test-page-build",
 			resumed: false,
 			features: { upload: true },
 		});

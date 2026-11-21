@@ -6,6 +6,7 @@
  * service configures), the desktop's say over a new device, `tailscale whois` and the schedule service's webhook. The
  * page sockets are the core's router's (8c); main's side of it is `WsRouter`, whose number is this host's.
  */
+import { WEB_BUILD_META } from "../../shared/web-protocol";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
 import type { WebhookOutcome } from "../schedules";
 import type { TailnetPeer } from "../tailscale/whois";
@@ -152,6 +153,7 @@ export class WebServer {
 				userData: this.#deps.userData,
 				port: this.#asked,
 				staticRoot: this.#deps.staticRoot(),
+				buildMeta: WEB_BUILD_META,
 				router: this.#deps.router.config(),
 			});
 			this.#deps.router.started(generation);
