@@ -784,6 +784,29 @@ describe("WebSocket", () => {
 		expect(host.router.isConnected(paired.deviceId)).toBe(true);
 	});
 
+	it("lists the first 500 files in natural order and finds a file beyond the limit by name", async () => {
+		const dir = join(userData, "picker");
+		mkdirSync(dir);
+		for (let i = 0; i <= 500; i++) writeFileSync(join(dir, `item${i}`), "");
+		const paired = await pair();
+		const { socket, frames, arrived } = await open(paired, await ticketFor(paired));
+		const listing = async (id: number, query?: string) => {
+			const request = { path: dir, files: true, query };
+			socket.send(JSON.stringify({ t: "inv", ch: WEB_HOST_CHANNELS.LIST_DIRS, id, a: [request] }));
+			await arrived(frames => frames.some(frame => frame.t === "res" && frame.id === id));
+			return frames.find(frame => frame.t === "res" && frame.id === id);
+		};
+		const entry = (i: number) => ({ name: `item${i}`, path: join(dir, `item${i}`), directory: false, size: 0 });
+		expect(await listing(1)).toMatchObject({
+			ok: true,
+			v: { entries: Array.from({ length: 500 }, (_, i) => entry(i)), truncated: true },
+		});
+		expect(await listing(2, " ITEM500 ")).toMatchObject({
+			ok: true,
+			v: { entries: [entry(500)], truncated: false },
+		});
+	});
+
 	it("compresses the page's frames: permessage-deflate is agreed with context takeover, as ws agreed it", async () => {
 		const paired = await pair();
 		const { socket } = await open(paired, await ticketFor(paired));

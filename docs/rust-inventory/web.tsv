@@ -12,7 +12,7 @@ src/main/web/devices-store.ts	core web/devices.rs and web/store.rs; TS device mi
 src/main/web/file-edit-reports.test.ts	Vitest (node)	FileEditReports and parseFileEditReport	Keep per-connection dirty-state and withdrawal tests.
 src/main/web/file-edit-reports.ts	TS live file edit report store	ipc.ts and agent-control/host.ts	Move connection reports with the tab-close decision and connection lifecycle, not through a separate hop per report.
 src/main/web/host-actions.test.ts	Vitest (node)	createHostActions handlers	Keep host browser, save, open, blob, models and device preference parity.
-src/main/web/host-actions.ts	TS web-only channel handlers; core blob/device stores	WebHost supplies the table to WsRouter	Move disk listing, save and file checks with host file operations. Move shell actions, model edits and device prefs with their respective service owners.
+src/main/web/host-actions.ts	TS web-only handlers; core fs/list.rs, blob and device stores	WebHost supplies the table to WsRouter	fs.listDirs reads the web picker's entries and file sizes. Move save and file checks with host file operations, shell actions with the native shell, and model edits and device prefs with their stores.
 src/main/web/ipc-policy.test.ts	Vitest (node)	IPC_POLICY and the registered channels	Keep complete direction and grant classification against createOmpApi.
 src/main/web/ipc-policy.ts	TS channel contract; core web/router.rs enforces it	WsRouter.config and index.ts	Retain the typed channel table until native IPC registration owns the corresponding handlers; do not duplicate its names in Rust.
 src/main/web/ipc-registry.test.ts	Vitest (node)	IpcRegistry	Keep native-window and paired caller dispatch parity.
