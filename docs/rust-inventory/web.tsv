@@ -1,7 +1,5 @@
 path	current_owner	consumer	remaining_unit_or_reason
-src/main/web/asset-archive-order.test.ts	Vitest (node)	AssetArchive.retain/roots	Keep the out-of-order reply test while main exposes the archive snapshot.
-src/main/web/asset-archive.test.ts	Vitest (node)	AssetArchive and web.assets.*	Keep file retention and replacement parity against the core.
-src/main/web/asset-archive.ts	core web/archive.rs; TS archive client	WebHost.start	Move retain scheduling with web host startup. Only the tests read the TS roots snapshot; the edge reads Rust roots directly.
+src/main/web/asset-archive.test.ts	Vitest (node)	core web.start and web.stop	Keep disk retention, expiry and ordered replacement parity; the edge owns the index and serves the previous builds directly.
 src/main/web/blobs.test.ts	Vitest (node)	BlobStore and core web/blobs.rs	Keep device isolation, expiry, ranges and response-header parity.
 src/main/web/blobs.ts	core web/blobs.rs; TS token and media adapter	WsRouter, PageImages, createHostActions	Move token issuance with frame preparation. Move media response pumping with MediaStreams; URLs currently return synchronously.
 src/main/web/blocks-store.test.ts	Vitest (node)	WebBlocks	Keep block persistence and visitor verdict cases.
@@ -42,7 +40,7 @@ src/main/web/vapid-store.test.ts	Vitest (node)	loadVapid and push.vapid	Keep pub
 src/main/web/vapid-store.ts	core web/push.rs; TS typed client	PushSender.open	Retire the client with push initialization; private key material stays in the core.
 src/main/web/web-client-window.ts	TS virtual window registry	WebHost, WsRouter and index.ts	Move per-device virtual windows with IPC caller identity, tab ownership and teardown.
 src/main/web/web-edge-p256.test.ts	Vitest and Playwright browsers	WebCrypto proof fixture for core web/proof_browsers.rs	Keep cross-runtime verification tooling; browser signatures are produced by the browsers.
-src/main/web/web-host.ts	TS host composition; core web/host.rs owns served build identity	index.ts constructs WebHost	Move admin handlers, revocation, tab notices and sweep scheduling with their respective services; the page build is no longer read or cached in main.
+src/main/web/web-host.ts	TS host composition; core web/host.rs owns page build identity and asset archiving	index.ts constructs WebHost	Move admin handlers, revocation, tab notices and sweep scheduling with their services. Archive copy and stop barrier run with the listener; main holds no archive roots.
 src/main/web/web-push-notifier.test.ts	Vitest (node)	WebPushNotifier	Keep tab activity, category, visibility and batching cases.
 src/main/web/web-push-notifier.ts	TS tab notification policy	WebHost.tabActivity/tabNotice	Move with the common notification batcher, tab facts and visibility state so desktop and phone decisions still agree.
 src/main/web/web-push.integration.test.ts	Vitest (node)	WebHost edge and notifier with an injected push transport	Keep paired subscription and notification delivery integration coverage.

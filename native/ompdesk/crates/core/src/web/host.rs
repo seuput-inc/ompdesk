@@ -12,6 +12,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::archive::{self, AssetArchive};
 use super::assets::Assets;
 use super::auth::Policy;
 use super::relay::Relay;
@@ -30,7 +31,7 @@ fn running() -> MutexGuard<'static, HashMap<u64, Running>> {
 /// The built renderer main named at the start, and the builds kept beside it.
 struct Built {
     root: Option<PathBuf>,
-    user_data: PathBuf,
+    archive: Arc<AssetArchive>,
 }
 
 impl Assets for Built {
@@ -39,7 +40,7 @@ impl Assets for Built {
     }
 
     fn previous_builds(&self) -> Vec<PathBuf> {
-        super::archive::open(&self.user_data).roots()
+        self.archive.roots()
     }
 }
 
@@ -50,6 +51,7 @@ struct StartParams {
     user_data: PathBuf,
     port: u16,
     static_root: Option<PathBuf>,
+    archive_now: Option<i64>,
     build_meta: String,
     /// The page sockets' router: `IPC_POLICY`, the web-only channels, the protocol and features.
     router: router::Config,
@@ -92,7 +94,10 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         params.router,
         stores.devices.clone(),
     );
-    let key_dir = user_data.clone();
+    let assets = Arc::new(Built {
+        root: params.static_root,
+        archive: archive::open(&user_data),
+    });
     let edge = Edge::new(Deps {
         // Main's policy is read for every request (`Desktop::policy`); this one only stands in until it answers.
         policy: Policy {
@@ -107,16 +112,13 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         blocks: stores.blocks.clone(),
         whois: relay.clone(),
         desktop: relay.clone(),
-        router,
+        router: router.clone(),
         uploads: super::uploads::open(&user_data),
         blobs,
         hooks: Some(relay),
-        assets: Arc::new(Built {
-            root: params.static_root,
-            user_data,
-        }),
+        assets: assets.clone(),
         push_public_key: Arc::new(move || {
-            super::push::loaded(&key_dir)
+            super::push::loaded(&user_data)
                 .map_or_else(String::new, |vapid| vapid.public_key().to_owned())
         }),
         clock: Arc::new(now_ms),
@@ -145,6 +147,13 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         match table.get(&params.host) {
             Some(existing) => Some((existing.port, started)),
             None => {
+                if let Some(root) = &assets.root {
+                    router.archive_copy.get_or_init(|| {
+                        assets
+                            .archive
+                            .start(root, params.archive_now.unwrap_or_else(now_ms))
+                    });
+                }
                 table.insert(params.host, started);
                 None
             }
@@ -167,6 +176,11 @@ async fn stop(call: Call) -> Result<Reply, Fault> {
     let started = running().remove(&params.host);
     if let Some(started) = started {
         started.stop().await;
+    }
+    if let Some(mut done) =
+        router::host_of(params.host).and_then(|host| host.archive_copy.get().cloned())
+    {
+        let _ = done.changed().await;
     }
     Reply::json(&serde_json::Value::Null)
 }

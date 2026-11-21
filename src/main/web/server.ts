@@ -52,6 +52,7 @@ export interface WebServerDeps {
 	router: WsRouter;
 	/** The folder holding the built renderer's `web.html` and assets; null while there is none. */
 	staticRoot: () => string | null;
+	now?: (() => number) | undefined;
 	/** A device authentication failed three times within a minute; told once. */
 	onUnpairedAuth?: (info: { address: string }) => void;
 	/** The schedule service that answers `POST /hooks/<id>`; null or absent while there is none (503). */
@@ -122,6 +123,7 @@ export class WebServer {
 	readonly #deps: WebServerDeps;
 	readonly #id: number;
 	#port: number | null = null;
+	#stopping: Promise<unknown> | null = null;
 	/** The loopback port asked for at `start`, kept to start again on it after a core that ended. */
 	#asked = 0;
 
@@ -142,6 +144,7 @@ export class WebServer {
 
 	/** Listen on the loopback; `port` 0 picks a free one. Rejects (`EADDRINUSE`) when the port is taken. */
 	async start(options: { port?: number } = {}): Promise<{ port: number }> {
+		if (this.#stopping) await this.#stopping;
 		if (this.#port !== null) return { port: this.#port };
 		const process = core();
 		route(process);
@@ -153,6 +156,7 @@ export class WebServer {
 				userData: this.#deps.userData,
 				port: this.#asked,
 				staticRoot: this.#deps.staticRoot(),
+				archiveNow: this.#deps.now?.(),
 				buildMeta: WEB_BUILD_META,
 				router: this.#deps.router.config(),
 			});
@@ -167,14 +171,17 @@ export class WebServer {
 
 	/** Pending approvals are declined, sockets close (1001, a second's grace) and the port is let go. */
 	async stop(): Promise<void> {
-		if (this.#port === null) return;
-		this.#port = null;
-		this.#deps.confirmations.declineAll();
-		try {
-			await core().call("web.stop", { host: this.#id });
-		} finally {
-			servers.delete(this.#id);
+		if (this.#port !== null) {
+			this.#port = null;
+			this.#deps.confirmations.declineAll();
+			this.#stopping = core()
+				.call("web.stop", { host: this.#id })
+				.finally(() => {
+					servers.delete(this.#id);
+					this.#stopping = null;
+				});
 		}
+		await this.#stopping;
 	}
 
 	/** One question of the edge (`web.ask`). */
