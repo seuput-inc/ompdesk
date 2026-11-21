@@ -62,7 +62,7 @@ export interface PlatformRelease {
 }
 
 export async function resolvePlatformRelease(
-	payload: unknown,
+	payload: string,
 	platform: UpdatePlatform,
 	allowPrerelease: boolean,
 ): Promise<PlatformRelease> {
@@ -77,6 +77,10 @@ export async function resolvePlatformRelease(
 	} catch (error) {
 		if (!(error instanceof CoreError)) throw error;
 		switch (error.code) {
+			case "update_invalid_payload":
+				// Preserve Response.json()'s native SyntaxError on a malformed GitHub response.
+				JSON.parse(payload);
+				throw error;
 			case "update_invalid_json": {
 				// JSON syntax errors are displayed in the running Node version's own words.
 				try {

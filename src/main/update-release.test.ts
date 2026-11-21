@@ -59,7 +59,7 @@ describe("release resolution through the core", () => {
 		const selected = frozen.pickRelease(payload, prereleases);
 		for (const platform of ["windows", "mac"] as const) {
 			const expected = frozen.resolvePlatformRelease(selected, platform);
-			expect(await resolvePlatformRelease(payload, platform, prereleases)).toEqual(
+			expect(await resolvePlatformRelease(JSON.stringify(payload), platform, prereleases)).toEqual(
 				platform === "mac" ? { ...expected, minimumSystemVersion: "23.0.0" } : expected,
 			);
 		}
@@ -101,7 +101,7 @@ describe("release resolution through the core", () => {
 			refusal = error;
 		}
 		expect(refusal).toBeDefined();
-		const result = resolvePlatformRelease(payload, "mac", prereleases);
+		const result = resolvePlatformRelease(JSON.stringify(payload), "mac", prereleases);
 		await expect(result).rejects.toBeInstanceOf(ReleaseFeedError);
 		await expect(result).rejects.toMatchObject({ code: refusal?.code, message: refusal?.message });
 	});
@@ -151,7 +151,7 @@ describe.runIf(process.platform !== "win32")("release workflow metadata step", (
 				})),
 			});
 			for (const platform of ["mac", "windows"] satisfies UpdatePlatform[]) {
-				const update = await resolvePlatformRelease(payload, platform, false);
+				const update = await resolvePlatformRelease(JSON.stringify(payload), platform, false);
 				expect(update.notes).toBe(NOTES);
 				expect(update.version).toBe(METADATA.version);
 				expect(update.releaseDate).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/);

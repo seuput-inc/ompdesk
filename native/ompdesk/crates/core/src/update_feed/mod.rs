@@ -6,152 +6,11 @@ use crate::fs::order::js_trim;
 use crate::git::parse::js_number;
 use crate::server::Fault;
 use serde_json::Value;
-use std::fmt::{Display, Write};
-use url::Url;
 
 const METADATA_ERROR: &str = "ERR_OMPDESK_UPDATE_METADATA";
 const PLATFORM_ERROR: &str = "ERR_OMPDESK_UPDATE_PLATFORM";
 const LOOKUP_ERROR: &str = "ERR_OMPDESK_RELEASE_LOOKUP";
 const NO_RELEASE_ERROR: &str = "ERR_UPDATER_LATEST_VERSION_NOT_FOUND";
-
-fn kind(value: Option<&Value>) -> &'static str {
-    match value {
-        None => "undefined",
-        Some(Value::Null) => "null",
-        Some(Value::Bool(_)) => "boolean",
-        Some(Value::Number(_)) => "number",
-        Some(Value::String(_)) => "string",
-        Some(Value::Array(_)) => "array",
-        Some(Value::Object(_)) => "object",
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct Path {
-    release: Option<usize>,
-    asset: Option<usize>,
-}
-
-impl Path {
-    fn issue(self, issues: &mut String, field: &str, message: impl Display) {
-        if !issues.is_empty() {
-            issues.push_str("; ");
-        }
-        if let Some(i) = self.release {
-            write!(issues, "{i}").unwrap();
-            if self.asset.is_some() || !field.is_empty() {
-                issues.push('.');
-            }
-        }
-        if let Some(i) = self.asset {
-            write!(issues, "assets.{i}").unwrap();
-            if !field.is_empty() {
-                issues.push('.');
-            }
-        }
-        if self.release.is_none() && self.asset.is_none() && field.is_empty() {
-            issues.push_str("(root)");
-        }
-        write!(issues, "{field}: {message}").unwrap();
-    }
-
-    fn check(self, issues: &mut String, field: &str, value: Option<&Value>, expected: &str) {
-        let received = kind(value);
-        if received != expected {
-            self.issue(
-                issues,
-                field,
-                format_args!("Invalid input: expected {expected}, received {received}"),
-            );
-        }
-    }
-}
-
-fn validate_release(value: Option<&Value>, path: Path, issues: &mut String) {
-    let Some(Value::Object(release)) = value else {
-        path.check(issues, "", value, "object");
-        return;
-    };
-    path.check(issues, "tag_name", release.get("tag_name"), "string");
-    for key in ["name", "body"] {
-        let value = release.get(key);
-        if !matches!(value, None | Some(Value::Null)) {
-            path.check(issues, key, value, "string");
-        }
-    }
-    for key in ["draft", "prerelease"] {
-        path.check(issues, key, release.get(key), "boolean");
-    }
-    let Some(Value::Array(assets)) = release.get("assets") else {
-        path.check(issues, "assets", release.get("assets"), "array");
-        return;
-    };
-    for (i, asset) in assets.iter().enumerate() {
-        let at = Path {
-            asset: Some(i),
-            ..path
-        };
-        let Value::Object(asset) = asset else {
-            at.check(issues, "", Some(asset), "object");
-            continue;
-        };
-        for (key, expected) in [("id", "number"), ("name", "string"), ("size", "number")] {
-            at.check(issues, key, asset.get(key), expected);
-        }
-        match asset.get("url") {
-            Some(Value::String(s)) if Url::parse(js_trim(s)).is_err() => {
-                at.issue(issues, "url", "Invalid URL")
-            }
-            Some(Value::String(_)) => (),
-            other => at.check(issues, "url", other, "string"),
-        }
-    }
-}
-
-fn select(payload: Option<&Value>, allow_prerelease: bool) -> Result<&Value, Fault> {
-    let mut issues = String::new();
-    let mut first = None;
-    let mut prerelease = None;
-    if allow_prerelease {
-        if let Some(Value::Array(list)) = payload {
-            for (i, item) in list.iter().enumerate() {
-                validate_release(
-                    Some(item),
-                    Path {
-                        release: Some(i),
-                        asset: None,
-                    },
-                    &mut issues,
-                );
-                if item["draft"].as_bool() == Some(false) {
-                    first.get_or_insert(item);
-                    if item["prerelease"].as_bool() == Some(true) {
-                        prerelease.get_or_insert(item);
-                    }
-                }
-            }
-        } else {
-            Path::default().check(&mut issues, "", payload, "array");
-        }
-    } else {
-        validate_release(payload, Path::default(), &mut issues);
-        first = payload;
-    }
-    if !issues.is_empty() {
-        let what = if allow_prerelease {
-            "release list"
-        } else {
-            "release"
-        };
-        return Err(Fault::new(
-            LOOKUP_ERROR,
-            format!("Unexpected {what} payload: {issues}"),
-        ));
-    }
-    prerelease
-        .or(first)
-        .ok_or_else(|| Fault::new(NO_RELEASE_ERROR, "The repository has no published release"))
-}
 
 fn resolve(params: Value) -> Result<Value, Fault> {
     let allow = params["allowPrerelease"]
@@ -166,7 +25,10 @@ fn resolve(params: Value) -> Result<Value, Fault> {
             ));
         }
     };
-    let release = select(params.get("payload"), allow)?;
+    let payload = params["payload"]
+        .as_str()
+        .ok_or_else(|| Fault::new("invalid_params", "payload must be JSON text"))?;
+    let release = metadata::select(payload, allow)?;
     let (mut update, notes) = metadata::parse(release["body"].as_str().unwrap_or_default())?;
     let tag = release["tag_name"].as_str().expect("validated release tag");
     let version = update["version"]
@@ -262,7 +124,7 @@ mod tests {
     }
 
     fn request(payload: Value) -> Value {
-        json!({"allowPrerelease":true,"platform":"mac","minimumDarwin":"23.0.0","payload":payload})
+        json!({"allowPrerelease":true,"platform":"mac","minimumDarwin":"23.0.0","payload":payload.to_string()})
     }
 
     #[test]
@@ -316,11 +178,31 @@ mod tests {
     }
 
     #[test]
+    fn deep_unknown_fields_and_overwritten_values_do_not_hide_later_errors() {
+        let deep = format!("{}1e999{}", "[".repeat(20_000), "]".repeat(20_000));
+        let selected = release("beta", true, false)
+            .to_string()
+            .replacen('{', &format!(r#"{{"unused":{deep},"tag_name":{deep},"#), 1)
+            .replace(r#""assets":[{"#, &format!(r#""assets":[{{"extra":{deep},"#));
+        let mut params = request(json!([]));
+        params["payload"] = format!("[{selected}]").into();
+        assert_eq!(resolve(params.clone()).unwrap()["releaseName"], "beta");
+        let later = selected.replace(r#""id":3"#, r#""id":-1e999"#);
+        params["payload"] = format!("[{selected},{later}]").into();
+        assert_eq!(
+            resolve(params.clone()).unwrap_err().message,
+            "Unexpected release list payload: 1.assets.0.id: Invalid input: expected number, received -Infinity"
+        );
+        params["payload"] = format!("[{selected},]").into();
+        assert_eq!(resolve(params).unwrap_err().code, "update_invalid_payload");
+    }
+
+    #[test]
     fn checks_the_selected_asset_and_the_shipped_floor() {
         let mut selected = release("", false, false);
         let mut params = request(json!([]));
         params["allowPrerelease"] = json!(false);
-        params["payload"] = selected.clone();
+        params["payload"] = selected.to_string().into();
         assert_eq!(resolve(params.clone()).unwrap()["releaseName"], "v2.1.3");
 
         let body = selected["body"].as_str().unwrap().replace(
@@ -329,7 +211,7 @@ mod tests {
         );
         selected["body"] = body.into();
         selected["assets"][0]["size"] = json!(13.5);
-        params["payload"] = selected;
+        params["payload"] = selected.to_string().into();
         let mismatch = resolve(params.clone()).unwrap_err();
         assert_eq!(mismatch.code, METADATA_ERROR);
         assert_eq!(
@@ -337,7 +219,8 @@ mod tests {
             "ompdesk-mac-arm64.dmg is 13.5 bytes, but the ompdesk-update comment says 13"
         );
 
-        params["payload"]["assets"][0]["size"] = json!(13);
+        selected["assets"][0]["size"] = json!(13);
+        params["payload"] = selected.to_string().into();
         let floor = resolve(params.clone()).unwrap_err();
         assert_eq!(floor.code, METADATA_ERROR);
         assert_eq!(
