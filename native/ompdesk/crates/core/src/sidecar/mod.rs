@@ -70,7 +70,8 @@ pub fn register(registry: &mut Registry) {
         plain(call, |params: SendParams| Command::Send(params.frame))
     });
     registry.add("sidecar.command", command);
-    registry.add("sidecar.bridge", bridge_request);
+    registry.add("sidecar.bridge", bridge_request::<BridgeParams>);
+    registry.add("sidecar.guiBridge", bridge_request::<GuiBridgeParams>);
     registry.add("sidecar.desktopProcess", desktop_process);
     registry.add("sidecar.barrier", |call| waited(call, Command::Barrier));
     registry.add("sidecar.whenExited", |call| {
@@ -412,6 +413,43 @@ struct BridgeParams {
     timeout_ms: Option<u64>,
 }
 
+/// Unlike a direct bridge request, a GUI command cannot choose a method, payload or another spawn.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GuiBridgeParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+    command: GuiBridgeCommand,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GuiBridgeCommand {
+    GetAdvisorStats,
+    RegenerateSessionTitle,
+}
+
+impl From<GuiBridgeParams> for BridgeParams {
+    fn from(gui: GuiBridgeParams) -> Self {
+        let (method, params) = match gui.command {
+            GuiBridgeCommand::GetAdvisorStats => (
+                "advisor_stats",
+                Some(RawValue::from_string("{}".into()).expect("empty JSON object")),
+            ),
+            GuiBridgeCommand::RegenerateSessionTitle => ("regenerate_title", None),
+        };
+        Self {
+            tab: gui.tab,
+            seq: gui.seq,
+            method: method.into(),
+            spawn_id: Some(gui.spawn_id),
+            params,
+            timeout_ms: None,
+        }
+    }
+}
+
 /// A field that is present holds a value even when it is `null`: `{"params": null}` is not an absent `params`.
 fn keep_null<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -426,9 +464,9 @@ struct BridgeAnswer {
 }
 
 /// A request to this spawn's bridge.
-fn bridge_request(call: Call) -> Answer {
-    let params: BridgeParams = match call.params() {
-        Ok(params) => params,
+fn bridge_request<P: serde::de::DeserializeOwned + Into<BridgeParams>>(call: Call) -> Answer {
+    let params = match call.params::<P>() {
+        Ok(params) => params.into(),
         Err(fault) => return failed(fault),
     };
     let (reply, answer) = oneshot::channel();

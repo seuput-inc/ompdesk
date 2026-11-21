@@ -1607,7 +1607,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Advisor spend and advisories read from stock's advisor stats and journal, bounded by the cost of reading.",
 		files: [
 			"resources/gui-bridge/advisor-stats.ts",
-			"src/main/local/advisor-stats.ts",
+			"native/ompdesk/crates/core/src/sidecar/mod.rs",
 			"resources/gui-bridge/capabilities.ts",
 		],
 		stock: ["advisor.enabled", "advisor stats journal"],

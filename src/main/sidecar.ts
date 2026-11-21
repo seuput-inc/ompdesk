@@ -632,20 +632,29 @@ class BridgeRelay implements BridgeClient {
 	 * `options.timeoutMs`: a request the bridge has not answered by then rejects (`bridge_timeout`). Without it a
 	 * request waits as long as the bridge takes (a user prompt, a login).
 	 */
-	async request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T> {
+	request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T> {
+		return this.#request({ method, params }, options?.timeoutMs);
+	}
+
+	guiCommand(command: "get_advisor_stats" | "regenerate_session_title"): Promise<unknown> {
+		return this.#request({ command });
+	}
+
+	async #request<T>(
+		target: { method: string; params: unknown } | { command: string },
+		timeoutMs?: number,
+	): Promise<T> {
 		if (this.#closed || !core().pid || core().generation !== this.generation)
 			throw new LocalCommandError("GUI bridge closed", "bridge_unavailable");
-		const timeoutMs = options?.timeoutMs;
 		try {
 			// `seq` is taken before the first await: messages leave in the order main makes them.
 			const { result } = await core().call<{ result: T }>(
-				"sidecar.bridge",
+				"command" in target ? "sidecar.guiBridge" : "sidecar.bridge",
 				{
 					tab: this.#tab,
 					seq: this.#nextSeq(),
 					spawnId: this.spawnId,
-					method,
-					params,
+					...target,
 					...(timeoutMs === undefined ? {} : { timeoutMs }),
 				},
 				{
@@ -1091,7 +1100,11 @@ export class SidecarManager extends EventEmitter {
 		const client: RpcClient = new RpcClient({
 			send: (command, timeoutMs) => this.#command(command, timeoutMs),
 			local: command => {
-				const handler = localHandlerFor(command.type);
+				const type = command.type;
+				const handler =
+					type === "get_advisor_stats" || type === "regenerate_session_title"
+						? () => relay.guiCommand(type)
+						: localHandlerFor(type);
 				if (!handler || !runtime) return undefined;
 				return this.#localContext(client, runtime, relay)
 					.then(ctx => runLocalCommand(handler, command, ctx))

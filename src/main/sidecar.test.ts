@@ -366,7 +366,7 @@ describe("SidecarManager", () => {
 		}
 	});
 
-	it("answers GUI-side commands in-process and stamps agent_end entry ids without reordering frames", async () => {
+	it("keeps GUI and stock commands separate and delivers agent_end with its entry ids", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-sidecar-local-"));
 		const commandLog = path.join(tempDir, "commands.json");
 		const script = [
@@ -379,8 +379,19 @@ describe("SidecarManager", () => {
 			'const entries = [{ type: "message", id: "e1", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: userMessage }];',
 			// The bridge server would keep the fake alive after stdin closes; on Windows the live
 			// process then locks tempDir (its cwd) and the cleanup rmdir fails with EBUSY.
+			"let titles = 0;",
+			"const localReply = r => {",
+			'  if (r.method === "advisor_stats") return { ok: true, result: Object.keys(r.params).length === 0 ? { calls: 3 } : null };',
+			'  if (r.method !== "regenerate_title") return { ok: true, result: answer(r) };',
+			"  switch (++titles) {",
+			'    case 1: return { ok: true, result: { title: null, reason: "params" in r ? "unexpected params" : "none" } };',
+			'    case 2: return { ok: true, result: { title: "Fresh title" } };',
+			'    case 3: return { ok: false, code: "unsupported_omp", error: "Title unavailable" };',
+			"    default: return undefined;",
+			"  }",
+			"};",
 			'const answer = (request) => request.method === "sessions.transcript" ? { leafId: "e1", total: 1, messages: [{ ...userMessage, entryId: "e1" }] } : request.method === "sessions.attach_entry_ids" ? { messages: request.params.messages.map(message => ({ ...message, entryId: "e1" })) } : null;',
-			'net.createServer(socket => { socket.setEncoding("utf8"); let buffer = ""; socket.on("data", chunk => { buffer += chunk; for (let i = buffer.indexOf("\\n"); i !== -1; i = buffer.indexOf("\\n")) { const request = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1); socket.write(JSON.stringify({ id: request.id, ok: true, result: answer(request) }) + "\\n"); } }); }).listen(process.env.OMP_GUI_BRIDGE, () => out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }));',
+			'net.createServer(socket => { socket.setEncoding("utf8"); let buffer = ""; socket.on("data", chunk => { buffer += chunk; for (let i = buffer.indexOf("\\n"); i !== -1; i = buffer.indexOf("\\n")) { const request = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1); const reply = localReply(request); if (reply) socket.write(JSON.stringify({ id: request.id, ...reply }) + "\\n"); } }); }).listen(process.env.OMP_GUI_BRIDGE, () => out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }));',
 			"createInterface({ input: process.stdin }).on('line', line => {",
 			"\tconst command = JSON.parse(line);",
 			"\tseen.push(command.type);",
@@ -431,6 +442,46 @@ describe("SidecarManager", () => {
 			const commands = JSON.parse(await fs.readFile(commandLog, "utf8")) as string[];
 			expect(commands).not.toContain("get_transcript");
 			expect(commands).toEqual(["get_state", "prompt"]);
+			for (const [type, data] of [
+				["get_advisor_stats", { calls: 3 }],
+				["regenerate_session_title", { title: null, reason: "none" }],
+			] as const) {
+				const command = { type, id: "renderer-id" };
+				await expect(client.command(command)).resolves.toEqual({
+					id: expect.stringMatching(/^gui-\d+$/),
+					type: "response",
+					command: type,
+					success: true,
+					data,
+				});
+				const direct = await client.stock(command);
+				expect(direct.success).toBe(true);
+				expect(direct).not.toHaveProperty("data");
+			}
+			expect(JSON.parse(await fs.readFile(commandLog, "utf8"))).toEqual([
+				...commands,
+				"get_advisor_stats",
+				"regenerate_session_title",
+			]);
+			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
+				success: true,
+				data: { title: "Fresh title" },
+			});
+			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
+				command: "regenerate_session_title",
+				success: false,
+				code: "unsupported_omp",
+				error: "Title unavailable",
+			});
+			await expect(client.command({ type: "regenerate_session_title" }, 20)).rejects.toThrow(
+				"RPC timeout (20ms): regenerate_session_title",
+			);
+			sidecar.kill();
+			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
+				success: false,
+				code: "bridge_unavailable",
+			});
+			await expect(client.stock({ type: "regenerate_session_title" })).rejects.toThrow("Sidecar disconnected");
 		} finally {
 			sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);
