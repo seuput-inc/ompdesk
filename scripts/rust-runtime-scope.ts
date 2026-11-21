@@ -36,15 +36,33 @@ const tracked = execFileSync("git", ["ls-files", "-z", "--", ...sourceDirs], {
 })
 	.split("\0")
 	.filter(Boolean);
-if (process.argv.includes("--check-inventory")) {
+const remaining = process.argv.includes("--remaining");
+if (remaining || process.argv.includes("--check-inventory")) {
 	const dir = "docs/rust-inventory";
 	const expected = new Set(tracked.filter(path => path.startsWith("src/main/") || path.startsWith("src/preload/")));
 	const seen = new Set<string>();
 	const issues: string[] = [];
+	const statuses = new Set(["port", "mixed", "native-client", "tooling", "exception"]);
+	const pending: string[] = [];
 	for (const name of readdirSync(dir).filter(name => name.endsWith(".tsv"))) {
-		const [, ...rows] = readFileSync(`${dir}/${name}`, "utf8").trimEnd().split("\n");
+		const [header, ...rows] = readFileSync(`${dir}/${name}`, "utf8").trimEnd().split("\n");
+		const columns = header.split("\t");
+		const statusColumn = columns.indexOf("status");
+		const reasons = [
+			"reason",
+			"remaining_unit_or_reason",
+			"replacement_or_dependency",
+			"implementer_and_remaining_work",
+		];
+		const reasonColumn = columns.findIndex(column => reasons.includes(column));
+		if (statusColumn < 0 || reasonColumn < 0) throw new Error(`Missing status or reason column in ${name}`);
 		for (const row of rows) {
-			const [path] = row.split("\t", 1);
+			const fields = row.split("\t");
+			const [path] = fields;
+			const status = fields[statusColumn];
+			if (!statuses.has(status) || !fields[reasonColumn]?.trim())
+				issues.push(`missing or invalid classification: ${path} (${name})`);
+			if (status === "port" || status === "mixed") pending.push(`${path}\t${status}\t${fields[reasonColumn]}`);
 			if (seen.has(path)) issues.push(`duplicate: ${path} (${name})`);
 			if (!expected.has(path)) issues.push(`no tracked file: ${path} (${name})`);
 			seen.add(path);
@@ -52,7 +70,8 @@ if (process.argv.includes("--check-inventory")) {
 	}
 	for (const path of expected) if (!seen.has(path)) issues.push(`unclassified: ${path}`);
 	if (issues.length) throw new Error(issues.join("\n"));
-	console.log(`${seen.size} tracked main/preload paths classified exactly once`);
+	if (remaining) console.log(["path\tstatus\treason", ...pending.sort()].join("\n"));
+	else console.log(`${seen.size} paths classified exactly once; ${pending.length} paths with host logic to move`);
 	process.exit(0);
 }
 const paths = tracked.filter(path => /\.[cm]?[jt]sx?$/.test(path));
