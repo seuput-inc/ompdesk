@@ -82,7 +82,7 @@ const share = (part: number, whole: number): number => tenth((100 * part) / whol
 
 /**
  * What two of main's own readings say: memory, how busy the processors were between them and how much of them this
- * process took. The hang watchdog's worker writes these alone (hang-watchdog-worker.ts): main's thread is stuck then.
+ * process took. A blocked main cannot take this sample; the shell watchdog samples its PID independently.
  */
 export function ownFacts(own: OwnReading, before: OwnReading): Details {
 	const total = own.cpuTotalMs - before.cpuTotalMs;

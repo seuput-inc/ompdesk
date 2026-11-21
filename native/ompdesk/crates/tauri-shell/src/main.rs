@@ -1063,6 +1063,10 @@ fn wc_op(call: host::Call) {
     }
 }
 fn dispatch(call: host::Call) {
+    if call.method == "app.watchdog" {
+        native_services::watchdog::handle(call, &runtime().user_data);
+        return;
+    }
     let app = runtime().app.clone();
     if let Err(error) = app.run_on_main_thread(move || dispatch_ui(call)) {
         log::log("dispatch.failed", json!({"error":error.to_string()}));

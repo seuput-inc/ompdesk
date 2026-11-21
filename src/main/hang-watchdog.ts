@@ -1,23 +1,6 @@
-/**
- * Main-thread hang watchdog, wiring (rules in `hang-watchdog-core.ts`, worker in
- * `hang-watchdog-worker.ts`). Observation only: a stall is recorded in
- * `<userData>/logs/main-thread-hang.json` and reported by the next launch as one
- * `gui-runtime.jsonl` line (`source: "main-thread-hang"`). The worker lives inside
- * this process and is unref'd, so it can neither outlive the app nor keep it open.
- */
-import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { Worker } from "node:worker_threads";
+import { join } from "node:path";
 import { app, powerMonitor } from "electron";
-import {
-	consumeHangMarker,
-	HANG_CHECK_INTERVAL_MS,
-	HANG_HEARTBEAT_INTERVAL_MS,
-	HANG_TIMEOUT_MS,
-	type HangWorkerData,
-	type MainPhase,
-	type MainToHangWorkerMessage,
-} from "./hang-watchdog-core";
+import { consumeHangMarker, type MainPhase } from "./hang-watchdog-core";
 import { writeRuntimeLog } from "./runtime-log";
 
 export function hangMarkerPath(): string {
@@ -43,7 +26,7 @@ export function reportPreviousHang(): void {
 			steps: marker.steps?.join(" > ") ?? null,
 		},
 	});
-	// The line is written a launch later, so the state the worker read during the stall says when it was.
+	// The next launch reports the sample from the stall, not the state of the computer now.
 	if (marker.machine)
 		writeRuntimeLog({
 			source: "machine-state",
@@ -57,7 +40,12 @@ export function reportPreviousHang(): void {
 		});
 }
 
-let postStep: ((message: MainToHangWorkerMessage) => void) | null = null;
+export type WatchdogSignal =
+	| { type: "start"; pid: number }
+	| { type: "heartbeat" | "suspend" | "resume" | "shutdown" }
+	| { type: "step"; phase: MainPhase; step: string };
+
+let postStep: ((message: WatchdogSignal) => void) | null = null;
 
 /**
  * Main is about to run `step` of `phase`: the watchdog's marker names the last few steps, so a stall reads as
@@ -68,56 +56,23 @@ export function markMainStep(phase: MainPhase, step: string): void {
 	postStep?.({ type: "step", phase, step });
 }
 
-/**
- * Starts the watchdog worker. Packaged builds only unless `OMP_GUI_HANG_WATCHDOG=1`: a debugger
- * pausing a dev main thread is no hang. Never under vitest.
- */
-export function installHangWatchdog(): void {
+export function installHangWatchdog(post: (signal: WatchdogSignal) => void): void {
 	if (process.env.VITEST) return;
 	if (!app.isPackaged && process.env.OMP_GUI_HANG_WATCHDOG !== "1") return;
-	const data: HangWorkerData = {
-		pid: process.pid,
-		markerPath: hangMarkerPath(),
-		timeoutMs: HANG_TIMEOUT_MS,
-		checkIntervalMs: HANG_CHECK_INTERVAL_MS,
-	};
-	let worker: Worker;
-	try {
-		mkdirSync(dirname(data.markerPath), { recursive: true });
-		worker = new Worker(join(__dirname, "hang-watchdog-worker.js"), {
-			name: "ompdesk-hang-watchdog",
-			workerData: data,
-		});
-	} catch (error) {
-		console.error("[hang-watchdog] worker failed to start:", error);
-		return;
-	}
-	worker.unref();
-	let stopped = false;
-	const post = (message: MainToHangWorkerMessage): void => {
-		try {
-			worker.postMessage(message);
-		} catch {
-			// The worker already exited.
-		}
-	};
+	post({ type: "start", pid: process.pid });
 	postStep = post;
-	const timer = setInterval(() => post({ type: "heartbeat" }), HANG_HEARTBEAT_INTERVAL_MS);
+	const timer = setInterval(() => post({ type: "heartbeat" }), 1_000);
 	timer.unref();
+	const onSuspend = (): void => post({ type: "suspend" });
 	const onResume = (): void => post({ type: "resume" });
 	const stop = (): void => {
-		if (stopped) return;
-		stopped = true;
 		postStep = null;
 		clearInterval(timer);
+		powerMonitor.off("suspend", onSuspend);
 		powerMonitor.off("resume", onResume);
 		post({ type: "shutdown" });
 	};
+	powerMonitor.on("suspend", onSuspend);
 	powerMonitor.on("resume", onResume);
-	worker.on("error", error => {
-		console.error("[hang-watchdog] worker failed:", error);
-		stop();
-	});
-	worker.once("exit", stop);
 	app.once("will-quit", stop);
 }

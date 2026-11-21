@@ -12,6 +12,8 @@ pub mod shellops;
 pub mod shortcut;
 #[path = "../../shell/src/system.rs"]
 pub mod system;
+#[path = "watchdog/mod.rs"]
+pub mod watchdog;
 
 pub fn dispatch(call: Call) -> Option<Call> {
     let handler: fn(Call) = match call.method.split_once('.').map(|(namespace, _)| namespace) {

@@ -215,6 +215,7 @@ import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } fr
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
+import { postWatchdog } from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
@@ -876,7 +877,7 @@ app.whenReady().then(async () => {
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
 		reportPreviousHang();
-		installHangWatchdog();
+		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({
 			log: (message, details) => {

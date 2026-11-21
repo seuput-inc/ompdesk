@@ -360,11 +360,7 @@ export default defineConfig({
 			externalizeDeps: { exclude: MAIN_BUNDLED_DEPS },
 			minify: "esbuild",
 			rollupOptions: {
-				// hang-watchdog-worker is the main-thread hang watchdog's worker thread (src/main/hang-watchdog.ts).
-				input: {
-					index: resolve(__dirname, "src/main/index.ts"),
-					"hang-watchdog-worker": resolve(__dirname, "src/main/hang-watchdog-worker.ts"),
-				},
+				input: { index: resolve(__dirname, "src/main/index.ts") },
 			},
 		},
 	},

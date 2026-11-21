@@ -8,7 +8,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { hangMarkerPath, reportPreviousHang } from "./hang-watchdog";
-import { writeHangMarker } from "./hang-watchdog-core";
 import { appendRuntimeLogAtPath, type RuntimeLogReport } from "./runtime-log-core";
 
 const mocks = vi.hoisted(() => ({ userData: { dir: "" } }));
@@ -37,14 +36,17 @@ afterAll(() => {
 describe("reportPreviousHang", () => {
 	it("writes the phase and the steps main stalled in, oldest first, to the log", () => {
 		fs.mkdirSync(path.dirname(hangMarkerPath()), { recursive: true });
-		writeHangMarker(hangMarkerPath(), {
-			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
-			pid: 29292,
-			unresponsiveMs: 5628,
-			selfRecovered: true,
-			phase: "update",
-			steps: ["update:quit-and-install", "quit:teardown:sidecars"],
-		});
+		fs.writeFileSync(
+			hangMarkerPath(),
+			JSON.stringify({
+				detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
+				pid: 29292,
+				unresponsiveMs: 5628,
+				selfRecovered: true,
+				phase: "update",
+				steps: ["update:quit-and-install", "quit:teardown:sidecars"],
+			}),
+		);
 
 		reportPreviousHang();
 
@@ -56,13 +58,16 @@ describe("reportPreviousHang", () => {
 	});
 
 	it("writes how the computer stood during the stall as a line of its own, with when that was", () => {
-		writeHangMarker(hangMarkerPath(), {
-			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
-			pid: 29292,
-			unresponsiveMs: 5628,
-			selfRecovered: false,
-			machine: { availMB: 512, totalMB: 16_384, cpus: 8, cpuBusyPct: 99.5, mainCpuPct: 0.1 },
-		});
+		fs.writeFileSync(
+			hangMarkerPath(),
+			JSON.stringify({
+				detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
+				pid: 29292,
+				unresponsiveMs: 5628,
+				selfRecovered: false,
+				machine: { availMB: 512, totalMB: 16_384, cpus: 8, cpuBusyPct: 99.5, mainCpuPct: 0.1 },
+			}),
+		);
 
 		reportPreviousHang();
 

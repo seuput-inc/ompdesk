@@ -5,6 +5,7 @@
  * level, as they do there.
  */
 import { shutdownCore } from "../../core/process";
+import type { WatchdogSignal } from "../../hang-watchdog";
 import { exitReport } from "../../quit-log";
 import { appendRuntimeLogAtPath, runtimeLogFile } from "../../runtime-log-core";
 import { ShellClient } from "../client";
@@ -24,6 +25,10 @@ const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello",
 	protocol: 1,
 });
 if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
+
+export function postWatchdog(signal: WatchdogSignal): void {
+	void client.call("app.watchdog", signal).catch((error: unknown) => console.warn("[hang-watchdog]", error));
+}
 
 let stopping = false;
 /** Main's app once made: its log line names the profile and the version. */

@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { withoutGitSelectors } from "../src/shared/git-env";
 
 const entries = {
-	node: ["src/main/index.ts", "src/main/hang-watchdog-worker.ts"],
+	node: ["src/main/index.ts"],
 	page: [
 		"src/preload/tauri.ts",
 		"src/renderer/public/pre-paint.js",
