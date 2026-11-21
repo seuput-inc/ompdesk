@@ -17,22 +17,18 @@ pub fn init() {
     LAST.with(|l| *l.borrow_mut() = system::displays());
 }
 
+/// Borrow the display facts on the UI thread, without asking the OS again.
+pub fn with_displays<R>(read: impl FnOnce(&(Vec<Value>, i64)) -> R) -> R {
+    LAST.with_borrow(read)
+}
+
 /// Pushes `screen.changed` when the display list moved. UI thread.
 pub fn refresh() {
     let now = system::displays();
-    let reason = LAST.with(|l| {
-        let mut last = l.borrow_mut();
-        let reason = displays_change(&last, &now);
-        if reason.is_some() {
-            *last = now.clone();
-        }
-        reason
-    });
-    if let Some(reason) = reason {
-        host::event(
-            "screen.changed",
-            json!({ "displays": now.0, "primaryDisplayId": now.1, "reason": reason }),
-        );
+    if let Some(reason) = with_displays(|last| displays_change(last, &now)) {
+        let data = json!({ "displays": now.0, "primaryDisplayId": now.1, "reason": reason });
+        LAST.with(|last| last.replace(now));
+        host::event("screen.changed", data);
     }
 }
 

@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import { release } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, shell } from "electron";
 import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
 import { appIconPath, appNotification } from "./app-icon";
@@ -28,7 +28,6 @@ import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
 import { SafeStore } from "./safe-store";
 import type { WindowPresence } from "./update-log-core";
 import type { ClientWindow } from "./web/client-window";
-import { type Rect, restoreWithinDisplays } from "./window-bounds";
 import { micaSupported, windowChromeOptions } from "./window-chrome";
 import { showOnFirstPaint } from "./window-show";
 
@@ -51,11 +50,6 @@ const MIN_WIDTH = 800;
 const MIN_HEIGHT = 600;
 /** Windows 11 windows can get the Mica backdrop (B79); decided once per launch, per window in createWindow. */
 const MICA = micaSupported(process.platform, release());
-
-/** Work areas with the primary display first — it is the recentering target. */
-function displayWorkAreas(): Rect[] {
-	return [screen.getPrimaryDisplay().workArea, ...screen.getAllDisplays().map(display => display.workArea)];
-}
 
 export interface WindowRecord {
 	win: BrowserWindow;
@@ -129,25 +123,16 @@ export class WindowManager {
 		const cascade = this.getAllWindows().length;
 		const offset = cascade * 28;
 
-		// A display that has been unplugged since the geometry was saved takes the
-		// title bar with it: the window comes back unreachable.
-		const geometry: { x?: number; y?: number; width: number; height: number } =
-			saved.x === undefined || saved.y === undefined
-				? { width: saved.width, height: saved.height }
-				: restoreWithinDisplays(
-						{ x: saved.x + offset, y: saved.y + offset, width: saved.width, height: saved.height },
-						displayWorkAreas(),
-					);
-
 		// Mica only for a window that first shows restored: Electron leaves a Mica window that is shown
 		// maximized blank for good (black with a GPU, white in software rendering), while one maximized
 		// after its first show draws fine. A saved maximized window opens without it.
 		const mica = MICA && !saved.isMaximized;
 		const win = new BrowserWindow({
-			x: geometry.x,
-			y: geometry.y,
-			width: geometry.width,
-			height: geometry.height,
+			...(saved.x !== undefined && saved.y !== undefined
+				? { x: saved.x + offset, y: saved.y + offset, restoreBounds: true }
+				: {}),
+			width: saved.width,
+			height: saved.height,
 			minWidth: MIN_WIDTH,
 			minHeight: MIN_HEIGHT,
 			show: false,

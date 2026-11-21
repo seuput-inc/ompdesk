@@ -131,6 +131,8 @@ has Node). The shim drops `webPreferences.preload`; the shell injects `out/prelo
 page of the **app session** (never into a Preview partition). The window loads nothing until `wc.op loadURL`.
 Chrome as in the contract: frameless; Windows draws the caption buttons (138 × 48 px popup, `titleBarOverlay`
 colours), macOS hidden-inset traffic lights at `trafficLightPosition`.
+For a restored app window, `restoreBounds: true` tells the Tauri host to keep the requested rectangle if its
+title bar is reachable, or fit it on the primary work area otherwise. `win.create` uses its cached display facts.
 
 `win.op` ops (`args` object):
 `show`, `showInactive`, `hide`, `close` (`{force: true}` — Node already ran the `close` listeners and the

@@ -532,15 +532,13 @@ src/main/updater-install.test.ts	tooling	-	Vitest suite: Restart & install with 
 src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
 src/main/updater-state.ts	port	2	stageBundleFromDmg, SWAP_SCRIPT and settleFailedUpdateCheck implement installer staging, replacement and status transitions.
 src/main/updater.ts	port	4	checkForUpdate/downloadUpdate/restartIntoUpdate orchestrate electron-updater, Electron networking, platform installers, app quit and relaunch.
-src/main/window-bounds.test.ts	tooling	-	Vitest suite: window restore geometry.
-src/main/window-bounds.ts	port	1	restoreWithinDisplays detects unreachable saved geometry and places the window within current work areas.
 src/main/window-chrome.test.ts	tooling	-	Vitest suite: windowChromeOptions.
 src/main/window-chrome.ts	port	1	windowChromeOptions selects platform caption layout; sanitizeChromeColors and nativeThemeSource normalize renderer theme inputs.
 src/main/window-show.test.ts	tooling	-	Vitest suite: showOnFirstPaint.
 src/main/window-show.ts	port	4	showOnFirstPaint races window ready-to-show with content load to reveal a hidden Electron window.
 src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.
 src/main/window-spawn-target.ts	port	1	resolveWindowSpawnTarget chooses idle placeholder versus a fresh or restored session launch target.
-src/main/window.ts	port	4	WindowManager creates sandboxed BrowserWindows, persists geometry and manages native dialogs, themes and window lifetimes.
+src/main/window.ts	mixed	4	WindowManager creates windows and persists geometry, dialogs, themes and lifetimes. Tauri win.create restores saved bounds using the shell's current display snapshot (tauri-shell/src/window_bounds.rs).
 src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: sniffMime.
 src/main/workspace-fs.ts	mixed	2	listWorkspace/readWorkspaceRange and mutations dispatch disk work to fs.* in core/src/fs/mod.rs; TS retains path confinement, MIME detection, argument checks and response shaping.
