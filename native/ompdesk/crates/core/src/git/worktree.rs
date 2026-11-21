@@ -2,23 +2,23 @@
 //! and branch, its `worktree add` with the branch rolled back when the add fails, the checks before a removal and
 //! the removal itself, and a session worktree's snapshot and removal. Each method is one whole step: main runs the
 //! ones that change the repository under its lock (`withRepoLock`), so a stopped holder cancels the request and the
-//! lock's next holder starts once its gits exited. What main keeps: where worktrees go (omp's
-//! `git.worktree_location`), the folder checks and `mkdir` its fenced files make under the lock (`fenced-fs.ts`)
-//! and the exit policy. A refusal is a fault whose code is the `LocalCommandError` code the TypeScript threw.
+//! lock's next holder starts once its gits and disk work have ended. Main gets the worktree root and repo hash
+//! from omp's `git.worktree_location`. A refusal carries the code the TypeScript caller exposes.
 
 use std::hash::{DefaultHasher, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::parse;
 use super::read::{self, blocking};
 use super::run::Git;
+use crate::disk::tree::live;
 use crate::fs::disk;
 use crate::fs::error::{Codes, NodeError};
 use crate::fs::order::js_trim;
-use crate::run::{Opts, Output};
-use crate::server::Fault;
+use crate::run::{Opts, Output, Runner};
+use crate::server::{Fault, Scope};
 
 fn refuse(code: &'static str, message: impl Into<String>) -> Fault {
     Fault::new(code, message)
@@ -141,15 +141,102 @@ pub async fn plan(
     })
 }
 
-#[derive(Serialize)]
-pub struct Added {
-    taken: bool,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AddParams {
+    git: Runner,
+    primary: String,
+    base_cwd: String,
+    root: String,
+    hash: String,
+    slug: String,
+    branch_prefix: String,
+    start_point: String,
+    source: Option<Source>,
+    add_timeout_ms: u64,
 }
 
-/// A worktree at `target` on a new branch `branch` from `start_point`; `taken` when the branch already exists (the
-/// caller tries its next name). A failed `branch` or `worktree add` deletes the branch again, so a retry does not
-/// trip over a half-made ref.
-pub async fn add(
+#[derive(Serialize)]
+pub(super) struct Added {
+    path: String,
+    branch: String,
+}
+
+/// An existing folder (even empty) is occupied. Never start a mkdir or git after a cancelled disk wait.
+fn free_folder(scope: Scope, path: PathBuf) -> Result<Option<String>, Fault> {
+    live(&scope)?;
+    if path.exists() {
+        return Ok(None);
+    }
+    let parent = path.parent().expect("a candidate has a folder name");
+    live(&scope)?;
+    let parent_text = parent.to_string_lossy();
+    if parent_text.contains('\0') {
+        return Err(NodeError::nul_in_path("path", &parent_text).fault(Codes::None));
+    }
+    std::fs::create_dir_all(parent)
+        .map_err(|error| NodeError::new(&error, "mkdir", Some(&parent_text)).fault(Codes::None))?;
+    live(&scope)?;
+    Ok(Some(
+        path.into_os_string()
+            .into_string()
+            .expect("UTF-8 worktree location"),
+    ))
+}
+
+pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault> {
+    let git = Git::new(params.git, scope.clone());
+    let root = PathBuf::from(read::native(&params.root));
+    for suffix in 1..=100 {
+        let suffixed;
+        let candidate = if suffix == 1 {
+            &params.slug
+        } else {
+            suffixed = format!("{}-{suffix}", params.slug);
+            &suffixed
+        };
+        let path = root.join(format!("gui-{candidate}-{}", params.hash));
+        let held = scope.clone();
+        let Some(path) = blocking(move || free_folder(held, path)).await?? else {
+            continue;
+        };
+        let branch = if let Some(source) = params.source {
+            add_named(
+                &git,
+                &params.primary,
+                &params.base_cwd,
+                &path,
+                &source,
+                params.add_timeout_ms,
+            )
+            .await?;
+            source.name
+        } else {
+            let branch = format!("{}{candidate}", params.branch_prefix);
+            if branch_exists(&git, &params.primary, &branch).await? {
+                continue;
+            }
+            add_new(
+                &git,
+                &params.primary,
+                &params.base_cwd,
+                &path,
+                &branch,
+                &params.start_point,
+                params.add_timeout_ms,
+            )
+            .await?;
+            branch
+        };
+        return Ok(Added { path, branch });
+    }
+    Err(refuse(
+        "worktree_create_failed",
+        "No available worktree name after 100 attempts",
+    ))
+}
+
+async fn add_new(
     git: &Git,
     primary: &str,
     base_cwd: &str,
@@ -157,31 +244,26 @@ pub async fn add(
     branch: &str,
     start_point: &str,
     add_timeout_ms: u64,
-) -> Result<Added, Fault> {
-    if branch_exists(git, primary, branch).await? {
-        return Ok(Added { taken: true });
-    }
-    let made = async {
-        git.text(base_cwd, &["branch", "--no-track", branch, start_point])
-            .await?;
-        add_worktree(
-            git,
-            primary,
-            &["worktree", "add", target, branch],
-            add_timeout_ms,
-        )
-        .await
-    };
-    if let Err(error) = made.await {
+) -> Result<(), Fault> {
+    git.text(base_cwd, &["branch", "--no-track", branch, start_point])
+        .await?;
+    if let Err(error) = add_worktree(
+        git,
+        primary,
+        &["worktree", "add", target, branch],
+        add_timeout_ms,
+    )
+    .await
+    {
         let _ = git.raw(primary, &["branch", "-D", branch]).await;
         return Err(error);
     }
-    Ok(Added { taken: false })
+    Ok(())
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq)]
+#[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Mode {
+enum Mode {
     New,
     Local,
     Remote,
@@ -189,7 +271,7 @@ pub enum Mode {
 
 /// The branch a caller names (main checked its shape: `worktreeBranchSource`).
 #[derive(Deserialize)]
-pub struct Source {
+struct Source {
     name: String,
     mode: Mode,
     remote: Option<String>,
@@ -199,7 +281,7 @@ pub struct Source {
 /// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else HEAD), an existing
 /// local one, or a new local one tracking `<remote>/<name>`. The name is never changed: a taken, missing or invalid
 /// one is refused, and a new branch whose `worktree add` failed is deleted again.
-pub async fn add_named(
+async fn add_named(
     git: &Git,
     primary: &str,
     base_cwd: &str,
@@ -228,14 +310,7 @@ pub async fn add_named(
                 return Err(failed(format!("The branch {name} already exists.")));
             }
             let from = source.from.as_deref().unwrap_or("HEAD");
-            git.text(base_cwd, &["branch", "--no-track", name, from])
-                .await?;
-            let args = ["worktree", "add", target, name];
-            if let Err(error) = add_worktree(git, primary, &args, add_timeout_ms).await {
-                let _ = git.raw(primary, &["branch", "-D", name]).await;
-                return Err(error);
-            }
-            Ok(())
+            add_new(git, primary, base_cwd, target, name, from, add_timeout_ms).await
         }
         Mode::Local => {
             if !exists {

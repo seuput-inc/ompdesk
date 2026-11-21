@@ -187,30 +187,6 @@ struct PlanParams {
     base_ref: Option<String>,
 }
 
-/// `addTimeoutMs`: `worktree add`'s timeout, main's to choose.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AddParams {
-    git: Runner,
-    primary: String,
-    base_cwd: String,
-    path: String,
-    branch: String,
-    start_point: String,
-    add_timeout_ms: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AddNamedParams {
-    git: Runner,
-    primary: String,
-    base_cwd: String,
-    path: String,
-    source: worktree::Source,
-    add_timeout_ms: u64,
-}
-
 #[derive(Deserialize)]
 struct RemovalParams {
     git: Runner,
@@ -730,43 +706,8 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.worktreeAdd", |call| {
         Box::pin(async move {
-            let AddParams {
-                git,
-                primary,
-                base_cwd,
-                path,
-                branch,
-                start_point,
-                add_timeout_ms,
-            } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(
-                &worktree::add(
-                    &git,
-                    &primary,
-                    &base_cwd,
-                    &path,
-                    &branch,
-                    &start_point,
-                    add_timeout_ms,
-                )
-                .await?,
-            )
-        })
-    });
-    registry.add("git.worktreeAddNamed", |call| {
-        Box::pin(async move {
-            let AddNamedParams {
-                git,
-                primary,
-                base_cwd,
-                path,
-                source,
-                add_timeout_ms,
-            } = call.params()?;
-            let git = Git::new(git, call.scope);
-            worktree::add_named(&git, &primary, &base_cwd, &path, &source, add_timeout_ms).await?;
-            Reply::json(&())
+            let params = call.params()?;
+            Reply::json(&worktree::add(params, call.scope).await?)
         })
     });
     registry.add("git.worktreeRemoval", |call| {

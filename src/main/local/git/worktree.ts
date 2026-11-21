@@ -1,10 +1,9 @@
 /**
  * `worktree_create` / `worktree_remove` (port of fork rpc-worktree.ts). The gits and their rules (base and branch
  * checks, `worktree add` and its branch rollback, the checks before a removal, the removal) run in the core process
- * (`native/ompdesk/crates/core/src/git/worktree.rs`); this is their typed client, which keeps what main owns: the
- * names (stock's canonical worktree base and repo hash through the bridge), the folder checks and `mkdir` under the
- * repository lock on the fenced files (`fenced-fs.ts`) and the lock itself.
- * Collisions suffix `-2..-100` on path and branch. Removal keeps the branch and
+ * (`native/ompdesk/crates/core/src/git/worktree.rs`). Main gets stock's worktree root and repo hash through the
+ * bridge and holds the repository lock while the core selects a free name and creates the checkout.
+ * Collisions suffix `-2..-100` on the folder and on generated branch names. Removal keeps the branch and
  * requires a linked checkout registered by git under the canonical root.
  * Kept over stock createSessionWorktree: GUI names/baseRef differ and never carry
  * uncommitted changes. Removal deliberately retains branches; session exit safety
@@ -13,16 +12,15 @@
 
 import * as path from "node:path";
 import type { RpcWorktreeCreateResult } from "../../../shared/rpc-types";
-import { worktreeBranchPrefix } from "../../../shared/worktree-branch";
+import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
 import { CoreError } from "../../core/process";
 import { fs } from "../../fenced-fs";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
 import { coreGit, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
-import { guiWorktreeCandidate, worktreeSlug } from "./parse";
+import { worktreeSlug } from "./parse";
 import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 
-const MAX_SUFFIX = 100;
 /** `git worktree add` checks out the whole tree: minutes on a large repository. */
 export const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
@@ -62,13 +60,6 @@ export async function worktreeGit<T>(method: string, params: object, rounds: num
 			throw new LocalCommandError(error.message, error.code);
 		throw error;
 	}
-}
-
-async function pathTaken(file: string): Promise<boolean> {
-	return fs.stat(file).then(
-		() => true,
-		() => false,
-	);
 }
 
 /** Main cannot import pi-utils' Bun hash or its live worktree.base override. */
@@ -130,7 +121,8 @@ export async function createWorktree(
 			"invalid_name",
 		);
 	}
-	const branchPrefix = input.branchPrefix === undefined ? undefined : worktreeBranchPrefix(input.branchPrefix);
+	const branchPrefix =
+		input.branchPrefix === undefined ? GUI_WORKTREE_BRANCH_PREFIX : worktreeBranchPrefix(input.branchPrefix);
 	if (branchPrefix === null) {
 		throw new LocalCommandError(`Invalid worktree branch prefix "${input.branchPrefix}".`, "invalid_name");
 	}
@@ -145,40 +137,36 @@ export async function createWorktree(
 		startPoint: string;
 		mainCheckout: string;
 	}>("git.worktreePlan", { cwd: baseCwd, checkoutSpelling: path.resolve(baseCwd), baseRef: input.baseRef }, 3);
-	const location = await stockWorktreeLocation(bridge, primary);
+	const { root, hash } = await stockWorktreeLocation(bridge, primary);
 
-	const made = await withRepoLock(primary, async (): Promise<RpcWorktreeCreateResult> => {
-		for (let suffix = 1; suffix <= MAX_SUFFIX; suffix++) {
-			const candidate = guiWorktreeCandidate(slug, location.hash, suffix, location.root, branchPrefix);
-			// A half-created dir (no .git yet) still makes `git worktree add` fail with "exists".
-			if (await pathTaken(candidate.path)) continue;
-			const add = { primary, baseCwd, path: candidate.path, addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS };
-			try {
-				await fs.mkdir(path.dirname(candidate.path), { recursive: true });
-				if (input.branch) {
-					// The branch name is the caller's: only the folder takes a suffix.
-					await worktreeGit("git.worktreeAddNamed", { ...add, source: input.branch }, 4, WORKTREE_ADD_TIMEOUT_MS);
-					return { path: candidate.path, branch: input.branch.name, baseCwd: mainCheckout };
-				}
-				// A taken branch name moves on to the next suffix; a failed add has rolled its branch back.
-				const { taken } = await worktreeGit<{ taken: boolean }>(
-					"git.worktreeAdd",
-					{ ...add, branch: candidate.branch, startPoint },
-					3,
-					WORKTREE_ADD_TIMEOUT_MS,
-				);
-				if (!taken) return { path: candidate.path, branch: candidate.branch, baseCwd: mainCheckout };
-			} catch (error) {
-				if (error instanceof LocalCommandError) throw error;
-				throw new LocalCommandError(
-					`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
-					"worktree_create_failed",
-				);
-			}
+	const made = await withRepoLock(primary, async () => {
+		try {
+			return await worktreeGit<{ path: string; branch: string }>(
+				"git.worktreeAdd",
+				{
+					primary,
+					baseCwd,
+					root,
+					hash,
+					slug,
+					branchPrefix,
+					startPoint,
+					source: input.branch,
+					addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+				},
+				// A generated name can need 100 branch probes before the create and its possible rollback.
+				input.branch ? 4 : 102,
+				WORKTREE_ADD_TIMEOUT_MS,
+			);
+		} catch (error) {
+			if (error instanceof LocalCommandError) throw error;
+			throw new LocalCommandError(
+				`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+				"worktree_create_failed",
+			);
 		}
-		throw new LocalCommandError(`No available worktree name after ${MAX_SUFFIX} attempts`, "worktree_create_failed");
 	});
-	return { ...made, ...(await prepareWorktree(primary, made.path)) };
+	return { ...made, baseCwd: mainCheckout, ...(await prepareWorktree(primary, made.path)) };
 }
 
 /**

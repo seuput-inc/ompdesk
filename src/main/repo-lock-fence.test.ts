@@ -407,20 +407,32 @@ describe("every caller of withRepoLock that touches the disk", () => {
 	});
 
 	it(
-		"worktree create: a late mkdir never goes on to add the branch and the worktree",
+		"worktree create: a stopped native add cannot create a branch or checkout under the next holder",
 		async () => {
-			const held = hold("mkdir", wtRoot);
 			const key = await primaryRoot(repo);
+			const branch = "omp/gui/late";
+			const refDir = path.join(repo, ".git", "refs", "heads", "omp", "gui");
+			const refLock = path.join(refDir, "late.lock");
+			await promises.mkdir(refDir, { recursive: true });
+			await promises.writeFile(refLock, "");
+			gitSync(repo, "config", "core.filesRefLockTimeout", "-1");
+			// The core recreates this root inside the held request. The competing ref lock stops git making the branch.
+			await promises.rmdir(wtRoot);
 			const old = caught(createWorktree(repo, { name: "late" }, bridge));
-			const next = withRepoLock(key, async () => {});
-			await held.reached;
-			await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
-			held.release();
-			await next;
-			expect(await old).toBeInstanceOf(Error);
-			await settle();
-			expect(gitSync(repo, "branch", "--list", "omp/gui/*")).toBe("");
-			expect(await promises.readdir(wtRoot)).toEqual([]);
+			try {
+				await vi.waitFor(() => promises.access(wtRoot), { timeout: 20_000, interval: 20 });
+				const next = withRepoLock(key, async () => {
+					await promises.unlink(refLock);
+					gitSync(repo, "branch", branch);
+				});
+				await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
+				expect(await old).toBeInstanceOf(StepStalledError);
+				await next;
+				expect(gitSync(repo, "rev-parse", branch)).toBe(gitSync(repo, "rev-parse", "HEAD"));
+				expect(await promises.readdir(wtRoot)).toEqual([]);
+			} finally {
+				await promises.rm(refLock, { force: true });
+			}
 		},
 		SLOW,
 	);
