@@ -69,7 +69,10 @@ async function flush(): Promise<void> {
 async function mount({
 	withComposerDock = false,
 	runtime,
-}: { withComposerDock?: boolean; runtime?: SessionRuntime } = {}): Promise<void> {
+}: {
+	withComposerDock?: boolean;
+	runtime?: SessionRuntime;
+} = {}): Promise<void> {
 	respondExtensionUi = vi.fn();
 	openExternal = vi.fn(async () => {});
 	const ompWindow = window as unknown as {

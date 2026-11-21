@@ -237,7 +237,9 @@ async function phoneTailscale(parent: string): Promise<FixtureTailscale> {
 	});
 }
 
-test("a paired phone's Preview page is driven by the agent through stock's relay, taken over and handed back", async ({ relayEnv }) => {
+test("a paired phone's Preview page is driven by the agent through stock's relay, taken over and handed back", async ({
+	relayEnv,
+}) => {
 	test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 	test.setTimeout(240_000);
 	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-preview-agent-phone-")));
@@ -269,7 +271,9 @@ test("a paired phone's Preview page is driven by the agent through stock's relay
 	}
 });
 
-test("a paired device's own Preview page is driven by the agent of the host's tab through the link, taken over and handed back", async ({ relayEnv }) => {
+test("a paired device's own Preview page is driven by the agent of the host's tab through the link, taken over and handed back", async ({
+	relayEnv,
+}) => {
 	test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 	// A host's tab never loads a loopback page (the Preview's rule for a paired host's tab): the site is on this
 	// computer's own address.

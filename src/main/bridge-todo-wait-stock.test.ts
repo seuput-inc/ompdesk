@@ -81,19 +81,23 @@ describe.skipIf(!existsSync(omp))("stock's todo reminder on a session that waits
 		expect(reminded(bodies)).toBe(0);
 	}, 180_000);
 
-	it.each([OPEN, SEND] as const)("keeps independent work actionable after %s", async delegate => {
-		const waiting = "Wait for the review";
-		const { bodies, session } = await start({ items: [waiting, LOCAL_ITEM], delegate });
-		const frames = await session.turn("Request a review and classify the local branches");
-		expect(frames.some(frame => frame.type === "host_tool_call" && frame.toolName === delegate)).toBe(true);
-		expect(bodies[3]).toContain("You stopped with 2 incomplete todo item(s)");
-		const done = frames.find(frame => frame.type === "tool_execution_end" && frame.result?.details?.op === "done");
-		expect(done?.result?.details?.phases?.[0]?.tasks).toEqual([
-			{ content: waiting, status: "in_progress" },
-			{ content: LOCAL_ITEM, status: "completed" },
-		]);
-		expect(frames.filter(frame => frame.type === "todo_reminder")).toHaveLength(1);
-	}, 180_000);
+	it.each([OPEN, SEND] as const)(
+		"keeps independent work actionable after %s",
+		async delegate => {
+			const waiting = "Wait for the review";
+			const { bodies, session } = await start({ items: [waiting, LOCAL_ITEM], delegate });
+			const frames = await session.turn("Request a review and classify the local branches");
+			expect(frames.some(frame => frame.type === "host_tool_call" && frame.toolName === delegate)).toBe(true);
+			expect(bodies[3]).toContain("You stopped with 2 incomplete todo item(s)");
+			const done = frames.find(frame => frame.type === "tool_execution_end" && frame.result?.details?.op === "done");
+			expect(done?.result?.details?.phases?.[0]?.tasks).toEqual([
+				{ content: waiting, status: "in_progress" },
+				{ content: LOCAL_ITEM, status: "completed" },
+			]);
+			expect(frames.filter(frame => frame.type === "todo_reminder")).toHaveLength(1);
+		},
+		180_000,
+	);
 
 	it("leaves a request for approval with the person", async () => {
 		const { bodies, session } = await start({ items: [LOCAL_ITEM], answer: "May I proceed?" });

@@ -183,7 +183,9 @@ export async function installRelayExtension(
 ): Promise<string> {
 	const nativeHost = nativeHostRelay(omp.version);
 	if (nativeHost && !NATIVE_HOST_BROWSERS.includes(id)) {
-		throw new Error(`omp does not register a native messaging host for ${CHROMIUM_BROWSER_NAMES[id]} on this platform`);
+		throw new Error(
+			`omp does not register a native messaging host for ${CHROMIUM_BROWSER_NAMES[id]} on this platform`,
+		);
 	}
 	const params = {
 		omp: { bin: omp.bin, env: ompRunEnv(omp.bin, await spawnPath()) },

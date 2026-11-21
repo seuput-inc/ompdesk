@@ -215,7 +215,10 @@ describe.skipIf(!existsSync(omp))("a message another session sends while the rec
 		frame.type === "extension_ui_request" &&
 		(frame.method === "form"
 			? frame.html === CARD_FORM
-			: frame.method === "select" && frame.options?.length === 2 && frame.options[0] === "A" && frame.options[1] === "B");
+			: frame.method === "select" &&
+				frame.options?.length === 2 &&
+				frame.options[0] === "A" &&
+				frame.options[1] === "B");
 	const answerCard = (session: Omp, card: Frame) =>
 		session.write({
 			type: "extension_ui_response",

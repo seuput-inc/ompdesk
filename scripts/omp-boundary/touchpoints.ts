@@ -2331,10 +2331,15 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "copy",
 		contract: "internal",
 		disposition: { kind: "registered", reason: "The renderer reads tool calls with no omp to ask." },
-		summary: "Read stock Bash tools/tool-commands.ToolCommandDispatch results and pi-tui parseXdUrl for historical device writes.",
+		summary:
+			"Read stock Bash tools/tool-commands.ToolCommandDispatch results and pi-tui parseXdUrl for historical device writes.",
 		files: ["src/renderer/lib/xdev.ts", "src/renderer/components/tools/index.tsx"],
 		stock: ["tools/tool-commands.ToolCommandDispatch", "@oh-my-pi/pi-tui/tools/xd-url"],
-		tests: ["src/renderer/components/tools/ToolRegistry.test.tsx", "src/renderer/lib/xdev.test.ts", "src/main/xdev-stock.test.ts"],
+		tests: [
+			"src/renderer/components/tools/ToolRegistry.test.tsx",
+			"src/renderer/lib/xdev.test.ts",
+			"src/main/xdev-stock.test.ts",
+		],
 	},
 	{
 		id: "C06",

@@ -131,7 +131,11 @@ async function askForm(): Promise<{ frames: Frame[]; text: string; projection: P
 			)
 				return;
 			if (!existsSync(join(isolated, "projected.json"))) {
-				unexpected = JSON.stringify({ method: frame.method, title: frame.title, requestedForm: frame.html === FORM });
+				unexpected = JSON.stringify({
+					method: frame.method,
+					title: frame.title,
+					requestedForm: frame.html === FORM,
+				});
 				child.kill("SIGKILL");
 				return;
 			}

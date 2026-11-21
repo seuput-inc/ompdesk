@@ -102,39 +102,45 @@ describe.skipIf(process.platform === "win32")("ompdesk check with Playwright", (
 		expect(JSON.parse(ompdesk("checks", "wait").stdout).next).toBe("fix");
 	}, 300_000);
 
-	it.each(["reporter", "stdout"])("keeps Playwright diagnostics from a Node wrapper (%s)", channel => {
-		writeFileSync(
-			join(project, "tests", "wrapper.spec.cjs"),
-			`const {test, expect} = require("@playwright/test");
+	it.each(["reporter", "stdout"])(
+		"keeps Playwright diagnostics from a Node wrapper (%s)",
+		channel => {
+			writeFileSync(
+				join(project, "tests", "wrapper.spec.cjs"),
+				`const {test, expect} = require("@playwright/test");
 test.describe.configure({mode: "serial"});
 test.skip("explicit skip", () => {});
 test("passes", () => {});
 test("${channel === "stdout" ? "synthetic-private-title" : "asserts"}", () => expect("synthetic-private-received").toBe("synthetic-private-expected"));
 test("not reached", () => {});`,
-		);
-		writeFileSync(
-			join(project, "wrapper.cjs"),
-			`const {spawnSync} = require("node:child_process");
+			);
+			writeFileSync(
+				join(project, "wrapper.cjs"),
+				`const {spawnSync} = require("node:child_process");
 if (process.argv[2] === "stdout") delete process.env.PW_TEST_REPORTER;
 process.exitCode = spawnSync(process.execPath, ["node_modules/playwright/cli.js", "test", "wrapper.spec.cjs", "--workers=1"], {stdio: "inherit"}).status ?? 2;`,
-		);
-		const result = ompdesk("check", "--light", "--", "node", "wrapper.cjs", channel);
-		expect(result.status).toBe(1);
-		const waited = ompdesk("checks", "wait");
-		expect(waited.status).toBe(1);
-		const answer = JSON.parse(waited.stdout);
-		expect(answer.verdict).toBe("red");
-		expect(answer.failed).toHaveLength(1);
-		expect(waited.stdout).not.toContain("synthetic-private");
-		if (channel === "reporter") {
-			expect(answer.counts).toEqual({ passed: 1, failed: 1, skipped: 1, unrun: 1 });
-			expect(answer.failed[0].test).toContain("asserts");
-			expect(answer.failed[0].firstError).toMatch(/expect\(\.\.\.\)\.toBe.*5:/);
-		} else {
-			expect(answer.counts.passed).toBe(0);
-			expect(answer.failed[0].firstError).toMatch(/assertion failed at .*5:\d+; 1 failed; 1 passed; 1 did not run/);
-		}
-	}, 300_000);
+			);
+			const result = ompdesk("check", "--light", "--", "node", "wrapper.cjs", channel);
+			expect(result.status).toBe(1);
+			const waited = ompdesk("checks", "wait");
+			expect(waited.status).toBe(1);
+			const answer = JSON.parse(waited.stdout);
+			expect(answer.verdict).toBe("red");
+			expect(answer.failed).toHaveLength(1);
+			expect(waited.stdout).not.toContain("synthetic-private");
+			if (channel === "reporter") {
+				expect(answer.counts).toEqual({ passed: 1, failed: 1, skipped: 1, unrun: 1 });
+				expect(answer.failed[0].test).toContain("asserts");
+				expect(answer.failed[0].firstError).toMatch(/expect\(\.\.\.\)\.toBe.*5:/);
+			} else {
+				expect(answer.counts.passed).toBe(0);
+				expect(answer.failed[0].firstError).toMatch(
+					/assertion failed at .*5:\d+; 1 failed; 1 passed; 1 did not run/,
+				);
+			}
+		},
+		300_000,
+	);
 
 	it("keeps the Node wrapper's own failure after its Playwright child passed", () => {
 		writeFileSync(

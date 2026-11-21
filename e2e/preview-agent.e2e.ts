@@ -6,13 +6,7 @@ import { pathToFileURL } from "node:url";
 import { expect } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible, variants } from "./harness";
-import {
-	connectRelay,
-	fixtureSite,
-	type PuppeteerBrowser,
-	stockRelayInstalled,
-	test,
-} from "./preview-agent-fixture";
+import { connectRelay, fixtureSite, type PuppeteerBrowser, stockRelayInstalled, test } from "./preview-agent-fixture";
 
 // Agent browsing in the Preview panel, end to end on stock's own pieces: the
 // fake omp forwards the relay requests to the isolated installed omp; the
@@ -27,7 +21,9 @@ for (const [language, theme] of variants([
 	["en", "light"],
 	["ko", "dark"],
 ] as const)) {
-	test(`the agent drives the visible preview through stock's relay and the user takes over (${language}-${theme})`, async ({ relayEnv }) => {
+	test(`the agent drives the visible preview through stock's relay and the user takes over (${language}-${theme})`, async ({
+		relayEnv,
+	}) => {
 		test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 		test.setTimeout(120_000);
 		const fixture = await fixtureSite("127.0.0.1");

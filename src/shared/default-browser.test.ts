@@ -112,7 +112,12 @@ describe("resolveAgentBrowser", () => {
 			status(false, chrome(false), brave(true)),
 			{ kind: "unavailable", name: "Google Chrome" },
 		],
-		["a browser that is gone stays unavailable", "chromium:brave", status(false, chrome(true)), { kind: "unavailable", name: "Brave" }],
+		[
+			"a browser that is gone stays unavailable",
+			"chromium:brave",
+			status(false, chrome(true)),
+			{ kind: "unavailable", name: "Brave" },
+		],
 		["built-in stays built-in whatever is installed", "builtin", status(true, chrome(true)), { kind: "builtin" }],
 	])("%s", (_name, pref, machine, expected) => {
 		expect(resolveAgentBrowser(pref, machine)).toEqual(expected);

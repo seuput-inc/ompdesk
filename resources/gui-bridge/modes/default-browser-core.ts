@@ -49,7 +49,9 @@ export function setDefaultBrowser(params: unknown): { browser: AgentBrowser } {
 	const value = typeof params === "object" && params !== null && "browser" in params ? params.browser : undefined;
 	const browser = parseAgentBrowser(value);
 	if (!browser) {
-		throw new Error('default_browser_set needs {browser: {kind: "ego" | "builtin" | "relay" | "unavailable", name?, url?}}');
+		throw new Error(
+			'default_browser_set needs {browser: {kind: "ego" | "builtin" | "relay" | "unavailable", name?, url?}}',
+		);
 	}
 	current = browser;
 	return { browser };

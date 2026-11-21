@@ -7,7 +7,8 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	"Enable when the first usable judge is native": "첫 번째 사용 가능한 판정 모델이 네이티브일 때 켜기",
 	"IDA Pro when an install with idalib is found, otherwise Ghidra; never Binary Ninja":
 		"idalib가 있는 IDA Pro를 찾으면 사용하고, 없으면 Ghidra를 사용해요. Binary Ninja는 자동으로 선택하지 않아요.",
-	"Inline built-in help; MCP and extension help on demand.": "내장 명령의 도움말만 넣고 MCP와 확장 명령의 도움말은 필요할 때 읽어요.",
+	"Inline built-in help; MCP and extension help on demand.":
+		"내장 명령의 도움말만 넣고 MCP와 확장 명령의 도움말은 필요할 때 읽어요.",
 	"Inline help for every mounted command.": "사용 가능한 모든 명령의 도움말을 넣어요.",
 	"List every command; run `--help` on demand.": "명령 이름만 나열하고 필요할 때 --help를 실행해요.",
 	magic: "매직 편집",

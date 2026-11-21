@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { relayExtensionUrl } from "./preview/agent-relay";
 import { INSTALLED_OMP } from "./test-bridge-probe";
-import { startStockBrowserSession, type StockPreviewRelay } from "./test-stock-browser-session";
+import { type StockPreviewRelay, startStockBrowserSession } from "./test-stock-browser-session";
 
 const TAB = { url: "about:blank", title: "", active: true, discarded: false, windowId: 1, pinned: false, groupId: -1 };
 
@@ -43,9 +43,7 @@ async function connectExtension(relay: StockPreviewRelay, label: string): Promis
 			browserSession: `${label}-run`,
 		}),
 	);
-	await expect
-		.poll(async () => (await fetch(relay.url + "/json/version")).status, { timeout: 5_000 })
-		.toBe(200);
+	await expect.poll(async () => (await fetch(relay.url + "/json/version")).status, { timeout: 5_000 }).toBe(200);
 	return { socket, created };
 }
 
@@ -101,9 +99,7 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("default browser relay binding on st
 
 			// Chrome's extension goes away: its relay refuses; the tab does not fall to the browser still connected.
 			chrome.socket.close();
-			await expect
-				.poll(async () => (await fetch(first.url + "/json/version")).status, { timeout: 5_000 })
-				.toBe(503);
+			await expect.poll(async () => (await fetch(first.url + "/json/version")).status, { timeout: 5_000 }).toBe(503);
 			expect((await fetch(second.url + "/json/version")).status).toBe(200);
 			const refused = await cdp(first.url, "Target.createTarget", { url: "https://chrome.example/again" });
 			expect(refused.error?.message).toContain("relay extension is not connected");

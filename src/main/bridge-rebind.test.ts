@@ -133,7 +133,9 @@ describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("gui-bridge bound ag
 		try {
 			const bridge = path.resolve("resources/gui-bridge/index.ts");
 			const worker = path.join(profile, "worker.mjs");
-			await fs.writeFile(worker, `
+			await fs.writeFile(
+				worker,
+				`
 				import { parentPort, workerData } from "node:worker_threads";
 				const { z } = await import(Bun.resolveSync("zod", workerData));
 				const hooks = new Set();
@@ -142,17 +144,32 @@ describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("gui-bridge bound ag
 				}, { get: (target, key) => target[key] ?? (() => {}) });
 				await (await import(workerData)).default(pi);
 				parentPort.postMessage(hooks.has("before_agent_start"));
-			`);
-			const run = spawnSync("bun", ["-e", `
+			`,
+			);
+			const run = spawnSync(
+				"bun",
+				[
+					"-e",
+					`
 				import { Worker } from "node:worker_threads";
 				import { once } from "node:events";
 				const w = new Worker(${JSON.stringify(worker)}, {workerData: ${JSON.stringify(bridge)}});
 				try { console.log((await once(w, "message"))[0]); } finally { await w.terminate(); }
-			`], { cwd: profile, env: { PATH: process.env.PATH, HOME: profile, USERPROFILE: profile, OMP_GUI_BRIDGE: address }, encoding: "utf8", timeout: 20_000 });
+			`,
+				],
+				{
+					cwd: profile,
+					env: { PATH: process.env.PATH, HOME: profile, USERPROFILE: profile, OMP_GUI_BRIDGE: address },
+					encoding: "utf8",
+					timeout: 20_000,
+				},
+			);
 			expect(run.status, run.error?.message ?? run.stderr).toBe(0);
 			expect(run.stdout.trim()).toBe("true");
 			const reply = await new Promise<string>((resolve, reject) => {
-				connect(address).once("error", reject).once("data", data => resolve(data.toString()));
+				connect(address)
+					.once("error", reject)
+					.once("data", data => resolve(data.toString()));
 			});
 			expect(reply).toBe("parent");
 		} finally {

@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PreviewRelayExtension, type RelayDebugger, relayExtensionUrl } from "./preview/agent-relay";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
-import { startStockBrowserSession, type StockPreviewRelay } from "./test-stock-browser-session";
+import { type StockPreviewRelay, startStockBrowserSession } from "./test-stock-browser-session";
 
 class IdleDebugger extends EventEmitter {
 	attach(): void {}

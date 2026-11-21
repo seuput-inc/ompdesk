@@ -365,7 +365,9 @@ async function applyTools(session: Session, role: "parent" | "child"): Promise<s
 function mountedTools(
 	session: { getMountedToolCommandNames(): string[] } | { getMountedXdevToolNames(): string[] },
 ): string[] {
-	return "getMountedToolCommandNames" in session ? session.getMountedToolCommandNames() : session.getMountedXdevToolNames();
+	return "getMountedToolCommandNames" in session
+		? session.getMountedToolCommandNames()
+		: session.getMountedXdevToolNames();
 }
 
 /**

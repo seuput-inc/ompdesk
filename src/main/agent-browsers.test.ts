@@ -7,7 +7,16 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -312,7 +321,9 @@ process.stderr.write(stderr, () => process.exit(code));
 	});
 
 	// Windows registration writes HKCU even with a private HOME; exercise its argv above, never the real registry.
-	it.skipIf(process.platform === "win32" || !stockSource("pi-coding-agent", "tools/browser/relay/native-host-manifest.ts"))(
+	it.skipIf(
+		process.platform === "win32" || !stockSource("pi-coding-agent", "tools/browser/relay/native-host-manifest.ts"),
+	)(
 		"stock registers only the final path's origin and leaves the synthetic Chrome profile alone",
 		() => {
 			const dir = relayExtensionDir("chrome");
@@ -320,14 +331,21 @@ process.stderr.write(stderr, () => process.exit(code));
 			const chrome = process.platform === "darwin" ? support("Google", "Chrome") : join(config, "google-chrome");
 			const prefs = join(chrome, "Default", "Preferences");
 			place(prefs, "{}");
-			const result = spawnSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "browser-relay", "install", "--dir", dir, "--no-chrome"], {
-				cwd: home,
-				env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: config, PI_CONFIG_DIR: ".", TMPDIR: root },
-				encoding: "utf8",
-				timeout: 30_000,
-			});
+			const result = spawnSync(
+				OMP_COMMAND.file,
+				[...OMP_COMMAND.args, "browser-relay", "install", "--dir", dir, "--no-chrome"],
+				{
+					cwd: home,
+					env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: config, PI_CONFIG_DIR: ".", TMPDIR: root },
+					encoding: "utf8",
+					timeout: 30_000,
+				},
+			);
 			expect(result.status, result.stderr || result.error?.message).toBe(0);
-			const id = createHash("sha256").update(realpathSync(dir)).digest("hex").slice(0, 32)
+			const id = createHash("sha256")
+				.update(realpathSync(dir))
+				.digest("hex")
+				.slice(0, 32)
 				.replace(/./g, digit => String.fromCharCode(97 + Number.parseInt(digit, 16)));
 			const manifests = join(chrome, "NativeMessagingHosts");
 			const files = readdirSync(manifests);

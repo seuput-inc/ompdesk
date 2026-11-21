@@ -86,7 +86,17 @@ describe.skipIf(!existsSync(omp))("a todo list grown long by appends, on stock o
 		});
 		const frames = await session.turn("Track the earlier request alongside the new one");
 		const results = frames.filter(frame => frame.type === "tool_execution_end" && frame.toolName === "todo");
-		expect(results.map(frame => !!frame.isError)).toEqual([false, true, true, true, false, false, false, false, false]);
+		expect(results.map(frame => !!frame.isError)).toEqual([
+			false,
+			true,
+			true,
+			true,
+			false,
+			false,
+			false,
+			false,
+			false,
+		]);
 		expect(provider.bodies[2]).toContain("Append new items with a phase");
 		expect(results[4].result?.details?.phases).toEqual([
 			{

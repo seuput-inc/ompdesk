@@ -898,7 +898,9 @@ function NativeFormDialog({
 				</Button>
 			)}
 			{view && (
-				<Button onClick={() => void submit({ kind: "submit", results: [] }).catch(cause => setError(String(cause)))}>
+				<Button
+					onClick={() => void submit({ kind: "submit", results: [] }).catch(cause => setError(String(cause)))}
+				>
 					{t("extDialog.submit")}
 				</Button>
 			)}

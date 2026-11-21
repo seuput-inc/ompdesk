@@ -95,13 +95,15 @@ export function relayUrl(id: ChromiumBrowserId): string {
 export function resolveAgentBrowser(pref: DefaultBrowserPref, status: AgentBrowserStatus | undefined): AgentBrowser {
 	const id = chromiumBrowserOf(pref);
 	if (id) {
-		const bound = status && !status.nativeHostBrowsers && status.browsers.find(browser => browser.id === id)?.relayInstalled;
+		const bound =
+			status && !status.nativeHostBrowsers && status.browsers.find(browser => browser.id === id)?.relayInstalled;
 		return bound
 			? { kind: "relay", name: CHROMIUM_BROWSER_NAMES[id], url: relayUrl(id) }
 			: { kind: "unavailable", name: CHROMIUM_BROWSER_NAMES[id] };
 	}
 	if (!status || pref === "builtin") return { kind: "builtin" };
 	if (status.egoInstalled) return { kind: "ego" };
-	const legacy = pref === "auto" && !status.nativeHostBrowsers && status.browsers.find(browser => browser.relayInstalled);
+	const legacy =
+		pref === "auto" && !status.nativeHostBrowsers && status.browsers.find(browser => browser.relayInstalled);
 	return legacy ? { kind: "relay", name: legacy.name, url: relayUrl(legacy.id) } : { kind: "builtin" };
 }

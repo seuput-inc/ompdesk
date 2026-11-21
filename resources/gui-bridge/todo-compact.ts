@@ -19,7 +19,8 @@ export function install(pi: ExtensionAPI): void {
 				if (init || otherInit)
 					return {
 						block: true,
-						reason: "Another todo edit has not finished. View the list after it finishes, then append new work by phase.",
+						reason:
+							"Another todo edit has not finished. View the list after it finishes, then append new work by phase.",
 					};
 			}
 		}
@@ -33,7 +34,8 @@ export function install(pi: ExtensionAPI): void {
 			if (phases.some(phase => phase.tasks.some(task => !isClosedTodo(task.status))))
 				return {
 					block: true,
-					reason: "This todo list still has unfinished work. Append new items with a phase. Mark individual tasks done when finished or drop them only when explicitly cancelled.",
+					reason:
+						"This todo list still has unfinished work. Append new items with a phase. Mark individual tasks done when finished or drop them only when explicitly cancelled.",
 				};
 		}
 		const calls = edits ?? new Map<string, boolean>();

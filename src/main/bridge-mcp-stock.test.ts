@@ -89,7 +89,11 @@ function fakeOAuthMcp(oauth = true, toolName = () => "echo"): Promise<{ url: str
 							serverInfo: { name: "fake-oauth", version: "1" },
 						}
 					: message.method === "tools/list"
-						? { tools: [{ name: toolName(), description: "Echo", inputSchema: { type: "object", properties: {} } }] }
+						? {
+								tools: [
+									{ name: toolName(), description: "Echo", inputSchema: { type: "object", properties: {} } },
+								],
+							}
 						: {};
 			json(200, { jsonrpc: "2.0", id: message.id, result });
 		});

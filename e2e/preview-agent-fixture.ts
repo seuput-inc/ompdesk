@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, test as base } from "@playwright/test";
+import { test as base, expect } from "@playwright/test";
 import { INSTALLED_OMP } from "../src/main/test-bridge-probe";
 import { startStockBrowserSession } from "../src/main/test-stock-browser-session";
 
@@ -43,6 +43,7 @@ interface PuppeteerModule {
 
 /** The spec owns the real stock process even if its Electron app or fake omp exits early. */
 export const test = base.extend<{ relayEnv: (relayFile: string) => Promise<Record<string, string>> }>({
+	// biome-ignore lint/correctness/noEmptyPattern: Playwright reads fixture dependencies from this destructuring pattern.
 	relayEnv: async ({}, use) => {
 		let stock: Awaited<ReturnType<typeof startStockBrowserSession>> | undefined;
 		try {

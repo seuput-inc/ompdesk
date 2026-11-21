@@ -37,15 +37,17 @@ export const methods: BridgeMethods = {
 		const slots = formSlots(form);
 		if (!("answers" in params)) {
 			return {
-				...(slots.length ? {} : {
-					context: form.sections
-						.flatMap(section => [
-							spansMarkdown(section.title),
-							blocksMarkdown(section.blocks.filter(block => block.kind !== "field")),
-						])
-						.filter(Boolean)
-						.join("\n\n"),
-				}),
+				...(slots.length
+					? {}
+					: {
+							context: form.sections
+								.flatMap(section => [
+									spansMarkdown(section.title),
+									blocksMarkdown(section.blocks.filter(block => block.kind !== "field")),
+								])
+								.filter(Boolean)
+								.join("\n\n"),
+						}),
 				questions: slots.map(({ field, labels, optionIndices, question }) => ({
 					...question,
 					formField: {
@@ -53,9 +55,7 @@ export const methods: BridgeMethods = {
 						multiline: field.kind === "text" && field.multiline,
 						initialText: field.kind === "text" ? field.value : "",
 						checked:
-							field.kind === "choice"
-								? labels.filter((_, i) => field.options[optionIndices[i]]?.checked)
-								: [],
+							field.kind === "choice" ? labels.filter((_, i) => field.options[optionIndices[i]]?.checked) : [],
 					},
 				})),
 			};
