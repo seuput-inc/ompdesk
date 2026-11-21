@@ -14,6 +14,7 @@ import { promises } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { timeoutForCommand } from "../shared/rpc-client";
 import { SavedWorktreeStore } from "./disk/saved-worktrees";
 import { fs } from "./fenced-fs";
 import { primaryRoot, repoRoot } from "./local/git/changes";
@@ -21,6 +22,7 @@ import { execBin, REPO_LOCK_HOLD_MS, withRepoLock } from "./local/git/exec";
 import * as scm from "./local/git/scm";
 import { gitSync } from "./local/git/test-repos";
 import { createWorktree } from "./local/git/worktree";
+import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { ChainBusyError, SerialChain, STALLED_DRAIN_MAX_MS, StepStalledError, trackEffect } from "./serial-chain";
 import { DIES_WITH_TEST } from "./test-fake-omp";
 import { removeOrphanWorktree } from "./worktree-orphans";
@@ -418,19 +420,43 @@ describe("every caller of withRepoLock that touches the disk", () => {
 			gitSync(repo, "config", "core.filesRefLockTimeout", "-1");
 			// The core recreates this root inside the held request. The competing ref lock stops git making the branch.
 			await promises.rmdir(wtRoot);
-			const old = caught(createWorktree(repo, { name: "late" }, bridge));
+			const requested = Promise.withResolvers<void>();
+			const location = Promise.withResolvers<void>();
+			const stopped = vi.fn();
+			const old = caught(
+				createWorktree(
+					repo,
+					{ name: "late" },
+					{
+						async request<T>(method: string) {
+							requested.resolve();
+							await location.promise;
+							return bridge.request<T>(method);
+						},
+					},
+				),
+			).then(stopped);
 			try {
+				const limit = timeoutForCommand({ type: "worktree_create", name: "late" });
+				if (limit === undefined) throw new Error("worktree_create has no RPC budget");
+				const createMs = limit - WORKTREE_PREPARE_BUDGET_MS;
+				const spentMs = 90_000;
+				await requested.promise;
+				await vi.advanceTimersByTimeAsync(spentMs);
+				location.resolve();
 				await vi.waitFor(() => promises.access(wtRoot), { timeout: 20_000, interval: 20 });
 				const next = withRepoLock(key, async () => {
 					await promises.unlink(refLock);
 					gitSync(repo, "branch", branch);
 				});
-				await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
-				expect(await old).toBeInstanceOf(StepStalledError);
+				await vi.advanceTimersByTimeAsync(createMs - spentMs);
+				expect(stopped).toHaveBeenCalledWith(expect.any(StepStalledError));
+				await old;
 				await next;
 				expect(gitSync(repo, "rev-parse", branch)).toBe(gitSync(repo, "rev-parse", "HEAD"));
 				expect(await promises.readdir(wtRoot)).toEqual([]);
 			} finally {
+				location.resolve();
 				await promises.rm(refLock, { force: true });
 			}
 		},
