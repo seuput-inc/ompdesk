@@ -93,7 +93,9 @@ fn compiled_header(head: &[u8], windows: bool) -> bool {
     let sections = u16::from_le_bytes([header[6], header[7]]) as usize;
     let table = 24 + u16::from_le_bytes([header[20], header[21]]) as usize;
     header.get(table..).is_some_and(|rest| {
-        rest.chunks_exact(40)
+        rest.as_chunks::<40>()
+            .0
+            .iter()
             .take(sections)
             .any(|section| &section[..8] == b".bun\0\0\0\0")
     })
