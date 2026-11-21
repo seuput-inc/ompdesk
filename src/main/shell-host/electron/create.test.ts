@@ -1483,6 +1483,27 @@ describe("menus, dialogs and the small modules", () => {
 		expect(Menu.getApplicationMenu()).toBe(menu);
 	});
 
+	it.runIf(process.platform === "darwin")(
+		"gives Copy and Paste to the Mac responder without swallowing custom Copy actions",
+		async () => {
+			const custom = vi.fn();
+			const { Menu } = electron;
+			Menu.setApplicationMenu(
+				Menu.buildFromTemplate([{ role: "copy" }, { role: "paste" }, { role: "copy", click: custom }]),
+			);
+			await settle();
+			const [{ params }] = fake.callsOf("menu.setApplication");
+			const items = params.template as Array<{ role?: string; id: string; accelerator: string }>;
+			expect(items.map(item => [item.role, item.accelerator])).toEqual([
+				["copy", "CommandOrControl+C"],
+				["paste", "CommandOrControl+V"],
+				[undefined, "CommandOrControl+C"],
+			]);
+			await shell.event("menu.click", { menuId: params.menuId, itemId: items[2].id });
+			expect(custom).toHaveBeenCalledTimes(1);
+		},
+	);
+
 	it("pops a menu up and runs the item the shell reports", async () => {
 		const { Menu, BrowserWindow } = electron;
 		const win = new BrowserWindow({});

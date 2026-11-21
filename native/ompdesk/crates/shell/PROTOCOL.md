@@ -248,6 +248,8 @@ The shim assigns every `id`; a click on an item with a JS `click` handler or a r
 back as `menu.click`. Roles the shim implements by itself are expanded before sending (it sets the label default and
 accelerator); `role` stays set only for those that need native handling: macOS `about`, `services`, `hide`,
 `hideOthers`, `unhide`, `front`, `zoom`, `quit`, `minimize`, `close` (and `appMenu`/`windowMenu` containers if used).
+On macOS, `undo`, `redo`, `cut`, `copy`, `paste` and `selectAll` without a custom click handler also keep their
+role. AppKit sends the action to the first responder. A native edit does not produce a second Node click.
 
 | Method | Asks | Params | Result |
 |---|---|---|---|

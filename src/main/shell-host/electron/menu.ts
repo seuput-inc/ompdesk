@@ -1,10 +1,8 @@
 /**
  * `Menu`, `MenuItem` and `Tray` over the host protocol (PROTOCOL.md §7). A menu is built here from Electron's
  * template, its click handlers stay in Node, and the shell gets a plain description (`id`, `label`, `accelerator`, …)
- * and answers `menu.click` with the item's id. Roles that only act on a window or the app (`reload`, `zoomIn`, `cut`,
- * `quit`, …) are expanded here into the label, the accelerator Electron gives them and the action; roles that need
- * the platform's own menu machinery (macOS `services`, `hide`, `hideOthers`, `unhide`, `front`, `zoom`) go to the
- * shell as `role`.
+ * and answers `menu.click` with the item's id. Window and app actions such as `reload` and `quit` run here.
+ * macOS edit commands go to AppKit's first responder; an explicit click handler stays in Node.
  */
 import { EventEmitter } from "node:events";
 import type { Host } from "./host";
@@ -114,6 +112,7 @@ const ROLES: Record<string, { label: string; accelerator?: string; run(window: W
 	};
 
 const NATIVE_ROLES = new Set(["services", "hide", "hideOthers", "unhide", "front", "zoom", "windowMenu", "appMenu"]);
+const MAC_EDIT_ROLES = new Set(["undo", "redo", "cut", "copy", "paste", "selectAll"]);
 
 let nextItem = 0;
 
@@ -131,6 +130,7 @@ export class MenuItem {
 	role: string | undefined;
 	submenu: Menu | undefined;
 	readonly click: (event?: unknown, window?: Window, webContents?: unknown) => void;
+	readonly #nativeEdit: boolean;
 	readonly #deps: MenuDeps;
 
 	constructor(options: MenuItemOptions, deps: MenuDeps, toMenu: (items: MenuItemOptions[]) => Menu) {
@@ -147,6 +147,7 @@ export class MenuItem {
 						: options.role;
 		const known = role === undefined ? undefined : ROLES[role];
 		this.role = role;
+		this.#nativeEdit = MAC && !options.click && role !== undefined && MAC_EDIT_ROLES.has(role);
 		this.label = options.label ?? known?.label ?? "";
 		this.type = options.type ?? (options.submenu ? "submenu" : "normal");
 		this.enabled = options.enabled !== false;
@@ -176,7 +177,9 @@ export class MenuItem {
 	}
 
 	toWire(): Record<string, unknown> {
-		const native = this.role !== undefined && (NATIVE_ROLES.has(this.role) || (this.role === "about" && MAC));
+		const native =
+			this.#nativeEdit ||
+			(this.role !== undefined && (NATIVE_ROLES.has(this.role) || (this.role === "about" && MAC)));
 		return {
 			id: this.commandId,
 			label: this.label,

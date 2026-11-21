@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.137.3] - 2026-11-21
+
+Mac에서 `⌘C`로 선택한 텍스트를 복사하고 `⌘V`로 커서가 있는 입력창에 붙여넣을 수 있어요. 편집 메뉴의 복사와 붙여넣기도 고쳤어요.
+
+<!-- en -->
+
+On Mac, the Edit menu and the `⌘C` and `⌘V` shortcuts now copy the selected text and paste into the focused field.
+
 ## [0.137.2] - 2026-11-21
 
 연결된 컴퓨터의 세션 목록에 보호된 행이나 방금 사라진 행이 있어도 다른 두 세션의 순서를 옮길 수 있어요.
