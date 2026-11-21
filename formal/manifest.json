@@ -263,7 +263,7 @@
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
 				"src/main/ipc.ts:654-671"
 			],
-			"syncCommit": null
+			"syncCommit": "68d7bf91dedeac0f35b6da04c728c8a1f802384d"
 		},
 		{
 			"id": "open-first-message",
