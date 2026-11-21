@@ -319,6 +319,37 @@ fn transcripts() {
 }
 
 #[test]
+fn command_done_report_needs_a_successful_dispatch_to_the_opener() {
+    let call = json!({"role":"assistant","content":[{
+        "type":"toolCall","id":"sh","name":"bash","arguments":{"command":"echo ompdesk_report --kind done"}
+    }]});
+    let report = json!({"tool":"ompdesk_report","mode":"execute","exitCode":0,"args":{"kind":"done"}});
+    let result = |dispatch: Value, shell_failed: bool| json!({
+        "role":"toolResult","toolCallId":"sh","toolName":"bash","isError":shell_failed,
+        "content":"ompdesk_report --kind done", "details":{"toolCommands":[dispatch]}
+    });
+    let done = |page: Value| transcript_ending(&messages(&page)).reported_done;
+    let success = result(report.clone(), true);
+    let prompt = json!({"role":"user","content":"new job"});
+    assert!(done(json!([call, success])));
+    assert!(!done(json!([success])));
+    assert!(!done(json!([call, prompt, success])));
+    assert!(!done(json!([call, success, prompt])));
+    for (key, invalid) in [
+        ("tool", json!("other")),
+        ("exitCode", json!(1)),
+        ("mode", json!("help")),
+        ("args", json!({"kind":"done","to":"peer"})),
+        ("args", json!({"kind":"progress"})),
+    ] {
+        let mut dispatch = report.clone();
+        dispatch[key] = invalid;
+        assert!(!done(json!([call, result(dispatch, false)])));
+    }
+    assert!(!done(json!([call, result(Value::Null, false)])));
+}
+
+#[test]
 fn cards_verdicts_and_branches() {
     replay("askTitle", |a| text(ask_title(&from(&a[0]))));
     replay("cardText", |a| text(card_text(&from(&a[0]))));

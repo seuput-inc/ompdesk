@@ -26,14 +26,14 @@ function sse(delta: unknown, finish: string): string {
 	return `${frame({ role: "assistant", content: "" })}${frame(delta)}${frame({}, finish)}data: [DONE]\n\n`;
 }
 
-function write(path: string, content: string): string {
+function toolCall(name: string, args: Record<string, string>): string {
 	const call = {
 		tool_calls: [
 			{
 				index: 0,
 				id: `call_${Math.random().toString(36).slice(2, 8)}`,
 				type: "function",
-				function: { name: "write", arguments: JSON.stringify({ path, content }) },
+				function: { name, arguments: JSON.stringify(args) },
 			},
 		],
 	};
@@ -62,9 +62,15 @@ async function startProvider(): Promise<{ url: string; bodies: string[] }> {
 				return;
 			}
 			bodies.push(body);
-			if (bodies.length === 1) res.end(write("local://demo-plan.md", PLAN));
-			else if (bodies.length === 2) res.end(write("xd://propose", "demo"));
-			else res.end(sse({ content: "DONE" }, "stop"));
+			if (bodies.length === 1) res.end(toolCall("write", { path: "local://demo-plan.md", content: PLAN }));
+			else if (bodies.length !== 2) res.end(sse({ content: "DONE" }, "stop"));
+			else if (parsed.tools?.some(tool => tool.function?.name === "propose")) {
+				res.end(toolCall("propose", { title: "demo" }));
+			} else if (body.includes("xd://propose")) {
+				res.end(toolCall("write", { path: "xd://propose", content: "demo" }));
+			} else {
+				res.end(toolCall("bash", { command: "propose demo; false" }));
+			}
 		});
 	});
 	await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
@@ -82,7 +88,7 @@ interface Omp {
 	send(command: Record<string, unknown>): Promise<Frame>;
 }
 
-async function startOmp(url: string): Promise<Omp> {
+async function startOmp(url: string, tools?: string): Promise<Omp> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-auto-plan-"));
 	chmodSync(isolated, 0o700);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-auto-plan-repo-")));
@@ -113,6 +119,7 @@ async function startOmp(url: string): Promise<Omp> {
 			...OMP_COMMAND.args,
 			...["--mode", "rpc-ui", "--no-extensions", "--no-skills", "--no-rules"],
 			...["--model", "fake/m1", "-e", resolve("resources/gui-bridge/index.ts")],
+			...(tools ? ["--tools", tools] : []),
 		],
 		{ cwd: root, env: env as NodeJS.ProcessEnv },
 	);
@@ -241,7 +248,7 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 
 	it("still waits for the person's answer when the user turned plan mode on", async () => {
 		const provider = await startProvider();
-		const { frames, events, bridge, send } = await startOmp(provider.url);
+		const { frames, events, bridge, send } = await startOmp(provider.url, "read,write,edit");
 		await bridge.request("modes.set_plan_mode", { enabled: true });
 		await send({ type: "prompt", message: "add a greeting file and run the checks" });
 		try {
@@ -255,5 +262,10 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 			proposal: { title: expect.any(String) },
 		});
 		expect(approvedPrompt(provider.bodies)).toBeUndefined();
+		expect(await bridge.request("modes.plan_approval", { approved: false })).toMatchObject({
+			approved: false,
+			dispatched: false,
+		});
+		expect(await bridge.request("modes.get_plan_mode", {})).not.toHaveProperty("proposal");
 	}, 120_000);
 });

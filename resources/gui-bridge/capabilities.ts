@@ -19,6 +19,7 @@
  *
  * Requirement paths are dotted member paths. A trailing `()` requires a
  * function; anything else only has to exist (`in`, so optional getters count).
+ * `a()|b()` accepts either name of a stock member renamed between supported versions.
  */
 
 export const FEATURES = {
@@ -181,7 +182,7 @@ export const FEATURES = {
 	scratch: "A scratch folder per session for throwaway files (prompt section)",
 	checkRuns: "Heavy commands and test suites through ompdesk run --heavy and ompdesk check (prompt section)",
 	checkoutPeers: "Sessions sharing a checkout (prompt section and git guard)",
-	xdevNotice: "No xd:// device listed twice in a request (mount notice)",
+	xdevNotice: "No mounted tool listed twice in a request (mount notice)",
 	contextHookIdle: "Model requests not copied while the message filters have nothing to drop (recap, mount notice)",
 	sessionDump: "Session dump archive saved as a file (/dump all, /dump anon)",
 	advisorStats: "Advisor spend and advisories (Run popover, Insights)",
@@ -322,7 +323,14 @@ const MCP_LIST: FeatureRequirement = {
  * (manager, session, settings), so what that controller asks of the session and the manager is listed.
  */
 const MCP_RELOAD: FeatureRequirement = {
-	session: ["settings", "getEvalPreludes()", "setMCPPromptCommands()", "refreshMCPTools()"],
+	session: [
+		"settings",
+		"effectiveExtensionRoots",
+		"getEvalPreludes()",
+		"getActiveToolNames()",
+		"setMCPPromptCommands()",
+		"refreshMCPTools()",
+	],
 	modules: {
 		[`${AGENT}/modes/controllers/mcp-command-controller`]: ["MCPCommandController.prototype.reloadServers()"],
 		[`${AGENT}/mcp/manager`]: [
@@ -562,15 +570,21 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** stream_metadata.start: the live read grouping and the token rate, pushed while the session runs. */
 	streamMetadata: union(READ_GROUPS, { session: ["subscribe()", "tokenRate.rate()"] }),
 	/**
-	 * browser.relay_start and browser.relay_stop (browser-relay.ts): stock's `omp browser-relay` server inside the
+	 * browser.relay_start and browser.relay_stop (browser-relay.ts): stock's CDP server inside the
 	 * session, with `browser.relay`/`browser.relayUrl` held as runtime overrides (handles via `lookup`). A relay that
 	 * can be started but not stopped is not offered, and the session's shutdown hook stops it the same way.
 	 */
 	agentBrowser: {
+		pkg: ["VERSION"],
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/registry`]: ["lookup()"],
 			[`${AGENT}/tools/browser/attach`]: ["findFreeCdpPort()"],
+			[`${AGENT}/tools/browser/relay/bridge`]: [
+				"RelayBridge.prototype.extConnected()",
+				"RelayBridge.prototype.extMessage()",
+				"RelayBridge.prototype.extClosed()",
+			],
 			[`${AGENT}/tools/browser/relay/server`]: ["startRelayServer()"],
 			[`${AGENT}/tools/browser/settings`]: [
 				"cfgBrowserRelay.override()",
@@ -614,7 +628,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** composer.prewalk_armed shows what composer.disarm_prewalk drops: an armed mark nobody can disarm is not shown. */
 	prewalk: { session: ["getPrewalkState()", "disarmPrewalk()"] },
-	toolExtras: { session: ["hasBuiltInTool()", "agent.state", "getXdevToolEntries()"] },
+	toolExtras: { session: ["hasBuiltInTool()", "agent.state", "getToolCommandEntries()|getXdevToolEntries()"] },
 	contextReport: { session: ["getContextBreakdown()", "model"] },
 	jobs: {
 		session: ["getAsyncJobTree()", "inspectAsyncJob()"],
@@ -717,7 +731,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/**
 	 * modes.get_plan_mode and modes.set_plan_mode with the proposal lifecycle they arm (modes/plan.ts): both install
-	 * the proposal handler, and a session listener turns the agent's `xd://propose` write into the plan card and
+	 * the proposal handler, and a session listener turns the agent's completed proposal into the plan card and
 	 * stops the turn. Plan mode without that lifecycle would leave a proposal nobody sees, and nothing guards a
 	 * listener, so its internals are listed here.
 	 */
@@ -737,8 +751,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"abort()",
 		],
 		modules: {
-			[`${AGENT}/tools/resolve`]: ["writeDeviceDispatch()"],
-			"@oh-my-pi/pi-tui/tools/resolve": ["PROPOSE_DEVICE_NAME"],
+			[`${AGENT}/tools/resolve`]: ["proposeDispatchDetails()|writeDeviceDispatch()"],
 		},
 	}),
 	/**
@@ -905,7 +918,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"getEnabledToolNames()",
 			"getAllToolNames()",
 			"setActiveToolsByName()",
-			"getMountedXdevToolNames()",
+			"getMountedToolCommandNames()|getMountedXdevToolNames()",
 			"setActiveToolPresentation()",
 			"getGoalModeState()",
 			"getPlanModeState()",
@@ -962,10 +975,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * the user's own browser.
 	 */
 	defaultBrowser: {
+		pkg: ["Settings.instance"],
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/registry`]: ["lookup()"],
 			[`${AGENT}/tools/browser/settings`]: [
+				"cfgBrowserEnabled.override()",
+				"cfgBrowserEnabled.clearOverride()",
 				"cfgBrowserRelay.override()",
 				"cfgBrowserRelay.clearOverride()",
 				"cfgBrowserRelayUrl.override()",
@@ -2099,7 +2115,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			// OMPdesk's sections read the session as a prompt's hook does (prompt-sections.ts `sectionContext`).
 			"extensionRunner.createContext()",
 			"hasBuiltInTool()",
-			"getXdevToolEntries()",
+			"getToolCommandEntries()|getXdevToolEntries()",
 			"settings",
 			"agent.state",
 			"agent.tokenizer.countTokens()",
@@ -2116,7 +2132,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"systemPrompt",
 			"systemPromptSources",
 			"extensionRunner.createContext()",
-			"getXdevToolEntries()",
+			"getToolCommandEntries()|getXdevToolEntries()",
 			"agent.state",
 		],
 		modules: {
@@ -2382,9 +2398,16 @@ export function missingFor(requirement: FeatureRequirement, sources: ProbeSource
 	const check = (present: boolean, name: string) => {
 		if (!present || sources.hidden?.has(name)) missing.push(name);
 	};
+	const member = (root: unknown, owner: string, path: string) => {
+		if (!path.includes("|")) return check(hasPath(root, path), label(owner, path));
+		const names = path.split("|");
+		if (!names.some(name => hasPath(root, name) && !sources.hidden?.has(label(owner, name)))) {
+			missing.push(names.map(name => label(owner, name)).join(" or "));
+		}
+	};
 	if (sources.session !== undefined) {
 		for (const path of requirement.session ?? []) {
-			check(hasPath(sources.session, path), label("AgentSession.", path));
+			member(sources.session, "AgentSession.", path);
 		}
 	}
 	for (const path of requirement.pkg ?? []) check(hasPath(sources.pkg, path), label("pi.", path));
@@ -2400,7 +2423,7 @@ export function missingFor(requirement: FeatureRequirement, sources: ProbeSource
 			continue;
 		}
 		const namespace = sources.modules.get(specifier);
-		for (const path of paths) check(hasPath(namespace, path), label(`${specifier}#`, path));
+		for (const path of paths) member(namespace, `${specifier}#`, path);
 	}
 	for (const prompt of requirement.prompts ?? []) check(sources.hasPrompt(prompt), `prompts/${prompt}`);
 	return missing;

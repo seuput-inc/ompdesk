@@ -190,6 +190,17 @@ describe("outbox delivery", () => {
 		]);
 	});
 
+	it("keeps the submitted form intact without showing field names or values in its outbox preview", async () => {
+		const { holdAnswer, useOutboxStore, translate, tab } = await page();
+		const response = { type: "extension_ui_response" as const, id: "form", data: { hidden: "private", note: "" } };
+		holdAnswer(tab, response);
+		expect(useOutboxStore.getState().items[0]?.send).toMatchObject({
+			kind: "answer",
+			response,
+			summary: translate("outbox.formAnswer"),
+		});
+	});
+
 	it("sends an answer whose question is still open to the process that asked", async () => {
 		const { holdAnswer, installOutboxDelivery, useOutboxStore, tab } = await page();
 		const response = { type: "extension_ui_response" as const, id: "ask-2", value: "Staging" };

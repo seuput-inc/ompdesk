@@ -11,6 +11,7 @@
 
 /** Section headings declared in the schema's TAB_GROUPS. */
 export const KO_GROUP_TITLES: Record<string, string> = {
+	"Binary Ninja": "Binary Ninja",
 	Theme: "테마",
 	"Status Line": "상태 표시줄",
 	Display: "표시",
@@ -242,6 +243,46 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "사용량 제한 시 대체 모델로 넘어가기",
 		description:
 			"사용량 제한에 걸리면, 실패한 모델이 서명한 생각이 있는 턴이어도 retry.fallbackChains 순서대로 다음 모델로 넘어가요. 끄면(기본값) 그런 턴은 retry.maxRetries를 다 쓸 때까지 같은 모델로 다시 시도한 뒤에야 다음 모델로 넘어가요.",
+	},
+	"binja.installDir": {
+		label: "Binary Ninja 설치 폴더",
+		description: "핵심 라이브러리가 있는 폴더나 macOS 앱을 지정해요. 비워 두면 $BN_INSTALL_DIR, 사용자 폴더의 lastrun 파일, 기본 설치 위치 순서로 찾아요.",
+	},
+	"binja.python": {
+		label: "Binary Ninja용 Python",
+		description: "설치 폴더의 python 디렉터리에서 Binary Ninja API를 불러올 Python 3을 지정해요. 비워 두면 자동으로 찾아요.",
+	},
+	"edit.magic.model": {
+		label: "매직 편집 모델",
+		description: "매직 모드의 변경을 적용할 모델이나 역할(예: @slow)이에요. 비워 두면 smol 역할을 사용해요.",
+	},
+	"mcp.idleStopMinutes": {
+		label: "미사용 MCP 서버 종료 시간",
+		description: "공유 서버를 이 시간(분) 동안 쓰지 않으면 종료해요. 다음 요청이 오면 다시 시작해요.",
+	},
+	"mcp.shared": {
+		label: "MCP 서버 공유",
+		description: "omp들이 데몬을 통해 서버 프로세스와 도구 목록을 공유해요. 세션 상태가 있는 서버나 공유할 수 없는 서버는 따로 실행해요.",
+	},
+	"pty.notify": {
+		label: "콘솔 입력 대기 알림",
+		description: "대화형 bash 콘솔(pty)이 입력을 기다릴 때 알려요.",
+	},
+	"tools.commandDocs": {
+		label: "프롬프트에 넣을 명령 도움말",
+		description: "시스템 프롬프트에 어떤 명령의 --help를 넣을지 골라요. ‘내장만’이면 MCP와 확장 명령의 도움말은 필요할 때 읽어요.",
+	},
+	"tools.commandInline": {
+		label: "도움말을 함께 넣을 명령",
+		description: "‘내장만’일 때 이 패턴(예: mcp__context_mode_*)과 이름이 맞는 명령의 도움말도 넣어요. ‘목록만’에서는 적용하지 않아요.",
+	},
+	"tools.commandNotices": {
+		label: "도구 명령 변경 알림",
+		description: "MCP나 확장 도구가 명령 목록에 추가되거나 빠질 때 알려요. 꺼도 모델은 다음 프롬프트에서 변경을 확인해요.",
+	},
+	"tools.commands": {
+		label: "도구를 bash 명령으로 사용",
+		description: "자주 쓰지 않는 도구는 매번 스키마를 보내지 않고 bash 명령과 --help로 제공해요. 끄거나 bash가 없는 세션에서는 활성 도구를 모두 직접 제공해요.",
 	},
 	"tools.xdevNotices": {
 		label: "xd:// 연결 알림",
@@ -1003,8 +1044,7 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	},
 	"generate_image.enabled": {
 		label: "이미지 생성",
-		description:
-			"generate_image 도구(텍스트→이미지 및 이미지 편집)를 사용해요. tools.xdev가 켜져 있으면 xd:// 장치로 노출돼요.",
+		description: "generate_image 도구로 설명에 맞는 이미지를 만들거나 기존 이미지를 편집해요.",
 	},
 	"computer.enabled": {
 		label: "데스크톱 제어",

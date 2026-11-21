@@ -5,19 +5,12 @@
  * agent-relay.ts) completes stock's extension handshake so the relay offers
  * the preview page as its one CDP target.
  */
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { PreviewRelayExtension, type RelayDebugger, relayExtensionUrl } from "./preview/agent-relay";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
-import { removeWhenFree } from "./test-folders";
-
-const stockRoot = path.join(os.homedir(), ".bun/install/global/node_modules/@oh-my-pi/pi-coding-agent");
+import { INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { startStockBrowserSession, type StockPreviewRelay } from "./test-stock-browser-session";
 
 class IdleDebugger extends EventEmitter {
 	attach(): void {}
@@ -30,66 +23,20 @@ class IdleDebugger extends EventEmitter {
 	}
 }
 
-describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("stock browser relay bridge", () => {
+describe.skipIf(!existsSync(omp))("stock browser relay bridge", () => {
 	it("serves stock's relay for the session and lists the preview once its extension says hello", async () => {
-		const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-relay-"));
-		const agent = path.join(profile, "agent");
-		await fs.mkdir(agent, { mode: 0o700 });
-		// A model that is never called: rpc mode refuses to start without a default model, and a CI runner has none.
-		await fs.writeFile(
-			path.join(agent, "models.yml"),
-			"providers:\n  fixture:\n    baseUrl: http://127.0.0.1:9/v1\n    api: openai-completions\n    apiKey: unused\n    models:\n      - id: idle\n",
-		);
-		const address = newBridgeAddress();
-		const env = {
-			...process.env,
-			PI_CODING_AGENT_DIR: agent,
-			PI_CONFIG_DIR: configDirName(profile),
-			OMP_PROFILE: "",
-			PI_PROFILE: "",
-			OMP_GUI_BRIDGE: address,
-		};
-		const child = spawn(
-			OMP_COMMAND.file,
-			[
-				...OMP_COMMAND.args,
-				"--mode",
-				"rpc-ui",
-				"--no-session",
-				"--no-extensions",
-				"--no-skills",
-				"--no-rules",
-				"--model",
-				"fixture/idle",
-				"-e",
-				path.resolve("resources/gui-bridge/index.ts"),
-			],
-			{ cwd: profile, env, stdio: "pipe" },
-		);
-		const client = new GuiBridgeClient(address);
-		let errors = "";
-		child.stderr.on("data", chunk => {
-			errors += String(chunk);
-		});
+		const { client, close } = await startStockBrowserSession();
 		let socket: WebSocket | null = null;
 		try {
-			const ready = Promise.withResolvers<void>();
-			// Real child readiness is event-driven; this deadline only diagnoses a stuck external omp.
-			const timer = setTimeout(() => ready.reject(new Error(`omp did not become ready: ${errors}`)), 40_000);
-			child.once("error", ready.reject);
-			child.once("exit", code => ready.reject(new Error(`omp exited ${code}: ${errors}`)));
-			let output = "";
-			child.stdout.on("data", chunk => {
-				output += String(chunk);
-				if (/"type"\s*:\s*"ready"/.test(output)) ready.resolve();
-			});
-			await ready.promise.finally(() => clearTimeout(timer));
-			await client.connect();
+			await client.request("default_browser_set", { browser: { kind: "unavailable", name: "Brave" } });
+			const enabled = () => client.request("settings_get", { paths: ["browser.enabled"] });
+			await expect(enabled()).resolves.toMatchObject({ values: { "browser.enabled": false } });
 
-			const relay = await client.request<{ url: string; token: string }>("browser.relay_start");
+			const relay = await client.request<StockPreviewRelay>("browser.relay_start");
 			expect(relay.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 			// A second start reuses the running relay.
 			expect(await client.request("browser.relay_start")).toEqual(relay);
+			await expect(enabled()).resolves.toMatchObject({ values: { "browser.enabled": true } });
 			const held = JSON.stringify(
 				await client.request("settings_get", { paths: ["browser.relay", "browser.relayUrl"] }),
 			);
@@ -98,10 +45,15 @@ describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("stock browser relay
 			const before = await fetch(`${relay.url}/json/version`);
 			expect(before.status).toBe(503);
 			expect(await before.json()).toMatchObject({ error: "relay extension is not connected" });
-			const target = relayExtensionUrl(relay.url, relay.token);
+			const target = relayExtensionUrl(relay.extensionUrl ?? relay.url, relay.token);
 			if (!target) throw new Error("relay endpoint refused");
 			const refused = await fetch(target.replace("ws://", "http://").replace(relay.token, "wrong"));
 			expect(refused.status).toBe(401);
+			const foreignOrigin = await fetch(target.replace("ws://", "http://"), {
+				headers: { Origin: "https://example.com" },
+			});
+			expect(foreignOrigin.status).toBe(403);
+			if (relay.extensionUrl) expect((await fetch(`${relay.url}/ext?token=${relay.token}`)).status).toBe(404);
 
 			const extension = new PreviewRelayExtension(
 				{
@@ -129,22 +81,14 @@ describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("stock browser relay
 			]);
 
 			await client.request("browser.relay_stop");
+			await expect(enabled()).resolves.toMatchObject({ values: { "browser.enabled": false } });
 			await expect(fetch(`${relay.url}/json/version`)).rejects.toThrow();
 			expect(JSON.stringify(await client.request("settings_get", { paths: ["browser.relayUrl"] }))).not.toContain(
 				relay.url,
 			);
 		} finally {
 			socket?.close();
-			client.close();
-			child.stdin.end();
-			child.kill();
-			if (child.exitCode === null && child.signalCode === null) {
-				const exited = Promise.withResolvers<void>();
-				child.once("exit", () => exited.resolve());
-				await exited.promise;
-			}
-			removeBridgeAddress(address);
-			await removeWhenFree(profile);
+			await close();
 		}
 	}, 60_000);
 });

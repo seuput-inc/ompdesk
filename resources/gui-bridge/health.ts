@@ -182,6 +182,8 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/task/restore": () => import("@oh-my-pi/pi-coding-agent/task/restore"),
 	"@oh-my-pi/pi-coding-agent/task/settings": () => import("@oh-my-pi/pi-coding-agent/task/settings"),
 	"@oh-my-pi/pi-coding-agent/tools/browser/attach": () => import("@oh-my-pi/pi-coding-agent/tools/browser/attach"),
+	"@oh-my-pi/pi-coding-agent/tools/browser/relay/bridge": () =>
+		import("@oh-my-pi/pi-coding-agent/tools/browser/relay/bridge"),
 	"@oh-my-pi/pi-coding-agent/tools/browser/relay/server": () =>
 		import("@oh-my-pi/pi-coding-agent/tools/browser/relay/server"),
 	"@oh-my-pi/pi-coding-agent/tools/browser/settings": () => import("@oh-my-pi/pi-coding-agent/tools/browser/settings"),
@@ -210,7 +212,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-tui/overlays/settings-defs": () => import("@oh-my-pi/pi-tui/overlays/settings-defs"),
 	"@oh-my-pi/pi-tui/render/render-utils": () => import("@oh-my-pi/pi-tui/render/render-utils"),
 	"@oh-my-pi/pi-tui/theme": () => import("@oh-my-pi/pi-tui/theme"),
-	"@oh-my-pi/pi-tui/tools/resolve": () => import("@oh-my-pi/pi-tui/tools/resolve"),
 	"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": () => import("@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime"),
 	"@oh-my-pi/pi-utils": () => import("@oh-my-pi/pi-utils"),
 	"@oh-my-pi/pi-tui/status-line/context-usage": () => import("@oh-my-pi/pi-tui/status-line/context-usage"),

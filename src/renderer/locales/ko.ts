@@ -442,6 +442,7 @@ export const ko: Record<string, string> = {
 	"outbox.cancel": "{text} 보내지 않기",
 	"outbox.answer": "답: {summary}",
 	"outbox.answerDismissed": "닫음",
+	"outbox.formAnswer": "작성한 양식",
 	"outbox.answerClosed": '"{summary}" 답을 보내지 못했어요: 연결이 끊긴 동안 질문이 닫혔어요.',
 	"outbox.answerElsewhere": '"{summary}" 답을 보내지 못했어요: 다른 기기에서 이미 답했어요.',
 	"outbox.messagesOnly":
@@ -6294,7 +6295,7 @@ export const ko: Record<string, string> = {
 		"ECC(Affaan Mustafa, MIT)의 언어·프레임워크·도구 스킬을 필요할 때만 읽어요. 작업 순서는 pstack 플레이북을 따라요. 끄면 ECC 스킬과 명령을 쓰지 않아요.",
 	"settings.gui.defaultBrowser": "기본 브라우저",
 	"settings.gui.defaultBrowserDesc":
-		"에이전트가 웹 작업에 쓰는 브라우저예요. 자동은 ego-browser가 있으면 그것을, 없으면 omp 확장을 추가한 브라우저(로그인된 내 브라우저)를, 그것도 없으면 omp 내장 브라우저를 써요. 열린 세션은 다음 메시지부터 바뀌어요.",
+		"자동은 ego-browser를 먼저 쓰고, 없으면 릴레이 연결 대상을 확인할 수 있는 브라우저를 써요. 둘 다 없으면 omp 내장 브라우저를 써요. 열린 세션은 다음 메시지부터 바뀌어요.",
 	"settings.gui.defaultBrowser.auto": "자동",
 	"settings.gui.defaultBrowser.autoResolved": "자동 · {browser}",
 	"settings.gui.defaultBrowser.ego": "ego-browser",
@@ -6303,10 +6304,12 @@ export const ko: Record<string, string> = {
 	"settings.gui.defaultBrowserLoadFailed": "기본 브라우저 설정을 읽지 못했어요",
 	"settings.gui.defaultBrowser.notInstalled": "{name} (설치 안 됨)",
 	"settings.gui.defaultBrowserBrowserMissing":
-		"{name} 브라우저는 설치돼 있지 않아 에이전트가 내장 브라우저(omp)를 써요.",
+		"{name} 브라우저가 설치돼 있지 않아요. 다른 브라우저를 대신 사용하지 않아요.",
 	"settings.gui.defaultBrowserRelayMissing":
-		"{name}에 omp 확장을 설치하면 에이전트가 로그인된 내 브라우저를 쓸 수 있어요. 그 전까지는 내장 브라우저(omp)를 써요.",
+		"{name}에 omp 확장을 설치하면 에이전트가 로그인된 내 브라우저를 쓸 수 있어요. 다른 브라우저를 대신 사용하지 않아요.",
 	"settings.gui.defaultBrowserInstall": "확장 설치",
+	"settings.gui.defaultBrowserRelayUnverified":
+		"omp가 {name}의 릴레이를 확인할 수 없어 다른 브라우저로 연결하지 않아요. 다른 기본 브라우저를 선택하거나 지원되는 브라우저의 omp 사이드 패널에서 대화를 시작하세요.",
 	"settings.gui.defaultBrowserRelayConnected": "연결됨: 에이전트가 로그인된 {name} 브라우저를 써요.",
 	"settings.gui.defaultBrowserRelayWaiting": "{name} 브라우저를 열면 연결돼요. 열려 있어야 에이전트가 쓸 수 있어요.",
 	"settings.gui.defaultBrowserInstallFailed": "확장을 설치하지 못했어요",

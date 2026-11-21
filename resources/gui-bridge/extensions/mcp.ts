@@ -492,7 +492,7 @@ async function findTestTarget(cwd: string, name: string): Promise<MCPServerConfi
 	return undefined;
 }
 
-/** Probe with a THROWAWAY manager so the shared connection pool is never touched. */
+/** A one-off live probe must not return the MCP host's cached discovery or tool list. */
 async function probeServer(session: AgentSession, probeName: string, config: MCPServerConfig, signal: AbortSignal) {
 	const [{ connectToServer, disconnectServer, listTools }, { MCPManager }] = await Promise.all([
 		import("../omp/pi-coding-agent/mcp/client"),
@@ -500,10 +500,11 @@ async function probeServer(session: AgentSession, probeName: string, config: MCP
 	]);
 	let connection: MCPServerConnection | undefined;
 	try {
-		const manager = new MCPManager(session.sessionManager.getCwd());
+		const cwd = session.sessionManager.getCwd();
+		const manager = new MCPManager(cwd);
 		manager.setAuthStorage(session.modelRegistry.authStorage);
 		const resolved = await manager.prepareConfig(config);
-		connection = await connectToServer(probeName, resolved, { signal });
+		connection = await connectToServer(probeName, resolved, { signal, cwd, live: true });
 		const tools = await listTools(connection, { signal });
 		return { ok: true, toolNames: tools.map(tool => tool.name), toolCount: tools.length };
 	} catch (error) {

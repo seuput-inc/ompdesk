@@ -219,11 +219,14 @@ function siblingCalls(session: Session, callId: string): string[] {
  * still running.
  */
 async function settledBeside(session: Session, state: LiveState, callId: string | undefined): Promise<string[]> {
-	if (callId) await untilToolEvents(() => state.pending.has(callId), OWN_START_WAIT_MS);
-	const siblings = callId ? siblingCalls(session, callId) : [];
-	// An autopilot call never waits for another (or for itself, reached as its `xd://` device).
+	// Stock reports only the enclosing Bash call's start/end for a nested <callId>:cmd:<index>.
+	const shellId = callId?.match(/^(.+):cmd:\d+$/)?.[1];
+	const eventId = () => (shellId && state.pending.get(shellId)?.tool === "bash" ? shellId : callId);
+	if (callId) await untilToolEvents(() => state.pending.has(eventId() ?? callId), OWN_START_WAIT_MS);
+	const own = eventId();
+	const siblings = own ? siblingCalls(session, own) : [];
 	const ours = (id: string, call: { tool: string; args: unknown }) =>
-		id === callId || call.tool === "autopilot" || String(record(call.args).path ?? "").startsWith("xd://autopilot");
+		id === own || call.tool === "autopilot" || String(record(call.args).path ?? "").startsWith("xd://autopilot");
 	const running = () => [
 		...[...state.pending].filter(([id, call]) => !ours(id, call)).map(([, call]) => call.tool),
 		...siblings.filter(id => !state.ended.has(id) && !state.pending.has(id)).map(() => "tool"),
@@ -358,16 +361,17 @@ async function applyTools(session: Session, role: "parent" | "child"): Promise<s
 	return removed;
 }
 
-/** Tools presented as `xd://` devices rather than top level (stock `getMountedXdevToolNames`); [] on an omp without it. */
-function mountedTools(session: Session): string[] {
-	return typeof session.getMountedXdevToolNames === "function" ? session.getMountedXdevToolNames() : [];
+/** Restore the original partition, whether stock mounted the tool as a command or (before 19.1) a device. */
+function mountedTools(
+	session: { getMountedToolCommandNames(): string[] } | { getMountedXdevToolNames(): string[] },
+): string[] {
+	return "getMountedToolCommandNames" in session ? session.getMountedToolCommandNames() : session.getMountedXdevToolNames();
 }
 
 /**
  * The session's tool set without the run: `autopilot` off, the excluded tools back. `getEnabledToolNames` lists the
- * `xd://` devices too, and stock's `setActiveToolsByName` keeps a device mounted only while it is mounted now, so a
- * device taken off at arm (`debug`) would come back top level. `setActiveToolPresentation` takes the partition
- * explicitly: what was a device at arm (`mounted`) or is one now stays one.
+ * mounted tools too; stock's `setActiveToolsByName` keeps a tool mounted only while it is mounted now, so a
+ * tool taken off at arm (`debug`) would come back top level. Restore the original partition explicitly.
  */
 async function restoreTools(session: Session, excluded: readonly string[], mounted: readonly string[]): Promise<void> {
 	const enabled = session.getEnabledToolNames();

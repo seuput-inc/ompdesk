@@ -5588,7 +5588,7 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 	}
 
 	/** A device's tab whose omp answers `browser_relay_start` with `relay` (nothing when omitted). */
-	async function tabWith(relay?: { port: number }) {
+	async function tabWith(relay?: { port: number; extensionPort?: number }) {
 		const context = setup();
 		const x = new FakeConnection(peer("device-x"));
 		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
@@ -5599,7 +5599,11 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 			sidecar.commands.push(command);
 			const data =
 				command.type === "browser_relay_start" && relay
-					? { url: `http://127.0.0.1:${relay.port}`, token: TOKEN }
+					? {
+							url: `http://127.0.0.1:${relay.port}`,
+							...(relay.extensionPort ? { extensionUrl: `http://127.0.0.1:${relay.extensionPort}` } : {}),
+							token: TOKEN,
+						}
 					: {};
 			return { type: "response", command: command.type, success: true, data };
 		};
@@ -5635,11 +5639,13 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 
 	it("dials the relay its bridge answered, and carries frames both ways", async () => {
 		const server = await relayServer();
-		const { services, x, command, relayEvents } = await tabWith(server);
+		const cdp = await relayServer();
+		const { services, x, command, relayEvents } = await tabWith({ port: cdp.port, extensionPort: server.port });
 		await command("browser_relay_start");
 
 		await expect(services.call(x.peer, PREVIEW_RELAY_METHODS.open, { rtab: "t1" }, x)).resolves.toBeNull();
 		expect(server.dialed).toEqual([`/ext?token=${TOKEN}`]);
+		expect(cdp.dialed).toEqual([]);
 
 		await services.call(x.peer, PREVIEW_RELAY_METHODS.send, { rtab: "t1", data: '{"t":"hello"}' }, x);
 		await vi.waitFor(() => expect(server.received).toEqual(['{"t":"hello"}']));

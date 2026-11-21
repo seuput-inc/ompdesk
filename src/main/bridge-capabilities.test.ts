@@ -287,6 +287,17 @@ describe("missingFor", () => {
 		]);
 	});
 
+	it("accepts either stock spelling and reports both when neither is usable", () => {
+		const session = { hasBuiltInTool() {}, agent: { state: {} } };
+		for (const name of ["getToolCommandEntries", "getXdevToolEntries"]) {
+			const tools = sources({ session: { ...session, [name]: () => [] } });
+			expect(missingFor(REQUIREMENTS.toolExtras, tools)).toEqual([]);
+			expect(missingFor(REQUIREMENTS.toolExtras, { ...tools, hidden: new Set([`AgentSession.${name}`]) })).toEqual([
+				"AgentSession.getToolCommandEntries or AgentSession.getXdevToolEntries",
+			]);
+		}
+	});
+
 	it("skips session requirements while no session is attached", () => {
 		expect(missingFor({ session: ["navigateTree()"] }, sources({ session: undefined }))).toEqual([]);
 	});

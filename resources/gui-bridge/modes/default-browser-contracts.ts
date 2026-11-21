@@ -11,13 +11,18 @@ export const DEFAULT_BROWSER_ENV = "OMP_GUI_BROWSER";
  * browser relay at `url`, the loopback endpoint only that browser's extension copy dials (one relay per browser:
  * every extension on a shared endpoint would let "Chrome" drive a connected Edge). `builtin`: omp's own browser, stock.
  */
-export type AgentBrowser = { kind: "ego" } | { kind: "relay"; name: string; url: string } | { kind: "builtin" };
+export type AgentBrowser =
+	| { kind: "ego" }
+	| { kind: "builtin" }
+	| { kind: "unavailable"; name: string }
+	| { kind: "relay"; name: string; url: string };
 
 /** `http://127.0.0.1:<port>`: the only relay endpoint a session may be pointed at. */
 const RELAY_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}$/;
 
 /** The env value: `ego`, `builtin` or `relay:<name>@<url>`. */
 export function agentBrowserEnv(browser: AgentBrowser): string {
+	if (browser.kind === "unavailable") return `unavailable:${browser.name}`;
 	return browser.kind === "relay" ? `relay:${browser.name}@${browser.url}` : browser.kind;
 }
 
@@ -29,6 +34,10 @@ function isBrowserName(name: unknown): name is string {
 /** The env value read back; missing or malformed reads as the built-in browser. */
 export function parseAgentBrowserEnv(value: string | undefined): AgentBrowser {
 	if (value === "ego") return { kind: "ego" };
+	if (value?.startsWith("unavailable:")) {
+		const name = value.slice("unavailable:".length);
+		if (isBrowserName(name)) return { kind: "unavailable", name };
+	}
 	if (value?.startsWith("relay:")) {
 		const rest = value.slice("relay:".length);
 		const at = rest.lastIndexOf("@");
@@ -43,6 +52,9 @@ export function parseAgentBrowserEnv(value: string | undefined): AgentBrowser {
 export function parseAgentBrowser(value: unknown): AgentBrowser | undefined {
 	if (typeof value !== "object" || value === null || !("kind" in value)) return undefined;
 	if (value.kind === "ego" || value.kind === "builtin") return { kind: value.kind };
+	if (value.kind === "unavailable" && "name" in value && isBrowserName(value.name)) {
+		return { kind: "unavailable", name: value.name };
+	}
 	if (
 		value.kind === "relay" &&
 		"name" in value &&

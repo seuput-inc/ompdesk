@@ -3,20 +3,20 @@ import { createServer } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible, variants } from "./harness";
 import {
 	connectRelay,
 	fixtureSite,
 	type PuppeteerBrowser,
-	relayEnv,
 	stockRelayInstalled,
+	test,
 } from "./preview-agent-fixture";
 
 // Agent browsing in the Preview panel, end to end on stock's own pieces: the
-// fake omp's bridge starts stock's relay server (tools/browser/relay/server.ts
-// from the installed omp), the app's preview joins it as the relay extension,
+// fake omp forwards the relay requests to the isolated installed omp; the
+// app's preview joins it as the relay extension,
 // and stock's puppeteer-core connects through it the way the browser tool's
 // relay mode does. The user watches the banner, then takes over.
 // OMP_GUI_PREVIEW_AGENT_CAPTURES=<dir> keeps the panel captures.
@@ -27,7 +27,7 @@ for (const [language, theme] of variants([
 	["en", "light"],
 	["ko", "dark"],
 ] as const)) {
-	test(`the agent drives the visible preview through stock's relay and the user takes over (${language}-${theme})`, async () => {
+	test(`the agent drives the visible preview through stock's relay and the user takes over (${language}-${theme})`, async ({ relayEnv }) => {
 		test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 		test.setTimeout(120_000);
 		const fixture = await fixtureSite("127.0.0.1");
@@ -47,7 +47,7 @@ for (const [language, theme] of variants([
 			OMP_GUI_HEADLESS: "1",
 			PI_CODING_AGENT_DIR: agent,
 			OMP_GUI_OMP: await fixtureOmp(profile),
-			...relayEnv(relayFile),
+			...(await relayEnv(relayFile)),
 		};
 		Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 		const app = await electron.launch({

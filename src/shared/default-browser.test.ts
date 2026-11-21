@@ -55,6 +55,17 @@ describe("relay endpoints", () => {
 });
 
 describe("resolveAgentBrowser", () => {
+	it("never assigns a discovered native host to a named browser even when its unpacked copy is loaded", () => {
+		const machine: AgentBrowserStatus = {
+			...status(false, chrome(true), brave(true)),
+			nativeHostBrowsers: ["chrome", "brave"],
+		};
+		expect(resolveAgentBrowser("chromium:brave", machine)).toEqual({ kind: "unavailable", name: "Brave" });
+		expect(resolveAgentBrowser("auto", machine)).toEqual({ kind: "builtin" });
+		expect(resolveAgentBrowser("chromium:brave", undefined)).toEqual({ kind: "unavailable", name: "Brave" });
+		expect(resolveAgentBrowser("auto", undefined)).toEqual({ kind: "builtin" });
+	});
+
 	it.each<[string, DefaultBrowserPref, AgentBrowserStatus, unknown]>([
 		[
 			"auto prefers ego-browser over a browser with its extension",
@@ -90,18 +101,18 @@ describe("resolveAgentBrowser", () => {
 			CHROME_RELAY,
 		],
 		[
-			"a browser without its extension is built-in",
+			"a browser without its extension stays unavailable",
 			"chromium:chrome",
 			status(true, chrome(false)),
-			{ kind: "builtin" },
+			{ kind: "unavailable", name: "Google Chrome" },
 		],
 		[
 			"a pick is never another browser's relay",
 			"chromium:chrome",
 			status(false, chrome(false), brave(true)),
-			{ kind: "builtin" },
+			{ kind: "unavailable", name: "Google Chrome" },
 		],
-		["a browser that is gone is built-in", "chromium:brave", status(false, chrome(true)), { kind: "builtin" }],
+		["a browser that is gone stays unavailable", "chromium:brave", status(false, chrome(true)), { kind: "unavailable", name: "Brave" }],
 		["built-in stays built-in whatever is installed", "builtin", status(true, chrome(true)), { kind: "builtin" }],
 	])("%s", (_name, pref, machine, expected) => {
 		expect(resolveAgentBrowser(pref, machine)).toEqual(expected);

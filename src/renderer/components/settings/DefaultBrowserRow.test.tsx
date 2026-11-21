@@ -206,6 +206,16 @@ describe("DefaultBrowserRow", () => {
 		expect(installButton()).toBeNull();
 	});
 
+	it("keeps an unverified profile selected without claiming its old extension is connected", async () => {
+		stored = "chromium:chrome";
+		status = { egoInstalled: false, browsers: [chrome(true, true)], nativeHostBrowsers: ["chrome"] };
+		await mount();
+		expect(field().value).toBe("chromium:chrome");
+		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayUnverified", { name: "Google Chrome" }));
+		expect(text()).not.toContain(translate("settings.gui.defaultBrowserRelayConnected", { name: "Google Chrome" }));
+		expect(prefs.set).not.toHaveBeenCalled();
+	});
+
 	it("tells a pick with its extension whether it is connected, and to open the browser when it is not", async () => {
 		stored = "chromium:chrome";
 		status = { egoInstalled: false, browsers: [chrome(true, true)] };

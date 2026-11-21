@@ -123,7 +123,9 @@ export function PreviewPanel() {
 			) {
 				throw new Error("omp returned no browser relay endpoint");
 			}
-			await window.omp.preview.command({ action: "agentStart", tabId, url: relay.url, token: relay.token });
+			const url = "extensionUrl" in relay ? relay.extensionUrl : relay.url;
+			if (typeof url !== "string") throw new Error("omp returned no preview extension endpoint");
+			await window.omp.preview.command({ action: "agentStart", tabId, url, token: relay.token });
 		} catch (error) {
 			releaseAgentRelay(tabId);
 			toastError({ title: t("panel.preview.agent.failed"), error });

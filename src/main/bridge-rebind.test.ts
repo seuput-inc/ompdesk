@@ -7,9 +7,10 @@
  * the user picked since. Here a second extension's slash command runs that same stock bind on the
  * session's prepared extensions, the way a subagent's session does.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import { connect, createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
@@ -123,4 +124,40 @@ describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("gui-bridge bound ag
 			await fs.rm(profile, RM_TEMP);
 		}
 	}, 60_000);
+
+	it("a worker installs turn hooks without taking the parent's endpoint", async () => {
+		const address = newBridgeAddress();
+		const server = createServer(socket => socket.end("parent"));
+		await new Promise<void>((resolve, reject) => server.once("error", reject).listen(address, resolve));
+		const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worker-bind-"));
+		try {
+			const bridge = path.resolve("resources/gui-bridge/index.ts");
+			const worker = path.join(profile, "worker.mjs");
+			await fs.writeFile(worker, `
+				import { parentPort, workerData } from "node:worker_threads";
+				const { z } = await import(Bun.resolveSync("zod", workerData));
+				const hooks = new Set();
+				const pi = new Proxy({ on: name => hooks.add(name), logger: console,
+					pi: { z, Settings: { instance: {} }, AgentRegistry: { global: () => new Map() } }
+				}, { get: (target, key) => target[key] ?? (() => {}) });
+				await (await import(workerData)).default(pi);
+				parentPort.postMessage(hooks.has("before_agent_start"));
+			`);
+			const run = spawnSync("bun", ["-e", `
+				import { Worker } from "node:worker_threads";
+				import { once } from "node:events";
+				const w = new Worker(${JSON.stringify(worker)}, {workerData: ${JSON.stringify(bridge)}});
+				try { console.log((await once(w, "message"))[0]); } finally { await w.terminate(); }
+			`], { cwd: profile, env: { PATH: process.env.PATH, HOME: profile, USERPROFILE: profile, OMP_GUI_BRIDGE: address }, encoding: "utf8", timeout: 20_000 });
+			expect(run.status, run.error?.message ?? run.stderr).toBe(0);
+			expect(run.stdout.trim()).toBe("true");
+			const reply = await new Promise<string>((resolve, reject) => {
+				connect(address).once("error", reject).once("data", data => resolve(data.toString()));
+			});
+			expect(reply).toBe("parent");
+		} finally {
+			server.close();
+			await fs.rm(profile, RM_TEMP);
+		}
+	});
 });

@@ -17,6 +17,7 @@
  */
 import * as fs from "node:fs";
 import * as net from "node:net";
+import { isMainThread } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { ALL_FEATURES, type AreaFailure, type FeatureId, mergeAreaFailures, UnsupportedOmpError } from "./capabilities";
 import { probe } from "./health";
@@ -347,6 +348,12 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 		processBind.startLoading?.();
 		const loaded = await processBind.bound;
 		for (const install of loaded?.installs ?? []) install(pi);
+		return;
+	}
+	if (!isMainThread) {
+		// Stock reimports file extensions in its task workers. Install their hooks without replacing the main socket.
+		processBind.bound = loadMethods(pi);
+		await processBind.bound;
 		return;
 	}
 	const first = Promise.withResolvers<LoadedMethods | undefined>();

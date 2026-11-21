@@ -102,8 +102,8 @@ impl Id {
 struct Named {
     id: Id,
     name: String,
-    /// Its own relay's loopback port.
-    port: u16,
+    /// Only older omp versions have a fixed port per browser.
+    port: Option<u16>,
 }
 
 /// Where the machine keeps things; a test points these at a temp folder.
@@ -251,8 +251,8 @@ async fn status(params: FindParams) -> Result<Vec<Installed>, Fault> {
                 let port = params
                     .browsers
                     .iter()
-                    .find_map(|named| (named.id == browser.id).then_some(named.port))
-                    .unwrap_or_default();
+                    .find(|named| named.id == browser.id)
+                    .and_then(|named| named.port);
                 (browser, installed, port)
             })
             .collect::<Vec<_>>()
@@ -266,7 +266,10 @@ async fn status(params: FindParams) -> Result<Vec<Installed>, Fault> {
                     id: browser.id,
                     name: browser.name,
                     relay_installed,
-                    relay_connected: relay_installed && relay_connected(port).await,
+                    relay_connected: match port {
+                        Some(port) if relay_installed => relay_connected(port).await,
+                        _ => false,
+                    },
                 }
             })
         })

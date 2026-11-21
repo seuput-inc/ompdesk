@@ -135,6 +135,17 @@ export function DefaultBrowserRow() {
 	let note: ReactNode = null;
 	if (status && pref === "ego" && !status.egoInstalled) {
 		note = <span data-default-browser-missing="true">{t("settings.gui.defaultBrowserMissing")}</span>;
+	} else if (status?.nativeHostBrowsers && picked) {
+		note = (
+			<span className="inline-flex flex-wrap items-center justify-end gap-2">
+				{t("settings.gui.defaultBrowserRelayUnverified", { name: CHROMIUM_BROWSER_NAMES[picked] })}
+				{pickedBrowser && status.nativeHostBrowsers.includes(picked) && (
+					<Button loading={installing} onClick={() => install(picked)} size="sm" variant="secondary">
+						{t("settings.gui.defaultBrowserInstall")}
+					</Button>
+				)}
+			</span>
+		);
 	} else if (status && picked && !pickedBrowser) {
 		note = (
 			<span data-default-browser-missing="true">

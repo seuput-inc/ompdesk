@@ -42,8 +42,10 @@ export const STEPS = "STEPS-MARK run";
 /** `STEPS` with the turn's first model request held until `release` (`held` resolves); it contains `STEPS`. */
 export const HELD_STEPS = "HELD-STEPS-MARK run";
 
-/** A prompt whose turn asks the person one question (stock `ask`: a `select` card), then replies. */
+/** A prompt whose first reply asks the person to choose A or B. */
 export const CARD = "CARD-MARK run";
+export const CARD_FORM =
+	'<form><label>Which one? <select name="pick"><option value="a">A</option><option value="b">B</option></select></label></form>';
 
 /** A prompt whose first reply is held until `release` (`held` resolves) and then calls the shell tool (`sleep 300`). */
 export const HELD_SHELL = "HELD-SHELL-MARK run";
@@ -61,6 +63,7 @@ export type Frame = {
 	/** `extension_ui_request`: a card (`select`, …), or a `cancel` whose `targetId` names the card; an answer names `id`. */
 	id?: string;
 	method?: string;
+	html?: string;
 	options?: string[];
 	targetId?: string;
 };
@@ -173,9 +176,7 @@ export async function startProvider(): Promise<Provider> {
 			}
 			// `toolNamed("ask")` would also match `task`.
 			if (main && body.includes(CARD) && results === 0) {
-				const html =
-					'<form><label>Which one? <select name="pick"><option value="a">A</option><option value="b">B</option></select></label></form>';
-				reply([{ id: "call_ask", name: "ask", args: { html } }]);
+				reply([{ id: "call_ask", name: "ask", args: { html: CARD_FORM } }]);
 				return;
 			}
 			if (shell && wait && body.includes(WAIT) && results < 2) {

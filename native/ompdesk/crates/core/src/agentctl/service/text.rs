@@ -1043,20 +1043,19 @@ pub struct TranscriptEnding {
 
 /// `ompdesk_report {kind: "done"}` to the opener: as the tool itself, or written to its device.
 pub fn is_done_report(name: &str, args: &Value) -> bool {
-    let mut report = args.clone();
-    if name == "write"
-        && args.get("path").and_then(Value::as_str) == Some("xd://ompdesk_report")
-        && let Some(content) = args.get("content").and_then(Value::as_str)
-    {
-        match serde_json::from_str(content) {
-            Ok(parsed) => report = parsed,
-            Err(_) => return false,
-        }
-    } else if name != Tool::Report.name() {
-        return false;
+    if name == Tool::Report.name() {
+        return done_to_opener(args);
     }
+    name == "write"
+        && args.get("path").and_then(Value::as_str) == Some("xd://ompdesk_report")
+        && args.get("content").and_then(Value::as_str)
+            .and_then(|content| serde_json::from_str(content).ok())
+            .as_ref().is_some_and(done_to_opener)
+}
+
+pub(super) fn done_to_opener(args: &Value) -> bool {
     // A report to a sibling (`to`) is a note, not the end of the work it was given.
-    report.as_object().is_some_and(|fields| {
+    args.as_object().is_some_and(|fields| {
         fields.get("kind").and_then(Value::as_str) == Some("done") && !fields.contains_key("to")
     })
 }
@@ -1065,9 +1064,11 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
     let mut last = None;
     let mut stop_reason = None;
     let mut person_prompted = false;
-    let mut reports: Vec<String> = Vec::new();
+    let mut reports: Vec<&str> = Vec::new();
+    let mut turn_start = 0;
+    let mut command_done = false;
     let mut refused: HashSet<&str> = HashSet::new();
-    for message in messages {
+    for (index, message) in messages.iter().enumerate() {
         match message.role.as_str() {
             "user" => {
                 if message.synthetic == Some(true)
@@ -1082,6 +1083,8 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
                 }
                 // New work: a done report before it no longer speaks for what the session does now.
                 reports.clear();
+                command_done = false;
+                turn_start = index + 1;
                 if parse_agent_message(text).is_none() {
                     person_prompted = true;
                 }
@@ -1101,9 +1104,20 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
                         } = block
                             && is_done_report(name, arguments)
                         {
-                            reports.push(id.clone());
+                            reports.push(id);
                         }
                     }
+                }
+            }
+            // A shell may fail after a successful report (or succeed after a failed one).
+            // Only accept stock's execution record for an actual Bash call of this turn.
+            "toolResult" if message.command_reported_done && message.tool_name.as_deref() == Some("bash") => {
+                if let Some(id) = message.tool_call_id.as_deref().filter(|id| !id.is_empty()) {
+                    command_done |= messages[turn_start..index].iter().rev().any(|prior| {
+                        prior.role == "assistant" && matches!(&prior.content, Some(Content::Blocks(parts))
+                            if parts.iter().any(|part| matches!(part, Block::ToolCall { id: call_id, name, .. }
+                                if call_id == id && name == "bash")))
+                    });
                 }
             }
             "toolResult" if message.is_error => {
@@ -1117,7 +1131,7 @@ pub fn transcript_ending(messages: &[AgentMessage]) -> TranscriptEnding {
     TranscriptEnding {
         last,
         stop_reason: stop_reason.filter(|reason| !reason.is_empty()),
-        reported_done: reports.iter().any(|id| !refused.contains(id.as_str())),
+        reported_done: command_done || reports.iter().any(|id| !refused.contains(*id)),
         person_prompted,
     }
 }

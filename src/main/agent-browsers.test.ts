@@ -5,7 +5,9 @@
  * (`native/ompdesk/crates/core/src/browsers/`): the relays are loopback servers of this test and omp is a stand-in
  * executable the core runs. Binding the port alone is a Rust table (`browsers/captured.json`).
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -21,6 +23,7 @@ import {
 import { CoreProcess } from "./core/process";
 import type { OmpRuntime } from "./local/types";
 import { nativeBinPath } from "./native-bin";
+import { OMP_COMMAND, stockSource } from "./test-bridge-probe";
 
 let root: string;
 let home: string;
@@ -298,6 +301,51 @@ process.stderr.write(stderr, () => process.exit(code));
 		// The staging folder is gone, and another browser's copy is its own.
 		expect(existsSync(`${dir}.new`)).toBe(false);
 		expect(existsSync(relayExtensionDir("chrome"))).toBe(false);
+	});
+
+	it("registers the final extension path on native-host omp without loading it in any Chrome profile", async () => {
+		const { omp, calls } = runtime({ "worker.js": "uses native messaging" });
+		const dir = await installRelayExtension({ ...omp, version: "19.1.0" }, "chrome", home);
+		expect(dir).toBe(relayExtensionDir("chrome"));
+		expect(calls()).toEqual([["browser-relay", "install", "--dir", dir, "--no-chrome"]]);
+		expect(readFileSync(join(dir, "worker.js"), "utf8")).toBe("uses native messaging");
+	});
+
+	// Windows registration writes HKCU even with a private HOME; exercise its argv above, never the real registry.
+	it.skipIf(process.platform === "win32" || !stockSource("pi-coding-agent", "tools/browser/relay/native-host-manifest.ts"))(
+		"stock registers only the final path's origin and leaves the synthetic Chrome profile alone",
+		() => {
+			const dir = relayExtensionDir("chrome");
+			const config = join(home, ".config");
+			const chrome = process.platform === "darwin" ? support("Google", "Chrome") : join(config, "google-chrome");
+			const prefs = join(chrome, "Default", "Preferences");
+			place(prefs, "{}");
+			const result = spawnSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "browser-relay", "install", "--dir", dir, "--no-chrome"], {
+				cwd: home,
+				env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: config, PI_CONFIG_DIR: ".", TMPDIR: root },
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			expect(result.status, result.stderr || result.error?.message).toBe(0);
+			const id = createHash("sha256").update(realpathSync(dir)).digest("hex").slice(0, 32)
+				.replace(/./g, digit => String.fromCharCode(97 + Number.parseInt(digit, 16)));
+			const manifests = join(chrome, "NativeMessagingHosts");
+			const files = readdirSync(manifests);
+			expect(files).toHaveLength(1);
+			expect(JSON.parse(readFileSync(join(manifests, files[0]), "utf8"))).toMatchObject({
+				allowed_origins: [`chrome-extension://${id}/`],
+				type: "stdio",
+			});
+			expect(readFileSync(prefs, "utf8")).toBe("{}");
+			expect(existsSync(join(chrome, "Default", "Secure Preferences"))).toBe(false);
+		},
+		40_000,
+	);
+
+	it("does not run the installer for a browser the native host cannot register", async () => {
+		const { omp, calls } = runtime({});
+		await expect(installRelayExtension({ ...omp, version: "19.1.0" }, "arc", home)).rejects.toThrow("Arc");
+		expect(calls()).toEqual([]);
 	});
 
 	it("rebinds an earlier copy in place", async () => {

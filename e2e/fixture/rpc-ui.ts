@@ -54,6 +54,7 @@ import {
 	transcriptPageMessages,
 	transcriptRunStart,
 } from "../../resources/gui-bridge/transcript-page";
+import { GuiBridgeClient } from "../../src/main/bridge-client";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
 import type {
@@ -1714,8 +1715,21 @@ export function runRpcUi(): void {
 				];
 			});
 		});
-	/** Stock's relay server while a spec lets the agent into the preview (browser.relay_start). */
-	let relayServer: { server: { stop(): void }; url: string; token: string } | null = null;
+	/** The spec owns a private real stock session; only its relay methods cross this fixture boundary. */
+	const stockRelay = async (method: "browser.relay_start" | "browser.relay_stop") => {
+		const address = process.env.OMP_E2E_STOCK_RELAY;
+		if (!address) throw new Error("OMP_E2E_STOCK_RELAY is not set");
+		const client = new GuiBridgeClient(address);
+		try {
+			await client.connect();
+			const result = await client.request<{ url?: string }>(method);
+			if (result.url && process.env.OMP_E2E_RELAY_FILE)
+				fs.writeFileSync(process.env.OMP_E2E_RELAY_FILE, JSON.stringify({ url: result.url }));
+			return result;
+		} finally {
+			client.close();
+		}
+	};
 	/** `prompt_origin_set` calls whose prompt has not been sent yet. */
 	const pendingOrigins: Array<{ deviceId: string; name: string; text: string }> = [];
 	/**
@@ -2010,39 +2024,8 @@ export function runRpcUi(): void {
 			reconnected: Array.isArray(params.names) ? params.names : [],
 			skipped: [],
 		}),
-		// gui-bridge browser-relay.ts: stock's own relay server, loaded from the installed omp
-		// only when a spec names it (OMP_E2E_STOCK_RELAY = stock's tools/browser/relay/server.ts).
-		// The endpoint lands in OMP_E2E_RELAY_FILE so the spec can connect puppeteer to it.
-		"browser.relay_start": (_params, reply) => {
-			void (async () => {
-				const modulePath = process.env.OMP_E2E_STOCK_RELAY;
-				if (!modulePath) throw new Error("OMP_E2E_STOCK_RELAY is not set");
-				if (!relayServer) {
-					const { startRelayServer } = await import(modulePath);
-					const probe = net.createServer();
-					const listening = Promise.withResolvers<void>();
-					probe.listen(0, "127.0.0.1", () => listening.resolve());
-					await listening.promise;
-					const address = probe.address();
-					const port = typeof address === "object" && address ? address.port : 0;
-					probe.close();
-					const token = createHash("sha256").update(String(Math.random())).digest("base64url");
-					relayServer = {
-						server: startRelayServer({ port, token, group: false }),
-						url: `http://127.0.0.1:${port}`,
-						token,
-					};
-					if (process.env.OMP_E2E_RELAY_FILE)
-						fs.writeFileSync(process.env.OMP_E2E_RELAY_FILE, JSON.stringify({ url: relayServer.url }));
-				}
-				reply({ url: relayServer.url, token: relayServer.token });
-			})();
-		},
-		"browser.relay_stop": () => {
-			relayServer?.server.stop();
-			relayServer = null;
-			return {};
-		},
+		"browser.relay_start": () => stockRelay("browser.relay_start"),
+		"browser.relay_stop": () => stockRelay("browser.relay_stop"),
 		read_image_blob: params => {
 			const hash = /^blob:sha256:([a-f0-9]{64})$/.exec(String(params.ref))?.[1];
 			if (!hash) throw new Error("Invalid image blob reference");
@@ -3102,7 +3085,8 @@ export function runRpcUi(): void {
 		}
 		try {
 			const result = handler(params, reply);
-			if (result !== undefined) reply(result);
+			if (result instanceof Promise) void result.then(reply, error => fail(String(error)));
+			else if (result !== undefined) reply(result);
 		} catch (error) {
 			fail(error instanceof Error ? error.message : String(error));
 		}

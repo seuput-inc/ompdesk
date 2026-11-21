@@ -25,6 +25,7 @@ import {
 } from "./context-inspect-core";
 import { guard } from "./health";
 import { sectionContext, withTurnSections } from "./prompt-sections";
+import { mountedToolEntries } from "./tool-presentation";
 import type { BridgeMethods } from "./types";
 
 interface Entry {
@@ -35,7 +36,7 @@ interface Entry {
 	/** Message role for `msg:` entries. */
 	role?: string;
 	tokens: number;
-	/** An xd:// mounted tool: listed in the prompt by name only, its schema loads on use. */
+	/** A mounted tool listed without a top-level schema. */
 	deferred?: true;
 }
 
@@ -112,7 +113,7 @@ async function inspect(session: AgentSession, withEntries: boolean) {
 		totals[category] += tokens;
 		entries.push({ id: `tool:${tool.name}`, category, label: tool.name, tokens });
 	}
-	for (const mounted of session.getXdevToolEntries()) {
+	for (const mounted of mountedToolEntries(session)) {
 		entries.push({
 			id: `deferred:${mounted.name}`,
 			category: TOOL_CATEGORY[toolSource(session, mounted.name)],
@@ -171,7 +172,7 @@ async function preview(session: AgentSession, id: string): Promise<Preview> {
 			return capPreview(`${tool.description ?? ""}\n\n${JSON.stringify(toolWireSchema(tool), null, 2)}`);
 		}
 		case "deferred": {
-			const mounted = session.getXdevToolEntries().find(candidate => candidate.name === key);
+			const mounted = mountedToolEntries(session).find(candidate => candidate.name === key);
 			if (mounted) return capPreview(mounted.summary ?? "");
 			break;
 		}

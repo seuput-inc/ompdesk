@@ -2,10 +2,11 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { ExtensionUIRequest, ExtensionUIResponse } from "../../../shared/rpc-types";
+import type { ExtensionUIRequest, ExtensionUIResponse, RpcResponseSuccess } from "../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { useAutopilotStore } from "../../stores/autopilot";
 import { awaitedInput, useExtensionUiStore } from "../../stores/extension-ui";
+import { type SessionRuntime, SessionRuntimeProvider } from "../../stores/session-runtime-context";
 import { useToastStore } from "../../stores/toast";
 import { AskDockSlot, BelowEditorDockSlot } from "./ask-dock";
 import { ExtensionDialog } from "./ExtensionDialog";
@@ -54,7 +55,7 @@ interface TestElement {
 
 let container: TestElement;
 let root: Root;
-let respondExtensionUi: Mock<(response: ExtensionUIResponse) => void>;
+let respondExtensionUi: Mock<(response: ExtensionUIResponse, tabId?: string) => void>;
 let openExternal: Mock<(url: string) => Promise<void>>;
 
 async function flush(): Promise<void> {
@@ -65,7 +66,10 @@ async function flush(): Promise<void> {
 	});
 }
 
-async function mount({ withComposerDock = false }: { withComposerDock?: boolean } = {}): Promise<void> {
+async function mount({
+	withComposerDock = false,
+	runtime,
+}: { withComposerDock?: boolean; runtime?: SessionRuntime } = {}): Promise<void> {
 	respondExtensionUi = vi.fn();
 	openExternal = vi.fn(async () => {});
 	const ompWindow = window as unknown as {
@@ -83,7 +87,13 @@ async function mount({ withComposerDock = false }: { withComposerDock?: boolean 
 			<I18nProvider>
 				{withComposerDock && <AskDockSlot />}
 				{withComposerDock && <BelowEditorDockSlot />}
-				<ExtensionDialog />
+				{runtime ? (
+					<SessionRuntimeProvider runtime={runtime}>
+						<ExtensionDialog />
+					</SessionRuntimeProvider>
+				) : (
+					<ExtensionDialog />
+				)}
 			</I18nProvider>,
 		);
 	});
@@ -197,6 +207,98 @@ describe("ExtensionDialog select", () => {
 		await click(again);
 		expect(respondExtensionUi).toHaveBeenCalledTimes(2);
 		expect(useExtensionUiStore.getState().pendingRequests).toEqual([]);
+	});
+});
+
+// React's value tracker ignores linkedom input events.
+async function typeInto(field: HTMLInputElement, value: string) {
+	field.value = value;
+	const record: Record<string, unknown> = Object(field);
+	const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
+	const props = propsKey ? (record[propsKey] as { onChange?: (event: object) => void }) : undefined;
+	await act(async () => props?.onChange?.({ target: field, currentTarget: field }));
+}
+
+describe("ExtensionDialog native RPC form", () => {
+	const html = '<form><label>Count <input name="n" type="number" value="3" min="2"></label></form>';
+	const question = {
+		id: "field-0",
+		question: "Count",
+		options: [],
+		formField: { custom: true, multiline: false, initialText: "3", checked: [] },
+	};
+	const ok = (data: unknown): RpcResponseSuccess => ({
+		type: "response",
+		command: "project_ask_form",
+		success: true,
+		data,
+	});
+	const submit = async () => {
+		const form = document.querySelector("form");
+		if (!form) throw new Error("missing form card");
+		await act(async () => {
+			form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+		});
+	};
+
+	it("uses the originating pane to project and validate, then sends data once with the stock id", async () => {
+		const command = vi
+			.fn<SessionRuntime["command"]>()
+			.mockResolvedValueOnce(ok({ questions: [question] }))
+			.mockResolvedValueOnce(ok({ index: 0, problem: "Must be at least 2" }))
+			.mockResolvedValueOnce(ok({ data: { n: 3 } }));
+		await mount({ runtime: { tabId: "paired-pane", command, stores: new Map() } });
+		await push({ type: "extension_ui_request", method: "form", id: "native-1", html });
+		const field = document.querySelector("input") as unknown as HTMLInputElement;
+		expect(field.value).toBe("3");
+		expect(command.mock.calls[0]?.[0]).toEqual({ type: "project_ask_form", html });
+		await typeInto(field, "1");
+		await submit();
+		expect(document.querySelector('[role="alert"]')?.textContent).toBe("Must be at least 2");
+		expect(respondExtensionUi).not.toHaveBeenCalled();
+		await typeInto(field, "3");
+		await submit();
+		expect(command.mock.calls[2]?.[0]).toEqual({
+			type: "project_ask_form",
+			html,
+			answers: [{ id: "field-0", selectedOptions: [], customInput: "3" }],
+		});
+		expect(respondExtensionUi).toHaveBeenCalledTimes(1);
+		expect(respondExtensionUi).toHaveBeenCalledWith(
+			{ type: "extension_ui_response", id: "native-1", data: { n: 3 } },
+			"paired-pane",
+		);
+	});
+
+	it("cancels instead of answering when validation finishes after the person dismisses the card", async () => {
+		const pending = Promise.withResolvers<RpcResponseSuccess>();
+		const command = vi
+			.fn<SessionRuntime["command"]>()
+			.mockResolvedValueOnce(ok({ questions: [question] }))
+			.mockReturnValueOnce(pending.promise);
+		await mount({ runtime: { tabId: "paired-pane", command, stores: new Map() } });
+		await push({ type: "extension_ui_request", method: "form", id: "native-2", html });
+		await submit();
+		const cancel = buttonWithText(translate("extDialog.ask.chat"));
+		if (!cancel) throw new Error("missing Chat instead");
+		await click(cancel);
+		await act(async () => pending.resolve(ok({ data: { n: 3 } })));
+		expect(respondExtensionUi).toHaveBeenCalledTimes(1);
+		expect(respondExtensionUi).toHaveBeenCalledWith(
+			{ type: "extension_ui_response", id: "native-2", cancelled: true },
+			"paired-pane",
+		);
+	});
+
+	it("returns stock's timeout marker rather than claiming a default was chosen", async () => {
+		const command = vi.fn<SessionRuntime["command"]>().mockResolvedValue(ok({ questions: [question] }));
+		await mount({ runtime: { tabId: "paired-pane", command, stores: new Map() } });
+		await push({ type: "extension_ui_request", method: "form", id: "expired", html, timeout: 0 });
+		expect(respondExtensionUi).toHaveBeenCalledTimes(1);
+		expect(respondExtensionUi).toHaveBeenCalledWith(
+			{ type: "extension_ui_response", id: "expired", cancelled: true, timedOut: true },
+			"paired-pane",
+		);
 	});
 });
 
@@ -529,14 +631,6 @@ describe("ExtensionDialog ask", () => {
 				if (!option) throw new Error(`missing ${pick}`);
 				await click(option);
 			}
-			// React's value tracker ignores linkedom input events; call the field's onChange the way ForceToolDialog.test does.
-			const typeInto = async (field: HTMLInputElement, value: string) => {
-				field.value = value;
-				const record: Record<string, unknown> = Object(field);
-				const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
-				const props = propsKey ? (record[propsKey] as { onChange?: (event: object) => void }) : undefined;
-				await act(async () => props?.onChange?.({ target: field, currentTarget: field }));
-			};
 			if (custom) {
 				const customField = card.querySelector(
 					'input[aria-label="Custom answer (optional)"]',

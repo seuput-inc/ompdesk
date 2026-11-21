@@ -1,8 +1,8 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { expect } from "vitest";
 import { ompPackageRoot } from "./omp-runtime";
 
 /** Bun's launcher for the global omp (`omp.exe` on Windows); a stock-pinned test skips when it is not installed. */
@@ -144,7 +144,7 @@ export function runBridgeProbe(
 			{ env: spawnEnv, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, input: "" },
 		);
 		const line = result.stderr.split("\n").find(value => value.startsWith(name));
-		expect(line, result.stderr.slice(-2500)).toMatch(new RegExp(`^${name}=`));
+		assert.match(line ?? "", new RegExp(`^${name}=`), result.stderr.slice(-2500));
 		return JSON.parse(line?.slice(name.length + 1) ?? "{}") as Record<string, unknown>;
 	} finally {
 		rmSync(isolated, { recursive: true, force: true });

@@ -245,7 +245,10 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			...(deps.defaultBrowserPref
 				? {
 						defaultBrowser: async () =>
-							resolveAgentBrowser(parseDefaultBrowser(deps.defaultBrowserPref?.()), await agentBrowserStatus()),
+							resolveAgentBrowser(
+								parseDefaultBrowser(deps.defaultBrowserPref?.()),
+								await agentBrowserStatus().catch(() => undefined),
+							),
 						egoBrowserDir: async () => {
 							const bin = await resolveEgoBrowser();
 							return bin ? dirname(bin) : null;

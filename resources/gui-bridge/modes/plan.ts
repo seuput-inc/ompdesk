@@ -4,7 +4,7 @@
  * Stock RPC has no plan commands; its AgentSession does: `setPlanModeState`,
  * `setPlanProposalHandler`, `preparePlanForReview`. Entering mirrors the TUI's
  * `#enterPlanMode` minus the plan-role model switch: the built-in `write` tool
- * is ensured (plan drafts and `xd://propose` are writes) and the pre-plan tool
+ * is ensured for plan drafts and the pre-plan tool
  * set restored on exit. When the agent proposes, the proposal is pushed as a
  * `plan_proposal` frame and the turn is silently aborted, the same stop the TUI
  * and print mode perform, until `plan_approval` resolves it.
@@ -142,15 +142,15 @@ async function enterPlanMode(session: AgentSession): Promise<void> {
 	const planFilePath = session.getPlanReferencePath() || "local://PLAN.md";
 	const before = session.getEnabledToolNames();
 	const previousState = session.getPlanModeState();
-	// Plan state lands before the tool change: approval is a top-level `write` to `xd://propose`.
+	// Without command transport stock presents `propose` directly when it rebuilds the tools in plan mode.
 	session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel" });
-	if (session.hasBuiltInTool("write") && !before.includes("write")) {
-		try {
-			await session.setActiveToolsByName([...before, "write"]);
-		} catch (error) {
-			session.setPlanModeState(previousState);
-			throw error;
-		}
+	const tools = before.filter(name => name !== "write");
+	if (session.hasBuiltInTool("write")) tools.push("write");
+	try {
+		await session.setActiveToolsByName(tools);
+	} catch (error) {
+		session.setPlanModeState(previousState);
+		throw error;
 	}
 	previousTools = before;
 	arm(session);
@@ -158,14 +158,19 @@ async function enterPlanMode(session: AgentSession): Promise<void> {
 	session.sessionManager.appendModeChange("plan", { planFilePath });
 }
 
-async function onProposalWritten(event: AgentSessionEvent, session: AgentSession): Promise<void> {
-	if (event.type !== "tool_execution_end" || event.isError) return;
+async function onProposalCompleted(event: AgentSessionEvent, session: AgentSession): Promise<void> {
+	if (event.type !== "tool_execution_end") return;
 	const proposal = pending;
-	if (!proposal) return;
-	const { writeDeviceDispatch } = await import("../omp/pi-coding-agent/tools/resolve");
-	const { PROPOSE_DEVICE_NAME } = await import("../omp/pi-tui/tools/resolve");
-	const dispatch = writeDeviceDispatch(event.toolName, event.result);
-	if (dispatch?.tool !== PROPOSE_DEVICE_NAME || dispatch.mode !== "execute") return;
+	if (!proposal || proposal.frame) return;
+	const stock = await import("../omp/pi-coding-agent/tools/resolve");
+	if (typeof stock.proposeDispatchDetails === "function") {
+		// A later shell command may fail after `propose` succeeded. Stock checks the dispatch's own exit code.
+		if (event.toolName === "propose" && event.isError) return;
+		if (stock.proposeDispatchDetails(event.toolName, event.result) === undefined) return;
+	} else {
+		const dispatch = stock.writeDeviceDispatch(event.toolName, event.result);
+		if (event.isError || dispatch?.tool !== "propose" || dispatch.mode !== "execute") return;
+	}
 	// A plan the automatic mode choice entered for one request is approved here, as the card's Approve would with
 	// "keep context": no `plan_proposal` frame (no card in any window, nothing waits on the person), and the plan
 	// runs in this session. The user's own plan mode still asks.
@@ -195,7 +200,7 @@ onSessionEvent((event, session) => {
 	// A turn that starts while the card waits is the person's (or an agent's) reply: feedback, like the dialog's
 	// refine, so the card goes everywhere and the agent revises or carries on from the message.
 	if (event.type === "agent_start" && pending?.frame) settlePending();
-	void onProposalWritten(event, session).catch(error =>
+	void onProposalCompleted(event, session).catch(error =>
 		emit({ type: "notice", level: "error", message: `Plan proposal failed: ${errorMessage(error)}` }),
 	);
 });

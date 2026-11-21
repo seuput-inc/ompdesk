@@ -33,6 +33,7 @@ import {
 	stoppedSubagents,
 	turnCutBehindNotes,
 } from "./restart-core";
+import { mountedToolEntries } from "./tool-presentation";
 import type { BridgeMethods } from "./types";
 
 type Session = AgentSession & Record<string, unknown>;
@@ -389,13 +390,13 @@ export const methods: BridgeMethods = {
 		},
 	}),
 	...guard("toolExtras", {
-		/** Stock get_state supplies top-level tool descriptions; only provenance and xd:// entries are extras. */
+		/** Stock get_state supplies top-level tool descriptions; only provenance and mounted entries are extras. */
 		"composer.tool_extras": async (_params, env) => {
 			const session = env.session() as Session;
 			const source = (name: string) =>
 				name.startsWith("mcp__") ? "mcp" : session.hasBuiltInTool(name) ? "builtin" : "extension";
 			const sources = Object.fromEntries(session.agent.state.tools.map(tool => [tool.name, source(tool.name)]));
-			const mounted = session.getXdevToolEntries();
+			const mounted = mountedToolEntries(session);
 			return {
 				sources,
 				mounted: mounted.map(entry => ({

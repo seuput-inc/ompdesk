@@ -89,6 +89,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_event_filter"; events: string[] | null }
 	/** Opts the host into upstream's `ask` extension-dialog protocol (`answers` responses). */
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
+	| { id?: string; type: "project_ask_form"; html: string; answers?: FormFieldAnswer[] }
 	/** Registers GUI-executed tools (stock `set_host_tools`); calls arrive as `host_tool_call`. */
 	| { id?: string; type: "set_host_tools"; tools: HostToolDefinition[] }
 	| { id?: string; type: "get_subagents" }
@@ -1764,7 +1765,10 @@ export interface ExtensionAskDialogQuestion {
 	 * (resources/gui-bridge/ask-form.ts) puts an `ask` form's paragraphs, tables and pictures here; stock never sets it.
 	 */
 	context?: string;
+	formField?: { custom: boolean; multiline: boolean; initialText: string; checked: string[] };
 }
+export type FormFieldAnswer = { id: string; selectedOptions: string[]; customInput?: string };
+export type FormDataReply = { data: Record<string, string | number | string[]> };
 export interface ExtensionAskDialogResultItem {
 	id: string;
 	question: string;
@@ -1807,6 +1811,7 @@ export type ExtensionUIRequest =
 			questions: ExtensionAskDialogQuestion[];
 			timeout?: number;
 	  }
+	| { type: "extension_ui_request"; id: string; method: "form"; html: string; timeout?: number }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -1867,6 +1872,7 @@ export type ExtensionUIResponse =
 			id: string;
 			answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
 	  }
+	| ({ type: "extension_ui_response"; id: string } & FormDataReply)
 	| { type: "extension_ui_response"; id: string; cancelled: true; timedOut?: boolean };
 
 // ============================================================================
@@ -2146,6 +2152,7 @@ export const BLOCKING_UI_METHODS: Record<string, true> = {
 	select: true,
 	confirm: true,
 	ask: true,
+	form: true,
 	input: true,
 	editor: true,
 	open_url: true,

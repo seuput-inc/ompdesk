@@ -4,6 +4,7 @@ import { wrapAgentMessage } from "../shared/agent-control";
 import {
 	atEnd,
 	CARD,
+	CARD_FORM,
 	CLEANUP_MS,
 	type Frame,
 	HELD_STEPS,
@@ -210,7 +211,17 @@ describe.skipIf(!existsSync(omp))("several messages other sessions send one busy
 });
 
 describe.skipIf(!existsSync(omp))("a message another session sends while the receiver shows the person a card", () => {
-	const isCard = (frame: Frame) => frame.type === "extension_ui_request" && frame.method === "select";
+	const isCard = (frame: Frame) =>
+		frame.type === "extension_ui_request" &&
+		(frame.method === "form"
+			? frame.html === CARD_FORM
+			: frame.method === "select" && frame.options?.length === 2 && frame.options[0] === "A" && frame.options[1] === "B");
+	const answerCard = (session: Omp, card: Frame) =>
+		session.write({
+			type: "extension_ui_response",
+			id: card.id,
+			...(card.method === "form" ? { data: { pick: "a" } } : { value: "A" }),
+		});
 	const askResult = (frames: readonly Frame[]) =>
 		JSON.stringify(
 			frames.find(frame => frame.type === "tool_execution_end" && frame.toolCallId === "call_ask")?.result,
@@ -250,12 +261,12 @@ describe.skipIf(!existsSync(omp))("a message another session sends while the rec
 			message: wrapAgentMessage("follow-card", "Other"),
 			streamingBehavior: "followUp",
 		});
-		session.write({ type: "extension_ui_response", id: card.id, value: card.options?.[0] });
+		answerCard(session, card);
 		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
 		expect(session.frames.some(frame => frame.type === "extension_ui_request" && frame.method === "cancel")).toBe(
 			false,
 		);
-		expect(askResult(session.frames)).not.toContain("interrupted");
+		expect(askResult(session.frames)).toContain("User answers");
 		// Requests: the card, the answer, then the message.
 		expect(firstWith(provider, "follow-card")).toBe(2);
 	}, 180_000);
@@ -264,12 +275,12 @@ describe.skipIf(!existsSync(omp))("a message another session sends while the rec
 		const { provider, session, card } = await cardOpen();
 		const message = wrapAgentMessage("aside-card", "Other");
 		expect(await session.bridge.request("agent_control.aside", { message })).toEqual({});
-		session.write({ type: "extension_ui_response", id: card.id, value: card.options?.[0] });
+		answerCard(session, card);
 		await expect.poll(() => ended(session.frames), { timeout: 30_000 }).toBe(1);
 		expect(session.frames.some(frame => frame.type === "extension_ui_request" && frame.method === "cancel")).toBe(
 			false,
 		);
-		expect(askResult(session.frames)).not.toContain("interrupted");
+		expect(askResult(session.frames)).toContain("User answers");
 		// Requests: the card, then the answer together with the message.
 		expect(firstWith(provider, "aside-card")).toBe(1);
 	}, 180_000);

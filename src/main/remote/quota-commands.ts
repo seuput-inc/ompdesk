@@ -262,6 +262,7 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"preview_share_session",
 	"promote_queued_message",
 	"prompt_origin_set",
+	"project_ask_form",
 	"queue_clear",
 	"queue_edit",
 	"queue_move",

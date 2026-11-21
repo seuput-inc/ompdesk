@@ -19,9 +19,10 @@ import {
 	type ChromiumBrowserId,
 	type InstalledBrowser,
 } from "../shared/default-browser";
+import { compareVersions } from "../shared/version";
 import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
-import { ompRunEnv } from "./omp-runtime";
+import { ompRunEnv, systemOmp } from "./omp-runtime";
 import { spawnPath } from "./shell-env";
 import { findOnPath } from "./spawn";
 
@@ -98,13 +99,13 @@ export interface FoundBrowser {
 }
 
 /** The browsers in `auto` order, as the page names them, each with its own relay port. */
-function named(ports: Record<ChromiumBrowserId, number>) {
-	return CHROMIUM_BROWSER_IDS.map(id => ({ id, name: CHROMIUM_BROWSER_NAMES[id], port: ports[id] }));
+function named(ports: Record<ChromiumBrowserId, number> | null) {
+	return CHROMIUM_BROWSER_IDS.map(id => ({ id, name: CHROMIUM_BROWSER_NAMES[id], port: ports?.[id] }));
 }
 
 /** The Chromium browsers installed in their standard places, in `auto` order. */
 export async function findChromiumBrowsers(places: BrowserPlaces = systemBrowserPlaces()): Promise<FoundBrowser[]> {
-	const params = { places, browsers: named(CHROMIUM_RELAY_PORTS) };
+	const params = { places, browsers: named(null) };
 	return (await core().call<FoundBrowser[]>("browsers.find", params)).result;
 }
 
@@ -114,63 +115,82 @@ export async function findChromiumBrowsers(places: BrowserPlaces = systemBrowser
  */
 export async function detectChromiumBrowsers(
 	places: BrowserPlaces = systemBrowserPlaces(),
-	ports: Record<ChromiumBrowserId, number> = CHROMIUM_RELAY_PORTS,
+	ports: Record<ChromiumBrowserId, number> | null = CHROMIUM_RELAY_PORTS,
 ): Promise<InstalledBrowser[]> {
 	return (await core().call<InstalledBrowser[]>("browsers.status", { places, browsers: named(ports) })).result;
 }
 
-let cachedStatus: Promise<AgentBrowserStatus> | null = null;
+let cachedStatus: { nativeHostRelay: boolean; result: Promise<AgentBrowserStatus> } | null = null;
 
-async function probeStatus(): Promise<AgentBrowserStatus> {
-	const [egoInstalled, browsers] = await Promise.all([egoBrowserInstalled(), detectChromiumBrowsers()]);
-	return { egoInstalled, browsers };
+function nativeHostRelay(version: string | undefined): boolean {
+	return !version || compareVersions(version, "19.1.0") !== -1;
+}
+
+// Stock registers Google's native-messaging key on Windows; its macOS manifests also cover Brave and Chromium.
+const NATIVE_HOST_BROWSERS: readonly ChromiumBrowserId[] =
+	process.platform === "win32" ? ["chrome"] : ["chrome", "brave", "chromium"];
+
+async function probeStatus(nativeHostRelay: boolean): Promise<AgentBrowserStatus> {
+	const [egoInstalled, browsers] = await Promise.all([
+		egoBrowserInstalled(),
+		detectChromiumBrowsers(undefined, nativeHostRelay ? null : CHROMIUM_RELAY_PORTS),
+	]);
+	return { egoInstalled, browsers, ...(nativeHostRelay ? { nativeHostBrowsers: NATIVE_HOST_BROWSERS } : {}) };
 }
 
 /**
  * What this computer has, read once per launch; Settings asks `reprobeAgentBrowserStatus` instead, since the person
  * may install ego-browser or load the extension while the app runs.
  */
-export function agentBrowserStatus(): Promise<AgentBrowserStatus> {
-	if (!cachedStatus) {
-		const pending = probeStatus();
-		cachedStatus = pending;
-		void pending.catch(() => {
-			if (cachedStatus === pending) cachedStatus = null;
+export async function agentBrowserStatus(): Promise<AgentBrowserStatus> {
+	const omp = await systemOmp();
+	const native = nativeHostRelay(omp.ok ? omp.runtime.version : undefined);
+	if (cachedStatus?.nativeHostRelay !== native) {
+		const result = probeStatus(native);
+		cachedStatus = { nativeHostRelay: native, result };
+		void result.catch(() => {
+			if (cachedStatus?.result === result) cachedStatus = null;
 		});
 	}
-	return cachedStatus;
+	return cachedStatus.result;
 }
 
 /** The answer without what changes by itself (a connection), which no session needs telling about. */
 function resolvedKey(status: AgentBrowserStatus): string {
-	return JSON.stringify([status.egoInstalled, status.browsers.map(browser => [browser.id, browser.relayInstalled])]);
+	return JSON.stringify([
+		status.nativeHostBrowsers,
+		status.egoInstalled,
+		status.browsers.map(browser => [browser.id, browser.relayInstalled]),
+	]);
 }
 
 /** Probe again; `changed` is whether what sessions are pointed at could differ from the answer held before. */
 export async function reprobeAgentBrowserStatus(): Promise<{ status: AgentBrowserStatus; changed: boolean }> {
-	const before = cachedStatus ? await cachedStatus.catch(() => null) : null;
-	const pending = probeStatus();
-	const status = await pending;
-	cachedStatus = pending;
-	return { status, changed: before !== null && resolvedKey(before) !== resolvedKey(status) };
+	const before = await cachedStatus?.result.catch(() => null);
+	cachedStatus = null;
+	const status = await agentBrowserStatus();
+	return { status, changed: !!before && resolvedKey(before) !== resolvedKey(status) };
 }
 
 /**
- * Write `id`'s own copy of the relay extension to `~/.omp/browser-relay/extension-<id>`, bound to its own port, and
- * return its folder. Stock's `omp browser-relay install` writes the copy to a staging folder; the copy is bound there
- * and only then put in place, so a stock asset that cannot be bound (it fails with a clear error) never leaves an
- * unbound extension behind.
+ * Stock 19.1 registers the path-derived extension ID, so it must install directly in the final folder.
+ * Older copies use a browser-specific port and are staged until their assets have been bound to it.
  */
 export async function installRelayExtension(
 	omp: OmpRuntime,
 	id: ChromiumBrowserId,
 	home: string = homedir(),
 ): Promise<string> {
+	const nativeHost = nativeHostRelay(omp.version);
+	if (nativeHost && !NATIVE_HOST_BROWSERS.includes(id)) {
+		throw new Error(`omp does not register a native messaging host for ${CHROMIUM_BROWSER_NAMES[id]} on this platform`);
+	}
 	const params = {
 		omp: { bin: omp.bin, env: ompRunEnv(omp.bin, await spawnPath()) },
 		id,
 		home,
 		port: CHROMIUM_RELAY_PORTS[id],
+		nativeHost,
 	};
 	// Stock's install has 30 s; the copy and the clean-up after it are a few small files.
 	return (await core().call<string>("browsers.installRelay", params, { timeoutMs: 37_000 })).result;
