@@ -30,7 +30,6 @@ import { z } from "zod";
 import type { IpcTabWorktree, IpcWorktreeNotice, IpcWorktreePrompt } from "../shared/ipc-types";
 import { IPC_EVENTS } from "../shared/ipc-types";
 import {
-	decideWorktreeExit,
 	type LifecycleWorktree,
 	removeSessionWorktree,
 	snapshotSessionWorktree,
@@ -421,15 +420,14 @@ export class WorktreeLifecycle {
 		if (owned.onExit === "keep") return null;
 		let snapshot: WorktreeSnapshot;
 		try {
-			snapshot = await snapshotSessionWorktree(owned.worktree);
+			snapshot = await snapshotSessionWorktree(owned.worktree, owned.onExit);
 		} catch (error) {
 			// Inspection errors keep that worktree.
 			this.#notify(owned.winId, { kind: "remove-failed", path: owned.worktree.path, message: message(error) });
 			return null;
 		}
-		const action = decideWorktreeExit(owned.onExit, snapshot.state);
-		if (action === "keep") return null;
-		if (action === "prompt") {
+		if (snapshot.action === "keep") return null;
+		if (snapshot.action === "prompt") {
 			const { path, branch } = owned.worktree;
 			const accepted = await this.#prompts.ask(owned.winId, { kind: "exit", path, branch, ...snapshot.state });
 			if (!accepted) return null;
@@ -441,7 +439,7 @@ export class WorktreeLifecycle {
 	async #remove({ owned, approvedFingerprint }: PlannedRemoval): Promise<void> {
 		const { worktree, winId } = owned;
 		try {
-			const now = await snapshotSessionWorktree(worktree);
+			const now = await snapshotSessionWorktree(worktree, owned.onExit);
 			// A vanished worktree holds nothing to lose; `moved` still guards the branch.
 			if (now.present && now.fingerprint !== approvedFingerprint) {
 				this.#notify(winId, { kind: "kept-changed", path: worktree.path });

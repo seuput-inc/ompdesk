@@ -242,6 +242,13 @@ struct LifecycleParams {
     worktree: worktree::Lifecycle,
 }
 
+#[derive(Deserialize)]
+struct SnapshotParams {
+    #[serde(flatten)]
+    session: LifecycleParams,
+    policy: worktree::ExitPolicy,
+}
+
 /// `target`: the checkout to remove (main's guard passed it), none when it already vanished.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -808,9 +815,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.sessionWorktreeSnapshot", |call| {
         Box::pin(async move {
-            let LifecycleParams { git, worktree } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(&worktree::snapshot(&git, &worktree).await?)
+            let SnapshotParams { session, policy } = call.params()?;
+            let git = Git::new(session.git, call.scope);
+            Reply::json(&worktree::snapshot(&git, &session.worktree, policy).await?)
         })
     });
     registry.add("git.sessionWorktreeRemoval", |call| {

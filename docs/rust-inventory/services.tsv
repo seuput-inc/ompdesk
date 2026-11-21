@@ -190,7 +190,7 @@ src/main/local/git/scm-history.test.ts	exception	Tests branch mutations, occupie
 src/main/local/git/scm.test.ts	exception	Tests working-tree and index effects of staging, unstaging, discard and other SCM commands.
 src/main/local/git/scm.ts	port	Locks mutations, removes discarded untracked files in Node and runs stock commit-message generation after checking staged changes.
 src/main/local/git/session-worktree.test.ts	exception	Tests worktree exit choices, branch movement and dirty versus ignored files in snapshots.
-src/main/local/git/session-worktree.ts	port	Chooses keep, remove or prompt from exit preference and dirty, moved or off-branch state. Rust checks the removal root. Compare native-root-mini-intake's worktree_lifecycle/ candidate with the current exit contract before further reuse.
+src/main/local/git/session-worktree.ts	native-client	Supplies the exit policy to git.sessionWorktreeSnapshot and uses the checked native removal plan under the repository lock. The lifecycle caller still asks the person and checks a fresh fingerprint before removal.
 src/main/local/git/stock-bridge.test.ts	exception	Integration fixture drives stock omp to test worktree paths, checkout removal, session movement and PR metadata.
 src/main/local/git/test-repos.ts	exception	Builds and copies reusable temporary Git repository, remote and session-worktree fixtures.
 src/main/local/git/unlanded.test.ts	exception	Tests comparison against the merge base and remote default branch, including main and detached HEAD exclusions.

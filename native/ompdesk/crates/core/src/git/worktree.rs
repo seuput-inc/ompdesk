@@ -527,8 +527,27 @@ pub struct State {
     off_branch: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExitPolicy {
+    Keep,
+    Ask,
+    Remove,
+}
+
+impl ExitPolicy {
+    fn action(self, state: &State) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Remove if !state.dirty && !state.moved && !state.off_branch => "remove",
+            Self::Ask | Self::Remove => "prompt",
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct Snapshot {
+    action: &'static str,
     state: State,
     fingerprint: String,
     present: bool,
@@ -547,7 +566,11 @@ fn hash_parts(parts: &[String]) -> String {
 /// The worktree's state at a session's exit (stock `snapshotSessionWorktree`) and a fingerprint that changes whenever
 /// any file, ref or `HEAD` in it does. A missing worktree is not dirty and not off its branch; a deleted branch has
 /// not moved; a missing source repository counts as moved, so the branch is never deleted.
-pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault> {
+pub async fn snapshot(
+    git: &Git,
+    worktree: &Lifecycle,
+    policy: ExitPolicy,
+) -> Result<Snapshot, Fault> {
     let mut moved = true;
     let mut tip = None;
     if read::repo_root(git, &worktree.source_cwd)
@@ -562,12 +585,14 @@ pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault
     }
     let tip = tip.unwrap_or_default();
     if !is_checkout_root(git, &worktree.path).await? {
+        let state = State {
+            dirty: false,
+            moved,
+            off_branch: false,
+        };
         return Ok(Snapshot {
-            state: State {
-                dirty: false,
-                moved,
-                off_branch: false,
-            },
+            action: policy.action(&state),
+            state,
             fingerprint: format!("missing\0{tip}"),
             present: false,
         });
@@ -621,6 +646,7 @@ pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault
     })
     .await?;
     Ok(Snapshot {
+        action: policy.action(&state),
         state,
         fingerprint: hash_parts(&parts),
         present: true,
