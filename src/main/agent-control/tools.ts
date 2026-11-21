@@ -329,7 +329,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Notify the user",
 		description:
 			"Show the user a system notification when work finishes or needs them.\n" +
-			"Clicking the notification opens this session.",
+			"Use while the user is looking elsewhere. Clicking the notification opens this session.",
 		parameters: {
 			type: "object",
 			properties: {
