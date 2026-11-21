@@ -95,7 +95,7 @@ src/main/disk/disk-care.test.ts	exception	Exercises usage measurements, saving a
 src/main/disk/saved-worktrees.ts	port	Persists saved-worktree records, separates secret files into the archive, rechecks before removal and coordinates rollback and restoration.
 src/main/disk/scratch.ts	port	Skips held tags and active processes, retains unknown nonempty folders, and resolves moved session files before asking Rust to sweep.
 src/main/disk/tree-sizes.test.ts	exception	Tests reuse of directory measurements, changed subtrees and hard-link deduplication.
-src/main/disk/tree-sizes.ts	port	disk.usage owns the breakdown; TS supplies root paths, the seven-day full-walk interval, retained-reading fallback and cumulative I/O counters.
+src/main/disk/tree-sizes.ts	mixed	Rust owns the breakdown, seven-day expiry and retained tree. Main supplies roots, falls back when a reading cannot be opened and accumulates I/O counters.
 src/main/disk/worktree-facts.test.ts	exception	Checks actual activity timestamps from stock-named session folders and tracked, untracked and non-regenerable ignored files.
 src/main/disk/worktree-facts.ts	port	disk.lastActivity locates the session folder under the supplied profile and combines its timestamps with Git and filesystem activity. TS still tests process-folder occupancy and excludes unreadable, oversized or credential-bearing files from commits.
 src/main/ecc/ecc-stock.test.ts	exception	Test coverage for stock SDK skill discovery and prompt cost.
@@ -151,14 +151,11 @@ src/main/github-auth/pty.ts	port	Allocates a PTY owner, tracks offsets, polls st
 src/main/github-auth/service.test.ts	exception	Exercises signed-out, unavailable and authenticated gh states and login flows against a fake executable.
 src/main/github-auth/service.ts	port	Owns the gh login state machine, including optional gh installation, PTY prompts, cancellation and refreshing account state.
 src/main/github-auth/test-fake-gh.ts	exception	Writes a fake gh executable and seeds account records for sign-in tests.
-src/main/local/advisor-stats.ts	port	Main still routes the local get_advisor_stats command to the stock-only bridge. Only the bridge implementation needs Bun.
 src/main/local/agent-control.ts	port	Enforces attachment path versus image-index exclusivity and size limits on messages and images before calling the stock bridge.
 src/main/local/agent-files.test.ts	exception	Tests creating, overwriting, renaming and protecting agent definition files in test directories.
 src/main/local/agent-files.ts	port	Confines edits to user or project agent directories, validates frontmatter names and writes files atomically without replacing another agent.
 src/main/local/auto-mode.test.ts	exception	Tests applying plan and goal decisions and routing the associated stock commands.
 src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan mode or creating a goal and undoes each differently.
-src/main/local/auto-title.test.ts	exception	Tests title regeneration and passthrough of a no-title reply from the tab bridge.
-src/main/local/auto-title.ts	port	Main still routes regenerate_session_title to the stock-only regenerate_title bridge method.
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.
 src/main/local/autopilot.ts	port	Checks refs before git.autopilotBranchStatus, restricts bridge methods and refuses set_autopilot outside the local window.
 src/main/local/builtin-mcp.test.ts	exception	Tests that mutations cannot overwrite the bundled REA declaration but may change a user's same-name server.

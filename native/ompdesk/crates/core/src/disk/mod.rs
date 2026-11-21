@@ -31,7 +31,6 @@ struct OpenParams {
     file: String,
     /// Main's clock (tests move it).
     now: f64,
-    full_walk_every_ms: f64,
 }
 
 #[derive(Serialize)]
@@ -46,13 +45,6 @@ struct BytesParams {
     reading: Option<u64>,
     path: String,
     reuse: bool,
-}
-
-#[derive(Serialize)]
-struct Measured {
-    bytes: u64,
-    lstat: u64,
-    readdir: u64,
 }
 
 #[derive(Deserialize)]
@@ -185,14 +177,9 @@ pub fn register(registry: &mut Registry) {
     registry.add("disk.usage", |call| Box::pin(usage::handle(call)));
     registry.add("disk.sizesOpen", |call| {
         Box::pin(async move {
-            let OpenParams {
-                file,
-                now,
-                full_walk_every_ms,
-            } = call.params()?;
+            let OpenParams { file, now } = call.params()?;
             let (reading, reused) =
-                blocking(move || sizes::open(std::path::Path::new(&file), now, full_walk_every_ms))
-                    .await?;
+                blocking(move || sizes::open(std::path::Path::new(&file), now)).await?;
             Reply::json(&Opened { reading, reused })
         })
     });
@@ -205,11 +192,7 @@ pub fn register(registry: &mut Registry) {
             } = call.params()?;
             let scope = call.scope;
             let walked = blocking(move || sizes::bytes(reading, &path, reuse, &scope)).await??;
-            Reply::json(&Measured {
-                bytes: walked.bytes,
-                lstat: walked.work.lstat,
-                readdir: walked.work.readdir,
-            })
+            Reply::json(&walked)
         })
     });
     registry.add("disk.sizesSave", |call| {

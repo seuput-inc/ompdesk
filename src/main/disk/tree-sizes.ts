@@ -3,8 +3,8 @@
  * (`native/ompdesk/crates/core/src/disk/sizes.rs`): what each directory held directly is kept with the directory's
  * mtime and inode in `file`, and reused while both are unchanged and the mtime is more than 2 s older than the
  * reading that saw it (git's racy rule). A directory's mtime moves whenever an entry is added, removed or renamed in
- * it; only a file rewritten in place keeps its folder's mtime, so a full walk runs at least every
- * `FULL_WALK_EVERY_MS` and bounds that drift. Bytes are allocated blocks where the platform reports them (as `du`),
+ * it; only a file rewritten in place keeps its folder's mtime, so core does a full walk at least weekly.
+ * Bytes are allocated blocks where the platform reports them (as `du`),
  * else sizes; a hard-linked file counts once per target; no link is followed.
  *
  * Measured on this Mac's ~/.omp/wt (924,219 files, 77,538 directories): a full walk (du) 17.7 s, a reused one 0.35 s
@@ -18,8 +18,6 @@ import { agentDir } from "../agent-paths";
 import { coreHeld } from "../local/git/exec";
 import type { LocatedCache } from "./caches";
 
-/** A full walk at least this often: bounds what files rewritten in place (no directory change) can leave out. */
-export const FULL_WALK_EVERY_MS = 7 * 24 * 60 * 60_000;
 /** Reading or writing the kept measurement. */
 const READING_TIMEOUT_MS = 60_000;
 /** One walk; past it the call fails and the core stops the walk. */
@@ -62,7 +60,7 @@ export class TreeSizes {
 		if (!this.#file) return;
 		const opened = await coreHeld<{ reading: number; reused: boolean }>(
 			"disk.sizesOpen",
-			{ file: this.#file, now: this.#now(), fullWalkEveryMs: FULL_WALK_EVERY_MS },
+			{ file: this.#file, now: this.#now() },
 			READING_TIMEOUT_MS,
 		).catch(() => null);
 		this.#reading = opened?.reading ?? null;
