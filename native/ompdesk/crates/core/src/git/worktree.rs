@@ -3,9 +3,8 @@
 //! the removal itself, and a session worktree's snapshot and removal. Each method is one whole step: main runs the
 //! ones that change the repository under its lock (`withRepoLock`), so a stopped holder cancels the request and the
 //! lock's next holder starts once its gits exited. What main keeps: where worktrees go (omp's
-//! `git.worktree_location`), the folder checks and `mkdir` its fenced files make under the lock (`fenced-fs.ts`), the
-//! removal guard on main's own real paths (`removableWorktreePath`) and the exit policy. A refusal is a fault whose
-//! code is the `LocalCommandError` code the TypeScript threw; git's own failure keeps run's `git_exit`.
+//! `git.worktree_location`), the folder checks and `mkdir` its fenced files make under the lock (`fenced-fs.ts`)
+//! and the exit policy. A refusal is a fault whose code is the `LocalCommandError` code the TypeScript threw.
 
 use std::hash::{DefaultHasher, Hasher};
 use std::path::Path;
@@ -258,12 +257,26 @@ pub async fn add_named(
 #[derive(Serialize)]
 pub struct Removal {
     primary: String,
+    path: String,
 }
 
-/// Before `path` (a real path under the worktree root, main's guard) is removed: it is a checkout root, git lists it
-/// as a linked worktree of its repository (never the main checkout), and unless `force` nothing in it is uncommitted.
-/// Answers the main checkout, whose lock the removal takes.
-pub async fn removal(git: &Git, path: &str, force: bool) -> Result<Removal, Fault> {
+/// Both paths must resolve; a symlink in the root may not authorize removal of another checkout.
+async fn removable_path(root: &str, path: &str) -> Option<String> {
+    if !read::is_absolute(path) {
+        return None;
+    }
+    let (root, path) = tokio::join!(disk::real(root), disk::real(path));
+    let path = path?.into_os_string().into_string().ok()?;
+    super::orphans::inside(root?.to_str()?, &path).then_some(path)
+}
+
+/// The checked target and its repository lock: a linked checkout under `root`, clean unless forced.
+pub async fn removal(git: &Git, path: &str, root: &str, force: bool) -> Result<Removal, Fault> {
+    let target = removable_path(root, path).await.ok_or_else(|| {
+        let name = if path.is_empty() { "(no path)" } else { path };
+        refuse("worktree_outside_root", format!("Refusing to remove {name}: only registered linked worktrees under {root} can be removed (check worktree.base)."))
+    })?;
+    let path = target.as_str();
     let not_a_worktree = |what: &str| refuse("not_a_worktree", format!("{what}: {path}"));
     let checkout_root = read::repo_root(git, path).await.ok().flatten();
     let Some(checkout_root) = checkout_root else {
@@ -311,7 +324,10 @@ pub async fn removal(git: &Git, path: &str, force: bool) -> Result<Removal, Faul
             ));
         }
     }
-    Ok(Removal { primary })
+    Ok(Removal {
+        primary,
+        path: target,
+    })
 }
 
 /// omp's service broker keeps its project's folder as its working folder for 3 s after the project's last omp exits
@@ -467,6 +483,7 @@ pub struct Lifecycle {
     branch: String,
     source_cwd: String,
     base_commit: String,
+    root: String,
 }
 
 /// Whether `dir` is itself a checkout root (a parent repository does not count).
@@ -593,15 +610,27 @@ pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault
 #[derive(Serialize)]
 pub struct SessionRemoval {
     primary: String,
-    present: bool,
+    target: Option<String>,
 }
 
-/// Before a session worktree is removed: the main checkout of its source (whose lock the removal takes) and whether
-/// the worktree is still a checkout of its own.
+/// A present checkout must pass the same confinement check as a manual removal. A vanished one is only pruned.
 pub async fn session_removal(git: &Git, worktree: &Lifecycle) -> Result<SessionRemoval, Fault> {
     let primary = read::primary_root(git, &worktree.source_cwd).await?;
-    let present = is_checkout_root(git, &worktree.path).await?;
-    Ok(SessionRemoval { primary, present })
+    let target = if is_checkout_root(git, &worktree.path).await? {
+        let Some(target) = removable_path(&worktree.root, &worktree.path).await else {
+            return Err(refuse(
+                "worktree_outside_root",
+                format!(
+                    "Refusing to remove {}: only worktrees under {} can be removed.",
+                    worktree.path, worktree.root
+                ),
+            ));
+        };
+        Some(target)
+    } else {
+        None
+    };
+    Ok(SessionRemoval { primary, target })
 }
 
 /// Force-removes the session worktree at `target` (none when it already vanished: git's list is only pruned) and

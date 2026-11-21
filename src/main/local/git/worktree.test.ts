@@ -10,7 +10,7 @@ import { GITHUB_COMMAND_BUDGET_MS } from "./github";
 import { PR_COMMAND_BUDGETS_MS } from "./pr";
 import { SCM_COMMAND_BUDGETS_MS } from "./scm";
 import { gitSync, initRepo, pathExists, stockShapedWorktree } from "./test-repos";
-import { createWorktree, removableWorktreePath, removeWorktree, WORKTREE_COMMAND_BUDGETS_MS } from "./worktree";
+import { createWorktree, removeWorktree, WORKTREE_COMMAND_BUDGETS_MS } from "./worktree";
 
 let scratch: string;
 let root: string;
@@ -37,25 +37,16 @@ afterEach(async () => {
 	await fs.rm(scratch, { recursive: true, force: true });
 });
 
-describe("removableWorktreePath", () => {
-	it("accepts a checkout inside the worktree root", async () => {
-		const inside = path.join(root, "gui-fix-1234567");
-		expect(await removableWorktreePath(inside, root)).toBe(inside);
-	});
-
-	it("refuses the user's own checkout, the root itself, and missing or relative paths", async () => {
-		expect(await removableWorktreePath(outside, root)).toBeNull();
-		expect(await removableWorktreePath(root, root)).toBeNull();
-		expect(await removableWorktreePath(path.join(root, "gone"), root)).toBeNull();
-		expect(await removableWorktreePath("wt/gui-fix-1234567", root)).toBeNull();
-		expect(await removableWorktreePath("", root)).toBeNull();
-	});
-
-	it("refuses paths that only look inside the root", async () => {
-		expect(await removableWorktreePath(path.join(root, "..", "projects", "app"), root)).toBeNull();
+describe("worktree removal confinement", () => {
+	it("refuses the root, relative and missing paths, and a symlink to an outside directory", async () => {
 		const link = path.join(root, "gui-link-1234567");
 		await fs.symlink(outside, link, "junction");
-		expect(await removableWorktreePath(link, root)).toBeNull();
+		for (const target of [root, "", "wt/gui-fix-1234567", path.join(root, "gone"), link]) {
+			await expect(removeWorktree({ path: target, force: true }, bridge, outside)).rejects.toMatchObject({
+				code: "worktree_outside_root",
+			});
+		}
+		expect(await pathExists(outside)).toBe(true);
 	});
 });
 

@@ -214,6 +214,7 @@ struct AddNamedParams {
 struct RemovalParams {
     git: Runner,
     path: String,
+    root: String,
     force: bool,
 }
 
@@ -757,9 +758,14 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.worktreeRemoval", |call| {
         Box::pin(async move {
-            let RemovalParams { git, path, force } = call.params()?;
+            let RemovalParams {
+                git,
+                path,
+                root,
+                force,
+            } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&worktree::removal(&git, &path, force).await?)
+            Reply::json(&worktree::removal(&git, &path, &root, force).await?)
         })
     });
     registry.add("git.leftBehind", |_call| {

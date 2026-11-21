@@ -3,7 +3,7 @@
  * checks, `worktree add` and its branch rollback, the checks before a removal, the removal) run in the core process
  * (`native/ompdesk/crates/core/src/git/worktree.rs`); this is their typed client, which keeps what main owns: the
  * names (stock's canonical worktree base and repo hash through the bridge), the folder checks and `mkdir` under the
- * repository lock on the fenced files (`fenced-fs.ts`), the removal guard on real paths and the lock itself.
+ * repository lock on the fenced files (`fenced-fs.ts`) and the lock itself.
  * Collisions suffix `-2..-100` on path and branch. Removal keeps the branch and
  * requires a linked checkout registered by git under the canonical root.
  * Kept over stock createSessionWorktree: GUI names/baseRef differ and never carry
@@ -19,7 +19,7 @@ import { fs } from "../../fenced-fs";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
 import { coreGit, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
-import { guiWorktreeCandidate, isInside, worktreeSlug } from "./parse";
+import { guiWorktreeCandidate, worktreeSlug } from "./parse";
 import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 
 const MAX_SUFFIX = 100;
@@ -48,6 +48,7 @@ const REFUSALS = new Set([
 	"invalid_name",
 	"worktree_create_failed",
 	"not_a_worktree",
+	"worktree_outside_root",
 	"worktree_dirty",
 	"worktree_remove_failed",
 ]);
@@ -199,23 +200,6 @@ export const tablessWorktreeBridge: Pick<BridgeClient, "request"> = {
 };
 
 /**
- * Real path of `worktreePath` when it lies strictly inside `root` (the
- * directory every GUI and PR worktree is created under), else null. Both sides
- * are resolved first, so neither `..` segments nor a symlink inside the root
- * can reach a checkout elsewhere.
- */
-export async function removableWorktreePath(worktreePath: string, root: string): Promise<string | null> {
-	if (!worktreePath || !path.isAbsolute(worktreePath)) return null;
-	try {
-		const [realRoot, realPath] = await Promise.all([fs.realpath(root), fs.realpath(worktreePath)]);
-		return isInside(realRoot, realPath) ? realPath : null;
-	} catch {
-		// A missing root or path holds nothing this command may remove.
-		return null;
-	}
-}
-
-/**
  * Dirty worktrees are refused unless `force`; the message carries the counts for the close dialog.
  * Only checkouts under the worktree root qualify: `--force` must never reach the user's own clone.
  */
@@ -225,16 +209,9 @@ export async function removeWorktree(
 	sessionCwd: string,
 ): Promise<{ removed: true }> {
 	const { root } = await stockWorktreeLocation(bridge, path.resolve(sessionCwd));
-	const worktreePath = await removableWorktreePath(input.path, root);
-	if (!worktreePath) {
-		throw new LocalCommandError(
-			`Refusing to remove ${input.path || "(no path)"}: only registered linked worktrees under ${root} can be removed (check worktree.base).`,
-			"worktree_outside_root",
-		);
-	}
-	const { primary } = await worktreeGit<{ primary: string }>(
+	const { primary, path: worktreePath } = await worktreeGit<{ primary: string; path: string }>(
 		"git.worktreeRemoval",
-		{ path: worktreePath, force: input.force === true },
+		{ path: input.path, root, force: input.force === true },
 		4,
 	);
 	return withRepoLock(primary, () =>
