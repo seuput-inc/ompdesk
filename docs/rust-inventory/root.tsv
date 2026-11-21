@@ -398,15 +398,13 @@ src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
 src/main/schedules.ts	mixed	2	ScheduleService uses schedules.open/command/launch in core/src/schedules/mod.rs for timers, journals and supervised runs; TS still cleans drafts, serializes requests and supplies quota, wake and omp launch callbacks.
 src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
 src/main/serial-chain.ts	port	2	SerialChain serializes steps, aborts stalled work and fences following steps until tracked OS effects drain.
-src/main/session-cache.test.ts	tooling	-	Vitest suite: StampedLru (entry-count budget).
-src/main/session-cache.ts	port	1	StampedLru implements path-keyed change signatures and weighted eviction for session-index caches.
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.
 src/main/session-free.test.ts	tooling	-	Vitest suite: whenSessionFree.
 src/main/session-free.ts	port	2	whenSessionFree owns the bounded polling loop and fallback when the injected stock session ownership check fails.
 src/main/session-index-activity.test.ts	tooling	-	Vitest suite: lists when the conversation last moved, not when a relaunch last wrote the file.
 src/main/session-index-first-prompt.test.ts	tooling	-	Vitest suite: lists the first prompt that stock persists after a long xd:// mount notice.
 src/main/session-index.test.ts	tooling	-	Vitest suite: keeps GUI kind overlays and handles headers with no title slot.
-src/main/session-index.ts	mixed	3	SessionIndex delegates watch, deduplication and header kind to sessions.watch/listed/kind in core/src/sessions/mod.rs; TS still composes stock lists, tombstones, folder filters, search cache and numbered updates.
+src/main/session-index.ts	mixed	3	Rust owns the tree watch, listed rows and bounded content search with excerpts. Main still calls stock, filters tombstones and folders, and shares numbered updates with the page.
 src/main/session-kinds.ts	port	2	SessionKindStore persists GUI-created chat session IDs outside stock journals using AtomicSaver.
 src/main/session-launch-parity.test.ts	tooling	-	Vitest suite: a session's omp launches the same way on every start path.
 src/main/session-list-share.test.ts	tooling	-	Vitest suite: SessionListShare.
@@ -420,8 +418,6 @@ src/main/session-pace.ts	port	1	pace reconstructs tool intervals, idle time and 
 src/main/session-processes.test.ts	tooling	-	Vitest suite: a session's processes, on this computer.
 src/main/session-processes.ts	mixed	3	SessionProcesses uses procs.list/end in core/src/procs/mod.rs for OS surveys and termination; TS owns the session tag ledger, sweep selection, spin sampling policy and retries.
 src/main/session-scratch.ts	port	2	SessionScratch assigns tab-tag scratch folders and persists the sessions each folder served for retention.
-src/main/session-snippet.test.ts	tooling	-	Vitest suite: contentSnippet.
-src/main/session-snippet.ts	port	1	contentSnippet extracts original-case query context from matching JSONL strings.
 src/main/session-store.ts	mixed	2	StockSessionStore validates stock sessions.list/list_directory/delete/move/messages/owned replies; core/src/stock/mod.rs stock.request supervises transport, resources/gui-bridge/stock-helper/sessions.ts implements storage operations in Bun, not Rust.
 src/main/session-summaries.test.ts	tooling	-	Vitest suite: SessionSummaries.
 src/main/session-summaries.ts	port	3	SessionSummaries combines pool and paired-host facts with subagent rosters and publishes versioned summary changes.
