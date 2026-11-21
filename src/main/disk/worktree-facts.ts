@@ -2,9 +2,8 @@
  * What disk care reads of one worktree before it touches it: its files split by what git and the project say about
  * them, when anyone last changed anything in it, whether a git operation is half done, its HEAD, and which running
  * processes sit inside it. Read-only. The reads run in the core process (`native/ompdesk/crates/core/src/disk/facts.rs`
- * and `regenerable.rs`, the rule table of what a project makes again); what stays here is main's: where stock omp keeps
- * a folder's sessions, whether a process folder is inside a worktree (real paths, `realFolder`), and the secret check,
- * which reads the central redactor.
+ * and `regenerable.rs`, the rule table of what a project makes again). Main supplies its profile and filesystem roots,
+ * checks whether a process folder is inside a worktree, and reads the central redactor.
  */
 import * as os from "node:os";
 import * as path from "node:path";
@@ -71,27 +70,6 @@ export function worktreeHead(worktree: string): Promise<string> {
 }
 
 /**
- * stock omp's session folder for a cwd (`worktree`, a real path), as `getDefaultSessionDirName` names it
- * (pi-coding-agent `session/session-paths.ts`; main reads it without an omp): under the temp folder `-tmp-<path
- * from it>`, else under the home folder `-<path from it>`, else `--<the whole path>--`, each with `/`, `\` and `:`
- * as `-`. A worktree made by hand can be anywhere, so all three count. Pinned by `worktree-facts.test.ts`.
- */
-export function sessionFolder(worktree: string): string {
-	const within = (root: string): string | null => {
-		const relative = path.relative(realFolder(root), worktree);
-		return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)) ? relative : null;
-	};
-	const dashed = (text: string): string => text.replace(/[/\\:]/g, "-");
-	const temp = within(os.tmpdir());
-	const home = within(os.homedir());
-	let name = `--${dashed(worktree.replace(/^[/\\]/, ""))}--`;
-	// The temp folder first: it is the more specific one where it sits inside the home folder (Windows).
-	if (temp !== null) name = temp === "" ? "-tmp" : `-tmp-${dashed(temp)}`;
-	else if (home !== null) name = `-${dashed(home)}`;
-	return path.join(agentDir(), "sessions", name);
-}
-
-/**
  * When anything in the worktree last changed (epoch ms): its HEAD commit, its git dir's HEAD, index and reflog, the
  * folder, every tracked and untracked file, every ignored entry no tool makes again (a seeded `.env` someone edited)
  * and the newest session file stock omp wrote for it. Regenerable output is left out: a build is no one's work.
@@ -102,9 +80,14 @@ export async function lastActivity(worktree: string, files: WorktreeFiles): Prom
 		"disk.lastActivity",
 		{
 			worktree,
-			stamps: [...files.tracked, ...files.untrackedFiles],
-			ignored: files.ignored.filter(entry => !entry.regenerable).map(entry => entry.path),
-			sessions: sessionFolder(worktree),
+			activity: {
+				tracked: files.tracked,
+				untrackedFiles: files.untrackedFiles,
+				ignored: files.ignored.filter(entry => !entry.regenerable).map(entry => entry.path),
+				sessionsRoot: path.join(agentDir(), "sessions"),
+				temp: realFolder(os.tmpdir()),
+				home: realFolder(os.homedir()),
+			},
 		},
 		ACTIVITY_ROUNDS,
 	);

@@ -71,9 +71,7 @@ struct WorktreeParams {
 struct ActivityParams {
     git: Runner,
     worktree: String,
-    stamps: Vec<String>,
-    ignored: Vec<String>,
-    sessions: Option<String>,
+    activity: facts::Activity,
 }
 
 #[derive(Deserialize)]
@@ -251,17 +249,10 @@ pub fn register(registry: &mut Registry) {
             let ActivityParams {
                 git,
                 worktree,
-                stamps,
-                ignored,
-                sessions,
+                activity,
             } = call.params()?;
             let scope = call.scope.clone();
             let git = Git::new(git, call.scope);
-            let activity = facts::Activity {
-                stamps,
-                ignored,
-                sessions,
-            };
             Reply::json(&facts::last_activity(&git, &worktree, activity, &scope).await?)
         })
     });
