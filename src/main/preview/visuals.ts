@@ -107,9 +107,6 @@ const argsSchema = z.discriminatedUnion("action", [
 interface VisualVersionRecord {
 	version: number;
 	createdAt: number;
-	/** Snapshot file name in the visual's folder; "" for a web address. */
-	file: string;
-	hash: string;
 }
 interface VisualRecord {
 	id: string;
@@ -118,9 +115,7 @@ interface VisualRecord {
 	/** Absolute file path or web address ("" inline). */
 	target: string;
 	cwd: string;
-	/** Folder its other files load from (the tab folder, or the visual's own for inline HTML). */
-	root: string;
-	/** The entry's path under `root`, `/`-separated. */
+	/** URL path of the visual's entry, `/`-separated. */
 	entry: string;
 	createdAt: number;
 	updatedAt: number;
@@ -249,27 +244,20 @@ export class VisualStore {
 	async #file(url: string, bytes: boolean) {
 		await this.#load();
 		const named = this.parse(url);
-		const record = named && this.#record(named.id);
-		if (!named || !record || record.kind === "url") return null;
+		if (!named) return null;
 		let relative: string;
 		try {
 			relative = decodeURIComponent(new URL(url).pathname).replace(/^\/+/, "");
 		} catch {
 			return null;
 		}
-		let source:
-			| { kind: "snapshot"; dir: string; id: string; file: string }
-			| { kind: "asset"; root: string; relative: string };
-		if (relative === record.entry) {
-			const file = record.versions.find(version => version.version === named.version)?.file;
-			if (!file) return null;
-			source = { kind: "snapshot", dir: this.#dir, id: record.id, file };
-		} else if (record.kind === "file") {
-			source = { kind: "asset", root: record.root, relative };
-		} else {
-			return null;
-		}
-		return core().call<VisualFile | null>("visual.file", { ...source, entry: record.entry, bytes });
+		return core().call<VisualFile | null>("visual.file", {
+			dir: this.#dir,
+			id: named.id,
+			version: Number.isSafeInteger(named.version) ? named.version : null,
+			relative,
+			bytes,
+		});
 	}
 
 	/** The response for an `omp-visual:` request: the file `resolve` allows, or 404; both limited to the page's own origin. */
