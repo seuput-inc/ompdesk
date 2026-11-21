@@ -636,8 +636,8 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 	}
 	const started = performance.now();
 	try {
-		// Asked early so it runs beside the model lookup; never blocks the gate, never throws.
-		const judging = replyNeedsUser(session, lastReplyText(messages));
+		// An unanswered ask counts even if the text judge would say no.
+		const judging = awaitsDecision(messages, false) ? undefined : replyNeedsUser(session, lastReplyText(messages));
 		const stock = await loadStock();
 		const resolved = await resolveModel(session, stock);
 		const judged = await judging;

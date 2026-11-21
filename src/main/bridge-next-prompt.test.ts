@@ -874,21 +874,29 @@ describe("the judge's reading of the last reply (judge assist)", () => {
 		expect(updates(world)[0]?.candidates).toEqual(["run the tests", "push it"]);
 	});
 
-	it("an ask still open counts as a decision whatever the judge says", async () => {
+	it.each([false, true])("skips the judge for an open ask (answered: %s)", async answered => {
 		world.session.messages.push(
 			{ role: "user", content: "set it up", timestamp: 3 },
 			{
 				role: "assistant",
 				stopReason: "toolUse",
-				content: [{ type: "toolCall", id: "a", name: "ask", arguments: { questions: [] } }],
+				content: [
+					{ type: "text", text: MISSED },
+					{ type: "toolCall", id: "a", name: "ask", arguments: { questions: [] } },
+				],
 				timestamp: 4,
 			},
 		);
+		if (answered)
+			world.session.messages.push({ role: "toolResult", toolCallId: "a", toolName: "ask", content: "First one." });
 		world.reply.current = async () => text("1. yes, go ahead\n2. run the tests\n3. push it");
 		withJudge(0.01);
 		await turnEnds();
-		expect(prompt()).toContain(DECISION_LINE);
-		expect(updates(world)[0]?.candidates).toContain("yes, go ahead");
+		expect(prompt()).toContain(answered ? DONE_LINE : DECISION_LINE);
+		expect(updates(world)[0]?.candidates).toEqual(
+			answered ? ["run the tests", "push it"] : ["yes, go ahead", "run the tests", "push it"],
+		);
+		expect(fake.requests).toHaveLength(answered ? 1 : 0);
 	});
 
 	it("keeps one suggestion per moment: a judged state does not move the state key", async () => {
