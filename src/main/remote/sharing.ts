@@ -29,6 +29,8 @@ export interface SharingOptions {
 	identity: Identity;
 	userData: string;
 	appVersion: string;
+	orderStore?: { get(key: string): unknown; set(key: string, value: unknown): void };
+	legacyOrder?: unknown;
 	/** This computer's device name now; later ones through `configure`. */
 	name: string;
 	tailnet: TailnetAccess;
@@ -70,6 +72,7 @@ export interface SharingSnapshot {
 	host: { port: number | null; addresses: string[]; listenError: ListenError | null };
 	peers: PeerInfo[];
 	hosts: PairedHost[];
+	deviceSectionOrder: string[];
 	/** The last quota patch the core applied. */
 	patched: number;
 }
@@ -80,6 +83,7 @@ const EMPTY: SharingSnapshot = {
 	host: { port: null, addresses: [], listenError: null },
 	peers: [],
 	hosts: [],
+	deviceSectionOrder: [],
 	patched: 0,
 };
 
@@ -115,6 +119,9 @@ function route(): void {
 	process.on("remote.log", data => {
 		const { host, event, details } = data as { host: number; event: string; details: Record<string, unknown> };
 		instances.get(host)?.options.log?.(event, details);
+	});
+	onCoreAsk("saveOrder", ask => {
+		return instances.get(ask.devices as number)?.saveOrder(ask.ticket, ask.rows) ?? false;
 	});
 	onCoreAsk("tailnet", async ask => {
 		const sharing = instances.get(ask.devices as number);
@@ -153,6 +160,7 @@ interface Opened {
 interface OpenedAnswer {
 	devices: number;
 	state: { devices: number } & SharingSnapshot;
+	orderRows: unknown[];
 }
 
 /** What a devices instance was told since it opened: a core that opens it again is brought to the same. */
@@ -167,6 +175,11 @@ export class SharingCore {
 	readonly options: SharingOptions;
 	#id = 0;
 	#snapshot: SharingSnapshot = EMPTY;
+	#rows: unknown[] = [];
+	#rankTail: Promise<void> = Promise.resolve();
+	#unstoredOrder = false;
+	#orderTicket = 0;
+	#canSaveOrder: (() => boolean) | null = null;
 	/** The open instance; while the core that held it is replaced, the one the next core is giving. */
 	#opened: Promise<Opened>;
 	/** The instance as the core running now holds it; null while it is not open (before the first answer, or after a loss). */
@@ -197,6 +210,11 @@ export class SharingCore {
 		route();
 		const sharing = new SharingCore(options);
 		await sharing.#opened;
+		if (sharing.#unstoredOrder && Array.isArray(options.legacyOrder) && options.legacyOrder.length) {
+			await sharing.editOrder("migrate", options.legacyOrder).catch(error => {
+				console.warn("[remote] could not migrate the sidebar device order", error);
+			});
+		}
 		return sharing;
 	}
 
@@ -213,6 +231,52 @@ export class SharingCore {
 	/** What the core told last. */
 	get snapshot(): SharingSnapshot {
 		return this.#snapshot;
+	}
+
+	get orderRows(): readonly unknown[] {
+		return this.#rows;
+	}
+
+	saveOrder(ticket: unknown, rows: unknown): boolean | string {
+		try {
+			if (ticket !== this.#orderTicket || !this.#canSaveOrder?.()) return false;
+			if (!this.options.orderStore || !Array.isArray(rows)) return false;
+			this.options.orderStore.set("rows", rows);
+			this.#rows = rows;
+			return true;
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	editOrder(op: "set" | "merge" | "migrate", value: unknown, allowed?: () => boolean): Promise<boolean> {
+		const apply = async () => {
+			const opened = await this.#opened;
+			const current = () =>
+				!this.#disposed &&
+				this.#ready?.devices === opened.devices &&
+				core().generation === opened.generation &&
+				(!allowed || allowed());
+			if (!current()) return false;
+			const ticket = ++this.#orderTicket;
+			this.#canSaveOrder = current;
+			try {
+				const changed = await this.#callIn<boolean>(opened, "remote.devices.editOrder", {
+					ticket,
+					op,
+					value,
+				});
+				return changed && core().generation === opened.generation;
+			} finally {
+				this.#canSaveOrder = null;
+			}
+		};
+		const result = this.#rankTail.then(apply);
+		this.#rankTail = result.then(
+			() => {},
+			() => {},
+		);
+		return result;
 	}
 
 	/** A state event from the core. */
@@ -234,6 +298,7 @@ export class SharingCore {
 		const params = {
 			identity: options.identity.deviceId,
 			userData: options.userData,
+			orderRows: options.orderStore?.get("rows") ?? null,
 			appVersion: options.appVersion,
 			name: this.#settings.name,
 			loopback: this.#settings.loopback,
@@ -248,6 +313,7 @@ export class SharingCore {
 			...(keepAwake !== undefined ? { keepAwake } : {}),
 			...(this.#migratedAt !== null ? { migratedAt: this.#migratedAt } : {}),
 		};
+		this.#unstoredOrder = params.orderRows === null;
 		const { result, generation } = await core().call<OpenedAnswer>("remote.devices.open", params);
 		return { ...result, generation };
 	}
@@ -257,6 +323,7 @@ export class SharingCore {
 		const { devices: _id, ...snapshot } = answer.state;
 		this.#id = answer.devices;
 		this.#snapshot = snapshot;
+		this.#rows = answer.orderRows;
 		instances.set(this.#id, this);
 		this.#ready = { devices: answer.devices, generation: answer.generation };
 		return this.#ready;

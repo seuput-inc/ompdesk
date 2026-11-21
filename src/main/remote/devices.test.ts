@@ -190,7 +190,7 @@ describe("shared sidebar device order", () => {
 		const clientId = a.devices.deviceId;
 		await b.devices.setHostEnabled(false);
 		await until(a, state => state.hosts[0]?.state !== "online");
-		a.devices.setDeviceSectionOrder([hostId, "local"]);
+		await a.devices.setDeviceSectionOrder([hostId, "local"]);
 
 		// B learns A's order while A is only an inbound peer, not a section on B's sidebar.
 		await b.devices.setHostEnabled(true);
@@ -206,10 +206,47 @@ describe("shared sidebar device order", () => {
 		expect(b.devices.state().deviceSectionOrder).toEqual(["local", clientId]);
 		await a.devices.setHostEnabled(false);
 		await until(b, state => state.hosts[0]?.state !== "online");
-		b.devices.setDeviceSectionOrder([clientId, "local"]);
+		await b.devices.setDeviceSectionOrder([clientId, "local"]);
 		await until(a, state => state.deviceSectionOrder?.[0] === "local");
 		expect(a.devices.state().deviceSectionOrder).toEqual(["local", hostId]);
 	}, 20_000);
+
+	it("does not publish a refused save; after core restart it restores the store's latest accepted rows", async () => {
+		const pending = new Map<string, unknown>();
+		let fail = true;
+		const store = {
+			get: (key: string) => pending.get(key),
+			set: (key: string, value: unknown) => {
+				if (fail) throw new Error("synthetic store refusal");
+				pending.set(key, value);
+			},
+		};
+		const { a, b, hostId } = await rig.connected({ orderStore: store });
+		await expect(b.devices.setDeviceSectionOrder(["local"])).rejects.toThrow("synthetic store refusal");
+		expect(b.devices.state().deviceSectionOrder).toEqual([]);
+		expect(pending.has("rows")).toBe(false);
+		fail = false;
+		await b.devices.setDeviceSectionOrder(["local"]);
+		await until(a, state => state.deviceSectionOrder?.[0] === hostId);
+		const before = await a.devices.request(hostId, DEVICE_ORDER_EXCHANGE, []);
+		expect(before).toEqual(pending.get("rows"));
+		await stopCore();
+		await until(a, state => state.hosts[0]?.state === "online", 30_000);
+		expect(await a.devices.request(hostId, DEVICE_ORDER_EXCHANGE, [])).toEqual(before);
+		expect(b.devices.state().deviceSectionOrder).toEqual(["local"]);
+	}, 60_000);
+
+	it("imports legacy ranks only when the store has no rows, not when its rows are malformed", async () => {
+		const orderStore = new Map<string, unknown>();
+		const prefs = new Map<string, unknown>([["sidebarFolds", { deviceOrder: ["local"] }]]);
+		const first = await rig.computer("first", fakeTailnet(), { prefs, orderStore });
+		expect(first.devices.state().deviceSectionOrder).toEqual(["local"]);
+		expect(orderStore.get("rows")).toEqual([[expect.any(String), 0, 0, expect.any(String)]]);
+		const malformed = new Map<string, unknown>([["rows", "invalid"]]);
+		const second = await rig.computer("second", fakeTailnet(), { prefs, orderStore: malformed });
+		expect(second.devices.state().deviceSectionOrder).toEqual([]);
+		expect(malformed.get("rows")).toBe("invalid");
+	});
 
 	it("refuses order exchange when a connected device's login loses access", async () => {
 		const { a, b, hostId } = await rig.connected();

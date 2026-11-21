@@ -61,6 +61,7 @@ function statusOf(tailnet: FakeTailnet): TailscaleStatus | null {
 export interface HostOptions {
 	services?: LocalHostServices;
 	logLink?: (event: string, details: Record<string, unknown>) => void;
+	orderStore?: { get(key: string): unknown; set(key: string, value: unknown): void };
 }
 
 export interface Computer {
@@ -128,7 +129,7 @@ export class DevicesRig {
 			identity: await loadIdentity(dir),
 			appVersion: "1.0.0",
 			prefs: { get: key => prefs.get(key), set: (key, value) => prefs.set(key, value) },
-			deviceOrderStore: new Map<string, unknown>(),
+			deviceOrderStore: options.orderStore ?? new Map<string, unknown>(),
 			broadcast: (channel, data) => {
 				if (channel === "remote:state") for (const listener of [...listeners]) listener();
 				else if (channel === "remote:tailnet") tailnet.pushed = structuredClone(data as TailnetComputer[]);

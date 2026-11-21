@@ -376,7 +376,7 @@ export class RemoteHost {
 		try {
 			const result =
 				method === DEVICE_ORDER_EXCHANGE && this.#opts.exchangeDeviceOrder
-					? this.#opts.exchangeDeviceOrder(conn.peer, params)
+					? await this.#opts.exchangeDeviceOrder(conn.peer, params)
 					: await this.#opts.services.call(conn.peer, method, params, conn);
 			reply = { t: "res", id, ok: true, result };
 		} catch (error) {
