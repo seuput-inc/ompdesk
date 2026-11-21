@@ -5,15 +5,14 @@
  * (`InteractiveMode.shutdown`, interactive-mode.ts 6817-6826); a GUI tab's omp
  * is already gone by then, so main runs these steps itself. The gits and their
  * rules run in the core process (`native/ompdesk/crates/core/src/git/worktree.rs`);
- * main keeps the exit policy, the removal guard and the repository lock.
+ * main keeps the exit policy and the repository lock.
  *
- * Removal also passes OMPdesk's own guard (`removableWorktreePath`): only a
+ * Removal also passes the core's guard on real paths: only a
  * checkout strictly inside the worktree root it was created under, never the
  * user's clone.
  */
-import { LocalCommandError } from "../types";
 import { coreGit, withRepoLock } from "./exec";
-import { removableWorktreePath, worktreeGit } from "./worktree";
+import { worktreeGit } from "./worktree";
 
 const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
 
@@ -82,18 +81,11 @@ export function snapshotSessionWorktree(wt: LifecycleWorktree): Promise<Worktree
  * when the guard or git refuses a step.
  */
 export async function removeSessionWorktree(wt: LifecycleWorktree, moved: boolean): Promise<void> {
-	const { primary, present } = await coreGit<{ primary: string; present: boolean }>(
+	const { primary, target } = await worktreeGit<{ primary: string; target: string | null }>(
 		"git.sessionWorktreeRemoval",
 		{ worktree: wt },
 		2,
 	);
-	const target = present ? await removableWorktreePath(wt.path, wt.root) : null;
-	if (present && !target) {
-		throw new LocalCommandError(
-			`Refusing to remove ${wt.path}: only worktrees under ${wt.root} can be removed.`,
-			"worktree_outside_root",
-		);
-	}
 	await withRepoLock(primary, () =>
 		worktreeGit(
 			"git.sessionWorktreeRemove",

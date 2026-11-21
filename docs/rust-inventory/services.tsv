@@ -190,7 +190,7 @@ src/main/local/git/scm-history.test.ts	exception	Tests branch mutations, occupie
 src/main/local/git/scm.test.ts	exception	Tests working-tree and index effects of staging, unstaging, discard and other SCM commands.
 src/main/local/git/scm.ts	port	Locks mutations, removes discarded untracked files in Node and runs stock commit-message generation after checking staged changes.
 src/main/local/git/session-worktree.test.ts	exception	Tests worktree exit choices, branch movement and dirty versus ignored files in snapshots.
-src/main/local/git/session-worktree.ts	port	Chooses keep, remove or prompt from exit preference and dirty, moved or off-branch state; guards deletion outside the worktree root. Compare native-root-mini-intake's worktree_lifecycle/ candidate with these current caller guarantees before reuse.
+src/main/local/git/session-worktree.ts	port	Chooses keep, remove or prompt from exit preference and dirty, moved or off-branch state. Rust checks the removal root. Compare native-root-mini-intake's worktree_lifecycle/ candidate with the current exit contract before further reuse.
 src/main/local/git/stock-bridge.test.ts	exception	Integration fixture drives stock omp to test worktree paths, checkout removal, session movement and PR metadata.
 src/main/local/git/test-repos.ts	exception	Builds and copies reusable temporary Git repository, remote and session-worktree fixtures.
 src/main/local/git/unlanded.test.ts	exception	Tests comparison against the merge base and remote default branch, including main and detached HEAD exclusions.
@@ -198,7 +198,7 @@ src/main/local/git/unlanded.ts	native-client	Delegates the whole comparison to t
 src/main/local/git/worktree-seed.test.ts	exception	Tests include patterns, ignored and tracked file handling and the worktree seeding size budget.
 src/main/local/git/worktree-seed.ts	port	Executes setup and merge hook scripts with a timeout, writes their output logs and combines setup results with Rust seeding results.
 src/main/local/git/worktree.test.ts	exception	Tests canonical path containment and refusal to remove the main checkout, root, missing or misleading path.
-src/main/local/git/worktree.ts	port	Validates branch sources, searches numbered names for an unused worktree, creates directories and guards removal with canonical paths.
+src/main/local/git/worktree.ts	port	Validates branch sources, searches numbered names and creates directories. Rust checks containment and registration and returns the actual removal target with its repository lock key.
 src/main/local/image-blobs.test.ts	exception	Tests restoration of stock blob references on subagent and bridge transcript reads.
 src/main/local/image-blobs.ts	port	Identifies image payload sites, hashes large inline payloads into references and resolves referenced bytes for transcripts.
 src/main/local/index.test.ts	exception	Tests duplicate local handler refusal and which GUI or stock commands the registry claims.
