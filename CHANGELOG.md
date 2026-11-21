@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.137.1] - 2026-11-21
+
+세션 도구의 상세 설명과 `/omfg` 재시도에서 중복 입력을 줄였어요.
+
+- 세션 열기의 단건·배치 공통 설명을 한 번만 보내고, 다른 도구 6개의 반복 문구도 줄였어요.
+- 자동 배포는 변경이 하루 지났다는 이유만으로 시작하지 않아요. 직접 요청한 배포에는 하루 대기가 없어요.
+
+<!-- en -->
+
+Session tool help and `/omfg` retries now send less duplicate input.
+
+- Single and batch session opens share one set of field descriptions. Six other tools have shorter help without changing their arguments.
+- Commit age alone no longer triggers an automatic release. An explicit release request does not wait a day.
+
 ## [0.137.0] - 2026-11-21
 
 어느 기기에서 보든 같은 호스트의 사이드바에 같은 프로젝트 순서, 세션 고정 위치, 보관 상태가 표시돼요.
