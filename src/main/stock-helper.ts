@@ -142,8 +142,7 @@ export class StockHelper {
 	async request<T>(method: string, params: unknown, options: StockHelperRequestOptions = {}): Promise<T> {
 		if (this.#stopped) throw new Error("Stock helper stopped");
 		const timeoutMs = options.timeoutMs ?? this.#requestTimeoutMs;
-		// The params and the result cross the core as the JSON text main and the worker wrote, in the frame's bytes: the
-		// core passes them on unread (a terminal's scrollback is a megabyte). No bytes is JavaScript's `undefined`.
+		// JSON travels in the frame's bytes. No bytes is JavaScript's `undefined`.
 		const text: string | undefined = JSON.stringify(params);
 		const started = performance.now();
 		try {

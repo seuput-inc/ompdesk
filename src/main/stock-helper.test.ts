@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -7,6 +5,7 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "../../resources/gui-bridge/stock-helper/dispatch";
+import type { TerminalOperation, TerminalSnapshot } from "../shared/terminal-types";
 import { core } from "./core/process";
 import { ompInstallStampFiles, StockHelper, type StockHelperOptions } from "./stock-helper";
 
@@ -446,49 +445,61 @@ describe("createDispatcher", () => {
 });
 
 describe("stock helper terminals", () => {
-	it("builds one terminal service for overlapping first requests, so dispose reaches every PTY", async () => {
-		// A stand-in for stock's pi-natives: PtySession counts constructions and kills.
-		const natives = path.join(dir, "node_modules", "@oh-my-pi", "pi-natives");
+	let helper: StockHelper;
+	beforeEach(async () => {
+		const bridge = path.resolve("resources/gui-bridge");
+		const natives = path.join(dir, "node_modules/@oh-my-pi/pi-natives");
 		await fs.mkdir(natives, { recursive: true });
 		await fs.writeFile(path.join(dir, "package.json"), "{}");
-		await fs.writeFile(
-			path.join(natives, "package.json"),
-			JSON.stringify({ name: "@oh-my-pi/pi-natives", version: "0.0.0", main: "index.js" }),
-		);
+		await fs.writeFile(path.join(natives, "package.json"), JSON.stringify({ main: "index.js" }));
 		await fs.writeFile(
 			path.join(natives, "index.js"),
-			`globalThis.ptyKills = 0;
+			`import { appendFileSync } from "node:fs";
 export class PtySession {
-	startArgv() { return new Promise(() => {}); }
-	write() {}
+	startArgv(_, emit) { this.emit = emit; return new Promise(() => {}); }
+	write(text) { this.emit(null, text); }
 	resize() {}
-	kill() { globalThis.ptyKills++; }
-}
-`,
+	kill() { appendFileSync(${JSON.stringify(path.join(dir, "kills"))}, "x"); }
+}`,
 		);
-		const script = path.join(dir, "terminals-race.ts");
-		const terminals = path.resolve("resources/gui-bridge/stock-helper/terminals.ts");
-		await fs.writeFile(
-			script,
-			`import { disposeTerminals, methods } from ${JSON.stringify(terminals)};
-const create = owner => methods["terminal.request"]({ owner, cwd: ${JSON.stringify(dir)}, operation: { action: "create", cols: 80, rows: 24 } });
-await Promise.all([create("a"), create("b")]);
-disposeTerminals();
-process.stdout.write(String(globalThis.ptyKills));
-`,
-		);
-		const child = spawn("bun", [script], { env: { ...process.env, OMP_PACKAGE_ROOT: dir } });
-		let out = "";
-		let err = "";
-		child.stdout.on("data", chunk => {
-			out += chunk;
+		helper = new StockHelper(bridge, {
+			launch: async () => ({
+				bin: "bun",
+				args: [path.join(bridge, "stock-helper/host.ts"), "terminals"],
+				env: { ...process.env, OMP_PACKAGE_ROOT: dir },
+			}),
 		});
-		child.stderr.on("data", chunk => {
-			err += chunk;
-		});
-		const [code] = await once(child, "close");
-		expect(err).toBe("");
-		expect(code).toBe(0);
-		expect(out).toBe("2");
+		helpers.push(helper);
+	});
+	const request = (operation: TerminalOperation, owner = "a") =>
+		helper.request<TerminalSnapshot[]>("terminal.request", { owner, cwd: dir, operation });
+
+	it("builds one terminal service for overlapping first requests, so dispose reaches every PTY", async () => {
+		await Promise.all(["a", "b"].map(owner => request({ action: "create", cols: 80, rows: 24 }, owner)));
+		await helper.stop();
+		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("xx");
+	});
+
+	it("reads each viewer's UTF-16 budget across worker replies, restarts, clears and retention cuts", async () => {
+		const [{ id }] = await request({ action: "create", cols: 80, rows: 24 });
+		const list = (from: number, budget: number) => request({ action: "list", offsets: { [id]: from }, budget });
+		const waiting = request({ action: "list", offsets: { [id]: 0 }, budget: 3, waitMs: 1000 });
+		await request({ action: "write", id, data: "ab😀cd\ud800" });
+		expect(await waiting).toMatchObject([{ id, output: "ab", offset: 2 }]);
+		expect(await list(2, 3)).toMatchObject([{ output: "😀c", offset: 5 }]);
+		expect(await list(5, 4)).toMatchObject([{ output: "d\ud800", offset: 7 }]);
+		expect(await list(3, 1)).toMatchObject([{ output: "\ude00", offset: 4 }]);
+		expect(await list(400, 4)).toMatchObject([{ output: "", offset: 7 }]);
+		expect(await request({ action: "list", offsets: {} })).toMatchObject([{ output: "", offset: 7 }]);
+		expect(await request({ action: "list" }, "b")).toEqual([]);
+		await request({ action: "restart", id });
+		expect(await request({ action: "list" })).toMatchObject([{ output: "ab😀cd\ud800", offset: 7 }]);
+		await request({ action: "clear", id });
+		expect(await request({ action: "list" })).toMatchObject([{ output: "", offset: 7 }]);
+		await request({ action: "write", id, data: "😀" });
+		await request({ action: "write", id, data: "x".repeat(999_999) });
+		expect(await list(0, 2)).toMatchObject([{ output: "\ude00x", offset: 10 }]);
+		await helper.request("terminal.dispose", { owner: "a" });
+		expect(await request({ action: "list" })).toEqual([]);
 	});
 });

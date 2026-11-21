@@ -3,9 +3,9 @@
 //! TypeScript because they import omp's modules.
 //!
 //! A worker speaks JSON lines on its stdio: `{id, method, params}` in, `{id, result}` or `{id, error}` out, and
-//! `{cancel: id}` in to withdraw a request its caller gave up on. The params and the result are JSON text main and
-//! the worker wrote; they cross the core as the bytes after the frame (`bin`) and are passed on unread, so a
-//! terminal's megabyte of scrollback is parsed once, in main. Three kinds, by the request's method:
+//! `{cancel: id}` in to withdraw a request its caller gave up on. Requests and ordinary results pass through the
+//! core as JSON bytes. A terminals worker returns `{terminal, id}` instead: its stdout reader retains output and
+//! builds the requested snapshots before handing the answer to the lane. Three kinds, by the request's method:
 //! - `terminals` (`terminal.*`, `pty.*`): holds every live shell and answers every request at once. It is never
 //!   ended for a request that hung or for a changed omp: its shells would go with it.
 //! - `extensions` (`extensions.*`): a serial lane of its own, because a plugin upgrade runs `bun install` for minutes
@@ -34,6 +34,8 @@
 //! of lanes (the app has one; each test helper its own), so `stock.stop` ends exactly those. The workers end with the
 //! core: their stdin is the core's pipe, the core's job object holds them on Windows and main kills its process
 //! group on POSIX.
+
+mod scrollback;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -709,7 +711,8 @@ impl Lane {
         let (lines, written) = mpsc::unbounded_channel();
         tokio::spawn(write_lines(stdin, written));
         let inbox = self.inbox.clone();
-        std::thread::spawn(move || read_lines(stdout, generation, &inbox));
+        let terminals = self.worker == Worker::Terminals;
+        std::thread::spawn(move || read_lines(stdout, generation, &inbox, terminals));
         let kill = Arc::new(Notify::new());
         let (exit, exited) = watch::channel(false);
         let (killed, inbox) = (Arc::clone(&kill), self.inbox.clone());
@@ -873,7 +876,13 @@ async fn write_lines(mut stdin: ChildStdin, mut lines: mpsc::UnboundedReceiver<V
 }
 
 /// Reads a worker's lines to the end of its output (its exit) and hands each to the lane.
-fn read_lines(stdout: std::fs::File, generation: u64, inbox: &mpsc::UnboundedSender<Msg>) {
+fn read_lines(
+    stdout: std::fs::File,
+    generation: u64,
+    inbox: &mpsc::UnboundedSender<Msg>,
+    terminals: bool,
+) {
+    let mut history = scrollback::Scrollback::default();
     let mut stdout = std::io::BufReader::with_capacity(READ_BUFFER, stdout);
     // A viewer that follows a busy terminal gets one large line after another: each starts at the last one's size.
     let mut size = 0;
@@ -883,6 +892,21 @@ fn read_lines(stdout: std::fs::File, generation: u64, inbox: &mpsc::UnboundedSen
             Ok(0) | Err(_) => break,
             Ok(read) => {
                 size = read;
+                if terminals && line.starts_with(b"{\"terminal\":") {
+                    match history.project(&line) {
+                        Ok(reply) => line = reply,
+                        Err(_) => {
+                            let Some(id) = serde_json::from_slice::<WorkerLine>(&line)
+                                .ok()
+                                .and_then(|frame| frame.id)
+                            else {
+                                continue;
+                            };
+                            line = format!("{{\"id\":{id},\"error\":\"Invalid terminal frame\"}}")
+                                .into_bytes();
+                        }
+                    }
+                }
                 if inbox.send(Msg::Line { generation, line }).is_err() {
                     break;
                 }

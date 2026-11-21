@@ -1,6 +1,7 @@
 import type { TerminalOperation } from "../../../src/shared/terminal-types";
 import { ompModuleFile } from "../omp-package";
-import { type Pty, TerminalService } from "./terminal-service";
+import type { HelperMethods } from "./dispatch";
+import { type Pty, type PtyOptions, TerminalService } from "./terminal-service";
 
 let service: TerminalService | null = null;
 let starting: Promise<TerminalService> | null = null;
@@ -23,8 +24,8 @@ function terminals(): Promise<TerminalService> {
 export function disposeTerminals(): void {
 	service?.dispose();
 }
-export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
-	"terminal.request": async params => {
+export const methods: HelperMethods = {
+	"terminal.request": async (params, frame) => {
 		const {
 			owner,
 			cwd,
@@ -57,12 +58,11 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		};
 		const service = await terminals();
 		// A web viewer's long poll holds here, in the worker, until the PTY writes (never a timer loop in main).
-		return operation.action === "list" && operation.waitMs
-			? service.list(owner, operation, options)
-			: service.request(owner, operation, options);
+		if (operation.action === "list" && operation.waitMs) await service.wait(owner, operation);
+		return frame(terminalFrame(service, owner, operation, options));
 	},
 	/** One command (not the login shell) in a PTY, e.g. `gh auth login`, which needs a TTY. Main supplies the whole env. */
-	"pty.request": async params => {
+	"pty.request": async (params, frame) => {
 		const { owner, application, args, cwd, env, operation } = params as {
 			owner: string;
 			application: string;
@@ -71,10 +71,19 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 			env: Record<string, string>;
 			operation: TerminalOperation;
 		};
-		return (await terminals()).request(owner, operation, { application, args, cwd, env, cols: 120, rows: 30 });
+		const service = await terminals();
+		return frame(terminalFrame(service, owner, operation, { application, args, cwd, env, cols: 120, rows: 30 }));
 	},
-	"terminal.dispose": async params => {
+	"terminal.dispose": async (params, frame) => {
 		const { owner } = params as { owner: string };
-		service?.dispose(owner);
+		return frame({ forget: service?.dispose(owner) });
 	},
 };
+
+function terminalFrame(service: TerminalService, owner: string, operation: TerminalOperation, options: PtyOptions) {
+	return {
+		rows: service.request(owner, operation, options),
+		forget: operation.action === "clear" || operation.action === "close" ? [operation.id] : undefined,
+		budget: operation.action === "list" ? operation.budget : undefined,
+	};
+}

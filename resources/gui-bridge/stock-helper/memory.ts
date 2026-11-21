@@ -127,7 +127,7 @@ async function readMessages(sessionPath: string): Promise<unknown[]> {
 	return (await (read as (path: string) => Promise<unknown[]>)(sessionPath)) ?? [];
 }
 
-export const methods: HelperMethods = {
+export const methods = {
 	"memory.promptFacts": params => promptFacts(items(params)),
 	"memory.journal": async params => {
 		const sessionPath = field(params, "sessionPath");
@@ -135,4 +135,4 @@ export const methods: HelperMethods = {
 			throw new Error("Invalid session path");
 		return journalFacts(await readMessages(sessionPath));
 	},
-};
+} satisfies HelperMethods;

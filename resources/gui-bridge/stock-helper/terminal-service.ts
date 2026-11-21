@@ -22,13 +22,19 @@ interface Entry {
 	owner: string;
 	pty: Pty;
 	options: PtyOptions;
-	output: string;
-	base: number;
+	pending: string;
+	offset: number;
 	exited: boolean;
 	exitCode?: number;
 	error?: string;
 }
 const SCROLLBACK_CHARS = 1_000_000;
+
+/** The worker hands off unread PTY chunks, never a second copy of the retained history. */
+interface TerminalRow extends Omit<TerminalSnapshot, "output"> {
+	delta?: string | { utf16: string };
+	from?: number;
+}
 export class TerminalService {
 	readonly #entries = new Map<string, Entry>();
 	/** Long polls (`list` with `waitMs`) waiting for the next output or change of any session. */
@@ -52,12 +58,9 @@ export class TerminalService {
 		entry.error = undefined;
 		const pty = entry.pty;
 		const append = (text: string) => {
-			entry.output += text;
-			if (entry.output.length > SCROLLBACK_CHARS) {
-				const cut = entry.output.length - SCROLLBACK_CHARS;
-				entry.output = entry.output.slice(cut);
-				entry.base += cut;
-			}
+			entry.offset += text.length;
+			entry.pending += text;
+			if (entry.pending.length > SCROLLBACK_CHARS) entry.pending = entry.pending.slice(-SCROLLBACK_CHARS);
 			this.#wake();
 		};
 		try {
@@ -88,14 +91,14 @@ export class TerminalService {
 		}
 	}
 
-	request(owner: string, operation: TerminalOperation, options: PtyOptions): TerminalSnapshot[] {
+	request(owner: string, operation: TerminalOperation, options: PtyOptions): TerminalRow[] {
 		if (operation.action === "create") {
 			const entry: Entry = {
 				owner,
 				pty: this.factory(),
 				options: { ...options, cols: operation.cols, rows: operation.rows },
-				output: "",
-				base: 0,
+				pending: "",
+				offset: 0,
 				exited: false,
 			};
 			this.#entries.set(randomUUID(), entry);
@@ -128,8 +131,7 @@ export class TerminalService {
 					this.#wake(true);
 					break;
 				case "clear":
-					entry.base += entry.output.length;
-					entry.output = "";
+					entry.pending = "";
 					this.#wake(true);
 					break;
 			}
@@ -137,20 +139,16 @@ export class TerminalService {
 		return [...this.#entries]
 			.filter(([, entry]) => entry.owner === owner)
 			.map(([id, entry]) => {
-				const listing = operation.action === "list" && !(operation.offsets && operation.offsets[id] === undefined);
-				const from = listing ? Math.max(0, (operation.offsets?.[id] ?? 0) - entry.base) : entry.output.length;
-				let end = entry.output.length;
-				const budget = operation.action === "list" ? operation.budget : undefined;
-				if (budget !== undefined && end - from > budget) {
-					end = from + budget;
-					// Never split a surrogate pair: the next reply would start with its low half.
-					const last = entry.output.charCodeAt(end - 1);
-					if (end > from && last >= 0xd800 && last <= 0xdbff) end -= 1;
-				}
+				const from = operation.action !== "list" ? undefined : operation.offsets ? operation.offsets[id] : 0;
+				const delta = from !== undefined && entry.pending ? entry.pending : undefined;
+				if (delta !== undefined) entry.pending = "";
 				return {
 					id,
-					output: listing ? entry.output.slice(from, end) : "",
-					offset: entry.base + end,
+					from,
+					// Rust strings cannot carry lone UTF-16 units, including one left by scrollback truncation.
+					delta:
+						delta && !delta.isWellFormed() ? { utf16: Buffer.from(delta, "utf16le").toString("base64") } : delta,
+					offset: entry.offset,
 					exited: entry.exited,
 					exitCode: entry.exitCode,
 					error: entry.error,
@@ -166,18 +164,14 @@ export class TerminalService {
 	 * nothing is sent while nothing happens). Output already waiting answers at once, so a viewer behind a `budget`
 	 * keeps reading without pause.
 	 */
-	async list(
-		owner: string,
-		operation: Extract<TerminalOperation, { action: "list" }>,
-		options: PtyOptions,
-	): Promise<TerminalSnapshot[]> {
+	async wait(owner: string, operation: Extract<TerminalOperation, { action: "list" }>): Promise<void> {
 		const waitMs = operation.waitMs ?? 0;
 		const pending = () =>
 			[...this.#entries].some(
 				([id, entry]) =>
 					entry.owner === owner &&
 					operation.offsets?.[id] !== undefined &&
-					entry.base + entry.output.length > (operation.offsets[id] ?? 0),
+					entry.offset > (operation.offsets[id] ?? 0),
 			);
 		const changed = this.#changed;
 		const deadline = Date.now() + waitMs;
@@ -191,14 +185,16 @@ export class TerminalService {
 				this.#waiters.delete(resolve);
 			});
 		}
-		return this.request(owner, operation, options);
 	}
 
-	dispose(owner?: string): void {
+	dispose(owner?: string): string[] {
+		const removed: string[] = [];
 		for (const [id, entry] of this.#entries) {
 			if (owner !== undefined && entry.owner !== owner) continue;
 			if (!entry.exited) entry.pty.kill();
 			this.#entries.delete(id);
+			removed.push(id);
 		}
+		return removed;
 	}
 }

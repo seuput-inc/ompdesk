@@ -46,10 +46,8 @@ describe("stock terminal lifecycle", () => {
 		expect(processes[0].pty.startArgv).toHaveBeenCalledWith({ ...options, cols: 90, rows: 30 }, expect.any(Function));
 		processes[0].chunk(null, "ompdesk-term\r\n");
 		const [snapshot] = service.request("tab", { action: "list" }, options);
-		expect(snapshot.output).toBe("ompdesk-term\r\n");
-		expect(
-			service.request("tab", { action: "list", offsets: { [session.id]: snapshot.offset } }, options)[0].output,
-		).toBe("");
+		expect(snapshot.delta).toBe("ompdesk-term\r\n");
+		expect(service.request("tab", { action: "list" }, options)[0].delta).toBeUndefined();
 		service.request("tab", { action: "write", id: session.id, data: "echo hello\r" }, options);
 		expect(processes[0].pty.write).toHaveBeenCalledWith("echo hello\r");
 		service.request("tab", { action: "resize", id: session.id, cols: 100, rows: 40 }, options);
@@ -87,7 +85,7 @@ describe("stock terminal lifecycle", () => {
 		);
 		processes[1].chunk(null, "hello");
 		service.request("one", { action: "clear", id: one.id }, options);
-		expect(service.request("one", { action: "list" }, options)[0].output).toBe("");
+		expect(service.request("one", { action: "list" }, options)[0]).toMatchObject({ offset: 5, delta: undefined });
 	});
 	it("restarts and closes an exited stock PTY without calling its invalid kill operation", async () => {
 		const { service, processes } = fixture();
