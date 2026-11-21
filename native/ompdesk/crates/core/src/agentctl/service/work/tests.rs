@@ -788,8 +788,9 @@ async fn a_merged_clean_child_is_no_review_item_but_a_conflict_one_is() {
 async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
     let mut state = family();
     state["tabs"][2]["status"] = json!("asleep");
+    state["tabs"][2]["cwd"] = json!("/worktree/asleep");
     state["closedChildren"] = json!([
-        { "path": "/s/old.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Old", "cwd": "/repo", "closedAt": 2000 },
+        { "path": "/s/old.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Old", "cwd": "/worktree/closed", "closedAt": 2000 },
         { "path": "/s/older.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Older", "cwd": "/repo", "closedAt": 500 },
         { "path": "/s/a.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Open still", "cwd": "/repo", "closedAt": 3000 },
     ]);
@@ -839,10 +840,12 @@ async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
     assert_eq!(members[0]["unlanded"]["target"], "main");
     // Asleep: read from its saved file, and no git read.
     assert_eq!(members[1]["key"], "/s/b.jsonl");
+    assert_eq!(members[1]["edits"]["cwd"], "/worktree/asleep");
     assert_eq!(members[1]["edits"]["messages"].as_array().unwrap().len(), 2);
     assert_eq!(members[1]["unlanded"], Value::Null);
     // Closed since `since`: its last turn only; a close before it, or one still open, is left out.
     assert_eq!(members[2]["key"], "/s/old.jsonl");
+    assert_eq!(members[2]["edits"]["cwd"], "/worktree/closed");
     assert_eq!(members[2]["edits"]["startedAt"], 100);
     assert_eq!(members[2]["edits"]["endedAt"], 102);
     let before = *stored_reads.lock().unwrap();
@@ -858,6 +861,33 @@ async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[tokio::test]
+async fn stored_edits_resolve_relative_paths_in_the_owner_not_the_session_index() {
+    let row = super::super::types::StoredSession {
+        path: "/s/asleep.jsonl".into(),
+        cwd: "/original".into(),
+        ..Default::default()
+    };
+    let (control, _) = rig(
+        219,
+        family(),
+        Caps::default(),
+        main_of(|method, args| {
+            (method == "storedMessages" && args["session"]["cwd"] == "/original").then(|| {
+                json!([{ "role": "assistant", "content": [
+                    { "type": "toolCall", "name": "edit", "arguments": { "path": "src/app.ts" } }
+                ] }])
+            })
+        }),
+    );
+    let edits = control.stored_edits(&row, "/current").await.unwrap();
+    assert_eq!(edits["cwd"], "/current");
+    assert_eq!(
+        edits["messages"][0]["content"][0]["arguments"]["path"],
+        "src/app.ts"
     );
 }
 

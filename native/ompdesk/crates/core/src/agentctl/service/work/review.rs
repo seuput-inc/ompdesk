@@ -78,13 +78,13 @@ pub(super) fn cost_split_of(providers: &Map<String, Value>) -> CostSplit {
 }
 
 impl AgentControl {
-    async fn stored_edits(&self, row: &StoredSession) -> R<Value> {
+    pub(super) async fn stored_edits(&self, row: &StoredSession, cwd: &str) -> R<Value> {
         let messages = self
             .host
             .port()
             .ask_raw("storedMessages", &json!({ "session": row }))
             .await?;
-        saved_edits(&messages, &row.cwd).map_err(|error| Fail::Other {
+        saved_edits(&messages, cwd).map_err(|error| Fail::Other {
             message: format!("storedMessages: main answered {error}"),
             code: Some("port_answer".into()),
         })
@@ -361,7 +361,7 @@ impl AgentControl {
                                 if ready {
                                     ask(tab, "get_turn_edits", is_turn_edits).await
                                 } else if let Some(saved) = &saved {
-                                    self.stored_edits(saved).await.ok()
+                                    self.stored_edits(saved, &tab.cwd).await.ok()
                                 } else {
                                     None
                                 }
@@ -472,7 +472,7 @@ impl AgentControl {
                 device: child.device.clone(),
                 ..StoredSession::default()
             };
-            let read = self.stored_edits(&row).await;
+            let read = self.stored_edits(&row, &child.cwd).await;
             if read.is_err() {
                 self.mem().closed_turns.remove(&place);
             }
