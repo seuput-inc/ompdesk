@@ -76,10 +76,6 @@ pub fn signal_name(signal: i32) -> String {
     format!("SIG{signal}")
 }
 
-fn command(start: &Start) -> Command {
-    omp_command(&start.bin, &start.args, start.shell, &start.cwd, &start.env)
-}
-
 pub(crate) fn omp_command(
     bin: &str,
     args: &[impl AsRef<str>],
@@ -146,7 +142,7 @@ pub fn start(
     timing: Timing,
     on_exit: impl FnOnce(Exit) + Send + 'static,
 ) -> Result<Started, String> {
-    let mut cmd = command(start);
+    let mut cmd = omp_command(&start.bin, &start.args, start.shell, &start.cwd, &start.env);
     #[cfg(windows)]
     let (mut child, priority_error) = {
         // A .cmd can start Bun immediately. Set the class before either process runs.
@@ -355,8 +351,14 @@ mod unix_tests {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             shell: false,
         };
-        let output = command(&how).output().await.unwrap();
-        let text = String::from_utf8_lossy(&output.stdout);
+        let mut child = start(&how, Timing::default(), |_| {}).unwrap();
+        let mut text = String::new();
+        child.stdout.read_to_string(&mut text).await.unwrap();
+        child
+            .confirmed_exit
+            .wait_for(|exited| *exited)
+            .await
+            .unwrap();
         let ids: Vec<&str> = text.split_whitespace().collect();
         assert_eq!(ids.len(), 2, "{text}");
         assert_eq!(ids[0], ids[1], "the omp does not lead its group: {text}");
