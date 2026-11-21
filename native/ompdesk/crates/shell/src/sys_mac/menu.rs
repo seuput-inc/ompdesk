@@ -117,6 +117,12 @@ pub fn system_scale() -> f64 {
 
 fn selector_of(role: &str) -> Option<Sel> {
     Some(match role {
+        "undo" => sel!(undo:),
+        "redo" => sel!(redo:),
+        "cut" => sel!(cut:),
+        "copy" => sel!(copy:),
+        "paste" => sel!(paste:),
+        "selectAll" => sel!(selectAll:),
         "about" => sel!(orderFrontStandardAboutPanel:),
         "hide" => sel!(hide:),
         "hideOthers" => sel!(hideOtherApplications:),
