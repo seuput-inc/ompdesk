@@ -1,5 +1,5 @@
 /**
- * A session that waits on another session is not woken by stock's stop-time todo reminder (rules: ./todo-wait-core.ts).
+ * Skip stock's stop-time reminder when every unfinished item is written as waiting (todo-wait-core.ts).
  *
  * Stock's `TodoTracker.checkCompletion` has no hook and no setting for this; it decides by what it can read (the open
  * items, a pending async job, a closing question). The one seam is the order of its synchronous start: it reads the
@@ -12,16 +12,12 @@
  * Feature-detected: an omp without either method keeps stock's reminder (`todoWait` in capabilities.ts).
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { MAIL_CUSTOM_TYPE } from "./agent-control-contracts";
 import { hasPath } from "./capabilities";
 import { guard } from "./health";
 import * as trackerModule from "./omp/pi-coding-agent/session/todo-tracker";
-import { type Arrival, controlCall, type PhaseLike, WaitBook, waitReason } from "./todo-wait-core";
+import { onlyWaitingItems, type PhaseLike } from "./todo-wait-core";
 
 const ORIGINAL = Symbol.for("ompdesk.todo-wait.original");
-
-/** The main session's replies owed; the main agent only (an ompdesk_session_* call is the main agent's). */
-const book = new WaitBook();
 
 /** True during the synchronous start of one `checkCompletion` call. */
 let checking = false;
@@ -78,66 +74,20 @@ function patchSession(pi: ExtensionAPI): void {
 		const active = names.call(this);
 		if (!checking) return active;
 		checking = false;
-		const reason = waitReason({
-			book: this === mainSession(pi) ? book : undefined,
-			phases: this.getTodoPhases?.() ?? [],
-		});
-		if (!reason) return active;
-		pi.logger.debug("gui-bridge: todo reminder skipped, the session waits", { reason });
+		if (!onlyWaitingItems(this.getTodoPhases?.() ?? [])) return active;
+		pi.logger.debug("gui-bridge: todo reminder skipped, all open items are waiting");
 		return active.filter(name => name !== "todo");
 	};
-}
-
-function arrival(message: {
-	role?: unknown;
-	customType?: unknown;
-	content?: unknown;
-	details?: unknown;
-}): Arrival | undefined {
-	if ((message.role === "custom" || message.role === "hookMessage") && message.customType === MAIL_CUSTOM_TYPE) {
-		const details = (
-			typeof message.details === "object" && message.details !== null ? message.details : {}
-		) as Record<string, unknown>;
-		const text = (value: unknown) => (typeof value === "string" ? value : undefined);
-		return { kind: "mail", from: text(details.from), title: text(details.fromTitle), mailKind: text(details.kind) };
-	}
-	if (message.role !== "user") return undefined;
-	const content = message.content;
-	const text =
-		typeof content === "string"
-			? content
-			: Array.isArray(content)
-				? content
-						.map(block => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
-						.join("")
-				: "";
-	return { kind: "user", text };
 }
 
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: ExtensionAPI): void {
 	if (!patchTracker(pi)) return;
 	patchSession(pi);
-	pi.on("session_start", (_event, ctx) => {
-		if (ctx?.agent?.kind === "main") book.clear();
-		patchSession(pi);
-	});
+	pi.on("session_start", () => patchSession(pi));
 	pi.on("before_agent_start", () => {
 		patchSession(pi);
 	});
-	pi.on("tool_result", (event, ctx) => {
-		if (ctx.agent.kind !== "main") return;
-		const text = event.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
-		const call = controlCall({ toolName: event.toolName, input: event.input, isError: event.isError, text });
-		if (call) book.noteCall(event.toolCallId, call);
-	});
-	const arrived = (event: { message: Parameters<typeof arrival>[0] }, ctx: { agent: { kind?: string } }) => {
-		if (ctx.agent.kind !== "main") return;
-		const note = arrival(event.message);
-		if (note) book.noteArrival(note);
-	};
-	pi.on("message_start", arrived);
-	pi.on("message_end", arrived);
 }
 
 /** Hook only; `capabilities` reports the feature when an internal it needs is gone. */
