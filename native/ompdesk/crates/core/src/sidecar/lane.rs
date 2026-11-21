@@ -1673,25 +1673,33 @@ impl Lane {
     // formal/tab-session `Observe`, `Switch(f)`, `NewSession` (findings F1, F2; CORRESPONDENCE A5).
     fn observe(&mut self, command: &CommandInfo, response: &str) {
         #[derive(Deserialize)]
-        struct Response {
-            success: Option<Value>,
-            data: Option<Box<RawValue>>,
+        struct Response<'a> {
+            success: Option<bool>,
+            #[serde(borrow)]
+            data: Option<&'a RawValue>,
         }
         let Ok(response) = serde_json::from_str::<Response>(response) else {
             return;
         };
-        if response.success != Some(Value::Bool(true)) {
+        if response.success != Some(true) {
             return;
         }
-        let data = response
-            .data
-            .as_ref()
-            .and_then(|data| serde_json::from_str::<Value>(data.get()).ok());
         if command.ty == "get_state" {
-            let Some(data @ (Value::Object(_) | Value::Array(_))) = data else {
-                return;
+            use std::collections::BTreeMap;
+            let Some(raw) = response.data else { return };
+            // Like JSON.parse, duplicate keys keep the last value; arrays have no named identity fields.
+            let fields = match raw.get().as_bytes().first() {
+                Some(b'{') => {
+                    let Ok(map) = serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get())
+                    else {
+                        return;
+                    };
+                    map
+                }
+                Some(b'[') => Default::default(),
+                _ => return,
             };
-            let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
+            let text = |key: &str| serde_json::from_str::<String>(fields.get(key)?.get()).ok();
             let next = Identity {
                 session_id: text("sessionId"),
                 session_file: text("sessionFile"),
@@ -1711,7 +1719,9 @@ impl Lane {
             // Stock's answer names no file, and the next get_state may come after a crash: the tab is on the session it
             // asked for, or on a new one stock has not named yet (formal/tab-session F2). A fork, branch or handoff
             // keeps the session it came from until get_state names the copy (formal/tab-session CORRESPONDENCE A5).
-            let cancelled = data
+            let cancelled = response
+                .data
+                .and_then(|data| serde_json::from_str::<Value>(data.get()).ok())
                 .as_ref()
                 .and_then(|data| data.get("cancelled"))
                 .is_some_and(|cancelled| cancelled == &Value::Bool(true));

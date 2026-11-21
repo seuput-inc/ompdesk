@@ -9,6 +9,7 @@ import { RM_TEMP, writeFakeOmp } from "../test-fake-omp";
 it("edits the chip the window saw on this spawn, without intercepting direct stock commands", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "queue-wire-"));
 	const parameters = JSON.parse(`${'{"type":"array","items":'.repeat(160)}{"type":"string"}${"}".repeat(160)}`);
+	const sessionFile = join(dir, "named.jsonl");
 	const bin = await writeFakeOmp(
 		dir,
 		`
@@ -16,13 +17,17 @@ it("edits the chip the window saw on this spawn, without intercepting direct sto
 		const out = value => console.log(JSON.stringify(value));
 		const steering = ["a", "b"];
 		const parameters = ${JSON.stringify(parameters)};
+		let getStateCalls = 0;
 		out({ type: "ready", supportedProtocolVersions: [1] });
 		createInterface({ input: process.stdin }).on("line", line => {
 			const { id, type, message } = JSON.parse(line);
 			let data;
 			switch (type) {
-				case "get_state": data = { sessionId: "s", dumpTools: [{ parameters }], queuedMessages: { steering, followUp: [] } }; break;
-				case "get_queue": data = "stock"; break;
+				case "get_state":
+					getStateCalls++;
+					data = { sessionId: "s", sessionFile: ${JSON.stringify(sessionFile)}, sessionName: "Named", dumpTools: [{ parameters }], queuedMessages: { steering, followUp: [] } };
+					break;
+				case "get_queue": data = { getStateCalls }; break;
 				case "remove_queued_message": {
 					if (message === "b") {
 						out({ type: "response", command: type, id, success: false, code: "stock_refusal", error: "stock refused" });
@@ -50,6 +55,8 @@ it("edits the chip the window saw on this spawn, without intercepting direct sto
 	});
 	try {
 		const ready = Promise.withResolvers<void>();
+		const identities: unknown[] = [];
+		sc.on("session", identity => identities.push(identity));
 		sc.on("status", ({ status }) => {
 			if (status === "ready") ready.resolve();
 		});
@@ -81,7 +88,9 @@ it("edits the chip the window saw on this spawn, without intercepting direct sto
 			success: false,
 			code: "unsupported",
 		});
-		await expect(client.stock({ type: "get_queue" })).resolves.toMatchObject({ data: "stock" });
+		// One get_state at ready, one for get_queue. The edit and move need no identity refresh.
+		await expect(client.stock({ type: "get_queue" })).resolves.toMatchObject({ data: { getStateCalls: 2 } });
+		expect(identities).toEqual([{ sessionId: "s", sessionFile, sessionName: "Named" }]);
 		await expect(client.command({ type: "queue_remove", queueId: b.id })).resolves.toEqual({
 			type: "response",
 			command: "queue_remove",
