@@ -909,14 +909,14 @@ describe("a link that dropped or went silent", () => {
 		// A restarting host: its port takes the connection and answers nothing until the app is back.
 		const restarting = { on: true };
 		const handshakeStarted = Promise.withResolvers<void>();
-		const handshakeEnded = Promise.withResolvers<void>();
+		const handshakeEnded = Promise.withResolvers<number>();
 		const held = new Set<Socket>();
 		const relay = await listenFake(inbound => {
 			held.add(inbound);
 			inbound.on("error", () => {});
 			if (restarting.on) {
 				inbound.once("data", () => handshakeStarted.resolve());
-				inbound.once("close", () => handshakeEnded.resolve());
+				inbound.once("close", () => handshakeEnded.resolve(performance.now()));
 				return;
 			}
 			const outbound = connect({ host: LOOPBACK, port: rig.port });
@@ -931,13 +931,16 @@ describe("a link that dropped or went silent", () => {
 		});
 		const { lines, log } = linkLog();
 		const remote = client(a, { ...paired, addresses: [`${LOOPBACK}:${relay.port}`] }, undefined, log);
+		const dialStarted = performance.now();
 		remote.connect();
 		await handshakeStarted.promise;
 		await advanceCoreTimers(1_000); // The held dial is now stale; no backoff timer has fired.
 		restarting.on = false;
 
 		remote.wake("peer");
-		await Promise.all([handshakeEnded.promise, untilState(remote, "online")]);
+		const [closedAt] = await Promise.all([handshakeEnded.promise, untilState(remote, "online")]);
+		// A queued peer retry also runs after the native 10 s handshake timeout. Only an earlier close proves cancellation.
+		expect(closedAt - dialStarted).toBeLessThan(10_000);
 
 		expect(lines.filter(line => line.message === "attempt").map(line => line.details.trigger)).toEqual([
 			"start",
