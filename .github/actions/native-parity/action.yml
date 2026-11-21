@@ -18,6 +18,7 @@ runs:
         src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts
         src/main/session-index.test.ts
+        src/main/session-store-enrichment.test.ts
         src/main/memory-sampler.test.ts
         src/main/model-setup-runner.test.ts
         src/main/schedules.test.ts

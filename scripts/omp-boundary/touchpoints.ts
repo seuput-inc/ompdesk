@@ -1331,7 +1331,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-utils",
 			"system/title-system.md",
 		],
-		tests: ["src/main/bridge-auto-title-stock.test.ts", "src/main/stock-helper-auto-title.test.ts"],
+		tests: ["src/main/bridge-auto-title-stock.test.ts", "src/main/session-store-enrichment.test.ts"],
 	},
 	{
 		id: "B43",
