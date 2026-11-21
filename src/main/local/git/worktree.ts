@@ -140,19 +140,11 @@ export async function createWorktree(
 		throw new LocalCommandError(`The folder "${baseCwd}" does not exist.`, "file_not_found");
 	}
 	// The repository, its main checkout, and the commit a new branch starts at (`HEAD`, `default`, or a ref it has).
-	const { primary, startPoint } = await worktreeGit<{ primary: string; startPoint: string }>(
-		"git.worktreePlan",
-		{ cwd: baseCwd, baseRef: input.baseRef },
-		3,
-	);
-	// The main checkout as the caller spells it when it is that directory: git answers with the long form of a Windows
-	// 8.3 path (C:\Users\RUNNER~1\…), and the caller's tabs and sessions compare against the form it gave.
-	const realOf = (dir: string) =>
-		fs.realpath(dir).then(real => (process.platform === "win32" ? real.toLowerCase() : real));
-	const mainCheckout =
-		(await realOf(baseCwd).catch(() => null)) === (await realOf(primary).catch(() => undefined))
-			? path.resolve(baseCwd)
-			: primary;
+	const { primary, startPoint, mainCheckout } = await worktreeGit<{
+		primary: string;
+		startPoint: string;
+		mainCheckout: string;
+	}>("git.worktreePlan", { cwd: baseCwd, checkoutSpelling: path.resolve(baseCwd), baseRef: input.baseRef }, 3);
 	const location = await stockWorktreeLocation(bridge, primary);
 
 	const made = await withRepoLock(primary, async (): Promise<RpcWorktreeCreateResult> => {

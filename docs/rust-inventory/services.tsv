@@ -198,7 +198,7 @@ src/main/local/git/unlanded.ts	native-client	Delegates the whole comparison to t
 src/main/local/git/worktree-seed.test.ts	exception	Tests include patterns, ignored and tracked file handling and the worktree seeding size budget.
 src/main/local/git/worktree-seed.ts	port	Executes setup and merge hook scripts with a timeout, writes their output logs and combines setup results with Rust seeding results.
 src/main/local/git/worktree.test.ts	exception	Tests canonical path containment and refusal to remove the main checkout, root, missing or misleading path.
-src/main/local/git/worktree.ts	port	Validates branch sources, searches numbered names and creates directories. Rust checks containment and registration and returns the actual removal target with its repository lock key.
+src/main/local/git/worktree.ts	port	Validates branch sources, searches numbered names and creates directories. git.worktreePlan preserves the caller's primary checkout spelling. Git absent: gitRunner throws before heldAnswer sends git.worktreeRemoval (exec.ts); runLocalCommand reports “git is not installed or not on PATH” without a code even for an outside path. No removal plan, lock or deletion executes. With Git available an outside target still fails worktree_outside_root.
 src/main/local/image-blobs.test.ts	exception	Tests restoration of stock blob references on subagent and bridge transcript reads.
 src/main/local/image-blobs.ts	port	Identifies image payload sites, hashes large inline payloads into references and resolves referenced bytes for transcripts.
 src/main/local/index.test.ts	exception	Tests duplicate local handler refusal and which GUI or stock commands the registry claims.

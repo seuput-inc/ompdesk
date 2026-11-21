@@ -66,13 +66,19 @@ async fn add_worktree(
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     primary: String,
+    main_checkout: String,
     start_point: String,
 }
 
 /// Before a worktree is made: `cwd` is in a repository, its main checkout, and the start point `base_ref` names:
 /// `HEAD` (the default), `default` (the remote's default branch, else HEAD), or any branch, tag or commit the
 /// repository resolves. A ref that resolves to no commit, or reads as a git option, is refused.
-pub async fn plan(git: &Git, cwd: &str, base_ref: Option<&str>) -> Result<Plan, Fault> {
+pub async fn plan(
+    git: &Git,
+    cwd: &str,
+    checkout_spelling: String,
+    base_ref: Option<&str>,
+) -> Result<Plan, Fault> {
     if read::repo_root(git, cwd).await?.is_none() {
         return Err(refuse("not_a_repo", format!("Not a git repository: {cwd}")));
     }
@@ -115,7 +121,21 @@ pub async fn plan(git: &Git, cwd: &str, base_ref: Option<&str>) -> Result<Plan, 
             base.to_owned()
         }
     };
+    // Node's path.resolve spelling is the identity held by tabs (notably a Windows 8.3 path).
+    let (given, main) = tokio::join!(disk::real(cwd), disk::real(&primary));
+    let same = match (given, main) {
+        (Some(a), Some(b)) if cfg!(windows) => {
+            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        }
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
     Ok(Plan {
+        main_checkout: if same {
+            checkout_spelling
+        } else {
+            primary.clone()
+        },
         primary,
         start_point,
     })

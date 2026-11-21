@@ -183,6 +183,7 @@ struct OriginParams {
 struct PlanParams {
     git: Runner,
     cwd: String,
+    checkout_spelling: String,
     base_ref: Option<String>,
 }
 
@@ -710,9 +711,14 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.worktreePlan", |call| {
         Box::pin(async move {
-            let PlanParams { git, cwd, base_ref } = call.params()?;
+            let PlanParams {
+                git,
+                cwd,
+                checkout_spelling,
+                base_ref,
+            } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&worktree::plan(&git, &cwd, base_ref.as_deref()).await?)
+            Reply::json(&worktree::plan(&git, &cwd, checkout_spelling, base_ref.as_deref()).await?)
         })
     });
     registry.add("git.worktreeAdd", |call| {
