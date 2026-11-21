@@ -243,7 +243,7 @@
 			"covers": [
 				"native/ompdesk/crates/core/src/stock/mod.rs"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "df960464e5655ccbfbe378032bd03732d51c8edd",
 			"verifySkill": ".omp/skills/stock-lane-verify/SKILL.md"
 		},
 		{
