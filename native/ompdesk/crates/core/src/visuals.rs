@@ -1,4 +1,6 @@
-//! Local file reads for `gui_visualize` and `omp-visual:`. The host selects the record and version.
+//! `gui_visualize` file admission, snapshot history and `omp-visual:` serving.
+
+mod store;
 
 use std::path::{Component, Path, PathBuf};
 
@@ -45,26 +47,23 @@ fn mime(path: &Path, asset: bool) -> Option<&'static str> {
     })
 }
 
-#[derive(Deserialize)]
-struct Source {
-    cwd: String,
-    raw: String,
-    path: PathBuf,
-}
-
-async fn source(p: Source) -> Result<Reply, Fault> {
+async fn source(
+    cwd: &str,
+    raw: &str,
+    path: &Path,
+) -> Result<(PathBuf, PathBuf, String, Vec<u8>), Fault> {
     let fail = |message| Fault::new("visual", message);
-    let root = disk::real(&p.cwd)
+    let root = disk::real(cwd)
         .await
-        .ok_or_else(|| fail(format!("The working directory is unavailable: {}", p.cwd)))?;
-    let target = disk::real(p.path)
+        .ok_or_else(|| fail(format!("The working directory is unavailable: {cwd}")))?;
+    let target = disk::real(path)
         .await
-        .ok_or_else(|| fail(format!("No such file: {}", p.raw)))?;
+        .ok_or_else(|| fail(format!("No such file: {raw}")))?;
     let entry = target
         .strip_prefix(&root)
         .ok()
         .filter(|entry| !entry.as_os_str().as_encoded_bytes().starts_with(b".."))
-        .ok_or_else(|| fail(format!("{} is outside the working directory", p.raw)))?;
+        .ok_or_else(|| fail(format!("{raw} is outside the working directory")))?;
     let io = |error, syscall| {
         let error = NodeError::new(&error, syscall, target.to_str());
         Fault::new(error.code, error.message)
@@ -73,14 +72,14 @@ async fn source(p: Source) -> Result<Reply, Fault> {
         .await
         .map_err(|e| io(e, "stat"))?;
     if !stat.is_file() {
-        return Err(fail(format!("{} is not a file", p.raw)));
+        return Err(fail(format!("{raw} is not a file")));
     }
     if mime(&target, false).is_none() {
         return Err(fail(
             "visualize shows .html, .htm, .svg, .txt and image files".into(),
         ));
     }
-    let too_large = || fail(format!("{} is larger than 5 MB", p.raw));
+    let too_large = || fail(format!("{raw} is larger than 5 MB"));
     if stat.len() > MAX_FILE {
         return Err(too_large());
     }
@@ -95,10 +94,10 @@ async fn source(p: Source) -> Result<Reply, Fault> {
     if bytes.len() as u64 > MAX_FILE {
         return Err(too_large());
     }
-    let entry = entry.to_string_lossy();
+    let entry = entry.to_string_lossy().into_owned();
     #[cfg(windows)]
     let entry = entry.replace('\\', "/");
-    Ok(Reply::json(&json!({"target": target, "root": root, "entry": entry}))?.with_bin(bytes))
+    Ok((target, root, entry, bytes))
 }
 
 #[derive(Deserialize)]
@@ -133,7 +132,7 @@ impl Request {
     async fn resolve(&self) -> Option<(PathBuf, &'static str)> {
         match &self.location {
             Location::Snapshot { dir, id, file } => {
-                if Path::new(file).file_name()?.to_str()? != file {
+                if !store::valid_id(id) || Path::new(file).file_name()?.to_str()? != file {
                     return None;
                 }
                 let folder = disk::real(dir).await?.join(id);
@@ -193,9 +192,7 @@ async fn file(p: Request) -> Result<Reply, Fault> {
 }
 
 pub(crate) fn register(registry: &mut Registry) {
-    registry.add("visual.source", |call| {
-        Box::pin(async move { source(call.params()?).await })
-    });
+    store::register(registry);
     registry.add("visual.file", |call| {
         Box::pin(async move { file(call.params()?).await })
     });

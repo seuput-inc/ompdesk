@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -183,6 +184,55 @@ describe("VisualStore", () => {
 		expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
 		await fs.rm(path.join(root, "visuals", record.id, "v1.png"));
 		expect((await store.serve(url)).status).toBe(404);
+	});
+
+	it("continues a pre-native history, retaining user labels and bytes across pruning and restart", async () => {
+		const dir = path.join(root, "visuals");
+		const id = "abcdef1234567890";
+		const label = "사용자가 붙인 제목 <&>";
+		const folder = path.join(dir, id);
+		const html = (n: number) => `<p data-choice="한글">수정 ${n} 🌱</p>\r\n`;
+		await fs.mkdir(folder, { recursive: true });
+		const versions = await Promise.all(
+			Array.from({ length: 20 }, async (_, index) => {
+				const version = index + 1;
+				const file = `v${version}.html`;
+				await fs.writeFile(path.join(folder, file), html(version));
+				return {
+					version,
+					createdAt: version,
+					file,
+					hash: createHash("sha256").update(html(version)).digest("hex"),
+				};
+			}),
+		);
+		const original = {
+			id,
+			label,
+			kind: "inline",
+			target: "",
+			cwd: project,
+			root: folder,
+			entry: "index.html",
+			createdAt: 1,
+			updatedAt: 20,
+			versions,
+		};
+		await fs.writeFile(path.join(dir, "history.json"), JSON.stringify([original]));
+		expect(await store.addToTab("tab", id)).toBe(true);
+		expect(await store.open("tab", project, { label, html: html(20) })).toMatchObject({ added: false, version: 20 });
+		const changed = await Promise.all([21, 22].map(n => store.open("tab", project, { visual: id, html: html(n) })));
+		expect(changed.map(opened => opened.version)).toEqual([21, 22]);
+		await expect(fs.stat(path.join(folder, "v2.html"))).rejects.toMatchObject({ code: "ENOENT" });
+		await stopCore();
+		const reopened = new VisualStore(dir);
+		expect(await reopened.list()).toEqual([
+			expect.objectContaining({ id, label, cwd: project, createdAt: 1, versions: 20 }),
+		]);
+		for (const version of [3, 20, 21, 22]) {
+			const response = await reopened.serve(reopened.url(id, version) ?? "");
+			expect(await response.text()).toBe(html(version));
+		}
 	});
 
 	it("keeps inline HTML by label, web addresses without versions, and history across instances", async () => {
