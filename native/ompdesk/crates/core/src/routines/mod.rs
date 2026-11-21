@@ -3,8 +3,7 @@
 //! IMAP client; this module answers what a trigger reads and says.
 //!
 //! - `routines.github`: one read of one kind of a GitHub trigger (`github.rs`), gh run as main's `ghRunner` says.
-//! - `routines.filesScan`, `routines.filesChanged`: a files trigger's listing and what changed while OMPdesk was
-//!   closed (`files.rs`).
+//! - `routines.filesScan`: a files trigger's listing and what changed while OMPdesk was closed (`files.rs`).
 //! - The git trigger's two reads are `git.routineHead` and `git.routineCommits` (`git/triggers.rs`), whose line is
 //!   `text.rs`' `describe_commits`.
 //!
@@ -47,7 +46,8 @@ struct GithubParams {
 struct GithubAnswer {
     state: github::State,
     /// What to keep for the next launch (only after a read that did not fail).
-    mark: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mark: Option<Value>,
     lines: Vec<String>,
     error: Option<String>,
 }
@@ -76,18 +76,8 @@ impl github::Api for GhApi<'_> {
 #[derive(Deserialize)]
 struct ScanParams {
     path: String,
-    /// Folder names never listed (`IGNORED_DIRS`).
     ignored: Vec<String>,
-    /// Files a listing holds at most (`FILES_LISTING_MAX`).
-    max: usize,
-}
-
-#[derive(Deserialize)]
-struct ChangedParams {
-    /// The mark the last launch left (JSON from disk), absent when none.
     mark: Option<Value>,
-    /// This launch's first listing, as `routines.filesScan` answered it.
-    listing: Option<files::Listing>,
 }
 
 pub fn register(registry: &mut Registry) {
@@ -112,7 +102,7 @@ pub fn register(registry: &mut Registry) {
                 Err(message) => (Vec::new(), Some(message)),
             };
             Reply::json(&GithubAnswer {
-                mark: state.mark(),
+                mark: error.is_none().then(|| state.mark()),
                 state,
                 lines,
                 error,
@@ -121,19 +111,15 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("routines.filesScan", |call| {
         Box::pin(async move {
-            let ScanParams { path, ignored, max } = call.params()?;
-            let listing = tokio::task::spawn_blocking(move || files::scan(&path, &ignored, max))
+            let ScanParams {
+                path,
+                ignored,
+                mark,
+            } = call.params()?;
+            let scan = tokio::task::spawn_blocking(move || files::scan(&path, &ignored, mark))
                 .await
                 .map_err(|error| Fault::new("internal", error.to_string()))??;
-            Reply::json(&listing)
-        })
-    });
-    registry.add("routines.filesChanged", |call| {
-        Box::pin(async move {
-            let ChangedParams { mark, listing } = call.params()?;
-            let names = files::parse_mark(mark.as_ref())
-                .map(|before| files::changed_names(before.as_ref(), listing.as_ref()));
-            Reply::json(&names)
+            Reply::json(&scan)
         })
     });
 }

@@ -26,16 +26,8 @@
 import { GITHUB_EVENT_KINDS, GITHUB_POLL_MINUTES, GITHUB_REPO, type GithubEventKind } from "../../shared/schedules";
 import { failureReporter, type RoutineSource, type SourceContext } from "./source";
 
-/** One read of one kind: the lines of what is new, where the trigger stands now and what the next launch reads. */
-export interface GithubRead {
-	/** The core's, handed back with the next read. */
-	state: unknown;
-	/** Saved as the trigger's mark after a read that did not fail. */
-	mark: unknown;
-	lines: string[];
-	/** gh's or GitHub's failure, in words without a token; `state` still moved as far as the read went. */
-	error: string | null;
-}
+/** A failed read can advance the in-memory state, but cannot replace the last launch's mark. */
+export type GithubRead = { state: unknown; lines: string[] } & ({ error: null; mark: unknown } | { error: string });
 
 /** Where a read starts: the last read's `state`, or before the first answer the last launch's mark. */
 export type GithubFrom = { state: unknown } | { mark: unknown };

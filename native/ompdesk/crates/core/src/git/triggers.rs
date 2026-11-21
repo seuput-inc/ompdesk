@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::Value;
 
 use super::run::Git;
 use crate::fs::order::js_trim;
@@ -60,14 +61,54 @@ pub async fn branch_status(
     }
 }
 
-pub async fn routine_head(git: &Git, repo: &str, branch: &str) -> Result<Option<String>, Fault> {
+#[derive(Serialize)]
+pub(super) struct HeadMark {
+    head: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(super) enum HeadRead<'a> {
+    Missing {
+        mark: Option<HeadMark>,
+    },
+    Unchanged,
+    Changed {
+        mark: HeadMark,
+        from: Option<&'a str>,
+    },
+}
+
+pub(super) async fn routine_head<'a>(
+    git: &Git,
+    repo: &str,
+    branch: &str,
+    mark: &'a Value,
+) -> Result<HeadRead<'a>, Fault> {
     let reference = format!("refs/heads/{branch}");
     let output = git
         .raw(repo, &["rev-parse", "--verify", "--quiet", &reference])
         .await?;
+    let baseline = mark.get("head");
     match output.code {
-        0 => Ok(Some(js_trim(&output.text()).to_owned())),
-        1 => Ok(None),
+        0 => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let head = js_trim(&text);
+            let before = baseline.and_then(Value::as_str);
+            if before == Some(head) {
+                return Ok(HeadRead::Unchanged);
+            }
+            Ok(HeadRead::Changed {
+                mark: HeadMark {
+                    head: Some(head.to_owned()),
+                },
+                from: before.filter(|s| !s.is_empty()),
+            })
+        }
+        1 => Ok(HeadRead::Missing {
+            mark: (!matches!(baseline, Some(Value::Null | Value::String(_))))
+                .then_some(HeadMark { head: None }),
+        }),
         code => {
             let stderr = js_trim(&output.stderr);
             Err(Fault::new(

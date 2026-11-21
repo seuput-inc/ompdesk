@@ -21,7 +21,7 @@
 import type { Schedule, ScheduleEvent, SchedulesState } from "../../shared/schedules";
 import type { ScheduleService } from "../schedules";
 import { createEmailSource, type MailPort } from "./email";
-import { type ChangedSince, createFilesSource, type ScanPath, type WatchPath } from "./files";
+import { createFilesSource, type ScanPath, type WatchPath } from "./files";
 import { createGitSource, type GitPort } from "./git";
 import { createGithubSource, type GithubPort } from "./github";
 import type { TriggerMarks } from "./marks";
@@ -39,8 +39,6 @@ export interface RoutineTriggerDeps {
 	github: GithubPort;
 	watch: WatchPath;
 	scan: ScanPath;
-	/** What changed under a files trigger's path while OMPdesk was closed. */
-	filesChanged: ChangedSince;
 	git: GitPort;
 	sessions: SessionPorts;
 	/** The owner's mail accounts, read over IMAP (an email trigger). */
@@ -186,7 +184,6 @@ export class RoutineTriggers {
 					path: event.path,
 					watch: this.#deps.watch,
 					scan: this.#deps.scan,
-					changed: this.#deps.filesChanged,
 					context,
 				});
 			case "git":

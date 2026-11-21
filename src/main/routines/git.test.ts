@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSync, initRepo } from "../local/git/test-repos";
 import { SCHEDULE_TICK_MS } from "../schedules";
-import { createGitSource } from "./git";
+import { createGitSource, type GitPort } from "./git";
 import { gitPort } from "./ports";
 import { fakeContext } from "./test-context";
 
@@ -46,9 +46,9 @@ async function tick(): Promise<void> {
 	await settleReads();
 }
 
-const counting = {
-	head: (r: string, b: string) => track(gitPort.head(r, b)),
-	commits: (r: string, b: string, from: string, to: string) => track(gitPort.commits(r, b, from, to)),
+const counting: GitPort = {
+	head: (...args) => track(gitPort.head(...args)),
+	commits: (...args) => track(gitPort.commits(...args)),
 };
 
 describe("git source on a real repository", () => {
@@ -92,11 +92,18 @@ describe("git source on a real repository", () => {
 				return next.context.fire(detail);
 			},
 		};
-		const after = createGitSource({ repo, branch: "main", git: counting, context });
+		const git: GitPort = {
+			head: counting.head,
+			commits: (...args) => {
+				order.push("log");
+				return counting.commits(...args);
+			},
+		};
+		const after = createGitSource({ repo, branch: "main", git, context });
 		await tick();
 		await tick();
 		expect(next.fired).toEqual([`1 new commit on main: ${made} While closed`]);
-		expect(order).toEqual(["save", "fire"]);
+		expect(order).toEqual(["save", "log", "fire"]);
 		expect(next.saved.at(-1)).toEqual({ head: gitSync(repo, "rev-parse", "HEAD") });
 		after.stop();
 	});
@@ -136,13 +143,30 @@ describe("git source on a real repository", () => {
 		expect(fired).toEqual([`1 new commit on main: ${later} by someone else`]);
 	});
 
+	it("saves the new head without firing if the run ends while the head read is pending", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+		const { context, saved, fired } = fakeContext({ head: gitSync(repo, "rev-parse", "HEAD") });
+		await commit("by the routine");
+		const source = createGitSource({ repo, branch: "main", git: counting, context });
+		source.runEnded?.();
+		await tick();
+		expect(saved).toEqual([{ head: gitSync(repo, "rev-parse", "HEAD") }]);
+		expect(fired).toEqual([]);
+
+		const later = await commit("after the run");
+		await tick();
+		expect(fired).toEqual([`1 new commit on main: ${later} after the run`]);
+		source.stop();
+	});
+
 	it("fires nothing for a branch that does not exist yet or a reset back, and tells a missing branch once", async () => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
-		const { context, fired, warned } = fakeContext();
+		const { context, fired, warned, saved } = fakeContext();
 		createGitSource({ repo, branch: "later", git: counting, context });
 		await tick();
 		await tick();
 		expect(warned).toHaveLength(1);
+		expect(saved).toEqual([{ head: null }]);
 		gitSync(repo, "branch", "later");
 		await tick();
 		expect(fired).toEqual([]);
@@ -156,6 +180,31 @@ describe("git source on a real repository", () => {
 		await tick();
 		expect(fired).toHaveLength(1);
 		back.stop();
+	});
+
+	it("keeps a known head while the branch is missing and uses it when the branch returns", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+		const { context, saved, warned, fired } = fakeContext({ head: gitSync(repo, "rev-parse", "HEAD") });
+		const source = createGitSource({ repo, branch: "restored", git: counting, context });
+		await tick();
+		expect(warned).toHaveLength(1);
+		expect(saved).toEqual([]);
+		const next = await commit("restored change");
+		gitSync(repo, "branch", "restored");
+		await tick();
+		expect(saved).toEqual([{ head: gitSync(repo, "rev-parse", "HEAD") }]);
+		expect(fired).toEqual([`1 new commit on restored: ${next} restored change`]);
+		source.stop();
+	});
+
+	it("replaces a malformed persisted head with the first observation", async () => {
+		const mark = { head: 42 };
+		await expect(gitPort.head(repo, "main", mark)).resolves.toEqual({
+			kind: "changed",
+			mark: { head: gitSync(repo, "rev-parse", "HEAD") },
+			from: null,
+		});
+		await expect(gitPort.head(repo, "absent", mark)).resolves.toEqual({ kind: "missing", mark: { head: null } });
 	});
 
 	it("tells a repository git cannot read once, and fires nothing", async () => {
@@ -172,18 +221,20 @@ describe("git source on a real repository", () => {
 
 	it("reads no more after stop", async () => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
-		const head = vi.fn(async () => "abc");
-		const { context } = fakeContext();
+		const head = vi.fn(counting.head);
+		const { context, saved, fired } = fakeContext();
 		const source = createGitSource({
 			repo,
 			branch: "main",
-			git: { head, commits: async () => null },
+			git: { head, commits: counting.commits },
 			context,
 		});
-		await vi.advanceTimersByTimeAsync(0);
 		source.stop();
+		await settleReads();
 		await vi.advanceTimersByTimeAsync(SCHEDULE_TICK_MS * 3);
 		expect(head).toHaveBeenCalledTimes(1);
+		expect(saved).toEqual([]);
+		expect(fired).toEqual([]);
 		expect(vi.getTimerCount()).toBe(0);
 	});
 });

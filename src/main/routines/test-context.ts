@@ -2,8 +2,7 @@
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ChangedSince, FilesListing, ScanPath, WatchPath } from "./files";
-import { filesChanged } from "./ports";
+import type { FilesListing, ScanPath, WatchPath } from "./files";
 import type { SourceContext } from "./source";
 
 /**
@@ -36,10 +35,7 @@ interface FakeWatcher {
 	onError: (error: Error) => void;
 }
 
-/**
- * A watcher the test drives: `emit` is a file event, `fail` the watcher's error, `missing` makes the path not exist.
- * What changed since a mark is the real core's answer (`changed`); `settle` waits until every one asked has come.
- */
+/** A watcher the test drives: `emit` is a file event, `fail` its error, `missing` makes the path absent. */
 export function fakeWatch() {
 	const watchers: FakeWatcher[] = [];
 	const control: { missing: boolean; attempts: number; listing: FilesListing | null } = {
@@ -48,7 +44,7 @@ export function fakeWatch() {
 		listing: { entries: {}, complete: true },
 	};
 	/** What the path holds now, as `control.listing` says. */
-	const scan: ScanPath = async () => structuredClone(control.listing);
+	const scan: ScanPath = async () => ({ listing: structuredClone(control.listing), changed: null });
 	const watch: WatchPath = (path, onChange, onError) => {
 		control.attempts++;
 		if (control.missing) throw new Error(`ENOENT: no such file or directory, watch '${path}'`);
@@ -61,20 +57,9 @@ export function fakeWatch() {
 		};
 	};
 	const live = () => watchers.filter(item => !item.closed);
-	const asked = new Set<Promise<unknown>>();
-	const changed: ChangedSince = (mark, listing) => {
-		const answer = filesChanged(mark, listing).finally(() => asked.delete(answer));
-		asked.add(answer);
-		return answer;
-	};
-	const settle = async () => {
-		while (asked.size > 0) await Promise.allSettled([...asked]);
-	};
 	return {
 		watch,
 		scan,
-		changed,
-		settle,
 		control,
 		watchers,
 		live,

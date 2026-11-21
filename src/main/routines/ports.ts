@@ -9,15 +9,8 @@ import { homedir } from "node:os";
 import { core } from "../core/process";
 import { coreGh, coreGit } from "../local/git/exec";
 import type { SidecarPool } from "../sidecar-pool";
-import {
-	type ChangedSince,
-	FILES_LISTING_MAX,
-	type FilesListing,
-	IGNORED_DIRS,
-	type ScanPath,
-	type WatchPath,
-} from "./files";
-import type { GitPort } from "./git";
+import { type FilesScan, IGNORED_DIRS, type ScanPath, type WatchPath } from "./files";
+import type { GitHeadRead, GitPort } from "./git";
 import type { GithubPort, GithubRead } from "./github";
 import type { SessionPorts } from "./sessions";
 
@@ -45,25 +38,11 @@ export const watchPath: WatchPath = (path, onChange, onError) => {
 	return watcher;
 };
 
-/**
- * The files under `path` in name order, up to `FILES_LISTING_MAX` (the core's `routines.filesScan`); folders it cannot
- * read and files gone meanwhile are passed over. Symbolic links are listed, not followed.
- */
-export const scanPath: ScanPath = async path =>
-	(
-		await core().call<FilesListing | null>("routines.filesScan", {
-			path,
-			ignored: IGNORED_DIRS,
-			max: FILES_LISTING_MAX,
-		})
-	).result;
-
-/** What changed while OMPdesk was closed (the core's `routines.filesChanged`). */
-export const filesChanged: ChangedSince = async (mark, listing) =>
-	(await core().call<string[] | null>("routines.filesChanged", { mark, listing })).result;
+export const scanPath: ScanPath = async (path, mark) =>
+	(await core().call<FilesScan>("routines.filesScan", { path, ignored: IGNORED_DIRS, mark })).result;
 
 export const gitPort: GitPort = {
-	head: (repo, branch) => coreGit<string | null>("git.routineHead", { repo, branch }, 1),
+	head: (repo, branch, mark) => coreGit<GitHeadRead>("git.routineHead", { repo, branch, mark }, 1),
 	commits: (repo, branch, from, to) => coreGit<string | null>("git.routineCommits", { repo, branch, from, to }, 2),
 };
 

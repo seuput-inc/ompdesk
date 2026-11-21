@@ -3,7 +3,7 @@
 //! between the last launch's listing and the first one of this launch. The watch and the burst's timers stay main's.
 //!
 //! A listing is each file's name (`/`-separated, relative; `""` for the path itself when it is a file) and
-//! `<modified ms>:<size>`, at most `max` files in name order; folders named in `ignored` are passed over, folders that
+//! `<modified ms>:<size>`, capped in name order; `.git` and `node_modules` directories are passed over, folders that
 //! cannot be read and files gone meanwhile too, and a link is listed, never followed. The names are compared as the
 //! TypeScript's objects held them: `name in entries` also found `Object.prototype`'s members, and a file named
 //! `__proto__` was never kept (an assignment to it sets no property).
@@ -41,8 +41,19 @@ pub struct Listing {
     pub complete: bool,
 }
 
-/// The listing of `path`, `None` when nothing is there (`ENOENT`, `ENOTDIR`); fails as node's `lstat` did otherwise.
-pub fn scan(path: &str, ignored: &[String], max: usize) -> Result<Option<Listing>, Fault> {
+#[derive(Serialize)]
+pub(super) struct Scan {
+    listing: Option<Listing>,
+    changed: Option<Vec<String>>,
+}
+
+pub(super) fn scan(path: &str, ignored: &[String], mark: Option<Value>) -> Result<Scan, Fault> {
+    let listing = list(path, ignored)?;
+    let changed = parse_mark(mark).map(|before| changed_names(before.as_ref(), listing.as_ref()));
+    Ok(Scan { listing, changed })
+}
+
+fn list(path: &str, ignored: &[String]) -> Result<Option<Listing>, Fault> {
     let top = match disk::lstat(path) {
         Ok(top) => top,
         Err(error) if matches!(error.code, "ENOENT" | "ENOTDIR") => return Ok(None),
@@ -60,18 +71,11 @@ pub fn scan(path: &str, ignored: &[String], max: usize) -> Result<Option<Listing
         return Ok(Some(listing));
     }
     let mut count = 0;
-    walk(Path::new(path), "", ignored, max, &mut listing, &mut count);
+    walk(Path::new(path), "", ignored, &mut listing, &mut count);
     Ok(Some(listing))
 }
 
-fn walk(
-    dir: &Path,
-    prefix: &str,
-    ignored: &[String],
-    max: usize,
-    listing: &mut Listing,
-    count: &mut usize,
-) {
+fn walk(dir: &Path, prefix: &str, ignored: &[String], listing: &mut Listing, count: &mut usize) {
     let mut items = disk::entries(dir).unwrap_or_default();
     // `a.name < b.name`: UTF-16 units.
     items.sort_by(|a, b| a.name.encode_utf16().cmp(b.name.encode_utf16()));
@@ -89,11 +93,11 @@ fn walk(
         let readable = item.raw.to_str().is_some();
         if item.kind == Kind::Dir {
             if readable && !ignored.contains(&item.name) {
-                walk(&dir.join(&item.raw), &name, ignored, max, listing, count);
+                walk(&dir.join(&item.raw), &name, ignored, listing, count);
             }
             continue;
         }
-        if *count >= max {
+        if *count >= 2_000 {
             listing.complete = false;
             return;
         }
@@ -126,37 +130,30 @@ fn stamp(meta: &std::fs::Metadata, size: u64) -> String {
 }
 
 /// The last launch's listing from its mark (JSON from disk): `None` when there is none it can read.
-pub fn parse_mark(mark: Option<&Value>) -> Option<Option<Listing>> {
-    let Some(Value::Object(mark)) = mark else {
+fn parse_mark(mark: Option<Value>) -> Option<Option<Listing>> {
+    let Value::Object(mut mark) = mark? else {
         return None;
     };
-    let listing = mark.get("listing")?;
-    let fields = match listing {
+    let mut fields = match mark.remove("listing")? {
         Value::Null => return Some(None),
         Value::Object(fields) => fields,
         _ => return None,
     };
-    let Some(Value::Bool(complete)) = fields.get("complete") else {
-        return None;
-    };
-    let pairs: Vec<(String, &Value)> = match fields.get("entries")? {
-        Value::Object(entries) => entries.iter().map(|(k, v)| (k.clone(), v)).collect(),
+    let complete = fields.get("complete")?.as_bool()?;
+    let entries = match fields.remove("entries")? {
+        Value::Object(mut entries) => {
+            entries.retain(|name, stamp| name != "__proto__" && stamp.is_string());
+            entries
+        }
         Value::Array(items) => items
-            .iter()
+            .into_iter()
             .enumerate()
-            .map(|(index, item)| (index.to_string(), item))
+            .filter(|(_, stamp)| stamp.is_string())
+            .map(|(index, stamp)| (index.to_string(), stamp))
             .collect(),
         _ => return None,
     };
-    let entries = pairs
-        .into_iter()
-        .filter(|(name, stamp)| stamp.is_string() && name != "__proto__")
-        .map(|(name, stamp)| (name, stamp.clone()))
-        .collect();
-    Some(Some(Listing {
-        entries,
-        complete: *complete,
-    }))
+    Some(Some(Listing { entries, complete }))
 }
 
 /// What `entries[name]` read: an own entry, a member of `Object.prototype`, or nothing.
@@ -204,7 +201,7 @@ fn sorted(mut names: Vec<String>) -> Vec<String> {
 }
 
 /// Names added, changed or removed between two listings; `""` alone when only "something" can be said.
-pub fn changed_names(before: Option<&Listing>, after: Option<&Listing>) -> Vec<String> {
+fn changed_names(before: Option<&Listing>, after: Option<&Listing>) -> Vec<String> {
     let (before, after) = match (before, after) {
         (None, None) => return Vec::new(),
         (Some(before), Some(after)) => (before, after),
@@ -270,7 +267,7 @@ mod tests {
                 if row[0].get("undefined").is_some() && row[0].as_object().unwrap().len() == 1 {
                     None
                 } else {
-                    Some(&row[0])
+                    Some(row[0].clone())
                 };
             let after: Option<Listing> = serde_json::from_value(row[1].clone()).unwrap();
             let answer =
@@ -307,7 +304,7 @@ mod tests {
             }
             let root = dir.join(tree["root"].as_str().unwrap());
             let ignored = [".git".to_owned(), "node_modules".to_owned()];
-            let listing = scan(&root.to_string_lossy(), &ignored, 2_000).unwrap();
+            let listing = list(&root.to_string_lossy(), &ignored).unwrap();
             let expected: Option<Listing> =
                 serde_json::from_value(tree["listing"].clone()).unwrap();
             assert_eq!(listing, expected, "{name}");
@@ -325,7 +322,7 @@ mod tests {
         fs::write(base.join("inside/a"), "abc").unwrap();
         std::os::unix::fs::symlink(base.join("inside"), base.join("to-dir")).unwrap();
         std::os::unix::fs::symlink("inside/a", base.join("to-file")).unwrap();
-        let listing = scan(&base.to_string_lossy(), &[], 2_000).unwrap().unwrap();
+        let listing = list(&base.to_string_lossy(), &[]).unwrap().unwrap();
         let names: Vec<&String> = listing.entries.keys().collect();
         assert_eq!(names, ["inside/a", "to-dir", "to-file"]);
         let size = |name: &str| {

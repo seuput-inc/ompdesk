@@ -195,7 +195,7 @@ import { KeepAwakePolicy } from "./remote/keep-awake";
 import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
 import { FileMarks } from "./routines/marks";
-import { filesChanged, githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
+import { githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
 import { RoutineTriggers } from "./routines/triggers";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
 import { tailLogLines } from "./runtime-log-core";
@@ -2317,7 +2317,6 @@ app.whenReady().then(async () => {
 		github: githubPort(),
 		watch: watchPath,
 		scan: scanPath,
-		filesChanged,
 		git: gitPort,
 		sessions: sessionPorts(sidecarPool),
 		mail: { account: name => mailbox.resolve(name), read: (id, cursor) => mailbox.read(id, cursor) },
