@@ -43,10 +43,9 @@ import { z } from "zod";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
 import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
-import { codedError } from "../../shared/ipc-error-codes";
+import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	HOST_UPDATE_ACTIONS,
-	HOST_UPLOAD_MAX_BYTES,
 	type IpcScheduledRetry,
 	type RemoteOpenedTab,
 	type SessionInfo,
@@ -79,6 +78,7 @@ import type { BridgeConnectResult } from "../bridge-health";
 import { canonicalCwd } from "../canonical-cwd";
 import type { CheckoutMember } from "../checkout-peers";
 import { controlEnvFor } from "../control-socket/env";
+import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { deliverOnce } from "../delivery-ledger";
 import { discardOpenedWorktree, savedWorktreesForSpawn } from "../disk/saved-worktrees";
@@ -260,10 +260,7 @@ function withAwayNote(frame: object, origin: PromptOriginEnv): object {
 }
 /** Session-index changes come in bursts while an agent writes; one push per burst. */
 const SESSIONS_CHANGED_DEBOUNCE_MS = 300;
-/** Parts of a file that wait this long for the next one are dropped (the sender gave up or went away). */
-export const UPLOAD_PART_IDLE_MS = 2 * 60_000;
-/** Files one device may be sending in parts at once (each up to HOST_UPLOAD_MAX_BYTES held until its last part). */
-export const UPLOAD_PARTS_PER_DEVICE = 2;
+let nextUploadOwner = 0;
 /** The tabs a session opened on paired devices change in bursts (a spawn, its status, its title): one push per burst. */
 export const REMOTE_OPENED_DEBOUNCE_MS = 250;
 /** Answers kept per tab to refuse the other side's late one (`already_answered`); the oldest go first. */
@@ -366,7 +363,7 @@ export interface HostServicesDeps {
 	/** This computer's Mobile web address while it serves phones (`MobileWebState.url`), else null. */
 	mobileWebUrl?: () => string | null;
 	/** Where a device's attached files land (`host.files.upload`): the phones' upload folder, same limits and lifetime. */
-	uploads?: Pick<UploadStore, "store">;
+	uploads?: Pick<UploadStore, "store" | "writeOptions">;
 	/**
 	 * Where the control calls a device's session made while the device was away wait for it (kept-calls.ts); absent:
 	 * nothing is kept and such a call waits for the device.
@@ -655,7 +652,7 @@ export class LocalHostServices implements HostServices {
 	readonly #tabs = new Map<string, HostTab>();
 	/** Moves a device's command has on its way, by `resumeId` (turn-resume.ts `trackMove`). */
 	readonly #moves = new MovesInFlight();
-	/** Files a device sends in parts (`host.files.uploadPart`), by device and upload id, until the last part lands. */
+	readonly #uploadOwner = ++nextUploadOwner;
 	/** Plan proposals counted for the tabs that run here: stock rewrites one plan file for a revised proposal. */
 	#planGeneration = 0;
 	#claimSerial = 0;
@@ -700,7 +697,6 @@ export class LocalHostServices implements HostServices {
 			if (tab?.planClaim?.claim === claim) tab.planClaim = undefined;
 		},
 	});
-	readonly #parts = new Map<string, { chunks: Buffer[]; bytes: number; next: number; timer?: NodeJS.Timeout }>();
 	/** Live connections that have talked to us; `sessions.changed` goes to each. */
 	readonly #conns = new Set<HostConnection>();
 	/** Each connected device's latest connection, for events meant for one device. */
@@ -1471,8 +1467,24 @@ export class LocalHostServices implements HostServices {
 				return this.#storeUpload(peer, name, Buffer.from(dataBase64, "base64"));
 			}
 			case "host.files.uploadPart": {
-				const part = parse(HostUploadPartParams, method, params);
-				return this.#uploadPart(peer, part);
+				const { dataBase64, ...part } = parse(HostUploadPartParams, method, params);
+				try {
+					const { result } = await core().call<{ path: string } | { received: number }>(
+						"remote.uploadPart",
+						{
+							...(part.last && this.#deps.uploads?.writeOptions()),
+							owner: this.#uploadOwner,
+							deviceId: peer.deviceId,
+							...part,
+						},
+						{ bin: Buffer.from(dataBase64, "base64") },
+					);
+					return "path" in result ? { path: result.path } : result;
+				} catch (error) {
+					if (error instanceof CoreError && isIpcErrorCode(error.code))
+						throw codedError(error.code, error.message);
+					throw error;
+				}
 			}
 			case "host.fs.readBinary": {
 				const { rtab, cwd, ...payload } = parse(FsReadParams, method, params);
@@ -3087,53 +3099,6 @@ export class LocalHostServices implements HostServices {
 				throw codedError(error.status === 413 ? "file_too_large" : "upload_refused", error.message);
 			throw error;
 		}
-	}
-
-	/**
-	 * One part of a file past a link frame: parts come in order and are held until the last, which stores the whole
-	 * file as `host.files.upload` does. A file past the attached-file limit, a part out of order, or parts left
-	 * waiting for `UPLOAD_PART_IDLE_MS` are dropped.
-	 */
-	async #uploadPart(
-		peer: PeerInfo,
-		part: { upload: string; index: number; last: boolean; name: string; dataBase64: string },
-	): Promise<{ path: string } | { received: number }> {
-		const key = `${peer.deviceId}\n${part.upload}`;
-		const held = this.#parts.get(key);
-		const drop = () => {
-			const entry = this.#parts.get(key);
-			if (entry) clearTimeout(entry.timer);
-			this.#parts.delete(key);
-		};
-		if ((held?.next ?? 0) !== part.index) {
-			drop();
-			throw codedError("invalid_path", "A part of this file arrived out of order; attach it again");
-		}
-		// Parts wait in memory: a device builds at most a few files at once, so what it holds stays bounded.
-		if (!held && !part.last) {
-			const prefix = `${peer.deviceId}\n`;
-			const open = [...this.#parts.keys()].filter(other => other.startsWith(prefix)).length;
-			if (open >= UPLOAD_PARTS_PER_DEVICE)
-				throw codedError("upload_refused", "Too many files are on their way from this device; try again later");
-		}
-		const chunk = Buffer.from(part.dataBase64, "base64");
-		const entry = held ?? { chunks: [], bytes: 0, next: 0 };
-		clearTimeout(entry.timer);
-		entry.chunks.push(chunk);
-		entry.bytes += chunk.byteLength;
-		entry.next += 1;
-		if (entry.bytes > HOST_UPLOAD_MAX_BYTES) {
-			drop();
-			throw codedError("file_too_large", "file too large");
-		}
-		if (!part.last) {
-			entry.timer = setTimeout(drop, UPLOAD_PART_IDLE_MS);
-			entry.timer.unref?.();
-			this.#parts.set(key, entry);
-			return { received: entry.bytes };
-		}
-		drop();
-		return this.#storeUpload(peer, part.name, Buffer.concat(entry.chunks));
 	}
 
 	#fsRoot(peer: PeerInfo, rtab: string | undefined, cwd: string | undefined): string | null {

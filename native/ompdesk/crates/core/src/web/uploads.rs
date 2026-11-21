@@ -745,7 +745,7 @@ fn fault(failure: &UploadFailure) -> Fault {
     )
 }
 
-async fn store(mut call: Call) -> Result<Reply, Fault> {
+pub(crate) async fn store(mut call: Call) -> Result<Reply, Fault> {
     let params = Params::of(&call)?;
     let bytes = call.bin.take().unwrap_or_default();
     let upload = open(&params.user_data)
