@@ -14,7 +14,6 @@ import {
 	installerPartialPath,
 	isSwappableBundleLocation,
 	macBundlePath,
-	macDownloadName,
 	planInstallerTransfer,
 	SingleTransfer,
 	StageBundleError,
@@ -126,17 +125,13 @@ describe("update check terminal state", () => {
 	});
 });
 
-describe("macOS DMG download name", () => {
-	it("puts the version back into the version-free release asset's local name", () => {
-		expect(macDownloadName("0.18.0")).toBe("ompdesk-0.18.0-arm64.dmg");
-	});
-
-	it("names it so the Downloads sweep still recognizes its partials", async () => {
+describe("macOS DMG download partials", () => {
+	it("sweeps a superseded partial without touching the current version", async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-dmg-name-"));
 		try {
-			const stale = `${macDownloadName("0.18.0")}.partial`;
+			const stale = "ompdesk-0.18.0-arm64.dmg.partial";
 			fs.writeFileSync(path.join(dir, stale), "");
-			const active = path.join(dir, `${macDownloadName("0.18.1")}.partial`);
+			const active = path.join(dir, "ompdesk-0.18.1-arm64.dmg.partial");
 			expect(await sweepInstallerPartials(dir, active)).toEqual([stale]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });

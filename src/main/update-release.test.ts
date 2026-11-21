@@ -60,7 +60,13 @@ describe("release resolution through the core", () => {
 		for (const platform of ["windows", "mac"] as const) {
 			const expected = frozen.resolvePlatformRelease(selected, platform);
 			expect(await resolvePlatformRelease(JSON.stringify(payload), platform, prereleases)).toEqual(
-				platform === "mac" ? { ...expected, minimumSystemVersion: "23.0.0" } : expected,
+				platform === "mac"
+					? {
+							...expected,
+							macDownloadName: `ompdesk-${expected.version}-arm64.dmg`,
+							minimumSystemVersion: "23.0.0",
+						}
+					: expected,
 			);
 		}
 	});

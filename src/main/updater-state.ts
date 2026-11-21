@@ -6,25 +6,6 @@ import compatibility from "../shared/app-compatibility.json";
 import type { UpdateAccess, UpdateStatus, UpdateTokenSource } from "../shared/ipc-types";
 import { compareVersions } from "../shared/version";
 
-/** The macOS update download: the release's DMG, saved under a versioned local name. */
-export interface MacInstallerAsset {
-	/** Local file name (`macDownloadName`). */
-	name: string;
-	/** API asset endpoint of the release's `ompdesk-mac-arm64.dmg`. */
-	url: string;
-	sha512: string;
-	size: number;
-}
-
-/**
- * Local name of a downloaded DMG. The release asset is version-free, so the
- * version goes back into the name: Downloads stays legible, and a partial of
- * a superseded release never resumes into the new one.
- */
-export function macDownloadName(version: string): string {
-	return `ompdesk-${version}-arm64.dmg`;
-}
-
 /**
  * `/Applications/ompdesk.app` from `/Applications/ompdesk.app/Contents/MacOS/ompdesk`; undefined outside a bundle.
  * macOS paths only, so POSIX path rules on every platform the tests run on.

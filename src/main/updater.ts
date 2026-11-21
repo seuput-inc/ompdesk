@@ -76,15 +76,13 @@ import {
 	windowPresenceOf,
 } from "./update-log-core";
 import { releaseUpdateProvider } from "./update-provider";
-import { type PlatformRelease, UPDATE_METADATA_ERROR, UPDATE_PLATFORM_ERROR } from "./update-release";
+import { type MacRelease, UPDATE_METADATA_ERROR, UPDATE_PLATFORM_ERROR } from "./update-release";
 import {
 	DOWNLOAD_IDLE_TIMEOUT_MS,
 	githubApiHeaders,
 	installerPartialPath,
 	isSwappableBundleLocation,
-	type MacInstallerAsset,
 	macBundlePath,
-	macDownloadName,
 	planInstallerTransfer,
 	SingleTransfer,
 	StageBundleError,
@@ -131,9 +129,9 @@ let current: UpdateStatus = { state: "idle" };
 let installMode: UpdateInstallMode = "automatic";
 let activeUpdate: UpdateInfo | undefined;
 /** The release the last check resolved; macOS takes its DMG from here. */
-let resolvedRelease: PlatformRelease | undefined;
+let resolvedRelease: MacRelease | undefined;
 /** The DMG the current macOS mode downloads (manual: to Downloads; relaunch: to staging). */
-let macAsset: MacInstallerAsset | undefined;
+let macAsset: MacRelease | undefined;
 let downloadedInstallerPath: string | undefined;
 /** Running bundle the relaunch mode replaces (`/Applications/OMPdesk.app`). */
 let ownBundle: string | undefined;
@@ -549,28 +547,23 @@ async function signedAssetUrl(assetApiUrl: string, token: string | undefined, si
 }
 
 async function downloadMacAsset(
-	version: string,
-	asset: MacInstallerAsset,
+	{ version, macDownloadName, assetUrl: apiUrl, file: asset }: MacRelease,
 	token: string | undefined,
 	mode: "manual" | "relaunch",
 ): Promise<void> {
 	// Manual installers land in Downloads for Finder; relaunch DMGs are private staging.
 	if (mode === "relaunch") await fs.promises.mkdir(updatesDirectory(), { recursive: true });
 	const destinationPath =
-		mode === "manual" ? availableDownloadPath(asset.name) : path.join(updatesDirectory(), asset.name);
+		mode === "manual" ? availableDownloadPath(macDownloadName) : path.join(updatesDirectory(), macDownloadName);
 	const partialPath = installerPartialPath(destinationPath);
 	// Every network step gets the idle timeout: a stalled transfer fails as
 	// retryable instead of sitting in `downloading` forever.
 	const controller = new AbortController();
 	const abort = () => controller.abort();
-	const assetUrl = await withinIdle(
-		signedAssetUrl(asset.url, token, controller.signal),
-		DOWNLOAD_IDLE_TIMEOUT_MS,
-		abort,
-	);
+	const assetUrl = await withinIdle(signedAssetUrl(apiUrl, token, controller.signal), DOWNLOAD_IDLE_TIMEOUT_MS, abort);
 	// Partials of releases this one superseded can never be continued.
 	if (mode === "manual") await sweepInstallerPartials(path.dirname(partialPath), partialPath);
-	else await sweepUpdatesDirectory(asset.name);
+	else await sweepUpdatesDirectory(macDownloadName);
 
 	let existing = await fileSize(partialPath);
 	if (existing > asset.size) {
@@ -667,34 +660,30 @@ async function sweepUpdatesDirectory(keepAsset: string): Promise<void> {
 }
 
 /** Background download for relaunch mode; failures stay out of the banner like any passive check. */
-async function prepareRelaunchUpdate(version: string): Promise<void> {
+async function prepareRelaunchUpdate(): Promise<void> {
 	if (!macAsset) return;
 	try {
-		await startMacDownload(version, macAsset, updateToken, "relaunch");
+		await startMacDownload(macAsset, updateToken, "relaunch");
 	} catch (error) {
 		broadcast(failureStatus(error, "updates.downloadFailed", false));
 	}
 }
 
 /** The one macOS asset download; callers return early while `macTransfer.running`. */
-function startMacDownload(
-	version: string,
-	asset: MacInstallerAsset,
-	token: string | undefined,
-	mode: "manual" | "relaunch",
-): Promise<void> {
+function startMacDownload(release: MacRelease, token: string | undefined, mode: "manual" | "relaunch"): Promise<void> {
+	const { version, file } = release;
 	return macTransfer.start(async () => {
 		broadcast({ state: "downloading", version, mode, percent: 0 });
 		const startedAt = Date.now();
-		logUpdate("download", { event: "started", version, mode, bytes: asset.size });
+		logUpdate("download", { event: "started", version, mode, bytes: file.size });
 		try {
-			await downloadMacAsset(version, asset, token, mode);
+			await downloadMacAsset(release, token, mode);
 		} catch (error) {
 			logUpdate("download", { event: "failed", version, mode, reason: failureReason(error) });
 			throw error;
 		}
 		// The SHA-512 matched and, for the relaunch mode, the bundle is staged and verified.
-		logUpdate("download", { event: "verified", version, mode, bytes: asset.size, ms: Date.now() - startedAt });
+		logUpdate("download", { event: "verified", version, mode, bytes: file.size, ms: Date.now() - startedAt });
 	});
 }
 
@@ -884,7 +873,7 @@ async function attemptCheck(token: string | undefined): Promise<{ error: unknown
 			downloadHeaders: githubApiHeaders(token, "application/octet-stream"),
 			fetch: (url, init) => net.fetch(url, init),
 			onResolved: release => {
-				resolvedRelease = release;
+				resolvedRelease = release.minimumSystemVersion === undefined ? undefined : release;
 			},
 		}),
 	});
@@ -929,7 +918,7 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
 	try {
 		if (current.mode === "manual" || current.mode === "relaunch") {
 			if (!macAsset) throw new Error(mainT("updates.installerMissing"));
-			await startMacDownload(activeUpdate?.version ?? current.version, macAsset, updateToken, current.mode);
+			await startMacDownload(macAsset, updateToken, current.mode);
 		} else {
 			await autoUpdater.downloadUpdate();
 		}
@@ -1106,12 +1095,7 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 				broadcast({ state: "error", message: mainT("updates.installerMissing") });
 				return;
 			}
-			macAsset = {
-				name: macDownloadName(info.version),
-				url: release.assetUrl,
-				sha512: release.file.sha512,
-				size: release.file.size,
-			};
+			macAsset = release;
 		}
 		broadcast({ state: "available", version: info.version, notes: notesOf(info), mode: installMode });
 		if (installMode === "automatic") {
@@ -1120,7 +1104,7 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 			logUpdate("download", { event: "started", version: info.version, mode: "nsis" });
 			if (downloadByHand) void autoUpdater.downloadUpdate().catch(() => {});
 		}
-		if (installMode === "relaunch") void prepareRelaunchUpdate(info.version);
+		if (installMode === "relaunch") void prepareRelaunchUpdate();
 	});
 	autoUpdater.on("update-not-available", () => {
 		logUpdate("check", { event: "no-update", current: appVersion() });

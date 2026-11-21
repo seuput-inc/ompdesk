@@ -82,7 +82,9 @@ fn resolve(params: Value) -> Result<Value, Fault> {
                 format!("A macOS update requires a Darwin minimum of {floor} or newer"),
             ));
         }
+        let download_name = format!("ompdesk-{version}-arm64.dmg");
         update["minimumSystemVersion"] = minimum.into();
+        update["macDownloadName"] = download_name.into();
     }
     let mut files = update
         .as_object_mut()

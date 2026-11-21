@@ -43,7 +43,7 @@ export class ReleaseFeedError extends Error {
 const SYSTEM_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 
 /** One platform's update, ready for the updater. */
-export interface PlatformRelease {
+interface ResolvedRelease {
 	version: string;
 	releaseDate: string;
 	releaseName: string;
@@ -57,9 +57,15 @@ export interface PlatformRelease {
 	};
 	/** API asset endpoint of `file`; downloads need the token and `application/octet-stream`. */
 	assetUrl: string;
-	/** Darwin release, not the macOS product version; absent for the unchanged Windows path. */
-	minimumSystemVersion?: string;
 }
+
+export interface MacRelease extends ResolvedRelease {
+	minimumSystemVersion: string;
+	/** Versioned local name; the GitHub asset name stays version-free. */
+	macDownloadName: string;
+}
+
+export type PlatformRelease = MacRelease | (ResolvedRelease & { minimumSystemVersion?: undefined });
 
 export async function resolvePlatformRelease(
 	payload: string,
