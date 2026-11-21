@@ -279,16 +279,16 @@ describe("start", () => {
 	});
 
 	it("answers get_autopilot on a tab that is no run with the sheet's facts", async () => {
-		build({ releaseProcedure: true });
+		build();
 		const sidecar = world.addTab("m", main);
+		expect((await autopilot.status(sidecar as unknown as SidecarLike, "m")).ship?.releaseBlocked).toMatch(
+			/release procedure/i,
+		);
+		build({ releaseProcedure: true });
 		const status = await autopilot.status(sidecar as unknown as SidecarLike, "m");
 		expect(status).toMatchObject({
 			active: false,
 			ship: { policy: DEFAULT_SHIP_POLICY, queue: [], releaseProcedure: { file: "AGENTS.md" } },
 		});
-		build();
-		expect((await autopilot.status(sidecar as unknown as SidecarLike, "m")).ship?.releaseBlocked).toMatch(
-			/release procedure/i,
-		);
 	});
 });
