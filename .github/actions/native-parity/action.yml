@@ -80,6 +80,8 @@ runs:
         src/main/workspace-fs*.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts
+        src/main/desktop-slot.test.ts
+        src/main/desktop-slot-host.test.ts
         src/main/shell-env.test.ts
         src/main/sidecar-os-shutdown.test.ts
         src/main/builtin-mcp-spawn.test.ts

@@ -21,7 +21,7 @@ Counts overlap. The command follows literal imports, including conditional test 
 
 The file inventories in `docs/rust-inventory/` record ownership, not import reach. In `root.tsv`, wave 1 moves leaf operations, wave 2 moves services and their state, wave 3 moves session and window coordination, and wave 4 removes Node dispatch and startup. A dash marks code outside these runtime waves. `shell.tsv` separates the Node adapters from the browser preload and the test driver.
 
-Run `bun scripts/rust-runtime-scope.ts --check-inventory` to compare all six inventories against Git. Every tracked path under `src/main` and `src/preload` must appear exactly once, including fixtures and test drivers. This checks coverage, not whether the implementation has moved.
+CI runs `bun scripts/rust-runtime-scope.ts --check-inventory` against Git. Every tracked path under `src/main` and `src/preload` must appear exactly once, including fixtures and test drivers. This checks coverage, not whether the implementation has moved.
 
 Use `bun scripts/rust-runtime-scope.ts --remaining` to list every path marked `port` or `mixed` with its reason. A path is not a unit of effort: one transaction can replace code in several files. Thin Rust clients do not count as remaining host implementations; they still need a non-Node caller before Node can be removed.
 
