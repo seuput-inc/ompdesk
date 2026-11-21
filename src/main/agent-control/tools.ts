@@ -166,17 +166,22 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 	{
 		name: T.open,
 		label: "Open OMPdesk session",
-		description:
-			"Open new sessions (tabs) to work in parallel with you; returns ids.\n" +
-			`Open new sessions (tabs) so they work in parallel with you; returns their ids. Give one session's fields, or sessions: [...] to fan out. See skill://ompdesk.`,
+		description: "Open new sessions (tabs) to work in parallel with you; returns ids.\nSee skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
 				...OPEN_ONE,
 				sessions: {
 					type: "array",
-					items: { type: "object", properties: OPEN_ONE, additionalProperties: false },
-					description: "Several sessions in one call; instead of the single-session fields.",
+					items: {
+						type: "object",
+						properties: Object.fromEntries(
+							Object.entries(OPEN_ONE).map(([key, { description: _, ...schema }]) => [key, schema]),
+						),
+						additionalProperties: false,
+					},
+					description:
+						"For a batch, use this array instead of the single-session fields described above. Each item takes those same fields.",
 				},
 				show: {
 					type: "string",
