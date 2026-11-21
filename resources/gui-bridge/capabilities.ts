@@ -443,7 +443,16 @@ const MODEL_CATALOG: FeatureRequirement = union(IMAGE_TOOL, {
 		"modelRegistry.authStorage.credentials.reload()",
 		"modelRegistry.refreshInBackground()",
 		"modelRegistry.awaitBackgroundRefresh()",
+		"modelRegistry.isBackgroundRefreshPending()",
+		"modelRegistry.authStorage.oauth.accounts()",
+		"modelRegistry.authStorage.keys.source()",
+		"modelRegistry.hasCommandBackedApiKey()",
+		"modelRegistry.refreshDiscoverableProviders()",
 	],
+	modules: {
+		"@oh-my-pi/pi-ai": ["getEnvApiKeyName()"],
+		[`${AGENT}/slash-commands/helpers/logout`]: ["listLogoutAccounts()"],
+	},
 });
 
 /** settings.ts `buildProviders`: every provider with models, a login or a stored credential. */

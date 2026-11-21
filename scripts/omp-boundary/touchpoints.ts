@@ -1009,6 +1009,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Live setting schema and catalog: `orderedSettings()` from config/all-settings, the TUI settings-defs, config file names and agent dir, and the live model registry.",
 		files: [
 			"resources/gui-bridge/settings.ts",
+			"resources/gui-bridge/codex-picker.ts",
+			"resources/gui-bridge/codex-picker-contracts.ts",
+			"src/main/test-codex-picker.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
 		],
@@ -1019,8 +1022,13 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-tui/overlays/settings-defs",
 			"@oh-my-pi/pi-utils",
 			"orderedSettings",
+			"Model.accountAccess / AuthStorage.oauth.accounts / refreshDiscoverableProviders",
 		],
-		tests: ["src/main/bridge-stock-settings-stock.test.ts", "src/main/bridge-catalog-stock.test.ts"],
+		tests: [
+			"src/main/bridge-stock-settings-stock.test.ts",
+			"src/main/bridge-catalog-stock.test.ts",
+			"src/renderer/components/dialogs/ModelPicker.test.tsx",
+		],
 	},
 	{
 		id: "B30",

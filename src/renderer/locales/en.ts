@@ -2918,6 +2918,7 @@ export const en: Record<string, string> = {
 	"modelPicker.placeholder": "Search models…",
 	"modelPicker.notResponding": "omp isn't responding",
 	"modelPicker.notConnected": "omp isn't connected",
+	"modelPicker.accountUnverified": "We haven’t confirmed which models this account can use yet.",
 	"modelPicker.notRespondingHint": "The omp process may be stuck.",
 	"modelPicker.stillNotResponding": "Still not responding. Try restarting omp.",
 	"modelPicker.loading": "Loading models…",
