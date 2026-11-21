@@ -20,6 +20,8 @@
 //! The stop of an omp the app still holds (its stdin's end, the hold it asks for while it saves a login) is main's
 //! (`omp-stop.ts`), and so is the quit's wait for all of them: both need the child process main spawned.
 
+mod log_tail;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -77,6 +79,12 @@ struct Entry {
 }
 
 pub fn register(registry: &mut Registry) {
+    registry.add("omp.logTail", |call| {
+        Box::pin(async move {
+            let params = call.params()?;
+            Reply::json(&blocking(move || log_tail::read(params)).await??)
+        })
+    });
     registry.add("omp.track", |call| {
         Box::pin(async move {
             let params: PidParams = call.params()?;

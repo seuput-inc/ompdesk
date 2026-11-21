@@ -1,0 +1,557 @@
+path	status	cutover_wave	implementer_and_remaining_work
+src/main/account-rotation.test.ts	tooling	-	Vitest suite: accountRotationDeps.
+src/main/account-rotation.ts	port	3	accountRotationDeps stores this machine's preference and pushes it to locally hosted live omps, including paired clients' tabs.
+src/main/agent-browsers.test.ts	tooling	-	Vitest suite: findChromiumBrowsers.
+src/main/agent-browsers.ts	mixed	2	browsers.find/status/installRelay/openExtensions dispatch in crates/core/src/browsers/mod.rs; resolveEgoBrowser, systemBrowserPlaces and the launch cache/reprobe remain in TS.
+src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
+src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed executable versions; computerUseSpawn selects the engine and spawn environment.
+src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
+src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
+src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
+src/main/agent-priority.test.ts	tooling	-	Vitest suite: agentPriorityLowerer.
+src/main/agent-priority.ts	port	1	agentPriorityLowerer applies OS below-normal process priority to spawned PIDs without failing spawn.
+src/main/agent-worktrees.test.ts	tooling	-	Vitest suite: parseAgentWorktrees.
+src/main/agent-worktrees.ts	port	1	listAgentWorktrees/clearAgentWorktrees run stock omp worktree list/clear --json and parse the two response shapes; stock owns orphan detection and removal.
+src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.
+src/main/agents-md.test.ts	tooling	-	Vitest suite: AGENTS.md and the area rules.
+src/main/app-auto-update.test.ts	tooling	-	Vitest suite: quietMoment.
+src/main/app-auto-update.ts	port	3	AutoInstallScheduler owns idle/card/compaction gating, countdown and automatic restart timing from injected app/session facts.
+src/main/app-icon.test.ts	tooling	-	Vitest suite: notifications of a test launch.
+src/main/app-icon.ts	port	4	appIconPath and appNotification choose packaged/dev icon and construct Electron notifications; holdTestNotifications suppresses test toasts.
+src/main/app-quit-failure.test.ts	tooling	-	Vitest suite: exits with failure when the last core stop cannot establish that its processes ended.
+src/main/app-quit.test.ts	tooling	-	Vitest suite: who asked to quit, in gui-runtime.jsonl.
+src/main/app-quit.ts	port	4	installQuitGuard and requestQuit arbitrate Electron before-quit, dialogs, approved restarts, watchdog and exit reporting.
+src/main/atomic-file-disk-full.test.ts	tooling	-	Vitest suite: a write on a full disk.
+src/main/atomic-file.test.ts	tooling	-	Vitest suite: atomic file writes.
+src/main/atomic-file.ts	port	1	writeFileAtomicSync/writeFileAtomic replace sibling temp files; AtomicSaver schedules/replaces deferred writes and disk-full retries.
+src/main/autopilot-actions.test.ts	tooling	-	Vitest suite: ship actions from the screen.
+src/main/autopilot-approver.test.ts	tooling	-	Vitest suite: decideApproval.
+src/main/autopilot-approver.ts	port	2	AutopilotApprover consumes extension cards; decideApproval checks the shared guard and decideQuestion chooses or declines unattended answers.
+src/main/autopilot-audit-local.test.ts	tooling	-	Vitest suite: auditCycle.
+src/main/autopilot-audit-test-rig.ts	tooling	-	installAuditRig creates Git fixtures; takeSnapshot/auditCycle call autopilot.snapshot/audit for crates/core/src/autopilot/audit.rs parity tests.
+src/main/autopilot-audit.test.ts	tooling	-	Vitest suite: auditCycle.
+src/main/autopilot-branch-choice.test.ts	tooling	-	Vitest suite: the branch a run is on.
+src/main/autopilot-branch-push.test.ts	tooling	-	Vitest suite: where a run on a chosen branch pushes, opens a PR and merges.
+src/main/autopilot-branch.test.ts	tooling	-	Vitest suite: stop.
+src/main/autopilot-branches.test.ts	tooling	-	Vitest suite: the repository's branches as the picker sees them.
+src/main/autopilot-cycle-end-land-summary.test.ts	tooling	-	Vitest suite: a cycle's end: Automatic shipping lands on the default branch.
+src/main/autopilot-cycle-end-land.test.ts	tooling	-	Vitest suite: a cycle's end: Automatic shipping lands on the default branch.
+src/main/autopilot-cycle-end.test.ts	tooling	-	Vitest suite: a cycle's end.
+src/main/autopilot-land-check.test.ts	tooling	-	Vitest suite: checkLandCandidate.
+src/main/autopilot-late-step.test.ts	tooling	-	Vitest suite: a pipeline step stopped at its bound that answers late.
+src/main/autopilot-notice-route.test.ts	tooling	-	Vitest suite: routeHostAutopilotNotice.
+src/main/autopilot-notice-route.ts	port	3	routeHostAutopilotNotice matches a paired host's session to local tabs and routes tab, banner and phone notifications.
+src/main/autopilot-restart-resume.test.ts	tooling	-	Vitest suite: restart.
+src/main/autopilot-ship-land-merge.test.ts	tooling	-	Vitest suite: a default branch that moved on and merges cleanly.
+src/main/autopilot-ship-land.test.ts	tooling	-	Vitest suite: land.
+src/main/autopilot-ship-merge.test.ts	tooling	-	Vitest suite: merge.
+src/main/autopilot-ship-push.test.ts	tooling	-	Vitest suite: push.
+src/main/autopilot-ship-stall.test.ts	tooling	-	Vitest suite: a drain that never ends.
+src/main/autopilot-ship-test-rig.ts	tooling	-	ShipRunner and checkLandCandidate drive autopilot.ship.* and autopilot.landCheck against disposable Git worktrees; crates/core/src/autopilot/{ship,land_check}.rs own landing.
+src/main/autopilot-ship.test.ts	tooling	-	Vitest suite: ShipRunner queue.
+src/main/autopilot-start-wait.test.ts	tooling	-	Vitest suite: the Autopilot tab's omp is slow to start.
+src/main/autopilot-test-rig.ts	tooling	-	installAutopilotRig, World and FakeSidecar construct the fake session pool and real Git fixtures for coordinator tests.
+src/main/autopilot.test.ts	tooling	-	Vitest suite: pure helpers.
+src/main/autopilot.ts	native-client	3	Autopilot opens the run via autopilot.open (crates/core/src/autopilot/coordinator.rs), sends commands/events, serves host callbacks and mirrors synchronous reads; Rust owns run transitions.
+src/main/background-work.test.ts	tooling	-	Vitest suite: summarizeJobRows.
+src/main/background-work.ts	port	3	askBackgroundWork queries member bridges under deadline and aggregates named subagents, jobs and unknown sessions for restart confirmation.
+src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
+src/main/benchmark-runner.ts	port	2	BenchmarkRunner spawns/cancels the benchmark child, enforces a timeout and parses its summary for the live IPC feature.
+src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
+src/main/boot-model.ts	port	2	isNoModelBootFailure detects stock startup errors; bootModelSelector spawns the catalog probe and caches its answer per install/version.
+src/main/bridge-account-credits.test.ts	tooling	-	Vitest suite: account credits from stock's usage limits.
+src/main/bridge-account-rotation-stock.test.ts	tooling	-	Vitest suite: moves an automatic warm pin only when stock ranks another account first by more than the margin, never an explicit one, and never flip-flops.
+src/main/bridge-account-rotation.test.ts	tooling	-	Vitest suite: gui-bridge account rotation.
+src/main/bridge-accounts-stock.test.ts	tooling	-	Vitest suite: matches reports, shapes reset passes, keeps a literal model id and lists a stored credential.
+src/main/bridge-accounts.test.ts	tooling	-	Vitest suite: stock account candidate reconciliation.
+src/main/bridge-advisor-stats-stock.test.ts	tooling	-	Vitest suite: maps stock's advisor stats and the notes journaled into the session, in under 5 ms a call.
+src/main/bridge-advisor-stats.test.ts	tooling	-	Vitest suite: advisorUsage.
+src/main/bridge-agent-attachment.test.ts	tooling	-	Vitest suite: agent_control.attachment of a file.
+src/main/bridge-agent-control-judge.test.ts	tooling	-	Vitest suite: judge family rules.
+src/main/bridge-agent-mail-restart-stock.test.ts	tooling	-	Vitest suite: a done SIGKILL cut before the step boundary reaches the replacing omp's journal once, through the outbox.
+src/main/bridge-agent-mail-stock-harness.ts	tooling	-	startProvider/startOmp create scripted loopback provider and stock RPC process; journaledMail reads evidence for mail tests.
+src/main/bridge-agent-mail-stock.test.ts	tooling	-	Vitest suite: reaches the model at the next step boundary of the same turn, and every call of the batch runs.
+src/main/bridge-agent-mail.test.ts	tooling	-	Vitest suite: agent_control.mail.
+src/main/bridge-agent-send-stock.test.ts	tooling	-	Vitest suite: as a steer, is read at the next step of the same turn, and no call of the turn is skipped.
+src/main/bridge-agent-worker.test.ts	tooling	-	Vitest suite: worker contract.
+src/main/bridge-answer-first.test.ts	tooling	-	Vitest suite: answer-first companion.
+src/main/bridge-ask-form-stock.test.ts	tooling	-	Vitest suite: reaches the card whole, pictures above the question, and the answer comes back as the form's data.
+src/main/bridge-attach-entry-ids.test.ts	tooling	-	Vitest suite: gives every message of a committed agent_end its journal entry id, custom messages included.
+src/main/bridge-auto-mode-core.test.ts	tooling	-	Vitest suite: autoModeSkip (guards).
+src/main/bridge-auto-mode-prefetch-stock.test.ts	tooling	-	Vitest suite: warms the judge once, answers the decision at Enter from the cache, and joins a question still asked.
+src/main/bridge-auto-mode-real.test.ts	tooling	-	Vitest suite: decides six prompts in time.
+src/main/bridge-auto-mode-stock.test.ts	tooling	-	Vitest suite: is available, asks the cheap judge chain, answers guards without a model and never holds a prompt up.
+src/main/bridge-auto-plan-stock.test.ts	tooling	-	Vitest suite: is approved by itself when proposed: no card, plan mode ends, the plan runs in the same session.
+src/main/bridge-auto-title-core.test.ts	tooling	-	Vitest suite: auto title contracts.
+src/main/bridge-auto-title-stock.test.ts	tooling	-	Vitest suite: is available, keeps the origin in stock's own journal, and names nothing for an empty conversation.
+src/main/bridge-auto-title.test.ts	tooling	-	Vitest suite: first title.
+src/main/bridge-autopilot-core.test.ts	tooling	-	Vitest suite: normalizeTitle / duplicates.
+src/main/bridge-autopilot-guard.test.ts	tooling	-	Vitest suite: autopilot guard: always blocked.
+src/main/bridge-autopilot-guide.test.ts	tooling	-	Vitest suite: reading the guide.
+src/main/bridge-autopilot-release.test.ts	tooling	-	Vitest suite: release facts of real repositories.
+src/main/bridge-autopilot-stock.test.ts	tooling	-	Vitest suite: arms, guards, finalizes cycles, keeps going through unreported ones and disarms.
+src/main/bridge-autopilot-verify.test.ts	tooling	-	Vitest suite: isCheckCommand.
+src/main/bridge-background-checks.test.ts	tooling	-	Vitest suite: background checks section.
+src/main/bridge-browser-relay.test.ts	tooling	-	Vitest suite: serves stock's relay for the session and lists the preview once its extension says hello.
+src/main/bridge-capabilities.test.ts	tooling	-	Vitest suite: hasPath.
+src/main/bridge-capability-granular-stock.test.ts	tooling	-	Vitest suite: refuses only the action that uses it and reports that action alone.
+src/main/bridge-catalog-stock.test.ts	tooling	-	Vitest suite: leaves stock's compat block on the omp's side and keeps what the windows read.
+src/main/bridge-checkout-peers-claims.test.ts	tooling	-	Vitest suite: LedgerLifecycle 1 and GuardRules 1: a file both sessions changed.
+src/main/bridge-checkout-peers-frame.test.ts	tooling	-	Vitest suite: checkout_peers frame.
+src/main/bridge-checkout-peers-rules.test.ts	tooling	-	Vitest suite: 1: a file both sessions changed can be taken by name, never dropped.
+src/main/bridge-checkout-peers.test.ts	tooling	-	Vitest suite: checkout guard: the repository's stash and branches.
+src/main/bridge-client.test.ts	tooling	-	Vitest suite: GuiBridgeClient.
+src/main/bridge-client.ts	tooling	-	GuiBridgeClient speaks newline-delimited JSON to stock-omp test sockets; production lanes instead use crates/core/src/sidecar/bridge.rs.
+src/main/bridge-compaction-points-stock.test.ts	tooling	-	Vitest suite: answers one model's point, as the whole table has it, when asked for that model.
+src/main/bridge-computer-use-mcp-stock.test.ts	tooling	-	Vitest suite: passes a server that answers.
+src/main/bridge-computer-use-stock.test.ts	tooling	-	Vitest suite: carries every bullet of stock's <critical> block.
+src/main/bridge-computer-use.test.ts	tooling	-	Vitest suite: the engine's prompt section.
+src/main/bridge-context-files.test.ts	tooling	-	Vitest suite: lists the folder's context files by stock id and turns one off through disabledExtensions.
+src/main/bridge-context-hook-stock.test.ts	tooling	-	Vitest suite: leaves stock's handler table while nothing needs dropping, so requests go uncopied, and comes back.
+src/main/bridge-context-hook.test.ts	tooling	-	Vitest suite: context hook off the request path while nothing needs dropping.
+src/main/bridge-context-inspect.test.ts	tooling	-	Vitest suite: context inspector rules.
+src/main/bridge-credit-spend-stock.test.ts	tooling	-	Vitest suite: stock alone (and credit use on) sends a spent ChatGPT account with credits every request.
+src/main/bridge-credit-spend.test.ts	tooling	-	Vitest suite: planSpentUntil.
+src/main/bridge-default-browser-relay-stock.test.ts	tooling	-	Vitest suite: opens a tab only in the extension bound to the relay endpoint it was sent to.
+src/main/bridge-default-browser.test.ts	tooling	-	Vitest suite: gui-bridge default browser section.
+src/main/bridge-delegation.test.ts	tooling	-	Vitest suite: delegation strength.
+src/main/bridge-desktop-slot.test.ts	tooling	-	Vitest suite: which computer runs need the slot.
+src/main/bridge-dump-stock.test.ts	tooling	-	Vitest suite: hands back stock's `/dump all` and `/dump anon` zips: session.md for all, session.jsonl for anon, null while empty.
+src/main/bridge-ecc-hint.test.ts	tooling	-	Vitest suite: eccMatches.
+src/main/bridge-exit-drain-stock.test.ts	tooling	-	Vitest suite: finishes a save its exit waits for, and says on stderr that it waits.
+src/main/bridge-exit-drain.test.ts	tooling	-	Vitest suite: an exit that waits for omp's cleanup.
+src/main/bridge-fallback-choice-stock.test.ts	tooling	-	Vitest suite: cooldown-expiry (stock's default): B stands in until A's wait is over; nothing makes B the choice.
+src/main/bridge-first-use-stock.test.ts	tooling	-	Vitest suite: gives a prompt sent at `ready`, before anything connected, the areas' prompt sections.
+src/main/bridge-formal-hint.test.ts	tooling	-	Vitest suite: isFormalRequest.
+src/main/bridge-goal-continuation-stock.test.ts	tooling	-	Vitest suite: holds rpc as a runtime override, released by a Settings write.
+src/main/bridge-goal-time.test.ts	tooling	-	Vitest suite: goal time limit.
+src/main/bridge-health.test.ts	tooling	-	Vitest suite: unavailableFeatures.
+src/main/bridge-health.ts	port	2	BridgeHealth requests capabilities, records per-version results, reports missing actions and initiates repair on local core-capability/connection failures.
+src/main/bridge-idle-maintenance-stock.test.ts	tooling	-	Vitest suite: holds the recap while the draft has text, shows it once cleared, re-arms on a settings write and keeps it from the model.
+src/main/bridge-image-refs-stock.test.ts	tooling	-	Vitest suite: names each picture by stock's content address, in every position stock externalizes, and changes nothing in place.
+src/main/bridge-image-subscription-stock.test.ts	tooling	-	Vitest suite: runs a call without a model on the subscription model and never falls through to a paid one.
+src/main/bridge-input-history.test.ts	tooling	-	Vitest suite: shares history bidirectionally, skips secrets, and uses stock compaction helpers.
+src/main/bridge-job-widgets-stock.test.ts	tooling	-	Vitest suite: costs no widget request under the GUI's jobs poll, while a config.yml `async.widgets: true` gets stock's.
+src/main/bridge-jobs-core.test.ts	tooling	-	Vitest suite: cancellable.
+src/main/bridge-jobs-tree-stock.test.ts	tooling	-	Vitest suite: lists a subagent's job under its agent, inspects it, and refuses to cancel it.
+src/main/bridge-judge-assist-stock.test.ts	tooling	-	Vitest suite: without a native judge answers 'did not decide' and sends no request.
+src/main/bridge-judge-assist.test.ts	tooling	-	Vitest suite: when the judge does not decide.
+src/main/bridge-mcp-config-rename.test.ts	tooling	-	Vitest suite: stock's MCP config rename on Windows.
+src/main/bridge-mcp-core.test.ts	tooling	-	Vitest suite: why an MCP server is off.
+src/main/bridge-mcp-credentials-stock.test.ts	tooling	-	Vitest suite: is not listed as a model provider; a model provider's stored key still is.
+src/main/bridge-mcp-stock.test.ts	tooling	-	Vitest suite: connects a server another session signed in to, and its tool joins this live session.
+src/main/bridge-memory-judge-stock.test.ts	tooling	-	Vitest suite: asks stock's native judge for each pair and returns the choice as the verdict.
+src/main/bridge-memory-recall-core.test.ts	tooling	-	Vitest suite: which prompts recall.
+src/main/bridge-memory-recall-judge.test.ts	tooling	-	Vitest suite: never offers a session page to the judge.
+src/main/bridge-memory-recall.test.ts	tooling	-	Vitest suite: memory recall hook.
+src/main/bridge-model-roles-stock.test.ts	tooling	-	Vitest suite: reports each built-in role's effective model as stock resolves it and runs template agents on their first role.
+src/main/bridge-modes-shared.test.ts	tooling	-	Vitest suite: gui-bridge modes attach.
+src/main/bridge-mojibake.test.ts	tooling	-	Vitest suite: isUtf8Mojibake.
+src/main/bridge-next-prompt-core.test.ts	tooling	-	Vitest suite: candidates.
+src/main/bridge-next-prompt-real.test.ts	tooling	-	Vitest suite: shows fewer pure approvals for work already underway.
+src/main/bridge-next-prompt-stock.test.ts	tooling	-	Vitest suite: is available, resolves the smol model through stock's role chain, and agrees with stock's reply cleaning.
+src/main/bridge-next-prompt.test.ts	tooling	-	Vitest suite: a finished turn.
+src/main/bridge-omp-defaults-stock.test.ts	tooling	-	Vitest suite: holds each as a runtime override over RPC, replacing stock's advisor pin, and releases it on a Settings write.
+src/main/bridge-ompdesk-roles-stock.test.ts	tooling	-	Vitest suite: holds review at runtime, resolves it for agents and subagents, and gives the security reviewer a tier.
+src/main/bridge-output-style.test.ts	tooling	-	Vitest suite: gui-bridge output style.
+src/main/bridge-prompt-origin.test.ts	tooling	-	Vitest suite: prompt origin journal.
+src/main/bridge-prompt-sections.test.ts	tooling	-	Vitest suite: gui-bridge turn prompt sections.
+src/main/bridge-provider-logout-stock.test.ts	tooling	-	Vitest suite: removes every stored account of that provider and no other provider's.
+src/main/bridge-pstack.test.ts	tooling	-	Vitest suite: pstackVariant.
+src/main/bridge-quit-journal.test.ts	tooling	-	Vitest suite: the tool calls a quit waits for.
+src/main/bridge-rebind.test.ts	tooling	-	Vitest suite: keeps one socket server and the user's delegation strength.
+src/main/bridge-reply-language.test.ts	tooling	-	Vitest suite: gui-bridge reply language.
+src/main/bridge-reset-passes.test.ts	tooling	-	Vitest suite: stock reset selector wire projection.
+src/main/bridge-reset-redeem-stock.test.ts	tooling	-	Vitest suite: redeems through a guard that let no request leave loopback.
+src/main/bridge-restart.test.ts	tooling	-	Vitest suite: interruptedJobs.
+src/main/bridge-restore-card-stock.test.ts	tooling	-	Vitest suite; not shipped in main.
+src/main/bridge-restore-request-stock.test.ts	tooling	-	Vitest suite: continues the turn whose bash result the model had not answered yet, without running bash again.
+src/main/bridge-restore-subagents-stock.test.ts	tooling	-	Vitest suite: reports a subagent the restore revived to omp's subagent registry, and tells the idle parent once.
+src/main/bridge-role-values.test.ts	tooling	-	Vitest suite: advisor auto policy around stock selector.
+src/main/bridge-scratch.test.ts	tooling	-	Vitest suite: bridge scratch section.
+src/main/bridge-security-stock.test.ts	tooling	-	Vitest suite: shows a scan an earlier process left running as failed, scan and operation alike, on the first read.
+src/main/bridge-session-fork-stock.test.ts	tooling	-	Vitest suite: starts a branch from a prompt before it, with the prompt as the draft, and never leaves an unsent prompt.
+src/main/bridge-session-pins.test.ts	tooling	-	Vitest suite: writes stock's pins file, under stock's lock, and assigns instead of toggling.
+src/main/bridge-session-spend.test.ts	tooling	-	Vitest suite: spendByProvider.
+src/main/bridge-sessions.test.ts	tooling	-	Vitest suite: preserves full compacted branches, generated row ids, collision matching and flat tree semantics.
+src/main/bridge-ssh-diagnostics.test.ts	tooling	-	Vitest suite: adds the verbose trace of a fresh attempt to a failed test.
+src/main/bridge-steer-now-stock.test.ts	tooling	-	Vitest suite: the person's steer: the command backgrounds and the next request carries it.
+src/main/bridge-stock-settings-stock.test.ts	tooling	-	Vitest suite: are the user's, read through this omp's own modules.
+src/main/bridge-stream-metadata.test.ts	tooling	-	Vitest suite: groups a read exactly when stock compacts it, shows it as stock splits it, and samples the session meter.
+src/main/bridge-stt-language-stock.test.ts	tooling	-	Vitest suite: finds every stock internal the voice methods need.
+src/main/bridge-stt-language.test.ts	tooling	-	Vitest suite: which dictation model hears a language.
+src/main/bridge-thinking-default.test.ts	tooling	-	Vitest suite: gui-bridge thinking default.
+src/main/bridge-todo-compact-stock.test.ts	tooling	-	Vitest suite: is asked to fold right after the append that made it long, once.
+src/main/bridge-todo-compact.test.ts	tooling	-	Vitest suite: todoCompaction.
+src/main/bridge-todo-drift-rig.ts	tooling	-	steeredTurn, journalList and panel compare scripted agent work, stock journal state and dock state in drift tests.
+src/main/bridge-todo-drift-stock.test.ts	tooling	-	Vitest suite: lists an instruction steered into a running turn as news, with no warning for one.
+src/main/bridge-todo-drift.test.ts	tooling	-	Vitest suite: the panel's received instructions.
+src/main/bridge-todo-reminder-stock.test.ts	tooling	-	Vitest suite: reaches the model as an aside of that turn, and the session settles when the turn ends.
+src/main/bridge-todo-reminder.test.ts	tooling	-	Vitest suite: which custom messages the bridge reroutes.
+src/main/bridge-todo-stale-stock.test.ts	tooling	-	Vitest suite: is named to the model once, in the turn a new request opens, and never for a question.
+src/main/bridge-todo-stale.test.ts	tooling	-	Vitest suite: todoStaleness.
+src/main/bridge-todo-stock-rig.ts	tooling	-	startProvider, fakeAgent and startOmp supply stock todo tests with provider responses, isolated config and a live bridge.
+src/main/bridge-todo-wait-stock.test.ts	tooling	-	Vitest suite: still reminds a session that stopped with an item it can act on.
+src/main/bridge-todo-wait.test.ts	tooling	-	Vitest suite: a session waiting on a child's reply is not woken by the todo reminder.
+src/main/bridge-turn-origin-stock.test.ts	tooling	-	Vitest suite: is the person only for a run their typed message started, while it runs and after.
+src/main/bridge-turn-origin.test.ts	tooling	-	Vitest suite: who started the main agent's run.
+src/main/bridge-turn-stages-stock.test.ts	tooling	-	Vitest suite: writes no line for a normal turn and names the stage of each way a turn waits.
+src/main/bridge-turn-stages.test.ts	tooling	-	Vitest suite: TurnStageRecorder.
+src/main/bridge-usage-live-stock.test.ts	tooling	-	Vitest suite: reads Settings' accounts from the base-URL entry every other usage reader shares, refreshes stale ones through invalidate, and never blanks a failed one.
+src/main/bridge-user-profile.test.ts	tooling	-	Vitest suite: user profile contracts.
+src/main/bridge-visuals.test.ts	tooling	-	Vitest suite: gui-bridge diagram instructions.
+src/main/bridge-waste-guards-stock.test.ts	tooling	-	Vitest suite: refuses a ready.log that cannot match at once, without running the command.
+src/main/bridge-waste-guards.test.ts	tooling	-	Vitest suite: ready.log that can never match.
+src/main/bridge-xdev-notice.test.ts	tooling	-	Vitest suite: xdev mount notice dedupe.
+src/main/builtin-mcp-spawn.test.ts	tooling	-	Vitest suite: built-in MCP sidecar argv.
+src/main/builtin-mcp.test.ts	tooling	-	Vitest suite: probes node and npx once for every later spawn, keeping the preference live.
+src/main/builtin-mcp.ts	port	2	builtinReaState/spawnReaState locate node/npx, probe runtime support and cache executable identity for REA startup.
+src/main/canonical-cwd.ts	port	1	canonicalCwd resolves real paths for tab/sidecar identity while preserving Windows spelling.
+src/main/checkout-claims-journal.test.ts	tooling	-	Vitest suite: the claims journal.
+src/main/checkout-claims.test.ts	tooling	-	Vitest suite: shared-checkout claims under generated sequences.
+src/main/checkout-expand.test.ts	tooling	-	Vitest suite: the files a formatter on a folder claims.
+src/main/checkout-peers.test.ts	tooling	-	Vitest suite: checkout peers.
+src/main/checkout-peers.ts	mixed	3	readCheckoutClaims calls git.checkoutStatus in crates/core/src/git/mod.rs; CheckoutPeerCoordinator still polls bridges, judges claims, groups checkouts and publishes peer changes.
+src/main/ci-queue.test.ts	tooling	-	Vitest suite: every macOS job of a dispatchable workflow.
+src/main/connectivity.test.ts	tooling	-	Vitest suite: ConnectivityMonitor.
+src/main/connectivity.ts	mixed	2	ConnectivityMonitor invokes hub kind connectivity (crates/core/src/resume/{mod,connectivity}.rs); TS still owns proxy target selection, DNS/TCP probe, deadlines, timers and host signals.
+src/main/console-window-watch.test.ts	tooling	-	Vitest suite: console window watch.
+src/main/console-window-watch.ts	mixed	2	procs.consoles in crates/core/src/procs/mod.rs enumerates Windows console windows; ConsoleWindowWatch polls, attributes new windows to recent process ancestry and rate-limits logs.
+src/main/core-saves.test.ts	tooling	-	Vitest suite: the core's stores on a full disk.
+src/main/core-saves.ts	native-client	2	routeCoreSaves consumes store.saveFailed/store.saved from crates/core/src/disk/saves.rs and clears reported names on core exit; retries stay in Rust.
+src/main/deep-link.ts	port	4	setupDeepLinks and handleOpenPath capture startup URLs and second-instance argv, then focus or create the matching Electron window.
+src/main/default-workspace.ts	port	1	ensureDefaultWorkspace resolves the work directory beside agentDir and creates it recursively.
+src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that save on every change, on a full disk.
+src/main/deleted-sessions.ts	port	2	DeletedSessions loads and persists bounded per-device/path tombstones through AtomicSaver to prevent deleted sessions reopening.
+src/main/delivery-ledger.test.ts	tooling	-	Vitest suite: deliverOnce.
+src/main/delivery-ledger.ts	port	2	deliverOnce shares in-flight answers and retains accepted delivery IDs for bounded retry deduplication across tabs.
+src/main/desktop-slot-host.test.ts	tooling	-	Vitest suite: DesktopSlotHost.
+src/main/desktop-slot-host.ts	port	3	DesktopSlotHost maps local and hosted session frames to slot requests and sends grant/revoke commands and window state.
+src/main/desktop-slot.test.ts	tooling	-	Vitest suite: DesktopSlot.
+src/main/desktop-slot.ts	port	2	DesktopSlot owns the FIFO desktop lease, revoke timeout/retry and confirmed release/kill rules before the next grant. ipc.ts creates DesktopSlotHost, which constructs this class; desktop_slot/policy.rs on 8a5e1af8a is not the production implementation.
+src/main/diagnostic-bundle.test.ts	tooling	-	Vitest suite: saving through the dialog.
+src/main/diagnostic-bundle.ts	port	3	saveDiagnosticBundle requests a redacted session archive locally or remotely, adds the diagnostics report with JSZip, saves and discards the source archive.
+src/main/diagnostics.test.ts	tooling	-	Vitest suite: buildDiagnosticsReport.
+src/main/diagnostics.ts	port	2	currentDiagnosticsReport collects system/setup/log facts; buildDiagnosticsReport formats and redacts them for registerDiagnosticsIpc.
+src/main/disk-full-notice.ts	port	3	bindDiskFullNotice opens/closes one OS notice for pending files; bindDiskFullPush sends changed state to listening clients.
+src/main/disk-full.ts	port	2	DiskFullWatch tracks failed file names and coalesces listener notifications; isDiskFull recognizes space/quota errors.
+src/main/editable-context-menu.test.ts	tooling	-	Vitest suite: editableContextMenuTemplate.
+src/main/editable-context-menu.ts	port	4	editableContextMenuTemplate and editRoleItems build Electron menu roles, spellchecker suggestions and copy-image actions from context-menu parameters.
+src/main/editor.ts	port	1	openInExternalEditor writes draft to a temp file, launches the configured editor and reads edited text after a successful exit.
+src/main/emoji-stock.test.ts	tooling	-	Vitest suite: ships stock's shortcode table byte for byte.
+src/main/event-batcher.ts	port	2	EventBatcher buffers agent session events per frame interval and drops intermediate tool execution updates under backpressure.
+src/main/extension-reload.test.ts	tooling	-	Vitest suite: mergeApplyPlans.
+src/main/extension-reload.ts	port	1	mergeApplyPlans merges restart/reload/reconnect requirements; extensionApplyDecision chooses immediate, deferred or skipped application from tab facts.
+src/main/extension-specs.test.ts	tooling	-	Vitest suite: isPinnedNpmSpec.
+src/main/external-url.test.ts	tooling	-	Vitest suite: isOpenableExternalUrl.
+src/main/external-url.ts	port	1	isOpenableExternalUrl restricts external OS dispatch to accepted web and mailto URLs.
+src/main/fenced-fs.ts	port	1	fs proxies Node promise filesystem methods through fencedEffect so a stopped serial-chain step cannot issue later operations.
+src/main/frame-bookkeeping.test.ts	tooling	-	Vitest suite: withoutFrameBookkeeping.
+src/main/frame-bookkeeping.ts	port	1	withoutFrameBookkeeping removes redundant turn_end payload and assistant request bookkeeping before live frames reach clients.
+src/main/gh-guard-launchers.test.ts	tooling	-	Vitest suite: the gh guard's launchers on Windows.
+src/main/gh-guard-stock.test.ts	tooling	-	Vitest suite: serves a finished attempt's log from the cache, by attempt, and slows a watch to a minute.
+src/main/gh-guard.test.ts	tooling	-	Vitest suite: what a gh command costs.
+src/main/git-fingerprints.test.ts	tooling	-	Vitest suite: GitFingerprints.
+src/main/git-fingerprints.ts	mixed	2	GitFingerprints owns checkout watches, invalidation and concurrent read caching; core git.checkoutDirs and git.fingerprint resolve directories and read Git state.
+src/main/gpu-fallback-core.ts	port	1	gpuMarkerDecision, gpuChange and markerForTrial determine software fallback and hardware retrial from persisted GPU identity and age.
+src/main/gpu-fallback-loop.test.ts	tooling	-	Vitest suite: GPU crash relaunch.
+src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.
+src/main/gpu-fallback.ts	mixed	4	applyGpuFallbackIfNeeded and handleGpuProcessGone manage the marker, flags and relaunch; tauri-shell/src/gpu.rs supplies app.getGPUInfo and process_failed.rs emits app.childProcessGone.
+src/main/hang-watchdog-core.test.ts	tooling	-	Vitest suite: createHangDetector.
+src/main/hang-watchdog-core.ts	port	1	createHangDetector classifies heartbeat stalls versus sleep gaps; createStepRing and consumeHangMarker retain diagnostic evidence.
+src/main/hang-watchdog-worker.ts	port	2	Node worker_threads entry monitors main heartbeats independently, samples process state and writes a stall marker without restarting the app.
+src/main/hang-watchdog.test.ts	tooling	-	Vitest suite: reportPreviousHang.
+src/main/hang-watchdog.ts	port	4	installHangWatchdog starts the Node watchdog worker and delivers heartbeats and power events; reportPreviousHang consumes the prior run's marker.
+src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
+src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
+src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.
+src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
+src/main/idle-release.ts	port	3	IdleRelease tracks quiet time and inspects process trees to select a quiet tab to release under memory pressure; does not perform the release.
+src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup and session services; routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
+src/main/initial-cwd.test.ts	tooling	-	Vitest suite: firstUsableCwd.
+src/main/initial-cwd.ts	port	1	firstUsableCwd selects the first usable directory in caller-supplied priority order.
+src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
+src/main/installer-spawn.ts	port	1	spawnDetachedOffThread delegates detached installer process creation to a Node Worker and returns its PID.
+src/main/ipc.ts	mixed	4	registerIpcHandlers owns caller/window routing, local and paired-device session commands and renderer events; clipboard.readText reaches shell/src/clipboard.rs and image.toModel uses core stock.request to reach stock omp.
+src/main/launch-argv.test.ts	tooling	-	Vitest suite: parseLaunchArgv.
+src/main/launch-argv.ts	port	1	parseLaunchArgv distinguishes a protocol URL, existing directory and focus-only launch for a second instance.
+src/main/launch-guard-core.ts	port	1	parseLaunchHistory, crashLoopDetected and gpuRelaunchDecision implement launch-history and relaunch cooldown policy.
+src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
+src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.
+src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
+src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
+src/main/launch-profile-store.ts	port	2	readLaunchProfile and updateLaunchProfile read and merge per-workspace launch flags in GUI preferences.
+src/main/legacy-user-data.test.ts	tooling	-	Vitest suite: migrateLegacyUserData.
+src/main/legacy-user-data.ts	port	1	migrateLegacyUserData checks the destination profile is fresh before renaming or copying the old seucode profile.
+src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
+src/main/local-engines-core.test.ts	tooling	-	Vitest suite: engineAction.
+src/main/local-engines-core.ts	port	1	engineAction maps one local engine's availability and provider facts to the action its detector should take.
+src/main/local-engines.test.ts	tooling	-	Vitest suite: localEngineSettings.
+src/main/local-engines.ts	port	2	LocalEngineDetector probes loopback inference endpoints on an interval and maintains detected provider entries via the models.yml writer.
+src/main/log-watcher.test.ts	tooling	-	Vitest suite: opening logs later replays complete lines once, including split appends.
+src/main/log-watcher.ts	port	2	LogWatcher watches the log directory, tails changed files, maintains a bounded buffer and publishes batches to subscribers.
+src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.
+src/main/mac-permissions.ts	port	2	MacPermissions queries accessibility and screen grants through injected platform calls, requests missing permissions and tracks prior requests in preferences.
+src/main/machine-services.test.ts	tooling	-	Vitest suite: machineFor.
+src/main/machine-services.ts	mixed	3	LocalMachine owns caller-scoped benchmark/model setup runners and local settings operations; RemoteMachine validates and forwards host requests. ModelSetupRunner delegates execution to core models.setupRun; TS retains routing and runner maps.
+src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.
+src/main/machine-state.ts	port	2	MachineState retains recent resource samples and emits before/after stall reports; readOwn and ownFacts calculate process-level facts.
+src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
+src/main/mail-accounts.ts	port	2	MailAccounts persists account metadata and encrypted per-account passwords, decrypts on read/test and opens TLS or plain IMAP sockets.
+src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
+src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
+src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
+src/main/mcp-hub-rea.test.ts	tooling	-	Vitest suite: MCP hub: REA.
+src/main/mcp-hub.ts	port	2	McpHub launches and supervises a shared Bun MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
+src/main/mcp-live.ts	port	3	onMcpChange and noteMcpChange register and invoke the desktop listener that fans a session's MCP change out to other sessions.
+src/main/media-stream.test.ts	tooling	-	Vitest suite: parseRange.
+src/main/media-stream.ts	port	2	MediaStreams maps opaque tokens to local files and streams bounded byte ranges for omp-media; parseRange validates seek requests.
+src/main/memory-prompt.test.ts	tooling	-	Vitest suite: promptTitle.
+src/main/memory-record.test.ts	tooling	-	Vitest suite: who uses the memory.
+src/main/memory-record.ts	port	1	processOwners and memoryRecord attribute sampled processes to sessions and rank memory users; RecordClock gates repeated pressure logs.
+src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of this computer.
+src/main/memory-sampler.ts	mixed	1	readMemory and listProcesses dispatch to core/src/memory/mod.rs memory.reading and memory.processes; treeBytes still totals descendants in TS and testMemoryReading reads a fixture override.
+src/main/memory-watch.ts	mixed	3	startMemoryWatch schedules samples via memory.reading and memory.processes, coordinates idle tab release and captures memory-owner records on pressure; scheduling and actions remain in TS.
+src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions.
+src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and window callbacks, installs the application menu and uses shell.openExternal (shell/src/shellops.rs) for the project URL; action composition remains in TS.
+src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
+src/main/message-update-slim.ts	port	1	slimMessageUpdate and createMessageUpdateSlimmer strip repeated accumulated message content from streamed events before forwarding.
+src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
+src/main/model-release-dates.ts	port	2	getModelReleaseDates fetches models.dev/catalog.json, extracts model-specific OpenRouter dates and caches/coalesces requests.
+src/main/model-role-contracts.test.ts	tooling	-	Vitest suite: role groups.
+src/main/model-roles-stock-coverage.test.ts	tooling	-	Vitest suite: lists each installed role with stock's metadata, or hides it with a reason.
+src/main/model-setup-metering.test.ts	tooling	-	Vitest suite: sees OpenRouter chat models, so the metering checks are not vacuous.
+src/main/model-setup-review-stock.test.ts	tooling	-	Vitest suite; not shipped in main.
+src/main/model-setup-runner.test.ts	tooling	-	Vitest suite: ModelSetupRunner.
+src/main/model-setup-runner.ts	mixed	2	ModelSetupRunner uses core models.setupRun/models.setupStop for the research process; TS enforces a single live request, validates input, tracks events and parses the returned plan.
+src/main/model-wait-count.test.ts	tooling	-	Vitest suite: countTogether.
+src/main/model-wait-count.ts	port	3	ModelWaitTracker records provider waits across sessions and countTogether counts sessions concurrently waiting beyond the threshold.
+src/main/models-config-stock.ts	mixed	2	modelsConfigMetadata and normalizeModelsConfig request catalog.roster and models.validate from installed omp via core stock.request; TS checks returned option arrays, Rust owns worker lanes, not stock validation.
+src/main/models-config.test.ts	tooling	-	Vitest suite: derives the full stock roster and option vocabularies.
+src/main/models-config.ts	mixed	2	listModelsProviders, upsertModelsProvider and writeModelsText own YAML editing, merging and file writes; models-config-stock obtains vocabulary and normalization from installed omp over core stock.request.
+src/main/native-bin.ts	port	1	configureNativeBin and nativeBinPath resolve packaged or development paths to ompdesk and ompdesk-core; this is runtime path selection, not binary staging.
+src/main/native-labels.test.ts	tooling	-	Vitest suite: native menu roles.
+src/main/notification-batch.test.ts	tooling	-	Vitest suite: NotificationBatcher.
+src/main/notification-batch.ts	port	2	NotificationBatcher groups one window's tab notifications over a timer; formatBatchSummary builds the resulting localized summary.
+src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge says waits for the person.
+src/main/notify-triage.ts	port	3	createNotifyHandler deduplicates per-window notifications and waits for a judge-model completion classification before deciding whether input is needed.
+src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
+src/main/nsis-updater.ts	port	4	OmpNsisUpdater customizes electron-updater's download session and delays quitAndInstall teardown until the detached installer spawn resolves.
+src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
+src/main/omp-auto-takeover.ts	port	2	OmpAutoTakeover reads/writes stock update.auto via the omp CLI and uses takeoverStep and the stored record to manage ownership of automatic updates.
+src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
+src/main/omp-availability.ts	port	2	followSetupState maintains the shared machine-level omp availability gate; refuseWithoutOmp distinguishes setup unavailability from a failed worker request.
+src/main/omp-compat-source.test.ts	tooling	-	Vitest suite: OmpCompatSource.
+src/main/omp-compat-source.ts	port	2	OmpCompatSource fetches the verified-version feed, throttles reads and retains a last-good disk cache for offline launches.
+src/main/omp-config-stock.test.ts	tooling	-	Vitest suite: reads stock's default, writes both values, and reads back what it wrote.
+src/main/omp-daemon-folder-stock.test.ts	tooling	-	Vitest suite: is removed once that omp ended, while another session's omp keeps running.
+src/main/omp-exits.ts	port	3	noteOmpExit records exit promises by cwd; ompsExitedIn bounds the wait before an opened worktree can be removed.
+src/main/omp-hold-notice.test.ts	tooling	-	Vitest suite: holdNotice: a release runners failed.
+src/main/omp-hold-notice.ts	port	1	holdNotice, parseHoldTold and heldSince determine when a blocked omp version should produce an initial or repeat notification.
+src/main/omp-launch.test.ts	tooling	-	Vitest suite: omp launch.
+src/main/omp-launch.ts	port	3	sessionOpen, ompArgs and sessionEnv compose a tab's resume/new launch and owned environment; withCreditSpendRuns controls which launches receive credit-spend configuration.
+src/main/omp-log-tail.test.ts	tooling	-	Vitest suite: ompLogTail.
+src/main/omp-log-tail.ts	native-client	3	SidecarManager.#onSlow calls ompLogTail; omp.logTail in core/src/omp/log_tail.rs selects, reads and compacts the log. TS resolves the stock log directory and supplies the local calendar days. At 2ae6e2587 the production caller still used TS.
+src/main/omp-processes.test.ts	tooling	-	Vitest suite: a quit's stop leaves no omp running: one that ignores SIGTERM and one that is stopped.
+src/main/omp-processes.ts	native-client	3	OmpProcesses.stopAll and reapLeftovers call sidecar.stopAll and omp.reap; core sidecar/mod.rs and omp/mod.rs own stopping and identity-checked reaping, TS supplies bounds, file paths and reporting.
+src/main/omp-restart.test.ts	tooling	-	Vitest suite: ompRestartDecision.
+src/main/omp-restart.ts	port	1	ompRestartDecision classifies an updated omp tab as restart, wait or skip based on its lifecycle facts.
+src/main/omp-runtime.test.ts	tooling	-	Vitest suite: omp version parsing.
+src/main/omp-runtime.ts	port	2	ompCandidates, isCompiledOmp and version probes resolve the supported system CLI, construct its Bun/PATH environment and run bounded subprocesses.
+src/main/omp-updater.test.ts	tooling	-	Vitest suite: OmpUpdater.
+src/main/omp-updater.ts	port	2	OmpUpdater schedules checks, applies verified-version policy and coordinates setup update/repair; registerOmpUpdateIpc exposes state and update actions.
+src/main/ompdesk-check.test.ts	tooling	-	Vitest suite: group.
+src/main/open-path.test.ts	tooling	-	Vitest suite: isLauncherPath.
+src/main/open-path.ts	mixed	1	isLauncherPath checks extensions, resolved symlinks and executable bits; openLocalPath chooses reveal versus shell.openPath, with native shell operations in shell/src/shellops.rs. Safety policy remains TS.
+src/main/packaging-config.test.ts	tooling	-	Vitest suite: mac bundle configs.
+src/main/platform-test-scope.test.ts	tooling	-	Vitest suite: Windows test scope.
+src/main/process-alive.ts	port	1	processAlive uses signal zero and treats EPERM as evidence that the PID exists.
+src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
+src/main/quit-guard.ts	port	3	assessQuitRisk aggregates tab work; lastWindowCloseAction, updateRestartConfirmation and QuitLatch decide close, approval and restart behavior.
+src/main/quit-log.test.ts	tooling	-	Vitest suite: app-quit lines.
+src/main/quit-log.ts	port	1	quitAskedReport and exitReport produce structured end-of-run records; uncleanEndReport identifies a prior run without an end line.
+src/main/quit-watchdog.test.ts	tooling	-	Vitest suite: quit watchdog.
+src/main/quit-watchdog.ts	port	2	QuitWatchdog arms or cancels the bounded forced-exit timer after a committed quit or update, reporting its reason before exit.
+src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a failure stock calls a billing cap, and waits for the limits stock lets pass with time.
+src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
+src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.
+src/main/release-detect.test.ts	tooling	-	Vitest suite: findReleaseAnchors.
+src/main/release-detect.ts	port	1	findReleaseAnchors and detectReleaseProcedure inspect repository rule headings and the Autopilot guide to locate a declared release procedure.
+src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recovery.
+src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
+src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
+src/main/restart-policy.test.ts	tooling	-	Vitest suite: restartDelay.
+src/main/restart-policy.ts	port	1	RestartBudget and restartDelay implement the bounded restart/backoff ladder used by bundled services; the tab sidecar has its own native ladder, not this implementation.
+src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
+src/main/retired-prefs.ts	port	2	migrateRetiredPrefs applies retired-key and panel-view migrations and updates associated settings/schedule storage.
+src/main/rpc-client.ts	mixed	3	RpcClient.command assigns GUI IDs, tries local handlers and times them out; stock() uses the tab lane's core sidecar.command and refuses sends after retire().
+src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
+src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.
+src/main/runtime-log.ts	port	2	runtimeLogPath resolves the app userData log location and writeRuntimeLog attaches caller context before passing the report to the TS log writer.
+src/main/safe-store.test.ts	tooling	-	Vitest suite: prefs written on a full disk.
+src/main/safe-store.ts	port	2	SafeStore overlays pending electron-store values per file and retries writes after ENOSPC.
+src/main/save-copy.test.ts	tooling	-	Vitest suite: fileNameOf.
+src/main/save-copy.ts	port	3	saveCopy coordinates destination selection, local copy or remote range streams, exclusive partial file and final rename.
+src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.
+src/main/saved-layouts.ts	port	1	layoutsToSave decides whether quit teardown or an empty window should overwrite the saved desktop.
+src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
+src/main/schedules.ts	mixed	2	ScheduleService uses schedules.open/command/launch in core/src/schedules/mod.rs for timers, journals and supervised runs; TS still cleans drafts, serializes requests and supplies quota, wake and omp launch callbacks.
+src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
+src/main/serial-chain.ts	port	2	SerialChain serializes steps, aborts stalled work and fences following steps until tracked OS effects drain.
+src/main/session-cache.test.ts	tooling	-	Vitest suite: StampedLru (entry-count budget).
+src/main/session-cache.ts	port	1	StampedLru implements path-keyed change signatures and weighted eviction for session-index caches.
+src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.
+src/main/session-free.test.ts	tooling	-	Vitest suite: whenSessionFree.
+src/main/session-free.ts	port	2	whenSessionFree owns the bounded polling loop and fallback when the injected stock session ownership check fails.
+src/main/session-index-activity.test.ts	tooling	-	Vitest suite: lists when the conversation last moved, not when a relaunch last wrote the file.
+src/main/session-index-first-prompt.test.ts	tooling	-	Vitest suite: lists the first prompt that stock persists after a long xd:// mount notice.
+src/main/session-index.test.ts	tooling	-	Vitest suite: keeps GUI kind overlays and handles headers with no title slot.
+src/main/session-index.ts	mixed	3	SessionIndex delegates watch, deduplication and header kind to sessions.watch/listed/kind in core/src/sessions/mod.rs; TS still composes stock lists, tombstones, folder filters, search cache and numbered updates.
+src/main/session-kinds.ts	port	2	SessionKindStore persists GUI-created chat session IDs outside stock journals using AtomicSaver.
+src/main/session-launch-parity.test.ts	tooling	-	Vitest suite: a session's omp launches the same way on every start path.
+src/main/session-list-share.test.ts	tooling	-	Vitest suite: SessionListShare.
+src/main/session-list-share.ts	port	3	SessionListShare coalesces concurrent list reads, tracks versions and broadcasts deltas to viewers.
+src/main/session-lists-report.test.ts	tooling	-	Vitest suite: measures asks, bytes and CPU idle and while agents append.
+src/main/session-mutations.test.ts	tooling	-	Vitest suite: deleteSession.
+src/main/session-mutations.ts	port	3	deleteSession, renameSession and moveSession coordinate live ownership, shutdown, stored sessions, tombstones and deletion listeners.
+src/main/session-pace-memory.test.ts	tooling	-	Vitest suite: reads a journal far larger than the memory it takes.
+src/main/session-pace.test.ts	tooling	-	Vitest suite: session-pace.
+src/main/session-pace.ts	port	1	pace reconstructs tool intervals, idle time and model time from journal entries; waste flags inefficient calls.
+src/main/session-processes.test.ts	tooling	-	Vitest suite: a session's processes, on this computer.
+src/main/session-processes.ts	mixed	3	SessionProcesses uses procs.list/end in core/src/procs/mod.rs for OS surveys and termination; TS owns the session tag ledger, sweep selection, spin sampling policy and retries.
+src/main/session-scratch.ts	port	2	SessionScratch assigns tab-tag scratch folders and persists the sessions each folder served for retention.
+src/main/session-snippet.test.ts	tooling	-	Vitest suite: contentSnippet.
+src/main/session-snippet.ts	port	1	contentSnippet extracts original-case query context from matching JSONL strings.
+src/main/session-store.ts	mixed	2	StockSessionStore validates stock sessions.list/list_directory/delete/move/messages/owned replies; core/src/stock/mod.rs stock.request supervises transport, resources/gui-bridge/stock-helper/sessions.ts implements storage operations in Bun, not Rust.
+src/main/session-summaries.test.ts	tooling	-	Vitest suite: SessionSummaries.
+src/main/session-summaries.ts	port	3	SessionSummaries combines pool and paired-host facts with subagent rosters and publishes versioned summary changes.
+src/main/session-targets.test.ts	tooling	-	Vitest suite: session targets.
+src/main/session-targets.ts	native-client	2	sessionTargets/sessionArtwork normalize paths and shape replies; projectMetadata.get/projectArtwork.get in core/src/repo_images/mod.rs own journal, Git and artwork lookup.
+src/main/settle-watch.test.ts	tooling	-	Vitest suite: settle watch.
+src/main/settle-watch.ts	port	2	SettleWatch arms a diagnostic timer and samples get_state when a tab remains settling.
+src/main/shell-env.test.ts	tooling	-	Vitest suite: resolveLoginShellEnv.
+src/main/shell-env.ts	port	2	resolveLoginShellEnv caches shell exports; shellSpawnEnv/spawnPath resolve the launch environment for GUI child processes.
+src/main/sidebar-layout.ts	port	1	SidebarLayoutScope restricts project and session reorders to sender-visible entries without displacing hidden slots.
+src/main/sidebar-prefs.test.ts	tooling	-	Vitest suite: updateSidebarPrefs.
+src/main/sidebar-prefs.ts	port	2	updateSidebarPrefs applies individual validated sidebar changes to current storage; moveSidebarPin updates pinned identities.
+src/main/sidebar-projects.test.ts	tooling	-	Vitest suite: SidebarProjects.
+src/main/sidebar-projects.ts	mixed	2	SidebarProjects owns project membership, suppression, persistence and session reconciliation; readProjectOrigin supplies Git facts via git.originFacts in core/src/git/mod.rs.
+src/main/sidecar-core-loss.test.ts	tooling	-	Vitest suite: tabs whose core ended under them.
+src/main/sidecar-exit-hold.test.ts	tooling	-	Vitest suite: is not killed at the stop's bound while it says it waits to save, and ends by itself once it saved.
+src/main/sidecar-factory.test.ts	tooling	-	Vitest suite: localSidecarFactory.
+src/main/sidecar-factory.ts	port	3	localSidecarFactory builds local SidecarManager launch dependencies and connects per-tab bridge events for pool and paired hosts; it does not implement the native lane.
+src/main/sidecar-os-shutdown.test.ts	tooling	-	Vitest suite: omp ended by the Windows session.
+src/main/sidecar-pool.test.ts	tooling	-	Vitest suite: SidecarPool session kind.
+src/main/sidecar-pool.ts	mixed	3	SidecarPool dispatches acquire and release decisions to the pool hub in core/src/pool/mod.rs; TS still holds live window/sidecar handles, event forwarders, activity listeners, timers and release promises.
+src/main/sidecar-run-state.test.ts	tooling	-	Vitest suite: a retry saga across a reading.
+src/main/sidecar-run-state.ts	port	3	applyRunEvent/trackRunEvent reduce stock events into busy, settling and outcome state for local and hosted sessions.
+src/main/sidecar-types.ts	port	3	SidecarLike and VIEW_ENDED_EVENT define the local/remote tab handle and event vocabulary; migrate consumers, not a separate process implementation.
+src/main/sidecar.test.ts	tooling	-	Vitest suite: SidecarManager.
+src/main/sidecar.ts	mixed	3	SidecarManager uses sidecar.open/start/restart/dispose/barrier in core/src/sidecar/mod.rs for child and wire lifecycle; TS still resolves spawn inputs, routes frames, dispatches GUI commands and pushes settings.
+src/main/sign-in-callback.ts	port	1	loopbackCallback validates redirect host and port; replaySignInCallback forwards a callback query and bounds the returned page.
+src/main/slow-steps.test.ts	tooling	-	Vitest suite: slow steps.
+src/main/slow-steps.ts	port	2	SlowSteps measures slow IPC and hub calls and rate-limits repeated diagnostics.
+src/main/snowflake-stock.test.ts	tooling	-	Vitest suite: mints stock's ids, including clocks before the epoch and past the 42-bit field.
+src/main/snowflake.ts	port	1	nextSnowflake combines timestamp and sequence into a padded hexadecimal ID.
+src/main/spawn-hidden.test.ts	tooling	-	Vitest suite: starts without a console window.
+src/main/spawn.test.ts	tooling	-	Vitest suite: Windows shims.
+src/main/spawn.ts	port	1	spawnCommand/spawnArgs choose platform launch behavior; findOnPath checks executable candidates.
+src/main/startup-timing.ts	port	2	markStartup records each launch milestone once on main's clock, including validated renderer marks.
+src/main/stats-client.ts	port	2	StatsClient validates API paths and sends bounded HTTP requests to the private bundled dashboard server.
+src/main/stats-host-stock.test.ts	tooling	-	Vitest suite: ingests the sessions on disk and every reply written after it started, with no dashboard page open.
+src/main/stats-host.test.ts	tooling	-	Vitest suite: exits when stdin closes while stock's server never finishes starting.
+src/main/stats-server.test.ts	tooling	-	Vitest suite: a live listener is never respawned by a demand-driven revive.
+src/main/stats-server.ts	port	2	StatsServerManager spawns stock's dashboard host, tracks private port readiness and terminates the child on quit.
+src/main/stock-helper-accounts.test.ts	tooling	-	Vitest suite: accounts.providers.
+src/main/stock-helper-auto-title.test.ts	tooling	-	Vitest suite: the automatic title a session list row shows beside a typed name.
+src/main/stock-helper-extensions.test.ts	tooling	-	Vitest suite: extensions worker on a fake install.
+src/main/stock-helper-history.test.ts	tooling	-	Vitest suite: stock helper history reads.
+src/main/stock-helper-images.test.ts	tooling	-	Vitest suite: turns a BMP and an AVIF into a format models take, and refuses bytes that are no picture.
+src/main/stock-helper-memory.test.ts	tooling	-	Vitest suite: memory.promptFacts.
+src/main/stock-helper-sessions.test.ts	tooling	-	Vitest suite: stock helper first-prompt fill.
+src/main/stock-helper-worktrees.test.ts	tooling	-	Vitest suite: answers stock's worktree base and repo hash, from the user's config and OMP_WORKTREE_DIR over it.
+src/main/stock-helper.test.ts	tooling	-	Vitest suite: StockHelper request timeout.
+src/main/stock-helper.ts	mixed	2	StockHelper uses stock.request/launched/stop in core/src/stock/mod.rs for worker scheduling and supervision; TS still resolves the installed omp, install stamps and launch environment.
+src/main/subagent-frames.test.ts	tooling	-	Vitest suite: createSubagentFrameBatcher.
+src/main/subagent-frames.ts	port	1	slimSubagentFrame and createSubagentFrameBatcher shrink streaming frames and coalesce visible-tab IPC deliveries.
+src/main/supply-chain.test.ts	tooling	-	Vitest suite: supply chain.
+src/main/system-languages.test.ts	tooling	-	Vitest suite: system languages.
+src/main/system-languages.ts	port	4	acceptLanguages, seedSpellchecker and applyAcceptLanguages apply system language ordering and spellchecker policy through the Electron-compatible session API on the Tauri host.
+src/main/system-version.test.ts	tooling	-	Vitest suite: systemVersion.
+src/main/system-version.ts	port	1	systemVersion maps OS kernel release to display version; shellEngine derives the shell label from runtime versions.
+src/main/tab-layout.test.ts	tooling	-	Vitest suite: persisted tab layout.
+src/main/tab-layout.ts	native-client	3	sanitizePersistedTabLayout(s) calls layout hub sanitize in core/src/pool/layout.rs; TS supplies deleted-session and optional probe callbacks and reports dropped entries.
+src/main/tab-release.test.ts	tooling	-	Vitest suite: closeWindowTab.
+src/main/tab-release.ts	port	3	closeWindowTab coordinates viewer detach or real tab release with worktree exit policy.
+src/main/tab-spawn.test.ts	tooling	-	Vitest suite: spawnTabForWindow refusal contracts.
+src/main/tab-spawn.ts	port	3	spawnTabForWindow validates stored-session ownership and kind, determines folder state and attaches a tab for the requesting window.
+src/main/test-bridge-probe.ts	tooling	-	runBridgeProbe and runStock prepare isolated bridge fixtures against installed stock omp.
+src/main/test-fake-judge.ts	tooling	-	fakeJudge records judge requests and returns test-controlled answers.
+src/main/test-fake-omp.ts	tooling	-	writeFakeOmp/writeFakeBin create platform-specific test launchers tied to the test runner's lifetime.
+src/main/test-folders.ts	tooling	-	removeWhenFree retries test-folder cleanup after transient filesystem locks.
+src/main/test-full-disk.ts	tooling	-	withFullDisk injects partial writes and ENOSPC for disk-full tests.
+src/main/test-hold-open.ts	tooling	-	holdOpen launches a child to keep a file open for lock-contention tests.
+src/main/test-launcher-exit.ts	tooling	-	exitWithLauncher is wired through index.ts for test launches; watches OMP_GUI_TEST_LAUNCHER_PID so apps do not outlive their test launcher.
+src/main/test-mojibake.ts	tooling	-	garbled reinterprets UTF-8 bytes with the fixture's Windows-1252 table.
+src/main/test-npm-registry.ts	tooling	-	npmRegistry serves mutable package tags and installer-compatible tarballs for tests.
+src/main/test-omp-registry.ts	tooling	-	ompRegistry serves fake stock omp releases with changing latest tags and real tarballs.
+src/main/test-skills-registry.ts	tooling	-	skillsRegistry serves Skillshare manifests, package tarballs and integrity metadata for installer tests.
+src/main/test-stock-rpc.ts	tooling	-	StockRpc correlates requests and responses for tests driving raw omp without a native sidecar lane.
+src/main/test-symlinks.ts	tooling	-	itWithFileSymlinks gates filesystem tests on a real unprivileged symlink capability probe.
+src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
+src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
+src/main/tray-labels.test.ts	tooling	-	Vitest suite: tray menu.
+src/main/tray-labels.ts	port	1	trayMenuTemplate, aggregateTrayStatus and menuSignature derive tray labels, progress and menu rebuild decisions.
+src/main/tray.ts	port	4	createTray/setTrayState/destroyTray own the Electron tray handle, menu installation and window/app actions.
+src/main/turn-resume-ends.test.ts	tooling	-	Vitest suite: the end table and formal/turn-resume name the same rows and checks.
+src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/resume/hold-ends.json for parity tests; core/src/resume/ends.rs makes the runtime decision.
+src/main/turn-resume-limit.test.ts	tooling	-	Vitest suite: a turn stock gave up on at a provider limit.
+src/main/turn-resume-test-rig.ts	tooling	-	TurnResumeWorld drives discrete network, tab, retry and move events against formal resume invariants.
+src/main/turn-resume.test.ts	tooling	-	Vitest suite: deriveMarkers.
+src/main/turn-resume.ts	mixed	3	TurnResume delegates resume decisions to resume hub launch and other methods in core/src/resume/mod.rs; TS still owns InterruptedTurnStore, in-flight move promises, timers, listeners and RPC command execution.
+src/main/turn-stages-log.ts	port	1	turnStagesReport validates a bridge turn_stages frame and builds a runtime-log record.
+src/main/turn-stop-log.test.ts	tooling	-	Vitest suite: dispatchedCommand.
+src/main/turn-stop-log.ts	port	1	dispatchedCommand/recordTurnStop log the origin of stop commands without message text.
+src/main/turn-wait-watch.test.ts	tooling	-	Vitest suite: turn wait watch.
+src/main/turn-wait-watch.ts	port	3	TurnWaitWatch tracks session progress and held waits, samples journal evidence and emits diagnostics at doubling intervals.
+src/main/update-auth.test.ts	tooling	-	Vitest suite: a stored update token when the keychain would ask.
+src/main/update-auth.ts	port	2	resolveUpdateToken chooses environment, gh CLI or encrypted credentials; checkRepoAccess uses Electron net and storeUpdateToken uses safeStorage.
+src/main/update-compatibility.test.ts	tooling	-	Vitest suite: released and current updater compatibility.
+src/main/update-log-core.test.ts	tooling	-	Vitest suite: scrubUpdateText.
+src/main/update-log-core.ts	port	1	scrubUpdateText, parsePendingInstall and previousInstallDetails redact and reconstruct install/swap outcomes from persisted markers.
+src/main/update-provider.test.ts	tooling	-	Vitest suite: release-notes update provider.
+src/main/update-provider.ts	port	4	releaseUpdateProvider adapts resolved GitHub releases to electron-updater metadata and asset download selection.
+src/main/update-release.test.ts	tooling	-	Vitest suite: update metadata comment.
+src/main/update-release.ts	port	1	pickRelease, parseUpdateMetadata and resolvePlatformRelease implement release, checksum metadata, asset and compatibility selection in TS here.
+src/main/update-scheduler.test.ts	tooling	-	Vitest suite: nextCheckDelay.
+src/main/update-scheduler.ts	port	2	UpdateScheduler serializes updater passes and owns timer rearming, failure backoff and disposal.
+src/main/updater-check.test.ts	tooling	-	Vitest suite: Check for Updates while the background check runs.
+src/main/updater-held-quit.test.ts	tooling	-	Vitest suite: a quit with a staged version that failed to start before.
+src/main/updater-install.test.ts	tooling	-	Vitest suite: Restart & install with background work running.
+src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
+src/main/updater-state.ts	port	2	stageBundleFromDmg, SWAP_SCRIPT and settleFailedUpdateCheck implement installer staging, replacement and status transitions.
+src/main/updater.ts	port	4	checkForUpdate/downloadUpdate/restartIntoUpdate orchestrate electron-updater, Electron networking, platform installers, app quit and relaunch.
+src/main/window-bounds.test.ts	tooling	-	Vitest suite: window restore geometry.
+src/main/window-bounds.ts	port	1	restoreWithinDisplays detects unreachable saved geometry and places the window within current work areas.
+src/main/window-chrome.test.ts	tooling	-	Vitest suite: windowChromeOptions.
+src/main/window-chrome.ts	port	1	windowChromeOptions selects platform caption layout; sanitizeChromeColors and nativeThemeSource normalize renderer theme inputs.
+src/main/window-show.test.ts	tooling	-	Vitest suite: showOnFirstPaint.
+src/main/window-show.ts	port	4	showOnFirstPaint races window ready-to-show with content load to reveal a hidden Electron window.
+src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.
+src/main/window-spawn-target.ts	port	1	resolveWindowSpawnTarget chooses idle placeholder versus a fresh or restored session launch target.
+src/main/window.ts	port	4	WindowManager creates sandboxed BrowserWindows, persists geometry and manages native dialogs, themes and window lifetimes.
+src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
+src/main/workspace-fs.test.ts	tooling	-	Vitest suite: sniffMime.
+src/main/workspace-fs.ts	mixed	2	listWorkspace/readWorkspaceRange and mutations dispatch disk work to fs.* in core/src/fs/mod.rs; TS retains path confinement, MIME detection, argument checks and response shaping.
+src/main/workspace-search.test.ts	tooling	-	Vitest suite: Files content search.
+src/main/workspace-search.ts	mixed	2	searchWorkspace owns validation, regex construction and match caps; search.text runs in the stock Bun worker via stock.request in core/src/stock/mod.rs, not a Rust grep implementation.
+src/main/worktree-lifecycle.test.ts	tooling	-	Vitest suite: decideWorktreeStart (interactive-mode.ts 7716-7720).
+src/main/worktree-lifecycle.ts	mixed	3	WorktreeLifecycle owns start/exit prompts, bridge settings and tab operations; session-worktree helpers dispatch git.sessionWorktreeSnapshot/Removal/Remove through core/src/git/mod.rs.
+src/main/worktree-orphans-removal.test.ts	tooling	-	Vitest suite: removeOrphanWorktree.
+src/main/worktree-orphans-sweep.test.ts	tooling	-	Vitest suite: sweepLandedWorktrees.
+src/main/worktree-orphans-test-rig.ts	tooling	-	installOrphansRig/scene build Git repositories, linked worktrees and simulated open-folder state for orphan tests.
+src/main/worktree-orphans.test.ts	tooling	-	Vitest suite: listOrphanWorktrees.
+src/main/worktree-orphans.ts	mixed	3	listOrphanWorktrees/removeOrphanWorktree use git.orphanInspect/removeOrphanWorktree and git.leftBehindRemove in core/src/git/mod.rs; TS still obtains open folders, reserves removals and invokes archive preparation.
+src/main/worktree-removals.test.ts	tooling	-	Vitest suite: withRemovalClaim.
+src/main/worktree-removals.ts	port	3	withRemovalClaim reserves canonical folder paths while removal runs; removalHolds prevents concurrent tab acquisition.
+src/main/xdev-stock.test.ts	tooling	-	Vitest suite: names the device stock names, and no device where stock finds none.
