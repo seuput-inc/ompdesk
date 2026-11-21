@@ -194,8 +194,8 @@ import type { LocalHostServices } from "./remote/host-services";
 import { uploadToHost } from "./remote/host-upload";
 import { hostedAutopilot } from "./remote/hosted-autopilot";
 import { RemoteImageReads } from "./remote/image-reads";
-import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
-import { normalizeRuntimeErrorReport, tailLogLines } from "./runtime-log-core";
+import { writeRuntimeLog } from "./runtime-log";
+import { normalizeRuntimeErrorReport } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
 import { fileNameOf, readRemoteFile, type SaveCopyRemote, saveCopy } from "./save-copy";
 import type { RunProcess, ScheduleService } from "./schedules";
@@ -769,13 +769,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.on(IPC_COMMANDS.RUNTIME_STARTUP_MARK, (_caller, mark: unknown) => markStartupFromRenderer(mark));
 
-	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_PATH, () => runtimeLogPath());
-	// Feedback dialog: last few runtime-error lines for the opt-in diagnostics
-	// block. Tail-read so a large log doesn't have to be parsed end to end.
-	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_TAIL, async (_caller, maxLines: unknown) => {
-		const limit = typeof maxLines === "number" && maxLines > 0 ? Math.min(Math.floor(maxLines), 50) : 20;
-		return tailLogLines(runtimeLogPath(), limit);
-	});
 	ipc.handle(IPC_COMMANDS.LOG_SNAPSHOT, () => logWatcher.getSnapshot());
 
 	// Tray/dock are app-global OS surfaces; with N parallel windows each pushing

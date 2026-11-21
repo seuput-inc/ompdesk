@@ -5,6 +5,7 @@ pub(super) enum Selection {
     Current,
     Archive,
     Probes,
+    Feedback(usize),
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -32,6 +33,7 @@ pub(super) fn lines(profile: &Path, selection: Selection) -> Vec<String> {
         Selection::Current => (&[false], MIB, 3000),
         Selection::Archive => (&[true], MIB, 3000),
         Selection::Probes => (&[false, true], 5 * MIB, 30),
+        Selection::Feedback(count) => (&[false], 256 * 1024, count),
     };
     let mut newest = Vec::new();
     for &archive in files {

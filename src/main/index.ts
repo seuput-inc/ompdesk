@@ -215,7 +215,7 @@ import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } fr
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
-import { postWatchdog, readDiagnosticLog } from "./shell-host/electron/index";
+import { postWatchdog, readDiagnosticLog, registerRuntimeLogIpc } from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
@@ -1788,6 +1788,7 @@ app.whenReady().then(async () => {
 					: null,
 		}),
 	};
+	registerRuntimeLogIpc(ipc);
 	registerDiagnosticsIpc(ipc, diagnostics);
 	registerDiagnosticBundleIpc(ipc, {
 		tabFor: poolTabFor(sidecarPool),
