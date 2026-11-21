@@ -219,6 +219,22 @@ describe("translation", () => {
 		}
 		expect(verbatim).toEqual([]);
 	});
+
+	it("adds a playbook to unfinished work instead of initializing another list", () => {
+		const playbooks = files.filter(
+			file => file.startsWith("skills/poteto-mode/playbooks/") && !file.endsWith("/opening-a-pr.md"),
+		);
+		for (const file of [
+			"adapter.md",
+			"skills/pstack-adapter/SKILL.md",
+			"skills/poteto-mode/SKILL.md",
+			...playbooks,
+		]) {
+			const text = readFileSync(path.join(PACK, file), "utf8");
+			expect(text, file).toContain("`init` only for a fresh plan");
+			expect(text, file).toContain("`append` only new items, one call per phase");
+		}
+	});
 });
 
 describe("always-on section", () => {

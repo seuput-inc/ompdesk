@@ -64,6 +64,8 @@ interface Rule {
 
 const MODEL_ROLES =
 	"Model roles: `@task` for code delegates, `@slow` for judgment, prose and the hardest change, `@smol` for light research, and a judge or cross-check on a model family different from the parent's (the `advisor` role, or another configured provider).";
+const PLAYBOOK_TODOS =
+	"Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged.";
 
 const ANY = /.*/;
 const rule = (id: string, files: RegExp, from: string | RegExp, to: string): Rule => ({ id, files, from, to });
@@ -130,7 +132,7 @@ const RULES: Rule[] = [
 		"mode-todolist",
 		/^poteto-mode\/SKILL\.md$/,
 		"Open a todolist whose first items are the matched playbook's steps, copied in verbatim, before any task-specific todos.",
-		"Open a `todo` list whose first items are the matched playbook's steps, copied in one per step in its order, before any task-specific todos. Write each copied step in the todo language your `<reply-language>` section sets (word for word without one), keeping skill, tool and file names as written.",
+		PLAYBOOK_TODOS,
 	),
 	rule("mode-todolist-copy", /^poteto-mode\/SKILL\.md$/, "Copy its steps in verbatim.", "Copy its steps in that way."),
 	rule(
@@ -604,6 +606,18 @@ const RULES: Rule[] = [
 	),
 	rule("askquestion", ANY, /`AskQuestion`/g, "`ask`"),
 	rule("todolist", ANY, /todolist/g, "`todo` list"),
+	rule(
+		"workflow-phase-todos",
+		/^(architect|arena|swarm)\/SKILL\.md$/,
+		"Open a `todo` list with one entry per phase",
+		"Add one `todo` item per new phase",
+	),
+	rule(
+		"figure-it-out-todos",
+		/^figure-it-out\/SKILL\.md$/,
+		"Open a `todo` list whose first item is to read",
+		"Add a `todo` item to read",
+	),
 	rule("bugbot-generic", ANY, /\bBugbot\b/g, "review-bot"),
 ];
 
@@ -752,8 +766,7 @@ function insertNote(text: string): string {
 
 /** Under the title of a playbook: the `todo` instruction, where the model is looking when it has just read the steps. */
 function insertPlaybookNote(text: string): string {
-	const note =
-		'> OMPdesk: before step 1, call `todo` with `op: "init"` and the numbered steps below copied in as its first items, one per step in order, each written in the todo language your `<reply-language>` section sets (word for word without one; skill, tool and file names stay as written; a step you skip stays with `skip: <reason>`), then work the list.';
+	const note = `> OMPdesk: before step 1, update the plan. ${PLAYBOOK_TODOS} Keep earlier work going unless the user explicitly cancels or replaces it. Keep skipped steps with \`skip: <reason>\`.`;
 	const newline = text.indexOf("\n");
 	if (!text.startsWith("### ") || newline < 0) throw new Error("a playbook does not start with its ### title");
 	return `${text.slice(0, newline + 1)}\n${note}\n${text.slice(newline + 1)}`;
