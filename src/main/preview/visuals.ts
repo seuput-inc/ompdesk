@@ -13,8 +13,6 @@
  * and never outside it.
  */
 
-import { createHash, randomBytes } from "node:crypto";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
 import {
@@ -25,7 +23,6 @@ import {
 	VISUAL_SCHEME,
 } from "../../shared/preview";
 import type { HostToolDefinition } from "../../shared/rpc-types";
-import { writeFileAtomic } from "../atomic-file";
 import { core } from "../core/process";
 import { type PreviewCheckOutcome, type PreviewImage, type PreviewVerdict, previewHint } from "./preview-check";
 import { parseVisualUrl } from "./visual-navigation";
@@ -33,8 +30,6 @@ import { parseVisualUrl } from "./visual-navigation";
 export const VISUALIZE_TOOL = "gui_visualize";
 /** Visuals one tab keeps open at once. */
 const TAB_VISUALS = 8;
-const MAX_VERSIONS = 20;
-const MAX_RECORDS = 100;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const CHOICE_DEFAULT_SECONDS = 120;
 const CHOICE_MAX_SECONDS = 600;
@@ -132,18 +127,18 @@ interface VisualRecord {
 	versions: VisualVersionRecord[];
 }
 
-const recordSchema: z.ZodType<VisualRecord> = z.object({
-	id: z.string().regex(/^[0-9a-f]{16}$/),
-	label: z.string(),
-	kind: z.enum(["file", "inline", "url"]),
-	target: z.string(),
-	cwd: z.string(),
-	root: z.string(),
-	entry: z.string(),
-	createdAt: z.number(),
-	updatedAt: z.number(),
-	versions: z.array(z.object({ version: z.number(), createdAt: z.number(), file: z.string(), hash: z.string() })),
-});
+interface OpenInput {
+	target?: string;
+	html?: string;
+	label?: string;
+	visual?: string;
+}
+
+interface OpenResult {
+	record: VisualRecord;
+	version: number;
+	added: boolean;
+}
 
 class VisualError extends Error {}
 
@@ -158,24 +153,23 @@ export class VisualStore {
 	#records: VisualRecord[] = [];
 	readonly #byTab = new Map<string, string[]>();
 	#loaded: Promise<void> | null = null;
+	#opening = Promise.resolve();
 
 	constructor(dir: string) {
 		this.#dir = dir;
 	}
 
 	#load(): Promise<void> {
-		this.#loaded ??= fs
-			.readFile(path.join(this.#dir, "history.json"), "utf8")
-			.then(text => {
-				const parsed = z.array(recordSchema).safeParse(JSON.parse(text));
-				if (parsed.success) this.#records = parsed.data;
+		this.#loaded ??= core()
+			.call<VisualRecord[]>("visual.history", { dir: this.#dir })
+			.then(({ result }) => {
+				this.#records = result;
 			})
-			.catch(() => {});
+			.catch(error => {
+				this.#loaded = null;
+				throw error;
+			});
 		return this.#loaded;
-	}
-
-	async #save(): Promise<void> {
-		await writeFileAtomic(path.join(this.#dir, "history.json"), JSON.stringify(this.#records));
 	}
 
 	#record(id: string): VisualRecord | undefined {
@@ -298,106 +292,58 @@ export class VisualStore {
 	}
 
 	/** `open`: a new visual or a new version of the tab's matching one. */
-	async open(
-		tabId: string,
-		cwd: string,
-		input: { target?: string; html?: string; label?: string; visual?: string },
-	): Promise<{ record: VisualRecord; version: number; added: boolean }> {
+	open(tabId: string, cwd: string, input: OpenInput): Promise<OpenResult> {
+		const opened = this.#opening.then(() => this.#open(tabId, cwd, input));
+		this.#opening = opened.then(
+			() => {},
+			() => {},
+		);
+		return opened;
+	}
+
+	async #open(tabId: string, cwd: string, input: OpenInput): Promise<OpenResult> {
 		await this.#load();
 		if (Boolean(input.target) === Boolean(input.html)) throw new VisualError("Give either target or html");
-		const tabIds = this.#byTab.get(tabId) ?? [];
-		let kind: VisualRecord["kind"];
-		let target = "";
-		let root = "";
-		let entry = "index.html";
-		let content: Uint8Array | null = null;
+		let source:
+			| { kind: "inline" }
+			| { kind: "url"; url: string; host: string }
+			| { kind: "file"; raw: string; path: string };
+		let bin: Buffer | undefined;
 		const raw = input.target ?? "";
 		if (input.html !== undefined) {
-			kind = "inline";
-			content = Buffer.from(input.html);
-			if (content.length > MAX_HTML_BYTES) throw new VisualError("html is larger than 2 MB");
+			if (Buffer.byteLength(input.html) > MAX_HTML_BYTES) throw new VisualError("html is larger than 2 MB");
+			source = { kind: "inline" };
+			bin = Buffer.from(input.html);
 		} else if (/^https?:\/\//i.test(raw)) {
-			kind = "url";
 			const url = previewUrl(raw);
 			if (!url) throw new VisualError(`Not a web address the preview opens: ${raw}`);
-			target = url;
+			source = { kind: "url", url, host: new URL(url).host };
 		} else {
-			kind = "file";
-			const source = await core().call<{ target: string; root: string; entry: string }>("visual.source", {
-				cwd,
-				raw,
-				path: path.resolve(cwd, raw),
+			source = { kind: "file", raw, path: path.resolve(cwd, raw) };
+		}
+		const tabIds = this.#byTab.get(tabId) ?? [];
+		const { result } = await core()
+			.call<OpenResult & { evicted: string[] }>(
+				"visual.open",
+				{
+					dir: this.#dir,
+					cwd,
+					label: input.label,
+					visual: input.visual,
+					tabIds,
+					tabLimit: TAB_VISUALS,
+					input: source,
+				},
+				{ bin },
+			)
+			.catch(error => {
+				this.#loaded = null;
+				throw error;
 			});
-			if (!source.bin) throw new VisualError("Missing visual file contents");
-			content = source.bin;
-			({ target, root, entry } = source.result);
-		}
-		const own = tabIds.map(id => this.#record(id)).filter(record => record !== undefined);
-		let record =
-			(input.visual ? own.find(candidate => candidate.id === input.visual) : undefined) ??
-			own.find(candidate =>
-				kind === "inline"
-					? candidate.kind === "inline" && input.label !== undefined && candidate.label === input.label
-					: candidate.kind === kind && candidate.target === target,
-			);
-		if (input.visual && !record) throw new VisualError(`No visual ${input.visual} in this tab`);
-		if (record && record.kind !== kind) throw new VisualError(`Visual ${record.id} shows a different kind of target`);
-		const now = Date.now();
-		let retargeted = false;
-		if (!record) {
-			if (own.length >= TAB_VISUALS)
-				throw new VisualError(`This tab already shows ${TAB_VISUALS} visuals; close one first`);
-			const id = randomBytes(8).toString("hex");
-			record = {
-				id,
-				label:
-					input.label ??
-					(kind === "url" ? new URL(target).host : kind === "file" ? path.basename(target) : "Visual"),
-				kind,
-				target,
-				cwd,
-				root: kind === "inline" ? path.join(this.#dir, id) : root,
-				entry,
-				createdAt: now,
-				updatedAt: now,
-				versions: [],
-			};
-			this.#records.unshift(record);
-			this.#byTab.set(tabId, [...tabIds, id]);
-		} else {
-			// A reused visual shows what this call named: its address or file moved with it, so the next open of
-			// the new target finds this record instead of adding a second one.
-			retargeted = record.target !== target;
-			record.target = target;
-			if (input.label) record.label = input.label;
-			if (kind === "file") {
-				record.root = root;
-				record.entry = entry;
-			}
-			this.#records = [record, ...this.#records.filter(candidate => candidate !== record)];
-		}
-		const hash = content ? createHash("sha256").update(content).digest("hex") : target;
-		const last = record.versions.at(-1);
-		let added = false;
-		if (!last || last.hash !== hash || retargeted) {
-			const version = (last?.version ?? 0) + 1;
-			let file = "";
-			if (content) {
-				file = `v${version}${kind === "inline" ? ".html" : path.extname(entry).toLowerCase()}`;
-				await fs.mkdir(path.join(this.#dir, record.id), { recursive: true });
-				await fs.writeFile(path.join(this.#dir, record.id, file), content);
-			}
-			record.versions.push({ version, createdAt: now, file, hash });
-			if (kind === "url") record.versions = record.versions.slice(-1);
-			for (const dropped of record.versions.splice(0, Math.max(0, record.versions.length - MAX_VERSIONS)))
-				if (dropped.file) await fs.rm(path.join(this.#dir, record.id, dropped.file), { force: true });
-			added = true;
-		}
-		record.updatedAt = now;
-		for (const dropped of this.#records.splice(MAX_RECORDS))
-			await fs.rm(path.join(this.#dir, dropped.id), { recursive: true, force: true });
-		await this.#save();
-		return { record, version: record.versions.at(-1)?.version ?? 1, added };
+		const { record, added, version, evicted } = result;
+		this.#records = [record, ...this.#records.filter(old => old.id !== record.id && !evicted.includes(old.id))];
+		if (!tabIds.includes(record.id)) this.#byTab.set(tabId, [...(this.#byTab.get(tabId) ?? []), record.id]);
+		return { record, version, added };
 	}
 }
 
