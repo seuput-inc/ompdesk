@@ -1,9 +1,9 @@
 //! This computer's memory, for idle release (was the OS reads and their rules in `src/main/memory-sampler.ts` and, on
 //! Windows, the stock helper's `process-memory.ts`): the OS's reading (`memory.reading`) and every process with its
-//! parent, resident bytes and processor time (`memory.processes`). Main keeps the watch's timer, the sessions' state
-//! and the choice of what to release (`memory-watch.ts`, `idle-release.ts`). The reading also carries what tells a
-//! starved computer from a busy OMPdesk when something stalls (`machine-state.ts`): Windows' commit charge and its
-//! processor and disk queues (`sys.rs` `queues`, PDH), macOS' swap (`vm.swapusage`, on the same `sysctl`).
+//! parent, resident bytes and processor time (`memory.processes`). `memory.watchProcesses` adds the release facts
+//! from that same listing. Main keeps the watch's timer, the sessions' quiet time and the choice of what to release.
+//! When something stalls, `machine-state.ts` reads Windows' commit charge, processor and disk queues (`sys.rs`
+//! `queues`, PDH), or macOS' swap (`vm.swapusage`, on the same `sysctl`).
 //!
 //! macOS reads through the two programs the TypeScript ran: one `sysctl` for `kern.memorystatus_vm_pressure_level`
 //! (1 normal, 2 warn, 4 critical: the level `memory_pressure` and the kernel's jetsam act on),
@@ -16,6 +16,8 @@
 //!
 //! `timeoutMs` is main's (`SAMPLE_TIMEOUT_MS`): how long `sysctl` or `ps` may run. A read that fails is a fault, which
 //! main counts as no sample, never as memory being fine.
+
+mod idle;
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +102,13 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let params: Params = call.params()?;
             Reply::json(&processes(params.timeout_ms, call.scope).await?)
+        })
+    });
+    registry.add("memory.watchProcesses", |call| {
+        Box::pin(async move {
+            let params: Params = call.params()?;
+            let rows = processes(params.timeout_ms, call.scope).await?;
+            Reply::json(&idle::WatchProcesses::new(&rows, cfg!(windows)))
         })
     });
 }

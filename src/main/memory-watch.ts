@@ -5,7 +5,7 @@
  */
 import { IdleRelease, memoryShort } from "./idle-release";
 import { memoryRecord, RecordClock } from "./memory-record";
-import { listProcesses, type MemoryReading, type ProcessRow, readMemory, treeBytes } from "./memory-sampler";
+import { type MemoryReading, type ProcessRow, readMemory, watchProcesses } from "./memory-sampler";
 import { listTaggedProcesses, type TagOwner } from "./session-processes";
 
 /** How often memory is read. */
@@ -75,26 +75,21 @@ export function startMemoryWatch(deps: MemoryWatchDeps): void {
 		try {
 			// The OS is read in a test launch too: what a stall writes down is the real computer's state.
 			const readAt = Date.now();
-			const [real, rows] = await Promise.all([readMemory(), listProcesses()]);
+			const [real, processes] = await Promise.all([readMemory(), watchProcesses()]);
 			const reading = deps.testReading ? deps.testReading() : real;
 			const owners = deps.owners;
 			if (owners && reading && clock.due(Date.now(), memoryShort(reading))) await recordShort(deps, owners, reading);
 			const release = deps.release;
-			const tabs = rows ? deps.tabs() : [];
-			deps.sampled?.(real, rows, tabs, readAt);
-			if (rows && release) {
-				const tabId = idle.pick(
-					Date.now(),
-					reading,
-					tabs.map(tab => ({ tabId: tab.tabId, pid: tab.pid, quiet: tab.quiet === true })),
-					rows,
-				);
-				const tab = tabs.find(entry => entry.tabId === tabId);
-				if (tab) {
+			const tabs = processes ? deps.tabs() : [];
+			deps.sampled?.(real, processes?.rows ?? null, tabs, readAt);
+			if (processes && release) {
+				const picked = idle.pick(Date.now(), reading, tabs, processes);
+				if (picked) {
+					const { tab, bytes } = picked;
 					deps.log("memory release", {
 						tab: tab.tabId,
 						label: tab.label,
-						...(tab.pid !== undefined ? { gb: gb(treeBytes(rows, tab.pid)) } : {}),
+						gb: gb(bytes),
 						...(reading ? { availableGb: gb(reading.availableBytes), pressure: reading.pressure } : {}),
 					});
 					release(tab.tabId);

@@ -3,7 +3,8 @@ import { once } from "node:events";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listProcesses, type ProcessRow, readMemory, treeBytes } from "./memory-sampler";
+import { idleFootprints } from "./idle-release";
+import { listProcesses, type ProcessRow, readMemory, watchProcesses } from "./memory-sampler";
 import { DIES_WITH_TEST } from "./test-fake-omp";
 
 // parseMacSysctl, windowsReading and parsePs moved to the core process with their cases
@@ -47,7 +48,6 @@ describe("the core's reading of this computer", () => {
 			expect(own?.bytes).toBeGreaterThan(rss / 4);
 			expect(own?.bytes).toBeLessThan(rss * 4);
 			expect(started?.bytes).toBeGreaterThan(1024 ** 2);
-			expect(treeBytes(rows, process.pid)).toBeGreaterThanOrEqual((own?.bytes ?? 0) + (started?.bytes ?? 0));
 			// Processor time so far: more for the process that runs vitest than for a child a moment old.
 			expect(own?.cpuMs).toBeGreaterThanOrEqual(started?.cpuMs ?? Number.NaN);
 			// Windows names each image (idle release tells conhost.exe from work by it); ps names none.
@@ -60,31 +60,38 @@ describe("the core's reading of this computer", () => {
 	});
 });
 
-describe("process trees", () => {
-	const KB = 1024;
-	const rows: ProcessRow[] = [
-		{ pid: 1, ppid: 0, bytes: 1000 * KB },
-		{ pid: 100, ppid: 1, bytes: 2000 * KB },
-		{ pid: 101, ppid: 100, bytes: 3000 * KB },
-		{ pid: 102, ppid: 101, bytes: 4000 * KB },
-		{ pid: 200, ppid: 1, bytes: 9000 * KB },
-	];
+/** The former idle-release rules, run against the exact same live OS snapshot as the core. */
+function referenceBytes(rows: readonly ProcessRow[], pid: number): number | undefined {
+	const work = (parent: number) =>
+		rows.filter(row => row.ppid === parent && row.name?.toLowerCase() !== "conhost.exe");
+	const children = work(pid);
+	if (process.platform === "win32") {
+		const [omp] = children;
+		if (!omp || children.length !== 1 || work(omp.pid).length) return undefined;
+	} else if (children.length) return undefined;
+	const seen = new Set<number>();
+	const root = rows.find(row => row.pid === pid);
+	const stack = root ? [root] : [];
+	let bytes = 0;
+	for (let row = stack.pop(); row; row = stack.pop()) {
+		if (seen.has(row.pid)) continue;
+		seen.add(row.pid);
+		bytes += row.bytes;
+		stack.push(...rows.filter(child => child.ppid === row.pid));
+	}
+	return bytes;
+}
 
-	it("sums a session's omp and everything below it", () => {
-		expect(treeBytes(rows, 100)).toBe((2000 + 3000 + 4000) * 1024);
-		expect(treeBytes(rows, 200)).toBe(9000 * 1024);
-	});
-
-	it("is nothing for a process that is gone, and survives a cycle in the listing", () => {
-		expect(treeBytes(rows, 999)).toBe(0);
-		expect(
-			treeBytes(
-				[
-					{ pid: 5, ppid: 6, bytes: 1 },
-					{ pid: 6, ppid: 5, bytes: 2 },
-				],
-				5,
-			),
-		).toBe(3);
-	});
+it("matches the old release rules for this computer's live trees and absent parents", async () => {
+	const sample = await watchProcesses();
+	if (!sample) throw new Error("the OS process listing failed");
+	expect(sample.rows.some(row => row.pid === process.pid)).toBe(true);
+	const pids = new Set([process.pid, process.ppid, 0xffff_ffff]);
+	for (const row of sample.rows.slice(0, 64)) {
+		pids.add(row.pid);
+		pids.add(row.ppid);
+	}
+	const tabs = Array.from(pids, pid => ({ tabId: String(pid), pid, quiet: true }));
+	const bytes = idleFootprints(sample, tabs);
+	for (const pid of pids) expect(bytes.get(pid), `pid ${pid}`).toBe(referenceBytes(sample.rows, pid));
 });

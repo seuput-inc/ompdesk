@@ -268,7 +268,7 @@ src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
 src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.
 src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
-src/main/idle-release.ts	port	3	IdleRelease tracks quiet time and inspects process trees to select a quiet tab to release under memory pressure; does not perform the release.
+src/main/idle-release.ts	port	3	IdleRelease tracks quiet time and uses the native snapshot’s idle facts to select a quiet tab to release under memory pressure; does not perform the release.
 src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup and session services; routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
 src/main/initial-cwd.test.ts	tooling	-	Vitest suite: firstUsableCwd.
 src/main/initial-cwd.ts	port	1	firstUsableCwd selects the first usable directory in caller-supplied priority order.
@@ -310,8 +310,8 @@ src/main/memory-prompt.test.ts	tooling	-	Vitest suite: promptTitle.
 src/main/memory-record.test.ts	tooling	-	Vitest suite: who uses the memory.
 src/main/memory-record.ts	port	1	processOwners and memoryRecord attribute sampled processes to sessions and rank memory users; RecordClock gates repeated pressure logs.
 src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of this computer.
-src/main/memory-sampler.ts	mixed	1	readMemory and listProcesses dispatch to core/src/memory/mod.rs memory.reading and memory.processes; treeBytes still totals descendants in TS and testMemoryReading reads a fixture override.
-src/main/memory-watch.ts	mixed	3	startMemoryWatch schedules samples via memory.reading and memory.processes, coordinates idle tab release and captures memory-owner records on pressure; scheduling and actions remain in TS.
+src/main/memory-sampler.ts	mixed	1	Reads memory and process rows from core. The periodic watch also receives native idle-tree facts; testMemoryReading reads the fixture override.
+src/main/memory-watch.ts	mixed	3	startMemoryWatch schedules samples via memory.reading and memory.watchProcesses, coordinates idle tab release and captures memory-owner records on pressure; scheduling and actions remain in TS.
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions.
 src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and window callbacks, installs the application menu and uses shell.openExternal (shell/src/shellops.rs) for the project URL; action composition remains in TS.
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.

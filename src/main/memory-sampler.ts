@@ -6,8 +6,8 @@
  * The reads and their rules are the core process's (`native/ompdesk/crates/core/src/memory/`): macOS one `sysctl`
  * for the kernel's pressure level, its free percentage, `hw.memsize` and the swap, and one `ps` for the processes;
  * Windows `GlobalMemoryStatusEx` with the share of RAM still available and the commit charge, its processor and disk
- * queues (PDH), and a Toolhelp32 snapshot with each process's working set and processor time. This file is their
- * client, plus the sum over a tree that idle release takes synchronously per sample.
+ * queues (PDH), and a Toolhelp32 snapshot with each process's working set and processor time. The watch also gets
+ * the quiet trees' footprints from that listing. A stall's independent process read doesn't need those facts.
  */
 import { readFileSync } from "node:fs";
 import { core } from "./core/process";
@@ -43,28 +43,12 @@ export interface ProcessRow {
 	cpuMs?: number;
 }
 
-/** Bytes of `root` and every process below it, from one listing; 0 when `root` is not in it. */
-export function treeBytes(rows: readonly ProcessRow[], root: number): number {
-	const children = new Map<number, ProcessRow[]>();
-	const byPid = new Map<number, ProcessRow>();
-	for (const row of rows) {
-		byPid.set(row.pid, row);
-		const siblings = children.get(row.ppid);
-		if (siblings) siblings.push(row);
-		else children.set(row.ppid, [row]);
-	}
-	const top = byPid.get(root);
-	if (!top) return 0;
-	let sum = 0;
-	const seen = new Set<number>();
-	const stack = [top];
-	for (let row = stack.pop(); row; row = stack.pop()) {
-		if (seen.has(row.pid)) continue;
-		seen.add(row.pid);
-		sum += row.bytes;
-		for (const child of children.get(row.pid) ?? []) if (child.pid !== row.pid) stack.push(child);
-	}
-	return sum;
+export interface WatchProcesses {
+	rows: ProcessRow[];
+	/** POSIX leaves are quiet at their own size. On Windows a leaf is busy and this list is null. */
+	busyParents: number[] | null;
+	/** Quiet parents only, with the bytes of every descendant including console hosts. */
+	quietTrees: [pid: number, bytes: number][];
 }
 
 /** How long one reading or one process listing may take; past it the sample counts as failed (never as safe). */
@@ -88,6 +72,10 @@ export function readMemory(): Promise<MemoryReading | null> {
 /** Every process with its parent and resident bytes; null when the listing failed or took too long. */
 export function listProcesses(): Promise<ProcessRow[] | null> {
 	return sample<ProcessRow[]>("memory.processes");
+}
+
+export function watchProcesses(): Promise<WatchProcesses | null> {
+	return sample<WatchProcesses>("memory.watchProcesses");
 }
 
 /** Unpackaged test launches: the reading a test writes to `file` (`{"totalGb":16,"availableGb":3,"pressure":"warn"}`). */
