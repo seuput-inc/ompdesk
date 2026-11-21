@@ -311,6 +311,7 @@ src/main/memory-record.test.ts	tooling	-	Vitest suite: who uses the memory.
 src/main/memory-record.ts	port	1	processOwners and memoryRecord attribute sampled processes to sessions and rank memory users; RecordClock gates repeated pressure logs.
 src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of this computer.
 src/main/memory-sampler.ts	mixed	1	Reads memory and process rows from core. The periodic watch also receives native idle-tree facts; testMemoryReading reads the fixture override.
+src/main/memory-watch.test.ts	tooling	-	Checks that the watch makes release decisions from the live tabs after sampling and ignores failed process snapshots.
 src/main/memory-watch.ts	mixed	3	startMemoryWatch schedules samples via memory.reading and memory.watchProcesses, coordinates idle tab release and captures memory-owner records on pressure; scheduling and actions remain in TS.
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions.
 src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and window callbacks, installs the application menu and uses shell.openExternal (shell/src/shellops.rs) for the project URL; action composition remains in TS.
