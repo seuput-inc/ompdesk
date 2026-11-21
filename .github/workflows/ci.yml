@@ -154,7 +154,7 @@ jobs:
         with:
           electron: "false"
       - run: bun run check:types
-      - run: bunx biome check src e2e resources scripts
+      - run: bunx biome check --max-diagnostics=none src e2e resources scripts
       - run: node scripts/lint-surfaces.mjs
       - name: All host and preload paths have a Rust migration disposition
         run: bun scripts/rust-runtime-scope.ts --check-inventory
