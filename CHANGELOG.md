@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.137.2] - 2026-11-21
+
+연결된 컴퓨터의 세션 목록에 보호된 행이나 방금 사라진 행이 있어도 다른 두 세션의 순서를 옮길 수 있어요.
+
+- 옮기려는 행이나 놓을 행 자체가 사라졌다면 저장하지 않아요. 보호된 행과 이번 목록에 없던 세션의 기존 위치는 그대로예요.
+- Windows에서 폴더 대신 파일을 선택한 경우와 폴더가 없는 경우를 구분해요. 휴대폰의 푸시 알림은 웹 리스너가 다시 시작돼도 기존 식별자를 유지해요.
+- 미리보기 기록을 저장하기 전에는 이전 버전 파일을 지우지 않아요. Git 작업 폴더를 만드는 재시도도 원래 요청의 제한 시간을 넘기지 않아요.
+- 저장된 세션 검색, 디스크 사용량 집계, 작업 폴더 확인, 업데이트 정보 판독을 Rust로 옮겼어요. macOS 다운로드는 확인한 릴리스 정보를 그대로 써요.
+
+<!-- en -->
+
+You can reorder two sessions on a paired computer even when another row is protected or has just disappeared.
+
+- If the row you move or its drop target is no longer available, the host rejects the move. Protected rows and saved positions outside your list stay in place.
+- On Windows, the folder picker distinguishes a file from a missing folder. Phone push notifications retain their identity when the web listener restarts.
+- Preview keeps old version files until it saves their history. Git worktree creation retries share the original request deadline.
+- Rust now handles saved-session search, disk usage measurements, worktree path checks, and release metadata. macOS downloads use the release already selected.
+
 ## [0.137.1] - 2026-11-21
 
 세션 도구의 상세 설명과 `/omfg` 재시도에서 중복 입력을 줄였어요.
