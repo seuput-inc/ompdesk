@@ -35,7 +35,6 @@ import { desktopExitReceipt } from "./desktop-slot-exit";
 import { EventBatcher } from "./event-batcher";
 import { withoutFrameBookkeeping } from "./frame-bookkeeping";
 import { localHandlerFor, runLocalCommand } from "./local";
-import { projectQueueUpdate } from "./local/queue";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError, type OmpRuntime } from "./local/types";
 import { nativeBinPath } from "./native-bin";
 import {
@@ -62,6 +61,14 @@ import { TERMINAL_READ_DEFINITION } from "./terminal/agent-tool";
 
 /** `ctx.send` from GUI-side handlers: stock commands such as `get_entries` on a long session. */
 const LOCAL_SEND_TIMEOUT_MS = 120_000;
+const QUEUE_COMMANDS: Record<string, true> = {
+	get_queue: true,
+	queue_remove: true,
+	queue_clear: true,
+	queue_edit: true,
+	queue_move: true,
+	dequeue: true,
+};
 /** A request the core answers when it is done (the longest a timer may be set for): the call has no deadline of its own. */
 const NO_DEADLINE_MS = 2 ** 31 - 1;
 /** The lane's own deadline of a bridge request, and what main's wait for its answer sits behind it. */
@@ -633,23 +640,33 @@ class BridgeRelay implements BridgeClient {
 	 * request waits as long as the bridge takes (a user prompt, a login).
 	 */
 	request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T> {
-		return this.#request({ method, params }, options?.timeoutMs);
+		return this.#request("sidecar.bridge", { method, params }, options?.timeoutMs);
 	}
 
 	guiCommand(command: "get_advisor_stats" | "regenerate_session_title"): Promise<unknown> {
-		return this.#request({ command });
+		return this.#request("sidecar.guiBridge", { command });
+	}
+
+	queueCommand(command: RpcCommand): Promise<unknown> {
+		return this.#request("sidecar.queue", { command, bridgeConnected: this.connected });
 	}
 
 	async #request<T>(
-		target: { method: string; params: unknown } | { command: string },
+		route: "sidecar.bridge" | "sidecar.guiBridge" | "sidecar.queue",
+		target:
+			| { method: string; params: unknown }
+			| { command: string }
+			| { command: RpcCommand; bridgeConnected: boolean },
 		timeoutMs?: number,
 	): Promise<T> {
-		if (this.#closed || !core().pid || core().generation !== this.generation)
+		if (this.#closed || !core().pid || core().generation !== this.generation) {
+			if (route === "sidecar.queue") throw new Error("Sidecar disconnected");
 			throw new LocalCommandError("GUI bridge closed", "bridge_unavailable");
+		}
 		try {
 			// `seq` is taken before the first await: messages leave in the order main makes them.
 			const { result } = await core().call<{ result: T }>(
-				"command" in target ? "sidecar.guiBridge" : "sidecar.bridge",
+				route,
 				{
 					tab: this.#tab,
 					seq: this.#nextSeq(),
@@ -664,6 +681,12 @@ class BridgeRelay implements BridgeClient {
 			);
 			return result.result;
 		} catch (error) {
+			if (
+				route === "sidecar.queue" &&
+				error instanceof CoreError &&
+				(error.code === "queue_error" || error.code === "sidecar_disconnected")
+			)
+				throw new Error(error.message);
 			throw bridgeError(error);
 		}
 	}
@@ -704,8 +727,6 @@ export class SidecarManager extends EventEmitter {
 	#desktopProcess: (DesktopSlotProcess & { owner: number }) | null = null;
 	/** The running omp's bridge; null while none runs. */
 	#bridge: BridgeRelay | null = null;
-	/** The last omp's bridge, kept until the next spawn: frames the lane releases after a stop still project their queues by it. */
-	#spawnRelay: BridgeRelay | null = null;
 	#batcher: EventBatcher | null = null;
 	/**
 	 * The lane sends every `message_update` after the first of its message reduced (`sidecar/stream.rs`); this rebuilds
@@ -1093,7 +1114,6 @@ export class SidecarManager extends EventEmitter {
 		this.#processes?.setPid(pid);
 		const relay = new BridgeRelay(this.#tab, () => ++this.#seq, generation, event.spawnId, event.wrapped);
 		this.#bridge = relay;
-		this.#spawnRelay = relay;
 		this.#batcher = new EventBatcher(events => {
 			this.emit("events", events);
 		});
@@ -1104,7 +1124,9 @@ export class SidecarManager extends EventEmitter {
 				const handler =
 					type === "get_advisor_stats" || type === "regenerate_session_title"
 						? () => relay.guiCommand(type)
-						: localHandlerFor(type);
+						: QUEUE_COMMANDS[type] === true
+							? () => relay.queueCommand(command)
+							: localHandlerFor(type);
 				if (!handler || !runtime) return undefined;
 				return this.#localContext(client, runtime, relay)
 					.then(ctx => runLocalCommand(handler, command, ctx))
@@ -1266,8 +1288,6 @@ export class SidecarManager extends EventEmitter {
 		// Before anything in main reads it.
 		if (obj.type === "message_update")
 			[obj] = this.#rebuild.events([obj as unknown as AgentSessionEvent]) as unknown as Frame[];
-		// Stock queue lanes are bare text; ids are assigned on arrival, in stream order.
-		if (obj.type === "queue_update" && this.#spawnRelay) obj = projectQueueUpdate(this.#spawnRelay, obj);
 		this.#dispatchFrame(obj);
 	}
 

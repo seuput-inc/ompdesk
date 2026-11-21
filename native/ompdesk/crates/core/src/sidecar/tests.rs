@@ -88,6 +88,12 @@ fn fake_omp(mode: &str) {
             say(LIMITS);
         }
     }
+    let mut queue = (mode == "queue").then(|| {
+        [
+            Vec::from(["repeat", "repeat", "edit"].map(String::from)),
+            Vec::from(["[Image]", "last"].map(String::from)),
+        ]
+    });
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         note(&format!("in {line}"));
@@ -108,6 +114,12 @@ fn fake_omp(mode: &str) {
         let reply = |data: Value| {
             say(&json!({ "type": "response", "id": id, "command": ty, "success": true, "data": data }).to_string());
         };
+        if let Some(lanes) = &mut queue
+            && let Some(data) = stock_queue(lanes, &command, ty)
+        {
+            reply(data);
+            continue;
+        }
         match ty {
             "get_state" => {
                 let file = std::env::var("FAKE_SESSION_FILE").ok();
@@ -162,7 +174,48 @@ fn fake_omp(mode: &str) {
     note("eof");
 }
 
-/// The bridge extension's stand-in: answers `sessions.attach_entry_ids` with an `entryId` per message.
+fn stock_queue(lanes: &mut [Vec<String>; 2], command: &Value, ty: &str) -> Option<Value> {
+    let message = command["message"].as_str().unwrap_or("");
+    let data = match ty {
+        "get_state" => {
+            return Some(json!({
+                "sessionId": "s1", "queuedMessages": {"steering": lanes[0], "followUp": lanes[1]}
+            }));
+        }
+        "steer" | "follow_up" => {
+            lanes[usize::from(ty == "follow_up")].push(message.into());
+            json!({})
+        }
+        "remove_queued_message" | "promote_queued_message" => {
+            let lane = if ty == "promote_queued_message" {
+                1
+            } else {
+                match command["queue"].as_str() {
+                    Some("steering") => 0,
+                    Some("followUp") => 1,
+                    _ => return Some(json!({"removed": false})),
+                }
+            };
+            let index = lanes[lane].iter().position(|text| text == message);
+            if let Some(index) = index {
+                let removed = lanes[lane].remove(index);
+                if ty == "promote_queued_message" {
+                    lanes[0].push(removed);
+                }
+            }
+            if ty == "promote_queued_message" {
+                json!({"promoted": index.is_some()})
+            } else {
+                json!({"removed": index.is_some()})
+            }
+        }
+        _ => return None,
+    };
+    say(&json!({"type":"queue_update","steering":lanes[0],"followUp":lanes[1]}).to_string());
+    Some(data)
+}
+
+/// The bridge extension's stand-in serves entry ids, composer attachments and fixture events.
 fn serve_bridge(address: String) {
     let (up, ready) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -232,13 +285,32 @@ async fn bridge_connection(stream: BoxedIo) {
         line.clear();
         let method = request["method"].as_str().unwrap_or("");
         note(&format!("bridge {method}"));
-        if method == "fixture.desktopTouch" {
+        if method == "fixture.queueTail" {
+            let tag = &request["params"]["tag"];
+            let end = json!({"type":"agent_end","messages":[{"role":"assistant","content":tag,"timestamp":1}]});
+            let queue = json!({"type":"queue_update","steering":["repeat","repeat"],"followUp":[],"tag":tag});
+            let malformed =
+                json!({"type":"queue_update","steering":["repeat",2],"followUp":[],"tag":tag});
+            for frame in [end, queue, malformed] {
+                let event = json!({"event":frame});
+                write
+                    .write_all(format!("{event}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        }
+        let hold = method == "sessions.attach_entry_ids"
+            && request["params"]["messages"][0]["content"] == "hold";
+        if method == "fixture.desktopTouch" || hold {
             let event =
                 json!({"event": {"type":"desktop_slot_touch","processId":std::process::id()}});
             write
                 .write_all(format!("{event}\n").as_bytes())
                 .await
                 .unwrap();
+        }
+        if hold {
+            continue;
         }
         let result = if method == "sessions.attach_entry_ids" {
             let messages: Vec<Value> = request["params"]["messages"]
@@ -253,6 +325,8 @@ async fn bridge_connection(stream: BoxedIo) {
                 })
                 .collect();
             json!({ "messages": messages })
+        } else if method == "composer.dequeue" {
+            json!({"text":"with attachment","images":[{"type":"image","mimeType":"image/png","data":"YWJj"}]})
         } else {
             Value::Null
         };
@@ -461,6 +535,26 @@ impl Rig {
             self.backlog.push_back(event);
         };
         Ok(json!({ "response": serde_json::from_slice::<Value>(&found.bin).unwrap() }))
+    }
+
+    fn spawn_id(&self) -> u64 {
+        self.seen
+            .iter()
+            .rev()
+            .find(|event| event.name == "sidecar.spawned")
+            .unwrap()
+            .data["spawnId"]
+            .as_u64()
+            .unwrap()
+    }
+
+    async fn queue(&mut self, spawn: u64, bridge: bool, command: Value) -> Result<Value, Value> {
+        self.tab_call(
+            "sidecar.queue",
+            json!({"spawnId":spawn,"bridgeConnected":bridge,"command":command}),
+        )
+        .await
+        .map(|mut reply| reply["result"].take())
     }
 
     /// Events until one satisfies `want` (every event read is kept in `seen`).
@@ -1371,5 +1465,236 @@ async fn main_and_subscribers_get_a_messages_later_updates_reduced_and_a_restart
         }
     }
     assert_eq!(tapped_updates, again);
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn queue_commands_retain_chip_ids_and_leave_stock_commands_raw() {
+    let mut rig = Rig::new("queue-stock", "queue").await;
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let spawn = rig.spawn_id();
+    let get = json!({"type":"get_queue"});
+    let original = rig.queue(spawn, false, get.clone()).await.unwrap();
+    let repeats = &original["steering"].as_array().unwrap()[..2];
+    let edit = &repeats[1];
+    let image = &original["followUp"][0];
+    assert!(edit["id"].is_string());
+    assert_eq!(repeats[0]["text"], "repeat");
+    assert_eq!(repeats[1]["text"], "repeat");
+    assert_ne!(repeats[0]["id"], repeats[1]["id"]);
+    assert_eq!(edit["editable"], true);
+    assert_eq!(image["editable"], false);
+    assert!(edit["timestamp"].is_u64());
+    let raw = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert_eq!(
+        raw["response"]["data"]["queuedMessages"],
+        json!({"steering":["repeat","repeat","edit"],"followUp":["[Image]","last"]})
+    );
+    let raw_dequeue = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"dequeue"}}))
+        .await
+        .unwrap();
+    assert_eq!(raw_dequeue["response"]["command"], "dequeue");
+    assert_eq!(raw_dequeue["response"]["data"], json!({}));
+    assert!(
+        rig.queue(spawn, false, json!({"type":"exit0"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        rig.queue(spawn, true, json!({"type":"dequeue"}))
+            .await
+            .is_err()
+    );
+    for (command, code) in [
+        (
+            json!({"type":"queue_edit","queueId":image["id"],"text":"x"}),
+            "not_editable",
+        ),
+        (
+            json!({"type":"queue_move","queueId":edit["id"],"toIndex":0}),
+            "unsupported",
+        ),
+        (json!({"type":"queue_clear","lane":"all"}), "queue_error"),
+        (
+            json!({"type":"queue_remove","queueId":"missing"}),
+            "queue_error",
+        ),
+    ] {
+        assert_eq!(
+            rig.queue(spawn, false, command).await.unwrap_err()["code"],
+            code
+        );
+    }
+    let edit_id = &edit["id"];
+    let image_id = &image["id"];
+    let mut edited = edit.clone();
+    edited["text"] = json!("changed");
+    for (command, expected) in [
+        (
+            json!({"type":"queue_edit","queueId":edit_id,"text":"changed"}),
+            json!({"updated":true}),
+        ),
+        (
+            json!({"type":"queue_move","queueId":edit_id,"toLane":"followUp","toIndex":0}),
+            json!({"lane":"followUp","index":2}),
+        ),
+        (
+            json!({"type":"queue_move","queueId":image_id,"toLane":"steering","toIndex":0}),
+            json!({"lane":"steering","index":2}),
+        ),
+    ] {
+        assert_eq!(rig.queue(spawn, false, command).await.unwrap(), expected);
+    }
+    let moved = rig.queue(spawn, false, get.clone()).await.unwrap();
+    assert_eq!(
+        moved["steering"],
+        json!([repeats[0], original["steering"][2], image])
+    );
+    assert_eq!(moved["followUp"], json!([original["followUp"][1], edited]));
+    rig.drain();
+    assert!(
+        frames(&rig)
+            .iter()
+            .any(|frame| { frame["type"] == "queue_update" && frame["steering"][2] == edited }),
+        "the edit must retain the id in the emitted frame too"
+    );
+    for (command, expected) in [
+        (
+            json!({"type":"queue_remove","queueId":image_id}),
+            json!({"removed":true}),
+        ),
+        (
+            json!({"type":"dequeue"}),
+            json!({"messages":[{"text":"edit"}]}),
+        ),
+        (
+            json!({"type":"queue_clear","lane":"steering"}),
+            json!({"removed":1}),
+        ),
+        (
+            json!({"type":"dequeue"}),
+            json!({"messages":[{"text":"changed"}]}),
+        ),
+        (json!({"type":"queue_clear"}), json!({"removed":1})),
+        (json!({"type":"dequeue"}), json!({"messages":[]})),
+        (get, json!({"steering":[],"followUp":[]})),
+    ] {
+        assert_eq!(rig.queue(spawn, false, command).await.unwrap(), expected);
+    }
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn queue_projection_follows_agent_end_through_cleanup_and_stops_at_restart() {
+    let mut rig = Rig::new("queue-held", "queue+bridge").await;
+    let mut subscriber = super::subscribe(&rig.tab);
+    let seq = rig.seq();
+    let mut params = rig.open_params(seq, no_queue());
+    params["entryIdTimeoutMs"] = json!(120_000);
+    let _open = rig.post("sidecar.open", params);
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let spawn = rig.spawn_id();
+    let get = json!({"type":"get_queue"});
+    let original = rig.queue(spawn, true, get.clone()).await.unwrap();
+    let dequeued = rig
+        .queue(spawn, true, json!({"type":"dequeue"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        dequeued,
+        json!({"messages":[{"text":"with attachment","images":[
+            {"type":"image","mimeType":"image/png","data":"YWJj"}
+        ]}]})
+    );
+    for tag in ["complete", "hold"] {
+        rig.tab_call(
+            "sidecar.bridge",
+            json!({"spawnId":spawn,"method":"fixture.queueTail","params":{"tag":tag}}),
+        )
+        .await
+        .unwrap();
+        if tag == "hold" {
+            // The bridge read the entry-id request after writing the tail. Its private touch bypasses the hold.
+            let before = rig.seen.len();
+            rig.until("held entry ids", |event| {
+                event.data["desktopSpawnId"] == spawn
+            })
+            .await;
+            assert!(!rig.seen[before..].iter().any(|event| {
+                event.name == "sidecar.frame"
+                    && serde_json::from_slice::<Value>(&event.bin).is_ok_and(|frame| {
+                        frame["type"] == "queue_update" || frame["type"] == "agent_end"
+                    })
+            }));
+            rig.tab_call("sidecar.restart", json!({})).await.unwrap();
+        }
+        rig.until("malformed tail", |event| {
+            event.name == "sidecar.frame"
+                && serde_json::from_slice::<Value>(&event.bin)
+                    .is_ok_and(|frame| frame["tag"] == tag && frame["steering"][1] == 2)
+        })
+        .await;
+        let delivered = frames(&rig);
+        let tail = &delivered[delivered.len() - 3..];
+        assert_eq!(tail[0]["type"], "agent_end");
+        assert_eq!(tail[0]["messages"][0]["content"], tag);
+        assert_eq!(
+            tail[0]["messages"][0]["entryId"].as_str(),
+            (tag == "complete").then_some("e0")
+        );
+        assert_eq!(
+            tail[1],
+            json!({"type":"queue_update","steering":[original["steering"][0],original["steering"][1]],"followUp":[],"tag":tag})
+        );
+        assert_eq!(
+            tail[2],
+            json!({"type":"queue_update","steering":["repeat",2],"followUp":[],"tag":tag})
+        );
+    }
+    rig.status("ready").await;
+    let replacement = rig.spawn_id();
+    assert_ne!(replacement, spawn);
+    let refused = rig
+        .queue(spawn, true, json!({"type":"queue_clear"}))
+        .await
+        .unwrap_err();
+    assert_eq!(refused["code"], "sidecar_disconnected");
+    let fresh = rig.queue(replacement, true, get).await.unwrap();
+    assert_eq!(fresh["steering"][0]["text"], "repeat");
+    assert_ne!(fresh["steering"][0]["id"], original["steering"][0]["id"]);
+    let stale_id = json!({"type":"queue_remove","queueId":original["steering"][0]["id"]});
+    assert_eq!(
+        rig.queue(replacement, true, stale_id).await.unwrap_err()["code"],
+        "queue_error"
+    );
+
+    let main: Vec<_> = rig
+        .seen
+        .iter()
+        .filter(|event| event.name == "sidecar.frame")
+        .map(|event| &event.bin)
+        .collect();
+    let mut tapped = Vec::new();
+    while let Ok(event) = subscriber.try_recv() {
+        if event.name == "sidecar.frame" {
+            tapped.push(event.bin.unwrap());
+        }
+    }
+    assert_eq!(main.len(), tapped.len());
+    for (wire, tap) in main.into_iter().zip(tapped) {
+        assert_eq!(wire.as_slice(), tap.as_ref());
+    }
+    let without_bridge = rig
+        .queue(replacement, false, json!({"type":"dequeue"}))
+        .await
+        .unwrap();
+    assert_eq!(without_bridge, json!({"messages":[{"text":"edit"}]}));
     finish(rig).await;
 }

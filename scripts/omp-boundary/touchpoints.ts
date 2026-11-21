@@ -252,10 +252,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "rpc",
 		contract: "public",
 		summary:
-			"Prompt, steer, follow-up, abort and queue commands; main turns a GUI queue id into stock's text plus lane.",
+			"Prompt, steer, follow-up, abort and queue commands; the sidecar lane turns a GUI queue id into stock's text plus lane.",
 		files: [
 			"src/shared/rpc-types.ts",
-			"src/main/local/queue.ts",
+			"native/ompdesk/crates/core/src/sidecar/chips.rs",
+			"native/ompdesk/crates/core/src/sidecar/queue_commands.rs",
 			"src/main/local/slash.ts",
 			"src/main/local/misc.ts",
 		],

@@ -26,12 +26,14 @@ use tokio::sync::{mpsc, oneshot};
 use crate::server::{Answer, Call, Events, Fault, Registry, Reply};
 
 pub mod bridge;
+mod chips;
 mod frames;
 mod lane;
 mod launch;
 mod messages;
 mod process;
 mod queue;
+mod queue_commands;
 mod stop;
 mod stream;
 #[cfg(test)]
@@ -71,6 +73,7 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("sidecar.command", command);
     registry.add("sidecar.bridge", bridge_request::<BridgeParams>);
+    registry.add("sidecar.queue", queue_command);
     registry.add("sidecar.guiBridge", bridge_request::<GuiBridgeParams>);
     registry.add("sidecar.desktopProcess", desktop_process);
     registry.add("sidecar.barrier", |call| waited(call, Command::Barrier));
@@ -371,6 +374,42 @@ fn command(call: Call) -> Answer {
             },
             () = scope.on_cancel() => Err(Fault::cancelled()),
         }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueueParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+    bridge_connected: bool,
+    command: Box<RawValue>,
+}
+
+fn queue_command(call: Call) -> Answer {
+    let params: QueueParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, answer) = oneshot::channel();
+    deliver(
+        &params.tab,
+        params.seq,
+        Command::Queue {
+            spawn_id: params.spawn_id,
+            bridge_connected: params.bridge_connected,
+            command: params.command,
+            reply,
+        },
+    );
+    Box::pin(async move {
+        let result = answer
+            .await
+            .map_err(|_| Fault::new("sidecar_disconnected", "Sidecar disconnected"))??;
+        Reply::json(&BridgeAnswer {
+            result: Some(result),
+        })
     })
 }
 
