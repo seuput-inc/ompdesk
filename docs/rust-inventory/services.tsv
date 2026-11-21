@@ -209,8 +209,7 @@ src/main/local/next-prompt.test.ts	exception	Tests bridge routing, invalid draft
 src/main/local/next-prompt.ts	port	Enforces child-count, title, draft and request-ID limits and admissible refresh and cancel values before calling stock suggestion methods.
 src/main/local/prompt-origin.test.ts	exception	Tests prompt provenance validation and which person-typed messages are noted to the bridge.
 src/main/local/prompt-origin.ts	port	Selects person-authored prompt and steer commands and caps the wait for recording their text at 500 ms.
-src/main/local/queue.test.ts	exception	Tests stable chip identities for duplicates and lane changes during queue reconciliation.
-src/main/local/queue.ts	port	Assigns persistent IDs to stock queue text, reconciles duplicate entries and controls remove, edit, promotion and dequeue behavior.
+src/main/local/queue.test.ts	exception	Drives edits through the real Rust sidecar, checks chip identity across queue updates, and verifies that direct stock commands still bypass GUI edits.
 src/main/local/session-dump.test.ts	exception	Tests stock archive requests, redaction, removal of non-text entries and cleanup of the original file.
 src/main/local/session-dump.ts	port	Rebuilds a private redacted ZIP, omits binary entries, removes the original and permits deletion only for recorded output paths.
 src/main/local/session-extras.ts	port	Restricts foreign import sources and combines stock session stats with a separate usage-history request.
