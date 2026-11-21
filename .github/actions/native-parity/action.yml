@@ -74,6 +74,7 @@ runs:
         src/main/local/git/changes.test.ts
         src/main/local/git/scm.test.ts
         src/main/local/git/worktree.test.ts
+        src/main/local/git/session-worktree.test.ts
         src/main/local/git/worktree-seed.test.ts
         src/main/local/git/exec-gh.test.ts
         src/main/workspace-fs*.test.ts
@@ -90,6 +91,7 @@ runs:
         src/main/remote/crypto.test.ts
         src/main/remote/devices.test.ts
         src/main/web/server.test.ts
+        src/main/web/host-actions.test.ts
         src/main/web/ws-router.test.ts
         src/main/web/push.test.ts
         src/main/web/vapid-store.test.ts
@@ -120,7 +122,6 @@ runs:
         src/main/tab-spawn.test.ts
         src/main/tab-release.test.ts
         src/main/web/web-tab-layouts.test.ts
-        src/main/remote/host-services.test.ts
         src/main/turn-resume.test.ts
         src/main/turn-resume-limit.test.ts
         src/main/turn-resume-ends.test.ts
