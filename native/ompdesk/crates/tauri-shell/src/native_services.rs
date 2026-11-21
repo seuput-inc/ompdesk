@@ -2,6 +2,8 @@ use crate::host::Call;
 
 #[path = "../../shell/src/clipboard.rs"]
 pub mod clipboard;
+#[path = "diagnostic_logs/mod.rs"]
+pub mod diagnostic_logs;
 #[path = "../../shell/src/power.rs"]
 pub mod power;
 #[path = "../../shell/src/screen.rs"]

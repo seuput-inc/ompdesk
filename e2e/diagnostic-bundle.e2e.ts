@@ -28,6 +28,12 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 		path.join(desktop as string, "prefs.json"),
 		JSON.stringify({ language: "en", themeName: "light", firstRunComplete: true }),
 	);
+	const logs = path.join(desktop as string, "logs");
+	await fs.mkdir(logs);
+	await fs.writeFile(
+		path.join(logs, "gui-runtime.jsonl.1"),
+		'{"source":"slow-step","message":"이전 실행: sample@example.invalid"}\n',
+	);
 	const before = new Set(await tempArchives());
 	const app = await launchApp({
 		project: project as string,
@@ -76,6 +82,9 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 			"ompdesk-diagnostics.txt"
 		]?.async("string");
 		expect(diagnostics).toContain("OMPdesk");
+		const probes = diagnostics?.split("## Probes")[1]?.split("## Runtime log")[0];
+		expect(probes).toContain('{"source":"slow-step","message":"이전 실행: <email>"}');
+		expect(diagnostics).not.toContain("sample@example.invalid");
 
 		const held = path.join(profile, "alt.zip");
 		await chooseTarget(held);

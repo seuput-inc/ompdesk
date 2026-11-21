@@ -235,7 +235,7 @@ src/main/desktop-slot.ts	native-client	3	DesktopSlot drives hub desktopSlot; cor
 src/main/diagnostic-bundle.test.ts	tooling	-	Vitest suite: saving through the dialog.
 src/main/diagnostic-bundle.ts	port	3	saveDiagnosticBundle requests a redacted session archive locally or remotely, adds the diagnostics report with JSZip, saves and discards the source archive.
 src/main/diagnostics.test.ts	tooling	-	Vitest suite: buildDiagnosticsReport.
-src/main/diagnostics.ts	port	2	currentDiagnosticsReport collects system/setup/log facts; buildDiagnosticsReport formats and redacts them for registerDiagnosticsIpc.
+src/main/diagnostics.ts	mixed	2	The shell reads fixed runtime-log windows and selects probes (app.diagnosticLog); currentDiagnosticsReport still folds repeats, formats system/setup facts and redacts the report.
 src/main/disk-full-notice.ts	port	3	bindDiskFullNotice opens/closes one OS notice for pending files; bindDiskFullPush sends changed state to listening clients.
 src/main/disk-full.ts	port	2	DiskFullWatch tracks failed file names and coalesces listener notifications; isDiskFull recognizes space/quota errors.
 src/main/editable-context-menu.test.ts	tooling	-	Vitest suite: editableContextMenuTemplate.

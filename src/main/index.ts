@@ -197,7 +197,7 @@ import { migrateRetiredPrefs } from "./retired-prefs";
 import { FileMarks } from "./routines/marks";
 import { githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
 import { RoutineTriggers } from "./routines/triggers";
-import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
+import { writeRuntimeLog } from "./runtime-log";
 import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
@@ -215,7 +215,7 @@ import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } fr
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
-import { postWatchdog } from "./shell-host/electron/index";
+import { postWatchdog, readDiagnosticLog } from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
@@ -1772,7 +1772,7 @@ app.whenReady().then(async () => {
 			language: deviceLanguage() ?? null,
 		}),
 		setupState: () => setup.state(),
-		runtimeLogPath,
+		readLog: readDiagnosticLog,
 		pairedVersions: () => {
 			const state = devices.state();
 			return {

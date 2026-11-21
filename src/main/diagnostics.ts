@@ -9,32 +9,14 @@
 import { redactDiagnosticsText } from "../../resources/gui-bridge/redactor";
 import { IPC_COMMANDS } from "../shared/ipc-types";
 import type { SetupItemState, SetupPresence, SetupState } from "../shared/setup";
-import { tailLogLines } from "./runtime-log-core";
 import type { IpcRegistry } from "./web/ipc-registry";
 
 /** Runtime-log entries in a report, newest last (a run of one line folded is one entry). */
 export const DIAGNOSTICS_LOG_LINES = 100;
-/** Raw lines read to find them: room for long runs of one repeated line. */
-const RAW_LOG_LINES = 3_000;
 /** One log line is cut here: a stack can run to tens of kilobytes. */
 const MAX_LINE_CHARS = 3_000;
 const MAX_DETAIL_CHARS = 300;
-/** The read window of a log tail: room for RAW_LOG_LINES short lines, or DIAGNOSTICS_LOG_LINES lines of stacks. */
-const LOG_TAIL_BYTES = 1024 * 1024;
-/**
- * The sources a symptom without a repro writes when it shows again (console-window-watch.ts, slow-steps.ts,
- * turn-wait-watch.ts, machine-state.ts). Their lines are few and may be days old, long out of the last entries, so a
- * report carries the newest of them on their own.
- */
-const PROBE_SOURCES = [
-	'"source":"console-window"',
-	'"source":"slow-step"',
-	'"source":"turn-wait"',
-	'"source":"machine-state"',
-];
 export const DIAGNOSTICS_PROBE_LINES = 30;
-/** The whole of a log file: it is rolled over at 4 MiB (runtime-log-core.ts). */
-const WHOLE_LOG_BYTES = 5 * 1024 * 1024;
 
 export interface DiagnosticsSystem {
 	appVersion: string;
@@ -59,7 +41,7 @@ export interface DiagnosticsInput {
 	setup: SetupState | null;
 	/** Runtime-log lines, oldest first. */
 	logLines: readonly string[];
-	/** The newest probe lines (`readProbeLines`), oldest first; none: the section is left out. */
+	/** The newest probe lines across both logs, oldest first; none: the section is left out. */
 	probeLines?: readonly string[];
 	/** The OMPdesk versions of the paired computers connected now, never their names: a mismatch explains a refusal. */
 	paired?: PairedVersions | null;
@@ -232,30 +214,19 @@ function entryLines(entries: readonly LogEntry[]): string[] {
 }
 
 /** The newest entries across the current log and its `.1` archive, oldest first, a run of one line folded. */
-export async function readDiagnosticsLog(logPath: string): Promise<string[]> {
-	const lines = await tailLogLines(logPath, RAW_LOG_LINES, LOG_TAIL_BYTES);
+export async function readDiagnosticsLog(read: DiagnosticsDeps["readLog"]): Promise<string[]> {
+	const lines = await read("current");
 	const current = foldRepeats(lines);
 	if (current.length >= DIAGNOSTICS_LOG_LINES) return entryLines(current.slice(-DIAGNOSTICS_LOG_LINES));
-	const older = await tailLogLines(`${logPath}.1`, RAW_LOG_LINES, LOG_TAIL_BYTES);
+	const older = await read("archive");
 	const both = foldRepeats([...older, ...lines]);
 	return entryLines(both.slice(-DIAGNOSTICS_LOG_LINES));
-}
-
-/** The newest probe lines of the whole log and, when those are few, of its `.1` archive, oldest first. */
-export async function readProbeLines(logPath: string): Promise<string[]> {
-	const probes = async (file: string) =>
-		(await tailLogLines(file, Number.MAX_SAFE_INTEGER, WHOLE_LOG_BYTES)).filter(line =>
-			PROBE_SOURCES.some(source => line.includes(source)),
-		);
-	const current = await probes(logPath);
-	if (current.length >= DIAGNOSTICS_PROBE_LINES) return current.slice(-DIAGNOSTICS_PROBE_LINES);
-	return [...(await probes(`${logPath}.1`)), ...current].slice(-DIAGNOSTICS_PROBE_LINES);
 }
 
 export interface DiagnosticsDeps {
 	system: () => DiagnosticsSystem;
 	setupState: () => SetupState | null;
-	runtimeLogPath: () => string;
+	readLog: (selection: "current" | "archive" | "probes") => Promise<string[]>;
 	/** The connected paired computers' versions; absent before remote devices exist. */
 	pairedVersions?: () => PairedVersions | null;
 	/** How the window draws (software rendering, Reduce motion). */
@@ -265,13 +236,12 @@ export interface DiagnosticsDeps {
 
 /** The report as of now: what the preview shows and what the diagnostic bundle (diagnostic-bundle.ts) carries. */
 export async function currentDiagnosticsReport(deps: DiagnosticsDeps): Promise<string> {
-	const logPath = deps.runtimeLogPath();
 	return buildDiagnosticsReport({
 		generatedAt: (deps.now ?? (() => new Date()))(),
 		system: deps.system(),
 		setup: deps.setupState(),
-		logLines: await readDiagnosticsLog(logPath),
-		probeLines: await readProbeLines(logPath),
+		logLines: await readDiagnosticsLog(deps.readLog),
+		probeLines: await deps.readLog("probes"),
 		paired: deps.pairedVersions?.() ?? null,
 		display: deps.display ? await deps.display().catch(() => null) : null,
 	});
