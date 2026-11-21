@@ -211,7 +211,7 @@ import {
 } from "./app-protocol";
 import type { HostConnection, HostServices } from "./host-server";
 import { HostedTabView, labelForViewer } from "./hosted-view";
-import { KEPT_CALL_PREFIX, KeptCalls } from "./kept-calls";
+import { KEPT_CALL_PREFIX, type KeptCall, KeptCalls } from "./kept-calls";
 import { createLinkEventSender, createReadEncoder, encodedReadKey, type LinkEventSender } from "./link-events";
 import type { PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
@@ -428,8 +428,8 @@ interface HostTab extends RunTracking {
 	awayShown?: true;
 	/** Calls a window here carries out for the absent device, by request id: their answer says so. */
 	awayRan?: Set<string>;
-	/** The kept calls (kept-calls.ts) handed to the current connection, by id: each goes once per connection. */
-	keptHanded?: Set<string>;
+	/** The session a kept call was handed for, even if the tab changes sessions before its device answers. */
+	keptHanded?: Map<string, string>;
 	/** The turn waits for this computer's internet connection (turn-resume.ts; a view's, its window tab's). */
 	awaitingConnection?: boolean;
 	/** Times the device moved this tab to another session or branch (`movesTab`): a held wait of the old one ends. */
@@ -1200,11 +1200,12 @@ export class LocalHostServices implements HostServices {
 		side: string,
 		from?: HostedTabView,
 		claim?: number,
-	): void {
+	): void | Promise<void> {
 		if ((frame.type === "host_tool_result" || frame.type === "host_uri_result") && typeof frame.id === "string") {
 			// The device took over a call this computer kept for it: the omp had its answer long ago.
 			if (frame.id.startsWith(KEPT_CALL_PREFIX)) {
-				if (side === "device") this.#kept?.settle(frame.id);
+				const session = tab.keptHanded?.get(frame.id) ?? tab.sessionFile;
+				if (side === "device" && session) return this.#kept?.settle(tab.peerId, session, frame.id);
 				return;
 			}
 			tab.hostCalls.delete(frame.id);
@@ -1303,7 +1304,7 @@ export class LocalHostServices implements HostServices {
 				return this.#command(peer, parse(CommandParams, method, params));
 			case "tab.sideChannel": {
 				const { rtab, frame } = parse(SideChannelParams, method, params);
-				this.#answer(this.#tab(peer, rtab), frame, "device");
+				await this.#answer(this.#tab(peer, rtab), frame, "device");
 				return null;
 			}
 			case KEPT_TABS_METHOD:
@@ -1976,7 +1977,6 @@ export class LocalHostServices implements HostServices {
 				id: `${KEPT_CALL_PREFIX}${request.id}`,
 				toolName: request.toolName,
 				arguments: request.arguments ?? {},
-				at: Date.now(),
 			});
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
@@ -1998,7 +1998,7 @@ export class LocalHostServices implements HostServices {
 				false,
 			),
 		);
-		this.#handKept(tab);
+		await this.#handKept(tab);
 	}
 
 	/**
@@ -2006,14 +2006,22 @@ export class LocalHostServices implements HostServices {
 	 * answers each (`#answer` settles it): it carries them out as the session's own, after the session's file is
 	 * known and its omp runs.
 	 */
-	#handKept(tab: HostTab): void {
-		const sessionPath = tab.sessionFile;
-		if (!this.#kept || tab.conn === null || !sessionPath || tab.sidecar.status !== "ready") return;
-		for (const call of this.#kept.for(tab.peerId, sessionPath)) {
-			const handed = tab.keptHanded ?? new Set<string>();
-			tab.keptHanded = handed;
+	async #handKept(tab: HostTab): Promise<void> {
+		const { sessionFile: sessionPath, conn } = tab;
+		if (!this.#kept || !conn || !sessionPath || tab.sidecar.status !== "ready") return;
+		tab.keptHanded ??= new Map<string, string>();
+		const handed = tab.keptHanded;
+		let calls: KeptCall[];
+		try {
+			calls = await this.#kept.for(tab.peerId, sessionPath);
+		} catch {
+			console.warn("[remote-host] could not read kept calls; the next attachment will retry");
+			return;
+		}
+		for (const call of calls) {
+			if (tab.conn !== conn || tab.sessionFile !== sessionPath || tab.sidecar.status !== "ready") return;
 			if (handed.has(call.id)) continue;
-			handed.add(call.id);
+			handed.set(call.id, sessionPath);
 			this.#emit(tab, "hostToolCall", {
 				type: "host_tool_call",
 				id: call.id,
@@ -2040,11 +2048,11 @@ export class LocalHostServices implements HostServices {
 		if (existing) {
 			clearTimeout(existing.graceTimer);
 			existing.graceTimer = undefined;
+			if (existing.conn !== conn) existing.keptHanded = undefined;
 			existing.conn = conn;
 			// Back: what the omp asks from now on is the device's again, and its kept calls go to this connection.
 			existing.away = undefined;
 			existing.awayShown = undefined;
-			existing.keptHanded = undefined;
 			// Re-attach: the device missed every event while it was away, so it
 			// gets the live status first. A never-started tab is not attached:
 			// the device still has to `tab.start` it.
@@ -2077,7 +2085,7 @@ export class LocalHostServices implements HostServices {
 				call.delivered = true;
 				this.#emit(existing, call.name, request);
 			}
-			this.#handKept(existing);
+			void this.#handKept(existing);
 			this.#syncHostWait(existing);
 			return { cwd: existing.sidecar.cwd, kind: existing.sidecar.kind, attached };
 		}
@@ -2391,7 +2399,7 @@ export class LocalHostServices implements HostServices {
 						if ((payload.status === "starting" && !resend) || payload.status === "restarting")
 							tab.omp = randomUUID();
 						this.#emit(tab, name, this.#statusArg(tab, payload));
-						if (payload.status === "ready") this.#handKept(tab);
+						if (payload.status === "ready") void this.#handKept(tab);
 					});
 					break;
 				case "session":
@@ -2403,7 +2411,7 @@ export class LocalHostServices implements HostServices {
 						this.#emit(tab, name, identity);
 						if (changed) this.#dedupe(tab);
 						if (changed) this.listingChanged();
-						if (changed) this.#handKept(tab);
+						if (changed) void this.#handKept(tab);
 					});
 					break;
 				case "bridge":

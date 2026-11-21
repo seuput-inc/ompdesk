@@ -6,7 +6,7 @@
 //! request answers.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -268,6 +268,30 @@ pub fn write_atomic(
     write_atomic_if(file, bytes, Some(mode), dir_mode, &|| !scope.cancelled())
 }
 
+fn atomic_temp(file: &Path, mode: Option<u32>) -> Result<(PathBuf, fs::File), Fault> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    loop {
+        let temp = PathBuf::from(format!(
+            "{}.{}-{}.tmp",
+            file.to_string_lossy(),
+            std::process::id(),
+            next_temp()
+        ));
+        match options.open(&temp) {
+            Ok(staged) => return Ok((temp, staged)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(fault(&error, "open", &temp)),
+        }
+    }
+}
+
 /// `write_atomic` for a writer that is no request: `commit` is asked right before every rename, and a refusal
 /// drops the write. Without a `mode` the file gets the one its creation gives it.
 pub fn write_atomic_if(
@@ -280,14 +304,13 @@ pub fn write_atomic_if(
     if let Some(dir) = file.parent() {
         make_dirs(dir, dir_mode)?;
     }
-    let temp = PathBuf::from(format!(
-        "{}.{}-{}.tmp",
-        file.to_string_lossy(),
-        std::process::id(),
-        next_temp()
-    ));
+    let (temp, staged) = atomic_temp(file, mode)?;
     let written = (|| {
-        fs::write(&temp, bytes).map_err(|error| fault(&error, "open", &temp))?;
+        let mut staged = staged;
+        staged
+            .write_all(bytes)
+            .map_err(|error| fault(&error, "write", &temp))?;
+        drop(staged);
         if let Some(mode) = mode {
             chmod(&temp, mode)?;
         }
@@ -346,6 +369,17 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_temp_is_private_before_any_bytes_are_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("private-stage");
+        let (path, staged) = atomic_temp(&dir.join("kept.json"), Some(0o600)).unwrap();
+        assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
+        drop(staged);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(unix)]

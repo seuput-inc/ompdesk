@@ -44,6 +44,7 @@ import type { MemoryPageCopy } from "../ai-memory/client";
 import { serveMemoryStore } from "../ai-memory/memory-store-test-rig";
 import { serveConclusionPull, serveConclusionPush, servePull, servePush } from "../ai-memory/sync";
 import { canonicalCwd } from "../canonical-cwd";
+import { fakeCoreTimers, realCoreTimers } from "../core/test-clock";
 import { deletedSessions, initDeletedSessions } from "../deleted-sessions";
 import { SavedWorktreeStore, setSavedWorktreeStore } from "../disk/saved-worktrees";
 import { gitSync, initRepo } from "../local/git/test-repos";
@@ -87,6 +88,7 @@ import {
 	UPLOAD_PARTS_PER_DEVICE,
 } from "./host-services";
 import type { HostedTabView } from "./hosted-view";
+import { KeptCalls } from "./kept-calls";
 import { createLinkEventDecoder, createReadDecoder, type WireSubagentFrame } from "./link-events";
 import { localDay, PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
@@ -1688,6 +1690,51 @@ describe("LocalHostServices", () => {
 		expect(resent(fourth)).toEqual([]);
 	});
 
+	it("reads legacy kept calls at the three-day boundary and keeps the newest 200 in submission order", async () => {
+		await fakeCoreTimers(["Date"]);
+		onTestFinished(realCoreTimers);
+		const file = join(workDir, "kept-calls.json");
+		const store = new KeptCalls(file);
+		const row = (id: string) => ({
+			device: "device-x",
+			sessionPath: "/s/one.jsonl",
+			id: `kept:${id}`,
+			toolName: "ompdesk_report",
+			arguments: { text: id },
+		});
+		const oldest = Date.now() - 3 * 24 * 60 * 60_000;
+		const legacy = Array.from({ length: 200 }, (_, i) => ({ ...row(String(i)), at: oldest }));
+		writeFileSync(file, JSON.stringify([null, { ...row("expired"), at: oldest - 1 }, ...legacy]));
+		expect(await store.for("device-x", "/s/one.jsonl")).toEqual(legacy);
+		const sameId = row("199");
+		await Promise.all([
+			store.keep({ ...sameId, device: "device-y" }),
+			store.keep({ ...sameId, sessionPath: "/s/two.jsonl" }),
+			store.settle("device-x", "/s/one.jsonl", sameId.id),
+		]);
+		const current = await store.for("device-x", "/s/one.jsonl");
+		expect(current).toEqual(legacy.slice(2, -1));
+		expect(await store.for("device-y", "/s/one.jsonl")).toEqual([expect.objectContaining({ id: sameId.id })]);
+		expect(await store.for("device-x", "/s/two.jsonl")).toEqual([expect.objectContaining({ id: sameId.id })]);
+	});
+
+	it("does not hand over a rejected keep when a later write succeeds", async () => {
+		const parent = join(workDir, "not-a-folder");
+		writeFileSync(parent, "blocked");
+		const store = new KeptCalls(join(parent, "kept.json"));
+		const call = {
+			device: "device-x",
+			sessionPath: "/s/one.jsonl",
+			id: "kept:rejected",
+			toolName: "ompdesk_notify",
+			arguments: { text: "synthetic notice" },
+		};
+		await expect(store.keep(call)).rejects.toThrow();
+		rmSync(parent);
+		await store.keep({ ...call, id: "kept:accepted" });
+		expect((await store.for(call.device, call.sessionPath)).map(row => row.id)).toEqual(["kept:accepted"]);
+	});
+
 	it("carries out here the calls its device never got once the device has been away past the notice, keeps its reports for it, and hands those over once when it is back", async () => {
 		// 19 Nov 2026: the MacBook slept 12:55-16:58 and the sessions its hub had opened on the Mac mini stood still,
 		// each in a control call only the sleeping MacBook would run.
@@ -1771,7 +1818,7 @@ describe("LocalHostServices", () => {
 				.tabEvents()
 				.filter(event => event.name === "hostToolCall")
 				.map(event => event.arg as { id: string; toolName: string; arguments?: unknown; resent?: boolean });
-		expect(toDevice().map(request => request.id)).toEqual(["handed", "kept:report"]);
+		await vi.waitFor(() => expect(toDevice().map(request => request.id)).toEqual(["handed", "kept:report"]));
 		expect(toDevice()[1]).toMatchObject({ toolName: "ompdesk_report", arguments: { text: "report" } });
 		// Kept across this computer's restart until the device has answered it.
 		expect(readFileSync(keptFile, "utf8")).toContain("kept:report");
@@ -1823,16 +1870,22 @@ describe("LocalHostServices", () => {
 		await after.services.call(back.peer, "tab.start", { rtab: "t2" }, back);
 		const restarted = after.sidecars[0];
 		if (!restarted) throw new Error("expected a sidecar");
+		const lookups = vi.spyOn(KeptCalls.prototype, "for");
+		onTestFinished(() => lookups.mockRestore());
 		restarted.setStatus("ready");
 		restarted.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
-		const handed = back.tabEvents().filter(event => event.name === "hostToolCall");
-		expect(handed).toEqual([
-			{
-				rtab: "t2",
-				name: "hostToolCall",
-				arg: expect.objectContaining({ id: "kept:report", toolName: "ompdesk_report" }),
-			},
-		]);
+		// The lookups triggered by ready/session are still in flight when this link goes away.
+		after.services.disconnected(back.peer, back);
+		const next = new FakeConnection(back.peer);
+		for (let n = 0; n < 2; n++) await after.services.call(next.peer, "tab.open", { rtab: "t2", cwd: workDir }, next);
+		await Promise.all(lookups.mock.results.map(lookup => lookup.value));
+		const expected = {
+			rtab: "t2",
+			name: "hostToolCall",
+			arg: expect.objectContaining({ id: "kept:report", toolName: "ompdesk_report" }),
+		};
+		expect(back.tabEvents().filter(event => event.name === "hostToolCall")).toEqual([]);
+		expect(next.tabEvents().filter(event => event.name === "hostToolCall")).toEqual([expected]);
 	});
 
 	it("tells the device which sign-ins its tab runs: as they start and end, and on every re-attach, link or no link", async () => {
