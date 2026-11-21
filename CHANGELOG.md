@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.138.0] - 2026-11-22
+
+작업 도중 지시를 추가해도 미완료 할 일이 목록에 남습니다.
+
+- 끝나지 않은 턴을 완료로 표시하지 않고, 다른 할 일이 막혀도 독립된 작업은 계속 진행할 수 있습니다.
+- 검사 결과에서 자리 대기 시간과 실행 시간을 구분합니다. 배포를 막는 검사는 실행 중인 작업을 중단하지 않고 빈 자리를 우선 배정받습니다.
+- omp 19.1의 명령·입력 폼 변경에 대응했습니다.
+
+<!-- en -->
+
+Adding an instruction during a task no longer replaces unfinished items in the plan.
+
+- Unfinished turns are no longer labeled complete. Independent work can continue when another item is blocked.
+- Check results distinguish queue time from run time. Release-blocking checks get priority for a free slot without interrupting running work.
+- Updated command and form handling for omp 19.1.
+
 ## [0.137.3] - 2026-11-21
 
 Mac에서 `⌘C`로 선택한 텍스트를 복사하고 `⌘V`로 커서가 있는 입력창에 붙여넣을 수 있어요. 편집 메뉴의 복사와 붙여넣기도 고쳤어요.
