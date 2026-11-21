@@ -5,7 +5,7 @@
  * (`InteractiveMode.shutdown`, interactive-mode.ts 6817-6826); a GUI tab's omp
  * is already gone by then, so main runs these steps itself. The gits and their
  * rules run in the core process (`native/ompdesk/crates/core/src/git/worktree.rs`);
- * main keeps the exit policy and the repository lock.
+ * main keeps the repository lock and passes the owner's policy with the snapshot request.
  *
  * Removal also passes the core's guard on real paths: only a
  * checkout strictly inside the worktree root it was created under, never the
@@ -42,21 +42,9 @@ export interface SessionWorktreeState {
 	offBranch: boolean;
 }
 
-export type WorktreeExitAction = "keep" | "remove" | "prompt";
-
-/**
- * Map the `worktree.onExit` policy and the worktree's state to an exit action:
- * `remove` only removes worktrees with nothing to lose; anything else prompts.
- * Stock `decideWorktreeExit` (session-worktree.ts 56-60).
- */
-export function decideWorktreeExit(policy: WorktreeOnExit, state: SessionWorktreeState): WorktreeExitAction {
-	if (policy === "keep") return "keep";
-	if (policy === "remove" && !state.dirty && !state.moved && !state.offBranch) return "remove";
-	return "prompt";
-}
-
 /** State plus a fingerprint that changes whenever any file, ref, or `HEAD` in the worktree changes. */
 export interface WorktreeSnapshot {
+	action: "keep" | "remove" | "prompt";
 	state: SessionWorktreeState;
 	/** Compares only with this app's own snapshots. */
 	fingerprint: string;
@@ -69,9 +57,9 @@ export interface WorktreeSnapshot {
  * worktree is not dirty and not off-branch; a deleted branch has not moved; a
  * missing source repository counts as moved so the branch is never deleted.
  */
-export function snapshotSessionWorktree(wt: LifecycleWorktree): Promise<WorktreeSnapshot> {
+export function snapshotSessionWorktree(wt: LifecycleWorktree, policy: WorktreeOnExit): Promise<WorktreeSnapshot> {
 	// The source's root and branch tip, the worktree's root, its status and HEAD.
-	return coreGit("git.sessionWorktreeSnapshot", { worktree: wt }, 5);
+	return coreGit("git.sessionWorktreeSnapshot", { worktree: wt, policy }, 5);
 }
 
 /**

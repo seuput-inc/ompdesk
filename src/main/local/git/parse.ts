@@ -1,6 +1,5 @@
 /** Pure parsers/projections for the GUI-side git commands (unit-tested). */
 import * as path from "node:path";
-import { GUI_WORKTREE_BRANCH_PREFIX } from "../../../shared/worktree-branch";
 
 /** A branch or tag name git accepts (`git check-ref-format --branch` rules, checked without spawning git). */
 export function isValidRefName(name: string): boolean {
@@ -56,18 +55,6 @@ export function worktreeSlug(raw: string): string | null {
 	const slug = slugifyName(raw);
 	if (/[^a-z0-9 -]/i.test(raw) || !WORKTREE_NAME_PATTERN.test(slug)) return null;
 	return slug;
-}
-
-/** Candidate `{path, branch}` for GUI worktree attempt `suffix` (1 = bare name); the folder name never takes the prefix. */
-export function guiWorktreeCandidate(
-	slug: string,
-	repoHash: string,
-	suffix: number,
-	baseDir: string,
-	branchPrefix = GUI_WORKTREE_BRANCH_PREFIX,
-): { name: string; branch: string; path: string } {
-	const name = suffix === 1 ? slug : `${slug}-${suffix}`;
-	return { name, branch: `${branchPrefix}${name}`, path: path.join(baseDir, `gui-${name}-${repoHash}`) };
 }
 
 /** Minimal `{{var}}` / `{{#if var}}…{{/if}}` renderer for the bundled pr-draft prompts. */

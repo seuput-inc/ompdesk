@@ -98,6 +98,58 @@ describe("removeWorktree", () => {
 			code: "invalid_name",
 		});
 	});
+	it("skips an occupied folder and a taken generated branch without changing either", async () => {
+		await initRepo(outside);
+		const first = path.join(root, "gui-topic-abc1234");
+		await fs.mkdir(first);
+		const taken = "alice/topic-2";
+		const oldTip = gitSync(outside, "rev-parse", "HEAD");
+		gitSync(outside, "branch", taken);
+		gitSync(outside, "commit", "-q", "--allow-empty", "-m", "next");
+
+		const made = await createWorktree(outside, { name: "Topic", branchPrefix: "alice/" }, bridge);
+		expect(made.path).toBe(path.join(root, "gui-topic-3-abc1234"));
+		expect(made.branch).toBe("alice/topic-3");
+		expect(gitSync(made.path, "branch", "--show-current")).toBe(made.branch);
+		expect(gitSync(made.path, "rev-parse", "HEAD")).toBe(gitSync(outside, "rev-parse", "HEAD"));
+		expect(await fs.readdir(first)).toEqual([]);
+		expect(gitSync(outside, "branch", "--list", "alice/topic")).toBe("");
+		expect(gitSync(outside, "rev-parse", taken)).toBe(oldTip);
+		expect(await pathExists(path.join(root, "gui-topic-2-abc1234"))).toBe(false);
+	});
+	it("uses the last free folder for an exact branch and refuses a 101st attempt", async () => {
+		await initRepo(outside);
+		for (let n = 1; n < 100; n++) {
+			await fs.mkdir(path.join(root, n === 1 ? "gui-x-abc1234" : `gui-x-${n}-abc1234`));
+		}
+		const made = await createWorktree(outside, { name: "x", branch: { mode: "new", name: "work/mine" } }, bridge);
+		expect(made.path).toBe(path.join(root, "gui-x-100-abc1234"));
+		expect(made.branch).toBe("work/mine");
+		expect(gitSync(made.path, "branch", "--show-current")).toBe("work/mine");
+		await expect(createWorktree(outside, { name: "x" }, bridge)).rejects.toMatchObject({
+			code: "worktree_create_failed",
+			message: "No available worktree name after 100 attempts",
+		});
+		expect(gitSync(outside, "branch", "--list", "omp/gui/*")).toBe("");
+		expect(await pathExists(path.join(root, "gui-x-101-abc1234"))).toBe(false);
+	});
+	it("creates a missing worktree root and refuses a blocked mkdir before creating a branch", async () => {
+		await initRepo(outside);
+		const parent = path.join(scratch, "nested");
+		root = path.join(parent, "wt");
+		await fs.writeFile(parent, "keep");
+		await expect(createWorktree(outside, { name: "topic" }, bridge)).rejects.toMatchObject({
+			code: "worktree_create_failed",
+			message: expect.stringMatching(/^Failed to create worktree: .*mkdir /),
+		});
+		expect(await fs.readFile(parent, "utf8")).toBe("keep");
+		expect(gitSync(outside, "branch", "--list", "omp/gui/topic")).toBe("");
+
+		await fs.unlink(parent);
+		const made = await createWorktree(outside, { name: "topic" }, bridge);
+		expect(made.path).toBe(path.join(root, "gui-topic-abc1234"));
+		expect(gitSync(made.path, "branch", "--show-current")).toBe("omp/gui/topic");
+	});
 	it("refuses a base folder that does not exist by naming it, never as a missing git", async () => {
 		const gone = path.join(scratch, "projects", "gone");
 		await expect(createWorktree(outside, { name: "x", baseCwd: gone }, bridge)).rejects.toMatchObject({

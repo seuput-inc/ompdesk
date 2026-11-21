@@ -1,13 +1,5 @@
-import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	extractDraftJson,
-	guiWorktreeCandidate,
-	isInside,
-	isSafeRelativePath,
-	renderPrompt,
-	worktreeSlug,
-} from "./parse";
+import { extractDraftJson, isInside, isSafeRelativePath, renderPrompt, worktreeSlug } from "./parse";
 
 // parseStatusV2 and newFileDiff moved to the core process with their cases (native/ompdesk/crates/core/src/git/parse.rs),
 // parsePrUnifiedDiff, rollupChecks and rollupCounts with theirs (native/ompdesk/crates/core/src/gh/pr.rs), parseGitStatus
@@ -32,15 +24,6 @@ describe("worktree naming", () => {
 		expect(worktreeSlug("fix_bug")).toBeNull();
 		expect(worktreeSlug("---")).toBeNull();
 		expect(worktreeSlug("a".repeat(42))).toBeNull();
-	});
-	it("builds suffixed branch and hashed path", () => {
-		const hash = "abc1234";
-		expect(guiWorktreeCandidate("x", hash, 1, "/wt")).toEqual({
-			name: "x",
-			branch: "omp/gui/x",
-			path: path.join("/wt", `gui-x-${hash}`),
-		});
-		expect(guiWorktreeCandidate("x", hash, 3, "/wt").branch).toBe("omp/gui/x-3");
 	});
 });
 
