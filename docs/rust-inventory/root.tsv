@@ -317,7 +317,7 @@ src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and wi
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	slimMessageUpdate and createMessageUpdateSlimmer strip repeated accumulated message content from streamed events before forwarding.
 src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
-src/main/model-release-dates.ts	port	2	getModelReleaseDates fetches models.dev/catalog.json, extracts model-specific OpenRouter dates and caches/coalesces requests.
+src/main/model-release-dates.ts	port	2	Node fetches models.dev/catalog.json directly by default; NODE_USE_ENV_PROXY=1 honors HTTPS_PROXY and NO_PROXY. Node trusts its bundled roots by default and accepts NODE_EXTRA_CA_CERTS. core/http.rs dials directly and trusts platform roots plus extra CAs; the shell's net.* uses OS TLS and session proxy rules. First provide equivalent proxy routing and CA selection for the catalog GET. Then move fetch, canonical UTC dates, single-flight and the 24h success / 5min failure cache together; keep the last good dates on refresh failure, without sending the catalog over IPC.
 src/main/model-role-contracts.test.ts	tooling	-	Vitest suite: role groups.
 src/main/model-roles-stock-coverage.test.ts	tooling	-	Vitest suite: lists each installed role with stock's metadata, or hides it with a reason.
 src/main/model-setup-metering.test.ts	tooling	-	Vitest suite: sees OpenRouter chat models, so the metering checks are not vacuous.
