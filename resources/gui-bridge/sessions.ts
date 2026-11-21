@@ -14,7 +14,7 @@ import { labelPromptOrigins } from "./prompt-origin-contracts";
 import { attachEntryIds, buildTranscript, flattenSessionTree } from "./session-display";
 import { forkCut } from "./session-fork-core";
 import { setSessionPinned } from "./session-pins";
-import { transcriptPageMessages, transcriptRunStart } from "./transcript-page";
+import { latestTurnStart, transcriptPageMessages, transcriptRunStart } from "./transcript-page";
 import type { BridgeMethods } from "./types";
 
 function param(params: unknown, key: string): unknown {
@@ -101,6 +101,7 @@ export const methods: BridgeMethods = {
 				version,
 				total: messages.length,
 				startIndex: offset,
+				...(param(params, "turnStart") === true ? { turnStart: latestTurnStart(messages) } : {}),
 				messages: decorateMessages(shown),
 			};
 		},

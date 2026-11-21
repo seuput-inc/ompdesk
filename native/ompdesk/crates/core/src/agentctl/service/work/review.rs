@@ -1,11 +1,11 @@
 //! The review board of the sessions an opener started: `#reviewItem`, `reviewItems`, `review`, `familyEdits` with
-//! `#closedEdits`, `liveReview`, and what a session has cost (`#cost`, `#split`). Also the cut of a turn's edit calls
-//! (`turnEdits` of `src/shared/turn-edits.ts`).
+//! `#closedEdits`, `liveReview`, and what a session has cost (`#cost`, `#split`).
 //!
 //! The results are JSON as main hands them to the work board (`AgentReviewResult`, `FamilyEdits`).
 
 use std::collections::HashSet;
 
+use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 
 use super::super::AgentControl;
@@ -19,9 +19,6 @@ use super::super::types::{ClosedChild, ControlTab, CostSplit, StoredSession};
 use super::super::util::{Flight, join};
 use super::super::wrap::AGENT_CARD_PREFIX;
 use crate::agentctl::rules::pickup::{WorkerResult, parse_worker_result};
-
-/// The tools that write files (stock names); a bash edit is not one of them.
-const TURN_EDIT_TOOLS: [&str; 4] = ["write", "edit", "ast_edit", "apply_patch"];
 
 /// A JavaScript number as JSON: a whole one is written without a fraction.
 fn js_num(value: f64) -> Value {
@@ -44,72 +41,9 @@ fn epoch_ms(value: Option<&Value>) -> Option<f64> {
     ms.is_finite().then_some(ms)
 }
 
-/// `isTurnPrompt`: a prompt that starts a turn; a steer joins the running one.
-fn is_turn_prompt(message: &Value) -> bool {
-    message.get("role").and_then(Value::as_str) == Some("user")
-        && message.get("steering").and_then(Value::as_bool) != Some(true)
-}
-
-/// `turnEdits`: the newest turn of `messages` (from its last prompt, or all of them when none is there), cut to its
-/// edit calls and their results.
-pub fn turn_edits(messages: &[Value], cwd: &str) -> Value {
-    let at = messages.iter().rposition(is_turn_prompt);
-    let prompt = at.map(|at| &messages[at]);
-    let turn = &messages[at.map_or(0, |at| at + 1)..];
-    let mut calls: HashSet<String> = HashSet::new();
-    let mut edits: Vec<Value> = Vec::new();
-    for message in turn {
-        let role = message.get("role").and_then(Value::as_str);
-        if role == Some("assistant")
-            && let Some(content) = message.get("content").and_then(Value::as_array)
-        {
-            let blocks: Vec<Value> = content
-                .iter()
-                .filter(|block| {
-                    block.get("type").and_then(Value::as_str) == Some("toolCall")
-                        && block
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .is_some_and(|name| TURN_EDIT_TOOLS.contains(&name))
-                })
-                .cloned()
-                .collect();
-            if blocks.is_empty() {
-                continue;
-            }
-            for block in &blocks {
-                if let Some(id) = block.get("id").and_then(Value::as_str) {
-                    calls.insert(id.to_owned());
-                }
-            }
-            let mut edit = Map::new();
-            edit.insert("role".into(), json!("assistant"));
-            edit.insert("content".into(), Value::Array(blocks));
-            if let Some(timestamp) = message.get("timestamp") {
-                edit.insert("timestamp".into(), timestamp.clone());
-            }
-            edits.push(Value::Object(edit));
-        } else if role == Some("toolResult")
-            && message
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .is_some_and(|id| !id.is_empty() && calls.contains(id))
-        {
-            edits.push(message.clone());
-        }
-    }
-    let ended = turn
-        .last()
-        .and_then(|last| last.get("timestamp"))
-        .filter(|timestamp| !timestamp.is_null())
-        .or_else(|| prompt.and_then(|prompt| prompt.get("timestamp")));
-    json!({
-        "cwd": cwd,
-        "startedAt": prompt
-            .and_then(|prompt| epoch_ms(prompt.get("timestamp")))
-            .map_or(Value::Null, js_num),
-        "endedAt": epoch_ms(ended).map_or(Value::Null, js_num),
-        "messages": edits,
+pub(super) fn saved_edits(messages: &RawValue, cwd: &str) -> serde_json::Result<Value> {
+    crate::turn_edits::saved(messages, cwd, |time| {
+        epoch_ms(Some(time)).map_or(Value::Null, js_num)
     })
 }
 
@@ -144,13 +78,16 @@ pub(super) fn cost_split_of(providers: &Map<String, Value>) -> CostSplit {
 }
 
 impl AgentControl {
-    /// `#tabRow` is in `auto`; this reads a saved session's messages as the host's JSON (timestamps kept).
-    async fn stored_raw(&self, row: &StoredSession) -> R<Vec<Value>> {
-        Ok(self
+    pub(super) async fn stored_edits(&self, row: &StoredSession, cwd: &str) -> R<Value> {
+        let messages = self
             .host
             .port()
-            .ask::<Vec<Value>, _>("storedMessages", &json!({ "session": row }))
-            .await?)
+            .ask_raw("storedMessages", &json!({ "session": row }))
+            .await?;
+        saved_edits(&messages, cwd).map_err(|error| Fail::Other {
+            message: format!("storedMessages: main answered {error}"),
+            code: Some("port_answer".into()),
+        })
     }
 
     /// `#reviewItem`: a child's review item, or None when nothing is left to review: an idle child whose branch
@@ -424,10 +361,7 @@ impl AgentControl {
                                 if ready {
                                     ask(tab, "get_turn_edits", is_turn_edits).await
                                 } else if let Some(saved) = &saved {
-                                    self.stored_raw(saved)
-                                        .await
-                                        .ok()
-                                        .map(|messages| turn_edits(&messages, &tab.cwd))
+                                    self.stored_edits(saved, &tab.cwd).await.ok()
                                 } else {
                                     None
                                 }
@@ -538,10 +472,7 @@ impl AgentControl {
                 device: child.device.clone(),
                 ..StoredSession::default()
             };
-            let read = self
-                .stored_raw(&row)
-                .await
-                .map(|messages| turn_edits(&messages, &child.cwd));
+            let read = self.stored_edits(&row, &child.cwd).await;
             if read.is_err() {
                 self.mem().closed_turns.remove(&place);
             }

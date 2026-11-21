@@ -49,7 +49,11 @@ import {
 } from "../../resources/gui-bridge/restart-core";
 import { type ForkEntry, forkCut } from "../../resources/gui-bridge/session-fork-core";
 import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
-import { transcriptPageMessages, transcriptRunStart } from "../../resources/gui-bridge/transcript-page";
+import {
+	latestTurnStart,
+	transcriptPageMessages,
+	transcriptRunStart,
+} from "../../resources/gui-bridge/transcript-page";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
 import type {
@@ -2582,6 +2586,7 @@ export function runRpcUi(): void {
 				leafId: activeLeafId,
 				total: messages.length,
 				startIndex: start,
+				...(params.turnStart === true ? { turnStart: latestTurnStart(messages) } : {}),
 				// The bridge's labels (gui-bridge/sessions.ts): prompts another device typed, for this omp's viewer.
 				messages: transcriptPageMessages(
 					labelPromptOrigins(

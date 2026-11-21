@@ -299,8 +299,9 @@ async fn bridge_connection(stream: BoxedIo) {
                     .unwrap();
             }
         }
-        let hold = method == "sessions.attach_entry_ids"
-            && request["params"]["messages"][0]["content"] == "hold";
+        let hold = (method == "sessions.attach_entry_ids"
+            && request["params"]["messages"][0]["content"] == "hold")
+            || (method == "sessions.transcript" && request["params"]["limit"] != 0);
         if method == "fixture.desktopTouch" || hold {
             let event =
                 json!({"event": {"type":"desktop_slot_touch","processId":std::process::id()}});
@@ -325,6 +326,8 @@ async fn bridge_connection(stream: BoxedIo) {
                 })
                 .collect();
             json!({ "messages": messages })
+        } else if method == "sessions.transcript" {
+            json!({"leafId":"leaf","total":300,"turnStart":0,"messages":[]})
         } else if method == "composer.dequeue" {
             json!({"text":"with attachment","images":[{"type":"image","mimeType":"image/png","data":"YWJj"}]})
         } else {
@@ -479,6 +482,10 @@ impl Rig {
 
     /// Sends a request now; the receiver gets its answer frame.
     fn post(&self, method: &str, params: Value) -> oneshot::Receiver<Value> {
+        self.post_cancellable(method, params).1
+    }
+
+    fn post_cancellable(&self, method: &str, params: Value) -> (u64, oneshot::Receiver<Value>) {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (reply, answer) = oneshot::channel();
         self.replies.lock().unwrap().insert(id, reply);
@@ -487,7 +494,7 @@ impl Rig {
             json!({ "id": id, "method": method, "params": params })
         );
         let _ = self.writer.send(line.into_bytes());
-        answer
+        (id, answer)
     }
 
     /// A request, answered as the core answered it (`ok: true` → `result`; else `error`).
@@ -724,6 +731,34 @@ fn no_queue() -> Value {
 }
 
 // ---- tests --------------------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancelling_a_turn_read_does_not_wait_for_the_held_page_or_block_the_lane() {
+    let mut rig = Rig::new("turn-cancel", "ok+bridge").await;
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let spawn = rig.spawn_id();
+    let seq = rig.seq();
+    let (id, answer) = rig.post_cancellable(
+        "sidecar.turnEdits",
+        json!({"tab":rig.tab,"seq":seq,"spawnId":spawn}),
+    );
+    rig.until("bridge waiting on the page", |event| {
+        event.data["desktopSpawnId"] == spawn
+    })
+    .await;
+    let state = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert_eq!(state["response"]["success"], true);
+    rig.writer
+        .send(format!("{{\"cancel\":{id}}}\n").into_bytes())
+        .unwrap();
+    assert_eq!(settle(answer).await.unwrap_err()["code"], "cancelled");
+    finish(rig).await;
+}
 
 #[tokio::test]
 async fn desktop_receipts_and_commands_never_cross_a_restarted_spawn() {

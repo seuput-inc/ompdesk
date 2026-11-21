@@ -1,3 +1,11 @@
+/** The indexed replay's newest typed prompt, or its beginning if the replay contains none. */
+export function latestTurnStart(messages: readonly { role: string; steering?: boolean }[]): number {
+	return Math.max(
+		0,
+		messages.findLastIndex(message => message.role === "user" && message.steering !== true),
+	);
+}
+
 /**
  * Where a renderer page may start: the whole run its first message belongs to, tool calls and results included, so no
  * page opens on an orphan result or a call group split from its step. A run starts at a typed prompt (a stock
