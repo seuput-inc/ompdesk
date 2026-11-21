@@ -1,54 +1,54 @@
-path	current_owner	consumer	remaining_unit_or_reason
-src/main/web/asset-archive.test.ts	Vitest (node)	core web.start and web.stop	Keep disk retention, expiry and ordered replacement parity; the edge owns the index and serves the previous builds directly.
-src/main/web/blobs.test.ts	Vitest (node)	BlobStore and core web/blobs.rs	Keep device isolation, expiry, ranges and response-header parity.
-src/main/web/blobs.ts	core web/blobs.rs; TS token and media adapter	WsRouter, PageImages, createHostActions	Move token issuance with frame preparation. Move media response pumping with MediaStreams; URLs currently return synchronously.
-src/main/web/blocks-store.test.ts	Vitest (node)	WebBlocks	Keep block persistence and visitor verdict cases.
-src/main/web/blocks-store.ts	core web/store.rs; TS block mirror	WebHost and remote/devices.ts	Move synchronous block checks with the computer sharing gate and block mutations with desktop device administration.
-src/main/web/client-window.ts	TS ClientWindow interface and isWebWindow predicate	SidecarPool, tab-spawn.ts and IpcRegistry	Replace the interface and negative-id convention with the native window registry when pool and IPC callers move.
-src/main/web/devices-store.test.ts	Vitest (node)	WebDevices and core web/stores	Keep paired-device lifecycle, grants, usage and subscription parity.
-src/main/web/devices-store.ts	core web/devices.rs and web/store.rs; TS device mirror	WebHost, WsRouter and WebPushNotifier	Move same-tick reads and optimistic updates with quota, administration and notifications.
-src/main/web/file-edit-reports.test.ts	Vitest (node)	FileEditReports and parseFileEditReport	Keep per-connection dirty-state and withdrawal tests.
-src/main/web/file-edit-reports.ts	TS live file edit report store	ipc.ts and agent-control/host.ts	Move connection reports with the tab-close decision and connection lifecycle, not through a separate hop per report.
-src/main/web/host-actions.test.ts	Vitest (node)	createHostActions handlers	Keep host browser, save, open, blob, models and device preference parity.
-src/main/web/host-actions.ts	core fs/list.rs, fs/read.rs and web/save.rs; TS shell and IPC adapter	WebHost supplies the table to WsRouter	Native code lists, saves, stats and reads bounded headers. Main confines relative paths, checks upload ownership and calls the desktop shell; model edits and device prefs stay with their stores.
-src/main/web/ipc-policy.test.ts	Vitest (node)	IPC_POLICY and the registered channels	Keep complete direction and grant classification against createOmpApi.
-src/main/web/ipc-policy.ts	TS channel contract; core web/router.rs enforces it	WsRouter.config and index.ts	Retain the typed channel table until native IPC registration owns the corresponding handlers; do not duplicate its names in Rust.
-src/main/web/ipc-registry.test.ts	Vitest (node)	IpcRegistry	Keep native-window and paired caller dispatch parity.
-src/main/web/ipc-registry.ts	TS host IPC registry	index.ts, ipc.ts and WsRouter	Move registration and caller resolution with the main IPC handlers and native window registry.
-src/main/web/page-images.test.ts	Vitest (node)	PageImages.lift/tabsChanged	Keep image threshold, queue exception and tab-scoped release tests.
-src/main/web/page-images.ts	TS frame shaping; core web/blobs.rs holds bytes	WsRouter	Move transcript image lifting and per-tab tracking into the existing native deliver/reply path, without a new call per frame.
-src/main/web/pairing.test.ts	Vitest (node)	PairingConfirmations	Keep desktop approval, refusal and expiry tests.
-src/main/web/pairing.ts	TS outstanding desktop approvals	WebServer.answerAsk and WebHost.confirmations	Move the pending approval table, timers and teardown with the shared computer and phone gate; leave UI responses in the page.
-src/main/web/preview-dialog.test.ts	Vitest (node)	dialogChannel and dialogReturnValue	Keep dialog replies and withdrawals against a synthetic stream.
-src/main/web/preview-dialog.ts	TS dialog adapter; Tauri preview/dialogs.rs owns CDP	preview/host.ts	Move stream dialog lifetime with PageStream into the preview owner.
-src/main/web/preview-input.test.ts	Vitest (node)	InputMapper and InputSequence	Keep synthetic input mapping and order tests; no physical device input.
-src/main/web/preview-input.ts	TS preview input validation and mapping	preview/host.ts	Move with the offscreen preview input sink, preserving batch order and key composition.
-src/main/web/preview-pacer.test.ts	Vitest (node)	FramePacer and streamProfile	Keep deterministic frame and acknowledgement timing tests.
-src/main/web/preview-pacer.ts	TS frame pacing and profile selection	PageStream and preview/host.ts	Move pacing beside native capture and acknowledgement state, not behind its own per-frame request.
-src/main/web/preview-stream.test.ts	Vitest (node)	PageStream	Keep paint, poll, idle and dialog lifecycle parity.
-src/main/web/preview-stream.ts	TS PageStream over the offscreen preview	preview/host.ts	Move stream state, paint delivery and held polls together with the native preview owner.
-src/main/web/push.test.ts	Vitest (node)	PushSender and coreTransport	Keep send status, payload limit and transport parity.
-src/main/web/push.ts	core web/push.rs; TS send result and size policy	WebHost and WebPushNotifier	Move payload limits and refusal classification with notification delivery; encryption, signing and HTTPS already run in Rust.
-src/main/web/serve-secret.test.ts	Vitest (node)	ServeSecretStore	Keep first use, reload and bad-file parity against the core.
-src/main/web/serve-secret.ts	core web/store.rs; TS synchronous copy	WebHost.serveSecret	Retire the copy with serve target publication; callers read synchronously after ready().
-src/main/web/server.test.ts	Vitest (node)	WebHost and the loopback Rust HTTP and WebSocket edge	Keep the synthetic-peer integration suite, including the build value in the first hello.
-src/main/web/server.ts	core web/host.rs and web/server.rs; TS lifecycle and relay	WebHost.start/stop	Move edge relisten and relay replies with the remaining desktop policy, whois, pairing and schedule handlers.
-src/main/web/test-web-devices.ts	TS test fixture	devices-store.test.ts, web-stores-client.test.ts and web-push-notifier.test.ts	Keep synthetic stored devices in the Vitest fixture; not shipped.
-src/main/web/uploads.test.ts	Vitest (node)	UploadStore, attachHere and web.uploads.receive	Keep multipart, ownership, quota and lifetime parity.
-src/main/web/uploads.ts	core web/uploads.rs; TS upload client	WsRouter, createHostActions, ipc.ts and remote/host-services.ts	Move synchronous owns check with host save. Move result shaping with attachment IPC; storage and sweep already run in Rust.
-src/main/web/vapid-store.test.ts	Vitest (node)	loadVapid and push.vapid	Keep public key creation and persistence parity.
-src/main/web/vapid-store.ts	core web/push.rs; TS typed client	WebServer.start (already listening)	Native web.start loads the key before binding, including after a core exit. A repeated start refreshes the key without rebinding. Rust invalidates obsolete subscriptions.
-src/main/web/web-client-window.ts	TS virtual window registry	WebHost, WsRouter and index.ts	Move per-device virtual windows with IPC caller identity, tab ownership and teardown.
-src/main/web/web-edge-p256.test.ts	Vitest and Playwright browsers	WebCrypto proof fixture for core web/proof_browsers.rs	Keep cross-runtime verification tooling; browser signatures are produced by the browsers.
-src/main/web/web-host.ts	TS host composition; core web/host.rs owns page build identity and asset archiving	index.ts constructs WebHost	Move admin handlers, revocation, tab notices and sweep scheduling with their services. Archive copy and stop barrier run with the listener; main holds no archive roots.
-src/main/web/web-push-notifier.test.ts	Vitest (node)	WebPushNotifier	Keep tab activity, category, visibility and batching cases.
-src/main/web/web-push-notifier.ts	TS tab notification policy	WebHost.tabActivity/tabNotice	Move with the common notification batcher, tab facts and visibility state so desktop and phone decisions still agree.
-src/main/web/web-push.integration.test.ts	Vitest (node)	WebHost edge and notifier with an injected push transport	Keep paired subscription and notification delivery integration coverage.
-src/main/web/web-stores-client.test.ts	Vitest (node)	StoresChannel device snapshots	Keep snapshot, acknowledgement and restart ordering parity.
-src/main/web/web-stores-client.ts	TS ordered mirror of core web/store.rs	WebBlocks and WebDevices	Drop the mirror once the synchronous quota, gate and desktop administration consumers use the native stores.
-src/main/web/web-tab-layouts.test.ts	Vitest (node)	WebTabLayouts	Keep restore, revocation and no-redundant-write cases.
-src/main/web/web-tab-layouts.ts	TS webTabLayouts preference adapter	index.ts persists and restores paired window layouts	Move with the shared layout sanitizer, deleted-session checks and prefs writer, not as another call on each tab change.
-src/main/web/webhook.test.ts	Vitest (node)	WebHost loopback webhook and ScheduleService	Keep webhook delivery tests against the edge and schedule service.
-src/main/web/ws-router-test-rig.ts	TS synthetic page connection fixture	ws-router.test.ts and e2e/fixture/preview-stream-main.ts	Keep test-only web.router.test.* client for controlled frames and timers.
-src/main/web/ws-router.test.ts	Vitest (node)	WsRouter and core web/router.rs	Keep synthetic socket dispatch, resync, grants and delivery-order tests.
-src/main/web/ws-router.ts	core web/router.rs; TS IPC and payload adapter	WebHost and WebServer	Move shaping, upload landing, quota and IPC invocation with their owners. Keep stock image conversion in the stock helper.
+path	current_owner	consumer	remaining_unit_or_reason	status
+src/main/web/asset-archive.test.ts	Vitest (node)	core web.start and web.stop	Keep disk retention, expiry and ordered replacement parity; the edge owns the index and serves the previous builds directly.	tooling
+src/main/web/blobs.test.ts	Vitest (node)	BlobStore and core web/blobs.rs	Keep device isolation, expiry, ranges and response-header parity.	tooling
+src/main/web/blobs.ts	core web/blobs.rs; TS token and media adapter	WsRouter, PageImages, createHostActions	Move token issuance with frame preparation. Move media response pumping with MediaStreams; URLs currently return synchronously.	mixed
+src/main/web/blocks-store.test.ts	Vitest (node)	WebBlocks	Keep block persistence and visitor verdict cases.	tooling
+src/main/web/blocks-store.ts	core web/store.rs; TS block mirror	WebHost and remote/devices.ts	Move synchronous block checks with the computer sharing gate and block mutations with desktop device administration.	mixed
+src/main/web/client-window.ts	TS ClientWindow interface and isWebWindow predicate	SidecarPool, tab-spawn.ts and IpcRegistry	Replace the interface and negative-id convention with the native window registry when pool and IPC callers move.	exception
+src/main/web/devices-store.test.ts	Vitest (node)	WebDevices and core web/stores	Keep paired-device lifecycle, grants, usage and subscription parity.	tooling
+src/main/web/devices-store.ts	core web/devices.rs and web/store.rs; TS device mirror	WebHost, WsRouter and WebPushNotifier	Move same-tick reads and optimistic updates with quota, administration and notifications.	mixed
+src/main/web/file-edit-reports.test.ts	Vitest (node)	FileEditReports and parseFileEditReport	Keep per-connection dirty-state and withdrawal tests.	tooling
+src/main/web/file-edit-reports.ts	TS live file edit report store	ipc.ts and agent-control/host.ts	Move connection reports with the tab-close decision and connection lifecycle, not through a separate hop per report.	port
+src/main/web/host-actions.test.ts	Vitest (node)	createHostActions handlers	Keep host browser, save, open, blob, models and device preference parity.	tooling
+src/main/web/host-actions.ts	core fs/list.rs, fs/read.rs and web/save.rs; TS shell and IPC adapter	WebHost supplies the table to WsRouter	Native code lists, saves, stats and reads bounded headers. Main confines relative paths, checks upload ownership and calls the desktop shell; model edits and device prefs stay with their stores.	mixed
+src/main/web/ipc-policy.test.ts	Vitest (node)	IPC_POLICY and the registered channels	Keep complete direction and grant classification against createOmpApi.	tooling
+src/main/web/ipc-policy.ts	TS channel contract; core web/router.rs enforces it	WsRouter.config and index.ts	Retain the typed channel table until native IPC registration owns the corresponding handlers; do not duplicate its names in Rust.	mixed
+src/main/web/ipc-registry.test.ts	Vitest (node)	IpcRegistry	Keep native-window and paired caller dispatch parity.	tooling
+src/main/web/ipc-registry.ts	TS host IPC registry	index.ts, ipc.ts and WsRouter	Move registration and caller resolution with the main IPC handlers and native window registry.	port
+src/main/web/page-images.test.ts	Vitest (node)	PageImages.lift/tabsChanged	Keep image threshold, queue exception and tab-scoped release tests.	tooling
+src/main/web/page-images.ts	TS frame shaping; core web/blobs.rs holds bytes	WsRouter	Move transcript image lifting and per-tab tracking into the existing native deliver/reply path, without a new call per frame.	mixed
+src/main/web/pairing.test.ts	Vitest (node)	PairingConfirmations	Keep desktop approval, refusal and expiry tests.	tooling
+src/main/web/pairing.ts	TS outstanding desktop approvals	WebServer.answerAsk and WebHost.confirmations	Move the pending approval table, timers and teardown with the shared computer and phone gate; leave UI responses in the page.	port
+src/main/web/preview-dialog.test.ts	Vitest (node)	dialogChannel and dialogReturnValue	Keep dialog replies and withdrawals against a synthetic stream.	tooling
+src/main/web/preview-dialog.ts	TS dialog adapter; Tauri preview/dialogs.rs owns CDP	preview/host.ts	Move stream dialog lifetime with PageStream into the preview owner.	mixed
+src/main/web/preview-input.test.ts	Vitest (node)	InputMapper and InputSequence	Keep synthetic input mapping and order tests; no physical device input.	tooling
+src/main/web/preview-input.ts	TS preview input validation and mapping	preview/host.ts	Move with the offscreen preview input sink, preserving batch order and key composition.	port
+src/main/web/preview-pacer.test.ts	Vitest (node)	FramePacer and streamProfile	Keep deterministic frame and acknowledgement timing tests.	tooling
+src/main/web/preview-pacer.ts	TS frame pacing and profile selection	PageStream and preview/host.ts	Move pacing beside native capture and acknowledgement state, not behind its own per-frame request.	port
+src/main/web/preview-stream.test.ts	Vitest (node)	PageStream	Keep paint, poll, idle and dialog lifecycle parity.	tooling
+src/main/web/preview-stream.ts	TS PageStream over the offscreen preview	preview/host.ts	Move stream state, paint delivery and held polls together with the native preview owner.	port
+src/main/web/push.test.ts	Vitest (node)	PushSender and coreTransport	Keep send status, payload limit and transport parity.	tooling
+src/main/web/push.ts	core web/push.rs; TS send result and size policy	WebHost and WebPushNotifier	Move payload limits and refusal classification with notification delivery; encryption, signing and HTTPS already run in Rust.	mixed
+src/main/web/serve-secret.test.ts	Vitest (node)	ServeSecretStore	Keep first use, reload and bad-file parity against the core.	tooling
+src/main/web/serve-secret.ts	core web/store.rs; TS synchronous copy	WebHost.serveSecret	Retire the copy with serve target publication; callers read synchronously after ready().	native-client
+src/main/web/server.test.ts	Vitest (node)	WebHost and the loopback Rust HTTP and WebSocket edge	Keep the synthetic-peer integration suite, including the build value in the first hello.	tooling
+src/main/web/server.ts	core web/host.rs and web/server.rs; TS lifecycle and relay	WebHost.start/stop	Move edge relisten and relay replies with the remaining desktop policy, whois, pairing and schedule handlers.	mixed
+src/main/web/test-web-devices.ts	TS test fixture	devices-store.test.ts, web-stores-client.test.ts and web-push-notifier.test.ts	Keep synthetic stored devices in the Vitest fixture; not shipped.	tooling
+src/main/web/uploads.test.ts	Vitest (node)	UploadStore, attachHere and web.uploads.receive	Keep multipart, ownership, quota and lifetime parity.	tooling
+src/main/web/uploads.ts	core web/uploads.rs; TS upload client	WsRouter, createHostActions, ipc.ts and remote/host-services.ts	Move synchronous owns check with host save. Move result shaping with attachment IPC; storage and sweep already run in Rust.	mixed
+src/main/web/vapid-store.test.ts	Vitest (node)	loadVapid and push.vapid	Keep public key creation and persistence parity.	tooling
+src/main/web/vapid-store.ts	core web/push.rs; TS typed client	WebServer.start (already listening)	Native web.start loads the key before binding, including after a core exit. A repeated start refreshes the key without rebinding. Rust invalidates obsolete subscriptions.	native-client
+src/main/web/web-client-window.ts	TS virtual window registry	WebHost, WsRouter and index.ts	Move per-device virtual windows with IPC caller identity, tab ownership and teardown.	port
+src/main/web/web-edge-p256.test.ts	Vitest and Playwright browsers	WebCrypto proof fixture for core web/proof_browsers.rs	Keep cross-runtime verification tooling; browser signatures are produced by the browsers.	tooling
+src/main/web/web-host.ts	TS host composition; core web/host.rs owns page build identity and asset archiving	index.ts constructs WebHost	Move admin handlers, revocation, tab notices and sweep scheduling with their services. Archive copy and stop barrier run with the listener; main holds no archive roots.	mixed
+src/main/web/web-push-notifier.test.ts	Vitest (node)	WebPushNotifier	Keep tab activity, category, visibility and batching cases.	tooling
+src/main/web/web-push-notifier.ts	TS tab notification policy	WebHost.tabActivity/tabNotice	Move with the common notification batcher, tab facts and visibility state so desktop and phone decisions still agree.	port
+src/main/web/web-push.integration.test.ts	Vitest (node)	WebHost edge and notifier with an injected push transport	Keep paired subscription and notification delivery integration coverage.	tooling
+src/main/web/web-stores-client.test.ts	Vitest (node)	StoresChannel device snapshots	Keep snapshot, acknowledgement and restart ordering parity.	tooling
+src/main/web/web-stores-client.ts	TS ordered mirror of core web/store.rs	WebBlocks and WebDevices	Drop the mirror once the synchronous quota, gate and desktop administration consumers use the native stores.	mixed
+src/main/web/web-tab-layouts.test.ts	Vitest (node)	WebTabLayouts	Keep restore, revocation and no-redundant-write cases.	tooling
+src/main/web/web-tab-layouts.ts	TS webTabLayouts preference adapter	index.ts persists and restores paired window layouts	Move with the shared layout sanitizer, deleted-session checks and prefs writer, not as another call on each tab change.	port
+src/main/web/webhook.test.ts	Vitest (node)	WebHost loopback webhook and ScheduleService	Keep webhook delivery tests against the edge and schedule service.	tooling
+src/main/web/ws-router-test-rig.ts	TS synthetic page connection fixture	ws-router.test.ts and e2e/fixture/preview-stream-main.ts	Keep test-only web.router.test.* client for controlled frames and timers.	tooling
+src/main/web/ws-router.test.ts	Vitest (node)	WsRouter and core web/router.rs	Keep synthetic socket dispatch, resync, grants and delivery-order tests.	tooling
+src/main/web/ws-router.ts	core web/router.rs; TS IPC and payload adapter	WebHost and WebServer	Move shaping, upload landing, quota and IPC invocation with their owners. Keep stock image conversion in the stock helper.	mixed
