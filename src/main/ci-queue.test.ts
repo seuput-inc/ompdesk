@@ -194,8 +194,9 @@ describe("the macOS checks of a push to main", () => {
 		for (const [id, job] of Object.entries(mac.jobs)) {
 			expect(job["runs-on"], id).toBe("macos-latest");
 			// In a called workflow `inputs` is its own, not the dispatch's: admission is the caller's `if`.
-			expect(String(job.if ?? ""), id).not.toContain("inputs.");
-			expect(JSON.stringify(job.steps), id).not.toContain("inputs.");
+			const callerInput = /(?<![\w.-])inputs\s*(?:\.|\[)/i;
+			expect(String(job.if ?? ""), id).not.toMatch(callerInput);
+			expect(JSON.stringify(job.steps), id).not.toMatch(callerInput);
 		}
 	});
 
