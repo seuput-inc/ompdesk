@@ -35,7 +35,7 @@ export type NativeBinary = (typeof BINARIES)[number];
 export interface NativeBuildRecord {
 	/** File name → SHA-256 of the staged bytes. */
 	binaries: Record<string, string>;
-	/** SHA-256 over every source file of the workspace (`sourceSha256`). */
+	/** SHA-256 of the native release build's source files and recipe. */
 	sourceSha256: string;
 	platform: string;
 	arch: string;
@@ -52,26 +52,60 @@ export const stagedDir = (): string => path.join(BIN_ROOT, `${process.platform}-
 
 class BuildError extends Error {}
 
-function sourceFiles(dir: string, out: string[] = []): string[] {
-	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-		if (entry.name === "target" || entry.name === ".DS_Store") continue;
-		const file = path.join(dir, entry.name);
-		if (entry.isDirectory()) sourceFiles(file, out);
-		else out.push(file);
+// Cargo does not compile integration tests or these three independent shell workspaces into either binary.
+const SEPARATE_CRATES = ["shell", "shell-preview", "tauri-shell"];
+
+function sourceFiles(root: string): string[] {
+	const files = ["scripts/build-native.ts", "scripts/cargo.ts"];
+	function walk(dir: string): void {
+		for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
+			if (entry.name === ".DS_Store" || entry.name === "target") continue;
+			const file = `${dir}/${entry.name}`;
+			if (dir === "native/ompdesk/crates" && SEPARATE_CRATES.includes(entry.name)) continue;
+			if (entry.name === "tests" && /^native\/ompdesk\/crates\/[^/]+$/.test(dir)) continue;
+			if (entry.isDirectory()) walk(file);
+			else files.push(file);
+		}
 	}
-	return out;
+	walk("native/ompdesk");
+	for (const dir of [".cargo", "native/.cargo"]) {
+		if (fs.existsSync(path.join(root, dir))) walk(dir);
+	}
+	return files.sort();
 }
 
-/** One hash over the workspace's sources (paths and bytes, `target/` left out), so a record names what it was built from. */
-export function sourceSha256(): string {
+/** The cache lookup and the staged record use the same paths, bytes and build settings. */
+export function sourceSha256(root = REPO_ROOT): string {
 	const hash = createHash("sha256");
-	for (const file of sourceFiles(NATIVE_DIR).sort()) {
-		hash.update(path.relative(NATIVE_DIR, file).split(path.sep).join("/"));
-		hash.update("\0");
-		hash.update(fs.readFileSync(file));
+	for (const file of sourceFiles(root)) {
+		hash.update(`${file}\0`);
+		hash.update(fs.readFileSync(path.join(root, file)));
 		hash.update("\0");
 	}
+	const cargoEnvKey = /^CARGO_(BUILD_|PROFILE_|TARGET_|ENCODED_RUSTFLAGS$)/;
+	const compilerEnvKey =
+		/^(RUSTFLAGS|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTUP_TOOLCHAIN|SDKROOT|MACOSX_DEPLOYMENT_TARGET|CC|CFLAGS|LDFLAGS|ImageOS|ImageVersion)$/;
+	for (const key of Object.keys(process.env).sort()) {
+		if (cargoEnvKey.test(key) || compilerEnvKey.test(key)) hash.update(`${key}\0${process.env[key]}\0`);
+	}
 	return hash.digest("hex");
+}
+
+/** Refuse to cache a binary if a path dependency or include! starts reading outside our fingerprint. */
+export function checkCompilerInputs(root = REPO_ROOT): void {
+	const workspace = path.join(root, "native/ompdesk");
+	const files = new Set(sourceFiles(root));
+	for (const name of BINARIES) {
+		const depInfo = fs.readFileSync(path.join(workspace, "target", "release", `${name}.d`), "utf8").trimEnd();
+		const split = depInfo.indexOf(": ");
+		if (split < 0) throw new BuildError(`missing Cargo dependencies for ${name}`);
+		for (const escaped of depInfo.slice(split + 2).split(/(?<!\\) /)) {
+			const input = escaped.replaceAll("\\ ", " ");
+			const file = path.relative(root, path.resolve(workspace, input)).split(path.sep).join("/");
+			if (!files.has(file))
+				throw new BuildError(`${name} compiled ${file}, missing from the native build fingerprint`);
+		}
+	}
 }
 
 const sha256 = (file: string): string => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -110,15 +144,19 @@ export function buildNative(options: { quiet?: boolean } = {}): string {
 				"from https://rustup.rs (the toolchain in native/ompdesk/rust-toolchain.toml is picked up automatically) and " +
 				"run `bun run build:native` again.",
 		);
+	const source = sourceSha256();
 	const started = Date.now();
 	const run = spawnSync(cargo, ["build", "--locked", "--release", "--workspace"], {
 		cwd: NATIVE_DIR,
-		env: cargoEnv(cargo),
+		env: { ...cargoEnv(cargo), CARGO_BUILD_DEP_INFO_BASEDIR: NATIVE_DIR },
 		stdio: options.quiet ? ["ignore", "ignore", "pipe"] : "inherit",
 		encoding: "utf8",
 	});
 	if (run.status !== 0)
 		throw new BuildError(`cargo build failed (${run.status ?? run.signal}).${run.stderr ? `\n${run.stderr}` : ""}`);
+	checkCompilerInputs();
+	if (source !== sourceSha256())
+		throw new BuildError("native build inputs changed during compilation; rerun the build.");
 	const target = stagedDir();
 	fs.mkdirSync(target, { recursive: true });
 	const binaries: Record<string, string> = {};
@@ -142,7 +180,7 @@ export function buildNative(options: { quiet?: boolean } = {}): string {
 	}
 	const record: NativeBuildRecord = {
 		binaries,
-		sourceSha256: sourceSha256(),
+		sourceSha256: source,
 		platform: process.platform,
 		arch: process.arch,
 		rustc: execFileSync(rustcPath(cargo), ["--version"], { cwd: NATIVE_DIR, encoding: "utf8" }).trim(),
@@ -177,7 +215,9 @@ export function ensureNative(): string {
 
 if (import.meta.main) {
 	try {
-		if (process.argv.includes("--check")) {
+		if (process.argv.includes("--source-sha256")) {
+			console.log(sourceSha256());
+		} else if (process.argv.includes("--check")) {
 			const record = checkNative();
 			console.log(
 				`checked ${path.relative(REPO_ROOT, stagedDir())} (${Object.keys(record.binaries).join(", ")}; built ${record.builtAt})`,

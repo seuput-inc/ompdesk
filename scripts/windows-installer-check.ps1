@@ -1,7 +1,7 @@
 <#
 Checks the packaged Windows setup (electron-builder.win.yml: one click, per
-user) on a real Windows. ci.yml's manual `installer-check` job runs every mode
-on windows-latest (`gh workflow run ci.yml -f installer_check=true`).
+user). ci.yml runs each mode on its own windows-latest runner
+(`gh workflow run ci.yml -f installer_check=true`).
 
   -Mode silent  `setup /S`: per-user install in %LOCALAPPDATA%\Programs\ompdesk,
                 Start-menu and desktop shortcuts to it, one HKCU uninstall
@@ -19,7 +19,7 @@ on windows-latest (`gh workflow run ci.yml -f installer_check=true`).
                 users first; `setup /S` must remove that copy (HKLM entry,
                 Program Files folder, all-users shortcuts) and install per user.
 
-Each mode uninstalls what it installed, so they run one after another.
+Each mode needs a machine without an existing install and uninstalls what it installed.
 #>
 param(
 	[Parameter(Mandatory)] [string] $Setup,

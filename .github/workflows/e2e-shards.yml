@@ -9,24 +9,11 @@
 # `mac-smoke`, release.yml's `mac`). The staged host (resources/ompdesk-tauri/win32-x64) runs the built `out/` as an
 # unpackaged app, as the harness always did; Preview's own browser is staged beside it.
 #
-# Sharding is scripts/e2e-shard.ts (whole spec files, dealt by estimated cost),
-# not `playwright test --shard`, which counts tests that skip inside their body
-# and so leaves one shard nearly empty. Every shard runs against the real latest
-# omp (real-core and deep-audit) and the fake omp (everything else); playwright
-# runs one worker per shard (2-core runner; playwright.config.ts).
-#
-# Five shards, as when the suite ran on macOS (where a public repo runs at most 5 jobs at once; Windows has no such
-# cap, so more is possible). `scripts/e2e-shard-costs.json` was measured on macOS runners, so the deal is an estimate
-# until `bun scripts/e2e-shard-costs.ts <run-id>` rewrites it from a Windows run. Playwright's `--global-timeout` is 35
-# minutes under the job's 40, so a shard that runs long still prints its failures and uploads `test-results/` (the
-# upload also runs on a cancel), though the tests left do not run. `fail-fast: false`: one run reports every failing
-# shard, and `gh run rerun <id> --failed` reruns only those.
-#
-# One worker per shard: on macOS, two workers failed load-sensitive tests that pass with one (run 42693732758:
-# `preview-stream`'s frame pacing, every time). Two workers need those made independent of load first.
-#
-# `specs` (space-separated e2e/*.e2e.ts paths) runs those files alone in one shard instead of the whole suite: the
-# check after a fix, at the cost of the files plus ~1 min of setup, not ~25 min (e2e-nightly.yml's dispatch input).
+# Run 44964976326 recorded 7,087 s of test bodies on five one-worker Windows jobs.
+# At 18 jobs the mean is 394 s, just below the longest independent test (402 s).
+# More jobs cannot shorten that test. Shared runner availability, setup and queue time are extra.
+# scripts/e2e-shard.ts deals whole files except deep-audit, whose independent settings tests
+# took 1,181 s together. A focused dispatch still runs its requested files on one worker.
 name: e2e-shards
 
 on:
@@ -53,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.specs != '' && '[1]' || '[1, 2, 3, 4, 5]') }}
+        shard: ${{ fromJSON(inputs.specs != '' && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]') }}
     defaults:
       run:
         shell: bash
@@ -91,21 +78,18 @@ jobs:
       - name: Playwright, this shard's spec files
         run: |
           set -euo pipefail
+          list="$RUNNER_TEMP/e2e-shard.txt"
           if [ -n "$SPECS_INPUT" ]; then
             read -r -a SPECS <<< "$SPECS_INPUT"
-            # Only existing spec files: a typo must fail here, not match nothing or (as a Playwright regex) more.
             for spec in "${SPECS[@]}"; do
-              [[ "$spec" =~ ^e2e/[A-Za-z0-9._/-]+\.e2e\.ts$ && -f "$spec" ]] || { echo "::error::not an e2e spec file: $spec"; exit 1; }
-            done
+              [[ "$spec" =~ ^e2e/([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.e2e\.ts$ && -f "$spec" ]] || { echo "::error::not an e2e spec file: $spec"; exit 1; }
+              printf '%s\n' "${spec#e2e/}"
+            done > "$list"
           else
-            # A failed listing must stop here: an empty list would run every spec.
-            FILES=$(bun scripts/e2e-shard.ts "$SHARD/$SHARDS")
-            read -r -a SPECS <<< "$FILES"
+            bun scripts/e2e-shard.ts "$SHARD/$SHARDS" > "$list"
           fi
-          test "${#SPECS[@]}" -gt 0
-          # Playwright stops itself 5 minutes before the job's limit, so a shard that runs long still prints every
-          # failure and leaves its traces (nightly 39749113072: shard 2 hit 30 minutes and its one failure left nothing).
-          bunx playwright test --global-timeout=2100000 "${SPECS[@]}"
+          test -s "$list"
+          bunx playwright test --global-timeout=2100000 --test-list "$list"
       - if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -36,10 +36,11 @@ runs:
   steps:
     - name: Electron versions from bun.lock
       id: ver
-      if: inputs.electron == 'true'
+      if: inputs.electron == 'true' || inputs.builder == 'true'
       shell: bash
       env:
         CACHE_ROOT: ${{ runner.temp }}
+        WITH_ELECTRON: ${{ inputs.electron }}
         WITH_BUILDER: ${{ inputs.builder }}
       run: |
         set -euo pipefail
@@ -52,8 +53,10 @@ runs:
         echo "electron=$electron" >> "$GITHUB_OUTPUT"
         echo "builder=$builder" >> "$GITHUB_OUTPUT"
         # electron's install.js reads electron_config_cache, @electron/get ELECTRON_CACHE.
-        echo "ELECTRON_CACHE=$CACHE_ROOT/electron-cache" >> "$GITHUB_ENV"
-        echo "electron_config_cache=$CACHE_ROOT/electron-cache" >> "$GITHUB_ENV"
+        if [ "$WITH_ELECTRON" = "true" ]; then
+          echo "ELECTRON_CACHE=$CACHE_ROOT/electron-cache" >> "$GITHUB_ENV"
+          echo "electron_config_cache=$CACHE_ROOT/electron-cache" >> "$GITHUB_ENV"
+        fi
         if [ "$WITH_BUILDER" = "true" ]; then
           echo "ELECTRON_BUILDER_CACHE=$CACHE_ROOT/electron-builder-cache" >> "$GITHUB_ENV"
         fi
@@ -67,7 +70,7 @@ runs:
         key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.ver.outputs.electron }}
 
     - name: Restore electron-builder's download cache
-      if: inputs.electron == 'true' && inputs.builder == 'true'
+      if: inputs.builder == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/electron-builder-cache
@@ -108,13 +111,21 @@ runs:
         path: ${{ runner.temp }}/electron-cache
         key: ${{ steps.electron-cache.outputs.cache-primary-key }}
 
+    - name: Fingerprint the native release build inputs
+      id: native-inputs
+      if: (inputs.native || inputs.electron) == 'true'
+      shell: bash
+      run: |
+        digest=$(bun scripts/build-native.ts --source-sha256)
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
     - name: Restore OMPdesk's native binaries
       id: native-cache
       if: (inputs.native || inputs.electron) == 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: resources/ompdesk-bin
-        key: ompdesk-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/**', 'scripts/build-native.ts', 'scripts/cargo.ts') }}
+        key: ompdesk-bin-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-inputs.outputs.digest }}
 
     - if: (inputs.native || inputs.electron) == 'true' && steps.native-cache.outputs.cache-hit != 'true'
       uses: ./.github/actions/native-toolchain
@@ -122,7 +133,11 @@ runs:
     - name: Build OMPdesk's native binaries
       if: (inputs.native || inputs.electron) == 'true' && steps.native-cache.outputs.cache-hit != 'true'
       shell: bash
-      run: bun run build:native
+      env:
+        NATIVE_DIGEST: ${{ steps.native-inputs.outputs.digest }}
+      run: |
+        bun scripts/build-native.ts
+        jq -e --arg digest "$NATIVE_DIGEST" '.sourceSha256 == $digest' resources/ompdesk-bin/*/ompdesk.build.json
 
     - if: (inputs.native || inputs.electron) == 'true' && steps.native-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -133,4 +148,4 @@ runs:
     - name: Check the cached native binaries
       if: (inputs.native || inputs.electron) == 'true' && steps.native-cache.outputs.cache-hit == 'true'
       shell: bash
-      run: bun run build:native -- --check
+      run: bun scripts/build-native.ts --check

@@ -1,47 +1,19 @@
 /**
- * Prints the e2e spec files of one shard of the full Playwright suite, for
- * e2e-shards.yml's matrix (called by ci.yml's manual `e2e=true` and by the nightly e2e workflow):
- *
- *   bunx playwright test $(bun scripts/e2e-shard.ts 2/4)
- *
- * Why not `playwright test --shard=2/4`: it cuts the ordered list of tests into
- * equal runs of *listed* tests, and the suite lists ~380 tests of which ~200
- * run. Specs that skip inside the test (the real-omp and `OMP_GUI_*=<dir>` audits)
- * still count, so one shard would get a run of near-free tests and another the
- * real work. Here whole files are dealt, heaviest first, to the lightest shard
- * (LPT), by an estimated cost per file: its tests that are not annotated skipped, a `captures:` test counting a tenth,
- * at `TEST_SECONDS` each, but never below the file's time in `scripts/e2e-shard-costs.json`: each spec file's summed
- * test time on the hosted Windows runner with one worker (e2e-nightly run 43861396559, 16 Nov 2026, every shard;
- * deep-audit read 1297 s there against 608 s on the hosted macOS runner the suite used to run on, and its shard hit
- * the 35-minute `--global-timeout` before the last 21 tests of preview.e2e.ts and what follows). Measured on a
- * 15-core Mac with 4 workers instead, deep-audit read 184 s. Most tests of an unmeasured file skip inside their body, so `TEST_SECONDS` is the mean of the rest, not of
- * all tests: at 8 s the estimate was ~1546 s a shard against 907 to 1494 s measured, and the split put the heaviest
- * shard past the timeout.
- * The costs only steer the split; every file lands in exactly one shard, so a wrong estimate costs wall time, never
- * coverage, except past the shard's `--global-timeout` (35 minutes): the tests left then do not run at all (nightly
- * 41817431850, shard 3: 36 tests did not run; 41880669356, shard 1: one). `bun scripts/e2e-shard-costs.ts <run-id>`
- * rewrites the JSON from a nightly's logs: run it when specs are added or slow down.
+ * Print one shard as a Playwright --test-list (paths relative to testDir, one selector per line).
+ * Run 44964976326 spent 1,181 s in deep-audit alone. Its parallel tests each launch their own app,
+ * so those tests can move independently. All other files keep their hooks and serial groups together.
+ * `bun scripts/e2e-shard-costs.ts <run-id>` refreshes the scheduling weights from Windows job logs.
  */
 import { spawnSync } from "node:child_process";
-import type { JSONReport } from "@playwright/test/reporter";
+import type { JSONReport, JSONReportSuite } from "@playwright/test/reporter";
 import costs from "./e2e-shard-costs.json";
 import { deal } from "./shard-deal";
 
 const TEST_SECONDS = 3;
 const CAPTURE_WEIGHT = 0.1;
-/** Spec files of 8 s or more, measured on the runner (seconds of test time, one worker). */
 const MEASURED_SECONDS: Readonly<Record<string, number>> = costs;
 
-interface JsonSpec {
-	title: string;
-	tests: { annotations?: { type: string }[] }[];
-}
-interface JsonSuite {
-	file?: string;
-	suites?: JsonSuite[];
-	specs?: JsonSpec[];
-}
-function listSuites(): JsonSuite[] {
+function listSuites(): JSONReportSuite[] {
 	const result = spawnSync("bunx", ["playwright", "test", "--list", "--reporter=json"], {
 		encoding: "utf8",
 		maxBuffer: 256 * 1024 * 1024,
@@ -58,21 +30,39 @@ function listSuites(): JsonSuite[] {
 		}
 		throw new Error(`playwright --list failed (${result.signal ?? `exit ${result.status}`})\n${detail}`);
 	}
-	// Playwright's own JSON reporter output (the documented list report shape).
-	const report: { suites: JsonSuite[] } = JSON.parse(result.stdout);
+	const report: JSONReport = JSON.parse(result.stdout);
 	return report.suites;
 }
 
-function cost(suite: JsonSuite): number {
-	let seconds = 0;
-	for (const spec of suite.specs ?? []) {
-		for (const test of spec.tests) {
-			if (test.annotations?.some(annotation => annotation.type === "skip")) continue;
-			seconds += TEST_SECONDS * (/^captures?\b/i.test(spec.title) ? CAPTURE_WEIGHT : 1);
+// --test-list matches a title path by prefix. A top-level describe and everything below it stay together.
+export function shardSelector(file: string, title: string): string {
+	return file === "deep-audit.e2e.ts" ? `${file} › ${title}` : file;
+}
+
+export function planShards(suites: JSONReportSuite[], total: number): string[][] {
+	const estimates = new Map<string, number>();
+	function visit(suite: JSONReportSuite, file: string, group?: string): void {
+		for (const spec of suite.specs) {
+			const title = group ?? spec.title;
+			const selector = shardSelector(file, title);
+			if (selector !== file && (!title.trim() || title !== title.trim() || /[›\r\n]/.test(title))) {
+				throw new Error(`Cannot select test title in ${file}: ${JSON.stringify(title)}`);
+			}
+			const active = spec.tests.filter(test => !test.annotations.some(a => a.type === "skip")).length;
+			const weight = /^captures?\b/i.test(spec.title) ? CAPTURE_WEIGHT : 1;
+			estimates.set(selector, (estimates.get(selector) ?? 0) + active * TEST_SECONDS * weight);
 		}
+		for (const child of suite.suites ?? []) visit(child, file, group ?? (child.title || undefined));
 	}
-	for (const child of suite.suites ?? []) seconds += cost(child);
-	return seconds;
+	for (const suite of suites) {
+		if (!suite.file) throw new Error(`Missing file for Playwright suite ${suite.title}`);
+		visit(suite, suite.file);
+	}
+	// Even an entirely skipped file costs discovery time. Zero weights would all land on the same shard.
+	return deal(
+		Array.from(estimates, ([file, estimate]) => ({ file, seconds: Math.max(1, MEASURED_SECONDS[file] ?? estimate) })),
+		total,
+	);
 }
 
 if (import.meta.main) {
@@ -83,23 +73,10 @@ if (import.meta.main) {
 		console.error("usage: bun scripts/e2e-shard.ts <shard>/<total>   (e.g. 2/4)");
 		process.exit(2);
 	}
-	const files = listSuites()
-		.filter(suite => suite.file)
-		.map(suite => {
-			const file = suite.file as string;
-			const base = file.split("/").pop() as string;
-			return { file: `e2e/${file}`, seconds: Math.max(cost(suite), MEASURED_SECONDS[base] ?? 0) };
-		});
-	const shards = deal(files, total);
-	const mine = shards[current - 1] ?? [];
+	const mine = planShards(listSuites(), total)[current - 1] ?? [];
 	if (mine.length === 0) {
-		console.error(`shard ${current}/${total} has no spec files (${files.length} in all)`);
+		console.error(`shard ${current}/${total} has no tests`);
 		process.exit(1);
 	}
-	const seconds = new Map(files.map(entry => [entry.file, entry.seconds]));
-	for (const [index, shard] of shards.entries()) {
-		const sum = shard.reduce((acc, file) => acc + (seconds.get(file) ?? 0), 0);
-		console.error(`[e2e-shard] ${index + 1}/${total}: ${shard.length} files, ~${Math.round(sum)} s estimated`);
-	}
-	console.log(mine.join(" "));
+	console.log(mine.join("\n"));
 }

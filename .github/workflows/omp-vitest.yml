@@ -89,6 +89,8 @@ jobs:
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
+        with:
+          native: ${{ startsWith(matrix.args, '--project=renderer') && 'false' || 'true' }}
       - id: omp
         uses: ./.github/actions/install-omp
         with:

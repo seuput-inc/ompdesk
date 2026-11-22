@@ -244,6 +244,8 @@ jobs:
       # Tests import electron, whose index.js throws without the binary; the shared install fetches it
       # (cached by electron's version, one retry on a download miss).
       - uses: ./.github/actions/install
+        with:
+          native: ${{ startsWith(matrix.args, '--project=renderer') && 'false' || 'true' }}
       - uses: ./.github/actions/install-omp
       - run: bunx vitest run ${{ matrix.args }}
       - if: failure()

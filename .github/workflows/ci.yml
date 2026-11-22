@@ -18,7 +18,7 @@
 # is a manual dispatch.
 #
 # The full Playwright suite is manual here (`gh workflow run ci.yml -f e2e=true`):
-# it builds out/ on Linux and runs the five Windows shards of e2e-shards.yml (Playwright
+# it builds out/ on Linux and runs the Windows shards of e2e-shards.yml (Playwright
 # drives the Tauri host's page through WebView2; macOS's WKWebView has no DevTools port),
 # which e2e-nightly.yml also runs every night (a release does not).
 #
@@ -211,6 +211,8 @@ jobs:
           bun-version: 1.4.4
       # Tests import electron, whose index.js throws without the binary: the shared install fetches it.
       - uses: ./.github/actions/install
+        with:
+          native: ${{ startsWith(matrix.args, '--project=renderer') && 'false' || 'true' }}
       - uses: ./.github/actions/install-omp
       - run: bunx vitest run ${{ matrix.args }}
       # The work card's verdict over 254 real cards and its generated invariants, by name, even when the run above
@@ -391,19 +393,31 @@ jobs:
       - uses: ./.github/actions/install
       - run: bun scripts/setup-install-check.ts --hide-system-git
 
-  # The packaged one-click, per-user setup (electron-builder.win.yml +
-  # resources/installer.nsh) on a real Windows: scripts/windows-installer-check.ps1
-  # runs `setup /S`, then the setup as a double-click runs it (no arguments;
-  # it must finish with only a progress bar and start OMPdesk), then an
-  # all-users install from the assisted NSIS fixture (or `legacy_tag` release) that the new
-  # setup must remove. Each checks the install folder, the Start-menu and
-  # desktop shortcuts, the uninstall entry (HKCU only), the app's first
-  # window, and the uninstall. Captures land in the `installer-check` artifact.
-  installer-check:
+  installer-backup:
     needs: gate
     if: "!cancelled() && inputs.installer_check"
     runs-on: windows-latest
-    # The build, the installs and the WebView2 crash checks took 27 of 30 minutes on a slow runner (run 44647544053).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
+        with:
+          toolchain: "1.95"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: native/memory
+      - name: Verify memory upgrade backups on Windows
+        working-directory: native/memory
+        run: cargo test --locked --release -p ai-memory-store --lib v85_backup::tests
+
+  installer-package:
+    needs: gate
+    if: "!cancelled() && inputs.installer_check"
+    runs-on: windows-latest
+    outputs:
+      attempt: ${{ github.run_attempt }}
+    env:
+      ELECTRON_BUILDER_COMPRESSION_LEVEL: "4" # Same NSIS payload compression as release.yml.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -418,6 +432,8 @@ jobs:
         run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
         with:
+          electron: "false"
+          native: "true"
           builder: "true"
       # The Tauri host (system WebView) and the pinned Node for the package (the tauri-shell action: a cached build).
       - uses: ./.github/actions/tauri-shell
@@ -431,10 +447,12 @@ jobs:
         with:
           path: resources/ai-memory-bin
           key: ai-memory-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/memory/**', 'scripts/build-memory.ts', 'resources/gui-bridge/memory-prompt.ts', 'resources/gui-bridge/redactor.ts') }}
-      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
+      - if: steps.memory-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
         with:
           toolchain: "1.95"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: steps.memory-cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/memory
       - if: steps.memory-cache.outputs.cache-hit != 'true'
@@ -448,9 +466,6 @@ jobs:
       - if: steps.memory-cache.outputs.cache-hit == 'true'
         name: Check the cached memory binary
         run: bun run build:memory -- --check
-      - name: Verify memory upgrade backups on Windows
-        working-directory: native/memory
-        run: cargo test --locked --release -p ai-memory-store --lib v85_backup::tests
       - name: Unpack the pinned agent-desktop
         run: bun run build:agent-desktop
       - name: Package
@@ -471,22 +486,71 @@ jobs:
             gh release download "$LEGACY_TAG" --pattern ompdesk-windows-setup.exe --output legacy-setup.exe
           fi
           ls -l ompdesk-windows-setup.exe legacy-setup.exe
-      - name: Silent install
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-setup-${{ github.run_attempt }}
+          path: ompdesk-windows-setup.exe
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: legacy-setup-${{ github.run_attempt }}
+          path: legacy-setup.exe
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  installer-proof:
+    needs: installer-package
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [silent, ui, legacy]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-setup-${{ needs.installer-package.outputs.attempt }}
+          path: installer-inputs
+      - if: matrix.mode == 'legacy'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: legacy-setup-${{ needs.installer-package.outputs.attempt }}
+          path: installer-inputs
+      - name: Install and uninstall (${{ matrix.mode }})
         shell: pwsh
-        run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode silent
-      - name: Double-click install
-        shell: pwsh
-        run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode ui -Captures installer-captures
-      - name: Over an all-users install
-        shell: pwsh
-        run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode legacy -LegacySetup legacy-setup.exe
-      - if: always()
+        run: >-
+          ./scripts/windows-installer-check.ps1 -Setup installer-inputs/ompdesk-windows-setup.exe
+          -Mode ${{ matrix.mode }} -Captures installer-captures -LegacySetup installer-inputs/legacy-setup.exe
+      - if: always() && matrix.mode == 'ui'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: installer-check
+          name: ${{ github.run_attempt == 1 && 'installer-check' || format('installer-check-{0}', github.run_attempt) }}
           path: installer-captures/
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
+
+  installer-check:
+    needs: [installer-package, installer-backup, installer-proof]
+    if: "!cancelled() && inputs.installer_check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require packaging, backup and every install mode to pass
+        env:
+          PACKAGE: ${{ needs.installer-package.result }}
+          BACKUP: ${{ needs.installer-backup.result }}
+          PROOF: ${{ needs.installer-proof.result }}
+        run: |
+          printf 'Package: %s, backup: %s, install modes: %s\n' "$PACKAGE" "$BACKUP" "$PROOF"
+          test "$PACKAGE" = success && test "$BACKUP" = success && test "$PROOF" = success
 
   # Launches the built app on a real Windows desktop: the @smoke specs on the
   # fake omp (e2e/*.e2e.ts titles tagged @smoke) and, before them, the real

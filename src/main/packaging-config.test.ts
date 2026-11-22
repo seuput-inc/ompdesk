@@ -1483,17 +1483,51 @@ describe("workflows", () => {
 	it("checks the built setup on Windows silently, as a double-click and over an all-users install", () => {
 		const ci = parse(workflows.find(entry => entry.name === "ci.yml")?.text ?? "") as {
 			on: { workflow_dispatch: { inputs: Record<string, unknown> } };
-			jobs: Record<string, { "runs-on": string; if?: string; steps: { run?: string }[] }>;
+			jobs: Record<
+				string,
+				{
+					"runs-on": string;
+					if?: string;
+					needs: string | string[];
+					strategy?: { matrix: { mode: string[] }; "fail-fast": boolean };
+					steps: { run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, string> }[];
+				}
+			>;
 		};
 		expect(ci.on.workflow_dispatch.inputs).toHaveProperty("installer_check");
 		const job = ci.jobs["installer-check"];
 		expect(job?.if).toBe("!cancelled() && inputs.installer_check");
-		expect(job?.["runs-on"]).toBe("windows-latest");
-		const runs = job?.steps.map(step => step.run ?? "").join("\n") ?? "";
-		expect(runs).toContain("ompdesk-windows-setup.exe");
-		for (const mode of ["silent", "ui", "legacy"]) {
-			expect(runs).toContain(`scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode ${mode}`);
+		const backup = ci.jobs["installer-backup"];
+		const pkg = ci.jobs["installer-package"];
+		const proof = ci.jobs["installer-proof"];
+		expect(job?.needs).toEqual(["installer-package", "installer-backup", "installer-proof"]);
+		expect(job?.steps[0]?.env).toEqual({
+			PACKAGE: "${{ needs.installer-package.result }}",
+			BACKUP: "${{ needs.installer-backup.result }}",
+			PROOF: "${{ needs.installer-proof.result }}",
+		});
+		for (const result of ["PACKAGE", "BACKUP", "PROOF"]) {
+			expect(job?.steps[0]?.run).toContain(`test "$${result}" = success`);
 		}
+		for (const producer of [pkg, backup]) {
+			expect(producer?.needs).toBe("gate");
+			expect(producer?.if).toBe(job?.if);
+			expect(producer?.["runs-on"]).toBe("windows-latest");
+		}
+		expect(backup?.steps.map(s => s.run)).toContain(
+			"cargo test --locked --release -p ai-memory-store --lib v85_backup::tests",
+		);
+		expect(proof?.needs).toBe("installer-package");
+		expect(proof?.["runs-on"]).toBe("windows-latest");
+		expect(proof?.strategy).toEqual({ matrix: { mode: ["silent", "ui", "legacy"] }, "fail-fast": false });
+		const install = proof?.steps.find(s => s.run?.includes("scripts/windows-installer-check.ps1"));
+		expect(install?.if).toBeUndefined();
+		expect(install?.run).toContain("-Setup installer-inputs/ompdesk-windows-setup.exe -Mode ${{ matrix.mode }}");
+		expect(install?.run).toContain("-LegacySetup installer-inputs/legacy-setup.exe");
+		expect(install?.run).toContain("-Captures installer-captures");
+		const captures = proof?.steps.find(s => s.with?.path === "installer-captures/");
+		expect(captures?.if).toBe("always() && matrix.mode == 'ui'");
+		expect(captures?.with?.["if-no-files-found"]).toBe("error");
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "scripts/windows-installer-check.ps1"))).toBe(true);
 	});
 

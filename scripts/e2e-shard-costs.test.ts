@@ -11,7 +11,8 @@ it("sums each spec file's test times from a shard's log, passed or failed, in ms
 		"e2e (shard 1/5)\tUNKNOWN STEP\t2026-11-09T11:44:00.0Z   2 passed (15.4m)",
 	].join("\n");
 	const seconds = parseSpecSeconds(log);
-	expect([...seconds.keys()]).toEqual(["smoke.e2e.ts", "phone-host-rows.e2e.ts"]);
+	expect([...seconds.keys()]).toEqual(["smoke.e2e.ts", "phone-host-rows.e2e.ts", "real-work-map.e2e.ts"]);
+	expect(seconds.get("real-work-map.e2e.ts")).toBe(0);
 	expect(seconds.get("smoke.e2e.ts")).toBeCloseTo(14.25);
 	expect(seconds.get("phone-host-rows.e2e.ts")).toBeCloseTo(66);
 });
@@ -25,7 +26,11 @@ it("reads a Windows runner's list reporter: ok and x marks, backslash paths, min
 		"e2e / e2e (shard 1/5)\tUNKNOWN STEP\t2026-11-16T12:23:00.0Z   3 passed (15.4m)",
 	].join("\n");
 	const seconds = parseSpecSeconds(log);
-	expect([...seconds.keys()]).toEqual(["shell-net.e2e.ts", "deep-audit.e2e.ts"]);
+	expect([...seconds.keys()]).toEqual([
+		"shell-net.e2e.ts",
+		"deep-audit.e2e.ts › deep GUI audit (1/3)",
+		"real-work-map.e2e.ts",
+	]);
 	expect(seconds.get("shell-net.e2e.ts")).toBeCloseTo(0.292);
-	expect(seconds.get("deep-audit.e2e.ts")).toBeCloseTo(450);
+	expect(seconds.get("deep-audit.e2e.ts › deep GUI audit (1/3)")).toBeCloseTo(450);
 });
