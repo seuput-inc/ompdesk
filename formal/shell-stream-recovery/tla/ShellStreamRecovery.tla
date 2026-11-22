@@ -82,7 +82,7 @@ Park ==
     /\ s.queue = <<>> /\ s.after = -1 /\ s.resetPart = -1 /\ ~s.waiting
     /\ s' = [s EXCEPT !.waiting = TRUE]
 
-\* @code src/renderer/web/resync.ts:105-109 installShellResync: capture the current token before awaiting authoritative reads
+\* @code src/renderer/web/resync.ts:127-130 installShellResync: capture the current token before awaiting authoritative reads
 StartRead ==
     /\ s.pending # 0 /\ s.read = "none"
     /\ s' = [s EXCEPT !.read = "working", !.readToken = s.pending, !.readLoss = s.pendingLoss]
@@ -92,12 +92,12 @@ FinishRead(ok) ==
     /\ s.read = "working"
     /\ s' = [s EXCEPT !.read = IF ok THEN "ok" ELSE "failed"]
 
-\* @code src/renderer/web/resync.ts:59-89 PageResync: a failed or superseded pass may be followed by another pass; timing is abstracted
+\* @code src/renderer/web/resync.ts:72-102 PageResync: a failed or superseded pass may be followed by another pass; timing is abstracted
 DiscardRead ==
     /\ s.read # "none" /\ (s.read = "failed" \/ s.readToken # s.pending)
     /\ s' = [s EXCEPT !.read = "none"]
 
-\* @code src/renderer/web/resync.ts:105-111 installShellResync and src/preload/shell.ts:84-85 acknowledge: success clears only the identical token
+\* @code src/renderer/web/resync.ts:128-132 installShellResync and src/preload/shell.ts:84-85 acknowledge: success clears only the identical token
 Ack ==
     /\ s.pending # 0 /\ s.read # "none"
     /\ (WaitRead => s.read = "ok")

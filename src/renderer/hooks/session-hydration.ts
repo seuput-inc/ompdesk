@@ -813,18 +813,20 @@ export function attachTabSession(tabId: string): Promise<void> {
  * calls join it.
  */
 export function hydrateTabSession(tabId: string, fallbackName?: string): Promise<void> {
-	return startTabHydration(tabId, fallbackName, false).then(() => undefined);
+	return startTabHydration(tabId, fallbackName).then(() => undefined);
 }
+
+type RequiredRecoveryReads = "core" | "all";
 
 /** Recover a missed event stream with reads only, reporting whether every required read succeeded. */
-export function recoverTabSession(tabId: string): Promise<boolean> {
-	return startTabHydration(tabId, undefined, true);
+export function recoverTabSession(tabId: string, required: RequiredRecoveryReads = "all"): Promise<boolean> {
+	return startTabHydration(tabId, undefined, required);
 }
 
-function startTabHydration(tabId: string, fallbackName: string | undefined, readOnly: boolean): Promise<boolean> {
+function startTabHydration(tabId: string, fallbackName?: string, required?: RequiredRecoveryReads): Promise<boolean> {
 	if (isTabClosed(tabId)) return Promise.resolve(false);
 	const runtime = ensureTabRuntime(tabId);
-	const result = loadTabSession(tabId, runtime, fallbackName, readOnly);
+	const result = loadTabSession(tabId, runtime, fallbackName, required);
 	const entry = { target: hydrationTarget(tabId), promise: result.then(() => undefined) };
 	inFlightHydrations.set(runtime, entry);
 	const release = () => {
@@ -950,8 +952,9 @@ async function loadTabSession(
 	tabId: string,
 	runtime: SessionRuntime,
 	fallbackName: string | undefined,
-	readOnly: boolean,
+	required?: RequiredRecoveryReads,
 ): Promise<boolean> {
+	const readOnly = required !== undefined;
 	const version = (hydrationVersions.get(runtime) ?? 0) + 1;
 	hydrationVersions.set(runtime, version);
 	const isCurrent = (): boolean => hydrationVersions.get(runtime) === version && sessionRuntime(tabId) === runtime;
@@ -976,7 +979,7 @@ async function loadTabSession(
 		syncGoal(tabId, runtime.command, isCurrent),
 		syncAutopilot(tabId, runtime.command, isCurrent),
 		syncCheckoutPeers(tabId, runtime.command, isCurrent),
-		syncNextPrompt(tabId, runtime.command, isCurrent, readOnly),
+		syncNextPrompt(tabId, runtime.command, isCurrent, required === "all"),
 		// Queue snapshot: queue_update frames keep it fresh afterwards;
 		// get_queue is only the hydrate fallback (boot/reconnect/session
 		// switch all land here). refresh() swallows its own failures.
@@ -1042,6 +1045,7 @@ async function loadTabSession(
 		: !sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval")?.getState().pending;
 	const subagentsOk = await subagentsResult;
 	const secondary = await secondaryResult;
+	if (required === "core") return isCurrent() && coreOk;
 	return (
 		isCurrent() &&
 		coreOk &&

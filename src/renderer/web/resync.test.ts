@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { flushReloadReasons, noteReload, type ReloadStorage, reloadReport } from "./reload-reason";
 import { PageResync } from "./resync";
+import { reloadWhenUnused } from "./sw-update";
 
 function timers() {
 	const pending: { callback: () => void; ms: number }[] = [];
@@ -44,10 +45,62 @@ describe("PageResync (catching up in place after a reconnect that missed events)
 		await settle();
 		expect(run).toHaveBeenCalledTimes(3);
 		expect(giveUp).toHaveBeenCalledWith(3);
-		// Given up: later reconnects change nothing (the last-resort reload is pending).
+		expect(clock.pending).toHaveLength(0);
+	});
+
+	it.each([true, false])("recovers once after the last resort with a draft and a resumed=%s hello", async resumed => {
+		vi.useFakeTimers();
+		try {
+			let draft = "not sent";
+			const moment = {
+				visible: () => true,
+				draftEmpty: () => draft === "",
+				attached: () => false,
+				picking: () => false,
+				askOpen: () => false,
+				editing: () => false,
+				uploading: () => false,
+			};
+			const run = vi.fn(async () => false);
+			const reload = vi.fn();
+			const giveUp = vi.fn(() => reloadWhenUnused(moment, { open: () => true }, reload));
+			const resync = new PageResync({ run, giveUp });
+			resync.request();
+			await vi.advanceTimersByTimeAsync(6000);
+			expect(run).toHaveBeenCalledTimes(3);
+			expect(giveUp).toHaveBeenCalledOnce();
+			expect(reload).not.toHaveBeenCalled();
+
+			run.mockResolvedValue(true);
+			resync.linkAvailable();
+			if (!resumed) resync.request();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(resync.passes).toBe(1);
+			resync.linkAvailable();
+			draft = "";
+			resync.recheckReload();
+			await vi.advanceTimersByTimeAsync(6000);
+			expect(run).toHaveBeenCalledTimes(4);
+			expect(reload).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([true, false])("a link returning during the last pass retries only if needed (pass result %s)", async ok => {
+		const last = Promise.withResolvers<boolean>();
+		const run = vi.fn<() => Promise<boolean>>().mockReturnValueOnce(last.promise).mockResolvedValue(true);
+		const giveUp = vi.fn();
+		const resync = new PageResync({ run, giveUp, maxFailures: 1 });
 		resync.request();
+		resync.linkAvailable();
+		resync.linkAvailable();
+		expect(run).toHaveBeenCalledOnce();
+		last.resolve(ok);
 		await settle();
-		expect(run).toHaveBeenCalledTimes(3);
+		expect(run).toHaveBeenCalledTimes(ok ? 1 : 2);
+		expect(resync.passes).toBe(1);
+		expect(giveUp).not.toHaveBeenCalled();
 	});
 
 	it("counts a throw as a failure and resets the count after a pass that works", async () => {

@@ -22,7 +22,7 @@ import { mountNotificationSweep } from "./notification-sweep";
 import { listenNotificationClicks, notifyPage, registerServiceWorker, requestNotificationPermission } from "./notify";
 import { createBrowserPwa, setWebPwa } from "./pwa";
 import { flushReloadReasons, noteReload, type ReloadReason } from "./reload-reason";
-import { PageResync } from "./resync";
+import { onHostOnline, PageResync } from "./resync";
 import { setWebRuntime } from "./runtime";
 import { fetchTicket } from "./session";
 import { preloadSessionList } from "./session-list-preload";
@@ -99,7 +99,7 @@ async function bootApp(): Promise<void> {
 	// The in-place resync (resync.ts), from the app's load on; a reconnect before that only marks it wanted.
 	let resync: PageResync | null = null;
 	let resyncCause: ResyncCause | null = null;
-	let lastResort: { recheck(): void } | null = null;
+	let chunkReload: { recheck(): void } | undefined;
 	// A chunk of this build failed to load for good (lib/chunk-load.ts): the page is outdated for the update gate.
 	let chunkStale = false;
 	const transport = new WsTransport({
@@ -271,6 +271,7 @@ async function bootApp(): Promise<void> {
 	});
 	transport.onState(state => {
 		if (state === "open") {
+			resync?.linkAvailable();
 			// The reasons of the reloads that led here reach the host's runtime log on each connect.
 			flushReloadReasons(localStorage, PAGE_BUILD, report => web.api.runtime.report(report));
 			// `hello` named the host's build: a launch or return moment still open moves the page to it.
@@ -287,13 +288,15 @@ async function bootApp(): Promise<void> {
 		transport.setPresence(visible);
 		if (!visible) {
 			gate.hidden(Date.now());
-			lastResort?.recheck();
+			chunkReload?.recheck();
+			resync?.recheckReload();
 			return;
 		}
 		gate.shown(Date.now());
 		transport.wake();
 		applyUpdate();
-		lastResort?.recheck();
+		chunkReload?.recheck();
+		resync?.recheckReload();
 		void pwa.update?.check().then(applyUpdate);
 	});
 	// The page is in use from the first touch, key or wheel on: no update or last-resort reload lands until it was
@@ -347,7 +350,7 @@ async function bootApp(): Promise<void> {
 			pwa.update?.markOutdated();
 			applyUpdate();
 		}
-		if (appGone && !lastResort) lastResort = reloadWhenUnused(appGoneMoment(current), gate, purgeNow);
+		if (appGone && !chunkReload) chunkReload = reloadWhenUnused(appGoneMoment(current), gate, purgeNow);
 	};
 	useChunkFailureStore.subscribe(onChunkFailure);
 	onChunkFailure(useChunkFailureStore.getState());
@@ -364,11 +367,12 @@ async function bootApp(): Promise<void> {
 		giveUp: failures => {
 			const current = moment;
 			if (!current) return;
-			lastResort = reloadWhenUnused(current, gate, () =>
+			return reloadWhenUnused(current, gate, () =>
 				reloadNow("resync-failed", { failures, cause: resyncCause ?? "missed-events" }),
 			);
 		},
 	});
+	onHostOnline(() => resync?.linkAvailable());
 	if (resyncCause) resync.request();
 	// The host never pushes to a visible device, so banners left from when the page was hidden are closed here.
 	const { useTabsStore } = await import("../stores/tabs");

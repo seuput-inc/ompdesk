@@ -955,6 +955,38 @@ describe("stream-loss hydration", () => {
 		});
 	}
 
+	it.each(["get_state", "get_transcript_page"] as const)(
+		"keeps the phone's last transcript when %s fails and restores the running tab without writing anything",
+		async missing => {
+			const { commandForTab } = installTabRoutedMockOmp();
+			const id = `t-phone-${missing}`;
+			const session = seedReadyTab(id);
+			const messages = sessionRuntimeStore<MessagesStore>(id, "messages")!;
+			const old: AgentMessage = { role: "user", content: "before the drop", timestamp: 1 };
+			const latest: AgentMessage = { role: "user", content: "while away", timestamp: 2 };
+			messages.getState().appendMessage(old);
+			const original = commandForTab.getMockImplementation()!;
+			let unavailable = true;
+			commandForTab.mockImplementation(async (tabId, command) => {
+				if (unavailable && command.type === missing)
+					return { type: "response", command: missing, success: false, code: "remote_offline", error: "Offline" };
+				if (command.type === "get_state") return success({ sessionId: "s1", isStreaming: true, todoPhases: [] });
+				if (command.type === "get_transcript_page") return success({ messages: [old, latest], totalMessages: 2 });
+				if (command.type === "get_next_prompt")
+					return { type: "response", command: command.type, success: false, error: "Unsupported command" };
+				return original(tabId, command);
+			});
+			expect(await recoverTabSession(id, "core")).toBe(false);
+			expect(messages.getState().messages).toEqual([old]);
+			unavailable = false;
+			expect(await recoverTabSession(id, "core")).toBe(true);
+			expect(messages.getState().messages).toEqual([old, latest]);
+			expect(session.getState().isStreaming).toBe(true);
+			expect(commandForTab.mock.calls.filter(([, command]) => !command.type.startsWith("get_"))).toEqual([]);
+			expect(window.omp.prefs.set).not.toHaveBeenCalled();
+		},
+	);
+
 	it("reports a failed queue read instead of acknowledging a fresh session", async () => {
 		const { commandForTab } = installTabRoutedMockOmp();
 		seedReadyTab("t-loss");

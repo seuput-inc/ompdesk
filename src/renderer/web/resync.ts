@@ -8,11 +8,16 @@
  */
 import type { ShellStreamReset } from "../../preload/shell";
 
+interface DeferredReload {
+	recheck(): void;
+	cancel(): void;
+}
+
 export interface PageResyncOptions {
 	/** Read the page's state again; false (or a throw) when it could not (the link dropped again, the host refused). */
 	run: () => Promise<boolean>;
-	/** `maxFailures` passes in a row failed: the last resort. Called once. */
-	giveUp: (failures: number) => void;
+	/** A run exhausted its attempts. A new link can cancel a deferred reload and recover in place. */
+	giveUp: (failures: number) => DeferredReload | void;
 	setTimer?: (callback: () => void, ms: number) => unknown;
 	clearTimer?: (handle: unknown) => void;
 	retryMs?: number;
@@ -22,10 +27,10 @@ export interface PageResyncOptions {
 export class PageResync {
 	readonly #options: PageResyncOptions;
 	#running = false;
-	#again = false;
+	#again: "required" | "if-failed" | null = null;
 	#failures = 0;
 	#retry: unknown = null;
-	#gaveUp = false;
+	#lastResort: DeferredReload | void = undefined;
 	/** Passes that completed, for the tests and the runtime log. */
 	passes = 0;
 
@@ -35,30 +40,38 @@ export class PageResync {
 
 	/** The page must catch up: a pass runs now, or once more after the one in flight. */
 	request(): void {
-		if (this.#gaveUp) return;
+		this.#lastResort?.cancel();
+		this.#lastResort = undefined;
+		if (this.#failures >= (this.#options.maxFailures ?? 3)) this.#failures = 0;
 		if (this.#retry !== null) {
 			(this.#options.clearTimer ?? clearTimeout)(this.#retry as ReturnType<typeof setTimeout>);
 			this.#retry = null;
 		}
 		if (this.#running) {
-			this.#again = true;
+			this.#again = "required";
 			return;
 		}
 		void this.#pass();
 	}
 
-	/** A new external wake may retry after the bounded failure run ended. */
-	resume(): void {
-		if (this.#gaveUp) {
-			this.#gaveUp = false;
-			this.#failures = 0;
+	/** A resumed socket or a paired host came back. A page already caught up has nothing to read. */
+	linkAvailable(): void {
+		if (this.#running) this.#again ??= "if-failed";
+		else if (this.#failures > 0) {
+			// A hello reporting missed events calls request() in this same tick. One pass covers both signals.
+			queueMicrotask(() => {
+				if (!this.#running && this.#failures > 0) this.request();
+			});
 		}
-		this.request();
+	}
+
+	recheckReload(): void {
+		this.#lastResort?.recheck();
 	}
 
 	async #pass(): Promise<void> {
 		this.#running = true;
-		this.#again = false;
+		this.#again = null;
 		let ok: boolean;
 		try {
 			ok = await this.#options.run();
@@ -69,18 +82,17 @@ export class PageResync {
 		if (ok) {
 			this.passes++;
 			this.#failures = 0;
-			if (this.#again) this.request();
+			if (this.#again === "required") this.request();
 			return;
 		}
 		this.#failures++;
-		const max = this.#options.maxFailures ?? 3;
-		if (this.#failures >= max) {
-			this.#gaveUp = true;
-			this.#options.giveUp(this.#failures);
-			return;
-		}
 		if (this.#again) {
 			this.request();
+			return;
+		}
+		const max = this.#options.maxFailures ?? 3;
+		if (this.#failures >= max) {
+			this.#lastResort = this.#options.giveUp(this.#failures);
 			return;
 		}
 		const wait = (this.#options.retryMs ?? 2000) * this.#failures;
@@ -91,29 +103,35 @@ export class PageResync {
 	}
 }
 
+/** The serving computer's link to another host can recover without a new page socket. */
+export function onHostOnline(wake: () => void): (() => void) | undefined {
+	let online = new Set<string>();
+	return window.omp?.remote?.onState?.(state => {
+		const next = new Set(state.hosts.filter(host => host.state === "online").map(host => host.deviceId));
+		const gained = [...next].some(device => !online.has(device));
+		online = next;
+		if (gained) wake();
+	});
+}
+
 export function installShellResync(
 	stream: ShellStreamReset,
 	run: () => Promise<boolean>,
 	onFailure: (failures: number) => void,
 ): () => void {
-	let attempted: object | null = null;
 	let disposed = false;
 	const wake = () => {
-		if (!disposed && stream.pending()) resync.resume();
+		if (!disposed && stream.pending()) resync.request();
 	};
 	const resync = new PageResync({
 		run: async () => {
 			const token = stream.pending();
-			attempted = token;
 			if (!token) return true;
 			const ok = await run();
 			if (ok) stream.acknowledge(token);
 			return ok;
 		},
-		giveUp: failures => {
-			onFailure(failures);
-			if (stream.pending() && stream.pending() !== attempted) queueMicrotask(wake);
-		},
+		giveUp: onFailure,
 	});
 	const unsubscribe = stream.onReset(wake);
 	const visible = () => {
@@ -121,13 +139,7 @@ export function installShellResync(
 	};
 	document.addEventListener("visibilitychange", visible);
 	window.addEventListener("online", wake);
-	let online = new Set<string>();
-	const unsubscribeRemote = window.omp?.remote?.onState?.(state => {
-		const next = new Set(state.hosts.filter(host => host.state === "online").map(host => host.deviceId));
-		const gained = [...next].some(device => !online.has(device));
-		online = next;
-		if (gained) wake();
-	});
+	const unsubscribeRemote = onHostOnline(wake);
 	return () => {
 		disposed = true;
 		unsubscribe();

@@ -4,7 +4,7 @@
  * start — without touching the composer, the scroll position or an open sheet.
  *
  * - the tab list, as the whole truth (`reconcileTabs({resync})`: a restarted host gave its tabs new ids);
- * - every visible tab's session: state, transcript tail, queue, subagents, goal and settings (`hydrateTabSession`
+ * - every visible tab's session: state, transcript tail, queue, subagents, goal and settings (`recoverTabSession`
  *   merges into what is shown and runs while a reply streams); a background tab reads the rest when shown;
  * - the status texts, widgets and title the tabs show, and the asks and approvals main still holds (`settleTabExtensionUiRequests`: missed ones appear, answered ones go);
  * - the paired-host snapshot, every computer's session summaries (what each row shows of a session's run and its
@@ -14,7 +14,7 @@
  *
  * Imported dynamically by web-boot.ts once the app has loaded (it reads the stores).
  */
-import { hydrateTabSession, recoverTabSession } from "../hooks/session-hydration";
+import { recoverTabSession } from "../hooks/session-hydration";
 import { useAgentReviewStore } from "../stores/agent-review";
 import { loadHostedSessions } from "../stores/hosted-sessions";
 import { loadRemoteState } from "../stores/remote";
@@ -34,18 +34,18 @@ export async function resyncPage(options?: { strict?: boolean }): Promise<boolea
 	const sessions = visibleTabIds(state).flatMap(tabId => {
 		const status = state.tabs.find(tab => tab.id === tabId)?.status;
 		if (status !== "ready" && status !== "running") return [];
-		return [options?.strict ? recoverTabSession(tabId) : hydrateTabSession(tabId)];
+		return [recoverTabSession(tabId, options?.strict ? "all" : "core")];
 	});
 	const before = captureTabExtensionUiRequests();
-	const [open, shown, reads] = await Promise.all([
+	const [open, shown, sessionReads, reads] = await Promise.all([
 		window.omp.ui.openRequests(),
 		window.omp.ui.shownState(),
+		Promise.allSettled(sessions),
 		Promise.allSettled([
 			loadRemoteState(),
 			loadHostedSessions(),
 			refreshHeldSessionLists(),
 			...visibleTabIds(state).map(tabId => useAgentReviewStore.getState().refresh(tabId)),
-			...sessions,
 		]),
 	]);
 	const settled = settleTabExtensionUiRequests(open, before);
@@ -53,6 +53,7 @@ export async function resyncPage(options?: { strict?: boolean }): Promise<boolea
 	const lists = reads[2];
 	return (
 		settled &&
+		sessionReads.every(result => result.status === "fulfilled" && result.value) &&
 		lists?.status === "fulfilled" &&
 		lists.value === true &&
 		reads.every(result => result.status === "fulfilled") &&
