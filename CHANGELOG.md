@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.141.1] - 2026-11-23
+
+OMPdesk가 다시 쓰지 않는 검사 캐시와 닫힌 세션의 임시 파일을 재시작 없이 정리합니다.
+
+- 자동 디스크 정리가 3일 넘게 쓰지 않은 검사의 입력 파일 목록을 지웁니다. 검사 결과와 로그는 남고, 입력이 그대로면 성공한 결과를 다시 쓸 수 있습니다.
+- 닫힌 세션에 프로세스가 남으면 다음 정리 때 다시 확인합니다. 실행 중인 작업과 답변에 연결된 파일은 지우지 않습니다.
+- 세션의 작업 폴더를 고르는 일과 이전 실행에서 앱이 멈춘 기록을 읽는 일을 Rust로 옮겼습니다. 내장 ECC를 2.2.3으로 올렸습니다.
+
+<!-- en -->
+
+OMPdesk reclaims unused check data and closed sessions’ temporary files without a restart.
+
+- Automatic disk care removes input file lists for checks idle for more than three days. Results and logs stay available, and passing results can still be reused when the inputs match.
+- If a process outlives a closed session, disk care checks it again on its next pass. Running work and files linked from replies are preserved.
+- Rust now selects session working folders and reads the previous launch’s hang report. Bundled ECC is now at 2.2.3.
+
 ## [0.141.0] - 2026-11-22
 
 OMPdesk에서 내장 REA를 제거했습니다.
