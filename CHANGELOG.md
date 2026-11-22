@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.140.0] - 2026-11-22
+
+새 OMPdesk 세션은 Ponytail Full로 시작하고, REA는 설정에서 켰을 때만 불러옵니다.
+
+세션에서 선택한 Ponytail 모드와 기존 REA 설정은 유지합니다. 메모리와 REA를 연결하는 MCP 허브는 이제 Rust로 실행합니다. 채팅을 실행하는 순정 omp에는 여전히 Bun이 필요합니다.
+
+<!-- en -->
+
+New OMPdesk sessions start in Ponytail Full mode and load REA only when you enable it in Settings.
+
+Your session's Ponytail mode and existing REA preference still take precedence. The MCP hub for memory and REA now runs in Rust. Stock omp still needs Bun to run chat sessions.
+
 ## [0.139.0] - 2026-11-22
 
 이 컴퓨터에서 `ompdesk heavy limit off`를 실행하면 로컬 검사와 빌드가 슬롯이나 시작 전 디스크 여유를 기다리지 않습니다. `ompdesk heavy limit auto`로 되돌릴 수 있습니다. 같은 빌드 폴더에 동시에 쓰는 잠금과 실행 중 디스크 고갈 보호는 유지합니다.
