@@ -21,7 +21,7 @@
 				"src/renderer/web/resync.ts#installShellResync",
 				"src/renderer/web/resync-page.ts#resyncPage"
 			],
-			"syncCommit": "e1a08e94aca8709e765960422c95818400f55a2a",
+			"syncCommit": "9a2fa9ce01622b6b931b6766aedcce5d53590570",
 			"verifySkill": ".omp/skills/shell-stream-recovery-verify/SKILL.md"
 		},
 		{
