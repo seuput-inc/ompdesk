@@ -1,21 +1,6 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
 import { memoryEn } from "./memory";
 export const en: Record<string, string> = {
-	"mcp.rea.title": "REA — reverse engineering (built in)",
-	"mcp.rea.description":
-		"{count} curated reverse-engineering tools, 2 discovery tools and the reverse-engineer-anything skill; the full catalog loads on demand. Changes apply to new sessions only.",
-	"mcp.rea.requirement": "Requires Node.js {version} or newer and npx on this computer's PATH.",
-	"mcp.rea.available": "Available for new sessions",
-	"mcp.rea.unavailable": "Unavailable",
-	"mcp.rea.disabled": "Off for new sessions",
-	"mcp.rea.loading": "Checking Node.js…",
-	"mcp.rea.loadFailed": "Couldn't check built-in REA",
-	"mcp.rea.saveFailed": "Couldn't save the built-in REA setting",
-	"mcp.rea.node-missing": "Node.js was not found.",
-	"mcp.rea.npx-missing": "npx was not found.",
-	"mcp.rea.node-version": "Node.js {version} does not meet the requirement.",
-	"mcp.rea.node-failed": "Node.js couldn't run.",
-	"mcp.rea.npx-failed": "npx couldn't run.",
 	"chat.history.loading": "Loading earlier messages…",
 	"chat.history.updating": "Updating…",
 	"chat.history.failed": "Couldn't load earlier messages.",
@@ -6829,7 +6814,7 @@ export const en: Record<string, string> = {
 	"machineSetup.purpose.git": "Optional, for Git features.",
 	"machineSetup.purpose.gitWindows": "Git for Windows: omp's shell tools run through Git Bash.",
 	"machineSetup.purpose.gh": "Optional, for GitHub features.",
-	"machineSetup.purpose.node": "Optional, for the built-in REA tools.",
+	"machineSetup.purpose.node": "Optional, for tools that run on Node.js.",
 	"machineSetup.purpose.agent-desktop": "Optional, the default way the agent uses this computer's screen and apps.",
 	"machineSetup.purpose.tailscale": "Optional, for Mobile web. Installs only when you ask for it.",
 	"machineSetup.settings.title": "This computer",
@@ -6933,7 +6918,6 @@ export const en: Record<string, string> = {
 	"extensionUpdate.skip.pinned": "Pinned to a version, so OMPdesk leaves it alone.",
 	"extensionUpdate.skip.follows-plugin": "Moves with its plugin.",
 	"extensionUpdate.skip.follows-latest": "Always starts at the newest version.",
-	"extensionUpdate.skip.builtin": "Part of this OMPdesk release; it updates with OMPdesk.",
 	"extensionUpdate.skip.local": "Local files with no source, so there is nothing to update.",
 	"extensionUpdate.skip.linked": "Linked from a local folder, so there is nothing to update.",
 	"extensionUpdate.skip.remote": "Runs elsewhere; nothing on this computer to update.",

@@ -71,6 +71,7 @@ runs:
         src/main/ai-memory/ambiguous-names.test.ts
         src/main/ai-memory/distill-model.test.ts
         src/main/stock-helper-memory.test.ts
+        src/main/mcp-hub-memory.test.ts
         src/main/ai-memory/sync.test.ts
         src/main/ai-memory/recall-terms.test.ts
         src/main/remote/host-services.test.ts
@@ -90,7 +91,6 @@ runs:
         src/main/desktop-slot-host.test.ts
         src/main/shell-env.test.ts
         src/main/sidecar-os-shutdown.test.ts
-        src/main/builtin-mcp-spawn.test.ts
         src/main/session-launch-parity.test.ts
         src/main/remote/link-traffic-relaunch.test.ts
         src/main/remote/fanout-cpu-report.test.ts

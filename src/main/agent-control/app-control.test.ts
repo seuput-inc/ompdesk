@@ -45,7 +45,7 @@ class FakePorts implements AppPorts {
 	/** The paired host each caller tab runs on; a tab not listed runs on this computer. */
 	devices: Record<string, string> = {};
 	/** What a paired host's own machine services hold: the Settings UI reads and writes these through its device routes. */
-	host = { rotation: "quota", rea: true, desktopState: "idle" };
+	host = { rotation: "quota", desktopState: "idle" };
 
 	device = (tab: string): string | undefined => this.devices[tab];
 	getPref = (key: string): unknown => this.prefs[key];
@@ -83,11 +83,6 @@ class FakePorts implements AppPorts {
 		if (channel === IPC_COMMANDS.ACCOUNT_ROTATION_SET) {
 			this.host.rotation = String(args[0]);
 			return { mode: this.host.rotation, evenSupported: true };
-		}
-		if (channel === IPC_COMMANDS.BUILTIN_REA_GET) return { enabled: this.host.rea, available: true };
-		if (channel === IPC_COMMANDS.BUILTIN_REA_SET) {
-			this.host.rea = args[0] === true;
-			return { enabled: this.host.rea, available: true };
 		}
 		if (channel === IPC_COMMANDS.HOST_DESKTOP_GET || channel === IPC_COMMANDS.HOST_DESKTOP_UPDATE)
 			return { version: "9.9.9", update: { state: this.host.desktopState } };
@@ -801,29 +796,11 @@ describe("a caller tab on a paired host", () => {
 		expect(ports.events.filter(event => event.kind === "pref")).toEqual([]);
 	});
 
-	it("turns the built-in REA tools on and off on that host", async () => {
-		const ports = onStudio();
-		const control = new AppControl(ports);
-		await control.run(HOSTED, "settings.builtinRea", { value: false });
-		expect(ports.host.rea).toBe(false);
-		expect(only(ports, IPC_COMMANDS.BUILTIN_REA_SET)).toEqual([
-			{ channel: IPC_COMMANDS.BUILTIN_REA_SET, args: [false, STUDIO] },
-		]);
-		expect(await control.run(HOSTED, "settings.get", { ids: ["builtinRea"] })).toContain("builtinRea: off");
-		await control.run(HOSTED, "app.undo", {});
-		expect(ports.host.rea).toBe(true);
-		expect(ports.writes).toEqual([]);
-	});
-
-	it("still writes a local caller's rotation and REA to this computer's prefs", async () => {
+	it("still writes a local caller's rotation to this computer's prefs", async () => {
 		const ports = onStudio();
 		const control = new AppControl(ports);
 		await control.run(CALLER, "settings.rotation", { value: "even" });
-		await control.run(CALLER, "settings.builtinRea", { value: false });
-		expect(ports.writes).toEqual([
-			{ key: "accountRotation", value: "even" },
-			{ key: "builtinMcp.rea", value: false },
-		]);
+		expect(ports.writes).toEqual([{ key: "accountRotation", value: "even" }]);
 		expect(ports.invoked).toEqual([]);
 	});
 

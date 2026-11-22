@@ -98,7 +98,7 @@ export function runRpcUi(): void {
 	};
 	const BOOLEAN_FLAGS: Record<string, true> = { "--no-tools": true, "--no-session": true, "--no-title": true };
 	const flags: Record<string, string> = {};
-	/** Every `-e`/`--extension` value in order: the bridge entry, then OMPdesk's own roots (control tools, REA, pstack). */
+	/** Every `-e`/`--extension` value in order: the bridge entry, then OMPdesk's own roots. */
 	const extensionRoots: string[] = [];
 	for (let index = 2; index < process.argv.length; index++) {
 		const arg = process.argv[index];
@@ -2081,9 +2081,9 @@ export function runRpcUi(): void {
 				{ id: "tool:edit", category: "builtinTools", label: "edit", tokens: 1_650 },
 				{ id: "tool:mcp__docs__search", category: "mcpTools", label: "mcp__docs__search", tokens: 640 },
 				{
-					id: "deferred:mcp__rea__analyze_function",
+					id: "deferred:mcp__docs__lookup",
 					category: "mcpTools",
-					label: "mcp__rea__analyze_function",
+					label: "mcp__docs__lookup",
 					tokens: 0,
 					deferred: true,
 				},
@@ -3653,9 +3653,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						role: "custom",
 						id: "work-view-irc",
 						customType: "irc:incoming",
-						content: "Workspace coordination from ReaMcp",
+						content: "Workspace coordination from DocsAgent",
 						details: {
-							from: "ReaMcp",
+							from: "DocsAgent",
 							message: "Workspace coordination is ready.\n**IRC details stay inside this work card.**",
 						},
 						timestamp: Date.now(),

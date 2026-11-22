@@ -1054,8 +1054,6 @@ export interface RpcMcpServerInfo {
 	toolCount: number;
 	enabled: boolean;
 	authed: boolean;
-	/** True only for OMPdesk's session-local REA declaration, never a user's same-name server. */
-	builtin?: "rea";
 	/** Config provenance (C1). */
 	scope?: "user" | "project";
 	/** stdio only. */

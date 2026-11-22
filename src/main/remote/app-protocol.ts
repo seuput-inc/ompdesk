@@ -109,7 +109,6 @@
  */
 import { z } from "zod";
 import { ACCOUNT_ROTATION_MODES, type AccountRotationState } from "../../shared/account-rotation";
-import type { BuiltinReaState } from "../../shared/builtin-mcp";
 import type { CreditSpendState } from "../../shared/credit-spend";
 import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import type {
@@ -748,13 +747,6 @@ export const BenchmarkOptionsSchema: z.ZodType<IpcBenchmarkRunOptions> = z.objec
 export const AccountRotationStateSchema: z.ZodType<AccountRotationState> = z.object({
 	mode: z.enum(ACCOUNT_ROTATION_MODES),
 	evenSupported: z.boolean().nullable(),
-});
-
-export const BuiltinReaStateSchema: z.ZodType<BuiltinReaState> = z.object({
-	enabled: z.boolean(),
-	available: z.boolean(),
-	nodeVersion: z.string().optional(),
-	reason: z.enum(["node-missing", "npx-missing", "node-version", "node-failed", "npx-failed"]).optional(),
 });
 
 /** `host.localEngines.*` reply: whether the host looks for local inference engines. */

@@ -57,7 +57,6 @@ const server = (
 	args,
 	url: null,
 	enabled: true,
-	sourcePath: "/home/u/.omp/agent/mcp.json",
 	origin: "user",
 	...over,
 });
@@ -205,8 +204,6 @@ function harness(over: Partial<ExtensionUpdaterDeps> = {}, scheduled = true): Ha
 			}
 		},
 		cwds: () => ["/w/proj"],
-		reaRoot: "/app/omp-builtin",
-		reaEnabled: () => false,
 		env: async () => ({ PATH: h.path.value }),
 		testInstaller: "/fake/installer",
 		blocked: () => h.blocked.value,
@@ -338,13 +335,6 @@ describe("listing", () => {
 		await h.updater.rescan();
 		await h.updater.updateNow();
 		expect(h.updater.state().rows).toHaveLength(1);
-	});
-
-	it("lists the built-in REA when the app has it on, and never checks it", async () => {
-		const h = harness({ reaEnabled: () => true });
-		await h.updater.updateNow();
-		expect(row(h, "mcp:rea")).toMatchObject({ skip: "builtin", method: null, last: null });
-		expect(h.checks).toEqual([]);
 	});
 });
 

@@ -5,9 +5,8 @@
  * may ask for a retry or a cancel by item id (never a command).
  *
  * Required: Bun and omp everywhere, plus Git for Windows on Windows (stock
- * omp's shell tools resolve Git Bash there). Optional: Git (macOS), GitHub CLI
- * and Node.js (the built-in REA MCP server) and agent-desktop (the default computer-use engine) install on their
- * own in the background; Tailscale (Mobile web) never does: only `installForConnection`
+ * omp's shell tools resolve Git Bash there). Optional: Git (macOS), GitHub CLI,
+ * Node.js and agent-desktop install in the background. Tailscale (Mobile web) never does: only `installForConnection`
  * and an explicit Retry install it, because the user's click is its consent.
  */
 

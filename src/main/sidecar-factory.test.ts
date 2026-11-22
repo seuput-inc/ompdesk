@@ -12,7 +12,6 @@ import { localSidecarFactory } from "./sidecar-factory";
 
 const ALWAYS = ["-e", path.join("/builtin", "formal"), "-e", path.join("/bridge", "ponytail.ts")];
 const created = vi.hoisted(() => [] as SidecarOptions[]);
-const reaProbes = vi.hoisted(() => ({ count: 0 }));
 const sidecars = vi.hoisted(() => [] as Array<{ listeners: Map<string, Array<(arg: unknown) => void>> }>);
 
 // The factory only builds options; what a SidecarManager does with them is sidecar.test.ts's.
@@ -32,13 +31,6 @@ vi.mock("./sidecar", () => ({
 // i18n opens the Electron prefs store on import.
 vi.mock("./i18n", () => ({ ompFailureText: (reason: string) => reason }));
 vi.mock("electron", () => ({ app: {} }));
-// The node/npx probe runs real processes (seconds on Windows); these tests count it instead.
-vi.mock("./builtin-mcp", () => ({
-	builtinReaState: async (pref: unknown) => {
-		reaProbes.count++;
-		return { enabled: pref !== false, available: true, nodeVersion: "v24.0.0" };
-	},
-}));
 
 describe("localSidecarFactory", () => {
 	it("hands every tab it spawns, hosted ones included, the stored launch profiles", () => {
@@ -46,7 +38,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => undefined,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -79,7 +70,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => undefined,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -111,7 +101,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => undefined,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -143,7 +132,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => undefined,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -174,7 +162,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => undefined,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -212,7 +199,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => false,
 			pstackPref: () => stored,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
@@ -245,7 +231,6 @@ describe("localSidecarFactory", () => {
 			const create = localSidecarFactory({
 				bridgeDir: "/bridge",
 				builtinDir: "/builtin",
-				builtinReaPref: () => false,
 				eccPref: () => stored,
 				proxyEnv: async () => ({}),
 				bridgeHealth: new BridgeHealth(() => {}),
@@ -274,7 +259,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => false,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -306,23 +290,15 @@ describe("localSidecarFactory", () => {
 		expect(asked.length).toBeGreaterThan(0);
 	});
 
-	it("asks for Node only while the built-in REA is on, and hands a spawn with REA or memory the hub's address", async () => {
-		let rea: unknown;
+	it("hands the hub address and credentials only to spawns that mount memory", async () => {
 		let memory: string[] = [];
-		const hubAsked: string[] = [];
+		const hub = { OMP_GUI_MCP_HUB: "http://127.0.0.1:7", OMP_GUI_MCP_AUTH: "Bearer s" };
+		const mcpHubEnv = vi.fn(async () => hub);
 		created.length = 0;
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => rea,
-			mcpHubEnv: async cwd => {
-				hubAsked.push(cwd);
-				return {
-					OMP_GUI_MCP_HUB: "http://127.0.0.1:7",
-					OMP_GUI_MCP_AUTH: "Bearer s",
-					OMP_GUI_MCP_CWD: "%2Fw%2Falpha",
-				};
-			},
+			mcpHubEnv,
 			aiMemoryExtensionArgs: async () => memory,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
@@ -339,22 +315,15 @@ describe("localSidecarFactory", () => {
 		});
 		create("/w/alpha", "agent", false);
 		const [options] = created;
-		reaProbes.count = 0;
 
 		const off = await options?.builtinMcp?.();
 		expect(off?.args).toEqual(ALWAYS);
 		expect(off?.env).not.toHaveProperty("OMP_GUI_MCP_HUB");
-		expect(reaProbes.count).toBe(0);
-		expect(hubAsked).toEqual([]);
-		rea = true;
-		const on = await options?.builtinMcp?.();
-		expect(on?.args).toEqual(["-e", path.join("/builtin", "rea"), ...ALWAYS]);
-		expect(on?.env).toMatchObject({ OMP_GUI_MCP_HUB: "http://127.0.0.1:7", OMP_GUI_MCP_AUTH: "Bearer s" });
-		expect(reaProbes.count).toBe(1);
-		rea = false;
+		expect(off?.env).not.toHaveProperty("OMP_GUI_MCP_AUTH");
+		expect(mcpHubEnv).not.toHaveBeenCalled();
 		memory = ["-e", "/ud/ai-memory/omp-ext"];
-		expect((await options?.builtinMcp?.())?.env).toMatchObject({ OMP_GUI_MCP_CWD: "%2Fw%2Falpha" });
-		expect(hubAsked).toEqual(["/w/alpha", "/w/alpha"]);
+		expect((await options?.builtinMcp?.())?.env).toMatchObject(hub);
+		expect(mcpHubEnv).toHaveBeenCalledTimes(1);
 	});
 
 	it("mounts agent-desktop on every tab it spawns, hosted ones included, only while it is picked and present, read per spawn", async () => {
@@ -365,7 +334,6 @@ describe("localSidecarFactory", () => {
 			const create = localSidecarFactory({
 				bridgeDir: "/bridge",
 				builtinDir: "/builtin",
-				builtinReaPref: () => false,
 				proxyEnv: async () => ({}),
 				bridgeHealth: new BridgeHealth(() => {}),
 				sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),
@@ -421,7 +389,6 @@ describe("localSidecarFactory", () => {
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
-			builtinReaPref: () => undefined,
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
 			sessionKinds: new SessionKindStore(path.join(os.tmpdir(), "omp-gui-factory-kinds.json")),

@@ -1,21 +1,6 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
 import { memoryKo } from "./memory";
 export const ko: Record<string, string> = {
-	"mcp.rea.title": "REA — 리버스 엔지니어링 (내장)",
-	"mcp.rea.description":
-		"리버스 엔지니어링 핵심 도구 {count}개, 탐색 도구 2개, reverse-engineer-anything 스킬을 제공해요. 전체 카탈로그는 필요할 때 불러와요. 변경은 새 세션에만 적용돼요.",
-	"mcp.rea.requirement": "이 컴퓨터의 PATH에 Node.js {version} 이상과 npx가 필요해요.",
-	"mcp.rea.available": "새 세션에서 사용할 수 있어요",
-	"mcp.rea.unavailable": "사용할 수 없어요",
-	"mcp.rea.disabled": "새 세션에서 꺼져 있어요",
-	"mcp.rea.loading": "Node.js를 확인하고 있어요…",
-	"mcp.rea.loadFailed": "내장 REA를 확인하지 못했어요",
-	"mcp.rea.saveFailed": "내장 REA 설정을 저장하지 못했어요",
-	"mcp.rea.node-missing": "Node.js를 찾지 못했어요.",
-	"mcp.rea.npx-missing": "npx를 찾지 못했어요.",
-	"mcp.rea.node-version": "Node.js {version} 버전은 요구 사항을 충족하지 않아요.",
-	"mcp.rea.node-failed": "Node.js를 실행하지 못했어요.",
-	"mcp.rea.npx-failed": "npx를 실행하지 못했어요.",
 	"chat.history.loading": "이전 메시지를 불러오고 있어요…",
 	"chat.history.updating": "갱신하는 중…",
 	"chat.history.failed": "이전 메시지를 불러오지 못했어요.",
@@ -6812,7 +6797,7 @@ export const ko: Record<string, string> = {
 	"machineSetup.purpose.git": "선택 사항이에요. Git 기능에 쓰여요.",
 	"machineSetup.purpose.gitWindows": "Git for Windows예요. omp의 셸 도구가 Git Bash로 실행돼요.",
 	"machineSetup.purpose.gh": "선택 사항이에요. GitHub 기능에 쓰여요.",
-	"machineSetup.purpose.node": "선택 사항이에요. 내장 REA 도구에 쓰여요.",
+	"machineSetup.purpose.node": "선택 사항이에요. Node.js로 실행하는 도구에 쓰여요.",
 	"machineSetup.purpose.agent-desktop": "선택 사항이에요. 에이전트가 이 컴퓨터의 화면과 앱을 다룰 때 기본으로 쓰여요.",
 	"machineSetup.purpose.tailscale": "선택 사항이에요. 모바일 웹에 쓰여요. 직접 요청할 때만 설치해요.",
 	"machineSetup.settings.title": "이 컴퓨터",
@@ -6915,7 +6900,6 @@ export const ko: Record<string, string> = {
 	"extensionUpdate.skip.pinned": "버전을 고정해 둔 항목이라 OMPdesk는 건드리지 않아요.",
 	"extensionUpdate.skip.follows-plugin": "플러그인과 함께 움직여요.",
 	"extensionUpdate.skip.follows-latest": "실행할 때마다 최신 버전으로 시작해요.",
-	"extensionUpdate.skip.builtin": "이번 OMPdesk 릴리스에 포함돼 있어서 OMPdesk와 함께 업데이트돼요.",
 	"extensionUpdate.skip.local": "출처 없는 로컬 파일이라 업데이트할 것이 없어요.",
 	"extensionUpdate.skip.linked": "로컬 폴더에서 연결한 항목이라 업데이트할 것이 없어요.",
 	"extensionUpdate.skip.remote": "다른 곳에서 실행돼서 이 컴퓨터에는 업데이트할 것이 없어요.",

@@ -110,7 +110,7 @@ src/main/ext-update/mcp-owner.ts	port	Resolves the executable on disk, determine
 src/main/ext-update/mcp-plans.test.ts	exception	Checks generated check and upgrade commands for package managers, runners and Python environments.
 src/main/ext-update/mcp-plans.ts	port	Chooses pip, pipx, uv or shared package-manager commands from the owner and dispatches version parsing by runner type.
 src/main/ext-update/mcp.test.ts	exception	Tests classification of bundled, remote and package-runner MCP launches and pinned versions.
-src/main/ext-update/mcp.ts	native-client	Forwards configured servers and the REA root to ext.mcpClasses for classification.
+src/main/ext-update/mcp.ts	native-client	Forwards configured servers to ext.mcpClasses for classification.
 src/main/ext-update/running.test.ts	exception	Tests which package-owner and executable combinations must wait for the running server before updating.
 src/main/ext-update/running.ts	port	Enables process scanning only on macOS; ext.defersWhileRunning and ext.serverRunning answer the other running checks.
 src/main/ext-update/updater.test.ts	exception	Tests initial inventory, project-scoped rows and keeping existing rows when inventory refresh fails.
@@ -158,12 +158,12 @@ src/main/local/auto-mode.test.ts	exception	Tests applying plan and goal decision
 src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan mode or creating a goal and undoes each differently.
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.
 src/main/local/autopilot.ts	port	Checks refs before git.autopilotBranchStatus, restricts bridge methods and refuses set_autopilot outside the local window.
-src/main/local/builtin-mcp.test.ts	exception	Tests that mutations cannot overwrite the bundled REA declaration but may change a user's same-name server.
 src/main/local/composer.test.ts	exception	Tests merging stock state with bridge extras, fast-mode handling and defaults when the bridge is down.
 src/main/local/composer.ts	port	Merges stock and bridge state with bounded reads, filters reasoning levels, refuses busy context clears and routes composer actions.
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
-src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and prevents mutations of bundled REA servers before notifying sessions of MCP changes.
+src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
+src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and notifies sessions of MCP changes.
 src/main/local/git.ts	port	Dispatches local SCM and PR commands and verifies repository ownership before restoring a worktree. Compare native-root-mini-intake's local_dispatch/ candidate with the current command, result and refusal contracts before reuse.
 src/main/local/git/changes.test.ts	exception	Tests net tracked changes, rename counts and treatment of untracked or binary files in real checkouts.
 src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. git.diff validates the path before reporting missing git or reading the checkout.
@@ -306,8 +306,6 @@ src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ord
 src/main/terminal/shells.ts	port	Probes installed platform shells, reads /etc/shells, deduplicates entries and orders the login shell first.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
-src/main/test-fixtures/mcp-hub-fixture.ts	exception	Test harness manages hub subprocesses and drives a streamable HTTP client.
-src/main/test-fixtures/rea-child.mjs	exception	Fake REA child implements scripted tool discovery and calls for hub tests.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.
 src/main/update-release.fixtures/v0.131.0/update-provider.ts	exception	Frozen v0.131.0 provider that translates release data into updater metadata and file URLs for compatibility tests.
 src/main/update-release.fixtures/v0.131.0/update-release.ts	exception	Frozen v0.131.0 release metadata parser and platform asset selector used as a compatibility fixture.

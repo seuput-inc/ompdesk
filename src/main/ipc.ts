@@ -38,7 +38,6 @@ import {
 	reviewFromDevice,
 } from "../shared/agent-control";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
-import { REA_PREF } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
 import {
@@ -2150,11 +2149,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// Same path as Settings' own control: store, then push to the live sessions.
 			return deps.machine.setAccountRotation(payload.value).then(() => prefChanged(caller.win, payload.key));
 		}
-		if (payload.key === REA_PREF) {
-			if (typeof payload.value !== "boolean")
-				throw codedError("invalid_preference_key", "Invalid built-in REA preference");
-			return deps.machine.setBuiltinRea(payload.value).then(() => prefChanged(caller.win, payload.key));
-		}
 		if (payload.key === LOCAL_ENGINE_DETECT_PREF) {
 			if (typeof payload.value !== "boolean") {
 				throw codedError("invalid_preference_key", "Invalid local engine detection preference");
@@ -2402,11 +2396,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return machineFor(caller, device).setAccountRotation(mode);
 	});
 
-	ipc.handle(IPC_COMMANDS.BUILTIN_REA_GET, (caller, device?: unknown) => machineFor(caller, device).builtinRea());
-	ipc.handle(IPC_COMMANDS.BUILTIN_REA_SET, (caller, enabled: unknown, device?: unknown) => {
-		if (typeof enabled !== "boolean") throw codedError("invalid_preference_key", "Invalid built-in REA preference");
-		return machineFor(caller, device).setBuiltinRea(enabled);
-	});
 	ipc.handle(IPC_COMMANDS.LOCAL_ENGINES_GET, (caller, device?: unknown) =>
 		machineFor(caller, device).localEngineDetect(),
 	);

@@ -210,7 +210,6 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
         pref("proxy", "proxyUrl", "general", "Network proxy", "네트워크 프록시", json!({"type":"string","maxLength":300})).redacted().sensitive(Manage::Always { reason: "the proxy sees all of this app's traffic and may carry credentials", when: None }),
         pref("appAutoUpdate", "appAutoUpdate", "updates", "Update OMPdesk automatically", "OMPdesk 자동 업데이트", boolean()).sensitive(Manage::Lifts("only the person's own update schedule; installing one now (updates.apply) still asks")),
         pref("toolsAutoUpdate", "toolsAutoUpdate", "updates", "Keep tools up to date (omp, tool CLIs, extensions)", "도구 최신으로 유지 (omp, 도구 CLI, 확장)", boolean()).sensitive(Manage::Lifts("updates omp, tools and extensions the person already has; running turns keep the code they loaded and installing something new still asks")),
-        pref("builtinRea", "builtinMcp.rea", "tools", "Built-in REA tools", "내장 REA 도구", boolean()).sensitive(Manage::Lifts("switches a bundled tool pack on or off; it adds no code the app does not ship")),
         pref("rotation", "accountRotation", "models", "Account rotation", "계정 순환", options(&["quota", "even"])).sensitive(Manage::Lifts("picks which signed-in account a session uses next; no credential is read or changed")),
         pref("localEngines", "localEngineDetect", "models", "Detect local inference engines", "로컬 추론 엔진 자동 탐지", boolean()),
         stock("steeringMode", "agent", "Steering mode", "스티어링 방식", options(&["all", "one-at-a-time"])),
@@ -258,21 +257,13 @@ pub struct HostPref {
 }
 
 pub fn host_pref(key: &str) -> Option<&'static HostPref> {
-    static HOST_PREFS: [(&str, HostPref); 3] = [
+    static HOST_PREFS: [(&str, HostPref); 2] = [
         (
             "accountRotation",
             HostPref {
                 get: "account-rotation:get",
                 set: "account-rotation:set",
                 field: "mode",
-            },
-        ),
-        (
-            "builtinMcp.rea",
-            HostPref {
-                get: "builtin-rea:get",
-                set: "builtin-rea:set",
-                field: "enabled",
             },
         ),
         (

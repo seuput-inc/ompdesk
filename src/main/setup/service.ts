@@ -346,8 +346,8 @@ export class SetupService {
 	}
 
 	/**
-	 * A connection the user started needs optional `item` (gh for the GitHub sign-in, Node for the built-in
-	 * REA server): detect it again and, when it is missing, install it right now — the user's own action, so
+	 * A connection the user started needs optional `item` (gh for GitHub sign-in, Tailscale for Mobile web):
+	 * detect it again and, when it is missing, install it right now — the user's own action, so
 	 * like a Retry it skips the back-off and the once-per-launch rule — queued behind any install that runs
 	 * now. Resolves with the item's state once that attempt ended. Without automatic setup (dev builds, test
 	 * launches without the fake installer) it only detects.

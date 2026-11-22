@@ -58,15 +58,5 @@ export const MCP_SERVERS: RpcMcpServersResult = {
 			authState: "authorized",
 			alsoIn: "Claude Code",
 		},
-		{
-			name: "rea",
-			transport: "stdio",
-			status: "connected",
-			toolCount: 28,
-			enabled: true,
-			authed: false,
-			builtin: "rea",
-			command: "npx -y @omp/rea",
-		},
 	],
 };

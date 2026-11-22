@@ -10,7 +10,7 @@ import { delimiter, join } from "node:path";
 import { CREDIT_SPEND_ENV } from "../../resources/gui-bridge/credit-spend-core";
 import { GH_BIN_DIR, GH_GUARD_ENV } from "../../resources/gui-bridge/gh-guard-core";
 import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
-import { MCP_AUTH_ENV, MCP_CWD_ENV, MCP_HUB_ENV } from "../../resources/gui-bridge/mcp-hub-contracts";
+import { MCP_AUTH_ENV, MCP_HUB_ENV } from "../../resources/gui-bridge/mcp-hub-contracts";
 import type { AutoTitleSettings } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { AGENT_DESKTOP_ENV, COMPUTER_USE_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
 import { agentBrowserEnv } from "../../resources/gui-bridge/modes/default-browser-contracts";
@@ -61,10 +61,8 @@ export const SESSION_OWNED_ENV = [
 	"OMP_GUI_ACCOUNT_ROTATION_STATE",
 	CREDIT_SPEND_ENV,
 	OMPDESK_ROLES_ENV,
-	"OMP_GUI_REA_ROOT",
 	MCP_HUB_ENV,
 	MCP_AUTH_ENV,
-	MCP_CWD_ENV,
 	"OMP_GUI_PSTACK",
 	"OMP_GUI_ECC",
 	"PONYTAIL_DEFAULT_MODE",
@@ -104,10 +102,9 @@ export function sessionOpen(tab: TabSession, written: (path: string) => boolean 
 	return tab.isNew || tab.path ? "new" : "default";
 }
 
-/** OMPdesk's own extensions for a spawn (sidecar-factory's `builtinMcp`): `-e` roots, REA's root and their variables. */
+/** OMPdesk's own extension arguments and variables for a spawn. */
 export interface BuiltinLaunch {
 	readonly args: readonly string[];
-	readonly root?: string;
 	readonly env?: Readonly<Record<string, string>>;
 }
 
@@ -185,7 +182,6 @@ export function sessionEnv(launch: OmpLaunch): Record<string, string> {
 	if (settings.accountRotationLedger) env.OMP_GUI_ACCOUNT_ROTATION_STATE = settings.accountRotationLedger;
 	if (settings.creditSpend !== undefined) env[CREDIT_SPEND_ENV] = settings.creditSpend ? "1" : "0";
 	if (settings.ompdeskRolesFile) env[OMPDESK_ROLES_ENV] = settings.ompdeskRolesFile;
-	if (builtin.root) env.OMP_GUI_REA_ROOT = builtin.root;
 	if (settings.browser) env[DEFAULT_BROWSER_ENV] = agentBrowserEnv(settings.browser);
 	if (launch.processTag) env[SESSION_TAG_ENV] = launch.processTag;
 	if (launch.scratchDir) env[SCRATCH_ENV] = launch.scratchDir;

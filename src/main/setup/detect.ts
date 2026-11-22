@@ -1,17 +1,14 @@
 /**
  * What this machine has: Bun, omp (through omp-runtime's own resolution and
- * version gate), Git, GitHub CLI and Node.js (through the built-in REA probe),
- * agent-desktop (the managed copy only), plus the package managers setup may
- * use (Homebrew, winget).
+ * version gate), Git, GitHub CLI, Node.js and agent-desktop, plus the package
+ * managers setup may use (Homebrew, winget).
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { REA_NODE_REQUIREMENT } from "../../shared/builtin-mcp";
 import type { GitShellProblem, SetupItemId, SetupPlatform, SetupPresence } from "../../shared/setup";
 import { isNewer } from "../../shared/version";
 import { bundledAgentDesktop, pickAgentDesktop } from "../agent-desktop";
-import { builtinReaState, resetReaRuntimeCache } from "../builtin-mcp";
 import { ompBunMinimum, ompPackageRoot, parseOmpVersion, refreshSystemOmp, systemOmp } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { brewBinDirs, spawnPath } from "../shell-env";
@@ -199,20 +196,6 @@ async function detectGit(platform: SetupPlatform, pathEnv: string, env: NodeJS.P
 	return versionOf("/usr/bin/git", env, platform);
 }
 
-async function detectNode(): Promise<SetupPresence> {
-	resetReaRuntimeCache();
-	const rea = await builtinReaState(true);
-	if (rea.available) return { kind: "present", version: rea.nodeVersion ?? null, path: null };
-	switch (rea.reason) {
-		case "node-missing":
-			return { kind: "missing" };
-		case "node-version":
-			return { kind: "outdated", version: rea.nodeVersion ?? "", minimum: REA_NODE_REQUIREMENT, path: null };
-		default:
-			return { kind: "broken", detail: rea.reason ?? "node-failed", path: null };
-	}
-}
-
 /**
  * agent-desktop (the default computer-use engine): the copy setup keeps in the managed tools dir, or the one the app
  * ships (`bundleDir`, src/main/agent-desktop.ts). One the user put on PATH (npm, brew) is theirs; OMPdesk neither
@@ -297,12 +280,13 @@ export async function detectMachine(
 		platform,
 		win ? [] : brewBinDirs().map(dir => join(dir, "gh")),
 	);
-	const [foundBun, omp, git, ghPresence, node, agentDesktop, tailscale] = await Promise.all([
+	const node = findOnPath([executableName("node", platform)], pathEnv, platform);
+	const [foundBun, omp, git, ghPresence, nodePresence, agentDesktop, tailscale] = await Promise.all([
 		bun ? versionOf(bun, env, platform) : Promise.resolve<SetupPresence>({ kind: "missing" }),
 		detectOmp(),
 		detectGit(platform, pathEnv, env),
 		gh ? versionOf(gh, env, platform) : Promise.resolve<SetupPresence>({ kind: "missing" }),
-		detectNode(),
+		node ? versionOf(node, env, platform) : Promise.resolve<SetupPresence>({ kind: "missing" }),
 		detectAgentDesktop(platform, toolsDir, env, agentDesktopBundle),
 		detectTailscale(platform, pathEnv),
 	]);
@@ -318,7 +302,7 @@ export async function detectMachine(
 			omp: omp.presence,
 			git,
 			gh: ghPresence,
-			node,
+			node: nodePresence,
 			"agent-desktop": agentDesktop,
 			tailscale,
 		},

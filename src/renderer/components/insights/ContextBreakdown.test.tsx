@@ -38,8 +38,8 @@ const categories = {
 const entries: RpcContextInspectResult["entries"] = [
 	{ id: "tool:bash", category: "builtinTools", label: "bash", tokens: 3_000 },
 	{ id: "tool:read", category: "builtinTools", label: "read", tokens: 2_000 },
-	{ id: "tool:mcp__rea_call", category: "mcpTools", label: "mcp__rea_call", tokens: 1_400 },
-	{ id: "deferred:mcp__rea_catalog", category: "mcpTools", label: "mcp__rea_catalog", tokens: 0, deferred: true },
+	{ id: "tool:mcp__docs_call", category: "mcpTools", label: "mcp__docs_call", tokens: 1_400 },
+	{ id: "deferred:mcp__docs_catalog", category: "mcpTools", label: "mcp__docs_catalog", tokens: 0, deferred: true },
 	{ id: "file:/repo/AGENTS.md", category: "memoryFiles", label: "/repo/AGENTS.md", tokens: 50 },
 	{ id: "msg:0:1", category: "messages", label: "Fix the build", role: "user", tokens: 40 },
 ];
@@ -141,7 +141,7 @@ describe("ContextInspector", () => {
 		const rows = () => [...(sheet?.querySelectorAll("li") ?? [])].map(row => row.textContent ?? "");
 		// Largest first; the deferred MCP tool shows its badge instead of a count.
 		expect(rows()[0]).toContain("bash");
-		expect(rows().find(row => row.includes("mcp__rea_catalog"))).toContain("Deferred");
+		expect(rows().find(row => row.includes("mcp__docs_catalog"))).toContain("Deferred");
 
 		await click(button("MCP tools"));
 		expect(button("MCP tools").getAttribute("aria-pressed")).toBe("true");
@@ -154,9 +154,9 @@ describe("ContextInspector", () => {
 			success: true,
 			type: "response",
 		});
-		await click(button("mcp__rea_call"));
-		expect(getContextEntry).toHaveBeenCalledWith("tool:mcp__rea_call");
-		expect(button("mcp__rea_call").getAttribute("aria-expanded")).toBe("true");
+		await click(button("mcp__docs_call"));
+		expect(getContextEntry).toHaveBeenCalledWith("tool:mcp__docs_call");
+		expect(button("mcp__docs_call").getAttribute("aria-expanded")).toBe("true");
 		expect(sheet?.textContent).toContain("Showing the first 32,000 of 40,000 characters");
 	});
 

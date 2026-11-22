@@ -14,7 +14,7 @@ Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-fil
 | Stock helper worker | 23 | Keep stock API calls in the worker. Rust already owns its process lifetime. |
 | Stats host | 2 | The standalone Bun process loads stock's stats implementation. It is not the desktop Node process. |
 | Boot model lookup | 2 | A separate Bun invocation reads the installed stock catalog when a session has no default model. |
-| MCP hub | 4 | Historical Bun host; now `ompdesk-core --mcp-hub` serves both endpoints. REA itself remains upstream. |
+| MCP hub | 4 | Historical Bun host; now `ompdesk-core --mcp-hub` serves the memory endpoint. |
 | No static import from these entries | 1,344 | Includes tests, types, dynamic paths, and other build inputs. An absent import is not proof that a file is dead. |
 
 Counts overlap. The command follows literal imports, including conditional test code, and excludes packages and assets. It does not measure which branches executed. Build scripts, verification tools, and third-party packages are outside this count.

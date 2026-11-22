@@ -465,7 +465,6 @@ describe("extensions worker on a fake install", () => {
 				args: ["x"],
 				url: null,
 				enabled: false,
-				sourcePath: "/plugins/p/.mcp.json",
 				origin: "other",
 			},
 			{
@@ -475,7 +474,6 @@ describe("extensions worker on a fake install", () => {
 				args: [],
 				url: "https://example.com/mcp",
 				enabled: true,
-				sourcePath: path.join(dir, "agent", "mcp.json"),
 				origin: "user",
 			},
 			{
@@ -485,7 +483,6 @@ describe("extensions worker on a fake install", () => {
 				args: ["-y", "pkg@1.0.0"],
 				url: null,
 				enabled: true,
-				sourcePath: path.join(dir, "agent", "mcp.json"),
 				origin: "user",
 			},
 		]);
@@ -1303,7 +1300,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 			},
 		);
 		const inventory = await ok(real.worker.ask<HelperInventory>("extensions.inventory", { cwds: [real.home] }));
-		const mcp = path.join(real.agent, "mcp.json");
 		expect(inventory.mcpServers).toEqual([
 			{
 				name: "alpha",
@@ -1312,7 +1308,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 				args: ["-y", "alpha-mcp@1.2.3"],
 				url: null,
 				enabled: true,
-				sourcePath: mcp,
 				origin: "user",
 			},
 			{
@@ -1322,7 +1317,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 				args: [],
 				url: "https://example.com/mcp",
 				enabled: true,
-				sourcePath: mcp,
 				origin: "user",
 			},
 			{
@@ -1332,7 +1326,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 				args: ["gamma-mcp"],
 				url: null,
 				enabled: false,
-				sourcePath: mcp,
 				origin: "user",
 			},
 		]);

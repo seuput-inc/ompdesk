@@ -14,7 +14,7 @@ const BUILTIN = path.join(ROOT, "resources/omp-builtin");
 const SKILL = "ompdesk-formal-verify";
 const SKILL_FILE = path.join(BUILTIN, "formal/skills", SKILL, "SKILL.md");
 /** The packs a bump rewrites, and the always-on pstack text generated from them. */
-const BUMPED_PACKS = ["pstack", "ecc", "rea", "ponytail"].map(name => path.join(BUILTIN, name));
+const BUMPED_PACKS = ["pstack", "ecc", "ponytail"].map(name => path.join(BUILTIN, name));
 const PSTACK_TEXT = path.join(ROOT, "resources/gui-bridge/modes/pstack-text.ts");
 /** What a skill for the same job says about itself. */
 const SAME_JOB =

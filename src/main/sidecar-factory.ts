@@ -15,7 +15,6 @@ import { normalizeUserProfile } from "../../resources/gui-bridge/modes/user-prof
 import type { PromptOriginEnv } from "../../resources/gui-bridge/prompt-origin-contracts";
 import { parseAccountRotationPref } from "../shared/account-rotation";
 import { agentControlEnabled } from "../shared/agent-control";
-import { reaEnabled, reaExtensionArgs } from "../shared/builtin-mcp";
 import { creditSpendEnabled } from "../shared/credit-spend";
 import { parseDefaultBrowser, resolveAgentBrowser } from "../shared/default-browser";
 import { eccEnabled } from "../shared/ecc";
@@ -26,7 +25,6 @@ import { agentBrowserStatus, resolveEgoBrowser } from "./agent-browsers";
 import { computerUseSpawn } from "./agent-desktop";
 import { bootModelSelector } from "./boot-model";
 import type { BridgeConnectResult, BridgeHealth } from "./bridge-health";
-import { builtinReaState, spawnReaState } from "./builtin-mcp";
 import { controlEnvFor } from "./control-socket/env";
 import { mainT, ompFailureText } from "./i18n";
 import { ompAvailability } from "./omp-availability";
@@ -44,16 +42,10 @@ export interface LocalSidecarDeps {
 	sessionFree?: (sessionPath: string) => Promise<"free" | "owned">;
 	/** The gui-bridge extension directory. */
 	bridgeDir: string;
-	/** OMPdesk's own extension root (`resources/omp-builtin`): the control tools' skill; REA is its `rea/` sub-root. */
+	/** OMPdesk's own extension root (`resources/omp-builtin`). */
 	builtinDir: string;
-	builtinReaPref: () => unknown;
-	/**
-	 * What an omp spawned in a folder needs to reach OMPdesk's MCP hub (src/main/mcp-hub.ts `ompEnv`), which serves its
-	 * `rea` and `ompdesk-memory` servers; absent: none (tests).
-	 */
-	mcpHubEnv?: (cwd: string) => Promise<Record<string, string>>;
-	/** Where the last launch's REA runtime answer is kept (`spawnReaState`), so a spawn need not wait for `node --version` and `npx --version`; absent = every launch's first spawn waits (tests). */
-	reaRuntimeFile?: string;
+	/** Address and credentials for the memory extension's MCP hub. */
+	mcpHubEnv?: () => Promise<Record<string, string>>;
 	/** Settings › Tools & extensions › OMPdesk control tools (`agentControl`, default on), read per use; absent = off (the caller that answers the tools supplies it). */
 	agentControlPref?: () => unknown;
 	/** Settings › Agent behavior › pstack engineering mode (`pstack`, default on), read per spawn; absent = off (tests only). */
@@ -186,18 +178,6 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			},
 			bridgeDir,
 			builtinMcp: async () => {
-				const reaRoot = join(deps.builtinDir, "rea");
-				// Off asks nothing: the probe runs node and npx (seconds on Windows), and runs again behind every
-				// spawn while REA is unavailable.
-				const reaPref = deps.builtinReaPref();
-				const rea = reaEnabled(reaPref)
-					? reaExtensionArgs(
-							reaRoot,
-							await (deps.reaRuntimeFile
-								? spawnReaState(reaPref, deps.reaRuntimeFile)
-								: builtinReaState(reaPref)),
-						)
-					: [];
 				// The control tools' skill loads with them; the tools themselves follow the switch live (hostTools).
 				const own =
 					deps.agentControlPref && agentControlEnabled(deps.agentControlPref()) ? ["-e", deps.builtinDir] : [];
@@ -208,7 +188,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				const formal = ["-e", join(deps.builtinDir, "formal")];
 				const ponytail = ["-e", join(bridgeDir, "ponytail.ts")];
 				const memory = (await deps.aiMemoryExtensionArgs?.(cwd)) ?? [];
-				const hub = rea.length || memory.length ? ((await deps.mcpHubEnv?.(cwd)) ?? {}) : {};
+				const hub = memory.length ? ((await deps.mcpHubEnv?.()) ?? {}) : {};
 				// One table for this computer's tabs and the tabs it hosts for a paired device.
 				const computer = deps.computerUse
 					? await computerUseSpawn({
@@ -218,8 +198,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 						})
 					: undefined;
 				return {
-					args: [...own, ...rea, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...ponytail, ...memory],
-					...(rea.length ? { root: reaRoot } : {}),
+					args: [...own, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...ponytail, ...memory],
 					// A chat (no project) keeps the packs' roots but not their section texts.
 					env: {
 						OMP_GUI_PSTACK: pstack.length && kind === "agent" ? "1" : "0",

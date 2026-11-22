@@ -27,6 +27,10 @@ fn main() -> ExitCode {
     }
     let mut args = std::env::args_os().skip(1);
     let mcp_hub = args.next().is_some_and(|arg| arg == "--mcp-hub");
+    if mcp_hub && args.next().is_some() {
+        eprintln!("--mcp-hub takes no arguments");
+        return ExitCode::FAILURE;
+    }
     let mut builder = if mcp_hub {
         tokio::runtime::Builder::new_current_thread()
     } else {
@@ -40,7 +44,7 @@ fn main() -> ExitCode {
         }
     };
     if mcp_hub {
-        return match runtime.block_on(ompdesk_core::mcp_hub::run(args.collect())) {
+        return match runtime.block_on(ompdesk_core::mcp_hub::run()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("mcp-hub: {error}");

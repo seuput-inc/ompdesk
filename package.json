@@ -15,7 +15,6 @@
     "package:mac": "bun run build && bun scripts/package-mac.ts",
     "package:win": "bun run build && electron-builder --config electron-builder.win.yml --win --x64",
     "gen:icons": "bun scripts/gen-icons.ts",
-    "sync:rea-skill": "bun scripts/sync-rea-skill.ts",
     "build:memory": "bun scripts/build-memory.ts",
     "build:native": "bun scripts/build-native.ts",
     "build:shell": "bun scripts/build-shell.ts",

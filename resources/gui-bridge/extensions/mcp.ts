@@ -9,7 +9,6 @@
  * reload details (mcp-command-controller.ts in omp 18.6); reauth is stock's
  * `mcp/oauth-reauth`.
  */
-import * as path from "node:path";
 import type { MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPServerConfig, MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
@@ -245,11 +244,6 @@ async function listMcpServers(session: AgentSession) {
 			toolCount: tools.filter(tool => tool.mcpServerName === name).length,
 			enabled,
 			authed: credential !== undefined || headerAuth,
-			...(name === "rea" &&
-			process.env.OMP_GUI_REA_ROOT &&
-			server?._source.path === path.join(process.env.OMP_GUI_REA_ROOT, ".mcp.json")
-				? { builtin: "rea" as const }
-				: {}),
 			...(scope !== undefined ? { scope } : {}),
 			...(config && "command" in config && config.command ? { command: config.command } : {}),
 			...(url ? { url } : {}),

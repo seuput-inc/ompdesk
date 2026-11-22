@@ -26,7 +26,6 @@ OMPdesk is built mostly on macOS. This page lists what a developer (or an agent)
 | `bun run locked`, `gate`, `check:changed` | Lock root is `%TEMP%\ompdesk-locks`, log `%TEMP%\ompdesk-build.log`. Commands run through cmd.exe where needed (so `bunx`/`npx` shims start) with arguments quoted by `spawnArgs` (`src/main/spawn.ts`); interrupting kills the tree with `taskkill /T /F`. |
 | `bun run build` | The `out-<hash>/` snapshot is a plain copy (no APFS clone), about 17 MB per build; old ones are deleted 30 min after last use. |
 | `bun run gen:icons` | Skips `icon.icns` and `dmg-background.tiff` (`iconutil`/`tiffutil` are macOS only). Commit only the files it changed. |
-| `bun run sync:rea-skill` | Needs `npm` and `tar` (`tar.exe` ships with Windows 10 1803+). |
 | `bun run package:win` | Builds the NSIS setup locally. `package:mac` cannot run. |
 | `.ompdesk/worktree-setup.cmd` | The Windows form of the worktree setup hook, checked in beside the POSIX `.ompdesk/worktree-setup`: `bun install --frozen-lockfile`, then `bun scripts/ensure-electron.ts`. |
 | `.ompdesk/worktree-pre-merge.cmd`, `.ompdesk/worktree-post-merge.cmd` | The Windows names of the two `ompdesk_merge` hooks (POSIX: no extension). Neither is checked in here; a repository adds them as it needs. |

@@ -1,5 +1,5 @@
 /**
- * Every way a session's omp starts launches the same omp: the same extensions (bridge, control tools' skill, REA,
+ * Every way a session's omp starts launches the same omp: the same extensions (bridge, control tools' skill,
  * pstack, ECC, formal, Ponytail, ai-memory), the same OMPdesk settings (reply language, profile, suggestions, titles, judge,
  * delegation, account rotation, model roles, memory recall), the same proxy and environment. The paths: a new tab,
  * a stored session opened, a relaunch's saved tab started later, a relaunch's interrupted turn, an omp update's
@@ -53,10 +53,6 @@ vi.mock("./omp-runtime", async importOriginal => ({
 					},
 				}
 			: { ok: false, error: "omp is not installed" },
-}));
-vi.mock("./builtin-mcp", () => ({
-	builtinReaState: async () => ({ enabled: true, available: true, nodeVersion: "v24.0.0" }),
-	spawnReaState: async () => ({ enabled: true, available: true, nodeVersion: "v24.0.0" }),
 }));
 
 import { BridgeHealth } from "./bridge-health";
@@ -178,11 +174,7 @@ function factory(): LocalSidecarFactory {
 		tuning: { restartDelaysMs: [100, 100, 100] },
 		bridgeDir: "/bridge",
 		builtinDir: "/builtin",
-		builtinReaPref: () => true,
-		// The folder rides along as OMP_GUI_MCP_CWD; the start paths here spell the same temp folder two ways
-		// (/var vs /private/var), so the stand-in leaves it out.
 		mcpHubEnv: async () => ({ OMP_GUI_MCP_HUB: "http://127.0.0.1:4100", OMP_GUI_MCP_AUTH: "Bearer launch-secret" }),
-		reaRuntimeFile: "/ud/rea-runtime.json",
 		agentControlPref: () => true,
 		pstackPref: () => true,
 		eccPref: () => true,
@@ -387,8 +379,6 @@ describe("a session's omp launches the same way on every start path", () => {
 			"-e",
 			"/builtin",
 			"-e",
-			join("/builtin", "rea"),
-			"-e",
 			join("/builtin", "pstack"),
 			"-e",
 			join("/builtin", "ecc"),
@@ -409,7 +399,6 @@ describe("a session's omp launches the same way on every start path", () => {
 			OMP_GUI_ACCOUNT_ROTATION_STATE: "/ud/rotation.json",
 			OMP_GUI_CREDIT_SPEND: "1",
 			OMP_GUI_OMPDESK_ROLES: "/ud/roles.json",
-			OMP_GUI_REA_ROOT: join("/builtin", "rea"),
 			OMP_GUI_MCP_HUB: "http://127.0.0.1:4100",
 			OMP_GUI_MCP_AUTH: "Bearer launch-secret",
 			OMP_GUI_PSTACK: "1",

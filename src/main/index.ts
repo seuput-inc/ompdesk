@@ -53,7 +53,6 @@ import {
 	sidebarViewOf,
 } from "../shared/agent-control";
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
-import { REA_PREF, reaEnabled } from "../shared/builtin-mcp";
 import { COMPUTER_USE_PREF } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF, creditSpendEnabled } from "../shared/credit-spend";
 import { DEFAULT_BROWSER_PREF } from "../shared/default-browser";
@@ -569,7 +568,7 @@ async function resolveProxyEnvForSpawn(): Promise<Record<string, string>> {
 let windowManager: WindowManager;
 let sidecarPool: SidecarPool;
 let statsServer: StatsServerManager | null = null;
-/** OMPdesk's MCP hub (src/main/mcp-hub.ts): the one process serving every omp's `rea` and `ompdesk-memory`. */
+/** OMPdesk's MCP hub (src/main/mcp-hub.ts): the one process serving the built-in `ompdesk-memory` endpoint. */
 let mcpHub: McpHub | null = null;
 /** Every omp this app runs (src/main/omp-processes.ts): a quit waits for their exits, a launch reaps an earlier one's. */
 let ompProcesses: OmpProcesses | null = null;
@@ -1041,17 +1040,6 @@ app.whenReady().then(async () => {
 	const memoryRecallFile = join(app.getPath("userData"), "ai-memory", "recall.json");
 	const recallTermsFile = join(app.getPath("userData"), "ai-memory", RECALL_TERMS_FILE);
 	mcpHub = new McpHub({
-		env: async () => {
-			const [resolution, basePath, shell, proxy] = await Promise.all([
-				systemOmp(),
-				spawnPath(),
-				shellSpawnEnv(),
-				resolveProxyEnvForSpawn(),
-			]);
-			// REA's npx comes from the same PATH an omp's spawn has.
-			return { ...shell, ...proxy, PATH: resolution.ok ? ompPathEnv(resolution.runtime.bin, basePath) : basePath };
-		},
-		reaCacheDir: join(app.getPath("userData"), "rea"),
 		memoryStateFile: memoryRecallFile,
 		lowerPriority: lowerAgentPriority,
 		log: (message, details) => console.log(`[mcp-hub] ${message}`, details ?? ""),
@@ -1128,9 +1116,7 @@ app.whenReady().then(async () => {
 				});
 			return outcome;
 		},
-		builtinReaPref: () => prefsStore().get(REA_PREF),
-		mcpHubEnv: cwd => hub.ompEnv(cwd),
-		reaRuntimeFile: join(app.getPath("userData"), "rea-runtime.json"),
+		mcpHubEnv: () => hub.ompEnv(),
 		agentControlPref: () => prefsStore().get(AGENT_CONTROL_PREF),
 		pstackPref: () => prefsStore().get(PSTACK_PREF),
 		eccPref: () => prefsStore().get(ECC_PREF),
@@ -1302,12 +1288,6 @@ app.whenReady().then(async () => {
 				pick === null
 					? prefsStore().delete(MODEL_SETUP_RESEARCH_PICK_PREF)
 					: prefsStore().set(MODEL_SETUP_RESEARCH_PICK_PREF, pick),
-		},
-		builtinRea: {
-			read: () => prefsStore().get(REA_PREF),
-			write: enabled => prefsStore().set(REA_PREF, enabled),
-			// Machine setup exists once startup built it; its node item carries the progress.
-			installNode: () => void setupService?.installForConnection("node").catch(() => undefined),
 		},
 		desktop: {
 			version: appVersion,
@@ -1980,8 +1960,6 @@ app.whenReady().then(async () => {
 		helper: <T>(method: string, params: unknown, timeoutMs: number) =>
 			stockHelperRequest<T>(method, params, { timeoutMs }),
 		cwds: () => [...new Set([...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()])],
-		reaRoot: builtinDir,
-		reaEnabled: () => reaEnabled(prefs.get(REA_PREF)),
 		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
 		testInstaller,
 		// While omp is installed the stock helper is stopped; a request would start it again.
@@ -2254,7 +2232,7 @@ app.whenReady().then(async () => {
 		omp: systemOmp,
 		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
 		extensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
-		extensionEnv: cwd => mcpHub?.ompEnv(cwd) ?? Promise.resolve({}),
+		extensionEnv: () => mcpHub?.ompEnv() ?? Promise.resolve({}),
 		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
 	});
 	scheduleService = new ScheduleService({

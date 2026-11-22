@@ -14,14 +14,14 @@ use super::archives::{
 use crate::http::tests::read_request;
 use crate::server::Registry;
 
-// ---- the pure rules, against what the TypeScript answered (captured.json, captured before it was deleted)
+// ---- the pure rules (captured.json includes cases from the TypeScript implementation)
 
 fn captured() -> Value {
     serde_json::from_str(include_str!("captured.json")).unwrap()
 }
 
 #[test]
-fn picks_the_lts_the_typescript_picked() {
+fn picks_the_first_stable_lts_in_the_index() {
     let rows = captured();
     let rows = rows["lts"].as_array().unwrap();
     assert!(!rows.is_empty());

@@ -290,8 +290,6 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[C.ACCOUNT_ROTATION_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.ACCOUNT_ROTATION_SET]: { dir: "invoke", permission: "accounts-admin", mode: "pass" },
-	[C.BUILTIN_REA_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
-	[C.BUILTIN_REA_SET]: { dir: "invoke", permission: "settings-write", mode: "pass" },
 	[C.LOCAL_ENGINES_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.LOCAL_ENGINES_SET]: { dir: "invoke", permission: "settings-write", mode: "pass" },
 	[C.CREDIT_SPEND_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },

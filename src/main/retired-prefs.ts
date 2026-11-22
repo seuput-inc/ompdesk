@@ -40,6 +40,10 @@ const MERGES: readonly { into: string; from: readonly string[]; value: (old: unk
 /** Prefs whose switch was removed; `migrateRetiredPrefs` deletes them so a stale value never lingers in prefs.json. */
 export const RETIRED_PREFS: readonly { key: string; why: string }[] = [
 	{
+		key: "builtinMcp.rea",
+		why: "OMPdesk no longer ships REA.",
+	},
+	{
 		key: "modelPool",
 		why: "The model pool was removed. The journal's `ompdesk.model-pool` entries stay in old sessions and are ignored.",
 	},

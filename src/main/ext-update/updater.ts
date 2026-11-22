@@ -70,10 +70,6 @@ export interface ExtensionUpdaterDeps {
 	helper: <T>(method: string, params: unknown, timeoutMs: number) => Promise<T>;
 	/** The workspaces of this computer's open local tabs: where project-scoped plugins and skills live. */
 	cwds: () => string[];
-	/** The built-in REA's root (`resources/omp-builtin`): a server whose config is under it is the built-in. */
-	reaRoot: string | null;
-	/** The built-in REA is on in this app. */
-	reaEnabled: () => boolean;
 	/** The spawn environment (login-shell PATH, proxies); its PATH is where an MCP command is looked up. */
 	env: () => Promise<NodeJS.ProcessEnv>;
 	/** `OMP_GUI_TEST_INSTALLER`: an MCP server's checks run `<installer> cli-mcp-<name> <method> check`. */
@@ -256,7 +252,7 @@ export class ExtensionUpdater {
 		const detect = this.#deps.detectBinary ?? detectMcpBinary;
 		const ownerDeps = environment.owner;
 		const binaries = new Map<string, McpBinary | null>();
-		const classes = await classifyMcpServers(inventory.mcpServers, { reaRoot: this.#deps.reaRoot });
+		const classes = await classifyMcpServers(inventory.mcpServers);
 		await Promise.all(
 			inventory.mcpServers.map(async (server, at) => {
 				const cls = classes[at];
@@ -264,11 +260,7 @@ export class ExtensionUpdater {
 			}),
 		);
 		throwIfStepStalled();
-		const seeds = await classifyInventory(inventory, {
-			reaRoot: this.#deps.reaRoot,
-			reaEnabled: this.#deps.reaEnabled(),
-			binaries,
-		});
+		const seeds = await classifyInventory(inventory, binaries);
 		const next = new Map<string, RowRecord>();
 		for (const seed of seeds) next.set(seed.row.key, this.#merge(this.#records.get(seed.row.key), seed));
 		this.#records = next;

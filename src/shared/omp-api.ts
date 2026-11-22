@@ -31,7 +31,6 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
-import type { BuiltinReaState } from "./builtin-mcp";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -764,11 +763,6 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.ACCOUNT_ROTATION_GET, device) as Promise<AccountRotationState>,
 			set: (mode: AccountRotationMode, device?: string) =>
 				transport.invoke(IPC_COMMANDS.ACCOUNT_ROTATION_SET, mode, device) as Promise<AccountRotationState>,
-		},
-		builtinRea: {
-			get: (device?: string) => transport.invoke(IPC_COMMANDS.BUILTIN_REA_GET, device) as Promise<BuiltinReaState>,
-			set: (enabled: boolean, device?: string) =>
-				transport.invoke(IPC_COMMANDS.BUILTIN_REA_SET, enabled, device) as Promise<BuiltinReaState>,
 		},
 		localEngines: {
 			get: (device?: string) =>

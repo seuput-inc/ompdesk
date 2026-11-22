@@ -15,7 +15,6 @@ import {
 	isAccountRotationMode,
 	parseAccountRotationPref,
 } from "../shared/account-rotation";
-import type { BuiltinReaState } from "../shared/builtin-mcp";
 import { type CreditSpendState, creditSpendEnabled } from "../shared/credit-spend";
 import { codedError, type IpcErrorCode, ipcErrorCode } from "../shared/ipc-error-codes";
 import type {
@@ -43,7 +42,6 @@ import type { OmpUpdateState } from "../shared/omp-update";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../shared/schedules";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../shared/sidebar-projects";
 import { BENCHMARK_TIMEOUT_MS, BenchmarkRunner } from "./benchmark-runner";
-import { builtinReaState } from "./builtin-mcp";
 import { ModelSetupRunner } from "./model-setup-runner";
 import { deleteModelsProvider, listModelsProviders, setModelOverride, upsertModelsProvider } from "./models-config";
 import { modelsConfigMetadata } from "./models-config-stock";
@@ -52,7 +50,6 @@ import type { OmpUpdater } from "./omp-updater";
 import {
 	AccountRotationStateSchema,
 	BridgeHealthReportSchema,
-	BuiltinReaStateSchema,
 	CreditSpendStateSchema,
 	HOST_STATS_TIMEOUT_MS,
 	HostDesktopStateSchema,
@@ -100,8 +97,6 @@ export interface MachineServices {
 	creditSpend(): Promise<CreditSpendState>;
 	/** Store the switch; every omp this machine runs follows from its next request. */
 	setCreditSpend(enabled: boolean): Promise<CreditSpendState>;
-	builtinRea(): Promise<BuiltinReaState>;
-	setBuiltinRea(enabled: boolean): Promise<BuiltinReaState>;
 	/** Whether that machine looks for local inference engines (FreeToken, colibri) and lists their models by itself. */
 	localEngineDetect(): Promise<LocalEngineDetectState>;
 	setLocalEngineDetect(enabled: boolean): Promise<LocalEngineDetectState>;
@@ -191,12 +186,6 @@ export interface LocalMachineDeps {
 		read(): unknown;
 		/** Store the pick; null removes it. */
 		write(pick: string | null): void;
-	};
-	builtinRea: {
-		read(): unknown;
-		write(enabled: boolean): void;
-		/** REA was turned on while Node.js is missing or too old: machine setup installs it now, in the background. */
-		installNode?(): void;
 	};
 	desktop: DesktopDeps;
 	/** This computer's omp updater (`omp-updater.ts`); it exists once startup has built it. */
@@ -376,21 +365,6 @@ export class LocalMachine implements MachineServices {
 		}
 		await this.#deps.localEngines.set(enabled);
 		return this.localEngineDetect();
-	}
-
-	async builtinRea(): Promise<BuiltinReaState> {
-		return builtinReaState(this.#deps.builtinRea.read());
-	}
-
-	async setBuiltinRea(enabled: boolean): Promise<BuiltinReaState> {
-		if (typeof enabled !== "boolean") throw codedError("invalid_preference_key", "Invalid built-in REA preference");
-		this.#deps.builtinRea.write(enabled);
-		const state = await this.builtinRea();
-		// Turning REA on is the connection that needs Node: install it right then (setup's node item shows it).
-		if (enabled && (state.reason === "node-missing" || state.reason === "node-version")) {
-			this.#deps.builtinRea.installNode?.();
-		}
-		return state;
 	}
 
 	async desktop(): Promise<HostDesktopState> {
@@ -582,14 +556,6 @@ export class RemoteMachine implements MachineServices {
 
 	async setCreditSpend(enabled: boolean): Promise<CreditSpendState> {
 		return CreditSpendStateSchema.parse(await this.#request<unknown>("host.creditSpend.set", { enabled }));
-	}
-
-	async builtinRea(): Promise<BuiltinReaState> {
-		return BuiltinReaStateSchema.parse(await this.#request<unknown>("host.builtinRea.get", {}));
-	}
-
-	async setBuiltinRea(enabled: boolean): Promise<BuiltinReaState> {
-		return BuiltinReaStateSchema.parse(await this.#request<unknown>("host.builtinRea.set", { enabled }));
 	}
 
 	async localEngineDetect(): Promise<LocalEngineDetectState> {

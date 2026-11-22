@@ -43,11 +43,8 @@ fn params<T: DeserializeOwned>(params: &RawValue) -> Result<T, Fault> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ClassesParams {
     servers: Vec<mcp::Server>,
-    /// The built-in REA's root (a server whose source is under it is the built-in).
-    rea_root: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -66,11 +63,7 @@ pub fn register(registry: &mut Registry) {
     registry.add("ext.mcpClasses", |call| {
         Box::pin(async move {
             let params: ClassesParams = params(&call.params)?;
-            let classes: Vec<_> = params
-                .servers
-                .iter()
-                .map(|server| mcp::classify(server, params.rea_root.as_deref()))
-                .collect();
+            let classes: Vec<_> = params.servers.iter().map(mcp::classify).collect();
             Reply::json(&classes)
         })
     });
@@ -123,7 +116,7 @@ mod tests {
     #[test]
     fn a_refused_shape_tells_nothing_of_what_it_held() {
         // A server whose arguments came as one string: serde's own words would quote it.
-        let text = r#"{"servers":[{"name":"s","type":"stdio","command":"npx","args":"--token=hunter2","url":null,"enabled":true,"sourcePath":null}],"reaRoot":null}"#;
+        let text = r#"{"servers":[{"name":"s","type":"stdio","command":"npx","args":"--token=hunter2","url":null,"enabled":true}]}"#;
         let raw = RawValue::from_string(text.into()).unwrap();
         let fault = params::<ClassesParams>(&raw).err().unwrap();
         assert_eq!(fault.code, "invalid_params");

@@ -42,7 +42,6 @@ export type ExtensionMethod =
  *   skill's exact version, an MCP package `pkg@1.2.3`); a newer one is only shown as "update available".
  * - `follows-plugin`: skills a plugin provides move with that plugin.
  * - `follows-latest`: an unpinned `npx`/`bunx`/`uvx` MCP package resolves the newest version at every start.
- * - `builtin`: part of the OMPdesk release (the built-in REA MCP server).
  * - `local`: plain local files with no source recorded (skills in a folder): never updated.
  * - `linked`: a plugin linked from a local path.
  * - `remote`: an MCP server reached by URL: nothing on this computer to update.
@@ -53,7 +52,6 @@ export type ExtensionSkipReason =
 	| "pinned"
 	| "follows-plugin"
 	| "follows-latest"
-	| "builtin"
 	| "local"
 	| "linked"
 	| "remote"

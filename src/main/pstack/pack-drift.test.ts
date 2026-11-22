@@ -128,10 +128,7 @@ const KNOWN_OTHER_SKILLS = [
 ];
 
 describe("skills", () => {
-	const ownedByOmpdesk = [
-		...readdirSync(path.join(REPO, "resources/omp-builtin/skills")),
-		...readdirSync(path.join(REPO, "resources/omp-builtin/rea/skills")),
-	];
+	const ownedByOmpdesk = readdirSync(path.join(REPO, "resources/omp-builtin/skills"));
 
 	it.each(skillNames)("%s: folder, name and description agree", skill => {
 		const text = readFileSync(path.join(SKILLS, skill, "SKILL.md"), "utf8");

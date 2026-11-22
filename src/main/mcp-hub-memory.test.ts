@@ -143,12 +143,8 @@ beforeEach(async () => {
 	await writeFile(join(dataDir, "auth-tokens", "default"), `${token}\n`);
 	const url = await fakeMemoryServer();
 	await writeFile(join(dir, "recall.json"), JSON.stringify({ url, dataDir }));
-	hub = new McpHub({
-		env: async () => ({ PATH: dir }), // No Bun or npx: memory must work independently of REA.
-		reaCacheDir: dir,
-		memoryStateFile: join(dir, "recall.json"),
-	});
-	const env = await hub.ompEnv(dir);
+	hub = new McpHub({ memoryStateFile: join(dir, "recall.json") });
+	const env = await hub.ompEnv();
 	endpoint = `${env.OMP_GUI_MCP_HUB}/memory`;
 	authorization = env.OMP_GUI_MCP_AUTH;
 });
@@ -260,6 +256,8 @@ describe("MCP hub: memory", () => {
 		expect((await post({ jsonrpc: "2.0", id: 1, method: "ping" }, "Bearer x")).status).toBe(401);
 		const stream = await fetch(endpoint, { headers: { authorization } });
 		expect(stream.status).toBe(405);
+		const retired = await fetch(new URL("/rea", endpoint), { method: "POST", headers: { authorization } });
+		expect(retired.status).toBe(404);
 		expect(seen).toEqual([]);
 	});
 });

@@ -589,7 +589,6 @@ const StatsFetchParams = z.object({
 const BenchRunParams = z.object({ ...FsRoot, options: BenchmarkOptionsSchema });
 const ModelSetupRunParams = z.object({ request: ModelSetupRequestSchema });
 const AccountRotationSetParams = z.object({ mode: z.enum(ACCOUNT_ROTATION_MODES) });
-const BuiltinReaSetParams = z.object({ enabled: z.boolean() });
 const LocalEnginesSetParams = z.object({ enabled: z.boolean() });
 const CreditSpendSetParams = z.object({ enabled: z.boolean() });
 const TerminalParams = z.object({ rtab: Rtab, operation: z.object({ action: z.string() }).passthrough() });
@@ -1572,10 +1571,6 @@ export class LocalHostServices implements HostServices {
 				return this.#deps.machine.creditSpend();
 			case "host.creditSpend.set":
 				return this.#deps.machine.setCreditSpend(parse(CreditSpendSetParams, method, params).enabled);
-			case "host.builtinRea.get":
-				return this.#deps.machine.builtinRea();
-			case "host.builtinRea.set":
-				return this.#deps.machine.setBuiltinRea(parse(BuiltinReaSetParams, method, params).enabled);
 			case "host.localEngines.get":
 				return this.#deps.machine.localEngineDetect();
 			case "host.localEngines.set":

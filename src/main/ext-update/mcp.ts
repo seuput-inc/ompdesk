@@ -1,6 +1,6 @@
 /**
  * What an MCP server's configured launch is, read from the config the user wrote (never changed here):
- * the built-in REA, a remote URL, a package a runner (`npx`, `bunx`, `uvx`, `pnpm dlx`, `bun x`,
+ * a remote URL, a package a runner (`npx`, `bunx`, `uvx`, `pnpm dlx`, `bun x`,
  * `uv tool run`, `pipx run`, `npm exec`) fetches itself, a command that runs an installed binary, or
  * something that is none of those (an interpreter running a script, a container). The rules are the core
  * process's (`native/ompdesk/crates/core/src/ext/mcp.rs`); this file is their contract and client.
@@ -15,7 +15,6 @@ import { extRule } from "./core";
 export type McpRunner = "npx" | "bunx" | "pnpm-dlx" | "bun-x" | "npm-exec" | "uvx" | "uv-tool-run" | "pipx-run";
 
 export type McpClass =
-	| { kind: "builtin" }
 	| { kind: "remote" }
 	| {
 			kind: "runner";
@@ -34,10 +33,7 @@ export type McpClass =
 	| { kind: "direct"; command: string }
 	| { kind: "unsupported" };
 
-/** Each server's class, in the servers' order. A server whose source is under `reaRoot` is the built-in REA. */
-export function classifyMcpServers(
-	servers: readonly HelperMcpServer[],
-	options: { reaRoot: string | null },
-): Promise<McpClass[]> {
-	return extRule("ext.mcpClasses", { servers, reaRoot: options.reaRoot });
+/** Each server's class, in the servers' order. */
+export function classifyMcpServers(servers: readonly HelperMcpServer[]): Promise<McpClass[]> {
+	return extRule("ext.mcpClasses", { servers });
 }

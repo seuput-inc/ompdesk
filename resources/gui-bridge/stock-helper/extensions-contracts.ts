@@ -58,8 +58,6 @@ export interface HelperMcpServer {
 	args: string[];
 	url: string | null;
 	enabled: boolean;
-	/** The config file or plugin dir the server came from; main marks the built-in REA by it. */
-	sourcePath: string | null;
 	/** `user`, `project` or `plugin` (a plugin or another tool's config provided it). */
 	origin: "user" | "project" | "other";
 }

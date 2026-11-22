@@ -207,9 +207,6 @@ src/main/bridge-visuals.test.ts	tooling	-	Vitest suite: gui-bridge diagram instr
 src/main/bridge-waste-guards-stock.test.ts	tooling	-	Vitest suite: refuses a ready.log that cannot match at once, without running the command.
 src/main/bridge-waste-guards.test.ts	tooling	-	Vitest suite: ready.log that can never match.
 src/main/bridge-xdev-notice.test.ts	tooling	-	Vitest suite: xdev mount notice dedupe.
-src/main/builtin-mcp-spawn.test.ts	tooling	-	Vitest suite: built-in MCP sidecar argv.
-src/main/builtin-mcp.test.ts	tooling	-	Vitest suite: probes node and npx once for every later spawn, keeping the preference live.
-src/main/builtin-mcp.ts	port	2	builtinReaState/spawnReaState locate node/npx, probe runtime support and cache executable identity for REA startup.
 src/main/canonical-cwd.ts	port	1	canonicalCwd resolves real paths for tab/sidecar identity while preserving Windows spelling.
 src/main/checkout-claims-journal.test.ts	tooling	-	Vitest suite: the claims journal.
 src/main/checkout-claims.test.ts	tooling	-	Vitest suite: shared-checkout claims under generated sequences.
@@ -303,7 +300,6 @@ src/main/mail-accounts.ts	port	2	MailAccounts persists account metadata and encr
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
 src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
-src/main/mcp-hub-rea.test.ts	tooling	-	Vitest suite: MCP hub: REA.
 src/main/mcp-hub.ts	port	2	McpHub launches and supervises the native MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
 src/main/mcp-live.ts	port	3	onMcpChange and noteMcpChange register and invoke the desktop listener that fans a session's MCP change out to other sessions.
 src/main/media-stream.test.ts	tooling	-	Vitest suite: parseRange.

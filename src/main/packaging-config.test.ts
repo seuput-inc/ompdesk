@@ -14,10 +14,8 @@ import { type PlistObject, parsePlistFile, savePlistFile } from "app-builder-lib
 import { UUID } from "builder-util-runtime";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { REA_HUB_ENTRY } from "../../resources/gui-bridge/mcp-hub-contracts";
 import { AGENT_DESKTOP_SERVER } from "../../resources/gui-bridge/modes/computer-use-contracts";
 import { assembleBundle, RESOURCE_COPIES, TAURI_COPIES } from "../../scripts/package-mac";
-import { REA_VERSION } from "../shared/builtin-mcp";
 import { UPDATE_ASSETS } from "./update-release";
 
 interface BuilderConfig {
@@ -411,14 +409,10 @@ describe("mac bundle configs", () => {
 		expect(win.nsis).toMatchObject({ installerIcon: "resources/icon.ico", uninstallerIcon: "resources/icon.ico" });
 	});
 
-	it("ships the built-in REA declaration and its extension files on both platforms", () => {
+	it("ships the bundled skill packs on both platforms", () => {
 		for (const file of ["darwin", "win32"]) {
 			expect(packagedResources(file), file).toContainEqual({ from: "resources/omp-builtin", to: "omp-builtin" });
 			for (const name of [
-				"rea/.mcp.json",
-				"rea/rea-config.json",
-				"rea/skills/reverse-engineer-anything/SKILL.md",
-				"rea/skills/reverse-engineer-anything/LICENSE",
 				"pstack/pstack-config.json",
 				"pstack/UPSTREAM-LICENSE",
 				"pstack/adapter.md",
@@ -447,19 +441,6 @@ describe("mac bundle configs", () => {
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "resources/omp-builtin/ecc/plugin.json"))).toBe(false);
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "resources/omp-builtin/ecc/package.json"))).toBe(false);
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "resources/omp-builtin/formal/plugin.json"))).toBe(false);
-		const declaration: unknown = JSON.parse(
-			fs.readFileSync(path.join(PACKAGE_ROOT, "resources/omp-builtin/rea/.mcp.json"), "utf8"),
-		);
-		expect(declaration).toEqual({ mcpServers: { rea: REA_HUB_ENTRY } });
-		expect(declaration).toEqual({
-			mcpServers: {
-				rea: {
-					type: "http",
-					url: "$" + "{OMP_GUI_MCP_HUB}/rea?cwd=" + "$" + "{OMP_GUI_MCP_CWD}",
-					headers: { Authorization: "$" + "{OMP_GUI_MCP_AUTH}" },
-				},
-			},
-		});
 	});
 
 	it("ships the agent-desktop root: one stdio server whose command is the executable the spawn names", () => {
@@ -480,18 +461,9 @@ describe("mac bundle configs", () => {
 		});
 	});
 
-	it("keeps OMPdesk's own extension root to its skill, so loading it never starts REA", () => {
-		// The control tools load `-e omp-builtin` on their own switch; REA is the separate `-e omp-builtin/rea`.
+	it("keeps OMPdesk's own extension root to its skill", () => {
 		const root = path.join(PACKAGE_ROOT, "resources/omp-builtin");
-		expect(fs.readdirSync(root).sort()).toEqual([
-			"agent-desktop",
-			"ecc",
-			"formal",
-			"ponytail",
-			"pstack",
-			"rea",
-			"skills",
-		]);
+		expect(fs.readdirSync(root).sort()).toEqual(["agent-desktop", "ecc", "formal", "ponytail", "pstack", "skills"]);
 		expect(fs.readdirSync(path.join(root, "skills"))).toEqual(["ompdesk"]);
 		const skill = fs.readFileSync(path.join(root, "skills/ompdesk/SKILL.md"), "utf8");
 		expect(skill).toMatch(/^---\nname: ompdesk\ndescription: \S/);
@@ -518,17 +490,6 @@ describe("mac bundle configs", () => {
 		expect(fs.existsSync(path.join(PACKAGE_ROOT, "LICENSES/proof-skills-MIT.txt"))).toBe(true);
 		const notices = fs.readFileSync(path.join(PACKAGE_ROOT, "THIRD_PARTY_NOTICES.txt"), "utf8");
 		expect(notices).toContain("proof-skills (https://github.com/opum-ai/proof-skills)");
-	});
-
-	it("vendors REA's skill from the pinned REA release (bun run sync:rea-skill after a bump)", () => {
-		const skill = fs.readFileSync(
-			path.join(PACKAGE_ROOT, "resources/omp-builtin/rea/skills/reverse-engineer-anything/SKILL.md"),
-			"utf8",
-		);
-		expect(skill).toMatch(/^---\nname: reverse-engineer-anything\ndescription: \S/);
-		// Upstream's own commands name the release the skill was generated for.
-		const releases = new Set(Array.from(skill.matchAll(/rea-agents@(\d+\.\d+\.\d+)/g), match => match[1]));
-		expect([...releases]).toEqual([REA_VERSION]);
 	});
 
 	it("ships the license texts of vendored code on both platforms", () => {
@@ -578,7 +539,6 @@ describe("mac bundle configs", () => {
 		expect(notices).toContain("LICENSES/Apache-2.0.txt");
 		expect(notices).toContain("@lobehub/icons");
 		expect(notices).toContain("LICENSES/MIT-lobe-icons.txt");
-		expect(notices).toContain("reverse-engineer-anything skill from REA");
 	});
 
 	it("ships the shared auto-mode contract inside the bridge on macOS and Windows", () => {

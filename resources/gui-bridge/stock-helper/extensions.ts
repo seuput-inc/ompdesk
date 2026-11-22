@@ -515,7 +515,6 @@ async function mcpInventory(): Promise<HelperMcpServer[]> {
 				args: Array.isArray(item.args) ? item.args.filter(arg => typeof arg === "string") : [],
 				url: item.url ? withoutCredentials(item.url) : null,
 				enabled: live !== undefined,
-				sourcePath: item._source.path || null,
 				origin: item._source.path === userPath ? "user" : "other",
 			});
 		}

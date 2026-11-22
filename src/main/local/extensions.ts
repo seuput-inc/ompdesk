@@ -19,7 +19,6 @@
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 import { transcriptPageMessages } from "../../../resources/gui-bridge/transcript-page";
-import type { RpcMcpServersResult } from "../../shared/rpc-types";
 import { noteMcpChange } from "../mcp-live";
 import { resolveImageBlobs } from "./image-blobs";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
@@ -38,7 +37,6 @@ const BRIDGED = [
 	"set_context_file_enabled",
 	"get_prompt_templates",
 	"get_mcp_servers",
-	"mcp_action",
 	"mcp_test",
 	"mcp_reauth_cancel",
 	"get_plugins",
@@ -173,13 +171,9 @@ async function mcpReauth(command: Parameters<LocalHandler>[0], ctx: LocalCommand
 	return result;
 }
 
-/** Built-in declarations are read-only; only OMPdesk prefs control their next-session launch. */
 const mcpAction: LocalHandler = async (command, ctx) => {
 	if (typeof command.name !== "string" || !command.name.trim())
 		throw new LocalCommandError("MCP server name must be a non-empty string", "invalid_params");
-	const { servers } = await ctx.bridge.request<RpcMcpServersResult>("get_mcp_servers");
-	if (servers.some(server => server.name === command.name && server.builtin === "rea"))
-		throw new LocalCommandError("Use the built-in REA toggle; changes apply to new sessions", "invalid_params");
 	const result = await viaBridge(command, ctx);
 	noteMcpChange({ names: [command.name] });
 	return result;

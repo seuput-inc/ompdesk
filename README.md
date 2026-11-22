@@ -59,7 +59,7 @@
 
 - **Memory.** Decisions, rules and each turn's conclusion are kept locally and recalled when a later prompt needs them; your paired computers share them. Settings › Memory shows and edits it.
 - **Files in the chat.** Every file you attach or the agent hands over is a card with a preview: a picture, a PDF's first page, a page, a sheet's first rows. One click shows it in Finder or Explorer, or saves it to the device you are using when the file sits on another computer.
-- **Skills.** The six official [Ponytail](https://github.com/DietrichGebert/ponytail) coding and review skills ship with the app and update with it. New OMPdesk sessions start in Full mode. The [pstack](https://github.com/cursor/plugins/tree/main/pstack) engineering playbooks, [ECC](https://github.com/affaan-m/ECC) language and framework skills, and REA reverse-engineering tools each have a switch in Settings. REA stays off unless you enable it.
+- **Skills.** The six official [Ponytail](https://github.com/DietrichGebert/ponytail) coding and review skills ship with the app and update with it. New OMPdesk sessions start in Full mode. The [pstack](https://github.com/cursor/plugins/tree/main/pstack) engineering playbooks and [ECC](https://github.com/affaan-m/ECC) language and framework skills each have a switch in Settings.
 - **Small automations.** Plan or Goal mode picked per request, session titles that follow the work, and suggested next prompts. Each has its own switch in Settings › Agent behavior.
 - **Computer use.** On by default; one session drives the desktop at a time, and `/computer off` turns it off.
 - **Keyboard first.** F6 moves between the sidebar, conversation, composer, work board and side panel; every shortcut can be changed in Settings › Keyboard shortcuts.

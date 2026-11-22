@@ -15,7 +15,6 @@ import type {
 	PluginSelector,
 	SkillSelector,
 } from "../../../resources/gui-bridge/stock-helper/extensions-contracts";
-import { REA_VERSION } from "../../shared/builtin-mcp";
 import { EXTENSION_KINDS, type ExtensionRow } from "../../shared/extension-update";
 import { extRule } from "./core";
 import type { McpBinary, McpOwner } from "./mcp-owner";
@@ -43,15 +42,6 @@ export interface ExtensionSeed {
 	target: SeedTarget;
 }
 
-export interface ClassifyOptions {
-	/** The built-in REA's root (a server whose source is under it is the built-in). */
-	reaRoot: string | null;
-	/** The built-in REA is on in this app: it is listed even though stock never reports it (it is an extension root). */
-	reaEnabled: boolean;
-	/** The resolved binary of each direct MCP command, by server name; null when it resolves to nothing. */
-	binaries: ReadonlyMap<string, McpBinary | null>;
-}
-
 /** A seed as the core answers it: a binary's target names the command, and the binary is joined here. */
 interface CoreSeed {
 	row: SeedRow;
@@ -64,25 +54,22 @@ export function projectHash(cwd: string): string {
 
 export async function classifyInventory(
 	inventory: HelperInventory,
-	options: ClassifyOptions,
+	binaries: ReadonlyMap<string, McpBinary | null>,
 ): Promise<ExtensionSeed[]> {
 	const projects = new Map<string, string>();
 	for (const entry of [...inventory.plugins, ...inventory.registrySkills])
 		if (entry.scope === "project" && entry.cwd) projects.set(entry.cwd, projectHash(entry.cwd));
 	const seeds = await extRule<CoreSeed[]>("ext.seeds", {
 		inventory,
-		reaRoot: options.reaRoot,
-		reaEnabled: options.reaEnabled,
-		reaVersion: REA_VERSION,
 		kinds: EXTENSION_KINDS,
 		// Names sort as `localeCompare` sorts them here.
 		locale: new Intl.Collator().resolvedOptions().locale,
 		projects: [...projects],
-		binaries: [...options.binaries],
+		binaries: [...binaries],
 	});
 	return seeds.map(({ row, target }): ExtensionSeed => {
 		if (target.kind !== "binary") return { row, target };
-		const binary = options.binaries.get(row.name);
+		const binary = binaries.get(row.name);
 		return {
 			row,
 			target: binary?.owner ? { ...target, binary, owner: binary.owner } : { kind: "none" },

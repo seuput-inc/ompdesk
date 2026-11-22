@@ -186,7 +186,6 @@ const MIT_TEXT = [
 function vendoredSections(): string {
 	const read = (rel: string): string => readFileSync(join(ROOT, rel), "utf8").replace(/\r\n?/g, "\n").trim();
 	const aiMemoryLicense = read("LICENSES/ai-memory-LICENSE");
-	const reaLicense = read("resources/omp-builtin/rea/skills/reverse-engineer-anything/LICENSE");
 	const pstackLicense = read("LICENSES/MIT-pstack.txt");
 	const eccLicense = read("LICENSES/MIT-ecc.txt");
 	const proofLicense = read("LICENSES/proof-skills-MIT.txt");
@@ -265,14 +264,6 @@ function vendoredSections(): string {
 			"scripts/agent-desktop-pin.json pins by scripts/build-agent-desktop.ts; on macOS they are re-signed with",
 			"the app. Licensed under the Apache License, Version 2.0 (full text: LICENSES/agent-desktop-LICENSE,",
 			"also shipped as agent-desktop-bin/LICENSE). Upstream publishes no NOTICE file.",
-		].join("\n"),
-		[
-			"reverse-engineer-anything skill from REA (rea-agents, https://github.com/morluto/rea)",
-			"Copyright (c) 2026 morluto, licensed under the MIT License. Copied unmodified from the pinned",
-			"rea-agents release into resources/omp-builtin/rea/skills/reverse-engineer-anything/, except",
-			'for one added "OMPdesk built-in" section in SKILL.md.',
-			"",
-			reaLicense,
 		].join("\n"),
 		[
 			"pstack engineering skills (https://github.com/cursor/plugins/tree/main/pstack)",

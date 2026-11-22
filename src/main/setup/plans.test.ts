@@ -120,10 +120,6 @@ describe("selectMethod", () => {
 			expect(selectMethod(item, missing, win)).toBe("winget");
 			expect(selectMethod(item, missing, { ...win, winget: null })).toBeNull();
 		}
-		// A Node older than REA's engines is replaced the same way.
-		expect(selectMethod("node", { kind: "outdated", version: "v18.0.0", minimum: "^22", path: null }, mac)).toBe(
-			"brew",
-		);
 	});
 });
 

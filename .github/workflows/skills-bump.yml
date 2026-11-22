@@ -9,8 +9,7 @@
 # matches or a failing test commits nothing and opens or updates ONE issue
 # ("Skill pack bump failed") with the log; a clean run closes it.
 #
-# Trust: the job that runs upstream code (the syncs, REA's server for its
-# catalog check, the tests) has a read-only token and no stored credentials;
+# Trust: the job that runs upstream code (syncs and tests) has a read-only token and no stored credentials;
 # only the push job, which runs no third-party code (git am, git push), can
 # write contents. A push made with GITHUB_TOKEN starts no workflow, so the push
 # job dispatches ci.yml on main afterwards to verify the bump.
@@ -188,7 +187,7 @@ jobs:
                 : "",
               ...sections,
               "",
-              "A sync rule that no longer matches is adapted in scripts/sync-<pack>.ts (never silenced); see AGENTS.md › Built-in pstack / ECC / REA.",
+              "A sync rule that no longer matches is adapted in scripts/sync-<pack>.ts (never silenced); see .omp/rules/builtin-packs.md.",
             ].join("\n\n");
             const issues = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "all", per_page: 100 });
             const existing = issues.find(issue => !issue.pull_request && issue.title === title);

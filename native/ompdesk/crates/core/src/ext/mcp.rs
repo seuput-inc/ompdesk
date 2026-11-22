@@ -1,5 +1,5 @@
-//! What an MCP server's configured launch is, read from the config the user wrote (never changed here): the built-in
-//! REA, a remote URL, a package a runner fetches itself (`npx`, `bunx`, `uvx`, `pnpm dlx`, `bun x`, `uv tool run`,
+//! What an MCP server's configured launch is, read from the config the user wrote (never changed here): a remote URL,
+//! a package a runner fetches itself (`npx`, `bunx`, `uvx`, `pnpm dlx`, `bun x`, `uv tool run`,
 //! `pipx run`, `npm exec`), a command that runs an installed binary, or none of those (an interpreter running a
 //! script, a container).
 //!
@@ -23,8 +23,6 @@ pub struct Server {
     pub args: Vec<String>,
     pub url: Option<String>,
     pub enabled: bool,
-    /// The config file or plugin dir the server came from.
-    pub source_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -66,7 +64,6 @@ pub struct Package {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum McpClass {
-    Builtin,
     Remote,
     Runner(Package),
     Direct { command: String },
@@ -414,37 +411,7 @@ fn unwrap<'a>(command: &str, args: &'a [String]) -> (String, &'a [String]) {
     (name, args)
 }
 
-/// A path with forward slashes and no trailing one, lowercased where the disk ignores case.
-fn slash(value: &str, lower: bool) -> String {
-    let text = value.replace('\\', "/");
-    let text = text.trim_end_matches('/');
-    if lower {
-        text.to_lowercase()
-    } else {
-        text.to_owned()
-    }
-}
-
-/// The config file or plugin dir the server came from sits under the built-in REA's root.
-pub fn is_builtin(source_path: Option<&str>, rea_root: Option<&str>) -> bool {
-    let (Some(rea_root), Some(source_path)) = (
-        rea_root.filter(|root| !root.is_empty()),
-        source_path.filter(|path| !path.is_empty()),
-    ) else {
-        return false;
-    };
-    let windows = matches!(rea_root.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
-    let root = slash(rea_root, windows);
-    let source = slash(source_path, windows);
-    source
-        .strip_prefix(&root)
-        .is_some_and(|below| below.is_empty() || below.starts_with('/'))
-}
-
-pub fn classify(server: &Server, rea_root: Option<&str>) -> McpClass {
-    if is_builtin(server.source_path.as_deref(), rea_root) {
-        return McpClass::Builtin;
-    }
+pub fn classify(server: &Server) -> McpClass {
     let command = server
         .command
         .as_deref()
@@ -503,17 +470,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn finds_the_builtin_server_as_the_typescript_did() {
-        for row in captured("builtin") {
-            assert_eq!(
-                is_builtin(row[0].as_str(), row[1].as_str()),
-                row[2].as_bool().unwrap(),
-                "{row}"
-            );
-        }
-    }
-
     /// A captured row holds the command, its arguments and the fields that differ from the capture's plain server.
     fn server(command: &Value, args: &Value, over: &Value) -> Server {
         let mut server = json!({
@@ -523,7 +479,6 @@ mod tests {
             "args": args,
             "url": null,
             "enabled": true,
-            "sourcePath": "/home/u/.omp/agent/mcp.json",
             "origin": "user",
         });
         for (key, value) in over.as_object().unwrap() {
@@ -537,8 +492,8 @@ mod tests {
         let rows = captured("classes");
         assert!(rows.len() > 300);
         for row in rows {
-            let class = classify(&server(&row[0], &row[1], &row[2]), row[3].as_str());
-            assert_eq!(serde_json::to_value(class).unwrap(), row[4], "{row}");
+            let class = classify(&server(&row[0], &row[1], &row[2]));
+            assert_eq!(serde_json::to_value(class).unwrap(), row[3], "{row}");
         }
     }
 }

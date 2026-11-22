@@ -15,7 +15,6 @@ it("reuses the native release build for integration-test and shell changes, not 
 		const inputs = [
 			"scripts/build-native.ts",
 			"scripts/cargo.ts",
-			"resources/omp-builtin/rea/rea-config.json",
 			".cargo/config.toml",
 			"native/ompdesk/Cargo.toml",
 			"native/ompdesk/Cargo.lock",

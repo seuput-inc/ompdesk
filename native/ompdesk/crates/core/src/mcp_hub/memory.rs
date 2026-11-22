@@ -128,13 +128,17 @@ fn upstream(text: &str, sse: bool) -> Option<Value> {
     answer
 }
 
+pub(super) fn parse_error() -> Reply {
+    json_reply(
+        400,
+        json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}),
+    )
+}
+
 pub(super) async fn post(bytes: Bytes, state_file: Option<&Path>) -> Reply {
     let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes));
     let Ok(message) = serde_json::from_str::<Value>(&whole_surrogates(&text)) else {
-        return json_reply(
-            400,
-            json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}),
-        );
+        return parse_error();
     };
     let method = message.get("method").and_then(Value::as_str);
     let id = method.and_then(|_| message.get("id"));

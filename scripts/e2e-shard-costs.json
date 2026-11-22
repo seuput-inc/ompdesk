@@ -200,7 +200,6 @@
 	"history-migration.e2e.ts": 3,
 	"memory-upkeep.e2e.ts": 3,
 	"app-auto-update.e2e.ts": 0,
-	"builtin-rea.e2e.ts": 0,
 	"card-flows.e2e.ts": 0,
 	"control-cli.e2e.ts": 0,
 	"first-run-walk.e2e.ts": 0,

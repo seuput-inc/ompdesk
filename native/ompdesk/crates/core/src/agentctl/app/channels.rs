@@ -137,14 +137,6 @@ pub static CHANNELS: &[(&str, Risk)] = &[
         Risk::Tier(Sensitive, &["app.undo", "settings.rotation"]),
     ),
     (
-        "builtin-rea:get",
-        Risk::Tier(Read, &["settings.get", "settings.builtinRea"]),
-    ),
-    (
-        "builtin-rea:set",
-        Risk::Tier(Sensitive, &["app.undo", "settings.builtinRea"]),
-    ),
-    (
         "local-engines:get",
         Risk::Tier(Read, &["settings.get", "settings.localEngines"]),
     ),

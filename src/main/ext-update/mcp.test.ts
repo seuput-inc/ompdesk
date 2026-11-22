@@ -10,35 +10,15 @@ function server(command: string | null, args: string[] = [], over: Partial<Helpe
 		args,
 		url: null,
 		enabled: true,
-		sourcePath: "/home/u/.omp/agent/mcp.json",
 		origin: "user",
 		...over,
 	};
 }
 
-const classifyUnder = async (reaRoot: string | null, entry: HelperMcpServer) =>
-	(await classifyMcpServers([entry], { reaRoot }))[0];
+const classify = async (command: string | null, args: string[] = [], over: Partial<HelperMcpServer> = {}) =>
+	(await classifyMcpServers([server(command, args, over)]))[0];
 
-const classify = (command: string | null, args: string[] = [], over: Partial<HelperMcpServer> = {}) =>
-	classifyUnder("/app/resources/omp-builtin", server(command, args, over));
-
-describe("built-in and remote servers", () => {
-	it("marks a server whose source is under the REA root", async () => {
-		expect(await classify("node", ["x"], { sourcePath: "/app/resources/omp-builtin/.mcp.json" })).toEqual({
-			kind: "builtin",
-		});
-		expect(
-			await classifyUnder(
-				"/app/resources/omp-builtin",
-				server("x", [], { sourcePath: "/app/resources/omp-builtin-other/.mcp.json" }),
-			),
-		).toEqual({ kind: "direct", command: "x" });
-		expect(
-			await classifyUnder("c:/app/omp-builtin", server("x", [], { sourcePath: "C:\\App\\omp-builtin\\.mcp.json" })),
-		).toEqual({ kind: "builtin" });
-		expect(await classifyUnder(null, server("x"))).toEqual({ kind: "direct", command: "x" });
-	});
-
+describe("remote servers", () => {
 	it("marks http and sse servers remote", async () => {
 		expect(await classify(null, [], { type: "http", url: "https://x.test/mcp" })).toEqual({ kind: "remote" });
 		expect(await classify(null, [], { type: "sse", url: "https://x.test/sse" })).toEqual({ kind: "remote" });

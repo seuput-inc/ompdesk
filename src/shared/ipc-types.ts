@@ -23,7 +23,6 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
-import type { BuiltinReaState } from "./builtin-mcp";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
@@ -339,8 +338,6 @@ export const IPC_COMMANDS = {
 	ACCOUNT_ROTATION_GET: "account-rotation:get",
 	/** Store the account-rotation pref there; its live sessions follow from their next prompt */
 	ACCOUNT_ROTATION_SET: "account-rotation:set",
-	BUILTIN_REA_GET: "builtin-rea:get",
-	BUILTIN_REA_SET: "builtin-rea:set",
 	/** Whether the focused tab's machine looks for local inference engines (`LocalEngineDetectState`); `device` absent = this computer */
 	LOCAL_ENGINES_GET: "local-engines:get",
 	/** Switch that detection on or off there; it lists or drops the engines' models by itself */
@@ -667,7 +664,7 @@ export type RuntimeErrorSource =
 	| "sidecar-restart"
 	/** A tab's omp that has not answered its first `get_state` after `START_SLOW_MS` and is still waited for (src/main/sidecar.ts `SlowStartReport`): `details.stderr` and `details.ompLog` (its own log) are its tails, `details.ready` whether it printed `ready`, `details.unanswered` the stock commands it holds. */
 	| "omp-slow-start"
-	/** An input a tab's omp start went on without after `START_INPUT_MS` (src/main/sidecar.ts `#onResolve`): `message` names it (omp, proxyEnv, shellEnv, builtinMcp, defaultBrowser, egoBrowserDir), `details` the lane and session. */
+	/** An input a tab's omp start went on without after `START_INPUT_MS` (src/main/sidecar.ts `#onResolve`): `message` names it (omp, proxyEnv, shellEnv, defaultBrowser, egoBrowserDir), `details` the lane and session. */
 	| "omp-start-input"
 	/** An omp whose CPU priority could not be lowered below the app's (src/main/agent-priority.ts), logged once: `message` is why. */
 	| "process-priority"
@@ -2712,11 +2709,6 @@ export interface OmpApi {
 	accountRotation: {
 		get(device?: string): Promise<AccountRotationState>;
 		set(mode: AccountRotationMode, device?: string): Promise<AccountRotationState>;
-	};
-	/** OMPdesk's built-in MCP preference of the machine that runs the focused session. */
-	builtinRea: {
-		get(device?: string): Promise<BuiltinReaState>;
-		set(enabled: boolean, device?: string): Promise<BuiltinReaState>;
 	};
 	/** Local inference engine detection of the machine that runs the focused session. */
 	localEngines: {

@@ -18,8 +18,7 @@ const FULL: OmpLaunch = {
 	open: "new",
 	bridge: { dir: "/bridge", address: "/tmp/omp-gui-1.sock" },
 	builtin: {
-		args: ["-e", "/builtin", "-e", "/builtin/rea"],
-		root: "/builtin/rea",
+		args: ["-e", "/builtin"],
 		// sidecar-factory.ts `builtinMcp` with every pack and memory on, agent-desktop mounted, and the MCP hub's address.
 		env: {
 			OMP_GUI_PSTACK: "1",
@@ -30,7 +29,6 @@ const FULL: OmpLaunch = {
 			OMP_GUI_MEMORY: "/ud/recall.json",
 			OMP_GUI_MCP_HUB: "http://127.0.0.1:4100",
 			OMP_GUI_MCP_AUTH: "Bearer s",
-			OMP_GUI_MCP_CWD: "%2Fw",
 		},
 	},
 	userFlags: [],

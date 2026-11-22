@@ -4,11 +4,8 @@ import type {
 	HelperMcpServer,
 	HelperPlugin,
 } from "../../../resources/gui-bridge/stock-helper/extensions-contracts";
-import { REA_VERSION } from "../../shared/builtin-mcp";
 import { classifyInventory, projectHash } from "./classify";
 import type { McpBinary, McpOwner } from "./mcp-owner";
-
-const REA_ROOT = "/app/resources/omp-builtin";
 
 const empty = (over: Partial<HelperInventory> = {}): HelperInventory => ({
 	marketplaces: [],
@@ -43,7 +40,6 @@ const server = (
 	args,
 	url: null,
 	enabled: true,
-	sourcePath: "/home/u/.omp/agent/mcp.json",
 	origin: "user",
 	...over,
 });
@@ -61,8 +57,8 @@ function binary(owner: McpOwner | null, over: Partial<McpBinary> = {}): McpBinar
 	};
 }
 
-const classify = (inventory: HelperInventory, binaries: Record<string, McpBinary | null> = {}, reaEnabled = false) =>
-	classifyInventory(inventory, { reaRoot: REA_ROOT, reaEnabled, binaries: new Map(Object.entries(binaries)) });
+const classify = (inventory: HelperInventory, binaries: Record<string, McpBinary | null> = {}) =>
+	classifyInventory(inventory, new Map(Object.entries(binaries)));
 
 describe("marketplaces", () => {
 	it("every marketplace is a catalog row, listed first", async () => {
@@ -171,22 +167,15 @@ describe("MCP servers", () => {
 	const mcp = (servers: HelperMcpServer[], binaries: Record<string, McpBinary | null> = {}) =>
 		classify(empty({ mcpServers: servers }), binaries);
 
-	it("the built-in REA, in the helper's list or added from the app's own knowledge", async () => {
-		const fromHelper = await mcp([server("rea", "node", ["x"], { sourcePath: `${REA_ROOT}/.mcp.json` })]);
-		expect(fromHelper[0]?.row).toMatchObject({
-			key: "mcp:rea",
-			skip: "builtin",
-			method: null,
-			installed: REA_VERSION,
-		});
-		expect((await classify(empty(), {}, true)).map(seed => seed.row)).toEqual([
-			expect.objectContaining({ key: "mcp:rea", skip: "builtin", installed: REA_VERSION }),
+	it("lists only configured servers, without reserving a server name", async () => {
+		expect(await mcp([])).toEqual([]);
+		const seeds = await mcp([server("rea", "npx", ["my-server@2.0.0"])]);
+		expect(seeds).toEqual([
+			expect.objectContaining({
+				row: expect.objectContaining({ key: "mcp:rea", method: "npm", installed: "2.0.0", skip: "pinned" }),
+				target: expect.objectContaining({ kind: "runner" }),
+			}),
 		]);
-		// Off in this app: not listed. Also named by the user's own server: not doubled.
-		expect(await classify(empty(), {}, false)).toEqual([]);
-		const named = await classify(empty({ mcpServers: [server("rea", "my-rea")] }), { rea: null }, true);
-		expect(named.map(seed => seed.row.key)).toEqual(["mcp:rea"]);
-		expect(named[0]?.row.skip).toBe("unknown-install");
 	});
 
 	it("a remote URL is skipped and its URL is never shown", async () => {
