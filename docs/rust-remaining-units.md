@@ -14,14 +14,14 @@ Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-fil
 | Stock helper worker | 23 | Keep stock API calls in the worker. Rust already owns its process lifetime. |
 | Stats host | 2 | The standalone Bun process loads stock's stats implementation. It is not the desktop Node process. |
 | Boot model lookup | 2 | A separate Bun invocation reads the installed stock catalog when a session has no default model. |
-| MCP hub | 4 | A separate Bun process. Its local HTTP and subprocess work is eligible for Rust; the actual tool implementation is a separate dependency. |
+| MCP hub | 4 | Historical Bun host; now `ompdesk-core --mcp-hub` serves both endpoints. REA itself remains upstream. |
 | No static import from these entries | 1,344 | Includes tests, types, dynamic paths, and other build inputs. An absent import is not proof that a file is dead. |
 
 Counts overlap. The command follows literal imports, including conditional test code, and excludes packages and assets. It does not measure which branches executed. Build scripts, verification tools, and third-party packages are outside this count.
 
 The file inventories in `docs/rust-inventory/` record ownership, not import reach. In `root.tsv`, wave 1 moves leaf operations, wave 2 moves services and their state, wave 3 moves session and window coordination, and wave 4 removes Node dispatch and startup. A dash marks code outside these runtime waves. `shell.tsv` separates the Node adapters from the browser preload and the test driver.
 
-CI runs `bun scripts/rust-runtime-scope.ts --check-inventory` against Git. Every tracked path under `src/main` and `src/preload` must appear exactly once, including fixtures and test drivers. The check also follows imports from the desktop Node entry and the four separately launched Bun hosts (stock worker, stats, catalog, MCP), and includes the stock worker’s type-only files. A module shared with the page or stock extension is not exempt: the inventory distinguishes host decisions from the contracts those callers still need. This checks coverage, not whether the implementation has moved.
+CI runs `bun scripts/rust-runtime-scope.ts --check-inventory` against Git. Every tracked path under `src/main` and `src/preload` must appear exactly once, including fixtures and test drivers. The check also follows imports from the desktop Node entry and the three separately launched Bun hosts (stock worker, stats, catalog), and includes the stock worker’s type-only files. A module shared with the page or stock extension is not exempt: the inventory distinguishes host decisions from the contracts those callers still need. This checks coverage, not whether the implementation has moved.
 
 Use `bun scripts/rust-runtime-scope.ts --remaining` to list every path marked `port` or `mixed` with its reason. A path is not a unit of effort: one transaction can replace code in several files. Thin Rust clients do not count as remaining host implementations; they still need a non-Node caller before Node can be removed.
 

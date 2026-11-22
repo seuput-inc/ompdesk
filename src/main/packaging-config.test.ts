@@ -411,14 +411,9 @@ describe("mac bundle configs", () => {
 		expect(win.nsis).toMatchObject({ installerIcon: "resources/icon.ico", uninstallerIcon: "resources/icon.ico" });
 	});
 
-	it("ships the built-in REA declaration and the MCP hub that serves it outside the asar on both platforms", () => {
+	it("ships the built-in REA declaration and its extension files on both platforms", () => {
 		for (const file of ["darwin", "win32"]) {
 			expect(packagedResources(file), file).toContainEqual({ from: "resources/omp-builtin", to: "omp-builtin" });
-			for (const name of ["mcp-hub.ts", "mcp-hub-rea.ts", "mcp-hub-memory.ts", "mcp-hub-contracts.ts"]) {
-				expect(fs.existsSync(path.join(PACKAGE_ROOT, "resources/gui-bridge", name)), `${file} omits ${name}`).toBe(
-					true,
-				);
-			}
 			for (const name of [
 				"rea/.mcp.json",
 				"rea/rea-config.json",

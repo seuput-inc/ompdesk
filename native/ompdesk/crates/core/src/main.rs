@@ -25,16 +25,33 @@ fn main() -> ExitCode {
     if let Err(error) = ompdesk_core::end_children_with_this_process() {
         eprintln!("ompdesk-core: no job object, so a git it starts may outlive it: {error}");
     }
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let mut args = std::env::args_os().skip(1);
+    let mcp_hub = args.next().is_some_and(|arg| arg == "--mcp-hub");
+    let mut builder = if mcp_hub {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    let runtime = match builder.enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("ompdesk-core: cannot start its runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
+    if mcp_hub {
+        return match runtime.block_on(ompdesk_core::mcp_hub::run(args.collect())) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("mcp-hub: {error}");
+                if error.kind() == std::io::ErrorKind::InvalidInput {
+                    ExitCode::from(2)
+                } else {
+                    ExitCode::FAILURE
+                }
+            }
+        };
+    }
     let served = runtime.block_on(async {
         // Main's synchronous calls (the pool, turn resume) come over their own connection.
         ompdesk_core::hub::listen_from_env();

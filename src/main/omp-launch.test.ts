@@ -24,6 +24,7 @@ const FULL: OmpLaunch = {
 		env: {
 			OMP_GUI_PSTACK: "1",
 			OMP_GUI_ECC: "1",
+			PONYTAIL_DEFAULT_MODE: "full",
 			OMP_GUI_COMPUTER_USE: "agent-desktop",
 			OMP_GUI_AGENT_DESKTOP: "/tools/agent-desktop/agent-desktop",
 			OMP_GUI_MEMORY: "/ud/recall.json",

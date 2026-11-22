@@ -61,7 +61,7 @@ afterEach(async () => {
 describe.skipIf(process.platform === "win32")("builtinReaState", () => {
 	it("probes node and npx once for every later spawn, keeping the preference live", async () => {
 		await installTools("v26.0.0");
-		await expect(builtinReaState(undefined)).resolves.toEqual({
+		await expect(builtinReaState(true)).resolves.toEqual({
 			enabled: true,
 			available: true,
 			nodeVersion: "v26.0.0",
@@ -114,7 +114,7 @@ describe.skipIf(process.platform === "win32")("spawnReaState", () => {
 	it("serves a spawn the last launch's answer while this launch's probe replaces it", async () => {
 		const file = path.join(dir, "rea-runtime.json");
 		await installShim("v26.0.0");
-		await expect(spawnReaState(undefined, file)).resolves.toEqual({
+		await expect(spawnReaState(true, file)).resolves.toEqual({
 			enabled: true,
 			available: true,
 			nodeVersion: "v26.0.0",

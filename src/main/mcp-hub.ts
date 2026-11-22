@@ -1,5 +1,5 @@
 /**
- * OMPdesk's MCP hub, main's side: ONE Bun process per app (resources/gui-bridge/mcp-hub.ts) that serves the built-in
+ * OMPdesk's MCP hub, main's side: one `ompdesk-core --mcp-hub` process per app that serves the built-in
  * MCP servers every omp mounts (`rea`, `ompdesk-memory`) over loopback HTTP, instead of three helper processes per
  * omp. Kept out of main's event loop on purpose: main keeps the window responsive, and REA results and memory traffic
  * stay in the hub.
@@ -15,16 +15,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { MCP_AUTH_ENV, MCP_CWD_ENV, MCP_HUB_ENV } from "../../resources/gui-bridge/mcp-hub-contracts";
+import { REA_VERSION } from "../shared/builtin-mcp";
 import type { LowerAgentPriority } from "./agent-priority";
+import { nativeBinPath } from "./native-bin";
 import { RestartBudget } from "./restart-policy";
 
 const READY_WAIT_MS = 10_000;
 const STOP_WAIT_MS = 5_000;
 
 export interface McpHubLaunch {
-	/** `<bridgeDir>/mcp-hub.ts`. */
-	script: string;
-	/** The hub's environment over main's: PATH with Bun and npx (the omp spawn PATH), proxy settings. */
+	/** The hub's environment over main's: PATH with npx (the omp spawn PATH), proxy settings. */
 	env: () => Promise<Record<string, string>>;
 	/** Where REA's startup cache lives (`<userData>/rea`). */
 	reaCacheDir: string;
@@ -84,13 +84,14 @@ export class McpHub {
 
 	async #spawn(): Promise<void> {
 		if (this.#disposed) return;
-		const { script, reaCacheDir, memoryStateFile } = this.#launch;
+		const { reaCacheDir, memoryStateFile } = this.#launch;
 		let child: ChildProcess;
 		this.#spawning = true;
 		try {
 			const env = await this.#launch.env();
 			if (this.#disposed) return;
-			child = spawn("bun", [script], {
+			const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+			child = spawn(nativeBinPath("ompdesk-core"), ["--mcp-hub", npx, "-y", `rea-agents@${REA_VERSION}`, "mcp"], {
 				stdio: ["pipe", "pipe", "pipe"],
 				env: {
 					...process.env,

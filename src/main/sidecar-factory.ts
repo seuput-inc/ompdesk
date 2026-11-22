@@ -224,6 +224,8 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 					env: {
 						OMP_GUI_PSTACK: pstack.length && kind === "agent" ? "1" : "0",
 						OMP_GUI_ECC: ecc.length && kind === "agent" ? "1" : "0",
+						// The official extension resolves its session journal before this process-local default.
+						PONYTAIL_DEFAULT_MODE: "full",
 						...(deps.memoryStateFile ? { [MEMORY_ENV]: deps.memoryStateFile } : {}),
 						...(computer?.env ?? {}),
 						...hub,

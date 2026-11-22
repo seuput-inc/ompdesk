@@ -36,6 +36,7 @@ async function launch() {
 		JSON.stringify({
 			language: "en",
 			firstRunComplete: true,
+			builtinMcp: { rea: true },
 			launchProfiles: { [project]: { noExtensions: true, noSkills: true, noRules: true } },
 		}),
 	);

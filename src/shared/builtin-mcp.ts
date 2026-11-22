@@ -14,7 +14,7 @@ export interface BuiltinReaState {
 	reason?: ReaUnavailable;
 }
 export function reaEnabled(value: unknown): boolean {
-	return value !== false;
+	return value === true;
 }
 /** REA's engines range, checked before omp starts (stock cannot gate this app-only root). */
 export function reaNodeSupported(version: string): boolean {

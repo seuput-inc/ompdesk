@@ -4,8 +4,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { McpHub } from "./mcp-hub";
 import { RM_TEMP } from "./test-fake-omp";
-import { startTestHub, stopTestHubs, type TestHub } from "./test-fixtures/mcp-hub-fixture";
 
 const NAMES = [
 	"memory_query",
@@ -65,7 +65,17 @@ let dir: string;
 let server: http.Server;
 let seen: { authorization?: string; body: string }[];
 let token: string;
-let hub: TestHub;
+let hub: McpHub;
+let endpoint: string;
+let authorization: string;
+
+function post(message: unknown, auth = authorization): Promise<Response> {
+	return fetch(endpoint, {
+		method: "POST",
+		headers: { authorization: auth, "content-type": "application/json" },
+		body: JSON.stringify(message),
+	});
+}
 
 /** A stand-in for ai-memory's `/mcp`: stateless JSON (SSE for `tools/call`, as a server may answer), bearer required. */
 async function fakeMemoryServer(): Promise<string> {
@@ -133,10 +143,17 @@ beforeEach(async () => {
 	await writeFile(join(dataDir, "auth-tokens", "default"), `${token}\n`);
 	const url = await fakeMemoryServer();
 	await writeFile(join(dir, "recall.json"), JSON.stringify({ url, dataDir }));
-	hub = await startTestHub({ OMP_GUI_MEMORY: join(dir, "recall.json") });
+	hub = new McpHub({
+		env: async () => ({ PATH: dir }), // No Bun or npx: memory must work independently of REA.
+		reaCacheDir: dir,
+		memoryStateFile: join(dir, "recall.json"),
+	});
+	const env = await hub.ompEnv(dir);
+	endpoint = `${env.OMP_GUI_MCP_HUB}/memory`;
+	authorization = env.OMP_GUI_MCP_AUTH;
 });
 afterEach(async () => {
-	await stopTestHubs();
+	await hub.kill();
 	server.closeAllConnections();
 	await new Promise<void>(done => server.close(() => done()));
 	await rm(dir, RM_TEMP);
@@ -144,7 +161,7 @@ afterEach(async () => {
 
 let next = 0;
 async function request(method: string, params: unknown = {}, id: number | string = ++next): Promise<Message> {
-	const response = await hub.post("/memory", { jsonrpc: "2.0", id, method, params });
+	const response = await post({ jsonrpc: "2.0", id, method, params });
 	expect(response.status).toBe(200);
 	return (await response.json()) as Message;
 }
@@ -218,7 +235,7 @@ describe("MCP hub: memory", () => {
 	});
 
 	it("forwards notifications and answers them 202", async () => {
-		const response = await hub.post("/memory", { jsonrpc: "2.0", method: "notifications/initialized" });
+		const response = await post({ jsonrpc: "2.0", method: "notifications/initialized" });
 		expect(response.status).toBe(202);
 		expect(seen.map(entry => JSON.parse(entry.body).method)).toEqual(["notifications/initialized"]);
 	});
@@ -240,10 +257,8 @@ describe("MCP hub: memory", () => {
 	});
 
 	it("refuses a request without the launch's secret and has no event stream", async () => {
-		expect(
-			(await hub.post("/memory", { jsonrpc: "2.0", id: 1, method: "ping" }, { authorization: "Bearer x" })).status,
-		).toBe(401);
-		const stream = await fetch(`${hub.url}/memory`, { headers: { authorization: `Bearer ${hub.secret}` } });
+		expect((await post({ jsonrpc: "2.0", id: 1, method: "ping" }, "Bearer x")).status).toBe(401);
+		const stream = await fetch(endpoint, { headers: { authorization } });
 		expect(stream.status).toBe(405);
 		expect(seen).toEqual([]);
 	});

@@ -10,15 +10,44 @@ const exec = promisify(execFile);
 const provider = resolve("resources/gui-bridge/ponytail.ts");
 const skills = resolve("resources/omp-builtin/ponytail/skills");
 const names = ["ponytail", "ponytail-audit", "ponytail-debt", "ponytail-gain", "ponytail-help", "ponytail-review"];
-const observer = `export default pi => pi.on("session_start", () => {
- const skills = pi.getCommands().filter(c => c.name.startsWith("skill:") && c.name.includes("ponytail"));
- console.error("PONYTAIL=" + JSON.stringify(skills.map(c => [c.name, c.path]).sort()));
- process.exit(0);
+const observer = `export default pi => pi.on("session_start", async () => {
+ try {
+  const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
+  const runner = session.extensionRunner;
+  const prompt = async () => (await runner.emitBeforeAgentStart("Fix the bug", undefined, ["base"]))?.systemPrompt?.join("\\n") ?? "base";
+  const skills = pi.getCommands().filter(c => c.name.startsWith("skill:") && c.name.includes("ponytail"));
+  const found = skills.map(c => [c.name, c.path]).sort();
+  const initial = await prompt();
+  const command = runner.getCommand("ponytail");
+  const level = process.env.PONYTAIL_PROBE_SET;
+  if (level) {
+   if (!command) throw new Error("Missing /ponytail command");
+   await command.handler(level, runner.createCommandContext());
+   await session.sessionManager.ensureOnDisk();
+   await session.sessionManager.flush();
+  }
+  console.error("PONYTAIL=" + JSON.stringify({found, command: !!command, initial, changed: level ? await prompt() : null, file: session.sessionManager.getSessionFile()}));
+  process.exit(0);
+ } catch (err) {
+  console.error(err);
+  process.exit(1);
+ }
 });`;
 
-it.skipIf(!existsSync(INSTALLED_OMP)).each(["user", "project"])(
-	"uses the bundle only without a %s marketplace install, including from a nested folder",
-	async scope => {
+interface Observation {
+	found: [string, string][];
+	command: boolean;
+	initial: string;
+	changed: string | null;
+	file: string;
+}
+
+it.skipIf(!existsSync(INSTALLED_OMP)).each([
+	["user", "off"],
+	["project", "lite"],
+])(
+	"respects %s marketplace installs and restores /ponytail %s after restart",
+	async (scope, level) => {
 		const home = realpathSync(mkdtempSync(join(tmpdir(), "ponytail-stock-")));
 		const project = join(home, "project");
 		const nested = join(project, "nested");
@@ -30,6 +59,7 @@ it.skipIf(!existsSync(INSTALLED_OMP)).each(["user", "project"])(
 			HOME: home,
 			USERPROFILE: home,
 			PI_CONFIG_DIR: ".omp",
+			XDG_CONFIG_HOME: join(home, ".config"),
 			APPDATA: join(home, "appdata"),
 			LOCALAPPDATA: join(home, "localappdata"),
 			TMPDIR: home,
@@ -40,22 +70,29 @@ it.skipIf(!existsSync(INSTALLED_OMP)).each(["user", "project"])(
 		};
 		const omp = (cwd: string, ...args: string[]) =>
 			exec(OMP_COMMAND.file, [...OMP_COMMAND.args, ...args], { cwd, env, timeout: 90_000 });
-		const discover = async () => {
-			const { stderr } = await omp(
-				nested,
+		const discover = async (options: { terminal?: boolean; set?: string; resume?: string } = {}) => {
+			const args = [
 				"--offline",
 				"--mode",
 				"rpc-ui",
-				"--no-session",
-				"-e",
-				provider,
+				...(options.resume ? ["--session", options.resume] : options.set ? [] : ["--no-session"]),
+				...(options.terminal ? [] : ["-e", provider]),
 				"-e",
 				probe,
-			);
+			];
+			const { stderr } = await exec(OMP_COMMAND.file, [...OMP_COMMAND.args, ...args], {
+				cwd: nested,
+				env: {
+					...env,
+					...(options.terminal ? {} : { PONYTAIL_DEFAULT_MODE: "full" }),
+					PONYTAIL_PROBE_SET: options.set,
+				},
+				timeout: 90_000,
+			});
 			const report = stderr.split(/\r?\n/).find(line => line.startsWith("PONYTAIL="));
 			if (!report) throw new Error(`Missing discovery result: ${stderr}`);
 			return {
-				found: JSON.parse(report.slice(9)) as [string, string][],
+				...(JSON.parse(report.slice(9)) as Observation),
 				hooks: stderr.split("PONY_HOOK_BOUND").length - 1,
 			};
 		};
@@ -63,10 +100,25 @@ it.skipIf(!existsSync(INSTALLED_OMP)).each(["user", "project"])(
 			mkdirSync(join(project, ".omp"), { recursive: true });
 			mkdirSync(nested);
 			writeFileSync(probe, observer);
-			expect(await discover()).toEqual({
-				found: names.map(name => [`skill:${name}`, join(skills, name, "SKILL.md")]),
-				hooks: 0,
-			});
+			const fresh = await discover({ set: level });
+			expect(fresh.found).toEqual(names.map(name => [`skill:${name}`, join(skills, name, "SKILL.md")]));
+			expect(fresh.hooks).toBe(0);
+			expect(fresh.initial).toContain("PONYTAIL MODE ACTIVE — level: full");
+			expect(fresh.initial).toContain("## Before you write");
+			const resumed = await discover({ resume: fresh.file });
+			for (const prompt of [fresh.changed, resumed.initial]) {
+				if (level === "off") {
+					expect(prompt).not.toContain("PONYTAIL MODE ACTIVE");
+					expect(prompt).not.toContain("## Before you write");
+				} else {
+					expect(prompt).toContain("PONYTAIL MODE ACTIVE — level: lite");
+					expect(prompt).not.toContain("PONYTAIL MODE ACTIVE — level: full");
+				}
+			}
+			const control = await discover({ terminal: true });
+			expect(control).toMatchObject({ found: [], command: false });
+			expect(control.initial).not.toContain("PONYTAIL MODE ACTIVE");
+			expect(existsSync(join(env.XDG_CONFIG_HOME, "ponytail", "config.json"))).toBe(false);
 
 			// Local catalog with the official id and Pi manifest shape, but different bodies and a harmless hook counter.
 			mkdirSync(join(market, ".claude-plugin"), { recursive: true });
@@ -105,8 +157,12 @@ it.skipIf(!existsSync(INSTALLED_OMP)).each(["user", "project"])(
 			expect(enabled.found.map(([name]) => name)).toEqual(names.map(name => `skill:${name}`));
 			expect(enabled.found.every(([, file]) => realpathSync(file).startsWith(home))).toBe(true);
 			expect(enabled.hooks).toBe(1);
+			expect(enabled.command).toBe(false);
+			expect(enabled.initial).not.toContain("PONYTAIL MODE ACTIVE");
 			await omp(project, "plugin", "disable", "ponytail@ponytail", "--scope", scope);
-			expect(await discover()).toEqual({ found: [], hooks: 0 });
+			const disabled = await discover();
+			expect(disabled).toMatchObject({ found: [], hooks: 0, command: false });
+			expect(disabled.initial).not.toContain("PONYTAIL MODE ACTIVE");
 		} finally {
 			stopOmpDaemon(join(home, ".omp"), env);
 			rmSync(home, { recursive: true, force: true, maxRetries: 5 });

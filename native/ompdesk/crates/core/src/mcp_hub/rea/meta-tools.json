@@ -1,0 +1,27 @@
+[
+  {
+    "name": "rea_catalog",
+    "description": "Search the full REA tool catalog by keyword or target. Request a named tool's input schema before using rea_call.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "Keywords or target, e.g. JavaScript, Android, native, process." },
+        "name": { "type": "string", "description": "Exact tool name whose input schema should be returned." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "rea_call",
+    "description": "Invoke any REA tool by its exact catalog name with its original arguments. Discover its input schema with rea_catalog first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "arguments": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["name", "arguments"],
+      "additionalProperties": false
+    }
+  }
+]

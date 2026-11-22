@@ -961,10 +961,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** modes/ecc-hint.ts: the public `before_agent_start` hook and the context's `cwd` only. */
 	eccHint: {},
 	ponytail: union(MARKETPLACE_MANAGER, {
+		session: ["sessionManager.getBranch()"],
 		modules: {
 			[`${AGENT}/capability`]: ["registerProvider()", "getProviderInfo()"],
 			[`${AGENT}/discovery/helpers`]: ["scanSkillsFromDir()"],
 			[`${AGENT}/extensibility/plugins/marketplace`]: ["MarketplaceManager.prototype.listInstalledPlugins()"],
+			[UTILS]: ["parseFrontmatter()"],
 		},
 	}),
 	/** modes/formal-hint.ts: the public `before_agent_start` hook and its `prompt` only. */

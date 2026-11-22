@@ -1041,7 +1041,6 @@ app.whenReady().then(async () => {
 	const memoryRecallFile = join(app.getPath("userData"), "ai-memory", "recall.json");
 	const recallTermsFile = join(app.getPath("userData"), "ai-memory", RECALL_TERMS_FILE);
 	mcpHub = new McpHub({
-		script: join(bridgeDir, "mcp-hub.ts"),
 		env: async () => {
 			const [resolution, basePath, shell, proxy] = await Promise.all([
 				systemOmp(),
@@ -1049,7 +1048,7 @@ app.whenReady().then(async () => {
 				shellSpawnEnv(),
 				resolveProxyEnvForSpawn(),
 			]);
-			// Bun from omp's own install runs the hub; REA's npx comes from the same PATH an omp's spawn has.
+			// REA's npx comes from the same PATH an omp's spawn has.
 			return { ...shell, ...proxy, PATH: resolution.ok ? ompPathEnv(resolution.runtime.bin, basePath) : basePath };
 		},
 		reaCacheDir: join(app.getPath("userData"), "rea"),

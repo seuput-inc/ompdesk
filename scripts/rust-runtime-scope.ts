@@ -26,7 +26,6 @@ const entries = {
 	worker: ["resources/gui-bridge/stock-helper/host.ts"],
 	stats: ["resources/gui-bridge/stats-host.ts"],
 	catalog: ["resources/gui-bridge/boot-model.ts"],
-	mcp: ["resources/gui-bridge/mcp-hub.ts"],
 };
 const sourceDirs = ["src", "resources/gui-bridge", "native/ompdesk/crates/tauri-shell/src"];
 const tracked = execFileSync("git", ["ls-files", "-z", "--", ...sourceDirs], {

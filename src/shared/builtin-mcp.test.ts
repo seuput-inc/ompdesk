@@ -11,8 +11,9 @@ describe("REA Node.js engines", () => {
 			expect(reaNodeSupported(version)).toBe(false);
 		},
 	);
-	it("defaults on, but does not pass the root without usable Node/npx", () => {
-		expect(reaEnabled(undefined)).toBe(true);
+	it("requires an explicit opt-in and does not pass the root without usable Node/npx", () => {
+		expect(reaEnabled(undefined)).toBe(false);
+		expect(reaEnabled(true)).toBe(true);
 		expect(reaEnabled(false)).toBe(false);
 		expect(
 			reaExtensionArgs("/resources/omp-builtin", { enabled: true, available: false, reason: "node-version" }),

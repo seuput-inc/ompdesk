@@ -306,7 +306,6 @@ src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ord
 src/main/terminal/shells.ts	port	Probes installed platform shells, reads /etc/shells, deduplicates entries and orders the login shell first.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
-src/main/test-fixtures/mcp-hub-entry.ts	exception	Bun test entry starts the hub with a fake REA and stops it on stdin EOF.
 src/main/test-fixtures/mcp-hub-fixture.ts	exception	Test harness manages hub subprocesses and drives a streamable HTTP client.
 src/main/test-fixtures/rea-child.mjs	exception	Fake REA child implements scripted tool discovery and calls for hub tests.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.

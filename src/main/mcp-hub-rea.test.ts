@@ -58,6 +58,29 @@ describe("MCP hub: REA", () => {
 		expect(answer.status).toBe(401);
 	});
 
+	it("keeps the same REA when its client replaces its event stream", async () => {
+		const hub = await hubWith();
+		const init = await hub.post("/rea", { jsonrpc: "2.0", id: 1, method: "initialize", params: HANDSHAKE });
+		const id = init.headers.get("mcp-session-id");
+		if (!id) throw new Error("Missing MCP session ID");
+		await init.json();
+		const headers = { "mcp-session-id": id, authorization: `Bearer ${hub.secret}` };
+		const get = () => fetch(`${hub.url}/rea`, { headers });
+		const ping = async () => {
+			const res = await hub.post("/rea", { jsonrpc: "2.0", id: 2, method: "ping" }, headers);
+			return Pid.parse((await res.json()).result).pid;
+		};
+		const first = await get();
+		const pid = await ping();
+		const replacement = await get();
+		try {
+			expect(await first.text()).toContain(": open");
+			expect(await ping()).toBe(pid);
+		} finally {
+			await replacement.body?.cancel();
+		}
+	});
+
 	it("exposes only the curated entry schemas plus two meta tools from a paginated 30-tool child", async () => {
 		const client = session(await hubWith());
 		await initialize(client);

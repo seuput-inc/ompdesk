@@ -1,5 +1,5 @@
 /**
- * How an omp reaches OMPdesk's MCP hub (./mcp-hub.ts, started by src/main/mcp-hub.ts): main puts these variables into
+ * How an omp reaches OMPdesk's MCP hub (ompdesk-core --mcp-hub, started by src/main/mcp-hub.ts): main puts these variables into
  * every omp it spawns, and the built-in MCP entries name them, so stock expands them when it reads the `.mcp.json`
  * (`expandEnvVarsDeep` in its plugin discovery) and the files stay the same across launches.
  */

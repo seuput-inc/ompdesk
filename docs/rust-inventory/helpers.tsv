@@ -1,11 +1,8 @@
 path	status	reason
 resources/gui-bridge/boot-model.ts	exception	Reads the installed stock catalog's provider defaults using its Bun modules. Do not ship a second model catalog in Rust.
 resources/gui-bridge/extensions/activation-core.ts	mixed	The live extension consumes the plugin restart rules too. A native extension inventory must preserve how stock distinguishes live changes from ones that require a restart.
-resources/gui-bridge/mcp-hub-memory.ts	port	The app's memory endpoint filters the upstream tool list and relays requests. Move with the hub's authenticated listener, not as a separately exposed endpoint.
-resources/gui-bridge/mcp-hub-rea.ts	port	The app owns per-session transport and child lifetime; the external tool implementation is not OMPdesk code. Preserve the existing boundary.
-resources/gui-bridge/mcp-hub.ts	port	The standalone app service owns its loopback listener, session streams and shutdown. Migrate both endpoint adapters with the same authentication and lifetime.
 resources/gui-bridge/memory-prompt.ts	mixed	The stock extension consumes prompt and title rules synchronously; the worker also uses them to form memory records. Retain the live extension contract when moving host consumers.
-resources/gui-bridge/modes/memory-recall-contracts.ts	mixed	The live extension and page still need the recall contract; the hub's state-file parsing must move with the memory endpoint.
+resources/gui-bridge/modes/memory-recall-contracts.ts	exception	State-file and request contracts used by the live stock extension and desktop launch.
 resources/gui-bridge/omp-package.ts	exception	Resolves and imports modules of the user's stock install for Bun callers. Native services must not duplicate or vendor those packages.
 resources/gui-bridge/prompt-origin-contracts.ts	exception	The same journal entry name and prompt-origin wire format are consumed by the stock extension and the list reader.
 resources/gui-bridge/redactor.ts	mixed	Privacy rules are shared with stock. Native journal or diagnostic readers must match the existing redaction before removing their Bun caller.

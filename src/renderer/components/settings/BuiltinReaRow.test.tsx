@@ -88,6 +88,7 @@ describe("BuiltinReaRow", () => {
 		await mount(undefined, REA_SERVER);
 		const status = document.querySelector('[role="status"]')?.textContent ?? "";
 		expect(status).toBe("Checking Node.js…");
+		expect(toggle().getAttribute("aria-checked")).toBe("false");
 		expect(document.body.textContent).not.toContain("connected");
 	});
 	it("names the current state once it is known, with the tool count in words", async () => {

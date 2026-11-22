@@ -1,11 +1,12 @@
 /**
- * A test's MCP hub: ./mcp-hub-entry.ts under Bun, and a client that speaks streamable HTTP to it the way stock omp's
+ * A test's MCP hub: the shipped Rust entry with a fake REA, and a client that speaks streamable HTTP to it the way stock omp's
  * http transport does (POST per message, `Mcp-Session-Id` from `initialize`, one GET event stream per session).
  */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { nativeBinPath } from "../native-bin";
 
 export interface RpcReply {
 	jsonrpc?: string;
@@ -29,9 +30,10 @@ const hubs: TestHub[] = [];
 
 export async function startTestHub(env: Record<string, string> = {}): Promise<TestHub> {
 	const secret = crypto.randomUUID();
-	const child = spawn("bun", [fileURLToPath(new URL("./mcp-hub-entry.ts", import.meta.url))], {
+	const rea = fileURLToPath(new URL("./rea-child.mjs", import.meta.url));
+	const child = spawn(nativeBinPath("ompdesk-core"), ["--mcp-hub", env.REA_TEST_COMMAND || process.execPath, rea], {
 		stdio: ["pipe", "pipe", "pipe"],
-		env: { ...process.env, HUB_TEST_SECRET: secret, ...env },
+		env: { ...process.env, OMP_GUI_MCP_HUB_SECRET: secret, ...env },
 	});
 	let errors = "";
 	child.stderr.on("data", chunk => {

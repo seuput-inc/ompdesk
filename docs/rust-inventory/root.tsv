@@ -304,7 +304,7 @@ src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the co
 src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
 src/main/mcp-hub-rea.test.ts	tooling	-	Vitest suite: MCP hub: REA.
-src/main/mcp-hub.ts	port	2	McpHub launches and supervises a shared Bun MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
+src/main/mcp-hub.ts	port	2	McpHub launches and supervises the native MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
 src/main/mcp-live.ts	port	3	onMcpChange and noteMcpChange register and invoke the desktop listener that fans a session's MCP change out to other sessions.
 src/main/media-stream.test.ts	tooling	-	Vitest suite: parseRange.
 src/main/media-stream.ts	port	2	MediaStreams maps opaque tokens to local files and streams bounded byte ranges for omp-media; parseRange validates seek requests.

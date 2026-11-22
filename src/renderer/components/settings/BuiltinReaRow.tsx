@@ -91,7 +91,7 @@ export function BuiltinReaRow({
 				icon={<ScanSearch />}
 				label={t("mcp.rea.title")}
 				badge={<Badge>{REA_VERSION}</Badge>}
-				checked={state?.enabled ?? true}
+				checked={state?.enabled === true}
 				disabled={!state || saving}
 				onCheckedChange={choose}
 				description={t("mcp.rea.description", { count: REA_CURATED_TOOL_COUNT })}

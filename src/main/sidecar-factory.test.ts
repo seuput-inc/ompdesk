@@ -230,7 +230,7 @@ describe("localSidecarFactory", () => {
 		create("/w/alpha", kind, false);
 		const mcp = await created[0]?.builtinMcp?.();
 		expect(mcp?.args).toEqual([...(on ? ["-e", path.join("/builtin", "pstack")] : []), ...ALWAYS]);
-		expect(mcp?.env).toEqual({ OMP_GUI_PSTACK: flag, OMP_GUI_ECC: "0" });
+		expect(mcp?.env).toEqual({ OMP_GUI_PSTACK: flag, OMP_GUI_ECC: "0", PONYTAIL_DEFAULT_MODE: "full" });
 	});
 
 	it.each([
@@ -263,7 +263,7 @@ describe("localSidecarFactory", () => {
 			create("/w/alpha", kind, false);
 			const mcp = await created[0]?.builtinMcp?.();
 			expect(mcp?.args).toEqual([...(on ? ["-e", path.join("/builtin", "ecc")] : []), ...ALWAYS]);
-			expect(mcp?.env).toEqual({ OMP_GUI_PSTACK: "0", OMP_GUI_ECC: flag });
+			expect(mcp?.env).toEqual({ OMP_GUI_PSTACK: "0", OMP_GUI_ECC: flag, PONYTAIL_DEFAULT_MODE: "full" });
 		},
 	);
 
@@ -307,7 +307,7 @@ describe("localSidecarFactory", () => {
 	});
 
 	it("asks for Node only while the built-in REA is on, and hands a spawn with REA or memory the hub's address", async () => {
-		let rea: unknown = false;
+		let rea: unknown;
 		let memory: string[] = [];
 		const hubAsked: string[] = [];
 		created.length = 0;
