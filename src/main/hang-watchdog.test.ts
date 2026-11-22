@@ -7,15 +7,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { hangMarkerPath, reportPreviousHang } from "./hang-watchdog";
+import { reportPreviousHang } from "./hang-watchdog";
 import { appendRuntimeLogAtPath, type RuntimeLogReport } from "./runtime-log-core";
 
 const mocks = vi.hoisted(() => ({ userData: { dir: "" } }));
 
-vi.mock("electron", () => ({
-	app: { getPath: () => mocks.userData.dir },
-	powerMonitor: { on: () => {}, off: () => {} },
-}));
+vi.mock("electron", () => ({ app: {}, powerMonitor: {} }));
 vi.mock("./runtime-log", () => ({
 	writeRuntimeLog: (report: RuntimeLogReport) =>
 		appendRuntimeLogAtPath(path.join(mocks.userData.dir, "gui-runtime.jsonl"), report, {
@@ -35,20 +32,14 @@ afterAll(() => {
 
 describe("reportPreviousHang", () => {
 	it("writes the phase and the steps main stalled in, oldest first, to the log", () => {
-		fs.mkdirSync(path.dirname(hangMarkerPath()), { recursive: true });
-		fs.writeFileSync(
-			hangMarkerPath(),
-			JSON.stringify({
-				detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
-				pid: 29292,
-				unresponsiveMs: 5628,
-				selfRecovered: true,
-				phase: "update",
-				steps: ["update:quit-and-install", "quit:teardown:sidecars"],
-			}),
-		);
-
-		reportPreviousHang();
+		reportPreviousHang({
+			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
+			pid: 29292,
+			unresponsiveMs: 5628,
+			selfRecovered: true,
+			phase: "update",
+			steps: ["update:quit-and-install", "quit:teardown:sidecars"],
+		});
 
 		const lines = fs.readFileSync(path.join(mocks.userData.dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
 		expect(JSON.parse(lines.at(-1) ?? "{}")).toMatchObject({
@@ -58,18 +49,13 @@ describe("reportPreviousHang", () => {
 	});
 
 	it("writes how the computer stood during the stall as a line of its own, with when that was", () => {
-		fs.writeFileSync(
-			hangMarkerPath(),
-			JSON.stringify({
-				detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
-				pid: 29292,
-				unresponsiveMs: 5628,
-				selfRecovered: false,
-				machine: { availMB: 512, totalMB: 16_384, cpus: 8, cpuBusyPct: 99.5, mainCpuPct: 0.1 },
-			}),
-		);
-
-		reportPreviousHang();
+		reportPreviousHang({
+			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
+			pid: 29292,
+			unresponsiveMs: 5628,
+			selfRecovered: false,
+			machine: { availMB: 512, totalMB: 16_384, cpus: 8, cpuBusyPct: 99.5, mainCpuPct: 0.1 },
+		});
 
 		const lines = fs.readFileSync(path.join(mocks.userData.dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
 		expect(lines.slice(-2).map(line => JSON.parse(line))).toMatchObject([

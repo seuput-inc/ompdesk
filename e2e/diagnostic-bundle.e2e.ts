@@ -30,6 +30,19 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 	);
 	const logs = path.join(desktop as string, "logs");
 	await fs.mkdir(logs);
+	const marker = path.join(logs, "main-thread-hang.json");
+	await fs.writeFile(
+		marker,
+		JSON.stringify({
+			detectedAt: Date.UTC(2025, 4, 6),
+			pid: 4242,
+			unresponsiveMs: 7312,
+			selfRecovered: false,
+			phase: "quit",
+			steps: ["update:quit-and-install", "quit:teardown:sidecars"],
+			machine: { availMB: 317, cpuBusyPct: 98.5 },
+		}),
+	);
 	await fs.writeFile(
 		path.join(logs, "gui-runtime.jsonl.1"),
 		'{"source":"slow-step","message":"이전 실행: sample@example.invalid"}\n',
@@ -48,6 +61,7 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 		await expect
 			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 			.toBe("ready");
+		await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 
 		const input = page.locator(".omp-composer-input").first();
 		await input.fill("hello there");
@@ -84,6 +98,24 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 		expect(diagnostics).toContain("OMPdesk");
 		const probes = diagnostics?.split("## Probes")[1]?.split("## Runtime log")[0];
 		expect(probes).toContain('{"source":"slow-step","message":"이전 실행: <email>"}');
+		const lines = diagnostics?.split("\n") ?? [];
+		const hang = lines.find(line => line.includes('"source":"main-thread-hang"'));
+		expect(JSON.parse(hang ?? "null")).toMatchObject({
+			message: "Main thread stalled for 7s and never recovered",
+			details: {
+				previousPid: 4242,
+				unresponsiveMs: 7312,
+				selfRecovered: false,
+				detectedAt: "2025-05-06T00:00:00.000Z",
+				phase: "quit",
+				steps: "update:quit-and-install > quit:teardown:sidecars",
+			},
+		});
+		const machine = lines.find(line => line.includes('"message":"hang during"'));
+		expect(JSON.parse(machine ?? "null")).toMatchObject({
+			source: "machine-state",
+			details: { trigger: "hang", when: "during", at: "2025-05-06T00:00:00.000Z", availMB: 317, cpuBusyPct: 98.5 },
+		});
 		expect(diagnostics).not.toContain("sample@example.invalid");
 
 		const held = path.join(profile, "alt.zip");

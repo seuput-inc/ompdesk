@@ -1069,6 +1069,14 @@ fn dispatch(call: host::Call) {
         native_services::watchdog::handle(call, &runtime().user_data);
         return;
     }
+    if call.method == "app.consumeHangMarker" {
+        tauri::async_runtime::spawn_blocking(move || {
+            call.ok(native_services::watchdog::consume_marker(
+                &runtime().user_data,
+            ))
+        });
+        return;
+    }
     if call.method == "app.diagnosticLog" {
         native_services::diagnostic_logs::handle(call, &runtime().user_data);
         return;

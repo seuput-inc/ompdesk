@@ -259,10 +259,8 @@ src/main/gpu-fallback-core.ts	port	1	gpuMarkerDecision, gpuChange and markerForT
 src/main/gpu-fallback-loop.test.ts	tooling	-	Vitest suite: GPU crash relaunch.
 src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.
 src/main/gpu-fallback.ts	mixed	4	applyGpuFallbackIfNeeded and handleGpuProcessGone manage the marker, flags and relaunch; tauri-shell/src/gpu.rs supplies app.getGPUInfo and process_failed.rs emits app.childProcessGone.
-src/main/hang-watchdog-core.test.ts	tooling	-	Vitest suite: consumeHangMarker and legacy marker compatibility.
-src/main/hang-watchdog-core.ts	port	1	consumeHangMarker reads, bounds and removes the previous launch's diagnostic marker; detection and step history live in tauri-shell/src/watchdog/engine.rs.
 src/main/hang-watchdog.test.ts	tooling	-	Vitest suite: reportPreviousHang.
-src/main/hang-watchdog.ts	mixed	4	Posts Node heartbeat, step and lifecycle signals to app.watchdog; tauri-shell/src/watchdog owns detection, machine sampling and marker writes. reportPreviousHang still formats the prior marker for the runtime log.
+src/main/hang-watchdog.ts	mixed	4	Posts Node heartbeat, step and lifecycle signals to app.watchdog and formats the previous stall for the runtime log. The Tauri watchdog writes and consumes its own marker.
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
 src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 const HANG_TIMEOUT_MS: u64 = 5_000;
 const SLEEP_GAP_MS: u64 = 3_000;
-const STEP_HISTORY: usize = 8;
+pub(super) const STEP_HISTORY: usize = 8;
 
 struct Incident {
     steps: Arc<VecDeque<String>>,

@@ -1,15 +1,19 @@
-import { join } from "node:path";
 import { app, powerMonitor } from "electron";
-import { consumeHangMarker, type MainPhase } from "./hang-watchdog-core";
 import { writeRuntimeLog } from "./runtime-log";
 
-export function hangMarkerPath(): string {
-	return join(app.getPath("userData"), "logs", "main-thread-hang.json");
+type MainPhase = "startup" | "running" | "quit" | "update";
+
+export interface HangMarker {
+	detectedAt: number;
+	pid: number;
+	unresponsiveMs: number;
+	selfRecovered: boolean;
+	phase?: MainPhase;
+	steps?: string[];
+	machine?: Record<string, string | number | boolean>;
 }
 
-/** Reports (and removes) the marker the previous run left, if any. Call before `installHangWatchdog`. */
-export function reportPreviousHang(): void {
-	const marker = consumeHangMarker(hangMarkerPath());
+export function reportPreviousHang(marker: HangMarker | null): void {
 	if (!marker) return;
 	writeRuntimeLog({
 		source: "main-thread-hang",

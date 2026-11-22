@@ -1,5 +1,6 @@
 //! Observes Node without calling it or the UI thread, including while either is blocked.
 mod engine;
+mod marker;
 mod sample;
 
 use crate::{host::Call, lifecycle::EXITING};
@@ -7,7 +8,7 @@ use engine::Engine;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -30,13 +31,21 @@ enum Signal {
 // One authenticated Node connection and one main per shell lifetime. Shutdown is terminal.
 static SENDER: OnceLock<Sender<Signal>> = OnceLock::new();
 
+fn marker_path(profile: &Path) -> PathBuf {
+    profile.join("logs").join(MARKER)
+}
+
+pub(crate) fn consume_marker(profile: &Path) -> Value {
+    marker::consume(&marker_path(profile)).unwrap_or(Value::Null)
+}
+
 pub(crate) fn handle(mut call: Call, profile: &Path) {
     let Ok(signal) = serde_json::from_value(std::mem::take(&mut call.params)) else {
         return call.err("invalid", "invalid watchdog signal");
     };
     if let Signal::Start { pid } = signal {
         if SENDER.get().is_none() {
-            let marker = profile.join("logs").join(MARKER);
+            let marker = marker_path(profile);
             let (tx, rx) = mpsc::channel();
             // The host socket has a single reader. Neither sampling nor file writes run on it.
             if let Err(error) = std::thread::Builder::new()
