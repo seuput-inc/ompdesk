@@ -1,8 +1,5 @@
 /**
- * A message the paired phone's page sends into a session whose turn runs reaches the omp as a typed note
- * (`typed_prompt`, steer: true) right before the stock steer, so the omp answers it first. The prompt that started the
- * turn is noted too, as the sender's own command (the phone's prompt carries streamingBehavior "steer"). A phone's Enter is a newline (touch keyboard): the Send button sends. Unit
- * counterpart: `prompt-origin.test.ts` (`noteTypedPrompt`).
+ * The phone asks stock to steer if busy. Only its second send interrupts a running turn and must be answered first.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -80,9 +77,12 @@ test("a message the phone sends into a running turn is noted as a typed steer be
 		const frames = await sends();
 		const first = frames.findIndex(record => record.type === "typed_prompt" && record.text === "fixture running");
 		expect(first).toBeGreaterThanOrEqual(0);
-		expect(frames[first + 1]).toMatchObject({ type: "prompt", message: "fixture running" });
-		// The note is the sender's own command, whether or not a turn runs yet.
-		expect(frames[first]?.steer).toBe(frames[first + 1]?.streamingBehavior === "steer");
+		expect(frames[first]).toMatchObject({ steer: false });
+		expect(frames[first + 1]).toMatchObject({
+			type: "prompt",
+			message: "fixture running",
+			streamingBehavior: "steer",
+		});
 
 		const note = frames.findIndex(record => record.type === "typed_prompt" && record.text === QUESTION);
 		expect(note).toBeGreaterThan(first);
