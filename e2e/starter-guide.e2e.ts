@@ -292,8 +292,8 @@ for (const variant of VARIANTS)
 				variant.language === "ko" ? `OMPdesk v${version}` : `Updated to OMPdesk v${version}`,
 			);
 			if (variant.language === "ko") await expect(card).toContainText("업데이트됐어요");
-			await expect(card.locator("[data-whats-new-summary]")).not.toBeEmpty();
-			const summary = await card.locator("[data-whats-new-summary]").innerText();
+			const summary = await card.locator("[data-whats-new-summary]").textContent();
+			if (!summary) throw new Error("The release card showed no summary");
 			await expect(
 				card.getByRole("button", { name: variant.language === "ko" ? "자세히 보기" : "See details" }),
 			).toBeVisible();
