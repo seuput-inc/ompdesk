@@ -7,6 +7,8 @@
 - 끝나지 않은 턴을 완료로 표시하지 않고, 다른 할 일이 막혀도 독립된 작업은 계속 진행할 수 있습니다.
 - 검사 결과에서 자리 대기 시간과 실행 시간을 구분합니다. 배포를 막는 검사는 실행 중인 작업을 중단하지 않고 빈 자리를 우선 배정받습니다.
 - omp 19.1의 명령·입력 폼 변경에 대응했습니다.
+- 채팅 모델 선택기는 다른 계정의 Codex 선택지를 제외하고, 사용량 조회만으로 크레딧이 차감됐다고 표시하지 않습니다.
+- 휴대폰의 첫 오프라인 등록은 페어링이 끝난 뒤 시작합니다. 로그인 화면을 다시 열면 브라우저가 중복으로 열리지 않습니다.
 
 <!-- en -->
 
@@ -15,6 +17,8 @@ Adding an instruction during a task no longer replaces unfinished items in the p
 - Unfinished turns are no longer labeled complete. Independent work can continue when another item is blocked.
 - Check results distinguish queue time from run time. Release-blocking checks get priority for a free slot without interrupting running work.
 - Updated command and form handling for omp 19.1.
+- The chat picker excludes Codex routes belonging to other accounts. A usage read no longer claims credits were spent.
+- The phone registers for offline use after pairing. Returning to an in-progress sign-in no longer opens the browser twice automatically.
 
 ## [0.137.3] - 2026-11-21
 
