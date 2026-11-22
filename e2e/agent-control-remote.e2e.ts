@@ -83,8 +83,13 @@ test("runs Autopilot in a paired device's repository and changes that device's s
 	expect(started.text).toContain("it runs on PC-B");
 	const runId = /Started Autopilot in session (\w+)/.exec(started.text)?.[1] ?? "";
 	expect(runId).not.toBe("");
-	const deviceTabs = (await client.page.evaluate(() => window.omp.tabs.list())).filter(tab => tab.device === deviceId);
-	expect(deviceTabs.map(tab => tab.tabId)).toEqual([runId]);
+	const clientPage = client.page;
+	await expect
+		.poll(async () => {
+			const tabs = await clientPage.evaluate(() => window.omp.tabs.list());
+			return tabs.filter(tab => tab.device === deviceId).map(tab => tab.tabId);
+		})
+		.toEqual([runId]);
 	// A's tab of the run is the caller's own opened session.
 	expect((await call("ompdesk_sessions", { mine: true })).text).toContain(runId);
 	// The run is B's: B's window has its tab in a new worktree, B's checkout stays on main, B's omp ran the cycles.
