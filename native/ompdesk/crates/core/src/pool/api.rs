@@ -432,9 +432,6 @@ impl Ctx {
             let ids: Vec<String> = pool.request_bodies.keys().cloned().collect();
             let mut open = Vec::new();
             for id in ids {
-                let Some(held) = pool.request_bodies.get(&id).cloned() else {
-                    continue;
-                };
                 let Some(owner) = pool.request_owners.get(&id).copied() else {
                     pool.request_bodies.remove(&id);
                     pool.sign_in_requests.remove(&id);
@@ -443,21 +440,69 @@ impl Ctx {
                 if !pool.by_seq(owner).is_some_and(|entry| entry.shown_in(win)) {
                     continue;
                 }
-                let sign_in = Ctx::sign_in_mark(pool, owner, &held.request, held.kinds);
-                let tab = pool
-                    .by_seq(owner)
-                    .map(|entry| entry.tab_id.clone())
-                    .unwrap_or_default();
-                let mut item = Map::new();
-                item.insert("tabId".into(), Value::from(tab));
-                item.insert("request".into(), held.request);
-                if let Some(sign_in) = sign_in {
-                    item.insert("signIn".into(), sign_in);
+                if let Some(item) = Self::open_request(pool, owner, &id) {
+                    open.push(item);
                 }
-                open.push(Value::Object(item));
             }
             Value::Array(open)
         })
+    }
+
+    fn open_request(pool: &mut Pool, seq: u64, id: &String) -> Option<Value> {
+        let held = pool.request_bodies.get(id)?.clone();
+        let sign_in = Ctx::sign_in_mark(pool, seq, &held.request, held.kinds);
+        if sign_in.is_none() && pool.answering.contains(id) {
+            return None;
+        }
+        let mut item = Map::new();
+        item.insert(
+            "tabId".into(),
+            Value::from(pool.by_seq(seq)?.tab_id.clone()),
+        );
+        item.insert("request".into(), held.request);
+        if let Some(mark) = sign_in {
+            item.insert("signIn".into(), mark);
+        }
+        Some(Value::Object(item))
+    }
+
+    pub(super) fn replay_viewer_questions(&self, seq: u64, win: i64) {
+        self.with(|pool| {
+            if !pool.by_seq(seq).is_some_and(|entry| entry.shown_in(win)) {
+                return;
+            }
+            let ids: Vec<_> = pool
+                .request_owners
+                .iter()
+                .filter(|(_, owner)| **owner == seq)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in ids {
+                if let Some(frame) = Self::replayed_question(pool, seq, &id) {
+                    self.send(vec![win], "EXTENSION_UI", frame);
+                }
+            }
+        });
+    }
+
+    pub(super) fn replay_failed_question(&self, seq: u64, id: &String) {
+        self.with(|pool| {
+            if pool.request_owners.get(id) == Some(&seq)
+                && let Some(frame) = Self::replayed_question(pool, seq, id)
+                && let Some(entry) = pool.by_seq(seq)
+            {
+                self.send(Pool::windows_of(entry), "EXTENSION_UI", frame);
+            }
+        });
+    }
+
+    fn replayed_question(pool: &mut Pool, seq: u64, id: &String) -> Option<Value> {
+        let mut frame = Self::open_request(pool, seq, id)?;
+        if frame.get("signIn").is_some() {
+            return None;
+        }
+        frame["resent"] = Value::Bool(true);
+        Some(frame)
     }
 
     // ---- what the other computers' views read ---------------------------------------------------------------------

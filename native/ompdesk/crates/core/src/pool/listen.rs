@@ -355,9 +355,7 @@ impl Ctx {
         let stale: Vec<String> = self.with(|pool| {
             pool.request_owners
                 .iter()
-                .filter(|(id, owner)| {
-                    **owner == seq && !open.contains(id) && !pool.answering.contains(*id)
-                })
+                .filter(|(id, owner)| **owner == seq && !open.contains(id))
                 .map(|(id, _)| id.clone())
                 .collect()
         });

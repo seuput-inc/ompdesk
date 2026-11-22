@@ -202,6 +202,8 @@ impl Ctx {
                 pool.answering.remove(&id);
             });
             if let Err(error) = delivered {
+                // A page that joined or reloaded during delivery did not see this question.
+                ctx.replay_failed_question(seq, &id);
                 ctx.settle_err(token, Some(&error.code), &error.message);
                 return;
             }

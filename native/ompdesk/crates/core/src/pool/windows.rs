@@ -557,6 +557,7 @@ impl Ctx {
                     self.sync_full_wiring(win).await?;
                 }
                 self.send_tab_lists(tab).await?;
+                self.replay_viewer_questions(seq, win);
                 // A paired device's saved layout names the tabs it views too.
                 self.notify_window_tabs_changed(win).await?;
                 Ok(true)

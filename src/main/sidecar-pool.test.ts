@@ -2295,6 +2295,58 @@ describe("SidecarPool request-origin routing (F-UI-ORIGIN)", () => {
 		expect(await pool.routeSideChannel("req-offline", response)).toBe(false);
 	});
 
+	it.each(["delivered", "failed", "withdrawn", "no longer held on host"] as const)(
+		"joins a tab during answer delivery without replaying a second question: %s",
+		async outcome => {
+			const { pool, sidecars } = fakePool();
+			const host = fakeWindow(1);
+			const phone = fakeWindow(-1);
+			pool.acquire("/a", host.win, "tab-a");
+			const [a] = sidecars;
+			if (!a) throw new Error("Expected the host tab");
+			const request = { type: "extension_ui_request", id: "form", method: "form", html: '<input name="color">' };
+			a.emit("openAsks", [request]);
+			const response = { type: "extension_ui_response", id: "form", data: { color: "blue" } };
+			const delivery = Promise.withResolvers<void>();
+			vi.spyOn(a, "sendSideChannel").mockReturnValueOnce(delivery.promise);
+			const pending = pool.routeSideChannel("form", response, "tab-a", host.win);
+			expect(pool.attachViewer(phone.win, "tab-a")).toBe(true);
+			const ui = () => phone.sentTo(IPC_EVENTS.EXTENSION_UI).map(item => item.data);
+			expect(ui()).toEqual([]);
+			expect(pool.openRequests(phone.win)).toEqual([]);
+
+			if (outcome === "delivered") {
+				delivery.resolve();
+				expect(await pending).toBe(true);
+				expect(ui()).toEqual([]);
+			} else {
+				if (outcome === "withdrawn") a.emitUiRequest({ id: "withdraw", method: "cancel", targetId: "form" });
+				if (outcome === "no longer held on host") a.emit("openAsks", []);
+				delivery.reject(new Error("not delivered"));
+				await expect(pending).rejects.toThrow("not delivered");
+				if (outcome === "failed") {
+					expect(ui()).toEqual([{ tabId: "tab-a", request, resent: true }]);
+					expect(a.sentFrames).toEqual([]);
+					expect(await pool.routeSideChannel("form", response, "tab-a", phone.win)).toBe(true);
+					expect(a.sentFrames).toEqual([response]);
+				} else {
+					expect(ui()).toEqual([
+						{
+							tabId: "tab-a",
+							request: {
+								type: "extension_ui_request",
+								id: outcome === "withdrawn" ? "withdraw" : "withdrawn:form",
+								method: "cancel",
+								targetId: "form",
+							},
+						},
+					]);
+				}
+			}
+			expect(pool.openRequests(phone.win)).toEqual([]);
+		},
+	);
+
 	it("fails host-uri requests on the raising sidecar instead of forwarding them, a hidden tab's too", async () => {
 		const { pool, sidecars } = fakePool();
 		const fw = fakeWindow(1);

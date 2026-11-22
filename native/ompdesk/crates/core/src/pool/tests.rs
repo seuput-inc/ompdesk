@@ -340,14 +340,30 @@ async fn a_request_routes_back_to_the_tab_that_raised_it_and_the_first_answer_of
         main.call("openRequests", json!({"win": 2})).await[0]["tabId"],
         "a"
     );
+    main.call("attachViewer", json!({"win": -1, "tab": "b"}))
+        .await;
+    assert_eq!(main.sends("EXTENSION_UI").len(), 1);
+    main.call("attachViewer", json!({"win": -1, "tab": "a"}))
+        .await;
+    main.call("attachViewer", json!({"win": -1, "tab": "a"}))
+        .await;
+    let sent = main.sends("EXTENSION_UI");
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[1],
+        (
+            vec![-1],
+            json!({"tabId": "a", "request": request, "resent": true})
+        )
+    );
     assert_eq!(
         main.call("resumeFacts", json!({})).await[0]["awaitingUi"],
         true
     );
-    // The window 2 answers first (the frame goes through main's sidecar: the scripted main answers at once).
+    // The late viewer answers first.
     main.call(
         "routeSideChannel",
-        json!({"token": 1, "id": "r1", "frame": {"id": "r1"}, "responder": 2, "choice": "yes"}),
+        json!({"token": 1, "id": "r1", "tab": "a", "frame": {"type": "extension_ui_response", "id": "r1", "confirmed": true}, "responder": -1, "choice": "yes"}),
     )
     .await;
     let settled = |main: &Main, token: u64| {
@@ -361,9 +377,9 @@ async fn a_request_routes_back_to_the_tab_that_raised_it_and_the_first_answer_of
         main.call("size", json!({})).await;
     }
     assert_eq!(settled(&main, 1).unwrap()["value"], true);
-    // The owner's card closes through a synthetic cancel; the answering window's does not.
+    // The owner and the first viewer close the card. The answering window gets no cancel.
     let cancel = main.sends("EXTENSION_UI").pop().unwrap();
-    assert_eq!(cancel.0, vec![1]);
+    assert_eq!(cancel.0, vec![1, 2]);
     assert_eq!(cancel.1["answeredElsewhere"], true);
     assert_eq!(cancel.1["request"]["targetId"], "r1");
     // A later answer from the other window is refused, as a second answer of the same window is not.
