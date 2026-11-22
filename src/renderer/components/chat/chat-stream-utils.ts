@@ -521,6 +521,8 @@ export function isVisibleTranscriptMessage(message: AgentMessage): boolean {
 	// Stock's model-facing developer messages are never shown (TUI ui-helpers renders none); its
 	// todo reminder is the one the live card showed, so it stays as that reminder.
 	if (message.role === "developer") return parseTodoReminder(message) !== null;
+	// Stock's `notify` sends matching output to the agent. The job's outcome arrives separately as an async-result.
+	if (message.role === "custom" && message.customType === "async-notify") return false;
 	if ((message.role === "custom" || message.role === "hookMessage") && message.display === false) return false;
 	if (
 		message.role === "user" ||

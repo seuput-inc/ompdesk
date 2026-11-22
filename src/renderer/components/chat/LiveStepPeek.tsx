@@ -528,7 +528,7 @@ export function LiveStepPeek({
 			? completion
 			: entry && surfaceKey !== "thinking"
 				? workNarrative(entry.toolName, settledArgs(entry), t, undefined, entry.intent)
-				: (!nested && modelWait) || t("chat.thinking.live");
+				: (!nested && modelWait) || t(thinkingLive || nested ? "chat.thinking.live" : "workBoard.step.working");
 	const waitsOnModel = !nested && !!modelWait && narrative === modelWait;
 	const waitingNames = waitingFor ? waitingFor.split(", ") : [];
 	// A running session-control call is said in words by the head's own line (CoordinationSub names the children).

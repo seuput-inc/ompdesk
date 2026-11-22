@@ -99,6 +99,25 @@ describe("TurnStatusRow", () => {
 		const streaming = frameOf(container.querySelector(".omp-live-step"));
 		expect(streaming.length).toBeGreaterThan(0);
 		expect(pending).toEqual(streaming);
+		expect(container.querySelector(".omp-work-narrative")?.textContent).toBe("Thinking…");
+	});
+
+	it("keeps the turn working without calling a finalized reasoning step live", async () => {
+		await mount(
+			<ProcessGroup
+				expanded
+				live
+				onExpandedChange={() => {}}
+				row={{
+					...STREAMING_WORK_ROW,
+					messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "Read the file." }] }],
+					stepCount: 1,
+				}}
+				rowKey="completed-reasoning"
+			/>,
+		);
+		expect(container.querySelector(".omp-thinking-state")?.textContent).toBe("Thought");
+		expect(container.querySelector(".omp-work-narrative")?.textContent).toBe("Working…");
 	});
 
 	it("renders nothing when the wait rides on the turn's last work row", async () => {
