@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.139.0] - 2026-11-22
+
+이 컴퓨터에서 `ompdesk heavy limit off`를 실행하면 로컬 검사와 빌드가 슬롯이나 시작 전 디스크 여유를 기다리지 않습니다. `ompdesk heavy limit auto`로 되돌릴 수 있습니다. 같은 빌드 폴더에 동시에 쓰는 잠금과 실행 중 디스크 고갈 보호는 유지합니다.
+
+<!-- en -->
+
+Run `ompdesk heavy limit off` to start local checks and builds on this computer without waiting for a slot or a free-space threshold. Use `ompdesk heavy limit auto` to restore both checks. Builds still lock their shared output, and running commands still stop if disk space becomes critically low.
+
 ## [0.138.1] - 2026-11-22
 
 휴대폰의 네트워크 연결이 돌아오면 페이지를 닫았다 열지 않아도 놓친 답변과 작업 상태가 갱신됩니다. 입력 중인 초안은 그대로 남습니다.
