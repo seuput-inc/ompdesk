@@ -405,7 +405,7 @@ describe("which tags end, and when", () => {
 		expect(sessions.owners().map(owner => owner.tag)).toEqual([second.tag]);
 	});
 
-	it("tries a tag once more when its end left something running, then leaves it to the next launch", async () => {
+	it("retries a surviving worker on a timer only once and records its tag for the next launch", async () => {
 		const { sessions, calls, timers } = held();
 		const tab = sessions.open({ cwd: "/w", sessionPath: "/s/a.jsonl" });
 		const closed = tab.close();
@@ -417,7 +417,7 @@ describe("which tags end, and when", () => {
 		expect(timers.map(timer => timer.ms)).toEqual([RETRY_REMAINING_MS]);
 		timers[0]?.run();
 		expect(calls.map(call => call.tags)).toEqual([[tab.tag], [tab.tag]]);
-		// Still there (a broker whose services the person keeps): no third try in this launch.
+		// A broker may stay live; don't start another timer.
 		calls[1]?.settle(remaining);
 		await sessions.settled();
 		expect(timers).toHaveLength(1);
@@ -429,6 +429,32 @@ describe("which tags end, and when", () => {
 			Promise.resolve().then(() => next.calls[0]?.settle()),
 		]);
 		expect(next.sessions.owners()).toEqual([]);
+	});
+
+	it("releases scratch on disk care after a closed tab's last worker exits, without touching a restored tab", async () => {
+		const before = held().sessions;
+		const restored = before.open({ cwd: "/w", sessionPath: "/s/restored.jsonl" });
+		const pending = before.open({ cwd: "/w", sessionPath: "/s/closed.jsonl" });
+		const { sessions, calls, timers } = held();
+		await sessions.sweep({
+			keep: new Set(["/s/restored.jsonl", "/s/closed.jsonl"]),
+			hostedHeld: () => false,
+			hostedGraceMs: 0,
+		});
+		sessions.sessionReleased("/s/closed.jsonl");
+		expect(sessions.held()).toContain(pending.tag);
+		const worker = { ...NOTHING, kept: [{ pid: 7, name: "bun" }] };
+		calls[0]?.settle(worker);
+		await sessions.settled();
+		timers[0]?.run();
+		calls[1]?.settle(worker);
+		await sessions.settled();
+		const cleanup = sessions.retryReleased();
+		expect(calls.map(call => call.tags)).toEqual([[pending.tag], [pending.tag], [pending.tag]]);
+		calls[2]?.settle();
+		await cleanup;
+		expect(sessions.held()).toEqual(new Set([restored.tag]));
+		expect(sessions.open({ cwd: "/w", sessionPath: "/s/restored.jsonl" }).tag).toBe(restored.tag);
 	});
 
 	it("keeps a tag whose end failed for the next launch", async () => {

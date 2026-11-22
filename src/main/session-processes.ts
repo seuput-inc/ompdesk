@@ -214,8 +214,8 @@ interface TagEntry {
 	state: TagState;
 	/** The tab's omp now, for the memory record's title. */
 	pid?: number;
-	/** Its end left something running and was tried again in this launch. */
-	retried?: boolean;
+	/** Set only after a close or launch sweep started ending this tag. Unset for a tab still due to restore. */
+	releasedBy?: "closed" | "relaunch";
 	/** This launch's look at what the last launch left for the tag (`#survey`), once started. */
 	survey?: Promise<Survey>;
 	/** When a tab of this launch took the tag over. */
@@ -340,6 +340,7 @@ export class SessionProcesses {
 		let entry = key === undefined ? undefined : this.#left(key, facts.device)[0];
 		if (entry) {
 			entry.state = "live";
+			entry.releasedBy = undefined;
 			entry.record = { ...entry.record, ...facts };
 			entry.takenAt = this.#now();
 		} else {
@@ -420,11 +421,19 @@ export class SessionProcesses {
 		await Promise.all([...now.map(entry => this.#endEntry(entry, "relaunch")), this.#surveyAll(kept)]);
 	}
 
-	/** The tags a tab holds now, or the last launch left for a tab that may still take them over. */
+	/** Retry only known releases. A restored or hosted tab waiting to open has no releasedBy. */
+	async retryReleased(): Promise<void> {
+		if (this.#deps.frozen()) return;
+		const pending: Promise<void>[] = [];
+		for (const entry of this.#entries.values()) {
+			if (entry.state === "left" && entry.releasedBy) pending.push(this.#endEntry(entry, entry.releasedBy));
+		}
+		await Promise.all(pending);
+	}
+
+	/** Scratch stays in use until the core confirms the tag is gone, including while its end is in flight. */
 	held(): Set<string> {
-		return new Set(
-			[...this.#entries.values()].filter(entry => entry.state !== "ending").map(entry => entry.record.tag),
-		);
+		return new Set(this.#entries.keys());
 	}
 
 	/** Every tag this app knows and whose it is. */
@@ -455,10 +464,11 @@ export class SessionProcesses {
 	/**
 	 * Ends what carries the entry's tag and forgets the tag. The entry stays in the file until the core answered, so a
 	 * crash meanwhile leaves it for the next launch; a failed end puts it back as left for the same reason, and so does
-	 * one that left something running (a stock worker and what it started, a process that survived the kill), which is
-	 * tried once more after `RETRY_REMAINING_MS`.
+	 * one that left something running. One short retry gives a stock worker time to exit; disk care retries survivors.
 	 */
 	#endEntry(entry: TagEntry, reason: "closed" | "relaunch"): Promise<void> {
+		const first = entry.releasedBy === undefined;
+		entry.releasedBy = reason;
 		entry.state = "ending";
 		const { record } = entry;
 		const run = (async () => {
@@ -477,10 +487,11 @@ export class SessionProcesses {
 			}
 			if (result.kept.length > 0 || result.left.length > 0) {
 				entry.state = "left";
-				if (!entry.retried) {
-					entry.retried = true;
+				if (first) {
 					this.#later(() => {
-						if (entry.state === "left" && !this.#deps.frozen()) void this.#endEntry(entry, reason);
+						if (entry.record === record && entry.state === "left" && !this.#deps.frozen()) {
+							void this.#endEntry(entry, reason);
+						}
 					}, RETRY_REMAINING_MS);
 				}
 			} else {

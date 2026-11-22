@@ -2555,7 +2555,7 @@ app.whenReady().then(async () => {
 		store: sessionScratch,
 		heldTags: () => sessionProcesses.held(),
 		processes: listTaggedProcesses,
-		sessionFiles: async () => (await sessionIndex.list("global")).map(info => info.path),
+		sessionFiles: async () => (await sessionIndex.listKnown())?.map(info => info.path) ?? null,
 		log: diskCareLog,
 	});
 	// A deleted session's replies are never shown again: the folder that served only it goes with it.
@@ -2574,7 +2574,14 @@ app.whenReady().then(async () => {
 		clearHttpCache: () => session.defaultSession.clearCache(),
 		httpCachePath: () => defaultSessionCachePath() ?? join(app.getPath("userData"), "Cache"),
 		cacheTools: systemCacheTools(),
-		scratch: scratchCare,
+		scratch: {
+			root: scratchCare.root,
+			sweep: async () => {
+				await sessionProcesses.retryReleased();
+				return scratchCare.sweep();
+			},
+		},
+		checkInputs: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1" && !userDataDirectory,
 		automatic: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
 		worktrees:
 			(app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1") ||

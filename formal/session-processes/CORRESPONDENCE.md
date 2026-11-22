@@ -10,7 +10,7 @@
 | `End(tags)` | `#endEntry`: `state = "ending"`, then the core's `procs.end` | the mark is synchronous; the request is the step `EndOk`/`EndFail` answers |
 | `EndOk(t)` | `procs.end` killed what carried the tag and answered; `#endEntry` deletes the entry | the core answers once the processes are gone; the entry stays `ending` until then |
 | `EndFail(t)` | `procs.end` threw (the core restarting, a timeout), or answered `kept` or `left` (something with the tag still runs): `#endEntry` puts the entry back as `left`; in the second case it arms one retry (`RETRY_REMAINING_MS`) | one catch block / one branch |
-| `Retry(t)` | the retry's timer: `#endEntry` again only when the entry is still `left` and no quit is underway | one timer callback; the model lets a tag be retried any number of times, the code once per launch |
+| `Retry(t)` | `#endEntry`'s short timer or disk care's `retryReleased`: only a `left` tag that this launch already tried to end, never while quitting | both check the tag and mark it `ending` without yielding; `EndFail` admits another retry after each failure. A tab that takes the tag over clears its release reason. |
 | `QuitBegin` | `quitApproved()` turns true; `persistTabLayouts` stops saving | the latch |
 | `Down` | the teardown's last step, or a crash or forced quit at any moment; the core ends with main (stdin EOF), so an end in flight is lost | the process is gone |
 | `Boot` | the `SessionProcesses` constructor reads the file (every record `left`); the saved layouts restore their tabs asleep | constructor; restore is synchronous |

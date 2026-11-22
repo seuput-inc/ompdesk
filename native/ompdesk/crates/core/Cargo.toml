@@ -18,6 +18,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+ompdesk-checks = { path = "../checks" }
 # Repository thumbnails decode bounded raster inputs and normalize them to small PNGs; no SVG or default codecs.
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
 # The process's base: requests run concurrently (a slow listing never holds a small read behind it). Only the

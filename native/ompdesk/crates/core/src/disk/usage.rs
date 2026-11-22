@@ -18,6 +18,8 @@ struct Params {
     omp: String,
     app_data: String,
     scratch: Option<String>,
+    #[serde(default)]
+    checks: bool,
     caches: Vec<Target>,
 }
 
@@ -30,6 +32,7 @@ enum Part {
     Stats,
     AppData,
     Scratch,
+    Checks,
     BunCache,
     BunTranspilerCache,
     NpmCache,
@@ -70,7 +73,7 @@ pub(super) async fn handle(call: Call) -> Result<Reply, Fault> {
             .to_string_lossy()
             .into_owned()
     };
-    let mut targets = Vec::with_capacity(6 + params.caches.len());
+    let mut targets = Vec::with_capacity(6 + usize::from(params.checks) + params.caches.len());
     for (id, path) in [
         (Part::Worktrees, params.worktrees),
         (Part::Sessions, params.sessions),
@@ -84,6 +87,14 @@ pub(super) async fn handle(call: Call) -> Result<Reply, Fault> {
         targets.push(Target {
             id: Part::Scratch,
             path,
+        });
+    }
+    if params.checks {
+        targets.push(Target {
+            id: Part::Checks,
+            path: ompdesk_checks::check::checks_dir()
+                .to_string_lossy()
+                .into_owned(),
         });
     }
     targets.extend(params.caches);

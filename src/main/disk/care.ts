@@ -19,6 +19,7 @@
  *    once idle `DISK_CARE_ARTIFACT_IDLE_DAYS` with no tab on their tag and no process carrying it.
  * 6. The tools' caches (`caches.ts`, one table: Bun's install cache, Bun's runtime transpiler cache, npm's cache), each
  *    cleared past its own bound while no process that needs it runs.
+ * 7. Generated input lists and hash caches of idle checks. Their verdicts and diagnostics stay.
  *
  * Left to stock or alone, by measurement (AGENTS.md › Disk care): omp logs (stock prunes to one per process and day
  * over five days), sessions (never deleted, stock has no compressed form), the stats database (stock has no
@@ -39,7 +40,7 @@ import {
 } from "../../shared/disk-care";
 import { IPC_COMMANDS } from "../../shared/ipc-types";
 import type { RpcOrphanWorktree } from "../../shared/rpc-types";
-import { withRepoLock } from "../local/git/exec";
+import { coreHeld, withRepoLock } from "../local/git/exec";
 import type { IpcRegistry } from "../web/ipc-registry";
 import {
 	linkedWorktreePaths,
@@ -86,6 +87,7 @@ export interface DiskCareDeps extends OrphanDeps {
 	httpCachePath(): string;
 	/** The sessions' scratch folders; absent: none kept (tests of the other steps). */
 	scratch?: Pick<ScratchCare, "root" | "sweep">;
+	checkInputs?: boolean;
 	/** How the cache step finds, asks and runs the tools whose caches it bounds. */
 	cacheTools: CacheTools;
 	/** The caches bounded (default `REGENERABLE_CACHES`; a test lowers the bounds). */
@@ -240,6 +242,15 @@ export class DiskCare {
 			tally.kept += swept.kept;
 			tally.failed += swept.failed;
 		});
+		if (this.#deps.checkInputs) {
+			await step("check-inputs", async () => {
+				const bytes = await coreHeld<number>("disk.pruneCheckInputs", {}, 60 * 60_000);
+				if (bytes > 0) {
+					tally.add("check-inputs", bytes);
+					this.#deps.log("check-inputs", { bytes });
+				}
+			});
+		}
 		// One reading of the measured folders per run, kept for the next: what did not change is not read again.
 		const sizes = new TreeSizes(path.join(this.#deps.userData, "disk-care", "sizes.json"), this.#now);
 		await sizes.load();
@@ -255,6 +266,7 @@ export class DiskCare {
 				userData: this.#deps.userData,
 				worktreeRoot: worktreeRoot ?? path.join(this.#deps.userData, "no-worktrees"),
 				caches,
+				checks: this.#deps.checkInputs,
 				...(this.#deps.scratch ? { scratchRoot: this.#deps.scratch.root } : {}),
 			});
 			await sizes.save();

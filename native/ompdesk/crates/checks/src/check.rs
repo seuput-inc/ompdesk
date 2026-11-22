@@ -60,8 +60,20 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+pub fn checks_dir() -> PathBuf {
+    store::store_dir(&env)
+}
+
+/// Allocated bytes of idle input payloads unlinked by disk care. A missing store stays missing.
+pub fn prune_idle_inputs(dir: &Path, now: u64, cancelled: impl Fn() -> bool) -> u64 {
+    Store {
+        dir: dir.to_owned(),
+    }
+    .expire_inputs(now, &cancelled)
+}
+
 pub(crate) fn open_store() -> io::Result<Store> {
-    Store::open(store::store_dir(&env))
+    Store::open(checks_dir())
 }
 
 /// The OMPdesk session this process runs in; none in a plain terminal.
@@ -781,18 +793,17 @@ fn decide(
             r.id != run.id && r.state.finished() && r.state != State::Error && r.inputs.is_some()
         })
         .collect();
-    // A run on exactly these inputs first (an edit undone brings its results back), else the newest one.
-    let Some(prev) = earlier
-        .iter()
-        .find(|r| r.changed_during.is_empty() && r.inputs.as_deref() == Some(digest))
-        .or_else(|| {
-            earlier
-                .iter()
-                .find(|r| r.changed_during.is_empty() && store.file(&r.id, "inputs.tsv").exists())
-        })
+    // An exact digest needs no file list. Comparing different digests needs a list we actually read.
+    let stable = || earlier.iter().filter(|r| r.changed_during.is_empty());
+    let Some((prev, detail)) = stable()
+        .find(|r| r.inputs.as_deref() == Some(digest))
+        .map(|r| (r, None))
+        .or_else(|| stable().find_map(|r| store.input_detail(&r.id).map(|tsv| (r, Some(tsv)))))
     else {
         let mut evidence = Vec::new();
-        if let Some(last) = earlier.first() {
+        if stable().next().is_some() {
+            evidence.push("the previous input lists are unavailable; running in full".into());
+        } else if let Some(last) = earlier.first() {
             evidence.push(format!(
                 "run {} changed its own inputs while it ran ({}), so none of its results hold",
                 last.id,
@@ -846,8 +857,7 @@ fn decide(
 
     // What changed, and whether all of it is test files the runner can run on their own.
     let mut changed_tests: BTreeSet<PathBuf> = BTreeSet::new();
-    if !same {
-        let tsv = fs::read_to_string(store.file(&prev.id, "inputs.tsv")).unwrap_or_default();
+    if let Some(tsv) = detail {
         let diff = inputs::differences(&tsv, set, 12);
         evidence.extend(diff.iter().cloned());
         let only_files = !diff.is_empty()
@@ -1879,7 +1889,7 @@ fn finish(
     ));
     // The finished state goes last: `attach_id` stops reading the log once it reads the run as finished.
     rt.save();
-    rt.store.prune(&rt.run.key);
+    rt.store.prune(&rt.run.key, finished);
     exit_of(&rt.run)
 }
 
@@ -1918,6 +1928,259 @@ mod tests {
         .unwrap();
         store.create(&run).unwrap();
         run
+    }
+
+    const CACHE_NOW: u64 = 1_794_536_107_000;
+    const DAY: u64 = 86_400_000;
+
+    fn cache_store(name: &str) -> Store {
+        let dir = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "ompdesk-input-retention-{name}-{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&dir);
+        Store::open(dir).unwrap()
+    }
+
+    fn write_at(path: &Path, bytes: &str, ms: u64) {
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(bytes.as_bytes()).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_millis(ms))
+            .unwrap();
+    }
+
+    fn cached_run(store: &Store, n: u32, checkout: &str, state: &str, at: u64) -> Run {
+        let id = format!("20261108-000000-{n:04x}");
+        let hash = "a".repeat(64);
+        let mut run = earlier_run(store, &id, state, &hash);
+        run.root = store.dir.join(checkout).display().to_string();
+        run.cwd.clone_from(&run.root);
+        run.key = key_of(Path::new(&run.root), Path::new(&run.cwd), &run.argv);
+        run.started = at;
+        run.ended = run.state.finished().then_some(at);
+        store.write(&run).unwrap();
+        fs::File::create(store.file(&id, "alive")).unwrap();
+        write_at(
+            &store.file(&id, "inputs.tsv"),
+            &format!("F\ta\t{hash}\n"),
+            at,
+        );
+        write_at(
+            &inputs::stat_cache_path(&store.dir, &run.root),
+            &format!("a\t1\t2\t3\t4\t0\t{hash}\n"),
+            at,
+        );
+        run
+    }
+
+    #[test]
+    fn disk_care_expires_only_idle_input_payloads() {
+        let store = cache_store("expiry");
+        let old = CACHE_NOW - 4 * DAY;
+        let a = cached_run(&store, 1, "first", "passed", old);
+        let b = cached_run(&store, 2, "second", "failed", old);
+        let recent = cached_run(&store, 3, "recent", "passed", CACHE_NOW - DAY);
+        let queued = cached_run(&store, 4, "queued", "waiting", old);
+        let ancestor = cached_run(&store, 5, "queued", "passed", old);
+        let running = cached_run(&store, 6, "running", "running", old);
+        let bad = cached_run(&store, 7, "malformed-tsvs", "passed", old);
+        let next = cached_run(&store, 8, "starting", "starting", old);
+        let held = cached_run(&store, 9, "held", "passed", old);
+        let alive = fs::File::open(store.file(&held.id, "alive")).unwrap();
+        alive.lock().unwrap();
+        let detail = |run: &Run| store.file(&run.id, "inputs.tsv");
+        let cache = |run: &Run| inputs::stat_cache_path(&store.dir, &run.root);
+        let refreshed = cached_run(&store, 10, "refreshed", "passed", old);
+        for path in [detail(&refreshed), cache(&refreshed)] {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_millis(CACHE_NOW))
+                .unwrap();
+        }
+        write_at(&detail(&bad), "not input detail\n", old);
+        write_at(&cache(&bad), "not a stat cache\n", old);
+        let unknown = store.dir.join("inputs").join("0123456789abcdef.tsv");
+        write_at(&unknown, "personal file", old);
+        let flaky = store.dir.join("flaky").join(format!("{}.json", a.key));
+        fs::create_dir(store.dir.join("flaky")).unwrap();
+        write_at(&flaky, "quarantine", old);
+        let evidence = [
+            "log",
+            "results.jsonl",
+            "verdict.txt",
+            "outputs.sha256",
+            "reused.jsonl",
+        ];
+        for name in evidence {
+            write_at(&store.file(&a.id, name), "evidence", old);
+        }
+        let expected: u64 = [&a, &b]
+            .into_iter()
+            .flat_map(|run| [detail(run), cache(run)])
+            .map(|p| {
+                let meta = fs::metadata(p).unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    meta.blocks() * 512
+                }
+                #[cfg(windows)]
+                {
+                    meta.len()
+                }
+            })
+            .sum();
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || true), 0);
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || false), expected);
+        for run in [&a, &b] {
+            assert!(!detail(run).exists() && !cache(run).exists());
+            assert_eq!(store.read(&run.id).unwrap().state, run.state);
+        }
+        for run in [
+            &recent, &queued, &ancestor, &running, &bad, &next, &held, &refreshed,
+        ] {
+            assert!(
+                detail(run).is_file() && cache(run).is_file(),
+                "{}",
+                run.root
+            );
+        }
+        for name in evidence {
+            assert_eq!(fs::read(store.file(&a.id, name)).unwrap(), b"evidence");
+        }
+        assert_eq!(fs::read(unknown).unwrap(), b"personal file");
+        assert_eq!(fs::read(flaky).unwrap(), b"quarantine");
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || false), 0);
+        drop(alive);
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_journal_cannot_choose_a_cleanup_path_and_the_ten_run_limit_stays_local() {
+        let store = cache_store("journals");
+        let old = CACHE_NOW - 4 * DAY;
+        let a = cached_run(&store, 0, "history", "passed", old);
+        for i in 1..=10 {
+            cached_run(&store, i, "history", "passed", old + u64::from(i));
+        }
+        let other = cached_run(&store, 11, "other", "passed", old);
+        let forged = cached_run(&store, 12, "forged", "passed", old);
+        let journal = store.file(&forged.id, "run.json");
+        let mut spoof = forged.clone();
+        spoof.id = "../..".into();
+        fs::write(journal, serde_json::to_vec(&spoof).unwrap()).unwrap();
+        prune_idle_inputs(&store.dir, CACHE_NOW, || false);
+        assert!(store.file(&forged.id, "inputs.tsv").exists());
+        assert!(inputs::stat_cache_path(&store.dir, &other.root).exists());
+        store.prune(&a.key, CACHE_NOW);
+        assert!(!store.run_dir(&a.id).exists());
+        assert_eq!(store.of_key(&a.key).len(), 10);
+        assert!(store.file(&other.id, "run.json").is_file());
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn linked_cache_directories_do_not_authorize_their_targets() {
+        fn link(target: &Path, at: &Path) {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, at).unwrap();
+            #[cfg(windows)]
+            assert!(
+                Command::new("cmd")
+                    .args(["/D", "/C", "mklink", "/J"])
+                    .arg(at)
+                    .arg(target)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let store = cache_store("links");
+        let old = CACHE_NOW - 4 * DAY;
+        let run = cached_run(&store, 1, "checkout", "passed", old);
+        let inputs = store.dir.join("inputs");
+        let personal = store.dir.join("elsewhere");
+        fs::rename(&inputs, &personal).unwrap();
+        link(&personal, &inputs);
+        #[cfg(unix)]
+        {
+            let detail = store.file(&run.id, "inputs.tsv");
+            let file = personal.join("input-list");
+            fs::rename(&detail, &file).unwrap();
+            std::os::unix::fs::symlink(&file, &detail).unwrap();
+        }
+        prune_idle_inputs(&store.dir, CACHE_NOW, || false);
+        assert!(inputs::stat_cache_path(&store.dir, &run.root).is_file());
+        #[cfg(unix)]
+        assert!(store.file(&run.id, "inputs.tsv").is_symlink());
+        let original = store.run_dir(&run.id);
+        let elsewhere = store.dir.join("other-run");
+        fs::rename(&original, &elsewhere).unwrap();
+        link(&elsewhere, &original);
+        let target = elsewhere.join("inputs.tsv");
+        #[cfg(unix)]
+        fs::remove_file(&target).unwrap();
+        write_at(&target, &format!("F\ta\t{}\n", "a".repeat(64)), old);
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || false), 0);
+        assert!(target.is_file());
+        let absent = store.dir.join("absent");
+        assert_eq!(prune_idle_inputs(&absent, CACHE_NOW, || false), 0);
+        assert!(!absent.exists());
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn cancellation_after_one_unlink_leaves_the_other_payloads() {
+        let store = cache_store("cancel");
+        let old = CACHE_NOW - 4 * DAY;
+        let a = cached_run(&store, 1, "first", "passed", old);
+        let b = cached_run(&store, 2, "second", "passed", old);
+        let first = store.file(&a.id, "inputs.tsv");
+        let second = store.file(&b.id, "inputs.tsv");
+        prune_idle_inputs(&store.dir, CACHE_NOW, || {
+            !first.exists() || !second.exists()
+        });
+        assert_ne!(first.exists(), second.exists());
+        for run in [a, b] {
+            assert!(inputs::stat_cache_path(&store.dir, &run.root).is_file());
+        }
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn missing_input_detail_runs_in_full_without_inventing_a_changed_file() {
+        let store = cache_store("missing");
+        let prev = earlier_run(&store, "0001", "passed", "old");
+        let now = earlier_run(&store, "0002", "running", "new");
+        let detected = Detected {
+            kind: Kind::Vitest,
+            needs_dashdash: false,
+            script: None,
+        };
+        let decision = decide(&store, &now, &detected, &InputSet::default(), "new", false);
+        assert_eq!(decision.plan.mode, "full");
+        assert!(
+            decision
+                .plan
+                .evidence
+                .iter()
+                .any(|line| line.contains("unavailable"))
+        );
+        assert!(decision.reused.is_empty());
+        let row = serde_json::json!({
+            "runner": "vitest", "kind": "test", "file": "a.test.ts", "titles": ["case"],
+            "status": "passed", "ms": 1
+        });
+        store
+            .append(&prev.id, "results.jsonl", &row.to_string())
+            .unwrap();
+        let same = decide(&store, &now, &detected, &InputSet::default(), "old", false);
+        assert_eq!(same.plan.mode, "reused");
+        fs::remove_dir_all(store.dir).unwrap();
     }
 
     #[test]

@@ -21,7 +21,7 @@ interface Scratch {
 	/** Running processes; null when they cannot be listed. */
 	processes: Array<{ tag?: string }> | null;
 	/** What the session index lists. */
-	stored: string[];
+	stored: string[] | null;
 }
 
 /** A scratch store and its care in the test's world, as of `now` (a month from now: every folder idle). */
@@ -86,6 +86,26 @@ describe("disk care: session scratch folders", () => {
 			expect(await exists(path.join(other, "shots/after.png"))).toBe(true);
 			expect(s.store.records().map(record => record.tag)).toEqual([OTHER]);
 			expect(logged("scratch")).toMatchObject([{ path: dir, reason: "its session was deleted" }]);
+		},
+		SLOW,
+	);
+
+	it.each([{ processes: null }, { processes: [{ tag: TAG }] }])(
+		"defers deletion until tagged processes are known to be gone (%j)",
+		async ({ processes }) => {
+			const s = await scratch(Date.now());
+			const owner = await session("deleted");
+			const dir = await folder(s, TAG, owner);
+			s.processes = processes;
+			await fs.unlink(owner);
+			await s.care.sessionDeleted(owner);
+			expect(await exists(path.join(dir, "checkout/src/a.ts"))).toBe(true);
+			expect(s.store.records()).toMatchObject([{ tag: TAG, sessions: [] }]);
+
+			s.processes = [];
+			await s.care.sweep();
+			expect(await exists(dir)).toBe(false);
+			expect(s.store.records()).toEqual([]);
 		},
 		SLOW,
 	);
@@ -264,6 +284,10 @@ describe("disk care: session scratch folders", () => {
 			const after = path.join(w.root, "sessions", "-elsewhere", "moved.jsonl");
 			await fs.mkdir(path.dirname(after), { recursive: true });
 			await fs.rename(before, after);
+			s.stored = null;
+			expect(await s.care.sweep()).toMatchObject({ kept: 1, failed: 0 });
+			expect(await exists(path.join(dir, "shots/after.png"))).toBe(true);
+
 			s.stored = [after];
 			const gone = await folder(s, OTHER, path.join(w.root, "sessions", "-repo", "removed-outside.jsonl"));
 
@@ -272,11 +296,21 @@ describe("disk care: session scratch folders", () => {
 			// The moved session still exists, so its folder waits for its idle days.
 			expect(await exists(path.join(dir, "shots/unused.png"))).toBe(true);
 
+			// Stock can leave the old file in place while its index already shows the moved copy.
+			await session("moved");
 			const later = await scratch();
 			later.stored = [after];
 			await w.care(undefined, { scratch: later.care }).run("user");
 			expect(await exists(path.join(dir, "shots/after.png"))).toBe(true);
 			expect(await exists(path.join(dir, "shots/unused.png"))).toBe(false);
+
+			await fs.unlink(before);
+			await later.care.sessionDeleted(before);
+			expect(await exists(path.join(dir, "shots/after.png"))).toBe(true);
+			await fs.unlink(after);
+			later.stored = [];
+			await later.care.sessionDeleted(after);
+			expect(await exists(dir)).toBe(false);
 		},
 		SLOW,
 	);

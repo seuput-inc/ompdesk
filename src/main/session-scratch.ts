@@ -121,16 +121,18 @@ export class SessionScratch {
 	}
 
 	/**
-	 * `sessionPath` was deleted: no reply of it will be shown again. Answers the tags of the folders that served it
-	 * and now serve no session at all.
+	 * `sessionPath` was deleted. Keep any moved copies in its place; return folders with no remaining session.
 	 */
-	sessionDeleted(sessionPath: string): string[] {
+	sessionDeleted(sessionPath: string, moved: readonly string[]): string[] {
 		const key = sessionKey(sessionPath);
 		const emptied: string[] = [];
 		let changed = false;
 		for (const record of this.#records.values()) {
 			const left = record.sessions.filter(known => sessionKey(known) !== key);
 			if (left.length === record.sessions.length) continue;
+			for (const file of moved) {
+				if (!left.some(known => sessionKey(known) === sessionKey(file))) left.push(file);
+			}
 			record.sessions = left;
 			changed = true;
 			if (left.length === 0) emptied.push(record.tag);

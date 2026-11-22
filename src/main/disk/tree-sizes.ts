@@ -92,6 +92,7 @@ export class TreeSizes {
 		worktreeRoot: string;
 		caches: readonly LocatedCache[];
 		scratchRoot?: string;
+		checks?: boolean;
 	}): Promise<DiskUsage> {
 		const { usage, work } = await coreHeld<{ usage: DiskUsage; work: TreeSizesWork }>(
 			"disk.usage",
@@ -103,6 +104,7 @@ export class TreeSizes {
 				omp: path.join(homedir(), ".omp"),
 				appData: options.userData,
 				scratch: options.scratchRoot,
+				checks: options.checks,
 				caches: options.caches.map(({ cache, dir }) => ({ id: cache.part, path: dir })),
 			},
 			WALK_TIMEOUT_MS,

@@ -298,31 +298,64 @@ pub struct StatCache {
     map: HashMap<String, (Stat, String)>,
 }
 
+fn stat_row(line: &str) -> Option<(&str, Stat, &str)> {
+    let mut fields = line.split('\t');
+    let path = fields.next()?;
+    let stat = Stat {
+        size: fields.next()?.parse().ok()?,
+        mtime: fields.next()?.parse().ok()?,
+        ctime: fields.next()?.parse().ok()?,
+        ino: fields.next()?.parse().ok()?,
+        exec: match fields.next()? {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        },
+    };
+    let hash = fields.next()?;
+    (!path.is_empty() && hex(hash, 64) && fields.next().is_none()).then_some((path, stat, hash))
+}
+
+pub(super) fn hex(text: &str, len: usize) -> bool {
+    text.len() == len && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+pub(super) fn stat_cache_path(store: &Path, root: &str) -> PathBuf {
+    let hash = sha256_hex(root.as_bytes());
+    store.join("inputs").join(format!("{}.tsv", &hash[..16]))
+}
+
+pub(super) fn stat_cache_row(line: &str) -> bool {
+    stat_row(line).is_some()
+}
+
+pub(super) fn run_input_row(line: &str) -> bool {
+    let mut fields = line.split('\t');
+    let (Some(kind), Some(key), Some(value), None) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return false;
+    };
+    !key.is_empty()
+        && match kind {
+            "F" if value == "directory" => true,
+            "F" if value.starts_with("link:") => hex(&value[5..], 64),
+            "X" if key == "@executable" => !value.is_empty(),
+            "F" | "X" => hex(value.strip_suffix('x').unwrap_or(value), 64),
+            "E" => hex(value, 16),
+            "T" => !value.is_empty(),
+            _ => false,
+        }
+}
+
 impl StatCache {
     pub fn load(store: &Path, root: &Path) -> StatCache {
-        let name = &sha256_hex(root.to_string_lossy().as_bytes())[..16];
-        let path = store.join("inputs").join(format!("{name}.tsv"));
+        let path = stat_cache_path(store, &root.to_string_lossy());
         let mut map = HashMap::new();
         if let Ok(text) = fs::read_to_string(&path) {
             for line in text.lines() {
-                let f: Vec<&str> = line.split('\t').collect();
-                if let [p, size, mtime, ctime, ino, exec, hash] = f[..] {
-                    let (Ok(size), Ok(mtime), Ok(ctime), Ok(ino)) =
-                        (size.parse(), mtime.parse(), ctime.parse(), ino.parse())
-                    else {
-                        continue;
-                    };
-                    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-                        continue;
-                    }
-                    let stat = Stat {
-                        size,
-                        mtime,
-                        ctime,
-                        ino,
-                        exec: exec == "1",
-                    };
-                    map.insert(p.to_string(), (stat, hash.to_string()));
+                if let Some((path, stat, hash)) = stat_row(line) {
+                    map.insert(path.to_owned(), (stat, hash.to_owned()));
                 }
             }
         }

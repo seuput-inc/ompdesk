@@ -164,8 +164,8 @@ EndFail(t) ==
     /\ \E again \in BOOLEAN : retry' = IF again THEN retry \cup {t} ELSE retry
     /\ UNCHANGED <<app, quitting, swept, launches, tab, held, sess, used, saved, keep, alive, mayEnd, tookOver>>
 
-\* The retry's timer fires: the tag is ended again only if nothing took it over meanwhile.
-\* @code src/main/session-processes.ts:358-363 #endEntry: the retry looks at the entry's state again
+\* The short timer or disk care retries a released tag only if nothing took it over meanwhile.
+\* @code src/main/session-processes.ts:424-432 retryReleased; :488-495 #endEntry: both recheck ownership
 RetryEnds(t) == state[t] = "left"
 
 Retry(t) ==

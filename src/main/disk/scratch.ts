@@ -1,7 +1,7 @@
 /**
  * Disk care for the sessions' scratch folders (`session-scratch.ts`: one folder per tab, named by its process tag).
  * A folder goes
- * - when the last session it served is deleted: at once, whole (`sessionDeleted`);
+ * - when the last session it served is deleted: at once, unless a tab or tagged process still holds it;
  * - in a run (`sweep`), once no tab holds its tag (a tab of this launch, or one the last launch left that may still
  *   come back), nothing in it changed for `DISK_CARE_ARTIFACT_IDLE_DAYS` and no running process carries its tag:
  *   everything but the files its sessions' replies name, which stay until those sessions are deleted (a reply reads
@@ -17,20 +17,22 @@ import * as path from "node:path";
 import { DISK_CARE_ARTIFACT_IDLE_DAYS } from "../../shared/disk-care";
 import { CoreError } from "../core/process";
 import { coreHeld } from "../local/git/exec";
-import { SCRATCH_TAG, type SessionScratch } from "../session-scratch";
+import { SCRATCH_TAG, type SessionScratch, sessionKey } from "../session-scratch";
 
 const DAY_MS = 24 * 60 * 60_000;
 const READ_MS = 10 * 60_000;
 const SWEEP_MS = 30 * 60_000;
+
+type TaggedProcesses = ReadonlyArray<{ tag?: string }> | null;
 
 export interface ScratchCareDeps {
 	store: Pick<SessionScratch, "root" | "dir" | "records" | "sessionDeleted" | "forget">;
 	/** The tags a tab holds, or the last launch left for a tab that may come back. */
 	heldTags(): ReadonlySet<string>;
 	/** Every running process with its tag; null when they cannot be listed. */
-	processes(): Promise<ReadonlyArray<{ tag?: string }> | null>;
-	/** Every stored session file of this computer: a session moved to another folder keeps its file name. */
-	sessionFiles(): Promise<readonly string[]>;
+	processes(): Promise<TaggedProcesses>;
+	/** Every stored session file of this computer, or null while the session index is unavailable. */
+	sessionFiles(): Promise<readonly string[] | null>;
 	/** One `disk-care` line. */
 	log(message: string, details: Record<string, unknown>): void;
 	now?(): number;
@@ -52,6 +54,12 @@ interface Swept {
 }
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const sessionName = (file: string): string => sessionKey(path.basename(file));
+
+function processHold(tag: string, processes: TaggedProcesses): string | null {
+	if (processes === null) return "process check unavailable";
+	return processes.some(process => process.tag === tag) ? "a process of its session runs" : null;
+}
 
 export class ScratchCare {
 	readonly #deps: ScratchCareDeps;
@@ -66,11 +74,27 @@ export class ScratchCare {
 
 	/** A session file of this computer was deleted: the folders that served only it go now, whole. */
 	async sessionDeleted(sessionPath: string): Promise<void> {
-		for (const tag of this.#deps.store.sessionDeleted(sessionPath)) {
+		const files = await this.#deps.sessionFiles().catch((error: unknown) => {
+			this.#deps.log("failed", { step: "scratch", error: errorText(error) });
+			return null;
+		});
+		if (files === null) return; // Keep the ownership record until a sweep can rule out a moved copy.
+		const key = sessionKey(sessionPath);
+		const name = sessionName(sessionPath);
+		const moved = files.filter(file => sessionName(file) === name && sessionKey(file) !== key);
+		let listed: Promise<TaggedProcesses> | undefined;
+		for (const tag of this.#deps.store.sessionDeleted(sessionPath, moved)) {
 			// A tab still on the tag (it moved to a session not written yet) keeps its folder; a run takes it later.
 			if (this.#deps.heldTags().has(tag)) continue;
 			const dir = this.#deps.store.dir(tag);
 			try {
+				listed ??= this.#deps.processes();
+				const hold = processHold(tag, await listed);
+				if (hold) {
+					this.#deps.log("kept", { path: dir, reason: hold });
+					continue;
+				}
+				if (this.#deps.heldTags().has(tag)) continue;
 				await this.#remove(dir, tag, [], "its session was deleted");
 			} catch (error) {
 				if (error instanceof CoreError && error.code === "scratch_kept") {
@@ -96,8 +120,8 @@ export class ScratchCare {
 			if (!names.includes(tag) && !this.#deps.heldTags().has(tag)) this.#deps.store.forget(tag);
 		}
 		// Listed once, and only when a folder is otherwise ready to go.
-		let listed: Promise<ReadonlyArray<{ tag?: string }> | null> | undefined;
-		let stored: Promise<readonly string[]> | undefined;
+		let listed: Promise<TaggedProcesses> | undefined;
+		let stored: Promise<Map<string, string[]> | null> | undefined;
 		const keep = (dir: string, reason: string): void => {
 			result.kept++;
 			this.#deps.log("kept", { path: dir, reason });
@@ -113,13 +137,23 @@ export class ScratchCare {
 					keep(dir, "its sessions are not known");
 					continue;
 				}
-				stored ??= this.#deps.sessionFiles();
-				const sessions = record ? await existing(record.sessions, await stored) : [];
+				let sessions: string[] = [];
+				if (record?.sessions.length) {
+					stored ??= this.#deps
+						.sessionFiles()
+						.then(files => (files === null ? null : Map.groupBy(files, sessionName)));
+					const files = await stored;
+					if (files === null) {
+						keep(dir, "session list unavailable");
+						continue;
+					}
+					sessions = await existing(record.sessions, files);
+				}
 				if (sessions.length > 0 && (now - facts.newestMs) / DAY_MS < DISK_CARE_ARTIFACT_IDLE_DAYS) continue;
 				listed ??= this.#deps.processes();
-				const processes = await listed;
-				if (processes === null || processes.some(process => process.tag === tag)) {
-					keep(dir, processes === null ? "process check unavailable" : "a process of its session runs");
+				const hold = processHold(tag, await listed);
+				if (hold) {
+					keep(dir, hold);
 					continue;
 				}
 				// A tab may have taken the tag over while the folder was read.
@@ -159,17 +193,18 @@ export class ScratchCare {
 	}
 }
 
-/** The session files of `recorded` that are still there: at their path, or where the session was moved to. */
-async function existing(recorded: readonly string[], stored: readonly string[]): Promise<string[]> {
-	const found: string[] = [];
+/** Stock can list a moved copy while the original still exists. Replies in either file keep their attachments. */
+async function existing(recorded: readonly string[], stored: ReadonlyMap<string, string[]>): Promise<string[]> {
+	const found = new Set<string>();
 	for (const session of recorded) {
-		const there = await fs.access(session).then(
-			() => true,
-			() => false,
-		);
-		const moved = there ? undefined : stored.find(file => path.basename(file) === path.basename(session));
-		if (there) found.push(session);
-		else if (moved) found.push(moved);
+		for (const file of stored.get(sessionName(session)) ?? []) found.add(file);
+		if (found.has(session)) continue;
+		try {
+			await fs.lstat(session);
+			found.add(session);
+		} catch (error) {
+			if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
+		}
 	}
-	return found;
+	return [...found];
 }

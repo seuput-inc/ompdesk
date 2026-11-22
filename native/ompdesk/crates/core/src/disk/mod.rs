@@ -246,6 +246,23 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&blocking(move || saved::drop_entries(&worktree, entries, &scope)).await??)
         })
     });
+    registry.add("disk.pruneCheckInputs", |call| {
+        Box::pin(async move {
+            let scope = call.scope;
+            let bytes = blocking(move || {
+                tree::live(&scope)?;
+                let bytes = ompdesk_checks::check::prune_idle_inputs(
+                    &ompdesk_checks::check::checks_dir(),
+                    crate::clock::now_ms(),
+                    || scope.cancelled(),
+                );
+                tree::live(&scope)?;
+                Ok::<_, crate::server::Fault>(bytes)
+            })
+            .await??;
+            Reply::json(&bytes)
+        })
+    });
     registry.add("disk.clearCache", |call| {
         Box::pin(async move {
             let ClearParams { kind, dir } = call.params()?;
