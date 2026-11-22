@@ -14,8 +14,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AGENT_DESKTOP_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv, stopOmpDaemon } from "./test-bridge-probe";
 import { RM_TEMP, writeFakeBin } from "./test-fake-omp";
+import { removeWhenFree } from "./test-folders";
 
 /** A command no machine has: stock's spawn fails at once. */
 const MISSING = join(tmpdir(), "ompdesk-no-such-agent-desktop");
@@ -83,30 +84,18 @@ interface Probe {
 async function runCheck<T = Probe>(command: string, mode: string, checkMs: number, probe = PROBE): Promise<T> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-computer-use-"));
 	chmodSync(isolated, 0o700);
+	const env = {
+		...stockFixtureEnv(isolated),
+		PI_CODING_AGENT_DIR: isolated,
+		OPENAI_API_KEY: "probe-not-a-real-key",
+		FAKE_MODE: mode,
+		CHECK_MS: String(checkMs),
+		[AGENT_DESKTOP_ENV]: command,
+	};
 	try {
 		cpSync(resolve("resources/gui-bridge"), join(isolated, "bridge"), { recursive: true });
 		const extension = join(isolated, "bridge", "check-probe.ts");
 		writeFileSync(extension, probe);
-		const env: Record<string, string | undefined> = {
-			...process.env,
-			PI_CODING_AGENT_DIR: isolated,
-			PI_CONFIG_DIR: configDirName(isolated),
-			OMP_PROFILE: "",
-			PI_PROFILE: "",
-			OPENAI_API_KEY: "probe-not-a-real-key",
-			FAKE_MODE: mode,
-			CHECK_MS: String(checkMs),
-			[AGENT_DESKTOP_ENV]: command,
-		};
-		// An `OMP_MCP_TIMEOUT_MS` of the shell would override every server's own deadline.
-		for (const key of [
-			"ANTHROPIC_API_KEY",
-			"ANTHROPIC_OAUTH_TOKEN",
-			"CLAUDE_CODE_OAUTH_TOKEN",
-			"OMP_MCP_TIMEOUT_MS",
-		]) {
-			Reflect.deleteProperty(env, key);
-		}
 		const child = spawn(
 			OMP_COMMAND.file,
 			[
@@ -121,7 +110,7 @@ async function runCheck<T = Probe>(command: string, mode: string, checkMs: numbe
 				"-e",
 				extension,
 			],
-			{ env, stdio: ["pipe", "ignore", "pipe"] },
+			{ cwd: isolated, env, stdio: ["pipe", "ignore", "pipe"] },
 		);
 		child.stdin.end();
 		let stderr = "";
@@ -137,7 +126,8 @@ async function runCheck<T = Probe>(command: string, mode: string, checkMs: numbe
 		expect(line, stderr.slice(-2500)).toMatch(/^CHECK_PROBE=/);
 		return JSON.parse(line?.slice("CHECK_PROBE=".length) ?? "{}") as T;
 	} finally {
-		rmSync(isolated, { recursive: true, force: true });
+		stopOmpDaemon(isolated, env);
+		await removeWhenFree(isolated);
 	}
 }
 

@@ -1,12 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv, stopOmpDaemon } from "./test-bridge-probe";
+import { removeWhenFree } from "./test-folders";
 
 /**
  * A plan the automatic mode choice entered for one request (bridge `modes.set_plan_mode {auto: true}`) is approved
@@ -92,9 +93,11 @@ async function startOmp(url: string, tools?: string): Promise<Omp> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-auto-plan-"));
 	chmodSync(isolated, 0o700);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-auto-plan-repo-")));
-	cleanups.push(() => {
-		rmSync(isolated, { recursive: true, force: true });
-		rmSync(root, { recursive: true, force: true });
+	const env = stockFixtureEnv(isolated);
+	cleanups.push(async () => {
+		stopOmpDaemon(isolated, env);
+		await removeWhenFree(isolated);
+		await removeWhenFree(root);
 	});
 	const agentDir = join(isolated, "agent");
 	mkdirSync(agentDir, { recursive: true });
@@ -103,16 +106,7 @@ async function startOmp(url: string, tools?: string): Promise<Omp> {
 		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
 	);
 	const address = newBridgeAddress();
-	const env: Record<string, string | undefined> = {
-		...process.env,
-		PI_CODING_AGENT_DIR: agentDir,
-		PI_CONFIG_DIR: configDirName(isolated),
-		OMP_PROFILE: "",
-		PI_PROFILE: "",
-		OMP_GUI_BRIDGE: address,
-	};
-	for (const key of ["ELECTRON_RUN_AS_NODE", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
-		Reflect.deleteProperty(env, key);
+	env.OMP_GUI_BRIDGE = address;
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
 		[
@@ -121,7 +115,7 @@ async function startOmp(url: string, tools?: string): Promise<Omp> {
 			...["--model", "fake/m1", "-e", resolve("resources/gui-bridge/index.ts")],
 			...(tools ? ["--tools", tools] : []),
 		],
-		{ cwd: root, env: env as NodeJS.ProcessEnv },
+		{ cwd: root, env },
 	);
 	let stderr = "";
 	child.stderr.on("data", chunk => {

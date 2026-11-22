@@ -43,6 +43,29 @@ export function configDirName(folder: string, home = homedir()): string {
 	return relative(home, folder) || ".";
 }
 
+/** A stock fixture inherits the executable search path, not accounts, daemon endpoints or Bun caches. */
+export function stockFixtureEnv(home: string): NodeJS.ProcessEnv {
+	return {
+		PATH: process.env.PATH,
+		SystemRoot: process.env.SystemRoot,
+		ComSpec: process.env.ComSpec,
+		PATHEXT: process.env.PATHEXT,
+		HOME: home,
+		USERPROFILE: home,
+		APPDATA: join(home, "AppData", "Roaming"),
+		LOCALAPPDATA: join(home, "AppData", "Local"),
+		TMP: tmpdir(),
+		TEMP: tmpdir(),
+		TMPDIR: tmpdir(),
+		PI_CONFIG_DIR: ".",
+		PI_CODING_AGENT_DIR: join(home, "agent"),
+		OMP_DAEMON_DIR: join(home, "run", "daemon"),
+		OMP_DAEMON_IDLE_GRACE_MS: "0",
+		AWS_EC2_METADATA_DISABLED: "true",
+		OTEL_SDK_DISABLED: "true",
+	};
+}
+
 /**
  * Ends the omp daemon a test's private config folder `folder` started, with what it runs. From omp 19 an omp starts
  * one per config folder (`<folder>/run/daemon`); it inherits that omp's working folder (stock `resolveWorkerSpawnCmd`
