@@ -30,17 +30,27 @@ export function windowsProcesses(): WinProcess[] {
 export const describeProcess = (process: WinProcess) =>
 	`${process.pid} (parent ${process.ppid}) ${process.name}: ${process.commandLine ?? process.exe ?? "?"}`;
 
-/** The app's core process (`ompdesk-core`, main's child; not the setup supervisor it starts). */
+/** Main starts the RPC core without arguments. The MCP hub and supervisor use the same executable. */
 export function corePids(mainPid: number): number[] {
 	if (process.platform === "win32")
 		return windowsProcesses()
-			.filter(entry => entry.ppid === mainPid && entry.name.toLowerCase() === "ompdesk-core.exe")
+			.filter(
+				entry =>
+					entry.ppid === mainPid &&
+					entry.name.toLowerCase() === "ompdesk-core.exe" &&
+					entry.exe !== null &&
+					entry.commandLine
+						?.trim()
+						.replace(/^"(.*)"$/, "$1")
+						.toLowerCase() === entry.exe.toLowerCase(),
+			)
 			.map(entry => entry.pid);
 	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
 		.split("\n")
-		.map(line => line.trim().split(/\s+/))
-		.filter(([, ppid, command]) => Number(ppid) === mainPid && command?.endsWith("ompdesk-core") === true)
-		.map(([pid]) => Number(pid));
+		.flatMap(line => {
+			const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+			return match && Number(match[2]) === mainPid && match[3]?.endsWith("/ompdesk-core") ? [Number(match[1])] : [];
+		});
 }
 
 /**
