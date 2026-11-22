@@ -3,6 +3,24 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 #[test]
+fn recovery_replaces_the_marker_while_a_reader_holds_the_stall() {
+    let profile = tempfile::tempdir().unwrap();
+    let path = profile.path().join(MARKER);
+    let mut engine = Engine::new(0, 7);
+    assert!(!engine.tick(3_000));
+    assert!(engine.tick(6_000));
+    record(&engine, &path).unwrap();
+    let stalled = std::fs::File::open(&path).unwrap();
+
+    assert!(engine.heartbeat(6_001));
+    record(&engine, &path).unwrap();
+    let previous: Value = serde_json::from_reader(stalled).unwrap();
+    let current: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(previous["selfRecovered"], false);
+    assert_eq!(current["selfRecovered"], true);
+}
+
+#[test]
 fn blocked_node_leaves_a_sampled_marker_before_it_can_recover() {
     let profile = tempfile::tempdir().unwrap();
     let logs = profile.path().join("logs");
@@ -56,7 +74,8 @@ fn blocked_node_leaves_a_sampled_marker_before_it_can_recover() {
     });
     assert!(
         status.success(),
-        "blocked Node did not observe a sampled marker"
+        "blocked Node did not observe a sampled marker ({status}); marker: {:?}",
+        std::fs::read_to_string(&path)
     );
     let marker: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(marker["selfRecovered"], true);

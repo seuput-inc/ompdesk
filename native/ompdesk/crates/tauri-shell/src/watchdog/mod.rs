@@ -65,8 +65,11 @@ fn record(engine: &Engine, path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(logs)?;
     let mut temp = tempfile::NamedTempFile::new_in(logs)?;
     serde_json::to_writer(temp.as_file_mut(), &engine.marker(epoch_ms()))?;
-    temp.persist(path)?;
-    Ok(())
+    // Unlike tempfile's MoveFileExW, std::fs::rename can replace a marker open for reading.
+    let temp = temp.into_temp_path().keep()?;
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 fn watch(pid: u32, path: &Path, rx: Receiver<Signal>) {
