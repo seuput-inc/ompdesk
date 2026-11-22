@@ -172,9 +172,18 @@ for (const engine of ENGINES)
 					);
 				}
 			};
-			await phone.goto(`${link.url}/`, { timeout: 60_000 });
+			// Let the first, unpaired document finish loading before the host sends it to /pair.
+			const session = link.hold("/api/session");
+			try {
+				await phone.goto(`${link.url}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+				await expect(phone.locator(".boot-shell")).toHaveCount(0, { timeout: 60_000 });
+				const hasScope = await phone.evaluate(async () => !!(await navigator.serviceWorker.getRegistration()));
+				expect(hasScope).toBe(false);
+			} finally {
+				session.release();
+			}
 			await phonePaired(phone);
-			// The first load's own worker takes the page (it registers once the app has loaded and claims on activation).
+			// The first paired page's own worker takes control without a reload.
 			// That is checked here, before the reload below: a document that is created while the worker is still installing
 			// and activating can miss the activation's claim (Chromium on a hosted Windows runner: the reload landed between
 			// the worker's install and its activation, the worker listed the page as a client and a claim made 30 s later

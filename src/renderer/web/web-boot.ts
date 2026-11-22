@@ -128,7 +128,10 @@ async function bootApp(): Promise<void> {
 	// The worker's install fetches the shell's chunks. Registered once the app has loaded, it takes them from the
 	// HTTP cache the page just filled, instead of downloading them a second time beside the page's own loads.
 	const appLoaded = Promise.withResolvers<void>();
-	const registration = appLoaded.promise.then(() => registerServiceWorker());
+	// An unpaired first visit leaves for /pair. WebKit can strand a registration started by that departing page.
+	const container = navigator.serviceWorker;
+	const firstHostReply = container && !container.controller ? transport.answered() : undefined;
+	const registration = Promise.all([appLoaded.promise, firstHostReply]).then(() => registerServiceWorker());
 	const openTarget = parseOpenHash(location.hash);
 	let pendingSessionPath = openTarget?.kind === "session-path" ? openTarget.sessionPath : null;
 
