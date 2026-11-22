@@ -293,6 +293,7 @@ for (const variant of VARIANTS)
 			);
 			if (variant.language === "ko") await expect(card).toContainText("업데이트됐어요");
 			await expect(card.locator("[data-whats-new-summary]")).not.toBeEmpty();
+			const summary = await card.locator("[data-whats-new-summary]").innerText();
 			await expect(
 				card.getByRole("button", { name: variant.language === "ko" ? "자세히 보기" : "See details" }),
 			).toBeVisible();
@@ -311,7 +312,7 @@ for (const variant of VARIANTS)
 			await expect(card).toHaveCount(0);
 			// The release's own notes, not the whole file: no other release heading. The dialog's title is its one h2
 			// (dialog titles are headings), and the notes carry none of their own.
-			await expect(notice.locator("li").first()).toBeVisible();
+			await expect(notice.locator("[data-changelog-notes]")).toContainText(summary);
 			await expect(notice).not.toContainText("## [");
 			await expect(notice.locator("h2")).toHaveCount(1);
 			await capture(page, `${variant.name}-01-whats-new`);
