@@ -3,7 +3,7 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	"All Commands": "모든 명령",
 	"Binary Ninja": "Binary Ninja",
 	"Binary Ninja via its headless Python API (needs a headless-capable licence); never chosen by Auto; analysis disabled when no install is found":
-		"Binary Ninja의 헤드리스 Python API를 사용해요. 이를 지원하는 라이선스가 필요해요. 자동 모드에서는 선택하지 않으며 설치본을 찾지 못하면 분석을 끕니다.",
+		"Binary Ninja의 헤드리스 Python API를 사용해요. 이를 지원하는 라이선스가 필요해요. 자동 모드에서는 선택하지 않아요. 설치본을 찾지 못하면 분석하지 않아요.",
 	"Enable when the first usable judge is native": "첫 번째 사용 가능한 판정 모델이 네이티브일 때 켜기",
 	"IDA Pro when an install with idalib is found, otherwise Ghidra; never Binary Ninja":
 		"idalib가 있는 IDA Pro를 찾으면 사용하고, 없으면 Ghidra를 사용해요. Binary Ninja는 자동으로 선택하지 않아요.",

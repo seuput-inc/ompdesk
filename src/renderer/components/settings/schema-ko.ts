@@ -252,7 +252,7 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"binja.python": {
 		label: "Binary Ninja용 Python",
 		description:
-			"설치 폴더의 python 디렉터리에서 Binary Ninja API를 불러올 Python 3을 지정해요. 비워 두면 자동으로 찾아요.",
+			"설치 경로 아래의 python 폴더에서 Binary Ninja API를 불러올 Python 3을 지정해요. 비워 두면 자동으로 찾아요.",
 	},
 	"edit.magic.model": {
 		label: "매직 편집 모델",
