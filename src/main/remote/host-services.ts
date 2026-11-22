@@ -2889,7 +2889,7 @@ export class LocalHostServices implements HostServices {
 		// A device's prompt is typed there (an agent's is wrapped, and `noteTypedPrompt` leaves it out): memory recall runs
 		// for it here, even in an Autopilot run's tab, and one that joins the running turn is answered first. Only for a
 		// prompt that goes in (one past the device's daily limit never reaches this).
-		await noteTypedPrompt(client, command);
+		await noteTypedPrompt(client, command, () => runs.run.running);
 		return client.command(command, timeoutMs);
 	}
 

@@ -1130,8 +1130,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// one that joins the running turn is answered first (gui-bridge typed-prompts.ts, answer-first.ts).
 			// The same word tells the control tools the person started this tab's turn: cleanups its agent was refused
 			// while the person was in the session are listed to it now (agent-control/pending-cleanups.ts).
-			if (channel !== undefined && issuerTabId && personsPrompt(cmd)) agentControl.personTyped(issuerTabId);
-			if (!sidecar.device && channel !== undefined) await noteTypedPrompt(client, cmd as RpcCommand);
+			if (channel !== undefined && personsPrompt(cmd)) {
+				if (issuerTabId) agentControl.personTyped(issuerTabId);
+				if (!sidecar.device)
+					await noteTypedPrompt(
+						client,
+						cmd as RpcCommand,
+						() => !!issuerTabId && sidecarPool.tabFacts(issuerTabId)?.busy === true,
+					);
+			}
 			// Every Stop leaves one line naming who asked (turn-stop-log.ts); omp gets it without that origin, while a
 			// paired host's tab gets it with, so the host logs it too.
 			const outgoing = dispatchedCommand({ ...cmd, id: _id } as RpcCommand, {
