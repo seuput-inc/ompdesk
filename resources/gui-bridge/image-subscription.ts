@@ -1,7 +1,7 @@
 /**
  * Every `generate_image` call runs on the subscription's image model (rule: image-subscription-core.ts), through the
- * public `tool_call` hook: its `input` revision is what stock validates, approves and executes, nested `xd://` calls
- * included, and `block` refuses a call that names another model. Imports nothing from omp.
+ * public `tool_call` hook: its `input` revision is what stock validates, approves and executes, including calls
+ * mounted in bash or under `xd://`. `block` refuses a call that names another model. Imports nothing from omp.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";

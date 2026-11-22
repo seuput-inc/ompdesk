@@ -34,18 +34,20 @@ async function startPaidImages(): Promise<{ url: string; hits: string[] }> {
 	return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, hits };
 }
 
-/** The image call as the session offers it: the tool itself, or its `xd://` device when stock mounts it there. */
+/** Use the image tool directly or through the mounted transport advertised by this omp. */
 function imageCall(firstRequest: string, args: Record<string, unknown>): unknown[] {
 	const tools = (JSON.parse(firstRequest) as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
-	return tools.some(tool => tool.function?.name === "generate_image")
-		? toolCall("generate_image", args)
-		: toolCall("write", { path: "xd://generate_image", content: JSON.stringify(args) });
+	if (tools.some(tool => tool.function?.name === "generate_image")) return toolCall("generate_image", args);
+	const content = JSON.stringify(args);
+	if (firstRequest.includes("# Tool Commands"))
+		return toolCall("bash", { command: `generate_image - <<'JSON'\n${content}\nJSON` });
+	return toolCall("write", { path: "xd://generate_image", content });
 }
 
 async function run(args: Record<string, unknown>): Promise<{ next: string; paidHits: string[] }> {
 	const paid = await startPaidImages();
-	const provider = await startProvider(step =>
-		step === 1 ? sse(imageCall(provider.bodies[0], args), "tool_calls") : sse([{ content: "DONE" }], "stop"),
+	const provider = await startProvider((step, body) =>
+		step === 1 ? sse(imageCall(body, args), "tool_calls") : sse([{ content: "DONE" }], "stop"),
 	);
 	const agent = fakeAgent(provider.url);
 	appendFileSync(
