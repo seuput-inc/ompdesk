@@ -338,7 +338,7 @@ for (const language of variants(["en", "ko"] as const)) {
 
 	test(`marketplaces, plugins and MCP servers keep current: refresh, plugin upgrade, MCP update, reload and reconnect (${language})`, async () => {
 		test.setTimeout(150_000);
-		const launched = await launch(`auto-${language}`, { language }, true);
+		const launched = await launch(`auto-${language}`, { language, builtinMcp: { rea: true } }, true);
 		const { page } = launched;
 		const shot = async (name: string) => {
 			await page.getByTestId("extension-update-group").evaluate(row => row.scrollIntoView({ block: "start" }));
@@ -455,7 +455,8 @@ test("with the pref off nothing runs at launch; Update now runs that row's cycle
 			"aria-checked",
 			"false",
 		);
-		await expect(settings.locator("[data-extension-row]")).toHaveCount(5, { timeout: 30_000 });
+		await expect(settings.locator("[data-extension-row]")).toHaveCount(4, { timeout: 30_000 });
+		await expect(status(settings, BUILTIN)).toHaveCount(0);
 		for (const id of [MARKETPLACE, PLUGIN, MCP]) {
 			await expect(status(settings, id)).toHaveText("Not checked yet.");
 		}
