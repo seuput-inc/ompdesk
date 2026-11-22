@@ -95,12 +95,41 @@ jobs:
     name: native (macos arm64)
     runs-on: macos-latest
     timeout-minutes: 30
+    env:
+      # Keep file and line numbers in backtraces, without debugger data for every local variable.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/native-check
+      - name: Identify the native test build
+        id: test-inputs
+        shell: bash
+        run: |
+          digest=$(git rev-parse HEAD:native/ompdesk HEAD:scripts/mac-signing.json \
+            HEAD:.github/actions/native-check HEAD:.github/actions/native-toolchain HEAD:.github/workflows/mac-checks.yml \
+            | shasum -a 256 | cut -d ' ' -f 1)
+          echo "key=rustc-test-$RUNNER_OS-$RUNNER_ARCH-${ImageVersion:-$(sw_vers -buildVersion)}-$digest" >> "$GITHUB_OUTPUT"
+      - id: check
+        uses: ./.github/actions/native-check
+        with:
+          test-cache-key: ${{ steps.test-inputs.outputs.key }}
+      - name: Measure the test compiler state
+        if: steps.check.outputs.unsaved-test-cache-key != ''
+        id: size
+        run: |
+          kib=$(du -sk native/ompdesk/target/debug/incremental | cut -f 1)
+          echo "rustc incremental state: $kib KiB (save limit: 1536 MiB)"
+          if (( kib > 0 && kib <= 1536 * 1024 )); then echo "save=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Save the test compiler state
+        if: steps.size.outputs.save == 'true'
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: native/ompdesk/target/debug/incremental
+          key: ${{ steps.check.outputs.unsaved-test-cache-key }}
       - if: failure()
         shell: bash
         run: bash scripts/ci-failure.sh
