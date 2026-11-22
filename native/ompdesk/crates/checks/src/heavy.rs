@@ -17,9 +17,9 @@
 //! Nesting: a holder puts `OMPDESK_HEAVY_HELD` (its own pid) in its command's environment; a heavy command started
 //! under it (a check script that wraps each step) runs inside its holder's place instead of waiting on itself.
 //!
-//! Disk: a new heavy command also waits while a volume it writes to (its folder's, the temp folder's) has less free
-//! space than `min_free` of that volume, and says so; a command already running is never stopped. A full system disk
-//! ended a check and put an OS error box on the owner's screen (13 Nov 2026: 116 MB left on a Mac mini).
+//! With admission limits on, a new heavy command also waits for the free space specified by `min_free`.
+//! An `admission-off` marker in the pool folder disables both start checks. Running commands retain their
+//! emergency disk watcher in either mode.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -233,6 +233,10 @@ pub struct Lease {
 }
 
 impl Lease {
+    pub fn has_slots(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
     pub fn slots(&self) -> Vec<usize> {
         self.slots.iter().map(|(i, _)| *i).collect()
     }
@@ -269,6 +273,8 @@ pub struct SlotView {
 pub struct Status {
     pub dir: String,
     pub size: usize,
+    #[serde(rename = "admissionLimited")]
+    pub admission_limited: bool,
     pub slots: Vec<SlotView>,
     /// Live waiters' pids in admission order if nobody else joins or cancels.
     pub queue: Vec<u32>,
@@ -316,15 +322,14 @@ struct Ticket {
     _lock: File,
 }
 
-impl Ticket {
-    fn leave(self) {
+impl Drop for Ticket {
+    fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
 
-    fn cancel(self) -> io::Error {
-        self.leave();
-        io::Error::new(io::ErrorKind::Interrupted, "cancelled while waiting")
-    }
+fn cancelled_wait() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "cancelled while waiting")
 }
 
 fn admission_order(turns: &mut [Turn], protected: u64) {
@@ -349,6 +354,28 @@ impl Pool {
             size: size.max(1),
             volumes: Volumes::of_work(&cwd, &[], &|k| std::env::var(k).ok()),
         })
+    }
+
+    pub fn admission_limited(&self) -> io::Result<bool> {
+        match fs::symlink_metadata(self.dir.join("admission-off")) {
+            Ok(m) if m.is_file() => Ok(false),
+            Ok(_) => Err(io::Error::other("admission-off is not a regular file")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_admission_limited(&self, limited: bool) -> io::Result<()> {
+        let _gate = self.queue_lock()?;
+        if limited == self.admission_limited()? {
+            return Ok(());
+        }
+        let marker = self.dir.join("admission-off");
+        if limited {
+            fs::remove_file(marker)
+        } else {
+            File::create_new(marker).map(drop)
+        }
     }
 
     pub fn disks(&self) -> Vec<Disk> {
@@ -509,13 +536,30 @@ impl Pool {
     ) -> io::Result<Lease> {
         let want = weight.clamp(1, self.size);
         let started = Instant::now();
+        let unrestricted = || {
+            if cancelled() {
+                return Err(cancelled_wait());
+            }
+            Ok(Lease {
+                slots: Vec::new(),
+                dir: PathBuf::new(),
+                waited: started.elapsed(),
+                acquired_at: now_ms(),
+            })
+        };
+        if !self.admission_limited()? {
+            return unrestricted();
+        }
         let ticket = self.enqueue(release)?;
         let mut held = Vec::new();
         let mut told: Option<(bool, usize)> = None;
         loop {
             let gate = self.queue_lock()?;
+            if !self.admission_limited()? {
+                return unrestricted();
+            }
             if cancelled() {
-                return Err(ticket.cancel());
+                return Err(cancelled_wait());
             }
             let mut tickets = self.live_tickets(Some(&ticket.path))?;
             let protected = self.protected()?;
@@ -530,7 +574,7 @@ impl Pool {
                 if low_disk.is_empty() {
                     if self.take_free(&mut held, want)? {
                         if cancelled() {
-                            return Err(ticket.cancel());
+                            return Err(cancelled_wait());
                         }
                         let overtook = tickets.get(1).is_some_and(|t| t.number < ticket.number);
                         owner.since = now_ms();
@@ -548,7 +592,7 @@ impl Pool {
                         if overtook {
                             self.protect(ticket.number)?;
                         }
-                        ticket.leave();
+                        drop(ticket);
                         return Ok(lease);
                     }
                 } else if !release && ticket.number > protected {
@@ -598,6 +642,7 @@ impl Pool {
         Status {
             dir: self.dir.display().to_string(),
             size: self.size,
+            admission_limited: self.admission_limited().unwrap_or(true),
             slots: self.slots(),
             queue,
             disk: self.disks(),
@@ -649,13 +694,77 @@ mod tests {
             std::process::id(),
             now_ms() ^ (size as u64) << 40 ^ rand_bits()
         ));
-        let pool = Pool::new(dir.clone(), size).unwrap();
+        let pool = synthetic_pool(&dir, size);
         (dir, pool)
     }
 
     fn rand_bits() -> u64 {
         use std::hash::{BuildHasher, RandomState};
         RandomState::new().hash_one(0u8)
+    }
+
+    #[test]
+    fn admission_setting_is_local_persistent_and_reversible() {
+        let (dir, pool) = temp_pool(1);
+        let (other_dir, other) = temp_pool(1);
+        assert!(pool.admission_limited().unwrap());
+        pool.set_admission_limited(false).unwrap();
+        let reopened = Pool::new(dir.clone(), 1).unwrap();
+        reopened.set_admission_limited(false).unwrap();
+        assert!(!reopened.status().admission_limited);
+        assert!(other.admission_limited().unwrap());
+        reopened.set_admission_limited(true).unwrap();
+        pool.set_admission_limited(true).unwrap();
+        assert!(pool.status().admission_limited);
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(other_dir).unwrap();
+    }
+
+    #[test]
+    fn disabling_admission_releases_waiters_without_claiming_slots() {
+        let (dir, mut pool) = temp_pool(1);
+        let holder = pool.acquire(1, owner("holder"), |_| panic!()).unwrap();
+        let older = pool.enqueue(false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let lease = pool
+            .acquire_unless(
+                1,
+                owner("queued"),
+                false,
+                |w| {
+                    assert_eq!(w.ahead, 1);
+                    pool.set_admission_limited(false).unwrap();
+                },
+                &|| Instant::now() >= deadline,
+            )
+            .unwrap();
+        assert!(lease.slots().is_empty());
+        assert_eq!(fs::read_dir(dir.join("queue")).unwrap().count(), 1);
+        pool.volumes = pool
+            .volumes
+            .with_probe(Arc::new(|_| panic!("start probed disk")));
+        let next = pool.acquire(1, owner("new"), |_| panic!("waited")).unwrap();
+        assert!(next.slots().is_empty());
+        assert_eq!(pool.slots()[0].owner.as_ref().unwrap().command, "holder");
+        assert_eq!(
+            pool.acquire_unless(1, owner("cancel"), false, |_| panic!(), &|| true)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        drop(older);
+        drop(holder);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_admission_marker_cannot_grant_admission() {
+        let (dir, pool) = temp_pool(1);
+        fs::create_dir(dir.join("admission-off")).unwrap();
+        assert!(pool.admission_limited().is_err());
+        assert!(pool.acquire(1, owner("invalid"), |_| panic!()).is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -680,7 +789,7 @@ mod tests {
         assert!(status.slots.iter().all(|s| s.held));
         assert_eq!(status.slots[0].owner.as_ref().unwrap().command, "a");
 
-        let pool2 = Pool::new(dir.clone(), 2).unwrap();
+        let pool2 = synthetic_pool(&dir, 2);
         let waited = Arc::new(Mutex::new(None));
         let seen = waited.clone();
         let c = std::thread::spawn(move || {
@@ -710,7 +819,7 @@ mod tests {
             let dir = dir.clone();
             let order = order.clone();
             joins.push(std::thread::spawn(move || {
-                let pool = Pool::new(dir, 1).unwrap();
+                let pool = synthetic_pool(&dir, 1);
                 let lease = pool.acquire(1, owner(name), |_| {}).unwrap();
                 order.lock().unwrap().push(name);
                 std::thread::sleep(Duration::from_millis(50));
@@ -736,7 +845,7 @@ mod tests {
             let dir = dir.clone();
             let order = order.clone();
             std::thread::spawn(move || {
-                let pool = Pool::new(dir, 2).unwrap();
+                let pool = synthetic_pool(&dir, 2);
                 let lease = pool.acquire(weight, owner(name), |_| {}).unwrap();
                 order.lock().unwrap().push((name, lease.slots().len()));
                 std::thread::sleep(Duration::from_millis(50));
@@ -826,8 +935,8 @@ mod tests {
 
     const WORKER_DIR: &str = "OMPDESK_TEST_QUEUE_WORKER_DIR";
 
-    fn synthetic_pool(dir: &Path) -> Pool {
-        let mut pool = Pool::new(dir.to_owned(), 2).unwrap();
+    fn synthetic_pool(dir: &Path, size: usize) -> Pool {
+        let mut pool = Pool::new(dir.to_owned(), size).unwrap();
         pool.volumes.paths = vec![dir.to_owned()];
         pool.volumes.need = Some(10 * GIB);
         pool.volumes = pool
@@ -837,7 +946,7 @@ mod tests {
     }
 
     fn queue_worker(dir: &Path) {
-        let pool = synthetic_pool(dir);
+        let pool = synthetic_pool(dir, 2);
         let release = std::env::var("OMPDESK_TEST_QUEUE_CLASS").unwrap() == "release";
         let weight = std::env::var("OMPDESK_TEST_QUEUE_WEIGHT")
             .unwrap()
@@ -928,8 +1037,7 @@ mod tests {
         if let Some(dir) = std::env::var_os(WORKER_DIR) {
             return queue_worker(Path::new(&dir));
         }
-        let (dir, _) = temp_pool(2);
-        let pool = synthetic_pool(&dir);
+        let (dir, pool) = temp_pool(2);
         let a = pool.acquire(1, owner("a"), |_| panic!()).unwrap();
         let b = pool.acquire(1, owner("b"), |_| panic!()).unwrap();
         let mut normal = Worker::waiting(&dir, "normal", 2);
@@ -982,8 +1090,7 @@ mod tests {
 
     #[test]
     fn an_empty_legacy_ticket_is_a_fifo_barrier_until_its_lock_is_returned() {
-        let (dir, _) = temp_pool(2);
-        let pool = synthetic_pool(&dir);
+        let (dir, pool) = temp_pool(2);
         let legacy = open_rw(&dir.join("queue/00000000000000000001.4242")).unwrap();
         legacy.lock().unwrap();
         let release = Worker::waiting(&dir, "release", 1);

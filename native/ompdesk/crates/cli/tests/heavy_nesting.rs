@@ -20,6 +20,8 @@ fn cli(dir: &Path) -> Command {
         .current_dir(dir)
         .env("OMPDESK_HEAVY_DIR", dir.join("heavy"))
         .env("OMPDESK_HEAVY_SLOTS", "1")
+        .env("OMPDESK_CHECKS_DIR", dir.join("checks"))
+        .env_remove("OMPDESK_CHECK_RUN")
         .env("OMPDESK_HEAVY_MIN_FREE_GB", "0")
         .env_remove("OMPDESK_HEAVY_HELD");
     command
@@ -152,5 +154,84 @@ fn a_hold_whose_named_holder_is_gone_takes_a_slot() {
         .args(["heavy", "hold"]);
     let hold = finish(hold);
     assert!(text(&hold).starts_with("held 0 pid "), "{hold:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn off_bypasses_an_existing_holder_until_auto_is_restored() {
+    let dir = temp("limit");
+    let (mut hold, _) = outer(&dir);
+    let call = |args: &[&str]| {
+        let mut command = cli(&dir);
+        command.args(args);
+        let out = finish(command);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        text(&out)
+    };
+    let json = |args: &[&str]| serde_json::from_str::<serde_json::Value>(&call(args)).unwrap();
+    call(&["heavy", "limit", "off"]);
+    for invalid in [&[][..], &["on"], &["auto", "--json"], &["off", "auto"]] {
+        let mut command = cli(&dir);
+        command.args(["heavy", "limit"]).args(invalid);
+        assert_eq!(finish(command).status.code(), Some(2));
+    }
+    let pool = json(&["heavy", "status", "--json"]);
+    assert_eq!(pool["admissionLimited"], false);
+    assert_eq!(pool["slots"][0]["held"], true);
+    assert!(status(&dir).contains("Heavy limit off"));
+    assert_eq!(call(&["heavy", "hold", "--all"]).trim(), "unlimited");
+    assert_eq!(
+        call(&[
+            "run",
+            "--heavy",
+            "--",
+            env!("CARGO_BIN_EXE_ompdesk"),
+            "heavy",
+            "hold",
+        ])
+        .trim(),
+        "unlimited"
+    );
+    let board = json(&["checks", "status"]);
+    assert_eq!(board["pools"][0]["admissionLimited"], false);
+    assert!(board["pools"][0]["limit"].is_null());
+    assert_eq!(board["pools"][0]["running"], 1);
+
+    call(&["heavy", "limit", "auto"]);
+    assert_eq!(
+        json(&["heavy", "status", "--json"])["admissionLimited"],
+        true
+    );
+    assert!(status(&dir).starts_with("1/1 heavy slots in use"));
+    drop(hold.stdin.take());
+    assert!(hold.wait().unwrap().success());
+    assert!(call(&["heavy", "hold"]).starts_with("held 0 pid "));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_unlimited_check_starts_without_a_holder_or_a_queue_milestone() {
+    let dir = temp("unlimited-check");
+    let work = dir.join("work");
+    std::fs::create_dir(&work).unwrap();
+    let mut off = cli(&dir);
+    off.args(["heavy", "limit", "off"]);
+    assert!(finish(off).status.success());
+    let mut check = cli(&dir);
+    check.current_dir(&work).args(["check", "--"]);
+    if cfg!(windows) {
+        check.args(["cmd", "/d", "/c", "if defined OMPDESK_HEAVY_HELD exit /b 1"]);
+    } else {
+        check.args(["sh", "-c", "test -z \"${OMPDESK_HEAVY_HELD+x}\""]);
+    }
+    let out = finish(check);
+    assert!(out.status.success(), "{out:?}");
+    let mut status = cli(&dir);
+    status.args(["checks", "status"]);
+    let board: serde_json::Value = serde_json::from_slice(&finish(status).stdout).unwrap();
+    let run = &board["runs"][0];
+    assert_eq!(run["state"], "passed");
+    assert!(run["timing"]["queuedAt"].is_null());
+    assert!(run["timing"]["acquiredAt"].is_null());
     let _ = std::fs::remove_dir_all(dir);
 }

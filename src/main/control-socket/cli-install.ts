@@ -72,6 +72,7 @@ read -r held <&4
 held=$(printf '%s' "$held" | tr -d '\r')
 case $held in
 "held reused") ;;
+"unlimited") unset OMPDESK_HEAVY_HELD ;;
 "held "*" pid "*) OMPDESK_HEAVY_HELD=$(printf '%s' "$held" | sed 's/.* pid //'); export OMPDESK_HEAVY_HELD ;;
 *) exec 3>&-; wait "$hold"; code=$?; [ $code -eq 0 ] && code=1; exit $code ;;
 esac

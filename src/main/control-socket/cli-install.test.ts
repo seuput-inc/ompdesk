@@ -125,6 +125,7 @@ describe("installCliLaunchers", () => {
 			`#!/bin/sh
 echo "$*" >> '${log}'
 [ "$1 $2" = "heavy hold" ] || exit 0
+if [ "$TEST_UNLIMITED" = yes ]; then printf 'unlimited\\r\\n'; exit 0; fi
 if [ -n "$OMPDESK_HEAVY_HELD" ]; then echo "reused under $OMPDESK_HEAVY_HELD" >> '${log}'; printf 'held reused\\r\\n'
 else printf 'held 1 pid 4242\\r\\n'; fi
 cat >/dev/null
@@ -151,6 +152,14 @@ echo released >> '${log}'
 		const { launcher, env, log, cli } = underWsl();
 		execFileSync(launcher, ["heavy", "status"], { env });
 		expect(readFileSync(log, "utf8").trim().split("\n")).toEqual([`wslpath -u ${cli}`, "heavy status"]);
+	});
+
+	it.skipIf(process.platform === "win32")("under WSL runs without exporting a holder when admission is off", () => {
+		const { launcher, env } = underWsl();
+		const run = spawnSync(launcher, ["run", "--heavy", "--", "sh", "-c", 'test -z "$OMPDESK_HEAVY_HELD" && exit 7'], {
+			env: { ...env, TEST_UNLIMITED: "yes", OMPDESK_HEAVY_HELD: "999" },
+		});
+		expect(run.status).toBe(7);
 	});
 
 	it.skipIf(process.platform === "win32")(

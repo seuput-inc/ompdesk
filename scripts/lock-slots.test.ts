@@ -7,7 +7,7 @@ import { configureNativeBin, nativeBinPath } from "../src/main/native-bin";
 import { removeWhenFree } from "../src/main/test-folders";
 import {
 	acquireHeavy,
-	acquireHold,
+	acquireHold as acquireOptionalHold,
 	acquireSlot,
 	DEFAULT_SLOTS,
 	HEAVY_HELD_ENV,
@@ -53,6 +53,7 @@ function locksFor(slots: Partial<Record<SlotKind, number>> = {}, heavySlots = 1)
 			...process.env,
 			OMPDESK_HEAVY_DIR: path.join(dir, "heavy"),
 			OMPDESK_HEAVY_SLOTS: String(heavySlots),
+			OMPDESK_HEAVY_MIN_FREE_GB: "0",
 			[HEAVY_HELD_ENV]: "",
 		},
 		say: message => said.push(message),
@@ -278,6 +279,11 @@ describe("workers per run", () => {
 // outside the lock) and WindowServer stalled at 29.9 GB of footprint. A small machine runs one heavy hold at a time; the
 // pool that enforces it is the product's (`ompdesk heavy`), so these cases run the real binary on a temp pool.
 describe("the computer's heavy slots (the real ompdesk, a temp pool)", () => {
+	const acquireHold = async (...args: Parameters<typeof acquireOptionalHold>) => {
+		const lease = await acquireOptionalHold(...args);
+		if (!lease) throw new Error("expected a kind lease");
+		return lease;
+	};
 	const pause = (ms = 600) => new Promise(resolve => setTimeout(resolve, ms));
 	/** Until `count` holds wait in the pool's queue: how a test fixes the order its waiters arrive in. */
 	const queued = (locks: Locks, count: number) =>
@@ -364,6 +370,21 @@ describe("the computer's heavy slots (the real ompdesk, a temp pool)", () => {
 		expect(lease?.waitedMs).toBeLessThan(10_000);
 		lease?.release();
 	}, 60_000);
+
+	it("starts independent checks without either slot but still locks the build output after opt-out", async () => {
+		const locks = locksFor();
+		const held = await acquireHold(locks, "vitest", who("already-running"));
+		leases.push(held);
+		const cli = nativeBinPath("ompdesk");
+		const changed = spawnSync(cli, ["heavy", "limit", "off"], { env: locks.env });
+		expect(changed.status).toBe(0);
+		expect(await heavyPoolSize(locks.env)).toBe(Infinity);
+		expect(await acquireOptionalHold(locks, "vitest", who("independent"))).toBeUndefined();
+		const build = await acquireHold(locks, "build", who("writes-out"));
+		leases.push(build);
+		expect(build.heavyPid).toBeUndefined();
+		expect(inspectSlots(locks).some(slot => slot.kind === "build" && slot.holder)).toBe(true);
+	});
 
 	it("is as large as the pool says: OMPDESK_HEAVY_SLOTS, else the product's rule", async () => {
 		expect(await heavyPoolSize(locksFor({}, 3).env)).toBe(3);

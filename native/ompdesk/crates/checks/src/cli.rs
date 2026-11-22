@@ -1,11 +1,12 @@
 //! The local commands of the `ompdesk` CLI: they work without a running OMPdesk, so a plain shell script, CI or
 //! another agent CLI uses them the same way.
 //!
-//! - `ompdesk run --heavy [--all] [--] CMD [ARG…]`: runs CMD holding a heavy slot (every slot with `--all`), waiting
-//!   in order for one; exits with CMD's code.
-//! - `ompdesk heavy status [--json]`: the pool's slots, their holders and the queue.
-//! - `ompdesk heavy hold [--all]`: for a program that holds a slot itself: prints `held <slots>` once it has the
-//!   slot(s) and gives them back when its stdin closes (or it dies).
+//! - `ompdesk run --heavy [--all] [--] CMD [ARG…]`: runs CMD with this computer's heavy admission policy; exits
+//!   with CMD's code.
+//! - `ompdesk heavy limit off|auto`: skips or restores the heavy slot and free-space checks before work starts.
+//! - `ompdesk heavy status [--json]`: the admission policy, slots, holders and queue.
+//! - `ompdesk heavy hold [--all]`: prints `held <slots> pid <pid>` or `held reused` and waits for stdin to close.
+//!   Without a slot or an inherited hold, it prints `unlimited` and exits.
 //! - `ompdesk check [--full] [--light] [--release] [--] CMD [ARG…]`, `check status|attach|cancel`: see `check.rs`.
 //! - `ompdesk checks wait [ID]`, `checks status`: see `board.rs`.
 
@@ -20,8 +21,10 @@ pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_NOT_STARTED: i32 = 127;
 
 pub const HELP: &str = concat!(
-    "  run       `run --heavy [--all] [--] CMD [ARG...]`: run CMD in one of this computer's heavy slots (all with --all).\n",
-    "  heavy     `heavy status [--json]` lists the slots and the queue; `heavy hold [--all]` holds slots until stdin closes.\n",
+    "  run       `run --heavy [--all] [--] CMD [ARG...]`: run CMD under this computer's heavy limit (all slots with --all).\n",
+    "  heavy     `heavy limit off|auto` disables or restores this computer's slot and free-space checks before work starts.\n",
+    "            `heavy status [--json]` shows the limit, slots and queue. `heavy hold [--all]` holds slots until stdin closes\n",
+    "            or prints `unlimited` if no slot is required.\n",
     "  check     `check [--full] [--light] [--release] [--] CMD [ARG...]`: run a test suite or check, reusing only results\n",
     "            whose inputs are unchanged; survives OMPdesk restarts. `check status [ID] [--all] [--json]`,\n",
     "            `check attach [ID]`, `check cancel ID`.\n",
@@ -248,7 +251,7 @@ fn take(weight: usize, command: &[String], label: &str) -> io::Result<heavy::Lea
         },
         |w| eprint!("{}", wait_line(w)),
     )?;
-    if lease.waited.as_secs() >= 1 {
+    if lease.has_slots() && lease.waited.as_secs() >= 1 {
         eprintln!(
             "ompdesk: heavy slot taken after {}",
             minutes(lease.waited.as_millis() as u64)
@@ -300,7 +303,7 @@ fn run(rest: &[String]) -> i32 {
             }
         }
     };
-    let code = run_holding(command);
+    let code = run_holding(command, lease.as_ref());
     drop(lease);
     code
 }
@@ -373,13 +376,18 @@ pub fn stop_process(pid: u32, grace: std::time::Duration) {
 /// Runs `command` to its end while this process holds its slots; SIGTERM and SIGHUP sent to this process are passed
 /// on to it, so the holder never gives its slot back before the command ended. Its volumes are watched while it runs
 /// (`watch.rs`), and output going to a pipe or file (an agent, a log) is capped; a terminal sees all of it.
-fn run_holding(command: &[String]) -> i32 {
+fn run_holding(command: &[String], lease: Option<&heavy::Lease>) -> i32 {
     use std::io::IsTerminal;
     use std::process::Stdio;
     let mut child = Command::new(&command[0]);
-    child
-        .args(&command[1..])
-        .env(HELD_ENV, std::process::id().to_string());
+    child.args(&command[1..]);
+    if let Some(lease) = lease {
+        if lease.has_slots() {
+            child.env(HELD_ENV, std::process::id().to_string());
+        } else {
+            child.env_remove(HELD_ENV);
+        }
+    }
     let cap_out = !io::stdout().is_terminal();
     let cap_err = !io::stderr().is_terminal();
     if cap_out {
@@ -461,6 +469,20 @@ pub fn exit_code(status: io::Result<std::process::ExitStatus>) -> i32 {
 
 fn heavy_command(rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
+        Some("limit") => {
+            let limited = match &rest[1..] {
+                [mode] if mode == "off" => false,
+                [mode] if mode == "auto" => true,
+                _ => return usage("heavy limit takes off or auto"),
+            };
+            match pool(&[]).and_then(|pool| pool.set_admission_limited(limited)) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("ompdesk: cannot set the heavy limit: {e}");
+                    EXIT_FAILED
+                }
+            }
+        }
         Some("status") => {
             let json = match &rest[1..] {
                 [] => false,
@@ -486,11 +508,19 @@ fn heavy_command(rest: &[String]) -> i32 {
             }
             let now = heavy::now_ms();
             let busy = status.slots.iter().filter(|s| s.held).count();
-            let _ = writeln!(
-                out,
-                "{busy}/{} heavy slots in use ({})",
-                status.size, status.dir
-            );
+            if status.admission_limited {
+                let _ = writeln!(
+                    out,
+                    "{busy}/{} heavy slots in use ({})",
+                    status.size, status.dir
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "Heavy limit off; {busy} slots still held ({})",
+                    status.dir
+                );
+            }
             for slot in &status.slots {
                 match (&slot.owner, slot.held) {
                     (Some(o), _) => {
@@ -507,6 +537,7 @@ fn heavy_command(rest: &[String]) -> i32 {
                     (None, true) => {
                         let _ = writeln!(out, "  slot {}: held", slot.slot);
                     }
+                    (None, false) if !status.admission_limited => {}
                     (None, false) => {
                         let _ = writeln!(out, "  slot {}: free", slot.slot);
                     }
@@ -523,7 +554,7 @@ fn heavy_command(rest: &[String]) -> i32 {
                     d.path,
                     crate::watch::gb(d.free),
                     crate::watch::gb(d.total),
-                    if d.low() {
+                    if status.admission_limited && d.low() {
                         format!(
                             "; under the {} new heavy work needs, so it waits",
                             crate::watch::gb(d.need)
@@ -559,6 +590,10 @@ fn heavy_command(rest: &[String]) -> i32 {
                 // The pid is what the holder exports as `OMPDESK_HEAVY_HELD` to the work it runs under this hold.
                 let mut out = io::stdout().lock();
                 let _ = match &lease {
+                    Some(lease) if !lease.has_slots() => {
+                        let _ = writeln!(out, "unlimited");
+                        return 0;
+                    }
                     Some(lease) => {
                         let slots: Vec<String> =
                             lease.slots().iter().map(usize::to_string).collect();
@@ -588,7 +623,7 @@ fn heavy_command(rest: &[String]) -> i32 {
             drop(lease);
             0
         }
-        _ => usage("heavy takes status or hold"),
+        _ => usage("heavy takes status, hold or limit off|auto"),
     }
 }
 

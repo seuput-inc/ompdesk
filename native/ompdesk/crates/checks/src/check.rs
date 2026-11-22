@@ -1249,9 +1249,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         if nothing_to_run || rt.run.light || lease.is_some() || held_by_parent {
             break;
         }
-        rt.run.state = State::Waiting;
-        rt.run.milestones.get_or_insert_default().queued_at = Some(now_ms());
-        rt.save();
+        let queued_at = now_ms();
         let lookup = |k: &str| env.get(k).cloned();
         let owner = heavy::Owner {
             pid: std::process::id(),
@@ -1265,7 +1263,6 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             run_id: Some(rt.run.id.clone()),
             session: rt.run.session.clone(),
         };
-        let log = &mut rt.log;
         let cancel_file = rt.store.file(&rt.run.id, "cancel");
         let taken = heavy::Pool::new(heavy::pool_dir(&lookup), heavy::machine_size(&lookup))
             .and_then(|mut pool| {
@@ -1275,6 +1272,11 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                     owner,
                     rt.run.release,
                     |w| {
+                        if rt.run.state != State::Waiting {
+                            rt.run.state = State::Waiting;
+                            rt.run.milestones.get_or_insert_default().queued_at = Some(queued_at);
+                            rt.save();
+                        }
                         let line = if w.low_disk.is_empty() {
                             format!(
                                 "waiting for a heavy slot ({} ahead, {} in use)",
@@ -1299,15 +1301,20 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                                 disks.join(", ")
                             )
                         };
-                        let _ = writeln!(log, "ompdesk check: {line}");
+                        rt.say(&line);
                     },
                     &|| cancel_file.exists(),
                 )
             });
         match taken {
             Ok(l) => {
-                rt.run.milestones.get_or_insert_default().acquired_at = Some(l.acquired_at);
-                if l.waited.as_secs() >= 1 {
+                if !l.has_slots() && rt.run.state != State::Waiting {
+                    break;
+                }
+                let milestones = rt.run.milestones.get_or_insert_default();
+                milestones.queued_at = Some(queued_at);
+                milestones.acquired_at = Some(l.acquired_at);
+                if l.has_slots() && l.waited.as_secs() >= 1 {
                     let waited = store::duration(l.waited.as_millis() as u64);
                     rt.say(&format!("heavy slot taken after {waited}"));
                 }
@@ -1369,8 +1376,10 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         cmd_env.extend(decision.rewrite.env.clone());
         cmd_env.insert(runner::RESULTS_ENV.into(), results.display().to_string());
         cmd_env.insert(RUN_ENV.into(), rt.run.id.clone());
-        if lease.is_some() {
+        if lease.as_ref().is_some_and(heavy::Lease::has_slots) {
             cmd_env.insert(heavy::HELD_ENV.into(), std::process::id().to_string());
+        } else if !held_by_parent {
+            cmd_env.remove(heavy::HELD_ENV);
         }
         if decision.rewrite.argv != argv {
             rt.say(&format!("running: {}", decision.rewrite.argv.join(" ")));

@@ -311,7 +311,7 @@ fn last_progress(store: &Store, run: &Run) -> Progress {
     };
     for (kind, at) in [
         ("queued", m.queued_at),
-        ("slot-acquired", m.acquired_at),
+        ("admitted", m.acquired_at),
         ("command-started", m.command_started_at),
         ("command-ended", m.command_ended_at),
     ] {
@@ -365,12 +365,13 @@ pub struct Holder {
 pub struct PoolRow {
     pub id: &'static str,
     pub os: &'static str,
-    pub limit: usize,
+    pub admission_limited: bool,
+    pub limit: Option<usize>,
     pub running: usize,
     pub queued: usize,
     pub oldest_wait_ms: u64,
     pub holders: Vec<Holder>,
-    /// Volumes too full for new heavy work to start.
+    /// Volumes below the free-space threshold used when admission is limited.
     pub low_disk: Vec<Disk>,
 }
 
@@ -458,7 +459,8 @@ pub(crate) fn board(store: &Store, pool: &Pool, me: Option<&str>) -> Board {
         pools: vec![PoolRow {
             id: "local",
             os: std::env::consts::OS,
-            limit: status.size,
+            admission_limited: status.admission_limited,
+            limit: status.admission_limited.then_some(status.size),
             running: holders.len(),
             holders,
             queued: status.queue.len(),
@@ -817,7 +819,7 @@ mod tests {
         let p = &b.pools[0];
         assert_eq!(
             (p.limit, p.running, p.queued, p.oldest_wait_ms),
-            (2, 1, 0, 0)
+            (Some(2), 1, 0, 0)
         );
         let holder = &p.holders[0];
         assert_eq!(holder.pid, Some(std::process::id()));
