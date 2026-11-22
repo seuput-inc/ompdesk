@@ -396,6 +396,23 @@ export function sagaRetryInfo(
 	return shown?.attempt === saga.attempt ? shown : { ...saga };
 }
 
+function applyTabRun(session: StoreApi<SessionStore>, info: IpcTabInfo): void {
+	const state = session.getState();
+	const running = info.status === "running";
+	const isStreaming = running && !info.settling;
+	if (!running) resetRetryPending(info.tabId);
+	session.setState({
+		status: info.status === "running" ? "ready" : info.status,
+		cwd: info.cwd,
+		isStreaming,
+		runStatusVersion: state.runStatusVersion + 1,
+		...(isStreaming ? {} : { awaitingModelSince: null }),
+		retryInfo: running ? sagaRetryInfo(info.retrySaga, state.retryInfo) : null,
+		isCompacting: info.compacting ?? state.isCompacting,
+		...(info.compacting ? {} : { compactionInfo: null }),
+	});
+}
+
 /**
  * Hand window focus to `id` with `view` (`view.split` null = single view,
  * `view.remembered` = the splits kept off screen) and route main's
@@ -725,6 +742,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 							{
 								tab,
 								runtime,
+								eventVersion: sessionRuntimeStore<SessionStore>(tab.id, "session")?.getState().eventVersion,
 								queue: runtime?.stores.get("queue")?.getState(),
 								composer: runtime?.stores.get("composer")?.getState(),
 								extensionUi: runtime?.stores.get("extensionUi")?.getState(),
@@ -811,8 +829,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		// A web page keeps its own done marks across reloads (lib/unread-marks.ts); the desktop's live in memory.
 		const savedMarks = webRuntime() ? readUnreadMarks() : null;
 		const ghosts = get().tabs.filter(tab => tab.ghost);
-		/** Tabs whose runtime this reconcile created or replaced: they hold no status yet (see below). */
-		const fresh: IpcTabInfo[] = [];
+		const runReadings: IpcTabInfo[] = [];
 		set(state => {
 			const leftovers = new Map(state.tabs.filter(tab => !tab.ghost).map(tab => [tab.id, tab]));
 			const unclaimed = state.tabs.filter(tab => tab.ghost);
@@ -841,7 +858,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				if (sessionChanged) {
 					replaceTabRuntime(info.tabId);
 				}
-				if (newRuntime || sessionChanged) fresh.push(info);
+				if (
+					newRuntime ||
+					sessionChanged ||
+					(resync &&
+						before?.get(info.tabId)?.eventVersion ===
+							sessionRuntimeStore<SessionStore>(info.tabId, "session")?.getState().eventVersion)
+				)
+					runReadings.push(info);
 				ensureTabRuntime(info.tabId);
 				if (ghostId) carryGhostComposer(ghostId, info.tabId);
 				const tab: SessionTab = {
@@ -901,13 +925,10 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		});
 		// A ghost is gone by now, adopted or not: its runtime (the seeded transcript) goes with it.
 		for (const ghost of ghosts) if (!get().tabs.some(tab => tab.id === ghost.id)) deleteSessionRuntime(ghost.id);
-		// A runtime made here missed the TAB_STATUS that told its status (a paired page that resyncs after the host
-		// restarted learns the new tab ids only from this list, after their `ready` went by): the list's status is it.
-		for (const info of fresh) {
+		// A new runtime missed its first status. On reconnect existing runtimes may have missed the turn's end too.
+		for (const info of runReadings) {
 			const session = sessionRuntimeStore<SessionStore>(info.tabId, "session");
-			if (!session) continue;
-			session.getState().setStatus(info.status === "running" ? "ready" : info.status, info.cwd);
-			session.setState({ isStreaming: info.status === "running" });
+			if (session) applyTabRun(session, info);
 		}
 		// Every tab's banner reason comes with the list too: a failure can come before any subscription exists (omp
 		// missing or too old at launch), or while the tab was not shown.
@@ -1397,35 +1418,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		});
 		watchTabAwaitingInput(payload.tabId);
 		const session = sessionRuntimeStore<SessionStore>(payload.tabId, "session");
+		const target = session ?? (active ? useSessionStore : null);
+		if (target) {
+			applyTabRun(target, payload);
+			applyTabFailure(target, payload, previous?.status);
+		} else if (payload.status !== "running") resetRetryPending(payload.tabId);
 		if (sessionChanged && (payload.status === "ready" || payload.status === "running")) {
 			void attachTabSession(payload.tabId);
 		}
-		// The end events that clear the retry/compaction rows and the retry gate
-		// only reach a visible tab; main's view of the run is authoritative. So is
-		// its retry saga: a tab shown after the saga started (a background tab, a
-		// view that joined later) heard no auto_retry_start, and the failed attempt
-		// then read as the turn's end (a failure card for the whole retried request).
-		const running = payload.status === "running";
-		const compacting = payload.compacting === true;
-		if (!running) resetRetryPending(payload.tabId);
-		const shownRetry = (session ? session.getState() : useSessionStore.getState()).retryInfo;
-		const settled = {
-			retryInfo: running ? sagaRetryInfo(payload.retrySaga, shownRetry) : null,
-			...(compacting ? {} : { compactionInfo: null }),
-		};
-		if (session) {
-			session.getState().setStatus(payload.status === "running" ? "ready" : payload.status, payload.cwd);
-			session.setState({
-				isStreaming: running,
-				isCompacting: payload.compacting ?? session.getState().isCompacting,
-				...settled,
-			});
-		} else if (active) {
-			useSessionStore.getState().setStatus(payload.status === "running" ? "ready" : payload.status, payload.cwd);
-			useSessionStore.setState({ isStreaming: running, ...settled });
-		}
-		const banner = session ?? (active ? useSessionStore : null);
-		if (banner) applyTabFailure(banner, payload, previous?.status);
 		if (completedInBackground && payload.lastRun) notifyRunEnd(payload.tabId, payload.lastRun);
 	},
 

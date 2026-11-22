@@ -1966,6 +1966,46 @@ describe("tabs store background tab signals", () => {
 		expect(sessionRuntime("t1")).toBeNull();
 	});
 
+	it("recovers existing tabs' foreground turns from the host list without ending background work", async () => {
+		seedTabs();
+		for (const id of ["t0", "t1", "t2"]) {
+			useTabsStore.getState().applyTabStatus(tabInfo(id, "/work", "running"));
+			sessionRuntimeStore<SessionStore>(id, "session")!.setState({ awaitingModelSince: 123 });
+		}
+		omp.tabs.list.mockResolvedValue([
+			{ ...tabInfo("t0", "/work", "running"), settling: true, active: true },
+			tabInfo("t1", "/work", "running"),
+			tabInfo("t2", "/work", "exited"),
+		]);
+
+		expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(true);
+		const session = (id: string) => sessionRuntimeStore<SessionStore>(id, "session")!.getState();
+		expect(tabOf("t0")).toMatchObject({ status: "running", settling: true });
+		expect(session("t0")).toMatchObject({ isStreaming: false, awaitingModelSince: null });
+		expect(session("t1")).toMatchObject({ isStreaming: true, awaitingModelSince: 123 });
+		expect(session("t2")).toMatchObject({ status: "exited", isStreaming: false, awaitingModelSince: null });
+	});
+
+	describe.each([
+		{ name: "state refresh", read: refreshSessionState },
+		{ name: "transcript hydration", read: hydrateTabSession },
+	])("$name racing a host status", ({ read }) => {
+		it.each([false, true])("keeps the newer foreground state (previously live: %s)", async wasLive => {
+			seedTabs();
+			const info = tabInfo("t0", "/alpha", "running");
+			useTabsStore.getState().applyTabStatus(wasLive ? info : { ...info, settling: true });
+			const older = Promise.withResolvers<RpcResponse>();
+			omp.rpc.getState.mockReturnValueOnce(older.promise);
+			const reading = read("t0");
+			useTabsStore.getState().applyTabStatus(wasLive ? { ...info, settling: true } : info);
+			older.resolve(ok(serverState({ isStreaming: wasLive, sessionName: "From the snapshot" })));
+			await reading;
+
+			expect(tabOf("t0")?.status).toBe("running");
+			expect(useSessionStore.getState()).toMatchObject({ isStreaming: !wasLive, sessionName: "From the snapshot" });
+		});
+	});
+
 	it("gives a tab it learns only from the list the list's status (its TAB_STATUS went by before the page knew it)", async () => {
 		seedTabs("t1");
 		omp.tabs.list.mockResolvedValue([

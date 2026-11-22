@@ -108,6 +108,17 @@ export function applyUsageSnapshot(state: RpcSessionState, tabId: string): void 
 	withSessionRuntime(tabId, () => writeUsage(state));
 }
 
+/** A host run reading received during the request supersedes only the snapshot's foreground flag. */
+function withLatestRun(
+	wire: RpcSessionState,
+	current: SessionStore | undefined,
+	before: number | undefined,
+): RpcSessionState {
+	return current && current.runStatusVersion !== before && current.isStreaming !== wire.isStreaming
+		? { ...wire, isStreaming: current.isStreaming }
+		: wire;
+}
+
 /** Apply a get_state snapshot to every state-derived store. */
 export function applySessionState(
 	state: RpcSessionState,
@@ -145,8 +156,8 @@ export async function refreshSessionState(tabId = useTabsStore.getState().active
 	// Live tabs may legitimately lack one yet (boot race) — create on demand.
 	const runtime = isTabClosed(tabId) ? sessionRuntime(tabId) : ensureTabRuntime(tabId);
 	if (!runtime) return;
-	const sessionId = sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().sessionId;
-	const eventVersion = sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().eventVersion;
+	const session = sessionRuntimeStore<SessionStore>(tabId, "session");
+	const before = session?.getState();
 	const selection = sessionRuntimeStore<ModelStore>(tabId, "model")?.getState();
 	const restarts = restartGenerations.get(runtime);
 	try {
@@ -154,17 +165,17 @@ export async function refreshSessionState(tabId = useTabsStore.getState().active
 		if (
 			sessionRuntime(tabId) !== runtime ||
 			restartGenerations.get(runtime) !== restarts ||
-			sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().sessionId !== sessionId ||
+			session?.getState().sessionId !== before?.sessionId ||
 			!res.success ||
 			res.data == null
 		)
 			return;
-		const state = res.data as RpcSessionState;
+		const state = withLatestRun(res.data as RpcSessionState, session?.getState(), before?.runStatusVersion);
 		// Events that landed during the round trip already updated the stores, so
 		// this snapshot is behind on everything they carry. Usage and the composer
 		// modes have no event carrier, so they stay the freshest reading either way;
 		// the model selection too, unless something wrote it meanwhile.
-		const churned = sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().eventVersion !== eventVersion;
+		const churned = session?.getState().eventVersion !== before?.eventVersion;
 		const current = sessionRuntimeStore<ModelStore>(tabId, "model")?.getState();
 		withSessionRuntime(tabId, () => {
 			if (churned)
@@ -566,6 +577,7 @@ interface HydrationBaseline {
 	messages: AgentMessage[];
 	liveMessages: AgentMessage[];
 	eventVersion: number | undefined;
+	runStatusVersion: number | undefined;
 	toolsRevision: number | undefined;
 	selection: ModelSelection | undefined;
 }
@@ -576,6 +588,7 @@ function captureHydrationBaseline({ messages, session, tools, model }: Hydration
 		messages: transcript?.messages ?? [],
 		liveMessages: transcript?.liveMessages ?? [],
 		eventVersion: session?.getState().eventVersion,
+		runStatusVersion: session?.getState().runStatusVersion,
 		toolsRevision: tools?.getState().revision,
 		selection: model?.getState(),
 	};
@@ -612,10 +625,11 @@ function commitHydration({
 	// `get_state` is the only witness to a live turn. A failed read counts as not
 	// live: a card left spinning never resolves, while a wrongly aborted card is
 	// repaired by the next execution event.
-	const wire =
+	const snapshot =
 		stateResult.status === "fulfilled" && stateResult.value.success
 			? (stateResult.value.data as RpcSessionState | null)
 			: null;
+	const wire = snapshot && withLatestRun(snapshot, session?.getState(), before.runStatusVersion);
 	const stateIsStreaming = wire?.isStreaming === true;
 	const stateIsIdle = wire != null && !stateIsStreaming;
 	const page =

@@ -22,6 +22,8 @@ export interface SessionStore {
 	setSwitchPending: (pending: { fromId: string; toId: string } | null) => void;
 	/** Live event revision; a delayed snapshot cannot overwrite a newer lifecycle transition. */
 	eventVersion: number;
+	/** Host tab run readings received; they supersede the foreground bit, not the rest of an in-flight get_state. */
+	runStatusVersion: number;
 	transcriptView: TranscriptView | null;
 	saveTranscriptView: (view: TranscriptView) => void;
 	/** Bumped when the transcript must snap back to the live edge (the user just
@@ -111,6 +113,7 @@ export interface SessionStore {
 const initialState = {
 	switchPending: null as { fromId: string; toId: string } | null,
 	eventVersion: 0,
+	runStatusVersion: 0,
 	transcriptView: null as TranscriptView | null,
 	transcriptPinNonce: 0,
 	sessionId: "",
@@ -201,7 +204,7 @@ export const createSessionStore = () =>
 				isCompacting: state.isCompacting,
 				// The end events that clear these rows can be missed (the tab was
 				// in the background); an idle snapshot proves the window closed.
-				...(state.isStreaming ? {} : { retryInfo: null }),
+				...(state.isStreaming ? {} : { retryInfo: null, awaitingModelSince: null }),
 				...(state.isCompacting ? {} : { compactionInfo: null }),
 				contextUsage: state.contextUsage ?? null,
 				messageCount: state.messageCount,
