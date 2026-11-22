@@ -35,12 +35,14 @@ import { writeFileSync } from "node:fs";
 import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { install, methods } from "./ask-form";
 export default function (pi) {
- pi.on("session_start", (_event, context) => {
+ pi.on("session_start", () => {
   setTimeout(async () => {
    try {
+    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
+    // The event handler's UI snapshots formDialog before install; the runner's context sees the live RPC UI.
+    const context = session.extensionRunner.createContext();
     const native = typeof context.ui.formDialog === "function";
     install(pi);
-    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
     const html = process.env.PROBE_FORM;
     const project = methods.project_ask_form;
     const { questions } = await project({ html });
@@ -156,8 +158,8 @@ async function askForm(): Promise<{ frames: Frame[]; text: string; projection: P
 		await once(child, "close");
 		expect(unexpected, `Dialog before the probe asked: ${unexpected}\n${stderr.slice(-2500)}`).toBeUndefined();
 		const line = stderr.split("\n").find(value => value.startsWith("ASK_FORM_PROBE="));
-		expect(line, stderr.slice(-2500)).toMatch(/^ASK_FORM_PROBE=/);
-		const content = JSON.parse(line?.slice("ASK_FORM_PROBE=".length) ?? "[]") as Array<{ text: string }>;
+		if (!line) throw new Error(`Stock ask probe returned no result:\n${stderr.slice(-2500)}`);
+		const content = JSON.parse(line.slice("ASK_FORM_PROBE=".length)) as Array<{ text: string }>;
 		const projection: Projection = JSON.parse(readFileSync(join(isolated, "projected.json"), "utf8"));
 		return { frames, text: content.map(block => block.text).join("\n"), projection };
 	} finally {

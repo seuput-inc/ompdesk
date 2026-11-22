@@ -23,6 +23,7 @@
  * rewrites the JSON from a nightly's logs: run it when specs are added or slow down.
  */
 import { spawnSync } from "node:child_process";
+import type { JSONReport } from "@playwright/test/reporter";
 import costs from "./e2e-shard-costs.json";
 import { deal } from "./shard-deal";
 
@@ -46,7 +47,17 @@ function listSuites(): JsonSuite[] {
 		maxBuffer: 256 * 1024 * 1024,
 		stdio: ["ignore", "pipe", "inherit"],
 	});
-	if (result.status !== 0) throw new Error(`playwright --list failed (exit ${result.status})`);
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		let detail = result.stdout.trim();
+		try {
+			const report: JSONReport = JSON.parse(detail);
+			detail = report.errors.map(error => error.stack ?? error.message ?? error.value).join("\n");
+		} catch {
+			// A failure before the JSON reporter starts may print plain text instead.
+		}
+		throw new Error(`playwright --list failed (${result.signal ?? `exit ${result.status}`})\n${detail}`);
+	}
 	// Playwright's own JSON reporter output (the documented list report shape).
 	const report: { suites: JsonSuite[] } = JSON.parse(result.stdout);
 	return report.suites;

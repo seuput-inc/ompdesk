@@ -3,16 +3,16 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { ompPackageRoot } from "./omp-runtime";
 
 /** Bun's launcher for the global omp (`omp.exe` on Windows); a stock-pinned test skips when it is not installed. */
 export const INSTALLED_OMP = join(homedir(), ".bun", "bin", process.platform === "win32" ? "omp.exe" : "omp");
+const stockScope = join(homedir(), ".bun", "install", "global", "node_modules", "@oh-my-pi");
+const stockCli = join(stockScope, "pi-coding-agent", "dist", "cli.js");
 
 /** The installed omp's `@oh-my-pi/<pkg>/src/<file>`, or null without omp or that file (a stock-pinned test skips). */
 export function stockSource(pkg: string, file: string): string | null {
-	const root = ompPackageRoot(INSTALLED_OMP);
-	const full = root ? join(root, "..", pkg, "src", file) : null;
-	return full && existsSync(full) ? full : null;
+	const full = join(stockScope, pkg, "src", file);
+	return existsSync(full) ? full : null;
 }
 
 /** Runs `script` in Bun, which loads stock's TypeScript as omp does, and parses the JSON line it prints. */
@@ -29,10 +29,10 @@ export function runStock<T>(script: string): T {
  * (a `session_exit` "normal" in the journal of a test that meant a crash) and keeps its folders open past the test's
  * cleanup. The product stops the whole tree (`taskkill /T`, sidecar.ts), so a test starts omp itself there.
  */
-export const OMP_COMMAND: { file: string; args: readonly string[] } = (() => {
-	const root = process.platform === "win32" ? ompPackageRoot(INSTALLED_OMP) : null;
-	return root ? { file: "bun", args: [join(root, "dist", "cli.js")] } : { file: INSTALLED_OMP, args: [] };
-})();
+export const OMP_COMMAND: { file: string; args: readonly string[] } =
+	process.platform === "win32" && existsSync(stockCli)
+		? { file: "bun", args: [stockCli] }
+		: { file: INSTALLED_OMP, args: [] };
 
 /**
  * `PI_CONFIG_DIR` naming `folder` for an omp whose home folder is `home`. Stock joins the value to the home folder
