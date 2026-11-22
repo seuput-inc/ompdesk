@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.138.1] - 2026-11-22
+
+휴대폰의 네트워크 연결이 돌아오면 페이지를 닫았다 열지 않아도 놓친 답변과 작업 상태가 갱신됩니다. 입력 중인 초안은 그대로 남습니다.
+
+<!-- en -->
+
+When your phone reconnects, the open page catches up on missed replies and work status without losing your draft.
+
 ## [0.138.0] - 2026-11-22
 
 작업 도중 지시를 추가해도 미완료 할 일이 목록에 남습니다.
