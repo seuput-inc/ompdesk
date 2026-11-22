@@ -33,8 +33,10 @@ import { createDispatcher } from ${JSON.stringify(dispatch)};
 appendFileSync(process.env.WORKER_PIDS, process.pid + "\\n");
 // slow takes real time; gated runs until the test writes "release", so a helper timeout cuts it short
 // whatever the machine's load does to either side's timers.
+const releaseOnCancel = Promise.withResolvers();
 const methods = {
 	fast: () => "ok",
+	untilCancel: () => releaseOnCancel.promise,
 	slow: async () => {
 		await new Promise(done => setTimeout(done, 300));
 		writeFileSync(${JSON.stringify(path.join(dir, "slow-done"))}, "");
@@ -54,12 +56,12 @@ const methods = {
 const input = createInterface({ input: process.stdin });
 input.on("close", () => process.exit(0));
 const dispatch = createDispatcher(methods, line => process.stdout.write(line + "\\n"), false);
-// Every withdrawal the worker read, so a test can release a gate only once the worker knows what to skip, and every
-// method it was handed, so a test can release one once a request queued behind it reached the worker.
+// Release the head inside the worker, only after the dispatcher registered the queued request's cancellation.
 input.on("line", line => {
-	if (line.includes('"cancel"')) appendFileSync(${JSON.stringify(path.join(dir, "cancels"))}, line + "\\n");
-	else appendFileSync(${JSON.stringify(path.join(dir, "handed"))}, JSON.parse(line).method + "\\n");
+	const canceled = line.includes('"cancel"');
+	if (!canceled) appendFileSync(${JSON.stringify(path.join(dir, "handed"))}, JSON.parse(line).method + "\\n");
 	dispatch(line);
+	if (canceled) releaseOnCancel.resolve("released");
 });
 `,
 	);
@@ -132,28 +134,14 @@ describe("StockHelper request timeout", () => {
 	});
 
 	it("never runs a queued mutation whose caller already timed out, and its acknowledged withdrawal keeps the worker", async () => {
-		const { helper, workers } = await helperOnWorker(250, { recycleGraceMs: 2000 });
-		const gated = helper.request("gated", {});
-		const gatedTimedOut = expect(gated).rejects.toThrow("timed out");
-		const mutate = helper.request("mutate", "late");
+		const { helper, workers } = await helperOnWorker(30_000, { recycleGraceMs: 2000 });
+		const gated = helper.request("untilCancel", {});
+		const mutate = helper.request("mutate", "late", { timeoutMs: 250 });
 		await expect(mutate).rejects.toThrow("timed out");
-		await gatedTimedOut;
-		// Both withdrawals reach the worker through its stdin pipe, which on a loaded Windows runner arrives after
-		// the release file below (release run 39918441333 ran "late"): the gate opens once the worker has read them.
-		await vi.waitFor(
-			async () =>
-				expect(
-					(await fs.readFile(path.join(dir, "cancels"), "utf8").catch(() => "")).trim().split("\n"),
-				).toHaveLength(2),
-			{ timeout: 10_000 },
-		);
-		// The withdrawn mutation sits behind the gated request; once that ends it must be skipped. The lane is
-		// serial, so the fresh mutation is answered only after the late answer and the withdrawal.
-		await fs.writeFile(path.join(dir, "release"), "");
-		await expect(helper.request("mutate", "fresh", { timeoutMs: 30_000 })).resolves.toBe("mutated");
+		await expect(gated).resolves.toBe("released");
+		await expect(helper.request("mutate", "fresh")).resolves.toBe("mutated");
 		expect(await fs.readFile(path.join(dir, "mutations"), "utf8")).toBe("fresh\n");
-		// Past both graces: the skipped mutation was acknowledged, so nothing counts as hung. A real wait: the
-		// grace is the helper's own timer on a real worker process, which fake timers cannot drive.
+		// The real core's grace expires even if its test client is descheduled after receiving the timeout.
 		await sleep(2100);
 		expect(workers()).toHaveLength(1);
 		expect(gone(workers()[0])).toBe(false);
