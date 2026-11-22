@@ -198,6 +198,7 @@ test("a reload mid-sign-in leaves no chat card and the panel shows the sign-in a
 	const { app, page, record, errors, root } = await launch("en", "light");
 	try {
 		await startSignIn(page, "en");
+		await expect.poll(() => app.evaluate(() => Reflect.get(globalThis, "openedUrls"))).toHaveLength(1);
 		await page.keyboard.press("Escape");
 		await reloadMidSignIn(page);
 		await expect(page.locator("[data-prompt-card]")).toHaveCount(0);
@@ -213,6 +214,7 @@ test("a reload mid-sign-in leaves no chat card and the panel shows the sign-in a
 
 		// The browser half still reaches the callback server of the login that survived the reload.
 		// The sign-in already opened the browser once by itself; the button reopens the same page.
+		await expect.poll(() => app.evaluate(() => Reflect.get(globalThis, "openedUrls"))).toHaveLength(1);
 		await anthropic.getByRole("button", { name: en["providerList.login.openBrowser"] }).click();
 		await expect.poll(() => app.evaluate(() => Reflect.get(globalThis, "openedUrls"))).toHaveLength(2);
 		const launchUrl = ((await app.evaluate(() => Reflect.get(globalThis, "openedUrls"))) as string[]).at(-1);

@@ -960,6 +960,7 @@ describe("ProvidersSection", () => {
 
 		it("on a local tab opens the launch page by itself, once, and shows no paste hint", async () => {
 			await startSignIn(undefined);
+			await act(async () => useExtensionUiStore.getState().restoreLoginRequest(openUrl));
 			expect(openExternal).toHaveBeenCalledTimes(1);
 			expect(openExternal).toHaveBeenCalledWith(openUrl.launchUrl);
 			expect(document.querySelector("[data-remote-login-hint]")).toBeNull();
@@ -1087,6 +1088,7 @@ describe("ProvidersSection", () => {
 			login.mockReturnValueOnce(pendingLogin.promise);
 			await act(async () => button(translate("providers.picker.connect", { provider: "Claude" }))?.click());
 			await act(async () => useExtensionUiStore.getState().pushRequest(openUrl));
+			expect(openExternal.mock.calls).toEqual([[openUrl.launchUrl], [openUrl.launchUrl]]);
 			expect(progress()).toBe(translate("providerList.login.waiting"));
 		});
 

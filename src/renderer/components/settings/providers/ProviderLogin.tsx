@@ -123,6 +123,7 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 	const [state, setState] = useState<ProviderLoginState>(IDLE);
 	const attempt = useRef(0);
 	const loginSent = useRef(false);
+	const browserOpened = useRef(false);
 	const cancelRequested = useRef(false);
 	const submittedPrompts = useRef(new Set<string>());
 	const adoptedShown = useRef(false);
@@ -147,8 +148,10 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 				const link = loginLink(request, remote);
 				setState(prev => ({ ...prev, link }));
 				// A browser sign-in this page started on this computer opens by itself; the panel's button reopens it.
-				if (link.oauth && !remote && !state.resumed && state.since > 0 && !cancelRequested.current)
+				if (link.oauth && !remote && !state.resumed && !cancelRequested.current && !browserOpened.current) {
+					browserOpened.current = true;
 					openExternal(link.target);
+				}
 				// omp never waits on this answer; acknowledge it all the same.
 				void sendResponse({ type: "extension_ui_response", id: request.id, value: "done" });
 				removeRequest(request.id);
@@ -196,6 +199,7 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 			const current = ++attempt.current;
 			submittedPrompts.current.clear();
 			loginSent.current = false;
+			browserOpened.current = false;
 			cancelRequested.current = false;
 			beginInlineLogin();
 			setState({ ...IDLE, providerId, running: true, since: Date.now() });
