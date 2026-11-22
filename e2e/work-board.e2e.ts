@@ -324,25 +324,33 @@ for (const language of variants(["en", "ko"] as const))
 			}
 		});
 
-/** The pane's transcript, the room the ask dock wrote for its card, and the work strip's height (0 without one). */
-interface PromptRoom {
-	transcript: number;
-	room: number;
-	strip: number;
+async function expectPromptRoom(page: Page, hasStrip: boolean) {
+	await expect(async () => {
+		const bounds = await page.locator(".omp-session-pane").evaluate(pane => {
+			const transcript = pane.querySelector(".omp-transcript-editorial")?.getBoundingClientRect();
+			const dock = pane.querySelector("[data-workspace-dock]");
+			const region = dock?.closest(".omp-composer-region")?.getBoundingClientRect();
+			const ask = pane.querySelector<HTMLElement>(".omp-ask-dock");
+			const card = ask?.querySelector("[data-prompt-card]");
+			if (!transcript || !region || !ask || !card) throw new Error("Missing transcript, dock or question card");
+			return {
+				transcript: transcript.height,
+				gap: region.top - transcript.bottom,
+				strip: pane.querySelector(".omp-work-strip")?.getBoundingClientRect().height ?? 0,
+				card: Number.parseFloat(getComputedStyle(card).height), // Before the entrance transform.
+				dockCards: dock?.querySelector('[data-testid="workspace-dock"]')?.getBoundingClientRect().height ?? 0,
+				room: Number.parseFloat(ask.style.getPropertyValue("--omp-prompt-room")),
+			};
+		});
+		const numbers = JSON.stringify(bounds);
+		expect(bounds.transcript, numbers).toBeGreaterThanOrEqual(240);
+		expect(bounds.strip > 0, numbers).toBe(hasStrip);
+		expect(Math.abs(bounds.gap - bounds.strip), numbers).toBeLessThanOrEqual(1);
+		// The card can reclaim the dock's scrolling cards and the transcript above its floor, in this same layout.
+		const ceiling = Math.floor(bounds.card + bounds.dockCards + bounds.transcript - 240);
+		expect(Math.abs(bounds.room - ceiling), numbers).toBeLessThanOrEqual(1);
+	}).toPass({ timeout: 5_000 });
 }
-
-const promptRoom = (page: Page): Promise<PromptRoom> =>
-	page.evaluate(() => {
-		const pane = document.querySelector(".omp-session-pane");
-		const transcript = pane?.querySelector(".omp-transcript-editorial")?.getBoundingClientRect().height ?? 0;
-		const askDock = pane?.querySelector<HTMLElement>(".omp-ask-dock");
-		const strip = pane?.querySelector(".omp-work-strip")?.getBoundingClientRect().height ?? 0;
-		return {
-			transcript,
-			room: Number.parseFloat(askDock?.style.getPropertyValue("--omp-prompt-room") ?? ""),
-			strip,
-		};
-	});
 
 test("after a session switch in the same tab, the room above the composer follows the work strip coming and going (en light)", async () => {
 	test.setTimeout(180_000);
@@ -404,57 +412,17 @@ test("after a session switch in the same tab, the room above the composer follow
 		await fixture(page, "fixture:select 8");
 		await expect(page.locator("[data-prompt-card]")).toContainText("Follow-up 8");
 		await expect(page.locator("aside[data-work-board-panel]")).toBeVisible();
-		await expect.poll(async () => (await promptRoom(page)).transcript).toBeGreaterThanOrEqual(240);
-		// The card writes its room as it lays out (547 px, 563 px under load, then back): the baseline is read once two
-		// reads a frame apart agree, or the later comparison measures the layout still settling.
-		let docked = await promptRoom(page);
-		await expect
-			.poll(async () => {
-				const before = docked;
-				docked = await promptRoom(page);
-				await page.evaluate(() => {
-					const { promise, resolve } = Promise.withResolvers<null>();
-					requestAnimationFrame(() => resolve(null));
-					return promise;
-				});
-				return docked.room === before.room && docked.transcript === before.transcript;
-			})
-			.toBe(true);
-		expect(docked.strip).toBe(0);
+		await expectPromptRoom(page, false);
 
-		// The side panel takes the board's margin: the strip appears and the card's room gives up its height.
-		const settled = async (until: (read: PromptRoom) => boolean) => {
-			let last = await promptRoom(page);
-			await expect
-				.poll(async () => {
-					const before = last;
-					last = await promptRoom(page);
-					await page.evaluate(() => {
-						const { promise, resolve } = Promise.withResolvers<null>();
-						requestAnimationFrame(() => resolve(null));
-						return promise;
-					});
-					return until(last) && last.room === before.room && last.transcript === before.transcript;
-				})
-				.toBe(true);
-			return last;
-		};
+		// The side panel takes the board's margin: the strip occupies its own row above the dock.
 		await page.keyboard.press("ControlOrMeta+j");
 		await expect(page.locator("[data-work-strip]")).toBeVisible();
-		const open = await settled(read => read.strip > 0 && read.transcript >= 240);
+		await expectPromptRoom(page, true);
 
 		// Closed again: the strip goes and the room comes back.
 		await page.keyboard.press("ControlOrMeta+j");
 		await expect(page.locator("[data-work-strip]")).toHaveCount(0);
-		const closed = await settled(read => read.strip === 0 && read.transcript >= 240);
-		// Nightlies 41906983008 and 41921143051: the baseline read 563 px where the run settled at 547 (open 507 + a 40 px
-		// strip), so every number goes into the message, not only the one that failed.
-		const numbers = JSON.stringify({ docked, open, closed });
-		expect(
-			Math.abs(docked.room - open.strip - open.room),
-			`room follows the strip in: ${numbers}`,
-		).toBeLessThanOrEqual(1);
-		expect(closed.room, `room comes back out: ${numbers}`).toBe(docked.room);
+		await expectPromptRoom(page, false);
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);
