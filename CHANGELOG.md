@@ -9,6 +9,7 @@
 - omp 19.1의 명령·입력 폼 변경에 대응했습니다.
 - 채팅 모델 선택기는 다른 계정의 Codex 선택지를 제외하고, 사용량 조회만으로 크레딧이 차감됐다고 표시하지 않습니다.
 - 휴대폰의 첫 오프라인 등록은 페어링이 끝난 뒤 시작합니다. 로그인 화면을 다시 열면 브라우저가 중복으로 열리지 않습니다.
+- 사고가 끝나고 다른 작업이 이어지면 ‘사고 중’ 대신 ‘작업 중’으로 표시합니다. 재연결하면 중지 버튼은 호스트의 현재 턴 상태를 따릅니다. 내부 `async-notify` 메시지는 대화에 표시하지 않습니다.
 
 <!-- en -->
 
@@ -19,6 +20,7 @@ Adding an instruction during a task no longer replaces unfinished items in the p
 - Updated command and form handling for omp 19.1.
 - The chat picker excludes Codex routes belonging to other accounts. A usage read no longer claims credits were spent.
 - The phone registers for offline use after pairing. Returning to an in-progress sign-in no longer opens the browser twice automatically.
+- The turn card shows “Working” once thinking ends and other work continues. On reconnect, the Stop button follows the host’s current turn. Internal `async-notify` messages stay out of the transcript.
 
 ## [0.137.3] - 2026-11-21
 
