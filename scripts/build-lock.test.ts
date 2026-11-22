@@ -2,11 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeBinPath } from "../src/main/native-bin";
 import { removeWhenFree } from "../src/main/test-folders";
 import { describeExit, run } from "./build-lock";
-import { ensureNative } from "./build-native";
 import { type LockLogEntry, readLockLog } from "./lock-log";
 import { HEAVY_HELD_ENV, type HeavyStatus } from "./lock-slots";
 
@@ -63,9 +62,6 @@ const nodeScript = (code: string) => {
 	return ["node", file];
 };
 
-beforeAll(() => {
-	ensureNative();
-}, 900_000);
 beforeEach(() => {
 	dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-build-lock-"));
 });

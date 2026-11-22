@@ -2,10 +2,9 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureNativeBin, nativeBinPath } from "../src/main/native-bin";
 import { removeWhenFree } from "../src/main/test-folders";
-import { ensureNative } from "./build-native";
 import {
 	acquireHeavy,
 	acquireHold,
@@ -279,10 +278,6 @@ describe("workers per run", () => {
 // outside the lock) and WindowServer stalled at 29.9 GB of footprint. A small machine runs one heavy hold at a time; the
 // pool that enforces it is the product's (`ompdesk heavy`), so these cases run the real binary on a temp pool.
 describe("the computer's heavy slots (the real ompdesk, a temp pool)", () => {
-	beforeAll(() => {
-		ensureNative();
-	}, 900_000);
-
 	const pause = (ms = 600) => new Promise(resolve => setTimeout(resolve, ms));
 	/** Until `count` holds wait in the pool's queue: how a test fixes the order its waiters arrive in. */
 	const queued = (locks: Locks, count: number) =>

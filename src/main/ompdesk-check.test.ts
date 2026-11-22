@@ -6,17 +6,14 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { binaryFile, ensureNative, stagedDir } from "../../scripts/build-native";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { binaryFile, stagedDir } from "../../scripts/build-native";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const PLAYWRIGHT = join(REPO, "node_modules", ".bin", "playwright");
 let dir: string;
 let project: string;
 
-beforeAll(() => {
-	ensureNative();
-}, 900_000);
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "ompdesk-check-"));
 	project = join(dir, "project");

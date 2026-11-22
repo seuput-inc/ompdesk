@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { binaryFile, ensureNative } from "../../../scripts/build-native";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { binaryFile, stagedDir } from "../../../scripts/build-native";
 import { TOKEN_FILE } from "../../shared/control-protocol";
 import type { ToolOutcome } from "../agent-control/service";
 import type { TabActivity } from "../sidecar-pool";
@@ -45,11 +45,7 @@ interface Run {
 	stderr: string;
 }
 
-let binary: string;
-beforeAll(() => {
-	// A stale or missing build compiles here; a fresh one only hashes the sources.
-	binary = join(ensureNative(), binaryFile("ompdesk"));
-}, 600_000);
+const binary = join(stagedDir(), binaryFile("ompdesk"));
 
 describe("ompdesk CLI", () => {
 	let userData: string;
