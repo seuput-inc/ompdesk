@@ -8,7 +8,6 @@
  * reflects the mutation.
  */
 
-import type { AutoModeDecision } from "../../../resources/gui-bridge/modes/auto-mode-contracts";
 import type { AvailableCommand, ImageContent, RpcResponse } from "../../shared/rpc-types";
 import { hydrateSession } from "../hooks/use-rpc-events";
 import { toast, toastError } from "../stores/toast";
@@ -129,7 +128,7 @@ export function planComposerSubmit(input: {
 	commands: AvailableCommand[];
 	rpc?: Pick<TabRpc, "compact" | "prompt" | "steer">;
 	/** Runs just before a plain (non-slash, non-streaming) prompt is sent: the automatic mode choice. */
-	beforePrompt?: () => Promise<AutoModeDecision | null | undefined>;
+	beforePrompt?: () => Promise<unknown>;
 	/** Aborted before the prompt leaves (Stop or Esc during the mode choice): nothing is sent. */
 	signal?: AbortSignal;
 	/**
@@ -177,27 +176,15 @@ export function planComposerSubmit(input: {
 	// Stock sends a `/skill:<name>` token for a skill that is off (or missing) as plain text: say so.
 	for (const name of unavailableSkillTokens(message, commands))
 		toast({ variant: "warning", message: translate("input.skills.off", { name }) });
-	if (!isSlashCommand && input.hostDecides) {
-		return {
-			kind: "send",
-			request: async () => {
-				if (!isStreaming) await input.beforePrompt?.();
-				if (input.signal?.aborted) return cancelledSubmit;
-				return rpc.prompt(message, images, "steer");
-			},
-		};
-	}
-	if (!isSlashCommand && isStreaming) return { kind: "send", request: () => rpc.steer(message, images) };
+	if (!isSlashCommand && isStreaming && !input.hostDecides)
+		return { kind: "send", request: () => rpc.steer(message, images) };
 	return {
 		kind: "send",
 		request: async () => {
-			// The automatic mode choice (lib/auto-mode-client.ts) never throws and is bounded; it runs only for a plain prompt.
-			const choice = isSlashCommand ? undefined : await input.beforePrompt?.();
+			if (!isSlashCommand && !isStreaming) await input.beforePrompt?.();
 			if (input.signal?.aborted) return cancelledSubmit;
-			// Main started a goal with stock `goal create`, which on an idle session admits the goal's own turn at once,
-			// ahead of this prompt; stock refuses a plain prompt while a turn runs, and the composer then put the sent
-			// text back as "Message not sent". As a steer it joins that turn, or starts one when none runs yet.
-			return choice?.mode === "goal" ? rpc.prompt(message, images, "steer") : rpc.prompt(message, images);
+			// Only stock knows whether a goal or another sender started a turn since Enter.
+			return isSlashCommand ? rpc.prompt(message, images) : rpc.prompt(message, images, "steer");
 		},
 	};
 }

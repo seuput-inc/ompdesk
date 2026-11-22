@@ -27,7 +27,7 @@ export interface OmpRuntime {
  */
 export interface BridgeClient {
 	/** Call a bridge method; rejects with the bridge's error message, or when disconnected. */
-	request<T = unknown>(method: string, params?: unknown): Promise<T>;
+	request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T>;
 	readonly connected: boolean;
 }
 

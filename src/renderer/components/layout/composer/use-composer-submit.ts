@@ -378,7 +378,7 @@ export function useComposerSubmit({
 				rpc,
 				signal: withdraw.signal,
 				beforePrompt: async () => {
-					if (withdraw.signal.aborted) return null;
+					if (withdraw.signal.aborted) return;
 					const choice = await runAutoMode({
 						message: expandedMessage,
 						isStreaming,
@@ -400,7 +400,6 @@ export function useComposerSubmit({
 					else if (choice?.mode === "plan") await endAutoPlan(session, rpc);
 					// Stock's `goal create` already started the goal's own turn: stopping it ends the goal too.
 					else if (choice?.mode === "goal") await abortActiveTurn(rpc, originTabId, "auto-mode");
-					return choice;
 				},
 			});
 			if (submit.kind === "blocked") return;

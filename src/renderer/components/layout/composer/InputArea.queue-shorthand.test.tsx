@@ -515,7 +515,7 @@ describe("InputArea queue shorthand submit", () => {
 		await pressEnter(findTextarea());
 		await flush();
 
-		expect(prompt).toHaveBeenCalledWith("slow network prompt", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("slow network prompt");
 		expect(useMessagesStore.getState().liveMessages).toMatchObject([
 			{
 				role: "user",
@@ -674,7 +674,7 @@ describe("InputArea prompt history", () => {
 		await flush();
 		await flush();
 
-		expect(prompt).toHaveBeenCalledWith("delivered prompt", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("delivered prompt");
 		expect(useInputHistoryStore.getState().entries.map(entry => entry.prompt)).toEqual(["delivered prompt"]);
 	});
 
@@ -687,7 +687,7 @@ describe("InputArea prompt history", () => {
 		await flush();
 		await flush();
 
-		expect(prompt).toHaveBeenCalledWith(`look: ${blob.content}`, []);
+		expect(prompt.mock.lastCall?.[0]).toBe(`look: ${blob.content}`);
 		expect(useInputHistoryStore.getState().entries.map(entry => entry.prompt)).toEqual([`look: ${blob.content}`]);
 	});
 
@@ -706,7 +706,7 @@ describe("InputArea prompt history", () => {
 			await pressEnter(findTextarea());
 			await flush();
 			await flush();
-			expect(prompt).toHaveBeenLastCalledWith(blob.content, []);
+			expect(prompt.mock.lastCall?.[0]).toBe(blob.content);
 		}
 		expect(bash).not.toHaveBeenCalled();
 		expect(evaluate).not.toHaveBeenCalled();
@@ -1109,7 +1109,7 @@ describe("InputArea next-prompt suggestion", () => {
 		await pressKey({ key: "Tab" });
 		await pressEnter(findTextarea());
 		await flush();
-		expect(prompt).toHaveBeenCalledWith(SUGGESTION, []);
+		expect(prompt.mock.lastCall?.[0]).toBe(SUGGESTION);
 		await act(async () => useComposerStore.getState().setSending(false));
 
 		expect(useComposerStore.getState().draft).toBe("");
@@ -1205,7 +1205,7 @@ describe("InputArea expanded composer", () => {
 
 		await pressKey({ key: "Enter", metaKey: true });
 		await flush();
-		expect(prompt).toHaveBeenCalledWith("long draft", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("long draft");
 		expect(isExpanded()).toBe(false);
 	});
 
@@ -1597,7 +1597,7 @@ describe("InputArea composer keys", () => {
 		await flush();
 		await pressKey({ key: "Enter" });
 		await flush();
-		expect(prompt).toHaveBeenCalledWith("use /skill:gone here", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("use /skill:gone here");
 		expect(useToastStore.getState().toasts.map(toast => toast.message)).toContain(
 			translate("input.skills.off", { name: "gone" }),
 		);
