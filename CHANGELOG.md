@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.141.0] - 2026-11-22
+
+OMPdesk에서 내장 REA를 제거했습니다.
+
+이전 버전에서 REA를 켰더라도 OMPdesk는 더 이상 REA를 설치하거나 실행하지 않습니다. ai-memory와 사용자가 직접 등록한 MCP 서버는 그대로 사용할 수 있습니다.
+
+<!-- en -->
+
+OMPdesk no longer ships REA.
+
+Even if you enabled REA in an earlier version, OMPdesk no longer installs or starts it for you. This does not change ai-memory or MCP servers you registered yourself.
+
 ## [0.140.0] - 2026-11-22
 
 새 OMPdesk 세션은 Ponytail Full로 시작하고, REA는 설정에서 켰을 때만 불러옵니다.
