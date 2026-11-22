@@ -156,7 +156,7 @@ import {
 } from "./checkout-peers";
 import { createControlBackend } from "./control-socket/backend";
 import { startControlSocket } from "./control-socket/index";
-import { ensureDefaultWorkspace } from "./default-workspace";
+import { defaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
 import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
@@ -298,7 +298,7 @@ export interface IpcDeps {
 	spawnWindow: SpawnWindow;
 	/** Where to start when the caller has no cwd. Never the volume root: a
 	 * Finder-launched app's `process.cwd()` is "/", which no session belongs in. */
-	initialCwd: () => string;
+	initialCwd: () => Promise<string>;
 	/** omp's `worktree.onStart` / `worktree.onExit` for this machine's tabs. */
 	worktreeLifecycle: WorktreeLifecycle;
 	/** The questions it asks in the windows. */
@@ -736,7 +736,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		sessionIndex,
 		fallbackCwd: () => null,
 		initialCwd: deps.initialCwd,
-		defaultWorkspace: ensureDefaultWorkspace,
+		defaultWorkspace,
 		remote: spawnRemote,
 		hosted: deps.hostedTabs,
 		savedWorktrees: savedWorktreesForSpawn,
@@ -1693,10 +1693,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			kind === "chat"
 				? device
 					? await remoteDefaultWorkspace(device)
-					: ensureDefaultWorkspace()
+					: await defaultWorkspace()
 				: (requested ??
 					cwdOnDevice(deps, caller, device) ??
-					(device ? await remoteDefaultWorkspace(device) : deps.initialCwd()));
+					(device ? await remoteDefaultWorkspace(device) : await deps.initialCwd()));
 		// Its boot switch_session runs in the window's omp, which stock refuses for a session recorded in another
 		// folder: a stored session's window starts where its file says (tab-spawn.ts' rule), never elsewhere.
 		const folder =
@@ -1714,7 +1714,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				"session_folder_missing",
 				`The folder this session belongs in no longer exists: ${folder.folder}`,
 			);
-		return deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device) !== null;
+		return (await deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device)) !== null;
 	});
 
 	// A desktop window starts its tab on its session (spawnWindow), so it has nothing pending; a paired web page
@@ -1746,7 +1746,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				sessionIndex,
 				fallbackCwd: device => cwdOnDevice(deps, caller, device),
 				initialCwd: deps.initialCwd,
-				defaultWorkspace: ensureDefaultWorkspace,
+				defaultWorkspace,
 				remote: spawnRemote,
 				hosted: deps.hostedTabs,
 				savedWorktrees: savedWorktreesForSpawn,
@@ -2340,7 +2340,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	ipc.handle(IPC_COMMANDS.SIDECAR_DEFAULT_WORKSPACE, (_caller, device?: unknown) => {
 		const host = deviceOf(device);
-		return host ? remoteDefaultWorkspace(host) : ensureDefaultWorkspace();
+		return host ? remoteDefaultWorkspace(host) : defaultWorkspace();
 	});
 
 	// models.yml custom providers of the machine the caller's focused tab runs on.

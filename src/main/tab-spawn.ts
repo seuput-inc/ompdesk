@@ -105,9 +105,9 @@ export type SpawnTabDeps = {
 	 */
 	fallbackCwd: (device: string | undefined) => string | null;
 	/** The app's initial cwd, for a local spawn with no caller cwd. */
-	initialCwd: () => string;
+	initialCwd: () => string | Promise<string>;
 	/** GUI-owned Work workspace, created on demand. */
-	defaultWorkspace: () => string;
+	defaultWorkspace: () => string | Promise<string>;
 	remote: SpawnTabRemote;
 	/**
 	 * Test hook (env `OMP_GUI_TEST_VIEWER_WINDOWS=1`): any window, not only a paired web device's, views a
@@ -200,7 +200,9 @@ export async function spawnTabForWindow(
 		? neutral
 			? await deps.remote.defaultWorkspace(device)
 			: (requested ?? callerCwd ?? (await deps.remote.defaultWorkspace(device)))
-		: canonicalCwd(neutral ? deps.defaultWorkspace() : (home ?? requested ?? callerCwd ?? deps.initialCwd()));
+		: canonicalCwd(
+				neutral ? await deps.defaultWorkspace() : (home ?? requested ?? callerCwd ?? (await deps.initialCwd())),
+			);
 	const tabId = nextSnowflake();
 	// A no-path tab is an explicit New Tab action. It must start empty even
 	// when the CLI's persistent autoResume setting is enabled for the project.

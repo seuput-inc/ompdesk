@@ -308,7 +308,7 @@ export interface HostServicesDeps {
 	/** Stored-file rename for a session no live tab holds (`omp` on this machine). */
 	renameStoredSession: (sessionPath: string, name: string) => Promise<void>;
 	/** The GUI-owned Work workspace, created on demand. */
-	defaultWorkspace: () => string;
+	defaultWorkspace: () => string | Promise<string>;
 	launchProfiles: LaunchProfilePrefs;
 	/** This machine's models.yml, stats server and `omp bench`. */
 	machine: MachineServices;
@@ -1533,7 +1533,7 @@ export class LocalHostServices implements HostServices {
 			}
 			case "host.bench.run": {
 				const { rtab, cwd, options } = parse(BenchRunParams, method, params);
-				const root = this.#fsRoot(peer, rtab, cwd) ?? this.#deps.defaultWorkspace();
+				const root = this.#fsRoot(peer, rtab, cwd) ?? (await this.#deps.defaultWorkspace());
 				// Every model runs `runs` times: that many requests on this computer's credentials.
 				return this.#metered(
 					peer.deviceId,

@@ -40,15 +40,20 @@ export function setupDeepLinks(windowManager: WindowManager, spawnWindow: SpawnW
 	// still arrive through open-url / second-instance below either way.
 	if (process.env.OMP_GUI_HEADLESS !== "1") app.setAsDefaultProtocolClient(PROTOCOL);
 
-	handler = url => handleDeepLink(url, windowManager, spawnWindow);
+	// The next open must see the window the preceding path or link asked the core to prepare.
+	let pending = Promise.resolve();
+	const enqueue = (open: () => Promise<void>) => {
+		pending = pending.then(open).catch(error => console.error("Failed to open launch request", error));
+	};
+	handler = url => enqueue(() => handleDeepLink(url, windowManager, spawnWindow));
 	for (const url of beforeSetup.splice(0)) handler(url);
-	fileHandler = path => handleOpenPath(path, windowManager, spawnWindow);
+	fileHandler = path => enqueue(() => handleOpenPath(path, windowManager, spawnWindow));
 	for (const path of filesBeforeSetup.splice(0)) fileHandler(path);
 
 	app.onSecondInstance(request => {
-		if (request.kind === "url") handleDeepLink(request.url, windowManager, spawnWindow);
-		else if (request.kind === "path") handleOpenPath(request.path, windowManager, spawnWindow);
-		else showWindow(windowManager.getTargetWindow());
+		if (request.kind === "url") handler?.(request.url);
+		else if (request.kind === "path") fileHandler?.(request.path);
+		else enqueue(async () => showWindow(windowManager.getTargetWindow()));
 	});
 }
 
@@ -69,7 +74,7 @@ function showWindow(win: BrowserWindow | null | undefined): void {
  * one. Relative paths resolve against the launcher's cwd, which is never the
  * workspace the user pointed at, so they are refused rather than guessed.
  */
-export function handleOpenPath(path: string, windowManager: WindowManager, spawnWindow: SpawnWindow): void {
+async function handleOpenPath(path: string, windowManager: WindowManager, spawnWindow: SpawnWindow): Promise<void> {
 	if (!isAbsolute(path)) return;
 	const target = resolve(path);
 	for (const win of windowManager.getAllWindows()) {
@@ -77,10 +82,10 @@ export function handleOpenPath(path: string, windowManager: WindowManager, spawn
 		showWindow(win);
 		return;
 	}
-	spawnWindow(target);
+	await spawnWindow(target);
 }
 
-function handleDeepLink(url: string, windowManager: WindowManager, spawnWindow: SpawnWindow): void {
+async function handleDeepLink(url: string, windowManager: WindowManager, spawnWindow: SpawnWindow): Promise<void> {
 	let parsed: URL;
 	try {
 		parsed = new URL(url);
@@ -88,7 +93,7 @@ function handleDeepLink(url: string, windowManager: WindowManager, spawnWindow: 
 		return;
 	}
 
-	const win = windowManager.getMainWindow() ?? spawnWindow();
+	const win = windowManager.getMainWindow() ?? (await spawnWindow());
 	if (!win) return;
 	win.show();
 	win.focus();

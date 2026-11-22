@@ -10,7 +10,11 @@ import { editRoleItems } from "./editable-context-menu";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
 import type { SpawnWindow, WindowManager } from "./window";
 
-function sendMenuAction(windowManager: WindowManager, spawnWindow: SpawnWindow, action: MenuAction): void {
+async function sendMenuAction(
+	windowManager: WindowManager,
+	spawnWindow: SpawnWindow,
+	action: MenuAction,
+): Promise<void> {
 	const win = windowManager.getTargetWindow();
 	if (win) {
 		win.webContents.send(IPC_EVENTS.MENU_ACTION, { action });
@@ -18,7 +22,7 @@ function sendMenuAction(windowManager: WindowManager, spawnWindow: SpawnWindow, 
 	}
 	// No windows open (macOS keep-running): spawn one and deliver once its
 	// renderer is up, instead of dropping the action silently.
-	const created = spawnWindow();
+	const created = await spawnWindow();
 	created?.once("ready-to-show", () => {
 		if (!created.isDestroyed()) created.webContents.send(IPC_EVENTS.MENU_ACTION, { action });
 	});

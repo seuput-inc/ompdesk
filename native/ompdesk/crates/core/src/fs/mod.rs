@@ -8,6 +8,7 @@
 pub(crate) mod disk;
 pub(crate) mod error;
 mod ignore;
+mod launch;
 mod list;
 mod mutate;
 pub(crate) mod order;
@@ -18,6 +19,12 @@ use serde_json::Value;
 use crate::server::{Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    registry.add("fs.initialCwd", |call| {
+        Box::pin(blocking(move || launch::initial_cwd(call.params()?)))
+    });
+    registry.add("fs.defaultWorkspace", |call| {
+        Box::pin(blocking(move || launch::workspace(call.params()?)))
+    });
     registry.add("fs.list", |call| {
         Box::pin(blocking(move || list::list(&call.params()?)))
     });

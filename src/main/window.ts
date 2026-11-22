@@ -79,7 +79,7 @@ export type SpawnWindow = (
 	pendingSessionPath?: string,
 	kind?: SessionKind,
 	device?: string,
-) => BrowserWindow | null;
+) => Promise<BrowserWindow | null>;
 
 export class WindowManager {
 	#records = new Map<number, WindowRecord>();

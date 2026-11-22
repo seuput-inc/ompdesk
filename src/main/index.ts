@@ -127,7 +127,7 @@ import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { setupDeepLinks } from "./deep-link";
-import { ensureDefaultWorkspace } from "./default-workspace";
+import { defaultWorkspace } from "./default-workspace";
 import { initDeletedSessions } from "./deleted-sessions";
 import type { DesktopSlotHost } from "./desktop-slot-host";
 import { poolTabFor, registerDiagnosticBundleIpc } from "./diagnostic-bundle";
@@ -152,7 +152,7 @@ import {
 } from "./gpu-fallback";
 import { installHangWatchdog, markMainStep, reportPreviousHang } from "./hang-watchdog";
 import { getMainLanguage, mainT } from "./i18n";
-import { firstUsableCwd } from "./initial-cwd";
+import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { markLaunchStable, startLaunchGuard } from "./launch-guard";
 import { CRASH_LOOP_LAUNCHES, STABLE_AFTER_MS } from "./launch-guard-core";
@@ -447,17 +447,8 @@ function prefsStore(): Store<MainPrefs> {
 	return mainPrefsStore;
 }
 
-function resolveExplicitStartupCwd(): string | undefined {
-	// Node runs `<main.js> <the shell's own arguments>`: argv[0] is node and argv[1] the bundle. Flags
-	// (`--user-data-dir=…`) are skipped.
-	const explicitCwd = process.argv.slice(2).find(arg => !arg.startsWith("-"));
-	return explicitCwd && existsSync(explicitCwd) ? explicitCwd : undefined;
-}
-
-function resolveInitialCwd(): string {
-	const explicitCwd = resolveExplicitStartupCwd();
-	if (explicitCwd) return explicitCwd;
-	return firstUsableCwd([prefsStore().get("lastProject"), process.cwd()]) ?? homedir();
+async function resolveInitialCwd(): Promise<string> {
+	return (await startupCwd(prefsStore().get("lastProject"))).cwd;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -759,12 +750,14 @@ function persistTabLayouts(): void {
 }
 
 /** Reopen one saved window: its tabs in order, at the layout's active cwd. */
-function spawnWindowWithLayout(layout: PersistedTabLayout): BrowserWindow | null {
+async function spawnWindowWithLayout(layout: PersistedTabLayout): Promise<BrowserWindow | null> {
 	if (quitApproved()) return null;
 	const active = layout.tabs[layout.activeIndex] ?? layout.tabs[0];
 	if (!active) return null;
 	// The window record keeps a path on this machine; a paired host's cwd means nothing here.
-	const win = windowManager.createWindow({ cwd: active.device ? resolveInitialCwd() : active.cwd });
+	const cwd = active.device ? await resolveInitialCwd() : active.cwd;
+	if (quitApproved()) return null;
+	const win = windowManager.createWindow({ cwd });
 	if (sidecarPool.restoreLayout(win, layout) > 0) return win;
 	win.close();
 	return null;
@@ -774,17 +767,19 @@ function spawnWindowWithLayout(layout: PersistedTabLayout): BrowserWindow | null
  *  With no target, start a fresh agent in the default workspace; explicit
  *  workspace/session requests retain their selected/fallback cwd and requested
  *  session kind. `device` runs the window's tab on that paired host, at its `cwd`. */
-function spawnWindow(
+async function spawnWindow(
 	cwd?: string,
 	pendingSessionPath?: string,
 	kind?: SessionKind,
 	device?: string,
-): BrowserWindow | null {
+): Promise<BrowserWindow | null> {
 	// An approved quit has torn the services down (or is doing so): a window built now has nothing to run on, and
 	// restoring the layout on it would drop what a disposed `RemoteDevices` cannot open from the saved session.
 	if (quitApproved()) return null;
 	if (device && cwd) {
-		const win = windowManager.createWindow({ cwd: resolveInitialCwd() });
+		const localCwd = await resolveInitialCwd();
+		if (quitApproved()) return null;
+		const win = windowManager.createWindow({ cwd: localCwd });
 		const fresh = pendingSessionPath === undefined;
 		const sidecar = sidecarPool.acquire(
 			cwd,
@@ -807,17 +802,13 @@ function spawnWindow(
 	if (restoreSavedLayout) {
 		const [saved] = readSavedTabLayouts();
 		if (saved) {
-			const restored = spawnWindowWithLayout(saved);
+			const restored = await spawnWindowWithLayout(saved);
 			if (restored) return restored;
 		}
 	}
-	const target = resolveWindowSpawnTarget(
-		cwd,
-		pendingSessionPath,
-		kind,
-		resolveInitialCwd(),
-		ensureDefaultWorkspace(),
-	);
+	const [fallback, work] = await Promise.all([resolveInitialCwd(), defaultWorkspace()]);
+	if (quitApproved()) return null;
+	const target = resolveWindowSpawnTarget(cwd, pendingSessionPath, kind, fallback, work);
 	// The tab's omp starts on the session file (`--session`), as a tab spawn's does: the renderer's boot switch it
 	// used to wait for never ran in a window whose tab list had not named its tab yet.
 	const win = windowManager.createWindow({ cwd: target.cwd });
@@ -912,8 +903,6 @@ app.whenReady().then(async () => {
 	const toolsDir = managedToolsDir(platform, process.env, homedir(), app.getPath("userData"));
 	applyManagedToolEnv(toolsDir, platform);
 
-	const initialCwd = resolveInitialCwd();
-	const explicitStartupCwd = resolveExplicitStartupCwd();
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
 	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
 	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
@@ -1157,6 +1146,12 @@ app.whenReady().then(async () => {
 		sessionProcesses,
 	});
 	initDeletedSessions(join(app.getPath("userData"), "deleted-sessions.json"));
+	const [startup, sidebarWorkspace] = await Promise.all([
+		startupCwd(prefsStore().get("lastProject")),
+		defaultWorkspace(false),
+	]);
+	const initialCwd = startup.cwd;
+	const explicitStartupCwd = startup.explicit ? initialCwd : undefined;
 	sessionIndex = new SessionIndex(undefined, initialCwd, sessionId => sessionKinds.isChat(sessionId), bridgeDir);
 	const sidebarPrefsChanged = () => {
 		for (const win of [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])])
@@ -1174,7 +1169,7 @@ app.whenReady().then(async () => {
 				if (updateSidebarPrefs(prefsStore(), change, "host", writeRuntimeLog)) sidebarPrefsChanged();
 			},
 		},
-		defaultWorkspace: ensureDefaultWorkspace,
+		defaultWorkspace: () => sidebarWorkspace,
 		// A removed worktree's project, read off its `gui-<name>-<hash7>` folder name (stock's root and repo hash).
 		worktreeLocation: project => stockWorktreeLocation(tablessWorktreeBridge, project),
 		worktreeBindings: () => sidecarPool.worktreeBindings(),
@@ -1424,7 +1419,7 @@ app.whenReady().then(async () => {
 			if (!omp.ok) throw new Error(omp.error);
 			await renameStoredSession(omp.runtime, sessionPath, name);
 		},
-		defaultWorkspace: ensureDefaultWorkspace,
+		defaultWorkspace,
 		launchProfiles: { get: key => prefs.get(key), set: (key, value) => prefs.set(key, value) },
 		machine,
 		localTabs: sidecarPool,
@@ -2786,13 +2781,13 @@ app.whenReady().then(async () => {
 	// app (the user's rule, 23 Oct 2026: it reopened maximized in front of them). Only the windows this launch restores.
 	const relaunchPresence = explicitStartupCwd ? null : readRelaunchPresence();
 	windowManager.launchPresence = relaunchPresence;
-	spawnWindow(explicitStartupCwd);
+	await spawnWindow(explicitStartupCwd);
 	markStartup("window-created");
 	// A bare launch restores the saved session in full. The window above carries
 	// layout[0]; these are the secondary windows whose tabs used to be dropped at
 	// relaunch. An argv cwd is an explicit "open this", not a restore.
 	if (!explicitStartupCwd) {
-		for (const layout of savedLayouts.slice(1)) spawnWindowWithLayout(layout);
+		for (const layout of savedLayouts.slice(1)) await spawnWindowWithLayout(layout);
 	}
 	windowManager.launchPresence = null;
 	// macOS activates the relaunched app; one that comes back in the tray gives the focus straight back.
@@ -2833,6 +2828,7 @@ app.whenReady().then(async () => {
 	if (process.env.OMP_GUI_HEADLESS !== "1") createTray(windowManager, spawnWindow);
 	createMenu(windowManager, spawnWindow);
 	setupDeepLinks(windowManager, spawnWindow);
+	app.on("activate", activateWindow);
 	setupUpdater(ipc, {
 		// Default on: only a stored `false` turns it off (an unattended Mac running Autopilot updates itself).
 		enabled: () => prefs.get(APP_AUTO_UPDATE_PREF) !== false,
@@ -2861,8 +2857,7 @@ app.whenReady().then(async () => {
 });
 
 // macOS: re-create window on dock click
-app.on("activate", () => {
-	if (!windowManager) return;
+function activateWindow(): void {
 	const windows = windowManager.getAllWindows();
 	const action = activateAction({
 		quitApproved: quitApproved(),
@@ -2875,7 +2870,7 @@ app.on("activate", () => {
 	if (win.isMinimized()) win.restore();
 	win.show();
 	win.focus();
-});
+}
 
 // Quit on all windows closed (except macOS)
 app.on("window-all-closed", () => {
