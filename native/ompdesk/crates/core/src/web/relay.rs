@@ -4,7 +4,7 @@
 //! only hears. The page sockets are the core's router's (`router.rs`, 8c).
 //!
 //! Events: `web.ask {call, host, kind, ...}` with `kind` one of `policy` → `{host, publicPort, secure, servePrefix,
-//! pendingPrefix, allowedUsers}`, `confirmNew` → `bool`,
+//! pendingPrefix, allowedUsers}`, `confirmNew` → `bool | null` (null refuses enrollment),
 //! `confirm {name, userAgent, tailscaleLogin, ip}` → `{approved: true, grants} | {approved: false, reason}`,
 //! `whois {address}` → `TailnetPeer | null`, `hook {id, bearer, detail}` → `"fired"|"unknown"|"denied"|"off"|
 //! "unavailable"`. `web.deviceConnected {host, device: {id, name, tailscaleLogin}}`, `web.unpairedAuth {host,
@@ -21,7 +21,7 @@ use super::auth::Policy;
 use super::deps::{
     BoxFuture, Desktop, HookOutcome, Hooks, PairingDetails, PairingOutcome, Peer, Whois,
 };
-use super::devices::{DEFAULT_GRANTS, Device};
+use super::devices::Device;
 use crate::server::{Call, Events, Fault, Registry, Reply};
 
 #[derive(Default)]
@@ -88,18 +88,17 @@ fn text_of(value: Option<&Value>) -> Option<String> {
 }
 
 impl Desktop for Relay {
-    fn confirm_new_devices(&self) -> BoxFuture<'_, bool> {
+    fn confirm_new_devices(&self) -> BoxFuture<'_, Option<bool>> {
         Box::pin(async move {
             self.ask("confirmNew", json!({}))
                 .await
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false)
         })
     }
 
     fn confirm(&self, details: PairingDetails) -> BoxFuture<'_, PairingOutcome> {
         Box::pin(async move {
-            let answer = self
+            let mut answer = self
                 .ask(
                     "confirm",
                     json!({
@@ -112,11 +111,12 @@ impl Desktop for Relay {
                 .await
                 .unwrap_or(Value::Null);
             if answer.get("approved").and_then(Value::as_bool) == Some(true) {
-                let grants = answer
-                    .get("grants")
-                    .and_then(Value::as_array)
-                    .map(|grants| grants.iter().filter_map(|g| text_of(Some(g))).collect())
-                    .unwrap_or_else(|| DEFAULT_GRANTS.iter().map(|g| (*g).to_owned()).collect());
+                let Some(grants) = answer
+                    .get_mut("grants")
+                    .and_then(|v| serde_json::from_value(v.take()).ok())
+                else {
+                    return PairingOutcome::Refused("declined");
+                };
                 return PairingOutcome::Approved { grants };
             }
             let reason = match answer.get("reason").and_then(Value::as_str) {
@@ -137,9 +137,6 @@ impl Desktop for Relay {
     fn unpaired_auth(&self, address: &str) {
         self.tell("web.unpairedAuth", json!({ "address": address }));
     }
-
-    /// Main declines what still waits before it stops the edge (`WebHost.stop`).
-    fn decline_all(&self) {}
 
     fn policy(&self) -> BoxFuture<'_, Option<Policy>> {
         Box::pin(async move {

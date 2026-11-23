@@ -104,6 +104,7 @@ runs:
         src/main/remote/crypto.test.ts
         src/main/remote/devices.test.ts
         src/main/web/server.test.ts
+        src/main/web/pairing.test.ts
         src/main/web/host-actions.test.ts
         src/main/web/ws-router.test.ts
         src/main/web/push.test.ts

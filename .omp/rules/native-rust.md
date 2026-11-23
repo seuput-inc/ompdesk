@@ -66,6 +66,8 @@ globs:
 
 - **R6 host tab directories.** `fs.directory` checks and resolves the cwd for fresh hosted tab opens and explicit-cwd restarts in one awaited request. It preserves Windows spelling and Node's order for parent segments and symlinks on Unix. `remote/host-services.test.ts` covers aliases, parent segments and error codes against the core. Main retains session selection, open/close guards, views and the ordered event stream; see `remote.tsv` for the missing producer at the R4/R7 boundary.
 
+- **Pairing approvals.** `web/pairing.rs` owns each host's outstanding phone and computer requests, their 60 s deadline and first answer. Stopping the host dismisses its pending requests. Main still presents the desktop prompt and forwards the person's answer. `web/pairing.test.ts` and `web/server.test.ts` cover approval, refusal, expiry and the loopback edge in native parity.
+
 - **Update feed.** `updateFeed.resolve` (`crates/core/src/update_feed`) selects a GitHub release and checks its comment, file, SHA-512 format, tag, asset size and declared Darwin minimum. `src/main/update-release.ts` is its typed client. Main retains HTTP/auth, delivery of the resolved installer to electron-updater, and the current OS check required by synchronous `resolveFiles`. Native parity runs `update-release.test.ts`, `update-provider.test.ts` and `update-compatibility.test.ts`, including the frozen v0.131 consumer and the publish step's generated comment.
   - The admitted macOS response also names the versioned local DMG. Manual and relaunch downloads retain that response for its version, API URL, size and digest. Windows keeps the version-free NSIS asset.
 

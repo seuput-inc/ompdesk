@@ -98,7 +98,7 @@ function route(process: CoreProcess): void {
 		const answer = (result: unknown) =>
 			void process.call("web.answer", { call: ask.call, result }, { generation }).catch(() => undefined);
 		const server = servers.get(ask.host);
-		if (!server) return answer(null);
+		if (!server || generation !== process.generation) return answer(null);
 		server.answerAsk(ask).then(answer, error => {
 			console.warn(`[web] ${ask.kind} failed: ${error instanceof Error ? error.message : String(error)}`);
 			answer(null);
@@ -177,7 +177,6 @@ export class WebServer {
 	async stop(): Promise<void> {
 		if (this.#port !== null) {
 			this.#port = null;
-			this.#deps.confirmations.declineAll();
 			this.#stopping = core()
 				.call("web.stop", { host: this.#id })
 				.finally(() => {
@@ -202,8 +201,9 @@ export class WebServer {
 					allowedUsers: [...policy.allowedUsers()],
 				};
 			case "confirmNew":
-				return this.#deps.confirmNewDevices();
+				return this.#stopping ? null : this.#deps.confirmNewDevices();
 			case "confirm":
+				if (this.#stopping) return { approved: false, reason: "declined" };
 				return this.#deps.confirmations.request({
 					name: ask.name ?? "",
 					userAgent: ask.userAgent ?? "",
@@ -230,8 +230,6 @@ export class WebServer {
 
 	/** The core ended with the edge in it: its sockets are gone, and the edge listens again on the same port. */
 	coreExited(): void {
-		// What the dead core was waiting on can no longer be answered: its numbers belong to that core alone.
-		this.#deps.confirmations.declineAll();
 		if (this.#port === null) return;
 		const port = this.#port;
 		this.#port = null;

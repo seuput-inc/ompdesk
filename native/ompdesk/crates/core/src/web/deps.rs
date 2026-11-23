@@ -50,15 +50,13 @@ pub enum PairingOutcome {
 
 /// The desktop's part in a new device.
 pub trait Desktop: Send + Sync {
-    /// Hold a new device until the desktop approves it (Settings, off by default); read when a device pairs.
-    fn confirm_new_devices(&self) -> BoxFuture<'_, bool>;
+    /// `None` means the desktop could not read the setting. Do not enroll the device.
+    fn confirm_new_devices(&self) -> BoxFuture<'_, Option<bool>>;
     fn confirm(&self, details: PairingDetails) -> BoxFuture<'_, PairingOutcome>;
     /// A device was just made without asking: the desktop is told once, with the way to block it.
     fn device_connected(&self, device: &Device);
     /// A device authentication failed three times within a minute; told once.
     fn unpaired_auth(&self, address: &str);
-    /// The server stops: everything still waiting is declined.
-    fn decline_all(&self);
     /// The published address, the serve secrets and the allowed logins as they stand now (Mobile web's service and
     /// Settings own them), read for every request; `None` keeps the edge's own (`Edge::configure`).
     fn policy(&self) -> BoxFuture<'_, Option<Policy>> {

@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebPairingRequest, WebPairingResponse } from "../../shared/mobile-web";
 import { DEFAULT_WEB_GRANTS, type WebPermission } from "../../shared/web-protocol";
-import { sanitizeGrants } from "./devices-store";
+import { core } from "../core/process";
 
 export const PAIRING_CONFIRM_TIMEOUT_MS = 60_000;
 
@@ -23,66 +23,52 @@ export type PairingOutcome =
 	| { approved: true; grants: WebPermission[] }
 	| { approved: false; reason: "declined" | "timeout" };
 
-interface Pending {
-	request: WebPairingRequest;
-	settle: (outcome: PairingOutcome) => void;
-	timer: ReturnType<typeof setTimeout>;
-}
-
-/** The phones waiting for the desktop's answer: each is shown once to the desktop windows and settles once. */
+/** The desktop publishes the prompt. The core owns its deadline and the first answer. */
 export class PairingConfirmations {
 	readonly #notify: (request: WebPairingRequest) => void;
 	readonly #now: () => number;
-	readonly #timeoutMs: number;
-	readonly #pending = new Map<string, Pending>();
+	readonly #host: number;
 
-	constructor(opts: { notify: (request: WebPairingRequest) => void; now?: () => number; timeoutMs?: number }) {
+	constructor(host: number, opts: { notify: (request: WebPairingRequest) => void; now?: () => number }) {
+		this.#host = host;
 		this.#notify = opts.notify;
 		this.#now = opts.now ?? Date.now;
-		this.#timeoutMs = opts.timeoutMs ?? PAIRING_CONFIRM_TIMEOUT_MS;
 	}
 
 	/** Ask the desktop; settles with the answer, or `timeout` after 60 s. */
-	request(details: PairingDetails): Promise<PairingOutcome> {
+	async request(details: PairingDetails): Promise<PairingOutcome> {
 		const request: WebPairingRequest = {
-			id: randomUUID(),
 			...details,
+			id: randomUUID(),
 			grants: [...DEFAULT_WEB_GRANTS],
-			expiresAt: this.#now() + this.#timeoutMs,
+			expiresAt: this.#now() + PAIRING_CONFIRM_TIMEOUT_MS,
 		};
-		return new Promise<PairingOutcome>(resolve => {
-			const settle = (outcome: PairingOutcome): void => {
-				const entry = this.#pending.get(request.id);
-				if (!entry) return;
-				clearTimeout(entry.timer);
-				this.#pending.delete(request.id);
-				resolve(outcome);
-			};
-			const timer = setTimeout(() => settle({ approved: false, reason: "timeout" }), this.#timeoutMs);
-			this.#pending.set(request.id, { request, settle, timer });
-			this.#notify(request);
-		});
+		// Write the registration before notify: a desktop may list or answer from inside that callback.
+		const outcome = core()
+			.call<PairingOutcome>(
+				"web.pairing.request",
+				{ host: this.#host, request, deadlineMs: Date.now() + PAIRING_CONFIRM_TIMEOUT_MS },
+				{ timeoutMs: PAIRING_CONFIRM_TIMEOUT_MS + 5_000 },
+			)
+			.then(
+				({ result }) => result,
+				(): PairingOutcome => ({ approved: false, reason: "declined" }),
+			);
+		this.#notify(request);
+		return outcome;
 	}
 
 	/** The desktop's answer; false for an id that already settled or never existed. */
-	respond(response: WebPairingResponse): boolean {
-		const entry = this.#pending.get(response.id);
-		if (!entry) return false;
-		entry.settle(
-			response.approve
-				? { approved: true, grants: sanitizeGrants(response.grants ?? entry.request.grants) }
-				: { approved: false, reason: "declined" },
-		);
-		return true;
+	async respond(response: WebPairingResponse): Promise<boolean> {
+		const process = core();
+		if (!process.generation) return false;
+		return (await process.call<boolean>("web.pairing.respond", { ...response, host: this.#host })).result;
 	}
 
 	/** Requests a desktop window that just opened should show. */
-	pending(): WebPairingRequest[] {
-		return [...this.#pending.values()].map(entry => entry.request);
-	}
-
-	/** Decline everything still waiting (the server stops). */
-	declineAll(): void {
-		for (const entry of [...this.#pending.values()]) entry.settle({ approved: false, reason: "declined" });
+	async pending(): Promise<WebPairingRequest[]> {
+		const process = core();
+		if (!process.generation) return [];
+		return (await process.call<WebPairingRequest[]>("web.pairing.pending", { host: this.#host })).result;
 	}
 }
