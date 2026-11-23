@@ -14,9 +14,9 @@
 //! - `stock`: everything else, one serial lane (the worker's own queue; a few read-only probes answer beside it).
 //!
 //! Main hands in how a worker starts, when one is needed: the core asks with the event `stock.launch`
-//! `{host, worker, launch}` and main answers `stock.launched` with the binary, its arguments, the whole environment
-//! and the files whose times and sizes identify the installed omp, or with why none can start. So omp is resolved
-//! only when a worker starts, as before, and a request carries no environment.
+//! `{host, worker, launch}` and main answers `stock.launched` with the binary, arguments and environment, or why
+//! none can start. The core collects the install's stamp paths from the worker's `OMP_PACKAGE_ROOT` before telling
+//! the lane to start it. Omp is resolved only when a worker starts, and a request carries no environment.
 //!
 //! Each request has its own timeout (main names it), armed before any worker starts. It fails only that request; the
 //! worker is told to skip it if it has not started it (a mutation never runs after its caller was told it failed) and
@@ -35,6 +35,7 @@
 //! core: their stdin is the core's pipe, the core's job object holds them on Windows and main kills its process
 //! group on POSIX.
 
+mod install_stamp;
 mod scrollback;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -72,7 +73,11 @@ const READ_BUFFER: usize = 64 * 1024;
 pub fn register(registry: &mut Registry) {
     registry.add("stock.request", enqueue);
     registry.add("stock.launched", |call| {
-        Box::pin(async move { launched(&call) })
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || launched(&call))
+                .await
+                .map_err(|err| Fault::new("internal", err.to_string()))?
+        })
     });
     registry.add("stock.stop", |call| Box::pin(stop(call)));
 }
@@ -140,7 +145,7 @@ struct Launch {
     env: BTreeMap<String, String>,
     /// What identifies the omp install, omp's own `package.json` first: their times and sizes tell one install from
     /// the next. One missing reads as absent.
-    #[serde(default)]
+    #[serde(skip)]
     stamp_files: Vec<PathBuf>,
 }
 
@@ -334,7 +339,14 @@ fn launched(call: &Call) -> Result<Reply, Fault> {
         error,
     } = call.params()?;
     let how = match (start, error) {
-        (Some(start), None) => Ok(start),
+        (Some(mut start), None) => {
+            if worker != Worker::Terminals
+                && let Some(root) = start.env.get("OMP_PACKAGE_ROOT")
+            {
+                start.stamp_files = install_stamp::files(root.as_ref());
+            }
+            Ok(start)
+        }
         (_, Some(failure)) if failure.unavailable => {
             Err(Fault::new("omp_unavailable", failure.message))
         }

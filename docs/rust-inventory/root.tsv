@@ -462,7 +462,7 @@ src/main/stock-helper-memory.test.ts	tooling	-	Vitest suite: memory.promptFacts.
 src/main/stock-helper-sessions.test.ts	tooling	-	Vitest suite: stock helper first-prompt fill.
 src/main/stock-helper-worktrees.test.ts	tooling	-	Vitest suite: answers stock's worktree base and repo hash, from the user's config and OMP_WORKTREE_DIR over it.
 src/main/stock-helper.test.ts	tooling	-	Vitest suite: StockHelper request timeout.
-src/main/stock-helper.ts	mixed	2	StockHelper uses stock.request/launched/stop in core/src/stock/mod.rs for worker scheduling and supervision; TS still resolves the installed omp, install stamps and launch environment.
+src/main/stock-helper.ts	mixed	2	Stock lanes, worker scheduling, install stamp paths and recycling are in core/src/stock. Main still gets the installed omp and login PATH, strips inherited control variables and synchronously refuses requests while omp is unavailable.
 src/main/subagent-frames.test.ts	tooling	-	Vitest suite: createSubagentFrameBatcher.
 src/main/subagent-frames.ts	port	1	slimSubagentFrame and createSubagentFrameBatcher shrink streaming frames and coalesce visible-tab IPC deliveries.
 src/main/supply-chain.test.ts	tooling	-	Vitest suite: supply chain.

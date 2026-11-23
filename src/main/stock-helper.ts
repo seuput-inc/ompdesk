@@ -5,8 +5,7 @@
  * stock worker that hung, the extensions worker's idle exit, the worker that outlived a reinstall of omp. This file
  * is its client: the request, and how a worker starts when the core asks (omp is resolved only then).
  */
-import { readdir } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { withoutControlEnv } from "./control-socket/env";
 import { CoreError, core } from "./core/process";
 import { OmpUnavailableError, ompAvailability, refuseWithoutOmp } from "./omp-availability";
@@ -33,10 +32,6 @@ export interface WorkerLaunch {
 	bin: string;
 	args: string[];
 	env: NodeJS.ProcessEnv;
-	/** The files whose times and sizes identify the omp install (`ompInstallStampFiles`, omp's package.json first): a
-	 * stock or extensions worker that was started on another install, or in the middle of one, is let go when idle
-	 * and started fresh. */
-	stampFiles?: string[];
 }
 
 export interface StockHelperOptions {
@@ -79,26 +74,6 @@ function answerLaunches(): void {
 	});
 }
 
-/**
- * What a change of the omp install moves, omp's own package.json first. One manifest is not enough: `bun install -g`
- * writes omp's package before its dependencies and the install's lockfile last, and a worker that started in between
- * keeps a failed resolution of a dependency for its whole life (Bun caches it). So the scope folder (a package added
- * or replaced), each `@oh-my-pi` package and its manifest, and the install's package.json and lockfiles. Missing ones
- * stamp as absent; npm's global layout has no lockfile, its folders still move.
- */
-export async function ompInstallStampFiles(root: string): Promise<string[]> {
-	const files = [join(root, "package.json")];
-	const scope = dirname(root);
-	if (basename(scope) !== "@oh-my-pi") return files;
-	files.push(scope);
-	for (const name of await readdir(scope).catch(() => []))
-		files.push(join(scope, name), join(scope, name, "package.json"));
-	const modules = dirname(scope);
-	if (basename(modules) !== "node_modules") return files;
-	const install = dirname(modules);
-	return [...files, ...["package.json", "bun.lock", "bun.lockb"].map(file => join(install, file))];
-}
-
 async function ompWorkerLaunch(bridgeDir: string, worker: HelperWorker): Promise<WorkerLaunch> {
 	const [omp, basePath] = await Promise.all([systemOmp(), spawnPath()]);
 	if (!omp.ok) throw refuseWithoutOmp(omp.error);
@@ -114,7 +89,6 @@ async function ompWorkerLaunch(bridgeDir: string, worker: HelperWorker): Promise
 			OMP_PACKAGE_ROOT: root,
 			PI_NOTIFICATIONS: "off",
 		},
-		stampFiles: await ompInstallStampFiles(root),
 	};
 }
 
