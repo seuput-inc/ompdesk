@@ -43,7 +43,7 @@ interface SidebarFoldsStore extends SidebarFolds {
 	 * Remembers the latest live host list for first paint and drops folds of hosts it no longer names.
 	 */
 	syncHosts: (hosts: readonly KnownHost[]) => void;
-	/** Reads the saved pref once; the mirror painted the first frame, the pref wins when it differs. */
+	/** Restores fold preferences, using their host list only if neither the mirror nor discovery supplied one. */
 	hydrate: () => Promise<void>;
 	reset: () => void;
 }
@@ -65,13 +65,15 @@ function saved(state: SidebarFolds): SidebarFolds {
 }
 
 export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
+	const { hasHostSnapshot: mirroredHosts, ...initial } = readSidebarFolds();
+	let hasHostSnapshot = mirroredHosts;
 	/** Applies an edit and remembers it. */
 	const edit = (patch: Partial<SidebarFolds>) => {
 		set({ ...patch, touched: true });
 		writeSidebarFolds(saved(get()));
 	};
 	return {
-		...readSidebarFolds(),
+		...initial,
 		touched: false,
 		setGroupFolded: (cwd, folded) => edit({ groups: withFlag(get().groups, cwd, folded) }),
 		setDeviceFolded: (deviceId, folded) => edit({ devices: withFlag(get().devices, deviceId, folded) }),
@@ -103,6 +105,7 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 			writeSidebarFolds(saved(get()));
 		},
 		syncHosts: hosts => {
+			hasHostSnapshot = true;
 			const { devices, deviceGroups, knownHosts, chats, deviceColors, deviceArchived } = get();
 			const ids = new Set(hosts.map(host => host.id));
 			const known = (deviceId: string) => deviceId === LOCAL_DEVICE || ids.has(deviceId);
@@ -133,10 +136,14 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 		hydrate: async () => {
 			const value = await readSavedPref(SIDEBAR_FOLDS_PREF);
 			if (value === null || get().touched) return;
-			const folds = parseSidebarFolds(value);
+			const pref = parseSidebarFolds(value);
+			const folds = hasHostSnapshot ? { ...pref, knownHosts: get().knownHosts } : pref;
 			set(folds);
 			writeSidebarFolds(folds);
 		},
-		reset: () => set({ ...EMPTY_FOLDS, touched: false }),
+		reset: () => {
+			hasHostSnapshot = false;
+			set({ ...EMPTY_FOLDS, touched: false });
+		},
 	};
 });

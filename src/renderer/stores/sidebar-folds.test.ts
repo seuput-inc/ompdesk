@@ -75,6 +75,28 @@ describe("remembered folds", () => {
 		expect(second.folds.getState().groups).toEqual({ "/from/pref": true, "/edited": false });
 	});
 
+	it("uses saved hosts without a snapshot, but never resurrects a host after an empty snapshot", async () => {
+		const host = { id: "dev", name: "Last host" };
+		saved.set("sidebarFolds", { knownHosts: [host] });
+		const first = await launch();
+		await first.folds.getState().hydrate();
+		expect(first.folds.getState().knownHosts).toEqual([host]);
+
+		first.folds.getState().syncHosts([]);
+		saved.set("sidebarFolds", { knownHosts: [host] });
+		const second = await launch();
+		await second.folds.getState().hydrate();
+		expect(second.folds.getState().knownHosts).toEqual([]);
+
+		local.clear();
+		saved.set("sidebarFolds", { knownHosts: [host] });
+		const third = await launch();
+		const hydrating = third.folds.getState().hydrate();
+		third.folds.getState().syncHosts([]);
+		await hydrating;
+		expect(third.folds.getState().knownHosts).toEqual([]);
+	});
+
 	it("leaves the mirror alone when the pref cannot be read", async () => {
 		local.set("omp.sidebarFolds", JSON.stringify({ groups: { "/kept": true } }));
 		get.mockRejectedValueOnce(new Error("io"));

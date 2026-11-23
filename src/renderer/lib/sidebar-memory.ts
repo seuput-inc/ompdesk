@@ -7,7 +7,7 @@
  * web page keeps them on that device, never on the host) with a localStorage mirror each, like the width
  * (`sidebar-width.ts`): the first React render reads the mirror synchronously, and `public/pre-paint.js` reads
  * `omp.sidebarVisible` before the first paint so the boot shell shows the sidebar as it was left. The pref is read
- * again after mount and wins when it differs.
+ * again after mount and wins for user choices. Only a live host list replaces the mirrored host snapshot.
  *
  * Bounded: each record keeps its newest `FOLD_LIMIT` entries, and the sidebar prunes folds of folders, devices and
  * sessions that no longer exist once a live read has confirmed what exists (`stores/sidebar-folds.ts`,
@@ -243,8 +243,11 @@ export function writeSidebarVisible(visible: boolean): void {
 	writePref(SIDEBAR_VISIBLE_PREF, visible);
 }
 
-export function readSidebarFolds(): SidebarFolds {
-	return parseSidebarFolds(readMirror(SIDEBAR_FOLDS_STORAGE_KEY));
+export function readSidebarFolds() {
+	const mirror = readMirror(SIDEBAR_FOLDS_STORAGE_KEY);
+	const hasHostSnapshot =
+		typeof mirror === "object" && mirror !== null && "knownHosts" in mirror && Array.isArray(mirror.knownHosts);
+	return { ...parseSidebarFolds(mirror), hasHostSnapshot };
 }
 
 /** Remembers `folds`, bounded: a key too long to keep still works in memory but is not saved. */
