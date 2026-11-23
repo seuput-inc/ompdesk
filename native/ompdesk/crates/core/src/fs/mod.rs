@@ -12,6 +12,7 @@ mod launch;
 mod list;
 mod mutate;
 pub(crate) mod order;
+pub(crate) mod path;
 mod read;
 
 use serde_json::Value;
