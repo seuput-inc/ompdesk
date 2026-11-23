@@ -262,7 +262,7 @@
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
-			"syncCommit": "a8ad2e69a8e8ed4c9e549f2fb9e50a8fdbafa6ce"
+			"syncCommit": "a253870d8ba8a140d304a8d98bb95e58813c32bd"
 		},
 		{
 			"id": "away-calls",
