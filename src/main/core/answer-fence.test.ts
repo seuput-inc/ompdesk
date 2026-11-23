@@ -13,6 +13,7 @@ import { MobileWebService } from "../tailscale/service";
 type Listener = (data: unknown, bin: Uint8Array | null, generation: number) => void;
 
 const fake = vi.hoisted(() => ({
+	generation: 1,
 	calls: [] as Array<{ method: string; params: unknown; options: unknown }>,
 	listeners: new Map<string, Array<(data: unknown, bin: Uint8Array | null, generation: number) => void>>(),
 }));
@@ -20,7 +21,7 @@ const fake = vi.hoisted(() => ({
 vi.mock("./process", async importOriginal => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	core: () => ({
-		generation: 1,
+		generation: fake.generation,
 		on: (event: string, listener: Listener) => {
 			const listeners = fake.listeners.get(event) ?? [];
 			listeners.push(listener);
@@ -48,6 +49,7 @@ const answerTo = (method: string) => fake.calls.find(call => call.method === met
 
 beforeEach(() => {
 	fake.calls.length = 0;
+	fake.generation = 1;
 });
 
 describe("an answer to the core's question", () => {
@@ -81,8 +83,15 @@ describe("an answer to the core's question", () => {
 	});
 
 	it("goes to the core that asked: the memory services' upkeep", async () => {
-		const stop = answerAsks("svc", { echo: async params => params });
+		const work = Promise.withResolvers<number>();
+		const handle = vi.fn(() => work.promise);
+		const stop = answerAsks("svc", { echo: handle });
+		fake.generation = 4;
+		ask("upkeep.ask", { service: "svc", ask: 1, kind: "echo", params: 8 }, 3);
 		ask("upkeep.ask", { service: "svc", ask: 2, kind: "echo", params: 9 }, 4);
+		expect(handle.mock.calls).toEqual([[9]]);
+		fake.generation = 5;
+		work.resolve(9);
 		await vi.waitFor(() => expect(answerTo("upkeep.answer")).toBeDefined());
 		expect(answerTo("upkeep.answer")).toEqual({
 			method: "upkeep.answer",
