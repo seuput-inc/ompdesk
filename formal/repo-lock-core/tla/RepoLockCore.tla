@@ -46,7 +46,7 @@ Init ==
     /\ nextHolder = "waiting" /\ spawnedAfterStop = FALSE /\ timedOut = FALSE
     /\ scratch = "none" /\ disk = 0 /\ diskCalls = 0
 
-\* @code src/main/local/git/exec.ts:162-219 heldRequest and heldAnswer (coreGit, coreGitAnswer, coreHeld, coreGh): a live step sends its request; its end is the step's tracked effect
+\* @code src/main/local/git/exec.ts:168-248 heldRequest and heldAnswer (coreGit, coreGitAnswer, coreHeld, coreGh): a live step sends its request; its end is the step's tracked effect
 Send ==
     /\ step = "running" /\ req = "none" /\ coreUp
     /\ req' = "pending" /\ toCore' = Append(toCore, "request")
