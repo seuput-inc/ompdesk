@@ -519,6 +519,8 @@ enum GuiBridgeCommand {
     GetModelSetupFacts,
     GetSessionSpend,
     GetRecentModels,
+    GetNextPrompt,
+    WorktreeLifecycleSettings,
 }
 
 impl From<GuiBridgeParams> for BridgeParams {
@@ -540,6 +542,8 @@ impl From<GuiBridgeParams> for BridgeParams {
             GuiBridgeCommand::GetModelSetupFacts => ("model_setup_facts", None),
             GuiBridgeCommand::GetSessionSpend => ("session_spend", None),
             GuiBridgeCommand::GetRecentModels => ("recent_models", None),
+            GuiBridgeCommand::GetNextPrompt => ("next_prompt_state", None),
+            GuiBridgeCommand::WorktreeLifecycleSettings => ("worktree_lifecycle_settings", None),
         };
         Self {
             tab: gui.tab,

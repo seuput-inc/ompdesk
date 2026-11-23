@@ -75,6 +75,8 @@ const GUI_BRIDGE_COMMANDS: Record<string, true> = {
 	get_model_setup_facts: true,
 	get_session_spend: true,
 	get_recent_models: true,
+	get_next_prompt: true,
+	worktree_lifecycle_settings: true,
 };
 const QUEUE_COMMANDS: Record<string, true> = {
 	get_queue: true,

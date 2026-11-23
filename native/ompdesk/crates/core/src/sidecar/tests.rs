@@ -31,6 +31,8 @@ fn parameterless_gui_commands_keep_the_bridge_method_and_absent_params() {
         ("get_model_setup_facts", "model_setup_facts"),
         ("get_session_spend", "session_spend"),
         ("get_recent_models", "recent_models"),
+        ("get_next_prompt", "next_prompt_state"),
+        ("worktree_lifecycle_settings", "worktree_lifecycle_settings"),
     ] {
         let gui: super::GuiBridgeParams = serde_json::from_value(json!({
             "command": command, "tab": "tab", "seq": 3, "spawnId": 7

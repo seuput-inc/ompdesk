@@ -545,6 +545,8 @@ describe("SidecarManager", () => {
 			"const localReply = r => {",
 			'  if (r.method === "advisor_stats") return { ok: true, result: Object.keys(r.params).length === 0 ? { calls: 3 } : null };',
 			'  if (r.method === "composer.last_link") return { ok: true, result: "params" in r ? null : { url: "https://example.org/doc" } };',
+			'  if (r.method === "next_prompt_state") return { ok: true, result: "params" in r ? null : { suggestions: true, inline: false } };',
+			'  if (r.method === "worktree_lifecycle_settings") return { ok: true, result: "params" in r ? null : { onExit: "keep" } };',
 			'  if (r.method !== "regenerate_title") return { ok: true, result: answer(r) };',
 			"  switch (++titles) {",
 			'    case 1: return { ok: true, result: { title: null, reason: "params" in r ? "unexpected params" : "none" } };',
@@ -609,6 +611,8 @@ describe("SidecarManager", () => {
 				["get_advisor_stats", { calls: 3 }],
 				["regenerate_session_title", { title: null, reason: "none" }],
 				["get_last_link", { url: "https://example.org/doc" }],
+				["get_next_prompt", { suggestions: true, inline: false }],
+				["worktree_lifecycle_settings", { onExit: "keep" }],
 			] as const) {
 				const command = { type, id: "renderer-id" };
 				await expect(client.command(command)).resolves.toEqual({
@@ -627,6 +631,8 @@ describe("SidecarManager", () => {
 				"get_advisor_stats",
 				"regenerate_session_title",
 				"get_last_link",
+				"get_next_prompt",
+				"worktree_lifecycle_settings",
 			]);
 			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
 				success: true,

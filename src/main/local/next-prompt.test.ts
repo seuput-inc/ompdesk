@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { INLINE_MAX_DRAFT_CHARS } from "../../../resources/gui-bridge/modes/next-prompt-contracts";
-import { localHandlerFor } from "./index";
 import { handlers } from "./next-prompt";
 import type { LocalCommandContext } from "./types";
 
@@ -28,25 +27,6 @@ function run(type: string, params: Record<string, unknown>, ctx: LocalCommandCon
 }
 
 describe("prompt suggestion commands", () => {
-	it("are served locally, one handler per command type", () => {
-		for (const type of [
-			"get_next_prompt",
-			"set_next_prompt_draft",
-			"refresh_next_prompt",
-			"cancel_next_prompt",
-			"complete_inline",
-		]) {
-			expect(localHandlerFor(type), type).toBe(handlers[type]);
-		}
-	});
-
-	it("reads the state through bridge next_prompt_state and returns it untouched", async () => {
-		const state = { suggestions: true, inline: true, legacyExtension: false, requests: { suggest: 0, inline: 0 } };
-		const { ctx, request } = fakeCtx(state);
-		await expect(run("get_next_prompt", {}, ctx)).resolves.toBe(state);
-		expect(request).toHaveBeenCalledExactlyOnceWith("next_prompt_state");
-	});
-
 	it("maps the draft flag to next_prompt_draft and rejects anything but a boolean", async () => {
 		const { ctx, request } = fakeCtx();
 		await run("set_next_prompt_draft", { empty: false }, ctx);

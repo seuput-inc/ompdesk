@@ -164,7 +164,7 @@ src/main/local/copy-targets.test.ts	exception	Tests message and command ranking,
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
 src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and notifies sessions of MCP changes.
-src/main/local/git.ts	port	Dispatches local SCM and PR commands and verifies repository ownership before restoring a worktree. Compare native-root-mini-intake's local_dispatch/ candidate with the current command, result and refusal contracts before reuse.
+src/main/local/git.ts	mixed	sidecar.guiBridge reads worktree lifecycle settings from the requesting spawn. Main dispatches SCM and PR commands and verifies repository ownership before restoring a worktree.
 src/main/local/git/changes.test.ts	exception	Tests net tracked changes, rename counts and treatment of untracked or binary files in real checkouts.
 src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. git.diff validates the path before reporting missing git or reading the checkout.
 src/main/local/git/exec-brew.test.ts	exception	Tests macOS gh discovery with a temporary shell and Homebrew bin directory.
@@ -205,7 +205,7 @@ src/main/local/misc.test.ts	exception	Tests filtering stock plugin doctor output
 src/main/local/misc.ts	mixed	omp.pluginDoctor and omp.checkUpdate execute and project stock reports. Main passes the resolved CLI launch and routes session-bound bridge calls; the security-validation follow-up still goes to the live session.
 src/main/local/modes.ts	port	Distinguishes goal creation, replacement, resumption and dropping, applies time limits and starts objective turns when idle.
 src/main/local/next-prompt.test.ts	exception	Tests bridge routing, invalid draft flags and handling of suggestion and inline completion commands.
-src/main/local/next-prompt.ts	port	Enforces child-count, title, draft and request-ID limits and admissible refresh and cancel values before calling stock suggestion methods.
+src/main/local/next-prompt.ts	mixed	sidecar.guiBridge reads prompt suggestion state. Main validates parameterized requests against the shared draft, title, child and request-ID limits before calling stock.
 src/main/local/prompt-origin.test.ts	exception	Tests prompt provenance validation and which person-typed messages are noted to the bridge.
 src/main/local/prompt-origin.ts	port	Selects person-authored prompt and steer commands and caps the wait for recording their text at 500 ms.
 src/main/local/queue.test.ts	exception	Drives edits through the real Rust sidecar, checks chip identity across queue updates, and verifies that direct stock commands still bypass GUI edits.
