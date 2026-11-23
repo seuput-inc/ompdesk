@@ -32,7 +32,7 @@ export const REPO_ROOT = path.resolve(import.meta.dir, "..");
 export const PIN_FILE = path.join(REPO_ROOT, "scripts", "agent-desktop-pin.json");
 export const BIN_ROOT = path.join(REPO_ROOT, "resources", "agent-desktop-bin");
 export const LICENSE_FILE = path.join(REPO_ROOT, "LICENSES", "agent-desktop-LICENSE");
-/** Read by the app (src/main/agent-desktop.ts `AGENT_DESKTOP_BUILD_RECORD`) and scripts/after-pack.cjs. */
+/** Read by the app (native/ompdesk/crates/core/src/setup/desktop.rs) and scripts/after-pack.cjs. */
 export const BUILD_RECORD = "agent-desktop.build.json";
 
 export interface PinTarget {
