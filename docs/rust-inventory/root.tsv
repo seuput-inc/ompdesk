@@ -359,7 +359,7 @@ src/main/omp-updater.test.ts	tooling	-	Vitest suite: OmpUpdater.
 src/main/omp-updater.ts	port	2	OmpUpdater schedules checks, applies verified-version policy and coordinates setup update/repair; registerOmpUpdateIpc exposes state and update actions.
 src/main/ompdesk-check.test.ts	tooling	-	Vitest suite: group.
 src/main/open-path.test.ts	tooling	-	Vitest suite: isLauncherPath.
-src/main/open-path.ts	mixed	1	isLauncherPath checks extensions, resolved symlinks and executable bits; openLocalPath chooses reveal versus shell.openPath, with native shell operations in shell/src/shellops.rs. Safety policy remains TS.
+src/main/open-path.ts	native-client	1	fs.isLauncherPath checks extensions, resolved targets and POSIX executable bits. The shell adapter reveals a launcher or a path the default app cannot open.
 src/main/packaging-config.test.ts	tooling	-	Vitest suite: mac bundle configs.
 src/main/platform-test-scope.test.ts	tooling	-	Vitest suite: Windows test scope.
 src/main/process-alive.ts	port	1	processAlive uses signal zero and treats EPERM as evidence that the PID exists.

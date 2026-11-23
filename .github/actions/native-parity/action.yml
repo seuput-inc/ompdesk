@@ -15,6 +15,7 @@ runs:
         bunx vitest run --project=node
         src/main/core/process.test.ts
         src/main/initial-cwd.test.ts
+        src/main/open-path.test.ts
         src/main/hang-watchdog.test.ts
         src/main/agent-browsers.test.ts
         src/main/preview/visuals.test.ts
