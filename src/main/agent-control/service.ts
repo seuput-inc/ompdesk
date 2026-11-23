@@ -41,6 +41,7 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
+import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type { IpcSavedFolder, IpcTabRunOutcome, IpcTabWorktree, TabStatus } from "../../shared/ipc-types";
 import type {
@@ -521,11 +522,6 @@ export class SessionFolderMissing extends Error {
 	}
 }
 
-/** The session waits on someone: an open ask or approval, or a plan proposal awaiting approval (the control socket's `blocked`). */
-export function waits(tab: ControlTab): boolean {
-	return tab.asks.length > 0 || tab.plan !== undefined;
-}
-
 /** What the core waits for, in ms; every field defaults to the TypeScript service's own value (`tuning.rs`). */
 export type Tuning = Partial<
 	Record<
@@ -824,7 +820,7 @@ export class AgentControl {
 	 * The open session `session` names for `callerTabId`, by the tools' own name rules, refused when hidden from
 	 * agents (the control socket's waits). Rejects with the tools' own message.
 	 */
-	openTarget(callerTabId: string, session: string): Promise<ControlTab> {
+	openTarget(callerTabId: string, session: string): Promise<SessionStatus> {
 		return this.#call("openTarget", { callerTabId, session });
 	}
 

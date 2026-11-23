@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { binaryFile, stagedDir } from "../../../scripts/build-native";
-import { TOKEN_FILE } from "../../shared/control-protocol";
+import { type SessionStatus, TOKEN_FILE } from "../../shared/control-protocol";
 import type { ToolOutcome } from "../agent-control/service";
 import type { TabActivity } from "../sidecar-pool";
-import type { ControlBackend, OutsideCaller, SessionView } from "./backend";
+import type { ControlBackend, OutsideCaller } from "./backend";
 import { type ControlSocketHandle, startControlSocket } from "./index";
 
 // The `ompdesk` CLI (Rust, native/ompdesk/crates/cli) against main's own control socket: what a script sees (output,
@@ -21,13 +21,10 @@ class Backend implements ControlBackend {
 		this.calls.push({ caller, tool, args });
 		return { text: `ran ${tool} ${JSON.stringify(args)}`, isError: this.failing };
 	}
-	async resolve(): Promise<SessionView> {
+	async resolve(): Promise<SessionStatus> {
 		throw new Error("no such session");
 	}
-	view(): SessionView | null {
-		return null;
-	}
-	views(): SessionView[] {
+	snapshots(): [] {
 		return [];
 	}
 	observe(_listener: (activity: TabActivity) => void): () => void {

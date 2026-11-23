@@ -414,7 +414,7 @@ impl AgentControl {
 
     /// `openTarget`: the open session `session` names for `caller_tab_id`, by the tools' own name rules, refused when
     /// hidden from agents (the control socket's waits).
-    pub async fn open_target(&self, caller_tab_id: &str, session: &str) -> R<ControlTab> {
+    pub async fn open_target(&self, caller_tab_id: &str, session: &str) -> R<crate::control::View> {
         let state = self.host.state();
         if !state.enabled {
             return fail(TURNED_OFF);
@@ -435,7 +435,7 @@ impl AgentControl {
             )
             .await?;
         self.refuse_hidden(&target, &caller)?;
-        Ok(target)
+        Ok(target.into())
     }
 
     /// `run`: one control-tool call. `call` is the host tool call: its id (stock's, the same when a paired host

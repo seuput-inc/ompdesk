@@ -108,13 +108,6 @@ fn session_name(request: &Frame) -> Result<Box<RawValue>, Failure> {
 }
 
 #[derive(Serialize)]
-struct Status<'a> {
-    session: &'a str,
-    title: &'a str,
-    state: SessionState,
-}
-
-#[derive(Serialize)]
 struct Waited<'a> {
     session: &'a str,
     title: &'a str,
@@ -148,11 +141,7 @@ pub async fn handle(
         "tool" => tool(&link, &connection, &request).await,
         "state" => {
             let (view, _) = resolve(&link, &connection.caller, session_name(&request)?).await?;
-            json(&Status {
-                session: &view.session,
-                title: &view.title,
-                state: view.state,
-            })
+            json(&view)
         }
         "wait" => wait(&link, &connection, &request).await,
         "send" => send(&link, &connection, &request).await,

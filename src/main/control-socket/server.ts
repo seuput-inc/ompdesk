@@ -142,10 +142,16 @@ export class ControlServer {
 
 	#push(push: Push): void {
 		if (this.#closed) return;
-		const views = this.#unwatch ? this.#options.backend.views() : undefined;
+		const tabs = this.#unwatch ? this.#options.backend.snapshots() : undefined;
+		if (push.kind === "activity" && push.activity.type === "ask") {
+			const { tabId } = push.activity;
+			// Keep the lifecycle edge, but not a hidden card's text or request id.
+			if (!tabs?.some(tab => tab.tabId === tabId && !tab.hidden))
+				push = { kind: "activity", activity: { type: "ask", tabId } };
+		}
 		// The held `control.closed` is the crash signal. A late push to a listener already closed has nobody to tell.
 		void core()
-			.call("control.push", { server: this.#number, seq: ++this.#sequence, ...push, views })
+			.call("control.push", { server: this.#number, seq: ++this.#sequence, ...push, tabs })
 			.catch(() => undefined);
 	}
 

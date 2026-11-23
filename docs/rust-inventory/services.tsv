@@ -60,7 +60,7 @@ src/main/cli-tools/plans.test.ts	exception	Checks package-manager executable sel
 src/main/cli-tools/plans.ts	port	Selects owner-specific check and update commands, parses latest versions and decides when running tools must wait.
 src/main/cli-tools/updater.test.ts	exception	Exercises provider filtering, supervised updates and post-update detection using controlled dependencies.
 src/main/cli-tools/updater.ts	port	Schedules detection and version checks, defers busy tools, runs updates and manages temporary package directories for probes.
-src/main/control-socket/backend.ts	port	Hides private tabs and maps waiting, starting, stopped, busy and idle states for socket callers.
+src/main/control-socket/backend.ts	native-client	The backend supplies already-visible host facts at the pool event and forwards outside calls. The core projects socket state both for a resolved target and for numbered updates.
 src/main/control-socket/cli-install.test.ts	exception	Checks launcher contents, PATH updates and when a packaged install may replace a launcher.
 src/main/control-socket/cli-install.ts	native-client	control.installCli writes the launchers; the startup adapter supplies the local platform and bin directories, appends the latter to the host PATH, and logs a failed install without stopping app startup.
 src/main/control-socket/cli.test.ts	exception	Drives the CLI with arguments and stdin and checks caller identity, text output and JSON output.
@@ -71,7 +71,7 @@ src/main/control-socket/events.test.ts	exception	Tests live subscription boundar
 src/main/control-socket/index.ts	port	Hub batch, §1.3(c): ipc.ts calls startControlSocket without awaiting it. The endpoint is set before directory/token preparation and withdrawn on failed listen or close. Move startup with the spawn-time readers in sidecar-factory.ts; Rust already prepares the directory, token and listener.
 src/main/control-socket/router.test.ts	exception	Tests request routing, successful frames carrying tool errors and unknown-session responses.
 src/main/control-socket/server.test.ts	exception	Exercises socket handshake, caller defaults and tool calls over real connections.
-src/main/control-socket/server.ts	port	Restarts the Rust listener after a lost core, releases tracked outside callers and fences late backend replies by listener epoch.
+src/main/control-socket/server.ts	port	Restarts the listener after core loss, releases outside callers, fences late replies by listener epoch, and takes its synchronous pool snapshot before numbering a push (§1.3c). The core computes the reported statuses.
 src/main/core/answer-fence.test.ts	exception	Verifies that replies to remote-byte and memory-sync questions go only to the core generation that asked.
 src/main/core/hub.bench.ts	exception	Benchmark of a synchronous hub call that publishes an item; not application startup code.
 src/main/core/hub.test.ts	exception	Exercises nested calls, synchronous questions and asynchronous answers on the hub connection.
