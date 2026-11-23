@@ -301,9 +301,9 @@ src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwri
 src/main/terminal/ipc.ts	port	Routes local versus remote terminal operations, tracks tab ownership and enforces viewer leases before dispatch.
 src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
 src/main/terminal/lease.ts	port	Tracks viewer presence and idle expiry to arbitrate terminal control and resizing.
-src/main/terminal/requests.ts	port	Validates operation shape, dimensions and write size; restricts requested shells before stock-helper dispatch.
+src/main/terminal/requests.ts	port	Remote-web batch, §1.3(c): paired remote/host-services checks the owner and immediately enqueues terminal.request, then can enqueue terminal.dispose for a closed tab. Awaiting a shell lookup before enqueue can create a shell after disposal. Move admission with the owner.
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
-src/main/terminal/shells.ts	port	Probes installed platform shells, reads /etc/shells, deduplicates entries and orders the login shell first.
+src/main/terminal/shells.ts	port	Remote-web batch, §1.3(c): terminal/requests uses the same live shell list as the picker to allow only exact installed paths at create admission, before the owner can be disposed. Move both uses together with paired terminal admission.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.
