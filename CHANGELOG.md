@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.141.3] - 2026-11-24
+
+Windows에서 `ompdesk check`가 더 이상 Windows 터미널 창을 띄우지 않고, 사이드바와 공급자 로그인의 빠른 연속 동작에서 생기던 문제를 고쳤습니다.
+
+- 사이드바에서 세션 두 개를 빠르게 연달아 눌러도 첫 세션이 사라지지 않고 둘 다 열립니다.
+- 연결된 다른 컴퓨터의 행이, 저장된 접기 설정이 늦게 도착해도 사이드바에서 사라지지 않습니다.
+- 공급자 로그인에서 취소한 직후 다시 연결을 눌러도 "이미 로그인이 진행 중" 오류가 나지 않습니다. 취소가 끝날 때까지 연결 버튼이 잠깐 비활성화됩니다.
+- Preview에서 페이지가 멈춘 뒤 복원을 누르면 바로 다시 열립니다.
+- 디스크 할당량이 가득 차 저장이 거부되면 다른 디스크 가득 참과 같이 기억해 두었다가 다시 저장합니다.
+- 로컬 명령과 git, 원격·웹 연결, 메모리·예약·디스크 정리, 설치와 업데이트 확인, 앱 시작 보호의 많은 부분을 Rust로 옮겼습니다.
+
+알려진 문제: Windows에서 드물게 첫 창이 30초 넘게 빈 화면으로 남을 수 있습니다. 원인을 좁히는 중이며 다음 업데이트에서 고칩니다.
+
+<!-- en -->
+
+On Windows, `ompdesk check` no longer opens Windows Terminal windows, and quick repeated actions in the sidebar and provider sign-in now work.
+
+- Clicking two sessions in the sidebar in quick succession opens both instead of replacing the first.
+- A paired computer's row no longer disappears from the sidebar when the saved fold settings arrive late.
+- Connecting again right after cancelling a provider sign-in no longer fails with "a sign-in is already in progress". Connect stays disabled until the cancel finishes.
+- Restore in Preview reopens a crashed page right away.
+- A save refused because a disk quota is full is kept and retried, like any other full disk.
+- Much of the local commands and git, the remote and web connections, memory, schedules and disk care, setup and update checks, and launch protection now run in Rust.
+
+Known issue: on Windows the first window can rarely stay blank for more than 30 seconds. The cause is being narrowed down and will be fixed in the next update.
+
 ## [0.141.2] - 2026-11-23
 
 Windows 10에서 WinHTTP가 옵션 195를 지원하지 않아도 업데이트를 확인할 수 있습니다.
