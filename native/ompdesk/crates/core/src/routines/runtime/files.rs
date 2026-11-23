@@ -131,10 +131,10 @@ pub(super) async fn run(
                 }));
             }
         }
-        if burst.due.is_some_and(|at| at <= Instant::now()) {
-            if let Some(line) = burst.take(&path) {
-                sink.file_changed(&line);
-            }
+        if burst.due.is_some_and(|at| at <= Instant::now())
+            && let Some(line) = burst.take(&path)
+        {
+            sink.file_changed(&line);
         }
         let deadline = retry.into_iter().chain(list_due).chain(burst.due).min();
         tokio::select! {

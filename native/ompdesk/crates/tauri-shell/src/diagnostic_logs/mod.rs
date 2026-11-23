@@ -11,8 +11,8 @@ use std::path::Path;
 pub(crate) use feedback::{FeedbackRead, feedback_profile};
 
 pub(crate) fn handle(call: Call, profile: &'static Path) {
-    let read = match call.params.as_str() {
-        Some("recent") => recent::read as fn(&Path) -> Vec<String>,
+    let read: fn(&Path) -> Vec<String> = match call.params.as_str() {
+        Some("recent") => recent::read,
         Some("probes") => |profile| reader::lines(profile, Selection::Probes),
         _ => return call.err("invalid", "unknown diagnostic log selection"),
     };
