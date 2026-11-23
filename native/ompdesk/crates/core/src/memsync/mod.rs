@@ -23,12 +23,13 @@
 //!   capture and diagnostics read it too, and the ai-memory build embeds it).
 //!
 //! Methods: `memsync.servePull`, `memsync.servePush`, `memsync.serveConclusionPull`, `memsync.serveConclusionPush`
-//! (the host's side, one each), `memsync.readConclusions` (recall-terms' read of a stream), `memsync.start`, `memsync.sync`,
+//! (the host's side, one each), `memsync.refreshRecallTerms` (the local recall corpus), `memsync.start`, `memsync.sync`,
 //! `memsync.hostOnline`, `memsync.syncAll`, `memsync.dispose` (a device's sync, named by main's `sync` number; each
 //! carries its state file, interval and whether it was started, so a core that started again picks it up),
 //! `memsync.answer`. Events: `memsync.ask`, `memsync.log` (a line main writes to its runtime log, source
 //! `memory-sync`).
 
+mod corpus;
 mod device;
 mod host;
 mod state;
@@ -50,7 +51,7 @@ use self::device::{Here, Report};
 use self::host::Offer;
 use self::state::{HostState, SyncFile};
 use self::store::Store;
-use self::wire::{ConclusionCursor, ConclusionWire, Cursor, PageWire, Source};
+use self::wire::{ConclusionCursor, ConclusionWire, Cursor, PageWire};
 use crate::aimemory::client::Server;
 use crate::server::{Call, Events, Fault, Registry, Reply};
 
@@ -435,29 +436,6 @@ async fn serve_conclusion_push(call: Call) -> Result<Reply, Fault> {
     Reply::json(&reply)
 }
 
-#[derive(Deserialize)]
-struct ReadParams {
-    server: Server,
-    source: String,
-    after: u64,
-    #[serde(default)]
-    known: Option<String>,
-    limit: u64,
-}
-
-async fn read_conclusions(call: Call) -> Result<Reply, Fault> {
-    let p: ReadParams = params(&call.params)?;
-    let source = match p.source.as_str() {
-        "native" => Source::Native,
-        "synced" => Source::Synced,
-        _ => return Err(invalid("source")),
-    };
-    let store = Store::new(p.server);
-    Reply::json(
-        &store::read_conclusions(&store, source, p.after, p.known.as_deref(), p.limit).await?,
-    )
-}
-
 async fn sync_call(call: Call) -> Result<Reply, Fault> {
     let p: SyncParams = params(&call.params)?;
     let host = p.host.clone().ok_or_else(|| invalid("host"))?;
@@ -534,8 +512,8 @@ pub fn register(registry: &mut Registry) {
     registry.add("memsync.serveConclusionPush", |call| {
         Box::pin(serve_conclusion_push(call))
     });
-    registry.add("memsync.readConclusions", |call| {
-        Box::pin(read_conclusions(call))
+    registry.add("memsync.refreshRecallTerms", |call| {
+        Box::pin(corpus::refresh(call))
     });
     registry.add("memsync.start", |call| Box::pin(start(call)));
     registry.add("memsync.sync", |call| Box::pin(sync_call(call)));

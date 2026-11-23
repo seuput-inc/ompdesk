@@ -76,6 +76,7 @@ runs:
         src/main/mcp-hub-memory.test.ts
         src/main/ai-memory/sync.test.ts
         src/main/ai-memory/recall-terms.test.ts
+        src/main/bridge-memory-recall-core.test.ts
         src/main/remote/host-services.test.ts
         src/main/routines/*.test.ts
         src/main/mail-accounts.test.ts

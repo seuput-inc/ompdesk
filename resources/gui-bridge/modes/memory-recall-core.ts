@@ -407,18 +407,11 @@ function byRank(a: RecallCandidate, b: RecallCandidate): number {
 
 /**
  * Corpus statistics over conclusion bodies: `n` conclusions, `df[term]` how many of them hold the term (counted once
- * per conclusion). Main builds them (src/main/ai-memory/recall-terms.ts) and the bridge reads them from a file.
+ * per conclusion). The core builds them from this tokenizer's `contentTerms`, and the bridge reads them from a file.
  */
 export interface RecallTermStats {
 	n: number;
 	df: Record<string, number>;
-}
-
-/** Adds one conclusion body to `stats` (mutated and returned): each distinct content term once. */
-export function addConclusionTerms(stats: RecallTermStats, body: string): RecallTermStats {
-	stats.n++;
-	for (const term of new Set(contentTerms(body))) stats.df[term] = (stats.df[term] ?? 0) + 1;
-	return stats;
 }
 
 /** A conclusion must cover at least this share of the prompt's IDF mass (over the terms the corpus has seen). */

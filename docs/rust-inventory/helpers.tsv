@@ -16,7 +16,7 @@ resources/gui-bridge/stock-helper/extensions.ts	mixed	Stock managers perform upg
 resources/gui-bridge/stock-helper/history.ts	mixed	Stock HistoryStorage owns composer history. The worker defaults the recent and search limits and permits these read-only requests beside the mutation queue.
 resources/gui-bridge/stock-helper/host.ts	mixed	Dispatch and worker lifetime can move toward the Rust lane. A Bun process must still load the installed stock methods and communicate over stdio.
 resources/gui-bridge/stock-helper/images.ts	exception	Converts unsupported formats and sizes images through stock's Bun image pipeline, not a desktop image decoder.
-resources/gui-bridge/stock-helper/memory.ts	mixed	The worker reads stock journals and derives prompt facts and completed assistant turns for the core. Separate the stock reader from the summarization rules.
+resources/gui-bridge/stock-helper/memory.ts	mixed	The worker reads stock journals and derives prompt facts and completed assistant turns. It also serves the core's recall tokenizer request using the bridge's contentTerms.
 resources/gui-bridge/stock-helper/models.ts	mixed	Stock owns ModelsConfigSchema. The worker extracts schema literals and shapes answers without reimplementing stock validation.
 resources/gui-bridge/stock-helper/search.ts	mixed	Keep pi-natives grep in the installed stock worker. Its adapter maps matches and truncation to the Files panel response.
 resources/gui-bridge/stock-helper/sessions.ts	mixed	Stock owns enumeration, message loading, moves, deletion and leases. First-prompt and prompt-origin fills use stock's streaming reader. Core owns activity and typed-name titles; Bun parses only batched noncanonical timestamp strings from restored journals.

@@ -148,21 +148,6 @@ export function serveConclusionPush(
 	return serve("serveConclusionPush", deps, peer, params);
 }
 
-/**
- * A page of a conclusion stream from the cursor `after`, which was read from the database `known`; a cursor of
- * another database, or past the stream's end, reads from 0 (`after: 0`).
- */
-export async function readConclusions(
-	server: AiMemoryServer,
-	source: "native" | "synced",
-	after: number,
-	known: string | undefined,
-	limit: number,
-): Promise<{ page: ConclusionPage; after: number }> {
-	const params = { server, source, after, ...(known === undefined ? {} : { known }), limit };
-	return (await core().call<{ page: ConclusionPage; after: number }>("memsync.readConclusions", params)).result;
-}
-
 let nextSync = 0;
 
 /** The device side: syncs with every connected host while memory is on. */

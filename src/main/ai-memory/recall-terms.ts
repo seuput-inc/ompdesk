@@ -1,43 +1,9 @@
-/**
- * The term corpus of memory recall's coverage gate (resources/gui-bridge/modes/memory-recall-core.ts `codeRuleSelect`):
- * how many conclusions hold each content term, kept in `<userData>/ai-memory/recall-terms.json` for the bridge. Both
- * conclusion streams are read after saved cursors through the core's `memsync.readConclusions` (the sync's reset
- * rule: another store, or a cursor past the stream's end, rebuilds from zero). Deletions are not subtracted, so the
- * document frequencies go slightly stale until the store changes (then the rebuild corrects them). The terms stay
- * here: `addConclusionTerms` is the bridge's own tokenizer, which its coverage gate reads the file with.
- */
-
-import { readFile } from "node:fs/promises";
-import { addConclusionTerms, type RecallTermStats } from "../../../resources/gui-bridge/modes/memory-recall-core";
-import { writeFileAtomic } from "../atomic-file";
+import { core } from "../core/process";
+import { stockHelperHost } from "../stock-helper";
 import type { AiMemoryServer } from "./client";
-import { readConclusions } from "./sync";
 
-const PAGE = 200;
-
-interface TermsFile extends RecallTermStats {
-	v: 1;
-	store: string;
-	native: number;
-	synced: number;
-}
-
-function empty(): TermsFile {
-	return { v: 1, store: "", native: 0, synced: 0, n: 0, df: {} };
-}
-
-function parse(raw: string): TermsFile | undefined {
-	try {
-		const value: unknown = JSON.parse(raw);
-		if (value === null || typeof value !== "object" || Reflect.get(value, "v") !== 1) return undefined;
-		const { store, native, synced, n, df } = value as Record<string, unknown>;
-		if (typeof store !== "string" || typeof native !== "number" || typeof synced !== "number") return undefined;
-		if (typeof n !== "number" || df === null || typeof df !== "object") return undefined;
-		return { v: 1, store, native, synced, n, df: { ...(df as Record<string, number>) } };
-	} catch {
-		return undefined;
-	}
-}
+// A rebuild may have many pages. Each server and tokenizer request has its own timeout.
+const REFRESH_TIMEOUT_MS = 2 ** 31 - 1;
 
 export class RecallTermsIndex {
 	readonly #server: () => AiMemoryServer;
@@ -65,40 +31,11 @@ export class RecallTermsIndex {
 
 	async #run(): Promise<void> {
 		try {
-			const saved = parse(await readFile(this.#file, "utf8").catch(() => ""));
-			let state = saved ?? empty();
-			let changed = false;
-			// A cursor that no longer holds (another store, or past the stream's end) rebuilds both streams from zero.
-			const reads = async (): Promise<boolean> => {
-				for (const source of ["native", "synced"] as const) {
-					for (;;) {
-						const { page, after } = await readConclusions(
-							this.#server(),
-							source,
-							state[source],
-							state.store,
-							PAGE,
-						);
-						if (after !== state[source]) return false;
-						if (state.store !== page.store) {
-							state.store = page.store;
-							changed = true;
-						}
-						for (const row of page.rows) addConclusionTerms(state, row.body);
-						if (page.next !== state[source]) changed = true;
-						state[source] = page.next;
-						if (!page.more) break;
-					}
-				}
-				return true;
-			};
-			if (!(await reads())) {
-				state = empty();
-				changed = true;
-				await reads();
-			}
-			if (!changed && saved) return;
-			await writeFileAtomic(this.#file, JSON.stringify(state), { mode: 0o600 });
+			await core().call(
+				"memsync.refreshRecallTerms",
+				{ file: this.#file, server: this.#server(), stockHost: stockHelperHost() },
+				{ timeoutMs: REFRESH_TIMEOUT_MS },
+			);
 		} catch (failure) {
 			this.#log?.("recall-terms-failed", { error: failure instanceof Error ? failure.message : String(failure) });
 		}

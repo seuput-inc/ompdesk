@@ -8,6 +8,7 @@ import {
 	promptTitle,
 	unwrapPrompt,
 } from "../memory-prompt";
+import { contentTerms } from "../modes/memory-recall-core";
 import { ompModuleFile } from "../omp-package";
 import type { HelperMethods } from "./dispatch";
 
@@ -128,6 +129,11 @@ async function readMessages(sessionPath: string): Promise<unknown[]> {
 }
 
 export const methods = {
+	"memory.recallTerms": bodies => {
+		if (!Array.isArray(bodies) || !bodies.every(body => typeof body === "string"))
+			throw new Error("Invalid conclusion bodies");
+		return bodies.map(contentTerms);
+	},
 	"memory.promptFacts": params => promptFacts(items(params)),
 	"memory.journal": async params => {
 		const sessionPath = field(params, "sessionPath");
