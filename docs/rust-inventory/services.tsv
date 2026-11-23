@@ -279,8 +279,8 @@ src/main/setup/service.test.ts	exception	Checks launch-time install order and pr
 src/main/setup/service.ts	port	Queues required and optional installations, enforces retry backoff, executes plans, refreshes detection and handles cancellation and update outcomes.
 src/main/setup/supervisor.ts	port	Builds isolated launches and log redirection, including the Windows Bun launcher and command-line quoting, before starting ompdesk-core --supervise.
 src/main/setup/test-mirror.ts	exception	Starts and stops controlled HTTP mirrors for installer release and download tests.
-src/main/ssh/client.ts	port	Starts native ssh.* operations but buffers early events, keeps prompts and reports dropped runs when the core restarts.
-src/main/ssh/ipc.ts	port	Starts and disposes SshTools with Electron, and broadcasts state and prompts to every live window.
+src/main/ssh/client.ts	mixed	Rust owns ssh processes, prompts and tool I/O. SshTools reads prompts synchronously and attaches listeners after start; this client queues early events and tells those listeners when their core died. Move the event consumer with SshTools (§1.3a,c).
+src/main/ssh/ipc.ts	port	registerSshToolsIpc enumerates the live windows for each state/prompt broadcast and disposes SshTools inside will-quit. Move with the shell window and quit owners (§1.3a,c).
 src/main/ssh/service.test.ts	exception	Test coverage for SSH prompts, forwarding, reconnect and restore.
 src/main/ssh/service.ts	mixed	ssh.readStore/saveStore own forward file validation, quarantine, persistence and disk-full retry. The live watch/forward map and grace timers remain with same-tick state broadcasts and will-quit disposal (§1.3a,c).
 src/main/ssh/test-fake-ssh.ts	exception	Test fixture writes a substitute SSH executable for controlled process interactions.
@@ -290,10 +290,10 @@ src/main/tailscale/locate.test.ts	exception	Test coverage for Tailscale executab
 src/main/tailscale/locate.ts	native-client	Supplies platform, preferences and environment to tailscale.locate; Rust selects the executable.
 src/main/tailscale/service-restart.test.ts	exception	Test coverage for mobile web recovery after core exit.
 src/main/tailscale/service.test.ts	exception	Test coverage for mobile web serve publication and cleanup.
-src/main/tailscale/service.ts	port	Schedules refreshes, serializes actions, and services core requests to change preferences, start servers and open settings.
+src/main/tailscale/service.ts	mixed	The core decides mobile web phases, actions and poll delays. state() joins the desktop setup snapshot and live preferences synchronously; dispose and coreLost clear the refresh timer before the server is stopped or reopened. Move that lifecycle with its desktop callers (§1.3a,c).
 src/main/tailscale/status.ts	exception	Declares status and node wire types, a minimum version and fixed admin URLs; no status processing.
 src/main/tailscale/tailnet.test.ts	exception	Test coverage for tailnet identity cache expiry.
-src/main/tailscale/tailnet.ts	port	Delegates status/whois to Rust but recreates stale native handles and selects fallback results on core errors.
+src/main/tailscale/tailnet.ts	native-client	remote.tailnet owns status/whois, lookup caching and shareable reads. The client supplies the CLI launch arguments and invalidates process-local handles on core exit; a core that cannot answer gives a conservative result.
 src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models status, serve configuration and relay responses.
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
 src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
