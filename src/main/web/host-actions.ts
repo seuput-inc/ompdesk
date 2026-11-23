@@ -19,9 +19,9 @@ import {
 	type WebModelsText,
 	type WebModelsWriteResult,
 } from "../../shared/web-host";
-import { type CoreAnswer, CoreError, core } from "../core/process";
+import { CoreError, core } from "../core/process";
 import { isOpenableExternalUrl } from "../external-url";
-import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin, sniffMime } from "../workspace-fs";
+import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin } from "../workspace-fs";
 import type { BlobStore } from "./blobs";
 import type { WebDevices } from "./devices-store";
 import type { UploadStore } from "./uploads";
@@ -204,22 +204,23 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 			abs = within;
 		}
 		abs = path.normalize(abs);
-		let head: CoreAnswer<{ size: number }>;
+		let file: { size: number; mime: string };
 		try {
-			head = await core().call<{ size: number }>("fs.resolveMedia", {
-				path: abs,
-				head: 512,
-				webBlobMaxBytes: FS_BINARY_LOCAL_MAX_BYTES,
-			});
+			file = (
+				await core().call<typeof file>("fs.resolveMedia", {
+					path: abs,
+					webBlobMaxBytes: FS_BINARY_LOCAL_MAX_BYTES,
+				})
+			).result;
 		} catch (error) {
 			if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "file_too_large"))
 				return { ok: false, error: error.message, code: error.code };
 			throw error;
 		}
-		const mime = sniffMime(head.bin ?? new Uint8Array(0), abs);
+		const { mime, size } = file;
 		const name = path.basename(abs);
 		const url = deps.blobs.addFile(context.deviceId, { abs, mime, name, download: request.download === true });
-		return { ok: true, url, mime, size: head.result.size, name };
+		return { ok: true, url, mime, size, name };
 	};
 
 	const blobRelease = async (context: WebCallContext, args: readonly unknown[]): Promise<void> => {

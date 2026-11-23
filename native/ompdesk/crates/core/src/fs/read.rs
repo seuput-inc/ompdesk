@@ -1,14 +1,12 @@
-//! Reads: text with a byte cap, bytes for the viewer and a download in parts, a markdown image, the plan file, the
-//! head of a media file, and a stat. Bytes travel as the reply's `bin` tail; main sniffs their type
-//! (`sniffMime`, which its callers need synchronously).
+//! Workspace reads. Only requested file contents travel as a reply's binary tail.
 
 use std::io::{Seek, SeekFrom};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::disk;
 use super::error::Codes;
+use super::{disk, mime};
 use crate::server::{Fault, Reply};
 
 const READ_DEFAULT_MAX_BYTES: f64 = 200_000.0;
@@ -83,8 +81,6 @@ pub struct BinaryParams {
     max_bytes: Option<Value>,
     /// Whole files up to this many bytes (the local or the paired-host cap).
     cap: f64,
-    /// The head an over-cap answer carries: what main sniffs a type from.
-    head: u64,
 }
 
 #[derive(Serialize)]
@@ -92,11 +88,11 @@ pub struct BinaryParams {
 struct Binary {
     size: u64,
     truncated: bool,
-    /// Over the cap: the tail holds only the head main sniffs a type from.
+    mime: &'static str,
     too_large: bool,
 }
 
-/// The viewer's read: a whole file up to `cap`; over it, `tooLarge` with the head. A `maxBytes` below the cap asks
+/// The viewer's read: a whole file up to `cap`; over it, `tooLarge` with its MIME. A `maxBytes` below the cap asks
 /// for a prefix instead (the hex view).
 pub fn read_binary(params: &BinaryParams) -> Result<Reply, Fault> {
     let cap = params.cap;
@@ -112,13 +108,15 @@ pub fn read_binary(params: &BinaryParams) -> Result<Reply, Fault> {
     let size = meta.len();
     let mut file = disk::open(&params.path).map_err(fail)?;
     if prefix.is_none() && size as f64 > cap {
-        let head = read_head(&mut file, size.min(params.head), Codes::Missing)?;
-        return Ok(Reply::json(&Binary {
+        let mut head = [0; mime::HEAD_BYTES];
+        let len = size.min(head.len() as u64) as usize;
+        let n = disk::read_into(&mut file, &mut head[..len]).map_err(fail)?;
+        return Reply::json(&Binary {
+            mime: mime::viewer(&head[..n], &params.path),
             size,
             truncated: false,
             too_large: true,
-        })?
-        .with_bin(head));
+        });
     }
     let length = match prefix {
         None => size,
@@ -126,6 +124,7 @@ pub fn read_binary(params: &BinaryParams) -> Result<Reply, Fault> {
     };
     let data = read_head(&mut file, length, Codes::Missing)?;
     Ok(Reply::json(&Binary {
+        mime: mime::viewer(&data, &params.path),
         size,
         truncated: size > length,
         too_large: false,
@@ -145,6 +144,7 @@ pub struct RangeParams {
 
 #[derive(Serialize)]
 struct Range {
+    mime: &'static str,
     size: u64,
     truncated: bool,
 }
@@ -171,6 +171,7 @@ pub fn read_range(params: &RangeParams) -> Result<Reply, Fault> {
     }
     data.truncate(read);
     Ok(Reply::json(&Range {
+        mime: mime::viewer(if params.offset == 0 { &data } else { &[] }, &params.path),
         size,
         truncated: params.offset + (read as u64) < size,
     })?
@@ -187,13 +188,14 @@ pub struct ImageParams {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Image {
+    mime: Option<&'static str>,
     size: u64,
     mtime_ms: f64,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     unchanged: bool,
 }
 
-/// A markdown image: a regular file under 25 MB, whole in the tail; main checks it sniffs as an image.
+/// A markdown image: only signature-checked bytes are sent, never a type inferred from a suffix.
 pub fn read_image(params: &ImageParams) -> Result<Reply, Fault> {
     let fail = |error: super::error::NodeError| error.fault(Codes::None);
     let meta = disk::stat(&params.path).map_err(fail)?;
@@ -213,6 +215,7 @@ pub fn read_image(params: &ImageParams) -> Result<Reply, Fault> {
     };
     if known("mtimeMs") == Some(mtime_ms) && known("size") == Some(size as f64) {
         return Reply::json(&Image {
+            mime: None,
             size,
             mtime_ms,
             unchanged: true,
@@ -222,7 +225,10 @@ pub fn read_image(params: &ImageParams) -> Result<Reply, Fault> {
     // The size the stat gave: a file that shrank since reads as zeros past its end, as the TypeScript's buffer did.
     let mut body = vec![0; size as usize];
     disk::read_into(&mut file, &mut body).map_err(fail)?;
+    let mime = mime::image(&body)
+        .ok_or_else(|| Fault::new("unsupported_image", "Not a supported image"))?;
     Ok(Reply::json(&Image {
+        mime: Some(mime),
         size,
         mtime_ms,
         unchanged: false,
@@ -300,18 +306,17 @@ fn newest_plan_file(dir: &str) -> Option<(String, String)> {
 #[serde(rename_all = "camelCase")]
 pub struct MediaParams {
     path: String,
-    /// The head's length: what main sniffs a type from.
-    head: u64,
     /// The web blob picker rejects a large file before opening it. Streamed media has no such limit.
     web_blob_max_bytes: Option<u64>,
 }
 
 #[derive(Serialize)]
 struct Media {
+    mime: &'static str,
     size: u64,
 }
 
-/// A stream's file: a regular file, its size and its head (main checks it sniffs as audio or video).
+/// The workspace stream accepts only audio or video. The web blob picker serves any regular file under its cap.
 pub fn resolve_media(params: &MediaParams) -> Result<Reply, Fault> {
     let missing = || Fault::new("file_not_found", "File not found");
     let web = params.web_blob_max_bytes.is_some();
@@ -333,13 +338,21 @@ pub fn resolve_media(params: &MediaParams) -> Result<Reply, Fault> {
     }
     let codes = if web { Codes::None } else { Codes::Missing };
     let mut file = disk::open(&params.path).map_err(|error| error.fault(codes))?;
-    let len = meta.len().min(params.head);
-    let mut head = read_head(&mut file, len, codes)?;
-    if web {
-        // The web picker's fixed header buffer kept its zero suffix if the file shrank after stat.
-        head.resize(len as usize, 0);
+    let mut head = [0; mime::HEAD_BYTES];
+    let len = meta.len().min(head.len() as u64) as usize;
+    let n = disk::read_into(&mut file, &mut head[..len]).map_err(|error| error.fault(codes))?;
+    // The web picker's fixed buffer kept its zero suffix if the file shrank after stat.
+    let mime = mime::viewer(&head[..if web { len } else { n }], &params.path);
+    if !web && !mime.starts_with("audio/") && !mime.starts_with("video/") {
+        return Err(Fault::new(
+            "unsupported",
+            format!("Not audio or video ({mime})"),
+        ));
     }
-    Ok(Reply::json(&Media { size: meta.len() })?.with_bin(head))
+    Reply::json(&Media {
+        size: meta.len(),
+        mime,
+    })
 }
 
 #[derive(Serialize)]

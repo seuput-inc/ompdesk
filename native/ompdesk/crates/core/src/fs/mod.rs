@@ -11,6 +11,7 @@ mod ignore;
 mod launch;
 mod launcher_path;
 mod list;
+mod mime;
 mod mutate;
 pub(crate) mod order;
 mod read;
