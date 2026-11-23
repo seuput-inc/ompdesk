@@ -225,7 +225,7 @@ src/main/default-workspace.ts	native-client	1	fs.defaultWorkspace resolves the w
 src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that save on every change, on a full disk.
 src/main/deleted-sessions.ts	port	2	DeletedSessions loads and persists bounded per-device/path tombstones through AtomicSaver to prevent deleted sessions reopening.
 src/main/delivery-ledger.test.ts	tooling	-	Vitest suite: deliverOnce.
-src/main/delivery-ledger.ts	port	2	deliverOnce shares in-flight answers and retains accepted delivery IDs for bounded retry deduplication across tabs.
+src/main/delivery-ledger.ts	port	2	§1.3: ipc.ts and remote/host-services.ts share the in-flight transport Promise itself on duplicate delivery. Receiver: remote-web, with those transports.
 src/main/desktop-slot-exit.ts	mixed	3	Desktop exit receipt: combines the spawn-bound native wait with read-only OS presence checks for the bridge process behind a launcher; move OS observations with the host.
 src/main/desktop-slot-host.test.ts	tooling	-	Vitest suite: DesktopSlotHost.
 src/main/desktop-slot-host.ts	mixed	3	hub/desktop_slot.rs decides ownership. DesktopSlotHost still maps captured omp executions to UI tab ids, delivers bridge effects, records Stops and broadcasts state; remove with main IPC.
@@ -299,7 +299,7 @@ src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the co
 src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
 src/main/mcp-hub.ts	port	2	McpHub launches and supervises the native MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
-src/main/mcp-live.ts	port	3	onMcpChange and noteMcpChange register and invoke the desktop listener that fans a session's MCP change out to other sessions.
+src/main/mcp-live.ts	port	3	§1.3: extension mutations synchronously notify the listener installed by index.ts; no separate I/O. Receiver: shell, with that notification.
 src/main/media-stream.test.ts	tooling	-	Vitest suite: parseRange.
 src/main/media-stream.ts	port	2	MediaStreams maps opaque tokens to local files and streams bounded byte ranges for omp-media; parseRange validates seek requests.
 src/main/memory-prompt.test.ts	tooling	-	Vitest suite: promptTitle.
@@ -384,7 +384,7 @@ src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
 src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.
 src/main/runtime-log.ts	port	2	runtimeLogPath resolves the app userData log location and writeRuntimeLog attaches caller context before passing the report to the TS log writer.
 src/main/safe-store.test.ts	tooling	-	Vitest suite: prefs written on a full disk.
-src/main/safe-store.ts	port	2	SafeStore overlays pending electron-store values per file and retries writes after ENOSPC.
+src/main/safe-store.ts	port	2	§1.3: window geometry and prefs getters synchronously read pending values, including after ENOSPC. Receiver: shell, with the window and prefs getters.
 src/main/save-copy.test.ts	tooling	-	Vitest suite: fileNameOf.
 src/main/save-copy.ts	port	3	saveCopy coordinates destination selection, local copy or remote range streams, exclusive partial file and final rename.
 src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.
@@ -392,7 +392,7 @@ src/main/saved-layouts.ts	port	1	layoutsToSave decides whether quit teardown or 
 src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
 src/main/schedules.ts	mixed	2	ScheduleService uses schedules.open/command/launch in core/src/schedules/mod.rs for timers, journals and supervised runs; TS still cleans drafts, serializes requests and supplies quota, wake and omp launch callbacks.
 src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
-src/main/serial-chain.ts	port	2	SerialChain serializes steps, aborts stalled work and fences following steps until tracked OS effects drain.
+src/main/serial-chain.ts	port	2	§1.3: local/git/exec and tailscale/cli take the current AbortSignal synchronously before starting OS effects. Receiver: local with local/git/exec; remote-web removes the tailscale/cli use.
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.
 src/main/session-free.test.ts	tooling	-	Vitest suite: whenSessionFree.
 src/main/session-free.ts	port	2	whenSessionFree owns the bounded polling loop and fallback when the injected stock session ownership check fails.
