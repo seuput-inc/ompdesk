@@ -1,0 +1,6 @@
+[
+  { "ours": true, "viaRoot": 2, "chain": "git.exe(900) < ompdesk-core.exe(300) < node.exe(200) < OMPdesk.exe(100)" },
+  { "ours": false, "chain": "WindowsTerminal.exe(5000) < svchost.exe(800)" },
+  { "ours": true, "chain": "cmd.exe(700)" },
+  { "ours": true }
+]
