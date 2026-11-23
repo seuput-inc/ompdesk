@@ -7,12 +7,14 @@
 //! - `setup.resolveArchive` `{item, arch, mirror?, githubToken?}`, `setup.resolveAgentDesktop`
 //!   `{platform, arch, …}` and `setup.resolveTailscale` `{platform, msiArch, …}` answer the release; a lookup that
 //!   cannot say fails `setup_lookup` with a readable reason.
+//! - `setup.probeOmp` checks the Bun that would run a package launcher, then its installed manifest or `--version`.
 //! - `mirror` is a test's server on 127.0.0.1 standing in for every host (`net::routed`).
 
 mod archives;
 mod download;
 mod launcher;
 mod net;
+mod runtime;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +27,7 @@ use crate::server::{Call, Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
     launcher::register(registry);
+    registry.add("setup.probeOmp", |call| Box::pin(runtime::probe(call)));
     registry.add("setup.download", |call| Box::pin(download::handle(call)));
     registry.add("setup.resolveArchive", |call| {
         Box::pin(async move { resolve_archive_method(call).await })

@@ -353,7 +353,7 @@ src/main/omp-processes.ts	native-client	3	OmpProcesses.stopAll and reapLeftovers
 src/main/omp-restart.test.ts	tooling	-	Vitest suite: ompRestartDecision.
 src/main/omp-restart.ts	port	1	ompRestartDecision classifies an updated omp tab as restart, wait or skip based on its lifecycle facts.
 src/main/omp-runtime.test.ts	tooling	-	Vitest suite: omp version parsing.
-src/main/omp-runtime.ts	mixed	2	Core checks launcher headers and parses stock update reports (omp.parseUpdateCheck). Main still resolves paths, verifies Bun and omp versions and runs other stock subprocesses.
+src/main/omp-runtime.ts	mixed	2	setup.firstPackageCandidate and setup.probeOmp classify launchers, read installed versions, run fixed --version probes and enforce version floors. omp.parseUpdateCheck parses stock update reports. Main keeps PATH lookup, general stock commands and ompPackageRoot for synchronous stats startup and the stock helper.
 src/main/omp-updater.test.ts	tooling	-	Vitest suite: OmpUpdater.
 src/main/omp-updater.ts	port	2	OmpUpdater schedules checks, applies verified-version policy and coordinates setup update/repair; registerOmpUpdateIpc exposes state and update actions.
 src/main/ompdesk-check.test.ts	tooling	-	Vitest suite: group.

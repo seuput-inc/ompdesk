@@ -267,6 +267,10 @@ describe("omp lookup", () => {
 				ok: false,
 				reason: { kind: "cannot-run", bin: broken.bin },
 			});
+			expect(await resolveOmpAmong([old.bin, broken.bin, tested.bin], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "too-old", version: "18.0.0", bin: old.bin },
+			});
 		} finally {
 			for (const fake of [old, older, tested, broken]) await fs.rm(fake.dir, RM_TEMP);
 		}
@@ -380,6 +384,45 @@ describe("resolveOmp", () => {
 			const resolution = await resolveOmp();
 			if (!resolution.ok) throw new Error(resolution.error);
 			expect(resolution.runtime).toMatchObject({ bin, version: MIN_OMP_VERSION });
+		} finally {
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
+
+	it("probes with --version on the session's PATH and with telemetry off", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-probe-"));
+		try {
+			const record = path.join(dir, "probe.json");
+			const bin = await writeFakeOmp(
+				dir,
+				[
+					`import { writeFileSync } from "node:fs";`,
+					`writeFileSync(${JSON.stringify(record)}, JSON.stringify([process.argv.slice(2), process.env.PATH, process.env.OTEL_SDK_DISABLED]));`,
+					`console.log("omp/${MIN_OMP_VERSION}");`,
+				].join("\n"),
+			);
+			const base = [dir, LOOKUP_PATH].join(path.delimiter);
+			expect(await resolveOmpAmong([bin], base)).toMatchObject({ ok: true, runtime: { bin } });
+			expect(JSON.parse(await fs.readFile(record, "utf8"))).toEqual([["--version"], ompPathEnv(bin, base), "true"]);
+		} finally {
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
+
+	it("takes the version from the launcher, not a package found only by its neighboring layout", async () => {
+		const { bin, dir } = await fakeOmp(`omp/${MIN_OMP_VERSION}`);
+		try {
+			const pkg = path.join(path.dirname(bin), "node_modules", "@oh-my-pi", "pi-coding-agent");
+			await fs.mkdir(pkg, { recursive: true });
+			await fs.writeFile(
+				path.join(pkg, "package.json"),
+				JSON.stringify({ name: "@oh-my-pi/pi-coding-agent", version: "1.2.3" }),
+			);
+			expect(ompPackageRoot(bin)).toBe(pkg);
+			expect(await resolveOmpAmong([bin], LOOKUP_PATH)).toMatchObject({
+				ok: true,
+				runtime: { bin, version: MIN_OMP_VERSION },
+			});
 		} finally {
 			await fs.rm(dir, RM_TEMP);
 		}

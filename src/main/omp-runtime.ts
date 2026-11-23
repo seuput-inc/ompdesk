@@ -17,12 +17,11 @@
  * An omp below MIN_OMP_VERSION is passed over too when a usable one follows:
  * setup installs the tested omp with Bun beside a too-old one it does not own.
  */
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import ompTested from "../shared/omp-tested.json";
-import { isNewer } from "../shared/version";
 import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
 import { bunInstallDir } from "./setup/paths";
@@ -67,7 +66,6 @@ export const MIN_OMP_VERSION = "18.18.9";
  */
 export const TESTED_OMP_VERSION: string = ompTested.version;
 
-const VERSION_TIMEOUT_MS = 15_000;
 const DEFAULT_RUN_TIMEOUT_MS = 60_000;
 const INSTALL_HINT = "OMPdesk's machine setup installs the omp package on its own.";
 
@@ -239,22 +237,8 @@ export function ompPackageRoot(bin: string): string | null {
 	return null;
 }
 
-/**
- * The version of the package a symlinked `bin` runs (bun's and npm's global install on macOS: `<root>/dist/cli.js`),
- * read from its package.json; null for any other layout. Measured on an M4 Mac (omp 18.12.5): `omp --version`
- * takes 0.3 s, all of it in front of the first session's start, and the manifest is what it prints. Only the file the
- * bin resolves to counts, never a layout guess (`ompPackageRoot`'s): a guess could name a package this bin does not run.
- */
-function installedVersion(bin: string): string | null {
-	try {
-		const root = dirname(dirname(realpathSync(bin)));
-		const manifest: unknown = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-		if (typeof manifest !== "object" || manifest === null) return null;
-		const { name, version } = manifest as { name?: unknown; version?: unknown };
-		return name === "@oh-my-pi/pi-coding-agent" && typeof version === "string" ? parseOmpVersion(version) : null;
-	} catch {
-		return null;
-	}
+function ompRunOverrides(bin: string, basePath: string) {
+	return { PATH: ompPathEnv(bin, basePath), ...OMP_TELEMETRY_OFF };
 }
 
 /**
@@ -262,7 +246,7 @@ function installedVersion(bin: string): string | null {
  * telemetry off. The core process runs `omp browser-relay install` with it too.
  */
 export function ompRunEnv(bin: string, basePath: string, env: Record<string, string> = {}): NodeJS.ProcessEnv {
-	return { ...process.env, ...env, PATH: ompPathEnv(bin, env.PATH ?? basePath), ...OMP_TELEMETRY_OFF };
+	return { ...process.env, ...env, ...ompRunOverrides(bin, env.PATH ?? basePath) };
 }
 
 function runOmp(
@@ -369,61 +353,68 @@ export async function resolveOmpAmong(candidates: readonly string[], basePath: s
 	};
 }
 
+type PackageProbe =
+	| { kind: "usable" | "too-old"; version: string }
+	| { kind: "bun-too-old"; bun: string; bunVersion: string; minimum: string }
+	| { kind: "cannot-run" | "failed-version"; detail: string };
+
 /** Whether the package omp at `bin` runs here: its Bun, then its version (`omp --version`), gated on MIN_OMP_VERSION. */
 async function examineOmp(bin: string, basePath: string): Promise<OmpResolution> {
 	const bunMinimum = ompBunMinimum(ompPackageRoot(bin));
-	// The Bun omp's `env bun` shebang (or bun's Windows launcher) finds on the PATH omp is spawned with.
-	const bun = bunMinimum
-		? findOnPath([executableName("bun", process.platform)], ompPathEnv(bin, basePath), process.platform)
-		: null;
-	if (bunMinimum && bun) {
-		const { promise, resolve } = Promise.withResolvers<string | null>();
-		execFile(bun, ["--version"], { timeout: VERSION_TIMEOUT_MS, windowsHide: true }, (error, stdout) =>
-			resolve(error ? null : parseOmpVersion(stdout)),
-		);
-		const bunVersion = await promise;
-		if (bunVersion && isNewer(bunMinimum, bunVersion)) {
+	const ompEnv = ompRunOverrides(bin, basePath);
+	const bun = bunMinimum ? findOnPath([executableName("bun", process.platform)], ompEnv.PATH, process.platform) : null;
+	const { result } = await core().call<PackageProbe>(
+		"setup.probeOmp",
+		{
+			bin,
+			minimum: MIN_OMP_VERSION,
+			bun: bun && bunMinimum ? { bin: bun, minimum: bunMinimum } : null,
+			cwd: process.cwd(),
+			env: process.env,
+			ompEnv,
+		},
+		{ timeoutMs: 37_000 }, // Two 15 s probes plus the core round trip.
+	);
+	switch (result.kind) {
+		case "usable":
+			return {
+				ok: true,
+				runtime: {
+					bin,
+					basePath,
+					version: result.version,
+					run: (args, opts = {}) => runOmp(bin, args, opts, basePath),
+				},
+			};
+		case "too-old":
 			return {
 				ok: false,
-				error: `omp at ${bin} needs Bun ${bunMinimum} or newer, but ${bun} is ${bunVersion}. OMPdesk's machine setup upgrades Bun on its own.`,
-				reason: { kind: "bun-too-old", bin, bun, bunVersion, minimum: bunMinimum },
+				error: `omp ${result.version} is too old; this GUI needs omp ${MIN_OMP_VERSION} or newer. OMPdesk updates it on its own.`,
+				reason: { kind: "too-old", version: result.version, minimum: MIN_OMP_VERSION, bin },
 			};
-		}
-	}
-	let version = installedVersion(bin);
-	if (!version) {
-		let output: { code: number; stdout: string; stderr: string };
-		try {
-			output = await runOmp(bin, ["--version"], { timeoutMs: VERSION_TIMEOUT_MS }, basePath);
-		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
+		case "bun-too-old":
 			return {
 				ok: false,
-				error: `omp at ${bin} could not run: ${detail}`,
-				reason: { kind: "cannot-run", bin, detail },
+				error: `omp at ${bin} needs Bun ${result.minimum} or newer, but ${result.bun} is ${result.bunVersion}. OMPdesk's machine setup upgrades Bun on its own.`,
+				reason: {
+					kind: "bun-too-old",
+					bin,
+					bun: result.bun,
+					bunVersion: result.bunVersion,
+					minimum: result.minimum,
+				},
 			};
-		}
-		version = output.code === 0 ? parseOmpVersion(output.stdout) : null;
-		if (!version) {
-			const detail = (output.stderr || output.stdout).trim().split("\n")[0] ?? "";
+		case "cannot-run":
+		case "failed-version":
 			return {
 				ok: false,
-				error: `omp at ${bin} failed \`omp --version\`${detail ? `: ${detail}` : ""}. ${INSTALL_HINT}`,
-				reason: { kind: "cannot-run", bin, detail },
+				error:
+					result.kind === "cannot-run"
+						? `omp at ${bin} could not run: ${result.detail}`
+						: `omp at ${bin} failed \`omp --version\`${result.detail ? `: ${result.detail}` : ""}. ${INSTALL_HINT}`,
+				reason: { kind: "cannot-run", bin, detail: result.detail },
 			};
-		}
 	}
-	if (isNewer(MIN_OMP_VERSION, version)) {
-		return {
-			ok: false,
-			error: `omp ${version} is too old; this GUI needs omp ${MIN_OMP_VERSION} or newer. OMPdesk updates it on its own.`,
-			reason: { kind: "too-old", version, minimum: MIN_OMP_VERSION, bin },
-		};
-	}
-	return {
-		ok: true,
-		runtime: { bin, basePath, version, run: (args, opts = {}) => runOmp(bin, args, opts, basePath) },
-	};
 }
 
 let cached: Promise<OmpResolution> | null = null;
