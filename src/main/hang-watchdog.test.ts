@@ -1,38 +1,39 @@
-/**
- * The line the next launch writes for the previous run's stall (hang-watchdog.ts). The runtime log keeps only
- * primitive details, so the steps main stalled in have to arrive as text: a stall that says only "update" left the
- * installer's start, the teardown and the quit equally to blame.
- */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { reportPreviousHang } from "./hang-watchdog";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appendRuntimeLogAtPath, type RuntimeLogReport } from "./runtime-log-core";
+import { type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 
-const mocks = vi.hoisted(() => ({ userData: { dir: "" } }));
+let dir: string;
+let fixture: ShellPolicyFixture;
 
-vi.mock("electron", () => ({ app: {}, powerMonitor: {} }));
-vi.mock("./runtime-log", () => ({
-	writeRuntimeLog: (report: RuntimeLogReport) =>
-		appendRuntimeLogAtPath(path.join(mocks.userData.dir, "gui-runtime.jsonl"), report, {
+beforeAll(async () => {
+	dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-hang-report-"));
+	fixture = await shellPolicyFixture();
+}, 180_000);
+
+afterAll(async () => {
+	await fixture?.close();
+	if (dir) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+async function reportPreviousHang(marker: object): Promise<void> {
+	const file = path.join(dir, "main-thread-hang.json");
+	fs.writeFileSync(file, JSON.stringify(marker));
+	const reports = await fixture.call<RuntimeLogReport[]>("hang.consume", { path: file });
+	for (const report of reports)
+		appendRuntimeLogAtPath(path.join(dir, "gui-runtime.jsonl"), report, {
 			appVersion: "0.44.0",
 			platform: "win32",
 			pid: 52076,
-		}),
-}));
-
-beforeAll(() => {
-	mocks.userData.dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-hang-report-"));
-});
-
-afterAll(() => {
-	fs.rmSync(mocks.userData.dir, { recursive: true, force: true });
-});
+		});
+	expect(fs.existsSync(file)).toBe(false);
+}
 
 describe("reportPreviousHang", () => {
-	it("writes the phase and the steps main stalled in, oldest first, to the log", () => {
-		reportPreviousHang({
+	it("writes the phase and the steps main stalled in, oldest first, to the log", async () => {
+		await reportPreviousHang({
 			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
 			pid: 29292,
 			unresponsiveMs: 5628,
@@ -41,15 +42,16 @@ describe("reportPreviousHang", () => {
 			steps: ["update:quit-and-install", "quit:teardown:sidecars"],
 		});
 
-		const lines = fs.readFileSync(path.join(mocks.userData.dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
+		const lines = fs.readFileSync(path.join(dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
 		expect(JSON.parse(lines.at(-1) ?? "{}")).toMatchObject({
 			source: "main-thread-hang",
+			message: "Main thread stalled for 6s and recovered",
 			details: { unresponsiveMs: 5628, phase: "update", steps: "update:quit-and-install > quit:teardown:sidecars" },
 		});
 	});
 
-	it("writes how the computer stood during the stall as a line of its own, with when that was", () => {
-		reportPreviousHang({
+	it("writes how the computer stood during the stall as a line of its own, with when that was", async () => {
+		await reportPreviousHang({
 			detectedAt: Date.parse("2026-10-20T01:38:33.839Z"),
 			pid: 29292,
 			unresponsiveMs: 5628,
@@ -57,7 +59,7 @@ describe("reportPreviousHang", () => {
 			machine: { availMB: 512, totalMB: 16_384, cpus: 8, cpuBusyPct: 99.5, mainCpuPct: 0.1 },
 		});
 
-		const lines = fs.readFileSync(path.join(mocks.userData.dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
+		const lines = fs.readFileSync(path.join(dir, "gui-runtime.jsonl"), "utf8").trim().split("\n");
 		expect(lines.slice(-2).map(line => JSON.parse(line))).toMatchObject([
 			{ source: "main-thread-hang", details: { unresponsiveMs: 5628, selfRecovered: false } },
 			{

@@ -1,9 +1,10 @@
-use super::engine::STEP_HISTORY;
+use crate::js_date::iso_ms;
 use serde_json::{Value, json};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
+pub(super) const STEP_HISTORY: usize = 8;
 const MAX_BYTES: u64 = 64 * 1024;
 const MACHINE_FACTS: usize = 12;
 const JS_DATE_LIMIT_MS: f64 = 8_640_000_000_000_000.0;
@@ -28,6 +29,52 @@ pub(super) fn consume(path: &Path) -> Option<Value> {
     // Stat and read failures leave the marker alone; invalid and oversized files are consumed.
     let _ = fs::remove_file(path);
     marker
+}
+
+pub(crate) fn consume_reports(path: &Path) -> Value {
+    let Some(mut marker) = consume(path) else {
+        return Value::Array(Vec::new());
+    };
+    let ms = marker["unresponsiveMs"].as_f64().unwrap();
+    let seconds = (ms / 1000.0).round().abs();
+    let outcome = if marker["selfRecovered"] == true {
+        "recovered"
+    } else {
+        "never recovered"
+    };
+    let duration = if seconds >= 1e21 {
+        format!("{seconds:e}").replace('e', "e+")
+    } else {
+        seconds.to_string()
+    };
+    let at = iso_ms(marker["detectedAt"].as_f64().unwrap() as i64);
+    let steps = marker["steps"].as_array().map(|steps| {
+        let mut labels = String::new();
+        for (i, step) in steps.iter().enumerate() {
+            if i != 0 {
+                labels.push_str(" > ");
+            }
+            labels.push_str(step.as_str().unwrap());
+        }
+        labels
+    });
+    let hang = json!({
+        "source": "main-thread-hang",
+        "message": format!("Main thread stalled for {duration}s and {outcome}"),
+        "details": {
+            "unresponsiveMs": ms.round(), "selfRecovered": marker["selfRecovered"],
+            "detectedAt": at, "previousPid": marker["pid"], "phase": marker["phase"], "steps": steps,
+        }
+    });
+    let mut reports = Vec::with_capacity(if marker["machine"].is_object() { 2 } else { 1 });
+    reports.push(hang);
+    if let Value::Object(machine) = marker["machine"].take() {
+        let mut details = json!({"trigger": "hang", "when": "during", "at": at});
+        details.as_object_mut().unwrap().extend(machine);
+        reports
+            .push(json!({"source": "machine-state", "message": "hang during", "details": details}));
+    }
+    Value::Array(reports)
 }
 
 fn parse(raw: &str) -> Option<Value> {

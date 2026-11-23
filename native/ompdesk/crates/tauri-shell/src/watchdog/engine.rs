@@ -1,10 +1,10 @@
+use super::marker::STEP_HISTORY;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
 const HANG_TIMEOUT_MS: u64 = 5_000;
 const SLEEP_GAP_MS: u64 = 3_000;
-pub(super) const STEP_HISTORY: usize = 8;
 
 struct Incident {
     steps: Arc<VecDeque<String>>,

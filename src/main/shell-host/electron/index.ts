@@ -7,9 +7,9 @@
 import { IPC_COMMANDS } from "../../../shared/ipc-types";
 import { shutdownCore } from "../../core/process";
 import type { DiagnosticsDeps } from "../../diagnostics";
-import type { HangMarker, WatchdogSignal } from "../../hang-watchdog";
+import type { WatchdogSignal } from "../../hang-watchdog";
 import { exitReport } from "../../quit-log";
-import { appendRuntimeLogAtPath, runtimeLogFile } from "../../runtime-log-core";
+import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "../../runtime-log-core";
 import type { IpcRegistry } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
@@ -29,10 +29,10 @@ const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello",
 });
 if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
 
-export function consumeHangMarker(): Promise<HangMarker | null> {
-	return client.call<HangMarker | null>("app.consumeHangMarker").catch((error: unknown) => {
+export function consumeHangReports(): Promise<RuntimeLogReport[]> {
+	return client.call<RuntimeLogReport[]>("app.consumeHangReports").catch((error: unknown) => {
 		console.warn("[hang-watchdog]", error);
-		return null;
+		return [];
 	});
 }
 

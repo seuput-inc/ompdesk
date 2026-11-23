@@ -2689,6 +2689,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-wdio-webdriver",
  "tempfile",
+ "time",
  "tokio",
  "tray-icon",
  "url",

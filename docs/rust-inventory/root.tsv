@@ -259,8 +259,8 @@ src/main/gpu-fallback-core.ts	port	1	gpuMarkerDecision, gpuChange and markerForT
 src/main/gpu-fallback-loop.test.ts	tooling	-	Vitest suite: GPU crash relaunch.
 src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.
 src/main/gpu-fallback.ts	mixed	4	applyGpuFallbackIfNeeded and handleGpuProcessGone manage the marker, flags and relaunch; tauri-shell/src/gpu.rs supplies app.getGPUInfo and process_failed.rs emits app.childProcessGone.
-src/main/hang-watchdog.test.ts	tooling	-	Vitest suite: reportPreviousHang.
-src/main/hang-watchdog.ts	mixed	4	Posts Node heartbeat, step and lifecycle signals to app.watchdog and formats the previous stall for the runtime log. The Tauri watchdog writes and consumes its own marker.
+src/main/hang-watchdog.test.ts	tooling	-	Vitest consumes an actual marker through the Rust watchdog and checks both JSONL records.
+src/main/hang-watchdog.ts	mixed	4	The Tauri watchdog owns marker I/O and report formatting. The observed Node event loop must send its own heartbeat, synchronous markMainStep and lifecycle signals until index.ts and app-quit.ts move (§1.3c).
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
 src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.
@@ -422,6 +422,7 @@ src/main/settle-watch.test.ts	tooling	-	Vitest suite: settle watch.
 src/main/settle-watch.ts	port	2	SettleWatch arms a diagnostic timer and samples get_state when a tab remains settling.
 src/main/shell-env.test.ts	tooling	-	Vitest suite: resolveLoginShellEnv.
 src/main/shell-env.ts	port	2	resolveLoginShellEnv caches shell exports; shellSpawnEnv/spawnPath resolve the launch environment for GUI child processes.
+src/main/shell-policy-test-rig.ts	tooling	-	Vitest drives the Rust shell policies in a test-only process without starting a WebView.
 src/main/sidebar-layout.ts	port	1	SidebarLayoutScope restricts project and session reorders to sender-visible entries without displacing hidden slots.
 src/main/sidebar-prefs.test.ts	tooling	-	Vitest suite: updateSidebarPrefs.
 src/main/sidebar-prefs.ts	port	2	updateSidebarPrefs applies individual validated sidebar changes to current storage; moveSidebarPin updates pinned identities.

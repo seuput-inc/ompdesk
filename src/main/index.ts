@@ -150,7 +150,7 @@ import {
 	recordGpuIdentity,
 	softwareCompositing,
 } from "./gpu-fallback";
-import { installHangWatchdog, markMainStep, reportPreviousHang } from "./hang-watchdog";
+import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { getMainLanguage, mainT } from "./i18n";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
@@ -214,7 +214,12 @@ import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } fr
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
-import { consumeHangMarker, postWatchdog, readDiagnosticLog, registerRuntimeLogIpc } from "./shell-host/electron/index";
+import {
+	consumeHangReports,
+	postWatchdog,
+	readDiagnosticLog,
+	registerRuntimeLogIpc,
+} from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
@@ -866,7 +871,7 @@ app.whenReady().then(async () => {
 	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
-		reportPreviousHang(await consumeHangMarker());
+		for (const report of await consumeHangReports()) writeRuntimeLog(report);
 		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({
