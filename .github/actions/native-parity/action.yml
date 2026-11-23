@@ -72,6 +72,7 @@ runs:
         src/main/ext-update/mcp.test.ts
         src/main/ext-update/classify.test.ts
         src/main/agent-desktop.test.ts
+        src/main/setup/detect-git-shell.test.ts
         src/main/setup/detect-agent-desktop.test.ts
         src/main/cli-tools/detect.test.ts
         src/main/ext-update/running.test.ts

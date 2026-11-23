@@ -10,12 +10,13 @@
  * environment, timeout, output cap), so both runners follow one set, and `coreGit`, `coreGh` and `coreHeld` hold each
  * request to the repository-lock step it is made in as `execBin` holds a git.
  */
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { withoutGitSelectors } from "../../../shared/git-env";
 import { type CoreAnswer, core } from "../../core/process";
 import { ChainBusyError, currentStepSignal, SerialChain, trackEffect } from "../../serial-chain";
+import { appleDeveloperDir } from "../../setup/apple-git";
 import { brewBinDirs, spawnPath } from "../../shell-env";
 import { findOnPath } from "../../spawn";
 import { LocalCommandError } from "../types";
@@ -92,9 +93,7 @@ async function gitBin(): Promise<string | null> {
 	if (process.platform !== "darwin" || found !== "/usr/bin/git") return found;
 	trampolineTarget ??= (async () => {
 		if (process.env.DEVELOPER_DIR) return developerGit(process.env.DEVELOPER_DIR) ?? found;
-		const { promise, resolve } = Promise.withResolvers<string | null>();
-		execFile("/usr/bin/xcode-select", ["-p"], { timeout: 5_000 }, (error, stdout) => resolve(error ? null : stdout));
-		return developerGit(await promise) ?? found;
+		return developerGit(await appleDeveloperDir(process.env, 5000)) ?? found;
 	})();
 	return trampolineTarget;
 }

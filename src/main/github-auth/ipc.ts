@@ -4,11 +4,11 @@
  * the login PTY in the stock helper. No handler takes a command or a path from
  * the renderer; a switch accepts only a login gh itself listed.
  */
-import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import type { GithubAuthState } from "../../shared/github-auth";
 import { IPC_COMMANDS } from "../../shared/ipc-types";
 import { ghRunner, resolveBin } from "../local/git/exec";
+import { appleDeveloperDir } from "../setup/apple-git";
 import { spawnPath } from "../shell-env";
 import type { IpcRegistry } from "../web/ipc-registry";
 import { stockPtyLauncher } from "./pty";
@@ -24,9 +24,7 @@ const NO_OP_BROWSER = process.platform === "win32" ? "cmd /c exit 0" : "true";
 async function usableGit(): Promise<string | null> {
 	const git = await resolveBin("git");
 	if (process.platform !== "darwin" || git !== "/usr/bin/git") return git;
-	const { promise, resolve } = Promise.withResolvers<string | null>();
-	execFile("/usr/bin/xcode-select", ["-p"], { timeout: 5_000 }, error => resolve(error ? null : git));
-	return promise;
+	return (await appleDeveloperDir(process.env, 5000)) === null ? null : git;
 }
 
 async function loginEnv(): Promise<Record<string, string>> {
