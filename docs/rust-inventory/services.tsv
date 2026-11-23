@@ -101,7 +101,7 @@ src/main/ecc/ecc-stock.test.ts	exception	Test coverage for stock SDK skill disco
 src/main/ecc/pack-drift.test.ts	exception	Test coverage for ECC pack pin and file integrity.
 src/main/ecc/stock-probe.ts	exception	Test probe launches a stock SDK session to measure skill visibility, slash commands and context cost.
 src/main/ext-update/classify.test.ts	exception	Tests inventory row order, project scoping, install methods and skipped linked plugins.
-src/main/ext-update/classify.ts	port	Hashes project working directories to eight hex characters before ext.seeds and drops binary targets without an owner on return.
+src/main/ext-update/classify.ts	native-client	Calls ext.seeds with the inventory and resolved binaries. The core builds project keys and selects targets. The adapter attaches the binary the updater already holds without sending it back over the pipe.
 src/main/ext-update/core.ts	native-client	Wraps ext.* requests to the Rust core in the updater step's call fence and returns the result.
 src/main/ext-update/ipc.ts	port	Rescans on state reads and permits a requested update key only if it appears in the updater's current rows.
 src/main/ext-update/mcp-owner.test.ts	exception	Checks ownership of npm, Bun, Homebrew and Python installs and the reasons other binaries are skipped.

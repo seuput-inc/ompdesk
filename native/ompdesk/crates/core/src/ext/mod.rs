@@ -68,7 +68,7 @@ pub fn register(registry: &mut Registry) {
         })
     });
     registry.add("ext.seeds", |call| {
-        Box::pin(async move { Reply::json(&seeds::seeds(params(&call.params)?)?) })
+        Box::pin(async move { Reply::json(&seeds::seeds(params(&call.params)?)) })
     });
     registry.add("ext.binaryFacts", |call| {
         Box::pin(async move {

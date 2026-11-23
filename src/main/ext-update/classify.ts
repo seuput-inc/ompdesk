@@ -9,7 +9,6 @@
  * `skill:<id>:<scope>[:<project>]`, `skill:plugin`, `skill:local`, `mcp:<name>`. A project is a short hash of
  * its folder, so no path is in a key; `detail` shows `user` or the folder's name.
  */
-import { createHash } from "node:crypto";
 import type {
 	HelperInventory,
 	PluginSelector,
@@ -48,23 +47,15 @@ interface CoreSeed {
 	target: Exclude<SeedTarget, { kind: "binary" }> | { kind: "binary"; command: string };
 }
 
-export function projectHash(cwd: string): string {
-	return createHash("sha1").update(cwd).digest("hex").slice(0, 8);
-}
-
 export async function classifyInventory(
 	inventory: HelperInventory,
 	binaries: ReadonlyMap<string, McpBinary | null>,
 ): Promise<ExtensionSeed[]> {
-	const projects = new Map<string, string>();
-	for (const entry of [...inventory.plugins, ...inventory.registrySkills])
-		if (entry.scope === "project" && entry.cwd) projects.set(entry.cwd, projectHash(entry.cwd));
 	const seeds = await extRule<CoreSeed[]>("ext.seeds", {
 		inventory,
 		kinds: EXTENSION_KINDS,
 		// Names sort as `localeCompare` sorts them here.
 		locale: new Intl.Collator().resolvedOptions().locale,
-		projects: [...projects],
 		binaries: [...binaries],
 	});
 	return seeds.map(({ row, target }): ExtensionSeed => {

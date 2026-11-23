@@ -4,7 +4,7 @@ import type {
 	HelperMcpServer,
 	HelperPlugin,
 } from "../../../resources/gui-bridge/stock-helper/extensions-contracts";
-import { classifyInventory, projectHash } from "./classify";
+import { classifyInventory } from "./classify";
 import type { McpBinary, McpOwner } from "./mcp-owner";
 
 const empty = (over: Partial<HelperInventory> = {}): HelperInventory => ({
@@ -122,12 +122,11 @@ describe("plugins", () => {
 				plugins: [plugin({ scope: "project", cwd }), plugin({ scope: "project", cwd: "C:\\work\\other-app" })],
 			}),
 		);
-		const keys = seeds.map(seed => seed.row.key);
-		expect(keys).toContain(`plugin:tools@official:project:${projectHash(cwd)}`);
-		expect(keys.some(key => key.includes("work"))).toBe(false);
+		expect(seeds.map(seed => seed.row.key).sort()).toEqual([
+			"plugin:tools@official:project:9fb32df3",
+			"plugin:tools@official:project:a2344a62",
+		]);
 		expect(seeds.map(seed => seed.row.detail).sort()).toEqual(["my-app", "other-app"]);
-		expect(projectHash(cwd)).toMatch(/^[0-9a-f]{8}$/);
-		expect(projectHash(cwd)).not.toBe(projectHash("/Users/u/work/other"));
 	});
 });
 
@@ -148,7 +147,7 @@ describe("skills", () => {
 		});
 		expect(seeds.find(seed => seed.row.name === "@s/b")?.row).toMatchObject({ method: "registry", skip: "pinned" });
 		expect(seeds.find(seed => seed.row.name === "@s/c")?.row).toMatchObject({
-			key: `skill:@s/c:project:${projectHash("/w/proj")}`,
+			key: "skill:@s/c:project:ff9d0ac7",
 			detail: "proj",
 		});
 	});
