@@ -215,7 +215,7 @@ src/main/ci-queue.test.ts	tooling	-	Vitest suite: every macOS job of a dispatcha
 src/main/connectivity.test.ts	tooling	-	Vitest suite: ConnectivityMonitor.
 src/main/connectivity.ts	mixed	2	resume.probe connects to up to two shell-resolved addresses concurrently. Tauri enforces network policy and uncached resolution; main supplies proxy settings, OS events, timer callbacks and promises to the native connectivity hub.
 src/main/console-window-watch.test.ts	tooling	-	Vitest suite: console window watch.
-src/main/console-window-watch.ts	mixed	2	procs.consoles in crates/core/src/procs/mod.rs enumerates Windows console windows; ConsoleWindowWatch polls, attributes new windows to recent process ancestry and rate-limits logs.
+src/main/console-window-watch.ts	mixed	2	procs.consoles enumerates and attributes each new Windows console to its process tree or tag. Main keeps known handles and the log budget across core loss; after enumeration it resolves a tag against the then-live session and clips log text in JS UTF-16 units (§1.3a,c).
 src/main/core-saves.test.ts	tooling	-	Vitest suite: the core's stores on a full disk.
 src/main/core-saves.ts	native-client	2	routeCoreSaves consumes store.saveFailed/store.saved from crates/core/src/disk/saves.rs and clears reported names on core exit; retries stay in Rust.
 src/main/deep-link.ts	mixed	4	shell/src/startup.rs selects second-instance requests. Main still decodes deep-link URLs, replays early macOS opens, matches workspaces and dispatches window operations.

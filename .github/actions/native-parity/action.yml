@@ -34,6 +34,7 @@ runs:
         src/main/omp-processes.test.ts
         src/main/omp-log-tail.test.ts
         src/main/session-processes.test.ts
+        src/main/console-window-watch.test.ts
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
         src/main/setup/archives.test.ts
