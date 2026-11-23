@@ -10,6 +10,7 @@
  */
 import { basename } from "node:path";
 import type { IpcScheduledRetry } from "../shared/ipc-types";
+import { core } from "./core/process";
 import type { TabActivity } from "./sidecar-pool";
 import type { ResumeFact } from "./turn-resume";
 
@@ -19,11 +20,7 @@ type Details = Record<string, string | number | boolean>;
 export const WAIT_REPORT_MS = 10 * 60_000;
 /** How often the tabs are looked at. */
 export const WAIT_SWEEP_MS = 60_000;
-/** The end of a session's journal read for its open tool calls: a reply with a large file in a call's arguments. */
-export const WAIT_JOURNAL_LINES = 400;
-export const WAIT_JOURNAL_BYTES = 1024 * 1024;
 const ERROR_CHARS = 300;
-const TOOLS_NAMED = 8;
 
 export type WaitFact = Pick<
 	ResumeFact,
@@ -63,42 +60,19 @@ function record(value: unknown): Record<string, unknown> | null {
  * What a session's journal ends on: the tool calls of its last reply that have no result yet (`tools`, since
  * `toolsMs`), and its last message (`journal`, `journalMs` ago). Names only, never a call's arguments.
  */
-export function journalWait(lines: readonly string[], now: number): Details {
-	let calls = new Map<string, string>();
-	let callsAt: number | undefined;
-	let last: { kind: string; at: number | undefined } | undefined;
-	for (const line of lines) {
-		let entry: Record<string, unknown> | null = null;
-		try {
-			entry = record(JSON.parse(line));
-		} catch {
-			// The tail's first line can start inside an entry.
-		}
-		const message = record(entry?.message);
-		if (entry?.type !== "message" || !message) continue;
-		const time = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-		const at = Number.isFinite(time) ? time : undefined;
-		const { role, stopReason, content, toolCallId } = message;
-		last = { kind: [role, stopReason].filter(part => typeof part === "string").join("/"), at };
-		if (role === "toolResult") {
-			if (typeof toolCallId === "string") calls.delete(toolCallId);
-			continue;
-		}
-		// A reply opens its own calls, and a prompt a new turn: what an older reply called is over either way.
-		calls = new Map();
-		callsAt = at;
-		if (role !== "assistant" || !Array.isArray(content)) continue;
-		for (const block of content) {
-			const call = record(block);
-			if (call?.type === "toolCall" && typeof call.id === "string" && typeof call.name === "string")
-				calls.set(call.id, call.name);
-		}
-	}
+export async function journalWait(path: string, now: number): Promise<Details> {
+	const { result } = await core().call<{ tools?: string; toolsAt?: string; journal?: string; journalAt?: string }>(
+		"sessions.journalWait",
+		{ path },
+	);
+	// Imported journals can use any timestamp spelling this runtime's Date.parse accepts.
+	const toolsAt = result.toolsAt === undefined ? NaN : Date.parse(result.toolsAt);
+	const journalAt = result.journalAt === undefined ? NaN : Date.parse(result.journalAt);
 	return {
-		...(calls.size > 0 ? { tools: [...calls.values()].slice(0, TOOLS_NAMED).join(", ") } : {}),
-		...(calls.size > 0 && callsAt !== undefined ? { toolsMs: now - callsAt } : {}),
-		...(last ? { journal: last.kind } : {}),
-		...(last?.at !== undefined ? { journalMs: now - last.at } : {}),
+		...(result.tools !== undefined ? { tools: result.tools } : {}),
+		...(Number.isFinite(toolsAt) ? { toolsMs: now - toolsAt } : {}),
+		...(result.journal !== undefined ? { journal: result.journal } : {}),
+		...(Number.isFinite(journalAt) ? { journalMs: now - journalAt } : {}),
 	};
 }
 
@@ -131,8 +105,8 @@ export interface TurnWaitDeps {
 	facts(tabId: string): Promise<Record<string, unknown>>;
 	/** The tab's own reading of its omp (`starting`, `restarting`, `error`), told for an omp that did not answer. */
 	status(tabId: string): string | undefined;
-	/** The last lines of a session's journal. */
-	journal(sessionFile: string): Promise<string[]>;
+	/** The open calls and last message in this session's journal at the sweep time. */
+	journal: typeof journalWait;
 	log(details: Details): void;
 	now?: () => number;
 	reportMs?: number;
@@ -244,12 +218,7 @@ export class TurnWaitWatch {
 					...(status ? { status } : {}),
 				};
 			}),
-			fact.sessionFile
-				? this.#deps.journal(fact.sessionFile).then(
-						lines => journalWait(lines, now),
-						(): Details => ({}),
-					)
-				: {},
+			fact.sessionFile ? this.#deps.journal(fact.sessionFile, now).catch(() => ({})) : {},
 		]);
 		// It stepped, ended or closed while its omp was asked: nothing waits any more.
 		if (this.#waits.get(fact.tabId) !== wait || wait.steppedAt !== undefined) return;

@@ -113,6 +113,7 @@ runs:
         src/main/media-stream.test.ts
         src/main/workspace-search.test.ts
         src/main/save-copy.test.ts
+        src/main/turn-wait-watch.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts
         src/main/local/queue.test.ts

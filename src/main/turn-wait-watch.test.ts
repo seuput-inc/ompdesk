@@ -1,8 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { stopCore } from "./core/process";
 import { journalWait, TurnWaitWatch, WAIT_REPORT_MS, WAIT_SWEEP_MS, type WaitFact, waitsOn } from "./turn-wait-watch";
 
 const START = Date.parse("2026-11-20T00:00:00.000Z");
 const HOUR = 60 * 60_000;
+let dir: string;
+beforeAll(async () => {
+	dir = await mkdtemp(join(tmpdir(), "turn-wait-"));
+});
+afterAll(async () => {
+	await stopCore();
+	await rm(dir, { recursive: true, force: true });
+});
 
 function tab(over: Partial<WaitFact> = {}): WaitFact {
 	return { tabId: "t1", running: true, awaitingUi: false, awaitingConnection: false, ...over };
@@ -21,7 +33,8 @@ interface RigOptions {
 function rig(tabs: WaitFact[], options: RigOptions = {}) {
 	const clock = { now: START };
 	const lines: Array<Record<string, string | number | boolean>> = [];
-	const state = { tabs, journal: [] as string[] };
+	const state = { tabs };
+	const firstReport = Promise.withResolvers<void>();
 	const watch = new TurnWaitWatch({
 		now: () => clock.now,
 		tabs: () => state.tabs,
@@ -33,8 +46,11 @@ function rig(tabs: WaitFact[], options: RigOptions = {}) {
 				run: { running: true, turn: true },
 			})),
 		status: () => "restarting",
-		journal: async () => state.journal,
-		log: details => lines.push(details),
+		journal: journalWait,
+		log: details => {
+			lines.push(details);
+			firstReport.resolve();
+		},
 	});
 	/** A look a minute for `count` minutes, then the lines those looks wrote. */
 	const minutes = async (count: number) => {
@@ -46,13 +62,14 @@ function rig(tabs: WaitFact[], options: RigOptions = {}) {
 	};
 	options.before?.(watch);
 	watch.sweep();
-	return { clock, lines, state, watch, minutes };
+	return { clock, lines, state, watch, minutes, reported: firstReport.promise };
 }
 
 describe("turn wait watch", () => {
 	it("writes a turn without a step once at ten minutes, with its open tool call and what its omp answers", async () => {
-		const { lines, state, minutes } = rig([tab({ sessionFile: "/sessions/2026-11-20_abc.jsonl" })]);
-		state.journal = [
+		const file = join(dir, "2026-11-20_abc.jsonl");
+		const { lines, minutes, reported } = rig([tab({ sessionFile: file })]);
+		const journal = [
 			entry(START - 5_000, { role: "user", content: "run the build" }),
 			entry(START, {
 				role: "assistant",
@@ -64,10 +81,12 @@ describe("turn wait watch", () => {
 			}),
 			entry(START + 1_000, { role: "toolResult", toolCallId: "c2", content: [] }),
 		];
+		await writeFile(file, journal.join("\n"));
 		await minutes(9);
 		expect(lines).toEqual([]);
 
 		await minutes(1);
+		await reported;
 		expect(lines).toEqual([
 			{
 				tab: "t1",
@@ -197,7 +216,7 @@ describe("turn wait watch", () => {
 			},
 			facts: async () => ({}),
 			status: () => undefined,
-			journal: async () => [],
+			journal: journalWait,
 			log: () => {},
 		});
 		expect(() => watch.sweep()).not.toThrow();
@@ -231,7 +250,8 @@ describe("waitsOn", () => {
 });
 
 describe("journalWait", () => {
-	it("names the last reply's calls without a result, and none once a prompt followed", () => {
+	it("names the last reply's calls without a result, and none once a prompt followed", async () => {
+		const file = join(dir, "prompt.jsonl");
 		const reply = entry(START, {
 			role: "assistant",
 			stopReason: "toolUse",
@@ -241,14 +261,55 @@ describe("journalWait", () => {
 				{ type: "toolCall", id: "b", name: "wait" },
 			],
 		});
-		expect(journalWait(['{"type":"mess', reply], START + 60_000)).toEqual({
+		await writeFile(file, ['{"type":"mess', reply].join("\n"));
+		expect(await journalWait(file, START + 60_000)).toEqual({
 			tools: "task, wait",
 			toolsMs: 60_000,
 			journal: "assistant/toolUse",
 			journalMs: 60_000,
 		});
 		const prompt = entry(START + 30_000, { role: "user", content: "stop that" });
-		expect(journalWait([reply, prompt], START + 60_000)).toEqual({ journal: "user", journalMs: 30_000 });
-		expect(journalWait([], START)).toEqual({});
+		await writeFile(file, [reply, prompt].join("\n"));
+		expect(await journalWait(file, START + 60_000)).toEqual({ journal: "user", journalMs: 30_000 });
+		await writeFile(file, "");
+		expect(await journalWait(file, START)).toEqual({});
+		expect(await journalWait(join(dir, "missing.jsonl"), START)).toEqual({});
+	});
+
+	it("counts only nonempty lines toward 400 and discards the first byte-limited fragment even at a newline", async () => {
+		const file = join(dir, "bounded.jsonl");
+		const prompt = entry(START, { role: "user" });
+		const read = async (text: string) => {
+			await writeFile(file, text);
+			return journalWait(file, START);
+		};
+		expect(await read(`${prompt}\n${" \n\n".repeat(399)}`)).toEqual({ journal: "user", journalMs: 0 });
+		expect(await read(`${prompt}\n${" \n\n".repeat(400)}`)).toEqual({});
+		const window = `${prompt}\n`.padEnd(1024 * 1024, "\n");
+		expect(await read(window)).toEqual({ journal: "user", journalMs: 0 });
+		expect(await read(`\n${window}`)).toEqual({});
+	});
+
+	it("keeps escaped tool ids distinct, ignores call arguments and uses the runtime's date parser", async () => {
+		const file = join(dir, "restored.jsonl");
+		const reply = entry(START, {
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "\ud800", name: "\ud800" },
+				{ type: "toolCall", id: "\ud801", name: "read", arguments: { token: "private" } },
+			],
+		});
+		const result = JSON.stringify({
+			type: "message",
+			timestamp: "Fri, 20 Nov 2026 00:00:02 GMT",
+			message: { role: "toolResult", toolCallId: "\ud801" },
+		});
+		await writeFile(file, [reply, result].join("\n"));
+		expect(await journalWait(file, START)).toEqual({
+			tools: "\ud800",
+			toolsMs: 0,
+			journal: "toolResult",
+			journalMs: -2000,
+		});
 	});
 });

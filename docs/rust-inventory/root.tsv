@@ -504,7 +504,7 @@ src/main/turn-stages-log.ts	port	1	turnStagesReport validates a bridge turn_stag
 src/main/turn-stop-log.test.ts	tooling	-	Vitest suite: dispatchedCommand.
 src/main/turn-stop-log.ts	port	1	dispatchedCommand/recordTurnStop log the origin of stop commands without message text.
 src/main/turn-wait-watch.test.ts	tooling	-	Vitest suite: turn wait watch.
-src/main/turn-wait-watch.ts	port	3	TurnWaitWatch tracks session progress and held waits, samples journal evidence and emits diagnostics at doubling intervals.
+src/main/turn-wait-watch.ts	mixed	3	sessions.journalWait reads the bounded journal tail and extracts pending calls. The watch timestamps synchronous pool activity, retries and resume transitions before its next sweep; main logs those facts with the native evidence.
 src/main/update-auth.test.ts	tooling	-	Vitest suite: a stored update token when the keychain would ask.
 src/main/update-auth.ts	port	2	resolveUpdateToken chooses environment, gh CLI or encrypted credentials; checkRepoAccess uses Electron net and storeUpdateToken uses safeStorage.
 src/main/update-compatibility.test.ts	tooling	-	Vitest suite: released and current updater compatibility.

@@ -12,6 +12,7 @@
 
 mod activity;
 mod enrich;
+mod journal_wait;
 mod rules;
 mod search;
 mod snippet;
@@ -75,6 +76,9 @@ pub fn register(registry: &mut Registry) {
         Box::pin(blocking(move || listed(call.params()?)))
     });
     registry.add("sessions.search", |call| Box::pin(search(call)));
+    registry.add("sessions.journalWait", |call| {
+        Box::pin(blocking(move || journal_wait::read(call.params()?)))
+    });
     registry.add_push("sessions.forgetText", |push| {
         if let Ok(change) = serde_json::from_str::<ChangedPaths>(push.params.get())
             && let Some(index) = locked(&INDEXES).get_mut(&change.index)

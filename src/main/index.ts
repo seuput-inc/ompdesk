@@ -193,7 +193,6 @@ import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
 import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
-import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
@@ -239,7 +238,7 @@ import { exitWithLauncher } from "./test-launcher-exit";
 import { createTray, destroyTray, hasTray } from "./tray";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
-import { TurnWaitWatch, WAIT_JOURNAL_BYTES, WAIT_JOURNAL_LINES, WAIT_SWEEP_MS } from "./turn-wait-watch";
+import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
 import {
 	appAutoUpdatePrefChanged,
 	appVersion,
@@ -2341,7 +2340,7 @@ app.whenReady().then(async () => {
 		tabs: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()],
 		facts: tabId => sidecarPool.settleFacts(tabId),
 		status: tabId => sidecarPool.sidecarOf(tabId)?.status,
-		journal: file => tailLogLines(file, WAIT_JOURNAL_LINES, WAIT_JOURNAL_BYTES),
+		journal: journalWait,
 		log: details => writeRuntimeLog({ source: "turn-wait", message: "still waiting", details }),
 	});
 	const turnResume = new TurnResume({
