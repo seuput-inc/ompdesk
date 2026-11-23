@@ -298,14 +298,14 @@ src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models s
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
 src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
 src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwritten text and formats a bounded tail for gui_terminal_read.
-src/main/terminal/ipc.ts	port	Routes local versus remote terminal operations, tracks tab ownership and enforces viewer leases before dispatch.
-src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
-src/main/terminal/lease.ts	port	Tracks viewer presence and idle expiry to arbitrate terminal control and resizing.
-src/main/terminal/requests.ts	mixed	Stock's native lane selects an allowed shell and derives the PTY owner from the authenticated peer and rtab; main validates the operation synchronously before terminal/ipc.ts updates a viewer lease or forwards to another machine (§1.3a,c).
+src/main/terminal/ipc.ts	mixed	The native stock lane arbitrates PTY size. Main gets the live pool target, attaches the owning sender's destroyed listener and enqueues work before yielding. Tab release removes that binding before releasing the sidecar, and an outstanding reply rechecks it. Move these shell bindings with the window and pool callback (§1.3a,c).
+src/main/terminal/lease.test.ts	tooling	Two viewers of the real stock lane compete over one synthetic PTY. Exercises returned geometry, arrival order, timed takeover, close and owner disposal.
+src/main/terminal/requests.ts	mixed	The stock lane chooses an allowed shell, derives the paired PTY owner and applies viewer operations before forwarding. Main validates incoming shapes before binding the sender or dispatching to an older paired host (§1.3a,c).
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
 src/main/terminal/shells.ts	native-client	terminal.shells lists installed shells in preference order. The same Rust probe restricts a named shell when the stock lane processes a create.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
+src/main/terminal/test-helper.ts	tooling	The real stock terminal worker loads a test PTY implementation; startup and disposal never launch an interactive shell.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.
 src/main/update-release.fixtures/v0.131.0/update-provider.ts	exception	Frozen v0.131.0 provider that translates release data into updater metadata and file URLs for compatibility tests.
 src/main/update-release.fixtures/v0.131.0/update-release.ts	exception	Frozen v0.131.0 release metadata parser and platform asset selector used as a compatibility fixture.

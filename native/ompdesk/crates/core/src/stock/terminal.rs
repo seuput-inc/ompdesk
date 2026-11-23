@@ -1,13 +1,17 @@
+use std::borrow::Cow;
+use std::sync::LazyLock;
+
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use super::lease::Leases;
 use super::shells::{self, Shell};
 use crate::server::Fault;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum Owner {
-    Local(String),
+enum Owner<'a> {
+    Local(#[serde(borrow)] Cow<'a, str>),
     Peer {
         #[serde(rename = "deviceId")]
         device: String,
@@ -17,18 +21,21 @@ enum Owner {
 
 #[derive(Deserialize)]
 struct Request<'a> {
-    owner: Owner,
+    #[serde(borrow)]
+    owner: Owner<'a>,
     #[serde(borrow)]
     cwd: Option<&'a RawValue>,
     #[serde(borrow)]
     operation: Option<&'a RawValue>,
     #[serde(borrow)]
     env: Option<&'a RawValue>,
+    viewer: Option<i64>,
+    now: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct Params<'a> {
-    owner: String,
+    owner: Cow<'a, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<&'a RawValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,18 +53,93 @@ struct Line<'a> {
     params: Params<'a>,
 }
 
+fn invalid() -> Fault {
+    Fault::new("stock_invalid", "Invalid terminal operation")
+}
+
+impl Request<'_> {
+    fn line(self, id: u64, method: &'static str, shell: Option<Shell>) -> Result<Vec<u8>, Fault> {
+        let owner = match self.owner {
+            Owner::Local(owner) => owner,
+            Owner::Peer { device, rtab } => Cow::Owned(format!("peer:{device}:{rtab}")),
+        };
+        // Leave room for the frame around a large raw write so the closing fields don't recopy it.
+        let payload = [self.cwd, self.operation, self.env]
+            .into_iter()
+            .flatten()
+            .map(|field| field.get().len())
+            .sum::<usize>();
+        let mut line = Vec::with_capacity(payload + owner.len() + 96);
+        serde_json::to_writer(
+            &mut line,
+            &Line {
+                id,
+                method,
+                params: Params {
+                    owner,
+                    cwd: self.cwd,
+                    operation: self.operation,
+                    env: self.env,
+                    shell,
+                },
+            },
+        )
+        .map_err(|_| invalid())?;
+        line.push(b'\n');
+        Ok(line)
+    }
+}
+
+/// `None` reserves the named create's place while its shell is resolved off the lane.
+pub(super) fn viewer_frame(
+    id: u64,
+    bytes: &[u8],
+    leases: &mut Leases,
+) -> Result<Option<Vec<u8>>, Fault> {
+    #[derive(Deserialize)]
+    struct Operation<'a> {
+        action: &'a str,
+        #[serde(borrow)]
+        id: Option<&'a RawValue>,
+        #[serde(borrow)]
+        shell: Option<&'a RawValue>,
+    }
+    static LIST: LazyLock<&RawValue> =
+        LazyLock::new(|| serde_json::from_str(r#"{"action":"list","offsets":{}}"#).unwrap());
+    let mut request: Request = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let (Owner::Local(owner), Some(viewer), Some(now), Some(op)) = (
+        &request.owner,
+        request.viewer,
+        request.now,
+        request.operation,
+    ) else {
+        return Err(invalid());
+    };
+    let op: Operation = serde_json::from_str(op.get()).map_err(|_| invalid())?;
+    match op.action {
+        "create" if op.shell.is_some_and(|path| path.get() != r#""""#) => return Ok(None),
+        "create" | "list" => {}
+        action => {
+            // Both IPC calls use JSON.stringify. Its string literal is a lossless key even for a lone UTF-16 unit.
+            let key = op
+                .id
+                .filter(|id| id.get().starts_with('"'))
+                .ok_or_else(invalid)?;
+            if !leases.apply(owner, key.get(), viewer, action, now) {
+                request.operation = Some(*LIST);
+            }
+        }
+    }
+    request.line(id, "terminal.request", None).map(Some)
+}
+
 pub(super) fn frame(
     id: u64,
     bytes: &[u8],
     dispose: bool,
     choose_shell: bool,
 ) -> Result<Vec<u8>, Fault> {
-    let request: Request = serde_json::from_slice(bytes)
-        .map_err(|_| Fault::new("stock_invalid", "Invalid terminal operation"))?;
-    let owner = match request.owner {
-        Owner::Local(owner) => owner,
-        Owner::Peer { device, rtab } => format!("peer:{device}:{rtab}"),
-    };
+    let request: Request = serde_json::from_slice(bytes).map_err(|_| invalid())?;
     #[derive(Deserialize)]
     struct Choice {
         shell: String,
@@ -74,22 +156,40 @@ pub(super) fn frame(
     } else {
         None
     };
-    let mut line = serde_json::to_vec(&Line {
+    request.line(
         id,
-        method: if dispose {
+        if dispose {
             "terminal.dispose"
         } else {
             "terminal.request"
         },
-        params: Params {
-            owner,
-            cwd: request.cwd,
-            operation: request.operation,
-            env: request.env,
-            shell,
-        },
-    })
-    .map_err(|_| Fault::new("stock_invalid", "Invalid terminal operation"))?;
-    line.push(b'\n');
-    Ok(line)
+        shell,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viewer_write_preserves_lone_units_in_the_worker_frame_and_the_lease_key() {
+        let mut leases = Leases::default();
+        let line = viewer_frame(
+            9,
+            br#"{"owner":"o","viewer":3,"now":100,"cwd":"folder","operation":{"action":"write","id":"\ud800","data":"\udfff"},"env":{}}"#,
+            &mut leases,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            line,
+            concat!(
+                r#"{"id":9,"method":"terminal.request","params":{"owner":"o","cwd":"folder","operation":{"action":"write","id":"\ud800","data":"\udfff"},"env":{}}}"#,
+                "\n"
+            )
+            .as_bytes()
+        );
+        assert_eq!(leases.seen("o", r#""\ud800""#, 3, 100), "you");
+        assert_eq!(leases.seen("o", r#""\\ud800""#, 3, 100), "free");
+    }
 }

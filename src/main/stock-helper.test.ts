@@ -8,6 +8,7 @@ import { createDispatcher } from "../../resources/gui-bridge/stock-helper/dispat
 import type { TerminalOperation, TerminalShell, TerminalSnapshot } from "../shared/terminal-types";
 import { core } from "./core/process";
 import { ompInstallStampFiles, StockHelper, type StockHelperOptions } from "./stock-helper";
+import { terminalTestHelper } from "./terminal/test-helper";
 
 let dir: string;
 const helpers: StockHelper[] = [];
@@ -435,38 +436,7 @@ describe("createDispatcher", () => {
 describe("stock helper terminals", () => {
 	let helper: StockHelper;
 	beforeEach(async () => {
-		const bridge = path.resolve("resources/gui-bridge");
-		const natives = path.join(dir, "node_modules/@oh-my-pi/pi-natives");
-		await fs.mkdir(natives, { recursive: true });
-		await fs.writeFile(path.join(dir, "package.json"), "{}");
-		await fs.writeFile(path.join(natives, "package.json"), JSON.stringify({ main: "index.js" }));
-		await fs.writeFile(
-			path.join(natives, "index.js"),
-			`import { appendFileSync } from "node:fs";
-export class PtySession {
-	startArgv({ application, args, cwd, cols, rows, env }, emit) {
-		this.emit = emit;
-		if (env.STOCK_TEST_LAUNCH_LOG) {
-			appendFileSync(env.STOCK_TEST_LAUNCH_LOG, JSON.stringify({ application, args, cwd, cols, rows }) + "\\n");
-		}
-		return new Promise(() => {});
-	}
-	write(text) { this.emit(null, text); }
-	resize() {}
-	kill() { appendFileSync(${JSON.stringify(path.join(dir, "kills"))}, "x"); }
-}`,
-		);
-		helper = new StockHelper(bridge, {
-			launch: async () => ({
-				bin: "bun",
-				args: [path.join(bridge, "stock-helper/host.ts"), "terminals"],
-				env: {
-					...process.env,
-					OMP_PACKAGE_ROOT: dir,
-					[process.platform === "win32" ? "ComSpec" : "SHELL"]: path.join(dir, "worker-default"),
-				},
-			}),
-		});
+		helper = await terminalTestHelper(dir);
 		helpers.push(helper);
 	});
 	const request = (operation: TerminalOperation, owner = "a") =>

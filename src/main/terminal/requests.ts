@@ -53,8 +53,18 @@ export function terminalRequest(
 	cwd: string,
 	operation: TerminalOperation,
 	env: Record<string, string>,
+	viewer?: number,
 ): Promise<TerminalSnapshot[]> {
 	if (!validTerminalOperation(operation)) return Promise.reject(new Error("Invalid terminal operation"));
+	if (viewer !== undefined)
+		return stockHelperRequest<TerminalSnapshot[]>("terminal.viewerRequest", {
+			owner,
+			cwd,
+			operation,
+			env,
+			viewer,
+			now: Date.now(),
+		});
 	const method =
 		operation.action === "create" && operation.shell
 			? "terminal.create"

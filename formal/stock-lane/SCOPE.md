@@ -26,7 +26,7 @@ The current matrix has 2 requests, 3 workers, and 3 starts for each lane kind. A
 
 ## Not in the model
 
-- The terminal model begins when the lane receives `Msg::Request` and ends at the worker's stdin sender. It does not check renderer lease validation, network delivery order, shell discovery, or execution of the frame by the worker.
+- The terminal model begins when the lane receives `Msg::Request` and ends at the worker's stdin sender. It does not check viewer size arbitration, network delivery order, shell discovery or execution of the frame by the worker. `terminal/lease.test.ts` checks a claim immediately followed by a competing resize on that lane and samples the standing before either answer is awaited.
 - The worker's own queue and withdrawal (`resources/gui-bridge/stock-helper/dispatch.ts`): that a withdrawn request never runs is pinned by `stock-helper.test.ts` "createDispatcher" and "never runs a queued mutation whose caller already timed out".
 - Time: how long a grace or an idle exit is, and that an idle timer armed before a newer request does nothing (`idle_epoch`). See `CORRESPONDENCE.md`.
 - The table of lanes and its lock (`LANES`, `end_lanes`): one lane only. That a request never lands behind a stop in a lane's inbox is by the lock both hold.

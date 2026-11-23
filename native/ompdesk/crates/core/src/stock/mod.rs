@@ -35,6 +35,7 @@
 //! core: their stdin is the core's pipe, the core's job object holds them on Windows and main kills its process
 //! group on POSIX.
 
+mod lease;
 mod scrollback;
 mod shells;
 mod terminal;
@@ -55,7 +56,7 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use crate::fs::error::uv_code;
 use crate::json::whole_surrogates;
 use crate::run::{Runner, terminate};
-use crate::server::{Call, Events, Fault, Registry, Reply};
+use crate::server::{Call, Events, Fault, Registry, Reply, at_once};
 
 /// How long past its timeout a stock request may stay unanswered before its worker counts as hung.
 const RECYCLE_GRACE: Duration = Duration::from_secs(30);
@@ -74,6 +75,7 @@ const READ_BUFFER: usize = 64 * 1024;
 pub fn register(registry: &mut Registry) {
     shells::register(registry);
     registry.add("stock.request", enqueue);
+    registry.add("terminal.viewerSeen", viewer_seen);
     registry.add("stock.launched", |call| {
         Box::pin(async move { launched(&call) })
     });
@@ -187,11 +189,18 @@ enum Msg {
     Request {
         id: u64,
         method: String,
-        line: Vec<u8>,
+        input: Input,
         timeout: Duration,
         tuning: Tuning,
         events: Events,
         reply: oneshot::Sender<Answer>,
+    },
+    ViewerSeen {
+        owner: String,
+        viewer: i64,
+        ids: Vec<Box<RawValue>>,
+        now: i64,
+        reply: oneshot::Sender<Vec<&'static str>>,
     },
     ShellReady(u64, Result<Vec<u8>, Fault>),
     /// The request's caller stopped waiting: its timeout passed (or main withdrew the call).
@@ -219,6 +228,67 @@ enum Msg {
     },
     /// Ends the lane; answers with the exits of every worker it started that has not exited yet.
     Stop(oneshot::Sender<Vec<watch::Receiver<bool>>>),
+}
+
+enum Input {
+    Line(Vec<u8>),
+    Create(Vec<u8>),
+    Viewer(Vec<u8>),
+    Dispose(Option<Vec<u8>>),
+}
+
+impl Input {
+    fn new(id: u64, method: &str, params: Option<Vec<u8>>) -> Result<Self, Fault> {
+        Ok(match method {
+            "terminal.create" => Self::Create(params.unwrap_or_default()),
+            "terminal.viewerRequest" => Self::Viewer(params.unwrap_or_default()),
+            "terminal.dispose" => Self::Dispose(params),
+            "terminal.peerRequest" | "terminal.peerDispose" => Self::Line(terminal::frame(
+                id,
+                params.as_deref().unwrap_or_default(),
+                method == "terminal.peerDispose",
+                false,
+            )?),
+            _ => Self::Line(request_line(id, method, params.as_deref())),
+        })
+    }
+
+    fn prepare(self, id: u64, lane: &mut Lane) -> Result<Option<Vec<u8>>, Fault> {
+        let create = match self {
+            Self::Line(line) => return Ok(Some(line)),
+            Self::Dispose(params) => {
+                #[derive(Deserialize)]
+                struct Local<'a> {
+                    #[serde(borrow)]
+                    owner: std::borrow::Cow<'a, str>,
+                }
+                if let Some(Local { owner }) = params
+                    .as_deref()
+                    .and_then(|p| serde_json::from_slice(p).ok())
+                {
+                    lane.leases.forget_owner(&owner);
+                }
+                return Ok(Some(request_line(
+                    id,
+                    "terminal.dispose",
+                    params.as_deref(),
+                )));
+            }
+            Self::Viewer(bytes) => {
+                if let Some(line) = terminal::viewer_frame(id, &bytes, &mut lane.leases)? {
+                    return Ok(Some(line));
+                }
+                bytes
+            }
+            Self::Create(bytes) => bytes,
+        };
+        let inbox = lane.inbox.clone();
+        tokio::task::spawn_blocking(move || {
+            let prepared = terminal::frame(id, &create, false, true);
+            let _ = inbox.send(Msg::ShellReady(id, prepared));
+        });
+        Ok(None)
+    }
 }
 
 struct Entry {
@@ -269,17 +339,7 @@ fn place(call: &mut Call) -> Result<Placed, Fault> {
     let worker = tuning.worker.unwrap_or_else(|| Worker::of(&method));
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let timeout = Duration::from_millis(timeout_ms);
-    let line = match method.as_str() {
-        // Reserve the create's position before the lane offloads its shell lookup.
-        "terminal.create" => call.bin.take().unwrap_or_default(),
-        "terminal.peerRequest" | "terminal.peerDispose" => terminal::frame(
-            id,
-            call.bin.as_deref().unwrap_or_default(),
-            method == "terminal.peerDispose",
-            false,
-        )?,
-        _ => request_line(id, &method, call.bin.as_deref()),
-    };
+    let input = Input::new(id, &method, call.bin.take())?;
     let (reply, answer) = oneshot::channel();
     let inbox = {
         // Sent under the table's lock, so a stop that takes the lane out never leaves a request behind it.
@@ -293,7 +353,7 @@ fn place(call: &mut Call) -> Result<Placed, Fault> {
         entry.events = call.events.clone();
         let _ = entry.inbox.send(Msg::Request {
             id,
-            line,
+            input,
             method,
             timeout,
             tuning,
@@ -308,6 +368,44 @@ fn place(call: &mut Call) -> Result<Placed, Fault> {
         timeout,
         answer,
     })
+}
+
+/// Place the receipt of the snapshot after all earlier claims/disposals, without starting a worker.
+fn viewer_seen(call: Call) -> crate::server::Answer {
+    #[derive(Deserialize)]
+    struct Seen {
+        host: String,
+        owner: String,
+        viewer: i64,
+        ids: Vec<Box<RawValue>>,
+        now: i64,
+    }
+    let Seen {
+        host,
+        owner,
+        viewer,
+        ids,
+        now,
+    } = match call.params() {
+        Ok(seen) => seen,
+        Err(fault) => return at_once(Err(fault)),
+    };
+    if ids.iter().any(|id| !id.get().starts_with('"')) {
+        return at_once(Err(Fault::new("invalid_params", "Expected terminal ids")));
+    }
+    let lanes = locked(&LANES);
+    let Some(entry) = lanes.get(&(host, Worker::Terminals)) else {
+        return at_once(Reply::json(&vec!["free"; ids.len()]));
+    };
+    let (reply, answer) = oneshot::channel();
+    let _ = entry.inbox.send(Msg::ViewerSeen {
+        owner,
+        viewer,
+        ids,
+        now,
+        reply,
+    });
+    Box::pin(async move { Reply::json(&answer.await.map_err(|_| stopped())?) })
 }
 
 async fn wait(call: Call, placed: Placed) -> Result<Reply, Fault> {
@@ -512,6 +610,7 @@ struct Lane {
     worker: Worker,
     inbox: mpsc::UnboundedSender<Msg>,
     tuning: Tuning,
+    leases: lease::Leases,
     events: Events,
     /// Requests whose caller still waits.
     pending: HashMap<u64, Pending>,
@@ -535,6 +634,7 @@ impl Lane {
             worker,
             inbox: inbox.clone(),
             tuning: Tuning::default(),
+            leases: lease::Leases::default(),
             events,
             pending: HashMap::new(),
             waiting: VecDeque::new(),
@@ -550,21 +650,18 @@ impl Lane {
                     Msg::Request {
                         id,
                         method,
-                        line,
+                        input,
                         timeout,
                         tuning,
                         events,
                         reply,
                     } => {
-                        let line = if method == "terminal.create" {
-                            let inbox = lane.inbox.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let prepared = terminal::frame(id, &line, false, true);
-                                let _ = inbox.send(Msg::ShellReady(id, prepared));
-                            });
-                            None
-                        } else {
-                            Some(line)
+                        let line = match input.prepare(id, &mut lane) {
+                            Ok(line) => line,
+                            Err(fault) => {
+                                let _ = reply.send(Err(fault));
+                                continue;
+                            }
                         };
                         lane.tuning = tuning;
                         lane.events = events;
@@ -575,6 +672,19 @@ impl Lane {
                             reply,
                         };
                         lane.request(id, pending);
+                    }
+                    Msg::ViewerSeen {
+                        owner,
+                        viewer,
+                        ids,
+                        now,
+                        reply,
+                    } => {
+                        let states = ids
+                            .iter()
+                            .map(|id| lane.leases.seen(&owner, id.get(), viewer, now))
+                            .collect();
+                        let _ = reply.send(states);
                     }
                     Msg::ShellReady(id, result) => {
                         match result {
@@ -995,6 +1105,7 @@ pub(crate) async fn request_in_process(
         serde_json::to_vec(params).map_err(|error| Fault::new("internal", error.to_string()))?;
     let worker = Worker::of(method);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let input = Input::new(id, method, Some(text))?;
     let (reply, answer) = oneshot::channel();
     let inbox = {
         // Sent under the table's lock, so a stop that takes the lane out never leaves a request behind it.
@@ -1008,7 +1119,7 @@ pub(crate) async fn request_in_process(
         entry.events = events.clone();
         let _ = entry.inbox.send(Msg::Request {
             id,
-            line: request_line(id, method, Some(&text)),
+            input,
             method: method.to_owned(),
             timeout,
             tuning: Tuning::default(),

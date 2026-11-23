@@ -6,13 +6,13 @@ export interface TerminalSnapshot {
 	exited: boolean;
 	exitCode?: number;
 	error?: string;
-	/** The PTY's size now (the lease holder's, see `TerminalLease`); absent from a host that predates it. */
+	/** The PTY's current size; absent from a host that predates the viewer lease. */
 	cols?: number;
 	rows?: number;
 	/** Who may size this PTY for the asking viewer: it did (`you`), another viewer did (`other`), or nobody. */
 	lease?: TerminalLeaseState;
 }
-/** A viewer's standing on a PTY's size (`main/terminal/lease.ts`). */
+/** A viewer's standing on a PTY's size. */
 export type TerminalLeaseState = "you" | "other" | "free";
 /** A shell the Terminal panel can start (main/terminal/shells.ts); `path` names it. */
 export interface TerminalShell {
