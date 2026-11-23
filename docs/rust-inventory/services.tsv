@@ -253,7 +253,7 @@ src/main/setup/detect-agent-desktop.test.ts	exception	Tests managed-only agent-d
 src/main/setup/detect-brew.test.ts	exception	Tests discovery of Homebrew's gh when the login shell does not supply its directory.
 src/main/setup/detect-bun.test.ts	exception	Checks Bun presence against the installed omp package's minimum Bun version.
 src/main/setup/detect-git-shell.test.ts	exception	Checks classification of Git shell failures, including the Mandatory ASLR signature.
-src/main/setup/detect.ts	mixed	setup.probeOmp, setup.pickAgentDesktop and setup.appleDeveloperDir check the runtime, Computer use executable and Apple Git trampoline. SetupService still owns the first-resolution gate and the remaining machine tool probes.
+src/main/setup/detect.ts	mixed	setup.toolVersion probes the five located tools; setup.probeOmp, pickAgentDesktop and appleDeveloperDir select their runtime. Shell setup batch (§1.3c) retains the first-resolution gate, spawn PATH and Git shell diagnosis beside its repair and prefs.
 src/main/setup/download.test.ts	exception	Tests streamed progress, SHA-256 verification and cleanup of rejected downloads.
 src/main/setup/download.ts	native-client	Forwards setup.download with cancellation and adapts setup.downloadProgress events and checksum errors to the caller.
 src/main/setup/git-aslr.test.ts	exception	Tests the scope of Git mitigation changes, quoting and recorded prior state for undo.

@@ -36,6 +36,9 @@ pub fn register(registry: &mut Registry) {
         Box::pin(desktop::select(call))
     });
     registry.add("setup.probeOmp", |call| Box::pin(runtime::probe(call)));
+    registry.add("setup.toolVersion", |call| {
+        Box::pin(runtime::tool_version(call))
+    });
     registry.add("setup.appleDeveloperDir", |call| {
         Box::pin(apple_developer_dir(call))
     });
