@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetLoginShellEnvCache } from "../../shell-env";
-import { findOnPath } from "../../spawn";
-import { developerGit, execBin, gitRaw, resolveBin } from "./exec";
+import { repoRoot } from "./changes";
+import { developerGit, ghText, gitRunner, resolveBin } from "./exec";
 
 const made: string[] = [];
 const savedEnv = { PATH: process.env.PATH, SHELL: process.env.SHELL };
@@ -23,11 +23,11 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-/** A developer dir whose `usr/bin/git` prints a marker instead of running git. */
+/** A developer dir whose git answers a root lookup even outside a repository. */
 async function fakeDeveloperDir(): Promise<string> {
 	const dir = await tempDir("omp-developer-dir-");
 	await fs.mkdir(path.join(dir, "usr", "bin"), { recursive: true });
-	await fs.writeFile(path.join(dir, "usr", "bin", "git"), "#!/bin/sh\necho developer-git\n", { mode: 0o755 });
+	await fs.writeFile(path.join(dir, "usr", "bin", "git"), "#!/bin/sh\npwd -P\n", { mode: 0o755 });
 	return dir;
 }
 
@@ -57,16 +57,15 @@ describe.skipIf(process.platform === "win32")("resolveBin", () => {
 	});
 });
 
-describe("execBin", () => {
+describe("core spawn failures", () => {
 	it("names a working folder that does not exist instead of the program's ENOENT", async () => {
 		const gone = path.join(await tempDir("omp-exec-cwd-"), "gone");
-		await expect(execBin(process.execPath, ["--version"], { cwd: gone })).rejects.toThrow(
-			`working folder ${gone} does not exist`,
-		);
+		await expect(ghText(gone, process.execPath, ["--version"])).rejects.toMatchObject({
+			code: "spawn_failed",
+			message: `working folder ${gone} does not exist`,
+		});
 	});
 
-	// A cwd beneath a regular file stats as absent (Node's `throwIfNoEntry` covers ENOTDIR too); a folder that cannot
-	// be read throws EACCES from that stat, which once escaped the spawn's error handler as an uncaught exception.
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"keeps the spawn's own error for a working folder it may not enter, and still rejects",
 		async () => {
@@ -74,9 +73,10 @@ describe("execBin", () => {
 			await fs.mkdir(path.join(locked, "inner"), { recursive: true });
 			await fs.chmod(locked, 0o000);
 			try {
-				await expect(
-					execBin(process.execPath, ["--version"], { cwd: path.join(locked, "inner") }),
-				).rejects.toMatchObject({ code: "EACCES" });
+				await expect(ghText(path.join(locked, "inner"), process.execPath, ["--version"])).rejects.toMatchObject({
+					code: "spawn_failed",
+					message: `spawn ${process.execPath} EACCES`,
+				});
 			} finally {
 				await fs.chmod(locked, 0o700);
 			}
@@ -93,12 +93,15 @@ describe("the git GUI git calls run", () => {
 		expect(developerGit(null)).toBeNull();
 	});
 
-	it.skipIf(process.platform !== "darwin" || findOnPath(["git"], process.env.PATH ?? "", "darwin") !== "/usr/bin/git")(
-		"skips macOS's /usr/bin/git trampoline and runs the git it forwards to",
-		async () => {
-			process.env.DEVELOPER_DIR = await fakeDeveloperDir();
-			const result = await gitRaw(os.tmpdir(), ["version"]);
-			expect(result.stdout.toString("utf8").trim()).toBe("developer-git");
+	it.skipIf(process.platform !== "darwin")(
+		"runs the developer git instead of macOS's /usr/bin/git trampoline",
+		async ctx => {
+			if ((await resolveBin("git")) !== "/usr/bin/git") ctx.skip();
+			const dir = await fakeDeveloperDir();
+			process.env.DEVELOPER_DIR = dir;
+			expect((await gitRunner()).bin).toBe(path.join(dir, "usr", "bin", "git"));
+			const cwd = await tempDir("omp-git-cwd-");
+			expect(await repoRoot(cwd)).toBe(await fs.realpath(cwd));
 		},
 	);
 });

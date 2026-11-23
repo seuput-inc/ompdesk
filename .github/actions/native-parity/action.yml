@@ -111,6 +111,9 @@ runs:
         src/main/local/git/session-worktree.test.ts
         src/main/local/git/worktree-seed.test.ts
         src/main/local/git/exec-gh.test.ts
+        src/main/local/git/exec.test.ts
+        src/main/local/git/git-env.test.ts
+        src/main/local/git/repo-lock.test.ts
         src/main/local/git/pr-draft.test.ts
         src/main/local/git/origin.test.ts
         src/main/local/git/stock-bridge.test.ts
