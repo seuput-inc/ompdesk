@@ -8,8 +8,8 @@
 # SHA-512 from an HTML comment the publish job appends to the notes
 # (`<!-- ompdesk-update {json} -->`, parsed by src/main/update-release.ts).
 # An `Unreleased` heading or an existing tag makes the run a no-op.
-# `workflow_dispatch` re-runs it; `dry_run` does everything except the tag and
-# release (the packages stay as run artifacts) and works on any branch.
+# `dry_run` on main exercises the gate without creating a tag or release. Other branches package ad-hoc on macOS
+# and exercise the Windows update gate; only main can build the pinned macOS candidate needed by publish.
 #
 # Layout: the repo is public, so hosted runners are free and every job runs on
 # one (Linux, macOS arm64, Windows). This is the whole release gate (what
@@ -22,8 +22,9 @@
 # arm64 and `mac-native` runs the vitest files that drive its real binary on
 # macOS; `win` and `mac` install meanwhile,
 # wait for build's out/ in this run's artifacts, package it and launch the
-# result (the packaged Tauri app, driven through its native WebDriver by scripts/tauri-native-smoke.ts); `publish` runs only
-# when all of them passed. The full Playwright suite is not part of a release
+# result (the packaged Tauri app, driven through its native WebDriver by scripts/tauri-native-smoke.ts).
+# Installed copies then update into this run's artifacts: the previous stable Mac release and the last Windows Electron release.
+# `publish` waits for both update gates. The full Playwright suite is not part of a release
 # (e2e-nightly.yml runs it informationally). A failed job writes its first error
 # lines to its job summary at once (scripts/ci-failure.sh). After a flaky
 # failure, rerun only the failed jobs: `gh run rerun <id> --failed`.
@@ -922,14 +923,57 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # Runs when prepare, build, static, check (every vitest job), win-platform (every shard), native (every OS),
-  # tauri (Windows and macOS), mac-native, mac (packaged Tauri smoke) and win (packaged Tauri smoke) succeeded (the job `if` keeps GitHub's
-  # implicit success(), so a failed or skipped need stops it). The full
-  # Playwright suite is not part of a release: e2e-nightly.yml runs it
-  # informationally. The pre-flight in ci.yml and local `bun run gate` are the
-  # other proofs.
+  release-update-mac:
+    needs: mac
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ompdesk-mac
+          path: ${{ runner.temp }}/mac-candidate
+      - uses: ./.github/actions/mac-update-candidate
+        with:
+          candidate-dmg: ${{ runner.temp }}/mac-candidate/ompdesk-mac-arm64.dmg
+
+  win-update-real:
+    needs: [prepare, win]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [installer, feed]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ompdesk-win
+          path: ${{ runner.temp }}/win-update-real/new
+      - uses: ./.github/actions/win-update-real
+        with:
+          mode: ${{ matrix.mode }}
+          expected-version: ${{ needs.prepare.outputs.version }}
+
+  # Keep GitHub's implicit success(): a failed or skipped package or update gate must block publication.
   publish:
-    needs: [prepare, build, static, check, mac, win-platform, native, tauri, mac-native, win]
+    needs: [prepare, build, static, check, mac, win-platform, native, tauri, mac-native, win, release-update-mac, win-update-real]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10

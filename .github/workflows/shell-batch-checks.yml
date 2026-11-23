@@ -46,6 +46,8 @@
 #                SHA-512 check against the metadata, the staged app is that version), swaps, and the published Tauri app starts on the profile: token decrypted, setting kept, conversation
 #                listed (read from disk: a release has no page to ask), window photographed (screencapture), swap.log installed/started, app-started.json for
 #                <tag>. S4 (a new shell that does not start) is skipped: it needs a broken DMG.
+#              only=release-update-mac uses a stand-in feed instead. The published old_tag updates into the exact dispatch SHA's
+#                signed release.yml artifact. The candidate must start from /Applications with the same profile canary.
 #              win-update-real  only=win-update-real, `tag` or `candidate_run`: the Windows update, published v0.131.0 into a candidate
 #                setup on a clean windows-latest runner under the real identity: `installer` runs the setup with the arguments v0.131.0's
 #                NsisUpdater passes, `feed` lets the published app's own updater fetch and start it (job win-update-real;
@@ -69,7 +71,7 @@
 # Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
 name: shell-batch-checks
 # The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || inputs.only == 'win-update-real' && format(' tag={0} run={1}', inputs.tag, inputs.candidate_run) || inputs.only == 'win-update-gate' && format(' old={0} run={1} next={2}', inputs.old_tag, inputs.candidate_run, inputs.next_run) || '') || '' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || inputs.only == 'release-update-mac' && format(' old={0} run={1}', inputs.old_tag, inputs.candidate_run) || inputs.only == 'win-update-real' && format(' tag={0} run={1}', inputs.tag, inputs.candidate_run) || inputs.only == 'win-update-gate' && format(' old={0} run={1} next={2}', inputs.old_tag, inputs.candidate_run, inputs.next_run) || '') || '' }}
 
 on:
   workflow_dispatch:
@@ -77,14 +79,14 @@ on:
       only:
         description: "Diagnostic subset, not the full shell landing gate"
         type: choice
-        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify, win-update-real, win-update-gate]
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify, release-update-mac, win-update-real, win-update-gate]
         default: all
       tag:
         description: "release-verify: the published release to check (assets, signatures, and the real update path into it). win-update-real: the published setup to update into when candidate_run is empty"
         type: string
         default: v0.132.0
       candidate_run:
-        description: "win-update-real and win-update-gate: id of a release.yml dry run on the branch (`gh workflow run release.yml --ref <branch> -f dry_run=true`) whose ompdesk-win (and ompdesk-mac) artifact is the candidate; win-update-real: empty uses the published setup of tag"
+        description: "release.yml run id for the candidate artifact. release-update-mac requires a release-signed ompdesk-mac at the dispatch SHA; win-update-gate requires a run; win-update-real uses the published tag when empty"
         type: string
         default: ""
       cpu_load:
@@ -96,7 +98,7 @@ on:
         type: string
         default: ""
       old_tag:
-        description: "win-update-gate: the published release a person has installed (break and manual start from it)"
+        description: "Published starting release for win-update-gate and release-update-mac (macOS needs a lower Tauri version with automatic relaunch)"
         type: string
         default: v0.134.1
   push:
@@ -747,9 +749,9 @@ jobs:
   # The released app (scripts/shell-move/move-mac.sh, OMP_MOVE_RELEASED_TAG) updates through the REAL GitHub feed into the published tag.
   # No Windows counterpart: see the release-verify note in this file's header (move-win's setups are rebuilt under a test identity).
   release-update-mac:
-    name: release-update-mac (macos-15, v0.131.0 to ${{ inputs.tag }})
+    name: release-update-mac (macos-15, ${{ inputs.only == 'release-update-mac' && format('{0} to run {1}', inputs.old_tag, inputs.candidate_run) || format('v0.131.0 to {0}', inputs.tag) }})
     needs: [gate, release-assets-mac]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'release-verify'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && (inputs.only == 'release-verify' || inputs.only == 'release-update-mac')"
     concurrency:
       group: mac-dispatch
       cancel-in-progress: false
@@ -762,11 +764,12 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      # Nothing is built: the scripts only need the repository's dependencies (Playwright's CDP client for the released Electron's
-      # page, the e2e fake omp); the apps are the published ones.
+      # Neither mode rebuilds an app. The move scripts need the e2e fake omp and the released Electron's CDP client.
       - uses: ./.github/actions/install
         with:
           electron: "false"
@@ -774,17 +777,18 @@ jobs:
       # OMP_MOVE_API_TOKEN, not GH_TOKEN: the released app reads GH_TOKEN/GITHUB_TOKEN before its stored token, and the move check
       # asserts the stored one is decrypted. The script seeds this token as the app's own update token.
       - name: The update move from the released v0.131.0 through the real feed
+        if: inputs.only == 'release-verify'
         shell: bash
         env:
           OMP_MOVE_API_TOKEN: ${{ github.token }}
         run: set -o pipefail; OMPDESK_SHELL_ENGINE=tauri OMP_MOVE_RELEASED_TAG=v0.131.0 OMP_MOVE_REAL_FEED="$RELEASE_TAG" bash scripts/shell-move/move-mac.sh 2>&1 | tee release-update-mac.log
       - name: Evidence lines
-        if: always()
+        if: always() && inputs.only == 'release-verify'
         shell: bash
         run: |
           { echo "### real-feed update v0.131.0 to $RELEASE_TAG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-update-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           { echo "Screenshots (artifact release-update-mac-$RELEASE_TAG, folder move-shots):"; ls "$RUNNER_TEMP/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
-      - if: always()
+      - if: always() && inputs.only == 'release-verify'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-update-mac-${{ inputs.tag }}
@@ -801,6 +805,34 @@ jobs:
             ${{ runner.temp }}/kc/s1/ud/tauri-shell.jsonl
           if-no-files-found: ignore
           retention-days: 14
+      - name: Verify the candidate run's source
+        if: inputs.only == 'release-update-mac'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_RUN" =~ ^[1-9][0-9]*$ ]] || { echo "::error::release-update-mac requires a numeric candidate_run"; exit 1; }
+          RUN="repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN"
+          gh api "$RUN" | jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            select(.path == ".github/workflows/release.yml" and .conclusion == "success" and
+              .head_repository.full_name == $repo and .head_sha == $sha) | {html_url, head_sha, run_attempt}' ||
+            { echo "::error::candidate_run must be a successful release.yml run for $GITHUB_REPOSITORY@$GITHUB_SHA"; exit 1; }
+          echo "Candidate from release.yml run $CANDIDATE_RUN at $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+      - if: inputs.only == 'release-update-mac'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run }}
+          name: ompdesk-mac
+          digest-mismatch: error
+          path: ${{ runner.temp }}/mac-candidate
+      - if: inputs.only == 'release-update-mac'
+        uses: ./.github/actions/mac-update-candidate
+        with:
+          candidate-dmg: ${{ runner.temp }}/mac-candidate/ompdesk-mac-arm64.dmg
+          old-tag: ${{ inputs.old_tag }}
       - if: failure()
         shell: bash
         run: bash scripts/ci-failure.sh
@@ -831,51 +863,32 @@ jobs:
       contents: read
       actions: read # gh run download reads the dry run's artifact
     env:
-      GH_TOKEN: ${{ github.token }}
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
       CANDIDATE_TAG: ${{ inputs.tag }}
-      CPU_LOAD: ${{ inputs.cpu_load }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - name: The published v0.131.0 setup and the candidate setup
+      - name: Download the candidate setup
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           W="$RUNNER_TEMP/win-update-real"
-          mkdir -p "$W/old" "$W/new"
-          OLD_TAG=$(jq -r .tag native/ompdesk/crates/shell/last-electron.json)
-          echo "OLD_VERSION=${OLD_TAG#v}" >> "$GITHUB_ENV"
-          gh release download "$OLD_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/old" --clobber
           if [ -n "$CANDIDATE_RUN" ]; then
             gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/new"
           else
             gh release download "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/new" --clobber
           fi
-          ls -l "$W/old" "$W/new"
-      - name: The update (${{ matrix.mode }})
-        shell: pwsh
-        run: |
-          $w = Join-Path $env:RUNNER_TEMP 'win-update-real'
-          $feed = if ($env:CANDIDATE_RUN) { @{ FeedScript = (Resolve-Path 'scripts/shell-move/feed.ts').Path } } else { @{} }
-          & ./scripts/shell-move/win-update-real.ps1 -Mode '${{ matrix.mode }}' `
-            -OldSetup (Join-Path $w 'old\ompdesk-windows-setup.exe') -NewSetup (Join-Path $w 'new\ompdesk-windows-setup.exe') `
-            -OldVersion $env:OLD_VERSION -Out (Join-Path $w 'out-${{ matrix.mode }}') -CpuLoad ([int]$env:CPU_LOAD) @feed
-          exit $LASTEXITCODE
-      - name: Evidence lines
-        if: always()
-        shell: bash
-        run: |
-          { echo "### win-update-real ${{ matrix.mode }}: v$OLD_VERSION to ${CANDIDATE_RUN:+run }${CANDIDATE_RUN:-$CANDIDATE_TAG}"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-real/out-${{ matrix.mode }}/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: ./.github/actions/win-update-real
         with:
-          name: win-update-real-${{ matrix.mode }}
-          path: ${{ runner.temp }}/win-update-real/out-${{ matrix.mode }}/
-          if-no-files-found: ignore
-          retention-days: 14
+          mode: ${{ matrix.mode }}
+          stand-in-feed: ${{ inputs.candidate_run != '' && 'true' || 'false' }}
+          cpu-load: ${{ inputs.cpu_load }}
       - if: failure()
         shell: bash
         run: bash scripts/ci-failure.sh

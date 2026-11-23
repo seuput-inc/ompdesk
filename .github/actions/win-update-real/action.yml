@@ -1,0 +1,56 @@
+name: Verify an installed Windows app update
+description: Update the last Electron release on a disposable Windows runner and upload its setup and app evidence.
+inputs:
+  mode:
+    description: installer or feed
+    required: true
+  stand-in-feed:
+    description: Serve the exact candidate setup instead of checking GitHub's published Latest
+    default: 'true'
+  cpu-load:
+    description: Busy loops per logical processor during setup
+    default: '0'
+  expected-version:
+    description: Expected installed version; empty reads it from the candidate setup
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Download the last published Electron setup
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        tag=$(jq -er .tag native/ompdesk/crates/shell/last-electron.json)
+        echo "OLD_VERSION=${tag#v}" >> "$GITHUB_ENV"
+        gh release download "$tag" -R "$GITHUB_REPOSITORY" -p ompdesk-windows-setup.exe --dir "$RUNNER_TEMP/win-update-real/old"
+    - name: Update the installed app
+      shell: pwsh
+      env:
+        MODE: ${{ inputs.mode }}
+        STAND_IN: ${{ inputs.stand-in-feed }}
+        CPU_LOAD: ${{ inputs.cpu-load }}
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+      run: |
+        $w = Join-Path $env:RUNNER_TEMP 'win-update-real'
+        $feed = if ($env:STAND_IN -eq 'true') { @{ FeedScript = (Resolve-Path 'scripts/shell-move/feed.ts').Path } } else { @{} }
+        & ./scripts/shell-move/win-update-real.ps1 -Mode $env:MODE `
+          -OldSetup (Join-Path $w 'old\ompdesk-windows-setup.exe') -NewSetup (Join-Path $w 'new\ompdesk-windows-setup.exe') `
+          -OldVersion $env:OLD_VERSION -NewVersion $env:EXPECTED_VERSION -Out (Join-Path $w "out-$env:MODE") -CpuLoad ([int]$env:CPU_LOAD) @feed
+        if (-not $?) { exit 1 }
+        if (-not (Select-String -LiteralPath (Join-Path $w "out-$env:MODE/run.log") -Pattern '^RESULT: ok$' -Quiet)) { throw 'No successful update result' }
+    - name: Evidence lines
+      if: always()
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        { echo "### win-update-real $MODE from v$OLD_VERSION"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-real/out-$MODE/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+    - if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: win-update-real-${{ inputs.mode }}
+        path: ${{ runner.temp }}/win-update-real/out-${{ inputs.mode }}/
+        if-no-files-found: warn
+        retention-days: 14
