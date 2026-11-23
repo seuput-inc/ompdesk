@@ -187,10 +187,20 @@ impl Drop for Request<'_> {
 fn option(handle: Handle, name: u32, value: u32) -> Result<(), String> {
     // SAFETY: value is a properly sized DWORD and handle is a live WinHTTP handle.
     if unsafe { WinHttpSetOption(handle, name, (&value as *const u32).cast(), 4) } == 0 {
-        Err(failure("set option"))
+        option_failure(name, std::io::Error::last_os_error())
     } else {
         Ok(())
     }
+}
+
+fn option_failure(name: u32, error: std::io::Error) -> Result<(), String> {
+    // Older WinHTTP has no global-pooling switch. Each hop still owns a fresh session.
+    if name == WINHTTP_OPTION_DISABLE_GLOBAL_POOLING
+        && error.raw_os_error() == Some(ERROR_WINHTTP_INVALID_OPTION as i32)
+    {
+        return Ok(());
+    }
+    Err(format!("WinHTTP set option {name}: {error}"))
 }
 
 fn raw_headers(handle: Handle) -> Result<Vec<(String, String)>, String> {
@@ -762,4 +772,25 @@ pub(in super::super) fn start(
         })
         .map_err(|error| format!("start WinHTTP worker: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_unrecognized_pooling_option_allows_request_setup_to_continue() {
+        let invalid_option =
+            || std::io::Error::from_raw_os_error(ERROR_WINHTTP_INVALID_OPTION as i32);
+        assert!(option_failure(WINHTTP_OPTION_DISABLE_GLOBAL_POOLING, invalid_option()).is_ok());
+        for required in [
+            WINHTTP_OPTION_DISABLE_FEATURE,
+            WINHTTP_OPTION_AUTOLOGON_POLICY,
+            WINHTTP_OPTION_DECOMPRESSION,
+        ] {
+            assert!(option_failure(required, invalid_option()).is_err());
+        }
+        let access_denied = std::io::Error::from_raw_os_error(5);
+        assert!(option_failure(WINHTTP_OPTION_DISABLE_GLOBAL_POOLING, access_denied).is_err());
+    }
 }
