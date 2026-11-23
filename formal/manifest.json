@@ -68,6 +68,7 @@
 				"native/ompdesk/crates/core/src/resume/ends.rs",
 				"native/ompdesk/crates/core/src/resume/facts.rs",
 				"native/ompdesk/crates/core/src/resume/connectivity.rs",
+				"native/ompdesk/crates/core/src/resume/probe.rs",
 				"native/ompdesk/crates/core/src/resume/hold-ends.json",
 				"native/ompdesk/crates/core/src/pool/run.rs",
 				"native/ompdesk/crates/core/src/pool/api.rs#note_stopped",

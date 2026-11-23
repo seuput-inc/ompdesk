@@ -262,6 +262,7 @@ pub fn registry() -> Registry {
     crate::remote::register(&mut registry);
     crate::remotebytes::register(&mut registry);
     crate::repo_images::register(&mut registry);
+    crate::resume::register(&mut registry);
     crate::routines::register(&mut registry);
     crate::schedules::register(&mut registry);
     crate::sessions::register(&mut registry);

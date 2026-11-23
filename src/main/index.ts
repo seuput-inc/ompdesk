@@ -111,14 +111,7 @@ import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { CliUpdater, psCommands, registerCliUpdateIpc } from "./cli-tools/updater";
-import {
-	answersWithin,
-	ConnectivityMonitor,
-	PROBE_TIMEOUT_MS,
-	probeTarget,
-	reaches,
-	tcpConnects,
-} from "./connectivity";
+import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, type ConsoleWindow, ConsoleWindowWatch } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
@@ -2307,13 +2300,11 @@ app.whenReady().then(async () => {
 				? Promise.resolve(false)
 				: answersWithin(
 						agentProxyUrl().then(proxy =>
-							reaches(probeTarget(host ?? "example.com", proxy), {
-								resolve: async name =>
-									(await net.resolveHost(name, { cacheUsage: "disallowed" })).endpoints.map(
-										endpoint => endpoint.address,
-									),
-								connect: (address, port) => tcpConnects(address, port, PROBE_TIMEOUT_MS),
-							}),
+							reaches(probeTarget(host ?? "example.com", proxy), async name =>
+								(await net.resolveHost(name, { cacheUsage: "disallowed" })).endpoints.map(
+									endpoint => endpoint.address,
+								),
+							),
 						),
 						PROBE_TIMEOUT_MS,
 					),
