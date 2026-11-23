@@ -536,7 +536,7 @@ src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name orde
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: workspace file reads, MIME detection, confinement and mutations.
 src/main/workspace-fs.ts	mixed	2	fs.* in core/src/fs owns disk operations, caps and viewer/image MIME detection. TS retains path confinement, argument checks, trash delegation and IPC response shapes.
 src/main/workspace-search.test.ts	tooling	-	Vitest suite: Files content search.
-src/main/workspace-search.ts	mixed	2	searchWorkspace owns validation, regex construction and match caps; search.text runs in the stock Bun worker via stock.request in core/src/stock/mod.rs, not a Rust grep implementation.
+src/main/workspace-search.ts	mixed	2	Validates the panel request before launching stock and returns V8's RegExp syntax error. core/src/stock/search.rs supplies the case flag, file and match limits, ignored/hidden-file policy and grep timeout on that request; installed pi-natives searches.
 src/main/worktree-lifecycle.test.ts	tooling	-	Vitest suite: decideWorktreeStart (interactive-mode.ts 7716-7720).
 src/main/worktree-lifecycle.ts	mixed	3	WorktreeLifecycle owns start/exit prompts, bridge settings and tab operations; session-worktree helpers dispatch git.sessionWorktreeSnapshot/Removal/Remove through core/src/git/mod.rs.
 src/main/worktree-orphans-removal.test.ts	tooling	-	Vitest suite: removeOrphanWorktree.

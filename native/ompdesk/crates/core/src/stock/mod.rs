@@ -37,6 +37,7 @@
 
 mod install_stamp;
 mod scrollback;
+mod search;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -270,6 +271,11 @@ fn place(call: &Call) -> Result<Placed, Fault> {
     let worker = tuning.worker.unwrap_or_else(|| Worker::of(&method));
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let timeout = Duration::from_millis(timeout_ms);
+    let line = if method == "search.text" {
+        search::request_line(id, call.bin.as_deref().unwrap_or_default())?
+    } else {
+        request_line(id, &method, call.bin.as_deref())
+    };
     let (reply, answer) = oneshot::channel();
     let inbox = {
         // Sent under the table's lock, so a stop that takes the lane out never leaves a request behind it.
@@ -283,7 +289,7 @@ fn place(call: &Call) -> Result<Placed, Fault> {
         entry.events = call.events.clone();
         let _ = entry.inbox.send(Msg::Request {
             id,
-            line: request_line(id, &method, call.bin.as_deref()),
+            line,
             method,
             timeout,
             tuning,

@@ -32,27 +32,9 @@ function stockGrep(): Promise<StockGrep> {
 }
 
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
-	/** Main validated `root`, `pattern` (already a regex) and the caps. */
+	/** The core supplies the complete, capped pi-natives options on this request. */
 	"search.text": async params => {
-		const { root, pattern, ignoreCase, glob, maxCount } = params as {
-			root: string;
-			pattern: string;
-			ignoreCase: boolean;
-			glob?: string;
-			maxCount: number;
-		};
-		const result = await (await stockGrep()).grep({
-			pattern,
-			path: root,
-			glob,
-			ignoreCase,
-			hidden: false,
-			gitignore: true,
-			maxCount,
-			maxColumns: 240,
-			maxCountPerFile: 50,
-			timeoutMs: 15_000,
-		});
+		const result = await (await stockGrep()).grep(params as Parameters<StockGrep["grep"]>[0]);
 		return {
 			matches: result.matches.map(match => ({
 				path: match.path.split("\\").join("/"),
