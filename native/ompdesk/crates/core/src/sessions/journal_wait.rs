@@ -1,6 +1,5 @@
 //! Evidence for a stalled turn. Only the last message and its still-open tool names leave the core.
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -9,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use super::activity::read_window;
+use super::raw::{Object, Text};
 use crate::server::{Fault, Reply};
 
 const BYTES: u64 = 1024 * 1024;
@@ -33,33 +33,6 @@ struct Evidence<'a> {
     journal_at: Option<&'a RawValue>,
 }
 
-// Decode keys and ids like JSON.parse, including escaped spellings and lone UTF-16 surrogates.
-#[derive(Deserialize, PartialEq, Eq, Hash)]
-#[serde(transparent)]
-struct Text<'a>(#[serde(borrow)] Cow<'a, [u8]>);
-
-#[derive(Deserialize)]
-#[serde(transparent)]
-struct Fields<'a>(#[serde(borrow)] HashMap<Text<'a>, &'a RawValue>);
-
-impl<'a> Fields<'a> {
-    fn get(&self, key: &'static [u8]) -> Option<&'a RawValue> {
-        self.0.get(&Text(Cow::Borrowed(key))).copied()
-    }
-
-    fn string(&self, key: &'static [u8]) -> Option<&'a RawValue> {
-        self.get(key).filter(|s| s.get().starts_with('"'))
-    }
-
-    fn decoded(&self, key: &'static [u8]) -> Option<Text<'a>> {
-        serde_json::from_str(self.string(key)?.get()).ok()
-    }
-
-    fn is(&self, key: &'static [u8], value: &[u8]) -> bool {
-        self.decoded(key).is_some_and(|s| s.0.as_ref() == value)
-    }
-}
-
 // Join JSON string literals without losing escaped lone surrogates in the diagnostic text.
 fn joined<'a>(parts: impl Iterator<Item = &'a RawValue>, separator: &str) -> Box<RawValue> {
     let mut literal = String::from("\"");
@@ -82,16 +55,13 @@ fn evidence(text: &str, truncated: bool) -> Evidence<'_> {
     let mut result = Evidence::default();
     let mut closed = HashSet::new();
     for line in lines.rev().filter(|s| !s.is_empty()).take(LINES) {
-        let Ok(entry) = serde_json::from_str::<Fields>(line) else {
+        let Ok(entry) = serde_json::from_str::<Object>(line) else {
             continue;
         };
         if !entry.is(b"type", b"message") {
             continue;
         }
-        let Some(message) = entry
-            .get(b"message")
-            .and_then(|m| serde_json::from_str::<Fields>(m.get()).ok())
-        else {
+        let Some(message) = entry.get(b"message").and_then(Object::parse) else {
             continue;
         };
         let time = entry.string(b"timestamp");
@@ -114,7 +84,7 @@ fn evidence(text: &str, truncated: bool) -> Evidence<'_> {
         {
             let mut calls: Vec<(Text<'_>, &RawValue)> = Vec::new();
             for block in blocks {
-                let Ok(call) = serde_json::from_str::<Fields>(block.get()) else {
+                let Some(call) = Object::parse(block) else {
                     continue;
                 };
                 if call.is(b"type", b"toolCall")

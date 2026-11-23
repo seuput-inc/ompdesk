@@ -1,6 +1,4 @@
 //! Disk cursor for the single Pace fold in main, where stock's check and poll classifiers run.
-use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -9,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
+use super::raw::{Object, Text};
 use crate::fs::disk::mtime_ms;
 use crate::server::{Fault, Reply};
 
@@ -48,36 +47,6 @@ fn identity(_: &File, meta: &std::fs::Metadata) -> io::Result<String> {
 fn identity(file: &File, _: &std::fs::Metadata) -> io::Result<String> {
     let (volume, index, _) = crate::sys::file_identity(file)?;
     Ok(format!("{volume}:{index}"))
-}
-
-// The caller parses the selected JSON fields with JavaScript, including dates, duplicate keys
-// (last wins), lone UTF-16 surrogates and numbers outside serde_json::Number's range.
-#[derive(Deserialize, Eq, Hash, PartialEq)]
-#[serde(transparent)]
-struct Text<'a>(#[serde(borrow)] Cow<'a, [u8]>);
-
-#[derive(Deserialize)]
-#[serde(transparent)]
-struct Object<'a>(#[serde(borrow)] HashMap<Text<'a>, &'a RawValue>);
-
-impl<'a> Object<'a> {
-    fn parse(raw: &'a RawValue) -> Option<Self> {
-        if !raw.get().starts_with('{') {
-            return None;
-        }
-        serde_json::from_str(raw.get()).ok()
-    }
-
-    fn get(&self, key: &'static str) -> Option<&'a RawValue> {
-        self.0.get(&Text(Cow::Borrowed(key.as_bytes()))).copied()
-    }
-
-    fn is(&self, key: &'static str, value: &[u8]) -> bool {
-        self.get(key)
-            .filter(|raw| raw.get().starts_with('"'))
-            .and_then(|raw| serde_json::from_str::<Text>(raw.get()).ok())
-            .is_some_and(|s| s.0.as_ref() == value)
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -165,7 +134,7 @@ fn receipt_lines(raw: &RawValue, found: &mut String) {
 fn fields(obj: &Object<'_>, keys: &[(&'static str, Keep)], out: &mut Vec<u8>) {
     out.push(b'{');
     for &(key, nested) in keys {
-        if let Some(value) = obj.get(key) {
+        if let Some(value) = obj.get(key.as_bytes()) {
             if out.last() != Some(&b'{') {
                 out.push(b',');
             }
@@ -187,8 +156,8 @@ fn select(raw: &RawValue, keep: Keep, out: &mut Vec<u8>) {
             };
             let keys = match keep {
                 Fields(keys) => keys,
-                _ if obj.is("role", b"assistant") => ASSISTANT,
-                _ if obj.is("role", b"toolResult") => RESULT,
+                _ if obj.is(b"role", b"assistant") => ASSISTANT,
+                _ if obj.is(b"role", b"toolResult") => RESULT,
                 _ => &[ROLE, STAMP],
             };
             fields(&obj, keys, out);
@@ -211,7 +180,7 @@ fn select(raw: &RawValue, keep: Keep, out: &mut Vec<u8>) {
                     // A null part makes the old fold fail instead of reporting incomplete stats.
                     select(part, Raw, out);
                 } else if let Some(obj) = Object::parse(part)
-                    && obj.is("type", b"toolCall")
+                    && obj.is(b"type", b"toolCall")
                 {
                     fields(&obj, CALL, out);
                 } else {
@@ -228,7 +197,7 @@ fn select(raw: &RawValue, keep: Keep, out: &mut Vec<u8>) {
             let mut found = String::new();
             if let Some(parts) = array(raw) {
                 for part in parts {
-                    if let Some(text) = Object::parse(part).and_then(|obj| obj.get("text")) {
+                    if let Some(text) = Object::parse(part).and_then(|obj| obj.get(b"text")) {
                         receipt_lines(text, &mut found);
                     }
                 }
@@ -241,9 +210,9 @@ fn select(raw: &RawValue, keep: Keep, out: &mut Vec<u8>) {
 }
 
 fn project(obj: &Object<'_>, out: &mut Vec<u8>) {
-    let keys: &[(&str, Keep)] = if obj.is("type", b"message") {
+    let keys: &[(&str, Keep)] = if obj.is(b"type", b"message") {
         &[("type", Raw), STAMP, ("message", Message)]
-    } else if obj.is("type", b"custom") && obj.is("customType", b"tool_execution_start") {
+    } else if obj.is(b"type", b"custom") && obj.is(b"customType", b"tool_execution_start") {
         &[
             ("type", Raw),
             ("customType", Raw),

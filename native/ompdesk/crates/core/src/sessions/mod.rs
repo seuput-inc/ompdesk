@@ -14,6 +14,7 @@ mod activity;
 mod enrich;
 mod journal_wait;
 mod pace;
+mod raw;
 mod rules;
 mod search;
 mod snippet;
