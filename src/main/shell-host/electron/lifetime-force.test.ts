@@ -55,6 +55,7 @@ it.each(["socket", "stdin", "both"] as const)(
 					paths: { userData: dir },
 					exe: process.execPath,
 					resourcesPath: dir,
+					appIcon: { path: join(dir, "app-icon.png"), notifications: "off" },
 					appPath: dir,
 					isPackaged: false,
 					argv: [process.execPath],

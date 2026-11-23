@@ -85,6 +85,8 @@ export function parseBenchmarkSummary(stdout: string): IpcBenchmarkSummary {
 	return parsed.data;
 }
 
+// §1.3: LocalMachine reads running and aborts in the same tick. Keep one child owner until the native
+// launcher runs the exact .cmd and distinguishes a spawn error, a signal, and a numeric exit.
 export class BenchmarkRunner {
 	#child: ChildProcess | null = null;
 	#terminationReason: string | null = null;

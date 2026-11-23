@@ -20,6 +20,12 @@ runs:
         src/main/diagnostic-bundle.test.ts
         src/main/diagnostics.test.ts
         src/main/log-watcher.test.ts
+        src/main/quit-log.test.ts
+        src/main/gpu-fallback*.test.ts
+        src/main/launch-guard.test.ts
+        src/main/app-icon.test.ts
+        src/main/external-url.test.ts
+        src/main/notify-triage.test.ts
         src/main/agent-browsers.test.ts
         src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts
@@ -84,6 +90,7 @@ runs:
         src/main/github-auth/service.test.ts
         src/main/checkout-peers*.test.ts
         src/main/git-fingerprints*.test.ts
+        src/main/ai-memory/ipc.test.ts
         src/main/ai-memory/client.test.ts
         src/main/ai-memory/service.test.ts
         src/main/ai-memory/care.test.ts

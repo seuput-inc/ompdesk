@@ -6,10 +6,12 @@
  */
 import { IPC_COMMANDS } from "../../../shared/ipc-types";
 import { shutdownCore } from "../../core/process";
+import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
 import type { DiagnosticsDeps } from "../../diagnostics";
-import type { HangMarker, WatchdogSignal } from "../../hang-watchdog";
+import type { WatchdogSignal } from "../../hang-watchdog";
+import type { AdmitNotification } from "../../notify-triage";
 import { exitReport } from "../../quit-log";
-import { appendRuntimeLogAtPath, runtimeLogFile } from "../../runtime-log-core";
+import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "../../runtime-log-core";
 import type { IpcRegistry } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
@@ -29,10 +31,12 @@ const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello",
 });
 if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
 
-export function consumeHangMarker(): Promise<HangMarker | null> {
-	return client.call<HangMarker | null>("app.consumeHangMarker").catch((error: unknown) => {
+export const appIconPath = hello.facts.appIcon.path;
+
+export function consumeHangReports(): Promise<RuntimeLogReport[]> {
+	return client.call<RuntimeLogReport[]>("app.consumeHangReports").catch((error: unknown) => {
 		console.warn("[hang-watchdog]", error);
-		return null;
+		return [];
 	});
 }
 
@@ -40,7 +44,16 @@ export function postWatchdog(signal: WatchdogSignal): void {
 	void client.call("app.watchdog", signal).catch((error: unknown) => console.warn("[hang-watchdog]", error));
 }
 
+export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>
+	client.call("app.diagnosticBundleFileName", params);
+
 export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
+
+export const admitNotification: AdmitNotification = report => client.call("app.admitNotification", report);
+
+export function openPageExternal(url: string): Promise<void> {
+	return electron.shell.openExternal(url, "page");
+}
 
 /** Paired pages arrive through the permission-checked registry. Desktop pages read the same log in the shell. */
 export function registerRuntimeLogIpc(ipc: Pick<IpcRegistry, "handle">): void {
@@ -83,6 +96,15 @@ electronApp = electron.app;
 electron.app.once("quit", () => {
 	ended = true;
 });
+
+export function readPreviousRunEnd(): Promise<RuntimeLogReport | null> {
+	return client
+		.call<RuntimeLogReport | null>("app.previousRunEnd", { ownPid: process.pid })
+		.catch((error: unknown) => {
+			console.warn("[app-quit]", error);
+			return null;
+		});
+}
 
 // The e2e harness (OMP_GUI_TEST_NODE_INSPECT=1: main runs under `--inspect`) evaluates specs' functions against this
 // object through the inspector, where Electron's `app.evaluate` handed them the module.

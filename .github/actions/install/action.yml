@@ -127,8 +127,36 @@ runs:
         path: resources/ompdesk-bin
         key: ompdesk-bin-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-inputs.outputs.digest }}
 
-    - if: (inputs.native || inputs.electron) == 'true' && steps.native-cache.outputs.cache-hit != 'true'
+    # Vitest also runs the shell policy fixture. Its sources are not inputs to the shipped core binaries.
+    - name: Restore the shell policy test binary
+      id: policy-cache
+      if: (inputs.native || inputs.electron) == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/shell-policy-bin
+        key: shell-policy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/tauri-shell/tests/policy/*.*', 'native/ompdesk/crates/tauri-shell/src/**/*.rs', 'native/ompdesk/crates/shell/src/**/*.rs') }}
+
+    - if: (inputs.native || inputs.electron) == 'true' && (steps.native-cache.outputs.cache-hit != 'true' || steps.policy-cache.outputs.cache-hit != 'true')
       uses: ./.github/actions/native-toolchain
+
+    - name: Prepare the shell policy fixture for Vitest
+      if: (inputs.native || inputs.electron) == 'true'
+      shell: bash
+      working-directory: native/ompdesk/crates/tauri-shell/tests/policy
+      env:
+        CACHE_HIT: ${{ steps.policy-cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        bin=shell-policy-fixture
+        if [[ "$RUNNER_OS" == Windows ]]; then bin+=.exe; fi
+        dest="$RUNNER_TEMP/shell-policy-bin/$bin"
+        if [[ "$CACHE_HIT" != true ]]; then
+          cargo build --locked --target-dir target
+          mkdir -p "$RUNNER_TEMP/shell-policy-bin"
+          cp "target/debug/$bin" "$dest"
+        fi
+        test -x "$dest"
+        echo "OMPDESK_TEST_SHELL_POLICY=$dest" >> "$GITHUB_ENV"
 
     - name: Build OMPdesk's native binaries
       if: (inputs.native || inputs.electron) == 'true' && steps.native-cache.outputs.cache-hit != 'true'

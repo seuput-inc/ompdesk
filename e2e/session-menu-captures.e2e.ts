@@ -156,6 +156,8 @@ for (const language of ["en", "ko"] as const)
 
 			// The window's last tab cannot be closed from a menu: a new session beside the host's first.
 			await a.locator("[data-sidebar-group-new]").first().click();
+			await expect.poll(() => a.evaluate(async () => (await window.omp.tabs.list()).length)).toBe(2);
+			await expect(hostRow).toHaveAttribute("data-active", "false");
 			await closeFromMenu(hostRow);
 			await openMenu(hostRow);
 			expect(await menuLabels(a)).toEqual([

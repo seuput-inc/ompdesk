@@ -60,7 +60,7 @@ beforeEach(async () => {
 		desktopWindows: () => [desktop() as ClientWindow & IpcCaller],
 		tabs: { activeTab: () => null, cwd: () => null, facts: () => null, resnapshot: () => undefined },
 		openMedia: async () => new Response(null, { status: 404 }),
-		shell: { openPath: async () => undefined, reveal: () => undefined, openExternal: async () => undefined },
+		shell: { openPath: async () => undefined, reveal: () => undefined, openPageExternal: async () => undefined },
 		allowedUsers: () => [LOGIN],
 		confirmNewDevices: () => false,
 		whois: async () => null,

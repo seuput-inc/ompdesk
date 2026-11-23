@@ -47,7 +47,7 @@ test("a host's window says when a paired device's session waits on that device w
 		const a = client.page;
 		await a.evaluate(() => window.omp.remote.setDeviceName("PC-A"));
 		const deviceId = await connectHost(b, a, "PC-B");
-		// Every OS notification B posts (a test launch shows none: app-icon.ts `holdTestNotifications`).
+		// Observe show() before the headless shell adapter suppresses OS delivery.
 		await host.app.evaluate(({ Notification }) => {
 			const shown: Array<{ title: string; body: string }> = [];
 			Reflect.set(globalThis, "__shownNotifications", shown);

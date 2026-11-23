@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:60-61",
+				"src/main/shell-host/electron/index.ts:90-91",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:344-363",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "f0c3fec6046ef3630a7004c3c526d50995d079be"
+			"syncCommit": "c44010e43753d67a047aef4d9f356cfded4c28fc"
 		},
 		{
 			"id": "turn-resume",
@@ -73,10 +73,10 @@
 				"native/ompdesk/crates/core/src/pool/api.rs#note_stopped",
 				"native/ompdesk/crates/core/src/pool/api.rs#note_counter",
 				"native/ompdesk/crates/core/src/pool/routes.rs#register_session_file_of",
-				"src/main/turn-resume.ts:174-265",
-				"src/main/turn-resume.ts:818-832",
+				"src/main/turn-resume.ts:181-272",
+				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2358-2362",
+				"src/main/index.ts:2447-2451",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
@@ -278,7 +278,7 @@
 				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
-				"src/main/ipc.ts:654-671"
+				"src/main/ipc.ts:653-672"
 			],
 			"syncCommit": "134ca752922acfa2e41bd3a1cbdb0f81e5eb59f9"
 		},

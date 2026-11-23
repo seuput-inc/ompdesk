@@ -23,12 +23,15 @@ tauri = { version = "=2.12.6", features = ["unstable", "devtools"] }
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: an object keeps its keys as written through the page's calls and Node's answers (the fallback
 # chains' key order is stock's precedence). Cargo unifies it onto `shell_core` and `shell_preview`'s serde_json.
-serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 getrandom = "0.4"
 tokio = { version = "1", features = ["time", "sync", "net", "io-util", "rt", "macros"] }
 sha2 = "0.11"
 shell_core = { package = "ompdesk-shell", path = "../shell", default-features = false }
 url = "2"
+# Diagnostic bundle names use the paired page's NFC and Unicode Letter/Number rules.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+icu_properties = "2"
 # Tauri's own tray-icon: a second muda would define its Objective-C classes twice (fat LTO refuses to link that on macOS).
 tray-icon = "0.25"
 shell_preview = { package = "ompdesk-shell-preview", path = "../shell-preview" }
@@ -37,6 +40,7 @@ psl = "=2.1.256"
 base64 = "=0.23.1"
 httparse = "=1.10.1"
 tempfile = "3"
+time = { version = "0.3", features = ["large-dates", "parsing"] }
 hmac = "0.13"
 tauri-plugin-wdio-webdriver = { version = "=1.5.1", optional = true }
 

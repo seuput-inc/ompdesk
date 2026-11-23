@@ -27,6 +27,20 @@ pub struct Launch {
     pub lang: Option<String>,
 }
 
+mod app_icon;
+
+impl Launch {
+    fn app_icon(&self) -> Value {
+        app_icon::fact(
+            &self.resources,
+            &self.renderer_root,
+            self.packaged,
+            cfg!(windows),
+            std::env::var_os("OMP_GUI_HEADLESS").as_deref(),
+        )
+    }
+}
+
 /// The locale Chromium reports as `app.getLocale()` for an OS locale tag (`ko-KR` → `ko`, `en-AU` → `en-GB`).
 pub fn chromium_locale(tag: &str) -> String {
     let tag = tag.replace('_', "-");
@@ -83,6 +97,7 @@ pub fn collect(launch: &Launch, log: &mut dyn FnMut(&str, Value)) -> Value {
         "paths": paths,
         "exe": launch.exe.to_string_lossy(),
         "resourcesPath": launch.resources.to_string_lossy(),
+        "appIcon": launch.app_icon(),
         "appPath": launch.app_dir.to_string_lossy(),
         "rendererRoot": launch.renderer_root.to_string_lossy(),
         "isPackaged": launch.packaged,
@@ -124,6 +139,7 @@ pub fn collect(launch: &Launch, log: &mut dyn FnMut(&str, Value)) -> Value {
         "paths": paths,
         "exe": launch.exe.to_string_lossy(),
         "resourcesPath": launch.resources.to_string_lossy(),
+        "appIcon": launch.app_icon(),
         "appPath": launch.app_dir.to_string_lossy(),
         "rendererRoot": launch.renderer_root.to_string_lossy(),
         "isPackaged": launch.packaged,
@@ -141,6 +157,44 @@ pub fn collect(launch: &Launch, log: &mut dyn FnMut(&str, Value)) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_of_the_running_bundle_and_windows_toast_default() {
+        let mut launch = Launch {
+            user_data: PathBuf::new(),
+            exe: PathBuf::new(),
+            app_dir: PathBuf::from("checkout"),
+            renderer_root: PathBuf::from("pinned").join("out").join("renderer"),
+            packaged: false,
+            resources: PathBuf::from("installation").join("resources"),
+            argv: Vec::new(),
+            lang: None,
+        };
+        assert_eq!(
+            Path::new(launch.app_icon()["path"].as_str().unwrap()),
+            Path::new("pinned/resources/brand/app-icon.png")
+        );
+        launch.packaged = true;
+        assert_eq!(
+            Path::new(launch.app_icon()["path"].as_str().unwrap()),
+            Path::new("installation/resources/app-icon.png")
+        );
+        for (windows, headless, expected) in [
+            (true, None, "appIcon"),
+            (false, None, "systemIcon"),
+            (true, Some("1"), "off"),
+            (false, Some("1"), "off"),
+        ] {
+            let fact = app_icon::fact(
+                &launch.resources,
+                &launch.renderer_root,
+                launch.packaged,
+                windows,
+                headless.map(std::ffi::OsStr::new),
+            );
+            assert_eq!(fact["notifications"], expected);
+        }
+    }
 
     #[test]
     fn the_os_locale_becomes_the_locale_chromium_reports() {

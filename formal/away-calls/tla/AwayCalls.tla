@@ -112,7 +112,7 @@ LoseReply(m) ==
     /\ replies' = replies \ {m}
     /\ UNCHANGED <<link, pending, delivered, inflight, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/ipc.ts:654-671 A runs the call: a control call through its journal (a re-sent one it ran answers the record), a report reaches the hub
+\* @code src/main/ipc.ts:653-672 A runs the call: a control call through its journal (a re-sent one it ran answers the record), a report reaches the hub
 ARun(m) ==
     /\ m \in inflight
     /\ inflight' = inflight \ {m}
