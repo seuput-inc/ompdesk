@@ -61,7 +61,13 @@ export interface ConsoleWindow {
 }
 
 export async function listConsoleWindows(known: number[], roots: number[], sinceMs: number): Promise<ConsoleWindow[]> {
-	return (await core().call<ConsoleWindow[]>("procs.consoles", { known, roots, env: SESSION_TAG_ENV, sinceMs })).result;
+	const { result } = await core().call<ConsoleWindow[]>("procs.consoles", {
+		known,
+		roots,
+		env: SESSION_TAG_ENV,
+		sinceMs,
+	});
+	return result;
 }
 
 /** One of OMPdesk's own processes and what it is: `main`, `host` (the window's shell) or `core`. */
