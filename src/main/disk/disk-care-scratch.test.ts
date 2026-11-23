@@ -274,6 +274,56 @@ describe("disk care: session scratch folders", () => {
 	);
 
 	it(
+		"keeps a tag claimed while the process listing is in flight",
+		async () => {
+			const s = await scratch();
+			const file = await session("claimed");
+			const dir = await folder(s, TAG, file);
+			const started = Promise.withResolvers<void>();
+			const listing = Promise.withResolvers<[]>();
+			const care = new ScratchCare({
+				store: s.store,
+				heldTags: () => s.held,
+				sessionFiles: async () => [file],
+				processes: () => {
+					started.resolve();
+					return listing.promise;
+				},
+				log: (message, details) => w.logs.push([message, details]),
+				now: () => Date.now() + MONTH_MS,
+			});
+			const pending = care.sweep();
+			await started.promise;
+			s.held.add(TAG);
+			listing.resolve([]);
+			expect(await pending).toEqual({ removed: [], kept: 0, failed: 0 });
+			expect(await exists(path.join(dir, "shots/unused.png"))).toBe(true);
+			expect(s.store.records()).toMatchObject([{ tag: TAG, sessions: [file] }]);
+		},
+		SLOW,
+	);
+
+	it(
+		"does not list a linked scratch root or forget the real folder's sessions",
+		async () => {
+			const s = await scratch();
+			const file = await session("linked-root");
+			await folder(s, TAG, file);
+			const root = s.care.root;
+			const original = path.join(w.root, "original");
+			const outside = path.join(w.root, "elsewhere");
+			await fs.rename(root, original);
+			await write(outside, `${OTHER}/sentinel.txt`, "mine\n");
+			await fs.symlink(outside, root, "junction");
+			expect(await s.care.sweep()).toEqual({ removed: [], kept: 1, failed: 0 });
+			expect(logged("kept")).toEqual([{ path: root, reason: "its scratch root is a link to another folder" }]);
+			expect(s.store.records()).toMatchObject([{ tag: TAG, sessions: [file] }]);
+			expect(await fs.readFile(path.join(outside, OTHER, "sentinel.txt"), "utf8")).toBe("mine\n");
+		},
+		SLOW,
+	);
+
+	it(
 		"follows a session moved to another folder, and takes a folder whose sessions are gone without waiting",
 		async () => {
 			// Not idle: a folder with no session left waits for nothing.

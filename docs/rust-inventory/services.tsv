@@ -81,8 +81,8 @@ src/main/core/process.test.ts	exception	Exercises real core startup, requests, e
 src/main/core/process.ts	port	Spawns and stops ompdesk-core, frames binary and JSON traffic, times out or cancels requests and waits for process-group exit.
 src/main/core/reopen.ts	port	Retries a failed core open while wanted, backing off from one second to thirty seconds.
 src/main/core/test-clock.ts	exception	Advances the Rust manual clock and Vitest timers together for deterministic tests.
-src/main/disk/caches.ts	port	Locates Bun and npm cache directories, assigns size limits and checks process use before selecting a clear operation.
-src/main/disk/care.ts	port	Schedules disk-care passes and decides when to prune artifacts, save idle worktrees or clear HTTP and tool caches.
+src/main/disk/caches.ts	mixed	disk.locateCaches, cacheHolds and clearCache own lookup policy, limits and tool execution. Node supplies the login-shell PATH and tool environment. Receiver: the disk-care runner with its remaining host.
+src/main/disk/care.ts	mixed	The core checks and clears tool caches. DiskCare still schedules passes, coordinates worktree/HTTP-cache actions, reads prefs and publishes state.
 src/main/disk/disk-care-artifacts.test.ts	exception	Tests removal of regenerable dependencies and build outputs while preserving hand-made directories.
 src/main/disk/disk-care-caches.test.ts	exception	Exercises cache size thresholds, clearing and disabled Bun caches.
 src/main/disk/disk-care-fixture.ts	exception	Builds temporary Git repositories, worktrees and files and installs setup and teardown hooks for disk-care tests.
@@ -93,7 +93,7 @@ src/main/disk/disk-care-scratch.test.ts	exception	Tests deletion and retention o
 src/main/disk/disk-care-shared-listing.test.ts	exception	Tests preserving worktrees changed after listing and saving one whose contents stayed unchanged.
 src/main/disk/disk-care.test.ts	exception	Exercises usage measurements, saving and restoring idle worktrees, and retaining ones still in use.
 src/main/disk/saved-worktrees.ts	port	Persists saved-worktree records, separates secret files into the archive, rechecks before removal and coordinates rollback and restoration.
-src/main/disk/scratch.ts	port	Skips held tags and active processes, retains unknown nonempty folders, and resolves moved session files before asking Rust to sweep.
+src/main/disk/scratch.ts	mixed	Rust checks links, idle age, copies of moved sessions and process facts before sweeping. §1.3: Node checks SessionProcesses.held() again immediately before dispatch and updates the ownership records read synchronously by SessionScratch.open().
 src/main/disk/tree-sizes.test.ts	exception	Tests reuse of directory measurements, changed subtrees and hard-link deduplication.
 src/main/disk/tree-sizes.ts	mixed	Rust owns the breakdown, seven-day expiry and retained tree. Main supplies roots, falls back when a reading cannot be opened and accumulates I/O counters.
 src/main/disk/worktree-facts.test.ts	exception	Checks actual activity timestamps from stock-named session folders and tracked, untracked and non-regenerable ignored files.

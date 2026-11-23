@@ -1,14 +1,15 @@
 //! Disk care's disk work and gits (was the logic of `src/main/disk/`): folder sizes and the reading kept between runs
 //! (`sizes`), which ignored paths a project makes again (`regenerable`), a worktree's facts (`facts`), saving,
 //! archiving, restoring and dropping (`saved`), clearing a tool's cache (`cache`) and a session's scratch folder
-//! (`scratch`), each step one request main sends (`disk.*`). Main keeps the order of the steps, its state (the saved records, the last run), what is in use
-//! (open tabs, the removal claim, the running tools), the secret check (the central redactor is TypeScript), the
-//! repository lock around each step, and where things are (the user data folder, the home, the session folders, the
-//! caches). A request that runs git carries main's runner (`git`); a cancelled request starts no more disk work and
+//! (`scratch`), each step one request main sends (`disk.*`). Main keeps the order of the steps, the saved
+//! records and last run, open tabs and removal claims, the secret check (the central redactor is TypeScript),
+//! the repository lock around each step, and the profile and session paths. The core locates tool caches
+//! and checks which processes need them. A git request carries main's runner (`git`); a cancelled request starts no more disk work and
 //! no git, and answers only once the call the system already has returned and every git it ran exited (`tree::live`,
 //! each worker holds the request's scope).
 
 mod cache;
+mod cache_policy;
 mod facts;
 mod regenerable;
 mod saved;
@@ -89,16 +90,28 @@ struct BlobParams {
 }
 
 #[derive(Deserialize)]
-struct ClearParams {
-    kind: cache::Kind,
+struct ScratchRoot {
+    root: std::path::PathBuf,
+}
+
+#[derive(Deserialize)]
+struct ScratchIdle {
     dir: String,
+    known: bool,
+    now: f64,
+    days: u32,
+}
+
+#[derive(Deserialize)]
+struct ScratchSessions {
+    candidates: Option<Vec<scratch::SessionCopies>>,
+    idle: bool,
 }
 
 #[derive(Deserialize)]
 struct ScratchParams {
     dir: String,
-    /// The session files whose replies may name the folder's files; absent to only read the folder.
-    #[serde(default)]
+    running: Option<bool>,
     sessions: Vec<String>,
 }
 
@@ -263,23 +276,50 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&bytes)
         })
     });
+    registry.add("disk.locateCaches", |call| {
+        Box::pin(cache_policy::locate(call))
+    });
+    registry.add("disk.cacheHolds", |call| {
+        Box::pin(cache_policy::holds(call))
+    });
     registry.add("disk.clearCache", |call| {
+        Box::pin(cache_policy::clear(call))
+    });
+    registry.add("disk.scratchTags", |call| {
         Box::pin(async move {
-            let ClearParams { kind, dir } = call.params()?;
+            let ScratchRoot { root } = call.params()?;
             let scope = call.scope;
-            Reply::json(&blocking(move || cache::clear(kind, &dir, &scope)).await??)
+            Reply::json(&blocking(move || scratch::tags(&root, &scope)).await??)
         })
     });
-    registry.add("disk.scratchFacts", |call| {
+    registry.add("disk.scratchSessions", |call| {
         Box::pin(async move {
-            let ScratchParams { dir, .. } = call.params()?;
+            let ScratchSessions { candidates, idle } = call.params()?;
             let scope = call.scope;
-            Reply::json(&blocking(move || scratch::facts(&dir, &scope)).await??)
+            blocking(move || Reply::json(&scratch::sessions(candidates.as_deref(), idle, &scope)?))
+                .await?
+        })
+    });
+    registry.add("disk.scratchIdle", |call| {
+        Box::pin(async move {
+            let ScratchIdle {
+                dir,
+                known,
+                now,
+                days,
+            } = call.params()?;
+            let scope = call.scope;
+            Reply::json(&blocking(move || scratch::idle(&dir, known, now, days, &scope)).await??)
         })
     });
     registry.add("disk.scratchSweep", |call| {
         Box::pin(async move {
-            let ScratchParams { dir, sessions } = call.params()?;
+            let ScratchParams {
+                dir,
+                sessions,
+                running,
+            } = call.params()?;
+            scratch::check_processes(running)?;
             let scope = call.scope;
             Reply::json(&blocking(move || scratch::sweep(&dir, &sessions, &scope)).await??)
         })

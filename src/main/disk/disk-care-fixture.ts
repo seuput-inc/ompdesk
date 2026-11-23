@@ -43,10 +43,9 @@ export interface DiskCareWorld {
 }
 
 const noTools = (): CacheTools => ({
-	env: async () => process.env,
+	env: async () => ({ ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }),
 	find: async () => null,
-	run: async () => null,
-	processes: async () => "",
+	ps: null,
 });
 
 /** Registers the per-test setup and teardown; the returned world's fields are fresh in every test. */
