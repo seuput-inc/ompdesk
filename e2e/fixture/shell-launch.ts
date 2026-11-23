@@ -198,25 +198,20 @@ async function freePort(): Promise<number> {
 	return address.port;
 }
 
-/** `true` once the DevTools endpoint on `port` answers, `undefined` while nothing listens (or it is not up yet). */
-async function devToolsAnswers(port: number): Promise<true | undefined> {
-	try {
-		const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1_000) });
-		return response.ok ? true : undefined;
-	} catch {
-		return undefined;
-	}
+type DevToolsTarget = { type: string; url: string };
+
+export function canAttachToShell(targets: readonly DevToolsTarget[], migrationFailed: boolean): boolean {
+	return targets.some(({ type, url }) => {
+		if (type !== "page") return false;
+		if (url === "about:blank") return migrationFailed;
+		return isAppPageUrl(url) && new URL(url).pathname !== "/__profile/migrate";
+	});
 }
 
-/** The targets WebView2's own DevTools endpoint lists on `port` (type and URL), or why it could not say. */
-async function devToolsTargets(port: number): Promise<string> {
-	try {
-		const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2_000) });
-		const targets = (await response.json()) as { type?: string; url?: string }[];
-		return JSON.stringify(targets.map(target => `${target.type ?? "?"} ${target.url ?? "?"}`));
-	} catch (error) {
-		return `unreadable (${String(error)})`;
-	}
+async function devToolsTargets(port: number): Promise<DevToolsTarget[]> {
+	const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1_000) });
+	if (!response.ok) throw new Error(`DevTools HTTP ${response.status}`);
+	return (await response.json()) as DevToolsTarget[];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -476,7 +471,10 @@ export class ShellApplication extends EventEmitter {
 			}
 		}
 		return (
-			`\nDevTools targets: ${await devToolsTargets(this.#debugPort)}` +
+			`\nDevTools targets: ${await devToolsTargets(this.#debugPort).then(
+				targets => JSON.stringify(targets.map(({ type, url }) => `${type} ${url}`)),
+				error => `unreadable (${String(error)})`,
+			)}` +
 			`\npage locations: ${JSON.stringify(locations)}` +
 			`\nnative log tail:\n${nativeLog}` +
 			`\nhost output tail:\n${capture?.hostOutput().slice(-3_000) ?? ""}`
@@ -676,6 +674,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 			hostOutput: () => tail,
 		});
 	let stderr = "";
+	let migrationFailed = false;
 	let inspector: Inspector | undefined;
 	const remember = (chunk: Buffer, isStderr: boolean) => {
 		const text = chunk.toString();
@@ -683,6 +682,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		if (env.OMP_GUI_E2E_SHELL_LOG === "1") process.stderr.write(`[shell ${child.pid}] ${text}`);
 		if (!isStderr) return;
 		stderr = (stderr + text).slice(-TAIL_BYTES);
+		migrationFailed ||= stderr.includes('"event":"profile.migrate.gave_up"');
 		// The app quit by itself (its own `app.quit()`): Node now waits for the attached debugger, so let go of it.
 		if (inspector && stderr.includes("Waiting for the debugger to disconnect")) inspector.close();
 	};
@@ -711,7 +711,11 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	try {
 		const url = await until("Node's inspector did not report its URL", () => inspectorUrl(stderr));
 		inspector = await Inspector.connect(url, Math.max(1_000, deadline - Date.now()));
-		await until(`WebView2 opened no DevTools port ${debugPort}`, () => devToolsAnswers(debugPort));
+		// Attaching Playwright to the initial blank target can stall WebView2's first custom-scheme navigation.
+		await until(`WebView2 opened neither the app nor its migration error page on ${debugPort}`, async () => {
+			const targets = await devToolsTargets(debugPort).catch(() => []);
+			return canAttachToShell(targets, migrationFailed) ? true : undefined;
+		});
 		for (let attempt = 0; ; attempt++) {
 			try {
 				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {

@@ -12,10 +12,10 @@ import { promisify } from "node:util";
 import {
 	app,
 	BrowserWindow,
-	clipboard,
 	dialog,
 	globalShortcut,
 	ipcMain,
+	Notification,
 	nativeImage,
 	nativeTheme,
 	net,
@@ -105,7 +105,6 @@ import { registerAiMemoryIpc } from "./ai-memory/ipc";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
-import { appIconPath, appNotification, holdTestNotifications } from "./app-icon";
 import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
@@ -141,19 +140,11 @@ import { ExtensionUpdater } from "./ext-update/updater";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
 import type { GithubAuthService } from "./github-auth/service";
-import {
-	applyGpuFallbackIfNeeded,
-	confirmHardwareTrial,
-	handleGpuProcessGone,
-	recordGpuIdentity,
-	softwareCompositing,
-} from "./gpu-fallback";
-import { installHangWatchdog, markMainStep, reportPreviousHang } from "./hang-watchdog";
+import { applyLaunchDecision, type LaunchDecision, softwareCompositing } from "./gpu-fallback";
+import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { getMainLanguage, mainT } from "./i18n";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
-import { markLaunchStable, startLaunchGuard } from "./launch-guard";
-import { CRASH_LOOP_LAUNCHES, STABLE_AFTER_MS } from "./launch-guard-core";
 import { migrateLegacyUserData } from "./legacy-user-data";
 import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
@@ -210,11 +201,22 @@ import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } fr
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
-import { consumeHangMarker, postWatchdog, readDiagnosticLog, registerRuntimeLogIpc } from "./shell-host/electron/index";
+import {
+	admitNotification,
+	appIconPath,
+	clipboard,
+	consumeHangReports,
+	diagnosticBundleFileName,
+	openPageExternal,
+	postWatchdog,
+	readDiagnosticLog,
+	readPreviousRunEnd,
+	registerRuntimeLogIpc,
+	app as shellApp,
+} from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
-	readClipboardText,
 	safeStorageUnavailableReason,
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
@@ -282,7 +284,7 @@ app.setName("ompdesk");
 // The Windows toast and taskbar group are keyed on this id: electron-builder gives the Start-menu shortcut the
 // appId, so the same id there makes a toast wear the shortcut's name and icon (the dev run has no shortcut).
 if (process.platform === "win32") app.setAppUserModelId("com.seuput.ompdesk");
-app.setAboutPanelOptions({ applicationName: "OMPdesk", iconPath: appIconPath() });
+app.setAboutPanelOptions({ applicationName: "OMPdesk", iconPath: appIconPath });
 
 // Honor Electron's explicit profile before acquiring its instance lock.
 const userDataDirectory = app.commandLine.getSwitchValue("user-data-dir");
@@ -333,27 +335,16 @@ if (!gotLock) {
 	app.quit();
 }
 // Before anything else is logged: how the last run ended, and this run's end line when it exits.
-if (gotLock) startQuitLog();
+if (gotLock) startQuitLog(readPreviousRunEnd());
 
-// Crash-loop guard (launch-guard-core.ts): when the last launches all ended within seconds, this one starts in
-// safe mode (software rendering, no automatic relaunch, machine setup and memory setup paused). Packaged runs
-// only (a dev run restarts main on every edit, e2e kills apps on purpose); OMP_GUI_LAUNCH_GUARD=1 forces it.
-// A second instance quits at once and is never recorded.
-const launchGuardOn =
-	gotLock && ((app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1") || process.env.OMP_GUI_LAUNCH_GUARD === "1");
-const safeMode = launchGuardOn
-	? startLaunchGuard(join(app.getPath("userData"), "launch-history.json")).safeMode
-	: false;
-if (safeMode) {
-	writeRuntimeLog({
-		source: "launch-guard",
-		message: `Safe mode: the last ${CRASH_LOOP_LAUNCHES} launches ended within ${STABLE_AFTER_MS / 1000} s of starting; software rendering, no automatic relaunch, setup paused`,
-	});
-}
-
-// Software-rendering escape hatch (must precede whenReady): a crashed GPU
-// process leaves every window black — the marker relaunches without it, once.
-applyGpuFallbackIfNeeded(safeMode);
+// The instance lock and legacy-profile migration precede the host's first write.
+const launch = shellApp.startLaunchProtection(gotLock);
+void launch.then(
+	({ logs }) => {
+		for (const report of logs) writeRuntimeLog(report);
+	},
+	error => console.error("[launch-guard]", error),
+);
 
 // Test runs (OMP_GUI_HEADLESS=1, set by playwright.config.ts) must not cover
 // or take focus from the desktop. Hidden windows would stop rendering
@@ -379,7 +370,6 @@ if (process.env.OMP_GUI_HEADLESS === "1") {
 		win.setSkipTaskbar(true);
 		win.setFocusable(false);
 	});
-	holdTestNotifications();
 }
 // A test launch ends with the Playwright worker that launched it, even one that died running no handler.
 exitWithLauncher(process.env, () => app.exit(0));
@@ -633,7 +623,7 @@ function installMainRuntimeLogging(): void {
 		});
 	}
 	installMainFailureLogging(process, report => writeRuntimeLog(report));
-	app.on("child-process-gone", (_event, details) => {
+	app.on("child-process-gone", (event: Electron.Event & { launchDecision?: LaunchDecision }, details) => {
 		writeRuntimeLog({
 			source: "child-process",
 			message: `${details.type} process exited: ${details.reason}`,
@@ -645,7 +635,7 @@ function installMainRuntimeLogging(): void {
 				name: details.name ?? null,
 			},
 		});
-		handleGpuProcessGone(details);
+		applyLaunchDecision(event.launchDecision ?? null);
 	});
 }
 
@@ -821,10 +811,11 @@ async function spawnWindow(
 
 app.whenReady().then(async () => {
 	installMainRuntimeLogging();
+	const { guard, safeMode, stableAfterMs } = await launch;
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
 		show: notice => {
-			const shown = appNotification(notice);
+			const shown = new Notification(notice);
 			shown.show();
 			return { close: () => shown.close() };
 		},
@@ -856,7 +847,7 @@ app.whenReady().then(async () => {
 	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
-		reportPreviousHang(await consumeHangMarker());
+		for (const report of await consumeHangReports()) writeRuntimeLog(report);
 		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({
@@ -871,15 +862,10 @@ app.whenReady().then(async () => {
 				const minute = takeHubMinute();
 				if (minute) writeRuntimeLog({ source: "hub", message: "blocked waits", details: { ...minute } });
 			}, 60_000).unref();
-		// The GPU the crash marker compares (gpu-fallback-core.ts): a changed driver brings hardware back.
-		void recordGpuIdentity();
-		// A launch that ran this long, or quits cleanly sooner, ends no crash loop. A GPU relaunch's `app.exit`
-		// and a crash skip both, so those launches stay unstable. A hardware trial that ran this long keeps hardware.
-		setTimeout(() => {
-			if (launchGuardOn) markLaunchStable();
-			confirmHardwareTrial();
-		}, STABLE_AFTER_MS).unref();
-		if (launchGuardOn) app.on("will-quit", markLaunchStable);
+		void shellApp.launchEvent("identity").then(applyLaunchDecision);
+		// Only a responsive Node main can confirm the trial. A forced GPU exit skips the clean-quit write.
+		setTimeout(() => void shellApp.launchEvent("healthy").then(applyLaunchDecision), stableAfterMs).unref();
+		if (guard) shellApp.stabilizeOnCleanQuit();
 	}
 	windowManager = new WindowManager();
 	// Before any window exists: each one is created under the app's theme, not the OS's (window-chrome.ts).
@@ -1002,7 +988,7 @@ app.whenReady().then(async () => {
 			// The tabs of one loss reach the bound within moments of each other: one notification counts them all.
 			setTimeout(() => {
 				stuckTabs = null;
-				appNotification({
+				new Notification({
 					title: mainT("recovery.stuckTitle"),
 					body: mainT("recovery.stuckBody", undefined, { count: burst.count, minutes: burst.minutes }),
 				}).show();
@@ -1428,7 +1414,7 @@ app.whenReady().then(async () => {
 			: {}),
 		// One notification per wait: the turn of a paired device's session stands in a call only that device runs.
 		hostWaiting: ({ device, title }) =>
-			appNotification({
+			new Notification({
 				title: mainT("remote.hostWait.title", undefined, { device }),
 				body: title
 					? mainT("remote.hostWait.body", undefined, { session: title, device })
@@ -1759,6 +1745,7 @@ app.whenReady().then(async () => {
 					HOST_FS_READ_BINARY_TIMEOUT_MS,
 				),
 			),
+		fileName: diagnosticBundleFileName,
 		chooseFile: async (caller, defaultPath) => {
 			if (!caller.browserWindow) return null;
 			const chosen = await dialog.showSaveDialog(caller.browserWindow, {
@@ -1873,7 +1860,7 @@ app.whenReady().then(async () => {
 						: notice.days > 0
 							? "ompHold.bodyDays"
 							: "ompHold.body";
-				appNotification({
+				new Notification({
 					title: mainT(
 						notice.reason === "verifying" ? "ompHold.verifyingTitle" : "ompHold.title",
 						undefined,
@@ -2150,8 +2137,7 @@ app.whenReady().then(async () => {
 	registerAiMemoryIpc(ipc, aiMemory, {
 		openExternal: url => shell.openExternal(url),
 		openPath: path => shell.openPath(path),
-		readClipboard: () => readClipboardText(),
-		writeClipboard: text => clipboard.writeText(text),
+		copyPassword: clipboard.writePassword,
 		care: () => aiMemoryCare,
 	});
 	// start() turns every failure into the `failed` phase and a log line; anything escaping it is logged too.
@@ -2273,7 +2259,7 @@ app.whenReady().then(async () => {
 		// macOS: the Dock icon is the way back and needs no explanation.
 		if (process.platform === "darwin" || prefs.get(CLOSE_TO_TRAY_NOTICE_PREF) === true) return;
 		prefs.set(CLOSE_TO_TRAY_NOTICE_PREF, true);
-		appNotification({ title: mainT("tray.keepsRunningTitle"), body: mainT("tray.keepsRunningBody") }).show();
+		new Notification({ title: mainT("tray.keepsRunningTitle"), body: mainT("tray.keepsRunningBody") }).show();
 	};
 	const workAwake = new KeepAwakePolicy({
 		blocker: keepAwakeBlocker("work"),
@@ -2555,6 +2541,8 @@ app.whenReady().then(async () => {
 	// Register all handlers and sidecar listeners before loading the renderer.
 	const fileEditReports = new FileEditReports();
 	registerIpcHandlers({
+		openPageExternal,
+		admitNotification,
 		fileEditReports,
 		ipc,
 		macPermissions,
@@ -2630,14 +2618,14 @@ app.whenReady().then(async () => {
 		shell: {
 			openPath: abs => openLocalPath(abs, shell),
 			reveal: abs => shell.showItemInFolder(abs),
-			openExternal: url => shell.openExternal(url),
+			openPageExternal,
 		},
 		allowedUsers: () => mobileWebService?.allowedUsers() ?? [],
 		// Off unless the user turned it on (Settings › Mobile web): a device Tailscale vouches for connects on its own.
 		confirmNewDevices: () => mobileWebService?.confirmNewDevices() ?? false,
 		whois: address => mobileWebService?.whois(address) ?? Promise.resolve(null),
 		onUnpairedAuth: () =>
-			appNotification({ title: mainT("web.unknownDevice.title"), body: mainT("web.unknownDevice.body") }).show(),
+			new Notification({ title: mainT("web.unknownDevice.title"), body: mainT("web.unknownDevice.body") }).show(),
 		language: () => getMainLanguage(),
 		// Routine webhooks: `POST /hooks/<schedule id>` (web/server.ts) is answered by the schedule service.
 		hooks: () => scheduleService,

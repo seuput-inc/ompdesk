@@ -73,7 +73,7 @@ mod windows {
                         Err(_) => (None, None),
                     };
                     if let Some(details) = report(kind.0, reason, exit) {
-                        crate::host::event("app.childProcessGone", details);
+                        crate::gpu_process_gone(details);
                     }
                     Ok(())
                 }));

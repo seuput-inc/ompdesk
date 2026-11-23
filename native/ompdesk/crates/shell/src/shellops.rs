@@ -14,7 +14,15 @@ use shell_core::sys_mac::shellops as native;
 
 pub fn handle(call: Call) {
     match call.method.as_str() {
-        "shell.openExternal" => {
+        "shell.openExternal" | "shell.openPageExternal" => {
+            if call.method == "shell.openPageExternal"
+                && !call.params["url"]
+                    .as_str()
+                    .is_some_and(shell_core::shell_args::page_external_url)
+            {
+                call.ok(json!({}));
+                return;
+            }
             let Some(url) = call.str("url") else {
                 call.err("invalid", "shell.openExternal needs a url");
                 return;

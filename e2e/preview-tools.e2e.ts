@@ -117,13 +117,14 @@ for (const [language, theme] of variants([
 			});
 		};
 		/** Act on the preview page's own webContents in main: the page starts a download, or its renderer is crashed. */
-		const child = (op: "zoom" | "download" | "crash") =>
+		const child = (op: "zoom" | "download" | "crash" | "document") =>
 			app.evaluate(
 				async ({ webContents }, source) => {
 					const contents = webContents
 						.getAllWebContents()
 						.find(candidate => candidate.getURL().startsWith(`http://${source.host}/`));
 					if (!contents) throw new Error("No preview page");
+					if (source.op === "document") return Number(await contents.executeJavaScript("performance.timeOrigin"));
 					if (source.op === "download")
 						await contents.executeJavaScript(
 							"(() => { const a = document.createElement('a'); a.href = '/file.zip'; document.body.append(a); a.click(); })()",
@@ -231,13 +232,20 @@ for (const [language, theme] of variants([
 			await expect(page.getByRole("status").filter({ hasText: label.saved }).first()).toBeVisible();
 			expect((await fs.readFile(pdf)).subarray(0, 4).toString()).toBe("%PDF");
 
-			// C126: a crashed page offers a restore that reloads it.
-			await child("crash");
-			await expect(aside.getByRole("alert")).toContainText(label.crashed);
-			await capture("preview-crashed");
-			await aside.getByRole("button", { name: label.restore, exact: true }).click();
-			await expect(aside.getByRole("alert")).toHaveCount(0);
-			await expect(status).toContainText("w=");
+			// C126: restore the document while the debugger may still be waiting for Page.crash.
+			const priorDocument = await child("document");
+			await Promise.all([
+				child("crash"),
+				(async () => {
+					const alert = aside.getByRole("alert");
+					await expect(alert).toContainText(label.crashed);
+					await capture("preview-crashed");
+					await aside.getByRole("button", { name: label.restore, exact: true }).click();
+					await expect(alert).toHaveCount(0, { timeout: 10_000 });
+					await expect(status).toContainText("w=");
+					expect(await child("document")).toBeGreaterThan(priorDocument);
+				})(),
+			]);
 
 			// C119: a target=_blank link opens a preview tab; the strip switches and closes tabs.
 			await addressBar.fill(`${host}/popup`);

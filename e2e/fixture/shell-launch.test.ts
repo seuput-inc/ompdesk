@@ -6,6 +6,7 @@ import {
 	appDirOfEntry,
 	assertPageAutomation,
 	assertTestAutomationHost,
+	canAttachToShell,
 	copyShellDiagnostics,
 	evaluateExpression,
 	inspectorUrl,
@@ -82,6 +83,17 @@ describe("the shell launcher's pure parts", () => {
 		expect(isAppPageUrl("http://app.localhost.evil.test/")).toBe(false);
 		expect(isAppPageUrl("about:blank")).toBe(false);
 		expect(isAppPageUrl("https://example.com/")).toBe(false);
+	});
+
+	it("leaves startup alone until the app commits, but can drive Retry on the migration error page", () => {
+		const pending = [
+			{ type: "service_worker", url: "http://app.localhost/sw.js" },
+			{ type: "page", url: "about:blank" },
+			{ type: "page", url: "http://app.localhost/__profile/migrate?attempt=2" },
+		];
+		expect(canAttachToShell(pending, false)).toBe(false);
+		expect(canAttachToShell([{ type: "page", url: "http://app.localhost/index.html" }], false)).toBe(true);
+		expect(canAttachToShell([{ type: "page", url: "about:blank" }], true)).toBe(true);
 	});
 
 	it("counts a network request except to the app's own WebView2 origins", () => {

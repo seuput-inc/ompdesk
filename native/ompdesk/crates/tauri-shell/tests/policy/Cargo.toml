@@ -1,0 +1,20 @@
+# Compile the production shell policies for Vitest without Tauri or a desktop session.
+[workspace]
+
+[package]
+name = "shell-policy-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "shell-policy-fixture"
+path = "fixture.rs"
+
+[dependencies]
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+icu_properties = "2"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+time = { version = "0.3", features = ["large-dates", "parsing"] }

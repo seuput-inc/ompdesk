@@ -6,10 +6,9 @@
 import * as fs from "node:fs";
 import { release } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, Notification, nativeTheme, shell } from "electron";
 import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
-import { appIconPath, appNotification } from "./app-icon";
 import { askQuit, quitRisk, requestQuit } from "./app-quit";
 import { editableContextMenuTemplate } from "./editable-context-menu";
 import { softwareCompositing } from "./gpu-fallback";
@@ -26,6 +25,7 @@ import {
 } from "./renderer-recovery";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
 import { SafeStore } from "./safe-store";
+import { appIconPath } from "./shell-host/electron/index";
 import type { WindowPresence } from "./update-log-core";
 import type { ClientWindow } from "./web/client-window";
 import { micaSupported, windowChromeOptions } from "./window-chrome";
@@ -141,7 +141,7 @@ export class WindowManager {
 			enableLargerThanScreen: process.env.OMP_GUI_HEADLESS === "1",
 			autoHideMenuBar: process.platform === "win32",
 			// macOS draws the window's icon from the bundle; Windows (and its dev run) takes a file.
-			...(process.platform === "darwin" ? {} : { icon: appIconPath() }),
+			...(process.platform === "darwin" ? {} : { icon: appIconPath }),
 			...windowChromeOptions(process.platform, nativeTheme.shouldUseDarkColors, mica),
 			// The shell injects `window.omp` (out/preload/shell.js) into every window of this session itself.
 			webPreferences: {
@@ -327,7 +327,7 @@ export class WindowManager {
 					context(),
 				);
 				if (notify)
-					appNotification({ title: mainT("rendererHang.title"), body: mainT("rendererHang.body") }).show();
+					new Notification({ title: mainT("rendererHang.title"), body: mainT("rendererHang.body") }).show();
 				endedForHang = true;
 				win.webContents.forcefullyCrashRenderer();
 			}, RENDERER_HANG_RESTART_MS);

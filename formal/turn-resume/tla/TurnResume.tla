@@ -159,7 +159,7 @@ Init ==
 
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:2274-2427 Inst::launch: launch(): the marker finds its tab (layout, unwritten, opened) and is kept as a launch marker (#pending)
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:2399-2425 Inst::launch[hold-or-run]: each marker's continuation holds (offline) or runs (online) with the tab's session file and `touched` (HeldWait.since / #run's `since`)
-\* @code native/ompdesk/crates/core/src/autopilot/cycle.rs:1146 Coordinator::on_ready: a launch marker means the run waits for the continuation's goalSettled (`apWait`)
+\* @code native/ompdesk/crates/core/src/autopilot/cycle.rs:1182-1188 Coordinator::on_ready: a launch marker means the run waits for the continuation's goalSettled (`apWait`)
 Launch(t) ==
     /\ Idle /\ ~launched /\ ~online /\ nStarts = 0 /\ run[t] = "idle" /\ ~awaiting[t]
     /\ launched' = TRUE
@@ -177,7 +177,7 @@ Launch(t) ==
 ----------------------------------------------------------------------------
 \* ===== pool events: each is followed by the `sync()` the pool triggers =====
 
-\* @code src/main/ipc.ts:921-924 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2792-2798 a device's, a view's through its window tab), before the command is sent
+\* @code src/main/ipc.ts:918-921 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2792-2798 a device's, a view's through its window tab), before the command is sent
 \* @code native/ompdesk/crates/core/src/pool/run.rs:249-253 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts: judge every fact
 UserPrompt(t) ==
@@ -212,7 +212,7 @@ Settle(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<last, kindOf, stopped, sg, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/pool/api.rs:993-1003 Ctx::note_stopped: noteStopped: Stop pressed (a run or the probe row)
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1038-1048 Ctx::note_stopped: noteStopped: Stop pressed (a run or the probe row)
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
 UserStop(t) ==
     /\ Idle /\ ~stopped[t] /\ (run[t] = "running" \/ probing[t] # 0)
@@ -221,15 +221,15 @@ UserStop(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<run, last, kindOf, sg, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, rp, bad1, bad2, bad2h, bad6, sentFor, calledOffH, launched, mvV, runSg, pk, rk, bad7, bad8>>
 
-\* @code src/main/turn-resume.ts:248-265 trackMove: a TOUCH_COMMANDS command goes out and is marked in flight (MovesInFlight.begin); `touched` counts it only at its answer
-\* @code src/main/ipc.ts:1154-1163 the window tab's move command; src/main/remote/host-services.ts:2808-2832 a device's
+\* @code src/main/turn-resume.ts:255-272 trackMove: a TOUCH_COMMANDS command goes out and is marked in flight (MovesInFlight.begin); `touched` counts it only at its answer
+\* @code src/main/ipc.ts:1151-1160 the window tab's move command; src/main/remote/host-services.ts:2808-2832 a device's
 MoveSend(t, k) ==
     /\ Idle /\ mv[t] = "none" /\ sg[t] < MaxSess
     /\ mv' = [mv EXCEPT ![t] = k]          \* k = "moves": the answer will count (or it times out); "stays": cancelled or failed
     /\ UNCHANGED <<poolV, resV, rg, restoring, restGen, rsg, apWait, runSg, pk, rk, monV, ctlV, histV>>
 
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1026-1040 Ctx::note_counter: noteTouched (called by trackMove at the answer, a timed-out command included: movesTabUnknown), then onRunningChange -> sync()
-\* @code src/main/turn-resume.ts:248-265 trackMove: `end()` runs after `touched` counted, so every continuation waiting in movesSettled resumes then (RunGo)
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1071-1085 Ctx::note_counter: noteTouched (called by trackMove at the answer, a timed-out command included: movesTabUnknown), then onRunningChange -> sync()
+\* @code src/main/turn-resume.ts:255-272 trackMove: `end()` runs after `touched` counted, so every continuation waiting in movesSettled resumes then (RunGo)
 MoveReply(t) ==
     /\ Idle /\ mv[t] # "none"
     /\ mv' = [mv EXCEPT ![t] = "none"]
