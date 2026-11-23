@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { OmpCompatSource } from "./omp-compat-source";
 
 const LIST = { "0.135.0": { verified: ["19.0.0"], holding: null } };
@@ -55,13 +55,19 @@ describe("OmpCompatSource", () => {
 	});
 
 	it("a launch without network follows what an earlier launch read, and nothing before any read", async () => {
-		const file = join(mkdtempSync(join(tmpdir(), "omp-compat-")), "omp-compat.json");
+		const dir = mkdtempSync(join(tmpdir(), "omp-compat-"));
+		onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+		const file = join(dir, "omp-compat.json");
 		const offline = () => {
 			throw new TypeError("fetch failed");
 		};
 		expect(await source([offline], file).compat.read()).toBeNull();
 		await source([() => Response.json(LIST)], file).compat.read();
-		expect(await source([offline], file).compat.read()).toEqual(LIST);
+		const restart = source([offline, () => new Response(null, { status: 404 })], file);
+		expect(await Promise.all([restart.compat.read(), restart.compat.read()])).toEqual([LIST, LIST]);
+		expect(restart.reads()).toBe(1);
+		// The offline read does not start a freshness window.
+		expect(await restart.compat.read()).toEqual({});
 		// A kept copy that was tampered with is not used.
 		writeFileSync(file, JSON.stringify({ "0.135.0": { verified: ["latest"], holding: null } }));
 		expect(await source([offline], file).compat.read()).toBeNull();
