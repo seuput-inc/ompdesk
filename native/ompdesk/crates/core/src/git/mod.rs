@@ -19,6 +19,7 @@ pub(crate) mod left_behind;
 pub(crate) mod origin;
 mod orphans;
 pub(crate) mod parse;
+mod project;
 pub(crate) mod read;
 pub(crate) mod run;
 mod scm;
@@ -686,6 +687,7 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&unlanded::unlanded(&git, &cwd).await?)
         })
     });
+    project::register(registry);
     registry.add("git.originFacts", |call| {
         Box::pin(async move {
             let OriginParams {

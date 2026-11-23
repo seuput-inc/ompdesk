@@ -1,7 +1,7 @@
 //! What git says about a folder's checkout, for the project it belongs to (was `readOriginFacts` of
 //! `src/main/local/git/origin.ts`): the common git dir, the git dir, the branch, the top level, and the first listed
 //! checkout when the common dir is not `<main>/.git`. Every git gets main's short timeout, and any that fails counts
-//! as git not knowing. Main keeps the cache and the rule that makes a project of the facts (`deriveProjectOrigin`).
+//! as git not knowing. `project` caches the checkout identity; image discovery separately requires a non-bare root.
 
 use std::path::{Path, PathBuf};
 
@@ -17,11 +17,11 @@ use crate::run::Opts;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Facts {
-    common_dir: String,
-    git_dir: String,
-    branch: Option<String>,
-    toplevel: Option<String>,
-    primary: Option<String>,
+    pub(super) common_dir: String,
+    pub(super) git_dir: String,
+    pub(super) branch: Option<String>,
+    pub(super) toplevel: Option<String>,
+    pub(super) primary: Option<String>,
 }
 
 impl Facts {
