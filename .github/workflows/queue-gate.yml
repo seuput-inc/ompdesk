@@ -74,7 +74,8 @@ jobs:
             ok=true
           else
             set -f # the list is names, never glob patterns
-            for ref in ${MAC_REFS//,/ }; do
+            refs=${MAC_REFS//$'\r'/ } # a value saved from Windows ends lines with CR, which IFS keeps in the last name
+            for ref in ${refs//,/ }; do
               if [ "$ref" = "$REF_NAME" ]; then ok=true; fi
             done
           fi
