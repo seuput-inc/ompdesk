@@ -297,6 +297,10 @@ impl<'a> Entry<'a> {
             )?)
         }
         #[cfg(windows)]
+        #[allow(
+            clippy::permissions_set_readonly_false,
+            reason = "Windows only: clears FILE_ATTRIBUTE_READONLY on the verified file handle"
+        )]
         {
             let p = self.parent.join(self.name);
             let m = std::fs::symlink_metadata(&p)?;
