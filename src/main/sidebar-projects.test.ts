@@ -3,10 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SidebarProjectsState } from "../shared/sidebar-projects";
+import { gitSync, initRepo } from "./local/git/test-repos";
 import { SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { SessionScratch } from "./session-scratch";
 import {
 	linkedWorktreeRoot,
+	projectOfFolder,
 	SidebarProjects,
 	type SidebarProjectsDeps,
 	type SidebarProjectsSession,
@@ -248,8 +250,55 @@ describe("SidebarProjects", () => {
 			// A main checkout's .git is a folder; a plain folder has none: neither is a linked worktree.
 			expect(await linkedWorktreeRoot(main)).toBeNull();
 			expect(await linkedWorktreeRoot(root)).toBeNull();
+			expect(await projectOfFolder(wt)).toBe(main);
+			expect(await projectOfFolder(root)).toBe(root);
+			expect(await projectOfFolder(path.join(wt, ".git"))).toBeNull();
+			expect(await projectOfFolder(path.join(root, "missing"))).toBeNull();
+
+			const alias = path.join(root, "alias");
+			await fs.symlink(main, alias, "junction");
+			for (const [text, expected] of [
+				["header\r\ngitdir:\t../../alias/.git/worktrees/agent \r\n", main],
+				["gitdir:\n../../gone/.git/worktrees/agent\n", path.join(root, "gone")],
+				["gitdir: ../../repo/.git/modules/submodule\n", null],
+				["gitdir: ../../repo/.GIT/worktrees/agent\n", null],
+				["gitdir: ../../repo/.git/Worktrees/agent\n", null],
+				["gitdir: ../../repo/.git/worktrees/agent/nested\n", null],
+				["not a gitdir\n", null],
+			] as const) {
+				await fs.writeFile(path.join(wt, ".git"), text);
+				expect(await linkedWorktreeRoot(wt), text).toBe(expected);
+			}
+			if (process.platform === "win32" && /^[a-z]:/i.test(root)) {
+				const target = path.join(main, ".git", "worktrees", "agent");
+				for (const hint of [target.slice(2), `${root.slice(0, 2)}..\\..\\repo\\.git\\worktrees\\agent`]) {
+					await fs.writeFile(path.join(wt, ".git"), `gitdir: ${hint}`);
+					expect(await linkedWorktreeRoot(wt), hint).toBe(main);
+				}
+			}
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("uses git's main checkout for a worktree subfolder with no .git file of its own", async () => {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-sidebar-origin-")));
+		try {
+			const repo = path.join(root, "repo");
+			const wt = path.join(root, "linked");
+			await initRepo(repo);
+			gitSync(repo, "worktree", "add", "-q", "--detach", wt);
+			const sub = path.join(wt, "sub");
+			await fs.mkdir(sub);
+			expect(await linkedWorktreeRoot(sub)).toBeNull();
+			expect(await projectOfFolder(sub)).toBe(repo);
+			// A cached git answer still wins over a conflicting file hint.
+			const other = path.join(root, "other");
+			await fs.writeFile(path.join(sub, ".git"), `gitdir: ${path.join(other, ".git", "worktrees", "agent")}`);
+			expect(await linkedWorktreeRoot(sub)).toBe(other);
+			expect(await projectOfFolder(sub)).toBe(repo);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 		}
 	});
 

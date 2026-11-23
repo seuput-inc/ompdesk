@@ -15,9 +15,9 @@
  * `ompdesk_sessions` and `ompdesk_session_result` put that number in front of the session that wrote the brief.
  */
 
-import * as fs from "node:fs/promises";
 import { checkKinds } from "../../resources/gui-bridge/command-verdict-core";
 import { createPollTracker, waitWindowElapsed } from "../../resources/gui-bridge/waste-guards-core";
+import { core } from "./core/process";
 
 const IDLE_S = 600;
 /** Model calls per tool call from which a session is reading and thinking instead of working. */
@@ -373,19 +373,13 @@ export function paceLine(result: Pace): string {
 
 /** Sessions whose fold is kept, the least recently read dropped first; a fold of 60,000 entries is a few MB. */
 const CACHED_SESSIONS = 64;
-/** Bytes read at a time: a journal is never read whole, only this and the line under way are in memory. */
-const CHUNK_BYTES = 1 << 20;
-/** The bytes just before a fold's offset, which must read the same for the file to be the one folded so far. */
-const SEAM_BYTES = 256;
+// Only the core interprets a cursor's file identity, snapshot size, timestamp, offset and seam.
+interface Cursor {
+	more: boolean;
+}
 
 interface Folded {
-	dev: number;
-	ino: number;
-	size: number;
-	mtimeMs: number;
-	/** Every whole line before this byte is folded. */
-	offset: number;
-	seam: Buffer;
+	cursor: Cursor;
 	fold: PaceFold;
 	pace: Pace;
 }
@@ -416,80 +410,35 @@ async function readPaceNow(sessionPath: string): Promise<Pace | undefined> {
 	const kept = cache.get(sessionPath);
 	// Out of the cache while it is read: a fold a failed read left half-advanced is never used again.
 	cache.delete(sessionPath);
-	let handle: fs.FileHandle | undefined;
 	try {
-		handle = await fs.open(sessionPath, "r");
-		const info = await handle.stat();
-		let folded =
-			kept && kept.dev === info.dev && kept.ino === info.ino && kept.offset <= info.size ? kept : undefined;
-		if (folded && folded.size === info.size && folded.mtimeMs === info.mtimeMs) {
-			cache.set(sessionPath, folded);
-			return folded.pace;
-		}
-		if (folded && !(await readAt(handle, folded.offset - folded.seam.length, folded.seam.length)).equals(folded.seam))
-			folded = undefined;
-		const fold = folded?.fold ?? paceFold();
-		let offset = folded?.offset ?? 0;
-		let position = offset;
-		let rest = Buffer.alloc(0);
-		const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
-		while (position < info.size) {
-			const { bytesRead } = await handle.read(chunk, 0, Math.min(CHUNK_BYTES, info.size - position), position);
-			if (bytesRead === 0) break;
-			position += bytesRead;
-			const data =
-				rest.length > 0 ? Buffer.concat([rest, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
-			let start = 0;
-			for (let newline = data.indexOf(10); newline !== -1; newline = data.indexOf(10, start)) {
-				fold.add(data.toString("utf8", start, newline));
-				start = newline + 1;
+		let fold = kept?.fold;
+		let cursor: Cursor | undefined = kept?.cursor;
+		do {
+			const { result, bin } = await core().call<{ reset: boolean; cursor: Cursor } | null>("sessions.pacePage", {
+				path: sessionPath,
+				cursor,
+			});
+			if (!result) {
+				if (kept) cache.set(sessionPath, kept);
+				return kept?.pace;
 			}
-			offset = position - (data.length - start);
-			// A copy: `chunk` is read into again.
-			rest = Buffer.from(data.subarray(start));
-		}
-		// A last line without its newline counts once it is whole JSON; one still being written is read next time.
-		if (rest.length > 0 && wholeJson(rest.toString("utf8"))) {
-			fold.add(rest.toString("utf8"));
-			offset = position;
-		}
-		const seam = await readAt(handle, Math.max(0, offset - SEAM_BYTES), Math.min(offset, SEAM_BYTES));
-		const next: Folded = {
-			dev: info.dev,
-			ino: info.ino,
-			size: info.size,
-			mtimeMs: info.mtimeMs,
-			offset,
-			seam,
-			fold,
-			pace: fold.result(),
-		};
+			if (!fold || result.reset) fold = paceFold();
+			// Pages contain only fold inputs. Journal prose, tool output and images stay in the core.
+			if (bin?.length) {
+				const rows = Buffer.from(bin.buffer, bin.byteOffset, bin.byteLength);
+				let from = 0;
+				for (let end = rows.indexOf(10); end >= 0; end = rows.indexOf(10, from)) {
+					fold.add(rows.toString("utf8", from, end));
+					from = end + 1;
+				}
+			}
+			cursor = result.cursor;
+		} while (cursor.more);
+		const next: Folded = { cursor, fold, pace: fold.result() };
 		cache.set(sessionPath, next);
 		if (cache.size > CACHED_SESSIONS) cache.delete(cache.keys().next().value as string);
 		return next.pace;
 	} catch {
 		return undefined;
-	} finally {
-		await handle?.close().catch(() => undefined);
-	}
-}
-
-async function readAt(handle: fs.FileHandle, position: number, length: number): Promise<Buffer> {
-	const buffer = Buffer.alloc(length);
-	let read = 0;
-	while (read < length) {
-		const { bytesRead } = await handle.read(buffer, read, length - read, position + read);
-		if (bytesRead === 0) break;
-		read += bytesRead;
-	}
-	return buffer.subarray(0, read);
-}
-
-function wholeJson(line: string): boolean {
-	try {
-		JSON.parse(line);
-		return true;
-	} catch {
-		return false;
 	}
 }

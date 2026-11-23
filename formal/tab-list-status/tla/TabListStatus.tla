@@ -56,7 +56,7 @@ Send(r) ==
     /\ req' = [req EXCEPT ![r].phase = "sent", ![r].sent = pushCount]
     /\ UNCHANGED <<mainV, pushes, view, pushCount, late>>
 
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:647 tabs_for_window: main reads its tabs (the answer)
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:716 tabs_for_window: main reads its tabs (the answer)
 Answer(r) ==
     /\ req[r].phase = "sent"
     /\ req' = [req EXCEPT ![r].phase = "answered", ![r].snap = mainV]

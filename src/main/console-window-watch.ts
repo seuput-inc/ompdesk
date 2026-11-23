@@ -7,11 +7,13 @@
  * before (Windows Terminal shows the console of another program, so its window's own process says nothing of who
  * opened it). Observation only.
  *
- * The core lists the windows (`procs.consoles`, native/ompdesk/crates/core/src/procs); this file decides what is new,
- * whose it is and how many lines an hour that is worth.
+ * `procs.consoles` attributes each new window while enumerating it. Main remembers what was shown and how many
+ * lines it wrote, including after the core restarts.
  */
 import { basename } from "node:path";
+import { core } from "./core/process";
 import { LineBudget } from "./line-budget";
+import { SESSION_TAG_ENV } from "./omp-launch";
 
 type Details = Record<string, string | number | boolean>;
 
@@ -27,7 +29,7 @@ const COMMAND_CHARS = 600;
 const RECENT_COMMAND_CHARS = 200;
 
 /** One process beside a window, as `procs.consoles` answers it. */
-export interface ConsoleProcess {
+interface ConsoleProcess {
 	pid: number;
 	name: string;
 	/** When it started, ms since the epoch; absent when Windows did not say. */
@@ -35,19 +37,37 @@ export interface ConsoleProcess {
 	commandLine?: string;
 }
 
-/** One visible console window, as `procs.consoles` answers it. A window the caller named as known comes bare. */
-export interface ConsoleWindow {
-	window: number;
+interface ConsoleFacts {
 	/** The program a conhost window's console belongs to; for a Windows Terminal window the terminal itself. */
 	pid: number;
 	class: string;
 	title: string;
-	/** That process and its ancestors, nearest first. */
-	chain?: ConsoleProcess[];
+	ours: boolean;
+	/** Index of the nearest ancestor among the roots sent for this poll. */
+	viaRoot?: number;
+	chain?: string;
+	process?: ConsoleProcess;
+	parentCmd?: string;
 	/** The session tag in that process's environment (`SESSION_TAG_ENV`). */
 	tag?: string;
 	/** What OMPdesk's own processes started since `sinceMs`, the newest first. */
 	recent?: ConsoleProcess[];
+}
+
+export interface ConsoleWindow {
+	window: number;
+	/** Absent when the caller already knows this handle. */
+	facts?: ConsoleFacts;
+}
+
+export async function listConsoleWindows(known: number[], roots: number[], sinceMs: number): Promise<ConsoleWindow[]> {
+	const { result } = await core().call<ConsoleWindow[]>("procs.consoles", {
+		known,
+		roots,
+		env: SESSION_TAG_ENV,
+		sinceMs,
+	});
+	return result;
 }
 
 /** One of OMPdesk's own processes and what it is: `main`, `host` (the window's shell) or `core`. */
@@ -101,8 +121,9 @@ export class ConsoleWindowWatch {
 			const shown = new Set<number>();
 			for (const win of windows) {
 				shown.add(win.window);
-				if (this.#known.has(win.window)) continue;
-				const { ours, details } = this.#describe(win, own, now);
+				if (!win.facts) continue;
+				const { ours } = win.facts;
+				const details = this.#describe(win.facts, own, now);
 				// What stood on the desktop before OMPdesk looked is the person's own, unless OMPdesk's processes opened it.
 				if (first && !ours) continue;
 				const dropped = this.#budget.take(now);
@@ -122,46 +143,33 @@ export class ConsoleWindowWatch {
 		}
 	}
 
-	#describe(win: ConsoleWindow, own: readonly OwnProcess[], now: number): { ours: boolean; details: Details } {
-		const chain = win.chain ?? [];
-		const self = chain[0];
-		const parent = chain[1];
-		// The nearest of OMPdesk's own processes above the window's: the one whose start, or whose child's, it was.
-		const via = chain
-			.map(process => own.find(mine => mine.pid === process.pid)?.role)
-			.find(role => role !== undefined);
-		// A tag alone says it too: a process keeps its session's tag after the parent that started it is gone.
-		const ours = via !== undefined || win.tag !== undefined;
+	#describe(win: ConsoleFacts, own: readonly OwnProcess[], now: number): Details {
+		const self = win.process;
 		const session = win.tag === undefined ? undefined : this.#deps.sessionOf(win.tag);
-		const recent = ours ? [] : (win.recent ?? []);
+		const recent = win.recent ?? [];
 		return {
-			ours,
-			details: {
-				class: win.class,
-				title: clip(win.title, TITLE_CHARS),
-				pid: win.pid,
-				...(self ? { exe: self.name } : {}),
-				...(self?.commandLine ? { cmd: clip(self.commandLine, COMMAND_CHARS) } : {}),
-				...(self?.startedMs !== undefined ? { ageMs: now - self.startedMs } : {}),
-				ours,
-				...(via !== undefined ? { via } : {}),
-				...(win.tag !== undefined ? { session: session ? basename(session) : `tag ${win.tag}` } : {}),
-				...(chain.length > 0 ? { chain: chain.map(process => `${process.name}(${process.pid})`).join(" < ") } : {}),
-				...(parent?.commandLine ? { parentCmd: clip(parent.commandLine, COMMAND_CHARS) } : {}),
-				...(recent.length > 0
-					? {
-							recent: recent
-								.map(process => {
-									const age = process.startedMs === undefined ? "" : ` ${now - process.startedMs}ms ago`;
-									const line = process.commandLine
-										? `: ${clip(process.commandLine, RECENT_COMMAND_CHARS)}`
-										: "";
-									return `${process.name}(${process.pid})${age}${line}`;
-								})
-								.join(" | "),
-						}
-					: {}),
-			},
+			class: win.class,
+			title: clip(win.title, TITLE_CHARS),
+			pid: win.pid,
+			...(self ? { exe: self.name } : {}),
+			...(self?.commandLine ? { cmd: clip(self.commandLine, COMMAND_CHARS) } : {}),
+			...(self?.startedMs !== undefined ? { ageMs: now - self.startedMs } : {}),
+			ours: win.ours,
+			...(win.viaRoot !== undefined ? { via: own[win.viaRoot].role } : {}),
+			...(win.tag !== undefined ? { session: session ? basename(session) : `tag ${win.tag}` } : {}),
+			...(win.chain ? { chain: win.chain } : {}),
+			...(win.parentCmd ? { parentCmd: clip(win.parentCmd, COMMAND_CHARS) } : {}),
+			...(recent.length > 0
+				? {
+						recent: recent
+							.map(process => {
+								const age = process.startedMs === undefined ? "" : ` ${now - process.startedMs}ms ago`;
+								const line = process.commandLine ? `: ${clip(process.commandLine, RECENT_COMMAND_CHARS)}` : "";
+								return `${process.name}(${process.pid})${age}${line}`;
+							})
+							.join(" | "),
+					}
+				: {}),
 		};
 	}
 }

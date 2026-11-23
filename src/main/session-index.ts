@@ -7,7 +7,6 @@
  * session id, which rows are kept, and search text and excerpts. Main asks stock for the list and applies tombstones
  * and the window's folder filter. The shared numbered copy uses the same order and diff as the page.
  */
-import { stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { codedError } from "../shared/ipc-error-codes";
@@ -15,6 +14,7 @@ import type { SessionContentMatch, SessionInfo, SessionKind } from "../shared/ip
 import type { AgentMessage } from "../shared/rpc-types";
 import { compareSessionRows, type SessionListDelta, type VersionedSessionList } from "../shared/session-list-delta";
 import { agentDir } from "./agent-paths";
+import { directoryExists } from "./canonical-cwd";
 import { core } from "./core/process";
 import { deletedSessions } from "./deleted-sessions";
 import { OmpUnavailableError } from "./omp-availability";
@@ -354,8 +354,7 @@ export class SessionIndex {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
 		const target = resolve(cwd);
-		const info = await stat(target).catch(() => null);
-		if (!info?.isDirectory()) throw codedError("not_a_directory", `Not a directory: ${target}`);
+		if (!(await directoryExists(target))) throw codedError("not_a_directory", `Not a directory: ${target}`);
 		const moved = await this.#store.move(source, target);
 		this.#forgetText([source, moved]);
 		this.#notifyChange();

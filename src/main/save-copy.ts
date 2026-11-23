@@ -1,9 +1,9 @@
 /**
  * "Save a copy" of a file the transcript names (ipc.ts `FS_SAVE_COPY`): the person picks where it goes, then the bytes
- * land there from the computer the tab runs on. A file on this computer is copied. A file on a paired host streams in
- * parts (`host.fs.readRange`) into a temp file of its own beside it (`<dest>.<random>.ompdesk-download`, created
- * exclusively, so no file already there is touched) and is renamed onto the destination once whole, so a
- * dropped link never leaves half a file under the chosen name. A host from before `host.fs.readRange` still sends a file
+ * land there from the computer the tab runs on. The core copies a local file. Main streams a paired host's file from
+ * the live link (`host.fs.readRange`) into an exclusive `<dest>.<random>.ompdesk-download` beside the destination.
+ * Main renames it only after the last part, so a dropped link never leaves half a file under the chosen name.
+ * A host from before `host.fs.readRange` still sends a file
  * that fits one `host.fs.readBinary`; a larger one asks for that computer's OMPdesk to be updated.
  * The dialog and the host link are injected; the destination is the person's own folder.
  */
@@ -17,6 +17,7 @@ import {
 	type IpcFsReadBinaryResult,
 	type IpcFsSaveCopyResult,
 } from "../shared/ipc-types";
+import { CoreError, core } from "./core/process";
 
 /** What the first read takes before the dialog: enough to learn the file, small enough to answer at once. */
 const PROBE_BYTES = 64 * 1024;
@@ -109,13 +110,12 @@ async function saveLocal(abs: string, request: SaveCopyRequest): Promise<IpcFsSa
 	const dest = await request.pickDestination(request.name);
 	if (dest === null) return { ok: false, cancelled: true };
 	try {
-		await fsp.copyFile(abs, dest);
+		// A copy to a slow volume has no deadline of its own. Use the longest timer Node supports.
+		await core().call<null>("fs.saveCopy", { abs, dest }, { timeoutMs: 2 ** 31 - 1 });
 	} catch (error) {
-		const gone = await fsp.access(abs).then(
-			() => false,
-			() => true,
-		);
-		return gone ? { ...failure(error), code: "file_not_found" } : failure(error);
+		return error instanceof CoreError && error.code === "file_not_found"
+			? { ...failure(error), code: error.code }
+			: failure(error);
 	}
 	return { ok: true, savedTo: dest };
 }
