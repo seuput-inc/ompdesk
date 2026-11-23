@@ -1,10 +1,9 @@
 /**
  * PR Center commands over the `gh` CLI (port of fork rpc-pr.ts). gh's runs and their rules (the checkout's GitHub
  * repository, the list, a PR's detail and one file's diff, create, merge, review, comment, the conversation, edit and
- * the commits and changed files a draft is written from) run in the core process
- * (`native/ompdesk/crates/core/src/gh/pr.rs`, methods `gh.*`); this is their typed client, which keeps what main owns:
+ * PR drafts) run in the core process (`native/ompdesk/crates/core/src/gh`); this is their typed client, which keeps
  * the checks of what the page sent that come before the repository is read (a PR number, the text a review or comment
- * needs, and its trim), the draft's model call (stock `omp -p`) with its prompt, the checkout through the bridge, and
+ * needs, and its trim), the resolved stock omp launch environment, the checkout through the bridge, and
  * the timeouts. Failures map to typed codes: gh_missing / gh_unauthenticated / not_a_repo / no_github_remote /
  * pr_not_found / pr_create_failed / pr_checkout_failed / pr_draft_failed / pr_merge_failed / pr_review_failed /
  * pr_edit_failed.
@@ -20,13 +19,12 @@ import type {
 	RpcPrRepo,
 	RpcPrReviewEvent,
 } from "../../../shared/rpc-types";
+import type { OmpCliLaunch } from "../../agent-worktrees";
 import { CoreError } from "../../core/process";
+import { ompRunEnv } from "../../omp-runtime";
 import type { BridgeClient, OmpRuntime } from "../types";
 import { LocalCommandError } from "../types";
 import { coreGh, DEFAULT_TIMEOUT_MS, GH_TEXT_TIMEOUT_MS } from "./exec";
-import { extractDraftJson, renderPrompt } from "./parse";
-import prDraftSystemPrompt from "./pr-draft-system.md?raw";
-import prDraftUserPrompt from "./pr-draft-user.md?raw";
 
 const DRAFT_TIMEOUT_MS = 170_000;
 const PR_CREATE_TIMEOUT_MS = 110_000;
@@ -109,53 +107,19 @@ export function prDiff(cwd: string, input: { number: number; path: string }): Pr
 	return ghRequest("gh.prDiff", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
-/** What the core reads for a draft: the checkout's root and the head branch's commits and changes against the base. */
-interface DraftFacts {
-	root: string;
-	base: string;
-	head: string;
-	commits: string[];
-	files: string[];
-	diffStat: string;
-}
-
 /** AI-draft title/body from the head branch's commits + change summary, via stock `omp -p`. */
-export async function prDraft(
+export function prDraft(
 	cwd: string,
-	omp: OmpRuntime,
+	omp: Pick<OmpRuntime, "bin" | "basePath">,
 	input: { base?: string; head?: string },
 ): Promise<RpcPrDraftResult> {
-	// The repository, the current branch, two revisions at up to two rev-parses each, then log and diffs at once.
-	const facts = await ghRequest<DraftFacts>(
-		"gh.prDraftFacts",
-		{ cwd, ...input },
-		GITHUB_REPO_MS + 6 * DEFAULT_TIMEOUT_MS,
+	const launch: OmpCliLaunch | null =
+		omp.basePath === undefined ? null : { bin: omp.bin, env: ompRunEnv(omp.bin, omp.basePath) };
+	return ghRequest(
+		"gh.prDraft",
+		{ cwd, ...input, omp: launch, timeoutMs: DRAFT_TIMEOUT_MS },
+		GITHUB_REPO_MS + 6 * DEFAULT_TIMEOUT_MS + DRAFT_TIMEOUT_MS,
 	);
-	const userPrompt = renderPrompt(prDraftUserPrompt, {
-		base: facts.base,
-		head: facts.head,
-		commitCount: String(facts.commits.length),
-		commits: facts.commits.join("\n"),
-		fileCount: String(facts.files.length),
-		files: facts.files.join("\n").slice(0, 6000),
-		diffStat: facts.diffStat.slice(0, 3000),
-	});
-	let output: { code: number; stdout: string; stderr: string };
-	try {
-		output = await omp.run(["-p", "--no-session", "--no-tools", "--no-lsp"], {
-			cwd: facts.root,
-			input: `${prDraftSystemPrompt.trim()}\n\n---\n\n${userPrompt}`,
-			timeoutMs: DRAFT_TIMEOUT_MS,
-		});
-	} catch (error) {
-		throw new LocalCommandError(`Draft failed: ${errorText(error)}`, "pr_draft_failed");
-	}
-	const draft = output.code === 0 ? extractDraftJson(output.stdout) : null;
-	if (!draft) {
-		const detail = (output.stderr || output.stdout).trim().slice(0, 300);
-		throw new LocalCommandError(`The model did not return a draft${detail ? `: ${detail}` : ""}`, "pr_draft_failed");
-	}
-	return { title: draft.title.trim(), body: draft.body.trim() };
 }
 
 /**

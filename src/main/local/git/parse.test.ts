@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractDraftJson, isInside, renderPrompt, worktreeSlug } from "./parse";
+import { isInside, worktreeSlug } from "./parse";
 
 // parseStatusV2 and newFileDiff moved to the core process with their cases (native/ompdesk/crates/core/src/git/parse.rs),
 // parsePrUnifiedDiff, rollupChecks and rollupCounts with theirs (native/ompdesk/crates/core/src/gh/pr.rs), parseGitStatus
@@ -19,19 +19,5 @@ describe("worktree naming", () => {
 		expect(worktreeSlug("fix_bug")).toBeNull();
 		expect(worktreeSlug("---")).toBeNull();
 		expect(worktreeSlug("a".repeat(42))).toBeNull();
-	});
-});
-
-describe("pr draft helpers", () => {
-	it("renders vars and conditional blocks", () => {
-		expect(renderPrompt("{{a}}{{#if b}}[{{b}}]{{/if}}", { a: "x", b: "" })).toBe("x");
-		expect(renderPrompt("{{a}}{{#if b}}[{{b}}]{{/if}}", { a: "x", b: "y" })).toBe("x[y]");
-	});
-	it("extracts the draft JSON around noise", () => {
-		expect(extractDraftJson('Working...\n```json\n{"title":"t {x}","body":"## S\\n- a"}\n```')).toEqual({
-			title: "t {x}",
-			body: "## S\n- a",
-		});
-		expect(extractDraftJson("{bad} nothing")).toBeNull();
 	});
 });

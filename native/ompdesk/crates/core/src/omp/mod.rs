@@ -20,7 +20,7 @@
 //! The stop of an omp the app still holds (its stdin's end, the hold it asks for while it saves a login) is main's
 //! (`omp-stop.ts`), and so is the quit's wait for all of them: both need the child process main spawned.
 
-mod cli;
+pub(crate) mod cli;
 mod facts;
 mod log_tail;
 mod worktrees;

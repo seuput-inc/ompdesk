@@ -5,7 +5,7 @@ use std::fmt::Arguments;
 use std::time::Duration;
 
 use serde::Deserialize;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::fs::error::uv_code;
 use crate::fs::order::js_trim;
@@ -14,13 +14,13 @@ use crate::server::{Fault, Scope};
 use crate::sidecar::omp_command;
 
 #[derive(Deserialize)]
-pub(super) struct Launch {
+pub(crate) struct Launch {
     pub bin: String,
     pub env: BTreeMap<String, String>,
     pub cwd: String,
 }
 
-pub(super) struct Output {
+pub(crate) struct Output {
     pub code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -51,6 +51,32 @@ pub(super) async fn run<const N: usize>(
     scope: Scope,
     timeout: Duration,
 ) -> Result<Output, Fault> {
+    execute(launch, args, scope, timeout, None).await
+}
+
+pub(crate) async fn pr_draft(
+    launch: &Launch,
+    scope: Scope,
+    timeout: Duration,
+    prompt: &str,
+) -> Result<Output, Fault> {
+    execute(
+        launch,
+        ["-p", "--no-session", "--no-tools", "--no-lsp"],
+        scope,
+        timeout,
+        Some(prompt),
+    )
+    .await
+}
+
+async fn execute<const N: usize>(
+    launch: &Launch,
+    args: [&'static str; N],
+    scope: Scope,
+    timeout: Duration,
+    prompt: Option<&str>,
+) -> Result<Output, Fault> {
     if scope.cancelled() {
         return Err(Fault::cancelled());
     }
@@ -68,22 +94,42 @@ pub(super) async fn run<const N: usize>(
     } else {
         omp_command(bin, &args, false, cwd, env)
     };
-    cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+    // Only the plain stock reports requested these overrides. Model calls inherit the launch environment.
+    if prompt.is_none() {
+        cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+    }
     cmd.kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let mut child = cmd
         .spawn()
         .map_err(|e| Fault::new("spawn_failed", format!("spawn {bin} {}", uv_code(&e))))?;
-    drop(child.stdin.take());
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let feed = async move {
+        if let Some(prompt) = prompt
+            && let Err(error) = stdin.write_all(prompt.as_bytes()).await
+            && error.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(error);
+        }
+        Ok(())
+    };
     let mut stdout = child.stdout.take().expect("piped stdout");
     let mut stderr = child.stderr.take().expect("piped stderr");
     let mut out = Vec::new();
     let mut err = Vec::new();
     // Node waited for close, not just exit: a child of stock can still hold an output pipe.
-    let finished = async {
+    let closed = async {
         tokio::try_join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err))?;
         child.wait().await
+    };
+    // A descendant holding only stdin did not delay Node's close event.
+    let finished = async {
+        tokio::pin!(closed);
+        tokio::select! {
+            status = &mut closed => status,
+            wrote = feed => { wrote?; closed.await }
+        }
     };
     let fault = tokio::select! {
         status = finished => match status {
@@ -102,11 +148,100 @@ pub(super) async fn run<const N: usize>(
             let _ = child.kill().await;
         }
     };
-    if fault.code == "omp_timeout" {
-        // A shim may ignore TERM or leave a descendant holding a pipe. Neither delays the timeout reply.
+    if fault.code == "omp_timeout" && prompt.is_none() {
+        // Plain reports answer at the deadline. A PR draft holds its repository step until reaped.
         tokio::spawn(cleanup);
     } else {
         cleanup.await;
     }
     Err(fault)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_draft_timeout_holds_the_request_until_its_child_exits() {
+        let dir = crate::fs::disk::make_temp_dir("ompdesk-draft-timeout-").unwrap();
+        let launch = Launch {
+            bin: "/bin/sh".into(),
+            cwd: dir.to_string_lossy().into_owned(),
+            env: BTreeMap::new(),
+        };
+        let (scope, gone) = Scope::watched();
+        let outcome = execute(
+            &launch,
+            ["-c", "trap '' TERM; echo $$ > started; exec /bin/sleep 30"],
+            scope,
+            Duration::from_millis(500),
+            Some("a draft"),
+        )
+        .await;
+        gone.wait().await;
+        let pid = std::fs::read_to_string(dir.join("started")).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(outcome.err().unwrap().code, "omp_timeout");
+        assert!(!crate::sys::alive(pid.trim().parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn an_omp_that_closes_stdin_still_returns_its_own_result() {
+        let launch = Launch {
+            bin: "/bin/sh".into(),
+            cwd: "/".into(),
+            env: BTreeMap::new(),
+        };
+        let output = execute(
+            &launch,
+            ["-c", "exec 0<&-; printf refused >&2; exit 9"],
+            Scope::detached(),
+            Duration::from_secs(10),
+            Some(&"a".repeat(1024 * 1024)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.code, 9);
+        assert_eq!(output.stderr, b"refused");
+    }
+
+    #[tokio::test]
+    async fn cancellation_reaps_omp_while_a_prompt_write_is_blocked() {
+        let dir = crate::fs::disk::make_temp_dir("ompdesk-draft-cancel-").unwrap();
+        let launch = Launch {
+            bin: "/bin/sh".into(),
+            cwd: dir.to_string_lossy().into_owned(),
+            env: BTreeMap::new(),
+        };
+        let scope = Scope::detached();
+        let prompt = "a".repeat(1024 * 1024);
+        let (outcome, pid) = tokio::join!(
+            execute(
+                &launch,
+                ["-c", "echo $$ > started; exec /bin/sleep 30"],
+                scope.clone(),
+                Duration::from_secs(10),
+                Some(&prompt),
+            ),
+            async {
+                let marker = dir.join("started");
+                let pid = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        if let Ok(text) = std::fs::read_to_string(&marker)
+                            && let Ok(pid) = text.trim().parse::<u32>()
+                        {
+                            break pid;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await;
+                scope.cancel();
+                pid
+            }
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(outcome.err(), Some(Fault::cancelled()));
+        assert!(!crate::sys::alive(pid.expect("omp did not start")));
+    }
 }
