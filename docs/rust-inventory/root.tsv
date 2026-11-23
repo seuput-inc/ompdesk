@@ -5,7 +5,7 @@ src/main/agent-browsers.test.ts	tooling	-	Vitest suite: findChromiumBrowsers.
 src/main/agent-browsers.ts	mixed	2	browsers.find/status/installRelay/openExtensions dispatch in crates/core/src/browsers/mod.rs; resolveEgoBrowser, systemBrowserPlaces and the launch cache/reprobe remain in TS.
 src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
 src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed executable versions; computerUseSpawn selects the engine and spawn environment.
-src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
+src/main/agent-paths.ts	port	1	SessionIndex, LogWatcher and defaultWorkspace need the current agent profile path when they construct their services. agentDir joins the environment or home path synchronously; it performs no directory I/O.
 src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
 src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
 src/main/agent-worktrees.test.ts	tooling	-	Exercises list and orphan-only clear through the core against an isolated stock CLI.
@@ -52,7 +52,7 @@ src/main/autopilot-test-rig.ts	tooling	-	installAutopilotRig, World and FakeSide
 src/main/autopilot.test.ts	tooling	-	Vitest suite: pure helpers.
 src/main/autopilot.ts	native-client	3	Autopilot opens the run via autopilot.open (crates/core/src/autopilot/coordinator.rs), sends commands/events, serves host callbacks and mirrors synchronous reads; Rust owns run transitions.
 src/main/background-work.test.ts	tooling	-	Vitest suite: summarizeJobRows.
-src/main/background-work.ts	port	3	askBackgroundWork queries member bridges under deadline and aggregates named subagents, jobs and unknown sessions for restart confirmation.
+src/main/background-work.ts	port	3	index.ts snapshots the pool's and paired host's live bridge handles for quit. askBackgroundWork's deadline covers those exact promises including delivery to main; querying tab IDs in the core could reach a replacement spawn or omit the host-side deadline. Move with both bridge owners.
 src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
 src/main/benchmark-runner.ts	port	2	BenchmarkRunner spawns/cancels the benchmark child, enforces a timeout and parses its summary for the live IPC feature.
 src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
@@ -221,7 +221,7 @@ src/main/core-saves.ts	native-client	2	routeCoreSaves consumes store.saveFailed/
 src/main/deep-link.ts	mixed	4	shell/src/startup.rs selects second-instance requests. Main still decodes deep-link URLs, replays early macOS opens, matches workspaces and dispatches window operations.
 src/main/default-workspace.ts	native-client	1	fs.defaultWorkspace resolves the work directory beside the profile and creates it on demand.
 src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that save on every change, on a full disk.
-src/main/deleted-sessions.ts	port	2	DeletedSessions loads and persists bounded per-device/path tombstones through AtomicSaver to prevent deleted sessions reopening.
+src/main/deleted-sessions.ts	port	2	The pool's blocked check, LocalHostServices.#open and layout restore read tombstones synchronously. deleteSession publishes add() before its listeners and AtomicSaver attempts the first save in that tick, retaining the tombstone on disk-full failure.
 src/main/delivery-ledger.test.ts	tooling	-	Vitest suite: deliverOnce.
 src/main/delivery-ledger.ts	port	2	§1.3: ipc.ts and remote/host-services.ts share the in-flight transport Promise itself on duplicate delivery. Receiver: remote-web, with those transports.
 src/main/desktop-slot-exit.ts	mixed	3	Hub batch with sidecar.ts, §1.3(a,c): desktopSlotProcess captures the current spawn and bridge generation synchronously. A replacement core cannot attest to the old holder's exit; keep the receipt and its read-only OS observations with the captured process.
@@ -247,7 +247,7 @@ src/main/external-url.test.ts	tooling	-	Vitest suite: isOpenableExternalUrl.
 src/main/external-url.ts	port	1	Shell batch, §1.3(a,b): ipc.ts and web/host-actions.ts check the page URL immediately before OS dispatch. Move the allowlist into the page-only open command, not a standalone validation RPC; keep general shell.openExternal available to trusted native callers.
 src/main/fenced-fs.ts	port	1	fs proxies Node promise filesystem methods through fencedEffect so a stopped serial-chain step cannot issue later operations.
 src/main/frame-bookkeeping.test.ts	tooling	-	Vitest suite: withoutFrameBookkeeping.
-src/main/frame-bookkeeping.ts	port	1	withoutFrameBookkeeping removes redundant turn_end payload and assistant request bookkeeping before live frames reach clients.
+src/main/frame-bookkeeping.ts	port	1	SidecarManager.#onFrame and slimSubagentFrame strip fields before forwarding the frame in the same dispatch. withoutRequestBookkeeping is also the bridge transcript rule; the adapter has no independent I/O.
 src/main/gh-guard-launchers.test.ts	tooling	-	Vitest suite: the gh guard's launchers on Windows.
 src/main/gh-guard-stock.test.ts	tooling	-	Vitest suite: serves a finished attempt's log from the cache, by attempt, and slows a watch to a minute.
 src/main/gh-guard.test.ts	tooling	-	Vitest suite: what a gh command costs.
@@ -263,7 +263,7 @@ src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
 src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.
 src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
-src/main/idle-release.ts	port	3	IdleRelease tracks quiet time and uses the native snapshot’s idle facts to select a quiet tab to release under memory pressure; does not perform the release.
+src/main/idle-release.ts	port	3	memory-watch re-reads the current tab facts after the native sample; pick() combines them with prior quiet-since times before releasing the selected tab without yielding. The sampler, not IdleRelease, owns the OS query.
 src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup and session services; routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
 src/main/initial-cwd.test.ts	tooling	-	Real-core parity for startup cwd selection and default workspace creation.
 src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path or an existing directory before falling back to home.
@@ -288,7 +288,7 @@ src/main/log-watcher.ts	mixed	2	logs.start/snapshot/close own watching, UTF-8 ta
 src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.
 src/main/mac-permissions.ts	port	2	MacPermissions queries accessibility and screen grants through injected platform calls, requests missing permissions and tracks prior requests in preferences.
 src/main/machine-services.test.ts	tooling	-	Vitest suite: machineFor.
-src/main/machine-services.ts	mixed	3	LocalMachine owns caller-scoped benchmark/model setup runners and local settings operations; RemoteMachine validates and forwards host requests. ModelSetupRunner delegates execution to core models.setupRun; TS retains routing and runner maps.
+src/main/machine-services.ts	mixed	3	LocalMachine checks StatsClient.port before reviving stats, and owns per-caller benchmark handles cancelled by IPC or peer disconnect. stats-client and benchmark-runner own their I/O; model setup already uses models.setupRun. RemoteMachine receives the link from its caller.
 src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.
 src/main/machine-state.ts	port	2	§1.3a,c: MachineState.sample returns main's CPU, loop delay and windowed facts synchronously. stalled("core-loss") needs the pre-loss history while the core is unavailable. Receiver: shell watchdog with main's event-loop and process owner, not the process being diagnosed.
 src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
@@ -341,9 +341,9 @@ src/main/omp-compat-source.test.ts	tooling	-	Vitest suite: OmpCompatSource.
 src/main/omp-compat-source.ts	port	2	OmpCompatSource fetches the verified-version feed, throttles reads and retains a last-good disk cache for offline launches.
 src/main/omp-config-stock.test.ts	tooling	-	Vitest suite: reads stock's default, writes both values, and reads back what it wrote.
 src/main/omp-daemon-folder-stock.test.ts	tooling	-	Vitest suite: is removed once that omp ended, while another session's omp keeps running.
-src/main/omp-exits.ts	port	3	noteOmpExit records exit promises by cwd; ompsExitedIn bounds the wait before an opened worktree can be removed.
+src/main/omp-exits.ts	port	3	SidecarPool disposal and LocalHostServices close register the exiting spawn's promise by folder. discardOpenedWorktree waits on promises already registered inside its removal claim; looking up current PIDs later could wait for a different spawn.
 src/main/omp-hold-notice.test.ts	tooling	-	Vitest suite: holdNotice: a release runners failed.
-src/main/omp-hold-notice.ts	port	1	holdNotice, parseHoldTold and heldSince determine when a blocked omp version should produce an initial or repeat notification.
+src/main/omp-hold-notice.ts	port	1	index.ts updater firstSeen/onState read the current hold, prefs and time before saving the observation and deciding whether to notify. The thresholds are comparisons; this module schedules no timer.
 src/main/omp-launch.test.ts	tooling	-	Vitest suite: omp launch.
 src/main/omp-launch.ts	port	3	sidecar::lane uses native session_open before requesting launch; no Node session-open decision remains. SidecarManager answers the launch with ompArgs/sessionEnv built from live preference callbacks; withCreditSpendRuns also gates the local handler's omp run through the live bridge.
 src/main/omp-log-tail.test.ts	tooling	-	Vitest suite: ompLogTail.
@@ -351,7 +351,7 @@ src/main/omp-log-tail.ts	native-client	3	SidecarManager.#onSlow calls ompLogTail
 src/main/omp-processes.test.ts	tooling	-	Vitest suite: a quit's stop leaves no omp running: one that ignores SIGTERM and one that is stopped.
 src/main/omp-processes.ts	native-client	3	OmpProcesses.stopAll and reapLeftovers call sidecar.stopAll and omp.reap; core sidecar/mod.rs and omp/mod.rs own stopping and identity-checked reaping, TS supplies bounds, file paths and reporting.
 src/main/omp-restart.test.ts	tooling	-	Vitest suite: ompRestartDecision.
-src/main/omp-restart.ts	port	1	ompRestartDecision classifies an updated omp tab as restart, wait or skip based on its lifecycle facts.
+src/main/omp-restart.ts	port	1	SidecarPool's decide callback and LocalHostServices.restartOnNewOmp use the current run/restore state to restart or mark the tab pending in the same tick. The helper does no process I/O.
 src/main/omp-runtime.test.ts	tooling	-	Vitest suite: omp version parsing.
 src/main/omp-runtime.ts	mixed	2	Core checks launcher headers and parses stock update reports (omp.parseUpdateCheck). Main still resolves paths, verifies Bun and omp versions and runs other stock subprocesses.
 src/main/omp-updater.test.ts	tooling	-	Vitest suite: OmpUpdater.
@@ -361,9 +361,9 @@ src/main/open-path.test.ts	tooling	-	Vitest suite: isLauncherPath.
 src/main/open-path.ts	native-client	1	fs.isLauncherPath checks extensions, resolved targets and POSIX executable bits. The shell adapter reveals a launcher or a path the default app cannot open.
 src/main/packaging-config.test.ts	tooling	-	Vitest suite: mac bundle configs.
 src/main/platform-test-scope.test.ts	tooling	-	Vitest suite: Windows test scope.
-src/main/process-alive.ts	port	1	processAlive uses signal zero and treats EPERM as evidence that the PID exists.
+src/main/process-alive.ts	port	1	test-launcher-exit decides immediately whether the launcher has ended; lock-slots also reads signal-zero synchronously (EPERM means alive). Neither caller requires a running core; this is not session process supervision.
 src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
-src/main/quit-guard.ts	port	3	assessQuitRisk aggregates tab work; lastWindowCloseAction, updateRestartConfirmation and QuitLatch decide close, approval and restart behavior.
+src/main/quit-guard.ts	port	3	app-quit reads QuitLatch in before-quit to veto synchronously or admit teardown once. Last-window close and Dock activation also read approval immediately; the guard performs no separate I/O.
 src/main/quit-log.test.ts	tooling	-	Vitest suite: app-quit lines.
 src/main/quit-log.ts	port	1	quitAskedReport and exitReport produce structured end-of-run records; uncleanEndReport identifies a prior run without an end line.
 src/main/quit-watchdog.test.ts	tooling	-	Vitest suite: quit watchdog.
@@ -376,7 +376,7 @@ src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesC
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
 src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
 src/main/retired-prefs.ts	port	2	migrateRetiredPrefs applies retired-key and panel-view migrations and updates associated settings/schedule storage.
-src/main/rpc-client.ts	mixed	3	RpcClient.command assigns GUI IDs, tries local handlers and times them out; stock() uses the tab lane's core sidecar.command and refuses sends after retire().
+src/main/rpc-client.ts	mixed	3	SidecarManager owns one RpcClient per spawn. It assigns the ID and selects a local handler before yielding, refuses stock sends on retire, and cancels the actual handler on timeout. The core lane already transports and correlates stock requests.
 src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
 src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.
 src/main/runtime-log.ts	port	2	runtimeLogPath resolves the app userData log location and writeRuntimeLog attaches caller context before passing the report to the TS log writer.
@@ -385,14 +385,14 @@ src/main/safe-store.ts	port	2	§1.3: window geometry and prefs getters synchrono
 src/main/save-copy.test.ts	tooling	-	Vitest suite: fileNameOf.
 src/main/save-copy.ts	mixed	3	fs.saveCopy copies local files after the destination dialog. Remote downloads still hold one exclusive temporary file across the peer's readRange callbacks; move the writer with that peer transport.
 src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.
-src/main/saved-layouts.ts	port	1	layoutsToSave decides whether quit teardown or an empty window should overwrite the saved desktop.
+src/main/saved-layouts.ts	port	1	index.persistTabLayouts compares the live windows, previous layout and quit approval before writing the store; teardown must not persist a transient empty layout. layoutsToSave itself performs no file operation.
 src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
 src/main/schedules.ts	mixed	2	Core owns drafts, journals, timers, live sources and supervised runs. Main forwards state changes, orders commands, supplies quota and launch inputs, and wakes the live session (§1.3c). Receiver: session/pool and device quota owners.
 src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
 src/main/serial-chain.ts	port	2	§1.3: local/git/exec and tailscale/cli take the current AbortSignal synchronously before starting OS effects. Receiver: local with local/git/exec; remote-web removes the tailscale/cli use.
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.
 src/main/session-free.test.ts	tooling	-	Vitest suite: whenSessionFree.
-src/main/session-free.ts	port	2	whenSessionFree owns the bounded polling loop and fallback when the injected stock session ownership check fails.
+src/main/session-free.ts	port	2	Each poll re-enters stockHelperRequest to check installation state and select the current helper. stopStockHelper between polls removes the old launcher: pinning its host in native request_in_process could report free for a session the replacement worker still sees owned.
 src/main/session-index-activity.test.ts	tooling	-	Vitest suite: lists when the conversation last moved, not when a relaunch last wrote the file.
 src/main/session-index-first-prompt.test.ts	tooling	-	Vitest suite: lists the first prompt that stock persists after a long xd:// mount notice.
 src/main/session-index.test.ts	tooling	-	Vitest suite: keeps GUI kind overlays and handles headers with no title slot.
@@ -400,42 +400,42 @@ src/main/session-index.ts	mixed	3	Rust watches the tree, filters listed rows, se
 src/main/session-kinds.ts	port	2	Hub batch, §1.3(a,c): sidecar-factory.ts marks chat IDs on its session event; session-index.ts reads isChat synchronously while classifying each row and resolving kind. Move the store with the index readers; a pending core write must not make a new chat briefly appear as an ordinary session.
 src/main/session-launch-parity.test.ts	tooling	-	Vitest suite: a session's omp launches the same way on every start path.
 src/main/session-list-share.test.ts	tooling	-	Vitest suite: SessionListShare.
-src/main/session-list-share.ts	port	3	SessionListShare coalesces concurrent list reads, tracks versions and broadcasts deltas to viewers.
+src/main/session-list-share.ts	port	3	HostSessionList.hostChanged reads held() and applies a delta against the same base before any await; SessionIndex also checks the held copy on watch warmup. Async scans are injected. Moving the copy alone would split version admission from publication.
 src/main/session-lists-report.test.ts	tooling	-	Vitest suite: measures asks, bytes and CPU idle and while agents append.
 src/main/session-mutations.test.ts	tooling	-	Vitest suite: deleteSession.
-src/main/session-mutations.ts	port	3	deleteSession, renameSession and moveSession coordinate live ownership, shutdown, stored sessions, tombstones and deletion listeners.
+src/main/session-mutations.ts	port	3	deleteSession marks the path deleting before the first await; LocalHostServices.#open checks it in the same turn. Rename/move consult the pool's current owner and use the live client or stock store. Disk operations do not belong to the coordination wrapper.
 src/main/session-pace-memory.test.ts	tooling	-	Vitest suite: reads a journal far larger than the memory it takes.
 src/main/session-pace.test.ts	tooling	-	Vitest suite: session-pace.
 src/main/session-pace.ts	mixed	1	sessions.pacePage reads bounded journal pages and projects only fold inputs. scripts/session-pace and session-checks consume pace() synchronously; the bridge and page share the check and poll classifiers. The single fold and its cache remain with those rules.
 src/main/session-processes.test.ts	tooling	-	Vitest suite: a session's processes, on this computer.
-src/main/session-processes.ts	mixed	3	SessionProcesses uses procs.list/end in core/src/procs/mod.rs for OS surveys and termination; TS owns the session tag ledger, sweep selection, spin sampling policy and retries.
-src/main/session-scratch.ts	port	2	SessionScratch assigns tab-tag scratch folders and persists the sessions each folder served for retention.
-src/main/session-store.ts	mixed	2	Validates stock storage replies and applies sessions.enrich in one batch before sorting. Enumeration, first-prompt fill and mutations still use the installed stock helper.
+src/main/session-processes.ts	mixed	3	procs.list/end perform the OS work. SidecarManager.#onLaunch takes the tag and scratch path from open immediately; index reads held/owners during disk care and quit. Each resample checks the current freeze state before surveying; keep the kill decision with the tag ledger.
+src/main/session-scratch.ts	port	2	SessionProcesses.open synchronously takes the tag and scratch folder for SidecarManager's spawn. SidebarProjects reconciliation consults sessionsOf against the same records before publishing. Disk care consumes that ownership for retention; do not split the folder from the tag or publish before opening it.
+src/main/session-store.ts	mixed	2	Stock list admission runs when stock.request is received, ordered against move/delete; stockHelperRequest checks setup availability before enqueue. Sessions are then validated and passed to sessions.enrich with its own deadline. A nested native list call would move admission after yielding and merge two failure boundaries.
 src/main/session-summaries.test.ts	tooling	-	Vitest suite: SessionSummaries.
-src/main/session-summaries.ts	port	3	SessionSummaries combines pool and paired-host facts with subagent rosters and publishes versioned summary changes.
+src/main/session-summaries.ts	port	3	ipc and LocalHostServices call current() synchronously; it flushes a pending publication to return the latest roster and version. The debounce cannot own a second copy, and restart-cut and diff rules are shared with the page.
 src/main/session-targets.test.ts	tooling	-	Vitest suite: session targets.
 src/main/session-targets.ts	native-client	2	sessionTargets/sessionArtwork normalize paths and shape replies; projectMetadata.get/projectArtwork.get in core/src/repo_images/mod.rs own journal, Git and artwork lookup.
 src/main/settle-watch.test.ts	tooling	-	Vitest suite: settle watch.
 src/main/settle-watch.ts	port	2	SettleWatch arms a diagnostic timer and samples get_state when a tab remains settling.
 src/main/shell-env.test.ts	tooling	-	Vitest suite: resolveLoginShellEnv.
 src/main/shell-env.ts	port	2	resolveLoginShellEnv caches shell exports; shellSpawnEnv/spawnPath resolve the launch environment for GUI child processes.
-src/main/sidebar-layout.ts	port	1	SidebarLayoutScope restricts project and session reorders to sender-visible entries without displacing hidden slots.
+src/main/sidebar-layout.ts	port	1	SidebarProjects builds the sender's scope from current sessions and prefs, reorders only visible slots, writes the preference and republishes. This synchronous projection uses the page's chat classifier and performs no I/O.
 src/main/sidebar-prefs.test.ts	tooling	-	Vitest suite: updateSidebarPrefs.
-src/main/sidebar-prefs.ts	port	2	updateSidebarPrefs applies individual validated sidebar changes to current storage; moveSidebarPin updates pinned identities.
+src/main/sidebar-prefs.ts	port	2	ipc.ts and the SidebarProjects layout writer in index.ts read/patch/write the current prefs and then notify without yielding. moveSidebarPin transfers a peer-moved session's pin against that same store; readSidebarPrefs and sidebarPatch are shared with the page.
 src/main/sidebar-projects.test.ts	tooling	-	Vitest suite: SidebarProjects.
 src/main/sidebar-projects.ts	mixed	2	fs.sidebarFolder resolves linked checkout files and missing folders; git.originFacts supplies Git facts. index.ts reads SidebarProjects.state() synchronously for local and paired snapshots; ipc.ts applies layoutChanged() in the preference update, using page-shared project rules.
 src/main/sidecar-core-loss.test.ts	tooling	-	Vitest suite: tabs whose core ended under them.
 src/main/sidecar-exit-hold.test.ts	tooling	-	Vitest suite: is not killed at the stop's bound while it says it waits to save, and ends by itself once it saved.
 src/main/sidecar-factory.test.ts	tooling	-	Vitest suite: localSidecarFactory.
-src/main/sidecar-factory.ts	port	3	localSidecarFactory builds local SidecarManager launch dependencies and connects per-tab bridge events for pool and paired hosts; it does not implement the native lane.
+src/main/sidecar-factory.ts	port	3	The pool spawn callback and paired host need a SidecarManager immediately to attach gates, overlay and frame listeners before start. Installed-omp, settings and builtin pack inputs come from the services injected into the factory; the actual lane is native.
 src/main/sidecar-os-shutdown.test.ts	tooling	-	Vitest suite: omp ended by the Windows session.
 src/main/sidecar-pool.test.ts	tooling	-	Vitest suite: SidecarPool session kind.
 src/main/sidecar-pool.ts	mixed	3	SidecarPool dispatches acquire and release decisions to the pool hub in core/src/pool/mod.rs; TS still holds live window/sidecar handles, event forwarders, activity listeners, timers and release promises.
 src/main/sidecar-run-state.test.ts	tooling	-	Vitest suite: a retry saga across a reading.
-src/main/sidecar-run-state.ts	port	3	applyRunEvent/trackRunEvent reduce stock events into busy, settling and outcome state for local and hosted sessions.
-src/main/sidecar-types.ts	port	3	SidecarLike and VIEW_ENDED_EVENT define the local/remote tab handle and event vocabulary; migrate consumers, not a separate process implementation.
+src/main/sidecar-run-state.ts	port	3	LocalHostServices updates the hosted run in its events/settle listener and compares runBusy before leaving that delivery. Hosted resume facts and restartOnNewOmp read it immediately; the local pool's own tracker is native pool/run.rs.
+src/main/sidecar-types.ts	port	3	RemoteSidecar and HostedTabView emit VIEW_ENDED_EVENT; the pool and LocalHostServices detach the matching view during delivery. Other exports are types for those handles; there is no process implementation to port separately.
 src/main/sidecar.test.ts	tooling	-	Vitest suite: SidecarManager.
-src/main/sidecar.ts	mixed	3	SidecarManager uses sidecar.open/start/restart/dispose/barrier in core/src/sidecar/mod.rs for child and wire lifecycle; TS still resolves spawn inputs, routes frames, dispatches GUI commands and pushes settings.
+src/main/sidecar.ts	mixed	3	The native lane owns spawn/stdio/exit. SidecarPool's spawn/facts/dispose callbacks read the live manager immediately, including that spawn's exit promise. Main flushes listeners before a command response and resolves inputs from live settings and bridge handles.
 src/main/sign-in-callback.test.ts	tooling	-	Replays a synthetic loopback callback through the core; no provider or credentials.
 src/main/sign-in-callback.ts	mixed	1	remotebytes.signInReplay fetches the host callback and bounds the page. Host open_url, the device relay and local cancellation still use loopbackCallback synchronously; move the parser with those callers (§1.3a,d).
 src/main/slow-steps.test.ts	tooling	-	Vitest suite: slow steps.
@@ -461,7 +461,7 @@ src/main/stock-helper-worktrees.test.ts	tooling	-	Vitest suite: answers stock's 
 src/main/stock-helper.test.ts	tooling	-	Vitest suite: StockHelper request timeout.
 src/main/stock-helper.ts	mixed	2	Stock lanes, worker scheduling, install stamp paths and recycling are in core/src/stock. Main still gets the installed omp and login PATH, strips inherited control variables and synchronously refuses requests while omp is unavailable.
 src/main/subagent-frames.test.ts	tooling	-	Vitest suite: createSubagentFrameBatcher.
-src/main/subagent-frames.ts	port	1	slimSubagentFrame and createSubagentFrameBatcher shrink streaming frames and coalesce visible-tab IPC deliveries.
+src/main/subagent-frames.ts	port	1	SidecarPool flushes pending subagent frames before an agent batch, response or detach; the paired link also uses slimSubagentFrame. Moving its timer alone would not preserve this same-dispatch flush.
 src/main/supply-chain.test.ts	tooling	-	Vitest suite: supply chain.
 src/main/system-languages.test.ts	tooling	-	Vitest suite: system languages.
 src/main/system-languages.ts	port	4	acceptLanguages, seedSpellchecker and applyAcceptLanguages apply system language ordering and spellchecker policy through the Electron-compatible session API on the Tauri host.
@@ -470,7 +470,7 @@ src/main/system-version.ts	port	1	systemVersion maps OS kernel release to displa
 src/main/tab-layout.test.ts	tooling	-	Vitest suite: persisted tab layout.
 src/main/tab-layout.ts	native-client	3	sanitizePersistedTabLayout(s) calls layout hub sanitize in core/src/pool/layout.rs; TS supplies deleted-session and optional probe callbacks and reports dropped entries.
 src/main/tab-release.test.ts	tooling	-	Vitest suite: closeWindowTab.
-src/main/tab-release.ts	port	3	closeWindowTab coordinates viewer detach or real tab release with worktree exit policy.
+src/main/tab-release.ts	port	3	closeWindowTab detaches a viewer immediately. After awaiting worktree exit policy it rechecks stillClosable, closes the tab's terminals and releases without another await. Both IPC close paths use that ordering.
 src/main/tab-spawn.test.ts	tooling	-	Vitest suite: spawnTabForWindow refusal contracts.
 src/main/tab-spawn.ts	mixed	3	fs.stat checks the recorded folder before and after a disk-care restore. The same-tick sessionOwner/attachViewer pair and hosted view handles stay with the local and paired pool callers.
 src/main/test-bridge-probe.ts	tooling	-	runBridgeProbe and runStock prepare isolated bridge fixtures against installed stock omp.
@@ -535,12 +535,12 @@ src/main/workspace-fs.ts	mixed	2	fs.* in core/src/fs owns disk operations, caps 
 src/main/workspace-search.test.ts	tooling	-	Vitest suite: Files content search.
 src/main/workspace-search.ts	mixed	2	Validates the panel request before launching stock and returns V8's RegExp syntax error. core/src/stock/search.rs supplies the case flag, file and match limits, ignored/hidden-file policy and grep timeout on that request; installed pi-natives searches.
 src/main/worktree-lifecycle.test.ts	tooling	-	Vitest suite: decideWorktreeStart (interactive-mode.ts 7716-7720).
-src/main/worktree-lifecycle.ts	mixed	3	WorktreeLifecycle owns start/exit prompts, bridge settings and tab operations; session-worktree helpers dispatch git.sessionWorktreeSnapshot/Removal/Remove through core/src/git/mod.rs.
+src/main/worktree-lifecycle.ts	mixed	3	The pool's start gate and closeWindowTab.exit policy use the current sidecar, window prompt and exact spawn exit; finalize removes the owned entry before awaiting cleanup. git.sessionWorktreeSnapshot/Removal/Remove already execute under the caller's repo lock.
 src/main/worktree-orphans-removal.test.ts	tooling	-	Vitest suite: removeOrphanWorktree.
 src/main/worktree-orphans-sweep.test.ts	tooling	-	Vitest suite: sweepLandedWorktrees.
 src/main/worktree-orphans-test-rig.ts	tooling	-	installOrphansRig/scene build Git repositories, linked worktrees and simulated open-folder state for orphan tests.
 src/main/worktree-orphans.test.ts	tooling	-	Vitest suite: listOrphanWorktrees.
 src/main/worktree-orphans.ts	mixed	3	git.orphanRepositories/orphanProject/orphanProjectWithEntries discover repositories in stock's global and project roots. The bridge supplies stock worktree.base; withRemovalClaim rechecks live open folders before deletion and the caller supplies archive preparation under its repo lock.
 src/main/worktree-removals.test.ts	tooling	-	Vitest suite: withRemovalClaim.
-src/main/worktree-removals.ts	port	3	withRemovalClaim reserves canonical folder paths while removal runs; removalHolds prevents concurrent tab acquisition.
+src/main/worktree-removals.ts	port	3	SidecarPool's blocked check and LocalHostServices.#open read removalHolds before acquiring. withRemovalClaim canonicalizes open folders and reserves the worktree without yielding; even its realpath I/O belongs inside that atomic check.
 src/main/xdev-stock.test.ts	tooling	-	Vitest suite: names the device stock names, and no device where stock finds none.
