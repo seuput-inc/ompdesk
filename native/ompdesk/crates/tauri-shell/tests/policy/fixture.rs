@@ -5,6 +5,8 @@ mod shell_args;
 mod app_icon;
 #[path = "../../src/js_date.rs"]
 mod js_date;
+#[path = "../../src/launch_protection.rs"]
+mod launch_protection;
 #[path = "../../src/diagnostic_logs/log_tail.rs"]
 mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
@@ -16,6 +18,7 @@ use std::path::Path;
 
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
+    let mut launch = None;
     for line in io::stdin().lock().lines() {
         let call: Value = serde_json::from_str(&line?)?;
         let params = &call["params"];
@@ -33,6 +36,18 @@ fn main() -> io::Result<()> {
                 std::fs::File::open(params["path"].as_str().unwrap()),
                 u32::try_from(params["ownPid"].as_u64().unwrap()).unwrap(),
             ),
+            "launch.start" => {
+                let (state, result) = launch_protection::LaunchProtection::start(
+                    Path::new(params["profile"].as_str().unwrap()),
+                    params["now"].as_i64().unwrap(),
+                    params["guard"].as_bool().unwrap(),
+                    params["enableGpu"].as_bool().unwrap(),
+                    params["disableGpu"].as_bool().unwrap(),
+                );
+                launch = Some(state);
+                result
+            }
+            "launch.event" => launch.as_mut().unwrap().apply(params["op"].as_str().unwrap(), &params["args"]),
             method => panic!("unknown fixture method {method}"),
         };
         serde_json::to_writer(&mut out, &answer)?;

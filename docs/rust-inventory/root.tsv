@@ -253,10 +253,9 @@ src/main/gh-guard-stock.test.ts	tooling	-	Vitest suite: serves a finished attemp
 src/main/gh-guard.test.ts	tooling	-	Vitest suite: what a gh command costs.
 src/main/git-fingerprints.test.ts	tooling	-	Vitest suite: GitFingerprints.
 src/main/git-fingerprints.ts	mixed	2	GitFingerprints owns checkout watches, invalidation and concurrent read caching; core git.checkoutDirs and git.fingerprint resolve directories and read Git state.
-src/main/gpu-fallback-core.ts	port	1	gpuMarkerDecision, gpuChange and markerForTrial determine software fallback and hardware retrial from persisted GPU identity and age.
 src/main/gpu-fallback-loop.test.ts	tooling	-	Vitest suite: GPU crash relaunch.
 src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.
-src/main/gpu-fallback.ts	mixed	4	applyGpuFallbackIfNeeded and handleGpuProcessGone manage the marker, flags and relaunch; tauri-shell/src/gpu.rs supplies app.getGPUInfo and process_failed.rs emits app.childProcessGone.
+src/main/gpu-fallback.ts	mixed	4	The shell owns markers, trial, cooldown and crash-loop decisions. Node logs the decision, issues its relaunch/exit sequence and samples the compositor for callers; move these with process and window ownership.
 src/main/hang-watchdog.test.ts	tooling	-	Vitest consumes an actual marker through the Rust watchdog and checks both JSONL records.
 src/main/hang-watchdog.ts	mixed	4	The Tauri watchdog owns marker I/O and report formatting. The observed Node event loop must send its own heartbeat, synchronous markMainStep and lifecycle signals until index.ts and app-quit.ts move (§1.3c).
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
@@ -270,9 +269,7 @@ src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path 
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
 src/main/installer-spawn.ts	port	1	spawnDetachedOffThread delegates detached installer process creation to a Node Worker and returns its PID.
 src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
-src/main/launch-guard-core.ts	port	1	parseLaunchHistory, crashLoopDetected and gpuRelaunchDecision implement launch-history and relaunch cooldown policy.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
-src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
 src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
 src/main/launch-profile-store.ts	port	2	readLaunchProfile and updateLaunchProfile read and merge per-workspace launch flags in GUI preferences.
