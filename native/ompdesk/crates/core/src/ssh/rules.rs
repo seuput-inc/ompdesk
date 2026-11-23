@@ -49,16 +49,28 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
 }
 
 /// A saved host as the page sent it (`SshTarget`). Unchecked: only `destination` makes arguments of it.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
     name: String,
     host: String,
-    #[serde(default, deserialize_with = "present")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     username: Option<String>,
-    #[serde(default, deserialize_with = "present")]
-    port: Option<f64>,
-    #[serde(default, deserialize_with = "present")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    port: Option<serde_json::Number>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     key_path: Option<String>,
 }
 
@@ -103,7 +115,10 @@ impl Target {
             name: self.name,
             host: self.host,
             username: self.username,
-            port: self.port.map(port).transpose()?,
+            port: self
+                .port
+                .map(|n| port(n.as_f64().unwrap_or(f64::NAN)))
+                .transpose()?,
             key_path: self.key_path,
         })
     }

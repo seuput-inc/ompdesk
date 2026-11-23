@@ -3,9 +3,9 @@
 //! questions an ssh asks (`askpass`), the port forwards and port watches that stay (`live`), and the short runs of
 //! `ssh -G`, `ssh-keygen` and `ssh-add` through the shared runner (`crate::run`).
 //!
-//! Main keeps what the person wants: which forwards exist, their retry and grace clocks and the saved list
-//! (`src/main/ssh/service.ts`). It hands every request how to run (`How`: the three programs, the whole environment,
-//! the home folder, its own ssh folder, how long a short run may take), as it does for git and gh.
+//! The core reads and saves `<userData>/ssh-forwards.json` (`store`). Main keeps the live forwards and their retry
+//! and grace clocks (`src/main/ssh/service.ts`). Each run carries `How`: the three programs, the whole environment,
+//! the home folder, its own ssh folder, and how long a short run may take.
 //!
 //! A forward or a watch is named by main (`service`, `run`). Its request answers once the ssh started; from then on
 //! it reports by events and is ended by `ssh.stop`, by its service's `ssh.close`, or when the core's input ends
@@ -22,6 +22,7 @@
 mod askpass;
 mod live;
 mod rules;
+mod store;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -69,6 +70,8 @@ fn random_hex(bytes: usize) -> io::Result<String> {
 }
 
 pub fn register(registry: &mut Registry) {
+    registry.add("ssh.readStore", |call| Box::pin(store::read(call)));
+    registry.add("ssh.saveStore", |call| Box::pin(store::save(call)));
     registry.add("ssh.plan", |call| Box::pin(async move { plan(&call) }));
     registry.add("ssh.forward", |call| Box::pin(forward(call)));
     registry.add("ssh.watch", |call| Box::pin(watch(call)));

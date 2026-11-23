@@ -282,7 +282,7 @@ src/main/setup/test-mirror.ts	exception	Starts and stops controlled HTTP mirrors
 src/main/ssh/client.ts	port	Starts native ssh.* operations but buffers early events, keeps prompts and reports dropped runs when the core restarts.
 src/main/ssh/ipc.ts	port	Starts and disposes SshTools with Electron, and broadcasts state and prompts to every live window.
 src/main/ssh/service.test.ts	exception	Test coverage for SSH prompts, forwarding, reconnect and restore.
-src/main/ssh/service.ts	port	Restores and saves forwards, tracks active watches and retries dropped connections after checking port availability.
+src/main/ssh/service.ts	mixed	ssh.readStore/saveStore own forward file validation, quarantine, persistence and disk-full retry. The live watch/forward map and grace timers remain with same-tick state broadcasts and will-quit disposal (§1.3a,c).
 src/main/ssh/test-fake-ssh.ts	exception	Test fixture writes a substitute SSH executable for controlled process interactions.
 src/main/tailscale/cli.test.ts	exception	Test coverage for native Tailscale CLI responses.
 src/main/tailscale/cli.ts	native-client	Supplies main's environment and step cancellation to native tailscale methods. Rust starts the Windows tray app outside the core job.
