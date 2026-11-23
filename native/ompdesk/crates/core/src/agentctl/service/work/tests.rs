@@ -520,12 +520,12 @@ async fn schedule_says_so_without_a_service_and_needs_one_start() {
     .await;
     assert_eq!(
         text,
-        "create needs exactly one of every_minutes, daily_at, at, in_minutes or on."
+        "Invalid arguments for ompdesk_schedule: create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on"
     );
     let (text, _) = run(
         &control,
         "ompdesk_schedule",
-        json!({ "action": "create", "name": "x", "every_minutes": 5, "folder": "repo" }),
+        json!({ "action": "create", "name": "x", "prompt": "p", "every_minutes": 5, "folder": "repo" }),
     )
     .await;
     assert_eq!(text, "folder must be an absolute path.");

@@ -2331,9 +2331,9 @@ describe("ompdesk_schedule", () => {
 		const service = control(host);
 		const result = await service.run("main0001", T.schedule, {
 			action: "create",
-			name: "nightly audit",
-			prompt: "Audit the repo and report",
-			every_minutes: 60,
+			name: " nightly audit ",
+			prompt: " Audit the repo and report ",
+			every_minutes: "60",
 		});
 		expect(result.isError).toBe(false);
 		expect(result.text).toContain("Scheduled “[agent] nightly audit” every 60 min in /repo");
@@ -2348,6 +2348,47 @@ describe("ompdesk_schedule", () => {
 			enabled: true,
 			model: null,
 		});
+	});
+
+	it("returns field errors before schedule action errors and skips refinements after an invalid type", async () => {
+		const host = new FakeHost({ tabId: "main0001" });
+		const service = control(host);
+		for (const [args, reason] of [
+			[
+				{
+					action: "create",
+					name: " ",
+					prompt: " ",
+					days: "[2]",
+					every_minutes: "0",
+					in_minutes: "2",
+					target: "self",
+					folder: "/fixture",
+					model: "model",
+					device: "local",
+				},
+				"name: Too small: expected string to have >=1 characters; prompt: Too small: expected string to have >=1 characters; every_minutes: Too small: expected number to be >=1; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on; target self wakes this session: it takes no folder; target self wakes this session: it takes no model; target self wakes this session on this computer: it takes no device",
+			],
+			[
+				{ action: "create", days: "[2]", extra: true },
+				'Unrecognized key: "extra"; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on',
+			],
+			[{ action: "create", at: "bad" }, "at: at is an ISO 8601 moment; create needs name; create needs prompt"],
+			[{ action: "create", at: 20 }, "at: Invalid input: expected string, received number"],
+			[{ action: "create", in_minutes: false }, "in_minutes: Invalid input: expected number, received boolean"],
+			[{ action: "list", name: " " }, "name: Too small: expected string to have >=1 characters"],
+			[
+				{ action: "other", days: [1] },
+				'action: Invalid option: expected one of "create"|"list"|"cancel"|"update"|"pause"|"resume"|"run"|"runs"',
+			],
+		] as const) {
+			expect(await service.run("main0001", T.schedule, args)).toEqual({
+				isError: true,
+				text: `Invalid arguments for ompdesk_schedule: ${reason}`,
+			});
+		}
+		expect(host.cards).toEqual([]);
+		expect(host.savedDrafts).toEqual([]);
 	});
 
 	it("supports a daily time with weekdays, skips the card when confirmations are off, and a refusal schedules nothing", async () => {
@@ -6239,6 +6280,17 @@ describe("an app action on another computer", () => {
 	const read = { action: "usage.read", args: { device: desktop.name } };
 	const asked = (host: FakeHost) =>
 		host.sent.filter(entry => entry.command.type === "get_usage").map(entry => entry.tabId);
+
+	it("keeps the strict nested Autopilot error distinct from a direct tool error", async () => {
+		const service = withApp(new FakeHost({ tabId: "main0001" }));
+		const direct = await service.run("main0001", T.autopilot, { action: "status", session: " " });
+		const nested = await service.run("main0001", T.app, { action: "autopilot.status", args: { session: " " } });
+		expect(direct.isError && nested.isError).toBe(true);
+		expect(direct.text).toBe(
+			"Invalid arguments for ompdesk_autopilot: session: Too small: expected string to have >=1 characters",
+		);
+		expect(nested.text).toMatch(/Invalid arguments: Too small: expected string to have >=1 characters$/);
+	});
 
 	it("asks a session that already runs there", async () => {
 		const host = new FakeHost(

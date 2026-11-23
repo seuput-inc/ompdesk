@@ -853,6 +853,7 @@ export const ARGS = {
 		})
 		.strict(),
 	[T.merge]: z.object({ session: sessionArg }).strict(),
+	// Zod checks fields (including Date.parse); the core checks their combination for the action.
 	[T.schedule]: z
 		.object({
 			action: z.enum(["create", "list", "cancel", "update", "pause", "resume", "run", "runs"]),
@@ -922,31 +923,7 @@ export const ARGS = {
 			device: deviceArg.optional(),
 			target: z.enum(["self"]).optional(),
 		})
-		.strict()
-		.superRefine((args, ctx) => {
-			const problem = (message: string) => ctx.addIssue({ code: "custom", message });
-			const starts = [args.every_minutes, args.daily_at, args.at, args.in_minutes, args.on].filter(
-				start => start !== undefined,
-			).length;
-			if (args.days !== undefined && args.daily_at === undefined) problem("days goes with daily_at");
-			if (args.action === "create") {
-				if (!args.name) problem("create needs name");
-				if (!args.prompt) problem("create needs prompt");
-				if (starts !== 1) problem("create needs exactly one of every_minutes, daily_at, at, in_minutes or on");
-				if (args.target === "self") {
-					if (args.folder !== undefined) problem("target self wakes this session: it takes no folder");
-					if (args.model !== undefined) problem("target self wakes this session: it takes no model");
-					if (args.device !== undefined)
-						problem("target self wakes this session on this computer: it takes no device");
-				}
-			} else {
-				if (args.action !== "list" && !args.id) problem(`${args.action} needs id`);
-				if (args.action === "update" && starts > 1)
-					problem("update takes at most one of every_minutes, daily_at, at, in_minutes or on");
-				if (args.action !== "update" && (starts > 0 || args.name || args.prompt || args.model || args.target))
-					problem(`${args.action} takes only id (and device)`);
-			}
-		}),
+		.strict(),
 	[T.autopilot]: autopilotArgs,
 	[T.appList]: z
 		.object({ area: z.string().trim().max(60).optional(), query: z.string().trim().max(200).optional() })
@@ -1004,6 +981,7 @@ function loosen(schema: LooseSchema | undefined, value: unknown): unknown {
  * JSON text (`"true"`, `"{\"base\":\"main\"}"`; measured 10 Nov 2026: 4 of one session's 15 failed opens in a week): a field
  * whose schema takes no string reads that text as the value it spells. Everything else passes as it came, so the strict
  * parser (`ARGS`) still refuses what the schema does not take. One rule for every control tool and every nesting.
+ * Keep Number/JSON.parse before Zod: overflowing numbers and escaped lone surrogates aren't Rust JSON values.
  */
 export function looseArgs(tool: AgentControlToolName, raw: unknown): unknown {
 	const definition = AGENT_CONTROL_DEFINITIONS.find(entry => entry.name === tool);

@@ -5,8 +5,8 @@
 //! written back as TypeScript's `undefined` would be (an absent key), so what main receives equals what it received
 //! from the TypeScript service.
 //!
-//! The tool arguments are validated in TypeScript (zod, `looseArgs`), where the tools' JSON schemas and the skill
-//! drift test already keep both in step: the service asks main to parse (`args.parse`) and receives these structs.
+//! Main keeps Zod's field checks and JavaScript's text coercion. `Host::parse_args` applies the
+//! schedule action's cross-field checks before the service reads these structs.
 
 use std::collections::HashMap;
 

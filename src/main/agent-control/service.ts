@@ -643,6 +643,20 @@ function issueText(issue: { path: PropertyKey[]; message: string }): string {
 	return issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message;
 }
 
+// On a rejected schedule only, let Zod decide if its action refinement still runs. Never return rejected field values.
+function partialSchedule(input: unknown) {
+	let partial: { action: string; fields: Record<string, boolean> } | undefined;
+	ARGS.ompdesk_schedule
+		.superRefine(value => {
+			partial = {
+				action: value.action,
+				fields: Object.fromEntries(Object.entries(value).map(([key, field]) => [key, field !== ""])),
+			};
+		})
+		.safeParse(input);
+	return partial;
+}
+
 /** The core's `agentRuntime.*`: what the host did over the service's own state, by one service's port. */
 export class RuntimeClient {
 	readonly #control: AgentControl;
@@ -1035,15 +1049,13 @@ export class AgentControl {
 		return {
 			"args.parse": ({ tool, args, loose }: { tool: AgentControlToolName; args: unknown; loose: boolean }) =>
 				coded(() => {
-					// A model's JSON written as text is read as what it spells, for every tool and nesting; the
-					// parser's output (trimmed, defaults applied) is what the tool body reads.
-					const parsed = ARGS[tool].safeParse(loose ? (looseArgs(tool, args) ?? {}) : args);
+					const input = loose ? (looseArgs(tool, args) ?? {}) : args;
+					const parsed = ARGS[tool].safeParse(input);
 					if (parsed.success) return { ok: true, args: parsed.data };
 					return {
 						ok: false,
-						error: loose
-							? `Invalid arguments for ${tool}: ${parsed.error.issues.map(issueText).join("; ")}`
-							: `Invalid arguments: ${parsed.error.issues.map(issue => issue.message).join("; ")}`,
+						error: parsed.error.issues.map(loose ? issueText : issue => issue.message).join("; "),
+						schedule: tool === "ompdesk_schedule" ? partialSchedule(input) : undefined,
 					};
 				}),
 			mail: ({
