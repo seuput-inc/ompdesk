@@ -18,15 +18,17 @@
 //! argv. `inputFile` becomes the command's stdin (else it gets none). `log` is the output file of an isolated command
 //! (`SpawnSpec.isolated`, `isolatedLaunch`): with `redirect` the command writes its stdout and stderr there; either way
 //! the file's bytes become this process's output once the command exited, and the file is removed.
+//! A `worktreeHook` spec instead runs one fixed repository hook and returns its deadline flag and bounded output
+//! tail. Its private output stream and log are never used for a general command.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+mod hook;
 
 use serde::Deserialize;
 
@@ -44,6 +46,16 @@ const KILL_AFTER: Duration = Duration::from_secs(2);
 /// How long a stop waits for the ended job to be empty before this process exits anyway.
 #[cfg(windows)]
 const EMPTY_WITHIN: Duration = Duration::from_secs(15);
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Request {
+    Command(Spec),
+    Hook {
+        #[serde(rename = "worktreeHook")]
+        hook: hook::Hook,
+    },
+}
 
 #[derive(Deserialize)]
 struct Spec {
@@ -81,13 +93,23 @@ pub fn run() -> i32 {
     let signals = crate::sys::StopSignals::block();
     let spec = match std::env::var(SPEC_ENV)
         .map_err(|error| error.to_string())
-        .and_then(|text| serde_json::from_str::<Spec>(&text).map_err(|error| error.to_string()))
+        .and_then(|text| serde_json::from_str::<Request>(&text).map_err(|error| error.to_string()))
     {
         Ok(spec) => spec,
         Err(error) => {
             eprintln!("ompdesk-core --supervise: no command in {SPEC_ENV}: {error}");
             return NOT_STARTED;
         }
+    };
+    let (events, received) = mpsc::channel();
+    watch_stop(
+        &events,
+        #[cfg(unix)]
+        signals,
+    );
+    let spec = match spec {
+        Request::Hook { hook } => return hook.run(events, received),
+        Request::Command(spec) => spec,
     };
     let held = match start(&spec) {
         Ok(held) => held,
@@ -97,14 +119,20 @@ pub fn run() -> i32 {
             return NOT_STARTED;
         }
     };
-    let Held {
-        mut child,
-        #[cfg(windows)]
-        tree,
-    } = held;
-    #[cfg(unix)]
-    let pid = child.id();
-    let (events, received) = mpsc::channel();
+    let (code, _) = wait(held, events, received, None);
+    if let Some(log) = &spec.log {
+        let text = std::fs::read(&log.path).unwrap_or_default();
+        drop_log(&spec);
+        let mut stdout = io::stdout().lock();
+        let _ = stdout.write_all(&text).and_then(|()| stdout.flush());
+    }
+    code
+}
+
+fn watch_stop(
+    events: &mpsc::Sender<Event>,
+    #[cfg(unix)] signals: io::Result<crate::sys::StopSignals>,
+) {
     let stop = events.clone();
     thread::spawn(move || {
         let mut stdin = io::stdin();
@@ -125,32 +153,47 @@ pub fn run() -> i32 {
             }
         });
     }
+}
+
+fn wait(
+    held: Held,
+    events: mpsc::Sender<Event>,
+    received: mpsc::Receiver<Event>,
+    hook_deadline: Option<Instant>,
+) -> (i32, bool) {
+    let Held {
+        mut child,
+        #[cfg(windows)]
+        tree,
+    } = held;
+    #[cfg(unix)]
+    let pid = child.id();
     thread::spawn(move || {
         let _ = events.send(Event::Exited(child.wait()));
     });
 
     let mut stopping = false;
-    #[cfg(unix)]
-    let mut kill_at: Option<Instant> = None;
+    let mut timed_out = false;
+    let mut deadline = hook_deadline;
     let status = loop {
-        #[cfg(unix)]
-        let event = match kill_at {
-            Some(at) => match received.recv_timeout(at.saturating_duration_since(Instant::now())) {
+        let event = if let Some(at) = deadline {
+            match received.recv_timeout(at.saturating_duration_since(Instant::now())) {
                 Ok(event) => event,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(mpsc::RecvTimeoutError::Disconnected) => break None,
+                Err(mpsc::RecvTimeoutError::Timeout) if stopping => {
+                    #[cfg(unix)]
                     crate::sys::signal_group(pid, true);
-                    kill_at = None;
+                    deadline = None;
                     continue;
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break None,
-            },
-            None => match received.recv() {
-                Ok(event) => event,
-                Err(_) => break None,
-            },
-        };
-        #[cfg(windows)]
-        let Ok(event) = received.recv() else {
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    timed_out = true;
+                    Event::Stop
+                }
+            }
+        } else if let Ok(event) = received.recv() {
+            event
+        } else {
             break None;
         };
         match event {
@@ -159,13 +202,21 @@ pub fn run() -> i32 {
                 #[cfg(unix)]
                 {
                     crate::sys::signal_group(pid, false);
-                    kill_at = Some(Instant::now() + KILL_AFTER);
+                    deadline = Some(Instant::now() + KILL_AFTER);
                 }
                 #[cfg(windows)]
-                tree.end();
+                {
+                    tree.end();
+                    deadline = None;
+                }
             }
             Event::Stop => {}
-            Event::Exited(status) => break status.ok(),
+            Event::Exited(status) => {
+                if !stopping && hook_deadline.is_some_and(|at| Instant::now() >= at) {
+                    timed_out = true;
+                }
+                break status.ok();
+            }
         }
     };
     // A descendant that outlived the command goes with its group.
@@ -173,26 +224,19 @@ pub fn run() -> i32 {
     crate::sys::signal_group(pid, true);
     // The command ending is not its tree ending: report the stop only once nothing of it runs.
     #[cfg(windows)]
-    if stopping {
+    if stopping || hook_deadline.is_some() {
         let since = std::time::Instant::now();
         while tree.alive() && since.elapsed() < EMPTY_WITHIN {
             tree.end();
             thread::sleep(Duration::from_millis(50));
         }
     }
-    let code = if stopping {
+    let code = if stopping || timed_out {
         STOPPED
     } else {
         status.and_then(|status| status.code()).unwrap_or(1)
     };
-    if let Some(log) = &spec.log {
-        let text = std::fs::read(&log.path).unwrap_or_default();
-        drop_log(&spec);
-        let mut stdout = io::stdout().lock();
-        // Nobody may read any more (main is gone): the status still says how the command ended.
-        let _ = stdout.write_all(&text).and_then(|()| stdout.flush());
-    }
-    code
+    (code, timed_out)
 }
 
 /// The started command; on Windows with its job.
@@ -226,6 +270,19 @@ fn start(spec: &Spec) -> Result<Held, String> {
             .map_err(|error| opening(&error, &log.path))?;
         command.stdout(output).stderr(errors);
     }
+    spawn_held(
+        command,
+        &program,
+        #[cfg(windows)]
+        spec.isolated,
+    )
+}
+
+fn spawn_held(
+    mut command: Command,
+    program: &str,
+    #[cfg(windows)] isolated: bool,
+) -> Result<Held, String> {
     #[cfg(unix)]
     crate::sys::new_session(&mut command);
     #[cfg(windows)]
@@ -249,7 +306,7 @@ fn start(spec: &Spec) -> Result<Held, String> {
     {
         use std::os::windows::io::AsRawHandle;
         // Suspended until it is in the job, so nothing it starts escapes the tree.
-        let tree = if spec.isolated {
+        let tree = if isolated {
             crate::sys::ProcessTree::outliving(child.as_raw_handle())
         } else {
             crate::sys::ProcessTree::of(child.as_raw_handle())

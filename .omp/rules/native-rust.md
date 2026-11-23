@@ -62,6 +62,8 @@ globs:
 
 - **4c, installed package ownership.** `ext.binaryFacts` follows the found launcher and identifies its package manager, writable target and package version for CLI updates, MCP updates and setup. A Bun executable sidecar is CLI evidence only; MCP direct commands and omp setup retain their original shim rules. `ext::install` runs the pre-port layout and shim tables. Native parity runs `cli-tools/detect.test.ts`, `ext-update/mcp-owner.test.ts`, `setup/plans.test.ts` and `setup/service.test.ts`.
 
+- **6a, worktree hooks.** The running core only discovers a setup, pre-merge or post-merge hook. A separate `ompdesk-core --supervise` runs it, so restarting the discovery core does not interrupt a hook. Main closes its stdin on cancellation and drains the result before releasing the repository lock. The supervisor combines stdout/stderr in write order and returns the final 4,096 UTF-16 units. It replaces the log after exit rather than following an existing log symlink; on POSIX the new log is private. Native parity's `local/git/worktree-seed.test.ts` covers captured results, timeout, restart and lease cancellation; `setup/runner.test.ts` retains the installer cases.
+
 - **4c, Apple's git trampoline.** `setup.appleDeveloperDir` runs only `/usr/bin/xcode-select -p` with the caller's environment. Setup retains its 15 s budget; sign-in and git resolution retain 5 s. No installer runs to discover Git. `setup/detect-git-shell.test.ts` compares the native reply to the command on macOS and expects no result on other platforms.
 
 
