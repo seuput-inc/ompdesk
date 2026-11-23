@@ -15,19 +15,30 @@ describe("checkLandCandidate", () => {
 	});
 
 	// The land waits on this: a check that outlives its bound is stopped and reported timed out, never waited for.
-	it.skipIf(process.platform === "win32")("stops a check that outlives its timeout", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-land-timeout-"));
-		try {
-			await initRepo(dir);
-			const sha = gitSync(dir, "rev-parse", "HEAD").trim();
-			const started = Date.now();
-			const result = await checkLandCandidate({ root: dir, primary: dir, sha, command: "sleep 60", timeoutMs: 400 });
-			expect(result).toMatchObject({ ok: false, timedOut: true, exitCode: null });
-			expect(Date.now() - started).toBeLessThan(30_000);
-		} finally {
-			await fs.rm(dir, { recursive: true, force: true });
-		}
-	}, 30_000); // the bound the assertion holds; on a busy runner the whole case took over 5 s (ci 45242399001)
+	it.skipIf(process.platform === "win32")(
+		"stops a check that outlives its timeout",
+		async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-land-timeout-"));
+			try {
+				await initRepo(dir);
+				const sha = gitSync(dir, "rev-parse", "HEAD").trim();
+				const started = Date.now();
+				const result = await checkLandCandidate({
+					root: dir,
+					primary: dir,
+					sha,
+					command: "sleep 60",
+					timeoutMs: 400,
+				});
+				expect(result).toMatchObject({ ok: false, timedOut: true, exitCode: null });
+				expect(Date.now() - started).toBeLessThan(30_000);
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		},
+		// The bound the assertion holds; on a busy runner the whole case took over 5 s (ci 45242399001).
+		30_000,
+	);
 
 	// A Finder-launched app has launchd's bare PATH; the cycle's command ran in the session's bash, whose PATH is the
 	// login shell's (shellSpawnEnv), so `bun run check` passed there and must find `bun` here too.
