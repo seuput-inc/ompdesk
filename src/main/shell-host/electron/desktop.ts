@@ -81,8 +81,8 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 
 	// --- shell ---
 	const shell = {
-		async openExternal(url: string): Promise<void> {
-			await client.call("shell.openExternal", { url });
+		async openExternal(url: string, source?: "page"): Promise<void> {
+			await client.call(source === "page" ? "shell.openPageExternal" : "shell.openExternal", { url });
 		},
 		async openPath(path: string): Promise<string> {
 			return (await client.call<{ error: string }>("shell.openPath", { path })).error;

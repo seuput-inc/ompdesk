@@ -51,8 +51,8 @@ export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client
 
 export const admitNotification: AdmitNotification = report => client.call("app.admitNotification", report);
 
-export async function openPageExternal(url: string): Promise<void> {
-	await client.call("shell.openPageExternal", { url });
+export function openPageExternal(url: string): Promise<void> {
+	return electron.shell.openExternal(url, "page");
 }
 
 /** Paired pages arrive through the permission-checked registry. Desktop pages read the same log in the shell. */
