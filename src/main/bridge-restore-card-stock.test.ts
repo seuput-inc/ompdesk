@@ -4,7 +4,7 @@ import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { BLOCKING_UI_METHODS } from "../shared/rpc-types";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon } from "./test-bridge-probe";
@@ -121,8 +121,8 @@ interface Omp {
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
-afterAll(async () => {
-	for (const cleanup of cleanups.reverse()) await cleanup();
+afterEach(async () => {
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 async function startOmp(
