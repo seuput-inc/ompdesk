@@ -9,7 +9,7 @@ src/main/agent-control/branches-worktrees.test.ts	exception	Tests worktree remov
 src/main/agent-control/branches.test.ts	exception	Asserts the commits, changed files and parent checkout state reported by branchFacts.
 src/main/agent-control/branches.ts	port	Runs the pre-merge hook before allowing git.mergeBranch and the post-merge hook after success; coordinates archival before discard.
 src/main/agent-control/host.test.ts	exception	Tests session visibility, permissions, opening and delivery through AgentControlRuntime with host dependencies.
-src/main/agent-control/host.ts	port	Resolves local or paired folders and routes session creation, confirmations, worktree requests and mail to their owning windows or devices.
+src/main/agent-control/host.ts	mixed	fs.stat follows links for a scheduled wake's session file and an explicitly requested local spawn folder. The host keeps the caller's path spelling and never stats a paired folder locally. Wake receipts, parent registration, window and pool ownership are read in the same turn (§1.3c).
 src/main/agent-control/mail.ts	exception	MAIL_KINDS is tool schema vocabulary; MailDelivery is the host callback type. agentctl/service/mod.rs calls Rust delivery_for before mail_attached; the stock bridge tests supply example frames.
 src/main/agent-control/service.test.ts	exception	Exercises agent-control commands across sessions, asks, visibility, branch operations and reports using a test host.
 src/main/agent-control/service.ts	port	Core owns schedule action constraints and socket status. Main still reopens the service after core loss, snapshots host state and handles JS field parsing (including Date.parse and Zod issue ordering).

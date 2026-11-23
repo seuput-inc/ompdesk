@@ -7,7 +7,6 @@
  * wait outlives the executor's stack frame and the tab list belongs to that window.
  */
 
-import { stat } from "node:fs/promises";
 import { isAbsolute, posix, resolve } from "node:path";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
@@ -67,6 +66,7 @@ import {
 import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary, VersionedSummaries } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
+import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
 import { createWorktree, tablessWorktreeBridge, WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
@@ -136,6 +136,16 @@ const SENT_MARKS_TIMEOUT_MS = 8_000;
 const OPENING_SETTLE_MS = 3_000;
 /** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
 const OPENING_MAX_MS = 5 * 60_000;
+
+async function localPathIs(path: string, kind: "file" | "directory"): Promise<boolean> {
+	try {
+		const { result } = await core().call<{ file: boolean; directory: boolean }>("fs.stat", { path });
+		return result[kind];
+	} catch (error) {
+		if (error instanceof CoreError && ["file_not_found", "io", "exists"].includes(error.code)) return false;
+		throw error;
+	}
+}
 
 /** Every tombstone, by file and computer and by saved id (stock names a session file `<time>_<session id>.jsonl`). */
 function tombstones(): Tombstones {
@@ -459,13 +469,7 @@ export class AgentControlRuntime {
 	async wakeSession(schedule: Schedule, runId: string): Promise<RunProcess> {
 		if (schedule.wakeSession === undefined) throw new Error("This schedule wakes no session");
 		const sessionPath = schedule.wakeSession;
-		if (
-			!(await stat(sessionPath).then(
-				entry => entry.isFile(),
-				() => false,
-			))
-		)
-			throw new Error(`The session to wake is gone (${sessionPath})`);
+		if (!(await localPathIs(sessionPath, "file"))) throw new Error(`The session to wake is gone (${sessionPath})`);
 		const { promise: done, resolve } = Promise.withResolvers<{ code: number | null; error?: string }>();
 		this.#wakes.set(runId, resolve);
 		try {
@@ -825,8 +829,7 @@ export class AgentControlRuntime {
 		if (!folder) return caller.cwd;
 		if (caller.device) return /^([a-zA-Z]:[\\/]|\/)/.test(folder) ? folder : posix.join(caller.cwd, folder);
 		const target = isAbsolute(folder) ? folder : resolve(caller.cwd, folder);
-		const info = await stat(target).catch(() => null);
-		if (!info?.isDirectory()) throw new Error(`"${target}" is not a folder on this computer.`);
+		if (!(await localPathIs(target, "directory"))) throw new Error(`"${target}" is not a folder on this computer.`);
 		return target;
 	}
 
