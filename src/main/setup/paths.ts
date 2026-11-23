@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SetupPlatform } from "../../shared/setup";
+import { core } from "../core/process";
 import { resetLoginShellEnvCache } from "../shell-env";
 
 export type Exists = (file: string) => boolean;
@@ -148,8 +149,6 @@ type RegistryPathPart = string | { name: string };
  */
 export async function refreshPath(platform: SetupPlatform, toolsDir: string): Promise<void> {
 	if (platform === "win32") {
-		// Playwright imports the path helpers as ESM; only a Windows registry refresh needs the host's CJS client.
-		const { core } = await import("../core/process");
 		// A failed registry read never prevents reapplying the managed tools.
 		const parts = await core()
 			.call<RegistryPathPart[]>("setup.registryPath", { cwd: process.cwd(), env: process.env })
