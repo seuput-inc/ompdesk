@@ -55,7 +55,7 @@ src/main/autopilot.ts	native-client	3	Autopilot opens the run via autopilot.open
 src/main/background-work.test.ts	tooling	-	Vitest suite: summarizeJobRows.
 src/main/background-work.ts	port	3	askBackgroundWork queries member bridges under deadline and aggregates named subagents, jobs and unknown sessions for restart confirmation.
 src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
-src/main/benchmark-runner.ts	port	2	BenchmarkRunner spawns/cancels the benchmark child, enforces a timeout and parses its summary for the live IPC feature.
+src/main/benchmark-runner.ts	port	2	Retained with the launcher (§1.3a,c): the caller reads running and aborts synchronously; an explicit Windows .cmd must run even beside .cmd.exe. The native supervisor must distinguish failure to spawn from a process exit and preserve a signal's null exitCode before it can own this run.
 src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
 src/main/boot-model.ts	port	2	isNoModelBootFailure detects stock startup errors; bootModelSelector spawns the catalog probe and caches its answer per install/version.
 src/main/bridge-account-credits.test.ts	tooling	-	Vitest suite: account credits from stock's usage limits.
