@@ -15,6 +15,7 @@ import { brewBinDirs, spawnPath } from "../shell-env";
 import { executableName, findOnPath, needsShell, spawnArgs, spawnCommand } from "../spawn";
 import { TailscaleCli } from "../tailscale/cli";
 import { locateTailscale } from "../tailscale/locate";
+import { appleDeveloperDir } from "./apple-git";
 import { AGENT_DESKTOP_MIN_VERSION } from "./archives";
 import { readGitAslrOverride } from "./git-aslr";
 import { findGitBash, managedAgentDesktop } from "./paths";
@@ -188,11 +189,7 @@ async function detectGit(platform: SetupPlatform, pathEnv: string, env: NodeJS.P
 	const git = findOnPath(["git"], pathEnv, platform, [], ["/usr/bin/git"]);
 	if (git) return versionOf(git, env, platform);
 	if (platform !== "darwin") return { kind: "missing" };
-	try {
-		await probe("/usr/bin/xcode-select", ["-p"], env, platform);
-	} catch {
-		return { kind: "missing" };
-	}
+	if ((await appleDeveloperDir(env, 15000)) === null) return { kind: "missing" };
 	return versionOf("/usr/bin/git", env, platform);
 }
 
