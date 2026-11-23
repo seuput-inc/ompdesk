@@ -54,7 +54,7 @@ src/main/ai-memory/upkeep.test.ts	exception	Checks learning from paused conversa
 src/main/ai-memory/upkeep.ts	mixed	Native readiness schedules repair and upkeep and cancels pending ticks on pause. The repair claim belongs to this app launch, not to a replaceable core; the client reads current host settings.
 src/main/cli-tools/catalog.ts	port	Shell updater batch, §1.3a,b: a synchronous table, not an I/O unit. Detection, command planning and CliUpdater share CLI_TOOL_SPECS; relevantTools preserves the caller's display order. Move the table with these readers.
 src/main/cli-tools/detect.test.ts	exception	Tests attribution of CLI installs to Homebrew, Bun and npm using their actual directory layouts.
-src/main/cli-tools/detect.ts	port	Resolves executable shims, classifies package-manager ownership, checks write access and probes installed versions.
+src/main/cli-tools/detect.ts	mixed	ext.binaryFacts resolves package shims and returns their manager, writable target and installed manifest version. The shell updater (§1.3c) supplies the login PATH and probes live vendor CLI versions with its command runner.
 src/main/cli-tools/plans.test.ts	exception	Checks package-manager executable selection, argv and environment for version checks and upgrades.
 src/main/cli-tools/plans.ts	mixed	ext.cliWaitsForIdle and ext.updateRunning decide whether an update must wait. Shell updater batch, §1.3a: CLI and MCP still share synchronous owner-specific command builders and the tool catalog.
 src/main/cli-tools/updater.test.ts	exception	Exercises provider filtering, supervised updates and post-update detection using controlled dependencies.
@@ -105,9 +105,9 @@ src/main/ext-update/classify.ts	native-client	Calls ext.seeds with the inventory
 src/main/ext-update/core.ts	native-client	Wraps ext.* requests to the Rust core in the updater step's call fence and returns the result.
 src/main/ext-update/ipc.ts	port	Shell IPC batch, §1.3a,c: GET returns the current rows before its rescan settles; NOW accepts only a key already in the same updater's rows. Move both handlers with the updater's state.
 src/main/ext-update/mcp-owner.test.ts	exception	Checks ownership of npm, Bun, Homebrew and Python installs and the reasons other binaries are skipped.
-src/main/ext-update/mcp-owner.ts	port	Resolves the executable on disk, determines its package owner and writable target, and probes its installed version after ext.binaryFacts.
+src/main/ext-update/mcp-owner.ts	mixed	ext.binaryFacts owns package layouts, script detection, venv versions and write access. The shell updater (§1.3c) resolves its launch PATH and queries the Python environment only for a pip console-script entry point.
 src/main/ext-update/mcp-plans.test.ts	exception	Checks generated check and upgrade commands for package managers, runners and Python environments.
-src/main/ext-update/mcp-plans.ts	port	Chooses pip, pipx, uv or shared package-manager commands from the owner and dispatches version parsing by runner type.
+src/main/ext-update/mcp-plans.ts	mixed	ext.pipLatest and ext.registryLatest parse check output. The shell updater owns the shared synchronous CLI/MCP package-manager plan and command runner (§1.3a,c); move both callers together.
 src/main/ext-update/mcp.test.ts	exception	Tests classification of bundled, remote and package-runner MCP launches and pinned versions.
 src/main/ext-update/mcp.ts	native-client	Forwards configured servers to ext.mcpClasses for classification.
 src/main/ext-update/running.test.ts	exception	Tests which package-owner and executable combinations must wait for the running server before updating.
@@ -265,7 +265,7 @@ src/main/setup/omp-update-install.test.ts	exception	Exercises updates of the sel
 src/main/setup/paths.test.ts	exception	Checks PATH refresh against the real core, plus synchronous managed paths and Git Bash selection.
 src/main/setup/paths.ts	mixed	setup.registryPath queries and parses the machine and user registry values. After it returns, refreshPath binds variables from the current process.env and publishes PATH synchronously; managedToolEnv and cli-install share the same synchronous merge (§1.3a,c).
 src/main/setup/plans.test.ts	exception	Checks the selected installer methods, generated commands and unsupported or already-present tools.
-src/main/setup/plans.ts	port	Selects installers by tool, platform and presence, and builds the download, verification and install commands or manual instructions.
+src/main/setup/plans.ts	mixed	ext.binaryFacts identifies the npm install behind omp. Shell setup batch keeps synchronous plan and manual-step selection with SetupService, the installer and its cancellation slot (§1.3a,c).
 src/main/setup/runner.test.ts	exception	Tests streamed output and the outcomes for success, nonzero exit and spawn failure.
 src/main/setup/runner.ts	port	Shell setup batch, §1.3a,c: SetupService.cancel reads runner.running and closes the current supervisor's stdin synchronously. Move with the same installer slot, output drain and cancellation outcome.
 src/main/setup/service.test.ts	exception	Checks launch-time install order and preservation or restoration of the prior compiled omp launcher.

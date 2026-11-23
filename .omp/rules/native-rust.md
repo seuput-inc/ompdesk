@@ -58,6 +58,8 @@ globs:
 
 - **4c, verified omp cache.** `setup.readCompatCache` and `setup.saveCompatCache` read and replace `<userData>/omp-compat.json`. The core accepts at most 1 MiB of UTF-8 and uses `disk::saves::write_kept` for both ENOSPC and EDQUOT. Main keeps the release validator, proxy-aware fetch, and the latest unconfirmed bytes so a replacement core can finish a save. Native parity's `omp-compat-source.test.ts` covers offline reads, replacement and save ordering; `disk::saves` tests the retry.
 
+- **4c, installed package ownership.** `ext.binaryFacts` follows the found launcher and identifies its package manager, writable target and package version for CLI updates, MCP updates and setup. A Bun executable sidecar is CLI evidence only; MCP direct commands and omp setup retain their original shim rules. `ext::install` runs the pre-port layout and shim tables. Native parity runs `cli-tools/detect.test.ts`, `ext-update/mcp-owner.test.ts`, `setup/plans.test.ts` and `setup/service.test.ts`.
+
 - **4c, Apple's git trampoline.** `setup.appleDeveloperDir` runs only `/usr/bin/xcode-select -p` with the caller's environment. Setup retains its 15 s budget; sign-in and git resolution retain 5 s. No installer runs to discover Git. `setup/detect-git-shell.test.ts` compares the native reply to the command on macOS and expects no result on other platforms.
 
 
