@@ -313,7 +313,7 @@ export interface IpcDeps {
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
-	schedules?: () => Pick<ScheduleService, "command" | "create" | "state" | "prune"> | null;
+	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */

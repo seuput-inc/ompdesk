@@ -15,6 +15,9 @@
 //!   `schedules.ended`: main starts the run, because the omp, its environment and its extensions are main's to
 //!   resolve (it hands them to `schedules.launch`) and a session's own wake-up is delivered by the control tools.
 //!   `schedules.stop` `{service, run}` asks main to stop the run it started.
+//! - After `schedules.routinesReady`, `routineAsk` → `routineAnswer` resolves a machine runner or a private
+//!   mailbox login per poll. `routineSession` subscribes/unsubscribes stock facts (`routineActivity`).
+//!   The core owns the source generations, all cursor writes, file watches, timers and acceptance of each event.
 //! - `schedules.state` `{service, state}`: every change, which main keeps as the copy its synchronous readers read.
 //!
 //! A service that is still open when the core's input ends is closed then (`close_all`): its running runs read
@@ -27,9 +30,11 @@
 mod draft;
 mod engine;
 mod launch;
+mod marks;
 pub(crate) mod rules;
 #[cfg(test)]
 mod tests;
+pub(crate) mod triggers;
 
 use std::collections::HashMap;
 use std::fs;
@@ -116,6 +121,8 @@ fn webhook_key() -> String {
 /// back never holds a request.
 struct Journal {
     file: PathBuf,
+    mode: Option<u32>,
+    label: &'static str,
     queue: Mutex<Option<mpsc::Sender<String>>>,
     /// The writer thread, joined by `close`: nothing of it lands after the last write, not even a temp file.
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -123,7 +130,7 @@ struct Journal {
 }
 
 impl Journal {
-    fn open(file: PathBuf) -> Journal {
+    fn open(file: PathBuf, mode: Option<u32>, label: &'static str) -> Journal {
         let (queue, texts) = mpsc::channel::<String>();
         let closed = Arc::new(AtomicBool::new(false));
         let writer = std::thread::spawn({
@@ -137,17 +144,16 @@ impl Journal {
                     if closed.load(Ordering::SeqCst) {
                         continue;
                     }
-                    if let Err(fault) = write_kept(&file, text.as_bytes(), None, 0o777) {
-                        eprintln!(
-                            "ompdesk-core: couldn't save the schedules: {}",
-                            fault.message
-                        );
+                    if let Err(fault) = write_kept(&file, text.as_bytes(), mode, 0o777) {
+                        eprintln!("ompdesk-core: couldn't save the {label}: {}", fault.message);
                     }
                 }
             }
         });
         Journal {
             file,
+            mode,
+            label,
             queue: Mutex::new(Some(queue)),
             writer: Mutex::new(Some(writer)),
             closed,
@@ -167,10 +173,10 @@ impl Journal {
         if let Some(writer) = locked(&self.writer).take() {
             let _ = writer.join();
         }
-        if let Err(fault) = write_kept(&self.file, text.as_bytes(), None, 0o777) {
+        if let Err(fault) = write_kept(&self.file, text.as_bytes(), self.mode, 0o777) {
             eprintln!(
-                "ompdesk-core: couldn't save the schedules on quit: {}",
-                fault.message
+                "ompdesk-core: couldn't save the {} on quit: {}",
+                self.label, fault.message
             );
         }
     }
@@ -180,6 +186,7 @@ struct Service {
     name: String,
     events: Events,
     engine: Mutex<Engine>,
+    triggers: Mutex<Option<triggers::Triggers>>,
     log_dir: PathBuf,
     /// The clock is main's: every request says the time, and there is no timer here.
     manual: bool,
@@ -258,6 +265,9 @@ impl Service {
         match out {
             Out::Changed { state, journal } => {
                 self.journal.keep(journal);
+                if let Some(triggers) = locked(&self.triggers).as_mut() {
+                    triggers.sync(self, engine, &state, now);
+                }
                 self.tell("schedules.state", serde_json::json!({ "state": state }));
             }
             Out::Closed { journal } => self.journal.close(&journal),
@@ -324,13 +334,22 @@ impl Service {
         (!Path::new(cwd).exists()).then(|| format!("Project folder not found: {cwd}"))
     }
 
-    fn close(&self, given: Option<f64>) {
+    async fn close(&self, given: Option<f64>) {
         let now = self.at(given);
-        self.with(|engine| engine.close(now));
+        let drained = self.with(|engine| {
+            let drained = locked(&self.triggers)
+                .take()
+                .map(|triggers| triggers.close(self));
+            engine.close(now);
+            drained
+        });
         if let Some(clock) = locked(&self.clock).take() {
             clock.abort();
         }
         locked(&self.waits).clear();
+        if let Some(mut drained) = drained {
+            while drained.recv().await.is_some() {}
+        }
         self.closed.send_replace(true);
     }
 }
@@ -344,7 +363,7 @@ fn service(name: &str) -> Result<Arc<Service>, Fault> {
 
 /// Closes every service whose events go to `events`' output, or to none any more. `serve` calls it when its input
 /// ended: a main that died never asks, and the request it keeps open on each service would keep the core alive.
-pub fn close_all(events: &Events) {
+pub async fn close_all(events: &Events) {
     let ending: Vec<Arc<Service>> = {
         let mut services = locked(&SERVICES);
         let names: Vec<String> = services
@@ -358,7 +377,7 @@ pub fn close_all(events: &Events) {
             .collect()
     };
     for service in ending {
-        service.close(None);
+        service.close(None).await;
     }
 }
 
@@ -402,22 +421,10 @@ struct CreateParams {
 }
 
 #[derive(Deserialize)]
-struct FireParams {
-    id: String,
-    detail: String,
-}
-
-#[derive(Deserialize)]
 struct WebhookParams {
     id: String,
     bearer: String,
     detail: String,
-}
-
-#[derive(Deserialize)]
-struct FailedParams {
-    id: String,
-    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -468,9 +475,10 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         name: params.service.clone(),
         events: call.events.clone(),
         engine: Mutex::new(engine),
+        triggers: Mutex::default(),
         log_dir: PathBuf::from(&params.log_dir),
         manual: params.manual,
-        journal: Journal::open(file.clone()),
+        journal: Journal::open(file.clone(), None, "schedules"),
         waits: Mutex::default(),
         clock: Mutex::default(),
         closed: watch::channel(false).0,
@@ -600,26 +608,12 @@ pub fn register(registry: &mut Registry) {
     registry.add("schedules.create", |call| {
         Box::pin(async move { create(&call) })
     });
-    registry.add("schedules.fire", |call| {
-        Box::pin(async move {
-            let (service, now, params): (_, _, FireParams) = asked(&call)?;
-            Reply::json(&service.with(|engine| engine.fire(&params.id, &params.detail, now)))
-        })
-    });
     registry.add("schedules.webhook", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, WebhookParams) = asked(&call)?;
             Reply::json(
                 &service
                     .with(|engine| engine.webhook(&params.id, &params.bearer, &params.detail, now)),
-            )
-        })
-    });
-    registry.add("schedules.triggerFailed", |call| {
-        Box::pin(async move {
-            let (service, now, params): (_, _, FailedParams) = asked(&call)?;
-            Reply::json(
-                &service.with(|engine| engine.trigger_failed(&params.id, &params.reason, now)),
             )
         })
     });
@@ -659,13 +653,15 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let at: At = call.params()?;
             // Closing twice, or after the core's input ended, has nothing left to close.
-            if let Some(service) = locked(&SERVICES).remove(&at.service) {
-                service.close(at.now);
+            let service = locked(&SERVICES).remove(&at.service);
+            if let Some(service) = service {
+                service.close(at.now).await;
             }
             Reply::json(&())
         })
     });
     registry.add("schedules.closed", |call| Box::pin(closed(call)));
+    triggers::register(registry);
     launch::register(registry);
 }
 

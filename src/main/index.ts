@@ -191,9 +191,7 @@ import { type Identity, loadIdentity } from "./remote/identity";
 import { KeepAwakePolicy } from "./remote/keep-awake";
 import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
-import { FileMarks } from "./routines/marks";
-import { githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
-import { RoutineTriggers } from "./routines/triggers";
+import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
 import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
@@ -599,9 +597,6 @@ let logsClosed: Promise<void> = Promise.resolve();
 let ompsStopped: Promise<void> = Promise.resolve();
 /** The core and the processes it started, after the omps and schedule writes have settled. */
 let coreStopped: Promise<void> = Promise.resolve();
-/** Watches what event routines (Settings › Schedules) wait for (src/main/routines). */
-let routineTriggers: RoutineTriggers | null = null;
-let routineMarks: FileMarks | null = null;
 
 /** Resolves once a window of the app has loaded its page (at once when one has). */
 function firstWindowLoaded(): Promise<void> {
@@ -2210,8 +2205,6 @@ app.whenReady().then(async () => {
 			}
 			// Devices showing this computer's schedules (Settings › Schedules on a tab here) follow.
 			devices.hostSchedulesChanged(state);
-			// An event routine's trigger starts, changes or stops with its schedule.
-			routineTriggers?.sync();
 		},
 		// A session's own wake-up (`ompdesk_schedule` with `target: "self"`) is delivered into that session by the control
 		// tools; the test launches shorten the check and the minute so a wake comes within seconds.
@@ -2249,28 +2242,20 @@ app.whenReady().then(async () => {
 			decrypt: data => safeStorage.decryptString(data),
 		},
 	});
-	const mailbox = mailAccounts;
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
-	const marks = new FileMarks(join(app.getPath("userData"), "routine-marks.json"));
-	routineMarks = marks;
-	routineTriggers = new RoutineTriggers({
-		service: scheduleService,
-		marks,
-		// What a relaunch fires may open a session: sources start once the first window has loaded.
-		ready: firstWindowReady,
-		log: message => writeRuntimeLog({ source: "routines", message }),
-		github: githubPort(),
-		watch: watchPath,
-		scan: scanPath,
-		git: gitPort,
-		sessions: sessionPorts(sidecarPool),
-		mail: { account: name => mailbox.resolve(name), read: (id, cursor) => mailbox.read(id, cursor) },
-		...(process.env.OMP_GUI_TEST_EMAIL_POLL_MS
-			? { emailPollMs: Number(process.env.OMP_GUI_TEST_EMAIL_POLL_MS) }
-			: {}),
-	});
-	void scheduleService.start().catch(error => console.error("[schedules] couldn't start:", error));
+	void scheduleService
+		.start({
+			...routinePorts(sidecarPool, mailAccounts),
+			file: join(app.getPath("userData"), "routine-marks.json"),
+			// A routine catching up after relaunch may open a session.
+			ready: firstWindowReady,
+			log: message => writeRuntimeLog({ source: "routines", message }),
+			...(process.env.OMP_GUI_TEST_EMAIL_POLL_MS
+				? { timing: { emailPollMs: Number(process.env.OMP_GUI_TEST_EMAIL_POLL_MS) } }
+				: {}),
+		})
+		.catch(error => console.error("[schedules] couldn't start:", error));
 	// Lists every folder sessions ran in (the first pass also the ones from before the list existed).
 	void sidebarProjects.sync();
 	logWatcher = new LogWatcher();
@@ -2876,7 +2861,12 @@ installQuitGuard(
 					connectivityMonitor?.stop();
 				},
 			],
-			["stats-server", () => { statsStopped = statsServer?.kill() ?? Promise.resolve(); }],
+			[
+				"stats-server",
+				() => {
+					statsStopped = statsServer?.kill() ?? Promise.resolve();
+				},
+			],
 			[
 				"mcp-hub",
 				() => {
@@ -2893,13 +2883,6 @@ installQuitGuard(
 			["ai-memory-care", () => aiMemoryCare?.dispose()],
 			["ai-memory", () => aiMemoryService?.dispose()],
 			["github-auth", () => githubAuthService?.dispose()],
-			[
-				"routine-triggers",
-				() => {
-					routineTriggers?.dispose();
-					routineMarks?.dispose();
-				},
-			],
 			[
 				"schedules",
 				() => {
@@ -2931,9 +2914,13 @@ installQuitGuard(
 			[
 				"core",
 				() => {
-					coreStopped = Promise.allSettled([schedulesClosed, ompsStopped, logsClosed, statsStopped, mcpHubStopped]).then(
-						() => shutdownCore(),
-					);
+					coreStopped = Promise.allSettled([
+						schedulesClosed,
+						ompsStopped,
+						logsClosed,
+						statsStopped,
+						mcpHubStopped,
+					]).then(() => shutdownCore());
 					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
 				},
 			],

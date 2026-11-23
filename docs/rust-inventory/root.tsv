@@ -292,7 +292,7 @@ src/main/machine-services.ts	mixed	3	LocalMachine owns caller-scoped benchmark/m
 src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.
 src/main/machine-state.ts	port	2	MachineState retains recent resource samples and emits before/after stall reports; readOwn and ownFacts calculate process-level facts.
 src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
-src/main/mail-accounts.ts	mixed	2	MailAccounts.read delegates the connection and IMAP poll to routines.readMailbox. Account state, encrypted password files and synchronous keystore reads remain in main.
+src/main/mail-accounts.ts	mixed	2	The native email source asks pollAccount for connection settings; the Settings test calls routines.readMailbox. Main still reads account state and keystore availability synchronously (§1.3c). Receiver: shell keystore and account-state owner.
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
 src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
 src/main/mcp-hub-lifetime.test.ts	tooling	-	Checks actual child priority, crash recovery with the old tab binding, endpoint contention and shutdown.
@@ -387,7 +387,7 @@ src/main/save-copy.ts	port	3	saveCopy coordinates destination selection, local c
 src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.
 src/main/saved-layouts.ts	port	1	layoutsToSave decides whether quit teardown or an empty window should overwrite the saved desktop.
 src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
-src/main/schedules.ts	mixed	2	The core normalizes every draft at save and owns timers, journals and supervised runs. Node serializes requests, mirrors state for synchronous readers, and supplies quota, wake and omp launch callbacks.
+src/main/schedules.ts	mixed	2	Core owns drafts, journals, timers, live sources and supervised runs. Main forwards state changes, orders commands, supplies quota and launch inputs, and wakes the live session (§1.3c). Receiver: session/pool and device quota owners.
 src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
 src/main/serial-chain.ts	port	2	§1.3: local/git/exec and tailscale/cli take the current AbortSignal synchronously before starting OS effects. Receiver: local with local/git/exec; remote-web removes the tailscale/cli use.
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.

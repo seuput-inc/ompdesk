@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createEmailSource, type EmailSourceOptions, type MailPort } from "./email";
+import type { ScheduleEvent } from "../../shared/schedules";
 import { type FakeImap, type FakeMail, startFakeImap } from "./fake-imap";
-import { readMailbox } from "./imap";
-import type { RoutineSource } from "./source";
-import { fakeContext } from "./test-context";
+import { fixture, until } from "./test-context";
 
 const PASSWORD = 's3cret "pw"';
 
 let server: FakeImap | null = null;
-let source: RoutineSource | null = null;
+let stop: (() => Promise<void>) | undefined;
 afterEach(async () => {
-	source?.stop();
-	source = null;
+	await stop?.();
+	stop = undefined;
 	await server?.close();
 	server = null;
 });
@@ -23,39 +21,52 @@ const mail = (uid: number, headers: string[], body = "") => ({ uid, headers: hea
  * settles once the n-th poll began, so every poll before it has finished: tests wait on polls, not on the clock.
  */
 async function rig(
-	options: Partial<EmailSourceOptions> & { named?: () => boolean; already?: FakeMail[]; mark?: unknown } = {},
+	options: Partial<Extract<ScheduleEvent, { source: "email" }>> & {
+		named?: () => boolean;
+		already?: FakeMail[];
+		mark?: unknown;
+	} = {},
 ) {
 	server = await startFakeImap();
 	const imap = server;
 	imap.mail.push(...(options.already ?? []));
-	const ctx = fakeContext(options.mark);
 	let started = 0;
-	const waiters: { count: number; resolve: () => void }[] = [];
-	const mailPort: MailPort = {
-		account: name => {
-			started++;
-			for (const waiter of waiters.filter(item => started >= item.count)) waiter.resolve();
-			if (options.named && !options.named()) return null;
-			return ["acc1", "work"].includes(name.toLowerCase())
-				? { id: "acc1", label: "Work", address: "owner@example.com" }
-				: null;
+	const ready = Promise.withResolvers<void>();
+	const f = await fixture({
+		ready: ready.promise,
+		ports: {
+			email: name => {
+				started++;
+				if ((options.named && !options.named()) || !["acc1", "work"].includes(name.toLowerCase())) return null;
+				return {
+					id: "acc1",
+					label: "Work",
+					address: "owner@example.com",
+					connection: {
+						...imap.endpoint,
+						plainLoopback: true,
+						login: { username: imap.state.user, password: PASSWORD, mailbox: "INBOX" },
+						timeoutMs: 5_000,
+					},
+				};
+			},
 		},
-		read: (_id, cursor) =>
-			readMailbox(imap.endpoint, { username: imap.state.user, password: PASSWORD, mailbox: "INBOX" }, cursor),
+	});
+	stop = f.close;
+	const { named: _named, already: _already, mark, ...filters } = options;
+	const id = await f.add({ account: "Work", ...filters, source: "email" });
+	if (mark !== undefined) f.seed(id, mark);
+	ready.resolve();
+	const polls = async (count: number) => {
+		await until(() => expect(started).toBeGreaterThanOrEqual(count));
+		await f.service.command({ action: "get" });
 	};
-	const polls = (count: number) => {
-		if (started >= count) return Promise.resolve();
-		const { promise, resolve } = Promise.withResolvers<void>();
-		waiters.push({ count, resolve });
-		return promise;
-	};
-	source = createEmailSource({ account: "Work", mail: mailPort, context: ctx.context, pollMs: 5, ...options });
-	return { imap, ...ctx, polls, polled: () => started };
+	return { imap, fired: f.fired, warned: f.log, mark: () => f.marks()[id]?.mark, polls, polled: () => started };
 }
 
 describe("the email trigger across a relaunch", () => {
 	it("fires once for mail that came while OMPdesk was closed, and keeps the cursor before it fires", async () => {
-		const { fired, polls, saved } = await rig({
+		const { fired, polls, mark } = await rig({
 			mark: { accountId: "acc1", validity: 7, uid: 1 },
 			already: [
 				mail(1, ["From: old@example.com", "Subject: before"]),
@@ -66,7 +77,7 @@ describe("the email trigger across a relaunch", () => {
 		expect(fired).toEqual([
 			'New mail in Work from Ann <ann@example.com> to owner@example.com: "while closed". It begins: hello',
 		]);
-		expect(saved[0]).toEqual({ accountId: "acc1", validity: 7, uid: 2 });
+		await until(() => expect(mark()).toEqual({ accountId: "acc1", validity: 7, uid: 2 }));
 	});
 
 	it("takes a baseline when the mark is for another mailbox generation", async () => {
@@ -144,14 +155,14 @@ describe("the email trigger", () => {
 		const { imap, fired, warned, polls, polled } = await rig({ named: () => named });
 		await polls(3);
 		expect(warned).toEqual([
-			"email Work: read: no mail account has that name or id (Settings › Schedules › Email accounts)",
+			"Routine: email Work: read: no mail account has that name or id (Settings › Schedules › Email accounts)",
 		]);
 		imap.state.password = "changed on the server";
 		named = true;
 		await polls(polled() + 3);
 		expect(warned).toEqual([
-			"email Work: read: no mail account has that name or id (Settings › Schedules › Email accounts)",
-			"email Work: read: could not login: [AUTHENTICATIONFAILED] Invalid credentials",
+			"Routine: email Work: read: no mail account has that name or id (Settings › Schedules › Email accounts)",
+			"Routine: email Work: read: could not login: [AUTHENTICATIONFAILED] Invalid credentials",
 		]);
 		expect(warned.join("\n")).not.toContain(PASSWORD);
 		// Mail that came while it could not read is the baseline once it can.
@@ -166,7 +177,7 @@ describe("the email trigger", () => {
 	it("reads nothing more once stopped", async () => {
 		const { imap, fired, polls, polled } = await rig();
 		await polls(2);
-		source?.stop();
+		await stop?.();
 		const before = polled();
 		imap.mail.push(mail(1, ["Subject: late"]));
 		// One read already under way may still finish; it fires nothing and starts no other poll.

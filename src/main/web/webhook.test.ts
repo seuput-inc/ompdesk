@@ -165,7 +165,7 @@ describe("POST /hooks/<id> on the loopback address", () => {
 		expect((await direct(id, { authorization: `Basic ${KEY}` })).status).toBe(401);
 		expect((await direct(id, { authorization: KEY })).status).toBe(401);
 		expect(prompts).toEqual([]);
-		expect(service?.state().runs).toEqual([]);
+		expect((await service?.command({ action: "get" }))?.runs).toEqual([]);
 	});
 
 	it("answers 404 for an unknown routine, a routine of another trigger and an id that cannot be one", async () => {

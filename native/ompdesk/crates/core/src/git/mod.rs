@@ -26,7 +26,7 @@ pub(crate) mod read;
 pub(crate) mod run;
 mod scm;
 mod seed;
-mod triggers;
+pub(crate) mod triggers;
 mod unlanded;
 pub(crate) mod worktree;
 
@@ -427,7 +427,12 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.watchedFingerprint", |call| {
         Box::pin(async move {
-            let FingerprintParams { git, cwd, root, key } = call.params()?;
+            let FingerprintParams {
+                git,
+                cwd,
+                root,
+                key,
+            } = call.params()?;
             let git = Git::new(git, call.scope);
             fingerprints::read(&git, &cwd, key.as_deref().unwrap_or(&cwd), root.as_deref()).await
         })

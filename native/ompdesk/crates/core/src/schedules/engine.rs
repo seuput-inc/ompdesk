@@ -309,6 +309,10 @@ impl Engine {
         self.now
     }
 
+    pub(super) fn closed(&self) -> bool {
+        self.closed
+    }
+
     pub fn state(&self) -> Value {
         let mut next_runs = Object::new();
         for schedule in &self.schedules {
@@ -378,6 +382,26 @@ impl Engine {
         self.start_event(at, vec![line]);
         self.changed();
         true
+    }
+
+    /// A replacement source cannot spend its predecessor's pending quota or replay its queued details.
+    /// The reserve frame was sent before the refund; a refused reservation has no refund registered in main.
+    pub(super) fn retire_trigger(&mut self, id: &str) {
+        self.pending.remove(id);
+        self.chain.remove(id);
+        let Some(ask) = self
+            .active
+            .get(id)
+            .filter(|active| active.run.is_none())
+            .and_then(|active| active.charge)
+        else {
+            return;
+        };
+        if matches!(self.held.get(&ask), Some(Held::Event { .. })) {
+            self.held.remove(&ask);
+            self.active.remove(id);
+            self.outs.push(Out::Refund { charge: ask });
+        }
     }
 
     /// `POST /hooks/<id>` with `Authorization: Bearer <key>`: fires the routine whose webhook key it is.
@@ -675,7 +699,7 @@ impl Engine {
                 run: None,
                 launched: false,
                 stop_requested: false,
-                charge: None,
+                charge: Some(self.last_ask),
                 prompt: String::new(),
             },
         );

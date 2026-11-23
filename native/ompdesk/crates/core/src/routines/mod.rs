@@ -1,5 +1,4 @@
-//! Routine triggers' reads and rules (unit 4e). Main keeps each trigger's live part: the schedule service's state, the
-//! poll and burst timers, the file watcher, the tab pool's activity, the marks file and the email account store.
+//! Routine triggers' reads and rules. The schedules service owns their timers, watches, marks and live generations.
 //!
 //! - `routines.github`: one read of one kind of a GitHub trigger (`github.rs`), gh run as main's `ghRunner` says.
 //! - `routines.filesScan`: a files trigger's listing and what changed while OMPdesk was closed (`files.rs`).
@@ -13,6 +12,7 @@
 mod files;
 pub(crate) mod github;
 mod imap;
+pub(crate) mod runtime;
 pub(crate) mod text;
 
 use serde::{Deserialize, Serialize};
@@ -116,9 +116,9 @@ pub fn register(registry: &mut Registry) {
             let ScanParams {
                 path,
                 ignored,
-                mark,
+                mut mark,
             } = call.params()?;
-            let scan = tokio::task::spawn_blocking(move || files::scan(&path, &ignored, mark))
+            let scan = tokio::task::spawn_blocking(move || files::scan(&path, &ignored, &mut mark))
                 .await
                 .map_err(|error| Fault::new("internal", error.to_string()))??;
             Reply::json(&scan)

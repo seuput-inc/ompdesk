@@ -231,26 +231,19 @@ src/main/power/lid-backend-windows.test.ts	exception	Test coverage for Windows p
 src/main/power/lid-backend-windows.ts	port	Async AC reconciliation and synchronous quit restoration read one saved previous value. Each of the three powercfg calls at quit may take 5 s; the synchronous core hub allows 2 s. Move both paths together (§1.3a,c).
 src/main/pstack/pack-drift.test.ts	exception	Test coverage for pstack pack pins and integrity.
 src/main/routines/email.test.ts	exception	Test coverage for mail trigger cursors across relaunch.
-src/main/routines/email.ts	port	Polls the mailbox, filters automated and self replies, saves the cursor and constructs the wake message.
 src/main/routines/fake-imap.ts	exception	Fake mailbox server supplies scripted IMAP exchanges to tests.
 src/main/routines/files.test.ts	exception	Test coverage for filesystem changes across relaunch.
-src/main/routines/files.ts	port	routines.filesScan now compares the saved mark against the listing it just read. Node still owns the live watcher, retry and burst timers, and quiet-period check before firing.
 src/main/routines/git.test.ts	exception	Test coverage for branch moves against a real repository.
-src/main/routines/git.ts	port	git.routineHead now decides whether to retain or replace the baseline. Node polls, rechecks stop/run state after the read, saves before requesting git.routineCommits, and suppresses the routine's own commits.
 src/main/routines/github.test.ts	exception	Test coverage for GitHub event baselines across relaunch.
-src/main/routines/github.ts	port	Core reads GitHub events and returns a persistable mark only on success. Node validates the repository, orders polls and commits each successful mark before waking the routine.
 src/main/routines/imap.test.ts	exception	Test coverage for IMAP exchanges against a fake server.
-src/main/routines/imap.ts	mixed	routines.readMailbox owns TLS, the read-only UID exchange and MIME decoding. MailAccounts in Node still supplies the endpoint, credentials and cursor; no native account caller yet.
+src/main/routines/imap.ts	native-client	The native email trigger reads the mailbox in process. This typed client exposes the same read to the Settings account test without a second IMAP implementation.
 src/main/routines/marks.test.ts	exception	Test coverage for configuration-keyed marks across relaunch.
-src/main/routines/marks.ts	port	Keys marks by trigger configuration; migrating persistence requires preserving ordering between in-flight atomic saves and the final shutdown write.
-src/main/routines/ports.ts	port	Uses Node recursive fs.watch and adapts pool activity and session facts in addition to calling native Git and file methods.
+src/main/routines/ports.ts	mixed	Rust owns live sources, recursive watches, polls and marks. Main supplies the installed git/gh runner and mailbox connection, observes pool activity and reads tab ancestry in the same turn (§1.3c). Receiver: the pool and machine launch owners.
 src/main/routines/sessions.test.ts	exception	Test coverage for session event triggering and filtering.
-src/main/routines/sessions.ts	port	Maps tab activity into waiting, failed or done events and excludes out-of-folder and related wake sessions.
 src/main/routines/source.test.ts	exception	Test coverage for text clipping at capture limits.
-src/main/routines/source.ts	port	Suppresses repeated failure notices and clips event text by Unicode code point.
-src/main/routines/test-context.ts	exception	Test harness captures fired events and marks and supplies fake file watchers and gh responses.
+src/main/routines/test-context.ts	exception	Test harness observes real schedule runs and marks with temporary repositories, synthetic mail, a fixture gh executable and a controlled session pool.
+src/main/routines/test-state.ts	exception	Test observer records the state sent to a window; no production schedule state mirror.
 src/main/routines/triggers.test.ts	exception	Test coverage for live trigger reconciliation on schedule edits.
-src/main/routines/triggers.ts	port	Core schedules owns run start, stop and state. Node reconciles live sources and quiet periods from that state. The older routines/runtime port needs the machine, tab-event and mailbox adapters before it can replace these subscriptions.
 src/main/setup/archives.test.ts	exception	Tests release selection and checksum lookup for the supported archives against a test mirror.
 src/main/setup/archives.ts	native-client	Forwards release lookups to setup.resolveArchive, setup.resolveAgentDesktop and setup.resolveTailscale and translates lookup errors.
 src/main/setup/compiled-launcher.test.ts	exception	Real core file operations and a delayed or lost reply exercise restore, competing installs, stale backups and the setup queue.

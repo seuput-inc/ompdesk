@@ -386,7 +386,7 @@ where
     let mcp_hub_closed = crate::mcp_hub::close_all(&ending);
     crate::control::close_all(&ending).await;
     crate::ssh::close_all(&ending);
-    crate::schedules::close_all(&ending);
+    crate::schedules::close_all(&ending).await;
     crate::aimemory::service::close_all(&ending);
     crate::stats::close_all(&ending).await;
     crate::stock::close_all(&ending).await;
@@ -395,7 +395,7 @@ where
     while tasks.join_next().await.is_some() {
         crate::control::close_all(&ending).await;
         crate::ssh::close_all(&ending);
-        crate::schedules::close_all(&ending);
+        crate::schedules::close_all(&ending).await;
         crate::aimemory::service::close_all(&ending);
         crate::stock::close_all(&ending).await;
         crate::sidecar::close_all(&ending).await;
