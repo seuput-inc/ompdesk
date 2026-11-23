@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentDesktopToRun } from "./agent-desktop";
+import { agentDesktopToRun, pickAgentDesktop } from "./agent-desktop";
 import { managedAgentDesktop } from "./setup/paths";
 
 const made: string[] = [];
@@ -26,19 +26,26 @@ function world(bundled: string | null) {
 	}
 	const managed = managedAgentDesktop(toolsDir, "darwin");
 	const run = (managedVersion: string | null) =>
-		agentDesktopToRun({
-			toolsDir,
-			bundleDir,
-			platform: "darwin",
-			version: async exe => (exe === managed ? managedVersion : null),
-		});
-	return { bundleDir, managed, bundledExe: path.join(bundleDir, "agent-desktop"), run };
+		pickAgentDesktop("darwin", bundleDir, managedVersion ? { path: managed, version: managedVersion } : undefined);
+	return { toolsDir, bundleDir, managed, bundledExe: path.join(bundleDir, "agent-desktop"), run };
 }
 
 describe("the agent-desktop a session runs", () => {
+	it("uses the managed executable's actual --version", async () => {
+		const { bundleDir } = world("1.2.0");
+		const exe = process.execPath;
+		const platform = process.platform === "win32" ? "win32" : "darwin";
+		const copy = await pickAgentDesktop(platform, bundleDir, { path: exe, cwd: process.cwd(), env: process.env });
+		expect(copy).toEqual({ source: "managed", version: process.versions.bun ?? process.versions.node, path: exe });
+	});
+
 	it("is the bundled copy on a first launch, before machine setup or an update installed anything", async () => {
 		const w = world("1.2.0");
-		expect(await w.run(null)).toEqual({ source: "bundled", path: w.bundledExe, version: "1.2.0" });
+		expect(await agentDesktopToRun({ ...w, platform: "darwin" })).toEqual({
+			source: "bundled",
+			path: w.bundledExe,
+			version: "1.2.0",
+		});
 	});
 
 	it("is the managed copy once an update made it at least as new as the bundled one", async () => {
