@@ -721,8 +721,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: macos-latest
-    # 25, not 10: on a staged-binary cache miss the install step builds native/ompdesk first (mac-checks.yml's mac-native).
-    timeout-minutes: 25
+    # 45, not 25: on a staged-binary cache miss the install step builds native/ompdesk first (mac-checks.yml's mac-native).
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
