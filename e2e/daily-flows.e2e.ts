@@ -432,7 +432,9 @@ test("daily flow b: merge one worktree child, delete the other; nothing lingers,
 				.poll(async () => (await tabs()).some(tab => tab.tabId === mergedTab), { timeout: 60_000 })
 				.toBe(false);
 			await expect.poll(() => flowBExists(merged?.path ?? ""), { timeout: 30_000 }).toBe(false);
-			expect(flowBGit(project, "branch", "--list", merged?.branch ?? "")).toBe("");
+			await expect
+				.poll(() => flowBGit(project, "branch", "--list", merged?.branch ?? ""), { timeout: 30_000 })
+				.toBe("");
 			expect((await tabs()).some(tab => tab.tabId === deletedId)).toBe(false);
 			expect(await flowBExists(kept?.path ?? "")).toBe(true);
 			expect(flowBGit(project, "branch", "--list", kept?.branch ?? "")).toContain(kept?.branch);
