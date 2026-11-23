@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.141.2] - 2026-11-23
+
+Windows 10에서 WinHTTP가 옵션 195를 지원하지 않아도 업데이트를 확인할 수 있습니다.
+
+이미 0.141.1에서 오류 12009가 나서 업데이트를 받을 수 없다면, 이번 한 번은 [Windows 설치 파일](https://github.com/seuput-inc/ompdesk/releases/download/v0.141.2/ompdesk-windows-setup.exe)로 업데이트하세요.
+
+<!-- en -->
+
+OMPdesk can check for updates on Windows 10 even when WinHTTP does not support option 195.
+
+If error 12009 prevents version 0.141.1 from updating itself, use the [Windows installer](https://github.com/seuput-inc/ompdesk/releases/download/v0.141.2/ompdesk-windows-setup.exe) for this update.
+
 ## [0.141.1] - 2026-11-23
 
 OMPdesk가 다시 쓰지 않는 검사 캐시와 닫힌 세션의 임시 파일을 재시작 없이 정리합니다.
