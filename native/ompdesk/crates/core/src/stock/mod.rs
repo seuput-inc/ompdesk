@@ -36,8 +36,10 @@
 //! group on POSIX.
 
 mod scrollback;
+mod shells;
+mod terminal;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -70,6 +72,7 @@ const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const READ_BUFFER: usize = 64 * 1024;
 
 pub fn register(registry: &mut Registry) {
+    shells::register(registry);
     registry.add("stock.request", enqueue);
     registry.add("stock.launched", |call| {
         Box::pin(async move { launched(&call) })
@@ -190,6 +193,7 @@ enum Msg {
         events: Events,
         reply: oneshot::Sender<Answer>,
     },
+    ShellReady(u64, Result<Vec<u8>, Fault>),
     /// The request's caller stopped waiting: its timeout passed (or main withdrew the call).
     GaveUp(u64),
     Launched {
@@ -239,12 +243,12 @@ struct Placed {
 /// a caller sent one after the other reach a serial lane in that order. The body of an `async fn` runs only once its
 /// future is polled, in a task of its own, and two such tasks start in either order: a mutation sent after a scan
 /// ran before it (main's `stock-helper.test.ts`, "never runs a queued mutation", run 43357570260).
-fn enqueue(call: Call) -> crate::server::Answer {
-    let placed = place(&call);
+fn enqueue(mut call: Call) -> crate::server::Answer {
+    let placed = place(&mut call);
     Box::pin(async move { wait(call, placed?).await })
 }
 
-fn place(call: &Call) -> Result<Placed, Fault> {
+fn place(call: &mut Call) -> Result<Placed, Fault> {
     let RequestParams {
         host,
         method,
@@ -265,6 +269,17 @@ fn place(call: &Call) -> Result<Placed, Fault> {
     let worker = tuning.worker.unwrap_or_else(|| Worker::of(&method));
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let timeout = Duration::from_millis(timeout_ms);
+    let line = match method.as_str() {
+        // Reserve the create's position before the lane offloads its shell lookup.
+        "terminal.create" => call.bin.take().unwrap_or_default(),
+        "terminal.peerRequest" | "terminal.peerDispose" => terminal::frame(
+            id,
+            call.bin.as_deref().unwrap_or_default(),
+            method == "terminal.peerDispose",
+            false,
+        )?,
+        _ => request_line(id, &method, call.bin.as_deref()),
+    };
     let (reply, answer) = oneshot::channel();
     let inbox = {
         // Sent under the table's lock, so a stop that takes the lane out never leaves a request behind it.
@@ -278,7 +293,7 @@ fn place(call: &Call) -> Result<Placed, Fault> {
         entry.events = call.events.clone();
         let _ = entry.inbox.send(Msg::Request {
             id,
-            line: request_line(id, &method, call.bin.as_deref()),
+            line,
             method,
             timeout,
             tuning,
@@ -500,8 +515,8 @@ struct Lane {
     events: Events,
     /// Requests whose caller still waits.
     pending: HashMap<u64, Pending>,
-    /// Those that wait for a worker to start, in the order they came.
-    waiting: Vec<u64>,
+    /// Arrival order, including a create whose selected shell has not been resolved yet.
+    waiting: VecDeque<u64>,
     /// The start main was asked for and has not answered.
     launching: Option<u64>,
     running: Option<Running>,
@@ -522,7 +537,7 @@ impl Lane {
             tuning: Tuning::default(),
             events,
             pending: HashMap::new(),
-            waiting: Vec::new(),
+            waiting: VecDeque::new(),
             launching: None,
             running: None,
             generations: 0,
@@ -541,15 +556,40 @@ impl Lane {
                         events,
                         reply,
                     } => {
+                        let line = if method == "terminal.create" {
+                            let inbox = lane.inbox.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let prepared = terminal::frame(id, &line, false, true);
+                                let _ = inbox.send(Msg::ShellReady(id, prepared));
+                            });
+                            None
+                        } else {
+                            Some(line)
+                        };
                         lane.tuning = tuning;
                         lane.events = events;
                         let pending = Pending {
                             method,
-                            line: Some(line),
+                            line,
                             timeout,
                             reply,
                         };
                         lane.request(id, pending);
+                    }
+                    Msg::ShellReady(id, result) => {
+                        match result {
+                            Ok(line) => {
+                                if let Some(pending) = lane.pending.get_mut(&id) {
+                                    pending.line = Some(line);
+                                }
+                            }
+                            Err(error) => {
+                                if let Some(pending) = lane.pending.remove(&id) {
+                                    let _ = pending.reply.send(Err(error));
+                                }
+                            }
+                        }
+                        lane.flush();
                     }
                     Msg::GaveUp(id) => lane.gave_up(id),
                     Msg::Launched { launch, how } => lane.launched(launch, how),
@@ -570,6 +610,7 @@ impl Lane {
     fn request(&mut self, id: u64, pending: Pending) {
         // A request keeps the worker up: the idle exit is armed again once this one is answered.
         self.idle_epoch += 1;
+        self.waiting.push_back(id);
         self.pending.insert(id, pending);
         if self.outlived_its_omp() {
             eprintln!(
@@ -579,10 +620,9 @@ impl Lane {
             self.let_go();
         }
         if self.running.is_some() {
-            self.write(id);
+            self.flush();
             return;
         }
-        self.waiting.push(id);
         if self.launching.is_none() {
             // Named apart from every other start ever asked for, so a late answer to one asked before a stop is
             // never taken for the answer to this one.
@@ -624,13 +664,20 @@ impl Lane {
         Some(running)
     }
 
-    fn write(&mut self, id: u64) {
-        let (Some(running), Some(pending)) = (&mut self.running, self.pending.get_mut(&id)) else {
+    /// A later dispose cannot pass a create whose shell is still being checked.
+    fn flush(&mut self) {
+        let Some(running) = &mut self.running else {
             return;
         };
-        if let Some(line) = pending.line.take() {
-            running.unanswered.insert(id);
-            let _ = running.stdin.send(line);
+        while let Some(&id) = self.waiting.front() {
+            if let Some(pending) = self.pending.get_mut(&id) {
+                let Some(line) = pending.line.take() else {
+                    break;
+                };
+                running.unanswered.insert(id);
+                let _ = running.stdin.send(line);
+            }
+            self.waiting.pop_front();
         }
     }
 
@@ -650,9 +697,7 @@ impl Lane {
         match how.and_then(|launch| self.spawn(launch)) {
             Ok(running) => {
                 self.running = Some(running);
-                for id in std::mem::take(&mut self.waiting) {
-                    self.write(id);
-                }
+                self.flush();
                 // Every request that waited for it timed out meanwhile: nothing will answer and arm it.
                 self.arm_idle_exit();
             }
@@ -772,6 +817,10 @@ impl Lane {
         let Some(running) = &mut self.running else {
             return;
         };
+        if !running.unanswered.contains(&id) {
+            self.flush();
+            return;
+        }
         let _ = running
             .stdin
             .send(format!("{{\"cancel\":{id}}}\n").into_bytes());

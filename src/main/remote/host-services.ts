@@ -1402,15 +1402,13 @@ export class LocalHostServices implements HostServices {
 			case "terminal.request": {
 				const { rtab, operation } = parse(TerminalParams, method, params);
 				const tab = this.#tab(peer, rtab);
-				const owner = terminalOwner(peer.deviceId, rtab);
 				// A paired device's terminal here is never told where this computer's control socket is.
-				const snapshots = await terminalRequest(
-					owner,
+				return terminalRequest(
+					{ deviceId: peer.deviceId, rtab },
 					tab.sidecar.cwd,
 					operation as TerminalOperation,
 					controlEnvFor(true),
 				);
-				return snapshots;
 			}
 			// The device's Preview page is driven by this tab's agent through the relay on this computer's loopback: the
 			// device never names an address, only the tab (see PreviewRelayTunnels).
@@ -2184,7 +2182,7 @@ export class LocalHostServices implements HostServices {
 		this.#stopRelay(this.#key(tab.peerId, tab.rtab));
 		this.#tabs.delete(this.#key(tab.peerId, tab.rtab));
 		// Terminals are owned by rtab; the device lost the old one with its previous launch.
-		disposeTerminals(terminalOwner(tab.peerId, tab.rtab));
+		disposeTerminals({ deviceId: tab.peerId, rtab: tab.rtab });
 		tab.formerRtabs = [tab.rtab, ...tab.formerRtabs].slice(0, MAX_FORMER_TAB_IDS);
 		tab.rtab = params.rtab;
 		this.#tabs.set(this.#key(peer.deviceId, params.rtab), tab);
@@ -3128,17 +3126,12 @@ export class LocalHostServices implements HostServices {
 			});
 		}
 		this.#relays.forget(key);
-		disposeTerminals(terminalOwner(tab.peerId, tab.rtab));
+		disposeTerminals({ deviceId: tab.peerId, rtab: tab.rtab });
 		if (runBusy(tab.run)) this.#runningChanged();
 		this.#resume?.sync();
 		this.workChanged();
 		this.listingChanged();
 	}
-}
-
-/** Terminal owner of a paired device's tab here; local windows use `<webContentsId>:<tabId>`. */
-function terminalOwner(deviceId: string, rtab: string): string {
-	return `peer:${deviceId}:${rtab}`;
 }
 
 /** A hosted tab's id for this computer's resume coordinator, beside the local tabs' ids (its first rtab). */

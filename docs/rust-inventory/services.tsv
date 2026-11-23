@@ -301,9 +301,9 @@ src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwri
 src/main/terminal/ipc.ts	port	Routes local versus remote terminal operations, tracks tab ownership and enforces viewer leases before dispatch.
 src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
 src/main/terminal/lease.ts	port	Tracks viewer presence and idle expiry to arbitrate terminal control and resizing.
-src/main/terminal/requests.ts	port	Validates operation shape, dimensions and write size; restricts requested shells before stock-helper dispatch.
+src/main/terminal/requests.ts	mixed	Stock's native lane selects an allowed shell and derives the PTY owner from the authenticated peer and rtab; main validates the operation synchronously before terminal/ipc.ts updates a viewer lease or forwards to another machine (§1.3a,c).
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
-src/main/terminal/shells.ts	port	Probes installed platform shells, reads /etc/shells, deduplicates entries and orders the login shell first.
+src/main/terminal/shells.ts	native-client	terminal.shells lists installed shells in preference order. The same Rust probe restricts a named shell when the stock lane processes a create.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.

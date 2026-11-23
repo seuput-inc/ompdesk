@@ -13,6 +13,9 @@
 		"OnlyTheStockWorkerIsRecycled",
 		"OnlyAStuckWorkerIsRecycled",
 		"NoRequestStranded",
+		"TerminalWritesInOrder",
+		"DroppedRequestsStayGone",
+		"PreparationCannotRevive",
 		"NoWorkerIsForgotten",
 		"AStartAskedBeforeAStopStartsNothing"
 	],
@@ -114,8 +117,8 @@
 			"name": "a-failed-start-leaves-its-waiters",
 			"why": "launched does not fail the waiting requests when main says no worker can start: they wait out their timeouts and the next request finds a queue nobody serves.",
 			"file": "StockLane.tla",
-			"search": "                   ELSE /\\ Fail\n                        /\\ UNCHANGED <<sent, running, made, life, unanswered, idles, changed, staleStart>>",
-			"replace": "                   ELSE /\\ UNCHANGED <<caller, pending, waiting>>\n                        /\\ UNCHANGED <<sent, running, made, life, unanswered, idles, changed, staleStart>>",
+			"search": "                   ELSE /\\ Fail\n                        /\\ UNCHANGED <<sent, running, made, life, unanswered, idles, changed, staleStart, writes>>",
+			"replace": "                   ELSE /\\ UNCHANGED <<caller, pending, waiting>>\n                        /\\ UNCHANGED <<sent, running, made, life, unanswered, idles, changed, staleStart, writes>>",
 			"breaks": "NoRequestStranded",
 			"config": "MC.cfg",
 			"isolate": true
@@ -124,10 +127,70 @@
 			"name": "a-second-worker-beside-the-first",
 			"why": "request asks for a start although a worker runs: its answer replaces the lane's worker, and the first one stays up with nothing left to end it.",
 			"file": "StockLane.tla",
-			"search": "         ELSE IF running # None\n         THEN /\\ sent' = [sent EXCEPT ![r] = running]",
-			"replace": "         ELSE IF running # None /\\ launching # None\n         THEN /\\ sent' = [sent EXCEPT ![r] = running]",
+			"search": "         ELSE IF running # None\n         THEN /\\ Flush(running, Append(waiting, r), probes')",
+			"replace": "         ELSE IF running # None /\\ launching # None\n         THEN /\\ Flush(running, Append(waiting, r), probes')",
 			"breaks": "NoWorkerIsForgotten",
 			"config": "MC.cfg",
+			"isolate": true
+		},
+		{
+			"name": "dispose-passes-an-unprepared-create",
+			"why": "Flush skips an unresolved head and writes the ready dispose behind it.",
+			"file": "StockLane.tla",
+			"search": "ELSE IF Head(q) \\in outstanding THEN <<>>",
+			"replace": "ELSE IF Head(q) \\in outstanding THEN ReadyPrefix(Tail(q), outstanding)",
+			"breaks": "TerminalWritesInOrder",
+			"config": "MC_terminals.cfg",
+			"isolate": true
+		},
+		{
+			"name": "writes-the-ready-batch-backwards",
+			"why": "Both frames become writable in one message, but stdin receives dispose before create.",
+			"file": "StockLane.tla",
+			"search": "ELSE <<Head(q)>> \\o ReadyPrefix(Tail(q), outstanding)",
+			"replace": "ELSE Append(ReadyPrefix(Tail(q), outstanding), Head(q))",
+			"breaks": "TerminalWritesInOrder",
+			"config": "MC_terminals.cfg",
+			"isolate": true
+		},
+		{
+			"name": "a-probe-releases-another-create",
+			"why": "An answer to the second probe writes the first create before its own shell is ready.",
+			"file": "StockLane.tla",
+			"search": "Flush(running, SelectSeq(waiting, LAMBDA id : id \\in pending'), probes')",
+			"replace": "Flush(running, SelectSeq(waiting, LAMBDA id : id \\in pending'), {})",
+			"breaks": "TerminalWritesInOrder",
+			"config": "MC_terminals.cfg",
+			"isolate": true
+		},
+		{
+			"name": "a-withdrawn-create-keeps-its-queue-position",
+			"why": "GaveUp ignores an unresolved create. Its caller is gone but the lane still owes it an answer.",
+			"file": "StockLane.tla",
+			"search": "IF r \\notin pending\n         THEN UNCHANGED <<pending, overdue, graces, waiting, sent, unanswered, writes>>",
+			"replace": "IF r \\notin pending \\/ r \\in probes\n         THEN UNCHANGED <<pending, overdue, graces, waiting, sent, unanswered, writes>>",
+			"breaks": "DroppedRequestsStayGone",
+			"config": "MC_terminals.cfg",
+			"isolate": true
+		},
+		{
+			"name": "dropping-the-blocked-head-leaves-a-ready-dispose",
+			"why": "GaveUp removes an unsent create without flushing the next frame to the running worker.",
+			"file": "StockLane.tla",
+			"search": "                   ELSE Flush(running, SelectSeq(waiting, LAMBDA id : id # r), probes)",
+			"replace": "                   ELSE /\\ waiting' = SelectSeq(waiting, LAMBDA id : id # r)\n                        /\\ UNCHANGED <<sent, unanswered, writes>>",
+			"breaks": "NoRequestStranded",
+			"config": "MC_terminals.cfg",
+			"isolate": true
+		},
+		{
+			"name": "a-stale-shell-result-asks-for-a-new-worker",
+			"why": "An old create's ShellReady runs the launch path after a stop emptied the lane.",
+			"file": "StockLane.tla",
+			"search": "    /\\ UNCHANGED <<launching, launches, answers>>\n    /\\ UNCHANGED <<running, made, life, overdue, graces",
+			"replace": "    /\\ IF r \\notin pending /\\ running = None /\\ launching = None THEN Ask ELSE UNCHANGED <<launching, launches, answers>>\n    /\\ UNCHANGED <<running, made, life, overdue, graces",
+			"breaks": "PreparationCannotRevive",
+			"config": "MC_terminals.cfg",
 			"isolate": true
 		}
 	]

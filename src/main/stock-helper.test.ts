@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "../../resources/gui-bridge/stock-helper/dispatch";
-import type { TerminalOperation, TerminalSnapshot } from "../shared/terminal-types";
+import type { TerminalOperation, TerminalShell, TerminalSnapshot } from "../shared/terminal-types";
 import { core } from "./core/process";
 import { ompInstallStampFiles, StockHelper, type StockHelperOptions } from "./stock-helper";
 
@@ -444,7 +444,13 @@ describe("stock helper terminals", () => {
 			path.join(natives, "index.js"),
 			`import { appendFileSync } from "node:fs";
 export class PtySession {
-	startArgv(_, emit) { this.emit = emit; return new Promise(() => {}); }
+	startArgv({ application, args, cwd, cols, rows, env }, emit) {
+		this.emit = emit;
+		if (env.STOCK_TEST_LAUNCH_LOG) {
+			appendFileSync(env.STOCK_TEST_LAUNCH_LOG, JSON.stringify({ application, args, cwd, cols, rows }) + "\\n");
+		}
+		return new Promise(() => {});
+	}
 	write(text) { this.emit(null, text); }
 	resize() {}
 	kill() { appendFileSync(${JSON.stringify(path.join(dir, "kills"))}, "x"); }
@@ -454,7 +460,11 @@ export class PtySession {
 			launch: async () => ({
 				bin: "bun",
 				args: [path.join(bridge, "stock-helper/host.ts"), "terminals"],
-				env: { ...process.env, OMP_PACKAGE_ROOT: dir },
+				env: {
+					...process.env,
+					OMP_PACKAGE_ROOT: dir,
+					[process.platform === "win32" ? "ComSpec" : "SHELL"]: path.join(dir, "worker-default"),
+				},
 			}),
 		});
 		helpers.push(helper);
@@ -476,6 +486,53 @@ export class PtySession {
 		]);
 		expect(await request({ action: "list" }, owner)).toEqual([]);
 		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("x");
+	});
+
+	it("orders named peer creates around disposal and selects only an exact listed shell path", async () => {
+		const { result: shells } = await core().call<TerminalShell[]>("terminal.shells");
+		const shell = shells[shells.length - 1];
+		expect(shell).toBeDefined();
+		const nearMatch = shell.path === shell.path.toUpperCase() ? shell.path.toLowerCase() : shell.path.toUpperCase();
+		expect(shells.map(entry => entry.path)).not.toContain(nearMatch);
+		const owner = { deviceId: "first", rtab: "shared-tab" };
+		const other = { ...owner, deviceId: "second" };
+		const launchLog = path.join(dir, "launches");
+		const create = (peer: typeof owner, shellPath: string, cols: number) =>
+			helper.request<TerminalSnapshot[]>("terminal.create", {
+				owner: peer,
+				operation: { action: "create", shell: shellPath, cols, rows: 31 },
+				cwd: dir,
+				env: { STOCK_TEST_LAUNCH_LOG: launchLog },
+			});
+		const peerRequest = (peer: typeof owner, operation: TerminalOperation) =>
+			helper.request<TerminalSnapshot[]>("terminal.peerRequest", { owner: peer, operation, cwd: dir, env: {} });
+
+		const [{ id: otherId }] = await create(other, shell.path, 81);
+		const [first, , later] = await Promise.all([
+			create(owner, shell.path, 82),
+			helper.request("terminal.peerDispose", { owner }),
+			create(owner, nearMatch, 83),
+		]);
+		expect(first).toMatchObject([{ cols: 82 }]);
+		expect(later).toMatchObject([{ cols: 83 }]);
+		const [{ id }] = later;
+		expect(id).not.toBe(first[0].id);
+		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("x");
+		const launches = (await fs.readFile(launchLog, "utf8")).trimEnd().split("\n");
+		expect(launches.map(line => JSON.parse(line))).toEqual([
+			{ application: shell.path, args: shell.args, cwd: dir, cols: 81, rows: 31 },
+			{ application: shell.path, args: shell.args, cwd: dir, cols: 82, rows: 31 },
+			{
+				application: path.join(dir, "worker-default"),
+				args: process.platform === "win32" ? [] : ["-l"],
+				cwd: dir,
+				cols: 83,
+				rows: 31,
+			},
+		]);
+		await peerRequest(owner, { action: "write", id, data: "\ud800" });
+		expect(await peerRequest(owner, { action: "list" })).toMatchObject([{ id, output: "\ud800", offset: 1 }]);
+		expect(await peerRequest(other, { action: "list" })).toMatchObject([{ id: otherId, output: "", exited: false }]);
 	});
 
 	it("reads each viewer's UTF-16 budget across worker replies, restarts, clears and retention cuts", async () => {
