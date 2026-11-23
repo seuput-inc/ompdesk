@@ -215,7 +215,7 @@
 				"native/ompdesk/crates/core/src/disk/saved_records.rs#change",
 				"native/ompdesk/crates/core/src/git/read.rs#blocking"
 			],
-			"syncCommit": "9aaf2f993a9604b5cee10b556c783a743b52bf24",
+			"syncCommit": "984299df7434c94f76757d7689766f730407a87f",
 			"verifySkill": ".omp/skills/repo-lock-core-verify/SKILL.md"
 		},
 		{
