@@ -9,6 +9,7 @@ import { shutdownCore } from "../../core/process";
 import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
 import type { DiagnosticsDeps } from "../../diagnostics";
 import type { WatchdogSignal } from "../../hang-watchdog";
+import type { AdmitNotification } from "../../notify-triage";
 import { exitReport } from "../../quit-log";
 import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "../../runtime-log-core";
 import type { IpcRegistry } from "../../web/ipc-registry";
@@ -47,6 +48,8 @@ export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params
 	client.call("app.diagnosticBundleFileName", params);
 
 export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
+
+export const admitNotification: AdmitNotification = report => client.call("app.admitNotification", report);
 
 export async function openPageExternal(url: string): Promise<void> {
 	await client.call("shell.openPageExternal", { url });

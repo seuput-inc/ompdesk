@@ -11,6 +11,8 @@ mod launch_protection;
 mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
 mod marker;
+#[path = "../../src/notify_triage.rs"]
+mod notify_triage;
 #[allow(dead_code)]
 #[path = "../../../shell/src/shell_args.rs"]
 mod shell_args;
@@ -23,11 +25,13 @@ fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
     let mut launch = None;
     let mut clipboard = clipboard::Clipboard::default();
+    let mut notify = notify_triage::NotifyTriage::default();
     for line in io::stdin().lock().lines() {
         let call: Value = serde_json::from_str(&line?)?;
         let params = &call["params"];
         let answer = match call["method"].as_str().unwrap() {
             method if method.starts_with("clipboard.") => clipboard.call(method, params),
+            "app.admitNotification" => notify.admit(params).unwrap(),
             "page.allowsExternal" => Value::Bool(
                 params["url"]
                     .as_str()
