@@ -345,7 +345,7 @@ src/main/omp-exits.ts	port	3	noteOmpExit records exit promises by cwd; ompsExite
 src/main/omp-hold-notice.test.ts	tooling	-	Vitest suite: holdNotice: a release runners failed.
 src/main/omp-hold-notice.ts	port	1	holdNotice, parseHoldTold and heldSince determine when a blocked omp version should produce an initial or repeat notification.
 src/main/omp-launch.test.ts	tooling	-	Vitest suite: omp launch.
-src/main/omp-launch.ts	port	3	sessionOpen, ompArgs and sessionEnv compose a tab's resume/new launch and owned environment; withCreditSpendRuns controls which launches receive credit-spend configuration.
+src/main/omp-launch.ts	port	3	sidecar::lane uses native session_open before requesting launch; no Node session-open decision remains. SidecarManager answers the launch with ompArgs/sessionEnv built from live preference callbacks; withCreditSpendRuns also gates the local handler's omp run through the live bridge.
 src/main/omp-log-tail.test.ts	tooling	-	Vitest suite: ompLogTail.
 src/main/omp-log-tail.ts	native-client	3	SidecarManager.#onSlow calls ompLogTail; omp.logTail in core/src/omp/log_tail.rs selects, reads and compacts the log. TS resolves the stock log directory and supplies the local calendar days. At 2ae6e2587 the production caller still used TS.
 src/main/omp-processes.test.ts	tooling	-	Vitest suite: a quit's stop leaves no omp running: one that ignores SIGTERM and one that is stopped.
