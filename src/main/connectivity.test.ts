@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -419,23 +420,22 @@ describe("reaches", () => {
 
 	it("connects to either of the first two answers, never the third, and reports refusal", async () => {
 		const server = createServer(socket => socket.destroy());
-		const listening = Promise.withResolvers<void>();
-		server.listen(0, "127.0.0.1", listening.resolve);
-		await listening.promise;
+		await once(server.listen(0, "127.0.0.1"), "listening");
 		const address = server.address();
 		if (address === null || typeof address === "string") throw new Error("no port");
 		const target = { host: "local.invalid", port: address.port };
 		try {
 			expect(await reaches(target, async () => ["127.0.0.1"])).toBe(true);
-			// The IPv4 listener refuses IPv6 loopback; 127.0.0.2 need not be assigned on macOS.
-			expect(await reaches(target, async () => ["::1", "127.0.0.1"])).toBe(true);
-			expect(await reaches(target, async () => ["::1", "::1", "127.0.0.1"])).toBe(false);
+			await server[Symbol.asyncDispose]();
+			expect(await reaches(target, async () => ["127.0.0.1"])).toBe(false);
+
+			// Keep the closed IPv4 port as the refused answer and serve the same port on IPv6 only.
+			await once(server.listen(target.port, "::1"), "listening");
+			expect(await reaches(target, async () => ["127.0.0.1", "::1"])).toBe(true);
+			expect(await reaches(target, async () => ["127.0.0.1", "127.0.0.1", "::1"])).toBe(false);
 		} finally {
-			const closed = Promise.withResolvers<void>();
-			server.close(() => closed.resolve());
-			await closed.promise;
+			await server[Symbol.asyncDispose]();
 		}
-		expect(await reaches(target, async () => ["127.0.0.1"])).toBe(false);
 	});
 });
 
